@@ -16,36 +16,36 @@ def main():
     reference = RBDReference(robot)
     q, qd, u, n = initializeValues(robot, MATCH_CPP_RANDOM = True)
 
-    print("q")
-    print(q)
-    print("qd")
-    print(qd)
-    print("u")
-    print(u)
+    print("q\n",q)
+    print("qd\n",qd)
+    print("u\n",u)
+
+    # Note these values are hardcoded
+    u = np.zeros(n)
+    q =[1,2,3,1,2,3,1]
+    qd = np.zeros(n)
 
     (c, v, a, f) = reference.rnea(q,qd)
-    print("c")
-    print(c)
 
-    print("Minv")
     Minv = reference.minv(q)
-    print(Minv)
+    print("Minv\n", Minv)
 
-    print("qdd")
     qdd = np.matmul(Minv,(u-c))
-    print(qdd)
+    print("qdd\n",qdd)
 
+    crba=reference.crba(q,qd,u)
+    print("crba\n",crba)
+
+    qdd_aba = reference.aba(q,qd,u)
+    print("aba\n",qdd_aba)
+    
     dc_du = reference.rnea_grad(q, qd, qdd)
-    print("dc/dq with qdd")
-    print(dc_du[:,:n])
-    print("dc/dqd with qdd")
-    print(dc_du[:,n:])
+    print("dc/dq with qdd\n",dc_du[:,:n])
+    print("dc/dqd with qdd\n",dc_du[:,n:])
 
     df_du = np.matmul(-Minv,dc_du)
-    print("df/dq")
-    print(df_du[:,:n])
-    print("df/dqd")
-    print(df_du[:,n:])
+    print("df/dq\n",df_du[:,:n])
+    print("df/dqd\n",df_du[:,n:])
 
     if DEBUG_MODE:
         print("-------------------")
@@ -53,37 +53,27 @@ def main():
         print("-------------------")
         codegen = GRiDCodeGenerator(robot, DEBUG_MODE, FILE_NAMESPACE = FILE_NAMESPACE_NAME)
         (c, v, a, f) = codegen.test_rnea(q,qd)
-        print("v")
-        print(v)
-        print("a")
-        print(a)
-        print("f")
-        print(f)
-        print("c")
-        print(c)
+        print("v\n",v)
+        print("a\n",a)
+        print("f\n",f)
+        print("c\n",c)
         
         Minv = codegen.test_minv(q)
-        print("Minv")
-        print(Minv)
+        print("Minv\n",Minv)
 
-        print("u-c")
         umc = u-c
-        print(umc)
-        print("qdd")
+        print("u-c\n",umc)
+
         qdd = np.matmul(Minv,umc)
-        print(qdd)
+        print("qdd\n",qdd)
         
         dc_du = codegen.test_rnea_grad(q, qd, qdd)
-        print("dc/dq with qdd")
-        print(dc_du[:,:n])
-        print("dc/dqd with qdd")
-        print(dc_du[:,n:])
+        print("dc/dq with qdd\n",dc_du[:,:n])
+        print("dc/dqd with qdd\n",dc_du[:,n:])
         
         df_du = np.matmul(-Minv,dc_du)
-        print("df/dq")
-        print(df_du[:,:n])
-        print("df/dqd")
-        print(df_du[:,n:])
+        print("df/dq\n",df_du[:,:n])
+        print("df/dqd\n",df_du[:,n:])
 
 if __name__ == "__main__":
     main()
