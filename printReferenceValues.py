@@ -20,7 +20,7 @@ def main():
     print("qd\n",qd)
     print("u\n",u)
 
-    # Note these values are hardcoded
+    print("\nNote: the variables u, q, and qd are hardcoded even though they are computed above\n")
     u = np.zeros(n)
     q =[1,2,3,1,2,3,1]
     qd = np.zeros(n)
