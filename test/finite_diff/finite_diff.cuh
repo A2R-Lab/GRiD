@@ -88,7 +88,7 @@ __device__ void finite_diff_aba(T *s_q_qd_tau, T *s_fdoutput, T eps, const grid:
 }
 
 template <typename T, int O_R, int O_C, int I_N>
-__device__ void finite_diff_for_ddp(T *s_q_qd_tau, T *s_fdoutput, T eps, const grid::robotModel<T> *d_robotModel, const T gravity){
+__device__ void finite_diff_fdsva(T *s_q_qd_tau, T *s_fdoutput, T eps, const grid::robotModel<T> *d_robotModel, const T gravity){
     __shared__ T s_df_du_plus[O_R*O_R*3*21];
     __shared__ T s_df_du_minus[O_R*O_R*3*21];
     __shared__ T s_qdd_plus[O_R];
@@ -187,5 +187,385 @@ __device__ void finite_diff_for_ddp(T *s_q_qd_tau, T *s_fdoutput, T eps, const g
             }
          }
         __syncthreads();
+
+}
+
+template <typename T, int O_R, int O_C, int I_N>
+__device__ void finite_diff_for_ddp(T *s_q_qd_tau, T *s_df2, T eps, const grid::robotModel<T> *d_robotModel, const T gravity){
+        __shared__ T s_Minv[49];
+        __shared__ T s_qdd[49];
+        __shared__ T s_dc_du_plus[98*7];
+        __shared__ T s_vaf_plus[84];
+        __shared__ T s_qdd1_plus[7];
+        __shared__ T s_Minv_plus[49*7];
+        __shared__ T s_dc_du_minus[98*7];
+        __shared__ T s_vaf_minus[84];
+        __shared__ T s_qdd1_minus[7];
+        __shared__ T s_Minv_minus[49*7];
+        __shared__ T s_di_du[1372];
+        __shared__ T s_df_du[147];
+        // __shared__ T s_df2[3087];
+        extern __shared__ T s_XITemp[]; T *s_XImats = s_XITemp; T *s_temp = &s_XITemp[504];
+
+        // T *s_di_dqq = s_di_du; T *s_di_dqdqd = &s_di_du[343]; T *s_di_dqqd = &s_di_du[686]; T *s_dm_dq = &s_di_du[1029];
+        // grid::load_update_XImats_helpers<T>(s_XImats, &s_q_qd_tau[0], d_robotModel, s_temp);
+        // T *s_df_dq = s_df_du; T *s_df_dqd = &s_df_du[49]; T *s_df_tau = &s_df_du[98];
+        // grid::direct_minv_inner<T>(s_Minv, &s_q_qd_tau[0], s_XImats, s_temp);
+        // grid::forward_dynamics_finish<T>(s_qdd, &s_q_qd_tau[14], s_temp, s_Minv);
+        // grid::fdsva_inner<T>(s_df_du, &s_q_qd_tau[0], &s_q_qd_tau[7], s_qdd, &s_q_qd_tau[14], s_XImats, s_temp, gravity);
+  
+        // fd of idsva
+        T *s_tau = &s_q_qd_tau[2 * O_R]; 
+        T *qqd_plus = s_q_qd_tau;
+        T *qqd_minus = s_q_qd_tau;
+
+
+       for (int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < I_N; ind += blockDim.x*blockDim.y){
+        qqd_plus[ind] += eps; 
+
+        grid::load_update_XImats_helpers<T>(s_XImats, &qqd_plus[0], d_robotModel, s_temp);
+        __syncthreads();
+
+        inverse_dynamics_inner<T>(s_temp, s_vaf_plus, &qqd_plus[0], &qqd_plus[7], s_XImats, &s_temp[7], gravity);
+        forward_dynamics_finish<T>(s_qdd1_plus, s_tau, s_temp, s_Minv);
+        inverse_dynamics_inner_vaf<T>(s_vaf_plus, &qqd_plus[0], &qqd_plus[7], s_qdd1_minus, s_XImats, s_temp, gravity);
+        inverse_dynamics_gradient_inner<T>(&s_dc_du_plus[49*ind], &qqd_plus[0], &qqd_plus[7], s_vaf_plus, s_XImats, s_temp, gravity);
+
+        qqd_minus[ind] -= (2*eps);
+        grid::load_update_XImats_helpers<T>(s_XImats, &qqd_minus[0], d_robotModel, s_temp);
+        __syncthreads();
+
+        inverse_dynamics_inner<T>(s_temp, s_vaf_plus, &qqd_minus[0], &qqd_minus[7], s_XImats, &s_temp[7], gravity);
+        forward_dynamics_finish<T>(s_qdd1_minus, s_tau, s_temp, s_Minv);
+        inverse_dynamics_inner_vaf<T>(s_vaf_minus, &qqd_minus[0], &qqd_minus[7], s_qdd1_minus, s_XImats, s_temp, gravity);
+        inverse_dynamics_gradient_inner<T>(&s_dc_du_minus[49*ind], &qqd_minus[0], &qqd_minus[7], s_vaf_minus, s_XImats, s_temp, gravity);
+
+
+        qqd_minus[ind] += eps;
+
+       }
+       __syncthreads();
+                 __syncthreads();
+      if(threadIdx.x == 0 && blockIdx.x == 0){
+
+        for(int i=0; i<7; i++){
+             printf("s_dc_du_plus[%d] = \n", i*49);
+            printMat<T,7,7>(&s_dc_du_plus[i*49],7);
+            printf("s_dc_du_minus[%d] = \n", i*49);
+            printMat<T,7,7>(&s_dc_du_minus[i*49],7);
+        }
+      }
+
+        for (int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < O_R*O_R*O_R; ind += blockDim.x*blockDim.y){
+          s_di_du[ind] = (s_dc_du_plus[ind] - s_dc_du_minus[ind])/ (2* eps);
+        }
+
+           __syncthreads();
+
+        for (int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < I_N; ind += blockDim.x*blockDim.y){
+        qqd_plus[7 + ind] += eps; 
+
+        grid::load_update_XImats_helpers<T>(s_XImats, &qqd_plus[0], d_robotModel, s_temp);
+        __syncthreads();
+
+        inverse_dynamics_inner<T>(s_temp, s_vaf_plus, &qqd_plus[0], &qqd_plus[7], s_XImats, &s_temp[7], gravity);
+        forward_dynamics_finish<T>(s_qdd1_plus, s_tau, s_temp, s_Minv);
+        inverse_dynamics_inner_vaf<T>(s_vaf_plus, &qqd_plus[0], &qqd_plus[7], s_qdd1_minus, s_XImats, s_temp, gravity);
+        inverse_dynamics_gradient_inner<T>(&s_dc_du_plus[49*ind], &qqd_plus[0], &qqd_plus[7], s_vaf_plus, s_XImats, s_temp, gravity);
+
+        qqd_minus[7 + ind] -= (2*eps);
+        grid::load_update_XImats_helpers<T>(s_XImats, &qqd_minus[0], d_robotModel, s_temp);
+        __syncthreads();
+
+        inverse_dynamics_inner<T>(s_temp, s_vaf_plus, &qqd_minus[0], &qqd_minus[7], s_XImats, &s_temp[7], gravity);
+        forward_dynamics_finish<T>(s_qdd1_minus, s_tau, s_temp, s_Minv);
+        inverse_dynamics_inner_vaf<T>(s_vaf_minus, &qqd_minus[0], &qqd_minus[7], s_qdd1_minus, s_XImats, s_temp, gravity);
+        inverse_dynamics_gradient_inner<T>(&s_dc_du_minus[49*ind], &qqd_minus[0], &qqd_minus[7], s_vaf_minus, s_XImats, s_temp, gravity);
+
+
+        qqd_minus[7 + ind] += eps;
+
+       }
+       __syncthreads();
+                      __syncthreads();
+      if(threadIdx.x == 0 && blockIdx.x == 0){
+
+        for(int i=0; i<7; i++){
+             printf("s_dc_du_plus[%d] = \n", i*49);
+            printMat<T,7,7>(&s_dc_du_plus[i*49],7);
+            printf("s_dc_du_minus[%d] = \n", i*49);
+            printMat<T,7,7>(&s_dc_du_minus[i*49],7);
+        }
+      }
+
+        for (int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < O_R*O_R*O_R; ind += blockDim.x*blockDim.y){
+          s_di_du[343 + ind] = (s_dc_du_plus[ind] - s_dc_du_minus[ind])/ (2* eps);
+        }
+       __syncthreads();
+
+
+          for (int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < I_N; ind += blockDim.x*blockDim.y){
+        qqd_plus[ind] += eps; 
+        qqd_plus[7 + ind] += eps; 
+
+        grid::load_update_XImats_helpers<T>(s_XImats, &qqd_plus[0], d_robotModel, s_temp);
+        __syncthreads();
+
+        inverse_dynamics_inner<T>(s_temp, s_vaf_plus, &qqd_plus[0], &qqd_plus[7], s_XImats, &s_temp[7], gravity);
+        forward_dynamics_finish<T>(s_qdd1_plus, s_tau, s_temp, s_Minv);
+        inverse_dynamics_inner_vaf<T>(s_vaf_plus, &qqd_plus[0], &qqd_plus[7], s_qdd1_minus, s_XImats, s_temp, gravity);
+        inverse_dynamics_gradient_inner<T>(&s_dc_du_plus[49*ind], &qqd_plus[0], &qqd_plus[7], s_vaf_plus, s_XImats, s_temp, gravity);
+
+        qqd_minus[ind] -= (2*eps);
+        qqd_minus[7 + ind] -= (2*eps);
+        grid::load_update_XImats_helpers<T>(s_XImats, &qqd_minus[0], d_robotModel, s_temp);
+        __syncthreads();
+
+        inverse_dynamics_inner<T>(s_temp, s_vaf_plus, &qqd_minus[0], &qqd_minus[7], s_XImats, &s_temp[7], gravity);
+        forward_dynamics_finish<T>(s_qdd1_minus, s_tau, s_temp, s_Minv);
+        inverse_dynamics_inner_vaf<T>(s_vaf_minus, &qqd_minus[0], &qqd_minus[7], s_qdd1_minus, s_XImats, s_temp, gravity);
+        inverse_dynamics_gradient_inner<T>(&s_dc_du_minus[49*ind], &qqd_minus[0], &qqd_minus[7], s_vaf_minus, s_XImats, s_temp, gravity);
+
+
+        qqd_minus[ind] += eps;
+        qqd_minus[7 + ind] += eps;
+
+       }
+       __syncthreads();
+                      __syncthreads();
+      if(threadIdx.x == 0 && blockIdx.x == 0){
+
+        for(int i=0; i<7; i++){
+             printf("s_dc_du_plus[%d] = \n", i*49);
+            printMat<T,7,7>(&s_dc_du_plus[i*49],7);
+            printf("s_dc_du_minus[%d] = \n", i*49);
+            printMat<T,7,7>(&s_dc_du_minus[i*49],7);
+        }
+      }
+                      __syncthreads();
+
+        for (int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < O_R*O_R*O_R; ind += blockDim.x*blockDim.y){
+          s_di_du[686 + ind] = (s_dc_du_plus[ind] - s_dc_du_minus[ind])/ (2* eps);
+        }
+       __syncthreads();
+    
+
+          for (int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < I_N; ind += blockDim.x*blockDim.y){
+        qqd_plus[ind] += eps; 
+
+        grid::load_update_XImats_helpers<T>(s_XImats, &qqd_plus[0], d_robotModel, s_temp);
+        __syncthreads();
+
+        grid::direct_minv_inner<T>(&s_Minv_plus[ind*49], &qqd_plus[0], s_XImats, s_temp);
+
+
+        qqd_minus[ind] -= (2*eps);
+        grid::load_update_XImats_helpers<T>(s_XImats, &qqd_minus[0], d_robotModel, s_temp);
+        __syncthreads();
+
+        grid::direct_minv_inner<T>(&s_Minv_minus[ind*49], &qqd_plus[0], s_XImats, s_temp);
+
+        qqd_minus[ind] += eps;
+        s_Minv_plus[ind*49 + 1] = s_Minv_plus[ind*49 + 7];
+        s_Minv_plus[ind*49 + 2] = s_Minv_plus[ind*49 + 14];
+        s_Minv_plus[ind*49 + 9] = s_Minv_plus[ind*49 + 15];
+        s_Minv_plus[ind*49 + 3] = s_Minv_plus[ind*49 + 21];
+        s_Minv_plus[ind*49 + 10] = s_Minv_plus[ind*49 + 22];
+        s_Minv_plus[ind*49 + 17] = s_Minv_plus[ind*49 + 23];
+        s_Minv_plus[ind*49 + 4] = s_Minv_plus[ind*49 + 28];
+        s_Minv_plus[ind*49 + 11] = s_Minv_plus[ind*49 + 29];
+        s_Minv_plus[ind*49 + 18] = s_Minv_plus[ind*49 + 30];
+        s_Minv_plus[ind*49 + 25] = s_Minv_plus[ind*49 + 31];
+        s_Minv_plus[ind*49 + 5] = s_Minv_plus[ind*49 + 35];
+        s_Minv_plus[ind*49 + 12] = s_Minv_plus[ind*49 + 36];
+        s_Minv_plus[ind*49 + 19] = s_Minv_plus[ind*49 + 37];
+        s_Minv_plus[ind*49 + 26] = s_Minv_plus[ind*49 + 38];
+        s_Minv_plus[ind*49 + 33] = s_Minv_plus[ind*49 + 39];
+        s_Minv_plus[ind*49 + 6] = s_Minv_plus[ind*49 + 42];
+        s_Minv_plus[ind*49 + 13] = s_Minv_plus[ind*49 + 43];
+        s_Minv_plus[ind*49 + 20] = s_Minv_plus[ind*49 + 44];
+        s_Minv_plus[ind*49 + 27] = s_Minv_plus[ind*49 + 45];
+        s_Minv_plus[ind*49 + 34] = s_Minv_plus[ind*49 + 46];
+        s_Minv_plus[ind*49 + 41] = s_Minv_plus[ind*49 + 47];
+
+        s_Minv_minus[ind*49 + 1] = s_Minv_minus[ind*49 + 7];
+        s_Minv_minus[ind*49 + 2] = s_Minv_minus[ind*49 + 14];
+        s_Minv_minus[ind*49 + 9] = s_Minv_minus[ind*49 + 15];
+        s_Minv_minus[ind*49 + 3] = s_Minv_minus[ind*49 + 21];
+        s_Minv_minus[ind*49 + 10] = s_Minv_minus[ind*49 + 22];
+        s_Minv_minus[ind*49 + 17] = s_Minv_minus[ind*49 + 23];
+        s_Minv_minus[ind*49 + 4] = s_Minv_minus[ind*49 + 28];
+        s_Minv_minus[ind*49 + 11] = s_Minv_minus[ind*49 + 29];
+        s_Minv_minus[ind*49 + 18] = s_Minv_minus[ind*49 + 30];
+        s_Minv_minus[ind*49 + 25] = s_Minv_minus[ind*49 + 31];
+        s_Minv_minus[ind*49 + 5] = s_Minv_minus[ind*49 + 35];
+        s_Minv_minus[ind*49 + 12] = s_Minv_minus[ind*49 + 36];
+        s_Minv_minus[ind*49 + 19] = s_Minv_minus[ind*49 + 37];
+        s_Minv_minus[ind*49 + 26] = s_Minv_minus[ind*49 + 38];
+        s_Minv_minus[ind*49 + 33] = s_Minv_minus[ind*49 + 39];
+        s_Minv_minus[ind*49 + 6] = s_Minv_minus[ind*49 + 42];
+        s_Minv_minus[ind*49 + 13] = s_Minv_minus[ind*49 + 43];
+        s_Minv_minus[ind*49 + 20] = s_Minv_minus[ind*49 + 44];
+        s_Minv_minus[ind*49 + 27] = s_Minv_minus[ind*49 + 45];
+        s_Minv_minus[ind*49 + 34] = s_Minv_minus[ind*49 + 46];
+        s_Minv_minus[ind*49 + 41] = s_Minv_minus[ind*49 + 47];
+
+       }
+       __syncthreads();
+          if(threadIdx.x == 0 && blockIdx.x == 0){
+
+        for(int i=0; i<7; i++){
+             printf("s_Minv_plus[%d] = \n", i*49);
+            printMat<T,7,7>(&s_Minv_plus[i*49],7);
+            printf("s_Minv_minus[%d] = \n", i*49);
+            printMat<T,7,7>(&s_Minv_minus[i*49],7);
+        }
+      }
+                      __syncthreads();
+
+
+        for (int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < O_R*O_R*O_R; ind += blockDim.x*blockDim.y){
+          s_di_du[1029 + ind] = (s_Minv_plus[ind] - s_Minv_minus[ind])/ (2* eps);
+        }
+
+        if(threadIdx.x == 0 && blockIdx.x == 0){
+            for(int i=0; i<28; i++){
+                printf("s_di_du %d\n", i);
+                printMat<T,O_R,7>(&s_di_du[49*i],7);
+            }
+         }
+        __syncthreads();
+
+        grid::load_update_XImats_helpers<T>(s_XImats, &s_q_qd_tau[0], d_robotModel, s_temp);
+        T *s_df_dq = s_df_du; T *s_df_dqd = &s_df_du[49]; T *s_df_tau = &s_df_du[98];
+        grid::direct_minv_inner<T>(s_Minv, &s_q_qd_tau[0], s_XImats, s_temp);
+        grid::forward_dynamics_finish<T>(s_qdd, &s_q_qd_tau[14], s_temp, s_Minv);
+        grid::fdsva_inner<T>(s_df_du, &s_q_qd_tau[0], &s_q_qd_tau[7], s_qdd, &s_q_qd_tau[14], s_XImats, s_temp, gravity);
+
+         __syncthreads();
+        T *s_dm_dq = &s_di_du[1029];
+
+
+        T *dM_dqxfd_dq = s_temp;
+        for(int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < 343; ind += blockDim.x*blockDim.y){
+            int page = ind / 49;
+            int row = ind % 7;
+            int col = ind % 49 / 7;
+            dM_dqxfd_dq[ind] = dot_prod<T,7,7,1>(&s_dm_dq[49*page + row], &s_df_dq[7*col]);
+        }
+        __syncthreads();
+        T *rot_dM_dqxfd_dqd = &s_temp[0];
+        for(int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < 49; ind += blockDim.x*blockDim.y){
+            int page = 0;
+            int row = ind % 7;
+            int col = ind / 7;
+            rot_dM_dqxfd_dqd[49*col + row + 7*page] = dM_dqxfd_dq[49*page + ind];
+        }
+        __syncthreads();
+        for(int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < 49; ind += blockDim.x*blockDim.y){
+            int page = 1;
+            int row = ind % 7;
+            int col = ind / 7;
+            rot_dM_dqxfd_dqd[49*col + row + 7*page] = dM_dqxfd_dq[49*page + ind];
+        }
+        __syncthreads();
+        for(int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < 49; ind += blockDim.x*blockDim.y){
+            int page = 2;
+            int row = ind % 7;
+            int col = ind / 7;
+            rot_dM_dqxfd_dqd[49*col + row + 7*page] = dM_dqxfd_dq[49*page + ind];
+        }
+        __syncthreads();
+        for(int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < 49; ind += blockDim.x*blockDim.y){
+            int page = 3;
+            int row = ind % 7;
+            int col = ind / 7;
+            rot_dM_dqxfd_dqd[49*col + row + 7*page] = dM_dqxfd_dq[49*page + ind];
+        }
+        __syncthreads();
+        for(int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < 49; ind += blockDim.x*blockDim.y){
+            int page = 4;
+            int row = ind % 7;
+            int col = ind / 7;
+            rot_dM_dqxfd_dqd[49*col + row + 7*page] = dM_dqxfd_dq[49*page + ind];
+        }
+        __syncthreads();
+        for(int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < 49; ind += blockDim.x*blockDim.y){
+            int page = 5;
+            int row = ind % 7;
+            int col = ind / 7;
+            rot_dM_dqxfd_dqd[49*col + row + 7*page] = dM_dqxfd_dq[49*page + ind];
+        }
+        __syncthreads();
+        for(int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < 49; ind += blockDim.x*blockDim.y){
+            int page = 6;
+            int row = ind % 7;
+            int col = ind / 7;
+            rot_dM_dqxfd_dqd[49*col + row + 7*page] = dM_dqxfd_dq[49*page + ind];
+        }
+        __syncthreads();
+        for(int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < 343; ind += blockDim.x*blockDim.y){
+            s_df2[ind] = s_di_du[ind] + dM_dqxfd_dq[ind] + rot_dM_dqxfd_dqd[ind];
+        }
+        __syncthreads();
+        T *dM_dqxfd_dqd = s_temp;
+        for(int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < 343; ind += blockDim.x*blockDim.y){
+            int page = ind / 49;
+            int row = ind % 7;
+            int col = ind % 49 / 7;
+            dM_dqxfd_dqd[ind] = dot_prod<T,7,7,1>(&s_dm_dq[49*page + row], &s_df_dqd[7*col]);
+        }
+        __syncthreads();
+        for(int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < 343; ind += blockDim.x*blockDim.y){
+            s_df2[343+ ind] = s_di_du[343 + ind] + dM_dqxfd_dqd[ind];
+            s_df2[686+ ind] = s_di_du[686 + ind];
+        }
+        __syncthreads();
+        s_Minv[1] = s_Minv[7];
+        s_Minv[2] = s_Minv[14];
+        s_Minv[9] = s_Minv[15];
+        s_Minv[3] = s_Minv[21];
+        s_Minv[10] = s_Minv[22];
+        s_Minv[17] = s_Minv[23];
+        s_Minv[4] = s_Minv[28];
+        s_Minv[11] = s_Minv[29];
+        s_Minv[18] = s_Minv[30];
+        s_Minv[25] = s_Minv[31];
+        s_Minv[5] = s_Minv[35];
+        s_Minv[12] = s_Minv[36];
+        s_Minv[19] = s_Minv[37];
+        s_Minv[26] = s_Minv[38];
+        s_Minv[33] = s_Minv[39];
+        s_Minv[6] = s_Minv[42];
+        s_Minv[13] = s_Minv[43];
+        s_Minv[20] = s_Minv[44];
+        s_Minv[27] = s_Minv[45];
+        s_Minv[34] = s_Minv[46];
+        s_Minv[41] = s_Minv[47];
+        for(int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < 343; ind += blockDim.x*blockDim.y){
+            int page = ind / 49;
+            int row = ind % 7;
+            int col = ind % 49 / 7;
+            s_df2[1029+ ind] = dot_prod<T,7,7,1>(&s_dm_dq[49*page + row], &s_Minv[7*col]);
+        }
+        __syncthreads();
+        for(int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < 1372; ind += blockDim.x*blockDim.y){
+            int page = ind / 49;
+            int row = ind % 7;
+            int col = ind % 49 / 7;
+            s_df2[ind] = dot_prod<T,7,7,1>(&s_Minv[row], &s_df2[49*page + 7*col]);
+            s_df2[ind] *= (-1);
+        }
+        __syncthreads();
+
+  
+      //        __syncthreads();
+      // if(threadIdx.x == 0 && blockIdx.x == 0){
+
+      //   for(int i=0; i<28; i++){
+      //       printf("s_df2[%d] = \n", i*49);
+      //       printMat<T,7,7>(&s_df2[i*49],7);
+      //   }
+      // }
 
 }
