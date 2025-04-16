@@ -5,6 +5,7 @@ nvcc -std=c++11 -o printGRiD.exe printGRiD.cu -gencode arch=compute_86,code=sm_8
 #include <random>
 #include <algorithm>
 #include "grid.cuh"
+// #include "iiwa14_grid.cuh"
 #define RANDOM_MEAN 0
 #define RANDOM_STDEV 1
 std::default_random_engine randEng(1337); // fixed seed
