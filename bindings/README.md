@@ -18,7 +18,7 @@ pip install .
 
 Option 2: Manual build
 
-python3 setup.py build
+`python3 setup.py build`
 
 
 Usage (python)n
