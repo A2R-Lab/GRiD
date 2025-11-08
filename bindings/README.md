@@ -18,13 +18,8 @@ pip install .
 
 Option 2: Manual build
 
-bash
+python3 setup.py build
 
-mkdir build
-cd build
-cmake ..
-make
-cd ..
 
 Usage (python)n
 
