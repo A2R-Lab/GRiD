@@ -41,10 +41,12 @@ target_compile_options(gridCuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxe
 # Specify that this is a CUDA compilation
 set_target_properties(gridCuda PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 
+# Define the output directory for the compiled Python module
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+
 # Set the output directory for the Python module
-set_target_properties(gridCuda
-  PROPERTIES
-  LIBRARY_OUTPUT_DIRECTORY ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
+set_target_properties(gridCuda PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/gridCuda
 )
 
 # Add installation rules
