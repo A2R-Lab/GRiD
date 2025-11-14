@@ -25,7 +25,7 @@ For editable install, add the `-e` flag to the command above.
 
 
 ## Quick Start
-To use PyGRiD, you will first need a grid.cuh file generated from your URDF file. This is a one-time generation for your robot configuration. See the [GRiD README](../../GRiD/README.md) for more information about what this does and how this works.
+To use PyGRiD, you will first need a grid.cuh file generated from your URDF file. This is a one-time generation for your robot configuration. See the [GRiD README](../README.md) for more information about what this does and how this works.
 
     generateGRiD.py PATH_TO_URDF
 
