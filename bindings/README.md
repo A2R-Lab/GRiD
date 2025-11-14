@@ -1,6 +1,6 @@
-# PyGrid: Python Bindings for CUDA GRiD Dynamics
+# PyGRiD: Python Bindings for GRiD
 
-This package provides Python bindings for the CUDA-based GRiD Dynamics library using pybind11.
+This package provides Python bindings for the CUDA-based GRiD (**G**PU-Accelerated **Ri**gid Body **D**ynamics) library using pybind11.
 
 ## Requirements
 
@@ -25,7 +25,7 @@ For editable install, add the `-e` flag to the command above.
 
 
 ## Quick Start
-To use the GRiD Python bindings, you will first need a grid.cuh file generated from your URDF file. This is a one-time generation for your robot configuration. See the [GRiD README](../../GRiD/README.md) for more information about what this does and how this works.
+To use PyGRiD, you will first need a grid.cuh file generated from your URDF file. This is a one-time generation for your robot configuration. See the [GRiD README](../../GRiD/README.md) for more information about what this does and how this works.
 
     generateGRiD.py PATH_TO_URDF
 
@@ -55,7 +55,7 @@ See [test_grid_cuda.py](tests/test_grid_cuda.py) for a more detailed example.
 [Full API Reference and Documentation](#api-reference)
 
 ### Classes
-- `GriDDataFloat(q, qd, u)`: Single-precision (float) implementation of RBD functions
+- `GRiDDataFloat(q, qd, u)`: Single-precision (float) implementation of RBD functions
 - Note that the double implementation caused errors
 
 ### Functions
