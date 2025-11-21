@@ -2,13 +2,16 @@
 
 This package provides Python bindings for the CUDA-based GRiD (**G**PU-Accelerated **Ri**gid Body **D**ynamics) library using pybind11.
 
-## Requirements
+GRiD is a library of functions that computes physics quantities needed for trajectory planning algorithms by generating CUDA kernels for your specific robot. Read more about this in the repository's main [README](../README.md).
 
-    C++11 compatible compiler
-    CUDA Toolkit >= 11.1 (compatible with compute capability 8.6)
-    CMake >= 3.10
-    Python >= 3.6
-    pybind11
+**Example GRiD Usage: Trajectory Planning**
+1. A target pose is defined using joint angles or end-effector positions and converted into a series of waypoints from the current pose.
+2. A motor control algorithm is used to calculate the torques needed to move the robot to the next waypoint.
+3. GRiD is invoked and `forward_dynamics` is called to convert the calculated torques into accelerations
+4. An integrator is used to convert the accelerations into updated velocities and positions.
+5. The robot moves to the next waypoint, and steps 2-4 is repeated until the final target position is reached.
+
+An example of this use case can be found in the implementation of KKT systems solvers in [MPCGPU](https://github.com/A2R-Lab/MPCGPU/tree/0efde8c63c38465bba630ba569c4f8a30c1b009c).
 
 ## Installation
 **Option 1: Install using pip**
@@ -73,4 +76,10 @@ See [test_grid_cuda.py](tests/test_grid_cuda.py) for a more detailed example.
 - `NUM_EES`: Number of end-effectors based on the URDF specification
 
 
+## Requirements
 
+    C++11 compatible compiler
+    CUDA Toolkit >= 11.1 (compatible with compute capability 8.6)
+    CMake >= 3.10
+    Python >= 3.6
+    pybind11
