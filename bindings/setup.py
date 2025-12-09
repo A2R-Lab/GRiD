@@ -45,7 +45,7 @@ class CMakeBuild(build_ext):
             extdir += os.path.sep
 
         cmake_args = ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + extdir,
-                      '-DPYTHON_EXECUTABLE=' + sys.executable]
+                      '-DPython_EXECUTABLE=' + sys.executable]
 
         # Specify CUDA architectures if not already in CMakeLists.txt
         # Uncomment and modify as needed for your target GPU
