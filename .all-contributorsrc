@@ -21,13 +21,6 @@
             "contributions": []
         },
         {
-            "login": "Danelle Tuchman",
-            "name": "Danelle Tuchman",
-            "avatar_url": "https://www.gravatar.com/avatar/b619b0ff13333ce2a22bb110eda8f7a9?d=identicon&s=100",
-            "profile": "https://github.com/harvard-edge/cs249r_book/graphs/contributors",
-            "contributions": []
-        },
-        {
             "login": "Z4KH",
             "name": "Zachary Pestrikov",
             "avatar_url": "https://avatars.githubusercontent.com/Z4KH",
@@ -35,10 +28,17 @@
             "contributions": []
         },
         {
-            "login": "EmreAdabag",
-            "name": "EmreAdabag",
-            "avatar_url": "https://avatars.githubusercontent.com/EmreAdabag",
-            "profile": "https://github.com/EmreAdabag",
+            "login": "Danelle Tuchman",
+            "name": "Danelle Tuchman",
+            "avatar_url": "https://www.gravatar.com/avatar/b619b0ff13333ce2a22bb110eda8f7a9?d=identicon&s=100",
+            "profile": "https://github.com/harvard-edge/cs249r_book/graphs/contributors",
+            "contributions": []
+        },
+        {
+            "login": "anncli",
+            "name": "Ann Li",
+            "avatar_url": "https://avatars.githubusercontent.com/anncli",
+            "profile": "https://github.com/anncli",
             "contributions": []
         },
         {
@@ -49,6 +49,13 @@
             "contributions": []
         },
         {
+            "login": "EmreAdabag",
+            "name": "EmreAdabag",
+            "avatar_url": "https://avatars.githubusercontent.com/EmreAdabag",
+            "profile": "https://github.com/EmreAdabag",
+            "contributions": []
+        },
+        {
             "login": "emilyburnett2003",
             "name": "emilyburnett2003",
             "avatar_url": "https://avatars.githubusercontent.com/emilyburnett2003",
@@ -56,17 +63,10 @@
             "contributions": []
         },
         {
-            "login": "Kimiya Shahamat",
-            "name": "Kimiya Shahamat",
-            "avatar_url": "https://www.gravatar.com/avatar/b6a2a74133224e85e9714e282a1576df?d=identicon&s=100",
-            "profile": "https://github.com/harvard-edge/cs249r_book/graphs/contributors",
-            "contributions": []
-        },
-        {
-            "login": "Kimiya Shahamat",
-            "name": "Kimiya Shahamat",
-            "avatar_url": "https://www.gravatar.com/avatar/b6a2a74133224e85e9714e282a1576df?d=identicon&s=100",
-            "profile": "https://github.com/harvard-edge/cs249r_book/graphs/contributors",
+            "login": "pruyontrarakk",
+            "name": "pruyontrarakk",
+            "avatar_url": "https://avatars.githubusercontent.com/pruyontrarakk",
+            "profile": "https://github.com/pruyontrarakk",
             "contributions": []
         }
     ],
