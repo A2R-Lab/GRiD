@@ -23,12 +23,17 @@ private:
     grid::robotModel<T>* d_robot_model;
 
 public:
-    PyGRidData(T g = static_cast<T>(9.81)) {
+    PyGRidData(py::array_t<T, py::array::c_style> q,
+                py::array_t<T, py::array::c_style> qd,
+                py::array_t<T, py::array::c_style> u,
+                T g = static_cast<T>(9.81)) {
         gravity = g;
         dimms = dim3(grid::SUGGESTED_THREADS, 1, 1);
         streams = grid::init_grid<T>();
         d_robot_model = grid::init_robotModel<T>();
         grid_data = grid::init_gridData<T, 1>();
+
+        load_joint_info(q, qd, u);
     }
 
     ~PyGRidData() {
@@ -193,7 +198,11 @@ PYBIND11_MODULE(gridCuda, m) {
     m.doc() = "Python bindings for CUDA GRiD dynamics";
     
     py::class_<PyGRidData<float>>(m, "GRidDataFloat")
-        .def(py::init<float>(), py::arg("gravity") = 9.81f)
+        .def(py::init<py::array_t<float, py::array::c_style>,
+                      py::array_t<float, py::array::c_style>,
+                      py::array_t<float, py::array::c_style>,
+                      float>(),
+             py::arg("q"), py::arg("qd"), py::arg("u"), py::arg("gravity") = 9.81f)
         .def("load_joint_info", &PyGRidData<float>::load_joint_info,
              "Load joint positions, velocities, torques",
              py::arg("q"), py::arg("qd"), py::arg("u"))

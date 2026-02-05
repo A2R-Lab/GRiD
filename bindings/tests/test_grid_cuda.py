@@ -4,9 +4,6 @@ import gridCuda
 def main():
     print("Testing gridCuda bindings....")
 
-    # create instance of module with default gravity 
-    grid = gridCuda.GRidDataFloat()
-
     # print some constants
     print(f"Number of joints: {gridCuda.NUM_JOINTS}")
 
@@ -16,8 +13,8 @@ def main():
     qd = np.random.normal(0, 1, gridCuda.NUM_JOINTS).astype(np.float32)
     u = np.random.normal(0, 1, gridCuda.NUM_JOINTS).astype(np.float32)
 
-    # set the state
-    grid.load_joint_info(q, qd, u)
+    # create instance of module with default gravity 
+    grid = gridCuda.GRidDataFloat(q, qd, u)
 
     # print the inputs
     print("\nJoint positions (q):")
