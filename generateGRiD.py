@@ -78,7 +78,7 @@ def generate_matlab_model(robot, floating_base):
     f.close()
 
 def main():
-    URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE = parseInputs()
+    URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE, FIXED_TARGET_NAMES = parseInputs()
     parser = URDFParser()
     robot = parser.parse(URDF_PATH, floating_base=FLOATING_BASE)
 
@@ -91,7 +91,7 @@ def main():
     codegen = GRiDCodeGenerator(robot, DEBUG_MODE, True, FILE_NAMESPACE = FILE_NAMESPACE_NAME)
     if FLOATING_BASE: include_homogenous_transforms = False
     else: include_homogenous_transforms = True
-    codegen.gen_all_code(include_homogenous_transforms = include_homogenous_transforms)
+    codegen.gen_all_code(include_homogenous_transforms = include_homogenous_transforms, fixed_target_name = FIXED_TARGET_NAMES)
     print("New code generated and saved to grid.cuh!")
 
 if __name__ == "__main__":

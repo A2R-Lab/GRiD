@@ -6,7 +6,7 @@ from util import parseInputs, printUsage, validateRobot, initializeValues, print
 import numpy as np
 
 def main():
-    URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE = parseInputs()
+    URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE, FIXED_TARGET_NAMES = parseInputs()
 
     parser = URDFParser()
     robot = parser.parse(URDF_PATH, floating_base=FLOATING_BASE)
@@ -55,9 +55,15 @@ def main():
     if not FLOATING_BASE:
         ee_pos = reference.end_effector_pose(q)
         print("eepos\n",ee_pos)
+        for fixed_target_name in FIXED_TARGET_NAMES:
+            ee_pos2 = reference.end_effector_pose(q, ee_joint_names=fixed_target_name)
+            print("eepos-" + fixed_target_name + "\n",ee_pos2)
 
         dee_pos = reference.end_effector_pose_gradient(q)
         print("deepos\n",dee_pos)
+        for fixed_target_name in FIXED_TARGET_NAMES:
+            dee_pos2 = reference.end_effector_pose_gradient(q, ee_joint_names=fixed_target_name)
+            print("deepos-" + fixed_target_name + "\n",dee_pos2)
 
         d2ee_pos = reference.end_effector_pose_hessian(q)
         print("d2eepos\n", d2ee_pos)

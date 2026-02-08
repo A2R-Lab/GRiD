@@ -71,6 +71,10 @@ void test(){
     grid::end_effector_pose<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
     printMat<T,1,6*grid::NUM_EES>(hd_data->h_eePos,1);
 
+    // printf("eePos - for panda_grasptarget_hand\n");
+    // grid::end_effector_pose_panda_grasptarget_hand<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
+    // printMat<T,1,6*grid::NUM_EES>(hd_data->h_eePos,1);
+
     printf("deePos\n");
     grid::end_effector_pose_gradient<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
     for(int ee=0; ee < grid::NUM_EES; ee++){
@@ -89,8 +93,6 @@ void test(){
             printf("[%d]\n",i); printMat<T,grid::NUM_JOINTS,grid::NUM_JOINTS>(&hd_data->h_d2eePos[offset],grid::NUM_JOINTS);
         }
     }
-    // printMat<T,grid::NUM_JOINTS,grid::NUM_EES*grid::NUM_JOINTS>(hd_data->h_d2eePos,6);
-
     grid::close_grid<T>(streams,d_robotModel,hd_data);
 }
 

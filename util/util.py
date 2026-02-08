@@ -1,12 +1,13 @@
 import sys
 import pathlib
 import random
+import argparse
 import numpy as np
 np.set_printoptions(precision=4, suppress=True, linewidth = 100)
 
 def printUsage(NO_ARG_OPTION = False):
-    print("Usage is: script.py PATH_TO_URDF (FILE_NAMESPACE_NAME) (-d) (-f)")
-    print("                    where -D indicates full debug mode")
+    print("Usage is: script.py PATH_TO_URDF (-e FIXED_TARGET_NAMES) (-n FILE_NAMESPACE_NAME) (-d) (-f)")
+    print("                    where -d indicates full debug mode")
     print("                    where -f indicates floating base")
     if NO_ARG_OPTION:
         print("Alternative usage assuming grid.cuh is already generated: script.py")
@@ -21,9 +22,19 @@ def validateFile(FILE_PATH, NO_ARG_OPTION = False):
         exit()
 
 def parseInputs(NO_ARG_OPTION = False):
-    args = sys.argv[1:]
+    parser = argparse.ArgumentParser(description="Process a URDF file and Generate Optimized CUDA Kinematics and Dynamics Code.")
+    # 1. Positional Argument (Required)
+    parser.add_argument("urdf_path", help="The path to the URDF file")
+    # 2. Optional Arguments with values
+    parser.add_argument("-t", "--fixed-target-names", default="", type=str, help="Fixed joint kinematic target names")
+    parser.add_argument("-n", "--namespace", default="grid", type=str, help="File namespace name")
+    # 3. Optional Boolean Flags (Switches)
+    parser.add_argument("-d", "--debug", default=False, action="store_true", help="Enable debug mode")
+    parser.add_argument("-f", "--floating-base", default=False, action="store_true", help="Add a floating base")
+    args = parser.parse_args()
     
-    if len(args) == 0:
+    # check for NO_ARG_OPTION
+    if args.urdf_path is None:
         if NO_ARG_OPTION:
             validateFile("grid.cuh", NO_ARG_OPTION)
             print("Using generated grid.cuh")
@@ -32,28 +43,24 @@ def parseInputs(NO_ARG_OPTION = False):
         printUsage(NO_ARG_OPTION)
         exit()
     
-    URDF_PATH = args[0]
+    # validate URDF Path
+    URDF_PATH = args.urdf_path
     validateFile(URDF_PATH, NO_ARG_OPTION)
 
-    args = args[1:]
-
-    DEBUG_MODE = False
-    FLOATING_BASE = False
-    FILE_NAMESPACE_NAME = 'grid'
-    
-    for arg in args:
-        if arg.lower() == '-d': DEBUG_MODE = True
-        elif arg.lower() == '-f': FLOATING_BASE = True
-        else: FILE_NAMESPACE_NAME = arg
-    
+    # process args
+    DEBUG_MODE = args.debug
+    FLOATING_BASE = args.floating_base
+    FILE_NAMESPACE_NAME = args.namespace
+    FIXED_TARGET_NAMES = args.fixed_target_names
     if FLOATING_BASE: DEBUG_MODE = False
-
+    
     print("Running with: DEBUG_MODE = " + str(DEBUG_MODE))
     print("           FLOATING_BASE = " + str(FLOATING_BASE))
     print("                    URDF = " + URDF_PATH)
-    print("                    NAME = " + FILE_NAMESPACE_NAME)
+    print("      FIXED_TARGET_NAMES = " + FIXED_TARGET_NAMES)
+    print("               FILE_NAME = " + FILE_NAMESPACE_NAME)
 
-    return (URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE)
+    return (URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE, FIXED_TARGET_NAMES)
 
 def validateRobot(robot, NO_ARG_OPTION = False):
     if robot == None:
