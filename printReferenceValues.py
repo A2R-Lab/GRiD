@@ -15,7 +15,6 @@ def main():
 
     reference = RBDReference(robot)
     q, qd, u, n = initializeValues(robot, MATCH_CPP_RANDOM = True)
-
     #for (idx, _) in enumerate(u): u[idx] = 0
 
     print("q\n",q)
@@ -55,15 +54,17 @@ def main():
     if not FLOATING_BASE:
         ee_pos = reference.end_effector_pose(q)
         print("eepos\n",ee_pos)
-        for fixed_target_name in FIXED_TARGET_NAMES:
-            ee_pos2 = reference.end_effector_pose(q, ee_joint_names=fixed_target_name)
-            print("eepos-" + fixed_target_name + "\n",ee_pos2)
+        
+        if FIXED_TARGET_NAMES != "":
+            ee_pos2 = reference.end_effector_pose(q, ee_joint_names=FIXED_TARGET_NAMES)
+            print("eepos-" + FIXED_TARGET_NAMES + "\n",ee_pos2)
 
         dee_pos = reference.end_effector_pose_gradient(q)
         print("deepos\n",dee_pos)
-        for fixed_target_name in FIXED_TARGET_NAMES:
-            dee_pos2 = reference.end_effector_pose_gradient(q, ee_joint_names=fixed_target_name)
-            print("deepos-" + fixed_target_name + "\n",dee_pos2)
+        
+        if FIXED_TARGET_NAMES != "":
+            dee_pos2 = reference.end_effector_pose_gradient(q, ee_joint_names=FIXED_TARGET_NAMES)
+            print("deepos-" + FIXED_TARGET_NAMES + "\n",dee_pos2)
 
         d2ee_pos = reference.end_effector_pose_hessian(q)
         print("d2eepos\n", d2ee_pos)
