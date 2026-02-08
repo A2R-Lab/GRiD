@@ -82,6 +82,10 @@ void test(){
         printMat<T,6,grid::NUM_JOINTS>(&hd_data->h_deePos[ee*6*grid::NUM_JOINTS],6);
     }
 
+    // printf("deePos - for panda_grasptarget_hand\n");
+    // grid::end_effector_pose_gradient_panda_grasptarget_hand<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
+    // printMat<T,6,grid::NUM_JOINTS>(&hd_data->h_deePos[0],6);
+
     printf("d2eePos\n");
     grid::end_effector_pose_gradient_hessian<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
     for(int ee=0; ee < grid::NUM_EES; ee++){

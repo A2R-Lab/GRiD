@@ -28,8 +28,7 @@ def main():
     print("-----------------")
     result = subprocess.run( \
         ["nvcc", "-std=c++11", "-o", "printGRiD.exe", "printGRiD.cu", \
-         "-gencode", "arch=compute_120,code=sm_120", \
-         "-ftz=true", "-prec-div=false", "-prec-sqrt=false"], \
+         "-gencode", "arch=compute_120,code=sm_120"], \
         capture_output=True, text=True \
     )
     if result.stderr:
