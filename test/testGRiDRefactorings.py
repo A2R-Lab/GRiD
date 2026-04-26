@@ -6,10 +6,10 @@ from util import parseInputs, printUsage, validateRobot, initializeValues, print
 import copy
 
 def main():
-    URDF_PATH, DEBUG_MODE, _ = parseInputs()
+    URDF_PATH, DEBUG_MODE, FLOATING_BASE = parseInputs()
 
     parser = URDFParser()
-    robot = parser.parse(URDF_PATH)
+    robot = parser.parse(URDF_PATH, floating_base = FLOATING_BASE)
 
     validateRobot(robot)
 
@@ -28,8 +28,8 @@ def main():
     printErr(f,f2,DEBUG_MODE)
 
     print("rnea bpass err")
-    (c, fbp) = codegen.test_rnea_bpass(q,qd,f)
-    (c2, fbp2) = reference.rnea_bpass(q,qd,f2)
+    (c, fbp) = codegen.test_rnea_bpass(q,f)
+    (c2, fbp2) = reference.rnea_bpass(q,f2)
     print("fbp")
     printErr(fbp,fbp2,DEBUG_MODE)
     print("c")
