@@ -1,0 +1,35 @@
+{
+  "default_tier": "smoke",
+  "robots": [
+    {
+      "robot_id": "iiwa14",
+      "tier": "smoke",
+      "embodiment": "manipulator",
+      "source_kind": "robot_descriptions",
+      "description_name": "iiwa14_description",
+      "base_modes": ["fixed", "floating"],
+      "preferred_variant": "default",
+      "notes": "Resolve through robot_descriptions exported URDF_PATH and keep the default asset selection."
+    },
+    {
+      "robot_id": "go2",
+      "tier": "smoke",
+      "embodiment": "quadruped",
+      "source_kind": "robot_descriptions",
+      "description_name": "go2_description",
+      "base_modes": ["fixed", "floating"],
+      "preferred_variant": "default",
+      "notes": "Resolve through robot_descriptions exported URDF_PATH and keep the default Unitree package selection."
+    },
+    {
+      "robot_id": "g1",
+      "tier": "smoke",
+      "embodiment": "humanoid",
+      "source_kind": "robot_descriptions",
+      "description_name": "g1_description",
+      "base_modes": ["fixed", "floating"],
+      "preferred_variant": "default",
+      "notes": "Prefer the default robot_descriptions export unless later inspection proves it is not the maintained no-hands variant."
+    }
+  ]
+}

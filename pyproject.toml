@@ -19,3 +19,12 @@ exclude = '''
 )/
 '''
 
+[tool.pytest.ini_options]
+markers = [
+    "pinocchio_equivalence: Pinocchio equivalence coverage for GRiD reference code.",
+    "developer_only: Optional developer-only tests that require extra dependencies.",
+    "floating_base: Tests that exercise floating-base model paths.",
+    "robot_smoke: Smoke-tier robot coverage.",
+    "robot_curated: Curated-tier robot coverage.",
+    "robot_nightly: Nightly-tier robot coverage.",
+]
