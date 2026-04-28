@@ -102,7 +102,8 @@ class ProjectModelAdapter:
             xmat_hom = np.eye(4)
             curr_id = target_id
             while curr_id != -1:
-                curr_x = self.robot.get_Xmat_hom_Func_by_id(curr_id)(q[curr_id])
+                inds_q = self.robot.get_joint_index_q(curr_id)
+                curr_x = self.robot.get_Xmat_hom_Func_by_id(curr_id)(q[inds_q])
                 xmat_hom = np.matmul(curr_x, xmat_hom)
                 curr_id = self.robot.get_parent_id(curr_id)
             return normalize_matrix(np.asarray(xmat_hom[:3, :3], dtype=np.float64))
@@ -117,7 +118,8 @@ class ProjectModelAdapter:
             xmat_hom = fixed_joint.get_transformation_matrix_hom()
             curr_id = parent.get_id()
             while curr_id != -1:
-                curr_x = self.robot.get_Xmat_hom_Func_by_id(curr_id)(q[curr_id])
+                inds_q = self.robot.get_joint_index_q(curr_id)
+                curr_x = self.robot.get_Xmat_hom_Func_by_id(curr_id)(q[inds_q])
                 xmat_hom = np.matmul(curr_x, xmat_hom)
                 curr_id = self.robot.get_parent_id(curr_id)
         return normalize_matrix(np.asarray(xmat_hom[:3, :3], dtype=np.float64))
@@ -143,7 +145,7 @@ def build_project_adapter(spec, resolved_model, base_mode: str) -> ProjectModelA
         mismatches.append(
             ConventionMismatch(
                 category="floating_base_quaternion",
-                detail="GRiD floating-base configurations use quaternion order wxyz, unlike Pinocchio's free-flyer xyzw convention.",
+                detail="GRiD floating-base configurations now use Pinocchio-compatible quaternion order xyzw.",
             )
         )
     return ProjectModelAdapter(

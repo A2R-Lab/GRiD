@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from test.pinocchio_equivalents.conftest import build_case_params
 from test.pinocchio_equivalents.conftest import MANIFEST_PATH
 from test.pinocchio_equivalents.utils.model_sources import iter_robot_cases
 from test.pinocchio_equivalents.utils.state_sampling import build_dynamics_samples
@@ -90,6 +91,28 @@ def select_pose_targets(project_model, pinocchio_model):
 
 @pytest.mark.parametrize(("spec", "base_mode"), build_fixed_pose_case_params())
 def test_fixed_base_pose_targets_match_pinocchio(spec, base_mode, project_model, pinocchio_model):
+    targets = select_pose_targets(project_model, pinocchio_model)
+    if not targets:
+        pytest.skip(f"No common pose targets available for {spec.robot_id}")
+    for target_name, offset in targets:
+        for sample in build_dynamics_samples(project_model):
+            actual = project_model.end_effector_pose(sample.q, target_name, offset=offset)
+            expected = pinocchio_model.end_effector_pose(sample.q, target_name, offset=offset)
+            actual_rot = project_model.end_effector_rotation_matrix(sample.q, target_name)
+            expected_rot = pinocchio_model.end_effector_rotation_matrix(sample.q, target_name)
+            assert_pose_and_rotation_close(
+                actual,
+                expected,
+                actual_rot,
+                expected_rot,
+                robot_id=spec.robot_id,
+            )
+
+
+@pytest.mark.parametrize(("spec", "base_mode"), build_case_params(base_mode="floating"))
+def test_floating_base_pose_targets_match_pinocchio(
+    spec, base_mode, project_model, pinocchio_model
+):
     targets = select_pose_targets(project_model, pinocchio_model)
     if not targets:
         pytest.skip(f"No common pose targets available for {spec.robot_id}")

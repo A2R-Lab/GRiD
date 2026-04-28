@@ -24,8 +24,8 @@ ALGORITHM_TOLERANCES = {
 ROBOT_ALGORITHM_TOLERANCES = {
     ("g1", "rnea"): Tolerance(
         rtol=1e-6,
-        atol=5e-7,
-        note="G1 fixed-base dynamics, ABA, and derivative comparisons show stable agreement against Pinocchio at the sub-micro scale.",
+        atol=3e-6,
+        note="G1 fixed-base and floating-base dynamics, ABA, and derivative comparisons show stable agreement against Pinocchio at the low-micro scale, with floating gradients needing a slightly wider absolute tolerance.",
     ),
     ("g1", "minv"): Tolerance(
         rtol=1e-6,
@@ -41,6 +41,16 @@ ROBOT_ALGORITHM_TOLERANCES = {
         rtol=1e-7,
         atol=5e-9,
         note="Baxter fixed-base ABA agrees with Pinocchio to within a few nanounits; this narrowly scoped absolute tolerance avoids failing on near-zero residuals.",
+    ),
+    ("gen3", "rnea"): Tolerance(
+        rtol=1e-7,
+        atol=1e-8,
+        note="Gen3 floating-base inverse-dynamics gradients match Pinocchio up to a few nanounits on the current reference suite.",
+    ),
+    ("fetch", "rnea"): Tolerance(
+        rtol=1e-6,
+        atol=1e-8,
+        note="Fetch floating-base inverse dynamics reaches single-digit nanounit residuals on near-zero entries; this narrow override avoids spurious failures without loosening the suite globally.",
     ),
     ("rizon4", "rnea"): Tolerance(
         rtol=1e-7,

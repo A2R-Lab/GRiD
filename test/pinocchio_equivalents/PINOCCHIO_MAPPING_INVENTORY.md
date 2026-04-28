@@ -34,10 +34,15 @@ Pass-level helpers and implementation internals:
 
 - `RBDReference.rnea(...)` maps to `pinocchio.rnea(...)`
   Note: GRiD returns `(c, v, a, f)` while Pinocchio returns the generalized
-  torque result directly, so the suite compares `c` to Pinocchio's `tau`.
+  torque result directly, so the suite compares `c` to Pinocchio's `tau`. For
+  floating-base robots, GRiD now interprets the root velocity and acceleration
+  inputs in Pinocchio-style `[vx, vy, vz, wx, wy, wz]` order and returns the
+  root generalized-force block in the same order.
 - `RBDReference.minv(...)` maps to a Pinocchio mass-matrix path using
   `pinocchio.crba(...)` followed by matrix inversion.
-  This is treated as the stable Python-side comparison target for v1.
+  This is treated as the stable Python-side comparison target for v1,
+  including floating-base smoke robots now that GRiD uses Pinocchio-style
+  free-flyer ordering natively.
 - `RBDReference.crba(q)` maps to `pinocchio.crba(...)`
   This is currently enforced for the verified fixed-base default robots
   `iiwa14`, `go2`, `g1`, `fetch`, `baxter`, `fr3`, `gen3`, and `rizon4`.
@@ -49,21 +54,28 @@ Pass-level helpers and implementation internals:
   implementation composes inverse dynamics and inverse mass to recover the ABA
   result. This is currently enforced for the verified fixed-base default robots
   `iiwa14`, `go2`, `g1`, `fetch`, `baxter`, `fr3`, and `gen3`.
+  It is also enforced for the floating-enabled robots `iiwa14`, `go2`, `g1`,
+  `fr3`, `fetch`, and `baxter`.
 - `RBDReference.forward_dynamics_grad(q, qd, u)` maps to
   `pinocchio.computeABADerivatives(...)` for the `ddq_dq` and `ddq_dv` blocks.
   This is currently enforced for the verified fixed-base default robots
   `iiwa14`, `go2`, `g1`, `fetch`, `baxter`, `fr3`, and `gen3`.
+  It is also enforced for floating-base `iiwa14`, `go2`, `g1`, `fr3`, `fetch`,
+  `baxter`, and `gen3`, with singular-model skips for `rizon4`.
 - `RBDReference.rnea_grad(...)` maps to `pinocchio.computeRNEADerivatives(...)`
   for the `dtau_dq` and `dtau_dv` blocks. This is currently enforced for the
   verified fixed-base default robots `iiwa14`, `go2`, `g1`, `fetch`, `baxter`,
   `fr3`, `gen3`, and `rizon4`.
+  It is also enforced for floating-base `iiwa14`, `go2`, `g1`, `fr3`, `fetch`,
+  `baxter`, `gen3`, and `rizon4`.
 - `RBDReference.end_effector_pose(...)` maps to Pinocchio frame placements plus
   local-point offsets. The suite compares translation directly and compares
   orientation through reconstructed rotation matrices to avoid Euler-angle
   singularity artifacts. This is currently enforced for the verified fixed-base
   default robots `iiwa14`, `go2`, `g1`, `fetch`, `baxter`, `fr3`, `gen3`, and
   `rizon4` using model-derived joint and fixed-joint targets that exist on both
-  the GRiD and Pinocchio sides.
+  the GRiD and Pinocchio sides. It is also enforced for floating-base
+  `iiwa14`, `go2`, `g1`, `fr3`, `fetch`, `baxter`, `gen3`, and `rizon4`.
 
 ## Ambiguous Or Deferred Mappings
 
@@ -77,8 +89,11 @@ Pass-level helpers and implementation internals:
 
 ## Normalization Steps Required Today
 
-- GRiD floating-base quaternion order is `wxyz`.
-- Pinocchio free-flyer quaternion order is `xyzw`.
+- GRiD floating-base quaternion order is now `xyzw`, matching Pinocchio's
+  free-flyer quaternion convention.
+- GRiD floating-base user-facing root 6-vectors now follow Pinocchio order
+  `[vx, vy, vz, wx, wy, wz]`. The floating-joint subspace handles the mapping
+  into GRiD's internal spatial-vector order.
 - GRiD `URDFParser` uses parser-defined DFS joint ordering with optional sibling
   tie-breaking, so joint-name alignment must be explicit.
 - GRiD merges fixed joints into retained custom structures, while Pinocchio keeps a
@@ -104,8 +119,9 @@ the current repo layout and documentation, not from guesswork about hidden APIs.
 - Additional fixed-base algorithms beyond `rnea`, `minv`, `crba`, `aba`,
   `forward_dynamics`, `forward_dynamics_grad`, `rnea_grad`, and selected pose
   targets on the verified default robots
-- All floating-base numerical enforcement until free-flyer conventions are
-  confirmed trustworthy
+- Floating-base CRBA, ABA, and end-effector derivative / Hessian helpers until
+  the remaining floating-base implementation gaps beyond `rnea`, `minv`, `forward_dynamics`,
+  `rnea_grad`, and `forward_dynamics_grad` are confirmed trustworthy
 - End-effector derivative and Hessian equivalence
 
 ## Current Suite Findings
@@ -139,3 +155,19 @@ the current repo layout and documentation, not from guesswork about hidden APIs.
   and forward-dynamics-family checks are explicitly skipped because the resolved
   source model exposes a singular zero-mass-matrix interpretation on both the
   GRiD and Pinocchio sides.
+- Floating-base `iiwa14`, `go2`, and `g1`: parse and metadata match, and
+  floating-base `rnea`, `minv`, `forward_dynamics`, `rnea_grad`, and
+  `forward_dynamics_grad`, and selected pose targets match Pinocchio in the
+  current suite.
+- Floating-base `fr3`, `fetch`, and `baxter`: parse and metadata match, and
+  floating-base `rnea`, `minv`, `forward_dynamics`, `rnea_grad`, and
+  `forward_dynamics_grad`, and selected pose targets match Pinocchio in the
+  current suite.
+- Floating-base `gen3`: parse and metadata match, and floating-base `rnea`,
+  `minv`, `forward_dynamics`, `rnea_grad`, and `forward_dynamics_grad` match
+  Pinocchio in the current suite, along with selected pose targets.
+- Floating-base `rizon4`: parse and metadata match, and floating-base `rnea`
+  and `rnea_grad` match Pinocchio in the current suite, along with selected
+  pose targets. Floating-base `minv`, `forward_dynamics`, and
+  `forward_dynamics_grad` are explicitly skipped because the resolved source
+  model is singular on both sides.

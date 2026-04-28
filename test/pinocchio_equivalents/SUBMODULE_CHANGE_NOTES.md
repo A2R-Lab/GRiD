@@ -140,7 +140,43 @@ Why it matters for CUDA later:
   same corrected transform composition rules or pose outputs will diverge from
   CPU reference behavior.
 
-### 9. Joint-type metadata is now stored on `Robot`
+### 9. Floating-base joints now build homogeneous transforms too
+
+Problem:
+- Floating-base parse used retained fixed-joint handling that expected
+  homogeneous transforms to exist on joints even in floating-base mode.
+- `Joint` previously skipped homogeneous-transform initialization whenever
+  `Joint.floating_base` was true, which broke floating-base parse before
+  numerical tests even started.
+
+Change:
+- Homogeneous-transform placeholders now exist regardless of base mode.
+- Floating joints now build a homogeneous transform and expose a matching
+  homogeneous-transform function in addition to the spatial transform.
+
+Why it matters for CUDA later:
+- Any floating-base kinematics or retained-fixed-joint bookkeeping in CUDA-side
+  codegen should assume homogeneous transforms are available for the free-flyer
+  path too.
+
+### 10. Floating-base quaternion convention now matches Pinocchio
+
+Problem:
+- GRiD previously used floating-base quaternion order `wxyz`, while Pinocchio
+  uses `xyzw`.
+- That required adapter-side quaternion reordering and made floating-base
+  equivalence harder to reason about.
+
+Change:
+- GRiD floating-base quaternion handling now uses `xyzw` directly.
+- The quaternion-to-rotation path in `SpatialAlgebra` no longer reorders the
+  quaternion components before building the rotation matrix.
+
+Why it matters for CUDA later:
+- Any CUDA or generated floating-base code that assumed `wxyz` must be updated
+  to consume and produce `xyzw` instead.
+
+### 11. Joint-type metadata is now stored on `Robot`
 
 Problem:
 - The equivalence layer needed to know which joints were `continuous`,
@@ -204,7 +240,32 @@ Why it matters for CUDA later:
   gradients. Any CUDA derivative kernels must mirror this corrected force-cross
   term.
 
-### 4. Rooted fixed-joint gradient cleanup
+### 4. Floating-base RNEA root convention was aligned with Pinocchio
+
+Problem:
+- Floating-base inverse dynamics previously disagreed with Pinocchio even after
+  quaternion alignment.
+- The remaining mismatch came from the floating root using a different
+  user-facing velocity/acceleration ordering and the wrong gravity transport at
+  the root.
+
+Change:
+- Floating-base `rnea(...)` now interprets the root velocity and acceleration
+  inputs in Pinocchio-style order:
+  `[vx, vy, vz, wx, wy, wz]`.
+- The floating joint subspace now encodes the mapping from that user-facing
+  Pinocchio order into GRiD's internal spatial-vector order, so the convention
+  is native at the API boundary instead of being patched in adapters.
+- Root gravity initialization in the floating-base forward pass now uses
+  `inv(Xmat) @ gravity_vec` instead of `Xmat @ gravity_vec`.
+
+Why it matters for CUDA later:
+- Any floating-base inverse-dynamics CUDA path must mirror both the root input
+  convention encoded in the floating-joint subspace and the corrected root
+  gravity transport if it is expected to
+  match the CPU reference layer.
+
+### 5. Rooted fixed-joint gradient cleanup
 
 Problem:
 - One rooted fixed-joint branch in the pose-gradient path multiplied a zero
@@ -217,6 +278,82 @@ Change:
 Why it matters for CUDA later:
 - Mostly cleanup, but it is worth keeping the same rooted-fixed-joint branch
   structure in any mirrored gradient code.
+
+### 6. Floating-base ABA, CRBA, and pose helpers received first-pass generalization fixes
+
+Problem:
+- Broader floating-base robots exposed several floating-only implementation bugs
+  even after the Pinocchio-order migration was complete.
+- Floating `aba(...)` still had a scalar-versus-vector articulated-bias update
+  bug and a root acceleration update that used the wrong root subspace action.
+- Floating `crba(...)` still allocated the mass matrix at body-count size
+  instead of velocity-count size, so broader floating robots indexed past the
+  matrix bounds.
+- Floating `end_effector_pose(...)` still tried to evaluate the floating root
+  transform with a scalar `q[0]` instead of the full root configuration slice.
+
+Change:
+- Floating `aba(...)` now treats the articulated-bias update term as a scalar
+  scaling of a 6D vector rather than an invalid matrix product, and the root
+  acceleration update now uses the floating joint subspace consistently.
+- Floating `crba(...)` now allocates its result at `n x n` velocity size and
+  writes the free-flyer root block into `[:6, :6]`.
+- Floating `end_effector_pose(...)` now uses `get_joint_index_q(...)` when
+  evaluating floating-root transforms in its forward and backward transform
+  chains.
+
+Why it matters for CUDA later:
+- Any floating-base articulated-body, composite-inertia, or pose helper code in
+  CUDA should be checked for these same root-expanded indexing and root-slice
+  assumptions before it is trusted against the new CPU reference behavior.
+
+### 7. Explicit-`world` URDF roots now convert cleanly into floating bases
+
+Problem:
+- Some upstream robot URDFs, including `gen3` and `rizon4`, already include an
+  explicit `world` link with a fixed base attachment.
+- The previous floating-base adjustment logic always injected a new synthetic
+  `world` link and floating joint, which created an invalid `world -> world`
+  self-loop for those robots and caused the DFS renumber pass to recurse
+  indefinitely.
+
+Change:
+- Floating-base adjustment now detects when the URDF root is already `world`.
+- In that case, it reuses the existing root child joint as the floating base
+  joint instead of creating a second `world` wrapper.
+- The converted root joint is renamed to `floating_base_joint`, switched into
+  quaternion-based floating mode, and rebuilt as a floating joint in place.
+
+Why it matters for CUDA later:
+- Any preprocessing or codegen path that assumes floating-base robots always
+  need a synthetic outer `world` wrapper should be updated to recognize explicit
+  world-root URDFs and convert the existing root attachment instead.
+
+### 8. Floating-base inverse-dynamics gradients were aligned with Pinocchio
+
+Problem:
+- After floating-base `rnea(...)` itself matched Pinocchio, the `dq` block of
+  `rnea_grad(...)` still disagreed badly while the `d/dqd` block already
+  matched.
+- The remaining mismatch came from two floating-root-specific issues:
+  the root `dq` backward pass still wrote out raw spatial-order results, and
+  the floating `dq` forward pass still differentiated the root gravity term
+  using the old `Xmat @ g` convention instead of the corrected
+  `inv(Xmat) @ g` root transport.
+
+Change:
+- Floating `rnea_grad_bpass_dq(...)` now maps the root block through the
+  floating joint subspace, just like the matching `d/dqd` path.
+- Floating `rnea_grad_fpass_dq(...)` now uses the corrected root gravity
+  transport when differentiating the floating-root acceleration with respect to
+  root position.
+- The fixed-base path was kept unchanged; the corrected gravity derivative is
+  scoped to the floating root only.
+
+Why it matters for CUDA later:
+- Any floating-base inverse-dynamics gradient kernels must mirror both the root
+  output mapping and the corrected root gravity derivative path to match the
+  CPU reference and Pinocchio.
 
 ## Behavior And Convention Changes To Remember
 

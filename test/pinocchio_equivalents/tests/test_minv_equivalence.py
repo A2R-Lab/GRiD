@@ -26,6 +26,10 @@ def test_floating_base_minv_matches_pinocchio_when_supported(
     if not capability["supported"]:
         pytest.xfail(capability["reason"])
     for sample in build_dynamics_samples(project_model):
+        if not pinocchio_model.has_invertible_mass_matrix(sample.q):
+            pytest.skip(
+                f"{spec.robot_id} floating-base mass matrix is singular for the resolved source model, so minv equivalence is not well-defined."
+            )
         actual = project_model.minv(sample.q)
         expected = pinocchio_model.minv(sample.q)
         assert_close(actual, expected, algorithm="minv", robot_id=spec.robot_id)

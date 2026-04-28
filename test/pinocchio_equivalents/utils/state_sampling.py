@@ -55,7 +55,7 @@ def _make_zero_state(adapter) -> DynamicsSample:
     qd = np.zeros(adapter.nv, dtype=np.float64)
     qdd = np.zeros(adapter.nv, dtype=np.float64)
     if adapter.base_mode == "floating":
-        q[3] = 1.0
+        q[6] = 1.0
     return DynamicsSample(name="zero", q=q, qd=qd, qdd=qdd)
 
 
@@ -68,9 +68,7 @@ def _make_conservative_state(adapter, rng: np.random.Generator) -> DynamicsSampl
         q[0:3] = rng.uniform(-0.25, 0.25, size=3)
         quat_xyzw = rng.uniform(-1.0, 1.0, size=4)
         quat_xyzw /= np.linalg.norm(quat_xyzw)
-        q[3:7] = np.array(
-            [quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]], dtype=np.float64
-        )
+        q[3:7] = quat_xyzw.astype(np.float64)
         joint_offset = 7
         joint_count = adapter.nq - joint_offset
         skip_joint_ids = 1

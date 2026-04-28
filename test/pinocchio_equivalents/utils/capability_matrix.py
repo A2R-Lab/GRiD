@@ -4,24 +4,32 @@ CAPABILITY_MATRIX = {
         "metadata": {"supported": True, "reason": ""},
         "rnea": {"supported": True, "reason": ""},
         "minv": {"supported": True, "reason": ""},
+        "forward_dynamics": {"supported": True, "reason": ""},
+        "rnea_grad": {"supported": True, "reason": ""},
+        "forward_dynamics_grad": {"supported": True, "reason": ""},
     },
     "floating": {
         "parse": {"supported": True, "reason": ""},
         "metadata": {"supported": True, "reason": ""},
         "rnea": {
-            "supported": False,
-            "reason": (
-                "Floating-base numerical equivalence is not yet trusted because the "
-                "Pinocchio free-flyer velocity convention has not been verified "
-                "against GRiD's current floating-base representation in this checkout."
-            ),
+            "supported": True,
+            "reason": "",
         },
         "minv": {
-            "supported": False,
-            "reason": (
-                "Floating-base inverse-mass equivalence is blocked on the same "
-                "free-flyer convention verification as floating-base RNEA."
-            ),
+            "supported": True,
+            "reason": "",
+        },
+        "forward_dynamics": {
+            "supported": True,
+            "reason": "",
+        },
+        "rnea_grad": {
+            "supported": True,
+            "reason": "",
+        },
+        "forward_dynamics_grad": {
+            "supported": True,
+            "reason": "",
         },
     },
 }

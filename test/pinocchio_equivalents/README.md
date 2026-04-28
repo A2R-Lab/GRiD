@@ -19,16 +19,36 @@ algorithms before extending that trust boundary to CUDA and generated GPU code.
   skips for inverse-mass and ABA-style checks because the resolved source model
   is singular on both the GRiD and Pinocchio sides.
 - Floating-base parse and metadata coverage exists for the same smoke robots.
-- Floating-base convention gaps are surfaced explicitly instead of being hidden by
-  loose tolerances or ad hoc test logic.
+- Floating-base `rnea` now matches Pinocchio for the floating-enabled smoke
+  robots after aligning the floating root velocity/acceleration convention and
+  correcting the root gravity transport in `RBDReference`.
+- Floating-base `minv` matches Pinocchio for the floating-enabled smoke robots
+  under the same native Pinocchio free-flyer ordering now used by GRiD.
+- Floating-base `forward_dynamics` now also matches Pinocchio for the current
+  floating-enabled set: `iiwa14`, `go2`, `g1`, `fr3`, `fetch`, and `baxter`.
+- Floating-base `rnea_grad` and `forward_dynamics_grad` now also match
+  Pinocchio for the current floating-enabled set wherever the resolved source
+  model has an invertible mass matrix.
+- Floating-base selected pose targets now also match Pinocchio for the current
+  floating-enabled set.
+- Floating-base parse, metadata, `rnea`, `minv`, `forward_dynamics`,
+  `rnea_grad`, `forward_dynamics_grad`, and selected pose targets are now
+  exercised on the broader floating-enabled set `iiwa14`, `go2`, `g1`, `fr3`,
+  `fetch`, `baxter`, `gen3`, and `rizon4`, with singular-model skips scoped
+  narrowly where needed.
+- Remaining floating-base convention gaps are surfaced explicitly instead of
+  being hidden by loose tolerances or ad hoc test logic.
 
 ## What This Suite Does Not Validate
 
 - CUDA kernels, generated GPU code, or accelerator paths.
 - Every function in `RBDReference`.
 - Broad nightly robot corpora in the default developer path.
-- Floating-base numerical equivalence before free-flyer convention alignment is
-  verified well enough to trust the comparison.
+- Floating-base ABA, forward-dynamics-family functions, and their derivatives
+  beyond `forward_dynamics` and `forward_dynamics_grad`.
+- Floating-base CRBA plus end-effector derivative / Hessian helpers on the
+  broader floating-enabled set until the remaining implementation gaps are
+  resolved.
 
 ## Robot Sourcing
 

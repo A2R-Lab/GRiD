@@ -61,7 +61,7 @@
           "description_name": "fr3_description"
         }
       ],
-      "base_modes": ["fixed"],
+      "base_modes": ["fixed", "floating"],
       "preferred_variant": "default",
       "notes": "Prefer robot_descriptions as the default source, with vendor fallbacks reserved for future manifest entries if upstream coverage changes."
     },
@@ -77,7 +77,7 @@
           "description_name": "rizon4_description"
         }
       ],
-      "base_modes": ["fixed"],
+      "base_modes": ["fixed", "floating"],
       "preferred_variant": "default",
       "notes": "Prefer robot_descriptions as the default source, with direct vendor fallback reserved if a future package version removes this entry."
     },
@@ -93,7 +93,7 @@
           "description_name": "gen3_description"
         }
       ],
-      "base_modes": ["fixed"],
+      "base_modes": ["fixed", "floating"],
       "preferred_variant": "default",
       "notes": "Prefer Kinova Gen3 through robot_descriptions by default."
     },
@@ -109,7 +109,7 @@
           "description_name": "fetch_description"
         }
       ],
-      "base_modes": ["fixed"],
+      "base_modes": ["fixed", "floating"],
       "preferred_variant": "default",
       "notes": "Prefer robot_descriptions as the default Fetch source."
     },
@@ -125,7 +125,7 @@
           "description_name": "baxter_description"
         }
       ],
-      "base_modes": ["fixed"],
+      "base_modes": ["fixed", "floating"],
       "preferred_variant": "default",
       "notes": "Prefer robot_descriptions as the default Baxter source."
     }

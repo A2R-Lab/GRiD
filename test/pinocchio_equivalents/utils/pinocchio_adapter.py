@@ -124,7 +124,8 @@ class PinocchioModelAdapter:
         mass = pin.crba(self.model, self.data, q_pin)
         mass = np.asarray(mass, dtype=np.float64)
         mass = 0.5 * (mass + mass.T)
-        return normalize_matrix(np.linalg.inv(mass))
+        minv = np.linalg.inv(mass)
+        return normalize_matrix(minv)
 
     def crba(self, q):
         import pinocchio as pin
@@ -137,7 +138,8 @@ class PinocchioModelAdapter:
         )
         mass = pin.crba(self.model, self.data, q_pin)
         mass = np.asarray(mass, dtype=np.float64)
-        return normalize_matrix(0.5 * (mass + mass.T))
+        mass = 0.5 * (mass + mass.T)
+        return normalize_matrix(mass)
 
     def rnea_grad(self, q, qd, qdd):
         import pinocchio as pin
@@ -254,7 +256,7 @@ def build_pinocchio_adapter(spec, resolved_model, base_mode: str) -> PinocchioMo
         mismatches = [
             ConventionMismatch(
                 category="floating_base_quaternion",
-                detail="Pinocchio free-flyer uses xyzw quaternion ordering, so GRiD states must be reordered before comparison.",
+                detail="Pinocchio free-flyer uses the same xyzw quaternion ordering as the current GRiD floating-base convention.",
             )
         ]
     else:

@@ -14,23 +14,10 @@ def as_float64(array_like) -> np.ndarray:
     return np.asarray(array_like, dtype=np.float64)
 
 
-def grid_quaternion_wxyz_to_pin_xyzw(q: Sequence[float]) -> np.ndarray:
+def normalize_pin_compatible_quaternion(q: Sequence[float]) -> np.ndarray:
     q = np.asarray(q, dtype=np.float64).copy()
     if q.shape[0] < 7:
         raise ValueError("Floating-base configuration must have at least 7 position entries.")
-    q[3:7] = np.array([q[4], q[5], q[6], q[3]], dtype=np.float64)
-    norm = np.linalg.norm(q[3:7])
-    if norm == 0.0:
-        raise ValueError("Floating-base quaternion norm was zero during normalization.")
-    q[3:7] /= norm
-    return q
-
-
-def pin_quaternion_xyzw_to_grid_wxyz(q: Sequence[float]) -> np.ndarray:
-    q = np.asarray(q, dtype=np.float64).copy()
-    if q.shape[0] < 7:
-        raise ValueError("Floating-base configuration must have at least 7 position entries.")
-    q[3:7] = np.array([q[6], q[3], q[4], q[5]], dtype=np.float64)
     norm = np.linalg.norm(q[3:7])
     if norm == 0.0:
         raise ValueError("Floating-base quaternion norm was zero during normalization.")
@@ -71,7 +58,7 @@ def normalize_project_q_for_pin(
 ) -> np.ndarray:
     q = as_float64(q)
     if base_mode == "floating":
-        q_prefix = grid_quaternion_wxyz_to_pin_xyzw(q[:7])
+        q_prefix = normalize_pin_compatible_quaternion(q[:7])
         if joint_names is None:
             return q_prefix
         q_suffix = expand_continuous_joint_positions_for_pin(
@@ -99,24 +86,12 @@ def project_q_to_pin_q_jacobian(
     if base_mode == "floating":
         if q.shape[0] < 7:
             raise ValueError("Floating-base configuration must have at least 7 position entries.")
-        base_jac = np.eye(7, dtype=np.float64)
+        base_jac = np.zeros((7, cols), dtype=np.float64)
+        base_jac[:, :7] = np.eye(7, dtype=np.float64)
         base_quat = q[3:7]
         norm = np.linalg.norm(base_quat)
         if norm == 0.0:
             raise ValueError("Floating-base quaternion norm was zero during normalization.")
-        # Current tests keep the zero-state quaternion normalized, so this captures the
-        # simple permutation used by the adapter. More general quaternion-coordinate
-        # derivatives can be added later if needed for floating-base q-derivative checks.
-        perm = np.array(
-            [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-                [0.0, 1.0, 0.0, 0.0],
-            ],
-            dtype=np.float64,
-        )
-        base_jac[3:7, 3:7] = perm
         rows.append(base_jac)
         q_joints = q[7:]
         joint_col_offset = 7
@@ -168,6 +143,8 @@ def reduce_pinocchio_q_jacobian_to_project(
     project_q = as_float64(q)
     if jacobian.shape[1] == project_q.shape[0]:
         return jacobian
+    if base_mode == "floating" and jacobian.shape[1] == project_q.shape[0] - 1:
+        return jacobian
     chain = project_q_to_pin_q_jacobian(
         base_mode,
         q,
@@ -195,5 +172,9 @@ def movable_joint_names_excluding_floating_root(
 ) -> list:
     joint_names = list(joint_names)
     if base_mode == "floating" and joint_names:
-        return [name for name in joint_names if name != "floating_base_joint"]
+        return [
+            name
+            for name in joint_names
+            if name not in {"floating_base_joint", "root_joint"}
+        ]
     return joint_names
