@@ -11,7 +11,7 @@ def test_fixed_base_minv_matches_pinocchio(spec, base_mode, project_model, pinoc
     for sample in build_dynamics_samples(project_model):
         actual = project_model.minv(sample.q)
         expected = pinocchio_model.minv(sample.q)
-        assert_close(actual, expected, algorithm="minv")
+        assert_close(actual, expected, algorithm="minv", robot_id=spec.robot_id)
 
 
 @pytest.mark.parametrize(("spec", "base_mode"), build_case_params(base_mode="floating"))
@@ -24,4 +24,4 @@ def test_floating_base_minv_matches_pinocchio_when_supported(
     for sample in build_dynamics_samples(project_model):
         actual = project_model.minv(sample.q)
         expected = pinocchio_model.minv(sample.q)
-        assert_close(actual, expected, algorithm="minv")
+        assert_close(actual, expected, algorithm="minv", robot_id=spec.robot_id)

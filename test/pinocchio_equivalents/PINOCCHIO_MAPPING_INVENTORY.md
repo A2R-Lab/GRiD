@@ -39,26 +39,25 @@ Pass-level helpers and implementation internals:
   `pinocchio.crba(...)` followed by matrix inversion.
   This is treated as the stable Python-side comparison target for v1.
 - `RBDReference.crba(q)` maps to `pinocchio.crba(...)`
-  This is currently enforced for fixed-base `iiwa14`.
+  This is currently enforced for fixed-base `iiwa14` and `go2`.
 - `RBDReference.aba(q, qd, tau, ...)` maps to `pinocchio.aba(...)`
-  This is now tested for fixed-base `iiwa14`, and the current suite exposes a
-  mismatch in the checked-out `RBDReference.aba(...)` implementation.
+  This is currently enforced for fixed-base `iiwa14` and `go2`.
 - `RBDReference.forward_dynamics(q, qd, u)` maps to the same forward-dynamics
   acceleration computed by `pinocchio.aba(...)`, because the current GRiD
   implementation composes inverse dynamics and inverse mass to recover the ABA
-  result. This is currently enforced for fixed-base `iiwa14` and matches
-  Pinocchio in the current suite.
+  result. This is currently enforced for fixed-base `iiwa14` and `go2`.
 - `RBDReference.forward_dynamics_grad(q, qd, u)` maps to
   `pinocchio.computeABADerivatives(...)` for the `ddq_dq` and `ddq_dv` blocks.
-  This is currently enforced for fixed-base `iiwa14`.
+  This is currently enforced for fixed-base `iiwa14` and `go2`.
 - `RBDReference.rnea_grad(...)` maps to `pinocchio.computeRNEADerivatives(...)`
   for the `dtau_dq` and `dtau_dv` blocks. This is currently enforced for
-  fixed-base `iiwa14`.
+  fixed-base `iiwa14` and `go2`.
 - `RBDReference.end_effector_pose(...)` maps to Pinocchio frame placements plus
   local-point offsets. The suite compares translation directly and compares
   orientation through reconstructed rotation matrices to avoid Euler-angle
   singularity artifacts. This is currently enforced for fixed-base `iiwa14`
-  targets `iiwa_joint_7`, `iiwa_joint_ee`, and `tool0_joint`.
+  targets `iiwa_joint_7`, `iiwa_joint_ee`, and `tool0_joint`, and fixed-base
+  `go2` targets `FL_calf_joint`, `FL_foot_joint`, and `RR_foot_joint`.
 
 ## Ambiguous Or Deferred Mappings
 
@@ -105,8 +104,9 @@ the current repo layout and documentation, not from guesswork about hidden APIs.
 
 ## Current Suite Findings
 
-- Fixed-base `iiwa14`:
-  `forward_dynamics` matches Pinocchio `aba`
-  `forward_dynamics_grad` matches Pinocchio ABA derivatives
-  `aba` does not currently match Pinocchio `aba`
-  `forward_dynamics` does not currently match `RBDReference.aba(...)`
+- Fixed-base `iiwa14`: `rnea`, `minv`, `crba`, `aba`, `forward_dynamics`,
+  `forward_dynamics_grad`, `rnea_grad`, and selected pose targets match
+  Pinocchio in the current suite.
+- Fixed-base `go2`: `rnea`, `minv`, `crba`, `aba`, `forward_dynamics`,
+  `forward_dynamics_grad`, `rnea_grad`, and selected pose targets match
+  Pinocchio in the current suite.

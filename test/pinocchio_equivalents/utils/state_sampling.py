@@ -19,16 +19,32 @@ def _joint_ranges(
     robot, count: int, default_low: float, default_high: float, skip_joint_ids: int = 0
 ) -> np.ndarray:
     bounds = np.zeros((count, 2), dtype=np.float64)
+    default_span = float(default_high - default_low)
     for local_index, jid in enumerate(range(skip_joint_ids, skip_joint_ids + count)):
         limits = robot.get_joint_by_id(jid).get_joint_limits()
         low = default_low
         high = default_high
         if limits:
             raw_low, raw_high = limits
-            if np.isfinite(raw_low):
-                low = max(default_low, raw_low)
-            if np.isfinite(raw_high):
-                high = min(default_high, raw_high)
+            finite_low = np.isfinite(raw_low)
+            finite_high = np.isfinite(raw_high)
+
+            if finite_low and finite_high:
+                clipped_low = max(default_low, raw_low)
+                clipped_high = min(default_high, raw_high)
+                if clipped_low <= clipped_high:
+                    low = clipped_low
+                    high = clipped_high
+                else:
+                    span = min(default_span, raw_high - raw_low)
+                    midpoint = 0.5 * (raw_low + raw_high)
+                    low = midpoint - 0.5 * span
+                    high = midpoint + 0.5 * span
+            else:
+                if finite_low:
+                    low = max(default_low, raw_low)
+                if finite_high:
+                    high = min(default_high, raw_high)
         bounds[local_index, 0] = low
         bounds[local_index, 1] = high
     return bounds

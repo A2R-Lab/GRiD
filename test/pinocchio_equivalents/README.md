@@ -11,12 +11,9 @@ algorithms before extending that trust boundary to CUDA and generated GPU code.
 - The same resolved URDF can be loaded by both GRiD and Pinocchio.
 - Fixed-base smoke robots have sane metadata and can be compared numerically.
 - Fixed-base `rnea` and `minv` match Pinocchio within central epsilon tolerances.
-- Fixed-base `iiwa14` also exercises `crba`, `aba`, `forward_dynamics`,
-  `forward_dynamics_grad`, `rnea_grad`, and selected pose targets against
-  Pinocchio.
-  In the current checkout, the added `aba` coverage exposes a mismatch while
-  the fixed-base `forward_dynamics` and `forward_dynamics_grad` paths match
-  Pinocchio.
+- Fixed-base `iiwa14` and `go2` also exercise `crba`, `aba`,
+  `forward_dynamics`, `forward_dynamics_grad`, `rnea_grad`, and selected pose
+  targets against Pinocchio.
 - Floating-base parse and metadata coverage exists for the same smoke robots.
 - Floating-base convention gaps are surfaced explicitly instead of being hidden by
   loose tolerances or ad hoc test logic.
