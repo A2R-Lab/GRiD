@@ -6,15 +6,10 @@ from test.pinocchio_equivalents.utils.model_sources import iter_robot_cases
 from test.pinocchio_equivalents.utils.state_sampling import build_dynamics_samples
 
 
-SUPPORTED_FIXED_ROBOTS = {"iiwa14", "go2", "g1"}
-
-
 def build_fixed_case_params():
     params = []
     for case in iter_robot_cases(MANIFEST_PATH, base_mode="fixed"):
         spec = case["spec"]
-        if spec.robot_id not in SUPPORTED_FIXED_ROBOTS:
-            continue
         params.append(
             pytest.param(
                 spec,
@@ -35,7 +30,11 @@ def test_fixed_base_aba_matches_pinocchio(
     spec, base_mode, project_model, pinocchio_model
 ):
     for sample in build_dynamics_samples(project_model):
+        if not pinocchio_model.has_invertible_mass_matrix(sample.q):
+            pytest.skip(
+                f"{spec.robot_id} fixed-base mass matrix is singular for the resolved source model, so ABA equivalence is not well-defined."
+            )
         tau = project_model.rnea(sample.q, sample.qd, sample.qdd)
         actual = project_model.aba(sample.q, sample.qd, tau)
         expected = pinocchio_model.aba(sample.q, sample.qd, tau)
-        assert_close(actual, expected, algorithm="rnea", robot_id=spec.robot_id)
+        assert_close(actual, expected, algorithm="aba", robot_id=spec.robot_id)

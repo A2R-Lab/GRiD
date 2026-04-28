@@ -84,7 +84,11 @@ def resolved_robot_spec(developer_environment, spec):
 
 @lru_cache(maxsize=None)
 def _project_model_attempt(robot_id, embodiment, source_kind, urdf_path, base_mode):
-    from test.pinocchio_equivalents.utils.model_sources import ResolvedRobotModel, RobotSpec
+    from test.pinocchio_equivalents.utils.model_sources import (
+        ResolvedRobotModel,
+        RobotSpec,
+        SourceCandidate,
+    )
 
     spec = RobotSpec(
         robot_id=robot_id,
@@ -95,6 +99,7 @@ def _project_model_attempt(robot_id, embodiment, source_kind, urdf_path, base_mo
         base_modes=[base_mode],
         preferred_variant="default",
         notes="",
+        source_candidates=[SourceCandidate(source_kind=source_kind, description_name="")],
     )
     resolved = ResolvedRobotModel(
         robot_id=robot_id,

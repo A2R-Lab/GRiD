@@ -9,8 +9,11 @@ def test_model_dimensions_are_positive(spec, base_mode, project_model, pinocchio
     assert project_model.nv > 0
     assert pinocchio_model.nq > 0
     assert pinocchio_model.nv > 0
-    assert project_model.nq == pinocchio_model.nq
     assert project_model.nv == pinocchio_model.nv
+    continuous_count = sum(
+        1 for joint_type in project_model.joint_types_by_id.values() if joint_type == "continuous"
+    )
+    assert pinocchio_model.nq == project_model.nq + continuous_count
 
 
 @pytest.mark.parametrize(("spec", "base_mode"), build_case_params())

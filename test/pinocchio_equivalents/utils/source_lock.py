@@ -20,15 +20,23 @@ def sha256_file(path: Optional[str]) -> Optional[str]:
     return digest.hexdigest()
 
 
-def build_lock_entry(spec, resolved: Optional[Any]) -> Dict[str, Any]:
+def build_lock_entry(spec, resolved: Optional[Any], resolution_error: Optional[str] = None) -> Dict[str, Any]:
     if resolved is None:
         return {
             "robot_id": spec.robot_id,
             "tier": spec.tier,
             "source_kind": spec.source_kind,
             "description_name": spec.description_name,
+            "source_candidates": [
+                {
+                    "source_kind": candidate.source_kind,
+                    "description_name": candidate.description_name,
+                }
+                for candidate in spec.source_candidates
+            ],
             "preferred_variant": spec.preferred_variant,
             "resolution_status": "unresolved",
+            "resolution_error": resolution_error,
             "resolved_urdf_path": None,
             "resolved_package_root": None,
             "resolved_repository_root": None,
@@ -44,8 +52,16 @@ def build_lock_entry(spec, resolved: Optional[Any]) -> Dict[str, Any]:
         "tier": spec.tier,
         "source_kind": spec.source_kind,
         "description_name": spec.description_name,
+        "source_candidates": [
+            {
+                "source_kind": candidate.source_kind,
+                "description_name": candidate.description_name,
+            }
+            for candidate in spec.source_candidates
+        ],
         "preferred_variant": spec.preferred_variant,
         "resolution_status": "resolved",
+        "resolution_error": None,
         "resolved_urdf_path": resolved.urdf_path,
         "resolved_package_root": resolved.package_path,
         "resolved_repository_root": resolved.repository_path,

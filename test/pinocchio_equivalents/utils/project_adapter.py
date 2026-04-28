@@ -49,6 +49,18 @@ class ProjectModelAdapter:
     def actuated_joint_names(self) -> List[str]:
         return movable_joint_names_excluding_floating_root(self.base_mode, self.joint_names)
 
+    @property
+    def fixed_joint_names(self) -> List[str]:
+        return self.robot.get_fixed_joint_names()
+
+    @property
+    def joint_types_by_id(self):
+        return self.robot.get_joint_types_by_id()
+
+    @property
+    def joint_types_by_name(self):
+        return self.robot.get_joint_types_by_name()
+
     def rnea(self, q, qd, qdd):
         c, _v, _a, _f = self.reference.rnea(q, qd, qdd)
         return normalize_vector(c)
@@ -83,6 +95,33 @@ class ProjectModelAdapter:
         )[0]
         return normalize_vector(np.asarray(ee_pose).reshape(-1))
 
+    def end_effector_rotation_matrix(self, q, target_name: str):
+        if target_name in self.joint_names:
+            joint = self.robot.get_joint_by_name(target_name)
+            target_id = joint.get_id()
+            xmat_hom = np.eye(4)
+            curr_id = target_id
+            while curr_id != -1:
+                curr_x = self.robot.get_Xmat_hom_Func_by_id(curr_id)(q[curr_id])
+                xmat_hom = np.matmul(curr_x, xmat_hom)
+                curr_id = self.robot.get_parent_id(curr_id)
+            return normalize_matrix(np.asarray(xmat_hom[:3, :3], dtype=np.float64))
+
+        fixed_joint = self.robot.get_fixed_joint_by_name(target_name)
+        if fixed_joint is None:
+            raise ValueError(f"Could not find joint or fixed joint named: {target_name}")
+        if fixed_joint.parent_name == -1:
+            xmat_hom = fixed_joint.get_transformation_matrix_hom()
+        else:
+            parent = self.robot.get_joint_by_name(fixed_joint.parent_name)
+            xmat_hom = fixed_joint.get_transformation_matrix_hom()
+            curr_id = parent.get_id()
+            while curr_id != -1:
+                curr_x = self.robot.get_Xmat_hom_Func_by_id(curr_id)(q[curr_id])
+                xmat_hom = np.matmul(curr_x, xmat_hom)
+                curr_id = self.robot.get_parent_id(curr_id)
+        return normalize_matrix(np.asarray(xmat_hom[:3, :3], dtype=np.float64))
+
 
 def build_project_adapter(spec, resolved_model, base_mode: str) -> ProjectModelAdapter:
     floating_base = base_mode == "floating"
@@ -97,7 +136,7 @@ def build_project_adapter(spec, resolved_model, base_mode: str) -> ProjectModelA
         ),
         ConventionMismatch(
             category="joint_order",
-            detail="Joint order is parser-defined DFS order with optional sibling tie-breaking, so tests must align by joint name explicitly.",
+            detail="Joint order follows parser-defined DFS order with Pinocchio-style sibling sorting by child subtree name.",
         ),
     ]
     if floating_base:
@@ -131,7 +170,7 @@ def strict_parse_robot(urdf_path: str, floating_base: bool):
             parser.robot = Robot(parser.soup["name"], floating_base, True)
             parser.parse_links()
             parser.parse_joints()
-            parser.renumber_linksJoints(using_quaternion=True, alpha_tie_breaker=False)
+            parser.renumber_linksJoints(using_quaternion=True, joint_ordering="pinocchio_order")
             parser.print_joint_order()
             robot = copy.deepcopy(parser.robot)
     except Exception as exc:

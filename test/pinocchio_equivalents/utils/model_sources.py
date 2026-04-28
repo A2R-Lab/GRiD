@@ -6,6 +6,12 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 @dataclass(frozen=True)
+class SourceCandidate:
+    source_kind: str
+    description_name: str = ""
+
+
+@dataclass(frozen=True)
 class RobotSpec:
     robot_id: str
     tier: str
@@ -15,6 +21,7 @@ class RobotSpec:
     base_modes: List[str]
     preferred_variant: str
     notes: str
+    source_candidates: List[SourceCandidate]
 
 
 @dataclass(frozen=True)
@@ -41,30 +48,49 @@ def select_robot_specs(manifest: Dict[str, Any], tier: Optional[str] = None) -> 
     for robot in manifest["robots"]:
         if robot["tier"] != resolved_tier:
             continue
+        source_candidates = [
+            SourceCandidate(
+                source_kind=candidate["source_kind"],
+                description_name=candidate.get("description_name", ""),
+            )
+            for candidate in robot.get("source_candidates", [])
+        ]
+        if not source_candidates:
+            source_candidates = [
+                SourceCandidate(
+                    source_kind=robot["source_kind"],
+                    description_name=robot["description_name"],
+                )
+            ]
         specs.append(
             RobotSpec(
                 robot_id=robot["robot_id"],
                 tier=robot["tier"],
                 embodiment=robot["embodiment"],
-                source_kind=robot["source_kind"],
-                description_name=robot["description_name"],
+                source_kind=source_candidates[0].source_kind,
+                description_name=source_candidates[0].description_name,
                 base_modes=list(robot["base_modes"]),
                 preferred_variant=robot.get("preferred_variant", "default"),
                 notes=robot.get("notes", ""),
+                source_candidates=source_candidates,
             )
         )
     return specs
 
 
-def resolve_robot_descriptions(spec: RobotSpec) -> ResolvedRobotModel:
+def resolve_robot_descriptions(spec: RobotSpec, candidate: SourceCandidate) -> ResolvedRobotModel:
     try:
-        module = importlib.import_module(spec.description_name)
+        module = importlib.import_module(candidate.description_name)
     except ModuleNotFoundError:
-        module = importlib.import_module(f"robot_descriptions.{spec.description_name}")
+        module = importlib.import_module(f"robot_descriptions.{candidate.description_name}")
     urdf_path = getattr(module, "URDF_PATH", None)
+    if not urdf_path and hasattr(module, "XACRO_PATH"):
+        from robot_descriptions._xacro import get_urdf_path
+
+        urdf_path = get_urdf_path(module)
     if not urdf_path:
         raise RuntimeError(
-            f"{spec.description_name} did not expose URDF_PATH for {spec.robot_id}"
+            f"{candidate.description_name} did not expose URDF_PATH for {spec.robot_id}"
         )
 
     package_path = getattr(module, "PACKAGE_PATH", None)
@@ -74,8 +100,8 @@ def resolve_robot_descriptions(spec: RobotSpec) -> ResolvedRobotModel:
 
     return ResolvedRobotModel(
         robot_id=spec.robot_id,
-        source_kind=spec.source_kind,
-        description_name=spec.description_name,
+        source_kind=candidate.source_kind,
+        description_name=candidate.description_name,
         urdf_path=str(urdf_path),
         package_path=str(package_path) if package_path else None,
         repository_path=str(repository_path) if repository_path else None,
@@ -86,21 +112,31 @@ def resolve_robot_descriptions(spec: RobotSpec) -> ResolvedRobotModel:
 
 
 def resolve_robot_spec(spec: RobotSpec) -> ResolvedRobotModel:
-    if spec.source_kind == "robot_descriptions":
-        return resolve_robot_descriptions(spec)
-    if spec.source_kind == "example_robot_data":
-        raise NotImplementedError(
-            "example_robot_data resolution is planned but not used in the smoke manifest"
-        )
-    if spec.source_kind == "direct_git":
-        raise NotImplementedError(
-            "direct_git resolution is planned but not used in the smoke manifest"
-        )
-    if spec.source_kind == "local_path":
-        raise NotImplementedError(
-            "local_path resolution is reserved for debugging and is not part of the smoke manifest"
-        )
-    raise ValueError(f"Unsupported source_kind: {spec.source_kind}")
+    failures = []
+    for candidate in spec.source_candidates:
+        try:
+            if candidate.source_kind == "robot_descriptions":
+                return resolve_robot_descriptions(spec, candidate)
+            if candidate.source_kind == "example_robot_data":
+                raise NotImplementedError(
+                    "example_robot_data resolution is planned but not used in the current developer flow"
+                )
+            if candidate.source_kind == "direct_git":
+                raise NotImplementedError(
+                    "direct_git resolution is reserved for future robot_descriptions gaps and is not implemented yet"
+                )
+            if candidate.source_kind == "local_path":
+                raise NotImplementedError(
+                    "local_path resolution is reserved for debugging and is not part of the default developer flow"
+                )
+            raise ValueError(f"Unsupported source_kind: {candidate.source_kind}")
+        except Exception as exc:
+            failures.append(
+                f"{candidate.source_kind}:{candidate.description_name or spec.robot_id} -> {exc}"
+            )
+    raise RuntimeError(
+        f"Unable to resolve {spec.robot_id} using source candidates: " + "; ".join(failures)
+    )
 
 
 def iter_robot_cases(

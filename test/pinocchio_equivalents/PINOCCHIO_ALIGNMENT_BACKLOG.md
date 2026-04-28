@@ -15,6 +15,8 @@ use from a Pinocchio-oriented workflow.
   joint traversal policy
   original URDF joint ordering
   final internal joint ordering
+- Keep Pinocchio-compatible traversal available as an explicit parser policy so
+  ordering changes remain intentional and testable.
 - Add stable helpers for:
   joint names
   movable joint names

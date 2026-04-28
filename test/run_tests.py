@@ -30,9 +30,13 @@ def list_tests(manifest_path: Path, tier: str | None) -> int:
     print(f"Tier: {resolved_tier}")
     for robot in select_robot_specs(manifest, tier=resolved_tier):
         base_modes = ", ".join(robot.base_modes)
+        source_chain = " -> ".join(
+            f"{candidate.source_kind}:{candidate.description_name}"
+            for candidate in robot.source_candidates
+        )
         print(
             f"- {robot.robot_id}: {robot.embodiment} via "
-            f"{robot.source_kind} ({robot.description_name}); base_modes={base_modes}"
+            f"{source_chain}; base_modes={base_modes}"
         )
     return 0
 
@@ -41,14 +45,21 @@ def prepare_models(manifest_path: Path, tier: str | None, update_lock: bool) -> 
     manifest = load_manifest(manifest_path)
     specs = select_robot_specs(manifest, tier=tier)
     entries = []
+    failures = []
     for spec in specs:
-        resolved = resolve_robot_spec(spec)
-        entry = build_lock_entry(spec, resolved)
+        try:
+            resolved = resolve_robot_spec(spec)
+            entry = build_lock_entry(spec, resolved)
+            print(
+                f"resolved {spec.robot_id}: urdf={entry['resolved_urdf_path']} "
+                f"package_root={entry['resolved_package_root']}"
+            )
+        except Exception as exc:
+            resolved = None
+            entry = build_lock_entry(spec, resolved, resolution_error=str(exc))
+            failures.append((spec.robot_id, str(exc)))
+            print(f"failed {spec.robot_id}: {exc}")
         entries.append(entry)
-        print(
-            f"resolved {spec.robot_id}: urdf={entry['resolved_urdf_path']} "
-            f"package_root={entry['resolved_package_root']}"
-        )
 
     generated_lock = {
         "schema_version": 1,
@@ -69,7 +80,7 @@ def prepare_models(manifest_path: Path, tier: str | None, update_lock: bool) -> 
             json.dumps(generated_lock, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-    return 0
+    return 1 if failures else 0
 
 
 def run_pytest(target: Path, pytest_args: list[str]) -> int:

@@ -6,15 +6,10 @@ from test.pinocchio_equivalents.utils.state_sampling import build_dynamics_sampl
 from test.pinocchio_equivalents.utils.comparators import assert_close
 
 
-SUPPORTED_FIXED_ROBOTS = {"iiwa14", "go2", "g1"}
-
-
 def build_fixed_case_params():
     params = []
     for case in iter_robot_cases(MANIFEST_PATH, base_mode="fixed"):
         spec = case["spec"]
-        if spec.robot_id not in SUPPORTED_FIXED_ROBOTS:
-            continue
         params.append(
             pytest.param(
                 spec,

@@ -1,3 +1,4 @@
 pytest
 pin
-robot_descriptions
+robot_descriptions>=1.23.0
+xacrodoc

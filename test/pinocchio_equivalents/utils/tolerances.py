@@ -18,6 +18,7 @@ DEFAULT_TOLERANCE = Tolerance(
 ALGORITHM_TOLERANCES = {
     "rnea": DEFAULT_TOLERANCE,
     "minv": DEFAULT_TOLERANCE,
+    "aba": DEFAULT_TOLERANCE,
 }
 
 ROBOT_ALGORITHM_TOLERANCES = {
@@ -30,6 +31,21 @@ ROBOT_ALGORITHM_TOLERANCES = {
         rtol=1e-6,
         atol=1e-7,
         note="G1 inverse-mass and CRBA comparisons need a slightly wider absolute tolerance than the smaller smoke robots.",
+    ),
+    ("g1", "aba"): Tolerance(
+        rtol=1e-6,
+        atol=5e-7,
+        note="G1 fixed-base ABA comparisons stay within the same sub-micro residual scale as the existing G1 dynamics checks.",
+    ),
+    ("baxter", "aba"): Tolerance(
+        rtol=1e-7,
+        atol=5e-9,
+        note="Baxter fixed-base ABA agrees with Pinocchio to within a few nanounits; this narrowly scoped absolute tolerance avoids failing on near-zero residuals.",
+    ),
+    ("rizon4", "rnea"): Tolerance(
+        rtol=1e-7,
+        atol=2e-9,
+        note="Rizon4 fixed-base pose and dynamics checks stay at nanounit residual scale; this narrow absolute tolerance covers tiny frame-placement differences.",
     ),
 }
 
