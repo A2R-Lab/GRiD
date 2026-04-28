@@ -1,9 +1,9 @@
 import pytest
 
-from test.pinocchio_equivalents.adapters.capability_matrix import get_capability
-from test.pinocchio_equivalents.adapters.comparators import assert_close
+from test.pinocchio_equivalents.utils.capability_matrix import get_capability
+from test.pinocchio_equivalents.utils.comparators import assert_close
 from test.pinocchio_equivalents.conftest import build_case_params
-from test.pinocchio_equivalents.state_sampling import build_dynamics_samples
+from test.pinocchio_equivalents.utils.state_sampling import build_dynamics_samples
 
 
 @pytest.mark.parametrize(("spec", "base_mode"), build_case_params(base_mode="fixed"))

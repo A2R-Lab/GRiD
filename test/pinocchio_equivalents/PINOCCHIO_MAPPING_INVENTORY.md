@@ -40,6 +40,17 @@ Pass-level helpers and implementation internals:
   This is treated as the stable Python-side comparison target for v1.
 - `RBDReference.crba(q)` maps to `pinocchio.crba(...)`
   This is currently enforced for fixed-base `iiwa14`.
+- `RBDReference.aba(q, qd, tau, ...)` maps to `pinocchio.aba(...)`
+  This is now tested for fixed-base `iiwa14`, and the current suite exposes a
+  mismatch in the checked-out `RBDReference.aba(...)` implementation.
+- `RBDReference.forward_dynamics(q, qd, u)` maps to the same forward-dynamics
+  acceleration computed by `pinocchio.aba(...)`, because the current GRiD
+  implementation composes inverse dynamics and inverse mass to recover the ABA
+  result. This is currently enforced for fixed-base `iiwa14` and matches
+  Pinocchio in the current suite.
+- `RBDReference.forward_dynamics_grad(q, qd, u)` maps to
+  `pinocchio.computeABADerivatives(...)` for the `ddq_dq` and `ddq_dv` blocks.
+  This is currently enforced for fixed-base `iiwa14`.
 - `RBDReference.rnea_grad(...)` maps to `pinocchio.computeRNEADerivatives(...)`
   for the `dtau_dq` and `dtau_dv` blocks. This is currently enforced for
   fixed-base `iiwa14`.
@@ -51,15 +62,10 @@ Pass-level helpers and implementation internals:
 
 ## Ambiguous Or Deferred Mappings
 
-- `aba(q, qd, tau, ...)`
-  Likely maps to `pinocchio.aba(...)`, but the current checkout and docs still
-  describe floating-base ABA as under development.
-- `forward_dynamics(q, qd, u)`
-  This appears to be a composed quantity rather than a direct Pinocchio primitive.
-  It is deferred until the exact semantics are documented relative to `aba`.
 - `forward_dynamics_grad(...)`
-  Pinocchio has related derivative APIs, but shape, semantics, and state ordering
-  still need careful validation before turning this into an enforcing test.
+  The mapping to Pinocchio ABA derivatives is now explicit for fixed-base
+  `iiwa14`, but broader fixed-base coverage and floating-base coverage are still
+  deferred.
 - End-effector helpers beyond pose
   The current source includes a TODO that floating-base support is not fully added
   and tested for end-effector derivatives and Hessians, so those remain deferred.
@@ -90,9 +96,17 @@ the current repo layout and documentation, not from guesswork about hidden APIs.
 
 ## V1 Deferrals
 
-- Additional fixed-base algorithms beyond `rnea`, `minv`, `crba`, `rnea_grad`,
-  and selected pose targets on `iiwa14`
+- Additional fixed-base algorithms beyond `rnea`, `minv`, `crba`, `aba`,
+  `forward_dynamics`, `forward_dynamics_grad`, `rnea_grad`, and selected pose
+  targets on `iiwa14`
 - All floating-base numerical enforcement until free-flyer conventions are
   confirmed trustworthy
-- Forward-dynamics derivative equivalence
 - End-effector derivative and Hessian equivalence
+
+## Current Suite Findings
+
+- Fixed-base `iiwa14`:
+  `forward_dynamics` matches Pinocchio `aba`
+  `forward_dynamics_grad` matches Pinocchio ABA derivatives
+  `aba` does not currently match Pinocchio `aba`
+  `forward_dynamics` does not currently match `RBDReference.aba(...)`

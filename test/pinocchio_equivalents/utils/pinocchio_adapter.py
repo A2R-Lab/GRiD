@@ -3,7 +3,7 @@ from typing import List
 
 import numpy as np
 
-from test.pinocchio_equivalents.adapters.normalization import (
+from test.pinocchio_equivalents.utils.normalization import (
     ConventionMismatch,
     movable_joint_names_excluding_floating_root,
     normalize_matrix,
@@ -45,6 +45,18 @@ class PinocchioModelAdapter:
         tau = pin.rnea(self.model, self.data, q_pin, qd_pin, qdd_pin)
         return normalize_vector(tau)
 
+    def aba(self, q, qd, tau):
+        import pinocchio as pin
+
+        q_pin = normalize_project_q_for_pin(self.base_mode, q)
+        qd_pin = np.asarray(qd, dtype=np.float64)
+        tau_pin = np.asarray(tau, dtype=np.float64)
+        qdd = pin.aba(self.model, self.data, q_pin, qd_pin, tau_pin)
+        return normalize_vector(qdd)
+
+    def forward_dynamics(self, q, qd, u):
+        return self.aba(q, qd, u)
+
     def minv(self, q):
         import pinocchio as pin
 
@@ -72,6 +84,18 @@ class PinocchioModelAdapter:
         return (
             normalize_matrix(np.asarray(self.data.dtau_dq, dtype=np.float64)),
             normalize_matrix(np.asarray(self.data.dtau_dv, dtype=np.float64)),
+        )
+
+    def forward_dynamics_grad(self, q, qd, u):
+        import pinocchio as pin
+
+        q_pin = normalize_project_q_for_pin(self.base_mode, q)
+        qd_pin = np.asarray(qd, dtype=np.float64)
+        u_pin = np.asarray(u, dtype=np.float64)
+        pin.computeABADerivatives(self.model, self.data, q_pin, qd_pin, u_pin)
+        return (
+            normalize_matrix(np.asarray(self.data.ddq_dq, dtype=np.float64)),
+            normalize_matrix(np.asarray(self.data.ddq_dv, dtype=np.float64)),
         )
 
     def end_effector_pose(self, q, target_name: str, offset=None):

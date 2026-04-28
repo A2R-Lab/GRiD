@@ -1,6 +1,6 @@
 import numpy as np
 
-from test.pinocchio_equivalents.tolerances import get_tolerance
+from test.pinocchio_equivalents.utils.tolerances import get_tolerance
 
 
 def assert_close(actual, expected, algorithm: str) -> None:

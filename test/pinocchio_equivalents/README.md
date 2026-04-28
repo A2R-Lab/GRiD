@@ -11,6 +11,12 @@ algorithms before extending that trust boundary to CUDA and generated GPU code.
 - The same resolved URDF can be loaded by both GRiD and Pinocchio.
 - Fixed-base smoke robots have sane metadata and can be compared numerically.
 - Fixed-base `rnea` and `minv` match Pinocchio within central epsilon tolerances.
+- Fixed-base `iiwa14` also exercises `crba`, `aba`, `forward_dynamics`,
+  `forward_dynamics_grad`, `rnea_grad`, and selected pose targets against
+  Pinocchio.
+  In the current checkout, the added `aba` coverage exposes a mismatch while
+  the fixed-base `forward_dynamics` and `forward_dynamics_grad` paths match
+  Pinocchio.
 - Floating-base parse and metadata coverage exists for the same smoke robots.
 - Floating-base convention gaps are surfaced explicitly instead of being hidden by
   loose tolerances or ad hoc test logic.
@@ -54,36 +60,49 @@ prewarms only the default smoke-tier assets unless `PINOCCHIO_EQUIVALENCE_TIER`
 is overridden. Both install scripts create and reuse a repo-local `.venv` so the
 workflow does not depend on global `pip` writes.
 
+Top-level runner and suite entrypoints:
+
+- `test/run_tests.py` is the main command-line entrypoint for listing models,
+  preparing assets, and running the suite.
+- `test/pinocchio_equivalents/test_all.py` is the suite-level pytest target used
+  by the top-level runner.
+
 ## Running The Smoke Suite
 
 ```bash
-.venv/bin/pytest -m pinocchio_equivalence test/pinocchio_equivalents
+.venv/bin/python test/run_tests.py
 ```
 
 To focus on fixed-base coverage first:
 
 ```bash
-.venv/bin/pytest -m "pinocchio_equivalence and not floating_base" test/pinocchio_equivalents
+.venv/bin/python test/run_tests.py -- -m "pinocchio_equivalence and not floating_base"
+```
+
+To list the manifest-controlled smoke robots:
+
+```bash
+.venv/bin/python test/run_tests.py --list-tests
 ```
 
 ## Provenance And Lock Files
 
 - `ROBOT_SOURCE_LOCK.json` is the checked-in source/provenance note for the suite.
-- `scripts/fetch_test_models.py` can generate a fresh machine-readable lock under
+- `test/run_tests.py --prepare-models` can generate a fresh machine-readable lock under
   `.external_test_assets/robot_source_lock.generated.json`.
 
 If you want to refresh the checked-in lock after verifying dependencies and robot
 resolution locally, run:
 
 ```bash
-python3 scripts/fetch_test_models.py --update-checked-in-lock
+.venv/bin/python test/run_tests.py --prepare-models --update-lock
 ```
 
 ## Adding A New Robot Safely
 
 1. Add a new manifest entry with robot id, embodiment, source kind, source
    descriptor, tier, and base modes.
-2. Resolve it with `scripts/fetch_test_models.py`.
+2. Resolve it with `test/run_tests.py --prepare-models`.
 3. Refresh the source lock.
 4. Run parse and metadata coverage first.
 5. Only add numerical coverage for algorithms whose mapping to Pinocchio is clear.

@@ -1,10 +1,10 @@
 import numpy as np
 import pytest
 
-from test.pinocchio_equivalents.adapters.comparators import assert_close
 from test.pinocchio_equivalents.conftest import MANIFEST_PATH
-from test.pinocchio_equivalents.model_sources import iter_robot_cases
-from test.pinocchio_equivalents.state_sampling import build_dynamics_samples
+from test.pinocchio_equivalents.utils.model_sources import iter_robot_cases
+from test.pinocchio_equivalents.utils.state_sampling import build_dynamics_samples
+from test.pinocchio_equivalents.utils.comparators import assert_close
 
 
 def pose_vector_to_rotation_matrix(pose_vector):
@@ -47,29 +47,6 @@ def build_iiwa_fixed_case_params():
             )
         )
     return params
-
-
-@pytest.mark.parametrize(("spec", "base_mode"), build_iiwa_fixed_case_params())
-def test_iiwa_fixed_base_crba_matches_pinocchio(
-    spec, base_mode, project_model, pinocchio_model
-):
-    for sample in build_dynamics_samples(project_model):
-        actual = project_model.crba(sample.q)
-        expected = pinocchio_model.crba(sample.q)
-        assert_close(actual, expected, algorithm="minv")
-
-
-@pytest.mark.parametrize(("spec", "base_mode"), build_iiwa_fixed_case_params())
-def test_iiwa_fixed_base_rnea_grad_matches_pinocchio(
-    spec, base_mode, project_model, pinocchio_model
-):
-    for sample in build_dynamics_samples(project_model):
-        actual_dq, actual_dqd = project_model.rnea_grad(sample.q, sample.qd, sample.qdd)
-        expected_dq, expected_dqd = pinocchio_model.rnea_grad(
-            sample.q, sample.qd, sample.qdd
-        )
-        assert_close(actual_dq, expected_dq, algorithm="rnea")
-        assert_close(actual_dqd, expected_dqd, algorithm="rnea")
 
 
 @pytest.mark.parametrize(("spec", "base_mode"), build_iiwa_fixed_case_params())

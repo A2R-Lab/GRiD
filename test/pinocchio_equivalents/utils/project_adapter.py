@@ -12,7 +12,7 @@ from URDFParser.Joint import Joint
 from URDFParser.Robot import Robot
 from URDFParser.URDFParser import URDFParser
 
-from test.pinocchio_equivalents.adapters.normalization import (
+from test.pinocchio_equivalents.utils.normalization import (
     ConventionMismatch,
     movable_joint_names_excluding_floating_root,
     normalize_matrix,
@@ -53,6 +53,12 @@ class ProjectModelAdapter:
         c, _v, _a, _f = self.reference.rnea(q, qd, qdd)
         return normalize_vector(c)
 
+    def aba(self, q, qd, tau):
+        return normalize_vector(self.reference.aba(q, qd, tau))
+
+    def forward_dynamics(self, q, qd, u):
+        return normalize_vector(self.reference.forward_dynamics(q, qd, u))
+
     def minv(self, q):
         return normalize_matrix(self.reference.minv(q))
 
@@ -62,6 +68,10 @@ class ProjectModelAdapter:
     def rnea_grad(self, q, qd, qdd):
         dc_du = normalize_matrix(self.reference.rnea_grad(q, qd, qdd))
         return dc_du[:, : self.nv], dc_du[:, self.nv :]
+
+    def forward_dynamics_grad(self, q, qd, u):
+        dqdd_dq, dqdd_dqd = self.reference.forward_dynamics_grad(q, qd, u)
+        return normalize_matrix(dqdd_dq), normalize_matrix(dqdd_dqd)
 
     def end_effector_pose(self, q, target_name: str, offset=None):
         if offset is None:

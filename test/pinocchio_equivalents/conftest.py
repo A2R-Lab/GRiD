@@ -4,17 +4,17 @@ from pathlib import Path
 
 import pytest
 
-from test.pinocchio_equivalents.adapters.pinocchio_adapter import build_pinocchio_adapter
-from test.pinocchio_equivalents.adapters.project_adapter import (
+from test.pinocchio_equivalents.utils.pinocchio_adapter import build_pinocchio_adapter
+from test.pinocchio_equivalents.utils.project_adapter import (
     ProjectParseError,
     build_project_adapter,
 )
-from test.pinocchio_equivalents.model_sources import (
+from test.pinocchio_equivalents.utils.model_sources import (
     iter_robot_cases,
     load_manifest,
     resolve_robot_spec,
 )
-from test.pinocchio_equivalents.source_lock import build_lock_entry
+from test.pinocchio_equivalents.utils.source_lock import build_lock_entry
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -84,7 +84,7 @@ def resolved_robot_spec(developer_environment, spec):
 
 @lru_cache(maxsize=None)
 def _project_model_attempt(robot_id, embodiment, source_kind, urdf_path, base_mode):
-    from test.pinocchio_equivalents.model_sources import ResolvedRobotModel, RobotSpec
+    from test.pinocchio_equivalents.utils.model_sources import ResolvedRobotModel, RobotSpec
 
     spec = RobotSpec(
         robot_id=robot_id,
