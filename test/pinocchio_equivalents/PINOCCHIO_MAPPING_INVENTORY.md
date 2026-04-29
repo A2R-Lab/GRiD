@@ -15,6 +15,8 @@ Clear or mostly clear dynamics-facing surface:
 - `forward_dynamics(q, qd, u)`
 - `rnea_grad(q, qd, qdd=None, GRAVITY=-9.81, USE_VELOCITY_DAMPING=False)`
 - `forward_dynamics_grad(q, qd, u)`
+- `idsva_so(q, qd, qdd, GRAVITY=-9.81)`
+- `fdsva_so(q, qd, u, GRAVITY=-9.81)`
 
 Kinematics-facing surface:
 
@@ -89,6 +91,20 @@ Pass-level helpers and implementation internals:
   the same pose target. The current suite compares GRiD against a Pinocchio-side
   finite-difference reference and enforces this on a focused `iiwa14`
   fixed-base and floating-base slice.
+- `RBDReference.idsva_so(...)` does not have a direct
+  Pinocchio second-order inverse-dynamics API counterpart in the Python stack
+  used here, so the suite validates it against finite differences of the
+  already-verified `rnea_grad(...)` and `crba(...)` paths. This is currently
+  enforced on a smoke-robot-first rollout: fixed-base `iiwa14` and floating-base
+  `iiwa14`, `go2`, and `g1`, with `g1` currently treated as runtime-heavy
+  rather than numerically suspect.
+- `RBDReference.fdsva_so(...)` likewise does not have a direct Pinocchio
+  second-order forward-dynamics API counterpart in the Python stack used here,
+  so the suite validates it against finite differences of the already-verified
+  `forward_dynamics_grad(...)` and `minv(...)` paths. This is currently
+  enforced on the same smoke-robot-first rollout: fixed-base `iiwa14` and
+  floating-base `iiwa14`, `go2`, and `g1`, with `g1` currently treated as
+  runtime-heavy rather than numerically suspect.
 
 ## Ambiguous Or Deferred Mappings
 
@@ -101,6 +117,10 @@ Pass-level helpers and implementation internals:
   The current comparison is intentionally narrow because the Hessian path uses
   higher-runtime finite differences on at least one side, so widening coverage
   should be done deliberately.
+- Broad second-order inverse-dynamics / forward-dynamics coverage beyond the
+  fixed-base `iiwa14` and floating-base smoke rollout
+  These tensor checks are intentionally narrow for now because they are
+  validated through higher-runtime finite differences of first-order quantities.
 
 ## Normalization Steps Required Today
 
@@ -191,3 +211,9 @@ the current repo layout and documentation, not from guesswork about hidden APIs.
   leaf-joint targets shared by both models.
 - End-effector pose Hessians: the current suite matches Pinocchio on a focused
   `iiwa14` fixed-base and floating-base slice.
+- Second-order inverse dynamics and forward dynamics: the current suite
+  validates `idsva_so(...)` and `fdsva_so(...)` against finite differences of
+  already-verified first-order quantities on fixed-base `iiwa14` and
+  floating-base `iiwa14`, `go2`, and `g1`. In practice, `g1` is currently the
+  runtime-heavy member of that rollout rather than the numerically suspicious
+  one.

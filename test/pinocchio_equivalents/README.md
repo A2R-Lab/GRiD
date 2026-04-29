@@ -31,7 +31,8 @@ algorithms before extending that trust boundary to CUDA and generated GPU code.
   floating-enabled set wherever the resolved source model has an invertible
   mass matrix.
 - Floating-base `forward_dynamics` now also matches Pinocchio for the current
-  floating-enabled set: `iiwa14`, `go2`, `g1`, `fr3`, `fetch`, and `baxter`.
+  floating-enabled set: `iiwa14`, `go2`, `g1`, `fr3`, `fetch`, `baxter`, and
+  `gen3`, with singular-model skips scoped narrowly where needed.
 - Floating-base `rnea_grad` and `forward_dynamics_grad` now also match
   Pinocchio for the current floating-enabled set wherever the resolved source
   model has an invertible mass matrix.
@@ -43,6 +44,11 @@ algorithms before extending that trust boundary to CUDA and generated GPU code.
 - End-effector pose Hessians now match Pinocchio on a focused `iiwa14`
   fixed-base and floating-base slice, with second-order checks using a
   dedicated finite-difference tolerance policy.
+- The second-order top-level helpers `idsva_so` and `fdsva_so` are now covered
+  on fixed-base `iiwa14` and floating-base smoke robots. The current assumption
+  is that `g1` is runtime-heavy rather than numerically suspect, so that path
+  remains in the smoke rollout even though it is slower than `iiwa14` and
+  `go2`.
 - Floating-base parse, metadata, `rnea`, `minv`, `crba`, `aba`,
   `forward_dynamics`, `rnea_grad`, `forward_dynamics_grad`, and selected pose
   targets are now exercised on the broader floating-enabled set `iiwa14`,

@@ -9,3 +9,4 @@ from test.pinocchio_equivalents.tests.test_model_metadata import *  # noqa: F401
 from test.pinocchio_equivalents.tests.test_parse_models import *  # noqa: F401,F403
 from test.pinocchio_equivalents.tests.test_rnea_equivalence import *  # noqa: F401,F403
 from test.pinocchio_equivalents.tests.test_rnea_grad_equivalence import *  # noqa: F401,F403
+from test.pinocchio_equivalents.tests.test_second_order_equivalence import *  # noqa: F401,F403

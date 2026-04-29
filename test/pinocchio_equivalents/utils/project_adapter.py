@@ -85,6 +85,24 @@ class ProjectModelAdapter:
         dqdd_dq, dqdd_dqd = self.reference.forward_dynamics_grad(q, qd, u)
         return normalize_matrix(dqdd_dq), normalize_matrix(dqdd_dqd)
 
+    def idsva_so(self, q, qd, qdd):
+        d2tau_dq, d2tau_dqd, d2tau_dvdq, dM_dq = self.reference.idsva_so(q, qd, qdd)
+        return (
+            np.asarray(d2tau_dq, dtype=np.float64),
+            np.asarray(d2tau_dqd, dtype=np.float64),
+            np.asarray(d2tau_dvdq, dtype=np.float64),
+            np.asarray(dM_dq, dtype=np.float64),
+        )
+
+    def fdsva_so(self, q, qd, u):
+        daba_dqdq, daba_dvdq, daba_dvdv, daba_dtdq = self.reference.fdsva_so(q, qd, u)
+        return (
+            np.asarray(daba_dqdq, dtype=np.float64),
+            np.asarray(daba_dvdq, dtype=np.float64),
+            np.asarray(daba_dvdv, dtype=np.float64),
+            np.asarray(daba_dtdq, dtype=np.float64),
+        )
+
     def end_effector_pose(self, q, target_name: str, offset=None):
         if offset is None:
             offset = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
