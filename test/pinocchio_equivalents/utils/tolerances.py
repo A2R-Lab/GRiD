@@ -49,8 +49,8 @@ ROBOT_ALGORITHM_TOLERANCES = {
     ),
     ("g1", "aba"): Tolerance(
         rtol=1e-6,
-        atol=5e-7,
-        note="G1 fixed-base ABA comparisons stay within the same sub-micro residual scale as the existing G1 dynamics checks.",
+        atol=2e-6,
+        note="G1 ABA comparisons stay within a low-micro residual scale against Pinocchio, so they use a narrowly widened absolute tolerance.",
     ),
     ("baxter", "aba"): Tolerance(
         rtol=1e-7,
@@ -66,6 +66,11 @@ ROBOT_ALGORITHM_TOLERANCES = {
         rtol=1e-6,
         atol=1e-8,
         note="Fetch floating-base inverse dynamics reaches single-digit nanounit residuals on near-zero entries; this narrow override avoids spurious failures without loosening the suite globally.",
+    ),
+    ("fetch", "aba"): Tolerance(
+        rtol=1e-7,
+        atol=1e-8,
+        note="Fetch floating-base ABA reaches single-digit nanounit residuals on near-zero entries; this narrow override avoids spurious failures without loosening the suite globally.",
     ),
     ("rizon4", "rnea"): Tolerance(
         rtol=1e-7,

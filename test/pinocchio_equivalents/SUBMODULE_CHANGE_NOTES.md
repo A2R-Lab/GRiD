@@ -307,6 +307,36 @@ Why it matters for CUDA later:
   CUDA should be checked for these same root-expanded indexing and root-slice
   assumptions before it is trusted against the new CPU reference behavior.
 
+### 6b. Floating-base ABA and CRBA now match Pinocchio on the enabled robot set
+
+Problem:
+- After the first floating-base generalization pass, `aba(...)` and `crba(...)`
+  still were not trustworthy enough to enforce across the floating-enabled set.
+- Floating `aba(...)` still mixed two root-only convention issues:
+  the root gravity / acceleration initialization did not match the already-fixed
+  floating `rnea(...)` path, and the root final forward update still treated the
+  floating root like a transformed child.
+- Floating `crba(...)` still mixed conventions inside the root-to-joint
+  cross-term blocks: the root block itself was already in the Pinocchio-facing
+  ordering, but the off-diagonal root cross terms were still emitted in the
+  internal spatial row ordering.
+
+Change:
+- Floating `aba(...)` now keeps the root `U` solve in its local form, uses the
+  same floating root gravity transport convention as `rnea(...)`, and skips the
+  extra root `Xmat` application in the final root forward update.
+- Floating `crba(...)` now leaves the root `6 x 6` block untouched and only
+  reorders the root-to-joint cross terms into the Pinocchio-facing root order.
+- The suite now enforces floating `aba(...)` and floating `crba(...)` across
+  `iiwa14`, `go2`, `g1`, `fr3`, `fetch`, `baxter`, and `gen3`, with narrow
+  singular-model skips retained for `rizon4`.
+
+Why it matters for CUDA later:
+- Any CUDA-side floating articulated-body or composite-inertia path should
+  mirror the same root-only distinctions: local root solve quantities stay in
+  the floating joint subspace convention, while user-facing mass-matrix
+  cross-term blocks must be emitted in Pinocchio order.
+
 ### 7. Explicit-`world` URDF roots now convert cleanly into floating bases
 
 Problem:

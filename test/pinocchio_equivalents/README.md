@@ -24,6 +24,12 @@ algorithms before extending that trust boundary to CUDA and generated GPU code.
   correcting the root gravity transport in `RBDReference`.
 - Floating-base `minv` matches Pinocchio for the floating-enabled smoke robots
   under the same native Pinocchio free-flyer ordering now used by GRiD.
+- Floating-base `crba` now also matches Pinocchio for the current
+  floating-enabled set wherever the resolved source model has an invertible
+  mass matrix.
+- Floating-base `aba` now also matches Pinocchio for the current
+  floating-enabled set wherever the resolved source model has an invertible
+  mass matrix.
 - Floating-base `forward_dynamics` now also matches Pinocchio for the current
   floating-enabled set: `iiwa14`, `go2`, `g1`, `fr3`, `fetch`, and `baxter`.
 - Floating-base `rnea_grad` and `forward_dynamics_grad` now also match
@@ -37,11 +43,11 @@ algorithms before extending that trust boundary to CUDA and generated GPU code.
 - End-effector pose Hessians now match Pinocchio on a focused `iiwa14`
   fixed-base and floating-base slice, with second-order checks using a
   dedicated finite-difference tolerance policy.
-- Floating-base parse, metadata, `rnea`, `minv`, `forward_dynamics`,
-  `rnea_grad`, `forward_dynamics_grad`, and selected pose targets are now
-  exercised on the broader floating-enabled set `iiwa14`, `go2`, `g1`, `fr3`,
-  `fetch`, `baxter`, `gen3`, and `rizon4`, with singular-model skips scoped
-  narrowly where needed.
+- Floating-base parse, metadata, `rnea`, `minv`, `crba`, `aba`,
+  `forward_dynamics`, `rnea_grad`, `forward_dynamics_grad`, and selected pose
+  targets are now exercised on the broader floating-enabled set `iiwa14`,
+  `go2`, `g1`, `fr3`, `fetch`, `baxter`, `gen3`, and `rizon4`, with
+  singular-model skips scoped narrowly where needed.
 - Remaining floating-base convention gaps are surfaced explicitly instead of
   being hidden by loose tolerances or ad hoc test logic.
 
@@ -50,9 +56,6 @@ algorithms before extending that trust boundary to CUDA and generated GPU code.
 - CUDA kernels, generated GPU code, or accelerator paths.
 - Every function in `RBDReference`.
 - Broad nightly robot corpora in the default developer path.
-- Floating-base ABA, forward-dynamics-family functions, and their derivatives
-  beyond `forward_dynamics` and `forward_dynamics_grad`.
-- Floating-base CRBA and floating-base ABA on the broader floating-enabled set.
 - Broad end-effector Hessian coverage beyond the focused `iiwa14`
   fixed/floating slice until the current higher-runtime finite-difference path
   is either widened confidently or replaced with a broader analytic

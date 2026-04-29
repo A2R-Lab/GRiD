@@ -25,6 +25,26 @@ def build_fixed_case_params():
     return params
 
 
+def build_floating_case_params():
+    params = []
+    for case in iter_robot_cases(MANIFEST_PATH, base_mode="floating"):
+        spec = case["spec"]
+        params.append(
+            pytest.param(
+                spec,
+                "floating",
+                id=f"{spec.robot_id}-floating",
+                marks=[
+                    pytest.mark.pinocchio_equivalence,
+                    pytest.mark.developer_only,
+                    pytest.mark.robot_smoke,
+                    pytest.mark.floating_base,
+                ],
+            )
+        )
+    return params
+
+
 @pytest.mark.parametrize(("spec", "base_mode"), build_fixed_case_params())
 def test_fixed_base_aba_matches_pinocchio(
     spec, base_mode, project_model, pinocchio_model
@@ -33,6 +53,21 @@ def test_fixed_base_aba_matches_pinocchio(
         if not pinocchio_model.has_invertible_mass_matrix(sample.q):
             pytest.skip(
                 f"{spec.robot_id} fixed-base mass matrix is singular for the resolved source model, so ABA equivalence is not well-defined."
+            )
+        tau = project_model.rnea(sample.q, sample.qd, sample.qdd)
+        actual = project_model.aba(sample.q, sample.qd, tau)
+        expected = pinocchio_model.aba(sample.q, sample.qd, tau)
+        assert_close(actual, expected, algorithm="aba", robot_id=spec.robot_id)
+
+
+@pytest.mark.parametrize(("spec", "base_mode"), build_floating_case_params())
+def test_floating_base_aba_matches_pinocchio(
+    spec, base_mode, project_model, pinocchio_model
+):
+    for sample in build_dynamics_samples(project_model):
+        if not pinocchio_model.has_invertible_mass_matrix(sample.q):
+            pytest.skip(
+                f"{spec.robot_id} floating-base mass matrix is singular for the resolved source model, so ABA equivalence is not well-defined."
             )
         tau = project_model.rnea(sample.q, sample.qd, sample.qdd)
         actual = project_model.aba(sample.q, sample.qd, tau)

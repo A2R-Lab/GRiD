@@ -46,9 +46,13 @@ Pass-level helpers and implementation internals:
 - `RBDReference.crba(q)` maps to `pinocchio.crba(...)`
   This is currently enforced for the verified fixed-base default robots
   `iiwa14`, `go2`, `g1`, `fetch`, `baxter`, `fr3`, `gen3`, and `rizon4`.
+  It is also enforced for floating-base `iiwa14`, `go2`, `g1`, `fr3`, `fetch`,
+  `baxter`, and `gen3`, with singular-model skips for `rizon4`.
 - `RBDReference.aba(q, qd, tau, ...)` maps to `pinocchio.aba(...)`
   This is currently enforced for the verified fixed-base default robots
   `iiwa14`, `go2`, `g1`, `fetch`, `baxter`, `fr3`, and `gen3`.
+  It is also enforced for floating-base `iiwa14`, `go2`, `g1`, `fr3`, `fetch`,
+  `baxter`, and `gen3`, with singular-model skips for `rizon4`.
 - `RBDReference.forward_dynamics(q, qd, u)` maps to the same forward-dynamics
   acceleration computed by `pinocchio.aba(...)`, because the current GRiD
   implementation composes inverse dynamics and inverse mass to recover the ABA
@@ -131,10 +135,6 @@ the current repo layout and documentation, not from guesswork about hidden APIs.
   `forward_dynamics`, `forward_dynamics_grad`, `rnea_grad`, selected pose
   targets, end-effector pose gradients, and focused end-effector Hessian checks
   on the verified default robots
-- Floating-base CRBA and ABA until the remaining floating-base implementation
-  gaps beyond `rnea`, `minv`, `forward_dynamics`, `rnea_grad`,
-  `forward_dynamics_grad`, and selected pose/pose-derivative helpers are
-  confirmed trustworthy
 - Broad end-effector Hessian equivalence beyond the focused `iiwa14`
   fixed/floating slice
 
@@ -170,19 +170,20 @@ the current repo layout and documentation, not from guesswork about hidden APIs.
   source model exposes a singular zero-mass-matrix interpretation on both the
   GRiD and Pinocchio sides.
 - Floating-base `iiwa14`, `go2`, and `g1`: parse and metadata match, and
-  floating-base `rnea`, `minv`, `forward_dynamics`, `rnea_grad`, and
-  `forward_dynamics_grad`, and selected pose targets match Pinocchio in the
-  current suite.
+  floating-base `rnea`, `minv`, `crba`, `aba`, `forward_dynamics`,
+  `rnea_grad`, and `forward_dynamics_grad`, and selected pose targets match
+  Pinocchio in the current suite.
 - Floating-base `fr3`, `fetch`, and `baxter`: parse and metadata match, and
-  floating-base `rnea`, `minv`, `forward_dynamics`, `rnea_grad`, and
-  `forward_dynamics_grad`, and selected pose targets match Pinocchio in the
-  current suite.
+  floating-base `rnea`, `minv`, `crba`, `aba`, `forward_dynamics`,
+  `rnea_grad`, and `forward_dynamics_grad`, and selected pose targets match
+  Pinocchio in the current suite.
 - Floating-base `gen3`: parse and metadata match, and floating-base `rnea`,
-  `minv`, `forward_dynamics`, `rnea_grad`, and `forward_dynamics_grad` match
-  Pinocchio in the current suite, along with selected pose targets.
+  `minv`, `crba`, `aba`, `forward_dynamics`, `rnea_grad`, and
+  `forward_dynamics_grad` match Pinocchio in the current suite, along with
+  selected pose targets.
 - Floating-base `rizon4`: parse and metadata match, and floating-base `rnea`
   and `rnea_grad` match Pinocchio in the current suite, along with selected
-  pose targets. Floating-base `minv`, `forward_dynamics`, and
+  pose targets. Floating-base `minv`, `crba`, `aba`, `forward_dynamics`, and
   `forward_dynamics_grad` are explicitly skipped because the resolved source
   model is singular on both sides.
 - End-effector pose gradients: the current suite matches Pinocchio across the
