@@ -124,6 +124,43 @@ class ProjectModelAdapter:
                 curr_id = self.robot.get_parent_id(curr_id)
         return normalize_matrix(np.asarray(xmat_hom[:3, :3], dtype=np.float64))
 
+    def end_effector_pose_gradient(self, q, target_name: str, offset=None):
+        if offset is None:
+            offset = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+        dee_pose = self.reference.end_effector_pose_gradient(
+            q,
+            ee_joint_names=target_name,
+            ee_offsets=[np.matrix([offset])],
+        )[0]
+        return normalize_matrix(dee_pose)
+
+    def end_effector_pose_hessian(self, q, target_name: str, offset=None):
+        if offset is None:
+            offset = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+
+        if self.base_mode == "floating":
+            d2ee_pose = self.reference.end_effector_pose_hessian(
+                q,
+                offsets=[np.matrix([offset])],
+                ee_joint_names=target_name,
+            )[0]
+            return np.asarray(d2ee_pose, dtype=np.float64)
+
+        target_joint = self.robot.get_joint_by_name(target_name)
+        if target_joint is None:
+            raise ValueError(f"Hessian helper only supports articulated joint targets, got {target_name}.")
+        leaf_ids = self.robot.get_leaf_nodes()
+        if target_joint.get_id() not in leaf_ids:
+            raise ValueError(
+                f"Hessian helper analytic path currently expects a leaf joint target, got {target_name}."
+            )
+        leaf_index = leaf_ids.index(target_joint.get_id())
+        d2ee_pose = self.reference.end_effector_pose_hessian(
+            q,
+            offsets=[np.matrix([offset])],
+        )[leaf_index]
+        return np.asarray(d2ee_pose, dtype=np.float64)
+
 
 def build_project_adapter(spec, resolved_model, base_mode: str) -> ProjectModelAdapter:
     floating_base = base_mode == "floating"

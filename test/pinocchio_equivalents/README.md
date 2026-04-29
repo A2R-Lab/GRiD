@@ -31,6 +31,12 @@ algorithms before extending that trust boundary to CUDA and generated GPU code.
   model has an invertible mass matrix.
 - Floating-base selected pose targets now also match Pinocchio for the current
   floating-enabled set.
+- End-effector pose gradients now match Pinocchio on the current fixed-base and
+  floating-base default robots using articulated leaf-joint targets shared by
+  both sides.
+- End-effector pose Hessians now match Pinocchio on a focused `iiwa14`
+  fixed-base and floating-base slice, with second-order checks using a
+  dedicated finite-difference tolerance policy.
 - Floating-base parse, metadata, `rnea`, `minv`, `forward_dynamics`,
   `rnea_grad`, `forward_dynamics_grad`, and selected pose targets are now
   exercised on the broader floating-enabled set `iiwa14`, `go2`, `g1`, `fr3`,
@@ -46,9 +52,11 @@ algorithms before extending that trust boundary to CUDA and generated GPU code.
 - Broad nightly robot corpora in the default developer path.
 - Floating-base ABA, forward-dynamics-family functions, and their derivatives
   beyond `forward_dynamics` and `forward_dynamics_grad`.
-- Floating-base CRBA plus end-effector derivative / Hessian helpers on the
-  broader floating-enabled set until the remaining implementation gaps are
-  resolved.
+- Floating-base CRBA and floating-base ABA on the broader floating-enabled set.
+- Broad end-effector Hessian coverage beyond the focused `iiwa14`
+  fixed/floating slice until the current higher-runtime finite-difference path
+  is either widened confidently or replaced with a broader analytic
+  implementation.
 
 ## Robot Sourcing
 

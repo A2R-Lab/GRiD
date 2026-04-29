@@ -76,6 +76,15 @@ Pass-level helpers and implementation internals:
   `rizon4` using model-derived joint and fixed-joint targets that exist on both
   the GRiD and Pinocchio sides. It is also enforced for floating-base
   `iiwa14`, `go2`, `g1`, `fr3`, `fetch`, `baxter`, `gen3`, and `rizon4`.
+- `RBDReference.end_effector_pose_gradient(...)` maps to first derivatives of
+  the same Pinocchio frame-placement-plus-offset pose target. The current suite
+  compares GRiD against a Pinocchio-side finite-difference reference in project
+  `q` coordinates and enforces this on the verified fixed-base and
+  floating-base default robots using articulated leaf-joint targets.
+- `RBDReference.end_effector_pose_hessian(...)` maps to second derivatives of
+  the same pose target. The current suite compares GRiD against a Pinocchio-side
+  finite-difference reference and enforces this on a focused `iiwa14`
+  fixed-base and floating-base slice.
 
 ## Ambiguous Or Deferred Mappings
 
@@ -83,9 +92,11 @@ Pass-level helpers and implementation internals:
   The mapping to Pinocchio ABA derivatives is now explicit for fixed-base
   `iiwa14`, but broader fixed-base coverage and floating-base coverage are still
   deferred.
-- End-effector helpers beyond pose
-  The current source includes a TODO that floating-base support is not fully added
-  and tested for end-effector derivatives and Hessians, so those remain deferred.
+- Broad end-effector Hessian coverage beyond the focused `iiwa14`
+  fixed/floating slice
+  The current comparison is intentionally narrow because the Hessian path uses
+  higher-runtime finite differences on at least one side, so widening coverage
+  should be done deliberately.
 
 ## Normalization Steps Required Today
 
@@ -117,12 +128,15 @@ the current repo layout and documentation, not from guesswork about hidden APIs.
 ## V1 Deferrals
 
 - Additional fixed-base algorithms beyond `rnea`, `minv`, `crba`, `aba`,
-  `forward_dynamics`, `forward_dynamics_grad`, `rnea_grad`, and selected pose
-  targets on the verified default robots
-- Floating-base CRBA, ABA, and end-effector derivative / Hessian helpers until
-  the remaining floating-base implementation gaps beyond `rnea`, `minv`, `forward_dynamics`,
-  `rnea_grad`, and `forward_dynamics_grad` are confirmed trustworthy
-- End-effector derivative and Hessian equivalence
+  `forward_dynamics`, `forward_dynamics_grad`, `rnea_grad`, selected pose
+  targets, end-effector pose gradients, and focused end-effector Hessian checks
+  on the verified default robots
+- Floating-base CRBA and ABA until the remaining floating-base implementation
+  gaps beyond `rnea`, `minv`, `forward_dynamics`, `rnea_grad`,
+  `forward_dynamics_grad`, and selected pose/pose-derivative helpers are
+  confirmed trustworthy
+- Broad end-effector Hessian equivalence beyond the focused `iiwa14`
+  fixed/floating slice
 
 ## Current Suite Findings
 
@@ -171,3 +185,8 @@ the current repo layout and documentation, not from guesswork about hidden APIs.
   pose targets. Floating-base `minv`, `forward_dynamics`, and
   `forward_dynamics_grad` are explicitly skipped because the resolved source
   model is singular on both sides.
+- End-effector pose gradients: the current suite matches Pinocchio across the
+  verified fixed-base and floating-base default robots using articulated
+  leaf-joint targets shared by both models.
+- End-effector pose Hessians: the current suite matches Pinocchio on a focused
+  `iiwa14` fixed-base and floating-base slice.

@@ -8,6 +8,7 @@ from test.pinocchio_equivalents.utils.normalization import (
     ConventionMismatch,
     movable_joint_names_excluding_floating_root,
     normalize_matrix,
+    normalize_pin_compatible_quaternion,
     normalize_project_q_for_pin,
     reduce_pinocchio_q_jacobian_to_project,
     normalize_vector,
@@ -231,6 +232,77 @@ class PinocchioModelAdapter:
 
         frame_id = self.model.getFrameId(target_name)
         return normalize_matrix(np.asarray(self.data.oMf[frame_id].rotation, dtype=np.float64))
+
+    def _normalize_project_q_for_pose_differences(self, q):
+        q = np.asarray(q, dtype=np.float64).copy()
+        if self.base_mode == "floating":
+            q[:7] = normalize_pin_compatible_quaternion(q[:7])
+        return q
+
+    def end_effector_pose_gradient(self, q, target_name: str, offset=None, step: float = 1e-6):
+        if offset is None:
+            offset = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+        q = self._normalize_project_q_for_pose_differences(q)
+        nq = len(q)
+        gradient = np.zeros((6, nq), dtype=np.float64)
+
+        for q_ind in range(nq):
+            q_pos = q.copy()
+            q_neg = q.copy()
+            q_pos[q_ind] += step
+            q_neg[q_ind] -= step
+            q_pos = self._normalize_project_q_for_pose_differences(q_pos)
+            q_neg = self._normalize_project_q_for_pose_differences(q_neg)
+            pose_pos = self.end_effector_pose(q_pos, target_name, offset=offset)
+            pose_neg = self.end_effector_pose(q_neg, target_name, offset=offset)
+            gradient[:, q_ind] = (pose_pos - pose_neg) / (2.0 * step)
+        return gradient
+
+    def end_effector_pose_hessian(self, q, target_name: str, offset=None, step: float = 1e-5):
+        if offset is None:
+            offset = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
+        q = self._normalize_project_q_for_pose_differences(q)
+        nq = len(q)
+        hessian = np.zeros((6, nq, nq), dtype=np.float64)
+
+        base_pose = self.end_effector_pose(q, target_name, offset=offset)
+        for q_ind_i in range(nq):
+            for q_ind_j in range(q_ind_i, nq):
+                if q_ind_i == q_ind_j:
+                    q_pos = q.copy()
+                    q_neg = q.copy()
+                    q_pos[q_ind_i] += step
+                    q_neg[q_ind_i] -= step
+                    q_pos = self._normalize_project_q_for_pose_differences(q_pos)
+                    q_neg = self._normalize_project_q_for_pose_differences(q_neg)
+                    pose_pos = self.end_effector_pose(q_pos, target_name, offset=offset)
+                    pose_neg = self.end_effector_pose(q_neg, target_name, offset=offset)
+                    value = (pose_pos - 2.0 * base_pose + pose_neg) / (step * step)
+                else:
+                    q_pp = q.copy()
+                    q_pm = q.copy()
+                    q_mp = q.copy()
+                    q_mm = q.copy()
+                    q_pp[q_ind_i] += step
+                    q_pp[q_ind_j] += step
+                    q_pm[q_ind_i] += step
+                    q_pm[q_ind_j] -= step
+                    q_mp[q_ind_i] -= step
+                    q_mp[q_ind_j] += step
+                    q_mm[q_ind_i] -= step
+                    q_mm[q_ind_j] -= step
+                    q_pp = self._normalize_project_q_for_pose_differences(q_pp)
+                    q_pm = self._normalize_project_q_for_pose_differences(q_pm)
+                    q_mp = self._normalize_project_q_for_pose_differences(q_mp)
+                    q_mm = self._normalize_project_q_for_pose_differences(q_mm)
+                    pose_pp = self.end_effector_pose(q_pp, target_name, offset=offset)
+                    pose_pm = self.end_effector_pose(q_pm, target_name, offset=offset)
+                    pose_mp = self.end_effector_pose(q_mp, target_name, offset=offset)
+                    pose_mm = self.end_effector_pose(q_mm, target_name, offset=offset)
+                    value = (pose_pp - pose_pm - pose_mp + pose_mm) / (4.0 * step * step)
+                hessian[:, q_ind_i, q_ind_j] = value
+                hessian[:, q_ind_j, q_ind_i] = value
+        return hessian
 
 
 def build_pinocchio_adapter(spec, resolved_model, base_mode: str) -> PinocchioModelAdapter:

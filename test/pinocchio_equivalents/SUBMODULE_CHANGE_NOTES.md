@@ -355,6 +355,31 @@ Why it matters for CUDA later:
   output mapping and the corrected root gravity derivative path to match the
   CPU reference and Pinocchio.
 
+### 9. Floating-base end-effector derivative helpers now use an analytic free-flyer path
+
+Problem:
+- `end_effector_pose_gradient(...)` and `end_effector_pose_hessian(...)` were
+  still shaped like fixed-base helpers.
+- Floating-base calls need the full root configuration slice, and the analytic
+  Hessian path also depends on derivative homogeneous transforms that the
+  floating joint model does not currently expose.
+
+Change:
+- Added block-structured floating-joint homogeneous-transform derivatives for
+  the 7D free-flyer configuration.
+- Reworked the end-effector gradient/Hessian logic to traverse joint-local
+  position blocks instead of assuming one scalar `q[ind]` per joint.
+- The floating-base path is now analytic, while the Pinocchio-side suite still
+  uses finite differences as the comparison oracle for Hessians.
+- The fixed-base analytic behavior was left in place.
+
+Why it matters for CUDA later:
+- CUDA-side floating-base pose derivatives now have a concrete CPU-side
+  analytic reference implementation to mirror.
+- Any generated free-flyer kinematics code should expose the same 7D local
+  derivative blocks for homogeneous transforms or provide an equivalent analytic
+  chain-rule implementation.
+
 ## Behavior And Convention Changes To Remember
 
 These are the highest-value items to keep aligned when updating CUDA:
@@ -368,6 +393,8 @@ These are the highest-value items to keep aligned when updating CUDA:
    joint removal.
 7. ABA must keep full 6D articulated bias forces.
 8. Gradient code must use the corrected force-cross helper in the backward pass.
+9. Floating pose-derivative helpers now rely on analytic free-flyer transform
+   derivatives.
 
 ## CUDA Update Checklist
 
@@ -381,6 +408,7 @@ When propagating these changes to CUDA or generated kernels, check:
 - homogeneous transform composition for retained fixed-joint kinematics
 - ABA articulated-bias-force handling
 - inverse-dynamics and forward-dynamics gradient force-cross terms
+- floating pose-derivative block semantics if CUDA needs end-effector derivatives
 
 ## Non-Submodule Test-Layer Adjustments
 

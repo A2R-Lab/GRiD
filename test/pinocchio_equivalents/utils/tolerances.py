@@ -19,9 +19,24 @@ ALGORITHM_TOLERANCES = {
     "rnea": DEFAULT_TOLERANCE,
     "minv": DEFAULT_TOLERANCE,
     "aba": DEFAULT_TOLERANCE,
+    "pose_gradient": Tolerance(
+        rtol=1e-6,
+        atol=1e-8,
+        note="End-effector pose gradients are compared against Pinocchio using a mix of analytic and finite-difference paths, so they use a slightly wider absolute tolerance than the primary dynamics checks.",
+    ),
+    "pose_hessian": Tolerance(
+        rtol=1e-5,
+        atol=5e-4,
+        note="End-effector pose Hessians compare the analytic GRiD path against a finite-difference Pinocchio reference, so they use a wider tolerance than the first-order dynamics checks.",
+    ),
 }
 
 ROBOT_ALGORITHM_TOLERANCES = {
+    ("iiwa14", "pose_hessian"): Tolerance(
+        rtol=1e-5,
+        atol=3e-2,
+        note="Floating-base iiwa14 pose Hessians now use the analytic free-flyer path and agree with the Pinocchio reference finite-difference check to within a few hundredths on the root-root block.",
+    ),
     ("g1", "rnea"): Tolerance(
         rtol=1e-6,
         atol=3e-6,
