@@ -74,6 +74,11 @@ CUDA_ROBOT_ALGORITHM_TOLERANCES = {
         "norm_rtol": 1e-2,
         "note": "FR3 CUDA ABA is checked with a norm-relative guard because the hand branch and float32 generated-kernel path produce sub-percent vector residuals.",
     },
+    ("fetch", "forward_dynamics_gradient_q"): {
+        "rtol": 2e-4,
+        "atol": 5e-4,
+        "note": "Fetch has a negative gripper axis and a near-singular zero-torque FD-gradient smoke sample where float32 cancellation leaves a sub-milliscale residual against a near-zero float64 reference entry.",
+    },
 }
 
 
