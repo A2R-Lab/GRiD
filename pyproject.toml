@@ -27,4 +27,5 @@ markers = [
     "robot_smoke: Smoke-tier robot coverage.",
     "robot_curated: Curated-tier robot coverage.",
     "robot_nightly: Nightly-tier robot coverage.",
+    "cuda_equivalence: CUDA executable equivalence coverage for generated GRiD code.",
 ]
