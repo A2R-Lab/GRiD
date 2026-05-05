@@ -2,15 +2,122 @@
 #include <iomanip>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include "grid.cuh"
 
 template <typename T>
 __global__ void runtime_probe_kernel(T *dst) {
-    for (int ind = threadIdx.x; ind < grid::NUM_JOINTS; ind += blockDim.x) {
+    for (int ind = threadIdx.x; ind < grid::NUM_VEL; ind += blockDim.x) {
         dst[ind] = static_cast<T>(10 + ind);
     }
 }
+
+#if GRID_CUDA_FLOATING_BASE
+template <typename T>
+__device__ void load_floating_inputs(
+    T *s_q, T *s_qd, T *s_u, const T *d_q, const T *d_qd, const T *d_u
+) {
+    for (int ind = threadIdx.x; ind < grid::NUM_JOINTS; ind += blockDim.x) {
+        s_q[ind] = d_q[ind];
+    }
+    for (int ind = threadIdx.x; ind < grid::NUM_VEL; ind += blockDim.x) {
+        s_qd[ind] = d_qd[ind];
+        s_u[ind] = d_u[ind];
+    }
+    __syncthreads();
+}
+
+template <typename T>
+__global__ void floating_inverse_dynamics_runner(
+    T *d_out, const T *d_q, const T *d_qd, const T *d_u,
+    const grid::robotModel<T> *d_robot_model, const T gravity
+) {
+    __shared__ T s_q[grid::NUM_JOINTS];
+    __shared__ T s_qd[grid::NUM_VEL];
+    __shared__ T s_u[grid::NUM_VEL];
+    __shared__ T s_out[grid::NUM_VEL];
+    load_floating_inputs(s_q, s_qd, s_u, d_q, d_qd, d_u);
+    grid::inverse_dynamics_device<T>(s_out, s_q, s_qd, s_u, d_robot_model, gravity);
+    __syncthreads();
+    for (int ind = threadIdx.x; ind < grid::NUM_VEL; ind += blockDim.x) {
+        d_out[ind] = s_out[ind];
+    }
+}
+
+template <typename T>
+__global__ void floating_direct_minv_runner(
+    T *d_out, const T *d_q, const grid::robotModel<T> *d_robot_model
+) {
+    __shared__ T s_q[grid::NUM_JOINTS];
+    __shared__ T s_out[grid::NUM_VEL * grid::NUM_VEL];
+    for (int ind = threadIdx.x; ind < grid::NUM_JOINTS; ind += blockDim.x) {
+        s_q[ind] = d_q[ind];
+    }
+    __syncthreads();
+    grid::direct_minv_device<T>(s_out, s_q, d_robot_model);
+    __syncthreads();
+    for (int ind = threadIdx.x; ind < grid::NUM_VEL * grid::NUM_VEL; ind += blockDim.x) {
+        d_out[ind] = s_out[ind];
+    }
+}
+
+template <typename T>
+__global__ void floating_forward_dynamics_runner(
+    T *d_out, const T *d_q, const T *d_qd, const T *d_u,
+    const grid::robotModel<T> *d_robot_model, const T gravity
+) {
+    __shared__ T s_q[grid::NUM_JOINTS];
+    __shared__ T s_qd[grid::NUM_VEL];
+    __shared__ T s_u[grid::NUM_VEL];
+    __shared__ T s_out[grid::NUM_VEL];
+    load_floating_inputs(s_q, s_qd, s_u, d_q, d_qd, d_u);
+    grid::forward_dynamics_device<T>(s_out, s_q, s_qd, s_u, d_robot_model, gravity);
+    __syncthreads();
+    for (int ind = threadIdx.x; ind < grid::NUM_VEL; ind += blockDim.x) {
+        d_out[ind] = s_out[ind];
+    }
+}
+
+template <typename T>
+__global__ void floating_inverse_dynamics_gradient_runner(
+    T *d_out, const T *d_q, const T *d_qd,
+    const grid::robotModel<T> *d_robot_model, const T gravity
+) {
+    __shared__ T s_q[grid::NUM_JOINTS];
+    __shared__ T s_qd[grid::NUM_VEL];
+    __shared__ T s_out[grid::NUM_VEL * 2 * grid::NUM_VEL];
+    for (int ind = threadIdx.x; ind < grid::NUM_JOINTS; ind += blockDim.x) {
+        s_q[ind] = d_q[ind];
+    }
+    for (int ind = threadIdx.x; ind < grid::NUM_VEL; ind += blockDim.x) {
+        s_qd[ind] = d_qd[ind];
+    }
+    __syncthreads();
+    grid::inverse_dynamics_gradient_device<T>(s_out, s_q, s_qd, d_robot_model, gravity);
+    __syncthreads();
+    for (int ind = threadIdx.x; ind < grid::NUM_VEL * 2 * grid::NUM_VEL; ind += blockDim.x) {
+        d_out[ind] = s_out[ind];
+    }
+}
+
+template <typename T>
+__global__ void floating_forward_dynamics_gradient_runner(
+    T *d_out, const T *d_q, const T *d_qd, const T *d_u,
+    const grid::robotModel<T> *d_robot_model, const T gravity
+) {
+    __shared__ T s_q[grid::NUM_JOINTS];
+    __shared__ T s_qd[grid::NUM_VEL];
+    __shared__ T s_u[grid::NUM_VEL];
+    __shared__ T s_out[grid::NUM_VEL * 2 * grid::NUM_VEL];
+    load_floating_inputs(s_q, s_qd, s_u, d_q, d_qd, d_u);
+    grid::forward_dynamics_gradient_device<T>(s_out, s_q, s_qd, s_u, d_robot_model, gravity);
+    __syncthreads();
+    for (int ind = threadIdx.x; ind < grid::NUM_VEL * 2 * grid::NUM_VEL; ind += blockDim.x) {
+        d_out[ind] = s_out[ind];
+    }
+}
+#endif
 
 template <typename T>
 void read_vector(T *dst, int count) {
@@ -57,6 +164,107 @@ void run() {
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 
+#if GRID_CUDA_FLOATING_BASE
+    std::vector<T> h_q(grid::NUM_JOINTS);
+    std::vector<T> h_qd(grid::NUM_VEL);
+    std::vector<T> h_u(grid::NUM_VEL);
+    std::vector<T> h_vec(grid::NUM_VEL);
+    std::vector<T> h_mat(grid::NUM_VEL * grid::NUM_VEL);
+    std::vector<T> h_grad(grid::NUM_VEL * 2 * grid::NUM_VEL);
+
+    read_vector(h_q.data(), grid::NUM_JOINTS);
+    read_vector(h_qd.data(), grid::NUM_VEL);
+    read_vector(h_u.data(), grid::NUM_VEL);
+
+    print_vector("input_q", h_q.data(), grid::NUM_JOINTS);
+    print_vector("input_qd", h_qd.data(), grid::NUM_VEL);
+    print_vector("input_u", h_u.data(), grid::NUM_VEL);
+
+    T *d_q;
+    T *d_qd;
+    T *d_u;
+    T *d_zero;
+    T *d_vec;
+    T *d_mat;
+    T *d_grad;
+    gpuErrchk(cudaMalloc((void**)&d_q, grid::NUM_JOINTS * sizeof(T)));
+    gpuErrchk(cudaMalloc((void**)&d_qd, grid::NUM_VEL * sizeof(T)));
+    gpuErrchk(cudaMalloc((void**)&d_u, grid::NUM_VEL * sizeof(T)));
+    gpuErrchk(cudaMalloc((void**)&d_zero, grid::NUM_VEL * sizeof(T)));
+    gpuErrchk(cudaMalloc((void**)&d_vec, grid::NUM_VEL * sizeof(T)));
+    gpuErrchk(cudaMalloc((void**)&d_mat, grid::NUM_VEL * grid::NUM_VEL * sizeof(T)));
+    gpuErrchk(cudaMalloc((void**)&d_grad, grid::NUM_VEL * 2 * grid::NUM_VEL * sizeof(T)));
+    gpuErrchk(cudaMemcpy(d_q, h_q.data(), grid::NUM_JOINTS * sizeof(T), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_qd, h_qd.data(), grid::NUM_VEL * sizeof(T), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_u, h_u.data(), grid::NUM_VEL * sizeof(T), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemset(d_zero, 0, grid::NUM_VEL * sizeof(T)));
+
+    runtime_probe_kernel<T><<<1, 32>>>(d_vec);
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
+    gpuErrchk(cudaMemcpy(h_vec.data(), d_vec, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
+    print_vector("runtime_probe", h_vec.data(), grid::NUM_VEL);
+
+    floating_inverse_dynamics_runner<T><<<1, 32, grid::ID_DYNAMIC_SHARED_MEM_COUNT * sizeof(T)>>>(
+        d_vec, d_q, d_qd, d_zero, d_robot_model, gravity
+    );
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
+    gpuErrchk(cudaMemcpy(h_vec.data(), d_vec, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
+    print_vector("inverse_dynamics", h_vec.data(), grid::NUM_VEL);
+
+    floating_direct_minv_runner<T><<<1, 32, grid::MINV_DYNAMIC_SHARED_MEM_COUNT * sizeof(T)>>>(
+        d_mat, d_q, d_robot_model
+    );
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
+    gpuErrchk(cudaMemcpy(h_mat.data(), d_mat, grid::NUM_VEL * grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
+    print_matrix_col_major("direct_minv", h_mat.data(), grid::NUM_VEL, grid::NUM_VEL);
+
+    floating_forward_dynamics_runner<T><<<1, 32, grid::FD_DYNAMIC_SHARED_MEM_COUNT * sizeof(T)>>>(
+        d_vec, d_q, d_qd, d_u, d_robot_model, gravity
+    );
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
+    gpuErrchk(cudaMemcpy(h_vec.data(), d_vec, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
+    print_vector("forward_dynamics", h_vec.data(), grid::NUM_VEL);
+
+    floating_inverse_dynamics_gradient_runner<T><<<1, 32, grid::ID_DU_DYNAMIC_SHARED_MEM_COUNT * sizeof(T)>>>(
+        d_grad, d_q, d_qd, d_robot_model, gravity
+    );
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
+    gpuErrchk(cudaMemcpy(h_grad.data(), d_grad, grid::NUM_VEL * 2 * grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
+    print_matrix_col_major("inverse_dynamics_gradient_q", h_grad.data(), grid::NUM_VEL, grid::NUM_VEL);
+    print_matrix_col_major(
+        "inverse_dynamics_gradient_qd",
+        &h_grad[grid::NUM_VEL * grid::NUM_VEL],
+        grid::NUM_VEL,
+        grid::NUM_VEL
+    );
+
+    floating_forward_dynamics_gradient_runner<T><<<1, 32, grid::FD_DU_DYNAMIC_SHARED_MEM_COUNT * sizeof(T)>>>(
+        d_grad, d_q, d_qd, d_u, d_robot_model, gravity
+    );
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
+    gpuErrchk(cudaMemcpy(h_grad.data(), d_grad, grid::NUM_VEL * 2 * grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
+    print_matrix_col_major("forward_dynamics_gradient_q", h_grad.data(), grid::NUM_VEL, grid::NUM_VEL);
+    print_matrix_col_major(
+        "forward_dynamics_gradient_qd",
+        &h_grad[grid::NUM_VEL * grid::NUM_VEL],
+        grid::NUM_VEL,
+        grid::NUM_VEL
+    );
+
+    gpuErrchk(cudaFree(d_q));
+    gpuErrchk(cudaFree(d_qd));
+    gpuErrchk(cudaFree(d_u));
+    gpuErrchk(cudaFree(d_zero));
+    gpuErrchk(cudaFree(d_vec));
+    gpuErrchk(cudaFree(d_mat));
+    gpuErrchk(cudaFree(d_grad));
+#else
     read_vector(hd_data->h_q, grid::NUM_JOINTS);
     read_vector(&hd_data->h_q_qd[grid::NUM_JOINTS], grid::NUM_JOINTS);
     read_vector(&hd_data->h_q_qd_u[2 * grid::NUM_JOINTS], grid::NUM_JOINTS);
@@ -149,6 +357,7 @@ void run() {
     print_matrix_col_major(
         "crba", hd_data->h_M, grid::NUM_JOINTS, grid::NUM_JOINTS
     );
+#endif
 
     grid::close_grid<T>(streams, d_robot_model, hd_data);
 }

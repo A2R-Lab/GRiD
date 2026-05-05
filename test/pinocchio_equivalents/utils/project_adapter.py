@@ -180,11 +180,17 @@ class ProjectModelAdapter:
         return np.asarray(d2ee_pose, dtype=np.float64)
 
 
-def build_project_adapter(spec, resolved_model, base_mode: str) -> ProjectModelAdapter:
+def build_project_adapter(
+    spec,
+    resolved_model,
+    base_mode: str,
+    floating_base_convention: str = "pinocchio",
+) -> ProjectModelAdapter:
     floating_base = base_mode == "floating"
     robot, parse_output = strict_parse_robot(
         resolved_model.urdf_path,
         floating_base=floating_base,
+        floating_base_convention=floating_base_convention,
     )
     mismatches = [
         ConventionMismatch(
@@ -200,7 +206,10 @@ def build_project_adapter(spec, resolved_model, base_mode: str) -> ProjectModelA
         mismatches.append(
             ConventionMismatch(
                 category="floating_base_quaternion",
-                detail="GRiD floating-base configurations now use Pinocchio-compatible quaternion order xyzw.",
+                detail=(
+                    "GRiD floating-base configurations default to Pinocchio-compatible "
+                    "xyzw / [vx, vy, vz, wx, wy, wz] input ordering, with optional legacy parsing."
+                ),
             )
         )
     return ProjectModelAdapter(
@@ -213,7 +222,11 @@ def build_project_adapter(spec, resolved_model, base_mode: str) -> ProjectModelA
     )
 
 
-def strict_parse_robot(urdf_path: str, floating_base: bool):
+def strict_parse_robot(
+    urdf_path: str,
+    floating_base: bool,
+    floating_base_convention: str = "pinocchio",
+):
     parser = URDFParser()
     output_capture = io.StringIO()
 
@@ -224,7 +237,12 @@ def strict_parse_robot(urdf_path: str, floating_base: bool):
                 parser.soup = BeautifulSoup(urdf_file.read(), "xml").find("robot")
             if parser.soup is None:
                 raise ValueError("URDF file did not contain a <robot> root element.")
-            parser.robot = Robot(parser.soup["name"], floating_base, True)
+            parser.robot = Robot(
+                parser.soup["name"],
+                floating_base,
+                True,
+                floating_base_convention=floating_base_convention,
+            )
             parser.parse_links()
             parser.parse_joints()
             parser.renumber_linksJoints(using_quaternion=True, joint_ordering="pinocchio_order")

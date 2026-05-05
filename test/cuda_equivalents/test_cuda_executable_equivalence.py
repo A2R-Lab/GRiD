@@ -23,6 +23,23 @@ from test.pinocchio_equivalents.utils.state_sampling import (
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_equivalence_runner.cu")
 DEFAULT_RANDOM_SAMPLE_COUNT = 3
+FIXED_CUDA_ALGORITHMS = (
+    "inverse_dynamics",
+    "direct_minv",
+    "forward_dynamics",
+    "inverse_dynamics_gradient_q",
+    "inverse_dynamics_gradient_qd",
+    "forward_dynamics_gradient_q",
+    "forward_dynamics_gradient_qd",
+    "aba",
+    "crba",
+)
+FLOATING_CUDA_ALGORITHMS = (
+    "inverse_dynamics",
+    "inverse_dynamics_gradient_q",
+    "inverse_dynamics_gradient_qd",
+)
+FLOATING_CUDA_CANDIDATE_ALGORITHMS = FIXED_CUDA_ALGORITHMS
 GPU_UNAVAILABLE_PATTERNS = (
     "no cuda-capable device",
     "cuda driver version is insufficient",
@@ -110,25 +127,37 @@ def _detect_cuda_arch() -> str:
 def pytest_configure(config):
     config.addinivalue_line("markers", "cuda_equivalence")
     config.addinivalue_line("markers", "developer_only")
+    config.addinivalue_line("markers", "floating_base")
 
 
-def build_fixed_cuda_case_params():
+def build_cuda_case_params(base_mode: str):
     params = []
-    for case in iter_robot_cases(MANIFEST_PATH, base_mode="fixed"):
+    for case in iter_robot_cases(MANIFEST_PATH, base_mode=base_mode):
         spec = case["spec"]
+        marks = [
+            pytest.mark.cuda_equivalence,
+            pytest.mark.developer_only,
+            pytest.mark.robot_smoke,
+        ]
+        if base_mode == "floating":
+            marks.append(pytest.mark.floating_base)
         params.append(
             pytest.param(
                 spec,
-                "fixed",
-                id=f"{spec.robot_id}-fixed",
-                marks=[
-                    pytest.mark.cuda_equivalence,
-                    pytest.mark.developer_only,
-                    pytest.mark.robot_smoke,
-                ],
+                base_mode,
+                id=f"{spec.robot_id}-{base_mode}",
+                marks=marks,
             )
         )
     return params
+
+
+def build_fixed_cuda_case_params():
+    return build_cuda_case_params("fixed")
+
+
+def build_floating_cuda_case_params():
+    return build_cuda_case_params("floating")
 
 
 def _generate_grid_header(project_model, build_dir: Path) -> Path:
@@ -147,7 +176,7 @@ def _generate_grid_header(project_model, build_dir: Path) -> Path:
     return header_path
 
 
-def _compile_runner(build_dir: Path) -> tuple[Path, list[str]]:
+def _compile_runner(build_dir: Path, *, floating_base: bool = False) -> tuple[Path, list[str]]:
     nvcc = shutil.which("nvcc")
     if nvcc is None:
         pytest.skip("nvcc was not found; install CUDA Toolkit to run CUDA equivalence tests.")
@@ -161,6 +190,7 @@ def _compile_runner(build_dir: Path) -> tuple[Path, list[str]]:
         nvcc,
         "-std=c++11",
         "-O0",
+        f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}",
         "-gencode",
         f"arch=compute_{arch},code=sm_{arch}",
         "-gencode",
@@ -220,6 +250,31 @@ def _random_sample_count() -> int:
         raise ValueError("GRID_CUDA_RANDOM_SAMPLES must be an integer.") from exc
 
 
+def _floating_algorithm_selection() -> tuple[str, ...]:
+    raw = os.environ.get("GRID_CUDA_FLOATING_ALGORITHMS")
+    if not raw:
+        return FLOATING_CUDA_ALGORITHMS
+    if raw.strip().lower() == "all":
+        return FLOATING_CUDA_CANDIDATE_ALGORITHMS
+    requested = tuple(part.strip() for part in raw.split(",") if part.strip())
+    unknown = sorted(set(requested) - set(FLOATING_CUDA_CANDIDATE_ALGORITHMS))
+    if unknown:
+        raise ValueError(
+            "GRID_CUDA_FLOATING_ALGORITHMS contained unsupported names: "
+            + ", ".join(unknown)
+        )
+    return requested
+
+
+def _floating_sample_name_selection() -> set[str] | None:
+    raw = os.environ.get("GRID_CUDA_FLOATING_SAMPLE_NAMES")
+    if not raw:
+        return {"zero"}
+    if raw.strip().lower() == "all":
+        return None
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
 def _stable_robot_seed(robot_id: str) -> int:
     return 1000 + sum((index + 1) * ord(char) for index, char in enumerate(robot_id))
 
@@ -231,13 +286,29 @@ def _build_cuda_samples(project_model, random_count: int | None = None):
 
     rng = np.random.default_rng(_stable_robot_seed(project_model.spec.robot_id))
     if project_model.nq:
-        bounds = _joint_ranges(project_model.robot, project_model.nq, -0.75, 0.75)
+        joint_offset = 7 if project_model.base_mode == "floating" else 0
+        joint_count = project_model.nq - joint_offset
+        skip_joint_ids = 1 if project_model.base_mode == "floating" else 0
+        bounds = _joint_ranges(
+            project_model.robot,
+            joint_count,
+            -0.75,
+            0.75,
+            skip_joint_ids=skip_joint_ids,
+        )
     else:
         bounds = np.zeros((0, 2), dtype=np.float64)
 
     for sample_index in range(random_count):
         q = np.zeros(project_model.nq, dtype=np.float64)
-        if project_model.nq:
+        if project_model.base_mode == "floating":
+            q[0:3] = rng.uniform(-0.35, 0.35, size=3)
+            quat_xyzw = rng.uniform(-1.0, 1.0, size=4)
+            quat_xyzw /= np.linalg.norm(quat_xyzw)
+            q[3:7] = quat_xyzw.astype(np.float64)
+            if bounds.size:
+                q[7:] = rng.uniform(bounds[:, 0], bounds[:, 1]).astype(np.float64)
+        elif project_model.nq:
             q = rng.uniform(bounds[:, 0], bounds[:, 1]).astype(np.float64)
         qd = rng.uniform(-1.5, 1.5, size=project_model.nv).astype(np.float64)
         qdd = rng.uniform(-2.5, 2.5, size=project_model.nv).astype(np.float64)
@@ -376,6 +447,30 @@ def _assert_close(
 
 @pytest.mark.parametrize(("spec", "base_mode"), build_fixed_cuda_case_params())
 def test_fixed_base_generated_cuda_matches_python_reference(spec, base_mode, tmp_path):
+    _run_cuda_equivalence_case(spec, base_mode, tmp_path, FIXED_CUDA_ALGORITHMS)
+
+
+@pytest.mark.parametrize(("spec", "base_mode"), build_floating_cuda_case_params())
+def test_floating_base_generated_cuda_matches_python_reference(spec, base_mode, tmp_path):
+    sample_names = _floating_sample_name_selection()
+    _run_cuda_equivalence_case(
+        spec,
+        base_mode,
+        tmp_path,
+        _floating_algorithm_selection(),
+        sample_names=sample_names,
+        random_count=0 if sample_names == {"zero"} else None,
+    )
+
+
+def _run_cuda_equivalence_case(
+    spec,
+    base_mode,
+    tmp_path,
+    algorithms,
+    sample_names=None,
+    random_count=None,
+):
     try:
         resolved = resolve_robot_spec(spec)
     except RuntimeError as exc:
@@ -388,11 +483,16 @@ def test_fixed_base_generated_cuda_matches_python_reference(spec, base_mode, tmp
     build_dir = tmp_path / f"cuda_{spec.robot_id}_{base_mode}"
     build_dir.mkdir()
     _generate_grid_header(project_model, build_dir)
-    executable, compile_cmd = _compile_runner(build_dir)
+    executable, compile_cmd = _compile_runner(
+        build_dir,
+        floating_base=base_mode == "floating",
+    )
 
     failures = []
     skipped = []
-    for sample in _build_cuda_samples(project_model):
+    for sample in _build_cuda_samples(project_model, random_count=random_count):
+        if sample_names is not None and sample.name not in sample_names:
+            continue
         stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
         cuda = _parse_runner_output(stdout)
 
@@ -425,17 +525,7 @@ def test_fixed_base_generated_cuda_matches_python_reference(spec, base_mode, tmp
         invertible_mass_matrix = _has_invertible_project_mass_matrix(
             project_model, sample.q
         )
-        for name in (
-            "inverse_dynamics",
-            "direct_minv",
-            "forward_dynamics",
-            "inverse_dynamics_gradient_q",
-            "inverse_dynamics_gradient_qd",
-            "forward_dynamics_gradient_q",
-            "forward_dynamics_gradient_qd",
-            "aba",
-            "crba",
-        ):
+        for name in algorithms:
             if name in SINGULAR_DEPENDENT_ALGORITHMS and not invertible_mass_matrix:
                 skipped.append(f"{spec.robot_id}/{sample.name}/{name}")
                 continue

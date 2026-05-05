@@ -19,6 +19,40 @@ For additional information and links to our paper on this work, check out our [p
   1) Print the reference values by running ```printReferenceValues.py PATH_TO_URDF (-D)``` where ```-D``` prints the full debug reference values from the refactorings 
   2) Run ```printGrid.py PATH_TO_URDF (-D)``` to compile, run, and print the same values from CUDA C++
 
+## Floating-Base Conventions
+Floating-base parsing and the Python reference path now accept a public
+floating-base convention flag. The default is Pinocchio-compatible:
+
++ `floating_base_convention="pinocchio"`:
+  `q = [x, y, z, qx, qy, qz, qw]`,
+  `v = [vx, vy, vz, wx, wy, wz]`
++ `floating_base_convention="legacy"`:
+  `q = [x, y, z, qw, qx, qy, qz]`,
+  `v = [wx, wy, wz, vx, vy, vz]`
+
+GRiD normalizes both public conventions into one shared internal floating-base
+representation, so the code generator and `RBDReference` stay consistent under
+the hood while callers can choose the input/output ordering they need.
+
+## Developer Testing
+The Pinocchio-side floating convention regression suite exercises both public
+floating-base orderings across the current floating robot manifest:
+
+```bash
+.venv/bin/python -m pytest test/pinocchio_equivalents/tests/test_floating_base_conventions.py -q
+```
+
+The CUDA executable equivalence suite still defaults to the Pinocchio-facing
+floating convention and is currently being expanded from the first floating-base
+smoke slice to broader floating algorithm coverage.
+
+For floating CUDA development, the pytest harness also accepts optional env
+overrides:
+
++ `GRID_CUDA_FLOATING_ALGORITHMS=all` to try the broader floating candidate set
++ `GRID_CUDA_FLOATING_ALGORITHMS=inverse_dynamics,forward_dynamics` to request a subset
++ `GRID_CUDA_FLOATING_SAMPLE_NAMES=all` to run every deterministic/random sample instead of only `zero`
+
 ## Current Support
 GRiD currently fully supports any robot model consisting of revolute, prismatic, and fixed joints that does not have closed kinematic loops.
 
