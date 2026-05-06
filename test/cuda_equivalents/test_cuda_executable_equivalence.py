@@ -1,8 +1,12 @@
 import contextlib
+import hashlib
+import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import pytest
@@ -22,7 +26,21 @@ from test.pinocchio_equivalents.utils.state_sampling import (
 
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_equivalence_runner.cu")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CACHE_SCHEMA_VERSION = 1
 DEFAULT_RANDOM_SAMPLE_COUNT = 3
+CUDA_CORNER_SAMPLE_NAMES = (
+    "positive",
+    "negative",
+    "mixed_sign",
+    "tiny",
+    "velocity_only",
+    "accel_or_torque_only",
+    "near_limit",
+    "floating_quat_identity",
+    "floating_quat_positive",
+    "floating_quat_mixed",
+)
 FIXED_CUDA_ALGORITHMS = (
     "inverse_dynamics",
     "direct_minv",
@@ -36,8 +54,12 @@ FIXED_CUDA_ALGORITHMS = (
 )
 FLOATING_CUDA_ALGORITHMS = (
     "inverse_dynamics",
+    "direct_minv",
+    "forward_dynamics",
     "inverse_dynamics_gradient_q",
     "inverse_dynamics_gradient_qd",
+    "forward_dynamics_gradient_q",
+    "forward_dynamics_gradient_qd",
 )
 FLOATING_CUDA_CANDIDATE_ALGORITHMS = FIXED_CUDA_ALGORITHMS
 GPU_UNAVAILABLE_PATTERNS = (
@@ -85,18 +107,142 @@ CUDA_ROBOT_ALGORITHM_TOLERANCES = {
         "atol": 1.25,
         "note": "G1 CUDA CRBA has about unit-scale residuals on selected off-diagonal entries in this smoke path; keep this override scoped to G1 CRBA.",
     },
+    ("g1", "forward_dynamics_gradient_q"): {
+        "rtol": 2e-4,
+        "atol": 2e-4,
+        "norm_rtol": 5e-4,
+        "note": "G1 floating FD-gradient-q is a large float32 generated-kernel path and uses selective spill; near-zero entries can show milliscale absolute residuals while the full-matrix norm remains tight.",
+    },
+    ("iiwa14", "forward_dynamics_gradient_q"): {
+        "rtol": 2e-4,
+        "atol": 2e-4,
+        "norm_rtol": 5e-4,
+        "note": "IIWA14 floating FD-gradient-q has float32 cancellation on deterministic corner samples; enforce the full-matrix norm while keeping entrywise checks strict for non-cancelled cases.",
+    },
     ("fr3", "aba"): {
         "rtol": 2.5e-2,
         "atol": 2e-4,
         "norm_rtol": 1e-2,
         "note": "FR3 CUDA ABA is checked with a norm-relative guard because the hand branch and float32 generated-kernel path produce sub-percent vector residuals.",
     },
+    ("fr3", "forward_dynamics_gradient_q"): {
+        "rtol": 2e-4,
+        "atol": 2e-4,
+        "norm_rtol": 5e-4,
+        "note": "FR3 floating FD-gradient-q has small float32 Minv/gradient cancellation on near-zero and conservative entries; require a tight full-matrix norm.",
+    },
+    ("gen3", "forward_dynamics_gradient_q"): {
+        "rtol": 2e-4,
+        "atol": 2e-4,
+        "norm_rtol": 5e-4,
+        "note": "Gen3 floating FD-gradient-q is sensitive to float32 Minv/gradient cancellation on conservative samples while the matrix norm stays tight.",
+    },
+    ("gen3", "forward_dynamics_gradient_qd"): {
+        "rtol": 2e-4,
+        "atol": 2e-4,
+        "norm_rtol": 5e-4,
+        "note": "Gen3 floating FD-gradient-qd has near-zero-entry float32 residuals; keep the full-matrix norm guard tight.",
+    },
+    ("baxter", "forward_dynamics_gradient_qd"): {
+        "rtol": 2e-4,
+        "atol": 2e-4,
+        "norm_rtol": 5e-4,
+        "note": "Baxter floating FD-gradient-qd has near-zero-entry float32 residuals in the broad deterministic CUDA sweep; keep the full-matrix norm guard tight.",
+    },
+    ("baxter", "forward_dynamics_gradient_q"): {
+        "rtol": 2e-4,
+        "atol": 2e-4,
+        "norm_rtol": 5e-4,
+        "note": "Baxter floating FD-gradient-q has isolated float32 Minv/gradient residuals on random samples while the full-matrix norm remains tight.",
+    },
     ("fetch", "forward_dynamics_gradient_q"): {
         "rtol": 2e-4,
         "atol": 5e-4,
-        "note": "Fetch has a negative gripper axis and a near-singular zero-torque FD-gradient smoke sample where float32 cancellation leaves a sub-milliscale residual against a near-zero float64 reference entry.",
+        "norm_rtol": 1e-4,
+        "note": "Fetch has a negative gripper axis and FD-gradient-q float32 cancellation on zero-torque and velocity-only smoke samples; keep entrywise checks strict unless the full-matrix norm remains very tight.",
     },
 }
+
+
+class SampleSelection(NamedTuple):
+    names: set[str] | None
+    include_corner_samples: bool
+    explicit: bool
+
+
+def _env_enabled(name: str, default: bool = True) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _progress(config, message: str, *, verbose: bool = False) -> None:
+    if not _env_enabled("GRID_CUDA_PROGRESS", default=True):
+        return
+    if verbose and not _env_enabled("GRID_CUDA_VERBOSE_PROGRESS", default=False):
+        return
+    prefix = "[cuda-equivalence] "
+    reporter = None
+    if config is not None:
+        reporter = config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line(prefix + message)
+        terminal_writer = getattr(reporter, "_tw", None)
+        if terminal_writer is not None and hasattr(terminal_writer, "flush"):
+            terminal_writer.flush()
+    else:
+        print(prefix + message, flush=True)
+
+
+def _cache_verbose(config, message: str) -> None:
+    if _env_enabled("GRID_CUDA_VERBOSE_CACHE", default=False):
+        _progress(config, message)
+
+
+def _cache_enabled() -> bool:
+    return not _env_enabled("GRID_CUDA_DISABLE_CACHE", default=False)
+
+
+def _cache_root() -> Path:
+    return Path(os.environ.get("GRID_CUDA_CACHE_DIR", ".pytest_cache/grid_cuda")).resolve()
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _hash_file(path: Path) -> str:
+    return _sha256_bytes(path.read_bytes())
+
+
+def _hash_tree(root: Path, suffixes: tuple[str, ...]) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix not in suffixes:
+            continue
+        if "__pycache__" in path.parts:
+            continue
+        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _stable_json_hash(payload: dict) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return _sha256_bytes(encoded)
+
+
+def _nvcc_version_text() -> str:
+    nvcc = shutil.which("nvcc")
+    if nvcc is None:
+        return "missing"
+    result = subprocess.run([nvcc, "--version"], capture_output=True, text=True)
+    if result.returncode != 0:
+        return f"error:{result.returncode}:{result.stderr.strip()}"
+    return result.stdout.strip()
 
 
 def _detect_cuda_arch() -> str:
@@ -122,6 +268,32 @@ def _detect_cuda_arch() -> str:
                     return compute_cap.replace(".", "")
 
     return "86"
+
+
+def _parse_const_ints(header_path: Path) -> dict[str, int]:
+    constants = {}
+    const_re = re.compile(r"const int (?P<name>[A-Z0-9_]+) = (?P<value>-?[0-9]+);")
+    for match in const_re.finditer(header_path.read_text()):
+        constants[match.group("name")] = int(match.group("value"))
+    return constants
+
+
+def _fallback_summary(header_path: Path) -> str:
+    constants = _parse_const_ints(header_path)
+    interesting = [
+        "GRID_ID_DU_SHARED_TIER_VALUE",
+        "GRID_FD_DU_SHARED_TIER_VALUE",
+        "GRID_ID_DU_USES_GLOBAL_TEMP",
+        "GRID_FD_DU_USES_GLOBAL_TEMP",
+        "GRID_ID_DU_USES_DA_DF_SPILL",
+        "GRID_FD_DU_USES_DA_DF_SPILL",
+    ]
+    parts = [
+        f"{name}={constants[name]}"
+        for name in interesting
+        if name in constants
+    ]
+    return ", ".join(parts) if parts else "fallback constants unavailable"
 
 
 def pytest_configure(config):
@@ -160,8 +332,62 @@ def build_floating_cuda_case_params():
     return build_cuda_case_params("floating")
 
 
-def _generate_grid_header(project_model, build_dir: Path) -> Path:
+def _header_cache_key(project_model, resolved_model, include_homogenous_transforms: bool) -> str:
+    urdf_path = Path(resolved_model.urdf_path)
+    payload = {
+        "schema": CACHE_SCHEMA_VERSION,
+        "kind": "grid_header",
+        "robot_id": project_model.spec.robot_id,
+        "base_mode": project_model.base_mode,
+        "nq": project_model.nq,
+        "nv": project_model.nv,
+        "urdf_path": str(urdf_path),
+        "urdf_hash": _hash_file(urdf_path) if urdf_path.exists() else "missing",
+        "robot_description_revision": resolved_model.revision,
+        "codegen_hash": _hash_tree(REPO_ROOT / "GRiDCodeGenerator", (".py",)),
+        "target_shared_mem_bytes": os.environ.get("GRID_CUDA_TARGET_SHARED_MEM_BYTES", "default"),
+        "shared_mem_type_size_bytes": os.environ.get("GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES", "default"),
+        "codegen_profile": os.environ.get("GRID_CODEGEN_PROFILE", "all"),
+        "include_homogenous_transforms": include_homogenous_transforms,
+        "debug_mode": False,
+        "need_print_mat": True,
+        "file_namespace": "grid",
+    }
+    return _stable_json_hash(payload)
+
+
+def _generate_grid_header(project_model, resolved_model, build_dir: Path, config) -> tuple[Path, str]:
     header_path = build_dir / "grid.cuh"
+    include_homogenous_transforms = True
+    header_key = _header_cache_key(
+        project_model,
+        resolved_model,
+        include_homogenous_transforms=include_homogenous_transforms,
+    )
+    if not _cache_enabled():
+        _progress(config, f"generating header for {project_model.spec.robot_id}-{project_model.base_mode}")
+        codegen = GRiDCodeGenerator(
+            project_model.robot,
+            DEBUG_MODE=False,
+            NEED_PRINT_MAT=True,
+            FILE_NAMESPACE="grid",
+        )
+        with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
+            codegen.gen_all_code(
+                include_homogenous_transforms=include_homogenous_transforms,
+                output_path=str(header_path),
+            )
+        return header_path, header_key
+
+    cached_dir = _cache_root() / "headers" / header_key
+    cached_header = cached_dir / "grid.cuh"
+    if cached_header.exists():
+        shutil.copyfile(cached_header, header_path)
+        _progress(config, f"header cache hit: {project_model.spec.robot_id}-{project_model.base_mode} key={header_key[:12]}")
+        return header_path, header_key
+
+    _progress(config, f"generating header for {project_model.spec.robot_id}-{project_model.base_mode} cache miss key={header_key[:12]}")
+    cached_dir.mkdir(parents=True, exist_ok=True)
     codegen = GRiDCodeGenerator(
         project_model.robot,
         DEBUG_MODE=False,
@@ -170,22 +396,73 @@ def _generate_grid_header(project_model, build_dir: Path) -> Path:
     )
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
         codegen.gen_all_code(
-            include_homogenous_transforms=True,
-            output_path=str(header_path),
+            include_homogenous_transforms=include_homogenous_transforms,
+            output_path=str(cached_header),
         )
-    return header_path
+    (cached_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema": CACHE_SCHEMA_VERSION,
+                "robot_id": project_model.spec.robot_id,
+                "base_mode": project_model.base_mode,
+                "target_shared_mem_bytes": os.environ.get("GRID_CUDA_TARGET_SHARED_MEM_BYTES", "default"),
+                "shared_mem_type_size_bytes": os.environ.get("GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES", "default"),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    shutil.copyfile(cached_header, header_path)
+    return header_path, header_key
 
 
-def _compile_runner(build_dir: Path, *, floating_base: bool = False) -> tuple[Path, list[str]]:
+def _compile_runner(
+    build_dir: Path,
+    *,
+    floating_base: bool = False,
+    header_key: str,
+    config=None,
+) -> tuple[Path, list[str]]:
     nvcc = shutil.which("nvcc")
     if nvcc is None:
         pytest.skip("nvcc was not found; install CUDA Toolkit to run CUDA equivalence tests.")
 
-    runner_copy = build_dir / RUNNER_SOURCE.name
+    arch = _detect_cuda_arch()
+    nvcc_version = _nvcc_version_text()
+    _cache_verbose(config, "nvcc version: " + nvcc_version.splitlines()[-1])
+    l2_persisting = os.environ.get("GRID_CUDA_ENABLE_L2_PERSISTING")
+    l2_define = int(l2_persisting) if l2_persisting is not None else 0
+    runner_key = _stable_json_hash(
+        {
+            "schema": CACHE_SCHEMA_VERSION,
+            "kind": "cuda_equivalence_runner",
+            "header_key": header_key,
+            "runner_source_hash": _hash_file(RUNNER_SOURCE),
+            "cuda_arch": arch,
+            "nvcc_version": nvcc_version,
+            "floating_base": bool(floating_base),
+            "l2_persisting": l2_define,
+            "compile_flags": ["-std=c++11", "-O0"],
+        }
+    )
+
+    if _cache_enabled():
+        compile_dir = _cache_root() / "runners" / runner_key
+        executable = compile_dir / "cuda_equivalence_runner.exe"
+        if executable.exists():
+            _progress(config, f"runner cache hit: arch=sm_{arch} floating={int(floating_base)} l2={l2_define} key={runner_key[:12]}")
+            cmd = [str(executable)]
+            return executable, cmd
+        compile_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(build_dir / "grid.cuh", compile_dir / "grid.cuh")
+    else:
+        compile_dir = build_dir
+        executable = compile_dir / "cuda_equivalence_runner.exe"
+
+    runner_copy = compile_dir / RUNNER_SOURCE.name
     shutil.copyfile(RUNNER_SOURCE, runner_copy)
 
-    arch = _detect_cuda_arch()
-    executable = build_dir / "cuda_equivalence_runner.exe"
     cmd = [
         nvcc,
         "-std=c++11",
@@ -199,13 +476,32 @@ def _compile_runner(build_dir: Path, *, floating_base: bool = False) -> tuple[Pa
         str(executable),
         str(runner_copy),
     ]
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    if l2_persisting is not None:
+        cmd.insert(3, f"-DGRID_CUDA_ENABLE_L2_PERSISTING={l2_define}")
+    _progress(config, f"compiling runner arch=sm_{arch} floating={int(floating_base)} l2={l2_define} cache_key={runner_key[:12]}")
+    result = subprocess.run(cmd, cwd=compile_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(
             "CUDA equivalence runner compilation failed.\n"
             f"Command: {' '.join(cmd)}\n"
             f"stdout:\n{result.stdout}\n"
             f"stderr:\n{result.stderr}"
+        )
+    if _cache_enabled():
+        (compile_dir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema": CACHE_SCHEMA_VERSION,
+                    "header_key": header_key,
+                    "arch": arch,
+                    "floating_base": bool(floating_base),
+                    "l2_persisting": l2_define,
+                    "cmd": cmd,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
         )
     return executable, cmd
 
@@ -266,21 +562,177 @@ def _floating_algorithm_selection() -> tuple[str, ...]:
     return requested
 
 
-def _floating_sample_name_selection() -> set[str] | None:
-    raw = os.environ.get("GRID_CUDA_FLOATING_SAMPLE_NAMES")
-    if not raw:
-        return {"zero"}
+def _parse_sample_names(raw: str) -> set[str] | None:
     if raw.strip().lower() == "all":
         return None
     return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def _sample_name_selection(base_mode: str) -> SampleSelection:
+    raw = os.environ.get("GRID_CUDA_SAMPLE_NAMES")
+    if raw:
+        return SampleSelection(_parse_sample_names(raw), True, True)
+    if base_mode == "floating":
+        raw = os.environ.get("GRID_CUDA_FLOATING_SAMPLE_NAMES")
+        if not raw:
+            return SampleSelection({"zero"}, False, False)
+        return SampleSelection(_parse_sample_names(raw), True, True)
+    return SampleSelection(None, False, False)
 
 
 def _stable_robot_seed(robot_id: str) -> int:
     return 1000 + sum((index + 1) * ord(char) for index, char in enumerate(robot_id))
 
 
-def _build_cuda_samples(project_model, random_count: int | None = None):
+def _joint_position_bounds(project_model, low: float, high: float):
+    if not project_model.nq:
+        return 0, np.zeros((0, 2), dtype=np.float64), 0
+    joint_offset = 7 if project_model.base_mode == "floating" else 0
+    joint_count = project_model.nq - joint_offset
+    skip_joint_ids = 1 if project_model.base_mode == "floating" else 0
+    bounds = _joint_ranges(
+        project_model.robot,
+        joint_count,
+        low,
+        high,
+        skip_joint_ids=skip_joint_ids,
+    )
+    return joint_offset, bounds, joint_count
+
+
+def _bounded_joint_values(bounds: np.ndarray, preferred: np.ndarray) -> np.ndarray:
+    if bounds.size == 0:
+        return np.zeros(0, dtype=np.float64)
+    return np.clip(preferred.astype(np.float64), bounds[:, 0], bounds[:, 1])
+
+
+def _alternating_values(count: int, magnitude: float) -> np.ndarray:
+    signs = np.where(np.arange(count) % 2 == 0, 1.0, -1.0)
+    return signs.astype(np.float64) * magnitude
+
+
+def _set_floating_base(q: np.ndarray, quat_xyzw: np.ndarray, translation=None) -> None:
+    if translation is None:
+        translation = np.zeros(3, dtype=np.float64)
+    quat_xyzw = np.asarray(quat_xyzw, dtype=np.float64)
+    quat_xyzw = quat_xyzw / np.linalg.norm(quat_xyzw)
+    q[0:3] = np.asarray(translation, dtype=np.float64)
+    q[3:7] = quat_xyzw
+
+
+def _make_cuda_corner_samples(project_model) -> list[DynamicsSample]:
+    samples: list[DynamicsSample] = []
+    joint_offset, bounds, joint_count = _joint_position_bounds(project_model, -0.6, 0.6)
+
+    def make_sample(name: str, joint_values, qd_values, qdd_values, quat=None, translation=None):
+        q = np.zeros(project_model.nq, dtype=np.float64)
+        if project_model.base_mode == "floating":
+            _set_floating_base(
+                q,
+                np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64) if quat is None else quat,
+                translation=translation,
+            )
+        if joint_count:
+            q[joint_offset:] = _bounded_joint_values(bounds, np.asarray(joint_values, dtype=np.float64))
+        qd = np.asarray(qd_values, dtype=np.float64)
+        qdd = np.asarray(qdd_values, dtype=np.float64)
+        samples.append(DynamicsSample(name=name, q=q, qd=qd, qdd=qdd))
+
+    positive_joints = np.full(joint_count, 0.2, dtype=np.float64)
+    negative_joints = np.full(joint_count, -0.2, dtype=np.float64)
+    mixed_joints = _alternating_values(joint_count, 0.25)
+    tiny_joints = _alternating_values(joint_count, 1e-7)
+    nominal_joints = _alternating_values(joint_count, 0.15)
+    if joint_count:
+        spans = bounds[:, 1] - bounds[:, 0]
+        near_low = bounds[:, 0] + 0.1 * spans
+        near_high = bounds[:, 1] - 0.1 * spans
+        near_limit_joints = np.where(np.arange(joint_count) % 2 == 0, near_high, near_low)
+    else:
+        near_limit_joints = np.zeros(0, dtype=np.float64)
+
+    make_sample(
+        "positive",
+        positive_joints,
+        np.full(project_model.nv, 0.35, dtype=np.float64),
+        np.full(project_model.nv, 0.75, dtype=np.float64),
+        translation=np.array([0.05, 0.04, 0.03], dtype=np.float64),
+    )
+    make_sample(
+        "negative",
+        negative_joints,
+        np.full(project_model.nv, -0.35, dtype=np.float64),
+        np.full(project_model.nv, -0.75, dtype=np.float64),
+        translation=np.array([-0.05, -0.04, -0.03], dtype=np.float64),
+    )
+    make_sample(
+        "mixed_sign",
+        mixed_joints,
+        _alternating_values(project_model.nv, 0.45),
+        -_alternating_values(project_model.nv, 0.9),
+        translation=np.array([0.04, -0.03, 0.02], dtype=np.float64),
+    )
+    make_sample(
+        "tiny",
+        tiny_joints,
+        _alternating_values(project_model.nv, 1e-7),
+        -_alternating_values(project_model.nv, 1e-7),
+    )
+    make_sample(
+        "velocity_only",
+        nominal_joints,
+        _alternating_values(project_model.nv, 0.55),
+        np.zeros(project_model.nv, dtype=np.float64),
+    )
+    make_sample(
+        "accel_or_torque_only",
+        nominal_joints,
+        np.zeros(project_model.nv, dtype=np.float64),
+        _alternating_values(project_model.nv, 1.1),
+    )
+    make_sample(
+        "near_limit",
+        near_limit_joints,
+        _alternating_values(project_model.nv, 0.25),
+        _alternating_values(project_model.nv, 0.5),
+    )
+    if project_model.base_mode == "floating":
+        make_sample(
+            "floating_quat_identity",
+            nominal_joints,
+            _alternating_values(project_model.nv, 0.25),
+            _alternating_values(project_model.nv, 0.5),
+            quat=np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64),
+            translation=np.array([0.02, -0.01, 0.03], dtype=np.float64),
+        )
+        make_sample(
+            "floating_quat_positive",
+            positive_joints,
+            np.full(project_model.nv, 0.2, dtype=np.float64),
+            np.full(project_model.nv, 0.4, dtype=np.float64),
+            quat=np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float64),
+            translation=np.array([0.06, 0.02, 0.04], dtype=np.float64),
+        )
+        make_sample(
+            "floating_quat_mixed",
+            mixed_joints,
+            _alternating_values(project_model.nv, 0.3),
+            -_alternating_values(project_model.nv, 0.6),
+            quat=np.array([-0.35, 0.2, -0.5, 0.75], dtype=np.float64),
+            translation=np.array([-0.03, 0.05, -0.02], dtype=np.float64),
+        )
+    return samples
+
+
+def _build_cuda_samples(
+    project_model,
+    random_count: int | None = None,
+    *,
+    include_corner_samples: bool = False,
+):
     samples = list(build_dynamics_samples(project_model))
+    if include_corner_samples:
+        samples.extend(_make_cuda_corner_samples(project_model))
     if random_count is None:
         random_count = _random_sample_count()
 
@@ -446,20 +898,36 @@ def _assert_close(
 
 
 @pytest.mark.parametrize(("spec", "base_mode"), build_fixed_cuda_case_params())
-def test_fixed_base_generated_cuda_matches_python_reference(spec, base_mode, tmp_path):
-    _run_cuda_equivalence_case(spec, base_mode, tmp_path, FIXED_CUDA_ALGORITHMS)
+def test_fixed_base_generated_cuda_matches_python_reference(spec, base_mode, tmp_path, request):
+    selection = _sample_name_selection(base_mode)
+    random_count = 0 if selection.explicit and os.environ.get("GRID_CUDA_RANDOM_SAMPLES") is None else None
+    _run_cuda_equivalence_case(
+        spec,
+        base_mode,
+        tmp_path,
+        FIXED_CUDA_ALGORITHMS,
+        sample_selection=selection,
+        random_count=random_count,
+        config=request.config,
+    )
 
 
 @pytest.mark.parametrize(("spec", "base_mode"), build_floating_cuda_case_params())
-def test_floating_base_generated_cuda_matches_python_reference(spec, base_mode, tmp_path):
-    sample_names = _floating_sample_name_selection()
+def test_floating_base_generated_cuda_matches_python_reference(spec, base_mode, tmp_path, request):
+    selection = _sample_name_selection(base_mode)
+    random_count = None
+    if os.environ.get("GRID_CUDA_RANDOM_SAMPLES") is None and (
+        selection.explicit or selection.names == {"zero"}
+    ):
+        random_count = 0
     _run_cuda_equivalence_case(
         spec,
         base_mode,
         tmp_path,
         _floating_algorithm_selection(),
-        sample_names=sample_names,
-        random_count=0 if sample_names == {"zero"} else None,
+        sample_selection=selection,
+        random_count=random_count,
+        config=request.config,
     )
 
 
@@ -468,31 +936,57 @@ def _run_cuda_equivalence_case(
     base_mode,
     tmp_path,
     algorithms,
-    sample_names=None,
+    sample_selection=None,
     random_count=None,
+    config=None,
 ):
+    if sample_selection is None:
+        sample_selection = SampleSelection(None, False, False)
+    sample_names = sample_selection.names
+    target_shared = os.environ.get("GRID_CUDA_TARGET_SHARED_MEM_BYTES", "default")
+    l2_mode = os.environ.get("GRID_CUDA_ENABLE_L2_PERSISTING", "0")
+    _progress(
+        config,
+        (
+            f"start {spec.robot_id}-{base_mode}: target_shared={target_shared}, "
+            f"l2={l2_mode}, samples={sorted(sample_names) if sample_names is not None else 'default/all'}, "
+            f"random={_random_sample_count() if random_count is None else random_count}"
+        ),
+    )
     try:
+        _progress(config, f"resolving robot model for {spec.robot_id}")
         resolved = resolve_robot_spec(spec)
     except RuntimeError as exc:
         pytest.skip(
             f"Could not resolve manifest {spec.robot_id}. Run ./developer_install.sh before "
             f"executing CUDA equivalence tests. Resolution error: {exc}"
         )
+    _progress(config, f"building project adapter for {spec.robot_id}-{base_mode}")
     project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
 
     build_dir = tmp_path / f"cuda_{spec.robot_id}_{base_mode}"
     build_dir.mkdir()
-    _generate_grid_header(project_model, build_dir)
+    header_path, header_key = _generate_grid_header(project_model, resolved, build_dir, config)
+    _progress(config, f"fallback summary for {spec.robot_id}-{base_mode}: {_fallback_summary(header_path)}")
     executable, compile_cmd = _compile_runner(
         build_dir,
         floating_base=base_mode == "floating",
+        header_key=header_key,
+        config=config,
     )
 
     failures = []
     skipped = []
-    for sample in _build_cuda_samples(project_model, random_count=random_count):
+    matched_samples = 0
+    for sample in _build_cuda_samples(
+        project_model,
+        random_count=random_count,
+        include_corner_samples=sample_selection.include_corner_samples,
+    ):
         if sample_names is not None and sample.name not in sample_names:
             continue
+        matched_samples += 1
+        _progress(config, f"{spec.robot_id}-{base_mode}/{sample.name}: running CUDA runner")
         stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
         cuda = _parse_runner_output(stdout)
 
@@ -521,7 +1015,8 @@ def _run_cuda_equivalence_case(
             atol=1e-7,
         )
 
-        cuda["direct_minv"] = _normalize_cuda_minv(cuda["direct_minv"])
+        if "direct_minv" in cuda:
+            cuda["direct_minv"] = _normalize_cuda_minv(cuda["direct_minv"])
         invertible_mass_matrix = _has_invertible_project_mass_matrix(
             project_model, sample.q
         )
@@ -530,6 +1025,11 @@ def _run_cuda_equivalence_case(
                 skipped.append(f"{spec.robot_id}/{sample.name}/{name}")
                 continue
             try:
+                _progress(
+                    config,
+                    f"{spec.robot_id}-{base_mode}/{sample.name}/{name}: comparing",
+                    verbose=True,
+                )
                 expected_value = _expected_output(project_model, sample, name)
                 _assert_close(
                     f"{spec.robot_id}/{sample.name}/{name}",
@@ -540,10 +1040,20 @@ def _run_cuda_equivalence_case(
                 )
             except AssertionError as exc:
                 failures.append(str(exc))
+        _progress(config, f"{spec.robot_id}-{base_mode}/{sample.name}: complete", verbose=True)
+
+    if matched_samples == 0:
+        known = ["zero", "conservative", *CUDA_CORNER_SAMPLE_NAMES, "cuda_random_N"]
+        pytest.fail(
+            f"No CUDA samples matched selection {sorted(sample_names) if sample_names else sample_names}. "
+            f"Known deterministic samples: {', '.join(known)}"
+        )
 
     if failures:
         pytest.fail("\n".join(failures))
     if skipped:
+        _progress(config, "Skipped singular-mass CUDA comparisons: " + ", ".join(skipped))
         pytest.skip(
             "Skipped singular-mass CUDA comparisons: " + ", ".join(skipped)
         )
+    _progress(config, f"complete {spec.robot_id}-{base_mode}: {matched_samples} sample(s)")
