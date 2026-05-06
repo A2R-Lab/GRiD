@@ -1,11 +1,14 @@
 import contextlib
 import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from GRiDCodeGenerator import GRiDCodeGenerator
+from test.cuda_equivalents.test_cuda_executable_equivalence import _detect_cuda_arch
 from test.pinocchio_equivalents.conftest import MANIFEST_PATH
 from test.pinocchio_equivalents.utils.model_sources import (
     iter_robot_cases,
@@ -81,6 +84,41 @@ def _constants(header: str) -> dict[str, int]:
     return {match.group("name"): int(match.group("value")) for match in CONST_RE.finditer(header)}
 
 
+def _compile_header_consumer(tmp_path: Path, header: str, source: str, label: str):
+    nvcc = shutil.which("nvcc")
+    if nvcc is None:
+        pytest.skip("nvcc was not found; install CUDA Toolkit to run CUDA compile-only tests.")
+
+    build_dir = tmp_path / label
+    build_dir.mkdir()
+    header_path = build_dir / "grid.cuh"
+    source_path = build_dir / f"{label}.cu"
+    object_path = build_dir / f"{label}.o"
+    header_path.write_text(header)
+    source_path.write_text(source)
+    arch = _detect_cuda_arch()
+    cmd = [
+        nvcc,
+        "-std=c++11",
+        "-c",
+        "-gencode",
+        f"arch=compute_{arch},code=sm_{arch}",
+        "-gencode",
+        f"arch=compute_{arch},code=compute_{arch}",
+        "-o",
+        str(object_path),
+        str(source_path),
+    ]
+    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    if result.returncode != 0:
+        pytest.fail(
+            f"CUDA compile-only check failed for {label}.\n"
+            f"Command: {' '.join(cmd)}\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+
+
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 def test_fixed_default_header_keeps_gradient_paths_all_shared(tmp_path):
@@ -141,6 +179,64 @@ def test_generated_header_includes_grid_data_variants_and_rnea_aliases(tmp_path)
     assert "void rnea_single_timing(gridData<T, KIND> *hd_data" in header
     assert "void rnea_compute_only(gridData<T, KIND> *hd_data" in header
     assert "inverse_dynamics<T,USE_QDD_FLAG,USE_COMPRESSED_MEM,KIND>" in header
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+def test_dynamics_grid_data_variant_wrappers_compile(tmp_path):
+    header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="dynamics")
+    source = r'''
+#include "grid.cuh"
+
+int main() {
+    using T = float;
+    grid::gridData<T, grid::GRID_DATA_DYNAMICS> *data = nullptr;
+    grid::robotModel<T> *model = nullptr;
+    cudaStream_t *streams = nullptr;
+    dim3 blocks(1, 1, 1);
+    dim3 threads(32, 1, 1);
+    grid::inverse_dynamics<T, false, false, grid::GRID_DATA_DYNAMICS>(
+        data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
+    grid::rnea<T, false, false, grid::GRID_DATA_DYNAMICS>(
+        data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
+    grid::direct_minv<T, false, grid::GRID_DATA_DYNAMICS>(
+        data, model, 1, blocks, threads, streams);
+    grid::forward_dynamics<T, grid::GRID_DATA_DYNAMICS>(
+        data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
+    grid::inverse_dynamics_gradient<T, false, false, grid::GRID_DATA_DYNAMICS>(
+        data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
+    grid::forward_dynamics_gradient<T, false, grid::GRID_DATA_DYNAMICS>(
+        data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
+    grid::dynamics_only<T, grid::GRID_DATA_DYNAMICS>(
+        data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
+    return 0;
+}
+'''
+    _compile_header_consumer(tmp_path, header, source, "dynamics_grid_data_variant")
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+def test_kinematics_grid_data_variant_wrappers_compile(tmp_path):
+    header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="kinematics")
+    source = r'''
+#include "grid.cuh"
+
+int main() {
+    using T = float;
+    grid::gridData<T, grid::GRID_DATA_KINEMATICS> *data = nullptr;
+    grid::robotModel<T> *model = nullptr;
+    cudaStream_t *streams = nullptr;
+    dim3 blocks(1, 1, 1);
+    dim3 threads(32, 1, 1);
+    grid::end_effector_pose<T, false, grid::GRID_DATA_KINEMATICS>(
+        data, model, 1, blocks, threads, streams);
+    grid::kinematics_only<T, grid::GRID_DATA_KINEMATICS>(
+        data, model, 1, blocks, threads, streams);
+    return 0;
+}
+'''
+    _compile_header_consumer(tmp_path, header, source, "kinematics_grid_data_variant")
 
 
 @pytest.mark.cuda_equivalence
