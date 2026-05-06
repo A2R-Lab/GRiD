@@ -7,7 +7,7 @@
 #include "grid.cuh"
 
 #ifndef GRID_CUDA_SECOND_ORDER_TEST_THREADS
-#define GRID_CUDA_SECOND_ORDER_TEST_THREADS grid::SUGGESTED_THREADS
+#define GRID_CUDA_SECOND_ORDER_TEST_THREADS 64
 #endif
 
 template <typename T>

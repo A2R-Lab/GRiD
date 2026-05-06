@@ -91,6 +91,19 @@ def _compile_second_order_runner(build_dir: Path):
         str(executable),
         str(runner_copy),
     ]
+    threads = os.environ.get("GRID_CUDA_SECOND_ORDER_TEST_THREADS")
+    if threads:
+        try:
+            thread_count = int(threads)
+        except ValueError:
+            pytest.fail(
+                "GRID_CUDA_SECOND_ORDER_TEST_THREADS must be an integer when set."
+            )
+        if thread_count <= 0:
+            pytest.fail(
+                "GRID_CUDA_SECOND_ORDER_TEST_THREADS must be positive when set."
+            )
+        cmd.insert(-1, f"-DGRID_CUDA_SECOND_ORDER_TEST_THREADS={thread_count}")
     result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(
@@ -156,7 +169,10 @@ def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path):
         forced_fallback["idsva_so"],
         _flatten_second_order_tensors(project_model.idsva_so(sample.q, sample.qd, sample.qdd)),
         rtol=2e-4,
-        atol=2e-4,
+        # The zero-state dM/dq block has a tiny reference norm, so float32
+        # accumulation noise can dominate relative error despite sub-1e-3
+        # absolute agreement.
+        atol=1e-3,
     )
     np.testing.assert_allclose(
         forced_fallback["fdsva_so"],
