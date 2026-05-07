@@ -164,7 +164,10 @@ bool floating_algorithm_requested(const std::string &name) {
                name == "inverse_dynamics_gradient_q" ||
                name == "inverse_dynamics_gradient_qd" ||
                name == "forward_dynamics_gradient_q" ||
-               name == "forward_dynamics_gradient_qd";
+               name == "forward_dynamics_gradient_qd" ||
+               name == "aba" ||
+               name == "crba" ||
+               name == "end_effector_pose";
     }
     const std::string selected(raw);
     if (selected == "all") {
@@ -211,6 +214,7 @@ void run() {
     std::vector<T> h_vec(grid::NUM_VEL);
     std::vector<T> h_mat(grid::NUM_VEL * grid::NUM_VEL);
     std::vector<T> h_grad(grid::NUM_VEL * 2 * grid::NUM_VEL);
+    std::vector<T> h_ee(6 * grid::NUM_EES);
 
     read_vector(h_q.data(), grid::NUM_JOINTS);
     read_vector(h_qd.data(), grid::NUM_VEL);
@@ -229,6 +233,7 @@ void run() {
     T *d_vec;
     T *d_mat;
     T *d_grad;
+    T *d_ee;
     for (int i = 0; i < grid::NUM_JOINTS; ++i) {
         h_q_qd[i] = h_q[i];
         h_q_qd_u[i] = h_q[i];
@@ -247,6 +252,7 @@ void run() {
     gpuErrchk(cudaMalloc((void**)&d_vec, grid::NUM_VEL * sizeof(T)));
     gpuErrchk(cudaMalloc((void**)&d_mat, grid::NUM_JOINTS * grid::NUM_JOINTS * sizeof(T)));
     gpuErrchk(cudaMalloc((void**)&d_grad, grid::NUM_VEL * 2 * grid::NUM_VEL * sizeof(T)));
+    gpuErrchk(cudaMalloc((void**)&d_ee, 6 * grid::NUM_EES * sizeof(T)));
     gpuErrchk(cudaMemcpy(d_q, h_q.data(), grid::NUM_JOINTS * sizeof(T), cudaMemcpyHostToDevice));
     gpuErrchk(cudaMemcpy(d_qd, h_qd.data(), grid::NUM_VEL * sizeof(T), cudaMemcpyHostToDevice));
     gpuErrchk(cudaMemcpy(d_u, h_u.data(), grid::NUM_VEL * sizeof(T), cudaMemcpyHostToDevice));
@@ -274,6 +280,21 @@ void run() {
         floating_forward_dynamics_runner<T>,
         cudaFuncAttributeMaxDynamicSharedMemorySize,
         static_cast<int>(grid::FD_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>())
+    ));
+    gpuErrchk(cudaFuncSetAttribute(
+        grid::aba_kernel<T>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        static_cast<int>(grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>())
+    ));
+    gpuErrchk(cudaFuncSetAttribute(
+        grid::crba_kernel<T>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        static_cast<int>(grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T>())
+    ));
+    gpuErrchk(cudaFuncSetAttribute(
+        grid::end_effector_pose_kernel<T>,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        static_cast<int>(grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>())
     ));
 
     if (floating_algorithm_requested("inverse_dynamics")) {
@@ -304,6 +325,50 @@ void run() {
         gpuErrchk(cudaDeviceSynchronize());
         gpuErrchk(cudaMemcpy(h_vec.data(), d_vec, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
         print_vector("forward_dynamics", h_vec.data(), grid::NUM_VEL);
+    }
+
+    if (floating_algorithm_requested("aba")) {
+        grid::aba_kernel<T><<<1, 32, grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+            d_vec,
+            d_q_qd_u,
+            grid::NUM_JOINTS + 2 * grid::NUM_VEL,
+            d_robot_model,
+            gravity,
+            1
+        );
+        gpuErrchk(cudaPeekAtLastError());
+        gpuErrchk(cudaDeviceSynchronize());
+        gpuErrchk(cudaMemcpy(h_vec.data(), d_vec, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
+        print_vector("aba", h_vec.data(), grid::NUM_VEL);
+    }
+
+    if (floating_algorithm_requested("crba")) {
+        grid::crba_kernel<T><<<1, 32, grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+            d_mat,
+            d_q_qd,
+            grid::NUM_JOINTS + grid::NUM_VEL,
+            d_robot_model,
+            gravity,
+            1
+        );
+        gpuErrchk(cudaPeekAtLastError());
+        gpuErrchk(cudaDeviceSynchronize());
+        gpuErrchk(cudaMemcpy(h_mat.data(), d_mat, grid::NUM_VEL * grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
+        print_matrix_col_major("crba", h_mat.data(), grid::NUM_VEL, grid::NUM_VEL);
+    }
+
+    if (floating_algorithm_requested("end_effector_pose")) {
+        grid::end_effector_pose_kernel<T><<<1, 32, grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+            d_ee,
+            d_q,
+            grid::NUM_JOINTS,
+            d_robot_model,
+            1
+        );
+        gpuErrchk(cudaPeekAtLastError());
+        gpuErrchk(cudaDeviceSynchronize());
+        gpuErrchk(cudaMemcpy(h_ee.data(), d_ee, 6 * grid::NUM_EES * sizeof(T), cudaMemcpyDeviceToHost));
+        print_vector("end_effector_pose", h_ee.data(), 6 * grid::NUM_EES);
     }
 
     if (floating_algorithm_requested("inverse_dynamics_gradient_q") ||
@@ -361,6 +426,7 @@ void run() {
     gpuErrchk(cudaFree(d_vec));
     gpuErrchk(cudaFree(d_mat));
     gpuErrchk(cudaFree(d_grad));
+    gpuErrchk(cudaFree(d_ee));
 #else
     read_vector(hd_data->h_q, grid::NUM_JOINTS);
     read_vector(&hd_data->h_q_qd[grid::NUM_JOINTS], grid::NUM_JOINTS);

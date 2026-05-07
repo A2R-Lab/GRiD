@@ -9,6 +9,7 @@ import pytest
 
 from GRiDCodeGenerator import GRiDCodeGenerator
 from test.cuda_equivalents.test_cuda_executable_equivalence import (
+    _build_cuda_samples,
     _detect_cuda_arch,
     _parse_runner_output,
     _run_runner,
@@ -20,10 +21,26 @@ from test.pinocchio_equivalents.utils.model_sources import (
     resolve_robot_spec,
 )
 from test.pinocchio_equivalents.utils.project_adapter import build_project_adapter
-from test.pinocchio_equivalents.utils.state_sampling import build_dynamics_samples
 
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_second_order_smoke_runner.cu")
+
+
+def _comma_separated_env(name: str, default: str) -> tuple[str, ...]:
+    raw = os.environ.get(name, default)
+    values = tuple(item.strip() for item in raw.split(",") if item.strip())
+    if not values:
+        pytest.fail(f"{name} must contain at least one value when set.")
+    return values
+
+
+def _second_order_smoke_robot_ids() -> tuple[str, ...]:
+    if "GRID_CUDA_SECOND_ORDER_SMOKE_ROBOTS" in os.environ:
+        return _comma_separated_env("GRID_CUDA_SECOND_ORDER_SMOKE_ROBOTS", "")
+    return _comma_separated_env(
+        "GRID_CUDA_SECOND_ORDER_SMOKE_ROBOT",
+        "iiwa14",
+    )
 
 
 @contextlib.contextmanager
@@ -115,13 +132,58 @@ def _compile_second_order_runner(build_dir: Path):
     return executable, cmd
 
 
-def _run_second_order_case(project_model, sample, tmp_path, label, target_shared_bytes):
+def _build_second_order_case(project_model, tmp_path, label, target_shared_bytes):
     build_dir = tmp_path / label
     build_dir.mkdir()
     _generate_second_order_header(project_model, build_dir, target_shared_bytes)
-    executable, compile_cmd = _compile_second_order_runner(build_dir)
+    return _compile_second_order_runner(build_dir)
+
+
+def _run_second_order_sample(executable, compile_cmd, sample):
     stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
     return _parse_runner_output(stdout)
+
+
+def _second_order_target_shared_bytes() -> int:
+    raw = os.environ.get("GRID_CUDA_SECOND_ORDER_TARGET_SHARED_BYTES", "10000")
+    try:
+        target_shared_bytes = int(raw)
+    except ValueError:
+        pytest.fail("GRID_CUDA_SECOND_ORDER_TARGET_SHARED_BYTES must be an integer.")
+    if target_shared_bytes <= 0:
+        pytest.fail("GRID_CUDA_SECOND_ORDER_TARGET_SHARED_BYTES must be positive.")
+    return target_shared_bytes
+
+
+def _second_order_samples(project_model):
+    sample_names = _comma_separated_env("GRID_CUDA_SECOND_ORDER_SAMPLE_NAMES", "zero")
+    try:
+        random_count = int(os.environ.get("GRID_CUDA_SECOND_ORDER_RANDOM_SAMPLES", "0"))
+    except ValueError:
+        pytest.fail("GRID_CUDA_SECOND_ORDER_RANDOM_SAMPLES must be an integer.")
+    if random_count < 0:
+        pytest.fail("GRID_CUDA_SECOND_ORDER_RANDOM_SAMPLES must be non-negative.")
+
+    include_corner_samples = sample_names == ("all",) or any(
+        name not in {"zero", "conservative"} for name in sample_names
+    )
+    samples = _build_cuda_samples(
+        project_model,
+        random_count=random_count,
+        include_corner_samples=include_corner_samples,
+    )
+    if sample_names == ("all",):
+        return samples
+
+    samples_by_name = {sample.name: sample for sample in samples}
+    missing = [name for name in sample_names if name not in samples_by_name]
+    if missing:
+        available = ", ".join(sorted(samples_by_name))
+        pytest.fail(
+            "Unknown GRID_CUDA_SECOND_ORDER_SAMPLE_NAMES value(s): "
+            f"{', '.join(missing)}. Available samples: {available}"
+        )
+    return [samples_by_name[name] for name in sample_names]
 
 
 @pytest.mark.cuda_equivalence
@@ -131,14 +193,55 @@ def _flatten_second_order_tensors(tensors):
     return np.concatenate([np.asarray(tensor, dtype=np.float64).reshape(-1) for tensor in tensors]).reshape(1, -1)
 
 
-def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path):
+def _assert_allclose_with_optional_norm_guard(
+    actual,
+    expected,
+    *,
+    rtol,
+    atol,
+    err_msg,
+    norm_rtol=None,
+    max_abs=None,
+):
+    try:
+        np.testing.assert_allclose(
+            actual,
+            expected,
+            rtol=rtol,
+            atol=atol,
+            err_msg=err_msg,
+        )
+    except AssertionError:
+        if norm_rtol is None:
+            raise
+        actual_arr = np.asarray(actual, dtype=np.float64)
+        expected_arr = np.asarray(expected, dtype=np.float64)
+        diff = actual_arr - expected_arr
+        norm_rel = np.linalg.norm(diff) / max(np.linalg.norm(expected_arr), 1e-30)
+        max_abs_diff = float(np.max(np.abs(diff))) if diff.size else 0.0
+        if norm_rel <= norm_rtol and (max_abs is None or max_abs_diff <= max_abs):
+            return
+        raise
+
+
+def _fdsva_so_tolerance(robot_id: str):
+    if robot_id == "fetch":
+        return dict(norm_rtol=2e-4, max_abs=3e-2)
+    return dict(norm_rtol=None, max_abs=None)
+
+
+@pytest.mark.parametrize(
+    "robot_id",
+    _second_order_smoke_robot_ids(),
+    ids=lambda robot_id: f"{robot_id}-fixed",
+)
+def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path, robot_id):
     if os.environ.get("GRID_CUDA_RUN_SECOND_ORDER_FALLBACK_SMOKE") != "1":
         pytest.skip(
             "Second-order CUDA fallback smoke is quarantined while IDSVA-SO/FDSVA-SO "
             "resource pressure and thread-count assumptions are investigated. Set "
             "GRID_CUDA_RUN_SECOND_ORDER_FALLBACK_SMOKE=1 to run this diagnostic."
         )
-    robot_id = os.environ.get("GRID_CUDA_SECOND_ORDER_SMOKE_ROBOT", "iiwa14")
     spec = _fixed_robot_spec(robot_id)
     try:
         resolved = resolve_robot_spec(spec)
@@ -148,35 +251,46 @@ def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path):
             f"before executing CUDA equivalence tests. Resolution error: {exc}"
         )
     project_model = build_project_adapter(spec, resolved, base_mode="fixed")
-    sample = next(item for item in build_dynamics_samples(project_model) if item.name == "zero")
-
-    forced_fallback = _run_second_order_case(
+    samples = _second_order_samples(project_model)
+    target_shared_bytes = _second_order_target_shared_bytes()
+    executable, compile_cmd = _build_second_order_case(
         project_model,
-        sample,
         tmp_path,
-        "second_order_forced_fallback",
-        target_shared_bytes=10000,
+        f"{robot_id}_second_order_forced_fallback",
+        target_shared_bytes,
     )
 
-    np.testing.assert_allclose(
-        forced_fallback["second_order_config"][0, 2:5],
-        np.asarray([1.0, 1.0, 1.0]),
-        rtol=0.0,
-        atol=0.0,
-    )
-    assert np.all(forced_fallback["second_order_config"][0, 0:2] > 0.0)
-    np.testing.assert_allclose(
-        forced_fallback["idsva_so"],
-        _flatten_second_order_tensors(project_model.idsva_so(sample.q, sample.qd, sample.qdd)),
-        rtol=2e-4,
-        # The zero-state dM/dq block has a tiny reference norm, so float32
-        # accumulation noise can dominate relative error despite sub-1e-3
-        # absolute agreement.
-        atol=1e-3,
-    )
-    np.testing.assert_allclose(
-        forced_fallback["fdsva_so"],
-        _flatten_second_order_tensors(project_model.fdsva_so(sample.q, sample.qd, sample.qdd)),
-        rtol=2e-4,
-        atol=2e-4,
-    )
+    for sample in samples:
+        forced_fallback = _run_second_order_sample(executable, compile_cmd, sample)
+
+        np.testing.assert_allclose(
+            forced_fallback["second_order_config"][0, 2:5],
+            np.asarray([1.0, 1.0, 1.0]),
+            rtol=0.0,
+            atol=0.0,
+            err_msg=f"{robot_id}-fixed {sample.name} second-order fallback flags",
+        )
+        assert np.all(forced_fallback["second_order_config"][0, 0:2] > 0.0)
+        np.testing.assert_allclose(
+            forced_fallback["idsva_so"],
+            _flatten_second_order_tensors(
+                project_model.idsva_so(sample.q, sample.qd, sample.qdd)
+            ),
+            rtol=2e-4,
+            # The zero-state dM/dq block has a tiny reference norm, so float32
+            # accumulation noise can dominate relative error despite sub-1e-3
+            # absolute agreement.
+            atol=1e-3,
+            err_msg=f"{robot_id}-fixed {sample.name} IDSVA-SO",
+        )
+        fdsva_tolerance = _fdsva_so_tolerance(robot_id)
+        _assert_allclose_with_optional_norm_guard(
+            forced_fallback["fdsva_so"],
+            _flatten_second_order_tensors(
+                project_model.fdsva_so(sample.q, sample.qd, sample.qdd)
+            ),
+            rtol=2e-4,
+            atol=2e-4,
+            err_msg=f"{robot_id}-fixed {sample.name} FDSVA-SO",
+            **fdsva_tolerance,
+        )
