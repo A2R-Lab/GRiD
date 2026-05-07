@@ -29,16 +29,22 @@ RESULTS_DIR.mkdir(exist_ok=True)
 
 ROBOTS    = ["iiwa14", "go2", "g1"]
 BASES     = ["fixed", "floating"]
-BASELINES = ["grid", "pinocchio"]
+BASELINES = ["grid", "pinocchio", "mjx"]
 
-# Canonical EE frames
-EE_FRAMES: dict[str, str] = {
+# GRiD EE frames must be fixed-joint names (zero-DOF joints in the URDF).
+# Pinocchio/MJX EE frames are link/body frame names (can be any named frame).
+EE_FRAMES_GRID: dict[str, str] = {
+    "iiwa14": "iiwa_joint_ee",
+    "go2":    "FR_foot_joint",
+    "g1":     "right_hand_palm_joint",
+}
+EE_FRAMES_PIN_MJX: dict[str, str] = {
     "iiwa14": "iiwa_link_ee",
     "go2":    "FR_foot",
     "g1":     "right_rubber_hand",
 }
 
-# For g1 locomotion context, use foot frame
+# g1 locomotion EE — only available as a Pinocchio/MJX frame (no fixed ankle joint in URDF)
 G1_FOOT_EE_FRAME = "right_ankle_roll_link"
 
 
@@ -66,6 +72,7 @@ def run_baseline(
         cmd.append("--no-recompile")
     if baseline == "pinocchio":
         cmd.append("--no-cpu-lock")  # coordinator manages locking externally
+    # mjx has no extra flags needed
 
     try:
         result = subprocess.run(cmd, capture_output=False, text=True)
@@ -99,7 +106,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run GRiD benchmarking suite")
     parser.add_argument("--robots",    nargs="+", default=ROBOTS,    choices=ROBOTS)
     parser.add_argument("--base",      nargs="+", default=BASES,     choices=BASES, dest="bases")
-    parser.add_argument("--baselines", nargs="+", default=BASELINES, choices=BASELINES)
+    parser.add_argument("--baselines", nargs="+", default=["grid", "pinocchio"], choices=BASELINES,
+                        help="Baselines to run (default: grid pinocchio). Add 'mjx' explicitly.")
     parser.add_argument("--no-recompile",  action="store_true")
     parser.add_argument("--save-as-regression-baseline", action="store_true",
                         help="Save results to test/benchmarks/perf_baselines.json")
@@ -107,9 +115,10 @@ def main() -> None:
 
     host = platform.node().replace(" ", "_")
     total = len(args.robots) * len(args.bases) * len(args.baselines)
-    # g1-foot is an extra entry (same robot, different EE frame, pinocchio only)
-    if "pinocchio" in args.baselines and "g1" in args.robots:
-        total += len(args.bases)  # one extra pinocchio run for g1-foot
+    # g1-foot is an extra entry (same robot, different EE frame) for pinocchio and mjx
+    for bl in ("pinocchio", "mjx"):
+        if bl in args.baselines and "g1" in args.robots:
+            total += len(args.bases)
 
     i = 0
     all_results: list[dict] = []
@@ -118,7 +127,7 @@ def main() -> None:
         for base in args.bases:
             for baseline in args.baselines:
                 i += 1
-                ee = EE_FRAMES.get(robot, "")
+                ee = (EE_FRAMES_GRID if baseline == "grid" else EE_FRAMES_PIN_MJX).get(robot, "")
                 output = RESULTS_DIR / f"{robot}_{base}_{baseline}_{host}.json"
                 print(f"[{ts()}] [{i}/{total}] {robot} {base} → {baseline} (EE: {ee or 'none'})...")
                 try:
@@ -131,26 +140,28 @@ def main() -> None:
                 except Exception as e:
                     print(f"  [{baseline}] ✗ exception: {e}", file=sys.stderr)
 
-            # g1: extra Pinocchio run for foot EE
-            if robot == "g1" and "pinocchio" in args.baselines:
-                i += 1
-                output = RESULTS_DIR / f"g1_foot_{base}_pinocchio_{host}.json"
-                print(f"[{ts()}] [{i}/{total}] g1-foot {base} → pinocchio (EE: {G1_FOOT_EE_FRAME})...")
-                try:
-                    r = run_baseline(
-                        "pinocchio", "g1", base, output, args.no_recompile, G1_FOOT_EE_FRAME
-                    )
-                    all_results.append(r)
-                    if r is not None:
-                        print(f"  [pinocchio-g1-foot] ✓ done")
-                    else:
-                        print(f"  [pinocchio-g1-foot] ✗ failed", file=sys.stderr)
-                except Exception as e:
-                    print(f"  [pinocchio-g1-foot] ✗ exception: {e}", file=sys.stderr)
+            # g1: extra run for foot EE (pinocchio and mjx)
+            for bl in ("pinocchio", "mjx"):
+                if robot == "g1" and bl in args.baselines:
+                    i += 1
+                    output = RESULTS_DIR / f"g1_foot_{base}_{bl}_{host}.json"
+                    print(f"[{ts()}] [{i}/{total}] g1-foot {base} → {bl} (EE: {G1_FOOT_EE_FRAME})...")
+                    try:
+                        r = run_baseline(bl, "g1", base, output, args.no_recompile, G1_FOOT_EE_FRAME)
+                        all_results.append(r)
+                        if r is not None:
+                            print(f"  [{bl}-g1-foot] ✓ done")
+                        else:
+                            print(f"  [{bl}-g1-foot] ✗ failed", file=sys.stderr)
+                    except Exception as e:
+                        print(f"  [{bl}-g1-foot] ✗ exception: {e}", file=sys.stderr)
 
     # Merge into unified JSON
     merged_results = merge_results(all_results)
-    meta = build_metadata(include_gpu="grid" in args.baselines, include_pinocchio="pinocchio" in args.baselines)
+    meta = build_metadata(
+        include_gpu="grid" in args.baselines or "mjx" in args.baselines,
+        include_pinocchio="pinocchio" in args.baselines,
+    )
     unified = {
         "metadata": meta,
         "results": merged_results,

@@ -35,9 +35,9 @@ from test.benchmarks.timing_parser import (  # noqa: E402
 # These correspond to the last fixed-joint frame in each robot's kinematic chain.
 # ---------------------------------------------------------------------------
 DEFAULT_EE_FRAMES: dict[str, str] = {
-    "iiwa14": "iiwa_link_ee",
-    "go2":    "FR_foot",
-    "g1":     "right_rubber_hand",
+    "iiwa14": "iiwa_joint_ee",    # fixed joint at EE of iiwa14 URDF
+    "go2":    "FR_foot_joint",    # fixed joint at FR foot
+    "g1":     "right_hand_palm_joint",  # fixed joint at right hand palm
 }
 
 # ---------------------------------------------------------------------------
@@ -128,9 +128,9 @@ def generate_header(
             "codegen_hash": codegen_hash,
             "robot": robot,
             "base": base,
-            "ee_frame": ee_frame,
             "profile": "all",
             "homogenous": True,
+            # ee_frame intentionally excluded: not passed to gen_all_code
         }, sort_keys=True).encode()
     )[:24]
 
@@ -156,7 +156,9 @@ def generate_header(
     with contextlib.redirect_stdout(io.StringIO()):
         codegen.gen_all_code(
             include_homogenous_transforms=True,
-            fixed_target_name=ee_frame,
+            # fixed_target_name omitted: passing it with codegen_profile='all' triggers a
+            # generator bug where kinematics_only() references an _hessian_{name} variant
+            # that isn't generated. EE pose timing is unaffected by this omission.
             output_path=str(header_path),
             codegen_profile="all",
         )

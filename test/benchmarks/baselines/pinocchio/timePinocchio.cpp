@@ -20,8 +20,10 @@
 #include "pinocchio/algorithm/crba.hpp"
 #include "pinocchio/algorithm/frames.hpp"
 
+#ifdef HAVE_CPPADCG
 #include "pinocchio/codegen/cppadcg.hpp"
 #include "pinocchio/codegen/code-generator-algo.hpp"
+#endif // HAVE_CPPADCG
 
 #include "pinocchio/parsers/urdf.hpp"
 #include "pinocchio/multibody/sample-models.hpp"
@@ -30,8 +32,10 @@
 
 #include <Eigen/StdVector>
 
+#ifdef HAVE_CPPADCG
 #include "../util/getters/GetResRNEA.hpp"
 #include "../util/getters/GettersDerivatives.hpp"
+#endif
 
 using namespace Eigen;
 using namespace pinocchio;
@@ -39,8 +43,10 @@ using namespace pinocchio;
 #define time_delta_us_timespec(start,end) (1e6*static_cast<double>(end.tv_sec - start.tv_sec)+1e-3*static_cast<double>(end.tv_nsec - start.tv_nsec))
 
 // ---------------------------------------------------------------------------
-// Threading helpers — existing algorithms
+// Threading helpers — codegen algorithms (require CppADCodeGen)
 // ---------------------------------------------------------------------------
+
+#ifdef HAVE_CPPADCG
 
 template<typename T>
 void inverseDynamicsThreaded_codegen_inner(CodeGenRNEAWithGetRes<T> *rnea_code_gen, int nq, int nv, \
@@ -194,7 +200,7 @@ void abaThreaded_codegen(CodeGenABA<T> **aba_code_gen_arr, int nq, int nv, \
 }
 
 // ---------------------------------------------------------------------------
-// Threading helpers — new algorithms
+// Threading helpers — more codegen algorithms
 // ---------------------------------------------------------------------------
 
 template<typename T>
@@ -216,6 +222,12 @@ void crbaThreaded_codegen(CodeGenCRBA<T> **crba_code_gen_arr, int nq, int nv,
     }
     threads->sync();
 }
+
+#endif // HAVE_CPPADCG
+
+// ---------------------------------------------------------------------------
+// Threading helpers — direct API algorithms (no CppADCodeGen needed)
+// ---------------------------------------------------------------------------
 
 template<typename T>
 void eePoseThreaded_inner(const pinocchio::Model *model, pinocchio::Data *data,
@@ -318,7 +330,8 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
         }
     }
 
-    // Initialize codegen objects
+    // Initialize codegen objects (requires CppADCodeGen)
+#ifdef HAVE_CPPADCG
     CodeGenRNEAWithGetRes<T> rnea_code_gen(model.cast<T>());
     rnea_code_gen.initLib(); rnea_code_gen.loadLib();
 
@@ -363,6 +376,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
         crba_code_gen_arr[i] = new CodeGenCRBA<T>(model.cast<T>());
         crba_code_gen_arr[i]->initLib(); crba_code_gen_arr[i]->loadLib();
     }
+#endif // HAVE_CPPADCG
 
     // Allocate state arrays
     VectorXT qs[NUM_TIME_STEPS];
@@ -390,6 +404,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
         if(NUM_TIME_STEPS == 1){
             // Print algorithm metadata once before single-call timing
             printf("=== BEGIN PINOCCHIO METADATA ===\n");
+#ifdef HAVE_CPPADCG
             printf("ID codegen: true\n");
             printf("Minv codegen: true\n");
             printf("ABA codegen: true\n");
@@ -397,6 +412,15 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             printf("CRBA codegen: true\n");
             printf("ID_DU codegen: true\n");
             printf("FD_DU codegen: true\n");
+#else
+            printf("ID codegen: false\n");
+            printf("Minv codegen: false\n");
+            printf("ABA codegen: false\n");
+            printf("FD codegen: false\n");
+            printf("CRBA codegen: false\n");
+            printf("ID_DU codegen: false\n");
+            printf("FD_DU codegen: false\n");
+#endif
             printf("EE_POSE codegen: false\n");
             printf("EE_POSE_GRADIENT codegen: false\n");
             printf("IDSVA_SO codegen: false\n");
@@ -407,6 +431,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             Eigen::VectorXd zeros_d = Eigen::VectorXd::Zero(model.nv);
             Eigen::MatrixXd J_single = Eigen::MatrixXd::Zero(6, model.nv);
 
+#ifdef HAVE_CPPADCG
             clock_gettime(CLOCK_MONOTONIC,&start);
             for(int i = 0; i < TEST_ITERS; i++){
                 rnea_code_gen.evalFunction(qs[0],qds[0],qdds[0]);
@@ -468,6 +493,16 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             }
             clock_gettime(CLOCK_MONOTONIC,&end);
             printf("FD_DU codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+#else
+            // cppadcg not available — codegen algorithms output null
+            printf("ID codegen null\n");
+            printf("Minv codegen null\n");
+            printf("ABA codegen null\n");
+            printf("FD codegen null\n");
+            printf("CRBA codegen null\n");
+            printf("ID_DU codegen null\n");
+            printf("FD_DU codegen null\n");
+#endif // HAVE_CPPADCG
 
             if(have_frame){
                 clock_gettime(CLOCK_MONOTONIC,&start);
@@ -504,6 +539,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             ReusableThreads<NUM_THREADS> threads;
             std::vector<double> times = {};
 
+#ifdef HAVE_CPPADCG
             for(int iter = 0; iter < TEST_ITERS; iter++){
                 clock_gettime(CLOCK_MONOTONIC,&start);
                 inverseDynamicsThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(rnea_code_gen_arr,
@@ -573,6 +609,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             }
             printf("[N:%d]: FD_DU codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
             printf("----------------------------------------\n");
+#endif // HAVE_CPPADCG
 
             if(have_frame){
                 for(int iter = 0; iter < TEST_ITERS; iter++){
@@ -609,10 +646,12 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
         }
     #endif
 
+#ifdef HAVE_CPPADCG
     for(int i = 0; i < NUM_THREADS; i++){
         delete rnea_derivatives_code_gen_arr[i];
         delete crba_code_gen_arr[i];
     }
+#endif
 }
 
 template<typename T, int TEST_ITERS, int CPU_THREADS>

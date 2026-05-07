@@ -136,14 +136,21 @@ def _robot_rows(results: dict, algo: str, section_robots: list[str]) -> list[str
         for base in BASES:
             grid_e = (results.get(robot, {}).get(base, {}).get("grid") or {}).get(algo)
             pin_e  = (results.get(robot, {}).get(base, {}).get("pinocchio") or {}).get(algo)
+            mjx_e  = (results.get(robot, {}).get(base, {}).get("mjx") or {}).get(algo)
 
-            single_g = _entry_single(grid_e)
-            single_p = _entry_single(pin_e) + _codegen_flag(pin_e)
-            batch_g  = _entry_batch(grid_e, 256, "compute_only")
-            batch_p  = _entry_batch(pin_e, 256)
-            spdup    = _speedup(grid_e, pin_e, 256)
+            single_g  = _entry_single(grid_e)
+            single_p  = _entry_single(pin_e) + _codegen_flag(pin_e)
+            single_m  = _entry_single(mjx_e)
+            batch_g   = _entry_batch(grid_e, 256, "compute_only")
+            batch_p   = _entry_batch(pin_e, 256)
+            batch_m   = _entry_batch(mjx_e, 256, "compute_only")
+            spdup_p   = _speedup(grid_e, pin_e, 256)
+            spdup_m   = _speedup(grid_e, mjx_e, 256)
 
-            rows.append(f"| {robot} | {base} | {single_g} | {single_p} | {batch_g} | {batch_p} | {spdup} |")
+            rows.append(
+                f"| {robot} | {base} | {single_g} | {single_p} | {single_m} "
+                f"| {batch_g} | {batch_p} | {batch_m} | {spdup_p} | {spdup_m} |"
+            )
     return rows
 
 
@@ -194,7 +201,8 @@ def generate_report(data: dict, output_path: Path) -> None:
         "GRiD *single*: kernel loop internal repeats, one GPU launch.  "
         "GRiD *N=256 compute*: compute-only (no cudaMemcpy).  "
         "Pinocchio *N=256*: multi-threaded CPU (codegen where available).  "
-        "Speedup = Pinocchio N=256 / GRiD N=256 compute-only.",
+        "MJX *N=256*: vmapped JAX on GPU, compute-only.  "
+        "GRiD/Pin and GRiD/MJX speedup = baseline N=256 / GRiD N=256 compute-only.",
         "",
     ]
 
@@ -207,8 +215,14 @@ def generate_report(data: dict, output_path: Path) -> None:
         for algo in algos:
             display = ALGO_DISPLAY.get(algo, algo)
             lines += [f"### {display}", ""]
-            lines += ["| Robot | Base | GRiD single (µs) | Pin single (µs) | GRiD N=256 compute | Pin N=256 | Speedup |"]
-            lines += ["|-------|------|:-----------------:|:---------------:|:------------------:|:---------:|:-------:|"]
+            lines += [
+                "| Robot | Base | GRiD single | Pin single | MJX single "
+                "| GRiD N=256 | Pin N=256 | MJX N=256 | GRiD/Pin | GRiD/MJX |"
+            ]
+            lines += [
+                "|-------|------|:-----------:|:----------:|:---------:"
+                "|:----------:|:---------:|:---------:|:--------:|:--------:|"
+            ]
             lines += _robot_rows(results, algo, ROBOTS_DISPLAY)
             lines += [""]
 

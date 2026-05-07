@@ -92,19 +92,39 @@ def try_lock_cpu_freq() -> bool:
 # ---------------------------------------------------------------------------
 # Pinocchio binary resolution (find pkg-config prefix)
 # ---------------------------------------------------------------------------
+def has_cppadcg() -> bool:
+    """Return True if CppADCodeGen headers are findable."""
+    result = subprocess.run(
+        ["pkg-config", "--exists", "cppadcg"],
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        return True
+    # Check cmeel prefix
+    venv = Path(sys.prefix)
+    cmeel = venv / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / \
+            "site-packages" / "cmeel.prefix"
+    return (cmeel / "include" / "cppad" / "cg.hpp").exists()
+
+
 def pinocchio_cflags() -> list[str]:
     result = subprocess.run(
         ["pkg-config", "--cflags", "pinocchio", "cppadcg"],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        # Fall back to cmeel prefix
+        # Fall back to cmeel prefix + system Eigen
         venv = Path(sys.prefix)
         cmeel = venv / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / \
                 "site-packages" / "cmeel.prefix"
         includes = []
         if cmeel.exists():
             includes = [f"-I{cmeel}/include"]
+        # Eigen may live in cmeel or system; try both
+        eigen_pkg = subprocess.run(["pkg-config", "--cflags", "eigen3"],
+                                   capture_output=True, text=True)
+        if eigen_pkg.returncode == 0:
+            includes += eigen_pkg.stdout.strip().split()
         return includes
     return result.stdout.strip().split()
 
@@ -158,6 +178,7 @@ def compile_binary(
             "util_hash": util_hash,
             "robot": robot,
             "base": base,
+            "have_cppadcg": has_cppadcg(),
         }, sort_keys=True).encode()
     )[:24]
 
@@ -178,11 +199,15 @@ def compile_binary(
     cflags = pinocchio_cflags()
     libs   = pinocchio_libs()
 
+    codegen_flag = ["-DHAVE_CPPADCG"] if has_cppadcg() else []
+    if not codegen_flag:
+        print("  [pinocchio] cppadcg not found — codegen algorithms will be null")
+
     cmd = [
         gxx, "-std=c++14", "-O3",
         str(TIMING_SOURCE),
         "-o", str(binary_path),
-        *cflags, *libs,
+        *codegen_flag, *cflags, *libs,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -200,12 +225,27 @@ def compile_binary(
 # ---------------------------------------------------------------------------
 # Run and parse
 # ---------------------------------------------------------------------------
+def _runtime_env() -> dict[str, str]:
+    """Build environment with cmeel lib path prepended to LD_LIBRARY_PATH."""
+    env = os.environ.copy()
+    venv = Path(sys.prefix)
+    cmeel_lib = (
+        venv / "lib"
+        / f"python{sys.version_info.major}.{sys.version_info.minor}"
+        / "site-packages" / "cmeel.prefix" / "lib"
+    )
+    if cmeel_lib.exists():
+        existing = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = f"{cmeel_lib}:{existing}" if existing else str(cmeel_lib)
+    return env
+
+
 def run_timing(binary_path: Path, urdf_path: str, base: str, ee_frame: str) -> str:
     floating_arg = "T" if base == "floating" else "F"
     cmd = [str(binary_path), urdf_path, floating_arg]
     if ee_frame:
         cmd.append(ee_frame)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, env=_runtime_env())
     if result.returncode != 0:
         raise RuntimeError(
             f"timePinocchio exited with code {result.returncode}:\n{result.stderr}"

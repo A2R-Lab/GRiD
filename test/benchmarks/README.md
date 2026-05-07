@@ -1,24 +1,39 @@
 # GRiD Benchmarks
 
-Performance comparison of GRiD vs. Pinocchio (and MJX in PR 2) across all 12 algorithms,
+Performance comparison of GRiD vs. Pinocchio vs. MJX across all 12 algorithms,
 for `iiwa14`, `go2`, and `g1` robots in fixed and floating-base configurations.
 
 ---
 
 ## Quick Start
 
+All commands use the project virtualenv.  Create it once if it doesn't exist:
+
+```bash
+python -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+```
+
+Then run benchmarks:
+
 ```bash
 # Full suite (GRiD + Pinocchio, all robots, fixed + floating):
-python test/benchmarks/run_benchmarks.py
+.venv/bin/python test/benchmarks/run_benchmarks.py
+
+# Include MJX:
+.venv/bin/python test/benchmarks/run_benchmarks.py --baselines grid pinocchio mjx
 
 # Just GRiD, one robot:
-python test/benchmarks/baselines/grid/run.py --robot iiwa14 --base fixed
+.venv/bin/python test/benchmarks/baselines/grid/run.py --robot iiwa14 --base fixed
 
 # Just Pinocchio, one robot:
-python test/benchmarks/baselines/pinocchio/run.py --robot iiwa14 --base fixed
+.venv/bin/python test/benchmarks/baselines/pinocchio/run.py --robot iiwa14 --base fixed
+
+# Just MJX, one robot:
+.venv/bin/python test/benchmarks/baselines/mjx/run.py --robot iiwa14 --base fixed
 
 # Re-use cached binaries (skip recompile):
-python test/benchmarks/run_benchmarks.py --no-recompile
+.venv/bin/python test/benchmarks/run_benchmarks.py --no-recompile
 ```
 
 Results are saved to `test/benchmarks/results/` (gitignored) and
@@ -38,17 +53,46 @@ nvcc --version   # should print CUDA release info
 
 ### Pinocchio (CPU)
 
-Pinocchio with CppADCodeGen is installed as part of the dev dependencies:
+Pinocchio is installed as part of the dev dependencies (see Quick Start above).
+
+Verify:
 
 ```bash
-pip install -e ".[dev]"   # from repo root
+.venv/bin/python -c "import pinocchio; print(pinocchio.__version__)"
+```
+
+**CppADCodeGen (optional):** The codegen-accelerated algorithms (ID, Minv, ABA, FD,
+CRBA, ID_DU, FD_DU) require CppADCodeGen headers.  The benchmark runner detects
+availability automatically — if not found, those algorithms are silently reported as
+null and the direct-API algorithms (EE_POSE, EE_POSE_GRADIENT, IDSVA_SO) still run.
+
+CppADCodeGen is not available on PyPI.  If you want full codegen coverage, install it
+from source or via your system package manager before running benchmarks:
+
+```bash
+# Ubuntu/Debian (if available):
+sudo apt-get install libcppadcg-dev
+
+# Or build from source: https://github.com/joaoleal/CppADCodeGen
+```
+
+### MJX (GPU via JAX)
+
+MJX requires JAX with GPU support and MuJoCo:
+
+```bash
+.venv/bin/pip install mujoco mujoco-mjx
+.venv/bin/pip install --upgrade "jax[cuda12]"   # adjust for your CUDA version
 ```
 
 Verify:
 
 ```bash
-python -c "import pinocchio; print(pinocchio.__version__)"
+.venv/bin/python -c "import mujoco.mjx; import jax; print(jax.devices())"
 ```
+
+MJX is **not** run by default — pass `--baselines mjx` explicitly.  MJX is also skipped on
+Jetson/unified-memory platforms since JAX/XLA is not optimized for that architecture.
 
 ### CPU Frequency Locking (Linux — optional but recommended for Pinocchio)
 
@@ -94,6 +138,21 @@ Compare on compute-only numbers in the Jetson appendices.
 | **codegen** | CppAD-generated C code compiled to a shared library — fastest Pinocchio path |
 | **direct** | Direct Pinocchio C++ API — used for algorithms without codegen support |
 
+### MJX Algorithm Coverage
+
+MJX exposes a subset of algorithms via `mujoco.mjx`:
+
+| Algorithm | MJX Function | Notes |
+|-----------|-------------|-------|
+| **ID** | `mjx.inverse()` | RNEA |
+| **FD** | `mjx.forward()` | Full forward dynamics |
+| **EE_POSE** | `mjx.kinematics()` | Forward kinematics |
+| **ID_DU** | `jax.jacobian(mjx.inverse)` | AD through RNEA |
+| Minv, CRBA, ABA, FD_DU, IDSVA_SO, FDSVA_SO | — | Not available in MJX |
+
+MJX uses `jax.vmap` for batching and `jax.block_until_ready()` to ensure GPU completion
+before stopping the timer. The first two calls (JIT compilation + GPU warm-up) are discarded.
+
 ### ABA vs. FD (GRiD forward dynamics)
 
 GRiD has two forward dynamics implementations:
@@ -108,10 +167,10 @@ Both are benchmarked and shown separately.
 
 The G1 humanoid has two distinct EE use cases:
 
-| Label | Frame | Use case |
-|-------|-------|----------|
-| `g1` (arm) | `right_rubber_hand` | Manipulation |
-| `g1-foot` | `right_ankle_roll_link` | Locomotion |
+| Label | Frame (GRiD) | Frame (Pinocchio/MJX) | Use case |
+|-------|-------------|----------------------|----------|
+| `g1` (arm) | `right_hand_palm_joint` | `right_rubber_hand` | Manipulation |
+| `g1-foot` | — (no fixed ankle joint) | `right_ankle_roll_link` | Locomotion |
 
 Both appear as separate rows in EE kinematics sections of `benchmark.md`.
 
@@ -151,6 +210,9 @@ test/benchmarks/
     │   ├── run.py               ← Pinocchio runner
     │   ├── timePinocchio.cpp    ← timing program (moved + extended)
     │   └── ReusableThreads/     ← submodule (plancherb1/ReusableThreads)
+    ├── mjx/
+    │   ├── run.py               ← MJX runner
+    │   └── timeMJX.py           ← JAX/MJX timing script
     └── util/
         ├── experiment_helpers.h
         └── getters/
