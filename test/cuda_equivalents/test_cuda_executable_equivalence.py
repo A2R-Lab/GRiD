@@ -454,7 +454,6 @@ def _compile_runner(
     _cache_verbose(config, "nvcc version: " + nvcc_version.splitlines()[-1])
     l2_persisting = os.environ.get("GRID_CUDA_ENABLE_L2_PERSISTING")
     l2_define = int(l2_persisting) if l2_persisting is not None else 0
-    recursive_aba = int(os.environ.get("GRID_CUDA_FLOATING_ABA_RECURSIVE", "0"))
     runner_key = _stable_json_hash(
         {
             "schema": CACHE_SCHEMA_VERSION,
@@ -465,7 +464,6 @@ def _compile_runner(
             "nvcc_version": nvcc_version,
             "floating_base": bool(floating_base),
             "l2_persisting": l2_define,
-            "floating_aba_recursive": recursive_aba,
             "compile_flags": ["-std=c++11", "-O0"],
         }
     )
@@ -474,7 +472,7 @@ def _compile_runner(
         compile_dir = _cache_root() / "runners" / runner_key
         executable = compile_dir / "cuda_equivalence_runner.exe"
         if executable.exists():
-            _progress(config, f"runner cache hit: arch=sm_{arch} floating={int(floating_base)} l2={l2_define} recursive_aba={recursive_aba} key={runner_key[:12]}")
+            _progress(config, f"runner cache hit: arch=sm_{arch} floating={int(floating_base)} l2={l2_define} key={runner_key[:12]}")
             cmd = [str(executable)]
             return executable, cmd
         compile_dir.mkdir(parents=True, exist_ok=True)
@@ -501,9 +499,7 @@ def _compile_runner(
     ]
     if l2_persisting is not None:
         cmd.insert(3, f"-DGRID_CUDA_ENABLE_L2_PERSISTING={l2_define}")
-    if floating_base and recursive_aba:
-        cmd.insert(3, "-DGRID_CUDA_FLOATING_ABA_RECURSIVE=1")
-    _progress(config, f"compiling runner arch=sm_{arch} floating={int(floating_base)} l2={l2_define} recursive_aba={recursive_aba} cache_key={runner_key[:12]}")
+    _progress(config, f"compiling runner arch=sm_{arch} floating={int(floating_base)} l2={l2_define} cache_key={runner_key[:12]}")
     result = subprocess.run(cmd, cwd=compile_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(
@@ -521,7 +517,6 @@ def _compile_runner(
                     "arch": arch,
                     "floating_base": bool(floating_base),
                     "l2_persisting": l2_define,
-                    "floating_aba_recursive": recursive_aba,
                     "cmd": cmd,
                 },
                 indent=2,

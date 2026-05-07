@@ -109,7 +109,7 @@ class ProjectModelAdapter:
         ee_pose = self.reference.end_effector_pose(
             q,
             ee_joint_names=target_name,
-            ee_offsets=[np.matrix([offset])],
+            ee_offsets=[offset],
         )[0]
         return normalize_vector(np.asarray(ee_pose).reshape(-1))
 
@@ -148,7 +148,7 @@ class ProjectModelAdapter:
         dee_pose = self.reference.end_effector_pose_gradient(
             q,
             ee_joint_names=target_name,
-            ee_offsets=[np.matrix([offset])],
+            ee_offsets=[offset],
         )[0]
         return normalize_matrix(dee_pose)
 
@@ -159,7 +159,7 @@ class ProjectModelAdapter:
         if self.base_mode == "floating":
             d2ee_pose = self.reference.end_effector_pose_hessian(
                 q,
-                offsets=[np.matrix([offset])],
+                offsets=[offset],
                 ee_joint_names=target_name,
             )[0]
             return np.asarray(d2ee_pose, dtype=np.float64)
@@ -175,7 +175,7 @@ class ProjectModelAdapter:
         leaf_index = leaf_ids.index(target_joint.get_id())
         d2ee_pose = self.reference.end_effector_pose_hessian(
             q,
-            offsets=[np.matrix([offset])],
+            offsets=[offset],
         )[leaf_index]
         return np.asarray(d2ee_pose, dtype=np.float64)
 
