@@ -1,6 +1,0 @@
-[submodule "ReusableThreads"]
-	path = ReusableThreads
-	url = git@github.com:plancherb1/ReusableThreads.git
-[submodule "GRiD"]
-	path = GRiD
-	url = git@github.com:robot-acceleration/GRiD.git

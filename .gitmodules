@@ -7,3 +7,6 @@
 [submodule "GRiDCodeGenerator"]
 	path = GRiDCodeGenerator
 	url = git@github.com:A2R-Lab/GRiDCodeGenerator.git
+[submodule "test/benchmarks/baselines/pinocchio/ReusableThreads"]
+	path = test/benchmarks/baselines/pinocchio/ReusableThreads
+	url = https://github.com/plancherb1/ReusableThreads

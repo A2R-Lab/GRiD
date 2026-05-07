@@ -114,7 +114,7 @@ def _baseline_median(entry) -> float | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a timing command and report non-failing deltas against GPU-class baselines.")
-    parser.add_argument("--baseline", type=Path, default=Path("GRiDBenchmarks/perf_baselines.json"))
+    parser.add_argument("--baseline", type=Path, default=Path("test/benchmarks/perf_baselines.json"))
     parser.add_argument("--robot", default="unknown")
     parser.add_argument("--base-mode", choices=["fixed", "floating"], default="fixed")
     parser.add_argument("--profile", default="all")

@@ -2,10 +2,14 @@
 nvcc -std=c++11 -o timeGRiD.exe timeGRiD.cu -gencode arch=compute_86,code=sm_86 -O3 -ftz=true -prec-div=false -prec-sqrt=false
 ***/
 
-#include "util/experiment_helpers.h" // include constants and other experiment consistency helpers
-#include "../grid.cuh"
+#ifndef GRID_HEADER_FILE
+#include "../../../../grid.cuh"
+#else
+#include GRID_HEADER_FILE
+#endif
+#include "../util/experiment_helpers.h"
 
-dim3 dimms(grid::SUGGESTED_THREADS,1,1); // all loops are single loops (all mat mult flattened into column opps)
+dim3 dimms(grid::SUGGESTED_THREADS,1,1);
 #define GRAVITY 9.81
 
 template <typename T, int TEST_ITERS>
@@ -13,54 +17,36 @@ __host__
 void test(int NUM_TIMESTEPS, cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
    	#if TEST_FOR_EQUIVALENCE
 		printf("q,qd,u\n");
-	// 	printMat<T,1,grid::NUM_JOINTS>(hd_data->h_q_qd_u,1);
-	// 	printMat<T,1,grid::NUM_JOINTS>(&hd_data->h_q_qd_u[grid::NUM_JOINTS],1);
-	// 	printMat<T,1,grid::NUM_JOINTS>(&hd_data->h_q_qd_u[2*grid::NUM_JOINTS],1);
-
-	// 	grid::inverse_dynamics<T,false,true>(hd_data,d_robotModel,GRAVITY,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms,streams);
-	// 	grid::direct_minv<T,true>(hd_data,d_robotModel,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms,streams);
-	// 	grid::forward_dynamics<T>(hd_data,d_robotModel,GRAVITY,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms,streams);
-	// 	grid::inverse_dynamics_gradient<T,false,true>(hd_data,d_robotModel,GRAVITY,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms,streams);
-	// 	grid::forward_dynamics_gradient<T,false>(hd_data,d_robotModel,GRAVITY,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms,streams);
-
-	// 	printf("c\n");
-	// 	printMat<T,1,grid::NUM_JOINTS>(hd_data->h_c,1);
-
-	// 	printf("Minv\n");
-	// 	printMat<T,grid::NUM_JOINTS,grid::NUM_JOINTS>(hd_data->h_Minv,grid::NUM_JOINTS);
-
-	// 	printf("qdd\n");
-	// 	printMat<T,1,grid::NUM_JOINTS>(hd_data->h_qdd,1);
-
-	// 	printf("dc_dq\n");
-	// 	printMat<T,grid::NUM_JOINTS,grid::NUM_JOINTS>(hd_data->h_dc_du,grid::NUM_JOINTS);
-
-	// 	printf("dc_dqd\n");
-	// 	printMat<T,grid::NUM_JOINTS,grid::NUM_JOINTS>(&hd_data->h_dc_du[grid::NUM_JOINTS*grid::NUM_JOINTS],grid::NUM_JOINTS);
-
-	// 	printf("df_dq\n");
-	// 	printMat<T,grid::NUM_JOINTS,grid::NUM_JOINTS>(hd_data->h_df_du,grid::NUM_JOINTS);
-
-	// 	printf("df_dqd\n");
-	// 	printMat<T,grid::NUM_JOINTS,grid::NUM_JOINTS>(&hd_data->h_df_du[grid::NUM_JOINTS*grid::NUM_JOINTS],grid::NUM_JOINTS);
-		
    	#else
-		// Setup timer
-	   	struct timespec start, end;
+		struct timespec start, end;
 	   	std::vector<double> times = {};
 
 		if(NUM_TIMESTEPS == 1){
-			// first one is done twice to wake up the GPU and get it up to full speed
-			grid::inverse_dynamics_single_timing<T,false,true>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),dimms,streams);
     		grid::inverse_dynamics_single_timing<T,false,true>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),dimms,streams);
 
     		grid::direct_minv_single_timing<T,true>(hd_data,d_robotModel,TEST_ITERS,dim3(1,1,1),dimms,streams);
 
-    		// grid::forward_dynamics_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),dimms,streams);
+    		grid::forward_dynamics_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),dimms,streams);
+
+    		grid::aba_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),dimms,streams);
+
+    		grid::crba_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),dimms,streams);
 
     		grid::inverse_dynamics_gradient_single_timing<T,false,true>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),dimms,streams);
 
-    		// grid::forward_dynamics_gradient_single_timing<T,false>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),dimms,streams);
+    		grid::forward_dynamics_gradient_single_timing<T,false>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),dimms,streams);
+
+    		grid::end_effector_pose_single_timing<T>(hd_data,d_robotModel,TEST_ITERS,dim3(1,1,1),dimms,streams);
+
+    		grid::end_effector_pose_gradient_single_timing<T>(hd_data,d_robotModel,TEST_ITERS,dim3(1,1,1),dimms,streams);
+
+    		#if GRID_GENERATES_IDSVA_SO
+    		grid::idsva_so_host_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),dimms,streams);
+    		#endif
+
+    		#if GRID_GENERATES_FDSVA_SO
+    		grid::fdsva_so_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),dimms,streams);
+    		#endif
 		}
 		else{
 			for(int iter = 0; iter < TEST_ITERS; iter++){
@@ -113,6 +99,38 @@ void test(int NUM_TIMESTEPS, cudaStream_t *streams, grid::robotModel<T> *d_robot
 
 			for(int iter = 0; iter < TEST_ITERS; iter++){
 				clock_gettime(CLOCK_MONOTONIC,&start);
+				grid::aba<T>(hd_data,d_robotModel,GRAVITY,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms,streams);
+				clock_gettime(CLOCK_MONOTONIC,&end);
+				times.push_back(time_delta_us_timespec(start,end));
+			}
+			printf("[N:%d]: ABA WITH MEMORY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
+
+			for(int iter = 0; iter < TEST_ITERS; iter++){
+				clock_gettime(CLOCK_MONOTONIC,&start);
+				grid::aba_compute_only<T>(hd_data,d_robotModel,GRAVITY,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms);
+				clock_gettime(CLOCK_MONOTONIC,&end);
+				times.push_back(time_delta_us_timespec(start,end));
+			}
+			printf("[N:%d]: ABA COMPUTE ONLY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
+
+			for(int iter = 0; iter < TEST_ITERS; iter++){
+				clock_gettime(CLOCK_MONOTONIC,&start);
+				grid::crba<T>(hd_data,d_robotModel,GRAVITY,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms,streams);
+				clock_gettime(CLOCK_MONOTONIC,&end);
+				times.push_back(time_delta_us_timespec(start,end));
+			}
+			printf("[N:%d]: CRBA WITH MEMORY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
+
+			for(int iter = 0; iter < TEST_ITERS; iter++){
+				clock_gettime(CLOCK_MONOTONIC,&start);
+				grid::crba_compute_only<T>(hd_data,d_robotModel,GRAVITY,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms);
+				clock_gettime(CLOCK_MONOTONIC,&end);
+				times.push_back(time_delta_us_timespec(start,end));
+			}
+			printf("[N:%d]: CRBA COMPUTE ONLY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
+
+			for(int iter = 0; iter < TEST_ITERS; iter++){
+				clock_gettime(CLOCK_MONOTONIC,&start);
 				grid::inverse_dynamics_gradient<T,false,true>(hd_data,d_robotModel,GRAVITY,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms,streams);
 				clock_gettime(CLOCK_MONOTONIC,&end);
 				times.push_back(time_delta_us_timespec(start,end));
@@ -145,43 +163,77 @@ void test(int NUM_TIMESTEPS, cudaStream_t *streams, grid::robotModel<T> *d_robot
 
 			for(int iter = 0; iter < TEST_ITERS; iter++){
 				clock_gettime(CLOCK_MONOTONIC,&start);
-				grid::idsva_so_host<T>(hd_data,d_robotModel,GRAVITY,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms,streams);
+				grid::end_effector_pose<T>(hd_data,d_robotModel,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms,streams);
 				clock_gettime(CLOCK_MONOTONIC,&end);
 				times.push_back(time_delta_us_timespec(start,end));
 			}
-			printf("[N:%d]: ID_SO WITH MEMORY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
+			printf("[N:%d]: EE_POSE WITH MEMORY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
 
+			for(int iter = 0; iter < TEST_ITERS; iter++){
+				clock_gettime(CLOCK_MONOTONIC,&start);
+				grid::end_effector_pose_compute_only<T>(hd_data,d_robotModel,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms);
+				clock_gettime(CLOCK_MONOTONIC,&end);
+				times.push_back(time_delta_us_timespec(start,end));
+			}
+			printf("[N:%d]: EE_POSE COMPUTE ONLY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
+
+			for(int iter = 0; iter < TEST_ITERS; iter++){
+				clock_gettime(CLOCK_MONOTONIC,&start);
+				grid::end_effector_pose_gradient<T>(hd_data,d_robotModel,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms,streams);
+				clock_gettime(CLOCK_MONOTONIC,&end);
+				times.push_back(time_delta_us_timespec(start,end));
+			}
+			printf("[N:%d]: EE_POSE_GRADIENT WITH MEMORY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
+
+			for(int iter = 0; iter < TEST_ITERS; iter++){
+				clock_gettime(CLOCK_MONOTONIC,&start);
+				grid::end_effector_pose_gradient_compute_only<T>(hd_data,d_robotModel,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms);
+				clock_gettime(CLOCK_MONOTONIC,&end);
+				times.push_back(time_delta_us_timespec(start,end));
+			}
+			printf("[N:%d]: EE_POSE_GRADIENT COMPUTE ONLY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
+
+			#if GRID_GENERATES_IDSVA_SO
 			for(int iter = 0; iter < TEST_ITERS; iter++){
 				clock_gettime(CLOCK_MONOTONIC,&start);
 				grid::idsva_so_host<T>(hd_data,d_robotModel,GRAVITY,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms,streams);
 				clock_gettime(CLOCK_MONOTONIC,&end);
 				times.push_back(time_delta_us_timespec(start,end));
 			}
-			printf("[N:%d]: ID_SO COMPUTE ONLY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
+			printf("[N:%d]: IDSVA_SO WITH MEMORY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
 
+			for(int iter = 0; iter < TEST_ITERS; iter++){
+				clock_gettime(CLOCK_MONOTONIC,&start);
+				grid::idsva_so_host_compute_only<T>(hd_data,d_robotModel,GRAVITY,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms);
+				clock_gettime(CLOCK_MONOTONIC,&end);
+				times.push_back(time_delta_us_timespec(start,end));
+			}
+			printf("[N:%d]: IDSVA_SO COMPUTE ONLY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
+			#endif
+
+			#if GRID_GENERATES_FDSVA_SO
 			for(int iter = 0; iter < TEST_ITERS; iter++){
 				clock_gettime(CLOCK_MONOTONIC,&start);
 				grid::fdsva_so<T>(hd_data,d_robotModel,GRAVITY,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms,streams);
 				clock_gettime(CLOCK_MONOTONIC,&end);
 				times.push_back(time_delta_us_timespec(start,end));
 			}
-			printf("[N:%d]: FD_SO WITH MEMORY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
+			printf("[N:%d]: FDSVA_SO WITH MEMORY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
 
 			for(int iter = 0; iter < TEST_ITERS; iter++){
 				clock_gettime(CLOCK_MONOTONIC,&start);
-				grid::fdsva_so<T>(hd_data,d_robotModel,GRAVITY,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms,streams);
+				grid::fdsva_so_compute_only<T>(hd_data,d_robotModel,GRAVITY,NUM_TIMESTEPS,dim3(NUM_TIMESTEPS,1,1),dimms);
 				clock_gettime(CLOCK_MONOTONIC,&end);
 				times.push_back(time_delta_us_timespec(start,end));
 			}
-			printf("[N:%d]: FD_SO COMPUTE ONLY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
-
+			printf("[N:%d]: FDSVA_SO COMPUTE ONLY: ",NUM_TIMESTEPS); printStats(&times); times.clear();
+			#endif
 		}
 	#endif
 }
 
 template<typename T, int TEST_ITERS>
 void run_all_tests(bool floating_base){
-	// allocate memory for max of what we need
 	const int MAX_TIMESTEPS = 256;
 	cudaStream_t *streams = grid::init_grid<T>();
 	grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
@@ -196,22 +248,24 @@ void run_all_tests(bool floating_base){
 			hd_data->h_q[k*(grid::NUM_JOINTS+floating_base) + ind] = val;
 		}
 		for(int ind = 0; ind < grid::NUM_JOINTS; ind++){
-			// get values
 			T val2 = getRand<double>(); T val3 = getRand<double>();
 			hd_data->h_q_qd_u[k*(3*grid::NUM_JOINTS+floating_base) + grid::NUM_JOINTS + ind + floating_base] = val2;
 			hd_data->h_q_qd_u[k*(3*grid::NUM_JOINTS+floating_base) + 2*grid::NUM_JOINTS + ind + floating_base] = val3;
-			// load into alternate memory sizes
 			hd_data->h_q_qd[k*(2*grid::NUM_JOINTS+floating_base) + grid::NUM_JOINTS + ind + floating_base] = val2;
 		}
 	}
-	// copy values onto the GPU as default values (we will do more transfers later but this ensures things are initialized)
 	gpuErrchk(cudaMemcpy(hd_data->d_q_qd_u,hd_data->h_q_qd_u,3*grid::NUM_JOINTS*MAX_TIMESTEPS*sizeof(T),cudaMemcpyHostToDevice));
 	gpuErrchk(cudaMemcpy(hd_data->d_q_qd,hd_data->h_q_qd,2*grid::NUM_JOINTS*MAX_TIMESTEPS*sizeof(T),cudaMemcpyHostToDevice));
 	gpuErrchk(cudaMemcpy(hd_data->d_q,hd_data->h_q,grid::NUM_JOINTS*MAX_TIMESTEPS*sizeof(T),cudaMemcpyHostToDevice));
 	gpuErrchk(cudaDeviceSynchronize());
 
-	// then run the tests
-	test<T,TEST_ITERS*10>(1,streams,d_robotModel,hd_data); // more iters for single test
+	// GPU warmup: run several ID batches and discard before timing
+	for(int w = 0; w < 5; w++){
+		grid::inverse_dynamics<T,false,true>(hd_data,d_robotModel,GRAVITY,MAX_TIMESTEPS,dim3(MAX_TIMESTEPS,1,1),dimms,streams);
+	}
+	gpuErrchk(cudaDeviceSynchronize());
+
+	test<T,TEST_ITERS*10>(1,streams,d_robotModel,hd_data);
 	#if !TEST_FOR_EQUIVALENCE
 		test<T,TEST_ITERS>(16,streams,d_robotModel,hd_data);
 		test<T,TEST_ITERS>(32,streams,d_robotModel,hd_data);
@@ -219,8 +273,7 @@ void run_all_tests(bool floating_base){
 		test<T,TEST_ITERS>(128,streams,d_robotModel,hd_data);
 		test<T,TEST_ITERS>(256,streams,d_robotModel,hd_data);
 	#endif
-	
-	// free all memory and exit
+
 	grid::close_grid<T>(streams,d_robotModel,hd_data);
 }
 
