@@ -1,3 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "GRiD-RBD"
+version = "1.0.0"
+description = "GPU-Accelerated Rigid Body Dynamics"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.17.4",
+    "sympy>=1.7.1",
+    "beautifulsoup4>=4.9.3",
+    "lxml>=4.2.1",
+]
+
+[project.scripts]
+grid-generate = "GRiDCodeGenerator.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["GRiDCodeGenerator*", "URDFParser*", "RBDReference*"]
+
 [tool.black]
 line-length = 88  # Sets the maximum line length; default is 88, but you can adjust it if needed.
 target-version = ['py39']  # Specify the Python version(s) you're targeting, e.g., 'py39' for Python 3.9.

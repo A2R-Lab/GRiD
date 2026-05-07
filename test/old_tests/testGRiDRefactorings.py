@@ -2,7 +2,8 @@
 from URDFParser import URDFParser
 from RBDReference import RBDReference
 from GRiDCodeGenerator import GRiDCodeGenerator
-from util import parseInputs, printUsage, validateRobot, initializeValues, printErr
+from GRiDCodeGenerator.cli import parseInputs, printUsage, validateRobot
+from test.helpers import initializeValues, printErr
 import copy
 
 def main():

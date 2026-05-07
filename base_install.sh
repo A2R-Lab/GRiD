@@ -9,5 +9,5 @@ if [[ ! -d "${VENV_DIR}" ]]; then
 fi
 
 "${VENV_DIR}/bin/python" -m pip install --upgrade pip
-"${VENV_DIR}/bin/python" -m pip install -r "${SCRIPT_DIR}/requirements.txt"
+"${VENV_DIR}/bin/python" -m pip install -e "${SCRIPT_DIR}"
 git -C "${SCRIPT_DIR}" submodule update --init --recursive

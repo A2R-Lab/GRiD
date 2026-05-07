@@ -2,7 +2,8 @@
 from URDFParser import URDFParser
 from GRiDCodeGenerator import GRiDCodeGenerator
 from RBDReference import RBDReference
-from util import parseInputs, printUsage, validateRobot, initializeValues
+from GRiDCodeGenerator.cli import parseInputs, printUsage, validateRobot
+from test.helpers import initializeValues
 import subprocess
 import numpy as np
 import re

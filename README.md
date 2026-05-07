@@ -10,14 +10,39 @@ For additional information and links to our paper on this work, check out our [p
 
 **This package contains submodules make sure to run ```git submodule update --init --recursive```** after cloning!
 
-![The GRiD library package ecosystem, showing how a user's URDF file can be transformed into optimized CUDA C++ code which can then be validated against reference outputs and benchmarked for performance.](imgs/GRiD.png)
+![The GRiD library package ecosystem, showing how a user's URDF file can be transformed into optimized CUDA C++ code which can then be validated against reference outputs and benchmarked for performance.](docs/imgs/GRiD.png)
 
-## Usage:
-+ To generate the ```grid.cuh``` header file please run: ```generateGRiD.py PATH_TO_URDF (-D)``` where ```-D``` indicates full debug mode which will include print statements after ever step of ever algorithm
-+ To test the python refactored algorithms against our reference implmentations please run ```testGRiDRefactorings.py PATH_TO_URDF (-D)``` where ```-D``` prints extra debug values as compared to just the comparisons
-+ To print and compare GRiD to reference values please do the following steps: 
-  1) Print the reference values by running ```printReferenceValues.py PATH_TO_URDF (-D)``` where ```-D``` prints the full debug reference values from the refactorings 
-  2) Run ```printGrid.py PATH_TO_URDF (-D)``` to compile, run, and print the same values from CUDA C++
+## Quick Start
+
+Install (creates a local venv and registers the `grid-generate` CLI):
+```shell
+bash base_install.sh
+source .venv/bin/activate
+```
+
+Generate CUDA code for your robot:
+```shell
+# Via the installed CLI:
+grid-generate path/to/robot.urdf [-t EE_JOINT_NAME] [-n NAMESPACE] [-f]
+
+# Or via a hardcoded zero-config example:
+python examples/quickstart_iiwa14.py       # iiwa14 fixed base
+python examples/quickstart_go2_floating.py # Go2 floating base
+```
+
+Validate and debug:
+```shell
+# Print CPU reference values for all algorithms:
+python examples/print_reference_values.py path/to/robot.urdf
+
+# Compile and run the CUDA print kernel (requires nvcc):
+python examples/print_grid.py path/to/robot.urdf
+```
+
+## Usage
++ `grid-generate PATH_TO_URDF` — generate `grid.cuh`; add `-d` for full debug mode, `-f` for floating base, `-t JOINT_NAME` to target a specific end-effector joint
++ `python examples/print_reference_values.py PATH_TO_URDF` — print CPU reference values for all algorithms to validate CUDA output
++ `python examples/print_grid.py PATH_TO_URDF` — compile and run the CUDA print kernel against the generated header
 
 ## Floating-Base Conventions
 Floating-base parsing and the Python reference path now accept a public
@@ -87,15 +112,26 @@ To cite GRiD in your research, please use the following bibtex for our paper ["G
 ## Performance
 When performing multiple computations of rigid body dynamics algorithms, GRiD provides as much as a 7.6x speedup over a state-of-the-art, multi-threaded CPU implementation, and maintains as much as a 2.6x speedup when accounting for I/O overhead. 
 
-![Latency (including GPU I/O overhead) for N = 16, 32, 64, 128, and 256 computations of the gradient of forward dynamics for both the Pinocchio CPU baseline and the GRiD GPU library for various robot models (IIWA, HyQ, and Atlas). Overlayed is the speedup (or slowdown) of GRiD as compared to Pinocchio both in terms of pure computation and including I/O overhead.](imgs/benchmark_multi_fd_grad.png)
+![Latency (including GPU I/O overhead) for N = 16, 32, 64, 128, and 256 computations of the gradient of forward dynamics for both the Pinocchio CPU baseline and the GRiD GPU library for various robot models (IIWA, HyQ, and Atlas). Overlayed is the speedup (or slowdown) of GRiD as compared to Pinocchio both in terms of pure computation and including I/O overhead.](docs/imgs/benchmark_multi_fd_grad.png)
 
-To learn more about GRiD's performance results and to run your own benchmark analysis of GRiD's performance please check out our [GRiDBenchmarks](https://github.com/robot-acceleration/GRiDBenchmarks) repository and our [paper](https://brianplancher.com/publication/GRiD/).
+To learn more about GRiD's performance results and to run your own benchmark analysis please see [`test/benchmarks/`](test/benchmarks/) and our [paper](https://brianplancher.com/publication/GRiD/).
 
-## Instalation Instructions:
+## Installation Instructions
 ### Install Python Dependencies
-In order to support the wrapped packages there are 4 required external packages ```beautifulsoup4, lxml, numpy, sympy``` which can be automatically installed by running:
+Run the provided install script, which creates a `.venv` and registers the `grid-generate` CLI:
 ```shell
-pip3 install -r requirements.txt
+bash base_install.sh
+source .venv/bin/activate
+```
+
+Or install manually:
+```shell
+pip install -e .
+```
+
+For development dependencies (Pinocchio, robot_descriptions, benchmarks):
+```shell
+bash developer_install.sh
 ```
 ### Install CUDA Dependencies
 ```

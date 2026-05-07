@@ -93,3 +93,9 @@ venv.bak/
 
 # Developer-only external robot assets
 .external_test_assets/
+
+# IDE settings
+.vscode/
+
+# Test cache
+.pytest_cache/
