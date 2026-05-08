@@ -325,8 +325,8 @@ def test_floating_header_does_not_require_second_order_kernels(tmp_path, robot_i
     assert "!GRID_GENERATES_IDSVA_SO" in header
     assert "!GRID_GENERATES_FDSVA_SO" in header
     assert "void end_effector_pose(gridData<T, KIND> *hd_data" in header
-    assert "void end_effector_pose_gradient(gridData<T, KIND> *hd_data" not in header
-    assert "void end_effector_pose_gradient_hessian(gridData<T, KIND> *hd_data" not in header
+    assert "void end_effector_pose_gradient(gridData<T, KIND> *hd_data" in header
+    assert "void end_effector_pose_gradient_hessian(gridData<T, KIND> *hd_data" in header
     assert "void kinematics_only(gridData<T, KIND> *hd_data" in header
     assert "void aba(gridData<T, KIND> *hd_data" in header
     assert "void crba(gridData<T, KIND> *hd_data" in header
@@ -403,6 +403,63 @@ int main() {
 }
 '''
     _compile_header_consumer(tmp_path, header, source, "kinematics_grid_data_variant")
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+def test_fixed_kinematics_derivative_wrappers_compile(tmp_path):
+    header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="kinematics-derivatives")
+    source = r'''
+#include "grid.cuh"
+
+int main() {
+    using T = float;
+    grid::gridData<T, grid::GRID_DATA_KINEMATICS> *data = nullptr;
+    grid::robotModel<T> *model = nullptr;
+    cudaStream_t *streams = nullptr;
+    dim3 blocks(1, 1, 1);
+    dim3 threads(32, 1, 1);
+    grid::end_effector_pose<T, false, grid::GRID_DATA_KINEMATICS>(
+        data, model, 1, blocks, threads, streams);
+    grid::end_effector_pose_gradient<T, false, grid::GRID_DATA_KINEMATICS>(
+        data, model, 1, blocks, threads, streams);
+    grid::end_effector_pose_gradient_hessian<T, false, grid::GRID_DATA_KINEMATICS>(
+        data, model, 1, blocks, threads, streams);
+    grid::kinematics_only<T, grid::GRID_DATA_KINEMATICS>(
+        data, model, 1, blocks, threads, streams);
+    return 0;
+}
+'''
+    _compile_header_consumer(tmp_path, header, source, "fixed_kinematics_derivative_wrappers")
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.floating_base
+def test_floating_kinematics_derivative_wrappers_compile(tmp_path):
+    header = _generate_header(tmp_path, "iiwa14", "floating", codegen_profile="kinematics-derivatives")
+    source = r'''
+#include "grid.cuh"
+
+int main() {
+    using T = float;
+    grid::gridData<T, grid::GRID_DATA_KINEMATICS> *data = nullptr;
+    grid::robotModel<T> *model = nullptr;
+    cudaStream_t *streams = nullptr;
+    dim3 blocks(1, 1, 1);
+    dim3 threads(32, 1, 1);
+    grid::end_effector_pose<T, false, grid::GRID_DATA_KINEMATICS>(
+        data, model, 1, blocks, threads, streams);
+    grid::end_effector_pose_gradient<T, false, grid::GRID_DATA_KINEMATICS>(
+        data, model, 1, blocks, threads, streams);
+    grid::end_effector_pose_gradient_hessian<T, false, grid::GRID_DATA_KINEMATICS>(
+        data, model, 1, blocks, threads, streams);
+    grid::kinematics_only<T, grid::GRID_DATA_KINEMATICS>(
+        data, model, 1, blocks, threads, streams);
+    return 0;
+}
+'''
+    _compile_header_consumer(tmp_path, header, source, "floating_kinematics_derivative_wrappers")
 
 
 @pytest.mark.cuda_equivalence

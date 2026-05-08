@@ -64,7 +64,11 @@ FLOATING_CUDA_ALGORITHMS = (
     "crba",
     "end_effector_pose",
 )
-FLOATING_CUDA_CANDIDATE_ALGORITHMS = FLOATING_CUDA_ALGORITHMS
+FLOATING_CUDA_CANDIDATE_ALGORITHMS = (
+    *FLOATING_CUDA_ALGORITHMS,
+    "end_effector_pose_gradient",
+    "end_effector_pose_hessian",
+)
 GPU_UNAVAILABLE_PATTERNS = (
     "no cuda-capable device",
     "cuda driver version is insufficient",
@@ -454,6 +458,16 @@ def _compile_runner(
     _cache_verbose(config, "nvcc version: " + nvcc_version.splitlines()[-1])
     l2_persisting = os.environ.get("GRID_CUDA_ENABLE_L2_PERSISTING")
     l2_define = int(l2_persisting) if l2_persisting is not None else 0
+    floating_algorithms = os.environ.get("GRID_CUDA_FLOATING_ALGORITHMS", "")
+    enable_floating_eepose_hessian = int(
+        floating_base
+        and (
+            "end_effector_pose_hessian" in {
+                part.strip() for part in floating_algorithms.split(",")
+            }
+            or floating_algorithms.strip().lower() == "all"
+        )
+    )
     runner_key = _stable_json_hash(
         {
             "schema": CACHE_SCHEMA_VERSION,
@@ -464,6 +478,7 @@ def _compile_runner(
             "nvcc_version": nvcc_version,
             "floating_base": bool(floating_base),
             "l2_persisting": l2_define,
+            "floating_eepose_hessian": enable_floating_eepose_hessian,
             "compile_flags": ["-std=c++11", "-O0"],
         }
     )
@@ -472,7 +487,7 @@ def _compile_runner(
         compile_dir = _cache_root() / "runners" / runner_key
         executable = compile_dir / "cuda_equivalence_runner.exe"
         if executable.exists():
-            _progress(config, f"runner cache hit: arch=sm_{arch} floating={int(floating_base)} l2={l2_define} key={runner_key[:12]}")
+            _progress(config, f"runner cache hit: arch=sm_{arch} floating={int(floating_base)} l2={l2_define} eepose_hessian={enable_floating_eepose_hessian} key={runner_key[:12]}")
             cmd = [str(executable)]
             return executable, cmd
         compile_dir.mkdir(parents=True, exist_ok=True)
@@ -499,7 +514,9 @@ def _compile_runner(
     ]
     if l2_persisting is not None:
         cmd.insert(3, f"-DGRID_CUDA_ENABLE_L2_PERSISTING={l2_define}")
-    _progress(config, f"compiling runner arch=sm_{arch} floating={int(floating_base)} l2={l2_define} cache_key={runner_key[:12]}")
+    if enable_floating_eepose_hessian:
+        cmd.insert(3, "-DGRID_CUDA_RUN_FLOATING_EEPOSE_HESSIAN=1")
+    _progress(config, f"compiling runner arch=sm_{arch} floating={int(floating_base)} l2={l2_define} eepose_hessian={enable_floating_eepose_hessian} cache_key={runner_key[:12]}")
     result = subprocess.run(cmd, cwd=compile_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(
@@ -517,6 +534,7 @@ def _compile_runner(
                     "arch": arch,
                     "floating_base": bool(floating_base),
                     "l2_persisting": l2_define,
+                    "floating_eepose_hessian": enable_floating_eepose_hessian,
                     "cmd": cmd,
                 },
                 indent=2,
@@ -879,6 +897,20 @@ def _expected_output(project_model, sample, name: str):
             target = project_model.robot.get_joint_by_id(jid).get_name()
             poses.append(project_model.end_effector_pose(sample.q, target))
         return np.concatenate(poses, axis=0).reshape(1, -1)
+    if name == "end_effector_pose_gradient":
+        gradients = []
+        for jid in project_model.robot.get_leaf_nodes():
+            target = project_model.robot.get_joint_by_id(jid).get_name()
+            gradient = project_model.end_effector_pose_gradient(sample.q, target)
+            gradients.append(np.asarray(gradient, dtype=np.float64).reshape(-1, order="F"))
+        return np.concatenate(gradients, axis=0).reshape(1, -1)
+    if name == "end_effector_pose_hessian":
+        hessians = []
+        for jid in project_model.robot.get_leaf_nodes():
+            target = project_model.robot.get_joint_by_id(jid).get_name()
+            hessian = project_model.end_effector_pose_hessian(sample.q, target)
+            hessians.append(np.asarray(hessian, dtype=np.float64).reshape(-1))
+        return np.concatenate(hessians, axis=0).reshape(1, -1)
     raise ValueError(f"Unexpected CUDA output name: {name}")
 
 
