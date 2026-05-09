@@ -318,10 +318,15 @@ def test_codegen_does_not_select_algorithms_by_fixture_name_or_filename():
 def test_floating_header_does_not_require_second_order_kernels(tmp_path, robot_id):
     header = _generate_header(tmp_path, robot_id, "floating")
     constants = _constants(header)
+    expected_d2ee_workspace = 1 if robot_id == "go2" else 0
 
     assert "__shared__ T" not in header
     assert constants["GRID_GENERATES_IDSVA_SO"] == 0
     assert constants["GRID_GENERATES_FDSVA_SO"] == 0
+    assert constants["GRID_GENERATES_D2EE"] == 1
+    assert constants["GRID_D2EE_USES_WORKSPACE_TEMP"] == expected_d2ee_workspace
+    assert constants["GRID_D2EE_USES_WORKSPACE_D2XHOM"] == 0
+    assert constants["GRID_D2EE_SHARED_TIER_VALUE"] == expected_d2ee_workspace
     assert "!GRID_GENERATES_IDSVA_SO" in header
     assert "!GRID_GENERATES_FDSVA_SO" in header
     assert "void end_effector_pose(gridData<T, KIND> *hd_data" in header
@@ -330,6 +335,38 @@ def test_floating_header_does_not_require_second_order_kernels(tmp_path, robot_i
     assert "void kinematics_only(gridData<T, KIND> *hd_data" in header
     assert "void aba(gridData<T, KIND> *hd_data" in header
     assert "void crba(gridData<T, KIND> *hd_data" in header
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.parametrize(
+    ("robot_id", "base_mode", "expected_tier"),
+    [
+        pytest.param("iiwa14", "fixed", 0, id="iiwa14-fixed"),
+        pytest.param("go2", "fixed", 0, id="go2-fixed"),
+        pytest.param("g1", "fixed", 1, id="g1-fixed"),
+        pytest.param("fetch", "fixed", 1, id="fetch-fixed"),
+        pytest.param("iiwa14", "floating", 0, id="iiwa14-floating"),
+        pytest.param("go2", "floating", 1, id="go2-floating"),
+        pytest.param("g1", "floating", 2, id="g1-floating"),
+    ],
+)
+def test_d2ee_spill_tiers_are_size_and_base_selected(robot_id, base_mode, expected_tier):
+    codegen = _codegen_for_robot(robot_id, base_mode)
+    codegen.generated_algorithms = {"ee_pose", "ee_pose_gradient", "ee_pose_hessian"}
+    codegen.generate_id_du = False
+    codegen.generate_fd_du = False
+    codegen.generate_ee_pose_hessian = True
+    codegen.generate_idsva_so = False
+    codegen.generate_fdsva_so = False
+    codegen.include_fixed_kinematic_targets = False
+
+    codegen.gen_add_constants_helpers(include_homogenous_transforms=True)
+    constants = _constants(codegen.code_str)
+
+    assert constants["GRID_D2EE_SHARED_TIER_VALUE"] == expected_tier
+    assert constants["GRID_D2EE_USES_WORKSPACE_TEMP"] == int(expected_tier >= 1)
+    assert constants["GRID_D2EE_USES_WORKSPACE_D2XHOM"] == int(expected_tier >= 2)
 
 
 @pytest.mark.cuda_equivalence

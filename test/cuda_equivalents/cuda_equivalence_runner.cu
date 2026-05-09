@@ -413,9 +413,15 @@ void run() {
 
     #if GRID_CUDA_RUN_FLOATING_EEPOSE_HESSIAN
     if (floating_algorithm_requested("end_effector_pose_hessian")) {
+        if (grid::GRID_D2EE_USES_WORKSPACE_TEMP) {
+            gpuErrchk(grid::grid_begin_l2_persisting(
+                0, hd_data->d_workspace, grid::GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()
+            ));
+        }
         grid::end_effector_pose_gradient_hessian_kernel<T><<<1, 32, grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_d2ee,
             d_dee,
+            hd_data->d_workspace,
             d_q,
             grid::NUM_JOINTS,
             d_robot_model,
@@ -423,6 +429,9 @@ void run() {
         );
         gpuErrchk(cudaPeekAtLastError());
         gpuErrchk(cudaDeviceSynchronize());
+        if (grid::GRID_D2EE_USES_WORKSPACE_TEMP) {
+            gpuErrchk(grid::grid_end_l2_persisting(0));
+        }
         gpuErrchk(cudaMemcpy(h_d2ee.data(), d_d2ee, 6 * grid::NUM_JOINTS * grid::NUM_JOINTS * grid::NUM_EES * sizeof(T), cudaMemcpyDeviceToHost));
         print_vector("end_effector_pose_hessian", h_d2ee.data(), 6 * grid::NUM_JOINTS * grid::NUM_JOINTS * grid::NUM_EES);
     }

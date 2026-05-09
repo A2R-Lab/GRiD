@@ -312,6 +312,10 @@ def _fallback_summary(header_path: Path) -> str:
         "GRID_FD_DU_USES_GLOBAL_TEMP",
         "GRID_ID_DU_USES_DA_DF_SPILL",
         "GRID_FD_DU_USES_DA_DF_SPILL",
+        "GRID_GENERATES_D2EE",
+        "GRID_D2EE_USES_WORKSPACE_TEMP",
+        "GRID_D2EE_USES_WORKSPACE_D2XHOM",
+        "GRID_D2EE_SHARED_TIER_VALUE",
     ]
     parts = [
         f"{name}={constants[name]}"
