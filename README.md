@@ -78,6 +78,13 @@ overrides:
 + `GRID_CUDA_FLOATING_ALGORITHMS=inverse_dynamics,forward_dynamics` to request a subset
 + `GRID_CUDA_FLOATING_SAMPLE_NAMES=all` to run every deterministic/random sample instead of only `zero`
 
+Generated CUDA defaults to a 96 KiB dynamic shared-memory target
+(`GRID_CUDA_TARGET_SHARED_MEM_BYTES=98304`) and selects spill fallbacks only
+when the generated arena would exceed that target. See
+[`docs/source/user_guide/tutorials/cuda_validation.rst`](docs/source/user_guide/tutorials/cuda_validation.rst)
+for shared-memory target overrides, L2 controls, and the recommended
+ptxas/register-pressure analysis workflow for tuning a specific robot/GPU.
+
 ## Current Support
 GRiD currently fully supports any robot model consisting of revolute, prismatic, and fixed joints that does not have closed kinematic loops.
 
