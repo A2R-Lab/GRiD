@@ -1,115 +1,68 @@
-========================================
-Editing Sphinx Documentation
-========================================
-
-Welcome to the guide on how to edit and deploy the Sphinx documentation for our project. This document will provide instructions on how to modify, build, and deploy the documentation locally and on the web.
-
-Follow the instructions below for tips on how to edit, build, deploy, and run the code locally. The docs folder currently has the following structure:
-
-.. code:: shell
-
-    docs
-    ├── source/
-    │   ├── _static/
-    │   │   ├──custom.css
-    |   |   └── etc..
-    │   ├── _templates/
-    │   ├── user_guide/
-    |   |   ├── concepts
-    |   |   |   ├── algorithms
-    |   |   |   |   ├── aba.rst
-    |   |   |   |   └── etc..
-    |   |   |   └── index.rst
-    |   |   ├── getting_started
-    |   |   |   ├── docker_setup.rst
-    |   |   |   ├── installation.rst
-    |   |   |   ├── library_overview.rst
-    |   |   |   └── etc..
-    |   |   ├── tutorials
-    |   |   |   ├── codegen.rst
-    |   |   |   ├── python_algorithms.rst
-    |   |   |   ├── urdf_parser.rst
-    |   |   |   └── etc..
-    │   ├── conf.py
-    │   └── index.rst
-    └── Makefile & etc...
-
-
-.. note::
-    When making changes to any of the above files, note the existence of a ``toctree`` at the bottom of some files.
-    ``index.rst`` files typically point to other files. In order for your new file to be a part of documentation, ensure that it is included in the toctree in its folder or the previous folder.
-    Also note that you can write files in the format of a README.md or .rst format. Both are quick to learn and use Latex.
-
-
-Table of Contents
-------------------
-1. `Editing the Documentation`
-2. `Building the Documentation Locally`
-3. `Deploying the Documentation`
-4. `Editing Code and Running Locally`
-5. `Deploying the Code`
-
-Editing the Documentation
+Editing The Documentation
 =========================
 
-To begin editing the documentation, follow these steps:
+GRiD uses Sphinx with the ``pydata_sphinx_theme`` theme. Most content changes
+are plain reStructuredText edits under ``docs/source/``.
 
-1. **Clone the repository**:
-   If you haven't already cloned the repository, use the following command to clone the project:
+Common Edits
+------------
 
-.. code::bash
-   git clone https://github.com/A2R-Lab/GRiD.git
+* Homepage text and first-screen navigation live in ``docs/source/index.rst``.
+* Install, examples, CUDA status, validation, and benchmark pages live under
+  ``docs/source/user_guide/``.
+* API landing-page text lives in ``docs/source/api_reference/index.rst``.
+* Add new pages to the nearest ``.. toctree::`` so Sphinx includes them in the
+  site.
 
+Logo, Images, And Styling
+-------------------------
 
-2. **Locate the Documentation Files**:
-    The Sphinx documentation files are located in the docs/ directory (or a similar name depending on the project setup). 
-    Inside this directory, you will find index.rst (the main entry point) and other .rst files that contain the content.
+The top navigation logo is configured in ``docs/source/conf.py``:
 
-3. **Edit .rst Files**: 
-    To edit the documentation, open any .rst file using a text editor (such as VSCode, Atom, or Sublime Text).
-    The primary file is index.rst, but other files are organized in subdirectories.
+.. code-block:: python
 
-4. **Preview Changes Locally**:
-    After making changes you can build locally to preview the changes. See Makefile for instructions for deployment (can use ``make all``)
+   html_theme_options = {
+       "logo": {
+           "image_light": "_static/a2r_lab.jpg",
+           "image_dark": "_static/a2r_lab.jpg",
+       },
+   }
 
-Building Documentaiton Locally
-==============================
+To update the current A2R Lab logo, replace
+``docs/source/_static/a2r_lab.jpg`` with a new image using the same filename.
+To use separate light and dark logos, add both files under
+``docs/source/_static/`` and update the two paths in ``conf.py``.
 
-1. **Install Dependencies**:
-    Before building the documentation, ensure you have the necessary dependencies installed. 
-    You can install the dependencies using the following command:
+Use ``docs/source/user_guide/imgs/`` for figures that belong to documentation
+pages. Use ``docs/source/_static/`` for theme assets such as logos, favicons,
+and CSS. Local CSS overrides live in ``docs/source/_static/custom.css``.
 
-.. code:: bash
+Build Locally
+-------------
 
-    pip install sphinx
-    pip install furo # html theme
-    pip install sphinx-rtd-theme #read the docs theme
+Install the docs dependencies:
 
-.. note::
+.. code-block:: bash
 
-    If there are missing themes, easily pip install them as well as extensions.
+   .venv/bin/python -m pip install -r docs/requirements.txt
 
+Build the docs from the repository root:
 
-.. code:: bash
+.. code-block:: bash
 
-    python3 -m venv venvsource venv/bin/activate
-    pip3 install -r requirements.txt
+   .venv/bin/python -m sphinx -W --keep-going -b html docs/source docs/build/html
 
-2. **Build the Documentation**:
-    sphinx-build -b html docs/source docs/build
+Preview in a browser:
 
-3. **View Locally**:
-    After building the documentation, you can view it locally by opening the index.html file in your browser.
+.. code-block:: bash
 
-.. code:: bash
+   .venv/bin/python -m http.server -d docs/build/html 8000
 
-    # without using npm
-    sphinx-build -b html . ../build # this updates files and builds 
-    python -m http.server 8000 #
+Then open ``http://localhost:8000``.
 
-    # using npm
-    npm install -g http-server
-    http-server ./build # run to view server in docs directory
+GitHub Pages
+------------
 
-
-To be completed...
+The GitHub Pages workflow installs ``docs/requirements.txt`` and builds the
+same Sphinx source tree. Keep local builds warning-free before pushing docs
+changes.

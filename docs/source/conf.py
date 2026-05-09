@@ -15,8 +15,10 @@ release = '1.0.0'
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
 import sys
-import os
-sys.path.insert(0, os.path.abspath('/Users/kwam/POST_GRAD/GRiD')) # change as needed
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
 
 extensions = [
 	'sphinx.ext.autodoc',
@@ -24,8 +26,13 @@ extensions = [
 	'sphinx.ext.napoleon',
 	'sphinx.ext.viewcode',
     'sphinx.ext.autosectionlabel',
-    'sphinx.ext.intersphinx',
+    'sphinx_design',
 ]
+
+# Keep section labels useful without generating duplicate labels for repeated
+# low-level API headings such as "Parameters", "Returns", and "Example".
+autosectionlabel_prefix_document = True
+autosectionlabel_maxdepth = 2
 
 #myst parser
 myst_enable_extensions = ["colon_fence", "dollarmath"]
@@ -84,8 +91,8 @@ html_theme_options = {
     "github_url": "https://github.com/A2R-Lab/GRiD", # Link to github
     "use_edit_page_button": True, # Enables edit button
         "logo": {
-        "image_light": "_static/a2r_lab.jpg",
-        "image_dark": "_static/a2r_lab.jpg",
+        "image_light": "_static/a2r_lab.png",
+        "image_dark": "_static/a2r_lab.png",
     },
     "collapse_navigation": True,
     "header_links_before_dropdown": 6,
@@ -113,7 +120,3 @@ html_context = {
     "conf_py_path": "/source/",
     "doc_path": "docs/source"
 }
-
-
-# What is this for?
-intersphinx_mapping = {'gymnasium': ('https://gymnasium.farama.org/', None)}

@@ -1,27 +1,75 @@
-.. sphinx_grid documentation master file, created by
-   sphinx-quickstart on Tue Oct 29 12:04:57 2024.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+GRiD: GPU-Accelerated Rigid Body Dynamics Code Generation
+==========================================================
 
-Welcome to GRiD Documentation
-=============================
+GRiD turns URDF robot models into optimized CUDA C++ for rigid-body dynamics,
+kinematics, analytical gradients, and validation against Python reference
+implementations. It supports fixed- and floating-base robots, shared-memory
+fallback paths for larger generated kernels, and benchmark tooling for checking
+performance on real GPU targets.
 
-This is a template landing page for GRiD documentation. The structure of the site needs work, but is currently in development and open to feedback.
+.. grid:: 2
+   :gutter: 3
 
-Add your content using ``reStructuredText`` syntax. See the
-`reStructuredText <https://www.sphinx-doc.org/en/master/usage/restructuredtext/index.html>`_
-documentation for details. It is also possible to convert README.md files and syntax used in README files to reStructuredText using `pandoc <https://pandoc.org/>`_.
+   .. grid-item-card:: Quick Start
+      :link: user_guide/landing_page
+      :link-type: doc
 
-.. code-block::
-   :caption:  Bash commands to convert README.md to reStructuredText
+      Install GRiD, generate your first CUDA header, and run the core examples.
 
-       # For most systems
-       brew install pandoc          # macOS (Homebrew)
-       sudo apt install pandoc      # debian/ubuntu
-       pandoc README.md -f markdown -t rst -o README.rst
+   .. grid-item-card:: API Reference
+      :link: api_reference/index
+      :link-type: doc
 
-``-f markdown`` specifies the input format and ``-t rst`` specifies the output format. ``-o README.rst`` specifies the output file.
+      Browse the Python APIs for URDF parsing, reference algorithms, and CUDA
+      code generation.
 
+   .. grid-item-card:: CUDA Validation
+      :link: user_guide/tutorials/cuda_validation
+      :link-type: doc
+
+      Run staged fixed/floating correctness checks, shared-memory fallback
+      tests, and performance reports.
+
+   .. grid-item-card:: Benchmarks
+      :link: user_guide/tutorials/benchmarks
+      :link-type: doc
+
+      Learn where benchmark scripts live and how to compare generated kernels
+      on target GPU hardware.
+
+.. figure:: user_guide/imgs/benchmark_multi_fd_grad.png
+   :alt: GRiD forward-dynamics gradient benchmark performance
+   :width: 85%
+   :align: center
+
+   Example GRiD benchmark results for batched forward-dynamics gradient
+   computation. Use the benchmark and performance-reporting tools to collect
+   current numbers on your robot and GPU.
+
+How To Customize This Site
+--------------------------
+
+* Homepage text and top-level navigation live in ``docs/source/index.rst``.
+* User-facing install, examples, and support notes live under
+  ``docs/source/user_guide/``.
+* API documentation entry points live under ``docs/source/api_reference/``.
+* The A2R Lab logo is configured in ``docs/source/conf.py`` through
+  ``html_theme_options["logo"]["image_light"]`` and
+  ``html_theme_options["logo"]["image_dark"]``. Replace
+  ``docs/source/_static/a2r_lab.jpg`` to update the current logo image.
+* Page figures belong in ``docs/source/user_guide/imgs/``; theme images,
+  favicon files, and CSS belong in ``docs/source/_static/``.
+* Local style overrides live in ``docs/source/_static/custom.css``.
+
+Build And Preview
+-----------------
+
+.. code-block:: bash
+
+   .venv/bin/python -m sphinx -W --keep-going -b html docs/source docs/build/html
+   .venv/bin/python -m http.server -d docs/build/html 8000
+
+Then open ``http://localhost:8000``.
 
 .. toctree::
    :maxdepth: 3
@@ -32,20 +80,18 @@ documentation for details. It is also possible to convert README.md files and sy
    contribution_guidelines
    sphinx_edit_guide
    faq
-   todo_list
 
-Citation 
+Citation
 --------
 
-If you use GRiD in your research, please cite using our bibtex citation: 
+If you use GRiD in your research, please cite:
 
 .. code-block:: text
 
    @inproceedings{plancher2022grid,
-     title={GRiD: GPU-Accelerated Rigid Body Dynamics with Analytical Gradients}, 
+     title={GRiD: GPU-Accelerated Rigid Body Dynamics with Analytical Gradients},
      author={Brian Plancher and Sabrina M. Neuman and Radhika Ghosal and Scott Kuindersma and Vijay Janapa Reddi},
-     booktitle={IEEE International Conference on Robotics and Automation (ICRA)}, 
-     year={2022}, 
+     booktitle={IEEE International Conference on Robotics and Automation (ICRA)},
+     year={2022},
      month={May}
    }
-   

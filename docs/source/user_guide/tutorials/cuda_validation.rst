@@ -5,6 +5,22 @@ This page summarizes the developer CUDA validation flow for generated GRiD
 headers. The checks are intentionally staged so long GPU runs provide useful
 progress and can be resumed with cached generated artifacts.
 
+Local Docs Build
+----------------
+
+Developer installs include the Sphinx documentation dependencies. To install
+them manually in an existing environment:
+
+.. code-block:: bash
+
+   .venv/bin/python -m pip install -r docs/requirements.txt
+
+Build the HTML docs from the repository root:
+
+.. code-block:: bash
+
+   .venv/bin/python -m sphinx -W --keep-going -b html docs/source docs/build/html
+
 Staged CUDA Correctness Checks
 ------------------------------
 

@@ -4,11 +4,14 @@
 Requires: pip install robot_descriptions  (included in dev dependencies)
 
 Run:
-    python examples/quickstart_go2_floating.py
+    python examples/quickstart_go2_floating.py --output /tmp/grid_go2.cuh
 
-Generates grid.cuh in the current directory.
+Generates a floating-base dynamics header by default.
 """
 from __future__ import annotations
+
+import argparse
+from pathlib import Path
 
 from robot_descriptions import go2_description
 
@@ -17,22 +20,48 @@ from GRiDCodeGenerator import GRiDCodeGenerator
 
 URDF_PATH = go2_description.URDF_PATH
 
-print(f"Parsing URDF: {URDF_PATH}")
-parser = URDFParser()
-robot = parser.parse(URDF_PATH, floating_base=True)
 
-print(f"Robot: {robot.name}  |  DOF: {robot.get_num_joints()} + 6 (floating base)")
-print("Generating GRiD CUDA code (floating base — homogeneous transforms excluded)...")
+def main():
+    parser_args = argparse.ArgumentParser(description="Generate floating-base Go2 GRiD CUDA code.")
+    parser_args.add_argument("--output", default="grid.cuh", help="Path for the generated CUDA header.")
+    parser_args.add_argument(
+        "--profile",
+        default="dynamics",
+        choices=[
+            "dynamics",
+            "dynamics-core",
+            "dynamics-gradients",
+            "kinematics",
+            "kinematics-derivatives",
+            "all",
+        ],
+        help="Generated code profile. Use kinematics-derivatives or all for floating eepose gradients/Hessians.",
+    )
+    args = parser_args.parse_args()
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-codegen = GRiDCodeGenerator(robot, DEBUG_MODE=False, NEED_PRINT_MAT=True, FILE_NAMESPACE="grid")
-codegen.gen_all_code(
-    include_homogenous_transforms=False,
-    output_path="grid.cuh",
-)
+    print(f"Parsing URDF: {URDF_PATH}")
+    parser = URDFParser()
+    robot = parser.parse(URDF_PATH, floating_base=True)
 
-print("Done — grid.cuh written to current directory.")
-print()
-print("Next steps:")
-print("  1. Compile a CUDA program against grid.cuh")
-print("  2. See test/benchmarks/ for performance benchmarking")
-print("  3. Try examples/quickstart_iiwa14.py for a fixed-base example")
+    print(f"Robot: {robot.name}  |  DOF: {robot.get_num_joints()} + floating root")
+    print(f"Generating floating-base GRiD CUDA code with profile '{args.profile}'...")
+
+    codegen = GRiDCodeGenerator(robot, DEBUG_MODE=False, NEED_PRINT_MAT=True, FILE_NAMESPACE="grid")
+    codegen.gen_all_code(
+        include_homogenous_transforms=args.profile in {"kinematics", "kinematics-derivatives", "all"},
+        output_path=str(output_path),
+        codegen_profile=args.profile,
+    )
+
+    print(f"Done: {output_path} written.")
+    print()
+    print("Next steps:")
+    print("  1. Compile a CUDA program against the generated header")
+    print("  2. Use --profile kinematics-derivatives to include floating eepose derivatives")
+    print("  3. Use test/benchmarks/baselines/grid/run.py for benchmark slices")
+
+
+if __name__ == "__main__":
+    main()

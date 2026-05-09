@@ -1,18 +1,22 @@
 API Reference
-=============================
-This is for API reference!
+=============
+
+The API reference is organized around GRiD's three Python-facing packages:
+
+* :doc:`RBDReference <rbd>` contains CPU reference rigid-body dynamics and
+  kinematics algorithms used for validation.
+* :doc:`URDFParser <urdf>` parses robot descriptions into the internal model
+  consumed by the reference algorithms and code generator.
+* :doc:`GRiDCodeGenerator <gridcodegen>` emits CUDA C++ headers, host wrappers,
+  shared-memory layouts, and generated helper APIs.
+
+Start with :doc:`gridcodegen` when you want to generate CUDA, :doc:`rbd` when
+you want Python reference values, and :doc:`urdf` when you need to inspect or
+debug parsed robot topology.
 
 .. toctree::
    :maxdepth: 2
 
    rbd
-
-.. toctree::
-   :maxdepth: 2
-
    urdf
-
-.. toctree::
-   :maxdepth: 2
-
    gridcodegen

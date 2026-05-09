@@ -10,4 +10,5 @@ These tutorials will help you get started with different aspects of GRID.
    codegen
    urdf_parser
    benchmarks
+   cuda_support_status
    cuda_validation

@@ -3,6 +3,9 @@
 # Generated GRiD header
 grid.cuh
 
+# Generated documentation output
+docs/build/
+
 # Custom debug files
 t.txt
 t2.txt

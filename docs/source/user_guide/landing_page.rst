@@ -1,207 +1,115 @@
 User Guide
-============
+==========
 
-GRiD
-------
+GRiD generates optimized CUDA C++ implementations of rigid-body dynamics,
+kinematics, and analytical-gradient algorithms from URDF robot models. The
+package combines three Python components:
 
-A GPU-accelerated library for computing rigid body dynamics with
-analytical gradients.
+* :doc:`URDFParser <tutorials/urdf_parser>` for reading robot models.
+* :doc:`RBDReference <tutorials/python_algorithms>` for CPU reference
+  algorithms.
+* :doc:`GRiDCodeGenerator <tutorials/codegen>` for CUDA header generation.
 
-GRiD wraps our
-`URDFParser <https://github.com/robot-acceleration/URDFParser>`__,
-`GRiDCodeGenerator <https://github.com/robot-acceleration/GRiDCodeGenerator>`__,
-and
-`RBDReference <https://github.com/robot-acceleration/RBDReference>`__
-packages. Using its scripts, users can easily generate and test
-optimized rigid body dynamics CUDA C++ code for their URDF files.
-
-See here for usage information on each module:
-* :doc:`URDFParser <tutorials/urdf_parser>`
-* :doc:`GRiDCodeGenerator <tutorials/codegen>`
-* :doc:`RBDReference <tutorials/python_algorithms>`
-
-
-For additional information and links to our paper on this work, check
-out our `project
-website <https://brianplancher.com/publication/GRiD>`__.
-
-**This package contains submodules make sure to run
-``git submodule update --init --recursive``** after cloning!
-
-.. figure:: ../imgs/GRiD.png
-   :alt: GRiD Library ecosystem
+.. figure:: imgs/GRiD.png
+   :alt: GRiD library ecosystem
    :width: 80%
    :align: center
 
-   The GRiD library package ecosystem, showing how a user’s URDF file
-   can be transformed into optimized CUDA C++ code which can then be
-   validated against reference outputs and benchmarked for performance.
+   A URDF model is parsed, checked against Python reference algorithms, and
+   lowered into generated CUDA code that can be validated and benchmarked.
 
-Usage:
-------
+Quick Start
+-----------
 
--  To generate the ``grid.cuh`` header file please run:
-   ``generateGRiD.py PATH_TO_URDF (-D)`` where ``-D`` indicates full
-   debug mode which will include print statements after ever step of
-   ever algorithm
--  To test the python refactored algorithms against our reference
-   implmentations please run
-   ``testGRiDRefactorings.py PATH_TO_URDF (-D)`` where ``-D`` prints
-   extra debug values as compared to just the comparisons
--  To print and compare GRiD to reference values please do the following
-   steps:
+Install the package in a local virtual environment:
 
-   1) Print the reference values by running
-      ``printReferenceValues.py PATH_TO_URDF (-D)`` where ``-D`` prints
-      the full debug reference values from the refactorings
-   2) Run ``printGrid.py PATH_TO_URDF (-D)`` to compile, run, and print
-      the same values from CUDA C++
+.. code-block:: bash
+
+   bash base_install.sh
+   source .venv/bin/activate
+
+For developer tests, robot-description fixtures, CUDA validation, and local
+docs builds:
+
+.. code-block:: bash
+
+   bash developer_install.sh
+
+Generate CUDA code for a robot:
+
+.. code-block:: bash
+
+   grid-generate path/to/robot.urdf
+   grid-generate path/to/robot.urdf -f        # floating base
+   grid-generate path/to/robot.urdf -t ee_jnt # retained fixed-joint target
+
+The default output is ``grid.cuh`` in the current directory.
+
+Examples
+--------
+
+The ``examples/`` directory contains small scripts for common workflows:
+
+* ``quickstart_iiwa14.py`` generates a fixed-base iiwa14 CUDA header.
+* ``quickstart_go2_floating.py`` generates a floating-base Go2 dynamics header.
+* ``print_reference_values.py`` prints Python reference outputs for a URDF.
+* ``print_grid.py`` generates, compiles, and runs the CUDA print executable.
+
+Typical commands:
+
+.. code-block:: bash
+
+   .venv/bin/python examples/quickstart_iiwa14.py --output /tmp/grid_iiwa14.cuh
+   .venv/bin/python examples/quickstart_go2_floating.py --output /tmp/grid_go2.cuh
+   .venv/bin/python examples/print_reference_values.py path/to/robot.urdf
+   GRID_CUDA_ARCH=86 .venv/bin/python examples/print_grid.py path/to/robot.urdf
+
+Validation And Performance
+--------------------------
+
+Use the staged CUDA checker when changing generated CUDA behavior:
+
+.. code-block:: bash
+
+   .venv/bin/python test/cuda_equivalents/run_staged_cuda_checks.py
+
+See :doc:`tutorials/cuda_validation` for CUDA equivalence tests, artifact
+caching, shared-memory fallback controls, L2 persisting options, and
+performance-reporting commands.
 
 Current Support
 ---------------
 
-GRiD currently fully supports any robot model consisting of revolute,
-prismatic, and fixed joints that does not have closed kinematic loops.
+GRiD supports revolute, prismatic, and fixed-joint robot models without closed
+kinematic loops.
 
-GRiD currently implements the following rigid body dynamics algorithms:
-+ Inverse Dynamics via the Recursive Newton Euler Algorithm (RNEA) from
-`Featherstone <https://link.springer.com/book/10.1007/978-1-4899-7560-7>`__
-+ The Direct Inverse of Mass Matrix from
-`Carpentier <https://www.researchgate.net/publication/343098270_Analytical_Inverse_of_the_Joint_Space_Inertia_Matrix>`__
-+ Forward Dynamics by combining the above algorithms as qdd =
--M^{-1}(u-RNEA(q,qd,0)) + Analytical Gradients of Inverse Dynamics from
-`Carpentier <https://hal.archives-ouvertes.fr/hal-01790971>`__ +
-Analytical Gradient of Forward Dynamics from
-`Carpentier <https://hal.archives-ouvertes.fr/hal-01790971>`__
+Implemented CUDA algorithm families include:
 
-Additional algorithms and features are in development. If you have a
-particular algorithm or feature in mind please let us know by posting a
-GitHub issue. We’d also love your collaboration in implementing the
-Python reference implementation of any algorithm you’d like implemented!
+* Inverse dynamics / RNEA.
+* Direct inverse mass matrix.
+* Forward dynamics via Minv + RNEA.
+* ABA and CRBA.
+* Inverse- and forward-dynamics gradients.
+* End-effector pose, gradient, and Hessian.
+* Fixed-base second-order diagnostics for IDSVA-SO/FDSVA-SO.
 
-C++ API
--------
-
-To enable GRiD to be used by both expert and novice GPU programmers we
-provide the following API interface for each rigid body dynamics
-algorithm: + ``ALGORITHM_inner``: a device function that computes the
-core computation. These functions assume that inputs are already loaded
-into GPU shared memory, require a pointer to additional scratch shared
-memory, and store the result back in shared memory. +
-``ALGORITHM_device``: a device function that handles the shared memory
-allocation for the ``\_inner`` function. These functions assume that
-inputs are already loaded into, and return results to, GPU shared
-memory. + ``ALGORITHM_kernel``: a kernel that handles the shared memory
-allocation for the ``\_inner`` function. These functions assume that
-inputs are loaded into, and return results to, the global GPU memory. +
-``ALGORITHM``: a host function that wraps the ``_kernel`` and handles
-the transfer of inputs to the GPU and the results back to the CPU.
+See :doc:`tutorials/cuda_support_status` for the current fixed/floating support
+matrix and known caveats.
 
 Citing GRiD
 -----------
 
-To cite GRiD in your research, please use the following bibtex for our
-paper `“GRiD: GPU-Accelerated Rigid Body Dynamics with Analytical
-Gradients” <https://brianplancher.com/publication/grid/>`__:
+If you use GRiD in your research, please cite:
 
-::
+.. code-block:: text
 
    @inproceedings{plancher2022grid,
-     title={GRiD: GPU-Accelerated Rigid Body Dynamics with Analytical Gradients}, 
+     title={GRiD: GPU-Accelerated Rigid Body Dynamics with Analytical Gradients},
      author={Brian Plancher and Sabrina M. Neuman and Radhika Ghosal and Scott Kuindersma and Vijay Janapa Reddi},
-     booktitle={IEEE International Conference on Robotics and Automation (ICRA)}, 
-     year={2022}, 
+     booktitle={IEEE International Conference on Robotics and Automation (ICRA)},
+     year={2022},
      month={May}
    }
-
-Performance
------------
-
-When performing multiple computations of rigid body dynamics algorithms,
-GRiD provides as much as a 7.6x speedup over a state-of-the-art,
-multi-threaded CPU implementation, and maintains as much as a 2.6x
-speedup when accounting for I/O overhead.
-
-.. figure:: /imgs/benchmark_multi_fd_grad.png
-   :alt: Latency
-   :width: 80%
-   :align: center
-
-   Latency (including GPU I/O overhead) for N = 16, 32, 64, 128, and 256
-   computations of the gradient of forward dynamics for both the
-   Pinocchio CPU baseline and the GRiD GPU library for various robot
-   models (IIWA, HyQ, and Atlas). Overlayed is the speedup (or slowdown)
-   of GRiD as compared to Pinocchio both in terms of pure computation
-   and including I/O overhead.
-
-To learn more about GRiD’s performance results and to run your own
-benchmark analysis of GRiD’s performance please check out our
-`GRiDBenchmarks <https://github.com/robot-acceleration/GRiDBenchmarks>`__
-repository and our
-`paper <https://brianplancher.com/publication/GRiD/>`__.
-
-Instalation Instructions:
--------------------------
-
-Install Python Dependencies
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-In order to support the wrapped packages there are 4 required external
-packages ``beautifulsoup4, lxml, numpy, sympy`` which can be
-automatically installed by running:
-
-.. code:: shell
-
-   pip3 install -r requirements.txt
-
-Install CUDA Dependencies
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-::
-
-   sudo apt-get update
-   sudo apt-get -y install xorg xorg-dev linux-headers-$(uname -r) apt-transport-https
-
-Download and Install CUDA
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Note: for Ubuntu 20.04 see https://developer.nvidia.com/cuda-downloads
-for other distros
-
-::
-
-   wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-ubuntu2004.pin
-   sudo mv cuda-ubuntu2004.pin /etc/apt/preferences.d/cuda-repository-pin-600
-   sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/7fa2af80.pub
-   sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/ /"
-   sudo apt-get update
-   sudo apt-get -y install cuda
-
-Add the following to ``~/.bashrc``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-::
-
-   export PATH="/usr/local/cuda/bin:$PATH"
-   export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
-   export PATH="opt/nvidia/nsight-compute/:$PATH"
-
-
-.. note::
-
-    This is an example of how to do a "note". Good luck with the rest of the setup! 
-
-.. warning::
-
-    Example of a warning.
-
-.. tip:: 
-
-    Here is a tip!
-
-.. caution:: 
-
-    And proceed with caution!
 
 .. toctree::
    :maxdepth: 2

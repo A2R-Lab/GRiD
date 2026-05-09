@@ -7,4 +7,5 @@ TIER="${PINOCCHIO_EQUIVALENCE_TIER:-smoke}"
 
 "${SCRIPT_DIR}/base_install.sh"
 "${VENV_DIR}/bin/python" -m pip install -r "${SCRIPT_DIR}/requirements-dev.txt"
+"${VENV_DIR}/bin/python" -m pip install -r "${SCRIPT_DIR}/docs/requirements.txt"
 "${VENV_DIR}/bin/python" "${SCRIPT_DIR}/test/run_tests.py" --prepare-models --tier "${TIER}"
