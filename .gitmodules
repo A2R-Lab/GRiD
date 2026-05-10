@@ -10,3 +10,6 @@
 [submodule "test/benchmarks/baselines/pinocchio/ReusableThreads"]
 	path = test/benchmarks/baselines/pinocchio/ReusableThreads
 	url = https://github.com/plancherb1/ReusableThreads
+[submodule "GLASS"]
+	path = GLASS
+	url = git@github.com:A2R-Lab/GLASS.git

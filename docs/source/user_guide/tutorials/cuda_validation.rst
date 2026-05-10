@@ -224,6 +224,57 @@ Second-order diagnostics are opt-in:
 Use ``GRID_CUDA_SECOND_ORDER_TEST_THREADS`` to override the diagnostic runner's
 thread count.
 
+Linear Algebra Backend
+----------------------
+
+Generated headers include a GRiD-owned linear algebra backend adapter. The
+default path is the vendored ``glass`` scalar/unrolled helper subset copied
+from the pinned GLASS submodule at codegen time: it has no MathDx dependency
+and keeps generated headers self-contained. ``glass-nvidia`` is reserved for
+explicit packed-kernel experiments where a topology level already exposes
+enough parallel work to justify a larger grouped operation.
+
+Backend macros:
+
+* ``GRID_LINALG_GLASS`` is the generated default and the intended
+  always-available path.
+* ``GRID_LINALG_GLASS_NVIDIA`` enables GLASS NVIDIA wrappers and fails at
+  compile time if C++17, CUB, cuBLASDx, or ``GRID_CUBLASDX_SM`` is missing.
+
+The default path remains usable without MathDx and without changing C++11
+compile commands. To explicitly compile a timing binary with the GLASS NVIDIA
+path:
+
+.. code-block:: bash
+
+   MATHDX_ROOT=/opt/nvidia/mathdx/25.12 \
+   .venv/bin/python test/benchmarks/baselines/grid/run.py \
+     --robot g1 \
+     --base floating \
+     --linalg-backend glass-nvidia
+
+The benchmark runner detects ``GRID_CUDA_ARCH`` or the active GPU and passes the
+MathDx ``GRID_CUBLASDX_SM`` macro automatically. For manual builds, use the same
+requirements explicitly:
+
+.. code-block:: bash
+
+   nvcc -std=c++17 \
+     -I${MATHDX_ROOT}/include \
+     -I${MATHDX_ROOT}/external/cutlass/include \
+     -DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS_NVIDIA \
+     -DGRID_CUBLASDX_SM=1200 \
+     ...
+
+``GRID_CUBLASDX_SM`` uses the MathDx convention, so an ``sm_120`` GPU is passed
+as ``1200``. Set ``GRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS`` to force the
+default helper path while debugging or bisecting performance.
+
+Packed NVIDIA rewrites should be done conservatively by replacing
+existing generated parallel-loop work groups; isolated scalar ``dot_prod`` calls
+should remain on the GLASS path unless they are part of a larger packed
+operation.
+
 Performance Reporting
 ---------------------
 
@@ -242,6 +293,18 @@ or run one GRiD benchmark slice directly:
 
    .venv/bin/python test/benchmarks/baselines/grid/run.py \
      --robot g1 --base floating
+
+Compare GLASS simple and cuBLASDx packed backend variants on the same machine
+with:
+
+.. code-block:: bash
+
+   .venv/bin/python test/benchmarks/baselines/grid/run.py \
+     --robot g1 --base floating --linalg-backend glass
+
+   MATHDX_ROOT=/opt/nvidia/mathdx/25.12 \
+   .venv/bin/python test/benchmarks/baselines/grid/run.py \
+     --robot g1 --base floating --linalg-backend glass-nvidia
 
 Use ``test/benchmarks/perf_regression_report.py`` when you want a non-failing
 delta report around a timing command or a local JSON baseline. The reporter

@@ -26,6 +26,15 @@ Then run benchmarks:
 # Just GRiD, one robot:
 .venv/bin/python test/benchmarks/baselines/grid/run.py --robot iiwa14 --base fixed
 
+# Just GRiD, explicitly force the default GLASS linear algebra backend:
+.venv/bin/python test/benchmarks/baselines/grid/run.py \
+  --robot iiwa14 --base fixed --linalg-backend glass
+
+# Just GRiD, opt into experimental GLASS NVIDIA packed mode when MathDx is installed:
+MATHDX_ROOT=/opt/nvidia/mathdx/25.12 \
+.venv/bin/python test/benchmarks/baselines/grid/run.py \
+  --robot g1 --base floating --linalg-backend glass-nvidia
+
 # Just Pinocchio, one robot:
 .venv/bin/python test/benchmarks/baselines/pinocchio/run.py --robot iiwa14 --base fixed
 
@@ -50,6 +59,20 @@ CUDA Toolkit and `nvcc` must be on `PATH`.  These are already required to use GR
 ```bash
 nvcc --version   # should print CUDA release info
 ```
+
+cuBLASDx is optional. The generated GRiD headers default to a vendored `glass`
+scalar/unrolled helper subset that needs no MathDx headers. The `glass-nvidia`
+path is reserved for explicit packed-kernel experiments and requires C++17,
+MathDx headers, and a `GRID_CUBLASDX_SM` target. The GRiD benchmark runner
+handles those flags when requested:
+
+```bash
+MATHDX_ROOT=/opt/nvidia/mathdx/25.12 \
+.venv/bin/python test/benchmarks/baselines/grid/run.py \
+  --robot g1 --base floating --linalg-backend glass-nvidia
+```
+
+Use `--linalg-backend glass` for the default helper path.
 
 ### Pinocchio (CPU)
 

@@ -127,8 +127,11 @@ def _compile_header_consumer(
     source: str,
     label: str,
     *,
+    cxx_standard: str = "-std=c++11",
+    extra_flags: list[str] | None = None,
     expect_success: bool = True,
     expected_error: str | None = None,
+    expected_output: str | None = None,
 ):
     nvcc = shutil.which("nvcc")
     if nvcc is None:
@@ -144,7 +147,7 @@ def _compile_header_consumer(
     arch = _detect_cuda_arch()
     cmd = [
         nvcc,
-        "-std=c++11",
+        cxx_standard,
         "-c",
         "-gencode",
         f"arch=compute_{arch},code=sm_{arch}",
@@ -152,9 +155,12 @@ def _compile_header_consumer(
         f"arch=compute_{arch},code=compute_{arch}",
         "-o",
         str(object_path),
-        str(source_path),
     ]
+    if extra_flags:
+        cmd.extend(extra_flags)
+    cmd.append(str(source_path))
     result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    combined = f"{result.stdout}\n{result.stderr}"
     if expect_success and result.returncode != 0:
         pytest.fail(
             f"CUDA compile-only check failed for {label}.\n"
@@ -169,7 +175,6 @@ def _compile_header_consumer(
                 f"Command: {' '.join(cmd)}"
             )
         if expected_error is not None:
-            combined = f"{result.stdout}\n{result.stderr}"
             if expected_error not in combined:
                 pytest.fail(
                     f"CUDA compile-only check failed for {label}, but did not "
@@ -178,6 +183,32 @@ def _compile_header_consumer(
                     f"stdout:\n{result.stdout}\n"
                     f"stderr:\n{result.stderr}"
                 )
+    if expected_output is not None and expected_output not in combined:
+        pytest.fail(
+            f"CUDA compile-only check for {label} did not include expected output "
+            f"{expected_output!r}.\nCommand: {' '.join(cmd)}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+
+
+def _mathdx_include_flags() -> list[str]:
+    candidates = []
+    env_root = os.environ.get("MATHDX_ROOT")
+    if env_root:
+        candidates.append(Path(env_root))
+    candidates.append(Path("/opt/nvidia/mathdx/25.12"))
+
+    for root in candidates:
+        if (root / "include" / "cublasdx.hpp").exists():
+            return [
+                f"-I{root / 'include'}",
+                f"-I{root / 'external' / 'cutlass' / 'include'}",
+            ]
+    pytest.skip("cuBLASDx headers were not found; set MATHDX_ROOT to run cuBLASDx compile tests.")
+
+
+def _grid_cublasdx_sm_define() -> str:
+    return f"-DGRID_CUBLASDX_SM={_detect_cuda_arch()}0"
 
 
 @pytest.mark.cuda_equivalence
@@ -386,6 +417,126 @@ def test_generated_header_includes_grid_data_variants_and_rnea_aliases(tmp_path)
 
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
+def test_linalg_backend_controls_and_helpers_are_generated(tmp_path):
+    header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="dynamics-core")
+
+    assert "#define GRID_LINALG_GLASS 0" in header
+    assert "#define GRID_LINALG_GLASS_NVIDIA 1" in header
+    assert "#ifndef GRID_CUDA_LINALG_BACKEND" in header
+    assert "GRID_LINALG_AUTO resolves to GLASS simple helpers" not in header
+    assert "namespace glass" in header
+    assert "Vendored from GLASS at codegen time" in header
+    assert "glass::gemm_ex" in header
+    assert "namespace nvidia" in header
+    assert "GRID_LINALG_NVIDIA_MAX_HELPER_BYTES" in header
+    assert "grid_linalg_packed_gemm_nvidia_colmajor" in header
+    assert "grid_linalg_gemm_glass" in header
+    assert "grid_linalg_gemv" in header
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+def test_linalg_backend_default_cxx11_compiles_without_mathdx(tmp_path):
+    header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="dynamics-core")
+    source = r'''
+#include "grid.cuh"
+
+int main() {
+    using T = float;
+    T *A = nullptr;
+    T *B = nullptr;
+    T *C = nullptr;
+    (void)A;
+    (void)B;
+    (void)C;
+    return grid::GRID_CUDA_USE_GLASS_NVIDIA_VALUE;
+}
+'''
+    _compile_header_consumer(
+        tmp_path,
+        header,
+        source,
+        "linalg_backend_default_cxx11",
+    )
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+def test_linalg_backend_glass_nvidia_requires_sm_macro(tmp_path):
+    header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="dynamics-core")
+    source = r'''
+#include "grid.cuh"
+int main() { return 0; }
+'''
+    _compile_header_consumer(
+        tmp_path,
+        header,
+        source,
+        "linalg_backend_glass_nvidia_missing_sm",
+        cxx_standard="-std=c++17",
+        extra_flags=["-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS_NVIDIA"],
+        expect_success=False,
+        expected_error="GRiD glass-nvidia backend requires GRID_CUBLASDX_SM",
+    )
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+def test_linalg_backend_required_cublasdx_requires_header(tmp_path):
+    header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="dynamics-core")
+    source = r'''
+#include "grid.cuh"
+int main() { return 0; }
+'''
+    _compile_header_consumer(
+        tmp_path,
+        header,
+        source,
+        "linalg_backend_required_missing_header",
+        cxx_standard="-std=c++17",
+        extra_flags=[
+            "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS_NVIDIA",
+            _grid_cublasdx_sm_define(),
+        ],
+        expect_success=False,
+        expected_error="GRiD glass-nvidia backend requires cublasdx.hpp",
+    )
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+def test_linalg_backend_auto_cublasdx_compiles_with_mathdx(tmp_path):
+    header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="dynamics-core")
+    source = r'''
+#include "grid.cuh"
+
+__global__ void smoke(float *A, float *B, float *C) {
+    extern __shared__ __align__(16) unsigned char smem[];
+#if GRID_CUDA_USE_GLASS_NVIDIA
+    grid::grid_linalg_packed_gemm_nvidia_colmajor<float, 4, 4, 4>(A, B, C, 1.0f, 0.0f, smem);
+#endif
+}
+
+int main() { return 0; }
+'''
+    _compile_header_consumer(
+        tmp_path,
+        header,
+        source,
+        "linalg_backend_auto_cublasdx",
+        cxx_standard="-std=c++17",
+        extra_flags=[
+            *_mathdx_include_flags(),
+            _grid_cublasdx_sm_define(),
+            "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS_NVIDIA",
+            "-Xptxas",
+            "-O1",
+        ],
+    )
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
 def test_dynamics_grid_data_variant_wrappers_compile(tmp_path):
     header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="dynamics")
     source = r'''
@@ -468,6 +619,49 @@ int main() {
 }
 '''
     _compile_header_consumer(tmp_path, header, source, "fixed_kinematics_derivative_wrappers")
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+def test_fixed_kinematics_derivative_wrappers_compile_cublasdx(tmp_path):
+    header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="kinematics-derivatives")
+    assert "GRID_EE_LINALG_SHARED_BYTES" in header
+    assert "GRID_CUDA_USE_EE_CUBLASDX_GEMM" not in header
+    assert "unsigned char *s_linalg_smem" in header
+    assert "grid_linalg_gemm<T,4,4,4>" not in header
+    source = r'''
+#include "grid.cuh"
+
+int main() {
+    using T = float;
+    grid::gridData<T, grid::GRID_DATA_KINEMATICS> *data = nullptr;
+    grid::robotModel<T> *model = nullptr;
+    cudaStream_t *streams = nullptr;
+    dim3 blocks(1, 1, 1);
+    dim3 threads(32, 1, 1);
+    grid::end_effector_pose<T, false, grid::GRID_DATA_KINEMATICS>(
+        data, model, 1, blocks, threads, streams);
+    grid::end_effector_pose_gradient<T, false, grid::GRID_DATA_KINEMATICS>(
+        data, model, 1, blocks, threads, streams);
+    grid::end_effector_pose_gradient_hessian<T, false, grid::GRID_DATA_KINEMATICS>(
+        data, model, 1, blocks, threads, streams);
+    return 0;
+}
+'''
+    _compile_header_consumer(
+        tmp_path,
+        header,
+        source,
+        "fixed_kinematics_derivative_wrappers_cublasdx",
+        cxx_standard="-std=c++17",
+        extra_flags=[
+            *_mathdx_include_flags(),
+            _grid_cublasdx_sm_define(),
+            "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS_NVIDIA",
+            "-Xptxas",
+            "-O1",
+        ],
+    )
 
 
 @pytest.mark.cuda_equivalence

@@ -4,7 +4,8 @@
 Usage:
     python test/benchmarks/baselines/grid/run.py \
         --robot iiwa14 --base fixed [--output results/iiwa14_fixed_rtx5090.json] \
-        [--no-recompile] [--ee-frame iiwa_link_ee]
+        [--no-recompile] [--ee-frame iiwa_link_ee] \
+        [--linalg-backend glass|glass-nvidia]
 """
 
 from __future__ import annotations
@@ -81,6 +82,32 @@ def detect_cuda_arch() -> str:
                 if cc:
                     return cc.replace(".", "")
     return "86"
+
+
+def resolve_mathdx_root(user_root: str | None = None) -> Path | None:
+    """Find a MathDx installation that contains cuBLASDx headers."""
+    candidates: list[Path] = []
+    if user_root:
+        candidates.append(Path(user_root))
+    env_root = os.environ.get("MATHDX_ROOT")
+    if env_root:
+        candidates.append(Path(env_root))
+    candidates.append(Path("/opt/nvidia/mathdx/25.12"))
+
+    seen: set[Path] = set()
+    for root in candidates:
+        root = root.expanduser()
+        if root in seen:
+            continue
+        seen.add(root)
+        if (root / "include" / "cublasdx.hpp").exists():
+            return root
+    return None
+
+
+def cublasdx_sm_from_arch(arch: str) -> str:
+    """Convert GRID_CUDA_ARCH-style values to the MathDx SM macro convention."""
+    return f"{arch}0"
 
 
 # ---------------------------------------------------------------------------
@@ -185,15 +212,48 @@ def compile_binary(
     arch: str,
     build_dir: Path,
     no_recompile: bool = False,
+    linalg_backend: str = "glass",
+    mathdx_root: str | None = None,
 ) -> Path:
     """Compile timeGRiD.cu against the generated header, using content-hash cache."""
     source_hash = _hash_file(TIMING_SOURCE)
     header_hash = _hash_file(header_path)
+
+    cxx_standard = "-std=c++11"
+    linalg_flags: list[str] = []
+    resolved_mathdx_root: Path | None = None
+    cublasdx_sm: str | None = None
+
+    if linalg_backend == "glass":
+        linalg_flags.append("-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS")
+    elif linalg_backend == "glass-nvidia":
+        resolved_mathdx_root = resolve_mathdx_root(mathdx_root)
+        if resolved_mathdx_root is None:
+            raise RuntimeError(
+                "glass-nvidia backend requested, but cublasdx.hpp was not found. "
+                "Set --mathdx-root or MATHDX_ROOT to a MathDx installation."
+            )
+        cxx_standard = "-std=c++17"
+        cublasdx_sm = cublasdx_sm_from_arch(arch)
+        linalg_flags.extend([
+            "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS_NVIDIA",
+            f"-DGRID_CUBLASDX_SM={cublasdx_sm}",
+            f"-I{resolved_mathdx_root / 'include'}",
+            f"-I{resolved_mathdx_root / 'external' / 'cutlass' / 'include'}",
+        ])
+    else:
+        raise ValueError(f"Unknown linear algebra backend '{linalg_backend}'")
+
     runner_key = _hash_bytes(
         json.dumps({
             "source_hash": source_hash,
             "header_hash": header_hash,
             "cuda_arch": arch,
+            "cxx_standard": cxx_standard,
+            "linalg_backend": linalg_backend,
+            "mathdx_root": str(resolved_mathdx_root) if resolved_mathdx_root else None,
+            "cublasdx_sm": cublasdx_sm,
+            "linalg_flags": linalg_flags,
         }, sort_keys=True).encode()
     )[:24]
 
@@ -207,17 +267,24 @@ def compile_binary(
             print(f"  [grid] binary cache hit (key={runner_key[:12]})")
             return binary_path
 
-    print(f"  [grid] compiling timeGRiD.cu (arch=sm_{arch}, cache key={runner_key[:12]})...")
+    backend_note = linalg_backend
+    if cublasdx_sm is not None:
+        backend_note += f", GRID_CUBLASDX_SM={cublasdx_sm}"
+    print(
+        f"  [grid] compiling timeGRiD.cu "
+        f"(arch=sm_{arch}, linalg={backend_note}, cache key={runner_key[:12]})..."
+    )
     nvcc = shutil.which("nvcc")
     if nvcc is None:
         raise RuntimeError("nvcc not found — install CUDA Toolkit to compile timeGRiD")
 
     cmd = [
-        nvcc, "-std=c++11", "-o", str(binary_path), str(TIMING_SOURCE),
+        nvcc, cxx_standard, "-o", str(binary_path), str(TIMING_SOURCE),
         f"-DGRID_HEADER_FILE=\"{header_path}\"",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         "-O3", "-ftz=true", "-prec-div=false", "-prec-sqrt=false",
     ]
+    cmd.extend(linalg_flags)
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(
@@ -260,6 +327,12 @@ def main() -> None:
                         help="Use cached binary even if header changed")
     parser.add_argument("--ee-frame", default=None,
                         help="EE target joint/link name for generator (default: per-robot canonical)")
+    parser.add_argument("--linalg-backend",
+                        choices=["glass", "glass-nvidia"],
+                        default=os.environ.get("GRID_BENCH_LINALG_BACKEND", "glass"),
+                        help="Linear algebra backend for generated GRiD helpers")
+    parser.add_argument("--mathdx-root", default=os.environ.get("MATHDX_ROOT"),
+                        help="MathDx root used when --linalg-backend=glass-nvidia")
     args = parser.parse_args()
 
     ee_frame = args.ee_frame or DEFAULT_EE_FRAMES.get(args.robot, "")
@@ -274,6 +347,7 @@ def main() -> None:
     arch = detect_cuda_arch()
     urdf_path = get_urdf_path(args.robot)
     print(f"[grid] {args.robot} {args.base} — URDF: {urdf_path}")
+    print(f"  [grid] linear algebra backend: {args.linalg_backend}")
 
     try:
         header_path = generate_header(urdf_path, args.robot, args.base, ee_frame, build_dir, args.no_recompile)
@@ -282,7 +356,14 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        binary_path = compile_binary(header_path, arch, build_dir, args.no_recompile)
+        binary_path = compile_binary(
+            header_path,
+            arch,
+            build_dir,
+            args.no_recompile,
+            linalg_backend=args.linalg_backend,
+            mathdx_root=args.mathdx_root,
+        )
     except Exception as e:
         print(f"  [grid] ERROR compiling binary: {e}", file=sys.stderr)
         sys.exit(1)
@@ -302,6 +383,11 @@ def main() -> None:
     meta["base"] = args.base
     meta["ee_frame"] = ee_frame
     meta["cuda_arch"] = arch
+    meta["grid_linalg_backend"] = args.linalg_backend
+    if args.linalg_backend == "glass-nvidia":
+        resolved_mathdx_root = resolve_mathdx_root(args.mathdx_root)
+        meta["mathdx_root"] = str(resolved_mathdx_root) if resolved_mathdx_root else None
+        meta["grid_cublasdx_sm"] = cublasdx_sm_from_arch(arch)
 
     result = {"metadata": meta, "results": {args.robot: {args.base: {"grid": filled}}}}
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")

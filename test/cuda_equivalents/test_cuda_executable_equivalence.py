@@ -295,6 +295,52 @@ def _detect_cuda_arch() -> str:
     return "86"
 
 
+def _resolve_mathdx_root() -> Path | None:
+    candidates = []
+    env_root = os.environ.get("MATHDX_ROOT")
+    if env_root:
+        candidates.append(Path(env_root))
+    candidates.append(Path("/opt/nvidia/mathdx/25.12"))
+    for root in candidates:
+        root = root.expanduser()
+        if (root / "include" / "cublasdx.hpp").exists():
+            return root
+    return None
+
+
+def _linalg_backend_compile_flags(arch: str) -> tuple[str, list[str], str]:
+    backend = os.environ.get("GRID_CUDA_LINALG_BACKEND", "glass").strip().lower()
+    if backend in ("grid_linalg_glass", "glass", ""):
+        return "-std=c++11", ["-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS"], "glass"
+    if backend not in ("grid_linalg_glass_nvidia", "glass-nvidia"):
+        pytest.fail(
+            "GRID_CUDA_LINALG_BACKEND must be glass or glass-nvidia "
+            f"for CUDA equivalence tests; got {backend!r}."
+        )
+
+    mathdx_root = _resolve_mathdx_root()
+    if mathdx_root is None:
+        pytest.fail(
+            "GRID_CUDA_LINALG_BACKEND=glass-nvidia requested, but cublasdx.hpp was "
+            "not found. Set MATHDX_ROOT to a MathDx installation."
+        )
+    sm = f"{arch}0"
+    flags = [
+        "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS_NVIDIA",
+        f"-DGRID_CUBLASDX_SM={sm}",
+        f"-I{mathdx_root / 'include'}",
+        f"-I{mathdx_root / 'external' / 'cutlass' / 'include'}",
+        "-Xptxas",
+        "-O1",
+    ]
+    note = f"glass-nvidia(sm={sm})"
+    return (
+        "-std=c++17",
+        flags,
+        note,
+    )
+
+
 def _parse_const_ints(header_path: Path) -> dict[str, int]:
     constants = {}
     const_re = re.compile(r"const int (?P<name>[A-Z0-9_]+) = (?P<value>-?[0-9]+);")
@@ -460,6 +506,8 @@ def _compile_runner(
     arch = _detect_cuda_arch()
     nvcc_version = _nvcc_version_text()
     _cache_verbose(config, "nvcc version: " + nvcc_version.splitlines()[-1])
+    cxx_standard, linalg_flags, linalg_backend_note = _linalg_backend_compile_flags(arch)
+    compile_flags = [cxx_standard, "-O0", *linalg_flags]
     l2_persisting = os.environ.get("GRID_CUDA_ENABLE_L2_PERSISTING")
     l2_define = int(l2_persisting) if l2_persisting is not None else 0
     floating_algorithms = os.environ.get("GRID_CUDA_FLOATING_ALGORITHMS", "")
@@ -483,7 +531,7 @@ def _compile_runner(
             "floating_base": bool(floating_base),
             "l2_persisting": l2_define,
             "floating_eepose_hessian": enable_floating_eepose_hessian,
-            "compile_flags": ["-std=c++11", "-O0"],
+            "compile_flags": compile_flags,
         }
     )
 
@@ -491,7 +539,7 @@ def _compile_runner(
         compile_dir = _cache_root() / "runners" / runner_key
         executable = compile_dir / "cuda_equivalence_runner.exe"
         if executable.exists():
-            _progress(config, f"runner cache hit: arch=sm_{arch} floating={int(floating_base)} l2={l2_define} eepose_hessian={enable_floating_eepose_hessian} key={runner_key[:12]}")
+            _progress(config, f"runner cache hit: arch=sm_{arch} floating={int(floating_base)} l2={l2_define} linalg={linalg_backend_note} eepose_hessian={enable_floating_eepose_hessian} key={runner_key[:12]}")
             cmd = [str(executable)]
             return executable, cmd
         compile_dir.mkdir(parents=True, exist_ok=True)
@@ -503,11 +551,18 @@ def _compile_runner(
     runner_copy = compile_dir / RUNNER_SOURCE.name
     shutil.copyfile(RUNNER_SOURCE, runner_copy)
 
+    defines = [f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}"]
+    if l2_persisting is not None:
+        defines.append(f"-DGRID_CUDA_ENABLE_L2_PERSISTING={l2_define}")
+    if enable_floating_eepose_hessian:
+        defines.append("-DGRID_CUDA_RUN_FLOATING_EEPOSE_HESSIAN=1")
+
     cmd = [
         nvcc,
-        "-std=c++11",
+        cxx_standard,
         "-O0",
-        f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}",
+        *defines,
+        *linalg_flags,
         "-gencode",
         f"arch=compute_{arch},code=sm_{arch}",
         "-gencode",
@@ -516,11 +571,7 @@ def _compile_runner(
         str(executable),
         str(runner_copy),
     ]
-    if l2_persisting is not None:
-        cmd.insert(3, f"-DGRID_CUDA_ENABLE_L2_PERSISTING={l2_define}")
-    if enable_floating_eepose_hessian:
-        cmd.insert(3, "-DGRID_CUDA_RUN_FLOATING_EEPOSE_HESSIAN=1")
-    _progress(config, f"compiling runner arch=sm_{arch} floating={int(floating_base)} l2={l2_define} eepose_hessian={enable_floating_eepose_hessian} cache_key={runner_key[:12]}")
+    _progress(config, f"compiling runner arch=sm_{arch} floating={int(floating_base)} l2={l2_define} linalg={linalg_backend_note} eepose_hessian={enable_floating_eepose_hessian} cache_key={runner_key[:12]}")
     result = subprocess.run(cmd, cwd=compile_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(
@@ -539,6 +590,8 @@ def _compile_runner(
                     "floating_base": bool(floating_base),
                     "l2_persisting": l2_define,
                     "floating_eepose_hessian": enable_floating_eepose_hessian,
+                    "linalg_backend": linalg_backend_note,
+                    "compile_flags": compile_flags,
                     "cmd": cmd,
                 },
                 indent=2,
