@@ -10,6 +10,10 @@
 #define GRID_CUDA_SECOND_ORDER_TEST_THREADS 64
 #endif
 
+#ifndef GRID_CUDA_SECOND_ORDER_ENABLE_FDSVA
+#define GRID_CUDA_SECOND_ORDER_ENABLE_FDSVA 1
+#endif
+
 template <typename T>
 void read_vector(T *dst, int count) {
     for (int i = 0; i < count; ++i) {
@@ -45,22 +49,28 @@ int run() {
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 
-    read_vector(hd_data->h_q_qd_u, grid::NUM_JOINTS);
-    read_vector(&hd_data->h_q_qd_u[grid::NUM_JOINTS], grid::NUM_JOINTS);
-    read_vector(&hd_data->h_q_qd_u[2 * grid::NUM_JOINTS], grid::NUM_JOINTS);
+    read_vector(hd_data->h_q_qd_u, grid::NUM_POS);
+    read_vector(&hd_data->h_q_qd_u[grid::NUM_POS], grid::NUM_VEL);
+    read_vector(&hd_data->h_q_qd_u[grid::NUM_POS + grid::NUM_VEL], grid::NUM_VEL);
 
     grid::idsva_so_host<T>(
         hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
     );
     gpuErrchk(cudaPeekAtLastError());
 
+#if GRID_CUDA_SECOND_ORDER_ENABLE_FDSVA
     grid::fdsva_so<T>(
         hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
     );
     gpuErrchk(cudaPeekAtLastError());
+#endif
 
-    const int tensor_count =
-        4 * grid::NUM_JOINTS * grid::NUM_JOINTS * grid::NUM_JOINTS;
+    const int tensor_count = grid::SECOND_ORDER_TENSOR_SIZE;
+#if !GRID_CUDA_SECOND_ORDER_ENABLE_FDSVA
+    for (int i = 0; i < tensor_count; ++i) {
+        hd_data->h_df2[i] = static_cast<T>(0);
+    }
+#endif
     int first_bad_idsva = -1;
     int first_bad_fdsva = -1;
     for (int i = 0; i < tensor_count; ++i) {
@@ -82,7 +92,7 @@ int run() {
                   << first_bad_fdsva << std::endl;
     }
 
-    T config[7];
+    T config[12];
     config[0] = static_cast<T>(grid::IDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>());
     config[1] = static_cast<T>(grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>());
     config[2] = static_cast<T>(grid::GRID_IDSVA_SO_USES_GLOBAL_OUTPUT);
@@ -90,8 +100,13 @@ int run() {
     config[4] = static_cast<T>(grid::GRID_FDSVA_SO_USES_WORKSPACE_TEMP);
     config[5] = static_cast<T>(grid::GRID_GENERATES_IDSVA_SO);
     config[6] = static_cast<T>(grid::GRID_GENERATES_FDSVA_SO);
+    config[7] = static_cast<T>(grid::NUM_POS);
+    config[8] = static_cast<T>(grid::NUM_VEL);
+    config[9] = static_cast<T>(grid::NUM_BODIES);
+    config[10] = static_cast<T>(grid::Q_QD_U_STRIDE);
+    config[11] = static_cast<T>(tensor_count);
 
-    print_flat("second_order_config", config, 7);
+    print_flat("second_order_config", config, 12);
     print_flat("idsva_so", hd_data->h_idsva_so, tensor_count);
     print_flat("fdsva_so", hd_data->h_df2, tensor_count);
 

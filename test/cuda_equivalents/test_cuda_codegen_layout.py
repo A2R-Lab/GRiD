@@ -58,6 +58,7 @@ def _generate_header(
     target_shared_bytes=None,
     codegen_profile="all",
     algorithm_list=None,
+    enable_floating_second_order=False,
 ) -> str:
     spec = _robot_spec(robot_id, base_mode)
     try:
@@ -81,6 +82,7 @@ def _generate_header(
                 include_homogenous_transforms=base_mode == "fixed",
                 codegen_profile=codegen_profile,
                 algorithm_list=algorithm_list,
+                enable_floating_second_order=enable_floating_second_order,
                 output_path=str(header_path),
             )
     return header_path.read_text()
@@ -352,6 +354,10 @@ def test_floating_header_does_not_require_second_order_kernels(tmp_path, robot_i
     expected_d2ee_workspace = 1 if robot_id == "go2" else 0
 
     assert "__shared__ T" not in header
+    assert constants["NUM_POS"] == constants["NUM_JOINTS"]
+    assert constants["SECOND_ORDER_COORDS"] == constants["NUM_VEL"]
+    assert constants["SECOND_ORDER_TENSOR_SIZE"] == 4 * constants["NUM_VEL"]**3
+    assert constants["Q_QD_U_STRIDE"] == constants["NUM_POS"] + 2 * constants["NUM_VEL"]
     assert constants["GRID_GENERATES_IDSVA_SO"] == 0
     assert constants["GRID_GENERATES_FDSVA_SO"] == 0
     assert constants["GRID_GENERATES_D2EE"] == 1
@@ -366,6 +372,61 @@ def test_floating_header_does_not_require_second_order_kernels(tmp_path, robot_i
     assert "void kinematics_only(gridData<T, KIND> *hd_data" in header
     assert "void aba(gridData<T, KIND> *hd_data" in header
     assert "void crba(gridData<T, KIND> *hd_data" in header
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.floating_base
+@pytest.mark.parametrize(
+    ("robot_id", "algorithm_list", "generates_fdsva"),
+    [
+        pytest.param("iiwa14", "idsva_so", 0, id="iiwa14-idsva-only"),
+        pytest.param("iiwa14", "idsva_so,fdsva_so", 1, id="iiwa14-idsva-fdsva"),
+        pytest.param("go2", "idsva_so", 0, id="go2-idsva-only"),
+    ],
+)
+def test_floating_second_order_opt_in_header_compiles(
+    tmp_path,
+    robot_id,
+    algorithm_list,
+    generates_fdsva,
+):
+    header = _generate_header(
+        tmp_path,
+        robot_id,
+        "floating",
+        algorithm_list=algorithm_list,
+        enable_floating_second_order=True,
+    )
+    constants = _constants(header)
+
+    assert constants["GRID_GENERATES_IDSVA_SO"] == 1
+    assert constants["GRID_GENERATES_FDSVA_SO"] == generates_fdsva
+    assert constants["SECOND_ORDER_COORDS"] == constants["NUM_VEL"]
+    assert constants["SECOND_ORDER_TENSOR_SIZE"] == 4 * constants["NUM_VEL"]**3
+    assert constants["Q_QD_U_STRIDE"] == constants["NUM_POS"] + 2 * constants["NUM_VEL"]
+    assert "void idsva_so_host(gridData<T, KIND> *hd_data" in header
+    if generates_fdsva:
+        assert "void fdsva_so(gridData<T, KIND> *hd_data" in header
+    else:
+        assert "void fdsva_so(gridData<T, KIND> *hd_data" not in header
+
+    _compile_header_consumer(
+        tmp_path,
+        header,
+        """
+        #include "grid.cuh"
+        int main() {
+            static_assert(grid::GRID_GENERATES_IDSVA_SO == 1, "IDSVA-SO must be generated");
+            static_assert(grid::GRID_GENERATES_FDSVA_SO == EXPECTED_FDSVA, "FDSVA-SO flag mismatch");
+            static_assert(grid::SECOND_ORDER_COORDS == grid::NUM_VEL, "second-order tensor must be velocity-sized");
+            static_assert(grid::SECOND_ORDER_TENSOR_SIZE == 4 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_VEL, "tensor size mismatch");
+            static_assert(grid::Q_QD_U_STRIDE == grid::NUM_POS + 2 * grid::NUM_VEL, "q/qd/u stride mismatch");
+            return 0;
+        }
+        """.replace("EXPECTED_FDSVA", str(generates_fdsva)),
+        f"{robot_id}_floating_so_{algorithm_list.replace(',', '_')}",
+    )
 
 
 @pytest.mark.cuda_equivalence
