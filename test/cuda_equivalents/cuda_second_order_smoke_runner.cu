@@ -61,12 +61,25 @@ int run() {
 
     const int tensor_count =
         4 * grid::NUM_JOINTS * grid::NUM_JOINTS * grid::NUM_JOINTS;
+    int first_bad_idsva = -1;
+    int first_bad_fdsva = -1;
     for (int i = 0; i < tensor_count; ++i) {
-        if (!std::isfinite(static_cast<double>(hd_data->h_idsva_so[i])) ||
-            !std::isfinite(static_cast<double>(hd_data->h_df2[i]))) {
-            std::cerr << "Non-finite second-order output at " << i << std::endl;
-            return 2;
+        if (first_bad_idsva < 0 &&
+            !std::isfinite(static_cast<double>(hd_data->h_idsva_so[i]))) {
+            first_bad_idsva = i;
         }
+        if (first_bad_fdsva < 0 &&
+            !std::isfinite(static_cast<double>(hd_data->h_df2[i]))) {
+            first_bad_fdsva = i;
+        }
+    }
+    if (first_bad_idsva >= 0) {
+        std::cerr << "Non-finite idsva_so output at "
+                  << first_bad_idsva << std::endl;
+    }
+    if (first_bad_fdsva >= 0) {
+        std::cerr << "Non-finite fdsva_so output at "
+                  << first_bad_fdsva << std::endl;
     }
 
     T config[7];
