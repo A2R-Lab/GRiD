@@ -426,12 +426,24 @@ def test_linalg_backend_controls_and_helpers_are_generated(tmp_path):
     assert "GRID_LINALG_AUTO resolves to GLASS simple helpers" not in header
     assert "namespace glass" in header
     assert "Vendored from GLASS at codegen time" in header
+    assert "BEGIN GLASS src/base/L1/dot_strided.cuh" in header
+    assert "BEGIN GLASS src/base/L2/gemv_strided.cuh" in header
+    assert "BEGIN GLASS src/base/L3/gemm_strided.cuh" in header
+    assert "glass::dot_strided" in header
+    assert "glass::row_strided_gemv" in header
+    assert "glass::row_strided_gemm" in header
     assert "glass::gemm_ex" in header
     assert "namespace nvidia" in header
     assert "GRID_LINALG_NVIDIA_MAX_HELPER_BYTES" in header
     assert "grid_linalg_packed_gemm_nvidia_colmajor" in header
     assert "grid_linalg_gemm_glass" in header
     assert "grid_linalg_gemv" in header
+    assert "grid_linalg_row_strided_gemv" in header
+    assert "grid_linalg_row_strided_gemm" in header
+    assert "grid_linalg_nvidia_row_strided_gemv_smem_bytes" in header
+    assert "grid_linalg_nvidia_row_strided_gemm_smem_bytes" in header
+    assert "grid_linalg_row_strided_gemv_nvidia" in header
+    assert "grid_linalg_row_strided_gemm_nvidia" in header
 
 
 @pytest.mark.cuda_equivalence
@@ -457,6 +469,32 @@ int main() {
         header,
         source,
         "linalg_backend_default_cxx11",
+    )
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+def test_linalg_base_strided_helpers_compile(tmp_path):
+    header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="dynamics-core")
+    source = r'''
+#include "grid.cuh"
+
+__global__ void smoke(float *A, float *B, float *C) {
+    C[0] = grid::dot_prod<float, 4, 4, 1>(A, B);
+    C[1] = grid::dot_prod<float, 6, 1, 1>(A, B);
+    C[2] = grid::dot_prod<float, 6, 6, 1>(A, B);
+    C[3] = grid::dot_prod<float, 6, 6, 6>(A, B);
+    grid::grid_linalg_row_strided_gemv<float, 6, 6, 8>(A, B, C, 1.0f, 0.0f);
+    grid::grid_linalg_row_strided_gemm<float, 6, 6, 6, 8, 8>(A, B, C, 1.0f, 0.0f);
+}
+
+int main() { return 0; }
+'''
+    _compile_header_consumer(
+        tmp_path,
+        header,
+        source,
+        "linalg_base_strided_helpers",
     )
 
 
@@ -524,6 +562,48 @@ int main() { return 0; }
         header,
         source,
         "linalg_backend_auto_cublasdx",
+        cxx_standard="-std=c++17",
+        extra_flags=[
+            *_mathdx_include_flags(),
+            _grid_cublasdx_sm_define(),
+            "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS_NVIDIA",
+            "-Xptxas",
+            "-O1",
+        ],
+    )
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+def test_linalg_backend_nvidia_row_strided_helpers_compile_with_mathdx(tmp_path):
+    header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="dynamics-core")
+    source = r'''
+#include "grid.cuh"
+
+__global__ void smoke(float *A, float *B, float *C) {
+    extern __shared__ __align__(16) unsigned char smem[];
+#if GRID_CUDA_USE_GLASS_NVIDIA
+    constexpr size_t gemv_bytes =
+        grid::grid_linalg_nvidia_row_strided_gemv_smem_bytes<float, 6, 6, 8>();
+    constexpr size_t gemm_bytes =
+        grid::grid_linalg_nvidia_row_strided_gemm_smem_bytes<float, 6, 6, 6, 8, 8>();
+    grid::grid_linalg_row_strided_gemv_nvidia<float, 6, 6, 8>(
+        A, B, C, 1.0f, 0.0f, smem);
+    grid::grid_linalg_row_strided_gemm_nvidia<float, 6, 6, 6, 8, 8>(
+        A, B, C, 1.0f, 0.0f, smem);
+    if (threadIdx.x == 0) {
+        C[4] = (gemv_bytes > 0 && gemm_bytes > 0) ? 1.0f : 0.0f;
+    }
+#endif
+}
+
+int main() { return 0; }
+'''
+    _compile_header_consumer(
+        tmp_path,
+        header,
+        source,
+        "linalg_backend_nvidia_row_strided_helpers",
         cxx_standard="-std=c++17",
         extra_flags=[
             *_mathdx_include_flags(),
