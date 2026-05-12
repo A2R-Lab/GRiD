@@ -13,8 +13,10 @@
 #include "pinocchio/algorithm/cholesky.hpp"
 #include "pinocchio/algorithm/jacobian.hpp"
 #include "pinocchio/algorithm/rnea.hpp"
+#include "pinocchio/algorithm/aba.hpp"
 #include "pinocchio/algorithm/kinematics-derivatives.hpp"
 #include "pinocchio/algorithm/rnea-derivatives.hpp"
+#include "pinocchio/algorithm/aba-derivatives.hpp"
 #include "pinocchio/algorithm/rnea-second-order-derivatives.hpp"
 #include "pinocchio/algorithm/compute-all-terms.hpp"
 #include "pinocchio/algorithm/crba.hpp"
@@ -226,6 +228,150 @@ void crbaThreaded_codegen(CodeGenCRBA<T> **crba_code_gen_arr, int nq, int nv,
 #endif // HAVE_CPPADCG
 
 // ---------------------------------------------------------------------------
+// Threading helpers — direct API core dynamics (no CppADCodeGen needed)
+// ---------------------------------------------------------------------------
+
+template<typename T>
+void idDirectThreaded_inner(const pinocchio::Model *model, pinocchio::Data *data,
+                             Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
+                             Matrix<T, Eigen::Dynamic, 1> *qdds, int tid, int kStart, int kMax){
+    for(int k = kStart; k < kMax; k++){
+        pinocchio::rnea(*model, *data, qs[k].template cast<double>(), qds[k].template cast<double>(), qdds[k].template cast<double>());
+    }
+}
+
+template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
+void idDirectThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
+                       Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
+                       Matrix<T, Eigen::Dynamic, 1> *qdds, ReusableThreads<NUM_THREADS> *threads){
+    for(int tid = 0; tid < NUM_THREADS; tid++){
+        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
+        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+        threads->addTask(tid, &idDirectThreaded_inner<T>, model, &datas[tid],
+                         std::ref(qs), std::ref(qds), std::ref(qdds), tid, kStart, kMax);
+    }
+    threads->sync();
+}
+
+template<typename T>
+void abaDirectThreaded_inner(const pinocchio::Model *model, pinocchio::Data *data,
+                              Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
+                              Matrix<T, Eigen::Dynamic, 1> *us, int tid, int kStart, int kMax){
+    for(int k = kStart; k < kMax; k++){
+        pinocchio::aba(*model, *data, qs[k].template cast<double>(), qds[k].template cast<double>(), us[k].template cast<double>());
+    }
+}
+
+template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
+void abaDirectThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
+                        Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
+                        Matrix<T, Eigen::Dynamic, 1> *us, ReusableThreads<NUM_THREADS> *threads){
+    for(int tid = 0; tid < NUM_THREADS; tid++){
+        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
+        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+        threads->addTask(tid, &abaDirectThreaded_inner<T>, model, &datas[tid],
+                         std::ref(qs), std::ref(qds), std::ref(us), tid, kStart, kMax);
+    }
+    threads->sync();
+}
+
+template<typename T>
+void crbaDirectThreaded_inner(const pinocchio::Model *model, pinocchio::Data *data,
+                               Matrix<T, Eigen::Dynamic, 1> *qs, int tid, int kStart, int kMax){
+    for(int k = kStart; k < kMax; k++){
+        pinocchio::crba(*model, *data, qs[k].template cast<double>());
+    }
+}
+
+template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
+void crbaDirectThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
+                         Matrix<T, Eigen::Dynamic, 1> *qs, ReusableThreads<NUM_THREADS> *threads){
+    for(int tid = 0; tid < NUM_THREADS; tid++){
+        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
+        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+        threads->addTask(tid, &crbaDirectThreaded_inner<T>, model, &datas[tid],
+                         std::ref(qs), tid, kStart, kMax);
+    }
+    threads->sync();
+}
+
+template<typename T>
+void minvDirectThreaded_inner(const pinocchio::Model *model, pinocchio::Data *data,
+                               Matrix<T, Eigen::Dynamic, 1> *qs, int tid, int kStart, int kMax){
+    for(int k = kStart; k < kMax; k++){
+        pinocchio::crba(*model, *data, qs[k].template cast<double>());
+        pinocchio::cholesky::decompose(*model, *data);
+        pinocchio::cholesky::computeMinv(*model, *data);
+    }
+}
+
+template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
+void minvDirectThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
+                         Matrix<T, Eigen::Dynamic, 1> *qs, ReusableThreads<NUM_THREADS> *threads){
+    for(int tid = 0; tid < NUM_THREADS; tid++){
+        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
+        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+        threads->addTask(tid, &minvDirectThreaded_inner<T>, model, &datas[tid],
+                         std::ref(qs), tid, kStart, kMax);
+    }
+    threads->sync();
+}
+
+template<typename T>
+void idDuDirectThreaded_inner(const pinocchio::Model *model, pinocchio::Data *data,
+                               Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
+                               Matrix<T, Eigen::Dynamic, 1> *qdds, int tid, int kStart, int kMax){
+    Eigen::MatrixXd dtau_dq = Eigen::MatrixXd::Zero(model->nv, model->nv);
+    Eigen::MatrixXd dtau_dv = Eigen::MatrixXd::Zero(model->nv, model->nv);
+    Eigen::MatrixXd dtau_da = Eigen::MatrixXd::Zero(model->nv, model->nv);
+    for(int k = kStart; k < kMax; k++){
+        pinocchio::computeRNEADerivatives(*model, *data,
+            qs[k].template cast<double>(), qds[k].template cast<double>(), qdds[k].template cast<double>(),
+            dtau_dq, dtau_dv, dtau_da);
+    }
+}
+
+template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
+void idDuDirectThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
+                         Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
+                         Matrix<T, Eigen::Dynamic, 1> *qdds, ReusableThreads<NUM_THREADS> *threads){
+    for(int tid = 0; tid < NUM_THREADS; tid++){
+        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
+        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+        threads->addTask(tid, &idDuDirectThreaded_inner<T>, model, &datas[tid],
+                         std::ref(qs), std::ref(qds), std::ref(qdds), tid, kStart, kMax);
+    }
+    threads->sync();
+}
+
+template<typename T>
+void fdDuDirectThreaded_inner(const pinocchio::Model *model, pinocchio::Data *data,
+                               Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
+                               Matrix<T, Eigen::Dynamic, 1> *us, int tid, int kStart, int kMax){
+    Eigen::MatrixXd ddq_dq = Eigen::MatrixXd::Zero(model->nv, model->nv);
+    Eigen::MatrixXd ddq_dv = Eigen::MatrixXd::Zero(model->nv, model->nv);
+    Eigen::MatrixXd ddq_dtau = Eigen::MatrixXd::Zero(model->nv, model->nv);
+    for(int k = kStart; k < kMax; k++){
+        pinocchio::computeABADerivatives(*model, *data,
+            qs[k].template cast<double>(), qds[k].template cast<double>(), us[k].template cast<double>(),
+            ddq_dq, ddq_dv, ddq_dtau);
+    }
+}
+
+template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
+void fdDuDirectThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
+                         Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
+                         Matrix<T, Eigen::Dynamic, 1> *us, ReusableThreads<NUM_THREADS> *threads){
+    for(int tid = 0; tid < NUM_THREADS; tid++){
+        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
+        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+        threads->addTask(tid, &fdDuDirectThreaded_inner<T>, model, &datas[tid],
+                         std::ref(qs), std::ref(qds), std::ref(us), tid, kStart, kMax);
+    }
+    threads->sync();
+}
+
+// ---------------------------------------------------------------------------
 // Threading helpers — direct API algorithms (no CppADCodeGen needed)
 // ---------------------------------------------------------------------------
 
@@ -420,6 +566,13 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             printf("CRBA codegen: false\n");
             printf("ID_DU codegen: false\n");
             printf("FD_DU codegen: false\n");
+            printf("ID direct: true\n");
+            printf("Minv direct: true\n");
+            printf("ABA direct: true\n");
+            printf("FD direct: false\n");
+            printf("CRBA direct: true\n");
+            printf("ID_DU direct: true\n");
+            printf("FD_DU direct: true\n");
 #endif
             printf("EE_POSE codegen: false\n");
             printf("EE_POSE_GRADIENT codegen: false\n");
@@ -494,7 +647,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             clock_gettime(CLOCK_MONOTONIC,&end);
             printf("FD_DU codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
 #else
-            // cppadcg not available — codegen algorithms output null
+            // cppadcg not available — codegen variants null; run direct library instead
             printf("ID codegen null\n");
             printf("Minv codegen null\n");
             printf("ABA codegen null\n");
@@ -502,6 +655,64 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             printf("CRBA codegen null\n");
             printf("ID_DU codegen null\n");
             printf("FD_DU codegen null\n");
+
+            clock_gettime(CLOCK_MONOTONIC,&start);
+            for(int i = 0; i < TEST_ITERS; i++){
+                pinocchio::rnea(model, datas[0], qs[0].template cast<double>(), qds[0].template cast<double>(), qdds[0].template cast<double>());
+            }
+            clock_gettime(CLOCK_MONOTONIC,&end);
+            printf("ID direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+
+            clock_gettime(CLOCK_MONOTONIC,&start);
+            for(int i = 0; i < TEST_ITERS; i++){
+                pinocchio::crba(model, datas[0], qs[0].template cast<double>());
+                pinocchio::cholesky::decompose(model, datas[0]);
+                pinocchio::cholesky::computeMinv(model, datas[0]);
+            }
+            clock_gettime(CLOCK_MONOTONIC,&end);
+            printf("Minv direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+
+            clock_gettime(CLOCK_MONOTONIC,&start);
+            for(int i = 0; i < TEST_ITERS; i++){
+                pinocchio::aba(model, datas[0], qs[0].template cast<double>(), qds[0].template cast<double>(), us[0].template cast<double>());
+            }
+            clock_gettime(CLOCK_MONOTONIC,&end);
+            printf("ABA direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+
+            printf("FD direct null\n");
+
+            clock_gettime(CLOCK_MONOTONIC,&start);
+            for(int i = 0; i < TEST_ITERS; i++){
+                pinocchio::crba(model, datas[0], qs[0].template cast<double>());
+            }
+            clock_gettime(CLOCK_MONOTONIC,&end);
+            printf("CRBA direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+
+            {
+                Eigen::MatrixXd dtau_dq_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
+                Eigen::MatrixXd dtau_dv_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
+                Eigen::MatrixXd dtau_da_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < TEST_ITERS; i++){
+                    pinocchio::computeRNEADerivatives(model, datas[0],
+                        qs[0].template cast<double>(), qds[0].template cast<double>(), qdds[0].template cast<double>(),
+                        dtau_dq_s, dtau_dv_s, dtau_da_s);
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("ID_DU direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+
+                Eigen::MatrixXd ddq_dq_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
+                Eigen::MatrixXd ddq_dv_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
+                Eigen::MatrixXd ddq_dtau_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < TEST_ITERS; i++){
+                    pinocchio::computeABADerivatives(model, datas[0],
+                        qs[0].template cast<double>(), qds[0].template cast<double>(), us[0].template cast<double>(),
+                        ddq_dq_s, ddq_dv_s, ddq_dtau_s);
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("FD_DU direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+            }
 #endif // HAVE_CPPADCG
 
             if(have_frame){
@@ -610,6 +821,60 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             printf("[N:%d]: FD_DU codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
             printf("----------------------------------------\n");
 #endif // HAVE_CPPADCG
+
+            for(int iter = 0; iter < TEST_ITERS; iter++){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                idDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, qdds, &threads);
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                times.push_back(time_delta_us_timespec(start,end));
+            }
+            printf("[N:%d]: ID direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+            printf("----------------------------------------\n");
+
+            for(int iter = 0; iter < TEST_ITERS; iter++){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                minvDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, &threads);
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                times.push_back(time_delta_us_timespec(start,end));
+            }
+            printf("[N:%d]: Minv direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+            printf("----------------------------------------\n");
+
+            for(int iter = 0; iter < TEST_ITERS; iter++){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                abaDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, us, &threads);
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                times.push_back(time_delta_us_timespec(start,end));
+            }
+            printf("[N:%d]: ABA direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+            printf("----------------------------------------\n");
+
+            for(int iter = 0; iter < TEST_ITERS; iter++){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                crbaDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, &threads);
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                times.push_back(time_delta_us_timespec(start,end));
+            }
+            printf("[N:%d]: CRBA direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+            printf("----------------------------------------\n");
+
+            for(int iter = 0; iter < TEST_ITERS; iter++){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                idDuDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, qdds, &threads);
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                times.push_back(time_delta_us_timespec(start,end));
+            }
+            printf("[N:%d]: ID_DU direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+            printf("----------------------------------------\n");
+
+            for(int iter = 0; iter < TEST_ITERS; iter++){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                fdDuDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, us, &threads);
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                times.push_back(time_delta_us_timespec(start,end));
+            }
+            printf("[N:%d]: FD_DU direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+            printf("----------------------------------------\n");
 
             if(have_frame){
                 for(int iter = 0; iter < TEST_ITERS; iter++){

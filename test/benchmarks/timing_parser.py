@@ -102,6 +102,13 @@ _PIN_SINGLE_LABELS: dict[str, str] = {
     "crba codegen":             "crba",
     "id_du codegen":            "id_du",
     "fd_du codegen":            "fd_du",
+    "id direct":                "id",
+    "minv direct":              "minv",
+    "aba direct":               "aba",
+    "fd direct":                "fd",
+    "crba direct":              "crba",
+    "id_du direct":             "id_du",
+    "fd_du direct":             "fd_du",
     "ee_pose direct":           "ee_pose",
     "ee_pose_gradient direct":  "ee_pose_gradient",
     "idsva_so direct":          "idsva_so",
@@ -116,6 +123,13 @@ _PIN_BATCH_LABELS: dict[str, str] = {
     "crba codegen":             "crba",
     "id_du codegen":            "id_du",
     "fd_du codegen":            "fd_du",
+    "id direct":                "id",
+    "minv direct":              "minv",
+    "aba direct":               "aba",
+    "fd direct":                "fd",
+    "crba direct":              "crba",
+    "id_du direct":             "id_du",
+    "fd_du direct":             "fd_du",
     "ee_pose direct":           "ee_pose",
     "ee_pose_gradient direct":  "ee_pose_gradient",
     "idsva_so direct":          "idsva_so",
@@ -230,7 +244,9 @@ def parse_pinocchio_output(stdout: str) -> dict[str, Optional[dict]]:
             mx  = float(m.group("max"))
             algo = _PIN_BATCH_LABELS.get(label)
             if algo is not None:
-                results.setdefault(algo, {})[_batch_key(n, "with_mem")] = _stats(avg, std, mn, mx)
+                if not isinstance(results.get(algo), dict):
+                    results[algo] = {}
+                results[algo][_batch_key(n, "with_mem")] = _stats(avg, std, mn, mx)
             continue
 
         # Single-call line — but skip "FDSVA_SO direct null"
@@ -255,7 +271,9 @@ def parse_pinocchio_output(stdout: str) -> dict[str, Optional[dict]]:
             value = float(m.group("value"))
             algo = _PIN_SINGLE_LABELS.get(label)
             if algo is not None:
-                results.setdefault(algo, {})["single_us"] = _single_stats(value)
+                if not isinstance(results.get(algo), dict):
+                    results[algo] = {}
+                results[algo]["single_us"] = _single_stats(value)
 
     # Attach codegen flags
     for algo, entry in results.items():

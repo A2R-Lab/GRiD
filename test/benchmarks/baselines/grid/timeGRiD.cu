@@ -265,7 +265,7 @@ void run_all_tests(bool floating_base){
 	}
 	gpuErrchk(cudaDeviceSynchronize());
 
-	test<T,TEST_ITERS*10>(1,streams,d_robotModel,hd_data);
+	test<T,SINGLE_CALL_ITERS_GLOBAL>(1,streams,d_robotModel,hd_data);
 	#if !TEST_FOR_EQUIVALENCE
 		test<T,TEST_ITERS>(16,streams,d_robotModel,hd_data);
 		test<T,TEST_ITERS>(32,streams,d_robotModel,hd_data);

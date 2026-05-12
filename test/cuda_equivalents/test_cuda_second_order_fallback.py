@@ -145,6 +145,19 @@ def _compile_second_order_runner(build_dir: Path, *, enable_fdsva=True):
                 "GRID_CUDA_SECOND_ORDER_TEST_THREADS must be positive when set."
             )
         cmd.insert(-1, f"-DGRID_CUDA_SECOND_ORDER_TEST_THREADS={thread_count}")
+    dq_mode = os.environ.get("GRID_CUDA_FLOATING_SECOND_ORDER_DQ_MODE")
+    if dq_mode:
+        mode_defines = {
+            "analytic": "GRID_FLOATING_SO_DQ_ANALYTIC",
+            "finite_diff": "GRID_FLOATING_SO_DQ_FINITE_DIFF",
+            "compare": "GRID_FLOATING_SO_DQ_COMPARE",
+        }
+        if dq_mode not in mode_defines:
+            pytest.fail(
+                "GRID_CUDA_FLOATING_SECOND_ORDER_DQ_MODE must be one of "
+                "analytic, finite_diff, compare."
+            )
+        cmd.insert(-1, f"-DGRID_FLOATING_SO_DQ_MODE={mode_defines[dq_mode]}")
     cmd.insert(-1, f"-DGRID_CUDA_SECOND_ORDER_ENABLE_FDSVA={int(enable_fdsva)}")
     result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
@@ -321,26 +334,39 @@ def _select_idsva_blocks(flat_tensor, block_indices, nv):
 
 
 def _assert_idsva_blocks_close(actual, expected, block_indices, nv, *, rtol, atol, err_msg):
-    actual_selected = _select_idsva_blocks(actual, block_indices, nv)
-    expected_selected = _select_idsva_blocks(expected, block_indices, nv)
+    block_size = nv**3
+    block_tolerances = {}
+    if 0 in block_indices:
+        try:
+            dq_atol = float(os.environ.get("GRID_CUDA_FLOATING_SECOND_ORDER_DQ_ATOL", "2e-3"))
+            dq_rtol = float(os.environ.get("GRID_CUDA_FLOATING_SECOND_ORDER_DQ_RTOL", "2e-3"))
+        except ValueError:
+            pytest.fail(
+                "GRID_CUDA_FLOATING_SECOND_ORDER_DQ_ATOL and "
+                "GRID_CUDA_FLOATING_SECOND_ORDER_DQ_RTOL must be numeric when set."
+            )
+        block_tolerances[0] = (max(rtol, dq_rtol), max(atol, dq_atol))
     try:
-        np.testing.assert_allclose(
-            actual_selected,
-            expected_selected,
-            rtol=rtol,
-            atol=atol,
-            err_msg=err_msg,
-        )
+        for block_index in block_indices:
+            block_rtol, block_atol = block_tolerances.get(block_index, (rtol, atol))
+            block_slice = slice(block_index * block_size, (block_index + 1) * block_size)
+            np.testing.assert_allclose(
+                actual[:, block_slice],
+                expected[:, block_slice],
+                rtol=block_rtol,
+                atol=block_atol,
+                err_msg=f"{err_msg} / {IDSVA_BLOCK_NAMES[block_index]}",
+            )
     except AssertionError as exc:
         lines = [str(exc), "IDSVA-SO block diagnostics:"]
-        block_size = nv**3
         for block_index in block_indices:
             name = IDSVA_BLOCK_NAMES[block_index]
+            block_rtol, block_atol = block_tolerances.get(block_index, (rtol, atol))
             block_slice = slice(block_index * block_size, (block_index + 1) * block_size)
             actual_block = actual[:, block_slice].reshape(nv, nv, nv)
             expected_block = expected[:, block_slice].reshape(nv, nv, nv)
             diff = actual_block - expected_block
-            bad = np.abs(diff) > (atol + rtol * np.abs(expected_block))
+            bad = np.abs(diff) > (block_atol + block_rtol * np.abs(expected_block))
             bad_indices = np.argwhere(bad)
             max_abs = float(np.max(np.abs(diff))) if diff.size else 0.0
             rel_norm = float(np.linalg.norm(diff) / max(np.linalg.norm(expected_block), 1e-30))

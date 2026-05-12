@@ -149,6 +149,9 @@ def generate_header(
 
     urdf_hash = _hash_file(Path(urdf_path))
     codegen_hash = _hash_tree(REPO_ROOT / "GRiDCodeGenerator", (".py",))
+    # GRID_BENCH_NVIDIA_MIN_DIM controls codegen's per-call backend choice via
+    # linalg_smem_for(); changing it must bust the header cache.
+    nvidia_min_dim_env = os.environ.get("GRID_BENCH_NVIDIA_MIN_DIM", "16")
     cache_key = _hash_bytes(
         json.dumps({
             "urdf_hash": urdf_hash,
@@ -157,6 +160,7 @@ def generate_header(
             "base": base,
             "profile": "all",
             "homogenous": True,
+            "nvidia_min_dim": nvidia_min_dim_env,
             # ee_frame intentionally excluded: not passed to gen_all_code
         }, sort_keys=True).encode()
     )[:24]
@@ -214,6 +218,7 @@ def compile_binary(
     no_recompile: bool = False,
     linalg_backend: str = "glass",
     mathdx_root: str | None = None,
+    with_cusolverdx: bool = False,
 ) -> Path:
     """Compile timeGRiD.cu against the generated header, using content-hash cache."""
     source_hash = _hash_file(TIMING_SOURCE)
@@ -240,7 +245,23 @@ def compile_binary(
             f"-DGRID_CUBLASDX_SM={cublasdx_sm}",
             f"-I{resolved_mathdx_root / 'include'}",
             f"-I{resolved_mathdx_root / 'external' / 'cutlass' / 'include'}",
+            # cuBLASDx L2/L3 require relaxed constexpr (see GLASS README).
+            "--expt-relaxed-constexpr",
         ])
+        if with_cusolverdx:
+            # cuSOLVERDx ships a precompiled device library; needs -rdc + -dlto
+            # and links against cusolverdx + cublas + cusolver + cudart.
+            cusolverdx_lib_dir = resolved_mathdx_root / "lib"
+            linalg_flags.extend([
+                "-DGRID_CUDA_USE_GLASS_NVIDIA_LAPACK=1",
+                "-rdc=true",
+                "-dlto",
+                f"-L{cusolverdx_lib_dir}",
+                "-lcusolverdx",
+                "-lcublas",
+                "-lcusolver",
+                "-lcudart",
+            ])
     else:
         raise ValueError(f"Unknown linear algebra backend '{linalg_backend}'")
 
@@ -254,6 +275,7 @@ def compile_binary(
             "mathdx_root": str(resolved_mathdx_root) if resolved_mathdx_root else None,
             "cublasdx_sm": cublasdx_sm,
             "linalg_flags": linalg_flags,
+            "with_cusolverdx": with_cusolverdx,
         }, sort_keys=True).encode()
     )[:24]
 
@@ -284,6 +306,8 @@ def compile_binary(
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         "-O3", "-ftz=true", "-prec-div=false", "-prec-sqrt=false",
     ]
+    if linalg_backend == "glass-nvidia":
+        cmd.extend(["-gencode", f"arch=compute_{arch},code=compute_{arch}"])
     cmd.extend(linalg_flags)
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -333,6 +357,11 @@ def main() -> None:
                         help="Linear algebra backend for generated GRiD helpers")
     parser.add_argument("--mathdx-root", default=os.environ.get("MATHDX_ROOT"),
                         help="MathDx root used when --linalg-backend=glass-nvidia")
+    parser.add_argument("--with-cusolverdx", action="store_true",
+                        default=os.environ.get("GRID_BENCH_WITH_CUSOLVERDX", "0") == "1",
+                        help="Enable cuSOLVERDx LAPACK wrappers (chol/trsm/posv). Adds "
+                             "-rdc=true -dlto -lcusolverdx -lcublas -lcusolver -lcudart to "
+                             "the link line. Only takes effect with --linalg-backend=glass-nvidia.")
     args = parser.parse_args()
 
     ee_frame = args.ee_frame or DEFAULT_EE_FRAMES.get(args.robot, "")
@@ -363,6 +392,7 @@ def main() -> None:
             args.no_recompile,
             linalg_backend=args.linalg_backend,
             mathdx_root=args.mathdx_root,
+            with_cusolverdx=args.with_cusolverdx and args.linalg_backend == "glass-nvidia",
         )
     except Exception as e:
         print(f"  [grid] ERROR compiling binary: {e}", file=sys.stderr)
