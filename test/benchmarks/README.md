@@ -216,6 +216,81 @@ Both appear as separate rows in EE kinematics sections of `benchmark.md`.
 
 ---
 
+## Reproducing the Multi-Version Comparison
+
+Side-by-side benchmark of three GRiD versions vs Pinocchio: **pre-GLASS** (git
+ref `d2c0d18`, the last commit before the GLASS v2 integration), **glass**
+(HEAD with pure-SIMT GLASS v2), and **glass-nvidia** (HEAD with cuBLASDx). The
+orchestrator manages a separate git worktree for the pre-GLASS column.
+
+**Prereqs on a fresh machine:**
+
+```bash
+# 1. Clone + check out the working branch + init submodules.
+git clone <repo-url> GRiD-A2R
+cd GRiD-A2R
+git checkout <branch>
+git submodule update --init --recursive
+
+# 2. Python venv + dependencies (same as Quick Start above).
+python -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+.venv/bin/pip install cmeel-cppadcodegen     # Pinocchio codegen-accelerated algos
+
+# 3. CUDA toolkit + nvcc on PATH (required for all GRiD columns).
+nvcc --version
+
+# 4. MathDx 25.12 for the glass-nvidia column (skip this column with --columns if
+#    you don't have MathDx; the others still run).
+ls /opt/nvidia/mathdx/25.12/include/cublasdx.hpp
+```
+
+**Run the sweep:**
+
+```bash
+# Where the d2c0d18 worktree gets created (defaults to ../GRiD-A2R-pre-glass).
+export GRID_PRE_GLASS_WORKTREE=../GRiD-A2R-pre-glass
+
+# Single robot/base (fastest, ~5 min on iiwa14_fixed):
+.venv/bin/python test/benchmarks/run_multi_version.py \
+    --robots iiwa14 --bases fixed \
+    --mathdx-root /opt/nvidia/mathdx/25.12
+
+# Full sweep (~30+ min, dominated by g1 pinocchio cppadcg compile):
+.venv/bin/python test/benchmarks/run_multi_version.py \
+    --mathdx-root /opt/nvidia/mathdx/25.12
+
+# Skip the glass-nvidia column if MathDx is not installed:
+.venv/bin/python test/benchmarks/run_multi_version.py \
+    --columns pre_glass glass pinocchio
+```
+
+The orchestrator:
+1. Creates a worktree at `$GRID_PRE_GLASS_WORKTREE` checked out to `d2c0d18`
+   with the pinned submodule SHAs (idempotent — reuses if it already exists).
+2. Runs each requested column for each robot/base (pre-glass is fixed-base only).
+3. Writes per-column JSONs into `test/benchmarks/results/comparison/` with names
+   like `iiwa14_fixed_grid_pre_glass.json`, `iiwa14_fixed_grid_glass.json`, etc.
+4. Merges them into `benchmark_multi_version_<host>.json` and renders
+   `test/benchmarks/benchmark_multi_version.md` with four columns + speedup
+   ratios.
+
+**Reading the report:**
+
+- **glass/pre** column: N=256 compute-only ratio. `> 1.00×` = HEAD is faster
+  than the pre-GLASS baseline; `< 1.00×` = HEAD regressed on that algo.
+- **glass_nv/glass** column: N=256 compute-only ratio. `> 1.00×` = cuBLASDx
+  beats pure-SIMT for that shape; `< 1.00×` = SIMT wins (expected for small
+  6×6×6 GEMMs on iiwa14; cuBLASDx is expected to win on larger shapes).
+- Floating-base rows show `—` in the pre_glass column (harness doesn't support
+  it at `d2c0d18`).
+
+**Caches:** each version uses its own `.pytest_cache/grid_cuda/` directory
+under its respective worktree, so codegen + binary caches don't collide.
+Pass `--no-recompile` to reuse cached binaries on rerun.
+
+---
+
 ## Adding Results from a New Machine
 
 1. Run the full suite on your machine:
