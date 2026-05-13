@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -72,12 +73,16 @@ def get_mjcf_path(robot: str) -> str:
 TIMING_SCRIPT = THIS_DIR / "timeMJX.py"
 
 
-def run_timing(mjcf_path: str, base: str, ee_frame: str) -> str:
+def run_timing(mjcf_path: str, base: str, ee_frame: str,
+               test_iters: int | None = None) -> str:
     floating_arg = "T" if base == "floating" else "F"
     cmd = [sys.executable, str(TIMING_SCRIPT), mjcf_path, floating_arg]
     if ee_frame:
         cmd.append(ee_frame)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    env = os.environ.copy()
+    if test_iters is not None:
+        env["BENCH_TEST_ITERS"] = str(int(test_iters))
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if result.returncode != 0:
         raise RuntimeError(
             f"timeMJX.py exited with code {result.returncode}:\n{result.stderr}"
@@ -115,6 +120,9 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--ee-frame", default=None,
                         help="EE body name in MJCF (default: per-robot canonical)")
+    parser.add_argument("--test-iters", type=int, default=None,
+                        help="Override TEST_ITERS (default 500). Number of timed reps per "
+                             "single-call or per batch size; bump for more stable medians.")
     args = parser.parse_args()
 
     ee_frame  = args.ee_frame or DEFAULT_EE_FRAMES.get(args.robot, "")
@@ -135,7 +143,7 @@ def main() -> None:
     print(f"  [mjx] running timeMJX.py (EE frame: {ee_frame or 'none'})...")
 
     try:
-        output = run_timing(mjcf_path, args.base, ee_frame)
+        output = run_timing(mjcf_path, args.base, ee_frame, test_iters=args.test_iters)
     except Exception as e:
         print(f"  [mjx] ERROR: {e}", file=sys.stderr)
         sys.exit(1)

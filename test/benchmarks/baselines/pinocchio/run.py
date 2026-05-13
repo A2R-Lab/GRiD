@@ -176,6 +176,8 @@ def compile_binary(
     base: str,
     build_dir: Path,
     no_recompile: bool = False,
+    single_call_iters: int | None = None,
+    batch_iters: int | None = None,
 ) -> Path:
     """Compile timePinocchio.cpp, using content-hash cache."""
     source_hash = _hash_file(TIMING_SOURCE)
@@ -183,6 +185,11 @@ def compile_binary(
     util_hash = _hash_bytes(
         b"".join(f.read_bytes() for f in sorted(util_dir.rglob("*.h")) if f.is_file())
     )
+    iter_defs: list[str] = []
+    if single_call_iters is not None:
+        iter_defs.append(f"-DSINGLE_CALL_ITERS_GLOBAL={int(single_call_iters)}")
+    if batch_iters is not None:
+        iter_defs.append(f"-DTEST_ITERS_GLOBAL={int(batch_iters)}")
     runner_key = _hash_bytes(
         json.dumps({
             "source_hash": source_hash,
@@ -190,6 +197,7 @@ def compile_binary(
             "robot": robot,
             "base": base,
             "have_cppadcg": has_cppadcg(),
+            "iter_defs": iter_defs,
         }, sort_keys=True).encode()
     )[:24]
 
@@ -218,7 +226,7 @@ def compile_binary(
         gxx, "-std=c++14", "-O3", "-DNDEBUG",
         str(TIMING_SOURCE),
         "-o", str(binary_path),
-        *codegen_flag, *cflags, *libs,
+        *iter_defs, *codegen_flag, *cflags, *libs,
     ]
     # -DNDEBUG disables Pinocchio's debug isUnitary check on the rotation matrix.
     # The harness stores q as float32, normalizes the quaternion segment in float32
@@ -341,6 +349,10 @@ def main() -> None:
                         help="Pinocchio frame name for EE timing (default: per-robot canonical)")
     parser.add_argument("--no-cpu-lock", action="store_true",
                         help="Skip CPU frequency locking even if available")
+    parser.add_argument("--single-call-iters", type=int, default=None,
+                        help="Override SINGLE_CALL_ITERS_GLOBAL (default 10000).")
+    parser.add_argument("--batch-iters", type=int, default=None,
+                        help="Override TEST_ITERS_GLOBAL (default 100).")
     args = parser.parse_args()
 
     ee_frame = args.ee_frame or DEFAULT_EE_FRAMES.get(args.robot, "")
@@ -358,7 +370,9 @@ def main() -> None:
     print(f"[pinocchio] {args.robot} {args.base} — URDF: {urdf_path}")
 
     try:
-        binary_path = compile_binary(args.robot, args.base, build_dir, args.no_recompile)
+        binary_path = compile_binary(args.robot, args.base, build_dir, args.no_recompile,
+                                     single_call_iters=args.single_call_iters,
+                                     batch_iters=args.batch_iters)
     except Exception as e:
         print(f"  [pinocchio] ERROR compiling: {e}", file=sys.stderr)
         sys.exit(1)
@@ -394,12 +408,17 @@ def main() -> None:
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(f"  [pinocchio] results saved: {args.output}")
 
+    def _us(entry, key):
+        v = (entry.get(key) or {}).get("median") or (entry.get(key) or {}).get("mean")
+        return f"{v:.2f}" if v is not None else "—"
     for algo, entry in sorted(filled.items()):
         if entry is None:
             print(f"    {algo}: null")
-        elif "single_us" in entry:
-            v = entry["single_us"]["mean"]
-            print(f"    {algo}: {v:.2f}us (single)")
+            continue
+        single  = _us(entry, "single_us")
+        n16     = _us(entry, "batch_16_with_mem_us")
+        n256    = _us(entry, "batch_256_with_mem_us")
+        print(f"    {algo:18s} single={single:>8} us   N=16(w/mem)={n16:>7} us   N=256(w/mem)={n256:>7} us")
 
 
 if __name__ == "__main__":

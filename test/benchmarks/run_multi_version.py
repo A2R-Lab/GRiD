@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a multi-version GRiD benchmark sweep against Pinocchio and MJX.
+"""Run a multi-version GRiD benchmark sweep against Pinocchio, MJX, and Frax.
 
 Columns produced (per robot/base):
   - grid_pre_glass:    GRiD at git ref d2c0d18 (last commit before the GLASS v2 work).
@@ -8,6 +8,8 @@ Columns produced (per robot/base):
   - grid_glass_nvidia: GRiD HEAD with --linalg-backend=glass-nvidia (cuBLASDx-backed).
   - pinocchio:         CPU reference, HEAD harness with --algo parallel fan-out.
   - mjx:               MuJoCo MJX GPU reference (JAX). Requires mujoco-mjx + jax[cuda12].
+  - frax:              Frax GPU reference (JAX, https://github.com/danielpmorton/frax).
+                       Covers id/fd/crba/minv. Requires frax + jax[cuda12].
 
 Usage (single robot, fastest):
     python test/benchmarks/run_multi_version.py \
@@ -45,7 +47,7 @@ DEFAULT_WORKTREE_PATH = REPO_ROOT.parent / "GRiD-A2R-pre-glass"
 
 ROBOTS = ("iiwa14", "go2", "g1")
 BASES  = ("fixed", "floating")
-COLUMNS = ("pre_glass", "glass", "glass_nvidia", "pinocchio", "mjx")
+COLUMNS = ("pre_glass", "glass", "glass_nvidia", "pinocchio", "mjx", "frax")
 
 # Maps the column identifier to the baseline key used in the merged JSON
 # (so generate_report.py / generate_multi_version_report.py can find them).
@@ -55,6 +57,7 @@ COLUMN_TO_BASELINE_KEY = {
     "glass_nvidia": "grid_glass_nvidia",
     "pinocchio":    "pinocchio",
     "mjx":          "mjx",
+    "frax":         "frax",
 }
 
 EE_FRAMES_GRID = {
@@ -73,6 +76,67 @@ EE_FRAMES_MJX = EE_FRAMES_PIN
 
 def ts() -> str:
     return datetime.now().strftime("%H:%M:%S")
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight dependency checks
+# ---------------------------------------------------------------------------
+def _check_column_deps(column: str, mathdx_root: str | None,
+                       worktree_path: Path) -> tuple[bool, str]:
+    """Return (ok, reason_if_not_ok). Used to short-circuit columns whose
+    runtime/build dependencies aren't installed on the target machine."""
+    if column in ("glass", "pre_glass"):
+        # Both need nvcc. The pre_glass path additionally needs the worktree.
+        nvcc = subprocess.run(["which", "nvcc"], capture_output=True).returncode == 0
+        if not nvcc:
+            return False, "nvcc not on PATH (install CUDA Toolkit)"
+        if column == "pre_glass" and not worktree_path.exists():
+            return False, (f"pre_glass worktree {worktree_path} does not exist; "
+                           f"orchestrator will create it on demand or pass --skip-setup")
+        return True, ""
+    if column == "glass_nvidia":
+        nvcc = subprocess.run(["which", "nvcc"], capture_output=True).returncode == 0
+        if not nvcc:
+            return False, "nvcc not on PATH"
+        if mathdx_root is None:
+            return False, "--mathdx-root not set and MATHDX_ROOT env var empty"
+        if not (Path(mathdx_root) / "include" / "cublasdx.hpp").exists():
+            return False, f"{mathdx_root}/include/cublasdx.hpp not found"
+        return True, ""
+    if column == "pinocchio":
+        # The pinocchio column compiles a C++ binary; needs pinocchio headers +
+        # libpinocchio.so accessible via pkg-config OR cmeel.prefix. Mirror the
+        # logic in baselines/pinocchio/run.py::pinocchio_cflags().
+        gxx = subprocess.run(["which", "g++"], capture_output=True).returncode == 0
+        if not gxx:
+            return False, "g++ not on PATH (install build-essential)"
+        pkg = subprocess.run(["pkg-config", "--exists", "pinocchio"],
+                             capture_output=True).returncode == 0
+        cmeel = (Path(sys.prefix) / "lib"
+                 / f"python{sys.version_info.major}.{sys.version_info.minor}"
+                 / "site-packages" / "cmeel.prefix" / "include" / "pinocchio")
+        if not (pkg or cmeel.exists()):
+            return False, ("pinocchio C++ headers not found "
+                           "(`pip install pin` or follow README's pkg-config setup)")
+        return True, ""
+    if column == "mjx":
+        rc = subprocess.run(
+            [sys.executable, "-c", "import jax, mujoco, mujoco.mjx"],
+            capture_output=True,
+        ).returncode
+        if rc != 0:
+            return False, ("jax+mujoco+mujoco-mjx not installed "
+                           "(`pip install mujoco mujoco-mjx 'jax[cuda12]'`)")
+        return True, ""
+    if column == "frax":
+        rc = subprocess.run(
+            [sys.executable, "-c", "import frax, jax"],
+            capture_output=True,
+        ).returncode
+        if rc != 0:
+            return False, "frax+jax not installed (`pip install frax 'jax[cuda12]'`)"
+        return True, ""
+    return False, f"unknown column '{column}'"
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +188,9 @@ def setup_pre_glass_worktree(path: Path) -> Path:
 def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
                   output: Path, ee_frame: str, linalg_backend: str | None,
                   mathdx_root: str | None, no_recompile: bool,
-                  no_rdc: bool = False) -> list[str]:
+                  no_rdc: bool = False, no_licm_barrier: bool = False,
+                  single_call_iters: int | None = None,
+                  batch_iters: int | None = None) -> list[str]:
     cmd = [
         sys.executable,
         str(harness_repo_root / "test" / "benchmarks" / "baselines" / "grid" / "run.py"),
@@ -139,13 +205,21 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
         cmd += ["--mathdx-root", mathdx_root]
     if no_rdc:
         cmd.append("--no-rdc")
+    if no_licm_barrier:
+        cmd.append("--no-licm-barrier")
+    if single_call_iters is not None:
+        cmd += ["--single-call-iters", str(single_call_iters)]
+    if batch_iters is not None:
+        cmd += ["--batch-iters", str(batch_iters)]
     return cmd
 
 
 def run_grid_column(column: str, robot: str, base: str, *,
                     output_dir: Path, worktree_path: Path,
                     mathdx_root: str | None, no_recompile: bool,
-                    no_rdc: bool = False) -> Path | None:
+                    no_rdc: bool = False, no_licm_barrier: bool = False,
+                    single_call_iters: int | None = None,
+                    batch_iters: int | None = None) -> Path | None:
     """Run the appropriate GRiD harness for `column`. Returns output JSON path or None."""
     ee_frame = EE_FRAMES_GRID.get(robot, "")
     baseline_key = COLUMN_TO_BASELINE_KEY[column]
@@ -161,11 +235,15 @@ def run_grid_column(column: str, robot: str, base: str, *,
     elif column == "glass":
         cmd = _grid_run_cmd(REPO_ROOT, robot, base, output, ee_frame,
                             linalg_backend="glass", mathdx_root=None,
-                            no_recompile=no_recompile, no_rdc=no_rdc)
+                            no_recompile=no_recompile, no_rdc=no_rdc,
+                            no_licm_barrier=no_licm_barrier,
+                            single_call_iters=single_call_iters, batch_iters=batch_iters)
     elif column == "glass_nvidia":
         cmd = _grid_run_cmd(REPO_ROOT, robot, base, output, ee_frame,
                             linalg_backend="glass-nvidia", mathdx_root=mathdx_root,
-                            no_recompile=no_recompile, no_rdc=no_rdc)
+                            no_recompile=no_recompile, no_rdc=no_rdc,
+                            no_licm_barrier=no_licm_barrier,
+                            single_call_iters=single_call_iters, batch_iters=batch_iters)
     else:
         raise ValueError(f"Unknown grid column: {column}")
 
@@ -182,7 +260,9 @@ def run_grid_column(column: str, robot: str, base: str, *,
 
 
 def run_pinocchio_column(robot: str, base: str, *,
-                         output_dir: Path, no_recompile: bool) -> Path | None:
+                         output_dir: Path, no_recompile: bool,
+                         single_call_iters: int | None = None,
+                         batch_iters: int | None = None) -> Path | None:
     ee_frame = EE_FRAMES_PIN.get(robot, "")
     output = output_dir / f"{robot}_{base}_pinocchio.json"
     cmd = [
@@ -194,6 +274,10 @@ def run_pinocchio_column(robot: str, base: str, *,
     ]
     if no_recompile:
         cmd.append("--no-recompile")
+    if single_call_iters is not None:
+        cmd += ["--single-call-iters", str(single_call_iters)]
+    if batch_iters is not None:
+        cmd += ["--batch-iters", str(batch_iters)]
     print(f"[{ts()}] [pinocchio] {robot} {base} → {output.name}")
     result = subprocess.run(cmd, capture_output=False, text=True)
     if result.returncode != 0 or not output.exists():
@@ -203,7 +287,8 @@ def run_pinocchio_column(robot: str, base: str, *,
 
 
 def run_mjx_column(robot: str, base: str, *,
-                   output_dir: Path) -> Path | None:
+                   output_dir: Path,
+                   batch_iters: int | None = None) -> Path | None:
     ee_frame = EE_FRAMES_MJX.get(robot, "")
     output = output_dir / f"{robot}_{base}_mjx.json"
     cmd = [
@@ -212,10 +297,31 @@ def run_mjx_column(robot: str, base: str, *,
         "--robot", robot, "--base", base, "--output", str(output),
         "--ee-frame", ee_frame,
     ]
+    if batch_iters is not None:
+        cmd += ["--test-iters", str(batch_iters)]
     print(f"[{ts()}] [mjx] {robot} {base} → {output.name}")
     result = subprocess.run(cmd, capture_output=False, text=True)
     if result.returncode != 0 or not output.exists():
         print(f"  [mjx] FAILED for {robot}/{base}", file=sys.stderr)
+        return None
+    return output
+
+
+def run_frax_column(robot: str, base: str, *,
+                    output_dir: Path,
+                    batch_iters: int | None = None) -> Path | None:
+    output = output_dir / f"{robot}_{base}_frax.json"
+    cmd = [
+        sys.executable,
+        str(REPO_ROOT / "test" / "benchmarks" / "baselines" / "frax" / "run.py"),
+        "--robot", robot, "--base", base, "--output", str(output),
+    ]
+    if batch_iters is not None:
+        cmd += ["--test-iters", str(batch_iters)]
+    print(f"[{ts()}] [frax] {robot} {base} → {output.name}")
+    result = subprocess.run(cmd, capture_output=False, text=True)
+    if result.returncode != 0 or not output.exists():
+        print(f"  [frax] FAILED for {robot}/{base}", file=sys.stderr)
         return None
     return output
 
@@ -282,6 +388,18 @@ def main() -> None:
                         help="Drop -rdc=true from the GRiD glass / glass-nvidia compile line. "
                              "Use when ptxas hangs on floating-base kernels (older toolkits). "
                              "Batch timings unaffected; single-call timings may LICM-elide.")
+    parser.add_argument("--no-licm-barrier", action="store_true",
+                        help="Strongest hammer for ptxas hangs: suppress the anti-LICM "
+                             "machinery in codegen (volatile reload + __noinline__ barrier). "
+                             "Try this if --no-rdc alone doesn't fix the hang. "
+                             "Batch timings unaffected; single-call may LICM-elide.")
+    parser.add_argument("--single-call-iters", type=int, default=None,
+                        help="Override SINGLE_CALL_ITERS_GLOBAL for GRiD/Pinocchio "
+                             "(default 10000). Inner-kernel rep count for single-call timings.")
+    parser.add_argument("--batch-iters", type=int, default=None,
+                        help="Override TEST_ITERS_GLOBAL for GRiD/Pinocchio (default 100) "
+                             "and BENCH_TEST_ITERS for MJX/Frax (default 500). Outer batch "
+                             "rep count at each N. Bump for more stable medians.")
     parser.add_argument("--report", type=Path,
                         default=THIS_DIR / "benchmark_multi_version.md",
                         help="Markdown report output path")
@@ -297,6 +415,23 @@ def main() -> None:
             print(f"[fatal] worktree setup failed: {e}", file=sys.stderr)
             sys.exit(1)
 
+    # 1b) Pre-flight dep check per column. Drop columns whose deps are missing
+    #     so we don't waste time spawning subprocesses that will ImportError.
+    print(f"[{ts()}] === Pre-flight dependency check ===")
+    requested = list(args.columns)
+    runnable_columns: list[str] = []
+    for col in requested:
+        ok, reason = _check_column_deps(col, args.mathdx_root, args.worktree_path)
+        if ok:
+            print(f"  [{col}] ✓ deps OK")
+            runnable_columns.append(col)
+        else:
+            print(f"  [{col}] ✗ SKIP (missing): {reason}")
+    if not runnable_columns:
+        print(f"[fatal] no columns have their dependencies installed.", file=sys.stderr)
+        sys.exit(1)
+    args.columns = runnable_columns
+
     # 2) Run all (column, robot, base) combinations sequentially. GPU work is
     #    inherently serial; running in parallel would cause cache races and
     #    contend for the single GPU.
@@ -311,25 +446,31 @@ def main() -> None:
                     print(f"  [{column}] SKIP {robot}/{base}: excluded via --skip")
                     skipped.append((column, robot, base))
                     continue
-                if column == "glass_nvidia" and args.mathdx_root is None:
-                    print(f"  [{column}] SKIP {robot}/{base}: --mathdx-root not provided")
-                    skipped.append((column, robot, base))
-                    continue
                 if column == "pinocchio":
                     p = run_pinocchio_column(
                         robot, base,
                         output_dir=args.output_dir, no_recompile=args.no_recompile,
+                        single_call_iters=args.single_call_iters,
+                        batch_iters=args.batch_iters,
                     )
                 elif column == "mjx":
                     p = run_mjx_column(
                         robot, base, output_dir=args.output_dir,
+                        batch_iters=args.batch_iters,
+                    )
+                elif column == "frax":
+                    p = run_frax_column(
+                        robot, base, output_dir=args.output_dir,
+                        batch_iters=args.batch_iters,
                     )
                 else:
                     p = run_grid_column(
                         column, robot, base,
                         output_dir=args.output_dir, worktree_path=args.worktree_path,
                         mathdx_root=args.mathdx_root, no_recompile=args.no_recompile,
-                        no_rdc=args.no_rdc,
+                        no_rdc=args.no_rdc, no_licm_barrier=args.no_licm_barrier,
+                        single_call_iters=args.single_call_iters,
+                        batch_iters=args.batch_iters,
                     )
                 if p is not None:
                     produced.append(p)

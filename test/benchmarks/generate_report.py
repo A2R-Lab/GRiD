@@ -158,7 +158,7 @@ def _robot_rows(results: dict, algo: str, section_robots: list[str]) -> list[str
 # Multi-version table generation (pre_glass / glass / glass_nvidia / pinocchio)
 # ---------------------------------------------------------------------------
 
-MULTI_VERSION_KEYS = ("grid_pre_glass", "grid_glass", "grid_glass_nvidia", "pinocchio", "mjx")
+MULTI_VERSION_KEYS = ("grid_pre_glass", "grid_glass", "grid_glass_nvidia", "pinocchio", "mjx", "frax")
 
 
 def _ratio(num_entry: Optional[dict], den_entry: Optional[dict],
@@ -175,14 +175,11 @@ def _ratio(num_entry: Optional[dict], den_entry: Optional[dict],
     return f"{dv/nv:.2f}×"
 
 
-def _multi_version_robot_rows(results: dict, algo: str,
-                              section_robots: list[str]) -> list[str]:
-    """Return markdown rows for one algo across robots with the five-column layout.
-
-    Columns: single (pre_glass, glass, glass_nv, pin, mjx)
-             | N=256 (pre_glass, glass, glass_nv, pin, mjx)
-    Ratios:  glass/pre_glass and glass_nv/glass on the N=256 compute-only timings.
-    """
+def _multi_version_rows_for_metric(results: dict, algo: str,
+                                   section_robots: list[str],
+                                   metric: str) -> list[str]:
+    """metric ∈ {"single", "n16", "n256"}. Returns rows for one algo across robots
+    showing only that metric, for all 6 columns."""
     rows = []
     for robot in section_robots:
         for base in BASES:
@@ -191,29 +188,40 @@ def _multi_version_robot_rows(results: dict, algo: str,
             gn = (results.get(robot, {}).get(base, {}).get("grid_glass_nvidia") or {}).get(algo)
             pi = (results.get(robot, {}).get(base, {}).get("pinocchio") or {}).get(algo)
             mx = (results.get(robot, {}).get(base, {}).get("mjx") or {}).get(algo)
+            fx = (results.get(robot, {}).get(base, {}).get("frax") or {}).get(algo)
 
-            single_pg = _entry_single(pg)
-            single_gl = _entry_single(gl)
-            single_gn = _entry_single(gn)
-            single_pi = _entry_single(pi) + _codegen_flag(pi)
-            single_mx = _entry_single(mx)
+            if metric == "single":
+                vals = [
+                    _entry_single(pg), _entry_single(gl), _entry_single(gn),
+                    _entry_single(pi) + _codegen_flag(pi),
+                    _entry_single(mx), _entry_single(fx),
+                ]
+                ratio_gl_over_pg = _ratio(gl, pg, "compute_only", "compute_only", 256)
+                ratio_gn_over_gl = _ratio(gn, gl, "compute_only", "compute_only", 256)
+            else:
+                n = 16 if metric == "n16" else 256
+                vals = [
+                    _entry_batch(pg, n, "compute_only"),
+                    _entry_batch(gl, n, "compute_only"),
+                    _entry_batch(gn, n, "compute_only"),
+                    _entry_batch(pi, n),
+                    _entry_batch(mx, n, "compute_only"),
+                    _entry_batch(fx, n, "compute_only"),
+                ]
+                ratio_gl_over_pg = _ratio(gl, pg, "compute_only", "compute_only", n)
+                ratio_gn_over_gl = _ratio(gn, gl, "compute_only", "compute_only", n)
 
-            n256_pg = _entry_batch(pg, 256, "compute_only")
-            n256_gl = _entry_batch(gl, 256, "compute_only")
-            n256_gn = _entry_batch(gn, 256, "compute_only")
-            n256_pi = _entry_batch(pi, 256)
-            n256_mx = _entry_batch(mx, 256, "compute_only")
-
-            ratio_gl_over_pg = _ratio(gl, pg, "compute_only", "compute_only", 256)
-            ratio_gn_over_gl = _ratio(gn, gl, "compute_only", "compute_only", 256)
-
+            cells = " | ".join(vals)
             rows.append(
-                f"| {robot} | {base} "
-                f"| {single_pg} | {single_gl} | {single_gn} | {single_pi} | {single_mx} "
-                f"| {n256_pg} | {n256_gl} | {n256_gn} | {n256_pi} | {n256_mx} "
-                f"| {ratio_gl_over_pg} | {ratio_gn_over_gl} |"
+                f"| {robot} | {base} | {cells} | {ratio_gl_over_pg} | {ratio_gn_over_gl} |"
             )
     return rows
+
+
+def _multi_version_robot_rows(results: dict, algo: str,
+                              section_robots: list[str]) -> list[str]:
+    """Legacy entry point — kept for backwards compat; calls the N=256 variant."""
+    return _multi_version_rows_for_metric(results, algo, section_robots, "n256")
 
 
 def _generate_multi_version_report(data: dict, output_path: Path) -> None:
@@ -248,12 +256,16 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
         "- **pin**: Pinocchio CPU reference (codegen where available).",
         "- **mjx**: MuJoCo MJX (JAX) GPU reference. Subset of algos only "
         "(id / fd / ee_pose / id_du); others render `—`.",
+        "- **frax**: Frax (JAX) GPU reference (https://github.com/danielpmorton/frax). "
+        "Subset of algos only (id / fd / crba / minv); others render `—`.",
         "- **glass/pre**: N=256 compute-only ratio. **> 1.00× = HEAD is faster**; "
         "**< 1.00× = HEAD regressed**.",
         "- **glass_nv/glass**: N=256 compute-only ratio. **> 1.00× = cuBLASDx is faster**.",
         "",
-        "Single-call column uses median (or mean) µs. N=256 column is "
-        "batch compute-only for GRiD/MJX, with-memory for Pinocchio.",
+        "Each algorithm gets three sub-tables: **single-call**, **batch N=16**, "
+        "**batch N=256**. Same 6 backend columns + ratios in each. Values are "
+        "median (or mean) µs. GRiD/MJX/Frax numbers are batch compute-only; "
+        "Pinocchio is batch with-memory (its compute/transfer aren't separable on CPU).",
         "",
         NOTE_SECOND_ORDER,
         "",
@@ -264,20 +276,28 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
         for algo in algos:
             display = ALGO_DISPLAY.get(algo, algo)
             lines += [f"### {display}", ""]
-            lines += [
-                "| Robot | Base "
-                "| pre_glass single | glass single | glass_nv single | pin single | mjx single "
-                "| pre_glass N=256 | glass N=256 | glass_nv N=256 | pin N=256 | mjx N=256 "
+
+            # Three sub-tables per algorithm: single | N=16 | N=256. Each is the
+            # same 6-column layout (pre_glass / glass / glass_nv / pin / mjx / frax)
+            # plus the glass/pre and glass_nv/glass ratios computed at that batch size.
+            metric_header = {
+                "single": "single-call",
+                "n16":    "batch N=16",
+                "n256":   "batch N=256",
+            }
+            col_header = (
+                "| Robot | Base | pre_glass | glass | glass_nv | pin | mjx | frax "
                 "| glass/pre | glass_nv/glass |"
-            ]
-            lines += [
-                "|-------|------"
-                "|:---------------:|:------------:|:---------------:|:----------:|:---------:"
-                "|:---------------:|:------------:|:---------------:|:---------:|:--------:"
+            )
+            col_align = (
+                "|-------|------|:---------:|:-----:|:--------:|:---:|:---:|:----:"
                 "|:---------:|:-------------:|"
-            ]
-            lines += _multi_version_robot_rows(results, algo, ROBOTS_DISPLAY)
-            lines += [""]
+            )
+            for metric in ("single", "n16", "n256"):
+                lines += [f"**{metric_header[metric]}**", ""]
+                lines += [col_header, col_align]
+                lines += _multi_version_rows_for_metric(results, algo, ROBOTS_DISPLAY, metric)
+                lines += [""]
 
     output_path.write_text("\n".join(lines) + "\n")
     print(f"[generate_report] wrote {output_path}")

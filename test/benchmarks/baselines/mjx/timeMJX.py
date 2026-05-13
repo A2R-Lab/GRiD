@@ -10,12 +10,14 @@ Usage:
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 
 import numpy as np
 
-TEST_ITERS  = 500
+# Configurable via env var (set by mjx/run.py's --test-iters flag).
+TEST_ITERS  = int(os.environ.get("BENCH_TEST_ITERS", "500"))
 BATCH_SIZES = [16, 32, 64, 128, 256]
 
 

@@ -152,6 +152,10 @@ def generate_header(
     # GRID_BENCH_NVIDIA_MIN_DIM controls codegen's per-call backend choice via
     # linalg_smem_for(); changing it must bust the header cache.
     nvidia_min_dim_env = os.environ.get("GRID_BENCH_NVIDIA_MIN_DIM", "16")
+    # GRID_NO_LICM_BARRIER suppresses the anti-LICM machinery in _single_timing
+    # rep loops (volatile reload + __noinline__ barrier). When toggled, the
+    # generated header changes — must bust the header cache.
+    no_licm_barrier_env = os.environ.get("GRID_NO_LICM_BARRIER", "0")
     cache_key = _hash_bytes(
         json.dumps({
             "urdf_hash": urdf_hash,
@@ -161,6 +165,7 @@ def generate_header(
             "profile": "all",
             "homogenous": True,
             "nvidia_min_dim": nvidia_min_dim_env,
+            "no_licm_barrier": no_licm_barrier_env,
             # ee_frame intentionally excluded: not passed to gen_all_code
         }, sort_keys=True).encode()
     )[:24]
@@ -220,6 +225,8 @@ def compile_binary(
     mathdx_root: str | None = None,
     with_cusolverdx: bool = False,
     no_rdc: bool = False,
+    single_call_iters: int | None = None,
+    batch_iters: int | None = None,
 ) -> Path:
     """Compile timeGRiD.cu against the generated header, using content-hash cache."""
     source_hash = _hash_file(TIMING_SOURCE)
@@ -229,6 +236,15 @@ def compile_binary(
     linalg_flags: list[str] = []
     resolved_mathdx_root: Path | None = None
     cublasdx_sm: str | None = None
+
+    # Override defaults in test/benchmarks/baselines/util/experiment_helpers.h
+    # (SINGLE_CALL_ITERS_GLOBAL=10000, TEST_ITERS_GLOBAL=100) by re-defining at
+    # the compile line. Bumping iter counts is the simplest way to reduce
+    # measurement noise on fast kernels.
+    if single_call_iters is not None:
+        linalg_flags.append(f"-DSINGLE_CALL_ITERS_GLOBAL={int(single_call_iters)}")
+    if batch_iters is not None:
+        linalg_flags.append(f"-DTEST_ITERS_GLOBAL={int(batch_iters)}")
 
     # -rdc=true (relocatable device code) is required so nvcc treats the
     # `__noinline__` device function `grid_licm_barrier` as opaque across the
@@ -385,11 +401,30 @@ def main() -> None:
                              "toolkits/GPUs at the cost of LICM defeat: single-call timings "
                              "for _single_timing kernels may elide their internal rep loop. "
                              "Batch timings (N=16..256) are unaffected. Use when builds hang.")
+    parser.add_argument("--no-licm-barrier", action="store_true",
+                        default=os.environ.get("GRID_NO_LICM_BARRIER", "0") == "1",
+                        help="Suppress the anti-LICM machinery in codegen (volatile reload + "
+                             "__noinline__ grid_licm_barrier call inside _single_timing rep loops). "
+                             "Strongest hammer for ptxas hangs on floating-base kernels. Sets "
+                             "GRID_NO_LICM_BARRIER=1 for the codegen subprocess. Batch timings "
+                             "unaffected; single-call may LICM-elide.")
+    parser.add_argument("--single-call-iters", type=int, default=None,
+                        help="Override SINGLE_CALL_ITERS_GLOBAL (default 10000). Inner-kernel "
+                             "rep count for single-call timings; bump for more stable medians "
+                             "on noisy machines.")
+    parser.add_argument("--batch-iters", type=int, default=None,
+                        help="Override TEST_ITERS_GLOBAL (default 100). Outer rep count for "
+                             "batch timings at each N; bump for more stable medians.")
     args = parser.parse_args()
 
     ee_frame = args.ee_frame or DEFAULT_EE_FRAMES.get(args.robot, "")
     build_dir = REPO_ROOT / "test" / "benchmarks" / "results"
     build_dir.mkdir(parents=True, exist_ok=True)
+
+    # Propagate the CLI flag to codegen via env var (the helpers read it at
+    # call time). Must be set BEFORE generate_header() so codegen picks it up.
+    if args.no_licm_barrier:
+        os.environ["GRID_NO_LICM_BARRIER"] = "1"
 
     if args.output is None:
         import platform
@@ -417,6 +452,8 @@ def main() -> None:
             mathdx_root=args.mathdx_root,
             with_cusolverdx=args.with_cusolverdx and args.linalg_backend == "glass-nvidia",
             no_rdc=args.no_rdc,
+            single_call_iters=args.single_call_iters,
+            batch_iters=args.batch_iters,
         )
     except Exception as e:
         print(f"  [grid] ERROR compiling binary: {e}", file=sys.stderr)
@@ -447,13 +484,21 @@ def main() -> None:
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(f"  [grid] results saved: {args.output}")
 
-    # Print quick summary
+    # Print quick summary: single + N=16 + N=256 compute-only so it's obvious
+    # the batch tests actually ran. Full data (all 5 batch sizes, with_mem +
+    # compute_only) lives in the JSON.
+    def _us(entry, key):
+        v = (entry.get(key) or {}).get("median") or (entry.get(key) or {}).get("mean")
+        return f"{v:.2f}" if v is not None else "—"
+
     for algo, entry in sorted(filled.items()):
         if entry is None:
             print(f"    {algo}: null")
-        elif "single_us" in entry:
-            v = entry["single_us"]["mean"]
-            print(f"    {algo}: {v:.2f}us (single)")
+            continue
+        single   = _us(entry, "single_us")
+        n16_co   = _us(entry, "batch_16_compute_only_us")
+        n256_co  = _us(entry, "batch_256_compute_only_us")
+        print(f"    {algo:18s} single={single:>8} us   N=16(compute)={n16_co:>7} us   N=256(compute)={n256_co:>7} us")
 
 
 if __name__ == "__main__":

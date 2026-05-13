@@ -66,17 +66,35 @@ nvcc --version   # should print CUDA release info
 
 cuBLASDx is optional. The generated GRiD headers default to a vendored `glass`
 scalar/unrolled helper subset that needs no MathDx headers. The `glass-nvidia`
-path is reserved for explicit packed-kernel experiments and requires C++17,
-MathDx headers, and a `GRID_CUBLASDX_SM` target. The GRiD benchmark runner
-handles those flags when requested:
+path uses NVIDIA's cuBLASDx for packed GEMMs and requires C++17 + the MathDx SDK.
+
+#### Installing NVIDIA MathDx (for `glass-nvidia` column)
+
+MathDx is **not** pip-installable. Download the SDK from NVIDIA:
+
+1. Visit https://developer.nvidia.com/cublasdx-downloads (free; requires NVIDIA developer account).
+2. Download the MathDx tarball (e.g. `nvidia-mathdx-25.12.0-Linux.tar.gz`).
+3. Extract under `/opt/nvidia/mathdx/25.12/` (or any path you like).
+4. Verify the headers landed:
+   ```bash
+   ls /opt/nvidia/mathdx/25.12/include/cublasdx.hpp
+   # cublasdx.hpp
+   ```
+
+Then point the benchmark runner at it (one of these is enough):
 
 ```bash
-MATHDX_ROOT=/opt/nvidia/mathdx/25.12 \
-.venv/bin/python test/benchmarks/baselines/grid/run.py \
-  --robot g1 --base floating --linalg-backend glass-nvidia
+# Option A: per-invocation flag
+.venv/bin/python test/benchmarks/run_multi_version.py \
+    --mathdx-root /opt/nvidia/mathdx/25.12
+
+# Option B: env var (also picked up by baselines/grid/run.py standalone)
+export MATHDX_ROOT=/opt/nvidia/mathdx/25.12
+.venv/bin/python test/benchmarks/run_multi_version.py
 ```
 
-Use `--linalg-backend glass` for the default helper path.
+If MathDx isn't installed, the pre-flight check skips the `glass-nvidia` column
+with a clear message; the other columns still run.
 
 ### Pinocchio (CPU)
 
@@ -218,13 +236,14 @@ Both appear as separate rows in EE kinematics sections of `benchmark.md`.
 
 ## Reproducing the Multi-Version Comparison
 
-Side-by-side benchmark of three GRiD versions vs two external GPU/CPU
+Side-by-side benchmark of three GRiD versions vs three external GPU/CPU
 references: **pre-GLASS** (git ref `d2c0d18`, the last commit before the GLASS
 v2 integration), **glass** (HEAD with pure-SIMT GLASS v2), **glass-nvidia**
-(HEAD with cuBLASDx), **pinocchio** (CPU codegen), and **mjx** (MuJoCo MJX on
-JAX-GPU). The orchestrator manages a separate git worktree for the pre-GLASS
-column. MJX exposes a subset of algorithms (id / fd / ee_pose / id_du);
-others render `—`.
+(HEAD with cuBLASDx), **pinocchio** (CPU codegen), **mjx** (MuJoCo MJX on
+JAX-GPU), and **frax** (Frax on JAX-GPU,
+https://github.com/danielpmorton/frax). The orchestrator manages a separate
+git worktree for the pre-GLASS column. MJX exposes id/fd/ee_pose/id_du;
+Frax exposes id/fd/crba/minv; the others render `—`.
 
 **Prereqs on a fresh machine:**
 
@@ -251,6 +270,10 @@ ls /opt/nvidia/mathdx/25.12/include/cublasdx.hpp
 .venv/bin/pip install mujoco mujoco-mjx
 .venv/bin/pip install --upgrade "jax[cuda12]"
 .venv/bin/python -c "import mujoco.mjx; import jax; print(jax.devices())"
+
+# 6. Frax for the frax column (skip with --columns if not wanted).
+.venv/bin/pip install frax
+.venv/bin/python -c "import frax; print('frax OK')"
 ```
 
 **Run the sweep:**
@@ -274,7 +297,23 @@ export GRID_PRE_GLASS_WORKTREE=../GRiD-A2R-pre-glass
 
 # Skip a specific (robot, base) combo (e.g. if it hangs the compiler):
 .venv/bin/python test/benchmarks/run_multi_version.py --skip iiwa14_floating
+
+# Bump iter counts for more stable medians on fast/noisy hardware
+# (default: 10000 inner reps for single-call, 100 outer reps for batch on GRiD/Pin,
+#  500 reps on MJX/Frax). 5x bumps roughly 5x the run time:
+.venv/bin/python test/benchmarks/run_multi_version.py \
+    --single-call-iters 50000 --batch-iters 500
 ```
+
+**Stability flags reference:**
+
+| Flag | Default | When to bump |
+|---|---|---|
+| `--single-call-iters N` | 10000 (GRiD/Pin) | Single-call timings show high variance — bump to 50k+ for sub-µs algos |
+| `--batch-iters N` | 100 (GRiD/Pin), 500 (MJX/Frax) | Batch medians noisy — bump 5–10× |
+| `--no-rdc` | off | ptxas hangs on floating-base; first thing to try |
+| `--no-licm-barrier` | off | ptxas still hangs after `--no-rdc`; strongest hammer |
+| `--skip iiwa14_floating` | none | Exclude specific robot/base combos that are broken on your machine |
 
 The orchestrator:
 1. Creates a worktree at `$GRID_PRE_GLASS_WORKTREE` checked out to `d2c0d18`
