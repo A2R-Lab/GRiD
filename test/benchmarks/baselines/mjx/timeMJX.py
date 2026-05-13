@@ -35,17 +35,36 @@ def _print_stats(label: str, n: int, times: np.ndarray) -> None:
 
 # ---------------------------------------------------------------------------
 # JAX timing primitives
+#
+# Discipline (mirrors what the GRiD benchmark does on the C++ side):
+#   1. JIT-compile the function with a representative input. First call is
+#      always slow (XLA HLO lowering + ptx); ignore it.
+#   2. Run N_WARMUP_PASSES additional warmup calls. These cache device buffers,
+#      stabilize the GPU clock, and drain any pending compilation. Ignore.
+#   3. Time the next N_ITERS calls. JIT cache is guaranteed warm and shapes are
+#      fixed, so any variance reflects the kernel + sync cost, not compilation.
+#
+# For with-memory timings, the JIT'd function takes raw numpy arrays as inputs
+# so that the host->device transfer is included in the timed region. The numpy
+# arrays are regenerated per-iter (outside the timer) to defeat device-side
+# buffer caching across calls.
 # ---------------------------------------------------------------------------
 
-def _warmup(fn, *args) -> None:
-    """Two-pass warmup: first call = JIT compile, second = GPU freq stabilization."""
+N_WARMUP_PASSES = 3
+
+
+def _jit_and_warmup(fn, sample_args, n_warmup: int = N_WARMUP_PASSES) -> None:
+    """Trigger JIT compile + run warmup passes. Discards results."""
     import jax
-    jax.block_until_ready(fn(*args))
-    jax.block_until_ready(fn(*args))
+    # First call: XLA lowering + GPU compilation. Slow.
+    jax.block_until_ready(fn(*sample_args))
+    # Additional warmup: GPU clock stabilization + device buffer caching.
+    for _ in range(n_warmup):
+        jax.block_until_ready(fn(*sample_args))
 
 
 def _time_device(fn, *args, n_iters: int = TEST_ITERS) -> np.ndarray:
-    """Time a JIT-compiled JAX function with args already on device."""
+    """Time a JIT-compiled, warmed-up JAX function with args already on device."""
     import jax
     times = []
     for _ in range(n_iters):
@@ -56,11 +75,14 @@ def _time_device(fn, *args, n_iters: int = TEST_ITERS) -> np.ndarray:
 
 
 def _time_with_mem(fn, make_args_fn, n_iters: int) -> np.ndarray:
-    """Time fn where make_args_fn() produces numpy arrays that must be transferred each call."""
+    """Time fn where make_args_fn() produces numpy arrays that get transferred each call.
+
+    Caller must have already JIT'd + warmed up `fn` against a numpy-input sample.
+    """
     import jax
     times = []
     for _ in range(n_iters):
-        np_args = make_args_fn()
+        np_args = make_args_fn()           # outside the timer
         t0 = time.perf_counter()
         jax.block_until_ready(fn(*np_args))
         times.append((time.perf_counter() - t0) * 1e6)
@@ -112,8 +134,7 @@ def main() -> None:
     # Metadata block (parsed by timing_parser)
     # ------------------------------------------------------------------
     try:
-        import jax.lib.xla_bridge as xb
-        backend = xb.get_backend().platform
+        backend = jax.default_backend()
     except Exception:
         backend = "unknown"
 

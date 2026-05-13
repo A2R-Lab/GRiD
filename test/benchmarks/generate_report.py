@@ -158,7 +158,7 @@ def _robot_rows(results: dict, algo: str, section_robots: list[str]) -> list[str
 # Multi-version table generation (pre_glass / glass / glass_nvidia / pinocchio)
 # ---------------------------------------------------------------------------
 
-MULTI_VERSION_KEYS = ("grid_pre_glass", "grid_glass", "grid_glass_nvidia", "pinocchio")
+MULTI_VERSION_KEYS = ("grid_pre_glass", "grid_glass", "grid_glass_nvidia", "pinocchio", "mjx")
 
 
 def _ratio(num_entry: Optional[dict], den_entry: Optional[dict],
@@ -177,9 +177,10 @@ def _ratio(num_entry: Optional[dict], den_entry: Optional[dict],
 
 def _multi_version_robot_rows(results: dict, algo: str,
                               section_robots: list[str]) -> list[str]:
-    """Return markdown rows for one algo across robots with the four-column layout.
+    """Return markdown rows for one algo across robots with the five-column layout.
 
-    Columns: single (pre_glass, glass, glass_nv, pin) | N=256 (pre_glass, glass, glass_nv, pin)
+    Columns: single (pre_glass, glass, glass_nv, pin, mjx)
+             | N=256 (pre_glass, glass, glass_nv, pin, mjx)
     Ratios:  glass/pre_glass and glass_nv/glass on the N=256 compute-only timings.
     """
     rows = []
@@ -189,24 +190,27 @@ def _multi_version_robot_rows(results: dict, algo: str,
             gl = (results.get(robot, {}).get(base, {}).get("grid_glass") or {}).get(algo)
             gn = (results.get(robot, {}).get(base, {}).get("grid_glass_nvidia") or {}).get(algo)
             pi = (results.get(robot, {}).get(base, {}).get("pinocchio") or {}).get(algo)
+            mx = (results.get(robot, {}).get(base, {}).get("mjx") or {}).get(algo)
 
             single_pg = _entry_single(pg)
             single_gl = _entry_single(gl)
             single_gn = _entry_single(gn)
             single_pi = _entry_single(pi) + _codegen_flag(pi)
+            single_mx = _entry_single(mx)
 
             n256_pg = _entry_batch(pg, 256, "compute_only")
             n256_gl = _entry_batch(gl, 256, "compute_only")
             n256_gn = _entry_batch(gn, 256, "compute_only")
             n256_pi = _entry_batch(pi, 256)
+            n256_mx = _entry_batch(mx, 256, "compute_only")
 
             ratio_gl_over_pg = _ratio(gl, pg, "compute_only", "compute_only", 256)
             ratio_gn_over_gl = _ratio(gn, gl, "compute_only", "compute_only", 256)
 
             rows.append(
                 f"| {robot} | {base} "
-                f"| {single_pg} | {single_gl} | {single_gn} | {single_pi} "
-                f"| {n256_pg} | {n256_gl} | {n256_gn} | {n256_pi} "
+                f"| {single_pg} | {single_gl} | {single_gn} | {single_pi} | {single_mx} "
+                f"| {n256_pg} | {n256_gl} | {n256_gn} | {n256_pi} | {n256_mx} "
                 f"| {ratio_gl_over_pg} | {ratio_gn_over_gl} |"
             )
     return rows
@@ -242,12 +246,14 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
         "- **glass**: GRiD HEAD with the pure-SIMT GLASS v2 backend.",
         "- **glass_nv**: GRiD HEAD with the cuBLASDx-backed GLASS v2 backend.",
         "- **pin**: Pinocchio CPU reference (codegen where available).",
+        "- **mjx**: MuJoCo MJX (JAX) GPU reference. Subset of algos only "
+        "(id / fd / ee_pose / id_du); others render `—`.",
         "- **glass/pre**: N=256 compute-only ratio. **> 1.00× = HEAD is faster**; "
         "**< 1.00× = HEAD regressed**.",
         "- **glass_nv/glass**: N=256 compute-only ratio. **> 1.00× = cuBLASDx is faster**.",
         "",
         "Single-call column uses median (or mean) µs. N=256 column is "
-        "batch compute-only for GRiD, with-memory for Pinocchio.",
+        "batch compute-only for GRiD/MJX, with-memory for Pinocchio.",
         "",
         NOTE_SECOND_ORDER,
         "",
@@ -260,14 +266,14 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
             lines += [f"### {display}", ""]
             lines += [
                 "| Robot | Base "
-                "| pre_glass single | glass single | glass_nv single | pin single "
-                "| pre_glass N=256 | glass N=256 | glass_nv N=256 | pin N=256 "
+                "| pre_glass single | glass single | glass_nv single | pin single | mjx single "
+                "| pre_glass N=256 | glass N=256 | glass_nv N=256 | pin N=256 | mjx N=256 "
                 "| glass/pre | glass_nv/glass |"
             ]
             lines += [
                 "|-------|------"
-                "|:---------------:|:------------:|:---------------:|:----------:"
-                "|:---------------:|:------------:|:---------------:|:---------:"
+                "|:---------------:|:------------:|:---------------:|:----------:|:---------:"
+                "|:---------------:|:------------:|:---------------:|:---------:|:--------:"
                 "|:---------:|:-------------:|"
             ]
             lines += _multi_version_robot_rows(results, algo, ROBOTS_DISPLAY)

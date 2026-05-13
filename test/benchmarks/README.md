@@ -218,10 +218,13 @@ Both appear as separate rows in EE kinematics sections of `benchmark.md`.
 
 ## Reproducing the Multi-Version Comparison
 
-Side-by-side benchmark of three GRiD versions vs Pinocchio: **pre-GLASS** (git
-ref `d2c0d18`, the last commit before the GLASS v2 integration), **glass**
-(HEAD with pure-SIMT GLASS v2), and **glass-nvidia** (HEAD with cuBLASDx). The
-orchestrator manages a separate git worktree for the pre-GLASS column.
+Side-by-side benchmark of three GRiD versions vs two external GPU/CPU
+references: **pre-GLASS** (git ref `d2c0d18`, the last commit before the GLASS
+v2 integration), **glass** (HEAD with pure-SIMT GLASS v2), **glass-nvidia**
+(HEAD with cuBLASDx), **pinocchio** (CPU codegen), and **mjx** (MuJoCo MJX on
+JAX-GPU). The orchestrator manages a separate git worktree for the pre-GLASS
+column. MJX exposes a subset of algorithms (id / fd / ee_pose / id_du);
+others render `—`.
 
 **Prereqs on a fresh machine:**
 
@@ -243,6 +246,11 @@ nvcc --version
 # 4. MathDx 25.12 for the glass-nvidia column (skip this column with --columns if
 #    you don't have MathDx; the others still run).
 ls /opt/nvidia/mathdx/25.12/include/cublasdx.hpp
+
+# 5. MuJoCo MJX for the mjx column (skip with --columns if not wanted).
+.venv/bin/pip install mujoco mujoco-mjx
+.venv/bin/pip install --upgrade "jax[cuda12]"
+.venv/bin/python -c "import mujoco.mjx; import jax; print(jax.devices())"
 ```
 
 **Run the sweep:**
@@ -262,7 +270,10 @@ export GRID_PRE_GLASS_WORKTREE=../GRiD-A2R-pre-glass
 
 # Skip the glass-nvidia column if MathDx is not installed:
 .venv/bin/python test/benchmarks/run_multi_version.py \
-    --columns pre_glass glass pinocchio
+    --columns pre_glass glass pinocchio mjx
+
+# Skip a specific (robot, base) combo (e.g. if it hangs the compiler):
+.venv/bin/python test/benchmarks/run_multi_version.py --skip iiwa14_floating
 ```
 
 The orchestrator:

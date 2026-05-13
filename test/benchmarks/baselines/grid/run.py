@@ -219,6 +219,7 @@ def compile_binary(
     linalg_backend: str = "glass",
     mathdx_root: str | None = None,
     with_cusolverdx: bool = False,
+    no_rdc: bool = False,
 ) -> Path:
     """Compile timeGRiD.cu against the generated header, using content-hash cache."""
     source_hash = _hash_file(TIMING_SOURCE)
@@ -237,10 +238,9 @@ def compile_binary(
     # -dlto is added on top only for the cuSOLVERDx link, since that path
     # needs the device-link-time optimizer to merge the precompiled library.
     if linalg_backend == "glass":
-        linalg_flags.extend([
-            "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
-            "-rdc=true",
-        ])
+        linalg_flags.append("-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS")
+        if not no_rdc:
+            linalg_flags.append("-rdc=true")
     elif linalg_backend == "glass-nvidia":
         resolved_mathdx_root = resolve_mathdx_root(mathdx_root)
         if resolved_mathdx_root is None:
@@ -257,8 +257,13 @@ def compile_binary(
             f"-I{resolved_mathdx_root / 'external' / 'cutlass' / 'include'}",
             # cuBLASDx L2/L3 require relaxed constexpr (see GLASS README).
             "--expt-relaxed-constexpr",
-            "-rdc=true",
         ])
+        if with_cusolverdx and no_rdc:
+            raise RuntimeError(
+                "--with-cusolverdx requires -rdc=true; cannot combine with --no-rdc."
+            )
+        if not no_rdc:
+            linalg_flags.append("-rdc=true")
         if with_cusolverdx:
             # cuSOLVERDx ships a precompiled device library; needs -dlto
             # on top of -rdc=true (added above) and links against
@@ -287,6 +292,7 @@ def compile_binary(
             "cublasdx_sm": cublasdx_sm,
             "linalg_flags": linalg_flags,
             "with_cusolverdx": with_cusolverdx,
+            "no_rdc": no_rdc,
         }, sort_keys=True).encode()
     )[:24]
 
@@ -373,6 +379,12 @@ def main() -> None:
                         help="Enable cuSOLVERDx LAPACK wrappers (chol/trsm/posv). Adds "
                              "-rdc=true -dlto -lcusolverdx -lcublas -lcusolver -lcudart to "
                              "the link line. Only takes effect with --linalg-backend=glass-nvidia.")
+    parser.add_argument("--no-rdc", action="store_true",
+                        default=os.environ.get("GRID_BENCH_NO_RDC", "0") == "1",
+                        help="Drop -rdc=true from the compile line. Speeds up ptxas on older "
+                             "toolkits/GPUs at the cost of LICM defeat: single-call timings "
+                             "for _single_timing kernels may elide their internal rep loop. "
+                             "Batch timings (N=16..256) are unaffected. Use when builds hang.")
     args = parser.parse_args()
 
     ee_frame = args.ee_frame or DEFAULT_EE_FRAMES.get(args.robot, "")
@@ -404,6 +416,7 @@ def main() -> None:
             linalg_backend=args.linalg_backend,
             mathdx_root=args.mathdx_root,
             with_cusolverdx=args.with_cusolverdx and args.linalg_backend == "glass-nvidia",
+            no_rdc=args.no_rdc,
         )
     except Exception as e:
         print(f"  [grid] ERROR compiling binary: {e}", file=sys.stderr)

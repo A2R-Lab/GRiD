@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a multi-version GRiD benchmark sweep against Pinocchio.
+"""Run a multi-version GRiD benchmark sweep against Pinocchio and MJX.
 
 Columns produced (per robot/base):
   - grid_pre_glass:    GRiD at git ref d2c0d18 (last commit before the GLASS v2 work).
@@ -7,6 +7,7 @@ Columns produced (per robot/base):
   - grid_glass:        GRiD HEAD with --linalg-backend=glass (pure-SIMT GLASS v2).
   - grid_glass_nvidia: GRiD HEAD with --linalg-backend=glass-nvidia (cuBLASDx-backed).
   - pinocchio:         CPU reference, HEAD harness with --algo parallel fan-out.
+  - mjx:               MuJoCo MJX GPU reference (JAX). Requires mujoco-mjx + jax[cuda12].
 
 Usage (single robot, fastest):
     python test/benchmarks/run_multi_version.py \
@@ -44,7 +45,7 @@ DEFAULT_WORKTREE_PATH = REPO_ROOT.parent / "GRiD-A2R-pre-glass"
 
 ROBOTS = ("iiwa14", "go2", "g1")
 BASES  = ("fixed", "floating")
-COLUMNS = ("pre_glass", "glass", "glass_nvidia", "pinocchio")
+COLUMNS = ("pre_glass", "glass", "glass_nvidia", "pinocchio", "mjx")
 
 # Maps the column identifier to the baseline key used in the merged JSON
 # (so generate_report.py / generate_multi_version_report.py can find them).
@@ -53,6 +54,7 @@ COLUMN_TO_BASELINE_KEY = {
     "glass":        "grid_glass",
     "glass_nvidia": "grid_glass_nvidia",
     "pinocchio":    "pinocchio",
+    "mjx":          "mjx",
 }
 
 EE_FRAMES_GRID = {
@@ -65,6 +67,8 @@ EE_FRAMES_PIN = {
     "go2":    "FR_foot",
     "g1":     "right_rubber_hand",
 }
+# MJX uses MuJoCo body names (same names as Pinocchio link names for these robots).
+EE_FRAMES_MJX = EE_FRAMES_PIN
 
 
 def ts() -> str:
@@ -119,7 +123,8 @@ def setup_pre_glass_worktree(path: Path) -> Path:
 # ---------------------------------------------------------------------------
 def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
                   output: Path, ee_frame: str, linalg_backend: str | None,
-                  mathdx_root: str | None, no_recompile: bool) -> list[str]:
+                  mathdx_root: str | None, no_recompile: bool,
+                  no_rdc: bool = False) -> list[str]:
     cmd = [
         sys.executable,
         str(harness_repo_root / "test" / "benchmarks" / "baselines" / "grid" / "run.py"),
@@ -132,12 +137,15 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
         cmd += ["--linalg-backend", linalg_backend]
     if mathdx_root is not None:
         cmd += ["--mathdx-root", mathdx_root]
+    if no_rdc:
+        cmd.append("--no-rdc")
     return cmd
 
 
 def run_grid_column(column: str, robot: str, base: str, *,
                     output_dir: Path, worktree_path: Path,
-                    mathdx_root: str | None, no_recompile: bool) -> Path | None:
+                    mathdx_root: str | None, no_recompile: bool,
+                    no_rdc: bool = False) -> Path | None:
     """Run the appropriate GRiD harness for `column`. Returns output JSON path or None."""
     ee_frame = EE_FRAMES_GRID.get(robot, "")
     baseline_key = COLUMN_TO_BASELINE_KEY[column]
@@ -147,15 +155,17 @@ def run_grid_column(column: str, robot: str, base: str, *,
         if base != "fixed":
             print(f"  [{column}] skipping {robot}/{base}: pre-glass harness doesn't support floating-base")
             return None
+        # pre_glass harness predates --no-rdc; don't pass it.
         cmd = _grid_run_cmd(worktree_path, robot, base, output, ee_frame,
                             linalg_backend=None, mathdx_root=None, no_recompile=no_recompile)
     elif column == "glass":
         cmd = _grid_run_cmd(REPO_ROOT, robot, base, output, ee_frame,
-                            linalg_backend="glass", mathdx_root=None, no_recompile=no_recompile)
+                            linalg_backend="glass", mathdx_root=None,
+                            no_recompile=no_recompile, no_rdc=no_rdc)
     elif column == "glass_nvidia":
         cmd = _grid_run_cmd(REPO_ROOT, robot, base, output, ee_frame,
                             linalg_backend="glass-nvidia", mathdx_root=mathdx_root,
-                            no_recompile=no_recompile)
+                            no_recompile=no_recompile, no_rdc=no_rdc)
     else:
         raise ValueError(f"Unknown grid column: {column}")
 
@@ -188,6 +198,24 @@ def run_pinocchio_column(robot: str, base: str, *,
     result = subprocess.run(cmd, capture_output=False, text=True)
     if result.returncode != 0 or not output.exists():
         print(f"  [pinocchio] FAILED for {robot}/{base}", file=sys.stderr)
+        return None
+    return output
+
+
+def run_mjx_column(robot: str, base: str, *,
+                   output_dir: Path) -> Path | None:
+    ee_frame = EE_FRAMES_MJX.get(robot, "")
+    output = output_dir / f"{robot}_{base}_mjx.json"
+    cmd = [
+        sys.executable,
+        str(REPO_ROOT / "test" / "benchmarks" / "baselines" / "mjx" / "run.py"),
+        "--robot", robot, "--base", base, "--output", str(output),
+        "--ee-frame", ee_frame,
+    ]
+    print(f"[{ts()}] [mjx] {robot} {base} → {output.name}")
+    result = subprocess.run(cmd, capture_output=False, text=True)
+    if result.returncode != 0 or not output.exists():
+        print(f"  [mjx] FAILED for {robot}/{base}", file=sys.stderr)
         return None
     return output
 
@@ -234,7 +262,11 @@ def main() -> None:
     parser.add_argument("--robots", nargs="+", default=list(ROBOTS), choices=list(ROBOTS))
     parser.add_argument("--bases",  nargs="+", default=list(BASES),  choices=list(BASES))
     parser.add_argument("--columns", nargs="+", default=list(COLUMNS), choices=list(COLUMNS),
-                        help="Subset of columns to run (default: all four)")
+                        help="Subset of columns to run (default: all five)")
+    parser.add_argument("--skip", nargs="+", default=[], metavar="ROBOT_BASE",
+                        help="Exclude specific robot/base combinations, e.g. "
+                             "'--skip iiwa14_floating g1_fixed'. Useful when one "
+                             "combination hangs the compiler.")
     parser.add_argument("--mathdx-root", default=os.environ.get("MATHDX_ROOT"),
                         help="Required for the glass_nvidia column (or set MATHDX_ROOT)")
     parser.add_argument("--worktree-path", type=Path,
@@ -246,6 +278,10 @@ def main() -> None:
                         help=f"Where per-column JSONs land (default: {RESULTS_DIR})")
     parser.add_argument("--no-recompile", action="store_true",
                         help="Forward --no-recompile to inner harnesses")
+    parser.add_argument("--no-rdc", action="store_true",
+                        help="Drop -rdc=true from the GRiD glass / glass-nvidia compile line. "
+                             "Use when ptxas hangs on floating-base kernels (older toolkits). "
+                             "Batch timings unaffected; single-call timings may LICM-elide.")
     parser.add_argument("--report", type=Path,
                         default=THIS_DIR / "benchmark_multi_version.md",
                         help="Markdown report output path")
@@ -267,9 +303,14 @@ def main() -> None:
     produced: list[Path] = []
     skipped: list[tuple[str, str, str]] = []
 
+    skip_set = {s.strip() for s in args.skip}
     for column in args.columns:
         for robot in args.robots:
             for base in args.bases:
+                if f"{robot}_{base}" in skip_set:
+                    print(f"  [{column}] SKIP {robot}/{base}: excluded via --skip")
+                    skipped.append((column, robot, base))
+                    continue
                 if column == "glass_nvidia" and args.mathdx_root is None:
                     print(f"  [{column}] SKIP {robot}/{base}: --mathdx-root not provided")
                     skipped.append((column, robot, base))
@@ -279,11 +320,16 @@ def main() -> None:
                         robot, base,
                         output_dir=args.output_dir, no_recompile=args.no_recompile,
                     )
+                elif column == "mjx":
+                    p = run_mjx_column(
+                        robot, base, output_dir=args.output_dir,
+                    )
                 else:
                     p = run_grid_column(
                         column, robot, base,
                         output_dir=args.output_dir, worktree_path=args.worktree_path,
                         mathdx_root=args.mathdx_root, no_recompile=args.no_recompile,
+                        no_rdc=args.no_rdc,
                     )
                 if p is not None:
                     produced.append(p)
