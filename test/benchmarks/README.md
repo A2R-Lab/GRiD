@@ -12,6 +12,10 @@ All commands use the project virtualenv.  Create it once if it doesn't exist:
 ```bash
 python -m venv .venv
 .venv/bin/pip install -e ".[dev]"
+# For an apples-to-apples Pinocchio comparison, also install CppADCodeGen
+# (enables the codegen-accelerated id/minv/aba/fd/crba/id_du/fd_du paths;
+# without it those algorithms appear as null in the Pinocchio results):
+.venv/bin/pip install cmeel-cppadcodegen
 ```
 
 Then run benchmarks:
@@ -84,18 +88,31 @@ Verify:
 .venv/bin/python -c "import pinocchio; print(pinocchio.__version__)"
 ```
 
-**CppADCodeGen (optional):** The codegen-accelerated algorithms (ID, Minv, ABA, FD,
-CRBA, ID_DU, FD_DU) require CppADCodeGen headers.  The benchmark runner detects
-availability automatically — if not found, those algorithms are silently reported as
-null and the direct-API algorithms (EE_POSE, EE_POSE_GRADIENT, IDSVA_SO) still run.
+**CppADCodeGen (recommended for an apples-to-apples comparison):** The codegen-
+accelerated algorithms (ID, Minv, ABA, FD, CRBA, ID_DU, FD_DU) require CppADCodeGen
+headers.  The benchmark runner detects availability automatically — if not found,
+those algorithms are silently reported as null and the direct-API algorithms
+(EE_POSE, EE_POSE_GRADIENT, IDSVA_SO) still run.
 
-CppADCodeGen is not available on PyPI.  If you want full codegen coverage, install it
-from source or via your system package manager before running benchmarks:
+Install the cmeel-packaged version into the same venv as Pinocchio:
+
+```bash
+.venv/bin/pip install cmeel-cppadcodegen
+```
+
+This drops `cppad/cg.hpp` into `.venv/lib/pythonX.Y/site-packages/cmeel.prefix/`
+where the runner looks for it; no other configuration needed.  Bust the pinocchio
+binary cache after installing so the rebuild picks up `-DHAVE_CPPADCG`:
+
+```bash
+rm -rf .pytest_cache/grid_cuda/pinocchio_benchmarks
+```
+
+If you'd rather use the system package or build from source, those still work too:
 
 ```bash
 # Ubuntu/Debian (if available):
 sudo apt-get install libcppadcg-dev
-
 # Or build from source: https://github.com/joaoleal/CppADCodeGen
 ```
 

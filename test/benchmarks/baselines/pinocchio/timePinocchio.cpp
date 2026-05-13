@@ -450,8 +450,35 @@ void idsvaSoThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
 // Main test function
 // ---------------------------------------------------------------------------
 
+// Algorithm gating for parallel per-algo subprocess runs. `enabled_algo` is the
+// CLI --algo value: "all" (default) runs every algorithm; "id", "minv", "fd",
+// "aba", "crba", "id_du", "fd_du", "ee_pose", "ee_pose_gradient", "idsva_so"
+// run only that algorithm and skip the codegen JIT for any algorithms whose
+// underlying CodeGen* objects are not needed (RNEA, Minv, ABA, CRBA,
+// RNEADerivatives). This is the lever for sidestepping the >25 min cppadcg
+// JIT wall on g1_floating: by farming algos out to parallel subprocesses in
+// run.py, the wall time becomes max(per_algo_time) instead of sum.
+inline bool is_algo_active(const std::string &enabled, const char *algo) {
+    return enabled == "all" || enabled == algo;
+}
+inline bool needs_codegen(const std::string &enabled, const char *cg) {
+    if (enabled == "all") return true;
+    // Map algos to the cppadcg CodeGen* objects each depends on.
+    // RNEA codegen used by: id, fd, fd_du
+    if (std::string(cg) == "rnea")   return enabled == "id" || enabled == "fd" || enabled == "fd_du";
+    // Minv codegen used by: minv, fd, fd_du
+    if (std::string(cg) == "minv")   return enabled == "minv" || enabled == "fd" || enabled == "fd_du";
+    // ABA codegen used by: aba
+    if (std::string(cg) == "aba")    return enabled == "aba";
+    // CRBA codegen used by: crba
+    if (std::string(cg) == "crba")   return enabled == "crba";
+    // RNEADerivatives codegen used by: id_du, fd_du
+    if (std::string(cg) == "rnea_d") return enabled == "id_du" || enabled == "fd_du";
+    return false;
+}
+
 template<typename T, int TEST_ITERS, int NUM_THREADS, int NUM_TIME_STEPS>
-void test(std::string urdf_filepath, bool floating_base, std::string frame_name = ""){
+void test(std::string urdf_filepath, bool floating_base, std::string frame_name = "", std::string enabled_algo = "all"){
     struct timespec start, end;
 
     typedef Matrix<T, Eigen::Dynamic, Eigen::Dynamic> MatrixXT;
@@ -476,51 +503,66 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
         }
     }
 
-    // Initialize codegen objects (requires CppADCodeGen)
+    // Initialize codegen objects (requires CppADCodeGen). Each block is gated
+    // on `needs_codegen()` so per-algo CLI subprocesses only pay the cppadcg
+    // JIT cost for the codegens actually needed. The CodeGen* solo objects
+    // are stack-allocated (constructor is cheap; JIT happens in initLib);
+    // the threaded arrays are zero-initialized so deletes on the unused
+    // entries are safe nullptrs at the end of the function.
 #ifdef HAVE_CPPADCG
     CodeGenRNEAWithGetRes<T> rnea_code_gen(model.cast<T>());
-    rnea_code_gen.initLib(); rnea_code_gen.loadLib();
+    if(needs_codegen(enabled_algo, "rnea")){ rnea_code_gen.initLib(); rnea_code_gen.loadLib(); }
 
-    CodeGenRNEAWithGetRes<T> *rnea_code_gen_arr[NUM_THREADS];
-    for(int i = 0; i < NUM_THREADS; i++){
-        rnea_code_gen_arr[i] = new CodeGenRNEAWithGetRes<T>(model.cast<T>());
-        rnea_code_gen_arr[i]->initLib(); rnea_code_gen_arr[i]->loadLib();
+    CodeGenRNEAWithGetRes<T> *rnea_code_gen_arr[NUM_THREADS] = {nullptr};
+    if(needs_codegen(enabled_algo, "rnea")){
+        for(int i = 0; i < NUM_THREADS; i++){
+            rnea_code_gen_arr[i] = new CodeGenRNEAWithGetRes<T>(model.cast<T>());
+            rnea_code_gen_arr[i]->initLib(); rnea_code_gen_arr[i]->loadLib();
+        }
     }
 
     CodeGenMinv<T> minv_code_gen(model.cast<T>());
-    minv_code_gen.initLib(); minv_code_gen.loadLib();
+    if(needs_codegen(enabled_algo, "minv")){ minv_code_gen.initLib(); minv_code_gen.loadLib(); }
 
-    CodeGenMinv<T> *minv_code_gen_arr[NUM_THREADS];
-    for(int i = 0; i < NUM_THREADS; i++){
-        minv_code_gen_arr[i] = new CodeGenMinv<T>(model.cast<T>());
-        minv_code_gen_arr[i]->initLib(); minv_code_gen_arr[i]->loadLib();
+    CodeGenMinv<T> *minv_code_gen_arr[NUM_THREADS] = {nullptr};
+    if(needs_codegen(enabled_algo, "minv")){
+        for(int i = 0; i < NUM_THREADS; i++){
+            minv_code_gen_arr[i] = new CodeGenMinv<T>(model.cast<T>());
+            minv_code_gen_arr[i]->initLib(); minv_code_gen_arr[i]->loadLib();
+        }
     }
 
     DerivedCodeGenRNEADerivatives<T> rnea_derivatives_code_gen(model.cast<T>());
-    rnea_derivatives_code_gen.initLib(); rnea_derivatives_code_gen.loadLib();
+    if(needs_codegen(enabled_algo, "rnea_d")){ rnea_derivatives_code_gen.initLib(); rnea_derivatives_code_gen.loadLib(); }
 
-    DerivedCodeGenRNEADerivatives<T> *rnea_derivatives_code_gen_arr[NUM_THREADS];
-    for(int i = 0; i < NUM_THREADS; i++){
-        rnea_derivatives_code_gen_arr[i] = new DerivedCodeGenRNEADerivatives<T>(model.cast<T>());
-        rnea_derivatives_code_gen_arr[i]->initLib(); rnea_derivatives_code_gen_arr[i]->loadLib();
+    DerivedCodeGenRNEADerivatives<T> *rnea_derivatives_code_gen_arr[NUM_THREADS] = {nullptr};
+    if(needs_codegen(enabled_algo, "rnea_d")){
+        for(int i = 0; i < NUM_THREADS; i++){
+            rnea_derivatives_code_gen_arr[i] = new DerivedCodeGenRNEADerivatives<T>(model.cast<T>());
+            rnea_derivatives_code_gen_arr[i]->initLib(); rnea_derivatives_code_gen_arr[i]->loadLib();
+        }
     }
 
     CodeGenABA<T> aba_code_gen(model.cast<T>());
-    aba_code_gen.initLib(); aba_code_gen.loadLib();
+    if(needs_codegen(enabled_algo, "aba")){ aba_code_gen.initLib(); aba_code_gen.loadLib(); }
 
-    CodeGenABA<T> *aba_code_gen_arr[NUM_THREADS];
-    for(int i = 0; i < NUM_THREADS; i++){
-        aba_code_gen_arr[i] = new CodeGenABA<T>(model.cast<T>());
-        aba_code_gen_arr[i]->initLib(); aba_code_gen_arr[i]->loadLib();
+    CodeGenABA<T> *aba_code_gen_arr[NUM_THREADS] = {nullptr};
+    if(needs_codegen(enabled_algo, "aba")){
+        for(int i = 0; i < NUM_THREADS; i++){
+            aba_code_gen_arr[i] = new CodeGenABA<T>(model.cast<T>());
+            aba_code_gen_arr[i]->initLib(); aba_code_gen_arr[i]->loadLib();
+        }
     }
 
     CodeGenCRBA<T> crba_code_gen(model.cast<T>());
-    crba_code_gen.initLib(); crba_code_gen.loadLib();
+    if(needs_codegen(enabled_algo, "crba")){ crba_code_gen.initLib(); crba_code_gen.loadLib(); }
 
-    CodeGenCRBA<T> *crba_code_gen_arr[NUM_THREADS];
-    for(int i = 0; i < NUM_THREADS; i++){
-        crba_code_gen_arr[i] = new CodeGenCRBA<T>(model.cast<T>());
-        crba_code_gen_arr[i]->initLib(); crba_code_gen_arr[i]->loadLib();
+    CodeGenCRBA<T> *crba_code_gen_arr[NUM_THREADS] = {nullptr};
+    if(needs_codegen(enabled_algo, "crba")){
+        for(int i = 0; i < NUM_THREADS; i++){
+            crba_code_gen_arr[i] = new CodeGenCRBA<T>(model.cast<T>());
+            crba_code_gen_arr[i]->initLib(); crba_code_gen_arr[i]->loadLib();
+        }
     }
 #endif // HAVE_CPPADCG
 
@@ -585,67 +627,81 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             Eigen::MatrixXd J_single = Eigen::MatrixXd::Zero(6, model.nv);
 
 #ifdef HAVE_CPPADCG
-            clock_gettime(CLOCK_MONOTONIC,&start);
-            for(int i = 0; i < TEST_ITERS; i++){
-                rnea_code_gen.evalFunction(qs[0],qds[0],qdds[0]);
+            if(is_algo_active(enabled_algo, "id")){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < TEST_ITERS; i++){
+                    rnea_code_gen.evalFunction(qs[0],qds[0],qdds[0]);
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("ID codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
-            clock_gettime(CLOCK_MONOTONIC,&end);
-            printf("ID codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
 
-            clock_gettime(CLOCK_MONOTONIC,&start);
-            for(int i = 0; i < TEST_ITERS; i++){
-                minv_code_gen.evalFunction(qs[0]);
+            if(is_algo_active(enabled_algo, "minv")){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < TEST_ITERS; i++){
+                    minv_code_gen.evalFunction(qs[0]);
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("Minv codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
-            clock_gettime(CLOCK_MONOTONIC,&end);
-            printf("Minv codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
 
-            clock_gettime(CLOCK_MONOTONIC,&start);
-            for(int i = 0; i < TEST_ITERS; i++){
-                aba_code_gen.evalFunction(qs[0],qds[0],us[0]);
+            if(is_algo_active(enabled_algo, "aba")){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < TEST_ITERS; i++){
+                    aba_code_gen.evalFunction(qs[0],qds[0],us[0]);
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("ABA codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
-            clock_gettime(CLOCK_MONOTONIC,&end);
-            printf("ABA codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
 
-            clock_gettime(CLOCK_MONOTONIC,&start);
-            for(int i = 0; i < TEST_ITERS; i++){
-                minv_code_gen.evalFunction(qs[0]);
-                Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic> minv = minv_code_gen.Minv.block(0,0,model.nv,model.nv);
-                minv.template triangularView<Eigen::StrictlyLower>() =
-                    minv.transpose().template triangularView<Eigen::StrictlyLower>();
-                rnea_code_gen.evalFunction(qs[0],qds[0],zeros);
-                qdds[0].noalias() = minv*(us[0] - rnea_code_gen.getRes());
+            if(is_algo_active(enabled_algo, "fd")){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < TEST_ITERS; i++){
+                    minv_code_gen.evalFunction(qs[0]);
+                    Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic> minv = minv_code_gen.Minv.block(0,0,model.nv,model.nv);
+                    minv.template triangularView<Eigen::StrictlyLower>() =
+                        minv.transpose().template triangularView<Eigen::StrictlyLower>();
+                    rnea_code_gen.evalFunction(qs[0],qds[0],zeros);
+                    qdds[0].noalias() = minv*(us[0] - rnea_code_gen.getRes());
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("FD codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
-            clock_gettime(CLOCK_MONOTONIC,&end);
-            printf("FD codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
 
-            clock_gettime(CLOCK_MONOTONIC,&start);
-            for(int i = 0; i < TEST_ITERS; i++){
-                crba_code_gen.evalFunction(qs[0]);
+            if(is_algo_active(enabled_algo, "crba")){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < TEST_ITERS; i++){
+                    crba_code_gen.evalFunction(qs[0]);
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("CRBA codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
-            clock_gettime(CLOCK_MONOTONIC,&end);
-            printf("CRBA codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
 
-            clock_gettime(CLOCK_MONOTONIC,&start);
-            for(int i = 0; i < TEST_ITERS; i++){
-                rnea_derivatives_code_gen.evalFunction(qs[0],qds[0],qdds[0]);
+            if(is_algo_active(enabled_algo, "id_du")){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < TEST_ITERS; i++){
+                    rnea_derivatives_code_gen.evalFunction(qs[0],qds[0],qdds[0]);
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("ID_DU codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
-            clock_gettime(CLOCK_MONOTONIC,&end);
-            printf("ID_DU codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
 
-            clock_gettime(CLOCK_MONOTONIC,&start);
-            for(int i = 0; i < TEST_ITERS; i++){
-                minv_code_gen.evalFunction(qs[0]);
-                Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic> minv = minv_code_gen.Minv.block(0,0,model.nv,model.nv);
-                minv.template triangularView<Eigen::StrictlyLower>() =
-                    minv.transpose().template triangularView<Eigen::StrictlyLower>();
-                rnea_code_gen.evalFunction(qs[0],qds[0],zeros);
-                VectorXT qdd = minv*(us[0] - rnea_code_gen.getRes());
-                rnea_derivatives_code_gen.evalFunction(qs[0],qds[0],qdd);
-                dqdd_dqs[0].noalias() = -minv*rnea_derivatives_code_gen.getDtauDq();
-                dqdd_dvs[0].noalias() = -minv*rnea_derivatives_code_gen.getDtauDv();
+            if(is_algo_active(enabled_algo, "fd_du")){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < TEST_ITERS; i++){
+                    minv_code_gen.evalFunction(qs[0]);
+                    Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic> minv = minv_code_gen.Minv.block(0,0,model.nv,model.nv);
+                    minv.template triangularView<Eigen::StrictlyLower>() =
+                        minv.transpose().template triangularView<Eigen::StrictlyLower>();
+                    rnea_code_gen.evalFunction(qs[0],qds[0],zeros);
+                    VectorXT qdd = minv*(us[0] - rnea_code_gen.getRes());
+                    rnea_derivatives_code_gen.evalFunction(qs[0],qds[0],qdd);
+                    dqdd_dqs[0].noalias() = -minv*rnea_derivatives_code_gen.getDtauDq();
+                    dqdd_dvs[0].noalias() = -minv*rnea_derivatives_code_gen.getDtauDv();
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("FD_DU codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
-            clock_gettime(CLOCK_MONOTONIC,&end);
-            printf("FD_DU codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
 #else
             // cppadcg not available — codegen variants null; run direct library instead
             printf("ID codegen null\n");
@@ -656,39 +712,49 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             printf("ID_DU codegen null\n");
             printf("FD_DU codegen null\n");
 
-            clock_gettime(CLOCK_MONOTONIC,&start);
-            for(int i = 0; i < TEST_ITERS; i++){
-                pinocchio::rnea(model, datas[0], qs[0].template cast<double>(), qds[0].template cast<double>(), qdds[0].template cast<double>());
+            if(is_algo_active(enabled_algo, "id")){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < TEST_ITERS; i++){
+                    pinocchio::rnea(model, datas[0], qs[0].template cast<double>(), qds[0].template cast<double>(), qdds[0].template cast<double>());
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("ID direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
-            clock_gettime(CLOCK_MONOTONIC,&end);
-            printf("ID direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
 
-            clock_gettime(CLOCK_MONOTONIC,&start);
-            for(int i = 0; i < TEST_ITERS; i++){
-                pinocchio::crba(model, datas[0], qs[0].template cast<double>());
-                pinocchio::cholesky::decompose(model, datas[0]);
-                pinocchio::cholesky::computeMinv(model, datas[0]);
+            if(is_algo_active(enabled_algo, "minv")){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < TEST_ITERS; i++){
+                    pinocchio::crba(model, datas[0], qs[0].template cast<double>());
+                    pinocchio::cholesky::decompose(model, datas[0]);
+                    pinocchio::cholesky::computeMinv(model, datas[0]);
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("Minv direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
-            clock_gettime(CLOCK_MONOTONIC,&end);
-            printf("Minv direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
 
-            clock_gettime(CLOCK_MONOTONIC,&start);
-            for(int i = 0; i < TEST_ITERS; i++){
-                pinocchio::aba(model, datas[0], qs[0].template cast<double>(), qds[0].template cast<double>(), us[0].template cast<double>());
+            if(is_algo_active(enabled_algo, "aba")){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < TEST_ITERS; i++){
+                    pinocchio::aba(model, datas[0], qs[0].template cast<double>(), qds[0].template cast<double>(), us[0].template cast<double>());
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("ABA direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
-            clock_gettime(CLOCK_MONOTONIC,&end);
-            printf("ABA direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
 
-            printf("FD direct null\n");
-
-            clock_gettime(CLOCK_MONOTONIC,&start);
-            for(int i = 0; i < TEST_ITERS; i++){
-                pinocchio::crba(model, datas[0], qs[0].template cast<double>());
+            if(is_algo_active(enabled_algo, "fd")){
+                printf("FD direct null\n");
             }
-            clock_gettime(CLOCK_MONOTONIC,&end);
-            printf("CRBA direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
 
-            {
+            if(is_algo_active(enabled_algo, "crba")){
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < TEST_ITERS; i++){
+                    pinocchio::crba(model, datas[0], qs[0].template cast<double>());
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("CRBA direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+            }
+
+            if(is_algo_active(enabled_algo, "id_du")){
                 Eigen::MatrixXd dtau_dq_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
                 Eigen::MatrixXd dtau_dv_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
                 Eigen::MatrixXd dtau_da_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
@@ -700,7 +766,9 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 }
                 clock_gettime(CLOCK_MONOTONIC,&end);
                 printf("ID_DU direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+            }
 
+            if(is_algo_active(enabled_algo, "fd_du")){
                 Eigen::MatrixXd ddq_dq_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
                 Eigen::MatrixXd ddq_dv_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
                 Eigen::MatrixXd ddq_dtau_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
@@ -715,7 +783,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             }
 #endif // HAVE_CPPADCG
 
-            if(have_frame){
+            if(have_frame && is_algo_active(enabled_algo, "ee_pose")){
                 clock_gettime(CLOCK_MONOTONIC,&start);
                 for(int i = 0; i < TEST_ITERS; i++){
                     pinocchio::forwardKinematics(model, datas[0], qs[0].template cast<double>());
@@ -723,7 +791,8 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 }
                 clock_gettime(CLOCK_MONOTONIC,&end);
                 printf("EE_POSE direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
-
+            }
+            if(have_frame && is_algo_active(enabled_algo, "ee_pose_gradient")){
                 clock_gettime(CLOCK_MONOTONIC,&start);
                 for(int i = 0; i < TEST_ITERS; i++){
                     pinocchio::computeJointJacobians(model, datas[0], qs[0].template cast<double>());
@@ -733,150 +802,180 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("EE_POSE_GRADIENT direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
 
-            // IDSVA_SO is expensive — use fewer iterations
-            int idsva_so_iters = std::max(1, TEST_ITERS/10);
-            clock_gettime(CLOCK_MONOTONIC,&start);
-            for(int i = 0; i < idsva_so_iters; i++){
-                pinocchio::ComputeRNEASecondOrderDerivatives(model, datas[0],
-                    qs[0].template cast<double>(), qds[0].template cast<double>(), zeros_d);
+            if(is_algo_active(enabled_algo, "idsva_so")){
+                // IDSVA_SO is expensive — use fewer iterations
+                int idsva_so_iters = std::max(1, TEST_ITERS/10);
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < idsva_so_iters; i++){
+                    pinocchio::ComputeRNEASecondOrderDerivatives(model, datas[0],
+                        qs[0].template cast<double>(), qds[0].template cast<double>(), zeros_d);
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("IDSVA_SO direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(idsva_so_iters));
             }
-            clock_gettime(CLOCK_MONOTONIC,&end);
-            printf("IDSVA_SO direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(idsva_so_iters));
 
             // FDSVA_SO: no Pinocchio equivalent
-            printf("FDSVA_SO direct null\n");
+            if(is_algo_active(enabled_algo, "fdsva_so")){
+                printf("FDSVA_SO direct null\n");
+            }
         }
         else{
             ReusableThreads<NUM_THREADS> threads;
             std::vector<double> times = {};
 
 #ifdef HAVE_CPPADCG
-            for(int iter = 0; iter < TEST_ITERS; iter++){
-                clock_gettime(CLOCK_MONOTONIC,&start);
-                inverseDynamicsThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(rnea_code_gen_arr,
-                                                                              model.nq,model.nv,qs,qds,&threads);
-                clock_gettime(CLOCK_MONOTONIC,&end);
-                times.push_back(time_delta_us_timespec(start,end));
+            if(is_algo_active(enabled_algo, "id")){
+                for(int iter = 0; iter < TEST_ITERS; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    inverseDynamicsThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(rnea_code_gen_arr,
+                                                                                  model.nq,model.nv,qs,qds,&threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: ID codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
             }
-            printf("[N:%d]: ID codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
-            printf("----------------------------------------\n");
 
-            for(int iter = 0; iter < TEST_ITERS; iter++){
-                clock_gettime(CLOCK_MONOTONIC,&start);
-                minvThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(minv_code_gen_arr,model.nq,model.nv,qs,&threads);
-                clock_gettime(CLOCK_MONOTONIC,&end);
-                times.push_back(time_delta_us_timespec(start,end));
+            if(is_algo_active(enabled_algo, "minv")){
+                for(int iter = 0; iter < TEST_ITERS; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    minvThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(minv_code_gen_arr,model.nq,model.nv,qs,&threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: Minv codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
             }
-            printf("[N:%d]: Minv codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
-            printf("----------------------------------------\n");
 
-            for(int iter = 0; iter < TEST_ITERS; iter++){
-                clock_gettime(CLOCK_MONOTONIC,&start);
-                abaThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(aba_code_gen_arr,
-                                                                  model.nq,model.nv,qs,qds,&threads);
-                clock_gettime(CLOCK_MONOTONIC,&end);
-                times.push_back(time_delta_us_timespec(start,end));
+            if(is_algo_active(enabled_algo, "aba")){
+                for(int iter = 0; iter < TEST_ITERS; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    abaThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(aba_code_gen_arr,
+                                                                      model.nq,model.nv,qs,qds,&threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: ABA codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
             }
-            printf("[N:%d]: ABA codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
-            printf("----------------------------------------\n");
 
-            for(int iter = 0; iter < TEST_ITERS; iter++){
-                clock_gettime(CLOCK_MONOTONIC,&start);
-                forwardDynamicsThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(minv_code_gen_arr,rnea_code_gen_arr,
-                                                                              model.nq,model.nv,qs,qds,qdds,us,&threads);
-                clock_gettime(CLOCK_MONOTONIC,&end);
-                times.push_back(time_delta_us_timespec(start,end));
+            if(is_algo_active(enabled_algo, "fd")){
+                for(int iter = 0; iter < TEST_ITERS; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    forwardDynamicsThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(minv_code_gen_arr,rnea_code_gen_arr,
+                                                                                  model.nq,model.nv,qs,qds,qdds,us,&threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: FD codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
             }
-            printf("[N:%d]: FD codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
-            printf("----------------------------------------\n");
 
-            for(int iter = 0; iter < TEST_ITERS; iter++){
-                clock_gettime(CLOCK_MONOTONIC,&start);
-                crbaThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(crba_code_gen_arr,model.nq,model.nv,qs,&threads);
-                clock_gettime(CLOCK_MONOTONIC,&end);
-                times.push_back(time_delta_us_timespec(start,end));
+            if(is_algo_active(enabled_algo, "crba")){
+                for(int iter = 0; iter < TEST_ITERS; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    crbaThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(crba_code_gen_arr,model.nq,model.nv,qs,&threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: CRBA codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
             }
-            printf("[N:%d]: CRBA codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
-            printf("----------------------------------------\n");
 
-            for(int iter = 0; iter < TEST_ITERS; iter++){
-                clock_gettime(CLOCK_MONOTONIC,&start);
-                inverseDynamicsGradientThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(rnea_derivatives_code_gen_arr,
-                                                                                      model.nq,model.nv,qs,qds,&threads);
-                clock_gettime(CLOCK_MONOTONIC,&end);
-                times.push_back(time_delta_us_timespec(start,end));
+            if(is_algo_active(enabled_algo, "id_du")){
+                for(int iter = 0; iter < TEST_ITERS; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    inverseDynamicsGradientThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(rnea_derivatives_code_gen_arr,
+                                                                                          model.nq,model.nv,qs,qds,&threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: ID_DU codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
             }
-            printf("[N:%d]: ID_DU codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
-            printf("----------------------------------------\n");
 
-            for(int iter = 0; iter < TEST_ITERS; iter++){
-                clock_gettime(CLOCK_MONOTONIC,&start);
-                forwardDynamicsGradientThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(rnea_derivatives_code_gen_arr,
-                                                                                    minv_code_gen_arr,rnea_code_gen_arr,
-                                                                                    model.nq,model.nv,dqdd_dqs,dqdd_dvs,
-                                                                                    qs,qds,us,&threads);
-                clock_gettime(CLOCK_MONOTONIC,&end);
-                times.push_back(time_delta_us_timespec(start,end));
+            if(is_algo_active(enabled_algo, "fd_du")){
+                for(int iter = 0; iter < TEST_ITERS; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    forwardDynamicsGradientThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(rnea_derivatives_code_gen_arr,
+                                                                                        minv_code_gen_arr,rnea_code_gen_arr,
+                                                                                        model.nq,model.nv,dqdd_dqs,dqdd_dvs,
+                                                                                        qs,qds,us,&threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: FD_DU codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
             }
-            printf("[N:%d]: FD_DU codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
-            printf("----------------------------------------\n");
 #endif // HAVE_CPPADCG
 
-            for(int iter = 0; iter < TEST_ITERS; iter++){
-                clock_gettime(CLOCK_MONOTONIC,&start);
-                idDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, qdds, &threads);
-                clock_gettime(CLOCK_MONOTONIC,&end);
-                times.push_back(time_delta_us_timespec(start,end));
+            if(is_algo_active(enabled_algo, "id")){
+                for(int iter = 0; iter < TEST_ITERS; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    idDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, qdds, &threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: ID direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
             }
-            printf("[N:%d]: ID direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
-            printf("----------------------------------------\n");
 
-            for(int iter = 0; iter < TEST_ITERS; iter++){
-                clock_gettime(CLOCK_MONOTONIC,&start);
-                minvDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, &threads);
-                clock_gettime(CLOCK_MONOTONIC,&end);
-                times.push_back(time_delta_us_timespec(start,end));
+            if(is_algo_active(enabled_algo, "minv")){
+                for(int iter = 0; iter < TEST_ITERS; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    minvDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, &threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: Minv direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
             }
-            printf("[N:%d]: Minv direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
-            printf("----------------------------------------\n");
 
-            for(int iter = 0; iter < TEST_ITERS; iter++){
-                clock_gettime(CLOCK_MONOTONIC,&start);
-                abaDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, us, &threads);
-                clock_gettime(CLOCK_MONOTONIC,&end);
-                times.push_back(time_delta_us_timespec(start,end));
+            if(is_algo_active(enabled_algo, "aba")){
+                for(int iter = 0; iter < TEST_ITERS; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    abaDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, us, &threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: ABA direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
             }
-            printf("[N:%d]: ABA direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
-            printf("----------------------------------------\n");
 
-            for(int iter = 0; iter < TEST_ITERS; iter++){
-                clock_gettime(CLOCK_MONOTONIC,&start);
-                crbaDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, &threads);
-                clock_gettime(CLOCK_MONOTONIC,&end);
-                times.push_back(time_delta_us_timespec(start,end));
+            if(is_algo_active(enabled_algo, "crba")){
+                for(int iter = 0; iter < TEST_ITERS; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    crbaDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, &threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: CRBA direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
             }
-            printf("[N:%d]: CRBA direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
-            printf("----------------------------------------\n");
 
-            for(int iter = 0; iter < TEST_ITERS; iter++){
-                clock_gettime(CLOCK_MONOTONIC,&start);
-                idDuDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, qdds, &threads);
-                clock_gettime(CLOCK_MONOTONIC,&end);
-                times.push_back(time_delta_us_timespec(start,end));
+            if(is_algo_active(enabled_algo, "id_du")){
+                for(int iter = 0; iter < TEST_ITERS; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    idDuDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, qdds, &threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: ID_DU direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
             }
-            printf("[N:%d]: ID_DU direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
-            printf("----------------------------------------\n");
 
-            for(int iter = 0; iter < TEST_ITERS; iter++){
-                clock_gettime(CLOCK_MONOTONIC,&start);
-                fdDuDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, us, &threads);
-                clock_gettime(CLOCK_MONOTONIC,&end);
-                times.push_back(time_delta_us_timespec(start,end));
+            if(is_algo_active(enabled_algo, "fd_du")){
+                for(int iter = 0; iter < TEST_ITERS; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    fdDuDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, us, &threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: FD_DU direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
             }
-            printf("[N:%d]: FD_DU direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
-            printf("----------------------------------------\n");
 
-            if(have_frame){
+            if(have_frame && is_algo_active(enabled_algo, "ee_pose")){
                 for(int iter = 0; iter < TEST_ITERS; iter++){
                     clock_gettime(CLOCK_MONOTONIC,&start);
                     eePoseThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, frame_id, qs, &threads);
@@ -885,7 +984,8 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 }
                 printf("[N:%d]: EE_POSE direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
                 printf("----------------------------------------\n");
-
+            }
+            if(have_frame && is_algo_active(enabled_algo, "ee_pose_gradient")){
                 for(int iter = 0; iter < TEST_ITERS; iter++){
                     clock_gettime(CLOCK_MONOTONIC,&start);
                     eePoseGradientThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, frame_id, qs, &threads);
@@ -896,16 +996,18 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("----------------------------------------\n");
             }
 
-            // IDSVA_SO uses fewer TEST_ITERS due to high cost (especially for large robots)
-            int idsva_so_iters = std::max(1, TEST_ITERS/10);
-            for(int iter = 0; iter < idsva_so_iters; iter++){
-                clock_gettime(CLOCK_MONOTONIC,&start);
-                idsvaSoThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, &threads);
-                clock_gettime(CLOCK_MONOTONIC,&end);
-                times.push_back(time_delta_us_timespec(start,end));
+            if(is_algo_active(enabled_algo, "idsva_so")){
+                // IDSVA_SO uses fewer TEST_ITERS due to high cost (especially for large robots)
+                int idsva_so_iters = std::max(1, TEST_ITERS/10);
+                for(int iter = 0; iter < idsva_so_iters; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    idsvaSoThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, &threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: IDSVA_SO direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
             }
-            printf("[N:%d]: IDSVA_SO direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
-            printf("----------------------------------------\n");
 
             // FDSVA_SO: no Pinocchio equivalent — not timed
         }
@@ -920,29 +1022,32 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
 }
 
 template<typename T, int TEST_ITERS, int CPU_THREADS>
-void run_all_tests(std::string urdf_filepath, bool floating_base, std::string frame_name = ""){
-    test<T,10*TEST_ITERS,CPU_THREADS,1>(urdf_filepath, floating_base, frame_name);
+void run_all_tests(std::string urdf_filepath, bool floating_base, std::string frame_name = "", std::string enabled_algo = "all"){
+    test<T,10*TEST_ITERS,CPU_THREADS,1>(urdf_filepath, floating_base, frame_name, enabled_algo);
     #if !TEST_FOR_EQUIVALENCE
-        test<T,TEST_ITERS,CPU_THREADS,16>(urdf_filepath, floating_base, frame_name);
-        test<T,TEST_ITERS,CPU_THREADS,32>(urdf_filepath, floating_base, frame_name);
-        test<T,TEST_ITERS,CPU_THREADS,64>(urdf_filepath, floating_base, frame_name);
-        test<T,TEST_ITERS,CPU_THREADS,128>(urdf_filepath, floating_base, frame_name);
-        test<T,TEST_ITERS,CPU_THREADS,256>(urdf_filepath, floating_base, frame_name);
+        test<T,TEST_ITERS,CPU_THREADS,16>(urdf_filepath, floating_base, frame_name, enabled_algo);
+        test<T,TEST_ITERS,CPU_THREADS,32>(urdf_filepath, floating_base, frame_name, enabled_algo);
+        test<T,TEST_ITERS,CPU_THREADS,64>(urdf_filepath, floating_base, frame_name, enabled_algo);
+        test<T,TEST_ITERS,CPU_THREADS,128>(urdf_filepath, floating_base, frame_name, enabled_algo);
+        test<T,TEST_ITERS,CPU_THREADS,256>(urdf_filepath, floating_base, frame_name, enabled_algo);
     #endif
 }
 
 int main(int argc, const char ** argv){
     std::string urdf_filepath;
     std::string frame_name = "";
+    std::string enabled_algo = "all";
     bool floating_base = false;
     if(argc > 1){
         urdf_filepath = argv[1];
         if(argc > 2 && argv[2][0] == 'T'){floating_base = true; printf("Floating Base = True\n");}
         if(argc > 3){frame_name = argv[3];}
+        if(argc > 4){enabled_algo = argv[4];}
     }
-    else{printf("Usage is: urdf_filepath [T/F floating_base] [frame_name]\n"); return 1;}
+    else{printf("Usage is: urdf_filepath [T/F floating_base] [frame_name] [algo|all]\n"); return 1;}
     if(!floating_base){printf("Floating Base = False\n");}
     if(!frame_name.empty()){printf("EE Frame: %s\n", frame_name.c_str());}
-    run_all_tests<float,TEST_ITERS_GLOBAL,CPU_THREADS_GLOBAL>(urdf_filepath, floating_base, frame_name);
+    if(enabled_algo != "all"){printf("Algo: %s\n", enabled_algo.c_str());}
+    run_all_tests<float,TEST_ITERS_GLOBAL,CPU_THREADS_GLOBAL>(urdf_filepath, floating_base, frame_name, enabled_algo);
     return 0;
 }

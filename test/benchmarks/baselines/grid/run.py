@@ -229,8 +229,18 @@ def compile_binary(
     resolved_mathdx_root: Path | None = None
     cublasdx_sm: str | None = None
 
+    # -rdc=true (relocatable device code) is required so nvcc treats the
+    # `__noinline__` device function `grid_licm_barrier` as opaque across the
+    # call boundary. Without separate-compilation semantics, nvcc inlines it
+    # despite the annotation and hoists the surrounding _single_timing inner
+    # work out of the rep loop (the LICM elision we hit on go2/g1 floating).
+    # -dlto is added on top only for the cuSOLVERDx link, since that path
+    # needs the device-link-time optimizer to merge the precompiled library.
     if linalg_backend == "glass":
-        linalg_flags.append("-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS")
+        linalg_flags.extend([
+            "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
+            "-rdc=true",
+        ])
     elif linalg_backend == "glass-nvidia":
         resolved_mathdx_root = resolve_mathdx_root(mathdx_root)
         if resolved_mathdx_root is None:
@@ -247,14 +257,15 @@ def compile_binary(
             f"-I{resolved_mathdx_root / 'external' / 'cutlass' / 'include'}",
             # cuBLASDx L2/L3 require relaxed constexpr (see GLASS README).
             "--expt-relaxed-constexpr",
+            "-rdc=true",
         ])
         if with_cusolverdx:
-            # cuSOLVERDx ships a precompiled device library; needs -rdc + -dlto
-            # and links against cusolverdx + cublas + cusolver + cudart.
+            # cuSOLVERDx ships a precompiled device library; needs -dlto
+            # on top of -rdc=true (added above) and links against
+            # cusolverdx + cublas + cusolver + cudart.
             cusolverdx_lib_dir = resolved_mathdx_root / "lib"
             linalg_flags.extend([
                 "-DGRID_CUDA_USE_GLASS_NVIDIA_LAPACK=1",
-                "-rdc=true",
                 "-dlto",
                 f"-L{cusolverdx_lib_dir}",
                 "-lcusolverdx",

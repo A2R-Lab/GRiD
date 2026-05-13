@@ -10,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -17,6 +18,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -141,6 +143,15 @@ def pinocchio_libs() -> list[str]:
         libs = []
         if cmeel.exists():
             libs = [f"-L{cmeel}/lib", "-lpinocchio_default", "-lpinocchio_parsers"]
+            # CppAD ships libcppad_lib.so (exports CppAD::local::temp_file etc.)
+            # which CppADCodeGen uses at link time. cmeel-cppad puts the library
+            # in cmeel.prefix/lib alongside libpinocchio_*, so just add it when
+            # cppadcg is enabled.
+            if (cmeel / "lib" / "libcppad_lib.so").exists():
+                libs.append("-lcppad_lib")
+                # Add rpath so the binary finds libcppad_lib.so at runtime
+                # without LD_LIBRARY_PATH gymnastics.
+                libs.append(f"-Wl,-rpath,{cmeel}/lib")
         return libs
     return result.stdout.strip().split()
 
@@ -204,11 +215,16 @@ def compile_binary(
         print("  [pinocchio] cppadcg not found — codegen algorithms will be null")
 
     cmd = [
-        gxx, "-std=c++14", "-O3",
+        gxx, "-std=c++14", "-O3", "-DNDEBUG",
         str(TIMING_SOURCE),
         "-o", str(binary_path),
         *codegen_flag, *cflags, *libs,
     ]
+    # -DNDEBUG disables Pinocchio's debug isUnitary check on the rotation matrix.
+    # The harness stores q as float32, normalizes the quaternion segment in float32
+    # precision (~1e-7), then Pinocchio casts to double and checks unitarity at
+    # double precision (~1e-12) — which fails for float32-normalized quaternions on
+    # floating-base robots (go2/g1). Release-mode benchmarks should disable asserts.
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(
@@ -240,17 +256,76 @@ def _runtime_env() -> dict[str, str]:
     return env
 
 
-def run_timing(binary_path: Path, urdf_path: str, base: str, ee_frame: str) -> str:
+# Pinocchio actively-timed algos. Skip "fdsva_so" — Pinocchio has no equivalent;
+# fill_nulls() will keep it as None in the final JSON. EE algos still need the
+# binary built with a valid frame_name; they run as fast as the others. The
+# main expense (cppadcg JIT) is gated inside timePinocchio.cpp by --algo.
+PINOCCHIO_ALGOS: tuple[str, ...] = (
+    "id", "minv", "fd", "aba", "crba", "id_du", "fd_du",
+    "ee_pose", "ee_pose_gradient", "idsva_so",
+)
+
+# Per-algo subprocess wall-clock timeout. g1 codegen for any one algo
+# (e.g., fd_du which needs rnea + minv + rnea_d) can take 20+ minutes;
+# headroom keeps us under a single 25-min ceiling per subprocess.
+PER_ALGO_TIMEOUT_S = 1500
+
+
+def run_timing_one_algo(binary_path: Path, urdf_path: str, base: str,
+                        ee_frame: str, algo: str) -> tuple[str, str | None]:
+    """Run timePinocchio.exe for a single algo. Returns (stdout+stderr, error_msg or None)."""
     floating_arg = "T" if base == "floating" else "F"
-    cmd = [str(binary_path), urdf_path, floating_arg]
-    if ee_frame:
-        cmd.append(ee_frame)
-    result = subprocess.run(cmd, capture_output=True, text=True, env=_runtime_env())
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"timePinocchio exited with code {result.returncode}:\n{result.stderr}"
+    # The CLI is positional: <urdf> <T/F> <frame_name> <algo>.
+    # frame_name must be present (even if empty) for algo to be parsed at argv[4].
+    cmd = [str(binary_path), urdf_path, floating_arg, ee_frame or "", algo]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, env=_runtime_env(),
+            timeout=PER_ALGO_TIMEOUT_S,
         )
-    return result.stdout + "\n" + result.stderr
+    except subprocess.TimeoutExpired:
+        return ("", f"timeout after {PER_ALGO_TIMEOUT_S}s")
+    if result.returncode != 0:
+        err = result.stderr[-500:] if result.stderr else f"exit {result.returncode}"
+        return (result.stdout + "\n" + result.stderr, err)
+    return (result.stdout + "\n" + result.stderr, None)
+
+
+def run_timings_parallel(
+    binary_path: Path, urdf_path: str, base: str, ee_frame: str,
+    algos: tuple[str, ...] = PINOCCHIO_ALGOS, max_workers: int | None = None,
+) -> dict[str, str]:
+    """Fan out one subprocess per algo and gather per-algo stdout.
+
+    Returns dict {algo: combined_stdout_stderr}. Algos that timed out or
+    errored get an error placeholder in the value (still parsed as null
+    downstream).
+    """
+    if max_workers is None:
+        # Most algos JIT-compile cppadcg in parallel; cap workers at
+        # os.cpu_count()/2 to avoid choking the system on big robots
+        # (each cppadcg compile already spawns gcc threads internally).
+        max_workers = max(1, (os.cpu_count() or 4) // 2)
+
+    print(f"  [pinocchio] fanning out {len(algos)} per-algo subprocesses "
+          f"(max_workers={max_workers}, timeout={PER_ALGO_TIMEOUT_S}s each)...")
+    outputs: dict[str, str] = {}
+    started = time.time()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        future_to_algo = {
+            ex.submit(run_timing_one_algo, binary_path, urdf_path, base, ee_frame, algo): algo
+            for algo in algos
+        }
+        for fut in concurrent.futures.as_completed(future_to_algo):
+            algo = future_to_algo[fut]
+            output, err = fut.result()
+            elapsed = time.time() - started
+            if err is not None:
+                print(f"  [pinocchio] [{elapsed:7.1f}s] {algo}: FAILED — {err}")
+            else:
+                print(f"  [pinocchio] [{elapsed:7.1f}s] {algo}: ok")
+            outputs[algo] = output
+    return outputs
 
 
 # ---------------------------------------------------------------------------
@@ -290,12 +365,24 @@ def main() -> None:
 
     print(f"  [pinocchio] running timing binary (EE frame: {ee_frame or 'none'})...")
     try:
-        output = run_timing(binary_path, urdf_path, args.base, ee_frame)
+        per_algo_outputs = run_timings_parallel(
+            binary_path, urdf_path, args.base, ee_frame,
+        )
     except Exception as e:
-        print(f"  [pinocchio] ERROR running binary: {e}", file=sys.stderr)
+        print(f"  [pinocchio] ERROR running binaries: {e}", file=sys.stderr)
         sys.exit(1)
 
-    timings = parse_pinocchio_output(output)
+    # Merge per-algo subprocess outputs. Each subprocess only emits timings for
+    # its own algo (others are gated out in timePinocchio.cpp); parse each
+    # subprocess's stdout independently and take that algo's entry from the
+    # parsed dict. Algos that errored or timed out stay null via fill_nulls().
+    timings: dict[str, object] = {}
+    for algo, output in per_algo_outputs.items():
+        if not output:
+            continue
+        parsed = parse_pinocchio_output(output)
+        if algo in parsed and parsed[algo] is not None:
+            timings[algo] = parsed[algo]
     filled = fill_nulls(timings)
 
     meta = build_metadata(include_gpu=False, include_pinocchio=True)

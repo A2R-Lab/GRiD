@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 
-from RBDReference import RBDReference
 from test.pinocchio_equivalents.conftest import MANIFEST_PATH
 from test.pinocchio_equivalents.utils.model_sources import (
     iter_robot_cases,
@@ -37,138 +36,74 @@ def _build_project_model(spec, base_mode):
     return build_project_adapter(spec, resolve_robot_spec(spec), base_mode=base_mode)
 
 
-def _perturb_reduced_quaternion(quat, col, step):
-    perturbed = np.asarray(quat, dtype=np.float64).copy()
-    perturbed[col] += step
-    return perturbed
+def _set_deterministic_joint_positions(project_model, q):
+    joint_count = project_model.nq - 7
+    if joint_count:
+        q[7:] = np.linspace(-0.15, 0.15, joint_count, dtype=np.float64)
 
 
-def test_reduced_quaternion_normalization_derivatives_match_finite_difference():
-    quat = np.array([0.25, -0.4, 0.15, 0.87], dtype=np.float64)
-    step = 1e-6
+def _make_lie_oracle_sample(project_model, pose_name):
+    if pose_name == "random_nonidentity":
+        sample = build_dynamics_samples(project_model)[1]
+        return sample.q, sample.qd, sample.qdd
 
-    actual_jac = RBDReference._reduced_quaternion_normalization_jacobian(quat)
-    expected_jac = np.zeros((4, 3), dtype=np.float64)
-    for col in range(3):
-        q_pos = _perturb_reduced_quaternion(quat, col, step)
-        q_neg = _perturb_reduced_quaternion(quat, col, -step)
-        expected_jac[:, col] = (
-            RBDReference._normalize_xyzw_quaternion(q_pos)
-            - RBDReference._normalize_xyzw_quaternion(q_neg)
-        ) / (2.0 * step)
-    np.testing.assert_allclose(actual_jac, expected_jac, atol=1e-10, rtol=1e-10)
+    q = np.zeros(project_model.nq, dtype=np.float64)
+    qd = np.linspace(-0.35, 0.35, project_model.nv, dtype=np.float64)
+    qdd = np.linspace(0.25, -0.25, project_model.nv, dtype=np.float64)
+    _set_deterministic_joint_positions(project_model, q)
 
-    actual_hess = RBDReference._reduced_quaternion_normalization_hessian(quat)
-    expected_hess = np.zeros((4, 3, 3), dtype=np.float64)
-    for col in range(3):
-        q_pos = _perturb_reduced_quaternion(quat, col, step)
-        q_neg = _perturb_reduced_quaternion(quat, col, -step)
-        expected_hess[:, :, col] = (
-            RBDReference._reduced_quaternion_normalization_jacobian(q_pos)
-            - RBDReference._reduced_quaternion_normalization_jacobian(q_neg)
-        ) / (2.0 * step)
-    np.testing.assert_allclose(actual_hess, expected_hess, atol=1e-9, rtol=1e-9)
+    if pose_name == "identity_nonzero":
+        q[6] = 1.0
+    elif pose_name == "fixed_nonidentity":
+        axis = np.array([0.3, -0.4, 0.5], dtype=np.float64)
+        axis /= np.linalg.norm(axis)
+        angle = np.deg2rad(30.0)
+        q[0:3] = np.array([0.05, -0.04, 0.03], dtype=np.float64)
+        q[3:6] = axis * np.sin(0.5 * angle)
+        q[6] = np.cos(0.5 * angle)
+    else:
+        raise ValueError(f"Unknown Lie-oracle sample: {pose_name}")
+    return q, qd, qdd
 
 
-def test_reduced_quaternion_rotation_derivatives_match_finite_difference():
-    quat = np.array([-0.35, 0.2, -0.5, 0.75], dtype=np.float64)
-    step = 1e-6
-
-    actual_jac = RBDReference._reduced_quaternion_rotation_jacobian(quat)
-    expected_jac = np.zeros((3, 3, 3), dtype=np.float64)
-    for col in range(3):
-        q_pos = _perturb_reduced_quaternion(quat, col, step)
-        q_neg = _perturb_reduced_quaternion(quat, col, -step)
-        expected_jac[:, :, col] = (
-            RBDReference._quat_xyzw_to_rotation_matrix(q_pos)
-            - RBDReference._quat_xyzw_to_rotation_matrix(q_neg)
-        ) / (2.0 * step)
-    np.testing.assert_allclose(actual_jac, expected_jac, atol=1e-9, rtol=1e-9)
-
-    actual_hess = RBDReference._reduced_quaternion_rotation_hessian(quat)
-    expected_hess = np.zeros((3, 3, 3, 3), dtype=np.float64)
-    for col in range(3):
-        q_pos = _perturb_reduced_quaternion(quat, col, step)
-        q_neg = _perturb_reduced_quaternion(quat, col, -step)
-        expected_hess[:, :, :, col] = (
-            RBDReference._reduced_quaternion_rotation_jacobian(q_pos)
-            - RBDReference._reduced_quaternion_rotation_jacobian(q_neg)
-        ) / (2.0 * step)
-    np.testing.assert_allclose(actual_hess, expected_hess, atol=2e-8, rtol=2e-8)
-
-
-def test_reduced_quaternion_angular_map_derivatives_match_finite_difference():
-    quat = np.array([-0.35, 0.2, -0.5, 0.75], dtype=np.float64)
-    step = 1e-6
-
-    for jacobian_fn, hessian_fn in (
-        (
-            RBDReference._reduced_quaternion_to_world_angular_jacobian,
-            RBDReference._reduced_quaternion_to_world_angular_hessian,
-        ),
-        (
-            RBDReference._reduced_quaternion_to_body_angular_jacobian,
-            RBDReference._reduced_quaternion_to_body_angular_hessian,
-        ),
-    ):
-        actual_jac = jacobian_fn(quat)
-        actual_hess = hessian_fn(quat)
-        expected_hess = np.zeros((3, 3, 3), dtype=np.float64)
-        for col in range(3):
-            q_pos = _perturb_reduced_quaternion(quat, col, step)
-            q_neg = _perturb_reduced_quaternion(quat, col, -step)
-            expected_hess[:, :, col] = (
-                jacobian_fn(q_pos) - jacobian_fn(q_neg)
-            ) / (2.0 * step)
-        np.testing.assert_allclose(actual_hess, expected_hess, atol=2e-8, rtol=2e-8)
-
-    identity = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
-    np.testing.assert_allclose(
-        RBDReference._reduced_quaternion_to_world_angular_jacobian(identity),
-        2.0 * np.eye(3),
-        atol=0.0,
-        rtol=0.0,
-    )
-    np.testing.assert_allclose(
-        RBDReference._reduced_quaternion_to_body_angular_jacobian(identity),
-        2.0 * np.eye(3),
-        atol=0.0,
-        rtol=0.0,
-    )
 
 
 @pytest.mark.parametrize(("spec", "base_mode"), _floating_smoke_params())
-def test_floating_idsva_so_finite_diff_mode_matches_default(
+@pytest.mark.parametrize(
+    "pose_name",
+    ("identity_nonzero", "fixed_nonidentity", "random_nonidentity"),
+)
+def test_floating_idsva_so_matches_lie_finite_difference(
+    spec,
+    base_mode,
+    pose_name,
+):
+    project_model = _build_project_model(spec, base_mode)
+    q, qd, qdd = _make_lie_oracle_sample(project_model, pose_name)
+    d2tau_dq = project_model.reference.idsva_so(q, qd, qdd)[0]
+    lie_oracle = project_model.reference._floating_idsva_d2tau_dq_lie_finite_diff(
+        q,
+        qd,
+        qdd,
+    )
+    np.testing.assert_allclose(d2tau_dq, lie_oracle, atol=1e-5, rtol=1e-7)
+
+
+
+@pytest.mark.parametrize(("spec", "base_mode"), _floating_smoke_params())
+def test_floating_gravity_direct_lie_d2tau_dq_matches_lie_finite_difference(
     spec,
     base_mode,
 ):
     project_model = _build_project_model(spec, base_mode)
-    sample = build_dynamics_samples(project_model)[0]
-    default = project_model.reference.idsva_so(sample.q, sample.qd, sample.qdd)
-    explicit = project_model.reference.idsva_so(
-        sample.q,
-        sample.qd,
-        sample.qdd,
-        floating_d2tau_dq_mode="finite_diff",
+    q, _qd, _qdd = _make_lie_oracle_sample(project_model, "fixed_nonidentity")
+    zeros = np.zeros(project_model.nv, dtype=np.float64)
+    direct = project_model.reference._floating_gravity_d2tau_dq_lie_direct(q)
+    lie_oracle = project_model.reference._floating_idsva_d2tau_dq_lie_finite_diff(
+        q,
+        zeros,
+        zeros,
     )
-    for default_tensor, explicit_tensor in zip(default, explicit):
-        np.testing.assert_allclose(default_tensor, explicit_tensor, atol=0.0, rtol=0.0)
+    np.testing.assert_allclose(direct, lie_oracle, atol=1e-6, rtol=1e-8)
 
 
-@pytest.mark.parametrize(("spec", "base_mode"), _floating_smoke_params())
-def test_floating_idsva_so_compare_mode_records_q_side_report(
-    spec,
-    base_mode,
-):
-    project_model = _build_project_model(spec, base_mode)
-    for sample in build_dynamics_samples(project_model):
-        project_model.reference.idsva_so(
-            sample.q,
-            sample.qd,
-            sample.qdd,
-            floating_d2tau_dq_mode="compare",
-        )
-        report = project_model.reference.last_floating_idsva_d2tau_dq_compare
-        assert set(report) == {"bad_count", "max_abs", "rel_norm", "first_mismatches"}
-        assert report["max_abs"] <= 1e-6
-        assert report["rel_norm"] <= 1e-9

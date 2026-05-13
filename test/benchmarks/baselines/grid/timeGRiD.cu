@@ -239,19 +239,22 @@ void run_all_tests(bool floating_base){
 	grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
 	grid::gridData<T> *hd_data = grid::init_gridData<T,MAX_TIMESTEPS>();
 
-	// load q,qd,u
+	// load q,qd,u — codegen's NUM_JOINTS already accounts for floating-base position dim;
+	// strides match init_gridData allocs (NUM_JOINTS, 2*NUM_JOINTS, 3*NUM_JOINTS). The
+	// floating_base flag is informational here; do not inflate strides on top of it.
+	(void)floating_base;
 	for(int k = 0; k < MAX_TIMESTEPS; k++){
-		for (int ind = 0; ind < grid::NUM_JOINTS + floating_base; ind++) {
+		for (int ind = 0; ind < grid::NUM_JOINTS; ind++) {
 			T val = getRand<double>();
-			hd_data->h_q_qd_u[k*(3*grid::NUM_JOINTS+floating_base) + ind] = val;
-			hd_data->h_q_qd[k*(2*grid::NUM_JOINTS+floating_base) + ind] = val;
-			hd_data->h_q[k*(grid::NUM_JOINTS+floating_base) + ind] = val;
+			hd_data->h_q_qd_u[k*(3*grid::NUM_JOINTS) + ind] = val;
+			hd_data->h_q_qd[k*(2*grid::NUM_JOINTS) + ind] = val;
+			hd_data->h_q[k*(grid::NUM_JOINTS) + ind] = val;
 		}
 		for(int ind = 0; ind < grid::NUM_JOINTS; ind++){
 			T val2 = getRand<double>(); T val3 = getRand<double>();
-			hd_data->h_q_qd_u[k*(3*grid::NUM_JOINTS+floating_base) + grid::NUM_JOINTS + ind + floating_base] = val2;
-			hd_data->h_q_qd_u[k*(3*grid::NUM_JOINTS+floating_base) + 2*grid::NUM_JOINTS + ind + floating_base] = val3;
-			hd_data->h_q_qd[k*(2*grid::NUM_JOINTS+floating_base) + grid::NUM_JOINTS + ind + floating_base] = val2;
+			hd_data->h_q_qd_u[k*(3*grid::NUM_JOINTS) + grid::NUM_JOINTS + ind] = val2;
+			hd_data->h_q_qd_u[k*(3*grid::NUM_JOINTS) + 2*grid::NUM_JOINTS + ind] = val3;
+			hd_data->h_q_qd[k*(2*grid::NUM_JOINTS) + grid::NUM_JOINTS + ind] = val2;
 		}
 	}
 	gpuErrchk(cudaMemcpy(hd_data->d_q_qd_u,hd_data->h_q_qd_u,3*grid::NUM_JOINTS*MAX_TIMESTEPS*sizeof(T),cudaMemcpyHostToDevice));
