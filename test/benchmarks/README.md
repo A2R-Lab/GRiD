@@ -313,6 +313,7 @@ export GRID_PRE_GLASS_WORKTREE=../GRiD-A2R-pre-glass
 | `--batch-iters N` | 100 (GRiD/Pin), 500 (MJX/Frax) | Batch medians noisy — bump 5–10× |
 | `--no-rdc` | off | ptxas hangs on floating-base; first thing to try |
 | `--no-licm-barrier` | off | ptxas still hangs after `--no-rdc`; strongest hammer |
+| `--fixed-only` | off | Skip every floating-base combo (shortcut for `--bases fixed`). Run fixed first to get clean data, then revisit floating with the slow compile. |
 | `--skip iiwa14_floating` | none | Exclude specific robot/base combos that are broken on your machine |
 
 The orchestrator:

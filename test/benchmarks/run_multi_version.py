@@ -256,6 +256,12 @@ def run_grid_column(column: str, robot: str, base: str, *,
     # Rewrite the JSON so the baseline key is column-specific (e.g. "grid_glass")
     # instead of the generic "grid" the inner harness emits.
     _rename_grid_key(output, baseline_key)
+
+    # The pre_glass worktree's grid/run.py (frozen at d2c0d18) predates the
+    # single/N=16/N=256 batch-summary print added in HEAD. Re-emit it here from
+    # the JSON so the stdout looks consistent across all columns.
+    if column == "pre_glass":
+        _print_batch_summary_from_json(output, baseline_key)
     return output
 
 
@@ -337,6 +343,43 @@ def _rename_grid_key(json_path: Path, new_key: str) -> None:
     json_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
+def _print_batch_summary_from_json(json_path: Path, baseline_key: str) -> None:
+    """Read a per-column JSON and print a single/N=16/N=256 summary table. Used
+    when the inner harness doesn't print one itself (e.g., the pre_glass worktree
+    at d2c0d18 predates the batch-summary update in HEAD's grid/run.py)."""
+    if not json_path.exists():
+        return
+    try:
+        data = json.loads(json_path.read_text())
+    except Exception as e:
+        print(f"  [{baseline_key}] WARN: could not parse {json_path.name} for summary: {e}")
+        return
+
+    def _us(entry, key):
+        v = (entry.get(key) or {}).get("median") or (entry.get(key) or {}).get("mean")
+        return f"{v:.2f}" if v is not None else "—"
+
+    is_pinocchio = baseline_key == "pinocchio"
+    batch_key_16  = "batch_16_with_mem_us"  if is_pinocchio else "batch_16_compute_only_us"
+    batch_key_256 = "batch_256_with_mem_us" if is_pinocchio else "batch_256_compute_only_us"
+
+    for robot, bases in data.get("results", {}).items():
+        for base, baselines in bases.items():
+            algos = baselines.get(baseline_key) or {}
+            if not algos:
+                continue
+            print(f"  [{baseline_key}] summary for {robot}/{base}:")
+            for algo, entry in sorted(algos.items()):
+                if entry is None:
+                    print(f"      {algo}: null")
+                    continue
+                single = _us(entry, "single_us")
+                n16    = _us(entry, batch_key_16)
+                n256   = _us(entry, batch_key_256)
+                label  = "compute" if not is_pinocchio else "w/mem"
+                print(f"      {algo:18s} single={single:>8} us   N=16({label})={n16:>7} us   N=256({label})={n256:>7} us")
+
+
 # ---------------------------------------------------------------------------
 # Merge + report
 # ---------------------------------------------------------------------------
@@ -367,6 +410,10 @@ def main() -> None:
     )
     parser.add_argument("--robots", nargs="+", default=list(ROBOTS), choices=list(ROBOTS))
     parser.add_argument("--bases",  nargs="+", default=list(BASES),  choices=list(BASES))
+    parser.add_argument("--fixed-only", action="store_true",
+                        help="Shortcut for `--bases fixed`. Skips every floating-base combo "
+                             "(useful when floating compile hangs and you want fixed data first). "
+                             "Equivalent to --bases fixed; overrides --bases if both are set.")
     parser.add_argument("--columns", nargs="+", default=list(COLUMNS), choices=list(COLUMNS),
                         help="Subset of columns to run (default: all five)")
     parser.add_argument("--skip", nargs="+", default=[], metavar="ROBOT_BASE",
@@ -404,6 +451,9 @@ def main() -> None:
                         default=THIS_DIR / "benchmark_multi_version.md",
                         help="Markdown report output path")
     args = parser.parse_args()
+
+    if args.fixed_only:
+        args.bases = ["fixed"]
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
