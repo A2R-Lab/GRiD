@@ -62,6 +62,59 @@ def get_urdf_path(robot: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Physical core detection
+# ---------------------------------------------------------------------------
+def _physical_core_count() -> int:
+    """Return the number of PHYSICAL cores. For the batched cppadcg path every
+    thread runs the same JIT'd function on different input rows, so SMT/HT
+    siblings compete for the same execution units + cache and pinning a thread
+    per physical core is materially faster than logical-CPU oversubscription.
+
+    Tries lscpu first (Linux); falls back to /proc/cpuinfo unique physical-id +
+    core-id pairs; finally falls back to os.cpu_count() // 2 (conservative).
+    Override with PIN_PHYSICAL_CORES env var when auto-detection is wrong.
+    """
+    env_override = os.environ.get("PIN_PHYSICAL_CORES")
+    if env_override:
+        try:
+            return max(1, int(env_override))
+        except ValueError:
+            pass
+    # Try lscpu (most accurate)
+    try:
+        out = subprocess.check_output(["lscpu"], text=True)
+        sockets = cores_per_socket = None
+        for line in out.splitlines():
+            if line.startswith("Socket(s):"):
+                sockets = int(line.split()[-1])
+            elif line.startswith("Core(s) per socket:"):
+                cores_per_socket = int(line.split()[-1])
+        if sockets and cores_per_socket:
+            return sockets * cores_per_socket
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        pass
+    # Try /proc/cpuinfo unique (physical id, core id) pairs
+    try:
+        pairs: set[tuple[str, str]] = set()
+        phys = core = None
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("physical id"):
+                    phys = line.split(":", 1)[1].strip()
+                elif line.startswith("core id"):
+                    core = line.split(":", 1)[1].strip()
+                elif not line.strip() and phys is not None and core is not None:
+                    pairs.add((phys, core))
+                    phys = core = None
+        if pairs:
+            return len(pairs)
+    except (OSError, ValueError):
+        pass
+    # Conservative fallback: assume HT 2:1
+    return max(1, (os.cpu_count() or 2) // 2)
+
+
+# ---------------------------------------------------------------------------
 # CPU frequency locking (Linux only, optional)
 # ---------------------------------------------------------------------------
 def try_lock_cpu_freq() -> bool:
@@ -179,6 +232,7 @@ def compile_binary(
     no_recompile: bool = False,
     single_call_iters: int | None = None,
     batch_iters: int | None = None,
+    num_threads: int | None = None,
 ) -> Path:
     """Compile timePinocchio.cpp, using content-hash cache."""
     source_hash = _hash_file(TIMING_SOURCE)
@@ -191,6 +245,11 @@ def compile_binary(
         iter_defs.append(f"-DSINGLE_CALL_ITERS_GLOBAL={int(single_call_iters)}")
     if batch_iters is not None:
         iter_defs.append(f"-DTEST_ITERS_GLOBAL={int(batch_iters)}")
+    if num_threads is not None:
+        # CPU_THREADS_GLOBAL is a C++ template parameter used by ReusableThreads<N>
+        # and as the row-split count in the *Threaded_codegen helpers. Must be a
+        # compile-time constant; override via -D at the compile line.
+        iter_defs.append(f"-DCPU_THREADS_GLOBAL={int(num_threads)}")
     runner_key = _hash_bytes(
         json.dumps({
             "source_hash": source_hash,
@@ -279,6 +338,10 @@ PINOCCHIO_ALGOS: tuple[str, ...] = (
 # headroom keeps us under a single 25-min ceiling per subprocess.
 PER_ALGO_TIMEOUT_S = 1500
 
+# Set in main() before run_timings_parallel; read in the executor default-arg
+# resolution so max_workers respects the actual internal thread count.
+_resolved_internal_threads: int = 0
+
 
 def run_timing_one_algo(binary_path: Path, urdf_path: str, base: str,
                         ee_frame: str, algo: str) -> tuple[str, str | None]:
@@ -321,18 +384,20 @@ def run_timings_parallel(
     downstream).
     """
     if max_workers is None:
-        # timePinocchio.cpp uses CPU_THREADS_GLOBAL=8 internal worker threads
-        # per subprocess to parallelize the batch loop. Spawning N subprocesses
-        # × 8 threads each on M cores must satisfy N * 8 <= M to avoid CPU
-        # oversubscription that wrecks batch timings. Conservative cap:
-        # cpu_count // 8 subprocesses, minimum 1, maximum len(algos).
-        # Override via PIN_MAX_WORKERS env var to force a different value.
+        # Each subprocess uses CPU_THREADS_GLOBAL internal worker threads
+        # (default = physical core count, set at compile time). Spawning N
+        # subprocesses × T threads each on P physical cores must satisfy
+        # N * T <= P to avoid CPU oversubscription that wrecks batch timings.
+        # We compile with T = P, so the default outer fan-out is 1
+        # (subprocesses run sequentially, each uses all physical cores).
+        # PIN_MAX_WORKERS env var overrides for tuning.
         env_override = os.environ.get("PIN_MAX_WORKERS")
         if env_override:
             max_workers = max(1, int(env_override))
         else:
-            cores = os.cpu_count() or 4
-            max_workers = max(1, cores // 8)
+            phys = _physical_core_count()
+            internal_threads = _resolved_internal_threads
+            max_workers = max(1, phys // max(1, internal_threads))
 
     print(f"  [pinocchio] fanning out {len(algos)} per-algo subprocesses "
           f"(max_workers={max_workers}, timeout={PER_ALGO_TIMEOUT_S}s each)...")
@@ -372,6 +437,13 @@ def main() -> None:
                         help="Override SINGLE_CALL_ITERS_GLOBAL (default 10000).")
     parser.add_argument("--batch-iters", type=int, default=None,
                         help="Override TEST_ITERS_GLOBAL (default 100).")
+    parser.add_argument("--num-threads", type=int, default=None,
+                        help="Override CPU_THREADS_GLOBAL at compile (default: physical "
+                             "core count). The internal ReusableThreads<N> pool used to "
+                             "split the batch loop across timesteps. Hyperthreaded siblings "
+                             "are a net loss when every thread runs the same JIT'd "
+                             "cppadcg function (execution-unit contention + cache "
+                             "thrashing), so default is physical cores not logical.")
     args = parser.parse_args()
 
     ee_frame = args.ee_frame or DEFAULT_EE_FRAMES.get(args.robot, "")
@@ -388,10 +460,20 @@ def main() -> None:
     urdf_path = get_urdf_path(args.robot)
     print(f"[pinocchio] {args.robot} {args.base} — URDF: {urdf_path}")
 
+    # Resolve internal-thread count: CLI override > physical-core auto-detect.
+    resolved_num_threads = (
+        args.num_threads if args.num_threads is not None else _physical_core_count()
+    )
+    print(f"  [pinocchio] internal CPU_THREADS_GLOBAL = {resolved_num_threads} "
+          f"(physical cores detected: {_physical_core_count()})")
+    global _resolved_internal_threads
+    _resolved_internal_threads = resolved_num_threads
+
     try:
         binary_path = compile_binary(args.robot, args.base, build_dir, args.no_recompile,
                                      single_call_iters=args.single_call_iters,
-                                     batch_iters=args.batch_iters)
+                                     batch_iters=args.batch_iters,
+                                     num_threads=resolved_num_threads)
     except Exception as e:
         print(f"  [pinocchio] ERROR compiling: {e}", file=sys.stderr)
         sys.exit(1)

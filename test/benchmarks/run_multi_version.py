@@ -268,7 +268,8 @@ def run_grid_column(column: str, robot: str, base: str, *,
 def run_pinocchio_column(robot: str, base: str, *,
                          output_dir: Path, no_recompile: bool,
                          single_call_iters: int | None = None,
-                         batch_iters: int | None = None) -> Path | None:
+                         batch_iters: int | None = None,
+                         pin_num_threads: int | None = None) -> Path | None:
     ee_frame = EE_FRAMES_PIN.get(robot, "")
     output = output_dir / f"{robot}_{base}_pinocchio.json"
     cmd = [
@@ -284,6 +285,8 @@ def run_pinocchio_column(robot: str, base: str, *,
         cmd += ["--single-call-iters", str(single_call_iters)]
     if batch_iters is not None:
         cmd += ["--batch-iters", str(batch_iters)]
+    if pin_num_threads is not None:
+        cmd += ["--num-threads", str(pin_num_threads)]
     print(f"[{ts()}] [pinocchio] {robot} {base} → {output.name}")
     result = subprocess.run(cmd, capture_output=False, text=True)
     if result.returncode != 0 or not output.exists():
@@ -447,6 +450,10 @@ def main() -> None:
                         help="Override TEST_ITERS_GLOBAL for GRiD/Pinocchio (default 100) "
                              "and BENCH_TEST_ITERS for MJX/Frax (default 500). Outer batch "
                              "rep count at each N. Bump for more stable medians.")
+    parser.add_argument("--pin-num-threads", type=int, default=None,
+                        help="Override Pinocchio CPU_THREADS_GLOBAL (default: physical "
+                             "cores). Logical/SMT siblings are skipped because every "
+                             "thread runs the same JIT'd code; HT hurts.")
     parser.add_argument("--report", type=Path,
                         default=THIS_DIR / "benchmark_multi_version.md",
                         help="Markdown report output path")
@@ -502,6 +509,7 @@ def main() -> None:
                         output_dir=args.output_dir, no_recompile=args.no_recompile,
                         single_call_iters=args.single_call_iters,
                         batch_iters=args.batch_iters,
+                        pin_num_threads=args.pin_num_threads,
                     )
                 elif column == "mjx":
                     p = run_mjx_column(

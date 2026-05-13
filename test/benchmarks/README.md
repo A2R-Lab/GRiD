@@ -311,10 +311,13 @@ export GRID_PRE_GLASS_WORKTREE=../GRiD-A2R-pre-glass
 |---|---|---|
 | `--single-call-iters N` | 10000 (GRiD/Pin) | Single-call timings show high variance — bump to 50k+ for sub-µs algos |
 | `--batch-iters N` | 100 (GRiD/Pin), 500 (MJX/Frax) | Batch medians noisy — bump 5–10× |
+| `--pin-num-threads N` | auto (physical cores) | Sets Pinocchio's internal CPU_THREADS_GLOBAL. Auto-detect picks physical cores (NOT logical/SMT siblings — they hurt for batched-same-function workloads). Override if auto-detection is wrong (`PIN_PHYSICAL_CORES` env var also works). |
 | `--no-rdc` | off | ptxas hangs on floating-base; first thing to try |
 | `--no-licm-barrier` | off | ptxas still hangs after `--no-rdc`; strongest hammer |
 | `--fixed-only` | off | Skip every floating-base combo (shortcut for `--bases fixed`). Run fixed first to get clean data, then revisit floating with the slow compile. |
 | `--skip iiwa14_floating` | none | Exclude specific robot/base combos that are broken on your machine |
+
+**Pinocchio parallelism details:** the Pinocchio runner uses two layers of parallelism — outer subprocess fan-out (one per algo, for parallel cppadcg JIT compile) and inner thread pool (`CPU_THREADS_GLOBAL` worker threads splitting the batch loop across timesteps). To avoid CPU oversubscription, the outer fan-out is `max(1, physical_cores / internal_threads)`. With the default `internal_threads = physical_cores`, that's 1 subprocess at a time (each gets all cores). Override via `PIN_MAX_WORKERS` env var if you want more parallelism (e.g. when JIT compile dominates and batch run is fast).
 
 The orchestrator:
 1. Creates a worktree at `$GRID_PRE_GLASS_WORKTREE` checked out to `d2c0d18`

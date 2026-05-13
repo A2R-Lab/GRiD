@@ -9,10 +9,18 @@
 #include <pthread.h>
 #include <iostream>
 
+#ifndef TEST_FOR_EQUIVALENCE
 #define TEST_FOR_EQUIVALENCE 0
+#endif
+#ifndef CPU_THREADS_GLOBAL
 #define CPU_THREADS_GLOBAL 8
+#endif
+#ifndef TEST_ITERS_GLOBAL
 #define TEST_ITERS_GLOBAL 100
+#endif
+#ifndef SINGLE_CALL_ITERS_GLOBAL
 #define SINGLE_CALL_ITERS_GLOBAL 10000
+#endif
 
 #define RANDOM_MEAN 0
 #define RANDOM_STDEV 1
