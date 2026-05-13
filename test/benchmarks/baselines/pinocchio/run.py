@@ -18,6 +18,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -281,22 +282,32 @@ PER_ALGO_TIMEOUT_S = 1500
 
 def run_timing_one_algo(binary_path: Path, urdf_path: str, base: str,
                         ee_frame: str, algo: str) -> tuple[str, str | None]:
-    """Run timePinocchio.exe for a single algo. Returns (stdout+stderr, error_msg or None)."""
+    """Run timePinocchio.exe for a single algo. Returns (stdout+stderr, error_msg or None).
+
+    Each invocation runs in its own isolated tmpdir so the cppadcg JIT (which
+    writes <algo>_codegen.so + cppadcg_tmp/ to the CWD with a hardcoded name)
+    doesn't race when we fan out parallel subprocesses.
+    """
     floating_arg = "T" if base == "floating" else "F"
     # The CLI is positional: <urdf> <T/F> <frame_name> <algo>.
     # frame_name must be present (even if empty) for algo to be parsed at argv[4].
     cmd = [str(binary_path), urdf_path, floating_arg, ee_frame or "", algo]
+    tmpdir = tempfile.mkdtemp(prefix=f"pin_cg_{algo}_")
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, env=_runtime_env(),
-            timeout=PER_ALGO_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired:
-        return ("", f"timeout after {PER_ALGO_TIMEOUT_S}s")
-    if result.returncode != 0:
-        err = result.stderr[-500:] if result.stderr else f"exit {result.returncode}"
-        return (result.stdout + "\n" + result.stderr, err)
-    return (result.stdout + "\n" + result.stderr, None)
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, env=_runtime_env(),
+                timeout=PER_ALGO_TIMEOUT_S, cwd=tmpdir,
+            )
+        except subprocess.TimeoutExpired:
+            return ("", f"timeout after {PER_ALGO_TIMEOUT_S}s")
+        if result.returncode != 0:
+            err = result.stderr[-500:] if result.stderr else f"exit {result.returncode}"
+            return (result.stdout + "\n" + result.stderr, err)
+        return (result.stdout + "\n" + result.stderr, None)
+    finally:
+        # Clean up the per-algo cppadcg artifacts.
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def run_timings_parallel(
@@ -310,10 +321,18 @@ def run_timings_parallel(
     downstream).
     """
     if max_workers is None:
-        # Most algos JIT-compile cppadcg in parallel; cap workers at
-        # os.cpu_count()/2 to avoid choking the system on big robots
-        # (each cppadcg compile already spawns gcc threads internally).
-        max_workers = max(1, (os.cpu_count() or 4) // 2)
+        # timePinocchio.cpp uses CPU_THREADS_GLOBAL=8 internal worker threads
+        # per subprocess to parallelize the batch loop. Spawning N subprocesses
+        # × 8 threads each on M cores must satisfy N * 8 <= M to avoid CPU
+        # oversubscription that wrecks batch timings. Conservative cap:
+        # cpu_count // 8 subprocesses, minimum 1, maximum len(algos).
+        # Override via PIN_MAX_WORKERS env var to force a different value.
+        env_override = os.environ.get("PIN_MAX_WORKERS")
+        if env_override:
+            max_workers = max(1, int(env_override))
+        else:
+            cores = os.cpu_count() or 4
+            max_workers = max(1, cores // 8)
 
     print(f"  [pinocchio] fanning out {len(algos)} per-algo subprocesses "
           f"(max_workers={max_workers}, timeout={PER_ALGO_TIMEOUT_S}s each)...")
