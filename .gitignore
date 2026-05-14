@@ -102,3 +102,6 @@ venv.bak/
 
 # Test cache
 .pytest_cache/
+
+# Internal handoff/debugging docs — keep local-only
+docs/handoff-*.md

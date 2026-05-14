@@ -66,16 +66,22 @@ def get_urdf_path(robot: str) -> str:
 TIMING_SCRIPT = THIS_DIR / "timeFrax.py"
 
 
-def run_timing(urdf_path: str, base: str, test_iters: int | None = None) -> str:
+def run_timing(urdf_path: str, base: str,
+               device: str | None = None,
+               test_iters: int | None = None) -> str:
+    """Invoke timeFrax.py as a subprocess. `device` selects the JAX backend
+    via FRAX_DEVICE env ('cpu' or 'gpu'); None lets JAX default."""
     floating_arg = "T" if base == "floating" else "F"
     cmd = [sys.executable, str(TIMING_SCRIPT), urdf_path, floating_arg]
     env = os.environ.copy()
     if test_iters is not None:
         env["BENCH_TEST_ITERS"] = str(int(test_iters))
+    if device is not None:
+        env["FRAX_DEVICE"] = device
     result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if result.returncode != 0:
         raise RuntimeError(
-            f"timeFrax.py exited with code {result.returncode}:\n{result.stderr}"
+            f"timeFrax.py [device={device or 'auto'}] exited with code {result.returncode}:\n{result.stderr}"
         )
     return result.stdout + "\n" + result.stderr
 
@@ -110,6 +116,11 @@ def main() -> None:
     parser.add_argument("--test-iters", type=int, default=None,
                         help="Override TEST_ITERS (default 500). Number of timed reps; "
                              "bump for more stable medians.")
+    parser.add_argument("--device", choices=["cpu", "gpu", "both"], default="both",
+                        help="Which JAX backend(s) to time. 'both' runs the timing "
+                             "subprocess twice and writes JSON with both `frax_cpu` "
+                             "and `frax_gpu` sub-keys. (Frax advertises performance "
+                             "on both backends.) Default: both.")
     args = parser.parse_args()
 
     build_dir = REPO_ROOT / "test" / "benchmarks" / "results"
@@ -126,37 +137,56 @@ def main() -> None:
         sys.exit(1)
 
     print(f"[frax] {args.robot} {args.base} — URDF: {urdf_path}")
-    print(f"  [frax] running timeFrax.py...")
 
-    try:
-        output = run_timing(urdf_path, args.base, test_iters=args.test_iters)
-    except Exception as e:
-        print(f"  [frax] ERROR: {e}", file=sys.stderr)
-        sys.exit(1)
+    # Pick which devices to time. 'both' runs the subprocess twice (JAX
+    # can't switch backends mid-run, so the timing script bakes in the
+    # FRAX_DEVICE env at JAX-import time).
+    devices = ["cpu", "gpu"] if args.device == "both" else [args.device]
 
-    # parse_grid_output handles the same label format that timeFrax.py emits
-    timings = parse_grid_output(output)
-    # Zero out algos that Frax doesn't support
-    for algo in list(timings.keys()):
-        if algo not in FRAX_ALGOS:
-            timings[algo] = None
-    filled = fill_nulls(timings)
-
+    results_section: dict[str, dict] = {}
     meta = build_metadata(include_gpu=True, include_pinocchio=False)
-    meta.update(_parse_frax_metadata(output))
     meta["robot"] = args.robot
     meta["base"]  = args.base
 
-    result = {"metadata": meta, "results": {args.robot: {args.base: {"frax": filled}}}}
+    for dev in devices:
+        col_key = f"frax_{dev}"
+        print(f"  [frax] running timeFrax.py (device={dev})...")
+        try:
+            output = run_timing(urdf_path, args.base, device=dev, test_iters=args.test_iters)
+        except Exception as e:
+            print(f"  [frax] ERROR (device={dev}): {e}", file=sys.stderr)
+            # Continue to the other device — partial results better than none.
+            continue
+
+        timings = parse_grid_output(output)
+        for algo in list(timings.keys()):
+            if algo not in FRAX_ALGOS:
+                timings[algo] = None
+        filled = fill_nulls(timings)
+        results_section[col_key] = filled
+
+        per_dev_meta = _parse_frax_metadata(output)
+        # Stash device-specific metadata under a namespaced key so the two
+        # runs' versions/backends don't clobber each other.
+        for k, v in per_dev_meta.items():
+            meta[f"{col_key}_{k}"] = v
+
+    if not results_section:
+        print("  [frax] all device runs failed", file=sys.stderr)
+        sys.exit(1)
+
+    result = {"metadata": meta, "results": {args.robot: {args.base: results_section}}}
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(f"  [frax] results saved: {args.output}")
 
-    for algo, entry in sorted(filled.items()):
-        if entry is None:
-            print(f"    {algo}: null")
-        elif "single_us" in entry:
-            v = entry["single_us"]["mean"]
-            print(f"    {algo}: {v:.2f}us (single)")
+    for dev, filled in results_section.items():
+        print(f"  [{dev}]")
+        for algo, entry in sorted(filled.items()):
+            if entry is None:
+                continue  # skip null algos in the summary print
+            if "single_us" in entry:
+                v = entry["single_us"]["mean"]
+                print(f"    {algo}: {v:.2f}us (single)")
 
 
 if __name__ == "__main__":
