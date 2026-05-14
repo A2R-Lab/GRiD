@@ -191,7 +191,9 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
                   no_rdc: bool = False, no_licm_barrier: bool = False,
                   single_call_iters: int | None = None,
                   batch_iters: int | None = None,
-                  cicc_opt_level: int | None = None) -> list[str]:
+                  cicc_opt_level: int | None = None,
+                  split_compile: int | None = None,
+                  ofast_compile: str | None = None) -> list[str]:
     cmd = [
         sys.executable,
         str(harness_repo_root / "test" / "benchmarks" / "baselines" / "grid" / "run.py"),
@@ -214,6 +216,10 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
         cmd += ["--batch-iters", str(batch_iters)]
     if cicc_opt_level is not None:
         cmd += ["--cicc-opt-level", str(cicc_opt_level)]
+    if split_compile is not None:
+        cmd += ["--split-compile", str(split_compile)]
+    if ofast_compile is not None:
+        cmd += ["--ofast-compile", ofast_compile]
     return cmd
 
 
@@ -223,7 +229,9 @@ def run_grid_column(column: str, robot: str, base: str, *,
                     no_rdc: bool = False, no_licm_barrier: bool = False,
                     single_call_iters: int | None = None,
                     batch_iters: int | None = None,
-                    cicc_opt_level: int | None = None) -> Path | None:
+                    cicc_opt_level: int | None = None,
+                    split_compile: int | None = None,
+                    ofast_compile: str | None = None) -> Path | None:
     """Run the appropriate GRiD harness for `column`. Returns output JSON path or None."""
     ee_frame = EE_FRAMES_GRID.get(robot, "")
     baseline_key = COLUMN_TO_BASELINE_KEY[column]
@@ -247,7 +255,8 @@ def run_grid_column(column: str, robot: str, base: str, *,
                             no_recompile=no_recompile, no_rdc=no_rdc,
                             no_licm_barrier=no_licm_barrier,
                             single_call_iters=single_call_iters, batch_iters=batch_iters,
-                            cicc_opt_level=effective_cicc)
+                            cicc_opt_level=effective_cicc,
+                            split_compile=split_compile, ofast_compile=ofast_compile)
     elif column == "glass_nvidia":
         effective_cicc = cicc_opt_level if base == "floating" else None
         cmd = _grid_run_cmd(REPO_ROOT, robot, base, output, ee_frame,
@@ -255,7 +264,8 @@ def run_grid_column(column: str, robot: str, base: str, *,
                             no_recompile=no_recompile, no_rdc=no_rdc,
                             no_licm_barrier=no_licm_barrier,
                             single_call_iters=single_call_iters, batch_iters=batch_iters,
-                            cicc_opt_level=effective_cicc)
+                            cicc_opt_level=effective_cicc,
+                            split_compile=split_compile, ofast_compile=ofast_compile)
     else:
         raise ValueError(f"Unknown grid column: {column}")
 
@@ -465,6 +475,16 @@ def main() -> None:
                              "preserved. Fixed-base is gated off the flag because cicc -O3 "
                              "is fine there and -O2 costs 30-70%% perf. Default: nvcc default "
                              "(-O3 to cicc).")
+    parser.add_argument("--split-compile", type=int, default=None,
+                        help="Pass `--split-compile=N` to nvcc (12.x). Parallelizes cicc "
+                             "optimization passes (0 = all CPU cores). ~2× faster compile.\n"
+                             "*** DEFEATS ANTI-LICM at all N>=2 *** — single-call and batch "
+                             "compute-only timings collapse to ~0us / launch overhead. Use "
+                             "ONLY for non-timing dev iteration, never for measurement runs.")
+    parser.add_argument("--ofast-compile", choices=["min", "mid", "max"], default=None,
+                        help="Pass `-Ofc=<level>` to nvcc (12.x). Fast-compile mode for "
+                             "device code. Trades device-code runtime perf for compile "
+                             "time — opt-in dev knob, NOT for perf measurement runs.")
     parser.add_argument("--single-call-iters", type=int, default=None,
                         help="Override SINGLE_CALL_ITERS_GLOBAL for GRiD/Pinocchio "
                              "(default 10000). Inner-kernel rep count for single-call timings.")
@@ -552,6 +572,8 @@ def main() -> None:
                         single_call_iters=args.single_call_iters,
                         batch_iters=args.batch_iters,
                         cicc_opt_level=args.cicc_opt_level,
+                        split_compile=args.split_compile,
+                        ofast_compile=args.ofast_compile,
                     )
                 if p is not None:
                     produced.append(p)
