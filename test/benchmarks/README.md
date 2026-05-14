@@ -39,6 +39,12 @@ MATHDX_ROOT=/opt/nvidia/mathdx/25.12 \
 .venv/bin/python test/benchmarks/baselines/grid/run.py \
   --robot g1 --base floating --linalg-backend glass-nvidia
 
+# Recommended one-time setup for the glass-nvidia column: tune the
+# cuBLASDx-vs-SIMT dispatch table for your specific GPU (~5 min). The
+# shipped table is measured on sm_120; other GPUs fall back to a
+# conservative heuristic. See "Autotune for your GPU" below for details.
+python GLASS/bench/autotune.py --sm AUTO --out GLASS/src/nvidia/tuning_table.cuh
+
 # Just Pinocchio, one robot:
 .venv/bin/python test/benchmarks/baselines/pinocchio/run.py --robot iiwa14 --base fixed
 
@@ -95,6 +101,29 @@ export MATHDX_ROOT=/opt/nvidia/mathdx/25.12
 
 If MathDx isn't installed, the pre-flight check skips the `glass-nvidia` column
 with a clear message; the other columns still run.
+
+#### Autotune for your GPU (recommended for production deployments)
+
+GLASS ships `tuning_table.cuh` with measurements taken on sm_120. For other
+GPUs, `glass::nvidia::should_use_cublasdx<T, M, N, K, SM>()` falls back to a
+shape heuristic (`max >= 16 AND min >= 4`), which is conservative but may
+mis-rank shapes for your specific hardware. To regenerate the table on your
+GPU (one-time, ~5 min):
+
+```bash
+# Requires MATHDX_ROOT set (cuBLASDx headers).
+python GLASS/bench/autotune.py --sm AUTO --out GLASS/src/nvidia/tuning_table.cuh
+```
+
+This measures SIMT vs cuBLASDx per (M, N, K) for the GRiD-relevant shape grid,
+emits one explicit `cublasdx_wins<>` specialization per measured shape, and
+writes a human-readable `autotune_results.md` alongside. The next GRiD codegen
+run will vendor the updated table into the generated header, so per-call
+dispatch decisions get optimal for your GPU at zero compile cost.
+
+The shipped table works without running autotune — the heuristic handles
+unmeasured shapes. But if a glass-nvidia row shows unexpected timings vs
+glass, running autotune is the first thing to try.
 
 ### Pinocchio (CPU)
 

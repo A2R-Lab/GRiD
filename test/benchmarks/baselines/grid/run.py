@@ -149,9 +149,6 @@ def generate_header(
 
     urdf_hash = _hash_file(Path(urdf_path))
     codegen_hash = _hash_tree(REPO_ROOT / "GRiDCodeGenerator", (".py",))
-    # GRID_BENCH_NVIDIA_MIN_DIM controls codegen's per-call backend choice via
-    # linalg_smem_for(); changing it must bust the header cache.
-    nvidia_min_dim_env = os.environ.get("GRID_BENCH_NVIDIA_MIN_DIM", "16")
     # GRID_NO_LICM_BARRIER suppresses the anti-LICM machinery in _single_timing
     # rep loops (volatile reload + __noinline__ barrier). When toggled, the
     # generated header changes — must bust the header cache.
@@ -164,7 +161,6 @@ def generate_header(
             "base": base,
             "profile": "all",
             "homogenous": True,
-            "nvidia_min_dim": nvidia_min_dim_env,
             "no_licm_barrier": no_licm_barrier_env,
             # ee_frame intentionally excluded: not passed to gen_all_code
         }, sort_keys=True).encode()
