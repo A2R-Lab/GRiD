@@ -227,6 +227,7 @@ def compile_binary(
     no_rdc: bool = False,
     single_call_iters: int | None = None,
     batch_iters: int | None = None,
+    cicc_opt_level: int | None = None,
 ) -> Path:
     """Compile timeGRiD.cu against the generated header, using content-hash cache."""
     source_hash = _hash_file(TIMING_SOURCE)
@@ -309,6 +310,7 @@ def compile_binary(
             "linalg_flags": linalg_flags,
             "with_cusolverdx": with_cusolverdx,
             "no_rdc": no_rdc,
+            "cicc_opt_level": cicc_opt_level,
         }, sort_keys=True).encode()
     )[:24]
 
@@ -341,6 +343,12 @@ def compile_binary(
     ]
     if linalg_backend == "glass-nvidia":
         cmd.extend(["-gencode", f"arch=compute_{arch},code=compute_{arch}"])
+    # Lower the cicc front-end opt level. Default nvcc passes -O3 to cicc, which
+    # hangs indefinitely on floating-base headers under CUDA 12.6 / sm_86 (the
+    # extra 6 DOF crosses some opt-pass threshold). -Xcicc -O2 finishes in ~2 min
+    # and keeps ptxas at -O3 so SASS quality is preserved.
+    if cicc_opt_level is not None:
+        cmd.extend(["-Xcicc", f"-O{int(cicc_opt_level)}"])
     cmd.extend(linalg_flags)
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -408,6 +416,15 @@ def main() -> None:
                              "Strongest hammer for ptxas hangs on floating-base kernels. Sets "
                              "GRID_NO_LICM_BARRIER=1 for the codegen subprocess. Batch timings "
                              "unaffected; single-call may LICM-elide.")
+    parser.add_argument("--cicc-opt-level", type=int, default=None,
+                        choices=[0, 1, 2, 3],
+                        help="Pass `-Xcicc -O<n>` to nvcc, lowering the device-frontend "
+                             "(cicc / NVVM-IR) optimization tier. Use this when nvcc hangs "
+                             "in cicc on floating-base kernels — observed on sm_86 / CUDA "
+                             "12.6 where cicc -O3 wedges at 100%% CPU indefinitely. -O2 "
+                             "finishes in ~2 min and keeps ptxas at -O3 so SASS perf is "
+                             "preserved (LICM defense intact). Default: nvcc default (-O3 "
+                             "to cicc).")
     parser.add_argument("--single-call-iters", type=int, default=None,
                         help="Override SINGLE_CALL_ITERS_GLOBAL (default 10000). Inner-kernel "
                              "rep count for single-call timings; bump for more stable medians "
@@ -454,6 +471,7 @@ def main() -> None:
             no_rdc=args.no_rdc,
             single_call_iters=args.single_call_iters,
             batch_iters=args.batch_iters,
+            cicc_opt_level=args.cicc_opt_level,
         )
     except Exception as e:
         print(f"  [grid] ERROR compiling binary: {e}", file=sys.stderr)

@@ -190,7 +190,8 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
                   mathdx_root: str | None, no_recompile: bool,
                   no_rdc: bool = False, no_licm_barrier: bool = False,
                   single_call_iters: int | None = None,
-                  batch_iters: int | None = None) -> list[str]:
+                  batch_iters: int | None = None,
+                  cicc_opt_level: int | None = None) -> list[str]:
     cmd = [
         sys.executable,
         str(harness_repo_root / "test" / "benchmarks" / "baselines" / "grid" / "run.py"),
@@ -211,6 +212,8 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
         cmd += ["--single-call-iters", str(single_call_iters)]
     if batch_iters is not None:
         cmd += ["--batch-iters", str(batch_iters)]
+    if cicc_opt_level is not None:
+        cmd += ["--cicc-opt-level", str(cicc_opt_level)]
     return cmd
 
 
@@ -219,7 +222,8 @@ def run_grid_column(column: str, robot: str, base: str, *,
                     mathdx_root: str | None, no_recompile: bool,
                     no_rdc: bool = False, no_licm_barrier: bool = False,
                     single_call_iters: int | None = None,
-                    batch_iters: int | None = None) -> Path | None:
+                    batch_iters: int | None = None,
+                    cicc_opt_level: int | None = None) -> Path | None:
     """Run the appropriate GRiD harness for `column`. Returns output JSON path or None."""
     ee_frame = EE_FRAMES_GRID.get(robot, "")
     baseline_key = COLUMN_TO_BASELINE_KEY[column]
@@ -233,17 +237,25 @@ def run_grid_column(column: str, robot: str, base: str, *,
         cmd = _grid_run_cmd(worktree_path, robot, base, output, ee_frame,
                             linalg_backend=None, mathdx_root=None, no_recompile=no_recompile)
     elif column == "glass":
+        # cicc -O3 is fast for fixed-base and only hangs on floating-base
+        # codegen (see test/benchmarks/baselines/grid/run.py --cicc-opt-level
+        # help text). Forwarding the lower opt level to fixed-base would
+        # cost 30-70% perf for no benefit, so gate on base here.
+        effective_cicc = cicc_opt_level if base == "floating" else None
         cmd = _grid_run_cmd(REPO_ROOT, robot, base, output, ee_frame,
                             linalg_backend="glass", mathdx_root=None,
                             no_recompile=no_recompile, no_rdc=no_rdc,
                             no_licm_barrier=no_licm_barrier,
-                            single_call_iters=single_call_iters, batch_iters=batch_iters)
+                            single_call_iters=single_call_iters, batch_iters=batch_iters,
+                            cicc_opt_level=effective_cicc)
     elif column == "glass_nvidia":
+        effective_cicc = cicc_opt_level if base == "floating" else None
         cmd = _grid_run_cmd(REPO_ROOT, robot, base, output, ee_frame,
                             linalg_backend="glass-nvidia", mathdx_root=mathdx_root,
                             no_recompile=no_recompile, no_rdc=no_rdc,
                             no_licm_barrier=no_licm_barrier,
-                            single_call_iters=single_call_iters, batch_iters=batch_iters)
+                            single_call_iters=single_call_iters, batch_iters=batch_iters,
+                            cicc_opt_level=effective_cicc)
     else:
         raise ValueError(f"Unknown grid column: {column}")
 
@@ -443,6 +455,16 @@ def main() -> None:
                              "machinery in codegen (volatile reload + __noinline__ barrier). "
                              "Try this if --no-rdc alone doesn't fix the hang. "
                              "Batch timings unaffected; single-call may LICM-elide.")
+    parser.add_argument("--cicc-opt-level", type=int, default=None,
+                        choices=[0, 1, 2, 3],
+                        help="Pass `-Xcicc -O<n>` to GRiD glass / glass-nvidia floating-base "
+                             "compiles only (fixed-base unaffected). Use --cicc-opt-level 2 "
+                             "when nvcc hangs in cicc on floating-base kernels (observed sm_86 "
+                             "/ CUDA 12.6, where cicc -O3 wedges 100%% CPU indefinitely). "
+                             "-O2 finishes in ~2 min, ptxas stays at -O3 so SASS quality is "
+                             "preserved. Fixed-base is gated off the flag because cicc -O3 "
+                             "is fine there and -O2 costs 30-70%% perf. Default: nvcc default "
+                             "(-O3 to cicc).")
     parser.add_argument("--single-call-iters", type=int, default=None,
                         help="Override SINGLE_CALL_ITERS_GLOBAL for GRiD/Pinocchio "
                              "(default 10000). Inner-kernel rep count for single-call timings.")
@@ -529,6 +551,7 @@ def main() -> None:
                         no_rdc=args.no_rdc, no_licm_barrier=args.no_licm_barrier,
                         single_call_iters=args.single_call_iters,
                         batch_iters=args.batch_iters,
+                        cicc_opt_level=args.cicc_opt_level,
                     )
                 if p is not None:
                     produced.append(p)

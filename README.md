@@ -162,6 +162,37 @@ export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
 export PATH="opt/nvidia/nsight-compute/:$PATH"
 ```
 
+## Troubleshooting
+
+### Bench harness `nvcc` hangs in `cicc` on floating-base (sm_8x / CUDA 12.6)
+
+If `python test/benchmarks/run_multi_version.py` (or the per-robot
+`test/benchmarks/baselines/grid/run.py`) wedges `nvcc` at 100 % CPU when
+compiling a floating-base GRiD harness, the cause is a cicc (NVVM-IR
+optimizer) -O3 hang specific to the bench harness's heavy template
+surface — every algorithm's `_single_timing` / `_compute_only` / batch
+variants instantiated together with `TEST_ITERS=10000` rep loops.
+Confirmed on RTX 3080 / sm_8.6 with CUDA 12.6.85; likely affects other
+Ampere-class GPUs and older toolkits.
+
+Pass `--cicc-opt-level 2` to the bench harness; it forwards `-Xcicc -O2`
+to floating-base GRiD compiles only (fixed-base unaffected — it stays at
+the default -O3, where it isn't 30-70 % slower).
+
+```bash
+python test/benchmarks/run_multi_version.py --cicc-opt-level 2
+# or per-robot:
+python test/benchmarks/baselines/grid/run.py --robot iiwa14 --base floating \
+    --linalg-backend glass --cicc-opt-level 2
+```
+
+`ptxas` stays at -O3 so SASS quality is preserved. **Typical user code
+that includes `grid.cuh` and calls the batch host wrappers (e.g.
+`grid::forward_dynamics<T>(...)`) does not hit this hang** — it's
+specific to the timing-bench template surface. Users writing their own
+multi-algorithm timing harnesses on sm_8x can apply the same `-Xcicc -O2`
+flag directly to their `nvcc` command if they reproduce the hang.
+
 
 ## Contributors
 
