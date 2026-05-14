@@ -62,9 +62,10 @@ void inverseDynamicsThreaded_codegen_inner(CodeGenRNEAWithGetRes<T> *rnea_code_g
 template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
 void inverseDynamicsThreaded_codegen(CodeGenRNEAWithGetRes<T> **rnea_code_gen_arr, int nq, int nv, \
                                      Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds, ReusableThreads<NUM_THREADS> *threads){
-        for (int tid = 0; tid < NUM_THREADS; tid++){
-            int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-            if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+        constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+        for (int tid = 0; tid < ET; tid++){
+            int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+            if(tid == ET-1){kMax = NUM_TIME_STEPS;}
             threads->addTask(tid, &inverseDynamicsThreaded_codegen_inner<T>, std::ref(rnea_code_gen_arr[tid]), nq, nv,
                                                                              std::ref(qs), std::ref(qds), tid, kStart, kMax);
         }
@@ -80,9 +81,10 @@ void minvThreaded_codegen_inner(CodeGenMinv<T> *minv_code_gen, int nq, int nv, M
 
 template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
 void minvThreaded_codegen(CodeGenMinv<T> **minv_code_gen_arr, int nq, int nv, Matrix<T, Eigen::Dynamic, 1> *qs, ReusableThreads<NUM_THREADS> *threads){
-        for (int tid = 0; tid < NUM_THREADS; tid++){
-            int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-            if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+        constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+        for (int tid = 0; tid < ET; tid++){
+            int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+            if(tid == ET-1){kMax = NUM_TIME_STEPS;}
             threads->addTask(tid, &minvThreaded_codegen_inner<T>, std::ref(minv_code_gen_arr[tid]), nq, nv, std::ref(qs), tid, kStart, kMax);
         }
         threads->sync();
@@ -107,9 +109,10 @@ template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
 void forwardDynamicsThreaded_codegen(CodeGenMinv<T> **minv_code_gen_arr, CodeGenRNEAWithGetRes<T> **rnea_code_gen_arr, int nq, int nv, \
                                      Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds, Matrix<T, Eigen::Dynamic, 1> *qdds, \
                                      Matrix<T, Eigen::Dynamic, 1> *us, ReusableThreads<NUM_THREADS> *threads){
-        for (int tid = 0; tid < NUM_THREADS; tid++){
-            int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-            if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+        constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+        for (int tid = 0; tid < ET; tid++){
+            int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+            if(tid == ET-1){kMax = NUM_TIME_STEPS;}
             threads->addTask(tid, &forwardDynamicsThreaded_codegen_inner<T>, std::ref(minv_code_gen_arr[tid]),
                                                                              std::ref(rnea_code_gen_arr[tid]), nq, nv,
                                                                              std::ref(qs), std::ref(qds), std::ref(qdds), std::ref(us),
@@ -132,9 +135,10 @@ template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
 void inverseDynamicsGradientThreaded_codegen(DerivedCodeGenRNEADerivatives<T> **rnea_derivatives_code_gen_arr, \
                                              int nq, int nv, Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
                                              ReusableThreads<NUM_THREADS> *threads){
-        for (int tid = 0; tid < NUM_THREADS; tid++){
-            int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-            if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+        constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+        for (int tid = 0; tid < ET; tid++){
+            int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+            if(tid == ET-1){kMax = NUM_TIME_STEPS;}
             threads->addTask(tid, &inverseDynamicsGradientThreaded_codegen_inner<T>, std::ref(rnea_derivatives_code_gen_arr[tid]),
                                                                                      nq, nv, std::ref(qs), std::ref(qds), tid, kStart, kMax);
         }
@@ -167,9 +171,10 @@ void forwardDynamicsGradientThreaded_codegen(DerivedCodeGenRNEADerivatives<T> **
                                              int nq, int nv, Matrix<T, Eigen::Dynamic, Eigen::Dynamic> *dqdd_dqs, Matrix<T, Eigen::Dynamic, Eigen::Dynamic> *dqdd_dvs, \
                                              Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds, Matrix<T, Eigen::Dynamic, 1> *us, \
                                              ReusableThreads<NUM_THREADS> *threads){
-        for (int tid = 0; tid < NUM_THREADS; tid++){
-            int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-            if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+        constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+        for (int tid = 0; tid < ET; tid++){
+            int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+            if(tid == ET-1){kMax = NUM_TIME_STEPS;}
             threads->addTask(tid, &forwardDynamicsGradientThreaded_codegen_inner<T>, std::ref(rnea_derivatives_code_gen_arr[tid]),
                                                                                      std::ref(minv_code_gen_arr[tid]),
                                                                                      std::ref(rnea_code_gen_arr[tid]), nq, nv,
@@ -192,9 +197,10 @@ void abaThreaded_codegen_inner(CodeGenABA<T> *aba_code_gen, int nq, int nv, \
 template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
 void abaThreaded_codegen(CodeGenABA<T> **aba_code_gen_arr, int nq, int nv, \
                                      Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds, ReusableThreads<NUM_THREADS> *threads){
-        for (int tid = 0; tid < NUM_THREADS; tid++){
-            int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-            if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+        constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+        for (int tid = 0; tid < ET; tid++){
+            int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+            if(tid == ET-1){kMax = NUM_TIME_STEPS;}
             threads->addTask(tid, &abaThreaded_codegen_inner<T>, std::ref(aba_code_gen_arr[tid]), nq, nv,
                                                                              std::ref(qs), std::ref(qds), tid, kStart, kMax);
         }
@@ -216,9 +222,10 @@ void crbaThreaded_codegen_inner(CodeGenCRBA<T> *crba_code_gen, int nq, int nv,
 template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
 void crbaThreaded_codegen(CodeGenCRBA<T> **crba_code_gen_arr, int nq, int nv,
                            Matrix<T, Eigen::Dynamic, 1> *qs, ReusableThreads<NUM_THREADS> *threads){
-    for(int tid = 0; tid < NUM_THREADS; tid++){
-        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+    constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+    for(int tid = 0; tid < ET; tid++){
+        int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+        if(tid == ET-1){kMax = NUM_TIME_STEPS;}
         threads->addTask(tid, &crbaThreaded_codegen_inner<T>, std::ref(crba_code_gen_arr[tid]), nq, nv,
                                                               std::ref(qs), tid, kStart, kMax);
     }
@@ -244,9 +251,10 @@ template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
 void idDirectThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
                        Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
                        Matrix<T, Eigen::Dynamic, 1> *qdds, ReusableThreads<NUM_THREADS> *threads){
-    for(int tid = 0; tid < NUM_THREADS; tid++){
-        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+    constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+    for(int tid = 0; tid < ET; tid++){
+        int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+        if(tid == ET-1){kMax = NUM_TIME_STEPS;}
         threads->addTask(tid, &idDirectThreaded_inner<T>, model, &datas[tid],
                          std::ref(qs), std::ref(qds), std::ref(qdds), tid, kStart, kMax);
     }
@@ -266,9 +274,10 @@ template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
 void abaDirectThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
                         Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
                         Matrix<T, Eigen::Dynamic, 1> *us, ReusableThreads<NUM_THREADS> *threads){
-    for(int tid = 0; tid < NUM_THREADS; tid++){
-        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+    constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+    for(int tid = 0; tid < ET; tid++){
+        int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+        if(tid == ET-1){kMax = NUM_TIME_STEPS;}
         threads->addTask(tid, &abaDirectThreaded_inner<T>, model, &datas[tid],
                          std::ref(qs), std::ref(qds), std::ref(us), tid, kStart, kMax);
     }
@@ -286,9 +295,10 @@ void crbaDirectThreaded_inner(const pinocchio::Model *model, pinocchio::Data *da
 template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
 void crbaDirectThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
                          Matrix<T, Eigen::Dynamic, 1> *qs, ReusableThreads<NUM_THREADS> *threads){
-    for(int tid = 0; tid < NUM_THREADS; tid++){
-        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+    constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+    for(int tid = 0; tid < ET; tid++){
+        int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+        if(tid == ET-1){kMax = NUM_TIME_STEPS;}
         threads->addTask(tid, &crbaDirectThreaded_inner<T>, model, &datas[tid],
                          std::ref(qs), tid, kStart, kMax);
     }
@@ -308,9 +318,10 @@ void minvDirectThreaded_inner(const pinocchio::Model *model, pinocchio::Data *da
 template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
 void minvDirectThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
                          Matrix<T, Eigen::Dynamic, 1> *qs, ReusableThreads<NUM_THREADS> *threads){
-    for(int tid = 0; tid < NUM_THREADS; tid++){
-        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+    constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+    for(int tid = 0; tid < ET; tid++){
+        int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+        if(tid == ET-1){kMax = NUM_TIME_STEPS;}
         threads->addTask(tid, &minvDirectThreaded_inner<T>, model, &datas[tid],
                          std::ref(qs), tid, kStart, kMax);
     }
@@ -335,9 +346,10 @@ template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
 void idDuDirectThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
                          Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
                          Matrix<T, Eigen::Dynamic, 1> *qdds, ReusableThreads<NUM_THREADS> *threads){
-    for(int tid = 0; tid < NUM_THREADS; tid++){
-        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+    constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+    for(int tid = 0; tid < ET; tid++){
+        int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+        if(tid == ET-1){kMax = NUM_TIME_STEPS;}
         threads->addTask(tid, &idDuDirectThreaded_inner<T>, model, &datas[tid],
                          std::ref(qs), std::ref(qds), std::ref(qdds), tid, kStart, kMax);
     }
@@ -362,9 +374,10 @@ template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
 void fdDuDirectThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
                          Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
                          Matrix<T, Eigen::Dynamic, 1> *us, ReusableThreads<NUM_THREADS> *threads){
-    for(int tid = 0; tid < NUM_THREADS; tid++){
-        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+    constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+    for(int tid = 0; tid < ET; tid++){
+        int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+        if(tid == ET-1){kMax = NUM_TIME_STEPS;}
         threads->addTask(tid, &fdDuDirectThreaded_inner<T>, model, &datas[tid],
                          std::ref(qs), std::ref(qds), std::ref(us), tid, kStart, kMax);
     }
@@ -389,9 +402,10 @@ template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
 void eePoseThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
                      pinocchio::FrameIndex frame_id,
                      Matrix<T, Eigen::Dynamic, 1> *qs, ReusableThreads<NUM_THREADS> *threads){
-    for(int tid = 0; tid < NUM_THREADS; tid++){
-        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+    constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+    for(int tid = 0; tid < ET; tid++){
+        int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+        if(tid == ET-1){kMax = NUM_TIME_STEPS;}
         threads->addTask(tid, &eePoseThreaded_inner<T>, model, &datas[tid], frame_id,
                                                         std::ref(qs), tid, kStart, kMax);
     }
@@ -413,9 +427,10 @@ template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
 void eePoseGradientThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
                               pinocchio::FrameIndex frame_id,
                               Matrix<T, Eigen::Dynamic, 1> *qs, ReusableThreads<NUM_THREADS> *threads){
-    for(int tid = 0; tid < NUM_THREADS; tid++){
-        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+    constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+    for(int tid = 0; tid < ET; tid++){
+        int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+        if(tid == ET-1){kMax = NUM_TIME_STEPS;}
         threads->addTask(tid, &eePoseGradientThreaded_inner<T>, model, &datas[tid], frame_id,
                                                                  std::ref(qs), tid, kStart, kMax);
     }
@@ -437,9 +452,10 @@ template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
 void idsvaSoThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
                       Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
                       ReusableThreads<NUM_THREADS> *threads){
-    for(int tid = 0; tid < NUM_THREADS; tid++){
-        int kStart = NUM_TIME_STEPS/NUM_THREADS*tid; int kMax = NUM_TIME_STEPS/NUM_THREADS*(tid+1);
-        if(tid == NUM_THREADS-1){kMax = NUM_TIME_STEPS;}
+    constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+    for(int tid = 0; tid < ET; tid++){
+        int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+        if(tid == ET-1){kMax = NUM_TIME_STEPS;}
         threads->addTask(tid, &idsvaSoThreaded_inner<T>, model, &datas[tid],
                                                           std::ref(qs), std::ref(qds), tid, kStart, kMax);
     }

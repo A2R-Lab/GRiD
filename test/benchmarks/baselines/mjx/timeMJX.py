@@ -117,6 +117,16 @@ def main() -> None:
     # Load model
     # ------------------------------------------------------------------
     model = mujoco.MjModel.from_xml_path(mjcf_path)
+
+    # Disable collision detection on every geom. MJX 3.8 rejects
+    # certain collision-pair types (e.g. CYLINDER vs BOX/MESH) at put_model
+    # time, even though we never call mjx.step()/mjx.collision() — we only
+    # use mjx.inverse(), mjx.forward(), mjx.kinematics() which don't need
+    # contacts. Zeroing contype/conaffinity disables all geom-geom pair
+    # generation so the model loads on any robot MJCF.
+    model.geom_contype[:]     = 0
+    model.geom_conaffinity[:] = 0
+
     data  = mujoco.MjData(model)
     mx    = mjx.put_model(model)
     dx0   = mjx.put_data(model, data)
@@ -181,7 +191,7 @@ def main() -> None:
     # ID (inverse dynamics)
     try:
         _id_jit = jax.jit(lambda d: mjx.inverse(mx, d))
-        _warmup(_id_jit, dx_single)
+        _jit_and_warmup(_id_jit, (dx_single,))
         t = _time_device(_id_jit, dx_single)
         print(f"Single Call ID {np.median(t):.4f}us")
     except Exception as e:
@@ -189,7 +199,7 @@ def main() -> None:
 
     # FD (forward dynamics)
     try:
-        _warmup(_fd_jit, dx_single)
+        _jit_and_warmup(_fd_jit, (dx_single,))
         t = _time_device(_fd_jit, dx_single)
         print(f"Single Call FD {np.median(t):.4f}us")
     except Exception as e:
@@ -198,7 +208,7 @@ def main() -> None:
     # EE_POSE (kinematics)
     try:
         _ee_jit = jax.jit(lambda d: mjx.kinematics(mx, d))
-        _warmup(_ee_jit, dx_single)
+        _jit_and_warmup(_ee_jit, (dx_single,))
         t = _time_device(_ee_jit, dx_single)
         print(f"Single Call EEPOS {np.median(t):.4f}us")
     except Exception as e:
@@ -215,7 +225,7 @@ def main() -> None:
                 argnums=(0, 1, 2),
             )(d.qpos, d.qvel, d.qacc)
 
-        _warmup(_id_du_jit, dx_single)
+        _jit_and_warmup(_id_du_jit, (dx_single,))
         t = _time_device(_id_du_jit, dx_single, n_iters=max(1, TEST_ITERS // 10))
         print(f"Single Call ID_DU {np.median(t):.4f}us")
     except Exception as e:
@@ -233,9 +243,9 @@ def main() -> None:
         _batch_fd_fn = jax.jit(jax.vmap(lambda d: mjx.forward(mx, d)))
         _batch_ee_fn = jax.jit(jax.vmap(lambda d: mjx.kinematics(mx, d)))
 
-        # Warmup all three
+        # JIT compile + warmup all three (compile + N_WARMUP_PASSES extra passes)
         for _fn in (_batch_id_fn, _batch_fd_fn, _batch_ee_fn):
-            jax.block_until_ready(_fn(dx_batch))
+            _jit_and_warmup(_fn, (dx_batch,))
 
         # Helper: build a batch dx from numpy arrays (simulates host→device transfer)
         def _make_batch_from_np(qs_np: np.ndarray, vs_np: np.ndarray, as_np: np.ndarray):
@@ -245,11 +255,11 @@ def main() -> None:
             return jax.vmap(lambda q, v, a: dx0.replace(qpos=q, qvel=v, qacc=a))(qs, vs, as_)
 
         _make_batch_jit = jax.jit(_make_batch_from_np)
-        # warmup the batch-dx builder
+        # JIT compile + warmup the batch-dx builder
         _qs_np = np.random.randn(N, nq).astype(np.float32)
         _vs_np = np.random.randn(N, nv).astype(np.float32)
         _as_np = np.random.randn(N, nv).astype(np.float32)
-        jax.block_until_ready(_make_batch_jit(_qs_np, _vs_np, _as_np))
+        _jit_and_warmup(_make_batch_jit, (_qs_np, _vs_np, _as_np))
 
         def _with_mem_fn(batch_fn, qs_np, vs_np, as_np):
             return batch_fn(_make_batch_jit(

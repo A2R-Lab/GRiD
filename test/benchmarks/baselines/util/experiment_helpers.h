@@ -21,6 +21,27 @@
 #ifndef SINGLE_CALL_ITERS_GLOBAL
 #define SINGLE_CALL_ITERS_GLOBAL 10000
 #endif
+// Min batch-loop work units per worker thread. Below this, thread spawn/sync
+// overhead dominates and parallelism is a net loss for fast cppadcg-JIT'd
+// dynamics calls. With this floor, NUM_THREADS scales with N: N=16 → 1 thread,
+// N=32 → 2 threads, N=64 → 4 threads, ... up to NUM_THREADS at large N.
+#ifndef MIN_WORK_PER_THREAD
+#define MIN_WORK_PER_THREAD 16
+#endif
+
+// Compute the actual thread count to use for a batch of `N` timesteps, given
+// `MAX` compile-time worker threads available. Both args are constexpr at
+// every call site (template params), so this is a compile-time constant.
+// C++11 constexpr functions can only contain a single return statement, so we
+// nest ternaries: ceil(N / MIN_WORK_PER_THREAD), clamped to [1, MAX].
+constexpr int _effective_needed(int N) {
+    return (N + MIN_WORK_PER_THREAD - 1) / MIN_WORK_PER_THREAD;
+}
+constexpr int effective_thread_count(int N, int MAX) {
+    return _effective_needed(N) < 1
+        ? 1
+        : (_effective_needed(N) > MAX ? MAX : _effective_needed(N));
+}
 
 #define RANDOM_MEAN 0
 #define RANDOM_STDEV 1
