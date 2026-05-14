@@ -333,19 +333,71 @@ def compile_binary(
     if nvcc is None:
         raise RuntimeError("nvcc not found — install CUDA Toolkit to compile timeGRiD")
 
-    cmd = [
-        nvcc, cxx_standard, "-o", str(binary_path), str(TIMING_SOURCE),
-        f"-DGRID_HEADER_FILE=\"{header_path}\"",
-        "-gencode", f"arch=compute_{arch},code=sm_{arch}",
-        "-O3", "-ftz=true", "-prec-div=false", "-prec-sqrt=false",
-    ]
+    # Split into compile (-c → .o) + link (.o → exe) stages so `ccache` can
+    # actually cache the heavy compile pass. ccache treats single-shot
+    # `nvcc source.cu -o exe` as a link operation (`called_for_link`) and
+    # bypasses caching entirely. Two-stage gets us real cache hits on
+    # repeat compiles after clearing the benchmark binary cache. Transparent
+    # no-op when ccache isn't on PATH. Disable via GRID_NO_CCACHE=1.
+    ccache_prefix: list[str] = []
+    if not os.environ.get("GRID_NO_CCACHE"):
+        ccache = shutil.which("ccache")
+        if ccache is not None:
+            ccache_prefix = [ccache]
+
+    # Partition linalg_flags into compile-only vs link-only. Linker flags:
+    # -L<dir>, -l<lib>, and -dlto (device link-time optim for cusolverdx).
+    # Everything else (-D defines, -I includes, -rdc=true, --expt-relaxed-
+    # constexpr, etc.) goes to compile. -rdc=true needs to also appear at
+    # link to drive device-link, so we forward it to both stages.
+    compile_linalg_flags: list[str] = []
+    link_linalg_flags: list[str] = []
+    skip_next = False
+    for i, f in enumerate(linalg_flags):
+        if skip_next:
+            link_linalg_flags.append(f)
+            skip_next = False
+            continue
+        if f.startswith(("-L", "-l")) or f == "-dlto":
+            link_linalg_flags.append(f)
+        elif f == "-rdc=true":
+            compile_linalg_flags.append(f)
+            link_linalg_flags.append(f)
+        else:
+            compile_linalg_flags.append(f)
+
+    object_path = build_dir / "timeGRiD.o"
+    common_arch = ["-gencode", f"arch=compute_{arch},code=sm_{arch}"]
     if linalg_backend == "glass-nvidia":
-        cmd.extend(["-gencode", f"arch=compute_{arch},code=compute_{arch}"])
-    cmd.extend(linalg_flags)
-    result = subprocess.run(cmd, capture_output=True, text=True)
+        common_arch.extend(["-gencode", f"arch=compute_{arch},code=compute_{arch}"])
+
+    compile_cmd = [
+        *ccache_prefix,
+        nvcc, cxx_standard, "-c", "-o", str(object_path), str(TIMING_SOURCE),
+        f"-DGRID_HEADER_FILE=\"{header_path}\"",
+        *common_arch,
+        "-O3", "-ftz=true", "-prec-div=false", "-prec-sqrt=false",
+        *compile_linalg_flags,
+    ]
+    if ccache_prefix:
+        print(f"  [grid] ccache enabled (CCACHE_DIR={os.environ.get('CCACHE_DIR', '~/.cache/ccache')})")
+    result = subprocess.run(compile_cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(
-            f"nvcc compilation failed:\n{result.stdout}\n{result.stderr}"
+            f"nvcc compile (-c) failed:\n{result.stdout}\n{result.stderr}"
+        )
+
+    # Link step: not cacheable, but the heavy lifting (ptxas, template
+    # instantiation) already happened in the compile step above.
+    link_cmd = [
+        nvcc, "-o", str(binary_path), str(object_path),
+        *common_arch,
+        *link_linalg_flags,
+    ]
+    result = subprocess.run(link_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"nvcc link failed:\n{result.stdout}\n{result.stderr}"
         )
 
     cached_binary.parent.mkdir(parents=True, exist_ok=True)

@@ -343,6 +343,27 @@ The orchestrator:
 under its respective worktree, so codegen + binary caches don't collide.
 Pass `--no-recompile` to reuse cached binaries on rerun.
 
+**ccache (strongly recommended — large iteration speedup):** both the GRiD
+nvcc compile and the Pinocchio g++ compile transparently route through
+`ccache` if it's on `$PATH`. Install with `sudo apt install ccache` (or
+`brew install ccache`).
+
+The first compile populates the cache; subsequent compiles with the same
+preprocessed source + flags are cache hits and skip the heavy ptxas /
+Eigen-template work entirely — typically going from tens of seconds to
+under a second per compile. Most useful when:
+
+- Clearing `.pytest_cache/grid_benchmarks/` or `pinocchio_benchmarks/` but
+  the underlying `.cu` / `.cpp` source hasn't changed.
+- Iterating on the harness Python code without touching codegen output.
+- Switching back and forth between `--linalg-backend glass` and
+  `glass-nvidia` (each is a separate ccache entry but cached after first hit).
+
+Disable per-binary with `GRID_NO_CCACHE=1` (GRiD) or `PIN_NO_CCACHE=1`
+(Pinocchio). Inspect cache stats with `ccache -s`; clear with `ccache -C`.
+Default cache size is 5 GB — bump if you're caching many builds:
+`ccache -M 20G`.
+
 ---
 
 ## Adding Results from a New Machine

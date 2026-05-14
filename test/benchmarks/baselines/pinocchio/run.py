@@ -282,21 +282,46 @@ def compile_binary(
     if not codegen_flag:
         print("  [pinocchio] cppadcg not found — codegen algorithms will be null")
 
-    cmd = [
+    # Split into compile (-c → .o) + link (.o → exe) so ccache can actually
+    # cache the heavy template-heavy Pinocchio compile pass. Single-shot
+    # `g++ source.cpp -o exe` is `called_for_link` in ccache and bypasses
+    # caching. Two-stage gets us real cache hits. Transparent no-op when
+    # ccache isn't on PATH. Disable via PIN_NO_CCACHE=1.
+    ccache_prefix: list[str] = []
+    if not os.environ.get("PIN_NO_CCACHE"):
+        ccache = shutil.which("ccache")
+        if ccache is not None:
+            ccache_prefix = [ccache]
+
+    object_path = build_dir / "timePinocchio.o"
+    compile_cmd = [
+        *ccache_prefix,
         gxx, "-std=c++14", "-O3", "-DNDEBUG",
-        str(TIMING_SOURCE),
-        "-o", str(binary_path),
-        *iter_defs, *codegen_flag, *cflags, *libs,
+        "-c", str(TIMING_SOURCE),
+        "-o", str(object_path),
+        *iter_defs, *codegen_flag, *cflags,
     ]
+    if ccache_prefix:
+        print(f"  [pinocchio] ccache enabled (CCACHE_DIR={os.environ.get('CCACHE_DIR', '~/.cache/ccache')})")
     # -DNDEBUG disables Pinocchio's debug isUnitary check on the rotation matrix.
     # The harness stores q as float32, normalizes the quaternion segment in float32
     # precision (~1e-7), then Pinocchio casts to double and checks unitarity at
     # double precision (~1e-12) — which fails for float32-normalized quaternions on
     # floating-base robots (go2/g1). Release-mode benchmarks should disable asserts.
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(compile_cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(
-            f"g++ compilation failed:\n{result.stdout}\n{result.stderr}"
+            f"g++ compile (-c) failed:\n{result.stdout}\n{result.stderr}"
+        )
+
+    # Link step: cheap relative to compile, not cached.
+    link_cmd = [
+        gxx, "-O3", str(object_path), "-o", str(binary_path), *libs,
+    ]
+    result = subprocess.run(link_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"g++ link failed:\n{result.stdout}\n{result.stderr}"
         )
 
     cached_binary.parent.mkdir(parents=True, exist_ok=True)
