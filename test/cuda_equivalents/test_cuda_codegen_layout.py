@@ -496,15 +496,21 @@ def test_linalg_backend_controls_and_helpers_are_generated(tmp_path):
     assert "glass::gemm_ex" in header
     assert "namespace nvidia" in header
     assert "GRID_LINALG_NVIDIA_MAX_HELPER_BYTES" in header
-    assert "grid_linalg_packed_gemm_nvidia_colmajor" in header
     assert "grid_linalg_gemm_glass" in header
+    assert "grid_linalg_gemm" in header
     assert "grid_linalg_gemv" in header
     assert "grid_linalg_row_strided_gemv" in header
     assert "grid_linalg_row_strided_gemm" in header
     assert "grid_linalg_nvidia_row_strided_gemv_smem_bytes" in header
     assert "grid_linalg_nvidia_row_strided_gemm_smem_bytes" in header
-    assert "grid_linalg_row_strided_gemv_nvidia" in header
-    assert "grid_linalg_row_strided_gemm_nvidia" in header
+    # GLASS round-2 + Gap D unlock: the internal `_nvidia` helpers
+    # (grid_linalg_packed_gemm_nvidia_colmajor, _transb, row_strided_*_nvidia)
+    # were collapsed into the public wrappers above, which now call
+    # ::glass::nvidia::* directly. The internal helpers must NOT regrow.
+    assert "grid_linalg_packed_gemm_nvidia_colmajor" not in header
+    assert "grid_linalg_packed_gemm_nvidia_transb" not in header
+    assert "grid_linalg_row_strided_gemv_nvidia" not in header
+    assert "grid_linalg_row_strided_gemm_nvidia" not in header
 
 
 @pytest.mark.cuda_equivalence
@@ -612,7 +618,11 @@ def test_linalg_backend_auto_cublasdx_compiles_with_mathdx(tmp_path):
 __global__ void smoke(float *A, float *B, float *C) {
     extern __shared__ __align__(16) unsigned char smem[];
 #if GRID_CUDA_USE_GLASS_NVIDIA
-    grid::grid_linalg_packed_gemm_nvidia_colmajor<float, 4, 4, 4>(A, B, C, 1.0f, 0.0f, smem);
+    // GLASS round-2: the internal grid_linalg_packed_gemm_nvidia_colmajor
+    // helper was collapsed into the public grid_linalg_gemm wrapper. The
+    // public wrapper calls ::glass::nvidia::gemm<> directly, which auto-
+    // dispatches between cuBLASDx and SIMT via should_use_cublasdx<>.
+    grid::grid_linalg_gemm<float, 4, 4, 4>(A, B, C, 1.0f, 0.0f, smem);
 #endif
 }
 
@@ -648,9 +658,11 @@ __global__ void smoke(float *A, float *B, float *C) {
         grid::grid_linalg_nvidia_row_strided_gemv_smem_bytes<float, 6, 6, 8>();
     constexpr size_t gemm_bytes =
         grid::grid_linalg_nvidia_row_strided_gemm_smem_bytes<float, 6, 6, 6, 8, 8>();
-    grid::grid_linalg_row_strided_gemv_nvidia<float, 6, 6, 8>(
+    // GLASS round-2: internal `_nvidia` helpers collapsed into the public
+    // wrappers which call ::glass::nvidia::row_strided_* directly.
+    grid::grid_linalg_row_strided_gemv<float, 6, 6, 8>(
         A, B, C, 1.0f, 0.0f, smem);
-    grid::grid_linalg_row_strided_gemm_nvidia<float, 6, 6, 6, 8, 8>(
+    grid::grid_linalg_row_strided_gemm<float, 6, 6, 6, 8, 8>(
         A, B, C, 1.0f, 0.0f, smem);
     if (threadIdx.x == 0) {
         C[4] = (gemv_bytes > 0 && gemm_bytes > 0) ? 1.0f : 0.0f;
