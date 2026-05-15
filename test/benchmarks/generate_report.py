@@ -158,7 +158,8 @@ def _robot_rows(results: dict, algo: str, section_robots: list[str]) -> list[str
 # Multi-version table generation (pre_glass / glass / glass_nvidia / pinocchio)
 # ---------------------------------------------------------------------------
 
-MULTI_VERSION_KEYS = ("grid_pre_glass", "grid_glass", "grid_glass_nvidia", "pinocchio", "mjx", "frax")
+MULTI_VERSION_KEYS = ("grid_pre_glass", "grid_glass", "grid_glass_nvidia",
+                      "pinocchio", "mjx", "frax_cpu", "frax_gpu")
 
 
 def _ratio(num_entry: Optional[dict], den_entry: Optional[dict],
@@ -188,13 +189,19 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
             gn = (results.get(robot, {}).get(base, {}).get("grid_glass_nvidia") or {}).get(algo)
             pi = (results.get(robot, {}).get(base, {}).get("pinocchio") or {}).get(algo)
             mx = (results.get(robot, {}).get(base, {}).get("mjx") or {}).get(algo)
-            fx = (results.get(robot, {}).get(base, {}).get("frax") or {}).get(algo)
+            # Frax columns: split into CPU + GPU since Frax advertises both as fast.
+            # Back-compat: legacy JSONs with key "frax" populate frax_gpu (the prior
+            # default), leaving frax_cpu as `—`.
+            base_dict = results.get(robot, {}).get(base, {})
+            fx_cpu = (base_dict.get("frax_cpu") or {}).get(algo)
+            fx_gpu = (base_dict.get("frax_gpu") or base_dict.get("frax") or {}).get(algo)
 
             if metric == "single":
                 vals = [
                     _entry_single(pg), _entry_single(gl), _entry_single(gn),
                     _entry_single(pi) + _codegen_flag(pi),
-                    _entry_single(mx), _entry_single(fx),
+                    _entry_single(mx),
+                    _entry_single(fx_cpu), _entry_single(fx_gpu),
                 ]
                 ratio_gl_over_pg = _ratio(gl, pg, "compute_only", "compute_only", 256)
                 ratio_gn_over_gl = _ratio(gn, gl, "compute_only", "compute_only", 256)
@@ -206,7 +213,8 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
                     _entry_batch(gn, n, "compute_only"),
                     _entry_batch(pi, n),
                     _entry_batch(mx, n, "compute_only"),
-                    _entry_batch(fx, n, "compute_only"),
+                    _entry_batch(fx_cpu, n, "compute_only"),
+                    _entry_batch(fx_gpu, n, "compute_only"),
                 ]
                 ratio_gl_over_pg = _ratio(gl, pg, "compute_only", "compute_only", n)
                 ratio_gn_over_gl = _ratio(gn, gl, "compute_only", "compute_only", n)
@@ -256,14 +264,15 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
         "- **pin**: Pinocchio CPU reference (codegen where available).",
         "- **mjx**: MuJoCo MJX (JAX) GPU reference. Subset of algos only "
         "(id / fd / ee_pose / id_du); others render `—`.",
-        "- **frax**: Frax (JAX) GPU reference (https://github.com/danielpmorton/frax). "
+        "- **frax_cpu / frax_gpu**: Frax (JAX) reference (https://github.com/danielpmorton/frax) "
+        "timed separately on JAX's CPU and CUDA backends — Frax advertises both as fast. "
         "Subset of algos only (id / fd / crba / minv); others render `—`.",
         "- **glass/pre**: N=256 compute-only ratio. **> 1.00× = HEAD is faster**; "
         "**< 1.00× = HEAD regressed**.",
         "- **glass_nv/glass**: N=256 compute-only ratio. **> 1.00× = cuBLASDx is faster**.",
         "",
         "Each algorithm gets three sub-tables: **single-call**, **batch N=16**, "
-        "**batch N=256**. Same 6 backend columns + ratios in each. Values are "
+        "**batch N=256**. Same 7 backend columns + ratios in each. Values are "
         "median (or mean) µs. GRiD/MJX/Frax numbers are batch compute-only; "
         "Pinocchio is batch with-memory (its compute/transfer aren't separable on CPU).",
         "",
@@ -286,11 +295,11 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
                 "n256":   "batch N=256",
             }
             col_header = (
-                "| Robot | Base | pre_glass | glass | glass_nv | pin | mjx | frax "
+                "| Robot | Base | pre_glass | glass | glass_nv | pin | mjx | frax_cpu | frax_gpu "
                 "| glass/pre | glass_nv/glass |"
             )
             col_align = (
-                "|-------|------|:---------:|:-----:|:--------:|:---:|:---:|:----:"
+                "|-------|------|:---------:|:-----:|:--------:|:---:|:---:|:--------:|:--------:"
                 "|:---------:|:-------------:|"
             )
             for metric in ("single", "n16", "n256"):

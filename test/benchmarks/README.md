@@ -39,6 +39,15 @@ MATHDX_ROOT=/opt/nvidia/mathdx/25.12 \
 .venv/bin/python test/benchmarks/baselines/grid/run.py \
   --robot g1 --base floating --linalg-backend glass-nvidia
 
+# Recommended one-time setup for the glass-nvidia column: tune the
+# cuBLASDx-vs-SIMT dispatch table for your specific GPU (5–30 min). The
+# shipped table is measured on sm_120; other GPUs fall back to a
+# conservative heuristic. Writes a per-host overrides file under
+# GLASS/bench/tuning/<hostname>.cuh — does NOT modify the shipped table.
+# See "Autotune for your GPU" below for the consume-via-
+# GLASS_TUNING_TABLE_LOCAL workflow.
+(cd GLASS && python bench/autotune.py --sm AUTO)
+
 # Just Pinocchio, one robot:
 .venv/bin/python test/benchmarks/baselines/pinocchio/run.py --robot iiwa14 --base fixed
 
@@ -95,6 +104,47 @@ export MATHDX_ROOT=/opt/nvidia/mathdx/25.12
 
 If MathDx isn't installed, the pre-flight check skips the `glass-nvidia` column
 with a clear message; the other columns still run.
+
+#### Autotune for your GPU (recommended for production deployments)
+
+GLASS ships `tuning_table.cuh` with measurements taken on sm_120 plus
+per-API shape heuristics for unmeasured shapes. The heuristics are
+conservative but may mis-rank shapes on hardware GLASS hasn't seen.
+To measure on your GPU (one-time, 5–30 min depending on which APIs):
+
+```bash
+# Requires MATHDX_ROOT set (cuBLASDx headers).
+cd GLASS
+python bench/autotune.py --sm AUTO
+```
+
+This measures SIMT vs cuBLASDx across the default shape grid for all
+five round-2 auto-dispatch primaries (`gemm`, `gemv`, `row_strided_gemv`,
+`row_strided_gemm`, `gemm_batched_1d`) and writes
+`bench/tuning/<hostname>.cuh` — a per-host overrides file. The shipped
+`src/nvidia/tuning_table.cuh` is **not** modified.
+
+Consume the per-host overrides in the GRiD bench by setting
+`GLASS_TUNING_TABLE_LOCAL` at compile time:
+
+```bash
+# Add to the nvcc command line (e.g. via grid/run.py extra-flags hook):
+-DGLASS_TUNING_TABLE_LOCAL='"bench/tuning/<hostname>.cuh"'
+```
+
+The per-host file is gitignored (see `GLASS/bench/.gitignore`). To
+restrict measurement to one API or supply a custom shape grid:
+
+```bash
+python bench/autotune.py --apis gemv
+python bench/autotune.py --apis row_strided_gemv --shapes "6,6,8;14,14,16"
+```
+
+The shipped table works without running autotune — the heuristic handles
+unmeasured shapes. But if a glass-nvidia row shows unexpected timings vs
+glass, running autotune is the first thing to try. See
+[`GLASS/bench/TUNING.md`](../../GLASS/bench/TUNING.md) for the full
+walkthrough (including `--in-tree` for upstream contributions).
 
 ### Pinocchio (CPU)
 

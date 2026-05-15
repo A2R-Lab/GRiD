@@ -149,9 +149,6 @@ def generate_header(
 
     urdf_hash = _hash_file(Path(urdf_path))
     codegen_hash = _hash_tree(REPO_ROOT / "GRiDCodeGenerator", (".py",))
-    # GRID_BENCH_NVIDIA_MIN_DIM controls codegen's per-call backend choice via
-    # linalg_smem_for(); changing it must bust the header cache.
-    nvidia_min_dim_env = os.environ.get("GRID_BENCH_NVIDIA_MIN_DIM", "16")
     # GRID_NO_LICM_BARRIER suppresses the anti-LICM machinery in _single_timing
     # rep loops (volatile reload + __noinline__ barrier). When toggled, the
     # generated header changes — must bust the header cache.
@@ -164,7 +161,6 @@ def generate_header(
             "base": base,
             "profile": "all",
             "homogenous": True,
-            "nvidia_min_dim": nvidia_min_dim_env,
             "no_licm_barrier": no_licm_barrier_env,
             # ee_frame intentionally excluded: not passed to gen_all_code
         }, sort_keys=True).encode()
@@ -228,6 +224,8 @@ def compile_binary(
     single_call_iters: int | None = None,
     batch_iters: int | None = None,
     cicc_opt_level: int | None = None,
+    split_compile: int | None = None,
+    ofast_compile: str | None = None,
 ) -> Path:
     """Compile timeGRiD.cu against the generated header, using content-hash cache."""
     source_hash = _hash_file(TIMING_SOURCE)
@@ -311,6 +309,8 @@ def compile_binary(
             "with_cusolverdx": with_cusolverdx,
             "no_rdc": no_rdc,
             "cicc_opt_level": cicc_opt_level,
+            "split_compile": split_compile,
+            "ofast_compile": ofast_compile,
         }, sort_keys=True).encode()
     )[:24]
 
@@ -387,6 +387,15 @@ def compile_binary(
     # and keeps ptxas at -O3 so SASS quality is preserved.
     if cicc_opt_level is not None:
         compile_cmd.extend(["-Xcicc", f"-O{int(cicc_opt_level)}"])
+    # nvcc 12.x: parallelize cicc optimization passes within a single TU.
+    # "Minimal (if any) impact on performance of the compiled binary" per
+    # nvcc docs. 0 = use all cores; N = use N threads.
+    if split_compile is not None:
+        compile_cmd.extend([f"--split-compile={int(split_compile)}"])
+    # nvcc 12.x: fast-compile mode for device code. Trades runtime perf
+    # for compile speed; opt-in dev knob, not a default.
+    if ofast_compile is not None:
+        compile_cmd.extend([f"-Ofc={ofast_compile}"])
     if ccache_prefix:
         print(f"  [grid] ccache enabled (CCACHE_DIR={os.environ.get('CCACHE_DIR', '~/.cache/ccache')})")
     result = subprocess.run(compile_cmd, capture_output=True, text=True)
@@ -484,6 +493,24 @@ def main() -> None:
     parser.add_argument("--batch-iters", type=int, default=None,
                         help="Override TEST_ITERS_GLOBAL (default 100). Outer rep count for "
                              "batch timings at each N; bump for more stable medians.")
+    parser.add_argument("--split-compile", type=int, default=None,
+                        help="Pass `--split-compile=N` to nvcc (12.x). Parallelizes cicc "
+                             "optimization passes across N threads within a single TU "
+                             "(0 = all CPU cores). Compile ~2× faster on cuBLASDx-heavy "
+                             "glass-nvidia builds.\n\n"
+                             "*** DO NOT USE FOR MEASUREMENT RUNS *** — empirically defeats "
+                             "the anti-LICM machinery (volatile reload + __noinline__ "
+                             "grid_licm_barrier) at ALL values N>=2. Single-call and "
+                             "batch-compute-only timings collapse to ~0us / launch-overhead "
+                             "(~2us) for FD/ABA/MINV/ID_DU/FD_DU/EE_POSE_GRAD. Use ONLY for "
+                             "non-timing dev iteration (e.g., verifying codegen output "
+                             "compiles).")
+    parser.add_argument("--ofast-compile", choices=["min", "mid", "max"], default=None,
+                        help="Pass `-Ofc=<level>` to nvcc (12.x). Fast-compile mode for "
+                             "device code: 'min' (mild compile-speed win), 'mid' (balanced), "
+                             "'max' (focuses only on fastest compilation, disables many "
+                             "optimizations). Trades device-code runtime perf for compile "
+                             "time — opt-in dev knob, NOT for perf measurement runs.")
     args = parser.parse_args()
 
     ee_frame = args.ee_frame or DEFAULT_EE_FRAMES.get(args.robot, "")
@@ -524,6 +551,8 @@ def main() -> None:
             single_call_iters=args.single_call_iters,
             batch_iters=args.batch_iters,
             cicc_opt_level=args.cicc_opt_level,
+            split_compile=args.split_compile,
+            ofast_compile=args.ofast_compile,
         )
     except Exception as e:
         print(f"  [grid] ERROR compiling binary: {e}", file=sys.stderr)

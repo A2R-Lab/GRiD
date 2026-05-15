@@ -28,6 +28,19 @@ TEST_ITERS  = int(os.environ.get("BENCH_TEST_ITERS", "500"))
 BATCH_SIZES = [16, 32, 64, 128, 256]
 N_WARMUP_PASSES = 3
 
+# Allow overriding the JAX backend before any jax import. Frax advertises
+# fast performance on BOTH CPU and GPU; the multi-version harness runs
+# this script twice (once per device) to capture both columns. Default:
+# whatever JAX picks (CUDA if jax[cuda12] is installed; CPU otherwise).
+_FRAX_DEVICE = os.environ.get("FRAX_DEVICE", "").strip().lower()
+if _FRAX_DEVICE in ("cpu", "gpu"):
+    # Must be set BEFORE the first `import jax` anywhere — JAX picks the
+    # backend at first import and won't switch later. Two equivalent env
+    # vars; set both so JAX picks regardless of version.
+    _JAX_PLATFORM = "cpu" if _FRAX_DEVICE == "cpu" else "cuda"
+    os.environ["JAX_PLATFORMS"] = _JAX_PLATFORM
+    os.environ["JAX_PLATFORM_NAME"] = _JAX_PLATFORM
+
 
 # ---------------------------------------------------------------------------
 # Output helpers (same format as timeGRiD)
