@@ -145,19 +145,9 @@ def _compile_second_order_runner(build_dir: Path, *, enable_fdsva=True):
                 "GRID_CUDA_SECOND_ORDER_TEST_THREADS must be positive when set."
             )
         cmd.insert(-1, f"-DGRID_CUDA_SECOND_ORDER_TEST_THREADS={thread_count}")
-    dq_mode = os.environ.get("GRID_CUDA_FLOATING_SECOND_ORDER_DQ_MODE")
-    if dq_mode:
-        mode_defines = {
-            "analytic": "GRID_FLOATING_SO_DQ_ANALYTIC",
-            "finite_diff": "GRID_FLOATING_SO_DQ_FINITE_DIFF",
-            "compare": "GRID_FLOATING_SO_DQ_COMPARE",
-        }
-        if dq_mode not in mode_defines:
-            pytest.fail(
-                "GRID_CUDA_FLOATING_SECOND_ORDER_DQ_MODE must be one of "
-                "analytic, finite_diff, compare."
-            )
-        cmd.insert(-1, f"-DGRID_FLOATING_SO_DQ_MODE={mode_defines[dq_mode]}")
+    # `GRID_CUDA_FLOATING_SECOND_ORDER_DQ_MODE` env-var dispatch removed alongside the
+    # `GRID_FLOATING_SO_DQ_*` codegen macros; the analytic floating-base d2tau_dq path
+    # is now correct in a single pass (Phase A+B of the SO codegen fix).
     cmd.insert(-1, f"-DGRID_CUDA_SECOND_ORDER_ENABLE_FDSVA={int(enable_fdsva)}")
     result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
