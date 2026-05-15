@@ -205,6 +205,13 @@ def _mathdx_include_flags() -> list[str]:
             return [
                 f"-I{root / 'include'}",
                 f"-I{root / 'external' / 'cutlass' / 'include'}",
+                # Required for any glass-nvidia consumer: GLASS's auto-dispatch
+                # helpers (should_use_cublasdx_*<>) and cuBLASDx itself use
+                # constexpr __host__ functions from device code, which nvcc
+                # disallows without this flag. The benchmark harness already
+                # passes it (test/benchmarks/baselines/grid/run.py); we mirror
+                # it here so the cuda_equivalence tests compile too.
+                "--expt-relaxed-constexpr",
             ]
     pytest.skip("cuBLASDx headers were not found; set MATHDX_ROOT to run cuBLASDx compile tests.")
 
@@ -677,6 +684,56 @@ int main() { return 0; }
         header,
         source,
         "linalg_backend_nvidia_row_strided_helpers",
+        cxx_standard="-std=c++17",
+        extra_flags=[
+            *_mathdx_include_flags(),
+            _grid_cublasdx_sm_define(),
+            "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS_NVIDIA",
+            "-Xptxas",
+            "-O1",
+        ],
+    )
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+def test_linalg_backend_gemv_and_transpose_b_compile_with_mathdx(tmp_path):
+    """Exercises the public wrappers whose round-2 behavior changed:
+
+    - grid_linalg_gemv: now routes through glass::nvidia::gemv<> on
+      glass-nvidia builds (uniform col-major path), auto-dispatching to
+      cuBLASDx or SIMT per the should_use_cublasdx_gemv<> table.
+    - grid_linalg_gemm with TRANSPOSE_B=true: with the Gap D fix in
+      GLASS round-2, glass::nvidia::gemm<>'s SIMT branch honors
+      (col, row, col) → TRANSPOSE_B=true, so small TRANSB sites compile
+      without needing a dedicated DEFINE_NVIDIA_GEMM_BLOCKDIM_TRANSB_SM.
+    """
+    header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="dynamics-core")
+    source = r'''
+#include "grid.cuh"
+
+__global__ void smoke(float *A, float *B, float *C, float *x, float *y) {
+    extern __shared__ __align__(16) unsigned char smem[];
+#if GRID_CUDA_USE_GLASS_NVIDIA
+    // grid_linalg_gemv at small shape (heuristic SIMT-routes).
+    grid::grid_linalg_gemv<float, 6, 6>(A, x, y, 1.0f, 0.0f, smem);
+    // grid_linalg_gemm with TRANSPOSE_B=true at a small shape (Gap D):
+    // previously this required a dedicated _transb wrapper; now goes
+    // through the unified glass::nvidia::gemm<> SIMT branch.
+    grid::grid_linalg_gemm<float, 4, 4, 4, /*TRANSPOSE_B=*/true>(
+        A, B, C, 1.0f, 0.0f, smem);
+    // Sanity: plain TRANSPOSE_B=false path still works at the same shape.
+    grid::grid_linalg_gemm<float, 4, 4, 4>(A, B, C, 1.0f, 0.0f, smem);
+#endif
+}
+
+int main() { return 0; }
+'''
+    _compile_header_consumer(
+        tmp_path,
+        header,
+        source,
+        "linalg_backend_gemv_transpose_b",
         cxx_standard="-std=c++17",
         extra_flags=[
             *_mathdx_include_flags(),
