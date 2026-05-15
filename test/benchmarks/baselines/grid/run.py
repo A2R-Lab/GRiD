@@ -209,10 +209,83 @@ def _recompile_requested() -> bool:
 # Binary compilation with caching
 # ---------------------------------------------------------------------------
 THIS_DIR = Path(__file__).resolve().parent
-TIMING_SOURCE = THIS_DIR / "timeGRiD.cu"
+# Two-binary split (2026-05-15):
+#   timeGRiD_single.cu — compiled WITH -rdc=true (anti-LICM correctness)
+#   timeGRiD_batch.cu  — compiled WITHOUT -rdc=true (recovers 3× SIMT batch perf)
+# Each TU has its own main() and produces its own .exe. We run both and
+# concatenate their stdout for the parser. timeGRiD_common.h holds the
+# shared init/load/warmup scaffolding.
+TIMING_SOURCE_SINGLE = THIS_DIR / "timeGRiD_single.cu"
+TIMING_SOURCE_BATCH  = THIS_DIR / "timeGRiD_batch.cu"
+TIMING_SOURCE_COMMON = THIS_DIR / "timeGRiD_common.h"
 
 
-def compile_binary(
+def _compile_one_source(
+    source_path: Path,
+    out_name: str,
+    *,
+    header_path: Path,
+    arch: str,
+    build_dir: Path,
+    cxx_standard: str,
+    compile_linalg_flags: list[str],
+    link_linalg_flags: list[str],
+    common_arch: list[str],
+    cicc_opt_level: int | None,
+    split_compile: int | None,
+    ofast_compile: str | None,
+    runner_key: str,
+    ccache_prefix: list[str],
+    nvcc: str,
+) -> Path:
+    """Compile one .cu source → .exe with the given flags. Returns the .exe
+    path. Two-stage (compile→link) so ccache caches the heavy compile pass."""
+    object_path = build_dir / f"{out_name}.o"
+    binary_path = build_dir / f"{out_name}.exe"
+    cached_binary = CACHE_ROOT / "grid_benchmarks" / runner_key / f"{out_name}.exe"
+
+    if cached_binary.exists():
+        shutil.copyfile(cached_binary, binary_path)
+        os.chmod(binary_path, 0o755)
+        return binary_path
+
+    compile_cmd = [
+        *ccache_prefix,
+        nvcc, cxx_standard, "-c", "-o", str(object_path), str(source_path),
+        f"-DGRID_HEADER_FILE=\"{header_path}\"",
+        *common_arch,
+        "-O3", "-ftz=true", "-prec-div=false", "-prec-sqrt=false",
+        *compile_linalg_flags,
+    ]
+    if cicc_opt_level is not None:
+        compile_cmd.extend(["-Xcicc", f"-O{int(cicc_opt_level)}"])
+    if split_compile is not None:
+        compile_cmd.extend([f"--split-compile={int(split_compile)}"])
+    if ofast_compile is not None:
+        compile_cmd.extend([f"-Ofc={ofast_compile}"])
+    result = subprocess.run(compile_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"nvcc compile (-c) failed for {source_path.name}:\n{result.stdout}\n{result.stderr}"
+        )
+
+    link_cmd = [
+        nvcc, "-o", str(binary_path), str(object_path),
+        *common_arch,
+        *link_linalg_flags,
+    ]
+    result = subprocess.run(link_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"nvcc link failed for {source_path.name}:\n{result.stdout}\n{result.stderr}"
+        )
+    cached_binary.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(binary_path, cached_binary)
+    os.chmod(cached_binary, 0o755)
+    return binary_path
+
+
+def compile_binaries(
     header_path: Path,
     arch: str,
     build_dir: Path,
@@ -226,9 +299,17 @@ def compile_binary(
     cicc_opt_level: int | None = None,
     split_compile: int | None = None,
     ofast_compile: str | None = None,
-) -> Path:
-    """Compile timeGRiD.cu against the generated header, using content-hash cache."""
-    source_hash = _hash_file(TIMING_SOURCE)
+) -> tuple[Path, Path]:
+    """Compile timeGRiD_single.cu (with -rdc=true) and timeGRiD_batch.cu
+    (without -rdc=true) against the generated header. Returns
+    (single_binary, batch_binary)."""
+    # Hash all three sources (.cu + .cu + .h) so a touch of the shared
+    # header busts both caches.
+    source_hash = _hash_bytes(
+        _hash_file(TIMING_SOURCE_SINGLE).encode() +
+        _hash_file(TIMING_SOURCE_BATCH).encode() +
+        _hash_file(TIMING_SOURCE_COMMON).encode()
+    )
     header_hash = _hash_file(header_path)
 
     cxx_standard = "-std=c++11"
@@ -245,17 +326,11 @@ def compile_binary(
     if batch_iters is not None:
         linalg_flags.append(f"-DTEST_ITERS_GLOBAL={int(batch_iters)}")
 
-    # -rdc=true (relocatable device code) is required so nvcc treats the
-    # `__noinline__` device function `grid_licm_barrier` as opaque across the
-    # call boundary. Without separate-compilation semantics, nvcc inlines it
-    # despite the annotation and hoists the surrounding _single_timing inner
-    # work out of the rep loop (the LICM elision we hit on go2/g1 floating).
-    # -dlto is added on top only for the cuSOLVERDx link, since that path
-    # needs the device-link-time optimizer to merge the precompiled library.
+    # Backend-specific shared flags. Whether to add -rdc=true is decided
+    # PER-TU below (single uses it for anti-LICM correctness; batch does
+    # not so nvcc can aggressively inline the inner SIMT helpers).
     if linalg_backend == "glass":
         linalg_flags.append("-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS")
-        if not no_rdc:
-            linalg_flags.append("-rdc=true")
     elif linalg_backend == "glass-nvidia":
         resolved_mathdx_root = resolve_mathdx_root(mathdx_root)
         if resolved_mathdx_root is None:
@@ -277,12 +352,10 @@ def compile_binary(
             raise RuntimeError(
                 "--with-cusolverdx requires -rdc=true; cannot combine with --no-rdc."
             )
-        if not no_rdc:
-            linalg_flags.append("-rdc=true")
         if with_cusolverdx:
             # cuSOLVERDx ships a precompiled device library; needs -dlto
-            # on top of -rdc=true (added above) and links against
-            # cusolverdx + cublas + cusolver + cudart.
+            # on top of -rdc=true (the single TU's -rdc handles it) and
+            # links against cusolverdx + cublas + cusolver + cudart.
             cusolverdx_lib_dir = resolved_mathdx_root / "lib"
             linalg_flags.extend([
                 "-DGRID_CUDA_USE_GLASS_NVIDIA_LAPACK=1",
@@ -311,133 +384,108 @@ def compile_binary(
             "cicc_opt_level": cicc_opt_level,
             "split_compile": split_compile,
             "ofast_compile": ofast_compile,
+            "split_binaries": True,  # cache-bust against the pre-split layout
         }, sort_keys=True).encode()
     )[:24]
-
-    binary_path = build_dir / "timeGRiD.exe"
-    cached_binary = CACHE_ROOT / "grid_benchmarks" / runner_key / "timeGRiD.exe"
-
-    if no_recompile or cached_binary.exists():
-        if cached_binary.exists():
-            shutil.copyfile(cached_binary, binary_path)
-            os.chmod(binary_path, 0o755)
-            print(f"  [grid] binary cache hit (key={runner_key[:12]})")
-            return binary_path
 
     backend_note = linalg_backend
     if cublasdx_sm is not None:
         backend_note += f", GRID_CUBLASDX_SM={cublasdx_sm}"
     print(
-        f"  [grid] compiling timeGRiD.cu "
+        f"  [grid] compiling timeGRiD_{{single,batch}}.cu "
         f"(arch=sm_{arch}, linalg={backend_note}, cache key={runner_key[:12]})..."
     )
     nvcc = shutil.which("nvcc")
     if nvcc is None:
         raise RuntimeError("nvcc not found — install CUDA Toolkit to compile timeGRiD")
 
-    # Split into compile (-c → .o) + link (.o → exe) stages so `ccache` can
-    # actually cache the heavy compile pass. ccache treats single-shot
-    # `nvcc source.cu -o exe` as a link operation (`called_for_link`) and
-    # bypasses caching entirely. Two-stage gets us real cache hits on
-    # repeat compiles after clearing the benchmark binary cache. Transparent
-    # no-op when ccache isn't on PATH. Disable via GRID_NO_CCACHE=1.
+    # Two-stage compile→link so ccache caches the heavy compile pass.
+    # ccache treats single-shot `nvcc source.cu -o exe` as a link op and
+    # bypasses caching. Disable via GRID_NO_CCACHE=1.
     ccache_prefix: list[str] = []
     if not os.environ.get("GRID_NO_CCACHE"):
         ccache = shutil.which("ccache")
         if ccache is not None:
             ccache_prefix = [ccache]
+            print(f"  [grid] ccache enabled (CCACHE_DIR={os.environ.get('CCACHE_DIR', '~/.cache/ccache')})")
 
-    # Partition linalg_flags into compile-only vs link-only. Linker flags:
-    # -L<dir>, -l<lib>, and -dlto (device link-time optim for cusolverdx).
-    # Everything else (-D defines, -I includes, -rdc=true, --expt-relaxed-
-    # constexpr, etc.) goes to compile. -rdc=true needs to also appear at
-    # link to drive device-link, so we forward it to both stages.
-    compile_linalg_flags: list[str] = []
-    link_linalg_flags: list[str] = []
-    skip_next = False
-    for i, f in enumerate(linalg_flags):
-        if skip_next:
-            link_linalg_flags.append(f)
-            skip_next = False
-            continue
+    # Partition shared linalg_flags into compile-only vs link-only. Linker
+    # flags: -L<dir>, -l<lib>, -dlto. Everything else goes to compile.
+    # (-rdc=true is NOT in linalg_flags here — it's added per-TU below.)
+    compile_linalg_flags_shared: list[str] = []
+    link_linalg_flags_shared: list[str] = []
+    for f in linalg_flags:
         if f.startswith(("-L", "-l")) or f == "-dlto":
-            link_linalg_flags.append(f)
-        elif f == "-rdc=true":
-            compile_linalg_flags.append(f)
-            link_linalg_flags.append(f)
+            link_linalg_flags_shared.append(f)
         else:
-            compile_linalg_flags.append(f)
+            compile_linalg_flags_shared.append(f)
 
-    object_path = build_dir / "timeGRiD.o"
     common_arch = ["-gencode", f"arch=compute_{arch},code=sm_{arch}"]
     if linalg_backend == "glass-nvidia":
         common_arch.extend(["-gencode", f"arch=compute_{arch},code=compute_{arch}"])
 
-    compile_cmd = [
-        *ccache_prefix,
-        nvcc, cxx_standard, "-c", "-o", str(object_path), str(TIMING_SOURCE),
-        f"-DGRID_HEADER_FILE=\"{header_path}\"",
-        *common_arch,
-        "-O3", "-ftz=true", "-prec-div=false", "-prec-sqrt=false",
-        *compile_linalg_flags,
-    ]
-    # Lower the cicc front-end opt level. Default nvcc passes -O3 to cicc, which
-    # hangs indefinitely on floating-base headers under CUDA 12.6 / sm_86 (the
-    # extra 6 DOF crosses some opt-pass threshold). -Xcicc -O2 finishes in ~2 min
-    # and keeps ptxas at -O3 so SASS quality is preserved.
-    if cicc_opt_level is not None:
-        compile_cmd.extend(["-Xcicc", f"-O{int(cicc_opt_level)}"])
-    # nvcc 12.x: parallelize cicc optimization passes within a single TU.
-    # "Minimal (if any) impact on performance of the compiled binary" per
-    # nvcc docs. 0 = use all cores; N = use N threads.
-    if split_compile is not None:
-        compile_cmd.extend([f"--split-compile={int(split_compile)}"])
-    # nvcc 12.x: fast-compile mode for device code. Trades runtime perf
-    # for compile speed; opt-in dev knob, not a default.
-    if ofast_compile is not None:
-        compile_cmd.extend([f"-Ofc={ofast_compile}"])
-    if ccache_prefix:
-        print(f"  [grid] ccache enabled (CCACHE_DIR={os.environ.get('CCACHE_DIR', '~/.cache/ccache')})")
-    result = subprocess.run(compile_cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"nvcc compile (-c) failed:\n{result.stdout}\n{result.stderr}"
-        )
+    # Per-TU flag sets. single needs -rdc=true (unless --no-rdc was passed)
+    # for the anti-LICM machinery; batch does NOT, so nvcc can inline
+    # ::glass::* / dot_prod / grid_xhom_or_dxhom_ptr aggressively.
+    def _flags_for(use_rdc: bool) -> tuple[list[str], list[str]]:
+        compile_flags = list(compile_linalg_flags_shared)
+        link_flags = list(link_linalg_flags_shared)
+        if use_rdc:
+            compile_flags.append("-rdc=true")
+            link_flags.append("-rdc=true")
+        return compile_flags, link_flags
 
-    # Link step: not cacheable, but the heavy lifting (ptxas, template
-    # instantiation) already happened in the compile step above.
-    link_cmd = [
-        nvcc, "-o", str(binary_path), str(object_path),
-        *common_arch,
-        *link_linalg_flags,
-    ]
-    result = subprocess.run(link_cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"nvcc link failed:\n{result.stdout}\n{result.stderr}"
-        )
+    single_rdc = not no_rdc
+    batch_rdc = False  # batch never wants -rdc — that's the whole point of the split
+    single_c, single_l = _flags_for(single_rdc)
+    batch_c,  batch_l  = _flags_for(batch_rdc)
 
-    cached_binary.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(binary_path, cached_binary)
-    os.chmod(cached_binary, 0o755)
-    print(f"  [grid] compiled successfully")
-    return binary_path
+    single_binary = _compile_one_source(
+        TIMING_SOURCE_SINGLE, "timeGRiD_single",
+        header_path=header_path, arch=arch, build_dir=build_dir,
+        cxx_standard=cxx_standard,
+        compile_linalg_flags=single_c, link_linalg_flags=single_l,
+        common_arch=common_arch,
+        cicc_opt_level=cicc_opt_level,
+        split_compile=split_compile, ofast_compile=ofast_compile,
+        runner_key=runner_key, ccache_prefix=ccache_prefix, nvcc=nvcc,
+    )
+    batch_binary = _compile_one_source(
+        TIMING_SOURCE_BATCH, "timeGRiD_batch",
+        header_path=header_path, arch=arch, build_dir=build_dir,
+        cxx_standard=cxx_standard,
+        compile_linalg_flags=batch_c, link_linalg_flags=batch_l,
+        common_arch=common_arch,
+        cicc_opt_level=cicc_opt_level,
+        split_compile=split_compile, ofast_compile=ofast_compile,
+        runner_key=runner_key, ccache_prefix=ccache_prefix, nvcc=nvcc,
+    )
+    print(f"  [grid] compiled successfully (single rdc={single_rdc}, batch rdc={batch_rdc})")
+    return single_binary, batch_binary
 
 
 # ---------------------------------------------------------------------------
 # Run and parse
 # ---------------------------------------------------------------------------
-def run_timing(binary_path: Path, base: str) -> str:
+def run_timing(binaries: tuple[Path, Path], base: str) -> str:
+    """Run the single + batch binaries in sequence; return concatenated stdout
+    so parse_grid_output picks up `Single Call X us` lines (from the single
+    binary) AND `[N:K]: X` lines (from the batch binary)."""
+    single_binary, batch_binary = binaries
     floating_arg = "T" if base == "floating" else "F"
-    result = subprocess.run(
-        [str(binary_path), floating_arg],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"timeGRiD exited with code {result.returncode}:\n{result.stderr}"
+    outputs = []
+    for label, binary in (("single", single_binary), ("batch", batch_binary)):
+        result = subprocess.run(
+            [str(binary), floating_arg],
+            capture_output=True, text=True,
         )
-    return result.stdout + "\n" + result.stderr
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"timeGRiD_{label} exited with code {result.returncode}:\n{result.stderr}"
+            )
+        outputs.append(result.stdout)
+        outputs.append(result.stderr)
+    return "\n".join(outputs)
 
 
 # ---------------------------------------------------------------------------
@@ -539,7 +587,7 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        binary_path = compile_binary(
+        binaries = compile_binaries(
             header_path,
             arch,
             build_dir,
@@ -555,12 +603,12 @@ def main() -> None:
             ofast_compile=args.ofast_compile,
         )
     except Exception as e:
-        print(f"  [grid] ERROR compiling binary: {e}", file=sys.stderr)
+        print(f"  [grid] ERROR compiling binaries: {e}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"  [grid] running timing binary...")
+    print(f"  [grid] running timing binaries (single + batch)...")
     try:
-        output = run_timing(binary_path, args.base)
+        output = run_timing(binaries, args.base)
     except Exception as e:
         print(f"  [grid] ERROR running binary: {e}", file=sys.stderr)
         sys.exit(1)
