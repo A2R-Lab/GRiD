@@ -2,3 +2,4 @@ pytest
 pin
 robot_descriptions>=1.23.0
 xacrodoc
+pybind11

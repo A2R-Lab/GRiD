@@ -59,6 +59,7 @@ def _generate_header(
     codegen_profile="all",
     algorithm_list=None,
     enable_floating_second_order=False,
+    enable_idsva_so_spatial_v2=False,
 ) -> str:
     spec = _robot_spec(robot_id, base_mode)
     try:
@@ -83,6 +84,7 @@ def _generate_header(
                 codegen_profile=codegen_profile,
                 algorithm_list=algorithm_list,
                 enable_floating_second_order=enable_floating_second_order,
+                enable_idsva_so_spatial_v2=enable_idsva_so_spatial_v2,
                 output_path=str(header_path),
             )
     return header_path.read_text()
@@ -385,11 +387,12 @@ def test_floating_header_does_not_require_second_order_kernels(tmp_path, robot_i
 @pytest.mark.developer_only
 @pytest.mark.floating_base
 @pytest.mark.parametrize(
-    ("robot_id", "algorithm_list", "generates_fdsva"),
+    ("robot_id", "algorithm_list", "generates_fdsva", "enable_spatial_v2"),
     [
-        pytest.param("iiwa14", "idsva_so", 0, id="iiwa14-idsva-only"),
-        pytest.param("iiwa14", "idsva_so,fdsva_so", 1, id="iiwa14-idsva-fdsva"),
-        pytest.param("go2", "idsva_so", 0, id="go2-idsva-only"),
+        pytest.param("iiwa14", "idsva_so", 0, False, id="iiwa14-idsva-only"),
+        pytest.param("iiwa14", "idsva_so,fdsva_so", 1, False, id="iiwa14-idsva-fdsva"),
+        pytest.param("go2", "idsva_so", 0, False, id="go2-idsva-only"),
+        pytest.param("iiwa14", "idsva_so", 0, True, id="iiwa14-idsva-spatial-v2"),
     ],
 )
 def test_floating_second_order_opt_in_header_compiles(
@@ -397,6 +400,7 @@ def test_floating_second_order_opt_in_header_compiles(
     robot_id,
     algorithm_list,
     generates_fdsva,
+    enable_spatial_v2,
 ):
     header = _generate_header(
         tmp_path,
@@ -404,6 +408,7 @@ def test_floating_second_order_opt_in_header_compiles(
         "floating",
         algorithm_list=algorithm_list,
         enable_floating_second_order=True,
+        enable_idsva_so_spatial_v2=enable_spatial_v2,
     )
     constants = _constants(header)
 
@@ -417,6 +422,12 @@ def test_floating_second_order_opt_in_header_compiles(
         assert "void fdsva_so(gridData<T, KIND> *hd_data" in header
     else:
         assert "void fdsva_so(gridData<T, KIND> *hd_data" not in header
+    if enable_spatial_v2:
+        assert "void idsva_so_spatial_v2_host(gridData<T, KIND> *hd_data" in header
+        assert "void idsva_so_spatial_v2_inner(" in header
+        assert "void idsva_so_spatial_v2_kernel(" in header
+    else:
+        assert "idsva_so_spatial_v2" not in header
 
     _compile_header_consumer(
         tmp_path,

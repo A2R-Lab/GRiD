@@ -145,9 +145,6 @@ def _compile_second_order_runner(build_dir: Path, *, enable_fdsva=True):
                 "GRID_CUDA_SECOND_ORDER_TEST_THREADS must be positive when set."
             )
         cmd.insert(-1, f"-DGRID_CUDA_SECOND_ORDER_TEST_THREADS={thread_count}")
-    # `GRID_CUDA_FLOATING_SECOND_ORDER_DQ_MODE` env-var dispatch removed alongside the
-    # `GRID_FLOATING_SO_DQ_*` codegen macros; the analytic floating-base d2tau_dq path
-    # is now correct in a single pass (Phase A+B of the SO codegen fix).
     cmd.insert(-1, f"-DGRID_CUDA_SECOND_ORDER_ENABLE_FDSVA={int(enable_fdsva)}")
     result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
@@ -325,38 +322,25 @@ def _select_idsva_blocks(flat_tensor, block_indices, nv):
 
 def _assert_idsva_blocks_close(actual, expected, block_indices, nv, *, rtol, atol, err_msg):
     block_size = nv**3
-    block_tolerances = {}
-    if 0 in block_indices:
-        try:
-            dq_atol = float(os.environ.get("GRID_CUDA_FLOATING_SECOND_ORDER_DQ_ATOL", "2e-3"))
-            dq_rtol = float(os.environ.get("GRID_CUDA_FLOATING_SECOND_ORDER_DQ_RTOL", "2e-3"))
-        except ValueError:
-            pytest.fail(
-                "GRID_CUDA_FLOATING_SECOND_ORDER_DQ_ATOL and "
-                "GRID_CUDA_FLOATING_SECOND_ORDER_DQ_RTOL must be numeric when set."
-            )
-        block_tolerances[0] = (max(rtol, dq_rtol), max(atol, dq_atol))
     try:
         for block_index in block_indices:
-            block_rtol, block_atol = block_tolerances.get(block_index, (rtol, atol))
             block_slice = slice(block_index * block_size, (block_index + 1) * block_size)
             np.testing.assert_allclose(
                 actual[:, block_slice],
                 expected[:, block_slice],
-                rtol=block_rtol,
-                atol=block_atol,
+                rtol=rtol,
+                atol=atol,
                 err_msg=f"{err_msg} / {IDSVA_BLOCK_NAMES[block_index]}",
             )
     except AssertionError as exc:
         lines = [str(exc), "IDSVA-SO block diagnostics:"]
         for block_index in block_indices:
             name = IDSVA_BLOCK_NAMES[block_index]
-            block_rtol, block_atol = block_tolerances.get(block_index, (rtol, atol))
             block_slice = slice(block_index * block_size, (block_index + 1) * block_size)
             actual_block = actual[:, block_slice].reshape(nv, nv, nv)
             expected_block = expected[:, block_slice].reshape(nv, nv, nv)
             diff = actual_block - expected_block
-            bad = np.abs(diff) > (block_atol + block_rtol * np.abs(expected_block))
+            bad = np.abs(diff) > (atol + rtol * np.abs(expected_block))
             bad_indices = np.argwhere(bad)
             max_abs = float(np.max(np.abs(diff))) if diff.size else 0.0
             rel_norm = float(np.linalg.norm(diff) / max(np.linalg.norm(expected_block), 1e-30))
@@ -432,12 +416,6 @@ def _fdsva_so_tolerance(robot_id: str):
     ids=lambda robot_id: f"{robot_id}-fixed",
 )
 def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path, robot_id):
-    if os.environ.get("GRID_CUDA_RUN_SECOND_ORDER_FALLBACK_SMOKE") != "1":
-        pytest.skip(
-            "Second-order CUDA fallback smoke is quarantined while IDSVA-SO/FDSVA-SO "
-            "resource pressure and thread-count assumptions are investigated. Set "
-            "GRID_CUDA_RUN_SECOND_ORDER_FALLBACK_SMOKE=1 to run this diagnostic."
-        )
     spec = _fixed_robot_spec(robot_id)
     try:
         resolved = resolve_robot_spec(spec)
@@ -500,12 +478,7 @@ def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path, r
     _floating_second_order_robot_ids(),
     ids=lambda robot_id: f"{robot_id}-floating",
 )
-def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, robot_id):
-    if os.environ.get("GRID_CUDA_RUN_FLOATING_SECOND_ORDER_SMOKE") != "1":
-        pytest.skip(
-            "Floating second-order CUDA smoke is an opt-in diagnostic. Set "
-            "GRID_CUDA_RUN_FLOATING_SECOND_ORDER_SMOKE=1 to run it."
-        )
+def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, robot_id, capsys):
     spec = _robot_spec(robot_id, "floating")
     try:
         resolved = resolve_robot_spec(spec)
@@ -519,6 +492,7 @@ def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, rob
     target_shared_bytes = _second_order_target_shared_bytes()
     enable_fdsva = os.environ.get("GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA", "0") == "1"
     algorithm_list = "idsva_so,fdsva_so" if enable_fdsva else "idsva_so"
+
     executable, compile_cmd = _build_second_order_case(
         project_model,
         tmp_path,

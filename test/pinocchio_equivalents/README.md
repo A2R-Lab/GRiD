@@ -45,10 +45,11 @@ algorithms before extending that trust boundary to CUDA and generated GPU code.
   fixed-base and floating-base slice, with second-order checks using a
   dedicated finite-difference tolerance policy.
 - The second-order top-level helpers `idsva_so` and `fdsva_so` are now covered
-  on fixed-base `iiwa14` and floating-base smoke robots. The current assumption
-  is that `g1` is runtime-heavy rather than numerically suspect, so that path
-  remains in the smoke rollout even though it is slower than `iiwa14` and
-  `go2`.
+  on fixed-base `iiwa14` and floating-base smoke robots. Floating-base coverage
+  is validated against Pinocchio's bound C++
+  `ComputeRNEASecondOrderDerivatives` (exposed through the `pin_so_ext`
+  pybind11 extension), which is the golden second-order oracle rather than
+  finite-differencing the first-order paths.
 - Floating-base parse, metadata, `rnea`, `minv`, `crba`, `aba`,
   `forward_dynamics`, `rnea_grad`, `forward_dynamics_grad`, and selected pose
   targets are now exercised on the broader floating-enabled set `iiwa14`,
@@ -99,10 +100,33 @@ Developer install for the Pinocchio equivalence suite:
 ./developer_install.sh
 ```
 
-The developer install adds `pytest`, `pin`, and `robot_descriptions>=1.23.0`,
-then prewarms only the default tier unless `PINOCCHIO_EQUIVALENCE_TIER` is
+The developer install adds `pytest`, `pin`, `robot_descriptions>=1.23.0`, and
+`pybind11`, then builds the `pin_so_ext` C++ extension (which wraps Pinocchio's
+`ComputeRNEASecondOrderDerivatives` for use as the second-order golden oracle)
+and prewarms only the default tier unless `PINOCCHIO_EQUIVALENCE_TIER` is
 overridden. Both install scripts create and reuse a repo-local `.venv` so the
 workflow does not depend on global `pip` writes.
+
+### pin_so_ext (Pinocchio second-order RNEA binding)
+
+The extension lives at `test/pinocchio_equivalents/pin_so_ext/`. Its loader
+(`pin_so_ext/__init__.py`) auto-builds via `setup.py build_ext --inplace` on
+first import if the compiled `.so` is missing, so a fresh checkout can be
+exercised without manual setup. Prerequisites:
+
+- A C++17 compiler (`g++` ≥ 7 is sufficient).
+- `pkg-config` configured for Pinocchio (`pkg-config --cflags --libs pinocchio`
+  must succeed).
+- Pinocchio development headers, typically installed via the OpenRobotPkg
+  binaries that ship under `/opt/openrobots/`.
+- `pybind11` (in `requirements-dev.txt`).
+
+To rebuild manually after editing the C++ source:
+
+```bash
+cd test/pinocchio_equivalents/pin_so_ext
+.venv/bin/python setup.py build_ext --inplace
+```
 
 Top-level runner and suite entrypoints:
 
