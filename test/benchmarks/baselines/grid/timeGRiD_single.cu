@@ -49,13 +49,13 @@ template <typename T, int TEST_ITERS>
 __host__ void measure_ee_pose_gradient_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
     grid::end_effector_pose_gradient_single_timing<T>(hd_data,d_robotModel,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
-#if GRID_GENERATES_IDSVA_SO
+#if GRID_HAS_IDSVA_SO
 template <typename T, int TEST_ITERS>
 __host__ void measure_idsva_so_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
     grid::idsva_so_host_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 #endif
-#if GRID_GENERATES_FDSVA_SO
+#if GRID_HAS_FDSVA_SO
 template <typename T, int TEST_ITERS>
 __host__ void measure_fdsva_so_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
     grid::fdsva_so_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
@@ -74,10 +74,10 @@ __host__ void run_single_timings(cudaStream_t *streams, grid::robotModel<T> *d_r
     measure_fd_du_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
     measure_ee_pose_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
     measure_ee_pose_gradient_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
-    #if GRID_GENERATES_IDSVA_SO
+    #if GRID_HAS_IDSVA_SO
     measure_idsva_so_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
     #endif
-    #if GRID_GENERATES_FDSVA_SO
+    #if GRID_HAS_FDSVA_SO
     measure_fdsva_so_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
     #endif
 #endif
