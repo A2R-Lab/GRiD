@@ -184,6 +184,46 @@ sudo apt-get install libcppadcg-dev
 # Or build from source: https://github.com/joaoleal/CppADCodeGen
 ```
 
+#### Pinocchio C++ binding for the equivalence suite (`pin_so_ext`)
+
+The `test/pinocchio_equivalents/` suite uses Pinocchio's C++ implementation
+as the golden oracle for RBDReference + CUDA equivalence tests
+(particularly for second-order derivatives, where Python Pinocchio's
+SO API isn't directly comparable). This binding is built automatically
+by `developer_install.sh` and on first import of the suite via
+`setuptools`.
+
+Requirements (on top of the standard dev install):
+
+```bash
+# Ubuntu/Debian — pkg-config-discoverable Pinocchio + a modern compiler:
+sudo apt-get install pkg-config libpinocchio-dev g++
+
+# Verify pinocchio's pkg-config is on the path:
+pkg-config --modversion pinocchio
+
+# pybind11 is in the dev dependencies but confirm:
+.venv/bin/python -c "import pybind11; print(pybind11.__version__)"
+```
+
+If `pkg-config pinocchio` doesn't resolve (common when Pinocchio came
+from cmeel rather than apt), the binding's `setup.py` falls back to
+the cmeel prefix in the same venv.
+
+**Verify the binding builds + runs:**
+
+```bash
+# Builds pin_so_ext on first run (~30s); subsequent runs are cache hits.
+.venv/bin/pytest test/pinocchio_equivalents/test_idsva_so_equivalence.py -k iiwa14 -x
+```
+
+If you hit build errors, the most common fixes are:
+- `pkg-config: command not found` → install pkg-config
+- `Pinocchio.hpp: No such file` → `pkg-config --cflags pinocchio` is empty
+  → install `libpinocchio-dev` or activate the cmeel venv
+- `python.h: No such file` → install `python3-dev` (matching the venv's
+  Python version)
+
 ### MJX (GPU via JAX)
 
 MJX requires JAX with GPU support and MuJoCo:
