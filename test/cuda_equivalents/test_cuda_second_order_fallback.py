@@ -432,12 +432,6 @@ def _fdsva_so_tolerance(robot_id: str):
     ids=lambda robot_id: f"{robot_id}-fixed",
 )
 def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path, robot_id):
-    if os.environ.get("GRID_CUDA_RUN_SECOND_ORDER_FALLBACK_SMOKE") != "1":
-        pytest.skip(
-            "Second-order CUDA fallback smoke is quarantined while IDSVA-SO/FDSVA-SO "
-            "resource pressure and thread-count assumptions are investigated. Set "
-            "GRID_CUDA_RUN_SECOND_ORDER_FALLBACK_SMOKE=1 to run this diagnostic."
-        )
     spec = _fixed_robot_spec(robot_id)
     try:
         resolved = resolve_robot_spec(spec)
@@ -500,12 +494,7 @@ def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path, r
     _floating_second_order_robot_ids(),
     ids=lambda robot_id: f"{robot_id}-floating",
 )
-def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, robot_id):
-    if os.environ.get("GRID_CUDA_RUN_FLOATING_SECOND_ORDER_SMOKE") != "1":
-        pytest.skip(
-            "Floating second-order CUDA smoke is an opt-in diagnostic. Set "
-            "GRID_CUDA_RUN_FLOATING_SECOND_ORDER_SMOKE=1 to run it."
-        )
+def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, robot_id, capsys):
     spec = _robot_spec(robot_id, "floating")
     try:
         resolved = resolve_robot_spec(spec)
@@ -519,6 +508,7 @@ def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, rob
     target_shared_bytes = _second_order_target_shared_bytes()
     enable_fdsva = os.environ.get("GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA", "0") == "1"
     algorithm_list = "idsva_so,fdsva_so" if enable_fdsva else "idsva_so"
+
     executable, compile_cmd = _build_second_order_case(
         project_model,
         tmp_path,
