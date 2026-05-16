@@ -1,6 +1,5 @@
 import pytest
 
-from test.pinocchio_equivalents.utils.capability_matrix import get_capability
 from test.pinocchio_equivalents.utils.comparators import assert_close
 from test.pinocchio_equivalents.conftest import build_case_params
 from test.pinocchio_equivalents.utils.state_sampling import build_dynamics_samples
@@ -19,12 +18,9 @@ def test_fixed_base_minv_matches_pinocchio(spec, base_mode, project_model, pinoc
 
 
 @pytest.mark.parametrize(("spec", "base_mode"), build_case_params(base_mode="floating"))
-def test_floating_base_minv_matches_pinocchio_when_supported(
+def test_floating_base_minv_matches_pinocchio(
     spec, base_mode, project_model, pinocchio_model
 ):
-    capability = get_capability(base_mode, "minv")
-    if not capability["supported"]:
-        pytest.xfail(capability["reason"])
     for sample in build_dynamics_samples(project_model):
         if not pinocchio_model.has_invertible_mass_matrix(sample.q):
             pytest.skip(

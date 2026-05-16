@@ -24,6 +24,7 @@ class PinocchioModelAdapter:
     mismatches: List[ConventionMismatch]
     urdf_joint_types_by_name: dict
     urdf_mimic_joint_names: set
+    urdf_path: str = ""
 
     @property
     def nq(self) -> int:
@@ -164,6 +165,84 @@ class PinocchioModelAdapter:
             ),
             normalize_matrix(np.asarray(self.data.dtau_dv, dtype=np.float64)),
         )
+
+    def idsva_so(self, q, qd, qdd):
+        """Return (d2tau_dq, d2tau_dqd, d2tau_dvdq, dM_dq) from Pinocchio's
+        C++ `ComputeRNEASecondOrderDerivatives`, in our nv-indexed Lie-tangent
+        convention.
+
+        Pinocchio's mixed tensor `d2tau_dqdv[i,j,k] = d2tau_i/(dq_j dv_k)` is
+        transposed on axes (1,2) to match our `d2tau_dvdq[i,j,k] = d2tau_i/(dv_j dq_k)`.
+        """
+        from test.pinocchio_equivalents.pin_so_ext import load as _load_so
+
+        ext = _load_so()
+        q_pin = normalize_project_q_for_pin(
+            self.base_mode,
+            q,
+            joint_names=self.scalar_joint_names,
+            joint_types_by_name=self.urdf_joint_types_by_name,
+        )
+        qd_arr = np.asarray(qd, dtype=np.float64)
+        qdd_arr = np.asarray(qdd, dtype=np.float64)
+        d2tau_dqdq, d2tau_dvdv, d2tau_dqdv, d2tau_dadq = ext.compute_rnea_second_order(
+            self.urdf_path,
+            self.base_mode == "floating",
+            np.asarray(q_pin, dtype=np.float64),
+            qd_arr,
+            qdd_arr,
+        )
+        d2tau_dvdq = np.asarray(d2tau_dqdv, dtype=np.float64).transpose(0, 2, 1)
+        return (
+            np.asarray(d2tau_dqdq, dtype=np.float64),
+            np.asarray(d2tau_dvdv, dtype=np.float64),
+            d2tau_dvdq,
+            np.asarray(d2tau_dadq, dtype=np.float64),
+        )
+
+    def fdsva_so(self, q, qd, u):
+        """Return (daba_dqdq, daba_dvdq, daba_dvdv, daba_dtdq) composed from
+        Pinocchio's second-order RNEA + first-order Minv/ABA derivatives.
+
+        Uses the same composition formula as `RBDReference.fdsva_so`, but with
+        every input grounded in Pinocchio's bound C++ implementations so the
+        result is independent of our analytic code path.
+        """
+        import pinocchio as pin
+
+        q_pin = normalize_project_q_for_pin(
+            self.base_mode,
+            q,
+            joint_names=self.scalar_joint_names,
+            joint_types_by_name=self.urdf_joint_types_by_name,
+        )
+        qd_arr = np.asarray(qd, dtype=np.float64)
+        u_arr = np.asarray(u, dtype=np.float64)
+        # Pinocchio ABA gives qdd and fills first-order derivatives.
+        qdd = np.asarray(pin.aba(self.model, self.data, q_pin, qd_arr, u_arr), dtype=np.float64)
+        d2tau_dq, d2tau_dqd, d2tau_dvdq, dM_dq = self.idsva_so(q, qd, qdd)
+        pin.computeMinverse(self.model, self.data, q_pin)
+        Minv = normalize_matrix(np.asarray(self.data.Minv, dtype=np.float64))
+        fd_dq, fd_dqd = self.forward_dynamics_grad(q, qd, u)
+        daba_dqdq = -np.einsum(
+            "il,ljk->ijk",
+            Minv,
+            d2tau_dq
+            + np.einsum("ilk,lj->ijk", dM_dq, fd_dq)
+            + np.einsum("ilk,lj->ikj", dM_dq, fd_dq),
+        )
+        daba_dvdq = -np.einsum(
+            "il,ljk->ijk",
+            Minv,
+            d2tau_dvdq + np.einsum("ilk,lj->ijk", dM_dq, fd_dqd),
+        )
+        daba_dvdv = -np.einsum("il,ljk->ijk", Minv, d2tau_dqd)
+        daba_dtdq = -np.einsum(
+            "il,ljk->ijk",
+            Minv,
+            np.einsum("ilk,lj->ijk", dM_dq, Minv),
+        )
+        return daba_dqdq, daba_dvdq, daba_dvdv, daba_dtdq
 
     def forward_dynamics_grad(self, q, qd, u):
         import pinocchio as pin
@@ -344,4 +423,5 @@ def build_pinocchio_adapter(spec, resolved_model, base_mode: str) -> PinocchioMo
         mismatches=mismatches,
         urdf_joint_types_by_name=urdf_joint_types_by_name,
         urdf_mimic_joint_names=urdf_mimic_joint_names,
+        urdf_path=str(resolved_model.urdf_path),
     )

@@ -87,6 +87,11 @@ ROBOT_ALGORITHM_TOLERANCES = {
         atol=2e-9,
         note="Rizon4 fixed-base pose and dynamics checks stay at nanounit residual scale; this narrow absolute tolerance covers tiny frame-placement differences.",
     ),
+    ("g1", "second_order_fdsva"): Tolerance(
+        rtol=1e-4,
+        atol=1e-2,
+        note="G1's mass matrix has entries up to ~1e4, which amplifies the ~1e-7 idsva_so residual to ~1e-3 when composing fdsva via Minv multiplication. Relative norm stays at ~1e-7 (8 significant digits).",
+    ),
 }
 
 def get_tolerance(algorithm: str, robot_id: str | None = None) -> Tolerance:
