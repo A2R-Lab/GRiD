@@ -1,1 +1,5 @@
 results/
+# Per-run sweep reports (timestamped / machine-tagged variants). The
+# canonical curated reports (benchmark.md, benchmark_multi_version.md,
+# README.md) stay tracked.
+benchmark_multi_version_sm*.md
