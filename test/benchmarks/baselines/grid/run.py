@@ -234,6 +234,7 @@ def _compile_one_source(
     link_linalg_flags: list[str],
     common_arch: list[str],
     cicc_opt_level: int | None,
+    ptxas_opt_level: int | None,
     split_compile: int | None,
     ofast_compile: str | None,
     runner_key: str,
@@ -261,6 +262,8 @@ def _compile_one_source(
     ]
     if cicc_opt_level is not None:
         compile_cmd.extend(["-Xcicc", f"-O{int(cicc_opt_level)}"])
+    if ptxas_opt_level is not None:
+        compile_cmd.extend(["-Xptxas", f"-O{int(ptxas_opt_level)}"])
     if split_compile is not None:
         compile_cmd.extend([f"--split-compile={int(split_compile)}"])
     if ofast_compile is not None:
@@ -299,6 +302,7 @@ def compile_binaries(
     single_call_iters: int | None = None,
     batch_iters: int | None = None,
     cicc_opt_level: int | None = None,
+    ptxas_opt_level: int | None = None,
     split_compile: int | None = None,
     ofast_compile: str | None = None,
 ) -> tuple[Path, Path]:
@@ -384,6 +388,7 @@ def compile_binaries(
             "with_cusolverdx": with_cusolverdx,
             "no_rdc": no_rdc,
             "cicc_opt_level": cicc_opt_level,
+            "ptxas_opt_level": ptxas_opt_level,
             "split_compile": split_compile,
             "ofast_compile": ofast_compile,
             "split_binaries": True,  # cache-bust against the pre-split layout
@@ -448,7 +453,7 @@ def compile_binaries(
         cxx_standard=cxx_standard,
         compile_linalg_flags=single_c, link_linalg_flags=single_l,
         common_arch=common_arch,
-        cicc_opt_level=cicc_opt_level,
+        cicc_opt_level=cicc_opt_level, ptxas_opt_level=ptxas_opt_level,
         split_compile=split_compile, ofast_compile=ofast_compile,
         runner_key=runner_key, ccache_prefix=ccache_prefix, nvcc=nvcc,
     )
@@ -458,7 +463,7 @@ def compile_binaries(
         cxx_standard=cxx_standard,
         compile_linalg_flags=batch_c, link_linalg_flags=batch_l,
         common_arch=common_arch,
-        cicc_opt_level=cicc_opt_level,
+        cicc_opt_level=cicc_opt_level, ptxas_opt_level=ptxas_opt_level,
         split_compile=split_compile, ofast_compile=ofast_compile,
         runner_key=runner_key, ccache_prefix=ccache_prefix, nvcc=nvcc,
     )
@@ -530,12 +535,31 @@ def main() -> None:
     parser.add_argument("--cicc-opt-level", type=int, default=None,
                         choices=[0, 1, 2, 3],
                         help="Pass `-Xcicc -O<n>` to nvcc, lowering the device-frontend "
-                             "(cicc / NVVM-IR) optimization tier. Use this when nvcc hangs "
-                             "in cicc on floating-base kernels — observed on sm_86 / CUDA "
-                             "12.6 where cicc -O3 wedges at 100%% CPU indefinitely. -O2 "
-                             "finishes in ~2 min and keeps ptxas at -O3 so SASS perf is "
-                             "preserved (LICM defense intact). Default: nvcc default (-O3 "
-                             "to cicc).")
+                             "(cicc / NVVM-IR) optimization tier. SM_86-SPECIFIC WORKAROUND: "
+                             "on sm_86 / CUDA 12.6, cicc -O3 wedges at 100%% CPU indefinitely "
+                             "on floating-base headers (the extra 6 DOF crosses an opt-pass "
+                             "threshold). -O2 finishes in ~2 min. Has not been needed on "
+                             "Blackwell (sm_120) in our tests — verify before applying on "
+                             "newer arches; it may be silently degrading SASS quality with "
+                             "no benefit there. Combine with --ptxas-opt-level 2 when "
+                             "ptxas also wedges (the cicc cut reduces PTX complexity, "
+                             "making ptxas's job easier). LICM defense (volatile reload + "
+                             "grid_licm_barrier) is at the C++ level and survives any cicc "
+                             "level. Default: nvcc default (-O3 to cicc).")
+    parser.add_argument("--ptxas-opt-level", type=int, default=None,
+                        choices=[0, 1, 2, 3],
+                        help="Pass `-Xptxas -O<n>` to nvcc, lowering the device-backend "
+                             "(ptxas / SASS) optimization tier. SM_86-SPECIFIC WORKAROUND: "
+                             "on sm_86 / CUDA 12.6, ptxas -O3 wedges at 100%% CPU on heavy "
+                             "floating-base kernels (LICM, scheduling, or register-coalescing "
+                             "pass chokes on dense PTX). -O2 typically completes in a few "
+                             "minutes at a small SASS-quality cost (<5%% on typical kernels). "
+                             "Has not been needed on Blackwell (sm_120) in our tests — "
+                             "verify before applying on newer arches. Best paired with "
+                             "--cicc-opt-level 2 so cicc emits simpler PTX. LICM defense "
+                             "(volatile reload + grid_licm_barrier) is at the C++ level "
+                             "and survives any ptxas level. Default: nvcc default (-O3 to "
+                             "ptxas).")
     parser.add_argument("--single-call-iters", type=int, default=None,
                         help="Override SINGLE_CALL_ITERS_GLOBAL (default 10000). Inner-kernel "
                              "rep count for single-call timings; bump for more stable medians "
@@ -601,6 +625,7 @@ def main() -> None:
             single_call_iters=args.single_call_iters,
             batch_iters=args.batch_iters,
             cicc_opt_level=args.cicc_opt_level,
+            ptxas_opt_level=args.ptxas_opt_level,
             split_compile=args.split_compile,
             ofast_compile=args.ofast_compile,
         )
