@@ -192,6 +192,7 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
                   single_call_iters: int | None = None,
                   batch_iters: int | None = None,
                   cicc_opt_level: int | None = None,
+                  ptxas_opt_level: int | None = None,
                   split_compile: int | None = None,
                   ofast_compile: str | None = None) -> list[str]:
     cmd = [
@@ -216,6 +217,8 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
         cmd += ["--batch-iters", str(batch_iters)]
     if cicc_opt_level is not None:
         cmd += ["--cicc-opt-level", str(cicc_opt_level)]
+    if ptxas_opt_level is not None:
+        cmd += ["--ptxas-opt-level", str(ptxas_opt_level)]
     if split_compile is not None:
         cmd += ["--split-compile", str(split_compile)]
     if ofast_compile is not None:
@@ -230,6 +233,7 @@ def run_grid_column(column: str, robot: str, base: str, *,
                     single_call_iters: int | None = None,
                     batch_iters: int | None = None,
                     cicc_opt_level: int | None = None,
+                    ptxas_opt_level: int | None = None,
                     split_compile: int | None = None,
                     ofast_compile: str | None = None) -> Path | None:
     """Run the appropriate GRiD harness for `column`. Returns output JSON path or None."""
@@ -250,21 +254,25 @@ def run_grid_column(column: str, robot: str, base: str, *,
         # help text). Forwarding the lower opt level to fixed-base would
         # cost 30-70% perf for no benefit, so gate on base here.
         effective_cicc = cicc_opt_level if base == "floating" else None
+        effective_ptxas = ptxas_opt_level if base == "floating" else None
         cmd = _grid_run_cmd(REPO_ROOT, robot, base, output, ee_frame,
                             linalg_backend="glass", mathdx_root=None,
                             no_recompile=no_recompile, no_rdc=no_rdc,
                             no_licm_barrier=no_licm_barrier,
                             single_call_iters=single_call_iters, batch_iters=batch_iters,
                             cicc_opt_level=effective_cicc,
+                            ptxas_opt_level=effective_ptxas,
                             split_compile=split_compile, ofast_compile=ofast_compile)
     elif column == "glass_nvidia":
         effective_cicc = cicc_opt_level if base == "floating" else None
+        effective_ptxas = ptxas_opt_level if base == "floating" else None
         cmd = _grid_run_cmd(REPO_ROOT, robot, base, output, ee_frame,
                             linalg_backend="glass-nvidia", mathdx_root=mathdx_root,
                             no_recompile=no_recompile, no_rdc=no_rdc,
                             no_licm_barrier=no_licm_barrier,
                             single_call_iters=single_call_iters, batch_iters=batch_iters,
                             cicc_opt_level=effective_cicc,
+                            ptxas_opt_level=effective_ptxas,
                             split_compile=split_compile, ofast_compile=ofast_compile)
     else:
         raise ValueError(f"Unknown grid column: {column}")
@@ -475,6 +483,15 @@ def main() -> None:
                              "preserved. Fixed-base is gated off the flag because cicc -O3 "
                              "is fine there and -O2 costs 30-70%% perf. Default: nvcc default "
                              "(-O3 to cicc).")
+    parser.add_argument("--ptxas-opt-level", type=int, default=None,
+                        choices=[0, 1, 2, 3],
+                        help="Pass `-Xptxas -O<n>` to GRiD glass / glass-nvidia floating-base "
+                             "compiles only. SM_86-SPECIFIC WORKAROUND: on sm_86 / CUDA 12.6, "
+                             "ptxas -O3 wedges at 100%% CPU on heavy floating-base kernels. "
+                             "-O2 typically completes in a few minutes. LICM defense is at the "
+                             "codegen level (rep-stomp + output->input feedback) and survives "
+                             "any ptxas opt level. Verify before applying on newer arches. "
+                             "Default: nvcc default (-O3 to ptxas).")
     parser.add_argument("--split-compile", type=int, default=None,
                         help="Pass `--split-compile=N` to nvcc (12.x). Parallelizes cicc "
                              "optimization passes (0 = all CPU cores). ~2× faster compile.\n"
@@ -572,6 +589,7 @@ def main() -> None:
                         single_call_iters=args.single_call_iters,
                         batch_iters=args.batch_iters,
                         cicc_opt_level=args.cicc_opt_level,
+                        ptxas_opt_level=args.ptxas_opt_level,
                         split_compile=args.split_compile,
                         ofast_compile=args.ofast_compile,
                     )

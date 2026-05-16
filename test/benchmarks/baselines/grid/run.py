@@ -163,6 +163,7 @@ def generate_header(
             "homogenous": True,
             "no_licm_barrier": no_licm_barrier_env,
             "idsva_so_spatial_v2": True,
+            "enable_floating_second_order": True,
             # ee_frame intentionally excluded: not passed to gen_all_code
         }, sort_keys=True).encode()
     )[:24]
@@ -195,6 +196,7 @@ def generate_header(
             output_path=str(header_path),
             codegen_profile="all",
             enable_idsva_so_spatial_v2=True,
+            enable_floating_second_order=True,
         )
 
     cached_header.parent.mkdir(parents=True, exist_ok=True)

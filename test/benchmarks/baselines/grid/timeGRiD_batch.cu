@@ -135,7 +135,7 @@ __host__ void measure_fdsva_so_batch(int N, cudaStream_t *streams, grid::robotMo
 #endif
 
 template <typename T, int TEST_ITERS>
-__host__ void run_batch_at(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+__host__ void run_batch_at(bool floating_base, int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
     measure_id_batch<T,TEST_ITERS>(N, streams, m, d);
     measure_minv_batch<T,TEST_ITERS>(N, streams, m, d);
     measure_fd_batch<T,TEST_ITERS>(N, streams, m, d);
@@ -152,25 +152,29 @@ __host__ void run_batch_at(int N, cudaStream_t *streams, grid::robotModel<T> *m,
     measure_idsva_so_sv2_batch<T,TEST_ITERS>(N, streams, m, d);
 #endif
 #if GRID_HAS_FDSVA_SO
-    measure_fdsva_so_batch<T,TEST_ITERS>(N, streams, m, d);
+    // fdsva_so floating-base currently OOBs (idsva_so_inner needs a workspace
+    // spill the kernel doesn't provide). TODO(fdsva-so-floating-single-timing).
+    if (!floating_base) {
+        measure_fdsva_so_batch<T,TEST_ITERS>(N, streams, m, d);
+    }
 #endif
 }
 
 template <typename T, int TEST_ITERS>
-__host__ void run_batch_timings(cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+__host__ void run_batch_timings(bool floating_base, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
 #if !TEST_FOR_EQUIVALENCE
-    run_batch_at<T,TEST_ITERS>(16, streams, m, d);
-    run_batch_at<T,TEST_ITERS>(32, streams, m, d);
-    run_batch_at<T,TEST_ITERS>(64, streams, m, d);
-    run_batch_at<T,TEST_ITERS>(128, streams, m, d);
-    run_batch_at<T,TEST_ITERS>(256, streams, m, d);
+    run_batch_at<T,TEST_ITERS>(floating_base, 16, streams, m, d);
+    run_batch_at<T,TEST_ITERS>(floating_base, 32, streams, m, d);
+    run_batch_at<T,TEST_ITERS>(floating_base, 64, streams, m, d);
+    run_batch_at<T,TEST_ITERS>(floating_base, 128, streams, m, d);
+    run_batch_at<T,TEST_ITERS>(floating_base, 256, streams, m, d);
 #endif
 }
 
 int main(int argc, const char **argv){
     bool floating_base = parse_floating_base_arg(argc, argv);
     run_all_tests<float, 256>(floating_base, [&](cudaStream_t *streams, grid::robotModel<float> *m, grid::gridData<float> *d){
-        run_batch_timings<float, TEST_ITERS_GLOBAL>(streams, m, d);
+        run_batch_timings<float, TEST_ITERS_GLOBAL>(floating_base, streams, m, d);
     });
     return 0;
 }

@@ -69,7 +69,7 @@ __host__ void measure_fdsva_so_single(cudaStream_t *streams, grid::robotModel<T>
 #endif
 
 template <typename T, int TEST_ITERS>
-__host__ void run_single_timings(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
+__host__ void run_single_timings(bool floating_base, cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
 #if !TEST_FOR_EQUIVALENCE
     measure_id_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
     measure_minv_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
@@ -87,7 +87,12 @@ __host__ void run_single_timings(cudaStream_t *streams, grid::robotModel<T> *d_r
     measure_idsva_so_sv2_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
     #endif
     #if GRID_HAS_FDSVA_SO
-    measure_fdsva_so_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    // fdsva_so floating-base single-timing currently OOBs (idsva_so_inner needs
+    // a workspace spill the kernel doesn't provide on floating-base). Batch
+    // path is unaffected. TODO(fdsva-so-floating-single-timing).
+    if (!floating_base) {
+        measure_fdsva_so_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    }
     #endif
 #endif
 }
@@ -95,7 +100,7 @@ __host__ void run_single_timings(cudaStream_t *streams, grid::robotModel<T> *d_r
 int main(int argc, const char **argv){
     bool floating_base = parse_floating_base_arg(argc, argv);
     run_all_tests<float, 256>(floating_base, [&](cudaStream_t *streams, grid::robotModel<float> *m, grid::gridData<float> *d){
-        run_single_timings<float, SINGLE_CALL_ITERS_GLOBAL>(streams, m, d);
+        run_single_timings<float, SINGLE_CALL_ITERS_GLOBAL>(floating_base, streams, m, d);
     });
     return 0;
 }
