@@ -32,6 +32,18 @@
 
 inline dim3 grid_timing_dimms() { return dim3(grid::SUGGESTED_THREADS, 1, 1); }
 
+// True when the kernel's requested dynamic shared memory exceeds the device's
+// per-block cap (i.e. not even cudaFuncSetAttribute could open enough). Used
+// by measure_* helpers to skip kernels that can't possibly run on this device
+// (e.g. fdsva_so on g1_floating wants ~197 KB but sm_120 caps at ~100 KB).
+inline bool grid_kernel_fits_device(size_t requested_bytes) {
+    int device = 0;
+    if (cudaGetDevice(&device) != cudaSuccess) return false;
+    int max_bytes = 0;
+    if (cudaDeviceGetAttribute(&max_bytes, cudaDevAttrMaxSharedMemoryPerBlockOptin, device) != cudaSuccess) return false;
+    return requested_bytes <= static_cast<size_t>(max_bytes);
+}
+
 // ---------------------------------------------------------------------------
 // run_all_tests<>: shared init / load / warmup / close skeleton.
 // `do_timings` is the per-TU dispatcher (single or batch) — passes

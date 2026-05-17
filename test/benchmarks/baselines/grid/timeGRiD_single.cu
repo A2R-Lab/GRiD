@@ -64,6 +64,10 @@ __host__ void measure_idsva_so_world_frame_single(cudaStream_t *streams, grid::r
 #if GRID_HAS_FDSVA_SO
 template <typename T, int TEST_ITERS>
 __host__ void measure_fdsva_so_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
+    if (!grid_kernel_fits_device(grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>())) {
+        printf("Single Call FDSVA_SO SKIPPED (kernel needs %zu bytes shared mem, exceeds device cap)\n",
+               grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>()); return;
+    }
     grid::fdsva_so_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 #endif

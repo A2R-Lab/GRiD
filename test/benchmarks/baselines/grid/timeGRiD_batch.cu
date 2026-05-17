@@ -127,6 +127,10 @@ __host__ void measure_idsva_so_world_frame_batch(int N, cudaStream_t *streams, g
 #if GRID_HAS_FDSVA_SO
 template <typename T, int TEST_ITERS>
 __host__ void measure_fdsva_so_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    if (!grid_kernel_fits_device(grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>())) {
+        printf("[N:%d]: FDSVA_SO SKIPPED (kernel needs %zu bytes shared mem, exceeds device cap)\n",
+               N, grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>()); return;
+    }
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("FDSVA_SO", N,
         [&]{ grid::fdsva_so<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },

@@ -251,16 +251,22 @@ When the sweep finishes, you should have:
 
 **Zero-cost spot checks against the JSONs**:
 
-a. **No `null` cells** — every algo should have populated `single_us`,
-   `batch_{16,32,64,128,256}_with_mem_us`, `batch_{...}_compute_only_us`.
-   If any are null, that's a regression: stop and report.
+a. **No unexpected `null` cells** — every algo should have populated
+   `single_us`, `batch_{16,32,64,128,256}_with_mem_us`,
+   `batch_{...}_compute_only_us`. The one expected `null` is fdsva_so
+   on g1_floating (see (b) below). Any other null is a regression: stop
+   and report.
 
-b. **`fdsva_so` floating populates for all 3 robots** — the fix from
-   commit `9a8a595` should produce real numbers, not crashes. If you see
-   `null` on g1_floating fdsva_so specifically, that may be the size-guard
-   skipping (g1_floating's fdsva_so needs 197 KB shared mem, more than the
-   ~100 KB sm_120 cap). That's an expected `null`, not a bug — note it in
-   the report writeup.
+b. **`fdsva_so` floating populates for iiwa14 + go2** — the fix from
+   commit `9a8a595` produces real numbers, not crashes.
+   **`fdsva_so` on g1_floating is hardware-blocked, expected `null`** —
+   its kernel needs ~197 KB of dynamic shared memory, but the sm_120
+   device cap is ~100 KB. The bench gracefully skips it at runtime with
+   a clear "SKIPPED" message in stdout (look for
+   `[N:K]: FDSVA_SO SKIPPED` or `Single Call FDSVA_SO SKIPPED`). Note
+   this in the report writeup as a hardware-blocked cell, not a
+   regression. Deeper fix (moving more fdsva_so intermediate state to
+   global memory) is queued as a follow-up.
 
 c. **`ee_pose_gradient` single-call > 0.5 µs on every floating-base cell**
    (sanity check that anti-LICM is working on sm_120 floating). Previous
@@ -389,7 +395,7 @@ GRiD-A2R/
 │   ├── pinocchio_equivalents/        # Python ↔ Pinocchio golden tests
 │   └── cuda_equivalents/             # CUDA ↔ Python tests
 └── docs/
-    └── handoff-5090-sweep.md         # this file
+    └── sweep-on-5090.md              # this file
 ```
 
 ## Verification commands you can run anytime
