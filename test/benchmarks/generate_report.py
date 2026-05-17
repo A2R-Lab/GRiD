@@ -29,9 +29,9 @@ ALGO_DISPLAY: dict[str, str] = {
     "fd_du":            "FD_DU (∂FD/∂q,v)",
     "ee_pose":          "EE_POSE",
     "ee_pose_gradient": "EE_POSE_GRADIENT (Jacobian)",
-    "idsva_so_body_frame":         "IDSVA_SO (2nd-order ID)",
-    "idsva_so_world_frame": "IDSVA_SO_WORLD_FRAME (world-frame single-pass)",
-    "fdsva_so":         "FDSVA_SO (2nd-order FD)",
+    "idsva_so_body_frame":  "IDSVA_SO_BODY_FRAME (2nd-order ID, body-frame)",
+    "idsva_so_world_frame": "IDSVA_SO_WORLD_FRAME (2nd-order ID, world-frame)",
+    "fdsva_so":             "FDSVA_SO (2nd-order FD)",
 }
 
 ALGO_SECTIONS: dict[str, list[str]] = {

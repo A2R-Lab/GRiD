@@ -152,11 +152,8 @@ __host__ void run_batch_at(bool floating_base, int N, cudaStream_t *streams, gri
     measure_idsva_so_world_frame_batch<T,TEST_ITERS>(N, streams, m, d);
 #endif
 #if GRID_HAS_FDSVA_SO
-    // fdsva_so floating-base currently OOBs (idsva_so_body_frame_inner needs a workspace
-    // spill the kernel doesn't provide). TODO(fdsva-so-floating-single-timing).
-    if (!floating_base) {
-        measure_fdsva_so_batch<T,TEST_ITERS>(N, streams, m, d);
-    }
+    measure_fdsva_so_batch<T,TEST_ITERS>(N, streams, m, d);
+    (void)floating_base;
 #endif
 }
 

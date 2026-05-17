@@ -87,12 +87,8 @@ __host__ void run_single_timings(bool floating_base, cudaStream_t *streams, grid
     measure_idsva_so_world_frame_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
     #endif
     #if GRID_HAS_FDSVA_SO
-    // fdsva_so floating-base single-timing currently OOBs (idsva_so_body_frame_inner needs
-    // a workspace spill the kernel doesn't provide on floating-base). Batch
-    // path is unaffected. TODO(fdsva-so-floating-single-timing).
-    if (!floating_base) {
-        measure_fdsva_so_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
-    }
+    measure_fdsva_so_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    (void)floating_base;
     #endif
 #endif
 }
