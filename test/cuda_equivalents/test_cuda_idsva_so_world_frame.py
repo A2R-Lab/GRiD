@@ -231,7 +231,7 @@ def _assert_blocks_close(actual, expected, nv, sample_name):
 @pytest.mark.parametrize(
     "robot_id",
     _world_frame_robot_ids(),
-    ids=lambda robot_id: f"{robot_id}-floating-spatial-v2",
+    ids=lambda robot_id: f"{robot_id}-floating-world-frame",
 )
 def test_cuda_world_frame_matches_python_reference(tmp_path, robot_id):
     """CUDA `idsva_so_world_frame_kernel` must match Python `idsva_so_world_frame`."""
