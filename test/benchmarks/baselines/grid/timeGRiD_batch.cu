@@ -106,22 +106,22 @@ __host__ void measure_ee_pose_gradient_batch(int N, cudaStream_t *streams, grid:
         [&]{ grid::end_effector_pose_gradient<T>(d,m,N,dim3(N,1,1),dimms,streams); },
         [&]{ grid::end_effector_pose_gradient_compute_only<T>(d,m,N,dim3(N,1,1),dimms); });
 }
-#if GRID_HAS_IDSVA_SO
+#if GRID_HAS_IDSVA_SO_BODY_FRAME
 template <typename T, int TEST_ITERS>
-__host__ void measure_idsva_so_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+__host__ void measure_idsva_so_body_frame_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
     dim3 dimms = grid_timing_dimms();
-    measure_batch_pair<TEST_ITERS>("IDSVA_SO", N,
-        [&]{ grid::idsva_so_host<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
-        [&]{ grid::idsva_so_host_compute_only<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms); });
+    measure_batch_pair<TEST_ITERS>("IDSVA_SO_BODY_FRAME", N,
+        [&]{ grid::idsva_so_body_frame_host<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
+        [&]{ grid::idsva_so_body_frame_host_compute_only<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms); });
 }
 #endif
-#if GRID_HAS_IDSVA_SO_SPATIAL_V2
+#if GRID_HAS_IDSVA_SO_WORLD_FRAME
 template <typename T, int TEST_ITERS>
-__host__ void measure_idsva_so_sv2_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+__host__ void measure_idsva_so_world_frame_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
     dim3 dimms = grid_timing_dimms();
-    measure_batch_pair<TEST_ITERS>("IDSVA_SO_SV2", N,
-        [&]{ grid::idsva_so_spatial_v2_host<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
-        [&]{ grid::idsva_so_spatial_v2_host_compute_only<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms); });
+    measure_batch_pair<TEST_ITERS>("IDSVA_SO_WORLD_FRAME", N,
+        [&]{ grid::idsva_so_world_frame_host<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
+        [&]{ grid::idsva_so_world_frame_host_compute_only<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms); });
 }
 #endif
 #if GRID_HAS_FDSVA_SO
@@ -145,14 +145,14 @@ __host__ void run_batch_at(bool floating_base, int N, cudaStream_t *streams, gri
     measure_fd_du_batch<T,TEST_ITERS>(N, streams, m, d);
     measure_ee_pose_batch<T,TEST_ITERS>(N, streams, m, d);
     measure_ee_pose_gradient_batch<T,TEST_ITERS>(N, streams, m, d);
-#if GRID_HAS_IDSVA_SO
-    measure_idsva_so_batch<T,TEST_ITERS>(N, streams, m, d);
+#if GRID_HAS_IDSVA_SO_BODY_FRAME
+    measure_idsva_so_body_frame_batch<T,TEST_ITERS>(N, streams, m, d);
 #endif
-#if GRID_HAS_IDSVA_SO_SPATIAL_V2
-    measure_idsva_so_sv2_batch<T,TEST_ITERS>(N, streams, m, d);
+#if GRID_HAS_IDSVA_SO_WORLD_FRAME
+    measure_idsva_so_world_frame_batch<T,TEST_ITERS>(N, streams, m, d);
 #endif
 #if GRID_HAS_FDSVA_SO
-    // fdsva_so floating-base currently OOBs (idsva_so_inner needs a workspace
+    // fdsva_so floating-base currently OOBs (idsva_so_body_frame_inner needs a workspace
     // spill the kernel doesn't provide). TODO(fdsva-so-floating-single-timing).
     if (!floating_base) {
         measure_fdsva_so_batch<T,TEST_ITERS>(N, streams, m, d);

@@ -15,7 +15,7 @@ Clear or mostly clear dynamics-facing surface:
 - `forward_dynamics(q, qd, u)`
 - `rnea_grad(q, qd, qdd=None, GRAVITY=-9.81, USE_VELOCITY_DAMPING=False)`
 - `forward_dynamics_grad(q, qd, u)`
-- `idsva_so(q, qd, qdd, GRAVITY=-9.81)`
+- `idsva_so_body_frame(q, qd, qdd, GRAVITY=-9.81)`
 - `fdsva_so(q, qd, u, GRAVITY=-9.81)`
 
 Kinematics-facing surface:
@@ -91,7 +91,7 @@ Pass-level helpers and implementation internals:
   the same pose target. The current suite compares GRiD against a Pinocchio-side
   finite-difference reference and enforces this on a focused `iiwa14`
   fixed-base and floating-base slice.
-- `RBDReference.idsva_so(...)` does not have a direct
+- `RBDReference.idsva_so_body_frame(...)` does not have a direct
   Pinocchio second-order inverse-dynamics API counterpart in the Python stack
   used here, so the suite validates it against finite differences of the
   already-verified `rnea_grad(...)` and `crba(...)` paths. This is currently
@@ -212,7 +212,7 @@ the current repo layout and documentation, not from guesswork about hidden APIs.
 - End-effector pose Hessians: the current suite matches Pinocchio on a focused
   `iiwa14` fixed-base and floating-base slice.
 - Second-order inverse dynamics and forward dynamics: the current suite
-  validates `idsva_so(...)` and `fdsva_so(...)` against finite differences of
+  validates `idsva_so_body_frame(...)` and `fdsva_so(...)` against finite differences of
   already-verified first-order quantities on fixed-base `iiwa14` and
   floating-base `iiwa14`, `go2`, and `g1`. In practice, `g1` is currently the
   runtime-heavy member of that rollout rather than the numerically suspicious

@@ -2,7 +2,7 @@
 
 The primary floating-base second-order correctness checks live in
 `test_second_order_pinocchio_equivalence.py`, which compares `idsva_so` /
-`idsva_so_spatial_v2` / `fdsva_so` against Pinocchio's bound C++
+`idsva_so_world_frame` / `fdsva_so` against Pinocchio's bound C++
 `ComputeRNEASecondOrderDerivatives`. The single remaining test in this file
 exercises the internal `_floating_gravity_d2tau_dq_lie_direct` helper against
 RBDReference's own Lie-tangent finite-difference reference, which is the

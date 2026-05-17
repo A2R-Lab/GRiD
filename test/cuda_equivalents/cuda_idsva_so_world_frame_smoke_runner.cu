@@ -1,9 +1,9 @@
-// Test runner for the CUDA spatial_v2 IDSVA-SO kernel.
+// Test runner for the CUDA world-frame IDSVA-SO kernel.
 //
 // Mirrors `cuda_second_order_smoke_runner.cu` but invokes
-// `idsva_so_spatial_v2_host` instead of `idsva_so_host`. Used by the new
-// `test_cuda_spatial_v2_idsva_so` to validate the CUDA emission against
-// `RBDReference.idsva_so_spatial_v2` (the verified Python reference).
+// `idsva_so_world_frame_host` instead of `idsva_so_body_frame_host`. Used by the new
+// `test_cuda_idsva_so_world_frame` to validate the CUDA emission against
+// `RBDReference.idsva_so_world_frame` (the verified Python reference).
 
 #include <cmath>
 #include <cstdlib>
@@ -13,8 +13,8 @@
 
 #include "grid.cuh"
 
-#ifndef GRID_CUDA_SPATIAL_V2_TEST_THREADS
-#define GRID_CUDA_SPATIAL_V2_TEST_THREADS 64
+#ifndef GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS
+#define GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS 64
 #endif
 
 template <typename T>
@@ -46,7 +46,7 @@ template <typename T>
 int run() {
     const T gravity = static_cast<T>(9.81);
     const dim3 block_dimms(1, 1, 1);
-    const dim3 thread_dimms(GRID_CUDA_SPATIAL_V2_TEST_THREADS, 1, 1);
+    const dim3 thread_dimms(GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS, 1, 1);
 
     cudaStream_t *streams = grid::init_grid<T>();
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
@@ -56,7 +56,7 @@ int run() {
     read_vector(&hd_data->h_q_qd_u[grid::NUM_POS], grid::NUM_VEL);
     read_vector(&hd_data->h_q_qd_u[grid::NUM_POS + grid::NUM_VEL], grid::NUM_VEL);
 
-    grid::idsva_so_spatial_v2_host<T>(
+    grid::idsva_so_world_frame_host<T>(
         hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
     );
     gpuErrchk(cudaPeekAtLastError());
@@ -70,22 +70,22 @@ int run() {
         }
     }
     if (first_bad >= 0) {
-        std::cerr << "Non-finite idsva_so_spatial_v2 output at "
+        std::cerr << "Non-finite idsva_so_world_frame output at "
                   << first_bad << std::endl;
     }
 
     T config[8];
-    config[0] = static_cast<T>(grid::IDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>());
+    config[0] = static_cast<T>(grid::IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES<T>());
     config[1] = static_cast<T>(grid::GRID_IDSVA_SO_USES_GLOBAL_OUTPUT);
-    config[2] = static_cast<T>(grid::GRID_GENERATES_IDSVA_SO);
+    config[2] = static_cast<T>(grid::GRID_GENERATES_IDSVA_SO_BODY_FRAME);
     config[3] = static_cast<T>(grid::NUM_POS);
     config[4] = static_cast<T>(grid::NUM_VEL);
     config[5] = static_cast<T>(grid::NUM_BODIES);
     config[6] = static_cast<T>(grid::Q_QD_U_STRIDE);
     config[7] = static_cast<T>(tensor_count);
 
-    print_flat("spatial_v2_config", config, 8);
-    print_flat("idsva_so", hd_data->h_idsva_so, tensor_count);
+    print_flat("world_frame_config", config, 8);
+    print_flat("idsva_so_body_frame", hd_data->h_idsva_so, tensor_count);
 
     grid::close_grid<T>(streams, d_robot_model, hd_data);
     return 0;

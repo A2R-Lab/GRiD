@@ -355,7 +355,7 @@ def _runtime_env() -> dict[str, str]:
 # main expense (cppadcg JIT) is gated inside timePinocchio.cpp by --algo.
 PINOCCHIO_ALGOS: tuple[str, ...] = (
     "id", "minv", "fd", "aba", "crba", "id_du", "fd_du",
-    "ee_pose", "ee_pose_gradient", "idsva_so",
+    "ee_pose", "ee_pose_gradient", "idsva_so_body_frame",
 )
 
 # Per-algo subprocess wall-clock timeout. g1 codegen for any one algo

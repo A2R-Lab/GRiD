@@ -53,7 +53,7 @@ int run() {
     read_vector(&hd_data->h_q_qd_u[grid::NUM_POS], grid::NUM_VEL);
     read_vector(&hd_data->h_q_qd_u[grid::NUM_POS + grid::NUM_VEL], grid::NUM_VEL);
 
-    grid::idsva_so_host<T>(
+    grid::idsva_so_body_frame_host<T>(
         hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
     );
     gpuErrchk(cudaPeekAtLastError());
@@ -93,12 +93,12 @@ int run() {
     }
 
     T config[12];
-    config[0] = static_cast<T>(grid::IDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>());
+    config[0] = static_cast<T>(grid::IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES<T>());
     config[1] = static_cast<T>(grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>());
     config[2] = static_cast<T>(grid::GRID_IDSVA_SO_USES_GLOBAL_OUTPUT);
     config[3] = static_cast<T>(grid::GRID_FDSVA_SO_USES_GLOBAL_TENSORS);
     config[4] = static_cast<T>(grid::GRID_FDSVA_SO_USES_WORKSPACE_TEMP);
-    config[5] = static_cast<T>(grid::GRID_GENERATES_IDSVA_SO);
+    config[5] = static_cast<T>(grid::GRID_GENERATES_IDSVA_SO_BODY_FRAME);
     config[6] = static_cast<T>(grid::GRID_GENERATES_FDSVA_SO);
     config[7] = static_cast<T>(grid::NUM_POS);
     config[8] = static_cast<T>(grid::NUM_VEL);
@@ -107,7 +107,7 @@ int run() {
     config[11] = static_cast<T>(tensor_count);
 
     print_flat("second_order_config", config, 12);
-    print_flat("idsva_so", hd_data->h_idsva_so, tensor_count);
+    print_flat("idsva_so_body_frame", hd_data->h_idsva_so, tensor_count);
     print_flat("fdsva_so", hd_data->h_df2, tensor_count);
 
     grid::close_grid<T>(streams, d_robot_model, hd_data);

@@ -447,10 +447,10 @@ def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path, r
         )
         assert np.all(forced_fallback["second_order_config"][0, 0:2] > 0.0)
         expected_idsva = _flatten_second_order_tensors(
-            project_model.idsva_so(sample.q, sample.qd, sample.qdd)
+            project_model.idsva_so_body_frame(sample.q, sample.qd, sample.qdd)
         )
         np.testing.assert_allclose(
-            forced_fallback["idsva_so"],
+            forced_fallback["idsva_so_body_frame"],
             expected_idsva,
             rtol=2e-4,
             # The zero-state dM/dq block has a tiny reference norm, so float32
@@ -491,7 +491,7 @@ def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, rob
     samples = _floating_second_order_samples(project_model)
     target_shared_bytes = _second_order_target_shared_bytes()
     enable_fdsva = os.environ.get("GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA", "0") == "1"
-    algorithm_list = "idsva_so,fdsva_so" if enable_fdsva else "idsva_so"
+    algorithm_list = "idsva_so_body_frame,fdsva_so" if enable_fdsva else "idsva_so_body_frame"
 
     executable, compile_cmd = _build_second_order_case(
         project_model,
@@ -531,10 +531,10 @@ def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, rob
             err_msg=f"{robot_id}-floating {sample.name} dimension config",
         )
         expected_idsva = _flatten_second_order_tensors(
-            project_model.idsva_so(sample.q, sample.qd, sample.qdd)
+            project_model.idsva_so_body_frame(sample.q, sample.qd, sample.qdd)
         )
         _assert_idsva_blocks_close(
-            actual["idsva_so"],
+            actual["idsva_so_body_frame"],
             expected_idsva,
             block_indices,
             project_model.nv,

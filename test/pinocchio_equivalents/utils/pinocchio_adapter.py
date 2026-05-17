@@ -166,7 +166,7 @@ class PinocchioModelAdapter:
             normalize_matrix(np.asarray(self.data.dtau_dv, dtype=np.float64)),
         )
 
-    def idsva_so(self, q, qd, qdd):
+    def idsva_so_body_frame(self, q, qd, qdd):
         """Return (d2tau_dq, d2tau_dqd, d2tau_dvdq, dM_dq) from Pinocchio's
         C++ `ComputeRNEASecondOrderDerivatives`, in our nv-indexed Lie-tangent
         convention.
@@ -220,7 +220,7 @@ class PinocchioModelAdapter:
         u_arr = np.asarray(u, dtype=np.float64)
         # Pinocchio ABA gives qdd and fills first-order derivatives.
         qdd = np.asarray(pin.aba(self.model, self.data, q_pin, qd_arr, u_arr), dtype=np.float64)
-        d2tau_dq, d2tau_dqd, d2tau_dvdq, dM_dq = self.idsva_so(q, qd, qdd)
+        d2tau_dq, d2tau_dqd, d2tau_dvdq, dM_dq = self.idsva_so_body_frame(q, qd, qdd)
         pin.computeMinverse(self.model, self.data, q_pin)
         Minv = normalize_matrix(np.asarray(self.data.Minv, dtype=np.float64))
         fd_dq, fd_dqd = self.forward_dynamics_grad(q, qd, u)

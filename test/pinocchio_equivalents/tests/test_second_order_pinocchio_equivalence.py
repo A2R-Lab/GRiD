@@ -1,7 +1,7 @@
 """Pinocchio-grounded equivalence tests for second-order dynamics derivatives.
 
 These tests compare GRiD's analytic second-order paths against Pinocchio's bound
-C++ `ComputeRNEASecondOrderDerivatives` (for `idsva_so` / `idsva_so_spatial_v2`)
+C++ `ComputeRNEASecondOrderDerivatives` (for `idsva_so` / `idsva_so_world_frame`)
 and a Pinocchio-grounded analytic composition (for `fdsva_so`). The Pinocchio
 second-order RNEA is exposed via the `pin_so_ext` pybind11 extension under
 `test/pinocchio_equivalents/pin_so_ext/`; the loader builds it on demand.
@@ -32,31 +32,31 @@ def test_idsva_so_matches_pinocchio_second_order(
     spec, base_mode, project_model, pinocchio_model
 ):
     for sample in build_dynamics_samples(project_model):
-        actual = project_model.idsva_so(sample.q, sample.qd, sample.qdd)
-        expected = pinocchio_model.idsva_so(sample.q, sample.qd, sample.qdd)
+        actual = project_model.idsva_so_body_frame(sample.q, sample.qd, sample.qdd)
+        expected = pinocchio_model.idsva_so_body_frame(sample.q, sample.qd, sample.qdd)
         for name, a, e in zip(_IDSVA_TENSOR_NAMES, actual, expected):
             assert_close(
                 np.asarray(a),
                 np.asarray(e),
-                algorithm="idsva_so",
+                algorithm="idsva_so_body_frame",
                 robot_id=spec.robot_id,
             )
 
 
 @pytest.mark.parametrize(("spec", "base_mode"), build_case_params())
-def test_idsva_so_spatial_v2_matches_pinocchio_second_order(
+def test_idsva_so_world_frame_matches_pinocchio_second_order(
     spec, base_mode, project_model, pinocchio_model
 ):
     for sample in build_dynamics_samples(project_model):
-        actual = project_model.reference.idsva_so_spatial_v2(
+        actual = project_model.reference.idsva_so_world_frame(
             sample.q, sample.qd, sample.qdd
         )
-        expected = pinocchio_model.idsva_so(sample.q, sample.qd, sample.qdd)
+        expected = pinocchio_model.idsva_so_body_frame(sample.q, sample.qd, sample.qdd)
         for name, a, e in zip(_IDSVA_TENSOR_NAMES, actual, expected):
             assert_close(
                 np.asarray(a),
                 np.asarray(e),
-                algorithm="idsva_so",
+                algorithm="idsva_so_body_frame",
                 robot_id=spec.robot_id,
             )
 

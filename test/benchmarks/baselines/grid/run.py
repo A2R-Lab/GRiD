@@ -162,7 +162,7 @@ def generate_header(
             "profile": "all",
             "homogenous": True,
             "no_licm_barrier": no_licm_barrier_env,
-            "idsva_so_spatial_v2": True,
+            "idsva_so_world_frame": True,
             "enable_floating_second_order": True,
             # ee_frame intentionally excluded: not passed to gen_all_code
         }, sort_keys=True).encode()
@@ -195,7 +195,7 @@ def generate_header(
             # that isn't generated. EE pose timing is unaffected by this omission.
             output_path=str(header_path),
             codegen_profile="all",
-            enable_idsva_so_spatial_v2=True,
+            enable_idsva_so_world_frame=True,
             enable_floating_second_order=True,
         )
 

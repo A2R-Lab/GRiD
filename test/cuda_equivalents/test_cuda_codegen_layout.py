@@ -59,7 +59,7 @@ def _generate_header(
     codegen_profile="all",
     algorithm_list=None,
     enable_floating_second_order=False,
-    enable_idsva_so_spatial_v2=False,
+    enable_idsva_so_world_frame=False,
 ) -> str:
     spec = _robot_spec(robot_id, base_mode)
     try:
@@ -84,7 +84,7 @@ def _generate_header(
                 codegen_profile=codegen_profile,
                 algorithm_list=algorithm_list,
                 enable_floating_second_order=enable_floating_second_order,
-                enable_idsva_so_spatial_v2=enable_idsva_so_spatial_v2,
+                enable_idsva_so_world_frame=enable_idsva_so_world_frame,
                 output_path=str(header_path),
             )
     return header_path.read_text()
@@ -233,7 +233,7 @@ def test_fixed_default_header_keeps_gradient_paths_all_shared(tmp_path):
     assert constants["GRID_FD_DU_USES_GLOBAL_TEMP"] == 0
     assert constants["GRID_ID_DU_USES_DA_DF_SPILL"] == 0
     assert constants["GRID_FD_DU_USES_DA_DF_SPILL"] == 0
-    assert constants["GRID_GENERATES_IDSVA_SO"] == 1
+    assert constants["GRID_GENERATES_IDSVA_SO_BODY_FRAME"] == 1
     assert constants["GRID_GENERATES_FDSVA_SO"] == 1
 
 
@@ -367,13 +367,13 @@ def test_floating_header_does_not_require_second_order_kernels(tmp_path, robot_i
     assert constants["SECOND_ORDER_COORDS"] == constants["NUM_VEL"]
     assert constants["SECOND_ORDER_TENSOR_SIZE"] == 4 * constants["NUM_VEL"]**3
     assert constants["Q_QD_U_STRIDE"] == constants["NUM_POS"] + 2 * constants["NUM_VEL"]
-    assert constants["GRID_GENERATES_IDSVA_SO"] == 0
+    assert constants["GRID_GENERATES_IDSVA_SO_BODY_FRAME"] == 0
     assert constants["GRID_GENERATES_FDSVA_SO"] == 0
     assert constants["GRID_GENERATES_D2EE"] == 1
     assert constants["GRID_D2EE_USES_WORKSPACE_TEMP"] == expected_d2ee_workspace
     assert constants["GRID_D2EE_USES_WORKSPACE_D2XHOM"] == 0
     assert constants["GRID_D2EE_SHARED_TIER_VALUE"] == expected_d2ee_workspace
-    assert "!GRID_GENERATES_IDSVA_SO" in header
+    assert "!GRID_GENERATES_IDSVA_SO_BODY_FRAME" in header
     assert "!GRID_GENERATES_FDSVA_SO" in header
     assert "void end_effector_pose(gridData<T, KIND> *hd_data" in header
     assert "void end_effector_pose_gradient(gridData<T, KIND> *hd_data" in header
@@ -387,12 +387,12 @@ def test_floating_header_does_not_require_second_order_kernels(tmp_path, robot_i
 @pytest.mark.developer_only
 @pytest.mark.floating_base
 @pytest.mark.parametrize(
-    ("robot_id", "algorithm_list", "generates_fdsva", "enable_spatial_v2"),
+    ("robot_id", "algorithm_list", "generates_fdsva", "enable_world_frame"),
     [
-        pytest.param("iiwa14", "idsva_so", 0, False, id="iiwa14-idsva-only"),
-        pytest.param("iiwa14", "idsva_so,fdsva_so", 1, False, id="iiwa14-idsva-fdsva"),
-        pytest.param("go2", "idsva_so", 0, False, id="go2-idsva-only"),
-        pytest.param("iiwa14", "idsva_so", 0, True, id="iiwa14-idsva-spatial-v2"),
+        pytest.param("iiwa14", "idsva_so_body_frame", 0, False, id="iiwa14-idsva-body-frame-only"),
+        pytest.param("iiwa14", "idsva_so_body_frame,fdsva_so", 1, False, id="iiwa14-idsva-body-frame-fdsva"),
+        pytest.param("go2", "idsva_so_body_frame", 0, False, id="go2-idsva-body-frame-only"),
+        pytest.param("iiwa14", "idsva_so_body_frame", 0, True, id="iiwa14-idsva-body-frame-world-frame"),
     ],
 )
 def test_floating_second_order_opt_in_header_compiles(
@@ -400,7 +400,7 @@ def test_floating_second_order_opt_in_header_compiles(
     robot_id,
     algorithm_list,
     generates_fdsva,
-    enable_spatial_v2,
+    enable_world_frame,
 ):
     header = _generate_header(
         tmp_path,
@@ -408,26 +408,26 @@ def test_floating_second_order_opt_in_header_compiles(
         "floating",
         algorithm_list=algorithm_list,
         enable_floating_second_order=True,
-        enable_idsva_so_spatial_v2=enable_spatial_v2,
+        enable_idsva_so_world_frame=enable_world_frame,
     )
     constants = _constants(header)
 
-    assert constants["GRID_GENERATES_IDSVA_SO"] == 1
+    assert constants["GRID_GENERATES_IDSVA_SO_BODY_FRAME"] == 1
     assert constants["GRID_GENERATES_FDSVA_SO"] == generates_fdsva
     assert constants["SECOND_ORDER_COORDS"] == constants["NUM_VEL"]
     assert constants["SECOND_ORDER_TENSOR_SIZE"] == 4 * constants["NUM_VEL"]**3
     assert constants["Q_QD_U_STRIDE"] == constants["NUM_POS"] + 2 * constants["NUM_VEL"]
-    assert "void idsva_so_host(gridData<T, KIND> *hd_data" in header
+    assert "void idsva_so_body_frame_host(gridData<T, KIND> *hd_data" in header
     if generates_fdsva:
         assert "void fdsva_so(gridData<T, KIND> *hd_data" in header
     else:
         assert "void fdsva_so(gridData<T, KIND> *hd_data" not in header
-    if enable_spatial_v2:
-        assert "void idsva_so_spatial_v2_host(gridData<T, KIND> *hd_data" in header
-        assert "void idsva_so_spatial_v2_inner(" in header
-        assert "void idsva_so_spatial_v2_kernel(" in header
+    if enable_world_frame:
+        assert "void idsva_so_world_frame_host(gridData<T, KIND> *hd_data" in header
+        assert "void idsva_so_world_frame_inner(" in header
+        assert "void idsva_so_world_frame_kernel(" in header
     else:
-        assert "idsva_so_spatial_v2" not in header
+        assert "idsva_so_world_frame" not in header
 
     _compile_header_consumer(
         tmp_path,
@@ -435,7 +435,7 @@ def test_floating_second_order_opt_in_header_compiles(
         """
         #include "grid.cuh"
         int main() {
-            static_assert(grid::GRID_GENERATES_IDSVA_SO == 1, "IDSVA-SO must be generated");
+            static_assert(grid::GRID_GENERATES_IDSVA_SO_BODY_FRAME == 1, "IDSVA-SO must be generated");
             static_assert(grid::GRID_GENERATES_FDSVA_SO == EXPECTED_FDSVA, "FDSVA-SO flag mismatch");
             static_assert(grid::SECOND_ORDER_COORDS == grid::NUM_VEL, "second-order tensor must be velocity-sized");
             static_assert(grid::SECOND_ORDER_TENSOR_SIZE == 4 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_VEL, "tensor size mismatch");
@@ -467,7 +467,7 @@ def test_d2ee_spill_tiers_are_size_and_base_selected(robot_id, base_mode, expect
     codegen.generate_id_du = False
     codegen.generate_fd_du = False
     codegen.generate_ee_pose_hessian = True
-    codegen.generate_idsva_so = False
+    codegen.generate_idsva_so_body_frame = False
     codegen.generate_fdsva_so = False
     codegen.include_fixed_kinematic_targets = False
 
@@ -991,7 +991,7 @@ def test_dynamics_core_profile_generates_only_core_dynamics_hosts(tmp_path):
     assert "void forward_dynamics_gradient(gridData<T, KIND> *hd_data" not in header
     assert "void all_dynamics(gridData<T, KIND> *hd_data" not in header
     assert "void end_effector_pose(gridData<T, KIND> *hd_data" not in header
-    assert "void idsva_so_host(gridData<T, KIND> *hd_data" not in header
+    assert "void idsva_so_body_frame_host(gridData<T, KIND> *hd_data" not in header
     assert "void fdsva_so(gridData<T, KIND> *hd_data" not in header
 
 

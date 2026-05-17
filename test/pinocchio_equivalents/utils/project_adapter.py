@@ -85,8 +85,8 @@ class ProjectModelAdapter:
         dqdd_dq, dqdd_dqd = self.reference.forward_dynamics_grad(q, qd, u)
         return normalize_matrix(dqdd_dq), normalize_matrix(dqdd_dqd)
 
-    def idsva_so(self, q, qd, qdd):
-        d2tau_dq, d2tau_dqd, d2tau_dvdq, dM_dq = self.reference.idsva_so(q, qd, qdd)
+    def idsva_so_body_frame(self, q, qd, qdd):
+        d2tau_dq, d2tau_dqd, d2tau_dvdq, dM_dq = self.reference.idsva_so_body_frame(q, qd, qdd)
         return (
             np.asarray(d2tau_dq, dtype=np.float64),
             np.asarray(d2tau_dqd, dtype=np.float64),

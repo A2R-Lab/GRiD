@@ -1,16 +1,16 @@
-"""CUDA equivalence test for the spatial_v2 IDSVA-SO emission.
+"""CUDA equivalence test for the world-frame IDSVA-SO emission.
 
-Validates `gen_idsva_so_spatial_v2_inner` (CUDA) against
-`RBDReference.idsva_so_spatial_v2` (verified Python).
+Validates `gen_idsva_so_world_frame_inner` (CUDA) against
+`RBDReference.idsva_so_world_frame` (verified Python).
 
-The spatial_v2 path is the second floating-base IDSVA-SO emission added
+The world-frame path is the second floating-base IDSVA-SO emission added
 alongside the existing shim-based `gen_idsva_so_floating_reference_inner`.
-It runs the single-pass spatial_v2 algorithm in CUDA — world-frame
+It runs the single-pass world-frame algorithm in CUDA — world-frame
 propagation with gravity baked into the main sweep, no separate gravity
-shim. Mirrors `RBDReference.idsva_so_spatial_v2` line-for-line.
+shim. Mirrors `RBDReference.idsva_so_world_frame` line-for-line.
 
 Runs by default; iiwa14-floating is the default robot.
-Set GRID_CUDA_SPATIAL_V2_ROBOTS=iiwa14,go2,g1 to exercise more.
+Set GRID_CUDA_IDSVA_SO_WORLD_FRAME_ROBOTS=iiwa14,go2,g1 to exercise more.
 """
 
 import contextlib
@@ -39,7 +39,7 @@ from test.pinocchio_equivalents.utils.model_sources import (
 from test.pinocchio_equivalents.utils.project_adapter import build_project_adapter
 
 
-RUNNER_SOURCE = Path(__file__).with_name("cuda_spatial_v2_smoke_runner.cu")
+RUNNER_SOURCE = Path(__file__).with_name("cuda_idsva_so_world_frame_smoke_runner.cu")
 
 
 def _comma_separated_env(name: str, default: str) -> tuple[str, ...]:
@@ -50,18 +50,18 @@ def _comma_separated_env(name: str, default: str) -> tuple[str, ...]:
     return values
 
 
-def _spatial_v2_robot_ids() -> tuple[str, ...]:
-    return _comma_separated_env("GRID_CUDA_SPATIAL_V2_ROBOTS", "iiwa14")
+def _world_frame_robot_ids() -> tuple[str, ...]:
+    return _comma_separated_env("GRID_CUDA_IDSVA_SO_WORLD_FRAME_ROBOTS", "iiwa14")
 
 
-def _spatial_v2_target_shared_bytes() -> int:
-    raw = os.environ.get("GRID_CUDA_SPATIAL_V2_TARGET_SHARED_BYTES", "100000")
+def _world_frame_target_shared_bytes() -> int:
+    raw = os.environ.get("GRID_CUDA_IDSVA_SO_WORLD_FRAME_TARGET_SHARED_BYTES", "100000")
     try:
         value = int(raw)
     except ValueError:
-        pytest.fail("GRID_CUDA_SPATIAL_V2_TARGET_SHARED_BYTES must be an integer.")
+        pytest.fail("GRID_CUDA_IDSVA_SO_WORLD_FRAME_TARGET_SHARED_BYTES must be an integer.")
     if value <= 0:
-        pytest.fail("GRID_CUDA_SPATIAL_V2_TARGET_SHARED_BYTES must be positive.")
+        pytest.fail("GRID_CUDA_IDSVA_SO_WORLD_FRAME_TARGET_SHARED_BYTES must be positive.")
     return value
 
 
@@ -72,16 +72,16 @@ def _robot_spec(robot_id: str, base_mode: str):
     pytest.skip(f"{robot_id}-{base_mode} was not found in the robot manifest.")
 
 
-def _spatial_v2_samples(project_model):
+def _world_frame_samples(project_model):
     sample_names = _comma_separated_env(
-        "GRID_CUDA_SPATIAL_V2_SAMPLE_NAMES", "zero,conservative"
+        "GRID_CUDA_IDSVA_SO_WORLD_FRAME_SAMPLE_NAMES", "zero,conservative"
     )
     try:
-        random_count = int(os.environ.get("GRID_CUDA_SPATIAL_V2_RANDOM_SAMPLES", "0"))
+        random_count = int(os.environ.get("GRID_CUDA_IDSVA_SO_WORLD_FRAME_RANDOM_SAMPLES", "0"))
     except ValueError:
-        pytest.fail("GRID_CUDA_SPATIAL_V2_RANDOM_SAMPLES must be an integer.")
+        pytest.fail("GRID_CUDA_IDSVA_SO_WORLD_FRAME_RANDOM_SAMPLES must be an integer.")
     if random_count < 0:
-        pytest.fail("GRID_CUDA_SPATIAL_V2_RANDOM_SAMPLES must be non-negative.")
+        pytest.fail("GRID_CUDA_IDSVA_SO_WORLD_FRAME_RANDOM_SAMPLES must be non-negative.")
     include_corner_samples = sample_names == ("all",) or any(
         name not in {"zero", "conservative"} for name in sample_names
     )
@@ -97,13 +97,13 @@ def _spatial_v2_samples(project_model):
     if missing:
         available = ", ".join(sorted(samples_by_name))
         pytest.fail(
-            "Unknown GRID_CUDA_SPATIAL_V2_SAMPLE_NAMES value(s): "
+            "Unknown GRID_CUDA_IDSVA_SO_WORLD_FRAME_SAMPLE_NAMES value(s): "
             f"{', '.join(missing)}. Available samples: {available}"
         )
     return [samples_by_name[name] for name in sample_names]
 
 
-def _generate_spatial_v2_header(project_model, build_dir: Path, target_shared_bytes: int) -> Path:
+def _generate_world_frame_header(project_model, build_dir: Path, target_shared_bytes: int) -> Path:
     header_path = build_dir / "grid.cuh"
     env_updates = {"GRID_CUDA_TARGET_SHARED_MEM_BYTES": str(target_shared_bytes)}
     with _temporary_env(env_updates):
@@ -117,15 +117,15 @@ def _generate_spatial_v2_header(project_model, build_dir: Path, target_shared_by
             codegen.gen_all_code(
                 include_homogenous_transforms=True,
                 codegen_profile="all",
-                algorithm_list="idsva_so",
+                algorithm_list="idsva_so_body_frame",
                 enable_floating_second_order=True,
-                enable_idsva_so_spatial_v2=True,
+                enable_idsva_so_world_frame=True,
                 output_path=str(header_path),
             )
     return header_path
 
 
-def _compile_spatial_v2_runner(build_dir: Path):
+def _compile_world_frame_runner(build_dir: Path):
     nvcc = shutil.which("nvcc")
     if nvcc is None:
         pytest.skip("nvcc was not found; install CUDA Toolkit to run CUDA tests.")
@@ -133,7 +133,7 @@ def _compile_spatial_v2_runner(build_dir: Path):
     runner_copy = build_dir / RUNNER_SOURCE.name
     shutil.copyfile(RUNNER_SOURCE, runner_copy)
     arch = _detect_cuda_arch()
-    executable = build_dir / "cuda_spatial_v2_smoke_runner.exe"
+    executable = build_dir / "cuda_idsva_so_world_frame_smoke_runner.exe"
     cmd = [
         nvcc,
         "-std=c++11",
@@ -146,21 +146,21 @@ def _compile_spatial_v2_runner(build_dir: Path):
         str(executable),
         str(runner_copy),
     ]
-    threads = os.environ.get("GRID_CUDA_SPATIAL_V2_TEST_THREADS")
+    threads = os.environ.get("GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS")
     if threads:
         try:
             thread_count = int(threads)
         except ValueError:
             pytest.fail(
-                "GRID_CUDA_SPATIAL_V2_TEST_THREADS must be an integer when set."
+                "GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS must be an integer when set."
             )
         if thread_count <= 0:
-            pytest.fail("GRID_CUDA_SPATIAL_V2_TEST_THREADS must be positive when set.")
-        cmd.insert(-1, f"-DGRID_CUDA_SPATIAL_V2_TEST_THREADS={thread_count}")
+            pytest.fail("GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS must be positive when set.")
+        cmd.insert(-1, f"-DGRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS={thread_count}")
     result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(
-            "CUDA spatial_v2 smoke runner compilation failed.\n"
+            "CUDA world-frame smoke runner compilation failed.\n"
             f"Command: {' '.join(cmd)}\n"
             f"stdout:\n{result.stdout}\n"
             f"stderr:\n{result.stderr}"
@@ -168,14 +168,14 @@ def _compile_spatial_v2_runner(build_dir: Path):
     return executable, cmd
 
 
-def _build_spatial_v2_case(project_model, tmp_path, label, target_shared_bytes):
+def _build_world_frame_case(project_model, tmp_path, label, target_shared_bytes):
     build_dir = tmp_path / label
     build_dir.mkdir()
-    _generate_spatial_v2_header(project_model, build_dir, target_shared_bytes)
-    return _compile_spatial_v2_runner(build_dir)
+    _generate_world_frame_header(project_model, build_dir, target_shared_bytes)
+    return _compile_world_frame_runner(build_dir)
 
 
-def _run_spatial_v2_sample(executable, compile_cmd, sample):
+def _run_world_frame_sample(executable, compile_cmd, sample):
     stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
     return _parse_runner_output(stdout)
 
@@ -198,7 +198,7 @@ def _assert_blocks_close(actual, expected, nv, sample_name):
             np.testing.assert_allclose(
                 actual[:, slc], expected[:, slc],
                 rtol=2e-4, atol=1e-3,
-                err_msg=f"spatial_v2 CUDA vs Python {name} at sample={sample_name}",
+                err_msg=f"world-frame CUDA vs Python {name} at sample={sample_name}",
             )
         except AssertionError as exc:
             actual_block = actual[:, slc].reshape(nv, nv, nv)
@@ -230,11 +230,11 @@ def _assert_blocks_close(actual, expected, nv, sample_name):
 @pytest.mark.developer_only
 @pytest.mark.parametrize(
     "robot_id",
-    _spatial_v2_robot_ids(),
+    _world_frame_robot_ids(),
     ids=lambda robot_id: f"{robot_id}-floating-spatial-v2",
 )
-def test_cuda_spatial_v2_matches_python_reference(tmp_path, robot_id):
-    """CUDA `idsva_so_spatial_v2_kernel` must match Python `idsva_so_spatial_v2`."""
+def test_cuda_world_frame_matches_python_reference(tmp_path, robot_id):
+    """CUDA `idsva_so_world_frame_kernel` must match Python `idsva_so_world_frame`."""
     spec = _robot_spec(robot_id, "floating")
     try:
         resolved = resolve_robot_spec(spec)
@@ -244,15 +244,15 @@ def test_cuda_spatial_v2_matches_python_reference(tmp_path, robot_id):
             f"before executing CUDA equivalence tests. Resolution error: {exc}"
         )
     project_model = build_project_adapter(spec, resolved, base_mode="floating")
-    target_shared_bytes = _spatial_v2_target_shared_bytes()
-    executable, compile_cmd = _build_spatial_v2_case(
-        project_model, tmp_path, f"{robot_id}_cuda_spatial_v2", target_shared_bytes
+    target_shared_bytes = _world_frame_target_shared_bytes()
+    executable, compile_cmd = _build_world_frame_case(
+        project_model, tmp_path, f"{robot_id}_cuda_world_frame", target_shared_bytes
     )
-    samples = _spatial_v2_samples(project_model)
+    samples = _world_frame_samples(project_model)
 
     for sample in samples:
-        actual = _run_spatial_v2_sample(executable, compile_cmd, sample)
-        config = actual["spatial_v2_config"][0]
+        actual = _run_world_frame_sample(executable, compile_cmd, sample)
+        config = actual["world_frame_config"][0]
         np.testing.assert_allclose(
             config[3:8],
             np.asarray(
@@ -267,11 +267,11 @@ def test_cuda_spatial_v2_matches_python_reference(tmp_path, robot_id):
             ),
             rtol=0.0,
             atol=0.0,
-            err_msg=f"{robot_id} spatial_v2 dimension config @ {sample.name}",
+            err_msg=f"{robot_id} world-frame dimension config @ {sample.name}",
         )
         expected_idsva = _flatten_idsva_blocks(
-            project_model.reference.idsva_so_spatial_v2(sample.q, sample.qd, sample.qdd)
+            project_model.reference.idsva_so_world_frame(sample.q, sample.qd, sample.qdd)
         )
         _assert_blocks_close(
-            actual["idsva_so"], expected_idsva, project_model.nv, sample.name
+            actual["idsva_so_body_frame"], expected_idsva, project_model.nv, sample.name
         )

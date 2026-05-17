@@ -51,8 +51,8 @@ _GRID_SINGLE_LABELS: dict[str, str] = {
     "single call fd_du":           "fd_du",
     "single call eepos":           "ee_pose",
     "single call deepos":          "ee_pose_gradient",
-    "single call idsva_so":        "idsva_so",
-    "single call idsva_so_sv2":    "idsva_so_spatial_v2",
+    "single call idsva_so_body_frame":        "idsva_so_body_frame",
+    "single call idsva_so_world_frame":    "idsva_so_world_frame",
     "single call fdsva_so":        "fdsva_so",
     # aliases for variants in generated code
     "single call inverse dynamics":         "id",
@@ -72,10 +72,10 @@ _GRID_BATCH_WITH_MEM_LABELS: dict[str, str] = {
     "fd_du with memory":           "fd_du",
     "ee_pose with memory":         "ee_pose",
     "ee_pose_gradient with memory": "ee_pose_gradient",
-    "idsva_so with memory":        "idsva_so",
-    "idsva_so_sv2 with memory":    "idsva_so_spatial_v2",
+    "idsva_so_body_frame with memory":        "idsva_so_body_frame",
+    "idsva_so_world_frame with memory":    "idsva_so_world_frame",
     "fdsva_so with memory":        "fdsva_so",
-    "id_so with memory":           "idsva_so",   # legacy label
+    "id_so with memory":           "idsva_so_body_frame",   # legacy label
     "fd_so with memory":           "fdsva_so",   # legacy label
 }
 
@@ -89,10 +89,10 @@ _GRID_BATCH_COMPUTE_ONLY_LABELS: dict[str, str] = {
     "fd_du compute only":           "fd_du",
     "ee_pose compute only":         "ee_pose",
     "ee_pose_gradient compute only": "ee_pose_gradient",
-    "idsva_so compute only":        "idsva_so",
-    "idsva_so_sv2 compute only":    "idsva_so_spatial_v2",
+    "idsva_so_body_frame compute only":        "idsva_so_body_frame",
+    "idsva_so_world_frame compute only":    "idsva_so_world_frame",
     "fdsva_so compute only":        "fdsva_so",
-    "id_so compute only":           "idsva_so",   # legacy label
+    "id_so compute only":           "idsva_so_body_frame",   # legacy label
     "fd_so compute only":           "fdsva_so",   # legacy label
 }
 
@@ -114,7 +114,7 @@ _PIN_SINGLE_LABELS: dict[str, str] = {
     "fd_du direct":             "fd_du",
     "ee_pose direct":           "ee_pose",
     "ee_pose_gradient direct":  "ee_pose_gradient",
-    "idsva_so direct":          "idsva_so",
+    "idsva_so_body_frame direct":          "idsva_so_body_frame",
 }
 
 # Pinocchio batch labels
@@ -135,7 +135,7 @@ _PIN_BATCH_LABELS: dict[str, str] = {
     "fd_du direct":             "fd_du",
     "ee_pose direct":           "ee_pose",
     "ee_pose_gradient direct":  "ee_pose_gradient",
-    "idsva_so direct":          "idsva_so",
+    "idsva_so_body_frame direct":          "idsva_so_body_frame",
 }
 
 
@@ -359,7 +359,7 @@ def build_metadata(include_gpu: bool = True, include_pinocchio: bool = False) ->
 # ---------------------------------------------------------------------------
 
 ALL_ALGOS = ["id", "minv", "fd", "aba", "crba", "id_du", "fd_du",
-             "ee_pose", "ee_pose_gradient", "idsva_so", "idsva_so_spatial_v2", "fdsva_so"]
+             "ee_pose", "ee_pose_gradient", "idsva_so_body_frame", "idsva_so_world_frame", "fdsva_so"]
 
 
 def fill_nulls(result: dict[str, Optional[dict]], algos: list[str] = ALL_ALGOS) -> dict[str, Optional[dict]]:

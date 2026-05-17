@@ -262,14 +262,14 @@ Change:
 ### 5. Floating second-order dynamics now follow the verified first-order root convention
 
 Problem:
-- The top-level second-order helpers `idsva_so(...)` and `fdsva_so(...)` only
+- The top-level second-order helpers `idsva_so_body_frame(...)` and `fdsva_so(...)` only
   assumed fixed-base scalar-joint indexing.
 - Floating-base rollout would have diverged immediately on the root
   configuration/velocity convention, and there is no direct Pinocchio
   second-order Python API to compare against.
 
 Change:
-- Added floating-base support for `idsva_so(...)` and `fdsva_so(...)` using the
+- Added floating-base support for `idsva_so_body_frame(...)` and `fdsva_so(...)` using the
   same reduced floating dynamics convention already verified for first-order
   floating derivatives:
   - public floating `q` stays `[x, y, z, qx, qy, qz, qw, ...]`
@@ -278,13 +278,13 @@ Change:
   finite differences of the already-verified first-order `rnea_grad(...)`,
   `forward_dynamics_grad(...)`, `crba(...)`, and `minv(...)` paths.
 - The current implementation is intentionally hybrid for floating base:
-  - `idsva_so(...)` keeps the analytic old-style path for the velocity-side and
+  - `idsva_so_body_frame(...)` keeps the analytic old-style path for the velocity-side and
     mass-matrix-side tensors, while patching `d2tau_dq` from the already-verified
     first-order `rnea_grad(...)` path.
   - `fdsva_so(...)` keeps the analytic old-style composition for the
     velocity-side and torque-side tensors, while patching `daba_dqdq` from the
     already-verified first-order `forward_dynamics_grad(...)` path.
-- The public inverse-dynamics second-order name is now `idsva_so(...)`, which
+- The public inverse-dynamics second-order name is now `idsva_so_body_frame(...)`, which
   mirrors `fdsva_so(...)` and replaces the older
   `second_order_idsva_parallel(...)` naming in the equivalence harness.
 

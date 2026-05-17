@@ -29,8 +29,8 @@ ALGO_DISPLAY: dict[str, str] = {
     "fd_du":            "FD_DU (∂FD/∂q,v)",
     "ee_pose":          "EE_POSE",
     "ee_pose_gradient": "EE_POSE_GRADIENT (Jacobian)",
-    "idsva_so":         "IDSVA_SO (2nd-order ID)",
-    "idsva_so_spatial_v2": "IDSVA_SO_SV2 (spatial_v2 single-pass)",
+    "idsva_so_body_frame":         "IDSVA_SO (2nd-order ID)",
+    "idsva_so_world_frame": "IDSVA_SO_WORLD_FRAME (world-frame single-pass)",
     "fdsva_so":         "FDSVA_SO (2nd-order FD)",
 }
 
@@ -38,7 +38,7 @@ ALGO_SECTIONS: dict[str, list[str]] = {
     "Core Dynamics": ["id", "minv", "fd", "aba", "crba"],
     "Gradients":     ["id_du", "fd_du"],
     "Kinematics":    ["ee_pose", "ee_pose_gradient"],
-    "Second-Order":  ["idsva_so", "idsva_so_spatial_v2", "fdsva_so"],
+    "Second-Order":  ["idsva_so_body_frame", "idsva_so_world_frame", "fdsva_so"],
 }
 
 ROBOTS_DISPLAY = ["iiwa14", "go2", "g1"]

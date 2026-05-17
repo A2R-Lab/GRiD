@@ -29,7 +29,7 @@ ALGORITHM_TOLERANCES = {
         atol=5e-4,
         note="End-effector pose Hessians compare the analytic GRiD path against a finite-difference Pinocchio reference, so they use a wider tolerance than the first-order dynamics checks.",
     ),
-    "idsva_so": Tolerance(
+    "idsva_so_body_frame": Tolerance(
         rtol=1e-4,
         atol=1e-5,
         note="Second-order inverse-dynamics tensors are validated against finite differences of already-verified first-order quantities, so they use a wider tolerance than the primary first-order dynamics checks.",
