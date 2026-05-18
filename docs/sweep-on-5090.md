@@ -12,9 +12,44 @@
 >   calibrated on iiwa14/go2; at very high DOF, the body-frame multi-pass
 >   amortization advantage erodes. A DOF-threshold refinement to the
 >   codegen-time dispatcher is a worthwhile follow-up.
-> - **cuBLASDx column (`glass_nvidia`) was a no-op across the entire sweep**:
->   `glass_nv/glass` ratios are 0.98–1.01× on every cell × every algorithm.
->   Future sweeps can drop `--columns glass_nvidia` to halve wall time.
+> - **cuBLASDx column (`glass_nvidia`) was a no-op across the entire sweep
+>   — but for a subtle reason.** `glass_nv/glass` ratios are 0.98–1.01× on
+>   every cell × every algorithm, which is **SIMT-vs-SIMT**, not
+>   cuBLASDx-vs-SIMT. GRiD only emits one cuBLASDx-aware call
+>   (`glass::nvidia::gemm_strided_batched_1d<T,4,4,4,...>` in
+>   `eepose_gradient_hessian.py`), and the GLASS batched-gemm heuristic
+>   `(BATCH >= 8) && (mx >= 8)` returns false at `mx=4` → SIMT path.
+>   Everything else (incl. the `4·n³` `dot_prod` calls dominating
+>   `fdsva_so_inner` on g1_floating) uses hand-rolled per-thread serial
+>   dot products that don't dispatch through GLASS at all.
+>
+> - **Followed up with `GLASS/bench/autotune.py` on this 5090 (2026-05-18)
+>   to ground-truth the heuristic.** Result: SIMT wins by **2.6×** at
+>   4×4×4 batched (the actual shape GRiD's eepose call uses) for every
+>   BATCH ∈ {4, 8, 16} — so the heuristic was correct and forcing
+>   cuBLASDx at the current call site would *regress* perf. The
+>   autotune did flip a few entries for shapes GRiD doesn't currently
+>   use: gemv at all sizes shows SIMT wins 2-3× (heuristic was wrong),
+>   gemm at 14×14×14 marginally flips to cuBLASDx (~6%, within noise).
+>   The clean per-host override lives at
+>   `GLASS/bench/tuning/plancher-omen-26.cuh`; see installation docs
+>   for how to consume.
+>
+> - **So the right interpretation**: cuBLASDx is unused, and *if* it
+>   were used at current GRiD shapes (4×4×4 batched) it would be
+>   slower. The real path to leveraging cuBLASDx is refactoring hot
+>   loops to expose **larger** gemm shapes — specifically the
+>   `4·n³` contraction in `fdsva_so_inner` (currently n-element
+>   serial dot products) into a proper batched gemm. At g1's n=35,
+>   the autotune table extrapolation (32×32×32 single gemm: cuBLASDx
+>   73% faster, 24×24×24 batched: cuBLASDx ~30% faster at BATCH=4)
+>   strongly suggests a real win. Code comment marking this future-
+>   refactor target lives at the hot loop in
+>   `GRiDCodeGenerator/algorithms/_fdsva_so.py`.
+>
+> - For default sweeps: drop `--columns glass_nvidia` (saves ~half the
+>   wall time) until the hot-loop refactor lands; revisit at that
+>   point.
 > - `fdsva_so` populated on every cell, including `g1_floating` at 6967 µs
 >   (selective-spill tier). No SKIPPED rows.
 >
