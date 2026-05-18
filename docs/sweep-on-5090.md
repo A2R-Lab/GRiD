@@ -1,5 +1,26 @@
 # Handoff: full benchmark sweep on the 5090
 
+> **Status (2026-05-18)**: The sweep ran end-to-end on sm_120 / RTX 5090.
+> Report: [`test/benchmarks/benchmark_multi_version_sm120_5090_phase7.md`](../test/benchmarks/benchmark_multi_version_sm120_5090_phase7.md).
+> Key findings:
+> - Dispatcher correctness verified across all 12 cells; matches the chosen
+>   variant within 1%.
+> - Big floating-base wins: g1_floating 20×, go2_floating 7×, iiwa14_floating 7×.
+> - **Surprise at high DOF**: on `g1_fixed` (29 DOF), `idsva_so_world_frame`
+>   is actually ~13% **faster** than `idsva_so_body_frame` (N=256
+>   compute-only: 2559 µs vs 2958 µs). The "body wins on fixed" rule was
+>   calibrated on iiwa14/go2; at very high DOF, the body-frame multi-pass
+>   amortization advantage erodes. A DOF-threshold refinement to the
+>   codegen-time dispatcher is a worthwhile follow-up.
+> - **cuBLASDx column (`glass_nvidia`) was a no-op across the entire sweep**:
+>   `glass_nv/glass` ratios are 0.98–1.01× on every cell × every algorithm.
+>   Future sweeps can drop `--columns glass_nvidia` to halve wall time.
+> - `fdsva_so` populated on every cell, including `g1_floating` at 6967 µs
+>   (selective-spill tier). No SKIPPED rows.
+>
+> The remainder of this doc is the original handoff context, preserved for
+> historical reference.
+
 **Audience**: Claude agent running on the user's new 5090 (sm_120, no thermal-throttling)
 workstation. This doc is self-contained — read it, then run the sweep.
 

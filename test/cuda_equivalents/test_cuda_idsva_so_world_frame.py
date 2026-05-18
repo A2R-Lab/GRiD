@@ -4,7 +4,7 @@ Validates `gen_idsva_so_world_frame_inner` (CUDA) against
 `RBDReference.idsva_so_world_frame` (verified Python).
 
 The world-frame path is the second floating-base IDSVA-SO emission added
-alongside the existing shim-based `gen_idsva_so_floating_reference_inner`.
+alongside the existing shim-based `gen_idsva_so_body_frame_floating_reference_inner`.
 It runs the single-pass world-frame algorithm in CUDA — world-frame
 propagation with gravity baked into the main sweep, no separate gravity
 shim. Mirrors `RBDReference.idsva_so_world_frame` line-for-line.

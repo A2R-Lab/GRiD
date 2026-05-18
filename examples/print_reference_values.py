@@ -80,14 +80,21 @@ def main():
         d2ee_pos = reference.end_effector_pose_hessian(q)
         print("d2eepos\n", d2ee_pos)
 
-    if not FLOATING_BASE:
-        d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq = reference.second_order_idsva_parallel(
-            q, qd, np.zeros(len(qd))
-        )
-        print(f'\nd2tau_dq:\n{d2tau_dq}')
-        print(f'\nd2tau_dqd:\n{d2tau_dqd}')
-        print(f'\nd2tau_cross:\n{d2tau_cross}')
-        print(f'\ndM_dq:\n{dM_dq}')
+    # Second-order inverse dynamics — auto-dispatched (body-frame for
+    # fixed-base, world-frame for floating-base). Both variants are
+    # mathematically equivalent; the dispatcher picks the faster one
+    # for the robot's base type.
+    d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq = reference.idsva_so(
+        q, qd, np.zeros(len(qd))
+    )
+    print(f'\nd2tau_dq:\n{d2tau_dq}')
+    print(f'\nd2tau_dqd:\n{d2tau_dqd}')
+    print(f'\nd2tau_cross:\n{d2tau_cross}')
+    print(f'\ndM_dq:\n{dM_dq}')
+
+    # Second-order forward dynamics
+    fdsva_so_out = reference.fdsva_so(q, qd, u)
+    print(f'\nfdsva_so (rank-3 partials of qdd):\n{fdsva_so_out}')
 
     if DEBUG_MODE:
         print("-------------------")

@@ -1,7 +1,16 @@
 # GRiD Benchmarks
 
-Performance comparison of GRiD vs. Pinocchio vs. MJX across all 12 algorithms,
+Performance comparison of GRiD vs. Pinocchio vs. MJX across 14 core algorithms,
 for `iiwa14`, `go2`, and `g1` robots in fixed and floating-base configurations.
+
+The 14 rows are the first-order set (`id`, `minv`, `fd`, `aba`, `crba`, `id_du`,
+`fd_du`, `ee_pose`, `ee_pose_gradient`) plus the second-order set (`idsva_so`
+— the dispatched winner, `idsva_so_body_frame`, `idsva_so_world_frame`,
+`fdsva_so`). The two IDSVA-SO variants are mathematically equivalent and ship
+side-by-side so the table shows the body-vs-world crossover; `idsva_so` itself
+is the codegen-time dispatcher (body-frame for fixed-base, world-frame for
+floating-base — see [docs/sweep-on-5090.md](../../docs/sweep-on-5090.md) for
+the crossover numbers).
 
 ---
 
@@ -160,7 +169,9 @@ Verify:
 accelerated algorithms (ID, Minv, ABA, FD, CRBA, ID_DU, FD_DU) require CppADCodeGen
 headers.  The benchmark runner detects availability automatically — if not found,
 those algorithms are silently reported as null and the direct-API algorithms
-(EE_POSE, EE_POSE_GRADIENT, IDSVA_SO) still run.
+(EE_POSE, EE_POSE_GRADIENT, IDSVA_SO_BODY_FRAME, IDSVA_SO_WORLD_FRAME) still run.
+The dispatched `IDSVA_SO` row mirrors whichever variant the codegen picked.
+FDSVA_SO has no Pinocchio equivalent and is GRiD-only.
 
 Install the cmeel-packaged version into the same venv as Pinocchio:
 
@@ -296,7 +307,7 @@ MJX exposes a subset of algorithms via `mujoco.mjx`:
 | **FD** | `mjx.forward()` | Full forward dynamics |
 | **EE_POSE** | `mjx.kinematics()` | Forward kinematics |
 | **ID_DU** | `jax.jacobian(mjx.inverse)` | AD through RNEA |
-| Minv, CRBA, ABA, FD_DU, IDSVA_SO, FDSVA_SO | — | Not available in MJX |
+| Minv, CRBA, ABA, FD_DU, IDSVA_SO_BODY_FRAME, IDSVA_SO_WORLD_FRAME, FDSVA_SO | — | Not available in MJX |
 
 MJX uses `jax.vmap` for batching and `jax.block_until_ready()` to ensure GPU completion
 before stopping the timer. The first two calls (JIT compilation + GPU warm-up) are discarded.
