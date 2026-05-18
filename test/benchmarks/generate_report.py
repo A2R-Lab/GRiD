@@ -18,28 +18,15 @@ from typing import Optional
 THIS_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = THIS_DIR / "results"
 
-# Algorithm display names and row ordering
-ALGO_DISPLAY: dict[str, str] = {
-    "id":               "ID (Inverse Dynamics)",
-    "minv":             "Minv (M⁻¹)",
-    "fd":               "FD (Minv+RNEA)",
-    "aba":              "ABA (Articulated Body)",
-    "crba":             "CRBA",
-    "id_du":            "ID_DU (∂ID/∂q,v)",
-    "fd_du":            "FD_DU (∂FD/∂q,v)",
-    "ee_pose":          "EE_POSE",
-    "ee_pose_gradient": "EE_POSE_GRADIENT (Jacobian)",
-    "idsva_so_body_frame":  "IDSVA_SO_BODY_FRAME (2nd-order ID, body-frame)",
-    "idsva_so_world_frame": "IDSVA_SO_WORLD_FRAME (2nd-order ID, world-frame)",
-    "fdsva_so":             "FDSVA_SO (2nd-order FD)",
-}
-
-ALGO_SECTIONS: dict[str, list[str]] = {
-    "Core Dynamics": ["id", "minv", "fd", "aba", "crba"],
-    "Gradients":     ["id_du", "fd_du"],
-    "Kinematics":    ["ee_pose", "ee_pose_gradient"],
-    "Second-Order":  ["idsva_so_body_frame", "idsva_so_world_frame", "fdsva_so"],
-}
+# Algorithm display names, row ordering, and section grouping derive from
+# GRiDCodeGenerator/algo_registry.py — that file is the single source of truth.
+# To add a new algo or rename a display label, edit the registry, not this module.
+from GRiDCodeGenerator.algo_registry import (
+    build_display_map as _build_display,
+    build_sections_map as _build_sections,
+)
+ALGO_DISPLAY: dict[str, str] = _build_display()
+ALGO_SECTIONS: dict[str, list[str]] = _build_sections()
 
 ROBOTS_DISPLAY = ["iiwa14", "go2", "g1"]
 BASES = ["fixed", "floating"]

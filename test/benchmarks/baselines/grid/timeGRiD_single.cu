@@ -71,6 +71,12 @@ __host__ void measure_fdsva_so_single(cudaStream_t *streams, grid::robotModel<T>
     grid::fdsva_so_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 #endif
+#if GRID_HAS_IDSVA_SO
+template <typename T, int TEST_ITERS>
+__host__ void measure_idsva_so_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
+    grid::idsva_so_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
+}
+#endif
 
 template <typename T, int TEST_ITERS>
 __host__ void run_single_timings(bool floating_base, cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
@@ -84,6 +90,9 @@ __host__ void run_single_timings(bool floating_base, cudaStream_t *streams, grid
     measure_fd_du_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
     measure_ee_pose_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
     measure_ee_pose_gradient_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    #if GRID_HAS_IDSVA_SO
+    measure_idsva_so_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    #endif
     #if GRID_HAS_IDSVA_SO_BODY_FRAME
     measure_idsva_so_body_frame_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
     #endif

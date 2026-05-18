@@ -40,61 +40,17 @@ BATCH_SIZES = [16, 32, 64, 128, 256]
 # Label → JSON key mapping
 # ---------------------------------------------------------------------------
 
-# GRiD single-call labels (from printf in _single_timing functions)
-_GRID_SINGLE_LABELS: dict[str, str] = {
-    "single call id":              "id",
-    "single call minv":            "minv",
-    "single call fd":              "fd",
-    "single call aba":             "aba",
-    "single call crba":            "crba",
-    "single call id_du":           "id_du",
-    "single call fd_du":           "fd_du",
-    "single call eepos":           "ee_pose",
-    "single call deepos":          "ee_pose_gradient",
-    "single call idsva_so_body_frame":        "idsva_so_body_frame",
-    "single call idsva_so_world_frame":    "idsva_so_world_frame",
-    "single call fdsva_so":        "fdsva_so",
-    # aliases for variants in generated code
-    "single call inverse dynamics":         "id",
-    "single call forward dynamics":         "fd",
-    "single call minv (direct)":            "minv",
-    "single call aba (articulated body)":   "aba",
-}
+# GRiD labels (derived from GRiDCodeGenerator/algo_registry.py — single source of truth).
+# To add a new algorithm or alias, edit that file instead of these maps.
+from GRiDCodeGenerator.algo_registry import (
+    build_single_label_map as _build_grid_single,
+    build_batch_with_mem_label_map as _build_grid_mem,
+    build_batch_compute_only_label_map as _build_grid_compute,
+)
 
-# GRiD batch labels (WITH MEMORY / COMPUTE ONLY suffixes)
-_GRID_BATCH_WITH_MEM_LABELS: dict[str, str] = {
-    "id with memory":              "id",
-    "minv with memory":            "minv",
-    "fd with memory":              "fd",
-    "aba with memory":             "aba",
-    "crba with memory":            "crba",
-    "id_du with memory":           "id_du",
-    "fd_du with memory":           "fd_du",
-    "ee_pose with memory":         "ee_pose",
-    "ee_pose_gradient with memory": "ee_pose_gradient",
-    "idsva_so_body_frame with memory":        "idsva_so_body_frame",
-    "idsva_so_world_frame with memory":    "idsva_so_world_frame",
-    "fdsva_so with memory":        "fdsva_so",
-    "id_so with memory":           "idsva_so_body_frame",   # legacy label
-    "fd_so with memory":           "fdsva_so",   # legacy label
-}
-
-_GRID_BATCH_COMPUTE_ONLY_LABELS: dict[str, str] = {
-    "id compute only":              "id",
-    "minv compute only":            "minv",
-    "fd compute only":              "fd",
-    "aba compute only":             "aba",
-    "crba compute only":            "crba",
-    "id_du compute only":           "id_du",
-    "fd_du compute only":           "fd_du",
-    "ee_pose compute only":         "ee_pose",
-    "ee_pose_gradient compute only": "ee_pose_gradient",
-    "idsva_so_body_frame compute only":        "idsva_so_body_frame",
-    "idsva_so_world_frame compute only":    "idsva_so_world_frame",
-    "fdsva_so compute only":        "fdsva_so",
-    "id_so compute only":           "idsva_so_body_frame",   # legacy label
-    "fd_so compute only":           "fdsva_so",   # legacy label
-}
+_GRID_SINGLE_LABELS: dict[str, str] = _build_grid_single()
+_GRID_BATCH_WITH_MEM_LABELS: dict[str, str] = _build_grid_mem()
+_GRID_BATCH_COMPUTE_ONLY_LABELS: dict[str, str] = _build_grid_compute()
 
 # Pinocchio single-call labels
 _PIN_SINGLE_LABELS: dict[str, str] = {

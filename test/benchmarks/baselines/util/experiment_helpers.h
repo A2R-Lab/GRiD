@@ -46,12 +46,17 @@ constexpr int effective_thread_count(int N, int MAX) {
 #define RANDOM_MEAN 0
 #define RANDOM_STDEV 1
 
+// `static` (file-local): each TU gets its own copy of the RNG state. Required
+// for the per-algo TU split (otherwise the link fails with ODR multiple-def
+// errors). c++17 `inline` would also work logically, but CUDA 13.2 nvlink
+// produces "unexpected reloc" errors with inline globals under -rdc=true —
+// static avoids that combo entirely.
 #if TEST_FOR_EQUIVALENCE
-   std::default_random_engine randEng(1337); //seed
+   static std::default_random_engine randEng(1337); //seed
 #else
-   std::default_random_engine randEng(time(0)); //seed
+   static std::default_random_engine randEng(time(0)); //seed
 #endif
-std::normal_distribution<double> randDist(RANDOM_MEAN, RANDOM_STDEV); //mean followed by stdiv
+static std::normal_distribution<double> randDist(RANDOM_MEAN, RANDOM_STDEV); //mean followed by stdiv
 template <typename T>
 T getRand(){return static_cast<T>(randDist(randEng));}
 

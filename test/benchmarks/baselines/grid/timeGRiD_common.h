@@ -15,9 +15,21 @@
  *   timeGRiD_single.cu  →  -rdc=true   (anti-LICM correctness)
  *   timeGRiD_batch.cu   →  no -rdc     (aggressive inlining, fast batch)
  *
- * This header carries only the shared host-side scaffolding (init / load
- * inputs / warmup / close). Each .cu defines its own `measure_*` template
- * helpers, its own `test<>()` dispatcher, and its own `main()`.
+ * This header carries the shared host-side scaffolding (init / load
+ * inputs / warmup / close) and the `measure_batch_pair` template loop
+ * used by every batch wrapper. Each .cu file defines its own
+ * `measure_*_entry` host function, and (for dispatcher mains) its own
+ * `int main()`.
+ *
+ * Per-algo TU layout (P6-7b, default):
+ *   timeGRiD_single_<algo>.cu  → measure_<algo>_single_entry()      (compiled with -rdc=true)
+ *   timeGRiD_batch_<algo>.cu   → measure_<algo>_batch_entry()        (compiled WITHOUT -rdc=true)
+ *   timeGRiD_single_main.cu    → main() that calls each *_single_entry
+ *   timeGRiD_batch_main.cu     → main() that calls each *_batch_entry, looped over N
+ *
+ * Monolithic fallback (--no-per-algo-tus):
+ *   timeGRiD_single.cu (this entire single-call binary in one TU)
+ *   timeGRiD_batch.cu  (this entire batch binary in one TU)
  ***/
 #pragma once
 
@@ -31,6 +43,37 @@
 #define GRAVITY 9.81
 
 inline dim3 grid_timing_dimms() { return dim3(grid::SUGGESTED_THREADS, 1, 1); }
+
+// ---------------------------------------------------------------------------
+// Shared timing loop for one (with-memory, compute-only) batch pair. Takes
+// the invocations as lambdas — a function-style macro chokes on the commas
+// inside `dim3(N,1,1)`.
+//
+// Hoisted into the common header so the per-algo batch TUs
+// (timeGRiD_batch_<algo>.cu) and the monolithic timeGRiD_batch.cu can both
+// share it. Must stay a template so each TU instantiates it locally
+// (no .o symbol leakage across TUs).
+// ---------------------------------------------------------------------------
+template <int TEST_ITERS, typename WMFn, typename COFn>
+__host__ void measure_batch_pair(const char *label, int NUM_TIMESTEPS, WMFn with_mem, COFn compute_only){
+    struct timespec start, end;
+    std::vector<double> times;
+    times.reserve(TEST_ITERS);
+    for(int iter = 0; iter < TEST_ITERS; iter++){
+        clock_gettime(CLOCK_MONOTONIC,&start);
+        with_mem();
+        clock_gettime(CLOCK_MONOTONIC,&end);
+        times.push_back(time_delta_us_timespec(start,end));
+    }
+    printf("[N:%d]: %s WITH MEMORY: ",NUM_TIMESTEPS,label); printStats(&times); times.clear();
+    for(int iter = 0; iter < TEST_ITERS; iter++){
+        clock_gettime(CLOCK_MONOTONIC,&start);
+        compute_only();
+        clock_gettime(CLOCK_MONOTONIC,&end);
+        times.push_back(time_delta_us_timespec(start,end));
+    }
+    printf("[N:%d]: %s COMPUTE ONLY: ",NUM_TIMESTEPS,label); printStats(&times); times.clear();
+}
 
 // True when the kernel's requested dynamic shared memory exceeds the device's
 // per-block cap (i.e. not even cudaFuncSetAttribute could open enough). Used

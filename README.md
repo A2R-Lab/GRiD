@@ -39,6 +39,10 @@ python examples/print_reference_values.py path/to/robot.urdf
 python examples/print_grid.py path/to/robot.urdf
 ```
 
+> **Requires a C++17-capable host compiler** (e.g., g++ ≥ 7, clang++ ≥ 5).
+> The benchmark and codegen runtime compile with `-std=c++17` — needed for
+> inline variables in the bench common header and for the cuBLASDx backend.
+
 ## Usage
 + `grid-generate PATH_TO_URDF` — generate `grid.cuh`; add `-d` for full debug mode, `-f` for floating base, `-t JOINT_NAME` to target a specific end-effector joint
 + `python examples/print_reference_values.py PATH_TO_URDF` — print CPU reference values for all algorithms to validate CUDA output

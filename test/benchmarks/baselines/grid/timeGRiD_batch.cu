@@ -17,31 +17,8 @@
  ***/
 #include "timeGRiD_common.h"
 
-// ---------------------------------------------------------------------------
-// Shared timing loop for one (with-memory, compute-only) batch pair. Takes
-// the invocations as lambdas — a function-style macro chokes on the commas
-// inside `dim3(N,1,1)`.
-// ---------------------------------------------------------------------------
-template <int TEST_ITERS, typename WMFn, typename COFn>
-__host__ void measure_batch_pair(const char *label, int NUM_TIMESTEPS, WMFn with_mem, COFn compute_only){
-    struct timespec start, end;
-    std::vector<double> times;
-    times.reserve(TEST_ITERS);
-    for(int iter = 0; iter < TEST_ITERS; iter++){
-        clock_gettime(CLOCK_MONOTONIC,&start);
-        with_mem();
-        clock_gettime(CLOCK_MONOTONIC,&end);
-        times.push_back(time_delta_us_timespec(start,end));
-    }
-    printf("[N:%d]: %s WITH MEMORY: ",NUM_TIMESTEPS,label); printStats(&times); times.clear();
-    for(int iter = 0; iter < TEST_ITERS; iter++){
-        clock_gettime(CLOCK_MONOTONIC,&start);
-        compute_only();
-        clock_gettime(CLOCK_MONOTONIC,&end);
-        times.push_back(time_delta_us_timespec(start,end));
-    }
-    printf("[N:%d]: %s COMPUTE ONLY: ",NUM_TIMESTEPS,label); printStats(&times); times.clear();
-}
+// measure_batch_pair() now lives in timeGRiD_common.h so the per-algo TU
+// split (timeGRiD_batch_<algo>.cu) can share it.
 
 template <typename T, int TEST_ITERS>
 __host__ void measure_id_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
@@ -137,6 +114,15 @@ __host__ void measure_fdsva_so_batch(int N, cudaStream_t *streams, grid::robotMo
         [&]{ grid::fdsva_so_compute_only<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms); });
 }
 #endif
+#if GRID_HAS_IDSVA_SO
+template <typename T, int TEST_ITERS>
+__host__ void measure_idsva_so_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    dim3 dimms = grid_timing_dimms();
+    measure_batch_pair<TEST_ITERS>("IDSVA_SO", N,
+        [&]{ grid::idsva_so<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
+        [&]{ grid::idsva_so_compute_only<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms); });
+}
+#endif
 
 template <typename T, int TEST_ITERS>
 __host__ void run_batch_at(bool floating_base, int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
@@ -149,6 +135,9 @@ __host__ void run_batch_at(bool floating_base, int N, cudaStream_t *streams, gri
     measure_fd_du_batch<T,TEST_ITERS>(N, streams, m, d);
     measure_ee_pose_batch<T,TEST_ITERS>(N, streams, m, d);
     measure_ee_pose_gradient_batch<T,TEST_ITERS>(N, streams, m, d);
+#if GRID_HAS_IDSVA_SO
+    measure_idsva_so_batch<T,TEST_ITERS>(N, streams, m, d);
+#endif
 #if GRID_HAS_IDSVA_SO_BODY_FRAME
     measure_idsva_so_body_frame_batch<T,TEST_ITERS>(N, streams, m, d);
 #endif
