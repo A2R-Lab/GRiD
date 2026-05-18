@@ -90,11 +90,21 @@ pre-generated header and does **not** include any of:
 * Floating-base support
 * End-effector pose Hessian (`get_end_effector_position_hessians`)
 
-To use the bindings against the current codegen surface, regenerate
-`grid.cuh` with the latest `grid-generate` CLI and add the matching
-pybind11 wrappers to `python_bindings.cu`. Refreshing the bindings to
-the full current API (including SO + floating-base + dispatcher) is on
-the long-term task list.
+### Planned direction — JAX FFI replacement
+
+Rather than refresh this Pybind11 layer, the bindings are planned to
+move to **JAX FFI**, which is a better fit for GRiD's natural
+generate-codegen-then-run-fast flow. The new bindings should support:
+
+* Runtime regeneration of `grid.cuh` against a user-supplied URDF.
+* Recompile + link of the generated kernels from the same process.
+* Batched function-call dispatch (the codegen-side host wrappers
+  `grid::<algo>` already accept N timesteps via the `gridData<T, N>`
+  template).
+
+The current Pybind11 layer should be considered **deprecated** —
+please don't extend it with new method wrappers; new work should
+target the JAX FFI replacement.
 
 
 ## Requirements
