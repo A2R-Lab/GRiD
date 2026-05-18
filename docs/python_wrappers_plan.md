@@ -1,9 +1,17 @@
 # Python Wrappers Plan
 
-> **Status (2026-05-18):** Design locked in. Implementation scheduled after
-> the GLASS TRAILING_SYNC rollout lands. This doc captures the design so
-> any agent picking up the implementation has the full context without
-> re-debating the architecture.
+> **Status (2026-05-18 — v0.1 LANDED):** Phases A-C (scaffolding +
+> register_robot + 12 algorithm methods + ee_joint_names) and Phase E
+> (examples + Sphinx docs page) are shipped. Phase F (delete
+> ``bindings/``) shipped. Phase D (JAX FFI) deferred. v0.1 commits:
+> 0e1f126 (initial 9 methods), 4d1812d (Phase-C extensions).
+>
+> See ``python/`` in the repo for the implementation, and
+> :doc:`/user_guide/tutorials/python_wrappers` in the docs.
+>
+> One v1 simplification vs the original plan below: the small Runner
+> module uses **pybind11** instead of nanobind. The user-facing API is
+> identical; migration to nanobind is a localized v2 change if needed.
 
 ## Goal
 

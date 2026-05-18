@@ -9,6 +9,7 @@ These tutorials will help you get started with different aspects of GRID.
    python_algorithms
    codegen
    urdf_parser
+   python_wrappers
    benchmarks
    cuda_support_status
    cuda_validation
