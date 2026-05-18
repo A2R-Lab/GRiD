@@ -192,6 +192,42 @@ class RobotHandle:
         blocks = raw.reshape(B, 2, NJ, NJ).transpose(0, 1, 3, 2)
         return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
+    def end_effector_pose_hessian(self, q):
+        """End-effector pose Hessian ∂²ee/∂q². Returns shape (B, 6*NUM_EES, NJ, NJ)."""
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        return self._runner.end_effector_pose_hessian(q)
+
+    def idsva_so(self, q, qd, qdd=None, *, gravity: float = 9.81):
+        """Second-order inverse dynamics. Returns a tuple of 4 tensors:
+        (d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq), each shape (B, NV, NV, NV).
+
+        Uses the codegen-time dispatcher: body-frame for fixed-base,
+        world-frame for floating-base.
+        """
+        q  = np.ascontiguousarray(q,  dtype=np.float32)
+        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        qdd_arr = np.ascontiguousarray(qdd, dtype=np.float32) if qdd is not None else None
+        NV = self.num_vel
+        flat = self._runner.idsva_so(q, qd, qdd_arr, 4 * NV ** 3, gravity)
+        # Slice the 4 NV^3 blocks. Each block is stored as raw column/row
+        # depending on the kernel; we return them as (B, NV, NV, NV)
+        # without further reshape — callers wanting tensor-axis semantics
+        # should consult RBDReference's idsva_so docs.
+        B = flat.shape[0]
+        return tuple(flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4))
+
+    def fdsva_so(self, q, qd, u, *, gravity: float = 9.81):
+        """Second-order forward dynamics. Returns shape (B, 4*NV^3) as a flat
+        view of the four output tensors; slice [..., i*NV^3:(i+1)*NV^3] for
+        each component."""
+        q  = np.ascontiguousarray(q,  dtype=np.float32)
+        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        u  = np.ascontiguousarray(u,  dtype=np.float32)
+        NV = self.num_vel
+        flat = self._runner.fdsva_so(q, qd, u, 4 * NV ** 3, gravity)
+        B = flat.shape[0]
+        return tuple(flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4))
+
     # ─── lifecycle ───────────────────────────────────────────────────────────
 
     def close(self) -> None:

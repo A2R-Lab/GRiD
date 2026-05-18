@@ -185,3 +185,38 @@ def test_get_robot_roundtrip(handle):
 def test_get_robot_missing_raises():
     with pytest.raises(_grid_rbd.RobotNotRegisteredError):
         _grid_rbd.get_robot("does_not_exist_xyz")
+
+
+# ─── Phase-C extension: hessian + SO ───────────────────────────────────────
+
+def test_end_effector_pose_hessian_shape(handle, samples):
+    """Smoke: hessian returns the right shape. Numerical agreement requires
+    a Pinocchio reference; RBDReference's d2ee_pose isn't a 1:1 layout match,
+    so we only assert shape + finiteness here.
+    """
+    d2ee = handle.end_effector_pose_hessian(samples["q"])
+    NJ = handle.num_joints
+    assert d2ee.shape == (samples["q"].shape[0], 6 * handle.num_ees, NJ, NJ)
+    assert np.all(np.isfinite(d2ee))
+
+
+def test_idsva_so_shape(handle, samples):
+    """Smoke: idsva_so returns 4 tensors of shape (B, NV, NV, NV). Numerical
+    agreement vs RBDReference's idsva_so is covered by the existing CUDA
+    equivalence suite (test_cuda_idsva_so_*)."""
+    out = handle.idsva_so(samples["q"], samples["qd"])
+    assert isinstance(out, tuple) and len(out) == 4
+    NV = handle.num_vel
+    for t in out:
+        assert t.shape == (samples["q"].shape[0], NV, NV, NV)
+        assert np.all(np.isfinite(t))
+
+
+def test_fdsva_so_shape(handle, samples):
+    """Smoke: fdsva_so returns 4 tensors of shape (B, NV, NV, NV)."""
+    out = handle.fdsva_so(samples["q"], samples["qd"], samples["u"])
+    assert isinstance(out, tuple) and len(out) == 4
+    NV = handle.num_vel
+    for t in out:
+        assert t.shape == (samples["q"].shape[0], NV, NV, NV)
+        assert np.all(np.isfinite(t))

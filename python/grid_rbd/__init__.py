@@ -56,6 +56,7 @@ def register_robot(
     urdf_path: str,
     *,
     floating_base: bool = False,
+    ee_joint_names: list[str] | tuple[str, ...] | None = None,
     max_batch_size: int = 256,
     cache_dir: str | Path | None = None,
     force_rebuild: bool = False,
@@ -78,6 +79,12 @@ def register_robot(
         Path to the robot's URDF file.
     floating_base : bool, optional
         Treat the robot as floating-base. Default False (fixed-base).
+    ee_joint_names : list[str] | None, optional
+        Names of fixed joints to treat as end-effector targets. Default
+        None ⇒ codegen uses all leaf nodes. Currently only the first
+        name is honored (single-target codegen); multi-target support is
+        a v2 concern. Passing a different list changes the cache key,
+        so different target choices land in separate cache entries.
     max_batch_size : int, optional
         Compile-time max batch size. Calls with batch <= this run on a
         single launch; larger batches must be chunked by the caller (a
@@ -115,6 +122,7 @@ def register_robot(
     code_options = {
         "floating_base": bool(floating_base),
         "max_batch": int(max_batch_size),
+        "ee_joint_names": list(ee_joint_names) if ee_joint_names else [],
     }
     cache_key = compute_cache_key(urdf_bytes, code_options, cuda_arch)
     entry_dir = store_dir(cache_dir, cache_key)

@@ -49,8 +49,10 @@ extern "C" {
                                       float*, int, float);
     // q, out, batch, gravity          — crba
     using fn_crba_t         = int (*)(const float*, float*, int, float);
-    // q, out, batch                   — ee_pose, ee_pose_gradient
+    // q, out, batch                   — ee_pose, ee_pose_gradient, ee_pose_hessian
     using fn_ee_t           = int (*)(const float*, float*, int);
+    // q, qd, qdd_opt, out, batch, gravity   — idsva_so (same as rnea)
+    // q, qd, u, out, batch, gravity         — fdsva_so (same as fd)
 }
 
 
@@ -83,6 +85,10 @@ public:
         fn_ee_pose_grad_     = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose_gradient"));
         fn_rnea_grad_        = reinterpret_cast<fn_rnea_t>(require_sym("grid_rbd_rnea_grad"));
         fn_fd_grad_          = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_forward_dynamics_grad"));
+        // Phase-C extension: hessian + SO. Required for v0.1+ .so files.
+        fn_ee_pose_hessian_  = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose_hessian"));
+        fn_idsva_so_         = reinterpret_cast<fn_rnea_t>(require_sym("grid_rbd_idsva_so"));
+        fn_fdsva_so_         = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_fdsva_so"));
 
         // Cache constants (avoid the indirect-function-call cost on every read).
         num_joints_ = fn_num_joints_();
@@ -291,6 +297,66 @@ public:
         return out;
     }
 
+    // ─── end_effector_pose_hessian ───────────────────────────────────────────
+    py::array_t<float> end_effector_pose_hessian(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q)
+    {
+        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
+            throw std::invalid_argument(
+                "end_effector_pose_hessian: q must be (batch, " + std::to_string(num_joints_) + ")");
+        }
+        int batch = (int)q.shape(0);
+        if (batch > max_batch_) {
+            throw std::invalid_argument(
+                "end_effector_pose_hessian: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
+        }
+        py::array_t<float> out({batch, 6 * num_ees_, num_joints_, num_joints_});
+        int rc = fn_ee_pose_hessian_(q.data(), out.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_hessian failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // ─── idsva_so / fdsva_so (raw second-order tensor surface) ───────────────
+    // Returns shape (B, SECOND_ORDER_TENSOR_SIZE) — flat, 4 * NV^3 floats per
+    // timestep. The Python side slices into the four NV^3 tensors.
+    py::array_t<float> idsva_so(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+        py::object qdd_opt,
+        int second_order_tensor_size,
+        float gravity)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        const float* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<
+                py::array_t<float, py::array::c_style | py::array::forcecast>>();
+            check_array_2d(qdd, batch, num_joints_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<float> out({batch, second_order_tensor_size});
+        int rc = fn_idsva_so_(q.data(), qd.data(), qdd_ptr,
+                              out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_idsva_so failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    py::array_t<float> fdsva_so(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+        int second_order_tensor_size,
+        float gravity)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        py::array_t<float> out({batch, second_order_tensor_size});
+        int rc = fn_fdsva_so_(q.data(), qd.data(), u.data(),
+                              out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_fdsva_so failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
 private:
     void* require_sym(const char* name) {
         dlerror();  // clear errors
@@ -351,6 +417,9 @@ private:
     fn_ee_t    fn_ee_pose_grad_   = nullptr;
     fn_rnea_t  fn_rnea_grad_      = nullptr;
     fn_fd_t    fn_fd_grad_        = nullptr;
+    fn_ee_t    fn_ee_pose_hessian_ = nullptr;
+    fn_rnea_t  fn_idsva_so_       = nullptr;
+    fn_fd_t    fn_fdsva_so_       = nullptr;
 
     int num_joints_ = 0;
     int num_vel_    = 0;
@@ -393,5 +462,15 @@ PYBIND11_MODULE(_core, m) {
              py::arg("gravity") = 9.81f)
         .def("forward_dynamics_grad", &Runner::forward_dynamics_grad,
              py::arg("q"), py::arg("qd"), py::arg("u"),
+             py::arg("gravity") = 9.81f)
+        .def("end_effector_pose_hessian", &Runner::end_effector_pose_hessian,
+             py::arg("q"))
+        .def("idsva_so", &Runner::idsva_so,
+             py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
+             py::arg("second_order_tensor_size"),
+             py::arg("gravity") = 9.81f)
+        .def("fdsva_so", &Runner::fdsva_so,
+             py::arg("q"), py::arg("qd"), py::arg("u"),
+             py::arg("second_order_tensor_size"),
              py::arg("gravity") = 9.81f);
 }

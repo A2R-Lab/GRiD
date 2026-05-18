@@ -303,4 +303,80 @@ extern "C" int grid_rbd_forward_dynamics_grad(
     return 0;
 }
 
-// (Second-order — idsva_so, fdsva_so — deferred to follow-up.)
+// End-effector pose Hessian: 6×NUM_EES×NJ×NJ per timestep.
+// Calls grid::end_effector_pose_gradient_hessian which fills BOTH d2eePos AND
+// deePos; we only copy d2eePos out. If the caller wants both they should
+// call end_effector_pose_gradient separately (the kernels are fast enough
+// that doing the work twice is fine for a small convenience).
+extern "C" int grid_rbd_end_effector_pose_hessian(
+    const T* q,
+    T* d2ee_out,
+    int batch)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+
+    const int nj = grid::NUM_JOINTS;
+    pack_q_qd_u(q, q, nullptr, batch, nj);
+
+    grid::end_effector_pose_gradient_hessian<T, /*USE_COMPRESSED_MEM=*/false>(
+        g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    std::memcpy(d2ee_out, g_data->h_d2eePos,
+                batch * 6 * grid::NUM_EES * nj * nj * sizeof(T));
+    return 0;
+}
+
+// Second-order inverse dynamics. Output is the concatenated SO tensor of
+// shape SECOND_ORDER_TENSOR_SIZE = 4 * NV^3 per timestep (four NV^3 blocks:
+// d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq). The Python side slices into the
+// four named tensors.
+extern "C" int grid_rbd_idsva_so(
+    const T* q, const T* qd, const T* qdd,
+    T* out, int batch, T gravity)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    (void)qdd;  // USE_QDD_FLAG=false for now; future v2
+
+    const int nj = grid::NUM_JOINTS;
+    pack_q_qd_u(q, qd, nullptr, batch, nj);
+
+    grid::idsva_so<T>(
+        g_data, g_robot, gravity, batch,
+        g_block_dimms, g_thread_dimms, g_streams);
+
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    std::memcpy(out, g_data->h_idsva_so,
+                batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
+    return 0;
+}
+
+// Second-order forward dynamics. Output is 4 * NV^3 per timestep
+// (d2qdd_dq, d2qdd_dqd, d2qdd_dudq — interpretation per Singh/Wensing).
+extern "C" int grid_rbd_fdsva_so(
+    const T* q, const T* qd, const T* u,
+    T* out, int batch, T gravity)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+
+    const int nj = grid::NUM_JOINTS;
+    pack_q_qd_u(q, qd, u, batch, nj);
+
+    grid::fdsva_so<T>(
+        g_data, g_robot, gravity, batch,
+        g_block_dimms, g_thread_dimms, g_streams);
+
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    std::memcpy(out, g_data->h_df2,
+                batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
+    return 0;
+}

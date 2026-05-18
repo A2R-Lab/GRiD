@@ -94,10 +94,30 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     cg = GRiDCodeGenerator(robot, debug_mode, FILE_NAMESPACE=file_namespace)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Plumb ee_joint_names → fixed_target_name. The codegen expects a single
+    # joint name string (it then keys the EE on that fixed joint); the
+    # default empty string ⇒ codegen uses all leaf nodes (default EEs).
+    # We expose `ee_joint_names` as a list because callers will frequently
+    # want to think in those terms; if multiple are passed we currently
+    # honor only the first (multi-target is a v2 concern). Lists matter for
+    # the cache key — passing the same list always lands on the same .so.
+    fixed_target_name = ""
+    ee_joint_names = options.get("ee_joint_names") or []
+    if ee_joint_names:
+        fixed_target_name = ee_joint_names[0]
+
     # gen_all_code accepts output_path directly; redirect stdout to swallow
-    # the chatty per-stage printouts.
+    # the chatty per-stage printouts. enable_floating_second_order=True so
+    # idsva_so / fdsva_so are always available — user paid for the compile,
+    # may as well include the methods.
     with contextlib.redirect_stdout(io.StringIO()):
-        cg.gen_all_code(output_path=str(out_path))
+        cg.gen_all_code(
+            output_path=str(out_path),
+            fixed_target_name=fixed_target_name,
+            enable_floating_second_order=True,
+            enable_idsva_so_world_frame=options.get("floating_base", False),
+        )
 
     if not out_path.exists():
         raise RuntimeError(
