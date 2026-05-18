@@ -1,6 +1,7 @@
 # Handoff: full benchmark sweep on the 5090
 
-> **Status (2026-05-18)**: The sweep ran end-to-end on sm_120 / RTX 5090.
+> **Status (2026-05-18)**: The sweep ran end-to-end on sm_120 / RTX 5090,
+> followed by a pre-GLASS regression check at commit `d2c0d18`.
 > Report: [`test/benchmarks/benchmark_multi_version_sm120_5090_phase7.md`](../test/benchmarks/benchmark_multi_version_sm120_5090_phase7.md).
 > Key findings:
 > - Dispatcher correctness verified across all 12 cells; matches the chosen
@@ -61,6 +62,30 @@
 >
 > - For default sweeps: drop `--columns glass_nvidia` (saves ~half the
 >   wall time) until/unless a measured hot-loop refactor lands.
+>
+> - **Pre-GLASS regression check (6a)**: ran `--columns pre_glass` against
+>   the `d2c0d18` worktree. Result: **no regression — GLASS is faster
+>   where the comparison is reliable.**
+>     - `iiwa14_fixed`: GLASS faster by 20-40% across first-order
+>       algorithms (id 5.73 → 4.63, crba 9.90 → 4.61, etc.).
+>     - `go2_fixed`: GLASS faster by 30-50% (id 9.45 → 6.89, crba 11.80
+>       → 6.81, minv 11.18 → 7.93).
+>     - `g1_fixed`: **pre-GLASS measurements are unreliable** for this
+>       cell — batch-mode timings are all ~0.7-0.8 µs (the kernel got
+>       LICM-hoisted out of the rep-loop, leaving the timed region
+>       empty), and several single-call timings are similarly bogus
+>       (e.g. `fd_du=0.05 µs`). The anti-LICM machinery that makes
+>       these timings trustworthy was specifically added in the GLASS
+>       round-2 work. Two algorithms whose anti-LICM happens to still
+>       work at `d2c0d18` (`ee_pose_gradient` and `id_du`) produced
+>       real numbers — and GLASS is faster on both.
+>     - The pre_glass column doesn't cover floating-base (pre-GLASS
+>       harness predates floating-base support).
+>     - Net read: GLASS modernization is a strict win on first-order
+>       perf where measurable, and adds the anti-LICM correctness
+>       infrastructure that makes the bench trustworthy in the first
+>       place. The g1_fixed measurement-failure pattern is itself
+>       evidence that the modernization was needed.
 > - `fdsva_so` populated on every cell, including `g1_floating` at 6967 µs
 >   (selective-spill tier). No SKIPPED rows.
 >
