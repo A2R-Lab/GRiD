@@ -94,10 +94,14 @@ GRiD currently fully supports any robot model consisting of revolute, prismatic,
 
 GRiD currently implements the following rigid body dynamics algorithms:
 + Inverse Dynamics via the Recursive Newton Euler Algorithm (RNEA) from [Featherstone](https://link.springer.com/book/10.1007/978-1-4899-7560-7)
++ Composite Rigid Body Algorithm (CRBA) for the joint-space mass matrix and the Articulated Body Algorithm (ABA) for forward dynamics, both from [Featherstone](https://link.springer.com/book/10.1007/978-1-4899-7560-7)
 + The Direct Inverse of Mass Matrix from [Carpentier](https://www.researchgate.net/publication/343098270_Analytical_Inverse_of_the_Joint_Space_Inertia_Matrix)
 + Forward Dynamics by combining the above algorithms as qdd = -M^{-1}(u-RNEA(q,qd,0))
 + Analytical Gradients of Inverse Dynamics from [Carpentier](https://hal.archives-ouvertes.fr/hal-01790971)
 + Analytical Gradient of Forward Dynamics from [Carpentier](https://hal.archives-ouvertes.fr/hal-01790971)
++ End-effector pose, pose gradient (Jacobian), and pose Hessian
++ Second-Order Inverse Dynamics (IDSVA-SO) from [Singh, Russell, & Wensing](https://arxiv.org/abs/2302.06001) — both body-frame and world-frame variants. A codegen-time dispatcher picks body-frame for fixed-base (multi-pass amortizes, ~30× faster) and world-frame for floating-base (single-pass + no gravity shim, 2–4× faster)
++ Second-Order Forward Dynamics (FDSVA-SO) from [Singh, Russell, & Wensing](https://arxiv.org/abs/2302.06001) on both fixed and floating bases
 
 Additional algorithms and features are in development. If you have a particular algorithm or feature in mind please let us know by posting a GitHub issue. We'd also love your collaboration in implementing the Python reference implementation of any algorithm you'd like implemented!
 

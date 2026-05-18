@@ -21,16 +21,47 @@ package.
    RBDReference = RBDReference(robot)
    outputs = RBDReference.ALGORITHM(inputs)
 
-Currently implemented algorithms include the: + Recursive Newton Euler
-Algorithm (RNEA):
-``(c,v,a,f) = rbdReference.rnea(q, qd, qdd = None, GRAVITY = -9.81)`` +
-The Gradient of the RNEA:
-``dc_du = rnea_grad(q, qd, qdd = None, GRAVITY = -9.81)`` where
-``dc_du = np.hstack((dc_dq,dc_dqd))`` + The Direct Inverse of the Mass
-Matrix Algorithm: ``Minv = rbdReference.minv(q, output_dense = True)`` +
-The Composite Rigid Body Algorithm: ``M = rbdReference.crba(q,qd)``
+Currently implemented algorithms include:
 
-We also include functions that break these algorithms down into there
+**Core dynamics**
+
+* Recursive Newton Euler Algorithm (RNEA):
+  ``(c, v, a, f) = rbd.rnea(q, qd, qdd=None, GRAVITY=-9.81)``
+* Articulated Body Algorithm (ABA, forward dynamics):
+  ``qdd = rbd.aba(q, qd, tau, f_ext=[], GRAVITY=-9.81)``
+* Composite Rigid Body Algorithm (mass matrix): ``M = rbd.crba(q)``
+* Direct Inverse Mass Matrix: ``Minv = rbd.minv(q, output_dense=True)``
+* Forward Dynamics (``Minv (τ − c)``): ``qdd = rbd.forward_dynamics(q, qd, u)``
+
+**Gradients**
+
+* ``dc_du = rbd.rnea_grad(q, qd, qdd=None, GRAVITY=-9.81)`` returning
+  ``np.hstack((dc_dq, dc_dqd))``
+* ``(dqdd_dq, dqdd_dqd) = rbd.forward_dynamics_grad(q, qd, u)``
+
+**End-effector kinematics**
+
+* Pose: ``ee = rbd.end_effector_pose(q, ee_joint_names=None, ee_offsets=None)``
+* Pose Jacobian: ``dee = rbd.end_effector_pose_gradient(q, ...)``
+* Pose Hessian: ``d2ee = rbd.end_effector_pose_hessian(q, ...)``
+
+**Second-order**
+
+* IDSVA-SO meta dispatcher (auto-picks body/world frame by base type):
+  ``(d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq) = rbd.idsva_so(q, qd, qdd, GRAVITY=-9.81)``
+* Body-frame variant (fastest on fixed-base):
+  ``... = rbd.idsva_so_body_frame(q, qd, qdd, GRAVITY=-9.81)``
+* World-frame variant (fastest on floating-base):
+  ``... = rbd.idsva_so_world_frame(q, qd, qdd, GRAVITY=-9.81)``
+* Second-order forward dynamics:
+  ``... = rbd.fdsva_so(q, qd, u, GRAVITY=-9.81)``
+
+The two IDSVA-SO variants are mathematically equivalent — they differ
+only in reference frame. Either is correct on either base type; the
+dispatch is purely a performance optimization (see
+:doc:`../user_guide/concepts/algorithms/idsva`).
+
+We also include functions that break these algorithms down into their
 different passes and by their output types (dq vs dqd) to enable easier
 testing of downstream GPU, FPGA, and accelerator implementations.
 

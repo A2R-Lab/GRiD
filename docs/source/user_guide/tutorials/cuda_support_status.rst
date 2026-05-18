@@ -5,6 +5,10 @@ This page summarizes the generated CUDA paths that are currently exercised by
 the GRiD developer test suite. For the commands that run these checks, see
 :doc:`cuda_validation`.
 
+Development testing currently targets **sm_120 (RTX 5090)** for correctness
+and performance validation. Earlier compute capabilities (sm_8x) remain
+supported but are not the active development target.
+
 Fixed-Base Robots
 -----------------
 
@@ -14,7 +18,9 @@ Fixed-base CUDA coverage includes the core dynamics and kinematics paths:
 * Inverse- and forward-dynamics gradients.
 * End-effector pose, gradient, and Hessian.
 * Fixed-base forced-fallback coverage for oversized gradient kernels.
-* IDSVA-SO/FDSVA-SO zero-sample diagnostics for selected fixed-base robots.
+* IDSVA-SO (body-frame and world-frame variants) and FDSVA-SO. Body-frame
+  is selected by the dispatcher for fixed-base because it wins by a wide
+  margin (multi-pass amortizes when the tree is fixed).
 
 Second-order fixed-base diagnostics are still developer-only. The current
 green zero-sample set includes ``iiwa14``, ``go2``, ``gen3``, ``fr3``, and
@@ -30,6 +36,11 @@ Floating-base CUDA coverage includes:
 * Inverse- and forward-dynamics gradients.
 * End-effector pose.
 * Opt-in end-effector pose gradient and Hessian checks.
+* IDSVA-SO (world-frame variant, dispatcher-selected) and FDSVA-SO.
+  World-frame wins by 2–4× on floating-base because the single-pass
+  formulation avoids the body-frame gravity shim and the floating chain
+  is deep enough that the body-frame subtree-broadcast no longer
+  amortizes.
 
 Floating end-effector Hessian generation uses target-aware spill tiers when
 needed:
@@ -64,8 +75,11 @@ state to the generated workspace.
 Known Caveats
 -------------
 
-* Floating IDSVA-SO/FDSVA-SO CUDA generation is intentionally disabled while
-  fixed-base second-order coverage is still being broadened.
+* Floating IDSVA-SO/FDSVA-SO CUDA generation is now enabled (dispatcher
+  picks ``idsva_so_world_frame`` for floating-base). FDSVA-SO on
+  ``g1_floating`` requires the selective-spill tier under sm_120's
+  ~100 KiB per-block dynamic shared-memory cap; the tier selector picks
+  it automatically.
 * Broad nonzero/random floating Hessian coverage is slower than the default
   smoke suite and remains opt-in.
 * Compute Sanitizer should be run on a supported GPU/driver setup before

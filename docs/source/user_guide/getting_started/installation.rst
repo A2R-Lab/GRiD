@@ -41,9 +41,33 @@ It is also recommended to create a virtual environment for each external depende
 Install Python Dependencies
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-In order to support the wrapped packages there are 4 required external
-packages ``beautifulsoup4, lxml, numpy, sympy`` which can be
-automatically installed by running:
+The simplest path is to use the provided install scripts, which create a
+local ``.venv`` and register the ``grid-generate`` CLI.
+
+For end-user installs (just the runtime + CLI):
+
+.. code-block:: shell
+
+   bash base_install.sh
+   source .venv/bin/activate
+
+For developer installs (adds Pinocchio, robot-description fixtures,
+documentation tooling, and the Pinocchio second-order pybind11 extension
+used as the golden oracle in the equivalence tests):
+
+.. code-block:: shell
+
+   bash developer_install.sh
+
+The developer script will, on Debian/Ubuntu, install the system build
+deps needed by the Pinocchio pybind11 extension via ``apt-get``:
+``pkg-config``, ``g++``, ``libeigen3-dev``, ``liburdfdom-headers-dev``.
+The ``pin`` wheel ships its own ``pinocchio.pc`` inside the venv via
+``cmeel``, and ``developer_install.sh`` computes the right
+``PKG_CONFIG_PATH`` automatically for the extension build — no manual
+configuration is required.
+
+You can also install manually with:
 
 .. code-block:: shell
 
@@ -81,20 +105,25 @@ Add the following to ``~/.bashrc``
    export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
    export PATH="opt/nvidia/nsight-compute/:$PATH"
 
-
 .. note::
 
-    This is an example of how to do a "note". Good luck with the rest of the setup! 
+    GRiD requires a C++17-capable host compiler (e.g. ``g++ >= 7`` or
+    ``clang++ >= 5``). The benchmark and codegen runtime compile with
+    ``-std=c++17``, needed for inline variables in the bench common
+    header and for the cuBLASDx backend.
 
-.. warning::
+Optional: cuBLASDx (MathDx)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    Example of a warning.
+The optional ``glass_nvidia`` linear-algebra backend uses cuBLASDx via
+NVIDIA's MathDx package. Download the tarball from
+`developer.nvidia.com/cublasdx-downloads
+<https://developer.nvidia.com/cublasdx-downloads>`_ and extract it into
+``/opt/nvidia/mathdx/<VERSION>``, then add to ``~/.bashrc``::
 
-.. tip:: 
+   export MATHDX_ROOT=/opt/nvidia/mathdx/<VERSION>
+   export CUTLASS_INCLUDE=$MATHDX_ROOT/external/cutlass/include
 
-    Here is a tip!
-
-.. caution:: 
-
-    And proceed with caution!
+The benchmark harness will pick this up automatically when invoked with
+``--columns glass_nvidia``.
 

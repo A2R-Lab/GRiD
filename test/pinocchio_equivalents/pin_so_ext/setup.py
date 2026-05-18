@@ -1,4 +1,12 @@
-"""Build script for the Pinocchio second-order RNEA binding."""
+"""Build script for the Pinocchio second-order RNEA binding.
+
+Note: pinocchio.pc lives inside the venv's cmeel.prefix
+(``<venv>/lib/python*/site-packages/cmeel.prefix/lib/pkgconfig``), not on
+the system pkg-config path. The repo's ``developer_install.sh`` exports
+``PKG_CONFIG_PATH`` to that location before invoking this script; if you
+run setup.py standalone you must export it yourself or pkg-config will
+fail to find ``pinocchio.pc``.
+"""
 import os
 import subprocess
 import sys

@@ -91,7 +91,10 @@ Implemented CUDA algorithm families include:
 * ABA and CRBA.
 * Inverse- and forward-dynamics gradients.
 * End-effector pose, gradient, and Hessian.
-* Fixed-base second-order diagnostics for IDSVA-SO/FDSVA-SO.
+* Second-order inverse dynamics (IDSVA-SO: body-frame for fixed-base,
+  world-frame for floating-base, with a codegen-time dispatcher) and
+  second-order forward dynamics (FDSVA-SO) on both fixed and floating
+  bases.
 
 See :doc:`tutorials/cuda_support_status` for the current fixed/floating support
 matrix and known caveats.
