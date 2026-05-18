@@ -59,7 +59,8 @@ See [test_grid_cuda.py](tests/test_grid_cuda.py) for a more detailed example.
 
 ### Classes
 - `GRiDDataFloat(q, qd, u)`: Single-precision (float) implementation of RBD functions
-- Note that the double implementation caused errors
+- Note: double precision is currently disabled (the commented-out block in
+  `python_bindings.cu`); the float path is the only supported configuration.
 
 ### Functions
 - `load_joint_info(q, qd, u)`: Update the input parameters for RBD calculations
@@ -74,6 +75,26 @@ See [test_grid_cuda.py](tests/test_grid_cuda.py) for a more detailed example.
 ### Variables
 - `NUM_JOINTS`: Number of joints defined in the URDF
 - `NUM_EES`: Number of end-effectors based on the URDF specification
+
+### Known Limitations
+
+This binding package was written before second-order derivatives, the
+body/world-frame IDSVA-SO variants, floating-base support, and the
+codegen-time `idsva_so` / `fdsva_so` dispatchers were added to the main
+codegen. The shipped `bindings/include/grid.cuh` is a frozen
+pre-generated header and does **not** include any of:
+
+* `idsva_so` / `idsva_so_body_frame` / `idsva_so_world_frame` (second-order
+  inverse dynamics)
+* `fdsva_so` (second-order forward dynamics)
+* Floating-base support
+* End-effector pose Hessian (`get_end_effector_position_hessians`)
+
+To use the bindings against the current codegen surface, regenerate
+`grid.cuh` with the latest `grid-generate` CLI and add the matching
+pybind11 wrappers to `python_bindings.cu`. Refreshing the bindings to
+the full current API (including SO + floating-base + dispatcher) is on
+the long-term task list.
 
 
 ## Requirements
