@@ -380,3 +380,99 @@ extern "C" int grid_rbd_fdsva_so(
                 batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
     return 0;
 }
+
+
+// ────────────────────────────────────────────────────────────────────────────
+// JAX FFI handlers
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Gated on -DGRID_RBD_WITH_JAX (set by _compile.py when JAX is installed at
+// register_robot time). Each handler:
+//   1. Receives JAX device buffers (q, qd, ...) plus a CUDA stream
+//      managed by JAX.
+//   2. Repacks the (q, qd[, u]) inputs into the singleton's device-side
+//      d_q_qd_u via cudaMemcpy2DAsync D→D (one wide copy per input, no
+//      host round-trip).
+//   3. Launches the algorithm's kernel DIRECTLY on the JAX stream
+//      (bypassing the host wrapper's internal staging logic). All
+//      computation stays on the GPU.
+//   4. Copies the result from the singleton's device output buffer
+//      (d_c, d_qdd, d_M, etc.) into JAX's output buffer via
+//      cudaMemcpyAsync D→D on the same stream.
+//
+// Net per call: 2-3 D→D cudaMemcpy ops + the kernel launch. No host
+// involvement, no implicit serialization with non-JAX streams. JAX's
+// scheduler owns the work.
+
+#ifdef GRID_RBD_WITH_JAX
+
+#include "xla/ffi/api/ffi.h"
+namespace ffi = xla::ffi;
+
+// rnea(q, qd) → c   — fully device-resident path.
+static ffi::Error grid_rbd_jax_rnea_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q,         // shape (B, NJ), device-resident
+    ffi::Buffer<ffi::F32> qd,        // shape (B, NJ), device-resident
+    ffi::ResultBuffer<ffi::F32> c)   // shape (B, NJ), device-resident
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) {
+        return ffi::Error::Internal("grid_rbd_init failed");
+    }}
+    auto q_shape = q.dimensions();
+    if (q_shape.size() != 2) {
+        return ffi::Error::InvalidArgument("rnea: q must be 2D (B, NJ)");
+    }
+    int batch = (int)q_shape[0];
+    int nj    = (int)q_shape[1];
+    if (nj != grid::NUM_JOINTS) {
+        return ffi::Error::InvalidArgument("rnea: last dim != NUM_JOINTS");
+    }
+    if (batch > kMaxBatch) {
+        return ffi::Error::InvalidArgument(
+            "rnea: batch exceeds compiled-in max_batch_size; recompile with a larger value");
+    }
+
+    // D→D repack: interleave q and qd into the singleton's d_q_qd_u
+    // (layout [q[NJ], qd[NJ], u[NJ]] per timestep). cudaMemcpy2DAsync
+    // writes a (batch, NJ) src into the (batch, 3*NJ) dst with the right
+    // stride in one call per input.
+    const size_t row_bytes = nj * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],       dst_pitch,
+                      q.typed_data(),            row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj],      dst_pitch,
+                      qd.typed_data(),           row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+
+    // Launch kernel directly on JAX's stream (skip the host wrapper's
+    // implicit H→D + own-stream dance). RNEA uses USE_QDD_FLAG=false; the
+    // kernel name embeds that via overload resolution on the d_q_qd
+    // signature without a qdd input.
+    constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
+    grid::inverse_dynamics_kernel<T><<<
+        g_block_dimms, g_thread_dimms,
+        grid::ID_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        stream>>>(
+            g_data->d_c, g_data->d_q_qd_u, stride_q_qd,
+            g_robot, /*gravity=*/9.81f, batch);
+
+    // D→D copy the result into JAX's output buffer on the same stream.
+    cudaMemcpyAsync(c->typed_data(), g_data->d_c,
+                    batch * nj * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_rnea,
+    grid_rbd_jax_rnea_impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>()  // q
+        .Arg<ffi::Buffer<ffi::F32>>()  // qd
+        .Ret<ffi::Buffer<ffi::F32>>()  // c
+);
+
+#endif  // GRID_RBD_WITH_JAX

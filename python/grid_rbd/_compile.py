@@ -142,6 +142,15 @@ def copy_wrapper_template(target_dir: Path) -> Path:
     return dst
 
 
+def _jax_ffi_include_dir() -> Path | None:
+    """Return JAX's FFI header include path if jax is installed, else None."""
+    try:
+        from jax import ffi as jax_ffi
+        return Path(jax_ffi.include_dir())
+    except Exception:
+        return None
+
+
 def compile_so(
     wrapper_cu: Path,
     out_so: Path,
@@ -149,10 +158,17 @@ def compile_so(
     max_batch: int = 256,
     glass_root: Path | None = None,
     extra_flags: list[str] | None = None,
+    enable_jax_ffi: bool = True,
 ) -> None:
     """Invoke nvcc to build wrapper.cu → robot.so.
 
     wrapper.cu must include "grid.cuh" from its own directory.
+
+    When `enable_jax_ffi=True` (default) and JAX is installed, the .so will
+    additionally export JAX FFI handler symbols (grid_rbd_jax_*). The
+    Python side picks these up via dlsym in grid_rbd.jax.register_robot.
+    If JAX isn't installed at compile time, the JAX FFI block is skipped
+    (the .so is still fully functional via the plain C ABI).
     """
     nvcc = find_nvcc()
     arch = f"sm_{cuda_arch}"
@@ -165,6 +181,19 @@ def compile_so(
     ]
     if glass_root:
         cmd.extend([f"-I{glass_root}", f"-I{glass_root / 'src'}"])
+
+    # JAX FFI handlers: optionally enabled. When jax is available, point
+    # nvcc at its FFI include dir and define GRID_RBD_WITH_JAX so the
+    # wrapper template emits its handler block.
+    if enable_jax_ffi:
+        jax_inc = _jax_ffi_include_dir()
+        if jax_inc and jax_inc.exists():
+            cmd.extend([
+                "-DGRID_RBD_WITH_JAX=1",
+                f"-I{jax_inc}",
+                "--expt-relaxed-constexpr",  # required by xla/ffi/api headers
+            ])
+
     if extra_flags:
         cmd.extend(extra_flags)
 
