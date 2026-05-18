@@ -37,19 +37,30 @@
 >
 > - **So the right interpretation**: cuBLASDx is unused, and *if* it
 >   were used at current GRiD shapes (4×4×4 batched) it would be
->   slower. The real path to leveraging cuBLASDx is refactoring hot
->   loops to expose **larger** gemm shapes — specifically the
->   `4·n³` contraction in `fdsva_so_inner` (currently n-element
->   serial dot products) into a proper batched gemm. At g1's n=35,
->   the autotune table extrapolation (32×32×32 single gemm: cuBLASDx
->   73% faster, 24×24×24 batched: cuBLASDx ~30% faster at BATCH=4)
->   strongly suggests a real win. Code comment marking this future-
->   refactor target lives at the hot loop in
+>   slower. The only theoretical path to leveraging cuBLASDx is
+>   refactoring hot loops to expose **larger** gemm shapes —
+>   specifically the `4·n³` contraction in `fdsva_so_inner`. At
+>   g1's n=35, standalone-gemm autotune extrapolation looks
+>   encouraging (32×32×32: cuBLASDx 73% faster) — **but
+>   standalone-gemm wins do NOT directly predict in-kernel wins.**
+>   Hot-kernel concerns: register pressure, shared-mem layout cost
+>   from the existing strided access pattern, tier pressure
+>   (g1_floating already in the most-spilled tier and cuBLASDx
+>   wants more shared-mem), per-block sync overhead. Realistic
+>   expected value: ~20% chance of a meaningful (1.5-2×) win on
+>   g1_floating fdsva_so, ~50% wash, ~30% regression. Code comment
+>   marking this as a PERF EXPERIMENT CANDIDATE (not a known win)
+>   lives at the hot loop in
 >   `GRiDCodeGenerator/algorithms/_fdsva_so.py`.
 >
+>   Sequencing if pursued: profile current fdsva_so_inner in-context
+>   first (ptxas / nsight compute) to confirm the contraction is
+>   actually the bottleneck — could equally be memory-bandwidth or
+>   sync-bound, in which case cuBLASDx won't help. Then prototype on
+>   one robot with measurement before generalizing.
+>
 > - For default sweeps: drop `--columns glass_nvidia` (saves ~half the
->   wall time) until the hot-loop refactor lands; revisit at that
->   point.
+>   wall time) until/unless a measured hot-loop refactor lands.
 > - `fdsva_so` populated on every cell, including `g1_floating` at 6967 µs
 >   (selective-spill tier). No SKIPPED rows.
 >
