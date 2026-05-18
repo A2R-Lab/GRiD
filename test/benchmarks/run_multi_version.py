@@ -47,7 +47,15 @@ DEFAULT_WORKTREE_PATH = REPO_ROOT.parent / "GRiD-A2R-pre-glass"
 
 ROBOTS = ("iiwa14", "go2", "g1")
 BASES  = ("fixed", "floating")
+# All columns the sweep knows how to run. `glass_nvidia` (cuBLASDx-backed)
+# is intentionally NOT in DEFAULT_COLUMNS — the 2026-05-18 sweep + autotune
+# showed cuBLASDx loses to SIMT at every GEMM shape GRiD currently calls
+# (notably 4×4×4 batched in eepose_gradient_hessian, where SIMT wins by
+# 2.6×). Opt in with `--columns ... glass_nvidia` if you want to validate
+# the dispatch on your own GPU (after running
+# `python3 GLASS/bench/autotune.py --sm AUTO` for per-host measurements).
 COLUMNS = ("pre_glass", "glass", "glass_nvidia", "pinocchio", "mjx", "frax")
+DEFAULT_COLUMNS = ("pre_glass", "glass", "pinocchio", "mjx", "frax")
 
 # Maps the column identifier to the baseline key used in the merged JSON
 # (so generate_report.py / generate_multi_version_report.py can find them).
@@ -447,7 +455,7 @@ def main() -> None:
                         help="Shortcut for `--bases fixed`. Skips every floating-base combo "
                              "(useful when floating compile hangs and you want fixed data first). "
                              "Equivalent to --bases fixed; overrides --bases if both are set.")
-    parser.add_argument("--columns", nargs="+", default=list(COLUMNS), choices=list(COLUMNS),
+    parser.add_argument("--columns", nargs="+", default=list(DEFAULT_COLUMNS), choices=list(COLUMNS),
                         help="Subset of columns to run (default: all five)")
     parser.add_argument("--skip", nargs="+", default=[], metavar="ROBOT_BASE",
                         help="Exclude specific robot/base combinations, e.g. "

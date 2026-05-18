@@ -43,7 +43,16 @@ Then run benchmarks:
 .venv/bin/python test/benchmarks/baselines/grid/run.py \
   --robot iiwa14 --base fixed --linalg-backend glass
 
-# Just GRiD, opt into experimental GLASS NVIDIA packed mode when MathDx is installed:
+# Just GRiD, opt into the experimental GLASS-NVIDIA cuBLASDx-backed path
+# when MathDx is installed. NOTE: the 2026-05-18 autotune + sweep on
+# sm_120 (RTX 5090) showed cuBLASDx loses to SIMT at every shape GRiD
+# currently calls (the 4×4×4 batched GEMM in eepose_gradient_hessian:
+# SIMT wins by 2.6×). The glass-nvidia compile flag is effectively
+# dead weight on the current codegen surface — kept for opt-in
+# experimentation and for future hot-loop refactors that might expose
+# larger gemm shapes where cuBLASDx wins (autotune table says cuBLASDx
+# wins on standalone gemm at ≥16×16×16). Run the autotune on YOUR GPU
+# before relying on the heuristic — your shape ranges may differ.
 MATHDX_ROOT=/opt/nvidia/mathdx/25.12 \
 .venv/bin/python test/benchmarks/baselines/grid/run.py \
   --robot g1 --base floating --linalg-backend glass-nvidia
