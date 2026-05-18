@@ -119,6 +119,28 @@ class JaxRobotHandle:
 
     # ─── algorithm methods ───────────────────────────────────────────────
 
+    # ─── small helpers ───────────────────────────────────────────────────
+
+    def _prep_2d(self, name: str, *arrays):
+        """Cast to float32 jax arrays, validate (B, NJ), enforce same batch."""
+        import jax.numpy as jnp
+        cast = [jnp.asarray(a, dtype=jnp.float32) for a in arrays]
+        for i, a in enumerate(cast):
+            if a.ndim != 2 or a.shape[1] != self.num_joints:
+                raise ValueError(
+                    f"{name}: arg{i} must be (B, {self.num_joints}); got {a.shape}")
+        B = cast[0].shape[0]
+        for i, a in enumerate(cast[1:], start=1):
+            if a.shape[0] != B:
+                raise ValueError(
+                    f"{name}: arg{i} batch={a.shape[0]} != arg0 batch={B}")
+        if B > self.max_batch:
+            raise ValueError(
+                f"{name}: batch={B} > max_batch={self.max_batch}")
+        return cast, B
+
+    # ─── algorithm methods ───────────────────────────────────────────────
+
     def rnea(self, q, qd):
         """Inverse dynamics: c = M(q)·qdd_zero + h(q,qd) − g(q).
 
@@ -129,17 +151,60 @@ class JaxRobotHandle:
         import jax.numpy as jnp
         target = _register_method_target(
             self._so_path, self._cache_key, "rnea", "grid_rbd_jax_rnea")
-        q  = jnp.asarray(q,  dtype=jnp.float32)
-        qd = jnp.asarray(qd, dtype=jnp.float32)
-        if q.ndim != 2 or qd.ndim != 2 or q.shape[1] != self.num_joints:
-            raise ValueError(
-                f"rnea: q and qd must be (B, {self.num_joints}); got {q.shape}, {qd.shape}")
-        if q.shape[0] > self.max_batch:
-            raise ValueError(
-                f"rnea: batch={q.shape[0]} > max_batch={self.max_batch}")
+        (q, qd), B = self._prep_2d("rnea", q, qd)
         out_type = jax.ShapeDtypeStruct(q.shape, jnp.float32)
-        call = jax.ffi.ffi_call(target, out_type)
-        return call(q, qd)
+        return jax.ffi.ffi_call(target, out_type)(q, qd)
+
+    def minv(self, q):
+        """Direct mass-matrix inverse Minv(q). Returns (B, NJ, NJ).
+
+        The kernel writes the lower triangle; we symmetrize inside the JAX
+        graph so callers see a full SPD matrix. (The plain wrapper does the
+        same in numpy.)
+        """
+        import jax
+        import jax.numpy as jnp
+        target = _register_method_target(
+            self._so_path, self._cache_key, "minv", "grid_rbd_jax_minv")
+        (q,), B = self._prep_2d("minv", q)
+        nj = self.num_joints
+        out_type = jax.ShapeDtypeStruct((B, nj, nj), jnp.float32)
+        m = jax.ffi.ffi_call(target, out_type)(q)
+        # Kernel fills the lower triangle; symmetrize as M + Mᵀ − diag(M).
+        eye = jnp.eye(nj, dtype=m.dtype)
+        return m + jnp.swapaxes(m, -1, -2) - m * eye
+
+    def forward_dynamics(self, q, qd, u):
+        """qdd = forward_dynamics(q, qd, u). Returns (B, NJ)."""
+        import jax
+        import jax.numpy as jnp
+        target = _register_method_target(
+            self._so_path, self._cache_key,
+            "forward_dynamics", "grid_rbd_jax_forward_dynamics")
+        (q, qd, u), B = self._prep_2d("forward_dynamics", q, qd, u)
+        out_type = jax.ShapeDtypeStruct(q.shape, jnp.float32)
+        return jax.ffi.ffi_call(target, out_type)(q, qd, u)
+
+    def aba(self, q, qd, u):
+        """qdd = aba(q, qd, u) via the articulated body algorithm. Returns (B, NJ)."""
+        import jax
+        import jax.numpy as jnp
+        target = _register_method_target(
+            self._so_path, self._cache_key, "aba", "grid_rbd_jax_aba")
+        (q, qd, u), B = self._prep_2d("aba", q, qd, u)
+        out_type = jax.ShapeDtypeStruct(q.shape, jnp.float32)
+        return jax.ffi.ffi_call(target, out_type)(q, qd, u)
+
+    def crba(self, q):
+        """Mass matrix M(q) via composite rigid body algorithm. Returns (B, NJ, NJ)."""
+        import jax
+        import jax.numpy as jnp
+        target = _register_method_target(
+            self._so_path, self._cache_key, "crba", "grid_rbd_jax_crba")
+        (q,), B = self._prep_2d("crba", q)
+        nj = self.num_joints
+        out_type = jax.ShapeDtypeStruct((B, nj, nj), jnp.float32)
+        return jax.ffi.ffi_call(target, out_type)(q)
 
 
 # ─── public API ─────────────────────────────────────────────────────────────

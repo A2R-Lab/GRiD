@@ -77,6 +77,7 @@ def samples(jax_handle):
     return {
         "q":  rng.standard_normal((B, NJ)).astype(np.float32),
         "qd": rng.standard_normal((B, NJ)).astype(np.float32),
+        "u":  rng.standard_normal((B, NJ)).astype(np.float32),
     }
 
 
@@ -136,6 +137,79 @@ def test_rnea_under_vmap(jax_handle, samples):
     c = np.asarray(f(samples["q"], samples["qd"]))
     assert c.shape == samples["q"].shape
     assert np.all(np.isfinite(c))
+
+
+def test_minv_eager_matches_plain(jax_handle, plain_handle, samples):
+    m_jax   = np.asarray(jax_handle.minv(samples["q"]))
+    m_plain = plain_handle.minv(samples["q"])
+    assert m_jax.shape == m_plain.shape
+    assert np.max(np.abs(m_jax - m_plain)) < _TOL
+
+
+def test_minv_is_symmetric(jax_handle, samples):
+    """The handler returns the lower triangle; JaxRobotHandle.minv symmetrizes."""
+    m = np.asarray(jax_handle.minv(samples["q"]))
+    assert np.allclose(m, np.swapaxes(m, -1, -2), atol=1e-6)
+
+
+def test_forward_dynamics_eager_matches_plain(jax_handle, plain_handle, samples):
+    qdd_jax   = np.asarray(jax_handle.forward_dynamics(samples["q"], samples["qd"], samples["u"]))
+    qdd_plain = plain_handle.forward_dynamics(samples["q"], samples["qd"], samples["u"])
+    assert qdd_jax.shape == qdd_plain.shape
+    assert np.max(np.abs(qdd_jax - qdd_plain)) < _TOL
+
+
+def test_aba_eager_matches_plain(jax_handle, plain_handle, samples):
+    qdd_jax   = np.asarray(jax_handle.aba(samples["q"], samples["qd"], samples["u"]))
+    qdd_plain = plain_handle.aba(samples["q"], samples["qd"], samples["u"])
+    assert qdd_jax.shape == qdd_plain.shape
+    assert np.max(np.abs(qdd_jax - qdd_plain)) < _TOL
+
+
+def test_aba_matches_forward_dynamics(jax_handle, samples):
+    """ABA and forward_dynamics solve the same problem via different paths."""
+    qdd_aba = np.asarray(jax_handle.aba(samples["q"], samples["qd"], samples["u"]))
+    qdd_fd  = np.asarray(jax_handle.forward_dynamics(samples["q"], samples["qd"], samples["u"]))
+    assert np.max(np.abs(qdd_aba - qdd_fd)) < _TOL
+
+
+def test_crba_eager_matches_plain(jax_handle, plain_handle, samples):
+    m_jax   = np.asarray(jax_handle.crba(samples["q"]))
+    m_plain = plain_handle.crba(samples["q"])
+    assert m_jax.shape == m_plain.shape
+    assert np.max(np.abs(m_jax - m_plain)) < _TOL
+
+
+def test_crba_is_symmetric(jax_handle, samples):
+    m = np.asarray(jax_handle.crba(samples["q"]))
+    assert np.allclose(m, np.swapaxes(m, -1, -2), atol=5e-4)
+
+
+def test_minv_and_crba_invert(jax_handle, samples):
+    """Minv·M ≈ I — exercises both kernels end-to-end."""
+    M    = np.asarray(jax_handle.crba(samples["q"]))
+    Minv = np.asarray(jax_handle.minv(samples["q"]))
+    NJ   = jax_handle.num_joints
+    eye  = np.eye(NJ, dtype=np.float32)[None].repeat(M.shape[0], axis=0)
+    prod = Minv @ M
+    # float32 + non-trivial conditioning — keep this loose.
+    assert np.max(np.abs(prod - eye)) < 5e-3
+
+
+def test_all_methods_jit(jax_handle, samples):
+    """Every method must slot into a single jax.jit graph."""
+    import jax
+    @jax.jit
+    def f(q, qd, u):
+        c    = jax_handle.rnea(q, qd)
+        qdd1 = jax_handle.forward_dynamics(q, qd, u)
+        qdd2 = jax_handle.aba(q, qd, u)
+        Minv = jax_handle.minv(q)
+        M    = jax_handle.crba(q)
+        return c, qdd1, qdd2, Minv, M
+    c, qdd1, qdd2, Minv, M = f(samples["q"], samples["qd"], samples["u"])
+    for x in (c, qdd1, qdd2, Minv, M):
+        assert np.all(np.isfinite(np.asarray(x)))
 
 
 def test_register_idempotent(jax_handle):
