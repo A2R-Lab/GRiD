@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61", "pybind11>=2.11"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "grid-rbd"
+version = "0.1.0"
+description = "GPU-accelerated rigid body dynamics for batched robot dynamics computations"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "BSD-3-Clause"}
+authors = [
+    {name = "GRiD Authors"},
+]
+dependencies = [
+    "numpy>=1.23",
+    "platformdirs>=4.0",
+]
+
+[project.optional-dependencies]
+jax = [
+    "jax>=0.4.40,<0.5",
+]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+grid-rbd = "grid_rbd._cli:main"
+
+[tool.setuptools]
+# We have a C++ extension; setup.py owns the Extension declaration.
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["grid_rbd*"]
+
+[tool.setuptools.package-data]
+grid_rbd = ["wrapper_template.cu"]
