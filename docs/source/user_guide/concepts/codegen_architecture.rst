@@ -109,6 +109,33 @@ CUDA-inline users can launch GRiD kernels with any block size that
 suits their outer kernel. See :doc:`cublasdx_removal_design` for the
 rationale.
 
+Design sweet spot: tens-to-hundreds of parallel computations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The one-timestep-per-block layout — block-cooperative compute inside,
+grid-stride over batch outside — is **tuned for batch sizes in the
+tens to hundreds**. Many batch robotics workloads (MPC shooting nodes,
+trajectory optimization horizons, behavioral cloning rollouts, real-time
+control with N robots) sit squarely in that range, which is the design
+target.
+
+For very small batches (N=1-8) the per-block fixed overhead dominates,
+and a design that packed multiple timesteps per block could be faster;
+for very large batches (N=10k+) a design that splits one timestep
+across multiple blocks could expose more parallelism. Neither is what
+GRiD optimizes for. If your workload sits at one of those extremes, a
+codegen layered on a different parallelism map (or an entirely
+different library) will likely beat GRiD; for the tens-to-hundreds
+range, GRiD's layout is the right tool.
+
+The ``SUGGESTED_THREADS`` constant is what the codegen picks as the
+best block-cooperative thread count for *this robot* (DOF-aware,
+warp-rounded). External callers are free to override (see
+:py:meth:`grid_rbd.RobotHandle.set_threads_per_block` or
+``grid_rbd_set_threads_per_block`` in the C ABI), but smaller block
+sizes will be slower at the same batch size (work-per-block stays
+constant; fewer threads cover it).
+
 The codegen currently still emits ``__launch_bounds__(SUGGESTED_THREADS)``
 on each ``X_kernel``. That attribute drops in phase B1 (any-thread-count
 emission); see the design doc for the rollout sequence.
