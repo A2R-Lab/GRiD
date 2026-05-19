@@ -39,6 +39,7 @@ namespace py = pybind11;
 
 extern "C" {
     using fn_int_v_t        = int (*)();
+    using fn_int_i_t        = int (*)(int);
     // q, qd, qdd_opt, out, batch, gravity
     using fn_rnea_t         = int (*)(const float*, const float*, const float*,
                                       float*, int, float);
@@ -72,6 +73,9 @@ public:
         fn_num_vel_          = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_num_vel"));
         fn_num_ees_          = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_num_ees"));
         fn_max_batch_        = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_max_batch"));
+        fn_suggested_threads_ = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_suggested_threads"));
+        fn_threads_per_block_ = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_threads_per_block"));
+        fn_set_threads_per_block_ = reinterpret_cast<fn_int_i_t>(require_sym("grid_rbd_set_threads_per_block"));
         fn_init_             = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_init"));
         fn_close_            = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_close"));
 
@@ -116,6 +120,23 @@ public:
     int num_vel()    const { return num_vel_; }
     int num_ees()    const { return num_ees_; }
     int max_batch()  const { return max_batch_; }
+    int suggested_threads() const { return fn_suggested_threads_(); }
+    int threads_per_block() const { return fn_threads_per_block_(); }
+    void set_threads_per_block(int n) {
+        // Override the per-block thread count for all subsequent kernel
+        // launches. Default is SUGGESTED_THREADS; the codegen no longer
+        // pins launch_bounds (cuBLASDx removed in v2.0), so any positive
+        // n that fits per-block (≤1024 on current GPUs) is valid.
+        if (n < 1) {
+            throw std::invalid_argument(
+                "set_threads_per_block: n must be >= 1, got " + std::to_string(n));
+        }
+        int rc = fn_set_threads_per_block_(n);
+        if (rc != 0) {
+            throw std::runtime_error(
+                "grid_rbd_set_threads_per_block failed: rc=" + std::to_string(rc));
+        }
+    }
 
     // ─── rnea ────────────────────────────────────────────────────────────────
     //
@@ -406,6 +427,9 @@ private:
     fn_int_v_t fn_num_vel_    = nullptr;
     fn_int_v_t fn_num_ees_    = nullptr;
     fn_int_v_t fn_max_batch_  = nullptr;
+    fn_int_v_t fn_suggested_threads_      = nullptr;
+    fn_int_v_t fn_threads_per_block_      = nullptr;
+    fn_int_i_t fn_set_threads_per_block_  = nullptr;
     fn_int_v_t fn_init_       = nullptr;
     fn_int_v_t fn_close_      = nullptr;
     fn_rnea_t  fn_rnea_           = nullptr;
@@ -439,6 +463,16 @@ PYBIND11_MODULE(_core, m) {
         .def_property_readonly("num_vel",    &Runner::num_vel)
         .def_property_readonly("num_ees",    &Runner::num_ees)
         .def_property_readonly("max_batch",  &Runner::max_batch)
+        .def_property_readonly("suggested_threads", &Runner::suggested_threads,
+            "Codegen-time thread-count hint (DOF-aware, warp-rounded). "
+            "The default block size for kernel launches; not enforced since v2.0.")
+        .def_property_readonly("threads_per_block", &Runner::threads_per_block,
+            "Current per-block thread count used by kernel launches.")
+        .def("set_threads_per_block", &Runner::set_threads_per_block,
+            py::arg("n"),
+            "Override the per-block thread count. Default is suggested_threads. "
+            "Smaller block sizes work (SIMT helpers use block-stride loops) but may be slower; "
+            "larger sizes are valid up to the per-block max (1024 on current GPUs).")
         .def("rnea", &Runner::rnea,
              py::arg("q"), py::arg("qd"),
              py::arg("qdd") = py::none(),

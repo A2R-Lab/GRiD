@@ -136,7 +136,7 @@ B. **Any-thread-count emission** — drop the ``__launch_bounds__``
    value still encodes the codegen's preferred DOF-aware,
    warp-rounded block size; it just stops being enforced). Parameterize
    ``g_thread_dimms`` in the wrapper, and convert ``threadIdx.x < N``
-   guards in ``_inner`` functions to grid-stride loops via the
+   guards in ``_inner`` functions to block-stride loops via the
    existing helper at
    ``GRiDCodeGenerator/helpers/_code_generation_helpers.py:87-88``.
 
@@ -418,7 +418,7 @@ Each phase is a self-contained commit with passing tests. Phase 1
    constant emission as a documented hint). Parameterize
    ``threads_per_block`` in ``wrapper_template.cu`` defaulting to
    ``grid::SUGGESTED_THREADS``. Convert ``threadIdx.x < N`` guards in
-   ``_inner`` functions to grid-stride loops (use the existing
+   ``_inner`` functions to block-stride loops (use the existing
    helper).
 9. **Any-thread-count tests (B2)** — extend
    ``test_cuda_second_order_fallback.py`` to cover all algorithms at

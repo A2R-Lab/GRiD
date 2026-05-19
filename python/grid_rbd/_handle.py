@@ -80,6 +80,35 @@ class RobotHandle:
     def max_batch(self) -> int:
         return self._runner.max_batch
 
+    @property
+    def suggested_threads(self) -> int:
+        """Codegen-time thread-count hint (DOF-aware, warp-rounded).
+
+        The default block size for kernel launches. Since v2.0 it is a
+        recommendation, not an enforced floor — callers can override
+        via :py:meth:`set_threads_per_block`.
+        """
+        return self._runner.suggested_threads
+
+    @property
+    def threads_per_block(self) -> int:
+        """Current per-block thread count used by kernel launches."""
+        return self._runner.threads_per_block
+
+    def set_threads_per_block(self, n: int) -> None:
+        """Override the per-block thread count for all subsequent kernel
+        launches issued through this handle.
+
+        The codegen does block-cooperative compute: each block handles one
+        timestep with its threads cooperating via block-stride loops.
+        Batching across timesteps is grid-stride at the block level. Any
+        block size ``n >= 1`` (up to the per-block max, 1024 on current
+        GPUs) is valid; smaller sizes are correct but slower.
+
+        Default: :py:attr:`suggested_threads`.
+        """
+        self._runner.set_threads_per_block(int(n))
+
     # ─── algorithms ──────────────────────────────────────────────────────────
     #
     # All methods take 2D float32 arrays of shape (B, num_joints) for the

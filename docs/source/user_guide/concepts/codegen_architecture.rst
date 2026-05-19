@@ -96,11 +96,18 @@ for iiwa14 it is 352, for go2_fixed it is 288, and so on. The host
 wrappers default to launching with ``dim3(SUGGESTED_THREADS, 1, 1)``.
 
 After the v2.0 cuBLASDx removal, ``SUGGESTED_THREADS`` is **a hint, not
-an enforced floor**. The vendored SIMT GLASS helpers (``L1/dot``,
-``L2/gemv``, ``L3/gemm``) are thread-count-agnostic by construction —
-they use grid-stride loops. CUDA-inline users can launch GRiD kernels
-with any block size that suits their outer kernel. See
-:doc:`cublasdx_removal_design` for the rationale.
+an enforced floor**. Every emitted ``X_inner`` does block-cooperative
+compute on one timestep — threads within a block split work via
+*block-stride loops* (the ``gen_add_parallel_loop`` helper emits
+``for (int i = threadIdx.x + threadIdx.y*blockDim.x; i < max_val;
+i += blockDim.x*blockDim.y)``). Any block size that fits per-block
+covers the work correctly. Batching across timesteps is handled by
+the outer ``X_kernel`` via a *grid-stride loop* over ``blockIdx`` —
+each block processes one or more timesteps.
+
+CUDA-inline users can launch GRiD kernels with any block size that
+suits their outer kernel. See :doc:`cublasdx_removal_design` for the
+rationale.
 
 The codegen currently still emits ``__launch_bounds__(SUGGESTED_THREADS)``
 on each ``X_kernel``. That attribute drops in phase B1 (any-thread-count
