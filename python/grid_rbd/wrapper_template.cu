@@ -674,4 +674,344 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
 );
 
+
+// end_effector_pose(q) → eePos  flat (B, 6*NUM_EES)
+static ffi::Error grid_rbd_jax_end_effector_pose_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q,
+    ffi::ResultBuffer<ffi::F32> ee_out)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose: q", grid::NUM_JOINTS);
+    int batch = (int)q.dimensions()[0];
+    int nj    = grid::NUM_JOINTS;
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("end_effector_pose: batch > max_batch");
+
+    const size_t row_bytes = nj * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch,
+                      q.typed_data(),       row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+
+    constexpr int stride_q = 3 * grid::NUM_JOINTS;
+    grid::end_effector_pose_kernel<T><<<
+        g_block_dimms, g_thread_dimms,
+        grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        stream>>>(
+            g_data->d_eePos, g_data->d_q_qd_u, stride_q,
+            g_robot, batch);
+
+    cudaMemcpyAsync(ee_out->typed_data(), g_data->d_eePos,
+                    batch * 6 * grid::NUM_EES * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_end_effector_pose,
+    grid_rbd_jax_end_effector_pose_impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+);
+
+
+// end_effector_pose_gradient(q) → deePos  flat (B, 6*NUM_EES*NJ)
+// Python side reshapes/transposes to the (B, 6*NUM_EES, NJ) row-major
+// convention (see _handle.py:end_effector_pose_gradient).
+static ffi::Error grid_rbd_jax_end_effector_pose_gradient_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q,
+    ffi::ResultBuffer<ffi::F32> dee_out)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose_gradient: q", grid::NUM_JOINTS);
+    int batch = (int)q.dimensions()[0];
+    int nj    = grid::NUM_JOINTS;
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("end_effector_pose_gradient: batch > max_batch");
+
+    const size_t row_bytes = nj * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch,
+                      q.typed_data(),       row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+
+    constexpr int stride_q = 3 * grid::NUM_JOINTS;
+    grid::end_effector_pose_gradient_kernel<T><<<
+        g_block_dimms, g_thread_dimms,
+        grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        stream>>>(
+            g_data->d_deePos, g_data->d_q_qd_u, stride_q,
+            g_robot, batch);
+
+    cudaMemcpyAsync(dee_out->typed_data(), g_data->d_deePos,
+                    batch * 6 * grid::NUM_EES * nj * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_end_effector_pose_gradient,
+    grid_rbd_jax_end_effector_pose_gradient_impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+);
+
+
+// end_effector_pose_hessian(q) → d2eePos  flat (B, 6*NUM_EES*NJ*NJ)
+// The kernel also writes d_deePos as a byproduct; we only return d2.
+static ffi::Error grid_rbd_jax_end_effector_pose_hessian_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q,
+    ffi::ResultBuffer<ffi::F32> d2ee_out)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose_hessian: q", grid::NUM_JOINTS);
+    int batch = (int)q.dimensions()[0];
+    int nj    = grid::NUM_JOINTS;
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("end_effector_pose_hessian: batch > max_batch");
+
+    const size_t row_bytes = nj * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch,
+                      q.typed_data(),       row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+
+    constexpr int stride_q = 3 * grid::NUM_JOINTS;
+    grid::end_effector_pose_gradient_hessian_kernel<T><<<
+        g_block_dimms, g_thread_dimms,
+        grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        stream>>>(
+            g_data->d_d2eePos, g_data->d_deePos, g_data->d_workspace,
+            g_data->d_q_qd_u, stride_q, g_robot, batch);
+
+    cudaMemcpyAsync(d2ee_out->typed_data(), g_data->d_d2eePos,
+                    batch * 6 * grid::NUM_EES * nj * nj * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_end_effector_pose_hessian,
+    grid_rbd_jax_end_effector_pose_hessian_impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+);
+
+
+// rnea_grad(q, qd) → dc_du  flat (B, 2*NJ*NJ)
+// Python reshapes/transposes to (B, NJ, 2*NJ) [dc_dq | dc_dqd].
+// USE_QDD_FLAG=false for now; qdd defaults to 0 in-kernel.
+static ffi::Error grid_rbd_jax_rnea_grad_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q,
+    ffi::Buffer<ffi::F32> qd,
+    ffi::ResultBuffer<ffi::F32> dc_du_out)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    GRID_RBD_FFI_VALIDATE_2D(q, "rnea_grad: q", grid::NUM_JOINTS);
+    int batch = (int)q.dimensions()[0];
+    int nj    = grid::NUM_JOINTS;
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("rnea_grad: batch > max_batch");
+
+    const size_t row_bytes = nj * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],  dst_pitch,
+                      q.typed_data(),        row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch,
+                      qd.typed_data(),       row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+
+    constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
+    grid::inverse_dynamics_gradient_kernel<T><<<
+        g_block_dimms, g_thread_dimms,
+        grid::ID_DU_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        stream>>>(
+            g_data->d_dc_du, g_data->d_workspace,
+            g_data->d_q_qd_u, stride_q_qd,
+            g_robot, /*gravity=*/9.81f, batch);
+
+    cudaMemcpyAsync(dc_du_out->typed_data(), g_data->d_dc_du,
+                    batch * nj * 2 * nj * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_rnea_grad,
+    grid_rbd_jax_rnea_grad_impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+);
+
+
+// forward_dynamics_grad(q, qd, u) → df_du  flat (B, 2*NJ*NJ)
+// Python reshapes/transposes to (B, NJ, 2*NJ).
+static ffi::Error grid_rbd_jax_forward_dynamics_grad_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q,
+    ffi::Buffer<ffi::F32> qd,
+    ffi::Buffer<ffi::F32> u,
+    ffi::ResultBuffer<ffi::F32> df_du_out)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    GRID_RBD_FFI_VALIDATE_2D(q, "forward_dynamics_grad: q", grid::NUM_JOINTS);
+    int batch = (int)q.dimensions()[0];
+    int nj    = grid::NUM_JOINTS;
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("forward_dynamics_grad: batch > max_batch");
+
+    const size_t row_bytes = nj * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],      dst_pitch,
+                      q.typed_data(),            row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj],     dst_pitch,
+                      qd.typed_data(),           row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj],   dst_pitch,
+                      u.typed_data(),            row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+
+    constexpr int stride_q_qd_u = 3 * grid::NUM_JOINTS;
+    grid::forward_dynamics_gradient_kernel<T><<<
+        g_block_dimms, g_thread_dimms,
+        grid::FD_DU_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        stream>>>(
+            g_data->d_df_du, g_data->d_workspace,
+            g_data->d_q_qd_u, stride_q_qd_u,
+            g_robot, /*gravity=*/9.81f, batch);
+
+    cudaMemcpyAsync(df_du_out->typed_data(), g_data->d_df_du,
+                    batch * nj * 2 * nj * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_forward_dynamics_grad,
+    grid_rbd_jax_forward_dynamics_grad_impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+);
+
+
+// idsva_so(q, qd) → packed (B, SECOND_ORDER_TENSOR_SIZE)
+// USE_QDD_FLAG=false. The codegen-time dispatcher picks body- vs world-frame;
+// we dispatch here at compile time using the GRID_GENERATES_* macros so a
+// per-robot .so calls whichever kernel was emitted.
+static ffi::Error grid_rbd_jax_idsva_so_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q,
+    ffi::Buffer<ffi::F32> qd,
+    ffi::ResultBuffer<ffi::F32> out)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    GRID_RBD_FFI_VALIDATE_2D(q, "idsva_so: q", grid::NUM_JOINTS);
+    int batch = (int)q.dimensions()[0];
+    int nj    = grid::NUM_JOINTS;
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("idsva_so: batch > max_batch");
+
+    const size_t row_bytes = nj * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],  dst_pitch,
+                      q.typed_data(),        row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch,
+                      qd.typed_data(),       row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+
+    constexpr int stride_q_qd_u = 3 * grid::NUM_JOINTS;
+    // v0.3: hardcoded body-frame kernel call — works for fixed-base robots
+    // (which is what the iiwa14 smoke test exercises). Floating-base support
+    // needs codegen to emit a #define so this dispatch can branch — tracked
+    // as follow-up.
+    grid::idsva_so_body_frame_kernel<T><<<
+        g_block_dimms, g_thread_dimms,
+        grid::IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        stream>>>(
+            g_data->d_idsva_so, g_data->d_workspace,
+            g_data->d_q_qd_u, stride_q_qd_u,
+            g_robot, /*gravity=*/9.81f, batch);
+
+    cudaMemcpyAsync(out->typed_data(), g_data->d_idsva_so,
+                    batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_idsva_so,
+    grid_rbd_jax_idsva_so_impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+);
+
+
+// fdsva_so(q, qd, u) → packed (B, SECOND_ORDER_TENSOR_SIZE)
+// Uses d_idsva_so as scratch — must not run concurrently with idsva_so.
+static ffi::Error grid_rbd_jax_fdsva_so_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q,
+    ffi::Buffer<ffi::F32> qd,
+    ffi::Buffer<ffi::F32> u,
+    ffi::ResultBuffer<ffi::F32> out)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    GRID_RBD_FFI_VALIDATE_2D(q, "fdsva_so: q", grid::NUM_JOINTS);
+    int batch = (int)q.dimensions()[0];
+    int nj    = grid::NUM_JOINTS;
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("fdsva_so: batch > max_batch");
+
+    const size_t row_bytes = nj * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],      dst_pitch,
+                      q.typed_data(),            row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj],     dst_pitch,
+                      qd.typed_data(),           row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj],   dst_pitch,
+                      u.typed_data(),            row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+
+    constexpr int stride_q_qd_u = 3 * grid::NUM_JOINTS;
+    // v0.3: assumes fdsva_so was emitted (true for all current robots; iiwa14
+    // body-frame fits sm_120's 100 KB shared-mem cap, g1_floating world-frame
+    // is the known SKIPPED cell). A compile error here would mean the codegen
+    // was invoked with second_order=False, which the grid-rbd wrappers never do.
+    grid::fdsva_so_kernel<T><<<
+        g_block_dimms, g_thread_dimms,
+        grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        stream>>>(
+            g_data->d_df2, g_data->d_q_qd_u, stride_q_qd_u,
+            g_data->d_workspace, g_data->d_idsva_so,
+            g_robot, /*gravity=*/9.81f, batch);
+
+    cudaMemcpyAsync(out->typed_data(), g_data->d_df2,
+                    batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_fdsva_so,
+    grid_rbd_jax_fdsva_so_impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+);
+
 #endif  // GRID_RBD_WITH_JAX

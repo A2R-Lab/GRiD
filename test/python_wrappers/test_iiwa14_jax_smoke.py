@@ -196,6 +196,124 @@ def test_minv_and_crba_invert(jax_handle, samples):
     assert np.max(np.abs(prod - eye)) < 5e-3
 
 
+def test_end_effector_pose_eager_matches_plain(jax_handle, plain_handle, samples):
+    e_jax   = np.asarray(jax_handle.end_effector_pose(samples["q"]))
+    e_plain = plain_handle.end_effector_pose(samples["q"])
+    assert e_jax.shape == e_plain.shape
+    assert np.max(np.abs(e_jax - e_plain)) < _TOL
+
+
+def test_end_effector_pose_jit_matches_eager(jax_handle, samples):
+    import jax
+    @jax.jit
+    def f(q): return jax_handle.end_effector_pose(q)
+    a = np.asarray(f(samples["q"]))
+    b = np.asarray(jax_handle.end_effector_pose(samples["q"]))
+    assert np.max(np.abs(a - b)) < 1e-6
+
+
+def test_end_effector_pose_gradient_eager_matches_plain(jax_handle, plain_handle, samples):
+    g_jax   = np.asarray(jax_handle.end_effector_pose_gradient(samples["q"]))
+    g_plain = plain_handle.end_effector_pose_gradient(samples["q"])
+    assert g_jax.shape == g_plain.shape
+    assert np.max(np.abs(g_jax - g_plain)) < _TOL
+
+
+def test_end_effector_pose_gradient_jit_matches_eager(jax_handle, samples):
+    import jax
+    @jax.jit
+    def f(q): return jax_handle.end_effector_pose_gradient(q)
+    a = np.asarray(f(samples["q"]))
+    b = np.asarray(jax_handle.end_effector_pose_gradient(samples["q"]))
+    assert np.max(np.abs(a - b)) < 1e-6
+
+
+def test_end_effector_pose_hessian_eager_matches_plain(jax_handle, plain_handle, samples):
+    h_jax   = np.asarray(jax_handle.end_effector_pose_hessian(samples["q"]))
+    h_plain = plain_handle.end_effector_pose_hessian(samples["q"])
+    assert h_jax.shape == h_plain.shape
+    assert np.max(np.abs(h_jax - h_plain)) < _TOL
+
+
+def test_end_effector_pose_hessian_jit_matches_eager(jax_handle, samples):
+    import jax
+    @jax.jit
+    def f(q): return jax_handle.end_effector_pose_hessian(q)
+    a = np.asarray(f(samples["q"]))
+    b = np.asarray(jax_handle.end_effector_pose_hessian(samples["q"]))
+    assert np.max(np.abs(a - b)) < 1e-6
+
+
+def test_rnea_grad_eager_matches_plain(jax_handle, plain_handle, samples):
+    dc_jax   = np.asarray(jax_handle.rnea_grad(samples["q"], samples["qd"]))
+    dc_plain = plain_handle.rnea_grad(samples["q"], samples["qd"])
+    assert dc_jax.shape == dc_plain.shape
+    assert np.max(np.abs(dc_jax - dc_plain)) < _TOL
+
+
+def test_rnea_grad_jit_matches_eager(jax_handle, samples):
+    import jax
+    @jax.jit
+    def f(q, qd): return jax_handle.rnea_grad(q, qd)
+    a = np.asarray(f(samples["q"], samples["qd"]))
+    b = np.asarray(jax_handle.rnea_grad(samples["q"], samples["qd"]))
+    assert np.max(np.abs(a - b)) < 1e-6
+
+
+def test_forward_dynamics_grad_eager_matches_plain(jax_handle, plain_handle, samples):
+    df_jax   = np.asarray(jax_handle.forward_dynamics_grad(samples["q"], samples["qd"], samples["u"]))
+    df_plain = plain_handle.forward_dynamics_grad(samples["q"], samples["qd"], samples["u"])
+    assert df_jax.shape == df_plain.shape
+    assert np.max(np.abs(df_jax - df_plain)) < _TOL
+
+
+def test_forward_dynamics_grad_jit_matches_eager(jax_handle, samples):
+    import jax
+    @jax.jit
+    def f(q, qd, u): return jax_handle.forward_dynamics_grad(q, qd, u)
+    a = np.asarray(f(samples["q"], samples["qd"], samples["u"]))
+    b = np.asarray(jax_handle.forward_dynamics_grad(samples["q"], samples["qd"], samples["u"]))
+    assert np.max(np.abs(a - b)) < 1e-6
+
+
+def test_idsva_so_eager_matches_plain(jax_handle, plain_handle, samples):
+    so_jax   = tuple(np.asarray(t) for t in jax_handle.idsva_so(samples["q"], samples["qd"]))
+    so_plain = plain_handle.idsva_so(samples["q"], samples["qd"])
+    assert len(so_jax) == 4 == len(so_plain)
+    for i, (a, b) in enumerate(zip(so_jax, so_plain)):
+        assert a.shape == b.shape, f"idsva_so tuple[{i}] shape mismatch"
+        assert np.max(np.abs(a - b)) < _TOL, f"idsva_so tuple[{i}] disagrees"
+
+
+def test_idsva_so_jit_matches_eager(jax_handle, samples):
+    import jax
+    @jax.jit
+    def f(q, qd): return jax_handle.idsva_so(q, qd)
+    aj = tuple(np.asarray(t) for t in f(samples["q"], samples["qd"]))
+    be = tuple(np.asarray(t) for t in jax_handle.idsva_so(samples["q"], samples["qd"]))
+    for a, b in zip(aj, be):
+        assert np.max(np.abs(a - b)) < 1e-6
+
+
+def test_fdsva_so_eager_matches_plain(jax_handle, plain_handle, samples):
+    so_jax   = tuple(np.asarray(t) for t in jax_handle.fdsva_so(samples["q"], samples["qd"], samples["u"]))
+    so_plain = plain_handle.fdsva_so(samples["q"], samples["qd"], samples["u"])
+    assert len(so_jax) == 4 == len(so_plain)
+    for i, (a, b) in enumerate(zip(so_jax, so_plain)):
+        assert a.shape == b.shape, f"fdsva_so tuple[{i}] shape mismatch"
+        assert np.max(np.abs(a - b)) < _TOL, f"fdsva_so tuple[{i}] disagrees"
+
+
+def test_fdsva_so_jit_matches_eager(jax_handle, samples):
+    import jax
+    @jax.jit
+    def f(q, qd, u): return jax_handle.fdsva_so(q, qd, u)
+    aj = tuple(np.asarray(t) for t in f(samples["q"], samples["qd"], samples["u"]))
+    be = tuple(np.asarray(t) for t in jax_handle.fdsva_so(samples["q"], samples["qd"], samples["u"]))
+    for a, b in zip(aj, be):
+        assert np.max(np.abs(a - b)) < 1e-6
+
+
 def test_all_methods_jit(jax_handle, samples):
     """Every method must slot into a single jax.jit graph."""
     import jax
@@ -206,9 +324,14 @@ def test_all_methods_jit(jax_handle, samples):
         qdd2 = jax_handle.aba(q, qd, u)
         Minv = jax_handle.minv(q)
         M    = jax_handle.crba(q)
-        return c, qdd1, qdd2, Minv, M
-    c, qdd1, qdd2, Minv, M = f(samples["q"], samples["qd"], samples["u"])
-    for x in (c, qdd1, qdd2, Minv, M):
+        ee   = jax_handle.end_effector_pose(q)
+        dee  = jax_handle.end_effector_pose_gradient(q)
+        d2ee = jax_handle.end_effector_pose_hessian(q)
+        dc   = jax_handle.rnea_grad(q, qd)
+        df   = jax_handle.forward_dynamics_grad(q, qd, u)
+        return c, qdd1, qdd2, Minv, M, ee, dee, d2ee, dc, df
+    outs = f(samples["q"], samples["qd"], samples["u"])
+    for x in outs:
         assert np.all(np.isfinite(np.asarray(x)))
 
 

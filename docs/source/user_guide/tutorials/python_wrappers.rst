@@ -146,6 +146,8 @@ fixed-joint target into the codegen:
 A different ``ee_joint_names`` value lands in a separate cache entry —
 both targets can coexist in the cache.
 
+.. _jax-ffi-quickstart:
+
 JAX FFI (``grid_rbd[jax]``)
 ---------------------------
 
@@ -169,15 +171,17 @@ running on JAX-supplied CUDA streams. Inputs may be numpy or
 ``jax.Array`` — JAX moves data to device transparently before the
 handler runs, and outputs stay device-resident.
 
-v0.2 JAX surface: ``rnea``, ``minv``, ``forward_dynamics``, ``aba``,
-``crba``. The remaining methods are accessible through
-``grid_rbd.RobotHandle`` (plain) and will gain JAX FFI wrappers in
-follow-up work.
+v0.3 JAX surface (parity with the plain ``RobotHandle``): all 12
+methods listed in the table above are bound via FFI and JIT-compatible.
+The SO methods (``idsva_so``, ``fdsva_so``) follow the plain wrapper's
+tuple-of-four convention.
 
 Coming next
 -----------
 
-* JAX FFI for the EE pose family, derivative kernels, and SO methods.
+* Floating-base JAX FFI for ``idsva_so`` (currently routes to the
+  body-frame kernel; world-frame fallback for floating-base needs the
+  codegen to emit a preprocessor-visible dispatcher).
 * Per-host autotune integration for the ``glass_nvidia`` linalg
   backend (currently SIMT-only).
 * CLI shortcut: ``grid-rbd register iiwa.urdf --name iiwa14``.

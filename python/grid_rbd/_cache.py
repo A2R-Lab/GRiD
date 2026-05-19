@@ -74,6 +74,17 @@ def package_version() -> str:
         return "0.0.0-dev"
 
 
+def _wrapper_template_hash() -> str:
+    """sha256 of the bundled wrapper_template.cu so editing the wrapper
+    invalidates the cache. The package version alone isn't enough for editable
+    dev installs where the version doesn't bump on every edit."""
+    path = Path(__file__).parent / "wrapper_template.cu"
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return ""
+
+
 def canonical_options(options: dict[str, Any]) -> str:
     """Canonical JSON serialization of compile options for hashing.
 
@@ -92,6 +103,7 @@ def compute_cache_key(urdf_bytes: bytes, options: dict[str, Any], cuda_arch: int
     h.update(canonical_options(options).encode())
     h.update(f"arch={cuda_arch}".encode())
     h.update(f"grid_rbd={package_version()}".encode())
+    h.update(f"wrapper={_wrapper_template_hash()}".encode())
     return h.hexdigest()
 
 

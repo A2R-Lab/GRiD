@@ -19,13 +19,12 @@ The underlying ``.so`` is shared with the plain ``grid_rbd.register_robot``
 cache — registering the same name from both APIs uses the same compiled
 library and doesn't trigger a recompile.
 
-v0.1 surface:
-  * ``rnea`` only. Adding the other methods is mechanical — each one is
-    a 30-line C++ FFI handler + 10-line Python registration.
-
-v0.1 limitations:
-  * Handlers do device→host round-trips for inputs and outputs. Slow but
-    correct. v0.2 will keep the data on device end-to-end.
+v0.3 surface (parity with the plain ``RobotHandle``):
+  ``rnea``, ``minv``, ``forward_dynamics``, ``aba``, ``crba``,
+  ``end_effector_pose``, ``end_effector_pose_gradient``,
+  ``end_effector_pose_hessian``, ``rnea_grad``, ``forward_dynamics_grad``,
+  ``idsva_so``, ``fdsva_so``. All run device-resident on JAX-supplied
+  streams.
 """
 from __future__ import annotations
 
@@ -205,6 +204,123 @@ class JaxRobotHandle:
         nj = self.num_joints
         out_type = jax.ShapeDtypeStruct((B, nj, nj), jnp.float32)
         return jax.ffi.ffi_call(target, out_type)(q)
+
+    def end_effector_pose(self, q):
+        """End-effector pose [xyz, rpy] per EE. Returns (B, 6*NUM_EES)."""
+        import jax
+        import jax.numpy as jnp
+        target = _register_method_target(
+            self._so_path, self._cache_key,
+            "end_effector_pose", "grid_rbd_jax_end_effector_pose")
+        (q,), B = self._prep_2d("end_effector_pose", q)
+        out_type = jax.ShapeDtypeStruct((B, 6 * self.num_ees), jnp.float32)
+        return jax.ffi.ffi_call(target, out_type)(q)
+
+    def end_effector_pose_gradient(self, q):
+        """End-effector pose Jacobian. Returns (B, 6*NUM_EES, NJ).
+
+        The kernel writes a column-major (6, NEE*NJ) buffer per timestep;
+        we mirror the plain wrapper's reshape/transpose to the row-major
+        (6*NEE, NJ) convention.
+        """
+        import jax
+        import jax.numpy as jnp
+        target = _register_method_target(
+            self._so_path, self._cache_key,
+            "end_effector_pose_gradient", "grid_rbd_jax_end_effector_pose_gradient")
+        (q,), B = self._prep_2d("end_effector_pose_gradient", q)
+        nee = self.num_ees
+        nj = self.num_joints
+        out_type = jax.ShapeDtypeStruct((B, 6 * nee * nj), jnp.float32)
+        raw = jax.ffi.ffi_call(target, out_type)(q)
+        return raw.reshape(B, nee, nj, 6).transpose(0, 1, 3, 2).reshape(B, 6 * nee, nj)
+
+    def end_effector_pose_hessian(self, q):
+        """End-effector pose Hessian. Returns (B, 6*NUM_EES, NJ, NJ)."""
+        import jax
+        import jax.numpy as jnp
+        target = _register_method_target(
+            self._so_path, self._cache_key,
+            "end_effector_pose_hessian", "grid_rbd_jax_end_effector_pose_hessian")
+        (q,), B = self._prep_2d("end_effector_pose_hessian", q)
+        nee = self.num_ees
+        nj = self.num_joints
+        out_type = jax.ShapeDtypeStruct((B, 6 * nee, nj, nj), jnp.float32)
+        return jax.ffi.ffi_call(target, out_type)(q)
+
+    def rnea_grad(self, q, qd):
+        """∂c/∂(q, qd) — concatenated [dc_dq | dc_dqd]. Returns (B, NJ, 2*NJ).
+
+        Matches the plain wrapper layout: GRiD writes (2, NJ, NJ) column-major
+        blocks; we reshape/transpose/concat to row-major (NJ, 2*NJ).
+        """
+        import jax
+        import jax.numpy as jnp
+        target = _register_method_target(
+            self._so_path, self._cache_key,
+            "rnea_grad", "grid_rbd_jax_rnea_grad")
+        (q, qd), B = self._prep_2d("rnea_grad", q, qd)
+        nj = self.num_joints
+        out_type = jax.ShapeDtypeStruct((B, 2 * nj * nj), jnp.float32)
+        raw = jax.ffi.ffi_call(target, out_type)(q, qd)
+        blocks = raw.reshape(B, 2, nj, nj).transpose(0, 1, 3, 2)
+        return jnp.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
+
+    def forward_dynamics_grad(self, q, qd, u):
+        """∂qdd/∂(q, qd) — concatenated [df_dq | df_dqd]. Returns (B, NJ, 2*NJ)."""
+        import jax
+        import jax.numpy as jnp
+        target = _register_method_target(
+            self._so_path, self._cache_key,
+            "forward_dynamics_grad", "grid_rbd_jax_forward_dynamics_grad")
+        (q, qd, u), B = self._prep_2d("forward_dynamics_grad", q, qd, u)
+        nj = self.num_joints
+        out_type = jax.ShapeDtypeStruct((B, 2 * nj * nj), jnp.float32)
+        raw = jax.ffi.ffi_call(target, out_type)(q, qd, u)
+        blocks = raw.reshape(B, 2, nj, nj).transpose(0, 1, 3, 2)
+        return jnp.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
+
+    def idsva_so(self, q, qd):
+        """Second-order inverse dynamics.
+
+        Returns a tuple of 4 jax.Arrays each shape (B, NV, NV, NV):
+        (d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq). Uses the codegen-time
+        dispatcher (body-frame for fixed-base, world-frame for floating-base).
+        """
+        import jax
+        import jax.numpy as jnp
+        target = _register_method_target(
+            self._so_path, self._cache_key,
+            "idsva_so", "grid_rbd_jax_idsva_so")
+        (q, qd), B = self._prep_2d("idsva_so", q, qd)
+        nv = self.num_vel
+        out_type = jax.ShapeDtypeStruct((B, 4 * nv ** 3), jnp.float32)
+        flat = jax.ffi.ffi_call(target, out_type)(q, qd)
+        return tuple(
+            flat[:, i * nv ** 3:(i + 1) * nv ** 3].reshape(B, nv, nv, nv)
+            for i in range(4)
+        )
+
+    def fdsva_so(self, q, qd, u):
+        """Second-order forward dynamics.
+
+        Returns a tuple of 4 jax.Arrays each shape (B, NV, NV, NV). Uses
+        the same scratch buffer (``d_idsva_so``) as ``idsva_so``, so the
+        two methods cannot run concurrently on the same handle.
+        """
+        import jax
+        import jax.numpy as jnp
+        target = _register_method_target(
+            self._so_path, self._cache_key,
+            "fdsva_so", "grid_rbd_jax_fdsva_so")
+        (q, qd, u), B = self._prep_2d("fdsva_so", q, qd, u)
+        nv = self.num_vel
+        out_type = jax.ShapeDtypeStruct((B, 4 * nv ** 3), jnp.float32)
+        flat = jax.ffi.ffi_call(target, out_type)(q, qd, u)
+        return tuple(
+            flat[:, i * nv ** 3:(i + 1) * nv ** 3].reshape(B, nv, nv, nv)
+            for i in range(4)
+        )
 
 
 # ─── public API ─────────────────────────────────────────────────────────────

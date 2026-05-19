@@ -7,4 +7,4 @@ Learn about the core concepts and algorithms in GRID.
    :maxdepth: 2
 
    algorithms/index
-   grid_methedology
+   codegen_architecture

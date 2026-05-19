@@ -1,5 +1,5 @@
-GRiD: GPU-Accelerated Rigid Body Dynamics Code Generation
-==========================================================
+GRiD: GPU-Accelerated Rigid Body Dynamics with Analytical Gradients
+===================================================================
 
 GRiD turns URDF robot models into optimized CUDA C++ for rigid-body dynamics,
 kinematics, analytical gradients, and validation against Python reference
@@ -7,14 +7,36 @@ implementations. It supports fixed- and floating-base robots, shared-memory
 fallback paths for larger generated kernels, and benchmark tooling for checking
 performance on real GPU targets.
 
-.. grid:: 2
+Pick how you want to call GRiD
+------------------------------
+
+.. grid:: 3
    :gutter: 3
 
-   .. grid-item-card:: Quick Start
-      :link: user_guide/landing_page
+   .. grid-item-card:: From Python
+      :link: user_guide/tutorials/python_wrappers
       :link-type: doc
 
-      Install GRiD, generate your first CUDA header, and run the core examples.
+      ``pip install grid-rbd`` and call the ``RobotHandle`` API — 12 batched
+      methods covering RNEA, FD/ABA, CRBA, Minv, EE pose family, RNEA/FD
+      gradients, and second-order ID/FD.
+
+   .. grid-item-card:: From JAX
+      :link: jax-ffi-quickstart
+      :link-type: ref
+
+      ``pip install grid-rbd[jax]`` for a device-resident, ``jax.jit``-compatible
+      FFI surface. Same per-robot ``.so`` cache as the plain Python wrapper.
+
+   .. grid-item-card:: From raw CUDA
+      :link: user_guide/tutorials/codegen
+      :link-type: doc
+
+      Generate a per-robot ``grid.cuh`` with the ``grid-generate`` CLI or the
+      ``GRiDCodeGenerator`` Python API, then ``#include`` it in your project.
+
+.. grid:: 2
+   :gutter: 3
 
    .. grid-item-card:: API Reference
       :link: api_reference/index
@@ -23,19 +45,12 @@ performance on real GPU targets.
       Browse the Python APIs for URDF parsing, reference algorithms, and CUDA
       code generation.
 
-   .. grid-item-card:: CUDA Validation
-      :link: user_guide/tutorials/cuda_validation
-      :link-type: doc
-
-      Run staged fixed/floating correctness checks, shared-memory fallback
-      tests, and performance reports.
-
    .. grid-item-card:: Benchmarks
       :link: user_guide/tutorials/benchmarks
       :link-type: doc
 
-      Learn where benchmark scripts live and how to compare generated kernels
-      on target GPU hardware.
+      Where the bench scripts live and how to compare generated kernels on
+      target GPU hardware.
 
 .. figure:: user_guide/imgs/benchmark_multi_fd_grad.png
    :alt: GRiD forward-dynamics gradient benchmark performance
@@ -45,41 +60,6 @@ performance on real GPU targets.
    Example GRiD benchmark results for batched forward-dynamics gradient
    computation. Use the benchmark and performance-reporting tools to collect
    current numbers on your robot and GPU.
-
-How To Customize This Site
---------------------------
-
-* Homepage text and top-level navigation live in ``docs/source/index.rst``.
-* User-facing install, examples, and support notes live under
-  ``docs/source/user_guide/``.
-* API documentation entry points live under ``docs/source/api_reference/``.
-* The A2R Lab logo is configured in ``docs/source/conf.py`` through
-  ``html_theme_options["logo"]["image_light"]`` and
-  ``html_theme_options["logo"]["image_dark"]``. Replace
-  ``docs/source/_static/a2r_lab.jpg`` to update the current logo image.
-* Page figures belong in ``docs/source/user_guide/imgs/``; theme images,
-  favicon files, and CSS belong in ``docs/source/_static/``.
-* Local style overrides live in ``docs/source/_static/custom.css``.
-
-Build And Preview
------------------
-
-.. code-block:: bash
-
-   .venv/bin/python -m sphinx -W --keep-going -b html docs/source docs/build/html
-   .venv/bin/python -m http.server -d docs/build/html 8000
-
-Then open ``http://localhost:8000``.
-
-.. toctree::
-   :maxdepth: 3
-   :hidden:
-
-   user_guide/landing_page
-   api_reference/index
-   contribution_guidelines
-   sphinx_edit_guide
-   faq
 
 Citation
 --------
@@ -95,3 +75,37 @@ If you use GRiD in your research, please cite:
      year={2022},
      month={May}
    }
+
+.. toctree::
+   :hidden:
+   :caption: User Guide
+
+   user_guide/landing_page
+   user_guide/getting_started/installation
+   user_guide/getting_started/library_overview
+   user_guide/getting_started/docker_setup
+
+.. toctree::
+   :hidden:
+   :caption: Tutorials
+
+   user_guide/tutorials/index
+
+.. toctree::
+   :hidden:
+   :caption: Concepts
+
+   user_guide/concepts/index
+
+.. toctree::
+   :hidden:
+   :caption: API Reference
+
+   api_reference/index
+
+.. toctree::
+   :hidden:
+   :caption: Project info
+
+   contribution_guidelines
+   sphinx_edit_guide

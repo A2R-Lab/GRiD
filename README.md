@@ -106,11 +106,12 @@ GRiD currently implements the following rigid body dynamics algorithms:
 Additional algorithms and features are in development. If you have a particular algorithm or feature in mind please let us know by posting a GitHub issue. We'd also love your collaboration in implementing the Python reference implementation of any algorithm you'd like implemented!
 
 ## C++ API
-To enable GRiD to be used by both expert and novice GPU programmers we provide the following API interface for each rigid body dynamics algorithm:
-+ ```ALGORITHM_inner```: a device function that computes the core computation. These functions assume that inputs are already loaded into GPU shared memory, require a pointer to additional scratch shared memory, and store the result back in shared memory.
-+ ```ALGORITHM_device```: a device function that handles the shared memory allocation for the ```\_inner``` function. These functions assume that inputs are already loaded into, and return results to, GPU shared memory.
-+ ```ALGORITHM_kernel```: a kernel that handles the shared memory allocation for the ```\_inner``` function. These functions assume that inputs are loaded into, and return results to, the global GPU memory.
-+ ```ALGORITHM```: a host function that wraps the ```_kernel``` and handles the transfer of inputs to the GPU and the results back to the CPU.
+For each algorithm GRiD emits four layers: `*_inner` (core math on
+shared-mem inputs), `*_device` (allocates scratch + calls `_inner`),
+`*_kernel` (global entry point with batched timestep loop), and the
+host wrapper (CPU launcher with H↔D copies). See the
+[codegen architecture docs](docs/source/user_guide/concepts/codegen_architecture.rst)
+for the rationale and concrete signatures.
 
 ## Citing GRiD
 To cite GRiD in your research, please use the following bibtex for our paper ["GRiD: GPU-Accelerated Rigid Body Dynamics with Analytical Gradients"](https://brianplancher.com/publication/grid/):
@@ -131,44 +132,11 @@ When performing multiple computations of rigid body dynamics algorithms, GRiD pr
 
 To learn more about GRiD's performance results and to run your own benchmark analysis please see [`test/benchmarks/`](test/benchmarks/) and our [paper](https://brianplancher.com/publication/GRiD/).
 
-## Installation Instructions
-### Install Python Dependencies
-Run the provided install script, which creates a `.venv` and registers the `grid-generate` CLI:
-```shell
-bash base_install.sh
-source .venv/bin/activate
-```
-
-Or install manually:
-```shell
-pip install -e .
-```
-
-For development dependencies (Pinocchio, robot_descriptions, benchmarks):
-```shell
-bash developer_install.sh
-```
-### Install CUDA Dependencies
-```
-sudo apt-get update
-sudo apt-get -y install xorg xorg-dev linux-headers-$(uname -r) apt-transport-https
-```
-### Download and Install CUDA 
-Note: for Ubuntu 20.04 see [https://developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads) for other distros
-```
-wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-ubuntu2004.pin
-sudo mv cuda-ubuntu2004.pin /etc/apt/preferences.d/cuda-repository-pin-600
-sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/7fa2af80.pub
-sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/ /"
-sudo apt-get update
-sudo apt-get -y install cuda
-```
-### Add the following to ```~/.bashrc```
-```
-export PATH="/usr/local/cuda/bin:$PATH"
-export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
-export PATH="opt/nvidia/nsight-compute/:$PATH"
-```
+## Installation
+The Quick Start above covers the common-case install. For CUDA Toolkit
+setup, developer dependencies (Pinocchio, robot_descriptions, benchmarks),
+and Docker, see the full
+[installation guide](docs/source/user_guide/getting_started/installation.rst).
 
 ## Troubleshooting
 

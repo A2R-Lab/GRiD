@@ -15,12 +15,16 @@ handle = grid_rbd.register_robot(
     max_batch_size=256,
 )
 
-# Many times, fast. All methods take (B, NJ) and return (B, NJ) or (B, NJ, NJ).
+# Many times, fast. All methods are 2D-batched on axis 0.
 qdd = handle.forward_dynamics(q, qd, u)
 M   = handle.crba(q)
 ```
 
-## Status — v0.2
+Full reference (gravity convention, cache layout, EE-target selection,
+JAX FFI, etc.) lives in the
+[main docs](https://a2r-lab.github.io/GRiD/).
+
+## Status — v0.3
 
 Methods bound and validated against [`RBDReference`](https://github.com/A2R-Lab/RBDReference)
 at float32 precision:
@@ -37,18 +41,18 @@ at float32 precision:
 | `end_effector_pose_hessian(q)` | `(B, 6*NUM_EES, NJ, NJ)` | 3.1e-7 |
 | `rnea_grad(q, qd, qdd=None, gravity=9.81)` | `(B, NJ, 2*NJ)` | 1.6e-5 |
 | `forward_dynamics_grad(q, qd, u, gravity=9.81)` | `(B, NJ, 2*NJ)` | 1.3e-4 |
-| `idsva_so(q, qd, qdd, gravity=9.81)` | `(B, NJ, 3*NJ)` | 1e-4 |
-| `fdsva_so(q, qd, u, gravity=9.81)` | `(B, NJ, 3*NJ)` | 1e-4 |
+| `idsva_so(q, qd, qdd, gravity=9.81)` | tuple of 4 × `(B, NV, NV, NV)` | 1e-4 |
+| `fdsva_so(q, qd, u, gravity=9.81)` | tuple of 4 × `(B, NV, NV, NV)` | 1e-4 |
 
 `register_robot` accepts `ee_joint_names=[...]` to pin specific
 end-effector frames (default: all leaf links).
 
 ## JAX FFI (`grid_rbd[jax]`)
 
-Install with `pip install grid-rbd[jax]` for the JAX-side bridge,
-which shares the same per-robot `.so` cache. Methods exposed via
-`jax.ffi.ffi_call` so they slot into `jax.jit` graphs and run on
-JAX-supplied CUDA streams (device-resident — no host round-trip):
+`pip install grid-rbd[jax]` enables the JAX-side bridge, which shares
+the same per-robot `.so` cache. All methods are exposed via
+`jax.ffi.ffi_call` and run device-resident on JAX-supplied CUDA streams
+— no host round-trip — so they slot directly into `jax.jit` graphs:
 
 ```python
 import grid_rbd.jax as grid_jax, jax
@@ -59,47 +63,7 @@ def step(q, qd, u):
     return handle.forward_dynamics(q, qd, u)
 ```
 
-v0.2 JAX surface: `rnea`, `minv`, `forward_dynamics`, `aba`, `crba`.
-The remaining methods (EE pose family, derivative kernels, SO) still
-work through the plain `grid_rbd.RobotHandle`; extending them to JAX
-FFI is mechanical follow-up.
-
-## Architecture
-
-* **Pure-Python orchestration** under `grid_rbd/` for cache management,
-  codegen invocation, and nvcc shell-out.
-* **Small pybind11 extension** at `grid_rbd/_core` — built once at
-  `pip install` time — that dlopens the per-robot .so and dispatches
-  numpy↔C-ABI calls.
-* **Per-robot `.so`** built at `register_robot` time, cached by content
-  hash. Each .so embeds `grid.cuh` (from GRiDCodeGenerator) plus the
-  robot-agnostic `wrapper.cu` (in this package) that exposes the
-  `extern "C"` symbols the runner looks up.
-
-See [`docs/python_wrappers_plan.md`](../docs/python_wrappers_plan.md)
-for the full design rationale.
-
-## Gravity convention
-
-This wrapper passes `gravity` as a **positive magnitude** (default 9.81)
-matching GRiD's internal convention. If you cross-check against
-`RBDReference.rnea(..., GRAVITY=-9.81)`, pass `gravity=9.81` here.
-
-## Cache layout
-
-```
-~/.cache/grid-rbd/
-├── manifest.json              # name -> cache_key
-└── store/<cache_key>/
-    ├── grid.cuh
-    ├── wrapper.cu
-    ├── robot.so
-    ├── meta.json
-    └── robot.build.log
-```
-
-Override the cache location with `$GRID_RBD_CACHE_DIR` or
-`cache_dir=...` on `register_robot`.
+Full parity with the plain wrapper as of v0.3.
 
 ## Requirements
 
