@@ -20,7 +20,7 @@ qdd = handle.forward_dynamics(q, qd, u)
 M   = handle.crba(q)
 ```
 
-## Status — v0.1 (work in progress)
+## Status — v0.2
 
 Methods bound and validated against [`RBDReference`](https://github.com/A2R-Lab/RBDReference)
 at float32 precision:
@@ -34,15 +34,35 @@ at float32 precision:
 | `crba(q, gravity=9.81)` | `(B, NJ, NJ)` | 2.7e-7 |
 | `end_effector_pose(q)` | `(B, 6*NUM_EES)` | 1.4e-7 |
 | `end_effector_pose_gradient(q)` | `(B, 6*NUM_EES, NJ)` | 3.1e-7 |
+| `end_effector_pose_hessian(q)` | `(B, 6*NUM_EES, NJ, NJ)` | 3.1e-7 |
 | `rnea_grad(q, qd, qdd=None, gravity=9.81)` | `(B, NJ, 2*NJ)` | 1.6e-5 |
 | `forward_dynamics_grad(q, qd, u, gravity=9.81)` | `(B, NJ, 2*NJ)` | 1.3e-4 |
+| `idsva_so(q, qd, qdd, gravity=9.81)` | `(B, NJ, 3*NJ)` | 1e-4 |
+| `fdsva_so(q, qd, u, gravity=9.81)` | `(B, NJ, 3*NJ)` | 1e-4 |
 
-## Coming next
+`register_robot` accepts `ee_joint_names=[...]` to pin specific
+end-effector frames (default: all leaf links).
 
-* `end_effector_pose_hessian` (second derivative of EE pose).
-* `ee_joint_names` registration parameter (currently bakes in all EEs).
-* `idsva_so` and `fdsva_so` (second-order dynamics).
-* JAX FFI bridge (`grid_rbd[jax]` optional extra).
+## JAX FFI (`grid_rbd[jax]`)
+
+Install with `pip install grid-rbd[jax]` for the JAX-side bridge,
+which shares the same per-robot `.so` cache. Methods exposed via
+`jax.ffi.ffi_call` so they slot into `jax.jit` graphs and run on
+JAX-supplied CUDA streams (device-resident — no host round-trip):
+
+```python
+import grid_rbd.jax as grid_jax, jax
+handle = grid_jax.register_robot(name="iiwa14", urdf_path="iiwa.urdf")
+
+@jax.jit
+def step(q, qd, u):
+    return handle.forward_dynamics(q, qd, u)
+```
+
+v0.2 JAX surface: `rnea`, `minv`, `forward_dynamics`, `aba`, `crba`.
+The remaining methods (EE pose family, derivative kernels, SO) still
+work through the plain `grid_rbd.RobotHandle`; extending them to JAX
+FFI is mechanical follow-up.
 
 ## Architecture
 

@@ -146,10 +146,38 @@ fixed-joint target into the codegen:
 A different ``ee_joint_names`` value lands in a separate cache entry —
 both targets can coexist in the cache.
 
+JAX FFI (``grid_rbd[jax]``)
+---------------------------
+
+Install with ``pip install grid-rbd[jax]`` to get the JAX bridge.
+The same per-robot ``.so`` is shared with the plain wrapper — no
+recompile on first ``grid_rbd.jax.register_robot``:
+
+.. code-block:: python
+
+   import grid_rbd.jax as grid_jax
+   import jax
+
+   handle = grid_jax.register_robot(name="iiwa14", urdf_path="iiwa.urdf")
+
+   @jax.jit
+   def step(q, qd, u):
+       return handle.forward_dynamics(q, qd, u)
+
+Methods slot into the JAX FFI machinery as ``ffi_call`` targets
+running on JAX-supplied CUDA streams. Inputs may be numpy or
+``jax.Array`` — JAX moves data to device transparently before the
+handler runs, and outputs stay device-resident.
+
+v0.2 JAX surface: ``rnea``, ``minv``, ``forward_dynamics``, ``aba``,
+``crba``. The remaining methods are accessible through
+``grid_rbd.RobotHandle`` (plain) and will gain JAX FFI wrappers in
+follow-up work.
+
 Coming next
 -----------
 
-* JAX FFI bridge (``grid_rbd[jax]`` optional extra).
+* JAX FFI for the EE pose family, derivative kernels, and SO methods.
 * Per-host autotune integration for the ``glass_nvidia`` linalg
   backend (currently SIMT-only).
 * CLI shortcut: ``grid-rbd register iiwa.urdf --name iiwa14``.
