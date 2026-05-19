@@ -110,49 +110,5 @@ Add the following to ``~/.bashrc``
     GRiD requires a C++17-capable host compiler (e.g. ``g++ >= 7`` or
     ``clang++ >= 5``). The benchmark and codegen runtime compile with
     ``-std=c++17``, needed for inline variables in the bench common
-    header and for the cuBLASDx backend.
-
-Optional: cuBLASDx (MathDx)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The optional ``glass_nvidia`` linear-algebra backend uses cuBLASDx via
-NVIDIA's MathDx package. Download the tarball from
-`developer.nvidia.com/cublasdx-downloads
-<https://developer.nvidia.com/cublasdx-downloads>`_ and extract it into
-``/opt/nvidia/mathdx/<VERSION>``, then add to ``~/.bashrc``::
-
-   export MATHDX_ROOT=/opt/nvidia/mathdx/<VERSION>
-   export CUTLASS_INCLUDE=$MATHDX_ROOT/external/cutlass/include
-
-The benchmark harness will pick this up automatically when invoked with
-``--columns glass_nvidia``.
-
-**Per-host tuning (recommended for production deployments):** the
-shipped ``GLASS/src/nvidia/tuning_table.cuh`` carries hand-curated
-defaults plus a small sm_120 measurement set. For best performance on
-your specific GPU, run the autotuner once after install (writes a
-per-host override file under ``GLASS/bench/tuning/<hostname>.cuh`` —
-does **not** modify the shipped table):
-
-.. code-block:: shell
-
-   cd GLASS
-   python3 bench/autotune.py --sm AUTO
-
-Wall time: ~15-30 minutes (66 shapes × compile + microbench). Consume
-the per-host override on subsequent builds by adding
-``-DGLASS_TUNING_TABLE_LOCAL='"GLASS/bench/tuning/<hostname>.cuh"'`` to
-your nvcc command (the bench harness picks it up automatically when
-present).
-
-.. note::
-
-   The shipped sm_120 measurements cover only the ``gemm`` API. The
-   ``gemm_batched_1d`` / ``gemv`` / ``row_strided_*`` dispatchers fall
-   back to a conservative shape heuristic for unmeasured shapes; running
-   the autotuner on your machine fills in the measured grid for those
-   APIs too. This matters for GRiD because the current
-   ``eepose_gradient_hessian`` codegen routes its batched calls through
-   ``glass::nvidia::gemm_strided_batched_1d`` — whose dispatch
-   decision is heuristic without per-host measurements.
+    header.
 

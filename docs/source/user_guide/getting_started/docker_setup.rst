@@ -56,21 +56,10 @@ Use the NVIDIA Container Toolkit to expose the host GPU:
    docker build -t grid:dev .
    docker run --rm -it --gpus all grid:dev
 
-For the optional ``glass_nvidia`` linear-algebra backend (cuBLASDx via
-MathDx), mount or copy the MathDx tarball-extracted tree to
-``/opt/nvidia/mathdx/<VERSION>`` inside the container and set
-``MATHDX_ROOT`` to match. See :doc:`installation` for details.
-
 Caveats
 -------
 
 * The image will be large (CUDA devel + Eigen + Pinocchio is several GB).
-* The MathDx package is not redistributable, so it cannot be baked into
-  a public image — mount it at runtime if you need the cuBLASDx backend.
-* Per-host GLASS autotuning writes a per-host file
-  (``GLASS/bench/tuning/<hostname>.cuh``); inside a container with a
-  stable hostname this is fine, but with random container hostnames
-  you'll regenerate it on every run.
 
 This recipe is a known-incomplete starting point; an officially
 supported Docker image is on the long-term wishlist.

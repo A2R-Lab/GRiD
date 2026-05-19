@@ -350,16 +350,20 @@ If we ever need to restore cuBLASDx support:
 Cache invalidation
 -------------------
 
-No external users to migrate (no CI dependents, no PyPI installs since
-the GLASS rollout), so the rip is **clean — no deprecation cycle**:
+No external users to migrate (no PyPI publish, no CI dependents since
+the GLASS rollout), so the rip is **clean — no deprecation cycle, no
+version bump**:
 
 * Hard-remove ``GRID_CUDA_LINALG_BACKEND``, ``GRID_LINALG_GLASS_NVIDIA``,
   ``GRID_CUBLASDX_HEADER_AVAILABLE``, and ``GRID_CUSOLVERDX_HEADER_AVAILABLE``
   from the emitted ``grid.cuh``.
-* Bump the package version from ``1.0.0`` to ``2.0.0`` in
-  ``pyproject.toml``. Any locally-cached ``.so`` files are invalidated
-  by the existing cache-key mixing of ``package_version()``.
-* No no-op alias, no deprecation warning, no v2.1 cleanup pass.
+* Package version stays at ``1.0.0`` (it has never been published).
+* Any locally-cached ``.so`` files become stale. The
+  :py:func:`grid_rbd._cache.compute_cache_key` formula already mixes in
+  a hash of ``wrapper_template.cu``, so wrapper edits invalidate
+  naturally. For the codegen-output change in A2, the only affected
+  user is the maintainer, who can ``rm -rf ~/.cache/grid-rbd`` once.
+* No no-op alias, no deprecation warning.
 
 Open research questions (deferred backlog)
 -------------------------------------------
@@ -407,8 +411,8 @@ Each phase is a self-contained commit with passing tests. Phase 1
    READMEs, tutorials. Sphinx ``make html`` clean.
 6. **Install scripts rip (A5)** — strip libmathdx from base_install.sh /
    developer_install.sh.
-7. **Cache + version bump (A6)** — bump ``grid-rbd`` to ``2.0.0`` in
-   pyproject.toml.
+7. **Install scripts (A6)** — strip libmathdx setup from base/developer
+   install scripts; no version bump (never published).
 8. **Any-thread-count emission (B1)** — drop the ``__launch_bounds__``
    attribute from every kernel emitter (keep the ``SUGGESTED_THREADS``
    constant emission as a documented hint). Parameterize
@@ -420,9 +424,9 @@ Each phase is a self-contained commit with passing tests. Phase 1
    ``test_cuda_second_order_fallback.py`` to cover all algorithms at
    block sizes {64, 128, 256, SUGGESTED_THREADS, 512}. Add the
    microbench artifact.
-10. **Release notes (C)** — short v2.0 changelog noting the rip and
+10. **Release notes (C)** — short changelog entry noting the rip and
     pointing at the archive tag + this design doc. No migration story
-    needed (no external installs since the GLASS rollout).
+    needed (never published).
 
 Estimated total: 2-3 days of focused work plus ~1 day of bench /
 validation. Phases 2-5 are largely mechanical (file-by-file deletion);

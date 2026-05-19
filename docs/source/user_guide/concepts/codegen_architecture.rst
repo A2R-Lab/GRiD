@@ -90,32 +90,21 @@ Concrete signatures (RNEA / inverse_dynamics)
 Thread-count assumptions
 ------------------------
 
-Each emitted ``X_kernel`` carries
-``__launch_bounds__(SUGGESTED_THREADS)``. ``SUGGESTED_THREADS`` is
-computed at codegen time from the robot's DVA parallelism (rounded up
-to a warp, capped at 512) — for iiwa14 it is 352, for go2_fixed it is
-288, and so on. The generated host wrappers also hardcode
-``thread_dimms = dim3(SUGGESTED_THREADS, 1, 1)`` when launching.
+GRiD emits a ``SUGGESTED_THREADS`` constant per generated header, computed
+from the robot's DVA parallelism (rounded up to a warp, capped at 512) —
+for iiwa14 it is 352, for go2_fixed it is 288, and so on. The host
+wrappers default to launching with ``dim3(SUGGESTED_THREADS, 1, 1)``.
 
-This pinning has two consequences for users calling GRiD primitives
-from inside their own kernels:
+After the v2.0 cuBLASDx removal, ``SUGGESTED_THREADS`` is **a hint, not
+an enforced floor**. The vendored SIMT GLASS helpers (``L1/dot``,
+``L2/gemv``, ``L3/gemm``) are thread-count-agnostic by construction —
+they use grid-stride loops. CUDA-inline users can launch GRiD kernels
+with any block size that suits their outer kernel. See
+:doc:`cublasdx_removal_design` for the rationale.
 
-* **cuBLASDx call sites** (in
-  ``GRiDCodeGenerator/helpers/_lin_alg_helpers.py``) ``static_assert``
-  that the launching block has at least ``gemm_min_block_threads<T,
-  M, N, K>()`` threads. cuBLASDx is what enforces the floor.
-
-* **GLASS SIMT paths** (the L1/L2/L3 helpers in ``GLASS/src/``) are
-  thread-count-agnostic — they already use grid-stride loops. The
-  ``__launch_bounds__`` pinning is an occupancy hint, not a
-  correctness requirement, for SIMT-only code paths.
-
-External callers wanting to launch GRiD kernels with different block
-sizes (e.g. to fit GRiD primitives inside a larger user kernel) are
-the motivation for **compat-mode** codegen — see the *Any-thread-count
-design* page for the proposed two-mode emission scheme that drops
-``__launch_bounds__`` and falls back to GLASS SIMT when below the
-cuBLASDx threshold.
+The codegen currently still emits ``__launch_bounds__(SUGGESTED_THREADS)``
+on each ``X_kernel``. That attribute drops in phase B1 (any-thread-count
+emission); see the design doc for the rollout sequence.
 
 See also
 --------

@@ -182,8 +182,8 @@ Coming next
 * Floating-base JAX FFI for ``idsva_so`` (currently routes to the
   body-frame kernel; world-frame fallback for floating-base needs the
   codegen to emit a preprocessor-visible dispatcher).
-* Per-host autotune integration for the ``glass_nvidia`` linalg
-  backend (currently SIMT-only).
+* Any-thread-count library functions for CUDA-inline users (see
+  :doc:`../concepts/cublasdx_removal_design`).
 * CLI shortcut: ``grid-rbd register iiwa.urdf --name iiwa14``.
 
 See also

@@ -34,11 +34,10 @@ producing the canonical markdown report:
        --output-dir test/benchmarks/results/comparison_<tag> \
        --report test/benchmarks/benchmark_multi_version_<tag>.md
 
-The full sweep takes ~3 hours on an RTX 5090 with both GLASS columns.
-Drop the ``glass_nvidia`` column to roughly halve wall time (see
-`docs/sweep-on-5090.md
-<https://github.com/A2R-Lab/GRiD/blob/main/docs/sweep-on-5090.md>`_ for
-why ``glass_nvidia`` is currently a no-op in GRiD).
+The full sweep takes ~1.5 hours on an RTX 5090. cuBLASDx (``glass_nvidia``)
+was removed in v2.0 of the codegen; see
+:doc:`../concepts/cublasdx_removal_design` for the rationale and the
+``archive/last-cublasdx`` git tag for the historical comparison data.
 
 Algorithms measured
 -------------------
