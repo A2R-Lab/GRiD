@@ -1,17 +1,25 @@
 """Any-thread-count correctness tests for the v2.0 codegen.
 
-After the v2.0 cuBLASDx removal, kernels no longer carry
-``__launch_bounds__(SUGGESTED_THREADS)`` and the SIMT GLASS helpers
-use block-stride loops, so any block size that fits per-block (≤1024
-on current GPUs) should produce numerically identical results.
+Today the host-wrapper kernels carry ``__launch_bounds__(SUGGESTED_THREADS)``,
+which is an upper bound: launches with ≤ SUGGESTED_THREADS threads succeed
+(the SIMT GLASS helpers use block-stride loops so any block size
+correctly covers the block-cooperative work); launches with >
+SUGGESTED_THREADS fail with "too many resources requested for launch".
 
-This test sweeps block sizes {64, 128, 256, SUGGESTED_THREADS, 512}
-and verifies every bound RobotHandle method on iiwa14_fixed produces
+This test sweeps block sizes from 64 up through SUGGESTED_THREADS for
+iiwa14_fixed and verifies every bound RobotHandle method produces
 results within float32 tolerance of the SUGGESTED_THREADS reference.
 
 Block size 32 (single warp) is not included because the EE-pose-Hessian
 emission expects at least 2 warps for the 4*NUM_EES tensor write
-parallelism. Block sizes >512 are skipped to keep the test fast.
+parallelism.
+
+Users who need to launch the host wrappers at >SUGGESTED_THREADS will
+want a future "compat-mode" emission (no launch_bounds) — separate
+follow-up. Users who inline ``grid::*_inner`` / ``grid::*_device``
+into their own ``__global__`` kernels have no GRiD-side thread-count
+constraint at all (those are ``__device__`` functions and the
+``__launch_bounds__`` attribute only applies to ``__global__``).
 
 Run with:
     pytest test/python_wrappers/test_any_thread_count.py -m python_wrappers -v
@@ -108,7 +116,12 @@ def reference(handle, samples):
 # ─── tests ──────────────────────────────────────────────────────────────────
 
 
-_BLOCK_SIZES = [64, 128, 256, 512]
+# Block sizes ≤ iiwa14's SUGGESTED_THREADS (352 on the current codegen).
+# 256 is the highest power-of-two ≤ 352; 352 itself is exercised by the
+# test_set_threads_per_block_default test below. To extend to higher
+# counts (e.g. 512, 1024) we need a compat-mode kernel emission with
+# launch_bounds(1024) — tracked as v1.x research follow-up.
+_BLOCK_SIZES = [64, 128, 256]
 
 
 def _call_method(handle, method, samples):
