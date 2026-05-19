@@ -4,20 +4,17 @@
 Columns produced (per robot/base):
   - grid_pre_glass:    GRiD at git ref d2c0d18 (last commit before the GLASS v2 work).
                        Fixed-base only — d2c0d18 harness doesn't support floating-base.
-  - grid_glass:        GRiD HEAD with --linalg-backend=glass (pure-SIMT GLASS v2).
-  - grid_glass_nvidia: GRiD HEAD with --linalg-backend=glass-nvidia (cuBLASDx-backed).
+  - grid_glass:        GRiD HEAD (pure-SIMT GLASS).
   - pinocchio:         CPU reference, HEAD harness with --algo parallel fan-out.
   - mjx:               MuJoCo MJX GPU reference (JAX). Requires mujoco-mjx + jax[cuda12].
   - frax:              Frax GPU reference (JAX, https://github.com/danielpmorton/frax).
                        Covers id/fd/crba/minv. Requires frax + jax[cuda12].
 
 Usage (single robot, fastest):
-    python test/benchmarks/run_multi_version.py \
-        --robots iiwa14 --bases fixed --mathdx-root /opt/nvidia/mathdx/25.12
+    python test/benchmarks/run_multi_version.py --robots iiwa14 --bases fixed
 
 Full sweep:
-    python test/benchmarks/run_multi_version.py \
-        --mathdx-root /opt/nvidia/mathdx/25.12
+    python test/benchmarks/run_multi_version.py
 
 Worktree for the pre-glass column is created at $GRID_PRE_GLASS_WORKTREE
 (default: ../GRiD-A2R-pre-glass/ relative to this repo's root).
@@ -47,14 +44,13 @@ DEFAULT_WORKTREE_PATH = REPO_ROOT.parent / "GRiD-A2R-pre-glass"
 
 ROBOTS = ("iiwa14", "go2", "g1")
 BASES  = ("fixed", "floating")
-# All columns the sweep knows how to run. `glass_nvidia` (cuBLASDx-backed)
-# is intentionally NOT in DEFAULT_COLUMNS — the 2026-05-18 sweep + autotune
-# showed cuBLASDx loses to SIMT at every GEMM shape GRiD currently calls
-# (notably 4×4×4 batched in eepose_gradient_hessian, where SIMT wins by
-# 2.6×). Opt in with `--columns ... glass_nvidia` if you want to validate
-# the dispatch on your own GPU (after running
-# `python3 GLASS/bench/autotune.py --sm AUTO` for per-host measurements).
-COLUMNS = ("pre_glass", "glass", "glass_nvidia", "pinocchio", "mjx", "frax")
+# Columns the sweep knows how to run. cuBLASDx (glass_nvidia) was removed in
+# v2.0 — the 2026-05-18 sweep + per-host autotune showed it loses to SIMT at
+# every GEMM shape GRiD calls (notably 4×4×4 in eepose_gradient_hessian, where
+# SIMT wins by 2.6×). The historical data is preserved at the
+# `archive/last-cublasdx` git tag; see
+# docs/source/user_guide/concepts/cublasdx_removal_design.rst.
+COLUMNS = ("pre_glass", "glass", "pinocchio", "mjx", "frax")
 DEFAULT_COLUMNS = ("pre_glass", "glass", "pinocchio", "mjx", "frax")
 
 # Maps the column identifier to the baseline key used in the merged JSON
@@ -62,7 +58,6 @@ DEFAULT_COLUMNS = ("pre_glass", "glass", "pinocchio", "mjx", "frax")
 COLUMN_TO_BASELINE_KEY = {
     "pre_glass":    "grid_pre_glass",
     "glass":        "grid_glass",
-    "glass_nvidia": "grid_glass_nvidia",
     "pinocchio":    "pinocchio",
     "mjx":          "mjx",
     "frax":         "frax",
@@ -89,8 +84,7 @@ def ts() -> str:
 # ---------------------------------------------------------------------------
 # Pre-flight dependency checks
 # ---------------------------------------------------------------------------
-def _check_column_deps(column: str, mathdx_root: str | None,
-                       worktree_path: Path) -> tuple[bool, str]:
+def _check_column_deps(column: str, worktree_path: Path) -> tuple[bool, str]:
     """Return (ok, reason_if_not_ok). Used to short-circuit columns whose
     runtime/build dependencies aren't installed on the target machine."""
     if column in ("glass", "pre_glass"):
@@ -101,15 +95,6 @@ def _check_column_deps(column: str, mathdx_root: str | None,
         if column == "pre_glass" and not worktree_path.exists():
             return False, (f"pre_glass worktree {worktree_path} does not exist; "
                            f"orchestrator will create it on demand or pass --skip-setup")
-        return True, ""
-    if column == "glass_nvidia":
-        nvcc = subprocess.run(["which", "nvcc"], capture_output=True).returncode == 0
-        if not nvcc:
-            return False, "nvcc not on PATH"
-        if mathdx_root is None:
-            return False, "--mathdx-root not set and MATHDX_ROOT env var empty"
-        if not (Path(mathdx_root) / "include" / "cublasdx.hpp").exists():
-            return False, f"{mathdx_root}/include/cublasdx.hpp not found"
         return True, ""
     if column == "pinocchio":
         # The pinocchio column compiles a C++ binary; needs pinocchio headers +
@@ -194,12 +179,10 @@ def setup_pre_glass_worktree(path: Path) -> Path:
 # Per-column runners
 # ---------------------------------------------------------------------------
 def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
-                  output: Path, ee_frame: str, linalg_backend: str | None,
-                  mathdx_root: str | None, no_recompile: bool,
+                  output: Path, ee_frame: str, no_recompile: bool,
                   no_rdc: bool = False, no_licm_barrier: bool = False,
                   single_call_iters: int | None = None,
                   batch_iters: int | None = None,
-                  cicc_opt_level: int | None = None,
                   ptxas_opt_level: int | None = None,
                   split_compile: int | None = None,
                   ofast_compile: str | None = None) -> list[str]:
@@ -211,10 +194,6 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
     ]
     if no_recompile:
         cmd.append("--no-recompile")
-    if linalg_backend is not None:
-        cmd += ["--linalg-backend", linalg_backend]
-    if mathdx_root is not None:
-        cmd += ["--mathdx-root", mathdx_root]
     if no_rdc:
         cmd.append("--no-rdc")
     if no_licm_barrier:
@@ -223,8 +202,6 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
         cmd += ["--single-call-iters", str(single_call_iters)]
     if batch_iters is not None:
         cmd += ["--batch-iters", str(batch_iters)]
-    if cicc_opt_level is not None:
-        cmd += ["--cicc-opt-level", str(cicc_opt_level)]
     if ptxas_opt_level is not None:
         cmd += ["--ptxas-opt-level", str(ptxas_opt_level)]
     if split_compile is not None:
@@ -236,11 +213,10 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
 
 def run_grid_column(column: str, robot: str, base: str, *,
                     output_dir: Path, worktree_path: Path,
-                    mathdx_root: str | None, no_recompile: bool,
+                    no_recompile: bool,
                     no_rdc: bool = False, no_licm_barrier: bool = False,
                     single_call_iters: int | None = None,
                     batch_iters: int | None = None,
-                    cicc_opt_level: int | None = None,
                     ptxas_opt_level: int | None = None,
                     split_compile: int | None = None,
                     ofast_compile: str | None = None) -> Path | None:
@@ -255,31 +231,13 @@ def run_grid_column(column: str, robot: str, base: str, *,
             return None
         # pre_glass harness predates --no-rdc; don't pass it.
         cmd = _grid_run_cmd(worktree_path, robot, base, output, ee_frame,
-                            linalg_backend=None, mathdx_root=None, no_recompile=no_recompile)
+                            no_recompile=no_recompile)
     elif column == "glass":
-        # cicc -O3 is fast for fixed-base and only hangs on floating-base
-        # codegen (see test/benchmarks/baselines/grid/run.py --cicc-opt-level
-        # help text). Forwarding the lower opt level to fixed-base would
-        # cost 30-70% perf for no benefit, so gate on base here.
-        effective_cicc = cicc_opt_level if base == "floating" else None
         effective_ptxas = ptxas_opt_level if base == "floating" else None
         cmd = _grid_run_cmd(REPO_ROOT, robot, base, output, ee_frame,
-                            linalg_backend="glass", mathdx_root=None,
                             no_recompile=no_recompile, no_rdc=no_rdc,
                             no_licm_barrier=no_licm_barrier,
                             single_call_iters=single_call_iters, batch_iters=batch_iters,
-                            cicc_opt_level=effective_cicc,
-                            ptxas_opt_level=effective_ptxas,
-                            split_compile=split_compile, ofast_compile=ofast_compile)
-    elif column == "glass_nvidia":
-        effective_cicc = cicc_opt_level if base == "floating" else None
-        effective_ptxas = ptxas_opt_level if base == "floating" else None
-        cmd = _grid_run_cmd(REPO_ROOT, robot, base, output, ee_frame,
-                            linalg_backend="glass-nvidia", mathdx_root=mathdx_root,
-                            no_recompile=no_recompile, no_rdc=no_rdc,
-                            no_licm_barrier=no_licm_barrier,
-                            single_call_iters=single_call_iters, batch_iters=batch_iters,
-                            cicc_opt_level=effective_cicc,
                             ptxas_opt_level=effective_ptxas,
                             split_compile=split_compile, ofast_compile=ofast_compile)
     else:
@@ -445,7 +403,7 @@ def merge_to_unified(json_paths: list[Path]) -> dict:
 # ---------------------------------------------------------------------------
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Multi-version GRiD benchmark sweep (pre-glass + glass + glass-nvidia vs pinocchio)",
+        description="Multi-version GRiD benchmark sweep (pre-glass + glass vs pinocchio + mjx + frax)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -461,8 +419,6 @@ def main() -> None:
                         help="Exclude specific robot/base combinations, e.g. "
                              "'--skip iiwa14_floating g1_fixed'. Useful when one "
                              "combination hangs the compiler.")
-    parser.add_argument("--mathdx-root", default=os.environ.get("MATHDX_ROOT"),
-                        help="Required for the glass_nvidia column (or set MATHDX_ROOT)")
     parser.add_argument("--worktree-path", type=Path,
                         default=Path(os.environ.get("GRID_PRE_GLASS_WORKTREE", str(DEFAULT_WORKTREE_PATH))),
                         help=f"Pre-glass worktree path (default: {DEFAULT_WORKTREE_PATH})")
@@ -473,32 +429,20 @@ def main() -> None:
     parser.add_argument("--no-recompile", action="store_true",
                         help="Forward --no-recompile to inner harnesses")
     parser.add_argument("--no-rdc", action="store_true",
-                        help="Drop -rdc=true from the GRiD glass / glass-nvidia compile line. "
-                             "Use when ptxas hangs on floating-base kernels (older toolkits). "
-                             "Batch timings unaffected; single-call timings may LICM-elide.")
+                        help="Drop -rdc=true from the GRiD compile line. Use when ptxas hangs "
+                             "on floating-base kernels (older toolkits). Batch timings unaffected; "
+                             "single-call timings may LICM-elide.")
     parser.add_argument("--no-licm-barrier", action="store_true",
                         help="Strongest hammer for ptxas hangs: suppress the anti-LICM "
                              "machinery in codegen (volatile reload + __noinline__ barrier). "
                              "Try this if --no-rdc alone doesn't fix the hang. "
                              "Batch timings unaffected; single-call may LICM-elide.")
-    parser.add_argument("--cicc-opt-level", type=int, default=None,
-                        choices=[0, 1, 2, 3],
-                        help="Pass `-Xcicc -O<n>` to GRiD glass / glass-nvidia floating-base "
-                             "compiles only (fixed-base unaffected). Use --cicc-opt-level 2 "
-                             "when nvcc hangs in cicc on floating-base kernels (observed sm_86 "
-                             "/ CUDA 12.6, where cicc -O3 wedges 100%% CPU indefinitely). "
-                             "-O2 finishes in ~2 min, ptxas stays at -O3 so SASS quality is "
-                             "preserved. Fixed-base is gated off the flag because cicc -O3 "
-                             "is fine there and -O2 costs 30-70%% perf. Default: nvcc default "
-                             "(-O3 to cicc).")
     parser.add_argument("--ptxas-opt-level", type=int, default=None,
                         choices=[0, 1, 2, 3],
-                        help="Pass `-Xptxas -O<n>` to GRiD glass / glass-nvidia floating-base "
-                             "compiles only. SM_86-SPECIFIC WORKAROUND: on sm_86 / CUDA 12.6, "
-                             "ptxas -O3 wedges at 100%% CPU on heavy floating-base kernels. "
-                             "-O2 typically completes in a few minutes. LICM defense is at the "
-                             "codegen level (rep-stomp + output->input feedback) and survives "
-                             "any ptxas opt level. Verify before applying on newer arches. "
+                        help="Pass `-Xptxas -O<n>` to GRiD floating-base compiles only. "
+                             "SM_86-SPECIFIC WORKAROUND: on sm_86 / CUDA 12.6, ptxas -O3 "
+                             "wedges at 100%% CPU on heavy floating-base kernels. -O2 typically "
+                             "completes in a few minutes. Not needed on Blackwell (sm_120). "
                              "Default: nvcc default (-O3 to ptxas).")
     parser.add_argument("--split-compile", type=int, default=None,
                         help="Pass `--split-compile=N` to nvcc (12.x). Parallelizes cicc "
@@ -545,7 +489,7 @@ def main() -> None:
     requested = list(args.columns)
     runnable_columns: list[str] = []
     for col in requested:
-        ok, reason = _check_column_deps(col, args.mathdx_root, args.worktree_path)
+        ok, reason = _check_column_deps(col, args.worktree_path)
         if ok:
             print(f"  [{col}] ✓ deps OK")
             runnable_columns.append(col)
@@ -592,11 +536,10 @@ def main() -> None:
                     p = run_grid_column(
                         column, robot, base,
                         output_dir=args.output_dir, worktree_path=args.worktree_path,
-                        mathdx_root=args.mathdx_root, no_recompile=args.no_recompile,
+                        no_recompile=args.no_recompile,
                         no_rdc=args.no_rdc, no_licm_barrier=args.no_licm_barrier,
                         single_call_iters=args.single_call_iters,
                         batch_iters=args.batch_iters,
-                        cicc_opt_level=args.cicc_opt_level,
                         ptxas_opt_level=args.ptxas_opt_level,
                         split_compile=args.split_compile,
                         ofast_compile=args.ofast_compile,

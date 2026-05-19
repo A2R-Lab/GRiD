@@ -4,8 +4,7 @@
 Usage:
     python test/benchmarks/baselines/grid/run.py \
         --robot iiwa14 --base fixed [--output results/iiwa14_fixed_rtx5090.json] \
-        [--no-recompile] [--ee-frame iiwa_link_ee] \
-        [--linalg-backend glass|glass-nvidia]
+        [--no-recompile] [--ee-frame iiwa_link_ee]
 """
 
 from __future__ import annotations
@@ -86,32 +85,6 @@ def detect_cuda_arch() -> str:
                 if cc:
                     return cc.replace(".", "")
     return "86"
-
-
-def resolve_mathdx_root(user_root: str | None = None) -> Path | None:
-    """Find a MathDx installation that contains cuBLASDx headers."""
-    candidates: list[Path] = []
-    if user_root:
-        candidates.append(Path(user_root))
-    env_root = os.environ.get("MATHDX_ROOT")
-    if env_root:
-        candidates.append(Path(env_root))
-    candidates.append(Path("/opt/nvidia/mathdx/25.12"))
-
-    seen: set[Path] = set()
-    for root in candidates:
-        root = root.expanduser()
-        if root in seen:
-            continue
-        seen.add(root)
-        if (root / "include" / "cublasdx.hpp").exists():
-            return root
-    return None
-
-
-def cublasdx_sm_from_arch(arch: str) -> str:
-    """Convert GRID_CUDA_ARCH-style values to the MathDx SM macro convention."""
-    return f"{arch}0"
 
 
 # ---------------------------------------------------------------------------
@@ -607,7 +580,6 @@ def _compile_one_source(
     compile_linalg_flags: list[str],
     link_linalg_flags: list[str],
     common_arch: list[str],
-    cicc_opt_level: int | None,
     ptxas_opt_level: int | None,
     split_compile: int | None,
     ofast_compile: str | None,
@@ -634,8 +606,6 @@ def _compile_one_source(
         "-O3", "-ftz=true", "-prec-div=false", "-prec-sqrt=false",
         *compile_linalg_flags,
     ]
-    if cicc_opt_level is not None:
-        compile_cmd.extend(["-Xcicc", f"-O{int(cicc_opt_level)}"])
     if ptxas_opt_level is not None:
         compile_cmd.extend(["-Xptxas", f"-O{int(ptxas_opt_level)}"])
     if split_compile is not None:
@@ -672,7 +642,6 @@ def _compile_to_object(
     cxx_standard: str,
     compile_linalg_flags: list[str],
     common_arch: list[str],
-    cicc_opt_level: int | None,
     ptxas_opt_level: int | None,
     split_compile: int | None,
     ofast_compile: str | None,
@@ -693,8 +662,6 @@ def _compile_to_object(
         "-O3", "-ftz=true", "-prec-div=false", "-prec-sqrt=false",
         *compile_linalg_flags,
     ]
-    if cicc_opt_level is not None:
-        compile_cmd.extend(["-Xcicc", f"-O{int(cicc_opt_level)}"])
     if ptxas_opt_level is not None:
         compile_cmd.extend(["-Xptxas", f"-O{int(ptxas_opt_level)}"])
     if split_compile is not None:
@@ -742,7 +709,6 @@ def _compile_per_algo_binary(
     compile_linalg_flags: list[str],
     link_linalg_flags: list[str],
     common_arch: list[str],
-    cicc_opt_level: int | None,
     ptxas_opt_level: int | None,
     split_compile: int | None,
     ofast_compile: str | None,
@@ -779,7 +745,6 @@ def _compile_per_algo_binary(
                 cxx_standard=cxx_standard,
                 compile_linalg_flags=compile_linalg_flags,
                 common_arch=common_arch,
-                cicc_opt_level=cicc_opt_level,
                 ptxas_opt_level=ptxas_opt_level,
                 split_compile=split_compile,
                 ofast_compile=ofast_compile,
@@ -829,13 +794,9 @@ def compile_binaries(
     arch: str,
     build_dir: Path,
     no_recompile: bool = False,
-    linalg_backend: str = "glass",
-    mathdx_root: str | None = None,
-    with_cusolverdx: bool = False,
     no_rdc: bool = False,
     single_call_iters: int | None = None,
     batch_iters: int | None = None,
-    cicc_opt_level: int | None = None,
     ptxas_opt_level: int | None = None,
     split_compile: int | None = None,
     ofast_compile: str | None = None,
@@ -878,11 +839,9 @@ def compile_binaries(
 
     # c++17 baseline: needed for inline variables (timeGRiD_common.h carries
     # the random-state singletons) and for clean ODR semantics in the
-    # per-algo TU split. cuBLASDx already required c++17 anyway.
+    # per-algo TU split.
     cxx_standard = "-std=c++17"
     linalg_flags: list[str] = []
-    resolved_mathdx_root: Path | None = None
-    cublasdx_sm: str | None = None
 
     # Override defaults in test/benchmarks/baselines/util/experiment_helpers.h
     # (SINGLE_CALL_ITERS_GLOBAL=10000, TEST_ITERS_GLOBAL=100) by re-defining at
@@ -893,62 +852,14 @@ def compile_binaries(
     if batch_iters is not None:
         linalg_flags.append(f"-DTEST_ITERS_GLOBAL={int(batch_iters)}")
 
-    # Backend-specific shared flags. Whether to add -rdc=true is decided
-    # PER-TU below (single uses it for anti-LICM correctness; batch does
-    # not so nvcc can aggressively inline the inner SIMT helpers).
-    if linalg_backend == "glass":
-        linalg_flags.append("-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS")
-    elif linalg_backend == "glass-nvidia":
-        resolved_mathdx_root = resolve_mathdx_root(mathdx_root)
-        if resolved_mathdx_root is None:
-            raise RuntimeError(
-                "glass-nvidia backend requested, but cublasdx.hpp was not found. "
-                "Set --mathdx-root or MATHDX_ROOT to a MathDx installation."
-            )
-        cxx_standard = "-std=c++17"
-        cublasdx_sm = cublasdx_sm_from_arch(arch)
-        linalg_flags.extend([
-            "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS_NVIDIA",
-            f"-DGRID_CUBLASDX_SM={cublasdx_sm}",
-            f"-I{resolved_mathdx_root / 'include'}",
-            f"-I{resolved_mathdx_root / 'external' / 'cutlass' / 'include'}",
-            # cuBLASDx L2/L3 require relaxed constexpr (see GLASS README).
-            "--expt-relaxed-constexpr",
-        ])
-        if with_cusolverdx and no_rdc:
-            raise RuntimeError(
-                "--with-cusolverdx requires -rdc=true; cannot combine with --no-rdc."
-            )
-        if with_cusolverdx:
-            # cuSOLVERDx ships a precompiled device library; needs -dlto
-            # on top of -rdc=true (the single TU's -rdc handles it) and
-            # links against cusolverdx + cublas + cusolver + cudart.
-            cusolverdx_lib_dir = resolved_mathdx_root / "lib"
-            linalg_flags.extend([
-                "-DGRID_CUDA_USE_GLASS_NVIDIA_LAPACK=1",
-                "-dlto",
-                f"-L{cusolverdx_lib_dir}",
-                "-lcusolverdx",
-                "-lcublas",
-                "-lcusolver",
-                "-lcudart",
-            ])
-    else:
-        raise ValueError(f"Unknown linear algebra backend '{linalg_backend}'")
-
     runner_key = _hash_bytes(
         json.dumps({
             "source_hash": source_hash,
             "header_hash": header_hash,
             "cuda_arch": arch,
             "cxx_standard": cxx_standard,
-            "linalg_backend": linalg_backend,
-            "mathdx_root": str(resolved_mathdx_root) if resolved_mathdx_root else None,
-            "cublasdx_sm": cublasdx_sm,
             "linalg_flags": linalg_flags,
-            "with_cusolverdx": with_cusolverdx,
             "no_rdc": no_rdc,
-            "cicc_opt_level": cicc_opt_level,
             "ptxas_opt_level": ptxas_opt_level,
             "split_compile": split_compile,
             "ofast_compile": ofast_compile,
@@ -958,12 +869,9 @@ def compile_binaries(
         }, sort_keys=True).encode()
     )[:24]
 
-    backend_note = linalg_backend
-    if cublasdx_sm is not None:
-        backend_note += f", GRID_CUBLASDX_SM={cublasdx_sm}"
     print(
         f"  [grid] compiling timeGRiD_{{single,batch}}.cu "
-        f"(arch=sm_{arch}, linalg={backend_note}, cache key={runner_key[:12]})..."
+        f"(arch=sm_{arch}, linalg=glass, cache key={runner_key[:12]})..."
     )
     nvcc = shutil.which("nvcc")
     if nvcc is None:
@@ -991,8 +899,6 @@ def compile_binaries(
             compile_linalg_flags_shared.append(f)
 
     common_arch = ["-gencode", f"arch=compute_{arch},code=sm_{arch}"]
-    if linalg_backend == "glass-nvidia":
-        common_arch.extend(["-gencode", f"arch=compute_{arch},code=compute_{arch}"])
 
     # Per-TU flag sets. single needs -rdc=true (unless --no-rdc was passed)
     # for the anti-LICM machinery; batch does NOT, so nvcc can inline
@@ -1033,7 +939,6 @@ def compile_binaries(
             compile_linalg_flags=single_c,
             link_linalg_flags=single_l,
             common_arch=common_arch,
-            cicc_opt_level=cicc_opt_level,
             ptxas_opt_level=ptxas_opt_level,
             split_compile=split_compile,
             ofast_compile=ofast_compile,
@@ -1054,7 +959,6 @@ def compile_binaries(
             compile_linalg_flags=batch_c,
             link_linalg_flags=batch_l,
             common_arch=common_arch,
-            cicc_opt_level=cicc_opt_level,
             ptxas_opt_level=ptxas_opt_level,
             split_compile=split_compile,
             ofast_compile=ofast_compile,
@@ -1078,7 +982,7 @@ def compile_binaries(
         cxx_standard=cxx_standard,
         compile_linalg_flags=single_c, link_linalg_flags=single_l,
         common_arch=common_arch,
-        cicc_opt_level=cicc_opt_level, ptxas_opt_level=ptxas_opt_level,
+        ptxas_opt_level=ptxas_opt_level,
         split_compile=split_compile, ofast_compile=ofast_compile,
         runner_key=runner_key, ccache_prefix=ccache_prefix, nvcc=nvcc,
     )
@@ -1088,7 +992,7 @@ def compile_binaries(
         cxx_standard=cxx_standard,
         compile_linalg_flags=batch_c, link_linalg_flags=batch_l,
         common_arch=common_arch,
-        cicc_opt_level=cicc_opt_level, ptxas_opt_level=ptxas_opt_level,
+        ptxas_opt_level=ptxas_opt_level,
         split_compile=split_compile, ofast_compile=ofast_compile,
         runner_key=runner_key, ccache_prefix=ccache_prefix, nvcc=nvcc,
     )
@@ -1137,17 +1041,6 @@ def main() -> None:
                         help="Use cached binary even if header changed")
     parser.add_argument("--ee-frame", default=None,
                         help="EE target joint/link name for generator (default: per-robot canonical)")
-    parser.add_argument("--linalg-backend",
-                        choices=["glass", "glass-nvidia"],
-                        default=os.environ.get("GRID_BENCH_LINALG_BACKEND", "glass"),
-                        help="Linear algebra backend for generated GRiD helpers")
-    parser.add_argument("--mathdx-root", default=os.environ.get("MATHDX_ROOT"),
-                        help="MathDx root used when --linalg-backend=glass-nvidia")
-    parser.add_argument("--with-cusolverdx", action="store_true",
-                        default=os.environ.get("GRID_BENCH_WITH_CUSOLVERDX", "0") == "1",
-                        help="Enable cuSOLVERDx LAPACK wrappers (chol/trsm/posv). Adds "
-                             "-rdc=true -dlto -lcusolverdx -lcublas -lcusolver -lcudart to "
-                             "the link line. Only takes effect with --linalg-backend=glass-nvidia.")
     parser.add_argument("--no-rdc", action="store_true",
                         default=os.environ.get("GRID_BENCH_NO_RDC", "0") == "1",
                         help="Drop -rdc=true from the compile line. Speeds up ptxas on older "
@@ -1161,34 +1054,13 @@ def main() -> None:
                              "Strongest hammer for ptxas hangs on floating-base kernels. Sets "
                              "GRID_NO_LICM_BARRIER=1 for the codegen subprocess. Batch timings "
                              "unaffected; single-call may LICM-elide.")
-    parser.add_argument("--cicc-opt-level", type=int, default=None,
-                        choices=[0, 1, 2, 3],
-                        help="Pass `-Xcicc -O<n>` to nvcc, lowering the device-frontend "
-                             "(cicc / NVVM-IR) optimization tier. SM_86-SPECIFIC WORKAROUND: "
-                             "on sm_86 / CUDA 12.6, cicc -O3 wedges at 100%% CPU indefinitely "
-                             "on floating-base headers (the extra 6 DOF crosses an opt-pass "
-                             "threshold). -O2 finishes in ~2 min. Has not been needed on "
-                             "Blackwell (sm_120) in our tests — verify before applying on "
-                             "newer arches; it may be silently degrading SASS quality with "
-                             "no benefit there. Combine with --ptxas-opt-level 2 when "
-                             "ptxas also wedges (the cicc cut reduces PTX complexity, "
-                             "making ptxas's job easier). LICM defense (volatile reload + "
-                             "grid_licm_barrier) is at the C++ level and survives any cicc "
-                             "level. Default: nvcc default (-O3 to cicc).")
     parser.add_argument("--ptxas-opt-level", type=int, default=None,
                         choices=[0, 1, 2, 3],
                         help="Pass `-Xptxas -O<n>` to nvcc, lowering the device-backend "
                              "(ptxas / SASS) optimization tier. SM_86-SPECIFIC WORKAROUND: "
                              "on sm_86 / CUDA 12.6, ptxas -O3 wedges at 100%% CPU on heavy "
-                             "floating-base kernels (LICM, scheduling, or register-coalescing "
-                             "pass chokes on dense PTX). -O2 typically completes in a few "
-                             "minutes at a small SASS-quality cost (<5%% on typical kernels). "
-                             "Has not been needed on Blackwell (sm_120) in our tests — "
-                             "verify before applying on newer arches. Best paired with "
-                             "--cicc-opt-level 2 so cicc emits simpler PTX. LICM defense "
-                             "(volatile reload + grid_licm_barrier) is at the C++ level "
-                             "and survives any ptxas level. Default: nvcc default (-O3 to "
-                             "ptxas).")
+                             "floating-base kernels. Not needed on Blackwell (sm_120). "
+                             "Default: nvcc default (-O3 to ptxas).")
     parser.add_argument("--single-call-iters", type=int, default=None,
                         help="Override SINGLE_CALL_ITERS_GLOBAL (default 10000). Inner-kernel "
                              "rep count for single-call timings; bump for more stable medians "
@@ -1199,8 +1071,7 @@ def main() -> None:
     parser.add_argument("--split-compile", type=int, default=None,
                         help="Pass `--split-compile=N` to nvcc (12.x). Parallelizes cicc "
                              "optimization passes across N threads within a single TU "
-                             "(0 = all CPU cores). Compile ~2× faster on cuBLASDx-heavy "
-                             "glass-nvidia builds.\n\n"
+                             "(0 = all CPU cores).\n\n"
                              "*** DO NOT USE FOR MEASUREMENT RUNS *** — empirically defeats "
                              "the anti-LICM machinery (volatile reload + __noinline__ "
                              "grid_licm_barrier) at ALL values N>=2. Single-call and "
@@ -1254,7 +1125,6 @@ def main() -> None:
     arch = detect_cuda_arch()
     urdf_path = get_urdf_path(args.robot)
     print(f"[grid] {args.robot} {args.base} — URDF: {urdf_path}")
-    print(f"  [grid] linear algebra backend: {args.linalg_backend}")
 
     try:
         header_path = generate_header(urdf_path, args.robot, args.base, ee_frame, build_dir, args.no_recompile)
@@ -1269,13 +1139,9 @@ def main() -> None:
             arch,
             build_dir,
             args.no_recompile,
-            linalg_backend=args.linalg_backend,
-            mathdx_root=args.mathdx_root,
-            with_cusolverdx=args.with_cusolverdx and args.linalg_backend == "glass-nvidia",
             no_rdc=args.no_rdc,
             single_call_iters=args.single_call_iters,
             batch_iters=args.batch_iters,
-            cicc_opt_level=args.cicc_opt_level,
             ptxas_opt_level=args.ptxas_opt_level,
             split_compile=args.split_compile,
             ofast_compile=args.ofast_compile,
@@ -1302,11 +1168,7 @@ def main() -> None:
     meta["base"] = args.base
     meta["ee_frame"] = ee_frame
     meta["cuda_arch"] = arch
-    meta["grid_linalg_backend"] = args.linalg_backend
-    if args.linalg_backend == "glass-nvidia":
-        resolved_mathdx_root = resolve_mathdx_root(args.mathdx_root)
-        meta["mathdx_root"] = str(resolved_mathdx_root) if resolved_mathdx_root else None
-        meta["grid_cublasdx_sm"] = cublasdx_sm_from_arch(arch)
+    meta["grid_linalg_backend"] = "glass"
 
     result = {"metadata": meta, "results": {args.robot: {args.base: {"grid": filled}}}}
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")

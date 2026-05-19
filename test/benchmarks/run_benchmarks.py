@@ -59,8 +59,6 @@ def run_baseline(
     output: Path,
     no_recompile: bool,
     ee_frame: str,
-    linalg_backend: str = "glass",
-    mathdx_root: str | None = None,
 ) -> dict | None:
     script = REPO_ROOT / "test" / "benchmarks" / "baselines" / baseline / "run.py"
     cmd = [
@@ -72,10 +70,6 @@ def run_baseline(
     ]
     if no_recompile:
         cmd.append("--no-recompile")
-    if baseline == "grid":
-        cmd += ["--linalg-backend", linalg_backend]
-        if mathdx_root is not None:
-            cmd += ["--mathdx-root", mathdx_root]
     if baseline == "pinocchio":
         cmd.append("--no-cpu-lock")  # coordinator manages locking externally
     # mjx has no extra flags needed
@@ -115,11 +109,6 @@ def main() -> None:
     parser.add_argument("--baselines", nargs="+", default=["grid", "pinocchio"], choices=BASELINES,
                         help="Baselines to run (default: grid pinocchio). Add 'mjx' explicitly.")
     parser.add_argument("--no-recompile",  action="store_true")
-    parser.add_argument("--linalg-backend", choices=["glass", "glass-nvidia"], default="glass",
-                        help="CUDA linalg backend for GRiD kernels (default: glass)")
-    parser.add_argument("--mathdx-root", default=None,
-                        help="MathDx installation root (required when --linalg-backend=glass-nvidia; "
-                             "falls back to MATHDX_ROOT env var)")
     parser.add_argument("--save-as-regression-baseline", action="store_true",
                         help="Save results to test/benchmarks/perf_baselines.json")
     args = parser.parse_args()
@@ -142,7 +131,7 @@ def main() -> None:
                 output = RESULTS_DIR / f"{robot}_{base}_{baseline}_{host}.json"
                 print(f"[{ts()}] [{i}/{total}] {robot} {base} → {baseline} (EE: {ee or 'none'})...")
                 try:
-                    r = run_baseline(baseline, robot, base, output, args.no_recompile, ee, args.linalg_backend, args.mathdx_root)
+                    r = run_baseline(baseline, robot, base, output, args.no_recompile, ee)
                     all_results.append(r)
                     if r is not None:
                         print(f"  [{baseline}] ✓ done")

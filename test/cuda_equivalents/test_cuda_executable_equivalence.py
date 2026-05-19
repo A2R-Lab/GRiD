@@ -295,50 +295,12 @@ def _detect_cuda_arch() -> str:
     return "86"
 
 
-def _resolve_mathdx_root() -> Path | None:
-    candidates = []
-    env_root = os.environ.get("MATHDX_ROOT")
-    if env_root:
-        candidates.append(Path(env_root))
-    candidates.append(Path("/opt/nvidia/mathdx/25.12"))
-    for root in candidates:
-        root = root.expanduser()
-        if (root / "include" / "cublasdx.hpp").exists():
-            return root
-    return None
-
-
 def _linalg_backend_compile_flags(arch: str) -> tuple[str, list[str], str]:
-    backend = os.environ.get("GRID_CUDA_LINALG_BACKEND", "glass").strip().lower()
-    if backend in ("grid_linalg_glass", "glass", ""):
-        return "-std=c++11", ["-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS"], "glass"
-    if backend not in ("grid_linalg_glass_nvidia", "glass-nvidia"):
-        pytest.fail(
-            "GRID_CUDA_LINALG_BACKEND must be glass or glass-nvidia "
-            f"for CUDA equivalence tests; got {backend!r}."
-        )
-
-    mathdx_root = _resolve_mathdx_root()
-    if mathdx_root is None:
-        pytest.fail(
-            "GRID_CUDA_LINALG_BACKEND=glass-nvidia requested, but cublasdx.hpp was "
-            "not found. Set MATHDX_ROOT to a MathDx installation."
-        )
-    sm = f"{arch}0"
-    flags = [
-        "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS_NVIDIA",
-        f"-DGRID_CUBLASDX_SM={sm}",
-        f"-I{mathdx_root / 'include'}",
-        f"-I{mathdx_root / 'external' / 'cutlass' / 'include'}",
-        "-Xptxas",
-        "-O1",
-    ]
-    note = f"glass-nvidia(sm={sm})"
-    return (
-        "-std=c++17",
-        flags,
-        note,
-    )
+    """Linalg backend is SIMT-only after the cuBLASDx removal (v2.0). The
+    function keeps the (cxx_standard, flags, note) tuple shape so callers
+    don't need updating."""
+    del arch  # unused; sm/arch is handled by the outer compile harness
+    return "-std=c++11", ["-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS"], "glass"
 
 
 def _parse_const_ints(header_path: Path) -> dict[str, int]:

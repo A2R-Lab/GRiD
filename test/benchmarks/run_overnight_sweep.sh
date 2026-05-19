@@ -66,21 +66,12 @@ if [[ ! -x "$PYTHON" ]]; then
     exit 1
 fi
 
-export MATHDX_ROOT="${MATHDX_ROOT:-/opt/nvidia/mathdx/25.12}"
-if [[ ! -f "$MATHDX_ROOT/include/cublasdx.hpp" ]]; then
-    echo "WARNING: $MATHDX_ROOT/include/cublasdx.hpp not found." >&2
-    echo "         glass-nvidia column will be skipped by the pre-flight check." >&2
-fi
-
 # ---------------------------------------------------------------------
-# Main sweep: 6 columns × 3 robots × 2 bases.
+# Main sweep: 5 columns × 3 robots × 2 bases.
 #
 # Flags chosen for sm_120 correctness:
 # - NO --no-licm-barrier: anti-LICM machinery must be active so single-
-#   call timings reflect real work (sm_8x uses --cicc-opt-level 2 instead,
-#   which preserves anti-LICM; sm_120 doesn't need that workaround).
-# - NO --cicc-opt-level: sm_120 doesn't hang at cicc -O3, and -O3
-#   produces measurably faster SASS than -O2 on this GPU.
+#   call timings reflect real work.
 # - --single-call-iters 50000 / --batch-iters 500: bumped from defaults
 #   for tighter medians overnight.
 # - MJX go2/g1 typically fail on current JAX/MJX pins (`_update_constraint`
@@ -91,7 +82,7 @@ fi
 echo
 echo "=== Multi-version sweep ==="
 "$PYTHON" test/benchmarks/run_multi_version.py \
-    --columns glass glass_nvidia pre_glass pinocchio frax mjx \
+    --columns glass pre_glass pinocchio frax mjx \
     --robots iiwa14 go2 g1 \
     --bases fixed floating \
     --single-call-iters 50000 \

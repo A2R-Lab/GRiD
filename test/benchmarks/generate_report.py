@@ -143,10 +143,10 @@ def _robot_rows(results: dict, algo: str, section_robots: list[str]) -> list[str
 
 
 # ---------------------------------------------------------------------------
-# Multi-version table generation (pre_glass / glass / glass_nvidia / pinocchio)
+# Multi-version table generation (pre_glass / glass / pinocchio / mjx / frax)
 # ---------------------------------------------------------------------------
 
-MULTI_VERSION_KEYS = ("grid_pre_glass", "grid_glass", "grid_glass_nvidia",
+MULTI_VERSION_KEYS = ("grid_pre_glass", "grid_glass",
                       "pinocchio", "mjx", "frax_cpu", "frax_gpu")
 
 
@@ -174,7 +174,6 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
         for base in BASES:
             pg = (results.get(robot, {}).get(base, {}).get("grid_pre_glass") or {}).get(algo)
             gl = (results.get(robot, {}).get(base, {}).get("grid_glass") or {}).get(algo)
-            gn = (results.get(robot, {}).get(base, {}).get("grid_glass_nvidia") or {}).get(algo)
             pi = (results.get(robot, {}).get(base, {}).get("pinocchio") or {}).get(algo)
             mx = (results.get(robot, {}).get(base, {}).get("mjx") or {}).get(algo)
             # Frax columns: split into CPU + GPU since Frax advertises both as fast.
@@ -186,30 +185,27 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
 
             if metric == "single":
                 vals = [
-                    _entry_single(pg), _entry_single(gl), _entry_single(gn),
+                    _entry_single(pg), _entry_single(gl),
                     _entry_single(pi) + _codegen_flag(pi),
                     _entry_single(mx),
                     _entry_single(fx_cpu), _entry_single(fx_gpu),
                 ]
                 ratio_gl_over_pg = _ratio(gl, pg, "compute_only", "compute_only", 256)
-                ratio_gn_over_gl = _ratio(gn, gl, "compute_only", "compute_only", 256)
             else:
                 n = 16 if metric == "n16" else 256
                 vals = [
                     _entry_batch(pg, n, "compute_only"),
                     _entry_batch(gl, n, "compute_only"),
-                    _entry_batch(gn, n, "compute_only"),
                     _entry_batch(pi, n),
                     _entry_batch(mx, n, "compute_only"),
                     _entry_batch(fx_cpu, n, "compute_only"),
                     _entry_batch(fx_gpu, n, "compute_only"),
                 ]
                 ratio_gl_over_pg = _ratio(gl, pg, "compute_only", "compute_only", n)
-                ratio_gn_over_gl = _ratio(gn, gl, "compute_only", "compute_only", n)
 
             cells = " | ".join(vals)
             rows.append(
-                f"| {robot} | {base} | {cells} | {ratio_gl_over_pg} | {ratio_gn_over_gl} |"
+                f"| {robot} | {base} | {cells} | {ratio_gl_over_pg} |"
             )
     return rows
 
@@ -247,8 +243,7 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
         "Columns:",
         "- **pre_glass**: GRiD at the pre-GLASS reference. Fixed-base only "
         "(pre_glass harness does not support floating-base).",
-        "- **glass**: GRiD HEAD with the pure-SIMT GLASS v2 backend.",
-        "- **glass_nv**: GRiD HEAD with the cuBLASDx-backed GLASS v2 backend.",
+        "- **glass**: GRiD HEAD with the pure-SIMT GLASS backend.",
         "- **pin**: Pinocchio CPU reference (codegen where available).",
         "- **mjx**: MuJoCo MJX (JAX) GPU reference. Subset of algos only "
         "(id / fd / ee_pose / id_du); others render `—`.",
@@ -257,10 +252,9 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
         "Subset of algos only (id / fd / crba / minv); others render `—`.",
         "- **glass/pre**: N=256 compute-only ratio. **> 1.00× = HEAD is faster**; "
         "**< 1.00× = HEAD regressed**.",
-        "- **glass_nv/glass**: N=256 compute-only ratio. **> 1.00× = cuBLASDx is faster**.",
         "",
         "Each algorithm gets three sub-tables: **single-call**, **batch N=16**, "
-        "**batch N=256**. Same 7 backend columns + ratios in each. Values are "
+        "**batch N=256**. Same backend columns + ratio in each. Values are "
         "median (or mean) µs. GRiD/MJX/Frax numbers are batch compute-only; "
         "Pinocchio is batch with-memory (its compute/transfer aren't separable on CPU).",
         "",
@@ -275,20 +269,20 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
             lines += [f"### {display}", ""]
 
             # Three sub-tables per algorithm: single | N=16 | N=256. Each is the
-            # same 6-column layout (pre_glass / glass / glass_nv / pin / mjx / frax)
-            # plus the glass/pre and glass_nv/glass ratios computed at that batch size.
+            # same 6-column layout (pre_glass / glass / pin / mjx / frax_cpu / frax_gpu)
+            # plus the glass/pre ratio computed at that batch size.
             metric_header = {
                 "single": "single-call",
                 "n16":    "batch N=16",
                 "n256":   "batch N=256",
             }
             col_header = (
-                "| Robot | Base | pre_glass | glass | glass_nv | pin | mjx | frax_cpu | frax_gpu "
-                "| glass/pre | glass_nv/glass |"
+                "| Robot | Base | pre_glass | glass | pin | mjx | frax_cpu | frax_gpu "
+                "| glass/pre |"
             )
             col_align = (
-                "|-------|------|:---------:|:-----:|:--------:|:---:|:---:|:--------:|:--------:"
-                "|:---------:|:-------------:|"
+                "|-------|------|:---------:|:-----:|:---:|:---:|:--------:|:--------:"
+                "|:---------:|"
             )
             for metric in ("single", "n16", "n256"):
                 lines += [f"**{metric_header[metric]}**", ""]
@@ -430,7 +424,7 @@ def main() -> None:
     parser.add_argument("--mode", choices=["single_version", "multi_version"],
                         default="single_version",
                         help="single_version: existing grid/pin/mjx layout. "
-                             "multi_version: pre_glass/glass/glass_nv/pin columns + speedup ratios.")
+                             "multi_version: pre_glass/glass/pin columns + speedup ratio.")
     args = parser.parse_args()
 
     data = load_results(args.input)

@@ -39,33 +39,6 @@ Then run benchmarks:
 # Just GRiD, one robot:
 .venv/bin/python test/benchmarks/baselines/grid/run.py --robot iiwa14 --base fixed
 
-# Just GRiD, explicitly force the default GLASS linear algebra backend:
-.venv/bin/python test/benchmarks/baselines/grid/run.py \
-  --robot iiwa14 --base fixed --linalg-backend glass
-
-# Just GRiD, opt into the experimental GLASS-NVIDIA cuBLASDx-backed path
-# when MathDx is installed. NOTE: the 2026-05-18 autotune + sweep on
-# sm_120 (RTX 5090) showed cuBLASDx loses to SIMT at every shape GRiD
-# currently calls (the 4×4×4 batched GEMM in eepose_gradient_hessian:
-# SIMT wins by 2.6×). The glass-nvidia compile flag is effectively
-# dead weight on the current codegen surface — kept for opt-in
-# experimentation and for future hot-loop refactors that might expose
-# larger gemm shapes where cuBLASDx wins (autotune table says cuBLASDx
-# wins on standalone gemm at ≥16×16×16). Run the autotune on YOUR GPU
-# before relying on the heuristic — your shape ranges may differ.
-MATHDX_ROOT=/opt/nvidia/mathdx/25.12 \
-.venv/bin/python test/benchmarks/baselines/grid/run.py \
-  --robot g1 --base floating --linalg-backend glass-nvidia
-
-# Recommended one-time setup for the glass-nvidia column: tune the
-# cuBLASDx-vs-SIMT dispatch table for your specific GPU (5–30 min). The
-# shipped table is measured on sm_120; other GPUs fall back to a
-# conservative heuristic. Writes a per-host overrides file under
-# GLASS/bench/tuning/<hostname>.cuh — does NOT modify the shipped table.
-# See "Autotune for your GPU" below for the consume-via-
-# GLASS_TUNING_TABLE_LOCAL workflow.
-(cd GLASS && python bench/autotune.py --sm AUTO)
-
 # Just Pinocchio, one robot:
 .venv/bin/python test/benchmarks/baselines/pinocchio/run.py --robot iiwa14 --base fixed
 
@@ -91,78 +64,11 @@ CUDA Toolkit and `nvcc` must be on `PATH`.  These are already required to use GR
 nvcc --version   # should print CUDA release info
 ```
 
-cuBLASDx is optional. The generated GRiD headers default to a vendored `glass`
-scalar/unrolled helper subset that needs no MathDx headers. The `glass-nvidia`
-path uses NVIDIA's cuBLASDx for packed GEMMs and requires C++17 + the MathDx SDK.
-
-#### Installing NVIDIA MathDx (for `glass-nvidia` column)
-
-MathDx is **not** pip-installable. Download the SDK from NVIDIA:
-
-1. Visit https://developer.nvidia.com/cublasdx-downloads (free; requires NVIDIA developer account).
-2. Download the MathDx tarball (e.g. `nvidia-mathdx-25.12.0-Linux.tar.gz`).
-3. Extract under `/opt/nvidia/mathdx/25.12/` (or any path you like).
-4. Verify the headers landed:
-   ```bash
-   ls /opt/nvidia/mathdx/25.12/include/cublasdx.hpp
-   # cublasdx.hpp
-   ```
-
-Then point the benchmark runner at it (one of these is enough):
-
-```bash
-# Option A: per-invocation flag
-.venv/bin/python test/benchmarks/run_multi_version.py \
-    --mathdx-root /opt/nvidia/mathdx/25.12
-
-# Option B: env var (also picked up by baselines/grid/run.py standalone)
-export MATHDX_ROOT=/opt/nvidia/mathdx/25.12
-.venv/bin/python test/benchmarks/run_multi_version.py
-```
-
-If MathDx isn't installed, the pre-flight check skips the `glass-nvidia` column
-with a clear message; the other columns still run.
-
-#### Autotune for your GPU (recommended for production deployments)
-
-GLASS ships `tuning_table.cuh` with measurements taken on sm_120 plus
-per-API shape heuristics for unmeasured shapes. The heuristics are
-conservative but may mis-rank shapes on hardware GLASS hasn't seen.
-To measure on your GPU (one-time, 5–30 min depending on which APIs):
-
-```bash
-# Requires MATHDX_ROOT set (cuBLASDx headers).
-cd GLASS
-python bench/autotune.py --sm AUTO
-```
-
-This measures SIMT vs cuBLASDx across the default shape grid for all
-five round-2 auto-dispatch primaries (`gemm`, `gemv`, `row_strided_gemv`,
-`row_strided_gemm`, `gemm_batched_1d`) and writes
-`bench/tuning/<hostname>.cuh` — a per-host overrides file. The shipped
-`src/nvidia/tuning_table.cuh` is **not** modified.
-
-Consume the per-host overrides in the GRiD bench by setting
-`GLASS_TUNING_TABLE_LOCAL` at compile time:
-
-```bash
-# Add to the nvcc command line (e.g. via grid/run.py extra-flags hook):
--DGLASS_TUNING_TABLE_LOCAL='"bench/tuning/<hostname>.cuh"'
-```
-
-The per-host file is gitignored (see `GLASS/bench/.gitignore`). To
-restrict measurement to one API or supply a custom shape grid:
-
-```bash
-python bench/autotune.py --apis gemv
-python bench/autotune.py --apis row_strided_gemv --shapes "6,6,8;14,14,16"
-```
-
-The shipped table works without running autotune — the heuristic handles
-unmeasured shapes. But if a glass-nvidia row shows unexpected timings vs
-glass, running autotune is the first thing to try. See
-[`GLASS/bench/TUNING.md`](../../GLASS/bench/TUNING.md) for the full
-walkthrough (including `--in-tree` for upstream contributions).
+GRiD uses a vendored `glass` SIMT linalg helper subset that needs no extra
+SDK. The cuBLASDx-backed `glass-nvidia` path was removed in v2.0; see
+`docs/source/user_guide/concepts/cublasdx_removal_design.rst` for the
+rationale and the `archive/last-cublasdx` git tag for the historical code
+path.
 
 ### Pinocchio (CPU)
 
@@ -346,11 +252,10 @@ Both appear as separate rows in EE kinematics sections of `benchmark.md`.
 
 ## Reproducing the Multi-Version Comparison
 
-Side-by-side benchmark of three GRiD versions vs three external GPU/CPU
+Side-by-side benchmark of two GRiD versions vs three external GPU/CPU
 references: **pre-GLASS** (git ref `d2c0d18`, the last commit before the GLASS
-v2 integration), **glass** (HEAD with pure-SIMT GLASS v2), **glass-nvidia**
-(HEAD with cuBLASDx), **pinocchio** (CPU codegen), **mjx** (MuJoCo MJX on
-JAX-GPU), and **frax** (Frax on JAX-GPU,
+work), **glass** (HEAD with pure-SIMT GLASS), **pinocchio** (CPU codegen),
+**mjx** (MuJoCo MJX on JAX-GPU), and **frax** (Frax on JAX-GPU,
 https://github.com/danielpmorton/frax). The orchestrator manages a separate
 git worktree for the pre-GLASS column. MJX exposes id/fd/ee_pose/id_du;
 Frax exposes id/fd/crba/minv; the others render `—`.
@@ -372,16 +277,12 @@ python -m venv .venv
 # 3. CUDA toolkit + nvcc on PATH (required for all GRiD columns).
 nvcc --version
 
-# 4. MathDx 25.12 for the glass-nvidia column (skip this column with --columns if
-#    you don't have MathDx; the others still run).
-ls /opt/nvidia/mathdx/25.12/include/cublasdx.hpp
-
-# 5. MuJoCo MJX for the mjx column (skip with --columns if not wanted).
+# 4. MuJoCo MJX for the mjx column (skip with --columns if not wanted).
 .venv/bin/pip install mujoco mujoco-mjx
 .venv/bin/pip install --upgrade "jax[cuda12]"
 .venv/bin/python -c "import mujoco.mjx; import jax; print(jax.devices())"
 
-# 6. Frax for the frax column (skip with --columns if not wanted).
+# 5. Frax for the frax column (skip with --columns if not wanted).
 .venv/bin/pip install frax
 .venv/bin/python -c "import frax; print('frax OK')"
 ```
@@ -394,16 +295,10 @@ export GRID_PRE_GLASS_WORKTREE=../GRiD-A2R-pre-glass
 
 # Single robot/base (fastest, ~5 min on iiwa14_fixed):
 .venv/bin/python test/benchmarks/run_multi_version.py \
-    --robots iiwa14 --bases fixed \
-    --mathdx-root /opt/nvidia/mathdx/25.12
+    --robots iiwa14 --bases fixed
 
 # Full sweep (~30+ min, dominated by g1 pinocchio cppadcg compile):
-.venv/bin/python test/benchmarks/run_multi_version.py \
-    --mathdx-root /opt/nvidia/mathdx/25.12
-
-# Skip the glass-nvidia column if MathDx is not installed:
-.venv/bin/python test/benchmarks/run_multi_version.py \
-    --columns pre_glass glass pinocchio mjx
+.venv/bin/python test/benchmarks/run_multi_version.py
 
 # Skip a specific (robot, base) combo (e.g. if it hangs the compiler):
 .venv/bin/python test/benchmarks/run_multi_version.py --skip iiwa14_floating
@@ -443,9 +338,6 @@ The orchestrator:
 
 - **glass/pre** column: N=256 compute-only ratio. `> 1.00×` = HEAD is faster
   than the pre-GLASS baseline; `< 1.00×` = HEAD regressed on that algo.
-- **glass_nv/glass** column: N=256 compute-only ratio. `> 1.00×` = cuBLASDx
-  beats pure-SIMT for that shape; `< 1.00×` = SIMT wins (expected for small
-  6×6×6 GEMMs on iiwa14; cuBLASDx is expected to win on larger shapes).
 - Floating-base rows show `—` in the pre_glass column (harness doesn't support
   it at `d2c0d18`).
 
@@ -466,8 +358,6 @@ under a second per compile. Most useful when:
 - Clearing `.pytest_cache/grid_benchmarks/` or `pinocchio_benchmarks/` but
   the underlying `.cu` / `.cpp` source hasn't changed.
 - Iterating on the harness Python code without touching codegen output.
-- Switching back and forth between `--linalg-backend glass` and
-  `glass-nvidia` (each is a separate ccache entry but cached after first hit).
 
 Disable per-binary with `GRID_NO_CCACHE=1` (GRiD) or `PIN_NO_CCACHE=1`
 (Pinocchio). Inspect cache stats with `ccache -s`; clear with `ccache -C`.
