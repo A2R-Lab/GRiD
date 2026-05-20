@@ -187,7 +187,8 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
                   batch_iters: int | None = None,
                   ptxas_opt_level: int | None = None,
                   split_compile: int | None = None,
-                  ofast_compile: str | None = None) -> list[str]:
+                  ofast_compile: str | None = None,
+                  tier: str | None = None) -> list[str]:
     cmd = [
         sys.executable,
         str(harness_repo_root / "test" / "benchmarks" / "baselines" / "grid" / "run.py"),
@@ -210,6 +211,8 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
         cmd += ["--split-compile", str(split_compile)]
     if ofast_compile is not None:
         cmd += ["--ofast-compile", ofast_compile]
+    if tier is not None:
+        cmd += ["--tier", tier]
     return cmd
 
 
@@ -221,15 +224,23 @@ def run_grid_column(column: str, robot: str, base: str, *,
                     batch_iters: int | None = None,
                     ptxas_opt_level: int | None = None,
                     split_compile: int | None = None,
-                    ofast_compile: str | None = None) -> Path | None:
+                    ofast_compile: str | None = None,
+                    tier: str | None = None) -> Path | None:
     """Run the appropriate GRiD harness for `column`. Returns output JSON path or None."""
     ee_frame = EE_FRAMES_GRID.get(robot, "")
     baseline_key = COLUMN_TO_BASELINE_KEY[column]
-    output = output_dir / f"{robot}_{base}_{baseline_key}.json"
+    # Tier-tagged output filename so PERF/LITE/MINIMAL runs don't overwrite
+    # each other. PERF keeps the legacy name (no _tier_ suffix) so historical
+    # filenames stay stable when no tier sweep is requested.
+    tier_suffix = "" if (tier is None or tier == "perf") else f"_tier_{tier}"
+    output = output_dir / f"{robot}_{base}_{baseline_key}{tier_suffix}.json"
 
     if column == "pre_glass":
         if base != "fixed":
             print(f"  [{column}] skipping {robot}/{base}: pre-glass harness doesn't support floating-base")
+            return None
+        if tier is not None and tier != "perf":
+            print(f"  [{column}] skipping {robot}/{base}: pre-glass harness predates tier system")
             return None
         # pre_glass harness predates --no-rdc; don't pass it.
         cmd = _grid_run_cmd(worktree_path, robot, base, output, ee_frame,
@@ -241,25 +252,30 @@ def run_grid_column(column: str, robot: str, base: str, *,
                             no_licm_barrier=no_licm_barrier,
                             single_call_iters=single_call_iters, batch_iters=batch_iters,
                             ptxas_opt_level=effective_ptxas,
-                            split_compile=split_compile, ofast_compile=ofast_compile)
+                            split_compile=split_compile, ofast_compile=ofast_compile,
+                            tier=tier)
     else:
         raise ValueError(f"Unknown grid column: {column}")
 
-    print(f"[{ts()}] [{column}] {robot} {base} → {output.name}")
+    tier_label = f" tier={tier}" if tier else ""
+    print(f"[{ts()}] [{column}] {robot} {base}{tier_label} → {output.name}")
     result = subprocess.run(cmd, capture_output=False, text=True)
     if result.returncode != 0 or not output.exists():
-        print(f"  [{column}] FAILED for {robot}/{base}", file=sys.stderr)
+        print(f"  [{column}] FAILED for {robot}/{base}{tier_label}", file=sys.stderr)
         return None
 
     # Rewrite the JSON so the baseline key is column-specific (e.g. "grid_glass")
-    # instead of the generic "grid" the inner harness emits.
-    _rename_grid_key(output, baseline_key)
+    # instead of the generic "grid" the inner harness emits. For tier sweeps,
+    # also append the tier suffix so PERF/LITE/MINIMAL results live as distinct
+    # keys in the merged output.
+    keyed = baseline_key + (f"_tier_{tier}" if (tier is not None and tier != "perf") else "")
+    _rename_grid_key(output, keyed)
 
     # The pre_glass worktree's grid/run.py (frozen at d2c0d18) predates the
     # single/N=16/N=256 batch-summary print added in HEAD. Re-emit it here from
     # the JSON so the stdout looks consistent across all columns.
     if column == "pre_glass":
-        _print_batch_summary_from_json(output, baseline_key)
+        _print_batch_summary_from_json(output, keyed)
     return output
 
 
@@ -467,6 +483,15 @@ def main() -> None:
                         help="Override Pinocchio CPU_THREADS_GLOBAL (default: physical "
                              "cores). Logical/SMT siblings are skipped because every "
                              "thread runs the same JIT'd code; HT hurts.")
+    parser.add_argument("--tiers", nargs="+", default=["perf"],
+                        choices=["perf", "lite", "minimal"],
+                        help="Resource tiers to sweep for the GRiD columns. Default: "
+                             "['perf'] (legacy single-tier behavior). Pass "
+                             "'--tiers perf lite minimal' for full Phase 4 sweep — each "
+                             "GRiD column gets one full run per tier with results "
+                             "tagged grid_glass / grid_glass_tier_lite / grid_glass_tier_minimal "
+                             "in the merged JSON. Non-GRiD columns (pinocchio/mjx/frax) "
+                             "are tier-agnostic and run only once.")
     parser.add_argument("--report", type=Path,
                         default=THIS_DIR / "benchmark_multi_version.md",
                         help="Markdown report output path")
@@ -535,17 +560,27 @@ def main() -> None:
                         batch_iters=args.batch_iters,
                     )
                 else:
-                    p = run_grid_column(
-                        column, robot, base,
-                        output_dir=args.output_dir, worktree_path=args.worktree_path,
-                        no_recompile=args.no_recompile,
-                        no_rdc=args.no_rdc, no_licm_barrier=args.no_licm_barrier,
-                        single_call_iters=args.single_call_iters,
-                        batch_iters=args.batch_iters,
-                        ptxas_opt_level=args.ptxas_opt_level,
-                        split_compile=args.split_compile,
-                        ofast_compile=args.ofast_compile,
-                    )
+                    # GRiD columns: one run per tier (perf is the default; multi-tier
+                    # sweep gives lite/minimal too). Each tier's binary cache is keyed
+                    # separately by the -DGRID_DEFAULT_RESOURCE_TIER flag.
+                    for tier in args.tiers:
+                        p = run_grid_column(
+                            column, robot, base,
+                            output_dir=args.output_dir, worktree_path=args.worktree_path,
+                            no_recompile=args.no_recompile,
+                            no_rdc=args.no_rdc, no_licm_barrier=args.no_licm_barrier,
+                            single_call_iters=args.single_call_iters,
+                            batch_iters=args.batch_iters,
+                            ptxas_opt_level=args.ptxas_opt_level,
+                            split_compile=args.split_compile,
+                            ofast_compile=args.ofast_compile,
+                            tier=tier,
+                        )
+                        if p is not None:
+                            produced.append(p)
+                        else:
+                            skipped.append((f"{column}/{tier}", robot, base))
+                    continue
                 if p is not None:
                     produced.append(p)
                 else:

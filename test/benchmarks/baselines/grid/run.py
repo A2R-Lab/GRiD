@@ -815,6 +815,7 @@ def compile_binaries(
     ofast_compile: str | None = None,
     per_algo_tus: bool = True,
     compile_workers: int | None = None,
+    tier: str | None = None,
 ) -> tuple[Path, Path]:
     """Compile the single-call binary (with -rdc=true) and the batch binary
     (without -rdc=true) against the generated header. Returns
@@ -864,6 +865,15 @@ def compile_binaries(
         linalg_flags.append(f"-DSINGLE_CALL_ITERS_GLOBAL={int(single_call_iters)}")
     if batch_iters is not None:
         linalg_flags.append(f"-DTEST_ITERS_GLOBAL={int(batch_iters)}")
+    # Resource-tier macro override: Phase 4 perf-validation sweep launches
+    # every kernel at the chosen tier (PERF default; LITE/MINIMAL pick the
+    # spill body). Defaulting via #ifndef in grid.cuh keeps PERF as the
+    # baseline when --tier is not passed.
+    if tier is not None:
+        tier_macro = {"perf": "grid::TIER_PERF", "lite": "grid::TIER_LITE", "minimal": "grid::TIER_MINIMAL"}.get(tier)
+        if tier_macro is None:
+            raise ValueError(f"unknown tier: {tier!r}; expected perf/lite/minimal")
+        linalg_flags.append(f"-DGRID_DEFAULT_RESOURCE_TIER={tier_macro}")
 
     runner_key = _hash_bytes(
         json.dumps({
@@ -1119,6 +1129,12 @@ def main() -> None:
                         help="Thread pool size for the per-algo parallel compile. Default: "
                              "0.75 × CPU count (capped at 2 minimum). nvcc forks cicc/ptxas "
                              "subprocesses already, so don't oversubscribe.")
+    parser.add_argument("--tier", default=None, choices=["perf", "lite", "minimal"],
+                        help="Resource-tier override. Compiles bench with "
+                             "-DGRID_DEFAULT_RESOURCE_TIER=grid::TIER_<X>. PERF default "
+                             "preserves current behavior; LITE/MINIMAL launch the spill bodies "
+                             "with their tier-specific launch_bounds + smem. Used for Phase 4 "
+                             "per-tier perf validation; output JSON gains a 'tier' field.")
     args = parser.parse_args()
 
     ee_frame = args.ee_frame or DEFAULT_EE_FRAMES.get(args.robot, "")
@@ -1160,6 +1176,7 @@ def main() -> None:
             ofast_compile=args.ofast_compile,
             per_algo_tus=args.per_algo_tus,
             compile_workers=args.compile_workers,
+            tier=args.tier,
         )
     except Exception as e:
         print(f"  [grid] ERROR compiling binaries: {e}", file=sys.stderr)
@@ -1182,6 +1199,7 @@ def main() -> None:
     meta["ee_frame"] = ee_frame
     meta["cuda_arch"] = arch
     meta["grid_linalg_backend"] = "glass"
+    meta["resource_tier"] = args.tier if args.tier is not None else "perf"
 
     result = {"metadata": meta, "results": {args.robot: {args.base: {"grid": filled}}}}
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
