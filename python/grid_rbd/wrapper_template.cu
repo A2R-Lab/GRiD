@@ -761,7 +761,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_gradient_impl(
         g_block_dimms, g_thread_dimms,
         grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
-            g_data->d_deePos, g_data->d_q_qd_u, stride_q,
+            g_data->d_deePos, g_data->d_workspace, g_data->d_q_qd_u, stride_q,
             g_robot, batch);
 
     cudaMemcpyAsync(dee_out->typed_data(), g_data->d_deePos,

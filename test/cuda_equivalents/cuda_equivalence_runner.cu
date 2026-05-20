@@ -401,6 +401,7 @@ void run() {
     if (floating_algorithm_requested("end_effector_pose_gradient")) {
         grid::end_effector_pose_gradient_kernel<T><<<1, 32, grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_dee,
+            /*d_workspace=*/nullptr,
             d_q,
             grid::NUM_JOINTS,
             d_robot_model,

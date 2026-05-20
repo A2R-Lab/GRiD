@@ -1,8 +1,8 @@
 Resource-Tier System (v2.0)
 ============================
 
-**Status**: shipped in v2.0 + Phase 3a/b/c/e spill machinery + L2 pinning
-default-on. Two surgical-spill follow-ups deferred (see
+**Status**: shipped in v2.0 + Phase 3a/b/c/d/e spill machinery + L2 pinning
+default-on. One surgical-spill follow-up deferred (IDSVA_SO_B/W; see
 "Immediate next steps" below).
 
 **Audience**: inline-CUDA users (``#include "grid.cuh"`` from their own
@@ -12,11 +12,8 @@ kernel). The Python wrappers (``grid_rbd.RobotHandle``,
 Immediate next steps
 ---------------------
 
-Two algorithms still SKIP at runtime on h1_2-scale humanoids and need
-per-algorithm surgical-spill design before they can be unlocked. Both
-need the same hot/cold buffer analysis we did for Minv (where ``s_F``
-was the clear surgical target) — that analysis hasn't been done for
-these algos yet:
+One algorithm still needs per-algorithm surgical-spill design before
+it can be unlocked at h1_2-scale humanoids:
 
 1. **IDSVA_SO_B / IDSVA_SO_W (Phase 3f)** — overflow at 146-168 KB
    on h1_2. ``use_global_output`` (Level 1) already spills the 4*NV³
@@ -33,18 +30,6 @@ these algos yet:
    shows the smem layout (``body_mat_count``, ``body_vec_count``,
    ``vel_vec_count``, ``vel_mat_count``); the inner function body
    (``gen_idsva_so_body_frame_inner``) is where access patterns live.
-
-2. **EE_POSE_GRAD (Phase 3d)** — overflows at 179-204 KB on h1_2.
-   No existing spill machinery on this kernel today; the entire smem
-   footprint (XHom + dXmatsHom + per-EE Jacobian columns + topology)
-   has to be re-examined. The natural surgical targets are
-   ``s_deePos`` (6*NV*num_ees output, write-once) or one of the XHom
-   tables if the algorithm tolerates a partial L2-fetch. Needs design
-   from scratch.
-
-   Entry points:
-   ``GRiDCodeGenerator/algorithms/_eepose_gradient_hessian.py``'s
-   ``gen_end_effector_pose_gradient_inner`` and ``_kernel``.
 
 What's *not* a concern (already addressed by L2 pinning):
 
@@ -425,7 +410,27 @@ would be sharp. With L2 pinning, the kernel still mostly hits L2.
 If your workload requires the L2 cache for other concurrent kernels and
 you want to opt out, compile with ``-DGRID_CUDA_ENABLE_L2_PERSISTING=0``.
 
-**Phase 3a + 3b + 3c + 3e shipped — Minv + FD + ABA + FDSVA_SO L4-5 spill landed**
+**Phase 3a + 3b + 3c + 3d + 3e shipped — Minv + FD + ABA + EE_POSE_GRAD + FDSVA_SO L4-5 spill landed**
+
+* **Phase 3d (EE_POSE_GRAD)**: mirrors the D2EE 3-tier spill pattern. PERF
+  keeps the full inner_temp + s_deePos + dXmatsHom in smem; LITE pushes the
+  recursion-hot inner_temp (2*2*16*num_ees*n T = ~52 KB on humanoid-scale)
+  to L2-pinned workspace and writes ``s_deePos`` directly into global
+  output; MINIMAL also pushes ``s_dXmatsHom`` (16*n T) to workspace.
+  ``end_effector_pose_gradient_kernel`` now takes ``unsigned char *d_workspace``
+  as its new 2nd argument. ``DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T, TIER>()``
+  is tier-aware. The workspace section reuses the SO offset (EE_POSE_GRAD
+  and SO algos don't run concurrently). Per-(robot) picks:
+
+  - iiwa14_fixed/floating: (0, 0, 2) — PERF/LITE alias to full smem;
+    MINIMAL spills inner_temp + dxhom
+  - go2_fixed/floating: (0, 0, 2) — same
+  - h1_2_fixed/floating: (1, 1, 2) — PERF/LITE both already spill
+    inner_temp + s_deePos; MINIMAL additionally spills dxhom
+
+  Smoke (nvcc -gencode arch=compute_120,code=sm_120, all 9 emitted kernels
+  × 3 tiers per robot): iiwa14_fixed/go2_fixed/h1_2_fixed all 27/27 PASS.
+  h1_2_fixed EE_POSE_GRAD compiles clean at 40/40/50 registers (PERF/LITE/MINIMAL).
 
 * **Phase 3e (FDSVA_SO Level 4 + 5)**: extends the existing 4-level spill machinery
   with two new top levels. Level 4 pushes ``s_df_du`` (2*NV²) to a new
