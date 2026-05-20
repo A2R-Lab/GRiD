@@ -273,14 +273,60 @@ For robots where picks collapse, the kernel emits a single body (current
 behavior, byte-identical to pre-Phase-2b). For divergent rows, the kernel
 emits 2 or 3 specialized bodies inside ``if constexpr`` branches.
 
-**Chunk 4: new spill levels for h1_2-overflowing kernels** (deferred)
+**Chunk 4: new spill levels for h1_2-overflowing kernels** (deferred — design fixed)
   - With Chunk 1's failure tolerance, h1_2's overflowing kernels (FDSVA_SO,
     IDSVA_SO_B, IDSVA_SO_W, EE_POSE_GRAD, Minv/FD/ABA on floating-base)
     SKIP cleanly at runtime. To actually *run* them, the codegen needs
-    new spill levels beyond the current most-aggressive (workspace_temp_spill,
-    grav_full_spill, etc.). Each algo needs its own design:
-    push output tensors to workspace; recompute-vs-cache trade-offs in
-    inner functions; or algorithmic recursion changes.
+    new spill levels.
+
+  **Design — two-level surgical + full per algo** (matches the v2.0 tier
+  philosophy: surgical wins are the default, full-spill is a backstop):
+
+  * **Level 1 — surgical**: push the *single largest contributor* in
+    ``inner_temp`` to L2-pinned workspace, keep everything else (and small
+    hot buffers) in shared memory. For ``direct_minv`` on h1_2_fixed the
+    target is ``s_F`` (6\*nv² = ~62 KB on NV=51), which alone is enough to
+    drop Minv from 100 KB to ~38 KB and clear the 99 KB sm_120 opt-in cap.
+    The pattern repeats for ``forward_dynamics`` (its ``s_F``-equivalent
+    inner buffer), ``aba`` (the 12\*NJ partial-tree storage), and
+    ``ee_pose_gradient`` (per-EE Jacobian column workspace).
+  * **Level 2 — full-spill backstop**: push the entire inner-temp arena
+    to workspace. Coarse and slow but guaranteed-correct fallback when
+    Level 1 still overflows (e.g. ``fdsva_so`` on h1_2_floating at 244 KB
+    needs more than just the largest buffer).
+  * The codegen's ``select_shared_tier_3way`` picks the lowest spill level
+    fitting each tier's target: PERF prefers Level 0 (no spill), then
+    Level 1; LITE adds Level 1 at 48 KB target; MINIMAL is always
+    most-spill.
+
+  **L2 cache pinning** is on-by-default whenever any kernel in the
+  generated header is at Level ≥ 1: workspace bytes get read/written
+  every timestep and are HBM-cold without pinning. The codegen flips
+  ``GRID_CUDA_ENABLE_L2_PERSISTING`` to 1 in the emitted header when any
+  algo has ``use_workspace_temp`` (or surgical equivalent) set; the
+  existing ``grid_begin_l2_persisting`` helper covers the runtime mechanics.
+
+  **Implementation cost per algo** (estimate from Minv inspection):
+
+  * ``gen_direct_minv_inner`` has 21 ``FOffset`` references; surgical
+    refactor splits ``s_F`` out as a separate parameter (default-routes
+    to ``&s_temp[FOffset]`` when not spilled, to a workspace pointer
+    when spilled). Other offsets re-base to 0.
+  * Every caller that composes ``direct_minv_inner`` (forward dynamics,
+    forward_dynamics_gradient, fdsva_so) also passes the new ``s_F``
+    pointer.
+  * ``gen_direct_minv_inner_temp_mem_size`` splits into
+    ``gen_direct_minv_inner_temp_mem_size`` (rest of s_temp, minus F) and
+    ``gen_direct_minv_inner_F_size`` (the F-region size).
+  * ``GRiDCodeGenerator.py`` arena math + 3-way pick tables for Minv.
+  * Tier-aware ``MINV_DYNAMIC_SHARED_MEM_BYTES<T, TIER>`` constexpr
+    reports the per-tier smem footprint.
+  * Workspace sizing in ``GRID_WORKSPACE_BYTES_PER_TIMESTEP`` extended to
+    cover Minv's F-region when Level 1 active.
+
+  Per algo this is ~150 lines of careful refactor + smoke + nvcc compile
+  test on h1_2. For 5-6 h1_2-overflowing algos that's multi-day work
+  best done in a focused follow-up session, not bundled with Phase 1-2b.
 
 Deferred work — LITE 48 KB smem target
 ---------------------------------------
