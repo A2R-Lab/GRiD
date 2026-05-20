@@ -328,7 +328,25 @@ emits 2 or 3 specialized bodies inside ``if constexpr`` branches.
   test on h1_2. For 5-6 h1_2-overflowing algos that's multi-day work
   best done in a focused follow-up session, not bundled with Phase 1-2b.
 
-**Phase 3a + 3b + 3c shipped — Minv + FD + ABA spill landed**
+**Phase 3a + 3b + 3c + 3e shipped — Minv + FD + ABA + FDSVA_SO L4-5 spill landed**
+
+* **Phase 3e (FDSVA_SO Level 4 + 5)**: extends the existing 4-level spill machinery
+  with two new top levels. Level 4 pushes ``s_df_du`` (2*NV²) to a new
+  ``GRID_FDSVA_SO_SPILL_OFFSET_BYTES`` workspace section past grad + SO;
+  Level 5 also pushes ``s_Minv`` (NV²). The new workspace section is
+  sized only when MINIMAL (or any tier) picks ≥ 4 (so iiwa14 doesn't pay
+  the allocation). Per-(algo, robot) picks:
+
+  - iiwa14_fixed: (0, 0, 5) — MINIMAL spills max
+  - go2_fixed: (0, 1, 5) — full 3-way divergence
+  - g1_fixed: (2, 5, 5) — LITE/MINIMAL aggressive
+  - g1_floating: (3, 5, 5)
+  - h1_2_fixed: (5, 5, 5) — all tiers max-spill (still doesn't fit 99 KB;
+    XI tables are the dominant cost on humanoid-scale; defer to a future
+    XI-streaming refactor)
+  - h1_2_floating: (5, 5, 5)
+
+
 
 Status (commits ``da831dd`` + ``0795442`` + (3c-tbd)):
 
