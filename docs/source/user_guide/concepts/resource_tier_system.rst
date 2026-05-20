@@ -197,15 +197,81 @@ chunks:
     the PERF pick (= today's behavior). The picks are available for
     introspection by tests + future per-tier emit work.
 
-**Chunk 3: per-tier ``if constexpr`` emission per algo** (deferred)
-  - Convert each algo's single-body emit to multi-body per-tier emit
-    when the 3 picks diverge. When picks collapse to identical, emit
-    one body (no change). When picks differ, wrap each body in
-    ``if constexpr (RESOURCE_TIER == TIER_X)``.
-  - Per-algo scope (rough surgery cost): D2EE narrow (3 emit sites),
-    FDSVA_SO moderate (4-tier spill, ~6 sites), ID_DU/FD_DU narrow,
-    IDSVA_SO_BODY_FRAME moderate (gravity-shim spill interacts).
-  - Each algo conversion is independent and incremental.
+**Chunk 3: per-tier ``if constexpr`` emission per algo** (4 of 5 shipped)
+  - Each kernel now dispatches on its 3-way picks: collapsed picks emit a
+    single body (current behavior), divergent picks emit
+    ``if constexpr (RESOURCE_TIER == TIER_X)`` branches with per-tier
+    spill flags. The tier-aware ``*_DYNAMIC_SHARED_MEM_BYTES<T, TIER>``
+    constexpr reports per-tier smem requirements (default ``TIER = TIER_PERF``
+    preserves all existing single-arg call sites).
+  - **Shipped**: ``d2ee``, ``id_du``, ``fd_du``, ``fdsva_so`` (commit
+    ``8e5ff50``). Verified via nvcc compile of go2_fixed (FULL 3-way
+    divergence on d2ee + fdsva_so picks) and h1_2_fixed (PERF=1, LITE/MIN=2
+    divergence on d2ee + id_du). Smoke test passes on iiwa14 (picks
+    collapse).
+  - **Deferred**: ``idsva_so_body_frame``. Its current spill machinery is
+    asymmetric (``grav_full_spill`` only applies to floating-base, and is
+    auto-triggered only when ``use_global_output`` already exceeds the
+    target). The 3-way picks would need a per-base spill-level enumeration.
+    Better to restructure this in tandem with Phase 3 (which will add new
+    spill levels for h1_2 anyway).
+
+**Where Phase 2b divergence shows up empirically** (from the per-tier picks
+survey across 4 robots × 2 bases):
+
+.. list-table:: 3-way picks per (algo × robot × base) — *(perf, lite, minimal)*
+   :header-rows: 1
+   :widths: 22 18 18 18 18
+
+   * - Robot
+     - fdsva_so
+     - d2ee
+     - id_du
+     - fd_du
+   * - iiwa14_fixed
+     - (0,0,3) divergent
+     - (0,0,2) divergent
+     - (0,0,2) divergent
+     - (0,0,2) divergent
+   * - iiwa14_floating
+     - (1,1,3) divergent
+     - (0,0,2) divergent
+     - (0,0,2) divergent
+     - (0,0,2) divergent
+   * - go2_fixed
+     - (0,1,3) **FULL 3-way**
+     - (0,1,2) **FULL 3-way**
+     - (0,0,2) divergent
+     - (0,0,2) divergent
+   * - go2_floating
+     - (2,3,3) divergent
+     - (1,1,2) divergent
+     - (0,0,2) divergent
+     - (0,0,2) divergent
+   * - g1_fixed
+     - (2,3,3) divergent
+     - (1,1,2) divergent
+     - (0,1,2) **FULL 3-way**
+     - (0,1,2) **FULL 3-way**
+   * - g1_floating
+     - (3,3,3) collapsed
+     - (2,2,2) collapsed
+     - (1,2,2) divergent
+     - (1,2,2) divergent
+   * - h1_2_fixed
+     - (3,3,3) collapsed
+     - (1,2,2) divergent
+     - (1,2,2) divergent
+     - (2,2,2) collapsed
+   * - h1_2_floating
+     - (3,3,3) collapsed
+     - (2,2,2) collapsed
+     - (2,2,2) collapsed
+     - (2,2,2) collapsed
+
+For robots where picks collapse, the kernel emits a single body (current
+behavior, byte-identical to pre-Phase-2b). For divergent rows, the kernel
+emits 2 or 3 specialized bodies inside ``if constexpr`` branches.
 
 **Chunk 4: new spill levels for h1_2-overflowing kernels** (deferred)
   - With Chunk 1's failure tolerance, h1_2's overflowing kernels (FDSVA_SO,
