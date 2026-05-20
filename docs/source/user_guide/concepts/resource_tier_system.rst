@@ -328,7 +328,40 @@ emits 2 or 3 specialized bodies inside ``if constexpr`` branches.
   test on h1_2. For 5-6 h1_2-overflowing algos that's multi-day work
   best done in a focused follow-up session, not bundled with Phase 1-2b.
 
-**Phase 3a — Minv surgical spill (concrete implementation plan)**
+**Phase 3a + 3b shipped — Minv + FD surgical spill landed**
+
+Status (commits ``da831dd`` + ``0795442``):
+
+* ``direct_minv_inner`` now takes ``T *s_F`` as a separate 6*NV*NV scratch
+  parameter; ``forward_dynamics_inner`` analogously takes ``T *s_minv_F``.
+  Callers decide whether the F-region lives in extra smem (Level 0,
+  preserves current behavior on small robots) or L2-pinned workspace
+  (Level 1, frees ~62 KB smem on humanoid-scale robots).
+* ``direct_minv_kernel`` and ``forward_dynamics_kernel`` now both take
+  ``unsigned char *d_workspace`` as their new 2nd argument. The per-tier
+  ``select_shared_tier_3way`` picks Level 0 vs Level 1 based on the
+  ``cuda_target_shared_mem_bytes`` (PERF, 98 KB), ``cuda_target_lite_shared_mem_bytes``
+  (LITE, 48 KB), and "always max spill" (MINIMAL) targets.
+* ``MINV_DYNAMIC_SHARED_MEM_BYTES<T, TIER>`` and
+  ``FD_DYNAMIC_SHARED_MEM_BYTES<T, TIER>`` are now tier-aware constexprs
+  reporting per-tier smem footprints (default ``TIER = TIER_PERF`` preserves
+  every existing single-arg call site).
+* Verified via nvcc compile of h1_2_fixed at all 3 tiers:
+
+  - **h1_2_fixed Minv**: 100 KB → 37 KB smem (PERF picks surgical at h1_2-scale)
+  - **h1_2_fixed FD**: 106 KB → 37 KB smem
+  - 40-64 registers/thread per tier; all three tiers instantiate cleanly.
+
+* External call sites updated to pass ``d_workspace``:
+
+  - ``python/grid_rbd/wrapper_template.cu`` (Python FFI surface)
+  - ``test/cuda_equivalents/cuda_equivalence_runner.cu`` (CUDA equivalence harness)
+
+* Composition: FDSVA_SO's device + kernel paths internally compose Minv
+  and FD inner. Both call sites updated to pass ``minv_s_F`` (the local
+  slot at the start of ``s_temp``) through to the new signatures.
+
+**Phase 3a — Minv surgical spill (concrete implementation plan, executed above)**
 
 The Minv inner function has ~15 references to ``s_temp[FOffset + X]`` across
 the backward pass (lines ~71, 173, 212-216, 226), debug prints (314, 362,
