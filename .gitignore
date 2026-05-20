@@ -103,5 +103,12 @@ venv.bak/
 # Test cache
 .pytest_cache/
 
+# Developer install scratch (CppADCodeGen clone, etc.)
+.cache/
+
+# Benchmark sweep artifacts (regenerable; commit explicitly to archive)
+test/benchmarks/benchmark_*.md
+test/benchmarks/benchmark_*.json
+
 # Internal handoff/debugging docs — keep local-only
 docs/handoff-*.md
