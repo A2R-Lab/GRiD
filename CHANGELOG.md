@@ -3,23 +3,26 @@
 GRiD has never been published; this changelog tracks notable in-tree
 changes since the GLASS rollout for our own historical reference.
 
-## Unreleased — cuBLASDx removal + any-thread-count
+## Unreleased — v2.0 — cuBLASDx removal + resource-tier system
 
 **Archive tag for pre-rip state:** `archive/last-cublasdx` (commit
 `5177070`). Use `git show archive/last-cublasdx -- <path>` to see the
 exact pre-rip content of any file.
 
-**Design doc:** [docs/source/user_guide/concepts/cublasdx_removal_design.rst](docs/source/user_guide/concepts/cublasdx_removal_design.rst).
+**Design docs:**
+- [docs/source/user_guide/concepts/cublasdx_removal_design.rst](docs/source/user_guide/concepts/cublasdx_removal_design.rst) — original cuBLASDx-removal rationale.
+- [docs/source/user_guide/concepts/resource_tier_system.rst](docs/source/user_guide/concepts/resource_tier_system.rst) — tier system shipped on top, plus the deferred LITE-48KB follow-up.
 
 ### Why
 
 The 2026-05-18 per-host-autotuned sweep showed cuBLASDx losing to SIMT
 across every algorithm × robot × base in the bench (notably 2.6× behind
 SIMT on the 4×4×4 GEMM inside `end_effector_pose_gradient_hessian`).
-With cuBLASDx gone, every emitted kernel can drop
-`__launch_bounds__(SUGGESTED_THREADS)`, which unblocks the larger goal:
-**CUDA-inline users can now call `grid::*_kernel<T><<<…, anysize>>>`
-without thread-count constraints**.
+With cuBLASDx gone, **CUDA-inline users get tier-controlled resource
+profiles via `grid::*_kernel<T, RESOURCE_TIER><<<…>>>` and the
+matching tier-aware `_device` / `_inner` functions** — picking the
+`(launch_bounds, smem footprint, register cap)` trade-off that fits
+their outer kernel.
 
 ### Codegen / generated headers
 
@@ -28,14 +31,51 @@ without thread-count constraints**.
   `GRID_CUDA_USE_GLASS_NVIDIA`, and all related dispatch logic.
 - Generated headers now vendor only the SIMT GLASS subset
   (`L1/dot`, `L2/gemv`, `L3/gemm`). No external SDK dependencies.
-- Stripped `__launch_bounds__(SUGGESTED_THREADS)` from every emitted
-  kernel. `SUGGESTED_THREADS` is preserved as a *hint*, not an enforced
-  floor.
+- Added `RESOURCE_TIER` non-type template parameter (default `TIER_PERF`)
+  to every emitted `__global__` kernel + the new inline-CUDA `_device`
+  / `_inner` functions listed below. `__launch_bounds__` is now
+  `tier_max_threads<RESOURCE_TIER>()` — at TIER_PERF this resolves to
+  `SUGGESTED_THREADS` (= current behavior, byte-identical to pre-tier
+  build); at TIER_LITE to `min(2*SUGGESTED, 768)`; at TIER_MINIMAL to
+  `1024` (the sm_120 hardware thread cap).
+- New inline-CUDA tier-aware surfaces (each takes
+  `template <typename T, int RESOURCE_TIER = TIER_PERF>` + a caller-
+  provided `T *s_workspace = nullptr` arg):
+    - `fdsva_so_inner` — 4*nv³ inner scratch routes between s_temp
+      (PERF) and s_workspace (LITE/MINIMAL).
+    - `forward_dynamics_gradient_device` — whole s_temp arena routes
+      per tier via `if constexpr` in `gen_declare_shared_arena`.
+    - `inverse_dynamics_gradient_device` — same pattern.
+    - `end_effector_pose_gradient_hessian_device` — d2eeTemp slot
+      routes per tier; inner_no_d2 stays in smem.
+    - `idsva_so_device` (new) — codegen-time frame dispatcher (body
+      for fixed-base, world for floating-base) mirroring the host-
+      level `idsva_so` dispatcher.
+- New per-tier sizing constexprs (call from host to allocate the right
+  buffers): `FDSVA_SO_INNER_*`, `FD_DU_DEVICE_INLINE_*`,
+  `ID_DU_DEVICE_INLINE_*`, `D2EE_DEVICE_INLINE_*`,
+  `IDSVA_SO_DEVICE_INLINE_*` — each as
+  `*_SMEM_BYTES<T, TIER>()` and `*_WORKSPACE_BYTES<T, TIER>()`.
+- Reusable arena helper:
+  `gen_declare_shared_arena(tier_workspace_expr=...)` makes the s_temp
+  slot conditionally route to a caller-provided pointer at TIER_LITE+
+  via `if constexpr (RESOURCE_TIER == TIER_PERF)` branches.
 - Inner functions already used block-stride loops via
-  `gen_add_parallel_loop`, so any block size works correctly. Smaller
-  block sizes are slower (block-cooperative work amortized over fewer
-  threads); larger block sizes are limited only by the per-block max
-  (1024 on current GPUs).
+  `gen_add_parallel_loop`, so any block size in `[1, tier_max_threads]`
+  works correctly. Smaller block sizes are slower (block-cooperative
+  work amortized over fewer threads); larger block sizes need
+  TIER_LITE or TIER_MINIMAL.
+
+### Known limit (deferred to humanoid follow-up)
+
+- **TIER_LITE smem currently behaves identically to TIER_MINIMAL on
+  the smem axis** (both route the whole inner scratch arena to
+  workspace). They differ on the register axis (launch_bounds
+  768 vs 1024). The planned upgrade is a 48 KB smem target for LITE
+  via the existing per-algo multi-tier spill machinery — deferred
+  alongside humanoid-scale (DOF≥50) work because h1_2 needs new
+  spill levels added that should be co-designed with the tier
+  targets. See `resource_tier_system.rst` "Deferred work".
 
 ### Python / JAX wrappers
 
