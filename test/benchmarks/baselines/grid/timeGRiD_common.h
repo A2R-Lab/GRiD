@@ -87,6 +87,28 @@ inline bool grid_kernel_fits_device(size_t requested_bytes) {
     return requested_bytes <= static_cast<size_t>(max_bytes);
 }
 
+// One-liner skip used at the top of each measure_<algo>_{single,batch}.
+// Prints a parseable "<LABEL> SKIPPED" line (matches timing_parser.py null
+// handling) and returns from the enclosing function when the kernel's
+// requested smem exceeds the device cap. The smem-bytes constexpr name is
+// passed as TOK so callers stay one line.
+#define GRID_SKIP_IF_KERNEL_TOO_BIG(LABEL, TOK)                                          \
+    do {                                                                                 \
+        if (!grid_kernel_fits_device(grid::TOK<T>())) {                                  \
+            printf("Single Call " LABEL " SKIPPED (kernel needs %zu bytes shared mem, " \
+                   "exceeds device cap)\n", grid::TOK<T>());                             \
+            return;                                                                      \
+        }                                                                                \
+    } while (0)
+#define GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG(LABEL, N, TOK)                                 \
+    do {                                                                                 \
+        if (!grid_kernel_fits_device(grid::TOK<T>())) {                                  \
+            printf("[N:%d]: " LABEL " SKIPPED (kernel needs %zu bytes shared mem, "      \
+                   "exceeds device cap)\n", (N), grid::TOK<T>());                        \
+            return;                                                                      \
+        }                                                                                \
+    } while (0)
+
 // ---------------------------------------------------------------------------
 // run_all_tests<>: shared init / load / warmup / close skeleton.
 // `do_timings` is the per-TU dispatcher (single or batch) — passes

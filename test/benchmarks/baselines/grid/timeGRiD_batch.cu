@@ -22,6 +22,7 @@
 
 template <typename T, int TEST_ITERS>
 __host__ void measure_id_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("ID", N, ID_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("ID", N,
         [&]{ grid::inverse_dynamics<T,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
@@ -29,6 +30,7 @@ __host__ void measure_id_batch(int N, cudaStream_t *streams, grid::robotModel<T>
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_minv_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("Minv", N, MINV_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("Minv", N,
         [&]{ grid::direct_minv<T,true>(d,m,N,dim3(N,1,1),dimms,streams); },
@@ -36,6 +38,7 @@ __host__ void measure_minv_batch(int N, cudaStream_t *streams, grid::robotModel<
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_fd_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("FD", N, FD_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("FD", N,
         [&]{ grid::forward_dynamics<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
@@ -43,6 +46,7 @@ __host__ void measure_fd_batch(int N, cudaStream_t *streams, grid::robotModel<T>
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_aba_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("ABA", N, ABA_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("ABA", N,
         [&]{ grid::aba<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
@@ -50,6 +54,7 @@ __host__ void measure_aba_batch(int N, cudaStream_t *streams, grid::robotModel<T
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_crba_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("CRBA", N, CRBA_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("CRBA", N,
         [&]{ grid::crba<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
@@ -57,6 +62,7 @@ __host__ void measure_crba_batch(int N, cudaStream_t *streams, grid::robotModel<
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_id_du_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("ID_DU", N, ID_DU_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("ID_DU", N,
         [&]{ grid::inverse_dynamics_gradient<T,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
@@ -64,6 +70,7 @@ __host__ void measure_id_du_batch(int N, cudaStream_t *streams, grid::robotModel
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_fd_du_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("FD_DU", N, FD_DU_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("FD_DU", N,
         [&]{ grid::forward_dynamics_gradient<T,false>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
@@ -71,6 +78,7 @@ __host__ void measure_fd_du_batch(int N, cudaStream_t *streams, grid::robotModel
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_ee_pose_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("EE_POSE", N, EE_POS_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("EE_POSE", N,
         [&]{ grid::end_effector_pose<T>(d,m,N,dim3(N,1,1),dimms,streams); },
@@ -78,6 +86,7 @@ __host__ void measure_ee_pose_batch(int N, cudaStream_t *streams, grid::robotMod
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_ee_pose_gradient_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("EE_POSE_GRADIENT", N, DEE_POS_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("EE_POSE_GRADIENT", N,
         [&]{ grid::end_effector_pose_gradient<T>(d,m,N,dim3(N,1,1),dimms,streams); },
@@ -86,6 +95,7 @@ __host__ void measure_ee_pose_gradient_batch(int N, cudaStream_t *streams, grid:
 #if GRID_HAS_IDSVA_SO_BODY_FRAME
 template <typename T, int TEST_ITERS>
 __host__ void measure_idsva_so_body_frame_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("IDSVA_SO_BODY_FRAME", N, IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("IDSVA_SO_BODY_FRAME", N,
         [&]{ grid::idsva_so_body_frame_host<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
@@ -95,6 +105,7 @@ __host__ void measure_idsva_so_body_frame_batch(int N, cudaStream_t *streams, gr
 #if GRID_HAS_IDSVA_SO_WORLD_FRAME
 template <typename T, int TEST_ITERS>
 __host__ void measure_idsva_so_world_frame_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("IDSVA_SO_WORLD_FRAME", N, IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("IDSVA_SO_WORLD_FRAME", N,
         [&]{ grid::idsva_so_world_frame_host<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
@@ -104,10 +115,7 @@ __host__ void measure_idsva_so_world_frame_batch(int N, cudaStream_t *streams, g
 #if GRID_HAS_FDSVA_SO
 template <typename T, int TEST_ITERS>
 __host__ void measure_fdsva_so_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
-    if (!grid_kernel_fits_device(grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>())) {
-        printf("[N:%d]: FDSVA_SO SKIPPED (kernel needs %zu bytes shared mem, exceeds device cap)\n",
-               N, grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>()); return;
-    }
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("FDSVA_SO", N, FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("FDSVA_SO", N,
         [&]{ grid::fdsva_so<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
@@ -117,6 +125,7 @@ __host__ void measure_fdsva_so_batch(int N, cudaStream_t *streams, grid::robotMo
 #if GRID_HAS_IDSVA_SO
 template <typename T, int TEST_ITERS>
 __host__ void measure_idsva_so_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("IDSVA_SO", N, IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("IDSVA_SO", N,
         [&]{ grid::idsva_so<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },

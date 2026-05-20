@@ -256,6 +256,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::inverse_dynamics_compute_only<float,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "ID",
         "gate": None,
+        "shared_mem_skip": "ID_DYNAMIC_SHARED_MEM_BYTES",
     },
     "minv": {
         "single_call":        "grid::direct_minv_single_timing<float,true>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -263,6 +264,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::direct_minv_compute_only<float,true>(d,m,N,dim3(N,1,1),dimms)",
         "batch_label": "Minv",
         "gate": None,
+        "shared_mem_skip": "MINV_DYNAMIC_SHARED_MEM_BYTES",
     },
     "fd": {
         "single_call":        "grid::forward_dynamics_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -270,6 +272,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::forward_dynamics_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "FD",
         "gate": None,
+        "shared_mem_skip": "FD_DYNAMIC_SHARED_MEM_BYTES",
     },
     "aba": {
         "single_call":        "grid::aba_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -277,6 +280,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::aba_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "ABA",
         "gate": None,
+        "shared_mem_skip": "ABA_DYNAMIC_SHARED_MEM_BYTES",
     },
     "crba": {
         "single_call":        "grid::crba_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -284,6 +288,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::crba_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "CRBA",
         "gate": None,
+        "shared_mem_skip": "CRBA_DYNAMIC_SHARED_MEM_BYTES",
     },
     "id_du": {
         "single_call":        "grid::inverse_dynamics_gradient_single_timing<float,false,true>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -291,6 +296,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::inverse_dynamics_gradient_compute_only<float,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "ID_DU",
         "gate": None,
+        "shared_mem_skip": "ID_DU_DYNAMIC_SHARED_MEM_BYTES",
     },
     "fd_du": {
         "single_call":        "grid::forward_dynamics_gradient_single_timing<float,false>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -298,6 +304,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::forward_dynamics_gradient_compute_only<float,false>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "FD_DU",
         "gate": None,
+        "shared_mem_skip": "FD_DU_DYNAMIC_SHARED_MEM_BYTES",
     },
     "ee_pose": {
         "single_call":        "grid::end_effector_pose_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -305,6 +312,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::end_effector_pose_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
         "batch_label": "EE_POSE",
         "gate": None,
+        "shared_mem_skip": "EE_POS_DYNAMIC_SHARED_MEM_BYTES",
     },
     "ee_pose_gradient": {
         "single_call":        "grid::end_effector_pose_gradient_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -312,6 +320,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::end_effector_pose_gradient_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
         "batch_label": "EE_POSE_GRADIENT",
         "gate": None,
+        "shared_mem_skip": "DEE_POS_DYNAMIC_SHARED_MEM_BYTES",
     },
     "idsva_so": {
         "single_call":        "grid::idsva_so_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -319,6 +328,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::idsva_so_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "IDSVA_SO",
         "gate": "GRID_HAS_IDSVA_SO",
+        "shared_mem_skip": "IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES",
     },
     "idsva_so_body_frame": {
         "single_call":        "grid::idsva_so_body_frame_host_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -326,6 +336,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::idsva_so_body_frame_host_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "IDSVA_SO_BODY_FRAME",
         "gate": "GRID_HAS_IDSVA_SO_BODY_FRAME",
+        "shared_mem_skip": "IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES",
     },
     "idsva_so_world_frame": {
         "single_call":        "grid::idsva_so_world_frame_host_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -333,6 +344,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::idsva_so_world_frame_host_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "IDSVA_SO_WORLD_FRAME",
         "gate": "GRID_HAS_IDSVA_SO_WORLD_FRAME",
+        "shared_mem_skip": "IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES",
     },
     "fdsva_so": {
         "single_call":        "grid::fdsva_so_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
