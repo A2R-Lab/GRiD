@@ -530,7 +530,8 @@ static ffi::Error grid_rbd_jax_minv_impl(
         g_block_dimms, g_thread_dimms,
         grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
-            g_data->d_Minv, g_data->d_q_qd_u, stride_q_qd_u,
+            g_data->d_Minv, g_data->d_workspace,
+            g_data->d_q_qd_u, stride_q_qd_u,
             g_robot, batch);
 
     cudaMemcpyAsync(minv_out->typed_data(), g_data->d_Minv,

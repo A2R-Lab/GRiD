@@ -335,7 +335,7 @@ void run() {
 
     if (floating_algorithm_requested("direct_minv")) {
         grid::direct_minv_kernel<T><<<1, 32, grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
-            d_mat, d_q, grid::NUM_JOINTS, d_robot_model, 1
+            d_mat, /*d_workspace=*/nullptr, d_q, grid::NUM_JOINTS, d_robot_model, 1
         );
         gpuErrchk(cudaPeekAtLastError());
         gpuErrchk(cudaDeviceSynchronize());
