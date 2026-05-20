@@ -87,12 +87,59 @@ def compile_all_tiers(grid_cuh: Path, emitted: list[str], build_dir: Path) -> di
             body_lines.append(
                 f"    (void) reinterpret_cast<void*>(&grid::{k}<T, grid::{tier}>);"
             )
+    # Validate the tier-aware sizing constexprs for inline-CUDA users. At
+    # TIER_PERF the SMEM_BYTES values should be non-zero (full smem
+    # footprint, current behavior) and WORKSPACE_BYTES values should be 0.
+    # At TIER_LITE/MINIMAL the SMEM_BYTES values should drop (some / all
+    # scratch moved out) and WORKSPACE_BYTES should be non-zero. These
+    # asserts catch regressions where a tier-aware constexpr isn't actually
+    # parameterized on TIER.
+    sizing_asserts = """
+    // fdsva_so_inner: 4*nv^3 scratch
+    static_assert(grid::FDSVA_SO_INNER_SMEM_BYTES<T, grid::TIER_PERF>() > 0,
+                  "FDSVA_SO_INNER_SMEM_BYTES PERF must include scratch");
+    static_assert(grid::FDSVA_SO_INNER_SMEM_BYTES<T, grid::TIER_LITE>() == 0,
+                  "FDSVA_SO_INNER_SMEM_BYTES LITE must drop scratch");
+    static_assert(grid::FDSVA_SO_INNER_WORKSPACE_BYTES<T, grid::TIER_PERF>() == 0,
+                  "FDSVA_SO_INNER_WORKSPACE_BYTES PERF must be zero");
+    static_assert(grid::FDSVA_SO_INNER_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
+                  "FDSVA_SO_INNER_WORKSPACE_BYTES LITE must hold scratch");
+
+    // fd_du_device, id_du_device, idsva_so_device: whole s_temp arena
+    static_assert(grid::FD_DU_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_PERF>() >
+                  grid::FD_DU_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
+                  "FD_DU_DEVICE_INLINE_SMEM_BYTES LITE must drop below PERF");
+    static_assert(grid::FD_DU_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_PERF>() == 0,
+                  "FD_DU_DEVICE_INLINE_WORKSPACE_BYTES PERF must be zero");
+    static_assert(grid::FD_DU_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
+                  "FD_DU_DEVICE_INLINE_WORKSPACE_BYTES LITE must hold scratch");
+
+    static_assert(grid::ID_DU_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_PERF>() >
+                  grid::ID_DU_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
+                  "ID_DU_DEVICE_INLINE_SMEM_BYTES LITE must drop below PERF");
+    static_assert(grid::ID_DU_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
+                  "ID_DU_DEVICE_INLINE_WORKSPACE_BYTES LITE must hold scratch");
+
+    static_assert(grid::IDSVA_SO_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_PERF>() >
+                  grid::IDSVA_SO_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
+                  "IDSVA_SO_DEVICE_INLINE_SMEM_BYTES LITE must drop below PERF");
+    static_assert(grid::IDSVA_SO_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
+                  "IDSVA_SO_DEVICE_INLINE_WORKSPACE_BYTES LITE must hold scratch");
+
+    // d2ee: only d2eeTemp slot moves (inner_no_d2 stays in smem at all tiers)
+    static_assert(grid::D2EE_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_PERF>() >
+                  grid::D2EE_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
+                  "D2EE_DEVICE_INLINE_SMEM_BYTES LITE must drop below PERF");
+    static_assert(grid::D2EE_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
+                  "D2EE_DEVICE_INLINE_WORKSPACE_BYTES LITE must hold d2eeTemp");
+"""
     src = build_dir / "force_inst.cu"
     src.write_text(
         '#include "grid.cuh"\n'
         'using T = float;\n'
         'void force_all_tiers() {\n'
         + '\n'.join(body_lines) + '\n'
+        + sizing_asserts +
         '}\n'
     )
     obj = build_dir / "force_inst.o"
