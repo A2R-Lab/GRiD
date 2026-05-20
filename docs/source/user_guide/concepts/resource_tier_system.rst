@@ -328,6 +328,53 @@ emits 2 or 3 specialized bodies inside ``if constexpr`` branches.
   test on h1_2. For 5-6 h1_2-overflowing algos that's multi-day work
   best done in a focused follow-up session, not bundled with Phase 1-2b.
 
+**Phase 3f IDSVA_SO_B + W — surgical spill needs design (no clean win)**
+
+The IDSVA_SO_B/W kernels overflow on h1_2 (146-168 KB) but the design
+needs to be surgical for it to be worth landing:
+
+* **Already spilled at Level 1** (``use_global_output``): the 4*NV³ output
+  tensor (``s_idsva_so``). Write-once + read-at-end → ideal spill target.
+* **Already spilled at Level 2** (floating-base only, ``grav_full_spill``):
+  the d2X/d2a/d2f gravity-Hessian helper tensors. Moderate access.
+* **What's left in smem** is the recursion-hot inner working set
+  (per-body 6x6 spatial matrices, per-velocity 6-vectors, etc.) — every
+  step of the BFS recursion touches multiple sub-buffers per thread.
+  *Pushing this band to workspace is a perf cliff*, not a surgical spill.
+
+The naïve "redirect entire ``s_temp`` to L2-pinned workspace" approach
+(analogous to ABA Phase 3c) would tank perf on every divergent (algo, robot)
+cell — and ABA only got away with it because its band is small relative
+to its dispatch overhead. For IDSVA_SO_B the inner is the main cost.
+
+**Surgical Phase 3f needs**: identify which sub-buffers in the IDSVA_SO_B
+inner are cold-or-write-once vs. recursion-hot. Then split a separate
+parameter for the cold ones (similar to ``s_F``/``s_minv_F`` in Phase 3a/3b).
+
+This is a per-algorithm design exercise requiring access to the inner's
+recursion structure. **Deferred to a focused next session** until we have
+that analysis — for now h1_2 IDSVA_SO_B/W SKIP cleanly via the
+failure-tolerant bench (Phase 1).
+
+**L2 cache pinning (default-ON in v2.0)**
+
+``GRID_CUDA_ENABLE_L2_PERSISTING`` defaults to 1 in the generated header.
+The ``init_gridData`` wrapper calls ``grid_begin_l2_persisting`` on
+``d_workspace`` once at allocation time and pairs it with
+``grid_end_l2_persisting`` in ``close_grid``. This means spilled buffers
+(Minv-F at Phase 3a, FD's Minv-F at 3b, ABA's interleaved scratch at 3c,
+FDSVA_SO's df_du/Minv at 3e) live in L2 cache for the kernel's lifetime —
+the perf hit relative to keeping them in shared memory is ~smem→L2 latency
+(~a few cycles), not the smem→HBM gap (~100s of cycles).
+
+Why this matters: most Phase 3 spills target recursion-hot buffers
+(touched many times per kernel), not write-once outputs. Without L2
+pinning, spilled hot data would hit HBM repeatedly and the perf cliff
+would be sharp. With L2 pinning, the kernel still mostly hits L2.
+
+If your workload requires the L2 cache for other concurrent kernels and
+you want to opt out, compile with ``-DGRID_CUDA_ENABLE_L2_PERSISTING=0``.
+
 **Phase 3a + 3b + 3c + 3e shipped — Minv + FD + ABA + FDSVA_SO L4-5 spill landed**
 
 * **Phase 3e (FDSVA_SO Level 4 + 5)**: extends the existing 4-level spill machinery
