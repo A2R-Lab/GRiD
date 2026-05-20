@@ -328,6 +328,108 @@ emits 2 or 3 specialized bodies inside ``if constexpr`` branches.
   test on h1_2. For 5-6 h1_2-overflowing algos that's multi-day work
   best done in a focused follow-up session, not bundled with Phase 1-2b.
 
+**Phase 3a — Minv surgical spill (concrete implementation plan)**
+
+The Minv inner function has ~15 references to ``s_temp[FOffset + X]`` across
+the backward pass (lines ~71, 173, 212-216, 226), debug prints (314, 362,
+412, 438, 457), and the forward pass (402-404, 422, 448). All other
+references (IAOffset, UOffset, DinvOffset, IaOffset, IaTempOffset) are
+self-contained within s_temp.
+
+**Implementation steps (in order, each independently testable):**
+
+1. **Refactor ``gen_direct_minv_inner`` signature**:
+
+   .. code-block:: python
+
+      # Old:
+      func_def_start = "void direct_minv_inner(T *s_Minv, const T *s_q, "
+      # New:
+      func_def_start = "void direct_minv_inner(T *s_Minv, T *s_F, const T *s_q, "
+      # And add template <typename T, bool SPILL_F = false> at the top.
+
+2. **Unified pointer-alias setup at top of body** (replaces lines 52-60):
+
+   .. code-block:: cpp
+
+      // Before existing offset declarations, emit:
+      constexpr int F_in_temp = SPILL_F ? 0 : 6 * NUM_VEL * NUM_VEL;
+      // Offsets re-base to 0 when F is spilled out
+      // (Existing FOffset/IAOffset/UOffset constants get adjusted accordingly)
+
+   In Python (codegen-side):
+
+   .. code-block:: python
+
+      FOffset = 0  # always — F refs use F_ptr below
+      IAOffset = 0 if spill_F else 6*n*n
+      UOffset = IAOffset + 36*n
+      # ... etc, all shifted
+
+3. **Body F-reference substitution** (~15 sites):
+   Replace ``s_temp[FOffset + X]`` → ``s_F[X]`` everywhere F is accessed.
+   The non-F references (IA, U, Dinv, Ia, IaTemp) automatically pick up
+   the new offsets via the Python variables — no body edit needed.
+
+4. **Update ``gen_direct_minv_inner_function_call``**:
+   Add ``s_F_name`` parameter (default ``"s_F"``), thread it through the
+   emitted call site.
+
+5. **Update ``gen_direct_minv_inner_temp_mem_size``**:
+   Return ``6*n*n + 36*n + 6*n + d_inv_count + 36*2*max_bfs_width``
+   (current), OR the same minus 6*n*n when SPILL_F. Add a new helper
+   ``gen_direct_minv_inner_F_size()`` returning ``6*n*n``.
+
+6. **Update ``gen_direct_minv_kernel``** to dispatch on the 3-way
+   ``minv_spill_tier_3way`` pick (Level 0 = full smem; Level 1 = surgical
+   F-to-workspace). At Level 1: allocate ``s_F = reinterpret_cast<T *>(&d_workspace[...])``
+   and ``s_temp`` arena from smem (sized for everything except F).
+
+7. **Update callers**: ``gen_forward_dynamics_inner`` (line 99),
+   ``gen_forward_dynamics_gradient_inner_python`` (line 18 of
+   ``_forward_dynamics_gradient.py``), and the 3 calls in
+   ``_fdsva_so.py`` (lines 265, 329, 360). Each passes ``s_F = &s_temp[0]``
+   so their existing smem layout is preserved (Level 0 behavior).
+
+8. **GRiDCodeGenerator.py arena math**:
+
+   .. code-block:: python
+
+      _minv_inner_temp_count = self.gen_direct_minv_inner_temp_mem_size()
+      _minv_F_count = self.gen_direct_minv_inner_F_size()  # = 6*n*n
+      # Level 0: full smem
+      _minv_t_count_full = n + n*n + _minv_F_count + _minv_inner_temp_count + XI_size
+      # Level 1: F to workspace
+      _minv_t_count_surgical = n + n*n + _minv_inner_temp_count + XI_size
+      self.minv_spill_tier_3way = select_shared_tier_3way(_minv_t_count_full, _minv_t_count_surgical)
+
+9. **Tier-aware ``MINV_DYNAMIC_SHARED_MEM_BYTES<T, TIER>``**:
+   Emit if-constexpr branch picking the per-tier t_count.
+
+10. **Workspace sizing**: extend ``GRID_WORKSPACE_BYTES_PER_TIMESTEP`` to
+    account for Minv-F when ``self.minv_spill_tier_3way`` has any
+    non-zero pick.
+
+11. **L2 pinning default-on**: in ``GRiDCodeGenerator.py``, when any algo
+    has spill flag set, flip the ``#define GRID_CUDA_ENABLE_L2_PERSISTING``
+    default to 1 in the emitted header.
+
+12. **Smoke + nvcc compile** on h1_2_fixed: ``Minv`` should compile at
+    all 3 tiers; TIER_PERF arena bytes should drop from ~100 KB to ~38 KB
+    (= subtract 6 × 51² × sizeof(float) = ~62 KB).
+
+13. **Numerical correctness**: extend
+    ``test/pinocchio_equivalents/test_direct_minv_equivalence.py`` to
+    cover the per-tier paths on h1_2_fixed (PERF only, since the
+    Python wrapper is locked to PERF; inline-CUDA users at LITE/MINIMAL
+    are covered by the smoke-only "compiles" guarantee until a
+    dedicated test_resource_tiers harness exists).
+
+Once Phase 3a is in, Phase 3b (FD), 3c (ABA), 3d (EE_POSE_GRAD), and
+3e (FDSVA_SO level 4) follow the same pattern — each per-algo identifies
+its largest inner-temp buffer, splits it as a separate parameter, and
+plumbs through callers.
+
 Deferred work — LITE 48 KB smem target
 ---------------------------------------
 
