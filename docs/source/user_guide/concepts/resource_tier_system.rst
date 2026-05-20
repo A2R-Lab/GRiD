@@ -1,12 +1,62 @@
 Resource-Tier System (v2.0)
 ============================
 
-**Status**: shipped in v2.0, with one explicitly deferred follow-up
-(``TIER_LITE`` partial smem target, see "Deferred work" below).
+**Status**: shipped in v2.0 + Phase 3a/b/c/e spill machinery + L2 pinning
+default-on. Two surgical-spill follow-ups deferred (see
+"Immediate next steps" below).
 
 **Audience**: inline-CUDA users (``#include "grid.cuh"`` from their own
 kernel). The Python wrappers (``grid_rbd.RobotHandle``,
 ``grid_rbd.jax.JaxRobotHandle``) always use ``TIER_PERF`` by design.
+
+Immediate next steps
+---------------------
+
+Two algorithms still SKIP at runtime on h1_2-scale humanoids and need
+per-algorithm surgical-spill design before they can be unlocked. Both
+need the same hot/cold buffer analysis we did for Minv (where ``s_F``
+was the clear surgical target) — that analysis hasn't been done for
+these algos yet:
+
+1. **IDSVA_SO_B / IDSVA_SO_W (Phase 3f)** — overflow at 146-168 KB
+   on h1_2. ``use_global_output`` (Level 1) already spills the 4*NV³
+   output tensor; ``grav_full_spill`` (Level 2, floating-only) already
+   spills the d2X/d2a/d2f gravity-Hessian helper tensors. What's left
+   is the recursion-hot inner band (per-body 6x6 spatial matrices,
+   per-velocity 6-vectors). A naïve full-band spill (analogous to
+   ABA Phase 3c) would be a perf cliff because the band is touched
+   every BFS step — needs per-sub-buffer hot/cold analysis to find a
+   cold/write-once slice that's safe to spill.
+
+   Entry points for the analysis:
+   ``GRiDCodeGenerator/algorithms/_idsva_so.py:gen_idsva_so_body_frame_inner_temp_mem_size``
+   shows the smem layout (``body_mat_count``, ``body_vec_count``,
+   ``vel_vec_count``, ``vel_mat_count``); the inner function body
+   (``gen_idsva_so_body_frame_inner``) is where access patterns live.
+
+2. **EE_POSE_GRAD (Phase 3d)** — overflows at 179-204 KB on h1_2.
+   No existing spill machinery on this kernel today; the entire smem
+   footprint (XHom + dXmatsHom + per-EE Jacobian columns + topology)
+   has to be re-examined. The natural surgical targets are
+   ``s_deePos`` (6*NV*num_ees output, write-once) or one of the XHom
+   tables if the algorithm tolerates a partial L2-fetch. Needs design
+   from scratch.
+
+   Entry points:
+   ``GRiDCodeGenerator/algorithms/_eepose_gradient_hessian.py``'s
+   ``gen_end_effector_pose_gradient_inner`` and ``_kernel``.
+
+What's *not* a concern (already addressed by L2 pinning):
+
+* Phase 3a/3b/3c spilled buffers (``s_F``, ABA's 140*NJ band) ARE
+  recursion-hot, but L2 pinning (default-on) means access is
+  ~smem→L2 cost, not ~smem→HBM. The perf cost relative to keeping
+  them in smem is bounded by the L2-vs-shared latency gap. Measure
+  via the post-Phase-3 baseline sweep before treating as a problem.
+
+* Phase 3e (FDSVA_SO ``s_df_du``, ``s_Minv``) is more naturally
+  output-like (write-then-read in disjoint phases) — less perf-
+  sensitive than 3a-3c.
 
 What the tier system is
 ------------------------
