@@ -176,32 +176,75 @@ def compile_all_tiers(grid_cuh: Path, emitted: list[str], build_dir: Path) -> di
     return {"compile_ok": True, "info": info}
 
 
+def _resolve_urdf_via_robot_descriptions(module_name: str) -> Path | None:
+    """Resolve a robot_descriptions module's URDF_PATH. Returns None if the
+    module isn't installed (so the smoke skips that scenario gracefully)."""
+    try:
+        import importlib
+        mod = importlib.import_module(module_name)
+        path = Path(getattr(mod, "URDF_PATH"))
+        return path if path.exists() else None
+    except Exception:
+        return None
+
+
+# Robots to exercise. iiwa14 is the baseline (picks collapse, single-body emit).
+# go2_fixed is the most divergent — full 3-way picks on fdsva_so + d2ee. h1_2_fixed
+# is the high-DOF stress test where ID_DU/D2EE pick divergent levels and several
+# kernels overflow at runtime (bench skips those via grid_kernel_fits_device).
+SCENARIOS = [
+    ("iiwa14_fixed",  "robot_descriptions.iiwa14_description",  False),
+    ("go2_fixed",     "robot_descriptions.go2_description",     False),
+    ("h1_2_fixed",    "robot_descriptions.h1_2_description",    False),
+]
+
+
 def main():
-    urdf = (Path.home()
-            / ".cache/robot_descriptions/drake/manipulation/models/"
-              "iiwa_description/urdf/iiwa14_primitive_collision.urdf")
-    if not urdf.exists():
-        print(f"SKIP: iiwa14 URDF not present at {urdf}")
-        return
+    # Fall back to legacy drake URDF path for iiwa14 if robot_descriptions
+    # isn't on PYTHONPATH — keeps the smoke runnable in a stripped venv.
+    legacy_iiwa = (Path.home() /
+        ".cache/robot_descriptions/drake/manipulation/models/"
+        "iiwa_description/urdf/iiwa14_primitive_collision.urdf")
 
-    work = Path("/tmp/tier_inst_smoke")
-    grid_cuh = generate("iiwa14_fixed", urdf, False, work)
-    emitted = detect_emitted(grid_cuh)
-    print(f"Emitted kernels ({len(emitted)}): {emitted}")
-    result = compile_all_tiers(grid_cuh, emitted, work / "build")
+    overall_ok = True
+    for label, mod_name, floating in SCENARIOS:
+        urdf = _resolve_urdf_via_robot_descriptions(mod_name)
+        if urdf is None and label == "iiwa14_fixed" and legacy_iiwa.exists():
+            urdf = legacy_iiwa
+        if urdf is None:
+            print(f"SKIP {label}: {mod_name} not installed (pip install robot_descriptions)")
+            continue
+        print(f"\n=== {label} ({urdf.name}) ===")
+        work = Path(f"/tmp/tier_inst_smoke/{label}")
+        try:
+            grid_cuh = generate(label, urdf, floating, work)
+        except RuntimeError as e:
+            print(f"  CODEGEN FAILED: {e}")
+            overall_ok = False
+            continue
+        emitted = detect_emitted(grid_cuh)
+        print(f"  Emitted kernels ({len(emitted)})")
+        result = compile_all_tiers(grid_cuh, emitted, work / "build")
+        if not result["compile_ok"]:
+            print(f"  COMPILE FAILED:\n{result['stderr']}")
+            overall_ok = False
+            continue
+        print(f"  All {len(emitted) * 3} (kernel, tier) instantiations compile.")
+        # Brief register summary only for the divergence-prone kernels.
+        watch = ("fdsva_so_kernel", "end_effector_pose_gradient_hessian_kernel",
+                 "inverse_dynamics_gradient_kernel", "forward_dynamics_gradient_kernel")
+        for k in emitted:
+            if k not in watch:
+                continue
+            reg_per_tier = [
+                (t, (result["info"].get((k, t)) or {}).get("registers", "?"))
+                for t in TIERS
+            ]
+            cells = "  ".join(f"{t}=R{r}" for t, r in reg_per_tier)
+            print(f"    {k:42s}  {cells}")
 
-    if not result["compile_ok"]:
-        print("COMPILE FAILED:")
-        print(result["stderr"])
+    if not overall_ok:
         sys.exit(1)
-
-    print(f"\nAll {len(emitted) * 3} (kernel, tier) instantiations compile.\n")
-    print("Per-(kernel, tier) register counts:")
-    for k in emitted:
-        for tier in TIERS:
-            d = result["info"].get((k, tier))
-            r = d.get("registers", "?") if d else "?"
-            print(f"  {k:45s} {tier:12s}  R={r}")
     print("\nSmoke: PASS")
 
 
