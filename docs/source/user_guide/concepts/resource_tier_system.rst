@@ -238,6 +238,80 @@ How it relates to other v2.0 work
   (``_inner`` / ``_device`` / ``_kernel`` / host); tier templates
   live at the ``_inner`` / ``_device`` / ``_kernel`` layers.
 
+Deferred validation sweep (P7 / P8)
+------------------------------------
+
+The tier-system perf characterization is deferred to land alongside
+the LITE-48KB and humanoid follow-ups. When that work happens, the
+benchmark sweep should produce one comprehensive matrix in a single
+run:
+
+**Coverage**
+
+* **GRiD across tiers**: PERF, LITE (post-48KB-target), MINIMAL.
+  Each tier × each algo × each robot.
+* **Baselines**:
+    - Pinocchio (CPU, cppadcodegen-accelerated, multi-threaded — the
+      existing ``baselines/pinocchio/run.py`` harness already drives
+      this).
+    - Frax CPU + Frax GPU (JAX reference at
+      https://github.com/danielpmorton/frax — already wired in
+      ``baselines/frax/``; emits ``frax_cpu`` and ``frax_gpu`` columns
+      that ``generate_report.py`` knows how to render).
+* **Timing modes**: single-call AND multi-call (batch) sweeps. Both
+  modes already supported by ``run_multi_version.py`` via
+  ``--single-call-iters`` and ``--batch-iters``.
+* **Base modes**: fixed AND floating per robot.
+
+**Robustness — collect, don't crash**
+
+The sweep should be failure-tolerant: a single (column × algo × robot
+× tier × batch_size) cell failing must NOT abort the script. The goal
+is to capture as much data as possible in one overnight run. Each
+cell that fails should leave a ``—`` (or NaN) entry in the output
+JSON; ``generate_report.py`` already renders missing cells gracefully.
+
+Existing entry points to extend:
+
+* ``test/benchmarks/run_multi_version.py`` — multi-column driver;
+  add a ``--tiers perf lite minimal`` argument that fans out the
+  GRiD column 3-way. Each tier is a separate run of the GRiD
+  harness with the appropriate template-arg-specifying compile flag
+  (TIER_PERF default, TIER_LITE/MINIMAL via a new ``--resource-tier``
+  passthrough on the GRiD harness).
+* ``test/benchmarks/run_overnight_sweep.sh`` — already wraps the
+  big runs; add the tiers parameter.
+* Each cell's ``try`` block in the runner needs to catch all
+  ``Exception`` (including ``cudaError`` surfacing as Python
+  exceptions, OOM, codegen failures, timeout) and write a placeholder
+  entry instead of re-raising.
+
+**Output artifact**
+
+The result lands as ``test/benchmarks/tier_validation_matrix.md``
+(committed). Same row × column structure as the existing
+``benchmark_multi_version_sm120_5090_full.md`` but with GRiD split
+into three tier columns (``grid_perf``, ``grid_lite``,
+``grid_minimal``).
+
+**Threshold tuning** (the reason this is a sweep, not just
+correctness verification):
+
+* Was 48 KB the right LITE smem target? Maybe 64 KB or 32 KB fits
+  the actual perf cliff better. Adjust the codegen target.
+* Are there ``if constexpr`` branches whose perf cost is too high?
+  E.g. on iiwa14 where everything fits PERF, LITE/MINIMAL aliases
+  should be byte-equivalent — verify no regression.
+* Pinocchio absolute baseline: GRiD-PERF / Pinocchio-CPU and
+  GRiD-MINIMAL / Pinocchio-CPU ratios. Even at MINIMAL, GRiD on GPU
+  should beat Pinocchio CPU for batch ≥ ~16. If MINIMAL drops below
+  Pinocchio at small batches, the downgrade design is too aggressive.
+* Frax comparison: with GPU acceleration available on both sides,
+  GRiD should beat Frax GPU at the dynamics kernels GRiD is
+  specialized for (RNEA, FD, gradients, SO). Frax GPU may win on
+  end-effector pose (no SIMT specialization). Use this to calibrate
+  expectations.
+
 References
 -----------
 
@@ -246,7 +320,14 @@ References
   per-(algo, robot) register + smem + spill data driving tier
   decisions.
 * Smoke test: ``test/diagnostics/tier_instantiation_smoke.py`` —
-  verifies all 9 single-overload kernels compile at all 3 tiers.
+  verifies all 9 single-overload kernels compile at all 3 tiers
+  AND 17 static_asserts validate per-tier SMEM/WORKSPACE invariants.
 * Reusable arena helper:
   ``GRiDCodeGenerator/helpers/_code_generation_helpers.py:504-583``
   (``gen_declare_shared_arena``, ``tier_workspace_expr``).
+* Existing bench harness:
+  ``test/benchmarks/run_multi_version.py`` (multi-column driver),
+  ``test/benchmarks/baselines/{grid,pinocchio,frax,mjx}/`` (per-
+  baseline runners), ``test/benchmarks/generate_report.py`` (output
+  renderer that already understands ``frax_cpu``/``frax_gpu`` columns
+  and gracefully renders missing cells as ``—``).
