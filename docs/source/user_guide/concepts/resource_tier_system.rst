@@ -158,6 +158,64 @@ What's in the framework but not yet exercised at LITE-distinct-from-MINIMAL:
   is binary (PERF in smem / non-PERF in workspace). The follow-up
   extends it to ternary picks.
 
+In-flight humanoid follow-up (``humanoid-tier-spill`` branch)
+-------------------------------------------------------------
+
+The next bundle, branching off ``modernizing-tests``, is staged in three
+chunks:
+
+**Chunk 1: bench harness h1_2 enablement + failure tolerance** (shipped)
+  - ``h1_2`` (Unitree H1.2, NV=51 fixed, 57 floating) added to the
+    multi-version bench's ``ROBOTS`` tuple + EE-frame maps in
+    ``run_multi_version.py`` and all four baseline runners
+    (``baselines/{grid,pinocchio,mjx,frax}/run.py``).
+  - **Per-algo runtime skip**: ``timeGRiD_{single,batch}.cu`` and
+    ``run.py``'s ``PER_ALGO_SPECS`` now wire ``GRID_SKIP_*`` macros for
+    every measured kernel. When ``grid_kernel_fits_device(SHARED_BYTES)``
+    is false, the measure function prints a parseable ``... SKIPPED``
+    line and returns. ``timing_parser.py`` ignores the SKIPPED line and
+    ``fill_nulls`` populates the algo with null —
+    ``generate_report.py`` renders missing cells as ``—``.
+  - Net result: a baseline sweep including h1_2 now produces a real row
+    for every (algo, robot, base) cell that fits the sm_120 ~100 KB
+    per-block cap, and graceful ``—`` placeholders for cells that
+    overflow. No more "one overflowing kernel kills the whole binary."
+
+**Chunk 2: 3-way spill picker infrastructure** (shipped, dormant)
+  - ``cuda_target_lite_shared_mem_bytes`` (default 48 KB, env-overridable)
+    added to ``GRiDCodeGenerator.__init__``.
+  - ``select_shared_tier_3way(*t_counts)`` returns
+    ``(perf_pick, lite_pick, minimal_pick)`` indices into the algorithm's
+    spill-level list. PERF picks the lowest-spill fitting
+    ``cuda_target_shared_mem_bytes`` (~98 KB); LITE picks the lowest-spill
+    fitting ``cuda_target_lite_shared_mem_bytes`` (~48 KB), clamped to
+    ``≥`` PERF; MINIMAL is always the most-spill index.
+  - Five algos now populate ``self.<algo>_spill_tier_3way`` plus
+    ``self.<algo>_t_count_per_tier`` (3-tuple of arena t_counts): ID_DU,
+    FD_DU, D2EE, FDSVA_SO, IDSVA_SO_BODY_FRAME.
+  - **No emit-path change yet** — existing single-body emission uses
+    the PERF pick (= today's behavior). The picks are available for
+    introspection by tests + future per-tier emit work.
+
+**Chunk 3: per-tier ``if constexpr`` emission per algo** (deferred)
+  - Convert each algo's single-body emit to multi-body per-tier emit
+    when the 3 picks diverge. When picks collapse to identical, emit
+    one body (no change). When picks differ, wrap each body in
+    ``if constexpr (RESOURCE_TIER == TIER_X)``.
+  - Per-algo scope (rough surgery cost): D2EE narrow (3 emit sites),
+    FDSVA_SO moderate (4-tier spill, ~6 sites), ID_DU/FD_DU narrow,
+    IDSVA_SO_BODY_FRAME moderate (gravity-shim spill interacts).
+  - Each algo conversion is independent and incremental.
+
+**Chunk 4: new spill levels for h1_2-overflowing kernels** (deferred)
+  - With Chunk 1's failure tolerance, h1_2's overflowing kernels (FDSVA_SO,
+    IDSVA_SO_B, IDSVA_SO_W, EE_POSE_GRAD, Minv/FD/ABA on floating-base)
+    SKIP cleanly at runtime. To actually *run* them, the codegen needs
+    new spill levels beyond the current most-aggressive (workspace_temp_spill,
+    grav_full_spill, etc.). Each algo needs its own design:
+    push output tensors to workspace; recompute-vs-cache trade-offs in
+    inner functions; or algorithmic recursion changes.
+
 Deferred work — LITE 48 KB smem target
 ---------------------------------------
 
