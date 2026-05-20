@@ -42,7 +42,7 @@ PRE_GLASS_REF = "d2c0d18"
 RESULTS_DIR   = THIS_DIR / "results" / "comparison"
 DEFAULT_WORKTREE_PATH = REPO_ROOT.parent / "GRiD-A2R-pre-glass"
 
-ROBOTS = ("iiwa14", "go2", "g1")
+ROBOTS = ("iiwa14", "go2", "g1", "h1_2")
 BASES  = ("fixed", "floating")
 # Columns the sweep knows how to run. cuBLASDx (glass_nvidia) was removed in
 # v2.0 — the 2026-05-18 sweep + per-host autotune showed it loses to SIMT at
@@ -67,11 +67,13 @@ EE_FRAMES_GRID = {
     "iiwa14": "iiwa_joint_ee",
     "go2":    "FR_foot_joint",
     "g1":     "right_hand_palm_joint",
+    "h1_2":   "R_base_link_joint",       # fixed joint at base of right hand (before fingers)
 }
 EE_FRAMES_PIN = {
     "iiwa14": "iiwa_link_ee",
     "go2":    "FR_foot",
     "g1":     "right_rubber_hand",
+    "h1_2":   "R_hand_base_link",
 }
 # MJX uses MuJoCo body names (same names as Pinocchio link names for these robots).
 EE_FRAMES_MJX = EE_FRAMES_PIN

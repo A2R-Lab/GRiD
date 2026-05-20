@@ -34,6 +34,7 @@ DEFAULT_EE_FRAMES: dict[str, str] = {
     "iiwa14": "iiwa_link_ee",
     "go2":    "FR_foot",
     "g1":     "right_rubber_hand",
+    "h1_2":   "R_hand_base_link",
 }
 
 # ---------------------------------------------------------------------------
@@ -43,6 +44,7 @@ ROBOT_MJCF_MODULE: dict[str, str] = {
     "iiwa14": "robot_descriptions.iiwa14_mj_description",
     "go2":    "robot_descriptions.go2_mj_description",
     "g1":     "robot_descriptions.g1_mj_description",
+    "h1_2":   "robot_descriptions.h1_2_mj_description",
 }
 
 

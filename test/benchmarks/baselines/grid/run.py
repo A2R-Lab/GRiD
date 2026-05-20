@@ -41,6 +41,7 @@ DEFAULT_EE_FRAMES: dict[str, str] = {
     "iiwa14": "iiwa_joint_ee",    # fixed joint at EE of iiwa14 URDF
     "go2":    "FR_foot_joint",    # fixed joint at FR foot
     "g1":     "right_hand_palm_joint",  # fixed joint at right hand palm
+    "h1_2":   "R_base_link_joint",      # fixed joint at base of right hand (h1_2)
 }
 
 # ---------------------------------------------------------------------------
