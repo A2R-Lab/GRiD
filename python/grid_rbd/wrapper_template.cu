@@ -632,7 +632,8 @@ static ffi::Error grid_rbd_jax_aba_impl(
         g_block_dimms, g_thread_dimms,
         grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
-            g_data->d_qdd, g_data->d_q_qd_u, stride_q_qd,
+            g_data->d_qdd, g_data->d_workspace,
+            g_data->d_q_qd_u, stride_q_qd,
             g_robot, /*gravity=*/9.81f, batch);
 
     cudaMemcpyAsync(qdd_out->typed_data(), g_data->d_qdd,

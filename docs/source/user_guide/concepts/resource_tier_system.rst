@@ -328,7 +328,23 @@ emits 2 or 3 specialized bodies inside ``if constexpr`` branches.
   test on h1_2. For 5-6 h1_2-overflowing algos that's multi-day work
   best done in a focused follow-up session, not bundled with Phase 1-2b.
 
-**Phase 3a + 3b shipped — Minv + FD surgical spill landed**
+**Phase 3a + 3b + 3c shipped — Minv + FD + ABA spill landed**
+
+Status (commits ``da831dd`` + ``0795442`` + (3c-tbd)):
+
+* **Phase 3c (ABA)** uses a different spill pattern than 3a/3b. ABA's 140*NJ+138
+  interleaved scratch band has no natural surgical sub-split — it's all one
+  tightly-coupled recursion. So Level 1 redirects the *entire* ``s_temp``
+  arena to L2-pinned workspace (analogous to the existing ``id_du``
+  ``use_global_temp`` pattern). A side effect of Phase 3b: ABA's
+  ``inner_temp_mem_size`` decreased on floating-base because the defensive
+  ``max(140*NJ+138, fd_inner_size)`` formula now sees a smaller FD inner
+  (post-F-removal). On h1_2_floating ABA's Level 0 arena dropped enough
+  that it now fits the 99 KB cap without spill — picks are
+  ``aba=(0, 1, 1)``: PERF/LITE use full smem on most robots, LITE on
+  h1_2_floating spills (~48KB target).
+
+
 
 Status (commits ``da831dd`` + ``0795442``):
 

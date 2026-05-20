@@ -356,6 +356,7 @@ void run() {
     if (floating_algorithm_requested("aba")) {
         grid::aba_kernel<T><<<1, 32, grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_vec,
+            /*d_workspace=*/nullptr,
             d_q_qd_u,
             grid::NUM_JOINTS + 2 * grid::NUM_VEL,
             d_robot_model,
