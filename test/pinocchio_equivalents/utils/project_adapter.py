@@ -103,6 +103,23 @@ class ProjectModelAdapter:
             np.asarray(daba_dtdq, dtype=np.float64),
         )
 
+    # ----- Time integrators -----
+    # Thin pass-through to `RBDReference.integrator` / `.integrator_grad`,
+    # which host the canonical Python implementation (same layering as
+    # forward_dynamics, minv, etc.). Floating-base support is implemented
+    # in RBDReference via Lie-group retract + SO(3) right-Jacobian.
+
+    def integrator(self, q, qd, u, dt, integrator_type: str = "euler"):
+        return normalize_vector(self.reference.integrator(q, qd, u, dt, integrator_type=integrator_type))
+
+    def integrator_gradient(self, q, qd, u, dt, integrator_type: str = "euler"):
+        """Return [A | B] of shape (2*nv, 3*nv) in tangent-space column order
+        [d/dq | d/dqd | d/du]. For floating-base the d/dq columns are in the
+        nv-tangent of q (not the nq scalar perturbation)."""
+        return normalize_matrix(
+            self.reference.integrator_grad(q, qd, u, dt, integrator_type=integrator_type)
+        )
+
     def end_effector_pose(self, q, target_name: str, offset=None):
         if offset is None:
             offset = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
