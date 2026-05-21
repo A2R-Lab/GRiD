@@ -92,18 +92,25 @@ void run_one(const std::string &prefix,
     grid::integrator<T, IT>(hd_data, d_robotModel, gravity, dt, 1, block_dimms, thread_dimms, streams);
     print_vector(prefix + "_x_kp1", hd_data->h_x_kp1, x_kp1_count);
 
-    // gradient + both-at-once: fixed-base only. The gradient kernels are not
-    // emitted for floating-base (see _normalize_codegen_algorithms), so the
-    // symbols don't exist — we must preprocessor-guard, not just if-constexpr
-    // (a discarded if-constexpr branch is still name-looked-up).
+    // gradient + both-at-once. The gradient kernels are emitted whenever
+    // integrator_gradient is requested; we must preprocessor-guard (not just
+    // if-constexpr) because a discarded if-constexpr branch is still
+    // name-looked-up and the symbols are absent in a value-only build.
+    //
+    // Floating-base supports the gradient only for EULER right now (SI-Euler /
+    // Midpoint / RK3 / RK4 floating gradients static_assert in the kernel). The
+    // inner `if constexpr` keeps those kernels from being instantiated for
+    // floating-base, so their static_asserts never fire.
 #if GRID_HAS_INTEGRATOR_GRADIENT
     (void) nv;
-    grid::integrator_gradient<T, IT>(hd_data, d_robotModel, gravity, dt, 1, block_dimms, thread_dimms, streams);
-    print_matrix_col_major(prefix + "_dAB", hd_data->h_dAB, 2 * nv, 3 * nv);
+    if constexpr (!GRID_INTEGRATOR_FLOATING || IT == grid::IntegratorType::EULER) {
+        grid::integrator_gradient<T, IT>(hd_data, d_robotModel, gravity, dt, 1, block_dimms, thread_dimms, streams);
+        print_matrix_col_major(prefix + "_dAB", hd_data->h_dAB, 2 * nv, 3 * nv);
 
-    grid::integrator_gradient_with_x_kp1<T, IT>(hd_data, d_robotModel, gravity, dt, 1, block_dimms, thread_dimms, streams);
-    print_vector(prefix + "_x_kp1_with_dAB", hd_data->h_x_kp1, x_kp1_count);
-    print_matrix_col_major(prefix + "_dAB_with_x_kp1", hd_data->h_dAB, 2 * nv, 3 * nv);
+        grid::integrator_gradient_with_x_kp1<T, IT>(hd_data, d_robotModel, gravity, dt, 1, block_dimms, thread_dimms, streams);
+        print_vector(prefix + "_x_kp1_with_dAB", hd_data->h_x_kp1, x_kp1_count);
+        print_matrix_col_major(prefix + "_dAB_with_x_kp1", hd_data->h_dAB, 2 * nv, 3 * nv);
+    }
 #else
     (void) nv;
 #endif

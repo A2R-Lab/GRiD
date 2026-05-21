@@ -44,10 +44,11 @@ from test.pinocchio_equivalents.utils.project_adapter import build_project_adapt
 RUNNER_SOURCE = Path(__file__).with_name("cuda_integrator_smoke_runner.cu")
 
 # (prefix, python-side integrator name, has_gradient)
-# Euler and Semi-Implicit Euler have value + gradient + both-at-once kernels.
-# Midpoint / RK3 / RK4 currently have only the value kernel — their gradients
-# require multi-stage chain-rule composition which is implemented in the
-# codegen scaffold (`if constexpr` static_assert) but not yet wired through.
+# Fixed-base: all five integrators emit value + gradient + both-at-once kernels.
+# Floating-base: all five emit the value kernel; only Euler emits the gradient
+# (SI-Euler / Midpoint / RK3 / RK4 floating gradients static_assert in-kernel
+# pending dIntegrate chain-rule wiring). The per-integrator emission is gated in
+# the test by `_gradient_emitted`.
 _INTEGRATORS = (
     ("integrator_euler",    "euler",                True),
     ("integrator_si_euler", "semi_implicit_euler",  True),
@@ -162,8 +163,17 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
     """CUDA integrator kernels must match the Python reference composed via FD + Minv.
 
     Fixed-base exercises value + gradient + both-at-once for all 5 integrators.
-    Floating-base exercises the value path only (the gradient kernels are not
-    emitted for floating-base — see `_normalize_codegen_algorithms`).
+    Floating-base exercises value for all 5 integrators, plus the Euler gradient.
+    The floating Euler gradient is expected to MISMATCH today because it builds
+    on `forward_dynamics_gradient`, whose floating-base dqdd/dqd spatial block
+    drops velocity-coupling terms (verified vs RBDReference AND Pinocchio, which
+    agree to 1e-13; the error is identical in float32 and double, so it is not
+    Minv-amplified noise). The integrator-gradient assembly itself is correct
+    (top dIntegrate rows match to ~1e-7). We therefore `xfail` the floating
+    gradient: once `forward_dynamics_gradient` is fixed, this comparison passes
+    and the suite is green with no xfail — that green run is the signal the bug
+    is resolved. SI-Euler / Midpoint / RK3 / RK4 floating gradients are not
+    emitted yet (kernel static_assert), so only Euler is checked for floating.
     """
     spec = _robot_spec(robot_id, base_mode)
     try:
@@ -179,10 +189,19 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
     dts = _dts()
     nv = project_model.nv
     nq = project_model.nq
-    check_gradient = base_mode == "fixed"
 
     rtol = 5e-4
     atol = 5e-4
+
+    # Floating-base emits the gradient kernel for Euler only; fixed-base for all
+    # five. Track whether the (xfail-expected) floating Euler gradient ever
+    # mismatched so we can xfail at the end without aborting the value checks.
+    floating_grad_mismatch = False
+
+    def _gradient_emitted(integrator_type: str) -> bool:
+        if base_mode == "fixed":
+            return True
+        return integrator_type == "euler"
 
     for dt in dts:
         for sample in samples:
@@ -203,7 +222,7 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
                     err_msg=f"{robot_id}-{base_mode} {prefix} x_kp1 @ {sample.name} dt={dt}",
                 )
 
-                if not (has_gradient and check_gradient):
+                if not (has_gradient and _gradient_emitted(integrator_type)):
                     continue
 
                 expected_dAB = project_model.integrator_gradient(
@@ -216,6 +235,21 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
                 assert dAB_block.shape == (2 * nv, 3 * nv), (
                     f"{prefix} dAB shape {dAB_block.shape} (expected {(2*nv, 3*nv)})"
                 )
+
+                # Floating Euler gradient is expected to mismatch (upstream
+                # forward_dynamics_gradient bug). Record the mismatch and keep
+                # going so the value checks across all samples still run; we
+                # xfail once at the end. The x_kp1 emitted alongside the
+                # gradient is unaffected by the bug, so we still check it.
+                if base_mode == "floating":
+                    if not np.allclose(dAB_block, expected_dAB, rtol=rtol, atol=atol):
+                        floating_grad_mismatch = True
+                    np.testing.assert_allclose(
+                        x_kp1_with_block, expected_x_kp1, rtol=rtol, atol=atol,
+                        err_msg=f"{robot_id}-floating {prefix} x_kp1_with_dAB @ {sample.name} dt={dt}",
+                    )
+                    continue
+
                 np.testing.assert_allclose(
                     dAB_block, expected_dAB, rtol=rtol, atol=atol,
                     err_msg=f"{robot_id} {prefix} dAB @ {sample.name} dt={dt}",
@@ -228,3 +262,10 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
                     dAB_with_block, expected_dAB, rtol=rtol, atol=atol,
                     err_msg=f"{robot_id} {prefix} dAB_with_x_kp1 @ {sample.name} dt={dt}",
                 )
+
+    if base_mode == "floating" and floating_grad_mismatch:
+        pytest.xfail(
+            "floating integrator gradient blocked on upstream "
+            "forward_dynamics_gradient dqdd/dqd velocity-coupling bug; "
+            "the integrator-gradient assembly itself is correct"
+        )
