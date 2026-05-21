@@ -162,6 +162,45 @@ That artifact, not a kernel bug, may be what was measured.
    the real cause is known. Do NOT propagate the "structural FD-grad bug"
    narrative further until it is independently re-confirmed.
 
+### MEASURED 2026-05-21 (step 1 done) — error localized to the J_qv block
+
+Ran step 1 (split `max|dAB_cuda − dAB_ref|` top `nv` rows vs bottom `nv` rows,
+per column-block) for **go2-floating Euler, all 15 samples, dt=0.01**, on the
+`humanoid-tier-spill` branch (after merging modernizing-tests). Result, every
+sample:
+
+- **Top `nv` rows** (SE(3) `dIntegrate` blocks `s_dInt_q_6x6`/`s_dInt_v_6x6`):
+  `[dq|dv|du] = [0, 0, 0]` — **exact**. The integrator's own SE(3) Jacobian
+  assembly is correct; it is NOT the source.
+- **Bottom `nv` rows** (`dt·J_qq | I+dt·J_qv | dt·Minv`): error is **isolated to
+  the ∂/∂v column block** = `I + dt·J_qv`, magnitude **~0.002–0.010**. The
+  ∂/∂q (`dt·J_qq`) and ∂/∂u (`dt·Minv`) blocks are `~0` (≤1e-6).
+
+So the mismatch is **purely in `J_qv = ∂qdd/∂qd` velocity-coupling**, surfaced
+through the bottom rows. This *confirms the location* the shipped comment
+claimed (bottom/FD-grad rows) and *refutes* the §4 worry that it might be the
+top dIntegrate rows.
+
+Magnitude argues **structural, not float32 noise**: at dt=0.01 a 0.002–0.010
+block error ⇒ `J_qv` error ~0.2–1.0 (far above float32 noise on a stiff Minv).
+
+**Remaining contradiction to resolve (step 2):** standalone
+`forward_dynamics_gradient_qd` (= J_qv) passes STRICT for go2-floating with no
+override, yet the integrator's J_qv is off by ~0.2–1.0. Since the integrator
+builds its bottom rows from the **inlined** FD-grad
+(`gen_forward_dynamics_gradient_inner_python`) rather than the standalone
+`forward_dynamics_gradient_kernel`, the prime suspects are now:
+  (a) the **inlined FD-grad path differs from the standalone kernel** on
+      floating-base velocity coupling, or
+  (b) an **operating-point difference** — the integrator computes its own qdd
+      (FD value step) and evaluates FD-grad there, while the standalone test
+      supplies qdd; J_qv depends on the qdd operating point.
+Next: dump the integrator's internal J_qv vs the standalone kernel's J_qv at the
+**same** (q, qd, u, qdd) and diff — that isolates (a) vs (b). (Not a
+forward_dynamics_gradient *structural* bug in the standalone sense — that path
+is independently validated, incl. by the humanoid-tier-spill rollout's
+`forward_dynamics_gradient_qd` fixed+floating equivalence pass.)
+
 ---
 
 ## 5. Known limitations (independent of the open question)
