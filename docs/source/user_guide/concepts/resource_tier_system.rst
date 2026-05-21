@@ -2,12 +2,312 @@ Resource-Tier System (v2.0)
 ============================
 
 **Status**: shipped in v2.0 + Phase 3a/b/c/d/e spill machinery + L2 pinning
-default-on. One surgical-spill follow-up deferred (IDSVA_SO_B/W; see
-"Immediate next steps" below).
+default-on. Inner-controlled placement refactor (below) implemented for
+fdsva_so/Minv/FD/ABA/EE_GRAD — pending numerical-equivalence testing. One
+surgical-spill follow-up deferred (IDSVA_SO_B/W; see "Immediate next steps").
 
 **Audience**: inline-CUDA users (``#include "grid.cuh"`` from their own
 kernel). The Python wrappers (``grid_rbd.RobotHandle``,
 ``grid_rbd.jax.JaxRobotHandle``) always use ``TIER_PERF`` by design.
+
+
+Who this is for (read this first)
+---------------------------------
+
+GRiD is, at its core, a **code generator for power users** — people who want
+to call hand-tuned, robot-specialized rigid-body-dynamics kernels directly
+from their own CUDA code and squeeze every cycle and byte out of the GPU.
+Everything below the convenience layer is built for that person.
+
+But you do **not** have to be that person to use GRiD. We deliberately ship a
+ladder of entry points, from "one line, no GPU knowledge required" up to
+"hand me the raw block-parallel device routine and I'll manage the shared
+memory myself." Pick the rung that matches how much control you need:
+
+.. list-table:: Entry points, easiest to most powerful
+   :header-rows: 1
+   :widths: 22 20 58
+
+   * - You want…
+     - Use…
+     - You manage…
+   * - Just the answer, from Python
+     - ``grid_rbd.RobotHandle`` / ``grid_rbd.jax.JaxRobotHandle``
+     - Nothing. Arrays in, arrays out. Always ``TIER_PERF``.
+   * - The answer, from C++/CUDA host code
+     - ``grid::<algo>(hd_data, ...)`` **host** wrapper
+     - Nothing on-device. The wrapper does H2D/D2H copies, picks
+       launch dims, sets shared-mem attributes, launches the kernel.
+   * - A kernel to drop into your own launch
+     - ``grid::<algo>_kernel<T, TIER>`` **__global__**
+     - The launch (grid/block dims, dynamic-smem bytes, streams) and
+       the per-trajectory batch loop is done for you inside.
+   * - A block-parallel routine to call **inside** your own kernel
+     - ``grid::<algo>_inner<T, PLACEMENT>`` / ``_device`` **__device__**
+     - Everything: shared-memory arenas, scratch placement, syncs.
+       This is the real engine; the layers above are conveniences.
+
+If you are new, start at the top of that table and ignore the rest of this
+document — the ``RobotHandle`` tutorial is all you need. If you are here to
+fight for occupancy inside a fused planning/MPC/learning kernel, read on: the
+rest of this page documents the full machinery so you can drive it directly.
+
+
+Design philosophy: smart inners, thin wrappers
+----------------------------------------------
+
+The organizing principle of the generated code is:
+
+  **Put all the intelligence in the inner functions. Make everything above
+  them a thin convenience wrapper.**
+
+Concretely, an emitted algorithm is four layers, and the value is concentrated
+entirely in the bottom one:
+
+``<algo>_inner`` — *the engine.*
+  A ``__device__`` routine that does the actual rigid-body-dynamics math. It
+  is written to use **as much block-wide parallelism as possible** (see
+  below), and it is **smart about memory**: it owns the decision of what lives
+  in shared memory vs. global memory, how scratch is laid out, what gets
+  spilled under resource pressure, and what gets recomputed vs. cached. It
+  takes the caller's input/output pointers plus a shared scratch arena
+  (``s_temp``) and a global scratch arena (``s_workspace``), and decides
+  internally — via a compile-time placement parameter — which buffers go
+  where. Nothing above this layer needs to understand the algorithm's memory
+  layout.
+
+``<algo>_device`` — *convenience: "call the engine without thinking about arenas."*
+  A ``__device__`` wrapper for inline-CUDA users who want a single call rather
+  than managing the scratch arena themselves. It declares the shared-memory
+  arena (sized for the default placement), loads/updates the per-configuration
+  helper tables (``XImats`` etc.), and calls ``_inner``. Use it when you want
+  to call a GRiD primitive from your kernel but don't need to micro-manage
+  where its scratch lives.
+
+``<algo>_kernel`` — *convenience: "a ready-to-launch batch entry point."*
+  A ``__global__`` entry point that loops over a trajectory/batch of inputs,
+  loads each timestep's inputs into shared memory, dispatches on
+  ``RESOURCE_TIER``, and calls the engine. This is what you launch if you want
+  GRiD to own the whole kernel. It is templated on ``<T, RESOURCE_TIER>`` and
+  carries the ``__launch_bounds__`` for the tier.
+
+``<algo>`` (host) — *convenience: "I never want to touch device code."*
+  A ``__host__`` wrapper that does the host↔device memory transfers, chooses
+  block/grid dimensions, sets the kernel's dynamic-shared-memory attribute,
+  and launches the kernel. This is what the Python/JAX handles call under the
+  hood, and what a C++ host-only user calls.
+
+Why this shape? Because the audience that cares about performance is calling
+``_inner`` (or ``_device``) and composing it into a larger fused kernel. For
+that user, **the kernel and host layers are noise** — they want the raw
+block-parallel routine and full control of the memory hierarchy. The
+convenience layers exist so that the *other* 90% of users never have to see
+any of it. Keeping the layers thin also means there is exactly one place where
+the hard decisions live (the inner), so there is one place to audit, tune, and
+get right.
+
+
+Block-wide parallelism in the inners
+------------------------------------
+
+The inners are written to saturate the **whole thread block**, not a fixed
+lane count. Every parallel region is emitted as a **block-stride loop** of the
+form::
+
+    for (int i = threadIdx.x + threadIdx.y * blockDim.x;
+         i < WORK_ITEMS;
+         i += blockDim.x * blockDim.y) { ... }
+
+This has several deliberate consequences that power users rely on:
+
+* **Correct at any block size.** The same generated routine runs correctly
+  whether you launch it with 32 threads or 1024. Work items are distributed
+  across however many threads the block has; there are no hard-coded lane
+  assumptions and no out-of-bounds writes when ``blockDim`` does not divide
+  the work evenly. (Audited: every parallel write in the emitted code is
+  inside a block-stride loop — there are no bare ``threadIdx``-indexed stores.)
+* **You choose the occupancy/latency trade.** Because the routine adapts to
+  the launch, you can tune block size for your fused kernel's occupancy
+  without regenerating anything. The tier system's ``__launch_bounds__`` only
+  bounds the *maximum* threads (to control the register budget), it does not
+  fix the launch.
+* **Maximal parallelism by construction.** Each algorithm exposes its
+  natural parallel width (e.g. per-(i,j,k) tensor elements, per-DOF columns,
+  per-body 6×6 blocks) directly as the loop bound, so a large block fills with
+  useful work rather than idling. Where the recursion structure forces
+  seriality (e.g. the BFS sweeps), the parallel regions sit between syncs and
+  still use the full block.
+
+The practical upshot: the inner is the unit of parallelism. You bring the
+threads; it uses all of them.
+
+
+Smart memory: shared vs. global, spills, and L2 pinning
+--------------------------------------------------------
+
+The other half of the inner's intelligence is the **memory hierarchy**. An
+inner's working set is a mix of:
+
+* **inputs/outputs** — supplied by the caller (you decide where these live);
+* **persistent scratch** — needed across the whole routine;
+* **transient scratch** — needed only within a phase, freely reused.
+
+On a GPU these can live in shared memory (fast, scarce — ~48 KB default /
+~100 KB opt-in per block on sm_120) or global memory (abundant, slower, but
+**L2-pinnable**). The inner decides, per buffer, where each goes — and that
+decision is exposed as a **compile-time placement parameter** so the caller
+can pick a profile that fits *their* outer kernel's pressure.
+
+**Placement is the inner's job, not the kernel's.** Each inline-callable inner
+is keyed on a placement template parameter and chooses ``s_temp`` (shared) vs.
+``s_workspace`` (global) for each spillable buffer *at the top of the
+function*. The caller (kernel, device wrapper, or your own code) is a thin
+shim: it sizes both arenas from the exposed constants, hands both pointers in,
+and passes the placement. A surgical-spill change — moving one more buffer to
+global, or splitting a buffer hot/cold — is therefore **local to the inner**:
+repoint a sub-buffer and update its size constant, with no kernel edit. This
+is what makes the spill machinery tractable to evolve.
+
+Placement parameters currently emitted (all default to "in shared memory" so
+existing call sites are unchanged):
+
+.. list-table:: Inner placement parameters
+   :header-rows: 1
+   :widths: 26 24 50
+
+   * - Inner
+     - Placement param
+     - Buffer it routes
+   * - ``direct_minv_inner``
+     - ``bool F_IN_SMEM``
+     - the 6·NV² articulated-body F-region
+   * - ``forward_dynamics_inner``
+     - ``bool MINV_F_IN_SMEM``
+     - the internal Minv F-region (FD no longer takes it as a param)
+   * - ``aba_inner``
+     - ``bool TEMP_IN_SMEM``
+     - the 140·NJ+ recursion scratch band
+   * - ``end_effector_pose_gradient_inner``
+     - ``bool TEMP_IN_SMEM``
+     - the double-buffered kinematic-chain workspace
+   * - ``fdsva_so_inner``
+     - ``bool SCRATCH_IN_SMEM``
+     - the 4·NV³ contraction scratch
+   * - ``*_device`` (id_du / fd_du / idsva_so / d2ee)
+     - ``int RESOURCE_TIER``
+     - whole inner ``s_temp`` arena (via the ``tier_workspace_expr`` helper)
+
+**Spilled global memory is L2-pinned.** Most spilled buffers are
+recursion-hot (touched every BFS step), so a naive spill to HBM would be a
+perf cliff. With L2 persistence enabled by default
+(``GRID_CUDA_ENABLE_L2_PERSISTING=1``), the generated workspace is pinned in
+L2 for the kernel's lifetime, so a spilled access costs roughly an L2 hit
+rather than an HBM round-trip. The cost of a spill is then bounded by the
+shared-vs-L2 latency gap, not the shared-vs-HBM gap.
+
+**Spill levels and the per-robot tier→level map.** Each algorithm has a fixed
+*menu* of spill levels (level 0 = everything in shared memory; higher levels
+progressively move buffers to ``s_workspace``). Which level a given
+``RESOURCE_TIER`` maps to is decided **at code-generation time, per robot**,
+based on what actually fits the smem budget for that robot. Small robots
+(e.g. iiwa14, go2) keep every tier at level 0 — there is nothing to spill, so
+``TIER_PERF``/``LITE``/``MINIMAL`` are byte-identical. Large robots (e.g.
+h1_2) map the lower tiers to deeper spill levels. Because the mapping is
+per-robot, **multiple tiers can share a level**, and the generated
+``*_IN_SMEM<TIER>()`` / ``*_SCRATCH_IN_SMEM<TIER>()`` constexprs expose
+exactly which placement each tier resolves to for the robot you generated.
+
+This is the reconciliation of two goals that look opposed: the inner stays
+self-contained and decidable from a single placement flag (good for inline
+reuse and for evolving spills), while the *choice* of flag per tier is a
+per-robot, fit-driven decision made once at codegen time (good for not paying
+for a spill you don't need).
+
+
+Exposed sizing + placement constants (power-user reference)
+-----------------------------------------------------------
+
+For every spillable inner, codegen emits a matched trio so you can allocate
+correctly and know what codegen chose. Using fdsva_so as the template::
+
+    // bytes to reserve in shared memory for this placement
+    template <typename T, bool SCRATCH_IN_SMEM = true>
+    constexpr size_t FDSVA_SO_INNER_SMEM_BYTES();
+
+    // bytes to reserve in (L2-pinned) global memory for this placement
+    template <typename T, bool SCRATCH_IN_SMEM = true>
+    constexpr size_t FDSVA_SO_INNER_WORKSPACE_BYTES();
+
+    // the placement codegen assigned to each tier, for THIS robot
+    template <int TIER>
+    constexpr bool FDSVA_SO_SCRATCH_IN_SMEM();
+
+The same trio is emitted for the other converted algorithms, with the
+placement bool named for the buffer it controls:
+
+* ``MINV_INNER_{SMEM,WORKSPACE}_BYTES<T, F_IN_SMEM>`` + ``MINV_F_IN_SMEM<TIER>``
+* ``FD_INNER_{SMEM,WORKSPACE}_BYTES<T, MINV_F_IN_SMEM>`` + ``FD_MINV_F_IN_SMEM<TIER>``
+* ``ABA_INNER_{SMEM,WORKSPACE}_BYTES<T, TEMP_IN_SMEM>`` + ``ABA_TEMP_IN_SMEM<TIER>``
+* ``EE_GRAD_INNER_{SMEM,WORKSPACE}_BYTES<T, TEMP_IN_SMEM>`` + ``EE_GRAD_TEMP_IN_SMEM<TIER>``
+
+The ``*_device`` inline entry points (id_du / fd_du / idsva_so / d2ee) still
+expose their sizing as ``*_DEVICE_INLINE_{SMEM,WORKSPACE}_BYTES<T, TIER>``
+(keyed on tier rather than a placement bool); they decide placement internally
+via the ``tier_workspace_expr`` arena helper, and their kernels inline + spill
+at the kernel level by design. Converting those kernels to call
+placement-deciding inners is a tracked follow-up.
+
+Rule of thumb for an inline call:
+
+#. Pick a ``TIER`` (or call ``<ALGO>_..._IN_SMEM<TIER>()`` to see the
+   placement it resolves to for your robot).
+#. Reserve ``..._INNER_SMEM_BYTES<T, placement>()`` in your block's dynamic
+   shared memory for the primitive's ``s_temp``.
+#. ``cudaMalloc`` (once) ``..._INNER_WORKSPACE_BYTES<T, placement>()`` per
+   concurrently-resident block for ``s_workspace`` (0 when the placement keeps
+   everything in shared). Pin it in L2 if you spill (see ``grid_begin_l2_persisting``).
+#. Call ``<algo>_inner<T, placement>(..., s_temp, s_workspace, ...)``.
+
+**Testing status of the refactor**: all five converted algos
+(fdsva_so / Minv / FD / ABA / EE_GRAD) compile clean at all three tiers across
+iiwa14 / go2 / h1_2 (fixed) + g1 (floating); the tier-instantiation smoke
+passes. Numerical equivalence (``cuda_equivalence``) and the per-tier perf
+sweep are pending a joint testing session — the Minv/FD arena layout changed
+(no_F-then-F instead of F-then-no_F), so equivalence is the gating check.
+
+Immediate next steps
+---------------------
+
+One algorithm still needs per-algorithm surgical-spill design before
+it can be unlocked at h1_2-scale humanoids:
+
+1. **IDSVA_SO_B / IDSVA_SO_W (Phase 3f)** — overflow at 146-168 KB
+   on h1_2. ``use_global_output`` (Level 1) already spills the 4*NV³
+   output tensor; ``grav_full_spill`` (Level 2, floating-only) already
+   spills the d2X/d2a/d2f gravity-Hessian helper tensors. What's left
+   is the recursion-hot inner band (per-body 6x6 spatial matrices,
+   per-velocity 6-vectors). A naïve full-band spill (analogous to
+   ABA Phase 3c) would be a perf cliff because the band is touched
+   every BFS step — needs per-sub-buffer hot/cold analysis to find a
+   cold/write-once slice that's safe to spill.
+
+   Entry points for the analysis:
+   ``GRiDCodeGenerator/algorithms/_idsva_so.py:gen_idsva_so_body_frame_inner_temp_mem_size``
+   shows the smem layout (``body_mat_count``, ``body_vec_count``,
+   ``vel_vec_count``, ``vel_mat_count``); the inner function body
+   (``gen_idsva_so_body_frame_inner``) is where access patterns live.
+
+What's *not* a concern (already addressed by L2 pinning):
+
+* Phase 3a/3b/3c spilled buffers (``s_F``, ABA's 140*NJ band) ARE
+  recursion-hot, but L2 pinning (default-on) means access is
+  ~smem→L2 cost, not ~smem→HBM. The perf cost relative to keeping
+  them in smem is bounded by the L2-vs-shared latency gap. Measure
+  via the post-Phase-3 baseline sweep before treating as a problem.
+
+* Phase 3e (FDSVA_SO ``s_df_du``, ``s_Minv``) is more naturally
+  output-like (write-then-read in disjoint phases) — less perf-
+  sensitive than 3a-3c.
 
 Immediate next steps
 ---------------------
