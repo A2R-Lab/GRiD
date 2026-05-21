@@ -96,14 +96,16 @@ def compile_all_tiers(grid_cuh: Path, emitted: list[str], build_dir: Path) -> di
     # parameterized on TIER.
     sizing_asserts = """
     // fdsva_so_inner: 4*nv^3 scratch
-    static_assert(grid::FDSVA_SO_INNER_SMEM_BYTES<T, grid::TIER_PERF>() > 0,
-                  "FDSVA_SO_INNER_SMEM_BYTES PERF must include scratch");
-    static_assert(grid::FDSVA_SO_INNER_SMEM_BYTES<T, grid::TIER_LITE>() == 0,
-                  "FDSVA_SO_INNER_SMEM_BYTES LITE must drop scratch");
-    static_assert(grid::FDSVA_SO_INNER_WORKSPACE_BYTES<T, grid::TIER_PERF>() == 0,
-                  "FDSVA_SO_INNER_WORKSPACE_BYTES PERF must be zero");
-    static_assert(grid::FDSVA_SO_INNER_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
-                  "FDSVA_SO_INNER_WORKSPACE_BYTES LITE must hold scratch");
+    // fdsva_so_inner scratch constants are now keyed on the placement bool
+    // SCRATCH_IN_SMEM (true = s_temp/shared, false = s_workspace/global).
+    static_assert(grid::FDSVA_SO_INNER_SMEM_BYTES<T, true>() > 0,
+                  "FDSVA_SO_INNER_SMEM_BYTES<smem> must include scratch");
+    static_assert(grid::FDSVA_SO_INNER_SMEM_BYTES<T, false>() == 0,
+                  "FDSVA_SO_INNER_SMEM_BYTES<global> must drop scratch");
+    static_assert(grid::FDSVA_SO_INNER_WORKSPACE_BYTES<T, true>() == 0,
+                  "FDSVA_SO_INNER_WORKSPACE_BYTES<smem> must be zero");
+    static_assert(grid::FDSVA_SO_INNER_WORKSPACE_BYTES<T, false>() > 0,
+                  "FDSVA_SO_INNER_WORKSPACE_BYTES<global> must hold scratch");
 
     // fd_du_device, id_du_device, idsva_so_device: whole s_temp arena
     static_assert(grid::FD_DU_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_PERF>() >
