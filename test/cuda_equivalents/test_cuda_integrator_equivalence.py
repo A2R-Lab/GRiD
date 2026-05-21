@@ -145,17 +145,27 @@ def _run_sample(executable, compile_cmd, sample, dt: float):
     return _parse_runner_output(stdout)
 
 
+def _base_modes() -> tuple[str, ...]:
+    return _comma_separated_env("GRID_CUDA_INTEGRATOR_BASE_MODES", "fixed,floating")
+
+
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
+@pytest.mark.parametrize("base_mode", _base_modes())
 @pytest.mark.parametrize(
     "robot_id",
     _robot_ids(),
-    ids=lambda robot_id: f"{robot_id}-fixed-integrator",
+    ids=lambda robot_id: f"{robot_id}-integrator",
 )
-def test_cuda_integrator_matches_python_reference(tmp_path, robot_id):
-    """CUDA integrator kernels must match the Python reference composed via FD + Minv."""
-    spec = _robot_spec(robot_id, "fixed")
+def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode):
+    """CUDA integrator kernels must match the Python reference composed via FD + Minv.
+
+    Fixed-base exercises value + gradient + both-at-once for all 5 integrators.
+    Floating-base exercises the value path only (the gradient kernels are not
+    emitted for floating-base — see `_normalize_codegen_algorithms`).
+    """
+    spec = _robot_spec(robot_id, base_mode)
     try:
         resolved = resolve_robot_spec(spec)
     except RuntimeError as exc:
@@ -163,11 +173,13 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id):
             f"Could not resolve manifest {spec.robot_id}. Run ./developer_install.sh "
             f"before executing CUDA equivalence tests. Resolution error: {exc}"
         )
-    project_model = build_project_adapter(spec, resolved, base_mode="fixed")
-    executable, compile_cmd = _build_case(project_model, tmp_path, f"{robot_id}_cuda_integrator")
+    project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
+    executable, compile_cmd = _build_case(project_model, tmp_path, f"{robot_id}_{base_mode}_cuda_integrator")
     samples = _samples(project_model)
     dts = _dts()
     nv = project_model.nv
+    nq = project_model.nq
+    check_gradient = base_mode == "fixed"
 
     rtol = 5e-4
     atol = 5e-4
@@ -183,15 +195,15 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id):
                     sample.q, sample.qd, u, dt, integrator_type=integrator_type,
                 )
                 x_kp1_block = np.asarray(actual[prefix + "_x_kp1"], dtype=np.float64).reshape(-1)
-                assert x_kp1_block.shape == (2 * nv,), (
-                    f"{prefix} x_kp1 shape {x_kp1_block.shape} (expected {(2*nv,)})"
+                assert x_kp1_block.shape == (nq + nv,), (
+                    f"{prefix} x_kp1 shape {x_kp1_block.shape} (expected {(nq + nv,)})"
                 )
                 np.testing.assert_allclose(
                     x_kp1_block, expected_x_kp1, rtol=rtol, atol=atol,
-                    err_msg=f"{robot_id} {prefix} x_kp1 @ {sample.name} dt={dt}",
+                    err_msg=f"{robot_id}-{base_mode} {prefix} x_kp1 @ {sample.name} dt={dt}",
                 )
 
-                if not has_gradient:
+                if not (has_gradient and check_gradient):
                     continue
 
                 expected_dAB = project_model.integrator_gradient(

@@ -52,6 +52,11 @@ void print_vector(const std::string &name, const T *data, int count) {
     print_matrix_col_major(name, data, 1, count);
 }
 
+// Whether this generated header is for a floating-base robot. The integrator
+// gradient kernels are emitted only for fixed-base (nq == nv); floating-base
+// supports the value path only.
+static constexpr bool GRID_INTEGRATOR_FLOATING = (grid::NUM_POS != grid::NUM_VEL);
+
 template <typename T, grid::IntegratorType IT>
 void run_value_only(const std::string &prefix,
                     grid::gridData<T> *hd_data,
@@ -62,10 +67,11 @@ void run_value_only(const std::string &prefix,
                     const T *original_q_qd_u,
                     T gravity,
                     T dt) {
-    const int N = grid::NUM_JOINTS;
-    std::memcpy(hd_data->h_q_qd_u, original_q_qd_u, 3 * N * sizeof(T));
+    const int input_count = grid::NUM_POS + 2 * grid::NUM_VEL;
+    const int x_kp1_count = grid::NUM_POS + grid::NUM_VEL;
+    std::memcpy(hd_data->h_q_qd_u, original_q_qd_u, input_count * sizeof(T));
     grid::integrator<T, IT>(hd_data, d_robotModel, gravity, dt, 1, block_dimms, thread_dimms, streams);
-    print_vector(prefix + "_x_kp1", hd_data->h_x_kp1, 2 * N);
+    print_vector(prefix + "_x_kp1", hd_data->h_x_kp1, x_kp1_count);
 }
 
 template <typename T, grid::IntegratorType IT>
@@ -78,22 +84,29 @@ void run_one(const std::string &prefix,
              const T *original_q_qd_u,
              T gravity,
              T dt) {
-    const int N = grid::NUM_JOINTS;
-    // restore inputs in case the previous run touched them
-    std::memcpy(hd_data->h_q_qd_u, original_q_qd_u, 3 * N * sizeof(T));
-
-    // value-only
+    const int input_count = grid::NUM_POS + 2 * grid::NUM_VEL;
+    const int x_kp1_count = grid::NUM_POS + grid::NUM_VEL;
+    const int nv = grid::NUM_VEL;
+    // value-only (always)
+    std::memcpy(hd_data->h_q_qd_u, original_q_qd_u, input_count * sizeof(T));
     grid::integrator<T, IT>(hd_data, d_robotModel, gravity, dt, 1, block_dimms, thread_dimms, streams);
-    print_vector(prefix + "_x_kp1", hd_data->h_x_kp1, 2 * N);
+    print_vector(prefix + "_x_kp1", hd_data->h_x_kp1, x_kp1_count);
 
-    // gradient-only
+    // gradient + both-at-once: fixed-base only. The gradient kernels are not
+    // emitted for floating-base (see _normalize_codegen_algorithms), so the
+    // symbols don't exist — we must preprocessor-guard, not just if-constexpr
+    // (a discarded if-constexpr branch is still name-looked-up).
+#if GRID_HAS_INTEGRATOR_GRADIENT
+    (void) nv;
     grid::integrator_gradient<T, IT>(hd_data, d_robotModel, gravity, dt, 1, block_dimms, thread_dimms, streams);
-    print_matrix_col_major(prefix + "_dAB", hd_data->h_dAB, 2 * N, 3 * N);
+    print_matrix_col_major(prefix + "_dAB", hd_data->h_dAB, 2 * nv, 3 * nv);
 
-    // both-at-once
     grid::integrator_gradient_with_x_kp1<T, IT>(hd_data, d_robotModel, gravity, dt, 1, block_dimms, thread_dimms, streams);
-    print_vector(prefix + "_x_kp1_with_dAB", hd_data->h_x_kp1, 2 * N);
-    print_matrix_col_major(prefix + "_dAB_with_x_kp1", hd_data->h_dAB, 2 * N, 3 * N);
+    print_vector(prefix + "_x_kp1_with_dAB", hd_data->h_x_kp1, x_kp1_count);
+    print_matrix_col_major(prefix + "_dAB_with_x_kp1", hd_data->h_dAB, 2 * nv, 3 * nv);
+#else
+    (void) nv;
+#endif
 }
 
 template <typename T>
@@ -106,11 +119,12 @@ void run() {
     grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 
-    const int N = grid::NUM_JOINTS;
-    std::vector<T> h_q(N), h_qd(N), h_u(N);
-    read_vector(h_q.data(), N);
-    read_vector(h_qd.data(), N);
-    read_vector(h_u.data(), N);
+    const int nq = grid::NUM_POS;
+    const int nv = grid::NUM_VEL;
+    std::vector<T> h_q(nq), h_qd(nv), h_u(nv);
+    read_vector(h_q.data(), nq);
+    read_vector(h_qd.data(), nv);
+    read_vector(h_u.data(), nv);
     double dt_double;
     if (!(std::cin >> dt_double)) {
         std::cerr << "Failed to read dt" << std::endl;
@@ -118,18 +132,19 @@ void run() {
     }
     const T dt = static_cast<T>(dt_double);
 
-    // Pack into h_q_qd_u
-    std::vector<T> original(3 * N);
-    for (int i = 0; i < N; ++i) {
-        original[i]          = h_q[i];
-        original[N + i]      = h_qd[i];
-        original[2 * N + i]  = h_u[i];
+    // Pack into h_q_qd_u as [q (nq) | qd (nv) | u (nv)].
+    const int input_count = nq + 2 * nv;
+    std::vector<T> original(input_count);
+    for (int i = 0; i < nq; ++i) original[i] = h_q[i];
+    for (int i = 0; i < nv; ++i) {
+        original[nq + i]      = h_qd[i];
+        original[nq + nv + i] = h_u[i];
     }
-    std::memcpy(hd_data->h_q_qd_u, original.data(), 3 * N * sizeof(T));
+    std::memcpy(hd_data->h_q_qd_u, original.data(), input_count * sizeof(T));
 
-    print_vector("input_q",  h_q.data(),  N);
-    print_vector("input_qd", h_qd.data(), N);
-    print_vector("input_u",  h_u.data(),  N);
+    print_vector("input_q",  h_q.data(),  nq);
+    print_vector("input_qd", h_qd.data(), nv);
+    print_vector("input_u",  h_u.data(),  nv);
     {
         const double dt_v = static_cast<double>(dt);
         std::cout << "BEGIN input_dt 1 1\n";
