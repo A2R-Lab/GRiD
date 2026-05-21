@@ -196,10 +196,48 @@ builds its bottom rows from the **inlined** FD-grad
       (FD value step) and evaluates FD-grad there, while the standalone test
       supplies qdd; J_qv depends on the qdd operating point.
 Next: dump the integrator's internal J_qv vs the standalone kernel's J_qv at the
-**same** (q, qd, u, qdd) and diff — that isolates (a) vs (b). (Not a
-forward_dynamics_gradient *structural* bug in the standalone sense — that path
-is independently validated, incl. by the humanoid-tier-spill rollout's
-`forward_dynamics_gradient_qd` fixed+floating equivalence pass.)
+**same** (q, qd, u, qdd) and diff — that isolates (a) vs (b).
+
+### RESOLVED 2026-05-21 (steps 1.5 + 2) — §4 "contradiction" explained; original hypothesis revived
+
+Further debugging **eliminates (a) and (b)** and re-confirms a velocity-coupling
+defect in the **shared** floating-base FD-gradient:
+
+1. The integrator's gradient calls `gen_forward_dynamics_gradient_inner_python(
+   use_qdd_Minv_input=False)` — **the exact same code** the standalone
+   `forward_dynamics_gradient_kernel` uses (`_emit_fd_du_kernel_body_for_flags`
+   → same `inner_python`). So CUDA `J_qv` is byte-identical in both; rules out (a).
+2. The `∂/∂q` block of the integrator dAB is **exact**. Since
+   `J_qq = -Minv·∂ID/∂q|_qdd` *depends on the qdd operating point*, its exactness
+   proves the integrator and reference share the same qdd; rules out (b).
+3. **The error scales with base velocity** (the smoking gun). Per-sample dAB
+   bottom-`∂v` error for go2-floating Euler (dt=0.01):
+   `zero`→0, `tiny`→0, `velocity_only`→0.0055, `conservative`→0.0079,
+   `cuda_random_0/1`→0.0085/0.0101. **Zero at zero/tiny base velocity, growing
+   with it.**
+
+This explains why the standalone `forward_dynamics_gradient_qd` test "passes
+strict": **its samples have small/near-zero base velocity**, so the
+velocity-scaled term is below tolerance. It is NOT a contradiction and the §4
+doubt was wrong — the shipped narrative (a dropped linear↔angular
+velocity-coupling term in the floating-base dqdd/dqd spatial 6×6) is, on this
+evidence, **correct**. The error structure confirms it: for go2 (nv=18, root =
+`[ω(0:3), v_lin(3:6)]`), the wrong `J_qv` entries are confined to the **root
+angular rows (0–2)** coupling to **angular + linear velocity columns**
+(antisymmetric `(0,1)/(1,0)` + `(0,4),(0,5),(2,3)`); linear rows (3–5) and all
+12 joint rows are exact.
+
+**Still open — which side is wrong (CUDA `inverse_dynamics_gradient` vs
+`RBDReference.forward_dynamics_grad`)?** Both currently agree at low velocity
+and disagree at high velocity, so one carries the velocity-scaled defect.
+Determine via `pin.computeABADerivatives` `ddq_dv` on a **high-base-angular-
+velocity** go2-floating sample, **carefully reordering Pinocchio's linear-first
+`[v_lin, ω]` root to GRiD's angular-first `[ω, v_lin]`** before comparing the
+root rows. Then fix the dropped coupling term in whichever side is wrong (likely
+the CUDA floating-base velocity-product gradient in
+`inverse_dynamics_gradient_inner`). This is a core-dynamics change — validate
+against Pinocchio + re-run standalone (with a high-velocity sample added) +
+integrator equivalence.
 
 ---
 
