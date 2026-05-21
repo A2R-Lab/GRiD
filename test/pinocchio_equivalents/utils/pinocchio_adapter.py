@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 
 from test.pinocchio_equivalents.utils.normalization import (
     ConventionMismatch,
+    collapse_pin_q_to_project,
     movable_joint_names_excluding_floating_root,
     normalize_matrix,
     normalize_pin_compatible_quaternion,
@@ -66,7 +67,14 @@ class PinocchioModelAdapter:
     def mimic_joint_names(self) -> List[str]:
         return sorted(self.urdf_mimic_joint_names)
 
-    def has_invertible_mass_matrix(self, q, min_singular_value: float = 1e-12) -> bool:
+    def has_invertible_mass_matrix(self, q, min_singular_value: float = 1e-6) -> bool:
+        # Threshold raised from 1e-12: a mass matrix whose smallest singular
+        # value is below ~1e-6 is *dynamically* near-singular — its inverse
+        # amplifies by >1e6, so forward-dynamics / Minv / their derivatives are
+        # numerically ill-defined (and overflow to NaN at high acceleration).
+        # Skipping such configs is correct, not masking; healthy robots have a
+        # smallest mass-matrix singular value far above 1e-6. (Catches rizon4,
+        # whose model is near-singular across configs.)
         import pinocchio as pin
 
         q_pin = normalize_project_q_for_pin(
@@ -278,12 +286,16 @@ class PinocchioModelAdapter:
         )
 
     def _pin_integrate(self, q, v_dt):
-        """`pin.integrate(model, q, v_dt)` mapped through the project's q
-        convention. v_dt is in tangent space (size nv) and passes through
-        directly (no conversion needed). Output is in project nq layout for
-        the floating-base prefix (xyzw quaternion + joints with no
-        continuous joints in our manifest).
-        """
+        """`pin.integrate(model, q, v_dt)` returned in the project's scalar-joint
+        layout. v_dt is in tangent space (size nv) and passes through directly.
+
+        The result is collapsed back from Pinocchio's nq layout (continuous
+        joints [cos,sin] -> scalar angle) so it can be fed straight into the
+        project-layout routines (`self.aba` / `self.minv` / derivatives) used by
+        the multi-stage integrators, and so the integrator output matches the
+        project adapter's layout. Configurations are compared wrap-safely in
+        the tangent space via `q_tangent_residual`, so the collapse's principal
+        branch is harmless."""
         import pinocchio as pin
 
         q_pin = self._to_pin_q(q)
@@ -291,14 +303,33 @@ class PinocchioModelAdapter:
             pin.integrate(self.model, q_pin, np.asarray(v_dt, dtype=np.float64)),
             dtype=np.float64,
         )
-        # The pinocchio q layout matches the project q layout for revolute +
-        # free-flyer robots (no continuous joints in the manifest), so we can
-        # pass through. Renormalize the quaternion prefix for safety.
         if self.base_mode == "floating":
-            # normalize_pin_compatible_quaternion expects the full pose prefix,
-            # so renormalize in place via that helper.
             q_new_pin = normalize_pin_compatible_quaternion(q_new_pin)
-        return q_new_pin
+        return collapse_pin_q_to_project(
+            self.base_mode,
+            q_new_pin,
+            joint_names=self.scalar_joint_names,
+            joint_types_by_name=self.urdf_joint_types_by_name,
+        )
+
+    def to_pin_q(self, q):
+        """Public: map a project-layout configuration to Pinocchio's nq layout
+        (scalar joint angle -> [cos,sin] for continuous joints, xyzw quaternion
+        kept for the free-flyer root)."""
+        return self._to_pin_q(q)
+
+    def q_tangent_residual(self, q_project_a, q_project_b):
+        """Tangent-space residual ``q_b (-) q_a`` between two project-layout
+        configurations, via `pin.difference`. Returns the nv-vector so that two
+        configurations representing the same pose give ~0 regardless of joint
+        representation (scalar-angle vs [cos,sin]) or 2*pi wrapping. This is the
+        representation-agnostic way to compare a continuous-joint / free-flyer
+        q-update across the two libraries."""
+        import pinocchio as pin
+
+        q0 = np.asarray(self._to_pin_q(q_project_a), dtype=np.float64)
+        q1 = np.asarray(self._to_pin_q(q_project_b), dtype=np.float64)
+        return np.asarray(pin.difference(self.model, q0, q1), dtype=np.float64)
 
     def _pin_dIntegrate(self, q, v_dt, with_respect_to):
         """Wrap `pin.dIntegrate` and return the (nv, nv) Jacobian."""

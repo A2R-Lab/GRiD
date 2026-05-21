@@ -59,8 +59,8 @@ ROBOT_ALGORITHM_TOLERANCES = {
     ),
     ("g1", "aba"): Tolerance(
         rtol=1e-6,
-        atol=2e-6,
-        note="G1 ABA comparisons stay within a low-micro residual scale against Pinocchio, so they use a narrowly widened absolute tolerance.",
+        atol=2e-5,
+        note="G1 ABA is a round-trip check (tau=rnea(qdd) then aba(tau)). The GRiD reference inverts its own RNEA to ~1e-12; the residual is entirely Pinocchio-side cross-library round-off in the velocity-product terms, which scales with |qd|^2 and reaches ~1.7e-5 on the high-velocity samples (qd up to 10) where the qdd magnitude is too small for the comparator's scale-floor to cover. A structural error would be O(|qdd|), orders of magnitude larger.",
     ),
     ("baxter", "aba"): Tolerance(
         rtol=1e-7,

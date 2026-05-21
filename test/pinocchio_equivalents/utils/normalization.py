@@ -50,6 +50,60 @@ def expand_continuous_joint_positions_for_pin(
     return np.asarray(expanded, dtype=np.float64)
 
 
+def collapse_continuous_joint_positions_from_pin(
+    q_pin: Sequence[float],
+    joint_names: Sequence[str],
+    joint_types_by_name: Mapping[str, str] | None,
+) -> np.ndarray:
+    """Inverse of `expand_continuous_joint_positions_for_pin`: collapse each
+    continuous joint's Pinocchio [cos,sin] pair back to a scalar angle via
+    atan2. Used to keep a Pinocchio-integrated configuration in the project's
+    scalar-joint layout so it can be fed back into project-layout routines."""
+    q_pin = as_float64(q_pin)
+    if not joint_types_by_name:
+        return q_pin
+
+    collapsed = []
+    cursor = 0
+    for joint_name in joint_names:
+        joint_type = joint_types_by_name.get(joint_name)
+        if joint_type == "continuous":
+            cos_v, sin_v = float(q_pin[cursor]), float(q_pin[cursor + 1])
+            collapsed.append(np.arctan2(sin_v, cos_v))
+            cursor += 2
+        else:
+            collapsed.append(float(q_pin[cursor]))
+            cursor += 1
+    if cursor != len(q_pin):
+        raise ValueError(
+            f"Consumed {cursor} Pinocchio position entries but received {len(q_pin)}."
+        )
+    return np.asarray(collapsed, dtype=np.float64)
+
+
+def collapse_pin_q_to_project(
+    base_mode: str,
+    q_pin: Sequence[float],
+    joint_names: Sequence[str] | None = None,
+    joint_types_by_name: Mapping[str, str] | None = None,
+) -> np.ndarray:
+    """Inverse of `normalize_project_q_for_pin`: map a Pinocchio-layout
+    configuration back to the project's scalar-joint layout (free-flyer prefix
+    kept as xyzw, continuous joints collapsed [cos,sin] -> angle)."""
+    q_pin = as_float64(q_pin)
+    if base_mode == "floating":
+        q_prefix = q_pin[:7]
+        if joint_names is None:
+            return q_prefix
+        q_suffix = collapse_continuous_joint_positions_from_pin(
+            q_pin[7:], joint_names, joint_types_by_name
+        )
+        return np.concatenate((q_prefix, q_suffix))
+    if joint_names is None:
+        return q_pin
+    return collapse_continuous_joint_positions_from_pin(q_pin, joint_names, joint_types_by_name)
+
+
 def normalize_project_q_for_pin(
     base_mode: str,
     q: Sequence[float],
