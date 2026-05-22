@@ -239,6 +239,40 @@ the CUDA floating-base velocity-product gradient in
 against Pinocchio + re-run standalone (with a high-velocity sample added) +
 integrator equivalence.
 
+### FIXED 2026-05-22 — it was a CUDA thread-count RACE, not a math/convention defect
+
+The "dropped velocity-coupling term / which side is wrong" conclusion above was
+**wrong**, and the misdiagnosis came from one blind spot: **the entire CUDA
+equivalence suite launched every kernel at `<<<1,32>>>` (one warp), while the
+integrator runner uses `SUGGESTED_THREADS` (448).** RBDReference matches
+Pinocchio; the CUDA side was correct *at 32 threads* and raced above one warp.
+
+Root cause(s), both CUDA-side, in `_inverse_dynamics_gradient.py`
+(`gen_inverse_dynamics_gradient_inner`), floating-base only:
+1. The `da/du` init **zeroed `s_temp[Offset_da_dq]` in one parallel loop and
+   then `+=`-accumulated into it in the next with no `__syncthreads` between** —
+   correct only within a single warp.
+2. The `MxS(dv/du)·qd` accumulation for the **floating root** had all 6 root
+   axes (`dof_id` 0–5 → `jid` 0) `mxX_peq_scaled` into the *same* `da/du`
+   column. That helper assumes one writer per destination, so the 6-way `+=`
+   raced. Fixed by serializing the root sum onto a single lane.
+
+Both fixed. After the fix, standalone `forward_dynamics_gradient_qd`,
+`inverse_dynamics_gradient_qd`, and the integrator dAB all match the reference
+to float32 noise at **32 and 448 threads**. The "velocity-scaled" signature was
+the race amplitude growing with operand magnitude, not a velocity-coupling term.
+
+A **separate, real** bug also fixed here: the SE(3) right-Jacobian `Q`-block had
+a sign-flipped `c3` coefficient in BOTH `RBDReference._se3_Q_block` and the CUDA
+`grid_se3_Q_block` (verified vs `pin.dIntegrate(ARG1)` to ~1e-14). This affected
+the SI-Euler floating gradient (and any non-tiny `dIntegrate` increment); it
+matched between Python and CUDA before because both were wrong.
+
+Regression guard: the CUDA equivalence tests now **sweep block thread counts**
+(one warp + multi-warp + a session-random non-multiple-of-32 count) so any
+future thread-count race on any kernel fails the suite. The floating Euler
+integrator gradient now passes with **no xfail**.
+
 ---
 
 ## 5. Known limitations (independent of the open question)
