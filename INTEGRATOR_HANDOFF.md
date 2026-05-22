@@ -126,31 +126,46 @@ Fix commits: GRiDCodeGenerator `501501b`, RBDReference `df76001`.
 
 In rough priority order:
 
-1. **Integrator inner-controlled spill (workspace plumbing).** The integrator
-   inners are NOT yet placement-aware: no `d_workspace` param, no
-   `s_temp`+`s_workspace`+placement template, so LITE/MINIMAL smem doesn't shrink
-   and the cold per-stage scaffold can't move to L2-pinned global. Not needed for
-   fixed or go2-floating (they fit smem today); **needed for g1/h1_2 floating
-   gradients** (nv=35 overflows float smem ~73 KB). When tackled, apply the
-   top-down ordering (spill the cold outer stage scaffold first, keep the
-   dynamics inner in smem longest) and reuse the established
-   inner-controlled-placement pattern from FD/Minv/ABA. Also register integrator
-   kernels in `test/diagnostics/tier_instantiation_smoke.py` (special-case the
-   extra `IntegratorType` template arg).
-2. **Floating FD-sanity test.** `test_integrator_gradient_fd_sanity.py` is
+1. **Floating FD-sanity test.** `test_integrator_gradient_fd_sanity.py` is
    fixed-base only; floating needs an SE(3) log for the tangent-space
    perturbation of the q columns.
+2. **Integrator VALUE-path spill (optional).** Only the gradient kernel is
+   tier-spillable so far (its `s_D_qdd_stage` dominates). The value kernel's
+   scaffold (`s_stage_*`) is small and fits everywhere, so it stays full-smem;
+   add the same `d_workspace` plumbing only if a big robot's value path ever
+   overflows.
 
 Out of scope here but on the longer roadmap: **JAX FFI bindings** to replace the
 stale Pybind11 layer (generate-compile-run-fast fit; see project memory).
 
 ---
 
-## 5. Known limitations
+## 5. Integrator gradient tier spill (done 2026-05-22)
 
-- Floating gradient smem budget: go2 floating (nv=18) fits in float (~73 KB);
-  g1 floating (nv=35) needs item 1's selective spill.
-- Floating FD-sanity deferred (item 2 above).
+The integrator-gradient kernel is inner-controlled-placement-aware like
+FD/Minv/ABA. The dominant cold buffer `s_D_qdd_stage` (`max_stages·nv·3nv`,
+≈59 KB float on g1-floating) lives in smem at TIER_PERF and spills to the
+L2-pinned `d_workspace` grad section at TIER_LITE/MINIMAL. Mechanism:
+- `select_shared_tier_3way` picks per-tier placement; the kernel emits per-tier
+  bodies (like `_emit_fd_du_kernel_body_for_flags`) gated on `RESOURCE_TIER`,
+  with `s_D_qdd_stage` conditionally in `extra_t_buffers` (smem) vs pointed into
+  `&d_workspace[k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]`.
+- `INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T,TIER>()` is tier-aware;
+  `INTEGRATOR_DU_D_QDD_IN_SMEM<TIER>()` gives the placement; `d_workspace` is
+  threaded through the kernel + host (L2-pinned when `GRID_INTEGRATOR_DU_USES_WORKSPACE`).
+- All five `IntegratorType` instantiations × 3 tiers compile in
+  `tier_instantiation_smoke.py` (iiwa14/go2/h1_2). Verified: go2-floating
+  gradient matches the reference at TIER_PERF (smem) AND TIER_MINIMAL (spilled),
+  32 + 448 threads. Exercise the spill via `GRID_CUDA_INTEGRATOR_TIER=TIER_MINIMAL`.
+
+Note: the arena helper (`gen_declare_shared_arena`) only natively spills the
+`s_temp` inner slot via `tier_workspace_expr`; `s_D_qdd_stage` is a cold
+extra-buffer, hence the per-tier-body approach rather than a single placement bool.
+
+## 6. Known limitations
+
+- Floating FD-sanity deferred (§4 item 1).
+- Integrator value-path is full-smem only (§4 item 2) — fits all current robots.
 
 ---
 
