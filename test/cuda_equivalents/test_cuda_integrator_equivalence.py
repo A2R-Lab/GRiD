@@ -32,6 +32,7 @@ from test.cuda_equivalents.test_cuda_executable_equivalence import (
     _parse_runner_output,
     _run_runner,
     _sample_to_stdin,
+    _thread_counts,
 )
 from test.pinocchio_equivalents.conftest import MANIFEST_PATH
 from test.pinocchio_equivalents.utils.model_sources import (
@@ -207,11 +208,15 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
             return True
         return integrator_type == "euler"
 
-    for dt in dts:
+    # Sweep block thread counts (one warp + multi-warp + a session-random count)
+    # to catch thread-count-dependent races; the kernel is compiled once and the
+    # thread count is passed to the runner via argv.
+    for num_threads in _thread_counts():
+      for dt in dts:
         for sample in samples:
             # The shared `DynamicsSample` carries q, qd, qdd — for the integrator
             # the third vector serves as the control torque u.
-            actual = _run_sample(executable, compile_cmd, sample, dt)
+            actual = _run_sample(executable, compile_cmd, sample, dt, num_threads=num_threads)
             u = sample.qdd
             for prefix, integrator_type, has_gradient in _INTEGRATORS:
                 expected_x_kp1 = project_model.integrator(
@@ -223,7 +228,7 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
                 )
                 _assert_close_scaled(
                     x_kp1_block, expected_x_kp1, rtol, atol,
-                    err_msg=f"{robot_id}-{base_mode} {prefix} x_kp1 @ {sample.name} dt={dt}",
+                    err_msg=f"{robot_id}-{base_mode} {prefix} x_kp1 @ {sample.name} dt={dt} threads={num_threads}",
                 )
 
                 if not (has_gradient and _gradient_emitted(integrator_type)):
@@ -242,13 +247,13 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
 
                 _assert_close_scaled(
                     dAB_block, expected_dAB, rtol, atol,
-                    err_msg=f"{robot_id}-{base_mode} {prefix} dAB @ {sample.name} dt={dt}",
+                    err_msg=f"{robot_id}-{base_mode} {prefix} dAB @ {sample.name} dt={dt} threads={num_threads}",
                 )
                 _assert_close_scaled(
                     x_kp1_with_block, expected_x_kp1, rtol, atol,
-                    err_msg=f"{robot_id}-{base_mode} {prefix} x_kp1_with_dAB @ {sample.name} dt={dt}",
+                    err_msg=f"{robot_id}-{base_mode} {prefix} x_kp1_with_dAB @ {sample.name} dt={dt} threads={num_threads}",
                 )
                 _assert_close_scaled(
                     dAB_with_block, expected_dAB, rtol, atol,
-                    err_msg=f"{robot_id}-{base_mode} {prefix} dAB_with_x_kp1 @ {sample.name} dt={dt}",
+                    err_msg=f"{robot_id}-{base_mode} {prefix} dAB_with_x_kp1 @ {sample.name} dt={dt} threads={num_threads}",
                 )

@@ -21,6 +21,11 @@
 
 #include "grid.cuh"
 
+// Block thread count for all integrator kernel launches. 0 => use
+// grid::SUGGESTED_THREADS. Overridable via argv[1] so the test harness can
+// sweep warp counts to catch thread-count-dependent races.
+int g_num_threads = 0;
+
 template <typename T>
 void read_vector(T *dst, int count) {
     for (int i = 0; i < count; ++i) {
@@ -120,7 +125,8 @@ template <typename T>
 void run() {
     const T gravity = static_cast<T>(9.81);
     const dim3 block_dimms(1, 1, 1);
-    const dim3 thread_dimms(grid::SUGGESTED_THREADS, 1, 1);
+    const int nthreads = g_num_threads > 0 ? g_num_threads : grid::SUGGESTED_THREADS;
+    const dim3 thread_dimms(nthreads, 1, 1);
 
     cudaStream_t *streams = grid::init_grid<T>();
     grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
@@ -175,7 +181,11 @@ void run() {
     grid::close_grid<T>(streams, d_robotModel, hd_data);
 }
 
-int main() {
+int main(int argc, char **argv) {
+    if (argc > 1) {
+        int requested = std::atoi(argv[1]);
+        if (requested > 0) { g_num_threads = requested; }
+    }
     run<float>();
     return 0;
 }
