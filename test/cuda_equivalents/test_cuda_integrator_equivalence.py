@@ -45,11 +45,9 @@ from test.pinocchio_equivalents.utils.project_adapter import build_project_adapt
 RUNNER_SOURCE = Path(__file__).with_name("cuda_integrator_smoke_runner.cu")
 
 # (prefix, python-side integrator name, has_gradient)
-# Fixed-base: all five integrators emit value + gradient + both-at-once kernels.
-# Floating-base: all five emit the value kernel; only Euler emits the gradient
-# (SI-Euler / Midpoint / RK3 / RK4 floating gradients static_assert in-kernel
-# pending dIntegrate chain-rule wiring). The per-integrator emission is gated in
-# the test by `_gradient_emitted`.
+# Both fixed- and floating-base emit value + gradient + both-at-once kernels for
+# all five integrators (the floating SI-Euler / Midpoint / RK3 / RK4 gradients
+# carry the SE(3) dIntegrate chain-rule wiring).
 _INTEGRATORS = (
     ("integrator_euler",    "euler",                True),
     ("integrator_si_euler", "semi_implicit_euler",  True),
@@ -178,10 +176,8 @@ def _base_modes() -> tuple[str, ...]:
 def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode):
     """CUDA integrator kernels must match the Python reference composed via FD + Minv.
 
-    Fixed-base exercises value + gradient + both-at-once for all 5 integrators.
-    Floating-base exercises value for all 5 integrators, plus the Euler gradient.
-    SI-Euler / Midpoint / RK3 / RK4 floating gradients are not emitted yet
-    (kernel static_assert), so only Euler is checked for floating.
+    Both fixed- and floating-base exercise value + gradient + both-at-once for
+    all 5 integrators (Euler / SI-Euler / Midpoint / RK3 / RK4).
     """
     spec = _robot_spec(robot_id, base_mode)
     try:
@@ -201,12 +197,9 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
     rtol = 5e-4
     atol = 5e-4
 
-    # Floating-base emits the gradient kernel for Euler only; fixed-base for all
-    # five.
+    # All five integrator gradients are emitted for both fixed- and floating-base.
     def _gradient_emitted(integrator_type: str) -> bool:
-        if base_mode == "fixed":
-            return True
-        return integrator_type == "euler"
+        return True
 
     # Sweep block thread counts (one warp + multi-warp + a session-random count)
     # to catch thread-count-dependent races; the kernel is compiled once and the

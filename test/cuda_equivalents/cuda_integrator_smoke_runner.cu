@@ -57,11 +57,6 @@ void print_vector(const std::string &name, const T *data, int count) {
     print_matrix_col_major(name, data, 1, count);
 }
 
-// Whether this generated header is for a floating-base robot. The integrator
-// gradient kernels are emitted only for fixed-base (nq == nv); floating-base
-// supports the value path only.
-static constexpr bool GRID_INTEGRATOR_FLOATING = (grid::NUM_POS != grid::NUM_VEL);
-
 template <typename T, grid::IntegratorType IT>
 void run_value_only(const std::string &prefix,
                     grid::gridData<T> *hd_data,
@@ -102,20 +97,17 @@ void run_one(const std::string &prefix,
     // if-constexpr) because a discarded if-constexpr branch is still
     // name-looked-up and the symbols are absent in a value-only build.
     //
-    // Floating-base supports the gradient only for EULER right now (SI-Euler /
-    // Midpoint / RK3 / RK4 floating gradients static_assert in the kernel). The
-    // inner `if constexpr` keeps those kernels from being instantiated for
-    // floating-base, so their static_asserts never fire.
+    // All five integrator gradients are now emitted for both fixed- and
+    // floating-base (the floating SI-Euler / Midpoint / RK3 / RK4 gradients add
+    // the SE(3) dIntegrate chain-rule wiring), so no per-IT guard is needed.
 #if GRID_HAS_INTEGRATOR_GRADIENT
     (void) nv;
-    if constexpr (!GRID_INTEGRATOR_FLOATING || IT == grid::IntegratorType::EULER) {
-        grid::integrator_gradient<T, IT>(hd_data, d_robotModel, gravity, dt, 1, block_dimms, thread_dimms, streams);
-        print_matrix_col_major(prefix + "_dAB", hd_data->h_dAB, 2 * nv, 3 * nv);
+    grid::integrator_gradient<T, IT>(hd_data, d_robotModel, gravity, dt, 1, block_dimms, thread_dimms, streams);
+    print_matrix_col_major(prefix + "_dAB", hd_data->h_dAB, 2 * nv, 3 * nv);
 
-        grid::integrator_gradient_with_x_kp1<T, IT>(hd_data, d_robotModel, gravity, dt, 1, block_dimms, thread_dimms, streams);
-        print_vector(prefix + "_x_kp1_with_dAB", hd_data->h_x_kp1, x_kp1_count);
-        print_matrix_col_major(prefix + "_dAB_with_x_kp1", hd_data->h_dAB, 2 * nv, 3 * nv);
-    }
+    grid::integrator_gradient_with_x_kp1<T, IT>(hd_data, d_robotModel, gravity, dt, 1, block_dimms, thread_dimms, streams);
+    print_vector(prefix + "_x_kp1_with_dAB", hd_data->h_x_kp1, x_kp1_count);
+    print_matrix_col_major(prefix + "_dAB_with_x_kp1", hd_data->h_dAB, 2 * nv, 3 * nv);
 #else
     (void) nv;
 #endif
@@ -125,7 +117,14 @@ template <typename T>
 void run() {
     const T gravity = static_cast<T>(9.81);
     const dim3 block_dimms(1, 1, 1);
-    const int nthreads = g_num_threads > 0 ? g_num_threads : grid::SUGGESTED_THREADS;
+    // The integrator kernels are compiled with
+    // __launch_bounds__(tier_max_threads<TIER>()) (= SUGGESTED_THREADS at
+    // TIER_PERF). Launching with MORE threads than that bound fails with
+    // cudaErrorInvalidValue, so a swept count above the bound (e.g. 448 on a
+    // small robot whose SUGGESTED_THREADS is 352) must be clamped down. The
+    // clamped value is still multi-warp, so thread-count race coverage holds.
+    const int requested = g_num_threads > 0 ? g_num_threads : grid::SUGGESTED_THREADS;
+    const int nthreads = requested < grid::SUGGESTED_THREADS ? requested : grid::SUGGESTED_THREADS;
     const dim3 thread_dimms(nthreads, 1, 1);
 
     cudaStream_t *streams = grid::init_grid<T>();

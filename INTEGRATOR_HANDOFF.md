@@ -1,21 +1,18 @@
-# Time-Integrator Codegen — Handoff & Open Questions
+# Time-Integrator Codegen — Handoff
 
-Status as of 2026-05-21 (branch `modernizing-tests`). This documents the
-time-integrator work (Euler / Semi-Implicit Euler / Midpoint / RK3 / RK4),
-what is validated, what is gated, and — importantly — a **contradiction in the
-floating-base gradient story that is currently UNRESOLVED** and must be settled
-before the floating gradient is trusted or its xfail removed.
-
-If you are a future agent picking this up: read the "CRITICAL OPEN QUESTION"
-section first. The xfail rationale shipped in the code comments may be wrong.
+Status as of 2026-05-22 (branch `humanoid-tier-spill`; RBDReference on
+`modernizing-tests`). Documents the time-integrator work (Euler /
+Semi-Implicit Euler / Midpoint / RK3 / RK4): what is built, what is validated,
+and what is still open. The floating Euler gradient bug that earlier versions of
+this doc flagged as a "CRITICAL OPEN QUESTION" is **RESOLVED** — see §3.
 
 ---
 
 ## 1. What was built
 
-GRiD now emits time-integrator kernels alongside the existing dynamics
-algorithms, in the usual inner / device / kernel / host layering, dispatched at
-compile time on `template <typename T, IntegratorType IT>`.
+GRiD emits time-integrator kernels alongside the existing dynamics algorithms,
+in the usual inner / device / kernel / host layering, dispatched at compile time
+on `template <typename T, IntegratorType IT>`.
 
 Per integrator, three entry points:
 - `integrator<T,IT>`                       — value only, `x_{k+1}`
@@ -40,264 +37,131 @@ Canonical Python lives in the `RBDReference` submodule (not the adapter):
 `ProjectModelAdapter.integrator / integrator_gradient` are thin pass-throughs
 that wrap RBDReference and apply `normalize_vector` / `normalize_matrix`
 ([project_adapter.py:112-119](test/pinocchio_equivalents/utils/project_adapter.py#L112)).
-**Note:** `normalize_matrix` is the IDENTITY — `np.atleast_2d(as_float64(...))`
-([normalization.py:166](test/pinocchio_equivalents/utils/normalization.py#L166)).
-It does NOT reorder ω/v_lin. RBDReference already emits in GRiD internal order,
-so CUDA-vs-ProjectModelAdapter is an apples-to-apples internal-order comparison.
+`normalize_matrix` is the IDENTITY; RBDReference already emits in GRiD internal
+order, so CUDA-vs-ProjectModelAdapter is an apples-to-apples internal-order
+comparison.
 
 CUDA codegen:
 - `GRiDCodeGenerator/algorithms/_integrator.py` — value path incl. floating
-  Lie-group retract helpers for the q-update (`integrate_q`).
+  Lie-group retract helpers for the q-update.
 - `GRiDCodeGenerator/algorithms/_integrator_gradient.py` — gradient assembly.
   Floating Euler reads precomputed `s_dInt_q_6x6` / `s_dInt_v_6x6` for the top
-  `nv` rows; bottom rows are the fixed-base code (`dt·J_qq | I+dt·J_qv | dt·Minv`).
-  Floating SI-Euler and all floating multi-stage gradients are behind
-  template-dependent `static_assert`s (not yet wired) —
-  [_integrator_gradient.py:133,173,212](GRiDCodeGenerator/algorithms/_integrator_gradient.py#L133).
+  `nv` rows; bottom rows are `dt·J_qq | I+dt·J_qv | dt·Minv`.
 - `GRID_HAS_INTEGRATOR` / `GRID_HAS_INTEGRATOR_GRADIENT` macros gate consumer
-  code so a value-only build still compiles
-  ([GRiDCodeGenerator.py:1233](GRiDCodeGenerator/GRiDCodeGenerator.py#L1233)).
+  code so a value-only build still compiles.
+- Kernel tier: `RESOURCE_TIER` defaults to `GRID_DEFAULT_RESOURCE_TIER` (so the
+  bench `-DGRID_DEFAULT_RESOURCE_TIER=…` macro reaches integrators; TIER_PERF
+  behavior unchanged). Python keeps its `TIER_PERF` default.
 
 ---
 
 ## 2. What is validated (green, trusted)
 
 - **Fixed-base, all 5 integrators, value + gradient + both-at-once**: CUDA ↔
-  ProjectModelAdapter(RBDReference) passes at rtol=atol=5e-4 on iiwa14-fixed
-  and go2-fixed across dt ∈ {1e-3, 1e-2, 1e-1} and corner + random samples.
-  Last verified 2026-05-21: `2 passed`.
+  ProjectModelAdapter(RBDReference) passes at rtol=atol=5e-4 on iiwa14-fixed and
+  go2-fixed across dt ∈ {1e-3, 1e-2, 1e-1} and corner + random samples.
 - **Floating-base, all 5 integrators, VALUE path**: passes (~5e-7) on
-  go2-floating. The q-update IS the Lie-group retract; cross-checked against
-  Pinocchio `pin.integrate` (see `test_integrator_pinocchio_equivalence.py`,
-  20/20).
-- **Floating-base Euler GRADIENT**: emitted and exercised, but currently
-  **xfail** — see below.
+  go2-floating; q-update is the Lie-group retract, cross-checked vs
+  `pin.integrate` (`test_integrator_pinocchio_equivalence.py`, 20/20).
+- **Floating-base GRADIENT, all 5 integrators** (Euler / SI-Euler / Midpoint /
+  RK3 / RK4): value + gradient + both-at-once pass on iiwa14-floating and
+  go2-floating at rtol=atol=5e-4, at 32 and 448 threads. The floating multi-stage
+  gradients project each stage's `J_qq` columns through the SE(3) `dIntegrate`
+  6x6 blocks (`_integrator_gradient.py`); SI-Euler evaluates `dIntegrate` at
+  `dt*v_new` and adds the `dInt_v @ dv/dX` top-row matmul.
+- The CUDA equivalence suite now **sweeps block thread counts** (1 warp +
+  multi-warp + a session-random non-multiple-of-32) so any future thread-count
+  race fails the suite. See `test/TESTING_STRATEGY.md`. The integrator smoke
+  runner clamps the requested count to `SUGGESTED_THREADS` because the kernels
+  are `__launch_bounds__(tier_max_threads<TIER>())` and launching above that
+  bound is a hard `cudaErrorInvalidValue` (hit on iiwa14-fixed, bound 352 < 448).
+- All five `IntegratorType` instantiations are registered for
+  `cudaFuncSetAttribute` (init_grid_kernel_attrs); previously only the default
+  (Euler) was, so a non-Euler floating gradient whose arena exceeds the 48 KB
+  device default failed to launch.
 
 Test files:
 - CUDA equivalence: `test/cuda_equivalents/test_cuda_integrator_equivalence.py`
   (smoke runner `cuda_integrator_smoke_runner.cu`).
 - Pinocchio equivalence: `test/pinocchio_equivalents/tests/test_integrator_pinocchio_equivalence.py`.
 - FD sanity (analytical ↔ finite diff): `test/pinocchio_equivalents/tests/test_integrator_gradient_fd_sanity.py`
-  (fixed-base only; floating FD-sanity deferred — needs SE(3) log for the
-  tangent-space perturbation).
+  (fixed-base only).
 
 ---
 
-## 3. The floating Euler gradient xfail — how the test is wired
+## 3. The floating Euler gradient bug — RESOLVED 2026-05-22
 
-`test_cuda_integrator_matches_python_reference[go2-integrator-floating]`:
-- checks VALUE for all 5 integrators (must pass),
-- checks the Euler GRADIENT, and if it mismatches, calls `pytest.xfail(...)`.
+It was a **CUDA thread-count race**, not a math/convention defect. The whole CUDA
+equivalence suite previously launched every kernel at `<<<1,32>>>` (one warp),
+while the integrator runner uses `SUGGESTED_THREADS` (448). RBDReference matches
+Pinocchio; the CUDA side was correct *at 32 threads* and raced above one warp, so
+the error grew with operand magnitude — which earlier debugging misread as a
+"velocity-scaled dropped-coupling term."
 
-Design intent: the day the floating Euler gradient matches, the test passes
-with **no xfail** — a fully-green run (no xfailed integrator line) is the signal
-that the floating gradient is correct. SI-Euler / Midpoint / RK3 / RK4 floating
-gradients are not emitted (kernel static_assert), so only Euler is checked for
-floating; the smoke runner guards them with
-`if constexpr (!FLOATING || IT==EULER)` so the un-emitted kernels are never
-instantiated.
+Root causes, both CUDA-side, floating-base only, in
+`_inverse_dynamics_gradient.py` (`gen_inverse_dynamics_gradient_inner`):
+1. The `da/du` init zeroed `s_temp[Offset_da_dq]` in one parallel loop and then
+   `+=`-accumulated into it in the next with **no `__syncthreads` between** —
+   correct only within a single warp. Fixed by adding the barrier.
+2. The `MxS(dv/du)·qd` accumulation for the **floating root** had all 6 root axes
+   (`dof_id` 0–5 → `jid` 0) `mxX_peq_scaled` into the *same* `da/du` column; that
+   helper assumes one writer per destination, so the 6-way `+=` raced. Fixed by
+   serializing the root sum onto a single lane.
 
-Last verified 2026-05-21: go2-floating → `1 xfailed` (values pass, Euler
-gradient mismatches → xfail).
+A **separate, real** bug fixed alongside it: the SE(3) right-Jacobian `Q`-block
+had a sign-flipped `c3` coefficient in BOTH `RBDReference._se3_Q_block` and the
+CUDA `grid_se3_Q_block` (verified vs `pin.dIntegrate(ARG1)` to ~1e-14). It
+affected the SI-Euler floating gradient and any non-tiny `dIntegrate` increment;
+it matched Python↔CUDA before only because both were wrong.
 
----
+After both fixes, standalone `forward_dynamics_gradient_qd`,
+`inverse_dynamics_gradient_qd`, and the integrator `dAB` all match the reference
+to float32 noise at **32 and 448 threads**.
 
-## 4. CRITICAL OPEN QUESTION — the xfail's stated cause is contradicted
-
-**The code comments and commit messages attribute the floating Euler gradient
-mismatch to a structural bug in CUDA `forward_dynamics_gradient` (dropping
-linear↔angular velocity-coupling in the dqdd/dqd spatial 6×6 block for
-floating-base). New evidence contradicts this. Treat the root cause as UNKNOWN.**
-
-Evidence AGAINST the "FD-grad structural bug" story:
-1. `test/cuda_equivalents/test_cuda_executable_equivalence.py` validates CUDA
-   `forward_dynamics_gradient_qd` (= dqdd/dqd, = J_qv) against
-   ProjectModelAdapter(RBDReference) for go2-floating, and there is **no
-   tolerance override** for `("go2","forward_dynamics_gradient_qd")` (overrides
-   exist only for iiwa14/gen3/baxter qd) — i.e. go2-floating dqdd/dqd passes at
-   STRICT tolerance. See the overrides table
-   [test_cuda_executable_equivalence.py:90-189](test/cuda_equivalents/test_cuda_executable_equivalence.py#L90).
-2. `normalize_matrix` is the identity, so that strict comparison is
-   apples-to-apples in GRiD internal order — the same order the integrator
-   gradient is compared in.
-3. The integrator-gradient bottom `nv` rows are literally
-   `dt·J_qq | I + dt·J_qv | dt·Minv`, built from that same (validated) CUDA
-   `forward_dynamics_gradient` + `direct_minv`
-   ([RBDReference.py:404](RBDReference/RBDReference.py#L404) mirrors the CUDA
-   assembly). If CUDA J_qv == RBDReference J_qv strictly, the integrator-gradient
-   bottom rows MUST match too.
-
-So if the bottom rows match, any real integrator-gradient mismatch must live in
-the **top `nv` rows** (the SE(3) `dIntegrate` blocks `s_dInt_q_6x6` /
-`s_dInt_v_6x6`) — the OPPOSITE of what the shipped comments claim (they say top
-dIntegrate rows match ~1e-7 and the bottom rows inherit the bug).
-
-Likely explanation for the original "0.48 error" finding: the standalone debug
-driver (`/tmp/go2_minv_hypothesis.py`, `/tmp/grid_go2_grad_check.cu`) compared
-CUDA against **raw RBDReference** without the convention/operating-point
-handling the adapter path uses (ω-first vs v_lin-first ordering in the spatial
-6×6, and/or a different qdd operating point in `inverse_dynamics_gradient`). A
-6×6 ordering mismatch produces exactly a "dropped velocity-coupling" signature.
-That artifact, not a kernel bug, may be what was measured.
-
-### What a future agent must do before trusting/removing the xfail
-1. **Measure the real mismatch.** Instrument
-   `test_cuda_integrator_matches_python_reference` (or a one-off driver) to print
-   `max|dAB_cuda − dAB_ref|` split into top `nv` rows vs bottom `nv` rows, per
-   column-block `[∂/∂q | ∂/∂v | ∂/∂u]`, for go2-floating Euler. ~4 min (nvcc).
-2. **If the error is in the bottom rows**: reconcile with the strict
-   `forward_dynamics_gradient_qd` pass — likely the integrator kernel computes
-   its internal qdd / FD-grad at a different operating point than the standalone
-   `forward_dynamics_gradient` host wrapper. Find where they diverge.
-3. **If the error is in the top rows**: the `s_dInt_q_6x6` / `s_dInt_v_6x6`
-   emission in `_integrator_gradient.py` is wrong for the CUDA path even though
-   `RBDReference.dIntegrate` matches Pinocchio. Compare the emitted SO(3)
-   right-Jacobian against `RBDReference.dIntegrate(q, dt·qd, 'q'/'v')`.
-4. **If there is no large error (just marginally over 5e-4)**: it may be float32
-   noise on a stiff Minv — then the fix is a per-entry tolerance override (like
-   the other floating FD-grad entries), not a code change, and the xfail should
-   become a normal pass with an override.
-5. Update the comments in `GRiDCodeGenerator.py` (`_normalize_codegen_algorithms`,
-   ~[line 163](GRiDCodeGenerator/GRiDCodeGenerator.py#L163)) and this doc once
-   the real cause is known. Do NOT propagate the "structural FD-grad bug"
-   narrative further until it is independently re-confirmed.
-
-### MEASURED 2026-05-21 (step 1 done) — error localized to the J_qv block
-
-Ran step 1 (split `max|dAB_cuda − dAB_ref|` top `nv` rows vs bottom `nv` rows,
-per column-block) for **go2-floating Euler, all 15 samples, dt=0.01**, on the
-`humanoid-tier-spill` branch (after merging modernizing-tests). Result, every
-sample:
-
-- **Top `nv` rows** (SE(3) `dIntegrate` blocks `s_dInt_q_6x6`/`s_dInt_v_6x6`):
-  `[dq|dv|du] = [0, 0, 0]` — **exact**. The integrator's own SE(3) Jacobian
-  assembly is correct; it is NOT the source.
-- **Bottom `nv` rows** (`dt·J_qq | I+dt·J_qv | dt·Minv`): error is **isolated to
-  the ∂/∂v column block** = `I + dt·J_qv`, magnitude **~0.002–0.010**. The
-  ∂/∂q (`dt·J_qq`) and ∂/∂u (`dt·Minv`) blocks are `~0` (≤1e-6).
-
-So the mismatch is **purely in `J_qv = ∂qdd/∂qd` velocity-coupling**, surfaced
-through the bottom rows. This *confirms the location* the shipped comment
-claimed (bottom/FD-grad rows) and *refutes* the §4 worry that it might be the
-top dIntegrate rows.
-
-Magnitude argues **structural, not float32 noise**: at dt=0.01 a 0.002–0.010
-block error ⇒ `J_qv` error ~0.2–1.0 (far above float32 noise on a stiff Minv).
-
-**Remaining contradiction to resolve (step 2):** standalone
-`forward_dynamics_gradient_qd` (= J_qv) passes STRICT for go2-floating with no
-override, yet the integrator's J_qv is off by ~0.2–1.0. Since the integrator
-builds its bottom rows from the **inlined** FD-grad
-(`gen_forward_dynamics_gradient_inner_python`) rather than the standalone
-`forward_dynamics_gradient_kernel`, the prime suspects are now:
-  (a) the **inlined FD-grad path differs from the standalone kernel** on
-      floating-base velocity coupling, or
-  (b) an **operating-point difference** — the integrator computes its own qdd
-      (FD value step) and evaluates FD-grad there, while the standalone test
-      supplies qdd; J_qv depends on the qdd operating point.
-Next: dump the integrator's internal J_qv vs the standalone kernel's J_qv at the
-**same** (q, qd, u, qdd) and diff — that isolates (a) vs (b).
-
-### RESOLVED 2026-05-21 (steps 1.5 + 2) — §4 "contradiction" explained; original hypothesis revived
-
-Further debugging **eliminates (a) and (b)** and re-confirms a velocity-coupling
-defect in the **shared** floating-base FD-gradient:
-
-1. The integrator's gradient calls `gen_forward_dynamics_gradient_inner_python(
-   use_qdd_Minv_input=False)` — **the exact same code** the standalone
-   `forward_dynamics_gradient_kernel` uses (`_emit_fd_du_kernel_body_for_flags`
-   → same `inner_python`). So CUDA `J_qv` is byte-identical in both; rules out (a).
-2. The `∂/∂q` block of the integrator dAB is **exact**. Since
-   `J_qq = -Minv·∂ID/∂q|_qdd` *depends on the qdd operating point*, its exactness
-   proves the integrator and reference share the same qdd; rules out (b).
-3. **The error scales with base velocity** (the smoking gun). Per-sample dAB
-   bottom-`∂v` error for go2-floating Euler (dt=0.01):
-   `zero`→0, `tiny`→0, `velocity_only`→0.0055, `conservative`→0.0079,
-   `cuda_random_0/1`→0.0085/0.0101. **Zero at zero/tiny base velocity, growing
-   with it.**
-
-This explains why the standalone `forward_dynamics_gradient_qd` test "passes
-strict": **its samples have small/near-zero base velocity**, so the
-velocity-scaled term is below tolerance. It is NOT a contradiction and the §4
-doubt was wrong — the shipped narrative (a dropped linear↔angular
-velocity-coupling term in the floating-base dqdd/dqd spatial 6×6) is, on this
-evidence, **correct**. The error structure confirms it: for go2 (nv=18, root =
-`[ω(0:3), v_lin(3:6)]`), the wrong `J_qv` entries are confined to the **root
-angular rows (0–2)** coupling to **angular + linear velocity columns**
-(antisymmetric `(0,1)/(1,0)` + `(0,4),(0,5),(2,3)`); linear rows (3–5) and all
-12 joint rows are exact.
-
-**Still open — which side is wrong (CUDA `inverse_dynamics_gradient` vs
-`RBDReference.forward_dynamics_grad`)?** Both currently agree at low velocity
-and disagree at high velocity, so one carries the velocity-scaled defect.
-Determine via `pin.computeABADerivatives` `ddq_dv` on a **high-base-angular-
-velocity** go2-floating sample, **carefully reordering Pinocchio's linear-first
-`[v_lin, ω]` root to GRiD's angular-first `[ω, v_lin]`** before comparing the
-root rows. Then fix the dropped coupling term in whichever side is wrong (likely
-the CUDA floating-base velocity-product gradient in
-`inverse_dynamics_gradient_inner`). This is a core-dynamics change — validate
-against Pinocchio + re-run standalone (with a high-velocity sample added) +
-integrator equivalence.
-
-### FIXED 2026-05-22 — it was a CUDA thread-count RACE, not a math/convention defect
-
-The "dropped velocity-coupling term / which side is wrong" conclusion above was
-**wrong**, and the misdiagnosis came from one blind spot: **the entire CUDA
-equivalence suite launched every kernel at `<<<1,32>>>` (one warp), while the
-integrator runner uses `SUGGESTED_THREADS` (448).** RBDReference matches
-Pinocchio; the CUDA side was correct *at 32 threads* and raced above one warp.
-
-Root cause(s), both CUDA-side, in `_inverse_dynamics_gradient.py`
-(`gen_inverse_dynamics_gradient_inner`), floating-base only:
-1. The `da/du` init **zeroed `s_temp[Offset_da_dq]` in one parallel loop and
-   then `+=`-accumulated into it in the next with no `__syncthreads` between** —
-   correct only within a single warp.
-2. The `MxS(dv/du)·qd` accumulation for the **floating root** had all 6 root
-   axes (`dof_id` 0–5 → `jid` 0) `mxX_peq_scaled` into the *same* `da/du`
-   column. That helper assumes one writer per destination, so the 6-way `+=`
-   raced. Fixed by serializing the root sum onto a single lane.
-
-Both fixed. After the fix, standalone `forward_dynamics_gradient_qd`,
-`inverse_dynamics_gradient_qd`, and the integrator dAB all match the reference
-to float32 noise at **32 and 448 threads**. The "velocity-scaled" signature was
-the race amplitude growing with operand magnitude, not a velocity-coupling term.
-
-A **separate, real** bug also fixed here: the SE(3) right-Jacobian `Q`-block had
-a sign-flipped `c3` coefficient in BOTH `RBDReference._se3_Q_block` and the CUDA
-`grid_se3_Q_block` (verified vs `pin.dIntegrate(ARG1)` to ~1e-14). This affected
-the SI-Euler floating gradient (and any non-tiny `dIntegrate` increment); it
-matched between Python and CUDA before because both were wrong.
-
-Regression guard: the CUDA equivalence tests now **sweep block thread counts**
-(one warp + multi-warp + a session-random non-multiple-of-32 count) so any
-future thread-count race on any kernel fails the suite. The floating Euler
-integrator gradient now passes with **no xfail**.
+Fix commits: GRiDCodeGenerator `501501b`, RBDReference `df76001`.
 
 ---
 
-## 5. Known limitations (independent of the open question)
+## 4. Open / next (nothing blocking; pick up here)
 
-- Floating SI-Euler / Midpoint / RK3 / RK4 **gradients** are not implemented
-  (kernel `static_assert`). They need the per-stage `dIntegrate` chain-rule
-  wiring (the value path already does the per-stage Lie retract). The Python
-  `RBDReference.integrator_grad` DOES implement all five for floating
-  ([RBDReference.py:427-462](RBDReference/RBDReference.py#L427)), so the CUDA
-  side is the only gap.
-- Floating gradient shared-memory budget: go2 floating (nv=18) fits in float
-  (~73 KB). g1 floating (nv=35) would likely need selective spill (out of scope).
-- Floating FD-sanity test is fixed-base only (needs SE(3) log for tangent-space
-  finite differencing of the q columns).
+In rough priority order:
+
+1. **Integrator inner-controlled spill (workspace plumbing).** The integrator
+   inners are NOT yet placement-aware: no `d_workspace` param, no
+   `s_temp`+`s_workspace`+placement template, so LITE/MINIMAL smem doesn't shrink
+   and the cold per-stage scaffold can't move to L2-pinned global. Not needed for
+   fixed or go2-floating (they fit smem today); **needed for g1/h1_2 floating
+   gradients** (nv=35 overflows float smem ~73 KB). When tackled, apply the
+   top-down ordering (spill the cold outer stage scaffold first, keep the
+   dynamics inner in smem longest) and reuse the established
+   inner-controlled-placement pattern from FD/Minv/ABA. Also register integrator
+   kernels in `test/diagnostics/tier_instantiation_smoke.py` (special-case the
+   extra `IntegratorType` template arg).
+2. **Floating FD-sanity test.** `test_integrator_gradient_fd_sanity.py` is
+   fixed-base only; floating needs an SE(3) log for the tangent-space
+   perturbation of the q columns.
+
+Out of scope here but on the longer roadmap: **JAX FFI bindings** to replace the
+stale Pybind11 layer (generate-compile-run-fast fit; see project memory).
 
 ---
 
-## 6. Commits
+## 5. Known limitations
 
-GRiDCodeGenerator submodule (branch `modernizing-tests`):
-- `f24ce27` Ungate floating-base integrator gradient (Euler).
-- `7a08a0a` (prior) Root-cause + gate-off — **its root-cause claim is the one now
-  in doubt; see §4.**
+- Floating gradient smem budget: go2 floating (nv=18) fits in float (~73 KB);
+  g1 floating (nv=35) needs item 1's selective spill.
+- Floating FD-sanity deferred (item 2 above).
 
-Parent GRiD (branch `modernizing-tests`):
-- `f2d6826` Enable floating Euler integrator gradient in CUDA equivalence test
-  (xfail) + submodule bump.
-- `299bef8` (prior) Floating value path for all 5 integrators.
+---
+
+## History
+
+Earlier revisions of this doc carried a long "CRITICAL OPEN QUESTION" thread that
+attributed the floating Euler gradient mismatch to a structural dropped
+linear↔angular velocity-coupling term in floating-base `forward_dynamics_gradient`,
+then went back and forth on which side carried it. **That entire narrative was a
+misdiagnosis** — the real cause was the 32-thread launch hiding a multi-warp race
+(§3). The lesson is now encoded as a regression guard: the CUDA equivalence tests
+sweep thread counts including a random non-multiple-of-32 (see
+`test/TESTING_STRATEGY.md`, Principle 2). Do not reintroduce fixed-32-thread
+launches.
