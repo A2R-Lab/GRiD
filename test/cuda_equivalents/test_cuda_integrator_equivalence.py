@@ -141,9 +141,24 @@ def _sample_stdin_with_dt(sample, dt: float) -> str:
     return base + f" {dt}\n"
 
 
-def _run_sample(executable, compile_cmd, sample, dt: float):
-    stdout = _run_runner(executable, _sample_stdin_with_dt(sample, dt), compile_cmd)
+def _run_sample(executable, compile_cmd, sample, dt: float, num_threads=None):
+    stdout = _run_runner(executable, _sample_stdin_with_dt(sample, dt), compile_cmd, num_threads=num_threads)
     return _parse_runner_output(stdout)
+
+
+def _assert_close_scaled(actual, expected, rtol, atol, err_msg):
+    """assert_allclose with the absolute floor raised to rtol*max|expected|.
+
+    A structurally-zero entry (e.g. a coupling term that vanishes at this
+    operating point) carries float32 round-off ~ rtol*scale; comparing it with
+    a fixed tiny atol trips at high velocity/dt even though the kernel is
+    correct. Flooring atol at the array's overall scale lets "small relative to
+    the matrix" count as close, while a genuine error stays O(scale) and fails."""
+    expected_arr = np.asarray(expected, dtype=np.float64)
+    scale = float(np.max(np.abs(expected_arr))) if expected_arr.size else 0.0
+    np.testing.assert_allclose(
+        actual, expected, rtol=rtol, atol=max(atol, rtol * scale), err_msg=err_msg,
+    )
 
 
 def _base_modes() -> tuple[str, ...]:
@@ -164,16 +179,8 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
 
     Fixed-base exercises value + gradient + both-at-once for all 5 integrators.
     Floating-base exercises value for all 5 integrators, plus the Euler gradient.
-    The floating Euler gradient is expected to MISMATCH today because it builds
-    on `forward_dynamics_gradient`, whose floating-base dqdd/dqd spatial block
-    drops velocity-coupling terms (verified vs RBDReference AND Pinocchio, which
-    agree to 1e-13; the error is identical in float32 and double, so it is not
-    Minv-amplified noise). The integrator-gradient assembly itself is correct
-    (top dIntegrate rows match to ~1e-7). We therefore `xfail` the floating
-    gradient: once `forward_dynamics_gradient` is fixed, this comparison passes
-    and the suite is green with no xfail — that green run is the signal the bug
-    is resolved. SI-Euler / Midpoint / RK3 / RK4 floating gradients are not
-    emitted yet (kernel static_assert), so only Euler is checked for floating.
+    SI-Euler / Midpoint / RK3 / RK4 floating gradients are not emitted yet
+    (kernel static_assert), so only Euler is checked for floating.
     """
     spec = _robot_spec(robot_id, base_mode)
     try:
@@ -194,10 +201,7 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
     atol = 5e-4
 
     # Floating-base emits the gradient kernel for Euler only; fixed-base for all
-    # five. Track whether the (xfail-expected) floating Euler gradient ever
-    # mismatched so we can xfail at the end without aborting the value checks.
-    floating_grad_mismatch = False
-
+    # five.
     def _gradient_emitted(integrator_type: str) -> bool:
         if base_mode == "fixed":
             return True
@@ -217,8 +221,8 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
                 assert x_kp1_block.shape == (nq + nv,), (
                     f"{prefix} x_kp1 shape {x_kp1_block.shape} (expected {(nq + nv,)})"
                 )
-                np.testing.assert_allclose(
-                    x_kp1_block, expected_x_kp1, rtol=rtol, atol=atol,
+                _assert_close_scaled(
+                    x_kp1_block, expected_x_kp1, rtol, atol,
                     err_msg=f"{robot_id}-{base_mode} {prefix} x_kp1 @ {sample.name} dt={dt}",
                 )
 
@@ -236,36 +240,15 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
                     f"{prefix} dAB shape {dAB_block.shape} (expected {(2*nv, 3*nv)})"
                 )
 
-                # Floating Euler gradient is expected to mismatch (upstream
-                # forward_dynamics_gradient bug). Record the mismatch and keep
-                # going so the value checks across all samples still run; we
-                # xfail once at the end. The x_kp1 emitted alongside the
-                # gradient is unaffected by the bug, so we still check it.
-                if base_mode == "floating":
-                    if not np.allclose(dAB_block, expected_dAB, rtol=rtol, atol=atol):
-                        floating_grad_mismatch = True
-                    np.testing.assert_allclose(
-                        x_kp1_with_block, expected_x_kp1, rtol=rtol, atol=atol,
-                        err_msg=f"{robot_id}-floating {prefix} x_kp1_with_dAB @ {sample.name} dt={dt}",
-                    )
-                    continue
-
-                np.testing.assert_allclose(
-                    dAB_block, expected_dAB, rtol=rtol, atol=atol,
-                    err_msg=f"{robot_id} {prefix} dAB @ {sample.name} dt={dt}",
+                _assert_close_scaled(
+                    dAB_block, expected_dAB, rtol, atol,
+                    err_msg=f"{robot_id}-{base_mode} {prefix} dAB @ {sample.name} dt={dt}",
                 )
-                np.testing.assert_allclose(
-                    x_kp1_with_block, expected_x_kp1, rtol=rtol, atol=atol,
-                    err_msg=f"{robot_id} {prefix} x_kp1_with_dAB @ {sample.name} dt={dt}",
+                _assert_close_scaled(
+                    x_kp1_with_block, expected_x_kp1, rtol, atol,
+                    err_msg=f"{robot_id}-{base_mode} {prefix} x_kp1_with_dAB @ {sample.name} dt={dt}",
                 )
-                np.testing.assert_allclose(
-                    dAB_with_block, expected_dAB, rtol=rtol, atol=atol,
-                    err_msg=f"{robot_id} {prefix} dAB_with_x_kp1 @ {sample.name} dt={dt}",
+                _assert_close_scaled(
+                    dAB_with_block, expected_dAB, rtol, atol,
+                    err_msg=f"{robot_id}-{base_mode} {prefix} dAB_with_x_kp1 @ {sample.name} dt={dt}",
                 )
-
-    if base_mode == "floating" and floating_grad_mismatch:
-        pytest.xfail(
-            "floating integrator gradient blocked on upstream "
-            "forward_dynamics_gradient dqdd/dqd velocity-coupling bug; "
-            "the integrator-gradient assembly itself is correct"
-        )

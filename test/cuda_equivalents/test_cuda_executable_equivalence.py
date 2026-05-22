@@ -2,6 +2,7 @@ import contextlib
 import hashlib
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -564,9 +565,12 @@ def _compile_runner(
     return executable, cmd
 
 
-def _run_runner(executable: Path, sample_input: str, compile_cmd: list[str]) -> str:
+def _run_runner(executable: Path, sample_input: str, compile_cmd: list[str], num_threads: int | None = None) -> str:
+    argv = [str(executable)]
+    if num_threads is not None:
+        argv.append(str(num_threads))
     result = subprocess.run(
-        [str(executable)],
+        argv,
         input=sample_input,
         cwd=executable.parent,
         capture_output=True,
@@ -592,6 +596,41 @@ def _run_runner(executable: Path, sample_input: str, compile_cmd: list[str]) -> 
             f"stderr:\n{result.stderr}"
         )
     return result.stdout
+
+
+def _thread_counts() -> tuple[int, ...]:
+    """Block thread counts to sweep each CUDA equivalence case over.
+
+    Defaults to a single warp (32) plus multi-warp counts (one a non-multiple
+    of 32 to exercise partial trailing warps, plus SUGGESTED_THREADS=448, the
+    count real GRiD usage launches at) and one session-random multi-warp count.
+    Sweeping thread counts catches thread-count-dependent races (missing
+    __syncthreads between a write phase and a read/accumulate phase that happens
+    to be correct only within a single warp) that a fixed 32-thread launch hides.
+    Override via GRID_CUDA_THREAD_COUNTS (comma-separated ints, or "random" for
+    a fresh multi-warp value)."""
+    raw = os.environ.get("GRID_CUDA_THREAD_COUNTS")
+    if raw:
+        counts = []
+        for part in raw.split(","):
+            part = part.strip().lower()
+            if not part:
+                continue
+            if part == "random":
+                counts.append(_random_thread_count())
+            else:
+                counts.append(int(part))
+        return tuple(dict.fromkeys(counts)) or (32,)
+    return (32, 96, 448, _random_thread_count())
+
+
+def _random_thread_count() -> int:
+    # A session-fresh multi-warp count that is not a multiple of 32, so a
+    # trailing partial warp is always present. Seeded from os.urandom so each
+    # run probes a different count over time; the chosen value appears in the
+    # parametrized test id for reproducibility.
+    rng = random.Random()
+    return rng.choice([n for n in range(33, 480) if n % 32 != 0])
 
 
 def _random_sample_count() -> int:
@@ -975,8 +1014,9 @@ def _assert_close(
         ) from exc
 
 
+@pytest.mark.parametrize("num_threads", _thread_counts(), ids=lambda t: f"threads{t}")
 @pytest.mark.parametrize(("spec", "base_mode"), build_fixed_cuda_case_params())
-def test_fixed_base_generated_cuda_matches_python_reference(spec, base_mode, tmp_path, request):
+def test_fixed_base_generated_cuda_matches_python_reference(spec, base_mode, num_threads, tmp_path, request):
     selection = _sample_name_selection(base_mode)
     random_count = 0 if selection.explicit and os.environ.get("GRID_CUDA_RANDOM_SAMPLES") is None else None
     _run_cuda_equivalence_case(
@@ -987,11 +1027,13 @@ def test_fixed_base_generated_cuda_matches_python_reference(spec, base_mode, tmp
         sample_selection=selection,
         random_count=random_count,
         config=request.config,
+        num_threads=num_threads,
     )
 
 
+@pytest.mark.parametrize("num_threads", _thread_counts(), ids=lambda t: f"threads{t}")
 @pytest.mark.parametrize(("spec", "base_mode"), build_floating_cuda_case_params())
-def test_floating_base_generated_cuda_matches_python_reference(spec, base_mode, tmp_path, request):
+def test_floating_base_generated_cuda_matches_python_reference(spec, base_mode, num_threads, tmp_path, request):
     selection = _sample_name_selection(base_mode)
     random_count = None
     if os.environ.get("GRID_CUDA_RANDOM_SAMPLES") is None and (
@@ -1006,6 +1048,7 @@ def test_floating_base_generated_cuda_matches_python_reference(spec, base_mode, 
         sample_selection=selection,
         random_count=random_count,
         config=request.config,
+        num_threads=num_threads,
     )
 
 
@@ -1017,6 +1060,7 @@ def _run_cuda_equivalence_case(
     sample_selection=None,
     random_count=None,
     config=None,
+    num_threads=None,
 ):
     if sample_selection is None:
         sample_selection = SampleSelection(None, False, False)
@@ -1064,8 +1108,8 @@ def _run_cuda_equivalence_case(
         if sample_names is not None and sample.name not in sample_names:
             continue
         matched_samples += 1
-        _progress(config, f"{spec.robot_id}-{base_mode}/{sample.name}: running CUDA runner")
-        stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
+        _progress(config, f"{spec.robot_id}-{base_mode}/{sample.name}: running CUDA runner (threads={num_threads or 32})")
+        stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd, num_threads=num_threads)
         cuda = _parse_runner_output(stdout)
 
         np.testing.assert_allclose(
@@ -1110,7 +1154,7 @@ def _run_cuda_equivalence_case(
                 )
                 expected_value = _expected_output(project_model, sample, name)
                 _assert_close(
-                    f"{spec.robot_id}/{sample.name}/{name}",
+                    f"{spec.robot_id}/{sample.name}/{name}/threads={num_threads or 32}",
                     cuda[name],
                     expected_value,
                     robot_id=spec.robot_id,

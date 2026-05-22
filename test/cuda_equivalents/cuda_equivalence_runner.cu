@@ -10,6 +10,11 @@
 #define GRID_CUDA_RUN_FLOATING_EEPOSE_HESSIAN 0
 #endif
 
+// Block thread count for all kernel launches. Defaults to 32 (one warp) and is
+// overridable via argv[1] so the test harness can sweep warp counts to catch
+// thread-count-dependent races.
+int g_num_threads = 32;
+
 template <typename T>
 __global__ void runtime_probe_kernel(T *dst) {
     for (int ind = threadIdx.x; ind < grid::NUM_VEL; ind += blockDim.x) {
@@ -203,7 +208,7 @@ template <typename T>
 void run() {
     const T gravity = static_cast<T>(9.81);
     const dim3 block_dimms(1, 1, 1);
-    const dim3 thread_dimms(32, 1, 1);
+    const dim3 thread_dimms(g_num_threads, 1, 1);
 
     cudaStream_t *streams = grid::init_grid<T>();
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
@@ -270,7 +275,7 @@ void run() {
     gpuErrchk(cudaMemcpy(d_q_qd_u, h_q_qd_u.data(), h_q_qd_u.size() * sizeof(T), cudaMemcpyHostToDevice));
     gpuErrchk(cudaMemset(d_zero, 0, grid::NUM_VEL * sizeof(T)));
 
-    runtime_probe_kernel<T><<<1, 32>>>(d_vec);
+    runtime_probe_kernel<T><<<1, g_num_threads>>>(d_vec);
     gpuErrchk(cudaPeekAtLastError());
     gpuErrchk(cudaDeviceSynchronize());
     gpuErrchk(cudaMemcpy(h_vec.data(), d_vec, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
@@ -324,7 +329,7 @@ void run() {
     #endif
 
     if (floating_algorithm_requested("inverse_dynamics")) {
-        floating_inverse_dynamics_runner<T><<<1, 32, grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        floating_inverse_dynamics_runner<T><<<1, g_num_threads, grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_vec, d_q, d_qd, d_zero, d_robot_model, gravity
         );
         gpuErrchk(cudaPeekAtLastError());
@@ -334,7 +339,7 @@ void run() {
     }
 
     if (floating_algorithm_requested("direct_minv")) {
-        grid::direct_minv_kernel<T><<<1, 32, grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::direct_minv_kernel<T><<<1, g_num_threads, grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_mat, /*d_workspace=*/nullptr, d_q, grid::NUM_JOINTS, d_robot_model, 1
         );
         gpuErrchk(cudaPeekAtLastError());
@@ -344,7 +349,7 @@ void run() {
     }
 
     if (floating_algorithm_requested("forward_dynamics")) {
-        floating_forward_dynamics_runner<T><<<1, 32, grid::FD_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        floating_forward_dynamics_runner<T><<<1, g_num_threads, grid::FD_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_vec, d_q, d_qd, d_u, d_robot_model, gravity
         );
         gpuErrchk(cudaPeekAtLastError());
@@ -354,7 +359,7 @@ void run() {
     }
 
     if (floating_algorithm_requested("aba")) {
-        grid::aba_kernel<T><<<1, 32, grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::aba_kernel<T><<<1, g_num_threads, grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_vec,
             /*d_workspace=*/nullptr,
             d_q_qd_u,
@@ -370,7 +375,7 @@ void run() {
     }
 
     if (floating_algorithm_requested("crba")) {
-        grid::crba_kernel<T><<<1, 32, grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::crba_kernel<T><<<1, g_num_threads, grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_mat,
             d_q_qd,
             grid::NUM_JOINTS + grid::NUM_VEL,
@@ -385,7 +390,7 @@ void run() {
     }
 
     if (floating_algorithm_requested("end_effector_pose")) {
-        grid::end_effector_pose_kernel<T><<<1, 32, grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::end_effector_pose_kernel<T><<<1, g_num_threads, grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_ee,
             d_q,
             grid::NUM_JOINTS,
@@ -399,7 +404,7 @@ void run() {
     }
 
     if (floating_algorithm_requested("end_effector_pose_gradient")) {
-        grid::end_effector_pose_gradient_kernel<T><<<1, 32, grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::end_effector_pose_gradient_kernel<T><<<1, g_num_threads, grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_dee,
             /*d_workspace=*/nullptr,
             d_q,
@@ -420,7 +425,7 @@ void run() {
                 0, hd_data->d_workspace, grid::GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()
             ));
         }
-        grid::end_effector_pose_gradient_hessian_kernel<T><<<1, 32, grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::end_effector_pose_gradient_hessian_kernel<T><<<1, g_num_threads, grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_d2ee,
             d_dee,
             hd_data->d_workspace,
@@ -441,7 +446,7 @@ void run() {
 
     if (floating_algorithm_requested("inverse_dynamics_gradient_q") ||
         floating_algorithm_requested("inverse_dynamics_gradient_qd")) {
-        grid::inverse_dynamics_gradient_kernel<T><<<1, 32, grid::ID_DU_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::inverse_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::ID_DU_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_grad,
             hd_data->d_workspace,
             d_q_qd,
@@ -464,7 +469,7 @@ void run() {
 
     if (floating_algorithm_requested("forward_dynamics_gradient_q") ||
         floating_algorithm_requested("forward_dynamics_gradient_qd")) {
-        grid::forward_dynamics_gradient_kernel<T><<<1, 32, grid::FD_DU_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::forward_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::FD_DU_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_grad,
             hd_data->d_workspace,
             d_q_qd_u,
@@ -514,7 +519,7 @@ void run() {
     print_vector("input_qd", &hd_data->h_q_qd[grid::NUM_JOINTS], grid::NUM_JOINTS);
     print_vector("input_u", &hd_data->h_q_qd_u[2 * grid::NUM_JOINTS], grid::NUM_JOINTS);
 
-    runtime_probe_kernel<T><<<1, 32>>>(hd_data->d_c);
+    runtime_probe_kernel<T><<<1, g_num_threads>>>(hd_data->d_c);
     gpuErrchk(cudaPeekAtLastError());
     gpuErrchk(cudaDeviceSynchronize());
     gpuErrchk(cudaMemcpy(
@@ -595,7 +600,15 @@ void run() {
     grid::close_grid<T>(streams, d_robot_model, hd_data);
 }
 
-int main() {
+int main(int argc, char **argv) {
+    // Optional argv[1] = block thread count (default 32). Lets the test sweep
+    // launches across warp counts to catch thread-count-dependent races (e.g.
+    // a missing __syncthreads between a write phase and a read/accumulate phase
+    // that is correct only within a single warp).
+    if (argc > 1) {
+        int requested = std::atoi(argv[1]);
+        if (requested > 0) { g_num_threads = requested; }
+    }
     run<float>();
     return 0;
 }
