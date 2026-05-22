@@ -117,6 +117,14 @@ def _compile_runner(build_dir: Path):
         "-o", str(executable),
         str(runner_copy),
     ]
+    # Optional tier override so the suite can exercise the LITE/MINIMAL spill path
+    # (s_D_qdd_stage -> d_workspace) for the integrator gradient. The math is
+    # tier-independent, so a tier sweep must still match the reference.
+    tier = os.environ.get("GRID_CUDA_INTEGRATOR_TIER")
+    if tier:
+        if tier not in ("TIER_PERF", "TIER_LITE", "TIER_MINIMAL"):
+            pytest.fail("GRID_CUDA_INTEGRATOR_TIER must be TIER_PERF, TIER_LITE, or TIER_MINIMAL.")
+        cmd.insert(-1, f"-DGRID_DEFAULT_RESOURCE_TIER={tier}")
     result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(

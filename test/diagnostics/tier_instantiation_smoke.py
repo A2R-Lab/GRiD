@@ -42,6 +42,17 @@ KERNELS = [
 
 TIERS = ["TIER_PERF", "TIER_LITE", "TIER_MINIMAL"]
 
+# Integrator kernels carry an extra `IntegratorType IT` template arg BEFORE
+# RESOURCE_TIER, so the 2-arg address trick above doesn't apply — they get a
+# dedicated force-instantiation with an explicit IT (EULER = single-stage path,
+# RK4 = multi-stage path, which spills s_D_qdd_stage at LITE/MINIMAL).
+INTEGRATOR_KERNELS = [
+    "integrator_kernel",
+    "integrator_gradient_kernel",
+    "integrator_gradient_with_x_kp1_kernel",
+]
+INTEGRATOR_ITS = ["EULER", "RK4"]
+
 
 def generate(robot_label: str, urdf: Path, floating: bool, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -87,6 +98,17 @@ def compile_all_tiers(grid_cuh: Path, emitted: list[str], build_dir: Path) -> di
             body_lines.append(
                 f"    (void) reinterpret_cast<void*>(&grid::{k}<T, grid::{tier}>);"
             )
+    # Integrator kernels: instantiate at every (IT, tier) so the per-tier spill
+    # bodies (s_D_qdd_stage in smem vs d_workspace) all compile.
+    grid_text = grid_cuh.read_text()
+    for k in INTEGRATOR_KERNELS:
+        if not re.search(rf"\bvoid\s+{k}\s*\(", grid_text):
+            continue
+        for it in INTEGRATOR_ITS:
+            for tier in TIERS:
+                body_lines.append(
+                    f"    (void) reinterpret_cast<void*>(&grid::{k}<T, grid::IntegratorType::{it}, grid::{tier}>);"
+                )
     # Validate the tier-aware sizing constexprs for inline-CUDA users. At
     # TIER_PERF the SMEM_BYTES values should be non-zero (full smem
     # footprint, current behavior) and WORKSPACE_BYTES values should be 0.
