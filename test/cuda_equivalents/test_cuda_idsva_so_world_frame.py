@@ -27,6 +27,7 @@ from test.cuda_equivalents.test_cuda_executable_equivalence import (
     _build_cuda_samples,
     _detect_cuda_arch,
     _parse_runner_output,
+    _random_thread_count,
     _run_runner,
     _sample_to_stdin,
 )
@@ -156,7 +157,12 @@ def _compile_world_frame_runner(build_dir: Path):
             )
         if thread_count <= 0:
             pytest.fail("GRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS must be positive when set.")
-        cmd.insert(-1, f"-DGRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS={thread_count}")
+    else:
+        # Session-random multi-warp count (non-multiple of 32) so the SO kernels
+        # are probed across warp counts over time, catching thread-count races
+        # that a fixed block size hides. Override with the env var to reproduce.
+        thread_count = _random_thread_count()
+    cmd.insert(-1, f"-DGRID_CUDA_IDSVA_SO_WORLD_FRAME_TEST_THREADS={thread_count}")
     result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(

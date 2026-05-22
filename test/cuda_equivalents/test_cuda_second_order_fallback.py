@@ -13,6 +13,7 @@ from test.cuda_equivalents.test_cuda_executable_equivalence import (
     _detect_cuda_arch,
     _has_invertible_project_mass_matrix,
     _parse_runner_output,
+    _random_thread_count,
     _run_runner,
     _sample_to_stdin,
 )
@@ -144,7 +145,12 @@ def _compile_second_order_runner(build_dir: Path, *, enable_fdsva=True):
             pytest.fail(
                 "GRID_CUDA_SECOND_ORDER_TEST_THREADS must be positive when set."
             )
-        cmd.insert(-1, f"-DGRID_CUDA_SECOND_ORDER_TEST_THREADS={thread_count}")
+    else:
+        # Session-random multi-warp count (non-multiple of 32) so the SO kernels
+        # are probed across warp counts over time, catching thread-count races
+        # that a fixed block size hides. Override with the env var to reproduce.
+        thread_count = _random_thread_count()
+    cmd.insert(-1, f"-DGRID_CUDA_SECOND_ORDER_TEST_THREADS={thread_count}")
     cmd.insert(-1, f"-DGRID_CUDA_SECOND_ORDER_ENABLE_FDSVA={int(enable_fdsva)}")
     result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
