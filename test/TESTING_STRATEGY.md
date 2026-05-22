@@ -109,6 +109,18 @@ Two pitfalls when comparing arrays:
   via the invertibility gate rather than loosening tolerance
   (`has_invertible_mass_matrix`, `min_singular_value`).
 
+A specific instance: the **`aba` (Articulated-Body) kernel** can return
+non-finite values in float32 on moderately ill-conditioned floating-base configs
+(e.g. the quaternion corner samples, condition number ~6e3) where the robust
+Minv-based `forward_dynamics` (CRBA + solve) still computes the correct result.
+ABA is correct in float64 (it matches Pinocchio); the recursion is just more
+float32-fragile than the CRBA+solve path. The test excuses a non-finite `aba`
+**only** when the float64 reference is finite *and* the CUDA `forward_dynamics`
+matched its reference for that sample (`_forward_dynamics_float32_matches`) — so
+a non-finite ABA at a well-conditioned config, or one coinciding with a broken
+FD path, still fails. Prefer `forward_dynamics` over `aba` for float32 on stiff
+configs.
+
 **Never loosen a tolerance to hide a real, magnitude-scaling discrepancy.** If
 the error grows with energy or exceeds `O(rtol·scale)`, it is a bug — find the
 root cause. Tolerance widening is only legitimate for documented float32 noise
