@@ -228,6 +228,21 @@ overhead does the wrapper add" answer.
 5. **License of generated `.so`** — user-owned (their URDF baked in);
    nothing to do, just document.
 
+## Backlog / consistency fixes
+
+- **Gravity handling is inconsistent across the two wrapper backends.** The
+  underlying CUDA threads `gravity` as a runtime parameter through every
+  inner/device/kernel/host function (`const T gravity`). The wrapper, however,
+  is split: the pybind11 C-ABI host fns take a `gravity` argument (default
+  9.81, surfaced as a `gravity=` kwarg on `RobotHandle` methods), while the JAX
+  FFI handlers **hardcode `9.81f`**. The integrator methods (added 2026-05-22)
+  also hardcode 9.81 on both paths (dt is their only runtime scalar). Decide one
+  convention and apply it throughout: either (a) thread `gravity` as a runtime
+  value on both backends (FFI: pass it as an `.Attr<float>("gravity")`, matching
+  the CUDA), or (b) hardcode the standard 9.81 everywhere and drop the pybind
+  `gravity=` kwargs. (a) matches the CUDA and is more flexible; (b) is simpler.
+  Either way, make pybind11 and JAX FFI agree.
+
 ## Migration: delete `bindings/`
 
 Once `grid-rbd` lands on PyPI:
