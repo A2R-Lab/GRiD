@@ -956,78 +956,105 @@ def compile_binaries(
             cpu = os.cpu_count() or 4
             compile_workers = max(2, int(cpu * 0.75))
 
-        single_binary = _compile_per_algo_binary(
-            kind="single",
-            tu_sources=[p for (_k, p) in single_tu_pairs],
-            main_source=single_main,
-            out_name="timeGRiD_single",
-            header_path=header_path,
-            build_dir=build_dir,
-            cxx_standard=cxx_standard,
-            compile_linalg_flags=single_c,
-            link_linalg_flags=single_l,
-            common_arch=common_arch,
-            ptxas_opt_level=ptxas_opt_level,
-            split_compile=split_compile,
-            ofast_compile=ofast_compile,
-            use_rdc=single_rdc,
-            runner_key=runner_key,
-            ccache_prefix=ccache_prefix,
-            nvcc=nvcc,
-            max_workers=compile_workers,
-        )
-        batch_binary = _compile_per_algo_binary(
-            kind="batch",
-            tu_sources=[p for (_k, p) in batch_tu_pairs],
-            main_source=batch_main,
-            out_name="timeGRiD_batch",
-            header_path=header_path,
-            build_dir=build_dir,
-            cxx_standard=cxx_standard,
-            compile_linalg_flags=batch_c,
-            link_linalg_flags=batch_l,
-            common_arch=common_arch,
-            ptxas_opt_level=ptxas_opt_level,
-            split_compile=split_compile,
-            ofast_compile=ofast_compile,
-            use_rdc=batch_rdc,
-            runner_key=runner_key,
-            ccache_prefix=ccache_prefix,
-            nvcc=nvcc,
-            max_workers=compile_workers,
-        )
+        # Build single and batch INDEPENDENTLY so one failing (e.g. the
+        # rdc-only single build hitting a ptxas regcount error on integrator
+        # kernels) doesn't take down the other — the batch (no-rdc) build
+        # inlines and still produces data. Only fail the combo if BOTH die.
+        single_binary = None
+        try:
+            single_binary = _compile_per_algo_binary(
+                kind="single",
+                tu_sources=[p for (_k, p) in single_tu_pairs],
+                main_source=single_main,
+                out_name="timeGRiD_single",
+                header_path=header_path,
+                build_dir=build_dir,
+                cxx_standard=cxx_standard,
+                compile_linalg_flags=single_c,
+                link_linalg_flags=single_l,
+                common_arch=common_arch,
+                ptxas_opt_level=ptxas_opt_level,
+                split_compile=split_compile,
+                ofast_compile=ofast_compile,
+                use_rdc=single_rdc,
+                runner_key=runner_key,
+                ccache_prefix=ccache_prefix,
+                nvcc=nvcc,
+                max_workers=compile_workers,
+            )
+        except Exception as e:
+            print(f"  [grid] WARNING: single-call build failed (batch will still run): {e}", file=sys.stderr)
+        batch_binary = None
+        try:
+            batch_binary = _compile_per_algo_binary(
+                kind="batch",
+                tu_sources=[p for (_k, p) in batch_tu_pairs],
+                main_source=batch_main,
+                out_name="timeGRiD_batch",
+                header_path=header_path,
+                build_dir=build_dir,
+                cxx_standard=cxx_standard,
+                compile_linalg_flags=batch_c,
+                link_linalg_flags=batch_l,
+                common_arch=common_arch,
+                ptxas_opt_level=ptxas_opt_level,
+                split_compile=split_compile,
+                ofast_compile=ofast_compile,
+                use_rdc=batch_rdc,
+                runner_key=runner_key,
+                ccache_prefix=ccache_prefix,
+                nvcc=nvcc,
+                max_workers=compile_workers,
+            )
+        except Exception as e:
+            print(f"  [grid] WARNING: batch build failed (single will still run): {e}", file=sys.stderr)
+        if single_binary is None and batch_binary is None:
+            raise RuntimeError("both single-call and batch builds failed")
         print(
             f"  [grid] per-algo TU compile+link finished in "
             f"{time.perf_counter() - t_total:.1f}s "
-            f"(single rdc={single_rdc}, batch rdc={batch_rdc}, workers={compile_workers})"
+            f"(single rdc={single_rdc} ok={single_binary is not None}, "
+            f"batch rdc={batch_rdc} ok={batch_binary is not None}, workers={compile_workers})"
         )
         return single_binary, batch_binary
 
     # ----- Monolithic fallback (pre-P6-7b layout) -----
-    single_binary = _compile_one_source(
-        TIMING_SOURCE_SINGLE, "timeGRiD_single",
-        header_path=header_path, arch=arch, build_dir=build_dir,
-        cxx_standard=cxx_standard,
-        compile_linalg_flags=single_c, link_linalg_flags=single_l,
-        common_arch=common_arch,
-        ptxas_opt_level=ptxas_opt_level,
-        split_compile=split_compile, ofast_compile=ofast_compile,
-        runner_key=runner_key, ccache_prefix=ccache_prefix, nvcc=nvcc,
-    )
-    batch_binary = _compile_one_source(
-        TIMING_SOURCE_BATCH, "timeGRiD_batch",
-        header_path=header_path, arch=arch, build_dir=build_dir,
-        cxx_standard=cxx_standard,
-        compile_linalg_flags=batch_c, link_linalg_flags=batch_l,
-        common_arch=common_arch,
-        ptxas_opt_level=ptxas_opt_level,
-        split_compile=split_compile, ofast_compile=ofast_compile,
-        runner_key=runner_key, ccache_prefix=ccache_prefix, nvcc=nvcc,
-    )
+    # Independent single/batch builds (see the per-algo path above for rationale).
+    single_binary = None
+    try:
+        single_binary = _compile_one_source(
+            TIMING_SOURCE_SINGLE, "timeGRiD_single",
+            header_path=header_path, arch=arch, build_dir=build_dir,
+            cxx_standard=cxx_standard,
+            compile_linalg_flags=single_c, link_linalg_flags=single_l,
+            common_arch=common_arch,
+            ptxas_opt_level=ptxas_opt_level,
+            split_compile=split_compile, ofast_compile=ofast_compile,
+            runner_key=runner_key, ccache_prefix=ccache_prefix, nvcc=nvcc,
+        )
+    except Exception as e:
+        print(f"  [grid] WARNING: single-call build failed (batch will still run): {e}", file=sys.stderr)
+    batch_binary = None
+    try:
+        batch_binary = _compile_one_source(
+            TIMING_SOURCE_BATCH, "timeGRiD_batch",
+            header_path=header_path, arch=arch, build_dir=build_dir,
+            cxx_standard=cxx_standard,
+            compile_linalg_flags=batch_c, link_linalg_flags=batch_l,
+            common_arch=common_arch,
+            ptxas_opt_level=ptxas_opt_level,
+            split_compile=split_compile, ofast_compile=ofast_compile,
+            runner_key=runner_key, ccache_prefix=ccache_prefix, nvcc=nvcc,
+        )
+    except Exception as e:
+        print(f"  [grid] WARNING: batch build failed (single will still run): {e}", file=sys.stderr)
+    if single_binary is None and batch_binary is None:
+        raise RuntimeError("both single-call and batch builds failed")
     print(
         f"  [grid] monolithic compile finished in "
         f"{time.perf_counter() - t_total:.1f}s "
-        f"(single rdc={single_rdc}, batch rdc={batch_rdc})"
+        f"(single rdc={single_rdc} ok={single_binary is not None}, "
+        f"batch rdc={batch_rdc} ok={batch_binary is not None})"
     )
     return single_binary, batch_binary
 
@@ -1035,24 +1062,39 @@ def compile_binaries(
 # ---------------------------------------------------------------------------
 # Run and parse
 # ---------------------------------------------------------------------------
-def run_timing(binaries: tuple[Path, Path], base: str) -> str:
-    """Run the single + batch binaries in sequence; return concatenated stdout
-    so parse_grid_output picks up `Single Call X us` lines (from the single
-    binary) AND `[N:K]: X` lines (from the batch binary)."""
+def run_timing(binaries: tuple[Path | None, Path | None], base: str) -> str:
+    """Run whichever of the single / batch binaries built, INDEPENDENTLY, so a
+    crash (or missing build) in one doesn't lose the other's data. Returns
+    concatenated stdout so parse_grid_output picks up `Single Call X us` lines
+    (single binary) AND `[N:K]: X` lines (batch binary). Raises only if neither
+    binary produced any output."""
     single_binary, batch_binary = binaries
     floating_arg = "T" if base == "floating" else "F"
     outputs = []
+    produced_any = False
     for label, binary in (("single", single_binary), ("batch", batch_binary)):
+        if binary is None:
+            print(f"  [grid] skipping {label} run (build unavailable)", file=sys.stderr)
+            continue
         result = subprocess.run(
             [str(binary), floating_arg],
             capture_output=True, text=True,
         )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"timeGRiD_{label} exited with code {result.returncode}:\n{result.stderr}"
-            )
+        # Capture whatever stdout was emitted before any crash (a runtime smem
+        # overflow aborts at init and yields nothing — that's fine, the other
+        # binary still contributes).
         outputs.append(result.stdout)
+        if result.returncode != 0:
+            print(
+                f"  [grid] WARNING: timeGRiD_{label} exited {result.returncode} "
+                f"(continuing with the other binary); stderr:\n{result.stderr}",
+                file=sys.stderr,
+            )
+            continue
         outputs.append(result.stderr)
+        produced_any = True
+    if not produced_any and not any(o.strip() for o in outputs):
+        raise RuntimeError("neither single nor batch produced any timing output")
     return "\n".join(outputs)
 
 
