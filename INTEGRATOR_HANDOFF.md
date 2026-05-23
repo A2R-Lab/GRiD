@@ -134,6 +134,15 @@ In rough priority order:
    scaffold (`s_stage_*`) is small and fits everywhere, so it stays full-smem;
    add the same `d_workspace` plumbing only if a big robot's value path ever
    overflows.
+3. **Bench the integrator algos.** `integrator`, `integrator_gradient`, and
+   `integrator_with_gradient` are in `ALGO_REGISTRY` but have no row in
+   `PER_ALGO_SPECS` (`test/benchmarks/baselines/grid/run.py`), so the bench
+   currently SKIPS them (with a warning — they no longer hard-fail the sweep as
+   of 2026-05-23). Wiring them in needs custom handling: their host signatures
+   take extra `dt` (and `IntegratorType`, a template arg) beyond the uniform
+   `(d, m, GRAVITY, N, ...)` shape the spec rows assume, plus integrator-specific
+   I/O buffer setup. Add the spec rows + buffer plumbing to include integrator
+   timings in the tier sweep.
 
 Out of scope here but on the longer roadmap: **JAX FFI bindings** to replace the
 stale Pybind11 layer (generate-compile-run-fast fit; see project memory).

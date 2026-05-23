@@ -18,6 +18,12 @@ from typing import Optional
 THIS_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = THIS_DIR / "results"
 
+# Make the repo root importable when this script runs as a subprocess (the bench
+# harness invokes it without inheriting PYTHONPATH).
+_REPO_ROOT = THIS_DIR.parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 # Algorithm display names, row ordering, and section grouping derive from
 # GRiDCodeGenerator/algo_registry.py — that file is the single source of truth.
 # To add a new algo or rename a display label, edit the registry, not this module.
