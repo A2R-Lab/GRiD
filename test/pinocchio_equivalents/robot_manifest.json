@@ -50,6 +50,22 @@
       "notes": "Prefer the default robot_descriptions export unless later inspection proves it is not the maintained no-hands variant."
     },
     {
+      "robot_id": "h1_2",
+      "tier": "smoke",
+      "embodiment": "humanoid",
+      "source_kind": "robot_descriptions",
+      "description_name": "h1_2_description",
+      "source_candidates": [
+        {
+          "source_kind": "robot_descriptions",
+          "description_name": "h1_2_description"
+        }
+      ],
+      "base_modes": ["fixed", "floating"],
+      "preferred_variant": "default",
+      "notes": "Unitree H1-2 (51 DoF). High-DOF humanoid stress robot exercising the per-tier shared-mem spill paths. Resolve through robot_descriptions exported URDF_PATH."
+    },
+    {
       "robot_id": "fr3",
       "tier": "smoke",
       "embodiment": "manipulator",
