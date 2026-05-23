@@ -278,7 +278,7 @@ class RobotHandle:
         B = flat.shape[0]
         return tuple(flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4))
 
-    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler"):
+    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = 9.81):
         """One integration step x_{k+1} = integrator(x_k, u, dt).
 
         Returns shape (B, NUM_POS + NUM_VEL) — concatenated [q_new, v_new].
@@ -289,9 +289,9 @@ class RobotHandle:
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         u  = np.ascontiguousarray(u,  dtype=np.float32)
         it = _integrator_code(integrator_type)
-        return self._runner.integrator(q, qd, u, float(dt), it)
+        return self._runner.integrator(q, qd, u, float(dt), it, gravity=float(gravity))
 
-    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler"):
+    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = 9.81):
         """Gradient of the integrator step. Returns shape (B, 2*NV, 3*NV) —
         column blocks [d/dq | d/dqd | d/du] in tangent space.
 
@@ -300,7 +300,7 @@ class RobotHandle:
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         u  = np.ascontiguousarray(u,  dtype=np.float32)
         it = _integrator_code(integrator_type)
-        raw = self._runner.integrator_gradient(q, qd, u, float(dt), it)
+        raw = self._runner.integrator_gradient(q, qd, u, float(dt), it, gravity=float(gravity))
         # h_dAB is (2*NV x 3*NV) column-major per timestep; recover row-major.
         B = raw.shape[0]
         NV = self.num_vel

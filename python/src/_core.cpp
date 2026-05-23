@@ -58,7 +58,7 @@ extern "C" {
     //   (dt is the runtime timestep; it selects the IntegratorType; gravity is
     //    the standard 9.81 constant baked in the wrapper)
     using fn_integrator_t   = int (*)(const float*, const float*, const float*,
-                                      float*, int, float, int);
+                                      float*, int, float, float, int);
 }
 
 
@@ -391,13 +391,13 @@ public:
         py::array_t<float, py::array::c_style | py::array::forcecast> q,
         py::array_t<float, py::array::c_style | py::array::forcecast> qd,
         py::array_t<float, py::array::c_style | py::array::forcecast> u,
-        float dt, int it)
+        float dt, int it, float gravity)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
         py::array_t<float> out({batch, num_joints_ + num_vel_});
         int rc = fn_integrator_(q.data(), qd.data(), u.data(),
-                                out.mutable_data(), batch, dt, it);
+                                out.mutable_data(), batch, gravity, dt, it);
         if (rc != 0) throw std::runtime_error("grid_rbd_integrator failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -408,13 +408,13 @@ public:
         py::array_t<float, py::array::c_style | py::array::forcecast> q,
         py::array_t<float, py::array::c_style | py::array::forcecast> qd,
         py::array_t<float, py::array::c_style | py::array::forcecast> u,
-        float dt, int it)
+        float dt, int it, float gravity)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
         py::array_t<float> out({batch, 2 * num_vel_ * 3 * num_vel_});
         int rc = fn_integrator_grad_(q.data(), qd.data(), u.data(),
-                                     out.mutable_data(), batch, dt, it);
+                                     out.mutable_data(), batch, gravity, dt, it);
         if (rc != 0) throw std::runtime_error("grid_rbd_integrator_gradient failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -552,8 +552,8 @@ PYBIND11_MODULE(_core, m) {
              py::arg("gravity") = 9.81f)
         .def("integrator", &Runner::integrator,
              py::arg("q"), py::arg("qd"), py::arg("u"),
-             py::arg("dt"), py::arg("it") = 0)
+             py::arg("dt"), py::arg("it") = 0, py::arg("gravity") = 9.81f)
         .def("integrator_gradient", &Runner::integrator_gradient,
              py::arg("q"), py::arg("qd"), py::arg("u"),
-             py::arg("dt"), py::arg("it") = 0);
+             py::arg("dt"), py::arg("it") = 0, py::arg("gravity") = 9.81f);
 }

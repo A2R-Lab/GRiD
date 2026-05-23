@@ -140,7 +140,7 @@ class JaxRobotHandle:
 
     # ─── algorithm methods ───────────────────────────────────────────────
 
-    def rnea(self, q, qd):
+    def rnea(self, q, qd, *, gravity: float = 9.81):
         """Inverse dynamics: c = M(q)·qdd_zero + h(q,qd) − g(q).
 
         ``q``, ``qd``: jax.Array shape (B, NJ), dtype float32.
@@ -148,11 +148,12 @@ class JaxRobotHandle:
         """
         import jax
         import jax.numpy as jnp
+        import numpy as np
         target = _register_method_target(
             self._so_path, self._cache_key, "rnea", "grid_rbd_jax_rnea")
         (q, qd), B = self._prep_2d("rnea", q, qd)
         out_type = jax.ShapeDtypeStruct(q.shape, jnp.float32)
-        return jax.ffi.ffi_call(target, out_type)(q, qd)
+        return jax.ffi.ffi_call(target, out_type)(q, qd, gravity=np.float32(gravity))
 
     def minv(self, q):
         """Direct mass-matrix inverse Minv(q). Returns (B, NJ, NJ).
@@ -173,37 +174,40 @@ class JaxRobotHandle:
         eye = jnp.eye(nj, dtype=m.dtype)
         return m + jnp.swapaxes(m, -1, -2) - m * eye
 
-    def forward_dynamics(self, q, qd, u):
+    def forward_dynamics(self, q, qd, u, *, gravity: float = 9.81):
         """qdd = forward_dynamics(q, qd, u). Returns (B, NJ)."""
         import jax
         import jax.numpy as jnp
+        import numpy as np
         target = _register_method_target(
             self._so_path, self._cache_key,
             "forward_dynamics", "grid_rbd_jax_forward_dynamics")
         (q, qd, u), B = self._prep_2d("forward_dynamics", q, qd, u)
         out_type = jax.ShapeDtypeStruct(q.shape, jnp.float32)
-        return jax.ffi.ffi_call(target, out_type)(q, qd, u)
+        return jax.ffi.ffi_call(target, out_type)(q, qd, u, gravity=np.float32(gravity))
 
-    def aba(self, q, qd, u):
+    def aba(self, q, qd, u, *, gravity: float = 9.81):
         """qdd = aba(q, qd, u) via the articulated body algorithm. Returns (B, NJ)."""
         import jax
         import jax.numpy as jnp
+        import numpy as np
         target = _register_method_target(
             self._so_path, self._cache_key, "aba", "grid_rbd_jax_aba")
         (q, qd, u), B = self._prep_2d("aba", q, qd, u)
         out_type = jax.ShapeDtypeStruct(q.shape, jnp.float32)
-        return jax.ffi.ffi_call(target, out_type)(q, qd, u)
+        return jax.ffi.ffi_call(target, out_type)(q, qd, u, gravity=np.float32(gravity))
 
-    def crba(self, q):
+    def crba(self, q, *, gravity: float = 9.81):
         """Mass matrix M(q) via composite rigid body algorithm. Returns (B, NJ, NJ)."""
         import jax
         import jax.numpy as jnp
+        import numpy as np
         target = _register_method_target(
             self._so_path, self._cache_key, "crba", "grid_rbd_jax_crba")
         (q,), B = self._prep_2d("crba", q)
         nj = self.num_joints
         out_type = jax.ShapeDtypeStruct((B, nj, nj), jnp.float32)
-        return jax.ffi.ffi_call(target, out_type)(q)
+        return jax.ffi.ffi_call(target, out_type)(q, gravity=np.float32(gravity))
 
     def end_effector_pose(self, q):
         """End-effector pose [xyz, rpy] per EE. Returns (B, 6*NUM_EES)."""
@@ -248,7 +252,7 @@ class JaxRobotHandle:
         out_type = jax.ShapeDtypeStruct((B, 6 * nee, nj, nj), jnp.float32)
         return jax.ffi.ffi_call(target, out_type)(q)
 
-    def rnea_grad(self, q, qd):
+    def rnea_grad(self, q, qd, *, gravity: float = 9.81):
         """∂c/∂(q, qd) — concatenated [dc_dq | dc_dqd]. Returns (B, NJ, 2*NJ).
 
         Matches the plain wrapper layout: GRiD writes (2, NJ, NJ) column-major
@@ -256,31 +260,33 @@ class JaxRobotHandle:
         """
         import jax
         import jax.numpy as jnp
+        import numpy as np
         target = _register_method_target(
             self._so_path, self._cache_key,
             "rnea_grad", "grid_rbd_jax_rnea_grad")
         (q, qd), B = self._prep_2d("rnea_grad", q, qd)
         nj = self.num_joints
         out_type = jax.ShapeDtypeStruct((B, 2 * nj * nj), jnp.float32)
-        raw = jax.ffi.ffi_call(target, out_type)(q, qd)
+        raw = jax.ffi.ffi_call(target, out_type)(q, qd, gravity=np.float32(gravity))
         blocks = raw.reshape(B, 2, nj, nj).transpose(0, 1, 3, 2)
         return jnp.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
-    def forward_dynamics_grad(self, q, qd, u):
+    def forward_dynamics_grad(self, q, qd, u, *, gravity: float = 9.81):
         """∂qdd/∂(q, qd) — concatenated [df_dq | df_dqd]. Returns (B, NJ, 2*NJ)."""
         import jax
         import jax.numpy as jnp
+        import numpy as np
         target = _register_method_target(
             self._so_path, self._cache_key,
             "forward_dynamics_grad", "grid_rbd_jax_forward_dynamics_grad")
         (q, qd, u), B = self._prep_2d("forward_dynamics_grad", q, qd, u)
         nj = self.num_joints
         out_type = jax.ShapeDtypeStruct((B, 2 * nj * nj), jnp.float32)
-        raw = jax.ffi.ffi_call(target, out_type)(q, qd, u)
+        raw = jax.ffi.ffi_call(target, out_type)(q, qd, u, gravity=np.float32(gravity))
         blocks = raw.reshape(B, 2, nj, nj).transpose(0, 1, 3, 2)
         return jnp.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
-    def idsva_so(self, q, qd):
+    def idsva_so(self, q, qd, *, gravity: float = 9.81):
         """Second-order inverse dynamics.
 
         Returns a tuple of 4 jax.Arrays each shape (B, NV, NV, NV):
@@ -289,19 +295,20 @@ class JaxRobotHandle:
         """
         import jax
         import jax.numpy as jnp
+        import numpy as np
         target = _register_method_target(
             self._so_path, self._cache_key,
             "idsva_so", "grid_rbd_jax_idsva_so")
         (q, qd), B = self._prep_2d("idsva_so", q, qd)
         nv = self.num_vel
         out_type = jax.ShapeDtypeStruct((B, 4 * nv ** 3), jnp.float32)
-        flat = jax.ffi.ffi_call(target, out_type)(q, qd)
+        flat = jax.ffi.ffi_call(target, out_type)(q, qd, gravity=np.float32(gravity))
         return tuple(
             flat[:, i * nv ** 3:(i + 1) * nv ** 3].reshape(B, nv, nv, nv)
             for i in range(4)
         )
 
-    def fdsva_so(self, q, qd, u):
+    def fdsva_so(self, q, qd, u, *, gravity: float = 9.81):
         """Second-order forward dynamics.
 
         Returns a tuple of 4 jax.Arrays each shape (B, NV, NV, NV). Uses
@@ -310,19 +317,20 @@ class JaxRobotHandle:
         """
         import jax
         import jax.numpy as jnp
+        import numpy as np
         target = _register_method_target(
             self._so_path, self._cache_key,
             "fdsva_so", "grid_rbd_jax_fdsva_so")
         (q, qd, u), B = self._prep_2d("fdsva_so", q, qd, u)
         nv = self.num_vel
         out_type = jax.ShapeDtypeStruct((B, 4 * nv ** 3), jnp.float32)
-        flat = jax.ffi.ffi_call(target, out_type)(q, qd, u)
+        flat = jax.ffi.ffi_call(target, out_type)(q, qd, u, gravity=np.float32(gravity))
         return tuple(
             flat[:, i * nv ** 3:(i + 1) * nv ** 3].reshape(B, nv, nv, nv)
             for i in range(4)
         )
 
-    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler"):
+    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = 9.81):
         """One integration step. Returns (B, NUM_POS + NUM_VEL).
 
         ``dt`` and the integrator type are passed as FFI attributes (runtime
@@ -337,9 +345,10 @@ class JaxRobotHandle:
         (q, qd, u), B = self._prep_2d("integrator", q, qd, u)
         out_type = jax.ShapeDtypeStruct((B, self.num_joints + self.num_vel), jnp.float32)
         return jax.ffi.ffi_call(target, out_type)(
-            q, qd, u, dt=np.float32(dt), it=np.int64(_integrator_code(integrator_type)))
+            q, qd, u, dt=np.float32(dt), it=np.int64(_integrator_code(integrator_type)),
+            gravity=np.float32(gravity))
 
-    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler"):
+    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = 9.81):
         """Gradient of the integrator step. Returns (B, 2*NV, 3*NV) — column
         blocks [d/dq | d/dqd | d/du] in tangent space."""
         import numpy as np
@@ -353,7 +362,8 @@ class JaxRobotHandle:
         nv = self.num_vel
         out_type = jax.ShapeDtypeStruct((B, 2 * nv * 3 * nv), jnp.float32)
         flat = jax.ffi.ffi_call(target, out_type)(
-            q, qd, u, dt=np.float32(dt), it=np.int64(_integrator_code(integrator_type)))
+            q, qd, u, dt=np.float32(dt), it=np.int64(_integrator_code(integrator_type)),
+            gravity=np.float32(gravity))
         # h_dAB is (2*NV x 3*NV) column-major per timestep; recover row-major.
         return flat.reshape(B, 3 * nv, 2 * nv).transpose(0, 2, 1)
 
