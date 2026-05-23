@@ -175,6 +175,24 @@ extra-buffer, hence the per-tier-body approach rather than a single placement bo
 
 - Floating FD-sanity deferred (§4 item 1).
 - Integrator value-path is full-smem only (§4 item 2) — fits all current robots.
+- **rdc + launch_bounds (FIXED 2026-05-23).** Under `-rdc=true` (the bench's
+  single-call build), the integrator kernels failed ptxas at LITE/MINIMAL for
+  medium+ robots: `__launch_bounds__(tier_max_threads<TIER>())` budgeted ~64-85
+  regs but the (non-inlined) RBD callees need 86-99 (`load_update_XImats`,
+  `direct_minv_inner`, `inverse_dynamics_gradient_inner`). The integrator is
+  register-bound by those callees, so launch_bounds is now pinned to
+  `SUGGESTED_THREADS` (PERF cap, ≤512 → ≥128 regs) at ALL tiers — tier behavior
+  remains the s_D_qdd_stage smem spill. Verified: compiles under rdc at all 3
+  tiers (go2-floating) + MINIMAL equivalence still passes (iiwa14). The earlier
+  "verified at MINIMAL" only covered the inlined (no-rdc) equivalence build.
+- **Integrator smem overflow on big floating robots (OPEN).** The sweep showed
+  `integrator_gradient` requesting ~228 KB (g1_floating) and `integrator` ~103 KB
+  (h1_2_fixed) — both exceed the sm_120 ~101 KB cap. The kernels now skip
+  registration gracefully (init_grid_kernel_attrs guards every kernel by
+  smem<=target as of 2026-05-23) instead of aborting, so they don't crash the
+  binary — but they can't actually RUN on those robots until the value/gradient
+  scaffold gets a real per-tier smem spill (the gradient spills s_D_qdd_stage but
+  the rest of its scaffold + the value kernel don't). Tracked as follow-up.
 
 ---
 
