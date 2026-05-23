@@ -6,7 +6,7 @@ dynamic shared memory bytes (computed at codegen via the
 `*_DYNAMIC_SHARED_MEM_BYTES<float>()` constexpr; ptxas's static-smem
 report is unhelpful here because GRiD uses `extern __shared__`).
 
-**perf** = `__launch_bounds__(SUGGESTED_THREADS)` (the default);
+**perf** = `__launch_bounds__(MAX_PERF_LEVEL_THREADS)` (the default);
 **relax** = `__launch_bounds__(1024)` (what TIER_MINIMAL looks like).
 
 **Decision predicate**:
@@ -17,7 +17,7 @@ report is unhelpful here because GRiD uses `extern __shared__`).
   a smem-axis downgrade variant.
 - `no`: free-alias TIER_LITE/MINIMAL to TIER_PERF; no body changes needed.
 
-**Per-robot `SUGGESTED_THREADS`**: iiwa14_fixed=352, go2_fixed=288, g1_fixed=512, g1_floating=512, h1_2_fixed=512, h1_2_floating=512
+**Per-robot `MAX_PERF_LEVEL_THREADS`**: iiwa14_fixed=352, go2_fixed=288, g1_fixed=512, g1_floating=512, h1_2_fixed=512, h1_2_floating=512
 
 | Robot | Kernel | perf R/sp | relax R/sp | smem | downgrade? |
 |---|---|---|---|---:|---|

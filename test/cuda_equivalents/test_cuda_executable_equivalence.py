@@ -602,16 +602,16 @@ def _thread_counts() -> tuple[int, ...]:
     """Block thread counts to sweep each CUDA equivalence case over.
 
     Defaults to a single warp (32), a non-multiple of 32 (96) to exercise partial
-    trailing warps, the sentinel 0 = the robot's SUGGESTED_THREADS (the count real
+    trailing warps, the sentinel 0 = the robot's MAX_PERF_LEVEL_THREADS (the count real
     GRiD usage launches at, resolved DYNAMICALLY in the runner from the generated
     header — never hardcoded, since it varies per robot: iiwa14=352, go2=288,
     g1/h1_2=512), and one session-random multi-warp count. The runner clamps every
-    requested count to SUGGESTED_THREADS (the kernels' __launch_bounds__ cap).
+    requested count to MAX_PERF_LEVEL_THREADS (the kernels' __launch_bounds__ cap).
     Sweeping thread counts catches thread-count-dependent races (missing
     __syncthreads between a write phase and a read/accumulate phase that happens
     to be correct only within a single warp) that a fixed 32-thread launch hides.
     Override via GRID_CUDA_THREAD_COUNTS (comma-separated ints, "suggested" for the
-    SUGGESTED_THREADS sentinel, or "random" for a fresh multi-warp value)."""
+    MAX_PERF_LEVEL_THREADS sentinel, or "random" for a fresh multi-warp value)."""
     raw = os.environ.get("GRID_CUDA_THREAD_COUNTS")
     if raw:
         counts = []

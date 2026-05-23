@@ -2,11 +2,11 @@
 """Microbench: GRiD kernel timing across per-block thread counts.
 
 After the v2.0 cuBLASDx removal, every kernel emission dropped
-``__launch_bounds__(SUGGESTED_THREADS)``. The SIMT GLASS helpers use
+``__launch_bounds__(MAX_PERF_LEVEL_THREADS)``. The SIMT GLASS helpers use
 block-stride loops, so any block size is correct. This microbench
 characterizes the perf trajectory across the sweep:
 
-    {64, 128, 256, SUGGESTED_THREADS, 512}
+    {64, 128, 256, MAX_PERF_LEVEL_THREADS, 512}
 
 for a fixed batch on iiwa14, go2, g1, h1_2 (all fixed-base) using the
 ``grid_rbd`` Python wrapper. Output is a small markdown table for each
@@ -100,7 +100,7 @@ def bench_robot(robot: str, batch: int = 16, iters: int = 500) -> dict:
         floating_base=False,
         max_batch_size=max(batch, 32),
     )
-    sug = handle.suggested_threads
+    sug = handle.max_perf_level_threads
 
     # Sweep: 64, 128, 256, SUGGESTED, 512 (deduplicated, sorted).
     block_sizes = sorted({64, 128, 256, sug, 512})
@@ -109,10 +109,10 @@ def bench_robot(robot: str, batch: int = 16, iters: int = 500) -> dict:
     q = rng.standard_normal((batch, handle.num_joints)).astype(np.float32)
     qd = rng.standard_normal((batch, handle.num_joints)).astype(np.float32)
 
-    print(f"\n=== {robot}_fixed (NJ={handle.num_joints}, SUGGESTED_THREADS={sug}) ===")
+    print(f"\n=== {robot}_fixed (NJ={handle.num_joints}, MAX_PERF_LEVEL_THREADS={sug}) ===")
     print(f"  batch={batch}, iters={iters}")
     results = {"robot": robot, "num_joints": handle.num_joints,
-               "suggested_threads": sug, "batch": batch, "iters": iters,
+               "max_perf_level_threads": sug, "batch": batch, "iters": iters,
                "per_block_us": {}}
     for n in block_sizes:
         us = _bench_rnea(handle, q, qd, n, iters=iters)
@@ -129,13 +129,13 @@ def _format_markdown(results: list[dict]) -> str:
     lines = ["# GRiD any-thread-count microbench — RNEA median µs", ""]
     for r in results:
         lines.append(f"## {r['robot']}_fixed (NJ={r['num_joints']}, "
-                     f"SUGGESTED_THREADS={r['suggested_threads']})")
+                     f"MAX_PERF_LEVEL_THREADS={r['max_perf_level_threads']})")
         lines.append("")
         lines.append("| threads/block | median µs |")
         lines.append("|---|---:|")
         for n in sorted(r["per_block_us"]):
             us = r["per_block_us"][n]
-            label = f"{n} *(default)*" if n == r["suggested_threads"] else str(n)
+            label = f"{n} *(default)*" if n == r["max_perf_level_threads"] else str(n)
             lines.append(f"| {label} | {us:.3f} |")
         lines.append("")
     return "\n".join(lines) + "\n"

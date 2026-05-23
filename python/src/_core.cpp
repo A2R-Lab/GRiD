@@ -78,7 +78,7 @@ public:
         fn_num_vel_          = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_num_vel"));
         fn_num_ees_          = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_num_ees"));
         fn_max_batch_        = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_max_batch"));
-        fn_suggested_threads_ = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_suggested_threads"));
+        fn_max_perf_level_threads_ = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_max_perf_level_threads"));
         fn_threads_per_block_ = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_threads_per_block"));
         fn_set_threads_per_block_ = reinterpret_cast<fn_int_i_t>(require_sym("grid_rbd_set_threads_per_block"));
         fn_init_             = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_init"));
@@ -127,11 +127,11 @@ public:
     int num_vel()    const { return num_vel_; }
     int num_ees()    const { return num_ees_; }
     int max_batch()  const { return max_batch_; }
-    int suggested_threads() const { return fn_suggested_threads_(); }
+    int max_perf_level_threads() const { return fn_max_perf_level_threads_(); }
     int threads_per_block() const { return fn_threads_per_block_(); }
     void set_threads_per_block(int n) {
         // Override the per-block thread count for all subsequent kernel
-        // launches. Default is SUGGESTED_THREADS; the codegen no longer
+        // launches. Default is MAX_PERF_LEVEL_THREADS; the codegen no longer
         // pins launch_bounds (cuBLASDx removed in v2.0), so any positive
         // n that fits per-block (≤1024 on current GPUs) is valid.
         if (n < 1) {
@@ -468,7 +468,7 @@ private:
     fn_int_v_t fn_num_vel_    = nullptr;
     fn_int_v_t fn_num_ees_    = nullptr;
     fn_int_v_t fn_max_batch_  = nullptr;
-    fn_int_v_t fn_suggested_threads_      = nullptr;
+    fn_int_v_t fn_max_perf_level_threads_      = nullptr;
     fn_int_v_t fn_threads_per_block_      = nullptr;
     fn_int_i_t fn_set_threads_per_block_  = nullptr;
     fn_int_v_t fn_init_       = nullptr;
@@ -506,14 +506,14 @@ PYBIND11_MODULE(_core, m) {
         .def_property_readonly("num_vel",    &Runner::num_vel)
         .def_property_readonly("num_ees",    &Runner::num_ees)
         .def_property_readonly("max_batch",  &Runner::max_batch)
-        .def_property_readonly("suggested_threads", &Runner::suggested_threads,
+        .def_property_readonly("max_perf_level_threads", &Runner::max_perf_level_threads,
             "Codegen-time thread-count hint (DOF-aware, warp-rounded). "
             "The default block size for kernel launches; not enforced since v2.0.")
         .def_property_readonly("threads_per_block", &Runner::threads_per_block,
             "Current per-block thread count used by kernel launches.")
         .def("set_threads_per_block", &Runner::set_threads_per_block,
             py::arg("n"),
-            "Override the per-block thread count. Default is suggested_threads. "
+            "Override the per-block thread count. Default is max_perf_level_threads. "
             "Smaller block sizes work (SIMT helpers use block-stride loops) but may be slower; "
             "larger sizes are valid up to the per-block max (1024 on current GPUs).")
         .def("rnea", &Runner::rnea,

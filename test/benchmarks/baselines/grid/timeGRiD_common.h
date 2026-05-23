@@ -42,7 +42,7 @@
 
 #define GRAVITY 9.81
 
-inline dim3 grid_timing_dimms() { return dim3(grid::SUGGESTED_THREADS, 1, 1); }
+inline dim3 grid_timing_dimms() { return dim3(grid::MAX_PERF_LEVEL_THREADS, 1, 1); }
 
 // ---------------------------------------------------------------------------
 // Shared timing loop for one (with-memory, compute-only) batch pair. Takes

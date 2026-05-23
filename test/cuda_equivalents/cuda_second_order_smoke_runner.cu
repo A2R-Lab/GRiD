@@ -43,11 +43,11 @@ template <typename T>
 int run() {
     const T gravity = static_cast<T>(9.81);
     const dim3 block_dimms(1, 1, 1);
-    // Clamp to the robot's SUGGESTED_THREADS (the kernels' __launch_bounds__ cap,
+    // Clamp to the robot's MAX_PERF_LEVEL_THREADS (the kernels' __launch_bounds__ cap,
     // resolved dynamically from the generated header) so a swept count above the
     // bound doesn't fail with cudaErrorInvalidValue.
     const int _req_threads = GRID_CUDA_SECOND_ORDER_TEST_THREADS;
-    const int _nthreads = _req_threads < grid::SUGGESTED_THREADS ? _req_threads : grid::SUGGESTED_THREADS;
+    const int _nthreads = _req_threads < grid::MAX_PERF_LEVEL_THREADS ? _req_threads : grid::MAX_PERF_LEVEL_THREADS;
     const dim3 thread_dimms(_nthreads, 1, 1);
 
     cudaStream_t *streams = grid::init_grid<T>();

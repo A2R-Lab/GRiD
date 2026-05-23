@@ -16,7 +16,7 @@ int main() {
     const int num_timesteps = 1;
     float gravity = static_cast<float>(9.81);
     //printf("gravity =  %f", gravity);
-    dim3 dimms(grid::SUGGESTED_THREADS,1,1);
+    dim3 dimms(grid::MAX_PERF_LEVEL_THREADS,1,1);
     cudaStream_t *streams = grid::init_grid<float>();
 
     hd_data->h_q_qd_u[0] = 1.24;

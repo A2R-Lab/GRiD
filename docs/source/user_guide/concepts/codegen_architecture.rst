@@ -90,12 +90,12 @@ Concrete signatures (RNEA / inverse_dynamics)
 Thread-count assumptions
 ------------------------
 
-GRiD emits a ``SUGGESTED_THREADS`` constant per generated header, computed
+GRiD emits a ``MAX_PERF_LEVEL_THREADS`` constant per generated header, computed
 from the robot's DVA parallelism (rounded up to a warp, capped at 512) —
 for iiwa14 it is 352, for go2_fixed it is 288, and so on. The host
-wrappers default to launching with ``dim3(SUGGESTED_THREADS, 1, 1)``.
+wrappers default to launching with ``dim3(MAX_PERF_LEVEL_THREADS, 1, 1)``.
 
-After the v2.0 cuBLASDx removal, ``SUGGESTED_THREADS`` is **a hint, not
+After the v2.0 cuBLASDx removal, ``MAX_PERF_LEVEL_THREADS`` is **a hint, not
 an enforced floor**. Every emitted ``X_inner`` does block-cooperative
 compute on one timestep — threads within a block split work via
 *block-stride loops* (the ``gen_add_parallel_loop`` helper emits
@@ -128,7 +128,7 @@ codegen layered on a different parallelism map (or an entirely
 different library) will likely beat GRiD; for the tens-to-hundreds
 range, GRiD's layout is the right tool.
 
-The ``SUGGESTED_THREADS`` constant is what the codegen picks as the
+The ``MAX_PERF_LEVEL_THREADS`` constant is what the codegen picks as the
 best block-cooperative thread count for *this robot* (DOF-aware,
 warp-rounded). External callers are free to override (see
 :py:meth:`grid_rbd.RobotHandle.set_threads_per_block` or
@@ -136,7 +136,7 @@ warp-rounded). External callers are free to override (see
 sizes will be slower at the same batch size (work-per-block stays
 constant; fewer threads cover it).
 
-The codegen currently still emits ``__launch_bounds__(SUGGESTED_THREADS)``
+The codegen currently still emits ``__launch_bounds__(MAX_PERF_LEVEL_THREADS)``
 on each ``X_kernel``. That attribute drops in phase B1 (any-thread-count
 emission); see the design doc for the rollout sequence.
 

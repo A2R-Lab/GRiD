@@ -40,10 +40,10 @@ static grid::gridData<T>*    g_data   = nullptr;
 static grid::robotModel<T>*  g_robot  = nullptr;
 static cudaStream_t*         g_streams = nullptr;
 static dim3 g_block_dimms = dim3(1, 1, 1);
-// g_thread_dimms defaults to the codegen-time SUGGESTED_THREADS hint. After
+// g_thread_dimms defaults to the codegen-time MAX_PERF_LEVEL_THREADS hint. After
 // the v2.0 cuBLASDx removal there is no hard floor — callers can override
 // via grid_rbd_set_threads_per_block() before issuing any kernel calls.
-static dim3 g_thread_dimms = dim3(grid::SUGGESTED_THREADS, 1, 1);
+static dim3 g_thread_dimms = dim3(grid::MAX_PERF_LEVEL_THREADS, 1, 1);
 
 // ─── lifecycle ───────────────────────────────────────────────────────────────
 
@@ -70,13 +70,13 @@ extern "C" int grid_rbd_num_joints()     { return grid::NUM_JOINTS; }
 extern "C" int grid_rbd_num_vel()        { return grid::NUM_VEL; }
 extern "C" int grid_rbd_num_ees()        { return grid::NUM_EES; }
 extern "C" int grid_rbd_max_batch()      { return kMaxBatch; }
-extern "C" int grid_rbd_suggested_threads() { return grid::SUGGESTED_THREADS; }
+extern "C" int grid_rbd_max_perf_level_threads() { return grid::MAX_PERF_LEVEL_THREADS; }
 extern "C" int grid_rbd_threads_per_block() { return (int)g_thread_dimms.x; }
 extern "C" int grid_rbd_set_threads_per_block(int n) {
     // Override the per-block thread count used for all subsequent kernel
     // launches. n must be >= 1; values larger than the per-block max
     // (1024 on current GPUs) will fail at launch time with cudaErrorInvalidConfiguration.
-    // The default is grid::SUGGESTED_THREADS; the codegen no longer pins
+    // The default is grid::MAX_PERF_LEVEL_THREADS; the codegen no longer pins
     // launch_bounds, so any block size that has enough threads to cover
     // the algorithm's parallel work is valid (the SIMT helpers use
     // block-stride loops, so smaller block sizes are correct but slower).

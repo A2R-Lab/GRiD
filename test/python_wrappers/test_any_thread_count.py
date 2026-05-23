@@ -1,20 +1,20 @@
 """Any-thread-count correctness tests for the v2.0 codegen.
 
-Today the host-wrapper kernels carry ``__launch_bounds__(SUGGESTED_THREADS)``,
-which is an upper bound: launches with ≤ SUGGESTED_THREADS threads succeed
+Today the host-wrapper kernels carry ``__launch_bounds__(MAX_PERF_LEVEL_THREADS)``,
+which is an upper bound: launches with ≤ MAX_PERF_LEVEL_THREADS threads succeed
 (the SIMT GLASS helpers use block-stride loops so any block size
 correctly covers the block-cooperative work); launches with >
-SUGGESTED_THREADS fail with "too many resources requested for launch".
+MAX_PERF_LEVEL_THREADS fail with "too many resources requested for launch".
 
-This test sweeps block sizes from 64 up through SUGGESTED_THREADS for
+This test sweeps block sizes from 64 up through MAX_PERF_LEVEL_THREADS for
 iiwa14_fixed and verifies every bound RobotHandle method produces
-results within float32 tolerance of the SUGGESTED_THREADS reference.
+results within float32 tolerance of the MAX_PERF_LEVEL_THREADS reference.
 
 Block size 32 (single warp) is not included because the EE-pose-Hessian
 emission expects at least 2 warps for the 4*NUM_EES tensor write
 parallelism.
 
-Users who need to launch the host wrappers at >SUGGESTED_THREADS will
+Users who need to launch the host wrappers at >MAX_PERF_LEVEL_THREADS will
 want a future "compat-mode" emission (no launch_bounds) — separate
 follow-up. Users who inline ``grid::*_inner`` / ``grid::*_device``
 into their own ``__global__`` kernels have no GRiD-side thread-count
@@ -55,7 +55,7 @@ if shutil.which("nvcc") is None:
 
 pytestmark = pytest.mark.python_wrappers
 
-# Tolerance vs the SUGGESTED_THREADS reference. Same algorithms, same
+# Tolerance vs the MAX_PERF_LEVEL_THREADS reference. Same algorithms, same
 # float32 precision; differences are limited to FP-summation ordering in
 # the block-stride loops when blockDim changes. Empirically ≤1e-5 on
 # iiwa14 across all bound methods.
@@ -89,13 +89,13 @@ def samples(handle):
 
 @pytest.fixture(scope="module")
 def reference(handle, samples):
-    """Run every method once at SUGGESTED_THREADS (the codegen-time default).
+    """Run every method once at MAX_PERF_LEVEL_THREADS (the codegen-time default).
 
     This is our reference oracle; the parametrized tests below compare
     against these values at varying block sizes.
     """
     # Reset to default explicitly in case a prior test left a different setting.
-    handle.set_threads_per_block(handle.suggested_threads)
+    handle.set_threads_per_block(handle.max_perf_level_threads)
     q, qd, u = samples["q"], samples["qd"], samples["u"]
     return {
         "rnea":                          handle.rnea(q, qd),
@@ -116,7 +116,7 @@ def reference(handle, samples):
 # ─── tests ──────────────────────────────────────────────────────────────────
 
 
-# Block sizes ≤ iiwa14's SUGGESTED_THREADS (352 on the current codegen).
+# Block sizes ≤ iiwa14's MAX_PERF_LEVEL_THREADS (352 on the current codegen).
 # 256 is the highest power-of-two ≤ 352; 352 itself is exercised by the
 # test_set_threads_per_block_default test below. To extend to higher
 # counts (e.g. 512, 1024) we need a compat-mode kernel emission with
@@ -150,9 +150,9 @@ def _max_abs_err(a, b):
 
 
 def test_set_threads_per_block_default(handle):
-    """Default threads_per_block should equal suggested_threads."""
-    handle.set_threads_per_block(handle.suggested_threads)
-    assert handle.threads_per_block == handle.suggested_threads
+    """Default threads_per_block should equal max_perf_level_threads."""
+    handle.set_threads_per_block(handle.max_perf_level_threads)
+    assert handle.threads_per_block == handle.max_perf_level_threads
 
 
 def test_set_threads_per_block_rejects_zero(handle):
@@ -174,7 +174,7 @@ def test_set_threads_per_block_rejects_negative(handle):
 ])
 def test_method_at_block_size(handle, samples, reference, threads, method):
     """Every method must produce results within float32 tolerance of the
-    SUGGESTED_THREADS reference at every block size in the sweep."""
+    MAX_PERF_LEVEL_THREADS reference at every block size in the sweep."""
     handle.set_threads_per_block(threads)
     try:
         actual = _call_method(handle, method, samples)
@@ -184,4 +184,4 @@ def test_method_at_block_size(handle, samples, reference, threads, method):
         )
     finally:
         # Restore default so subsequent tests see a clean state.
-        handle.set_threads_per_block(handle.suggested_threads)
+        handle.set_threads_per_block(handle.max_perf_level_threads)

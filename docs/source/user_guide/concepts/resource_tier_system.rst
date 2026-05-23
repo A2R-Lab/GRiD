@@ -364,7 +364,7 @@ The three tiers:
      - Register cap (sm_120)
      - Smem behavior
    * - ``TIER_PERF`` (default)
-     - ``SUGGESTED_THREADS`` (288-512 per robot)
+     - ``MAX_PERF_LEVEL_THREADS`` (288-512 per robot)
      - ~128-186 regs/thread
      - Full inner scratch lives in shared memory; current best perf.
    * - ``TIER_LITE``
@@ -973,8 +973,8 @@ How it relates to other v2.0 work
 
 * :doc:`cublasdx_removal_design` — v2.0 set the stage by removing
   cuBLASDx and adding ``set_threads_per_block`` (up to
-  SUGGESTED_THREADS). The tier system extends this to **above**
-  SUGGESTED_THREADS via TIER_MINIMAL's ``launch_bounds=1024``.
+  MAX_PERF_LEVEL_THREADS). The tier system extends this to **above**
+  MAX_PERF_LEVEL_THREADS via TIER_MINIMAL's ``launch_bounds=1024``.
 * :doc:`codegen_architecture` — describes the four-layer emission
   (``_inner`` / ``_device`` / ``_kernel`` / host); tier templates
   live at the ``_inner`` / ``_device`` / ``_kernel`` layers.

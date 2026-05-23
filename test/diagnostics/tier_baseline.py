@@ -2,7 +2,7 @@
 
 For each (algorithm × robot) combination, capture three resource axes:
 
-  1. Per-thread register count at __launch_bounds__(SUGGESTED_THREADS) — the
+  1. Per-thread register count at __launch_bounds__(MAX_PERF_LEVEL_THREADS) — the
      perf tier today.
   2. Per-thread register count at __launch_bounds__(1024) — what TIER_MINIMAL
      looks like.
@@ -123,7 +123,7 @@ def detect_emitted_kernels(grid_cuh: Path) -> set[str]:
 def compile_with_bounds(grid_cuh: Path, label: str, launch_bounds_override: int | None,
                          build_dir: Path) -> tuple[str, bool]:
     """Compile timeGRiD_batch.cu with -Xptxas -v. Optionally patches
-    grid.cuh's __launch_bounds__(SUGGESTED_THREADS) → __launch_bounds__(N).
+    grid.cuh's __launch_bounds__(MAX_PERF_LEVEL_THREADS) → __launch_bounds__(N).
     Returns (nvcc stderr, success)."""
     build_dir.mkdir(parents=True, exist_ok=True)
 
@@ -131,7 +131,7 @@ def compile_with_bounds(grid_cuh: Path, label: str, launch_bounds_override: int 
         patched = build_dir / "grid.cuh"
         text = grid_cuh.read_text()
         text = re.sub(
-            r"__launch_bounds__\(SUGGESTED_THREADS\)",
+            r"__launch_bounds__\(MAX_PERF_LEVEL_THREADS\)",
             f"__launch_bounds__({launch_bounds_override})",
             text,
         )
@@ -201,7 +201,7 @@ SMEM_DUMP_TEMPLATE = r"""
 
 int main() {
     using T = float;
-    std::printf("SUGGESTED_THREADS %d\n", (int)grid::SUGGESTED_THREADS);
+    std::printf("MAX_PERF_LEVEL_THREADS %d\n", (int)grid::MAX_PERF_LEVEL_THREADS);
 %MACRO_CALLS%
     return 0;
 }
@@ -210,7 +210,7 @@ int main() {
 
 def dump_smem_bytes(grid_cuh: Path, emitted_labels: set[str], build_dir: Path) -> tuple[dict[str, int], int]:
     """Compile + run a tiny .cu that prints constexpr smem-bytes for every
-    kernel actually emitted. Returns ({label: bytes}, suggested_threads)."""
+    kernel actually emitted. Returns ({label: bytes}, max_perf_level_threads)."""
     build_dir.mkdir(parents=True, exist_ok=True)
     calls = []
     for label, macro in SMEM_MACROS.items():
@@ -236,7 +236,7 @@ def dump_smem_bytes(grid_cuh: Path, emitted_labels: set[str], build_dir: Path) -
     for line in rc.stdout.splitlines():
         parts = line.split()
         if len(parts) == 2:
-            if parts[0] == "SUGGESTED_THREADS":
+            if parts[0] == "MAX_PERF_LEVEL_THREADS":
                 try: sug = int(parts[1])
                 except ValueError: pass
             else:
@@ -276,7 +276,7 @@ def main():
     WORK.mkdir(parents=True)
 
     results = []   # list of (robot, kernel_label, perf, relax, smem_bytes)
-    sug = {}       # robot -> SUGGESTED_THREADS
+    sug = {}       # robot -> MAX_PERF_LEVEL_THREADS
     for robot_label, urdf, floating in ROBOTS:
         if not urdf.exists():
             print(f"[skip] {robot_label}: URDF not present at {urdf}")
@@ -294,9 +294,9 @@ def main():
 
         smem, suggested = dump_smem_bytes(grid_cuh, emitted, robot_dir / "smem")
         sug[robot_label] = suggested
-        print(f"  smem dump: {len(smem)} entries, SUGGESTED_THREADS={suggested}")
+        print(f"  smem dump: {len(smem)} entries, MAX_PERF_LEVEL_THREADS={suggested}")
 
-        # Perf-tier compile (default __launch_bounds__(SUGGESTED_THREADS))
+        # Perf-tier compile (default __launch_bounds__(MAX_PERF_LEVEL_THREADS))
         stderr, ok = compile_with_bounds(grid_cuh, "perf", None, robot_dir / "build_perf")
         if not ok:
             print(f"  [perf-compile] FAILED — see {robot_dir}/build_perf/stderr_perf.log")
@@ -323,7 +323,7 @@ def main():
         "`*_DYNAMIC_SHARED_MEM_BYTES<float>()` constexpr; ptxas's static-smem",
         "report is unhelpful here because GRiD uses `extern __shared__`).",
         "",
-        "**perf** = `__launch_bounds__(SUGGESTED_THREADS)` (the default);",
+        "**perf** = `__launch_bounds__(MAX_PERF_LEVEL_THREADS)` (the default);",
         "**relax** = `__launch_bounds__(1024)` (what TIER_MINIMAL looks like).",
         "",
         "**Decision predicate**:",
@@ -334,7 +334,7 @@ def main():
         "  a smem-axis downgrade variant.",
         "- `no`: free-alias TIER_LITE/MINIMAL to TIER_PERF; no body changes needed.",
         "",
-        "**Per-robot `SUGGESTED_THREADS`**: " +
+        "**Per-robot `MAX_PERF_LEVEL_THREADS`**: " +
             ", ".join(f"{r}={n}" for r, n in sug.items()),
         "",
         "| Robot | Kernel | perf R/sp | relax R/sp | smem | downgrade? |",

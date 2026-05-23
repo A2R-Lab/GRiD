@@ -61,7 +61,7 @@ multi-thread `+=` into a shared destination — is **invisible at 32 threads**,
 because a single warp executes in lockstep (warp-synchronous) and "accidentally"
 behaves as if synchronized. The same kernel races at 2+ warps.
 
-GRiD launches real workloads at `SUGGESTED_THREADS` (e.g. 448), which is many
+GRiD launches real workloads at `MAX_PERF_LEVEL_THREADS` (e.g. 448), which is many
 warps. So a test that launches at a fixed 32 threads validates a configuration
 **nobody runs in production** and passes while production silently corrupts
 results.
@@ -69,7 +69,7 @@ results.
 Therefore the CUDA equivalence tests sweep block thread counts:
 
 - `1` warp (32) — the warp-synchronous baseline.
-- Multi-warp counts (e.g. 96, 448=`SUGGESTED_THREADS`).
+- Multi-warp counts (e.g. 96, 448=`MAX_PERF_LEVEL_THREADS`).
 - A **session-random count that is not a multiple of 32** (`_random_thread_count`
   in `test_cuda_executable_equivalence.py`), so a trailing partial warp is always
   present and, over many runs, many distinct counts are probed. The chosen value

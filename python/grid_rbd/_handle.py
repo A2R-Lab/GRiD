@@ -102,14 +102,14 @@ class RobotHandle:
         return self._runner.max_batch
 
     @property
-    def suggested_threads(self) -> int:
+    def max_perf_level_threads(self) -> int:
         """Codegen-time thread-count hint (DOF-aware, warp-rounded).
 
         The default block size for kernel launches. Since v2.0 it is a
         recommendation, not an enforced floor — callers can override
         via :py:meth:`set_threads_per_block`.
         """
-        return self._runner.suggested_threads
+        return self._runner.max_perf_level_threads
 
     @property
     def threads_per_block(self) -> int:
@@ -126,7 +126,7 @@ class RobotHandle:
         block size ``n >= 1`` (up to the per-block max, 1024 on current
         GPUs) is valid; smaller sizes are correct but slower.
 
-        Default: :py:attr:`suggested_threads`.
+        Default: :py:attr:`max_perf_level_threads`.
         """
         self._runner.set_threads_per_block(int(n))
 

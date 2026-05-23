@@ -22,7 +22,7 @@
 #include "grid.cuh"
 
 // Block thread count for all integrator kernel launches. 0 => use
-// grid::SUGGESTED_THREADS. Overridable via argv[1] so the test harness can
+// grid::MAX_PERF_LEVEL_THREADS. Overridable via argv[1] so the test harness can
 // sweep warp counts to catch thread-count-dependent races.
 int g_num_threads = 0;
 
@@ -118,13 +118,13 @@ void run() {
     const T gravity = static_cast<T>(9.81);
     const dim3 block_dimms(1, 1, 1);
     // The integrator kernels are compiled with
-    // __launch_bounds__(tier_max_threads<TIER>()) (= SUGGESTED_THREADS at
+    // __launch_bounds__(tier_max_threads<TIER>()) (= MAX_PERF_LEVEL_THREADS at
     // TIER_PERF). Launching with MORE threads than that bound fails with
     // cudaErrorInvalidValue, so a swept count above the bound (e.g. 448 on a
-    // small robot whose SUGGESTED_THREADS is 352) must be clamped down. The
+    // small robot whose MAX_PERF_LEVEL_THREADS is 352) must be clamped down. The
     // clamped value is still multi-warp, so thread-count race coverage holds.
-    const int requested = g_num_threads > 0 ? g_num_threads : grid::SUGGESTED_THREADS;
-    const int nthreads = requested < grid::SUGGESTED_THREADS ? requested : grid::SUGGESTED_THREADS;
+    const int requested = g_num_threads > 0 ? g_num_threads : grid::MAX_PERF_LEVEL_THREADS;
+    const int nthreads = requested < grid::MAX_PERF_LEVEL_THREADS ? requested : grid::MAX_PERF_LEVEL_THREADS;
     const dim3 thread_dimms(nthreads, 1, 1);
 
     cudaStream_t *streams = grid::init_grid<T>();

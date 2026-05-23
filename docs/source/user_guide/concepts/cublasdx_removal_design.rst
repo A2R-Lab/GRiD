@@ -23,7 +23,7 @@ Two user personas drive the change:
    ``#include``-ing it in their own kernels (MPC solvers, OCP shooting
    pipelines, neural-network policy code with embedded dynamics). For
    them, the fact that every GRiD kernel pins
-   ``__launch_bounds__(SUGGESTED_THREADS)`` and the cuBLASDx call sites
+   ``__launch_bounds__(MAX_PERF_LEVEL_THREADS)`` and the cuBLASDx call sites
    ``static_assert`` on a minimum block size is a constant source of
    friction — it forces their outer kernel to either match GRiD's
    block shape or pay a host round-trip via the host wrappers.
@@ -132,7 +132,7 @@ A. **cuBLASDx dispatch removal** — strip the ``GRID_LINALG_GLASS_NVIDIA``
    standalone library.
 B. **Any-thread-count emission** — drop the ``__launch_bounds__``
    *attribute* from every emitted kernel while keeping the
-   ``SUGGESTED_THREADS`` *constant* alive as a true caller hint (the
+   ``MAX_PERF_LEVEL_THREADS`` *constant* alive as a true caller hint (the
    value still encodes the codegen's preferred DOF-aware,
    warp-rounded block size; it just stops being enforced). Parameterize
    ``g_thread_dimms`` in the wrapper, and convert ``threadIdx.x < N``
@@ -151,7 +151,7 @@ Codegen layer
   ``enable_cublasdx`` / linalg-backend kwargs from ``__init__``; drop
   emission of ``GRID_LINALG_GLASS_NVIDIA`` / ``GRID_CUBLASDX_HEADER_AVAILABLE``
   / ``GRID_CUSOLVERDX_HEADER_AVAILABLE`` macros into ``grid.cuh``.
-  Simplify the ``SUGGESTED_THREADS`` computation (no longer pinned to
+  Simplify the ``MAX_PERF_LEVEL_THREADS`` computation (no longer pinned to
   cuBLASDx minimum).
 * :file:`GRiDCodeGenerator/helpers/_lin_alg_helpers.py` — single-path
   SIMT emission. Drop the ``DEFINE_NVIDIA_GEMM_BLOCKDIM`` /
@@ -178,7 +178,7 @@ Wrapper layer (Python + JAX)
   discovery, drop the ``-DGRID_CUDA_LINALG_BACKEND`` ``nvcc`` flag, drop
   the ``-rdc=true`` requirement (cuBLASDx is the only reason for it).
 * :file:`python/grid_rbd/wrapper_template.cu` — replace the hardcoded
-  ``g_thread_dimms = dim3(SUGGESTED_THREADS, 1, 1)`` with either a
+  ``g_thread_dimms = dim3(MAX_PERF_LEVEL_THREADS, 1, 1)`` with either a
   caller-provided ``threads_per_block`` parameter (preferred) or a
   named alias preserving current behavior.
 * :file:`python/grid_rbd/__init__.py`, :file:`python/grid_rbd/jax/__init__.py` —
@@ -318,7 +318,7 @@ Any-thread-count validation (after sub-rip B lands)
 Extend the existing
 ``test/cuda_equivalents/test_cuda_second_order_fallback.py`` scaffold
 to cover every algorithm at block sizes
-``{64, 128, 256, SUGGESTED_THREADS, 512}``. Output must match
+``{64, 128, 256, MAX_PERF_LEVEL_THREADS, 512}``. Output must match
 ``glass``-column reference at all block sizes within float32 precision.
 
 Add a microbench at ``test/benchmarks/any_thread_count_microbench.py``
@@ -402,7 +402,7 @@ Each phase is a self-contained commit with passing tests. Phase 1
    iiwa14 ``grid.cuh`` to verify clean SIMT output. Run accuracy suite.
 3. **Wrapper rip (A2)** — drop libmathdx detection from ``_compile.py``,
    drop ``g_thread_dimms`` hardcode in ``wrapper_template.cu`` (use
-   ``SUGGESTED_THREADS`` for now; parameterize in B2). Run wrapper +
+   ``MAX_PERF_LEVEL_THREADS`` for now; parameterize in B2). Run wrapper +
    JAX tests.
 4. **Bench rip (A3)** — drop ``glass_nvidia`` column from harness,
    drop ``--mathdx-root``, drop ``--cicc-opt-level``. Re-run
@@ -414,15 +414,15 @@ Each phase is a self-contained commit with passing tests. Phase 1
 7. **Install scripts (A6)** — strip libmathdx setup from base/developer
    install scripts; no version bump (never published).
 8. **Any-thread-count emission (B1)** — drop the ``__launch_bounds__``
-   attribute from every kernel emitter (keep the ``SUGGESTED_THREADS``
+   attribute from every kernel emitter (keep the ``MAX_PERF_LEVEL_THREADS``
    constant emission as a documented hint). Parameterize
    ``threads_per_block`` in ``wrapper_template.cu`` defaulting to
-   ``grid::SUGGESTED_THREADS``. Convert ``threadIdx.x < N`` guards in
+   ``grid::MAX_PERF_LEVEL_THREADS``. Convert ``threadIdx.x < N`` guards in
    ``_inner`` functions to block-stride loops (use the existing
    helper).
 9. **Any-thread-count tests (B2)** — extend
    ``test_cuda_second_order_fallback.py`` to cover all algorithms at
-   block sizes {64, 128, 256, SUGGESTED_THREADS, 512}. Add the
+   block sizes {64, 128, 256, MAX_PERF_LEVEL_THREADS, 512}. Add the
    microbench artifact.
 10. **Release notes (C)** — short changelog entry noting the rip and
     pointing at the archive tag + this design doc. No migration story
@@ -445,7 +445,7 @@ Adjacent considerations
   ``JaxRobotHandle`` keep their full method surface. The only visible
   change is faster ``register_robot`` times (no libmathdx discovery,
   no ``-rdc=true``).
-* **SUGGESTED_THREADS keeps its name and value.** It moves from
+* **MAX_PERF_LEVEL_THREADS keeps its name and value.** It moves from
   "enforced launch bound" to "recommended block size hint", which is
   what the name promises. Generated ``grid.cuh`` keeps the constant,
   the host wrappers still default to it, and external CUDA-inline

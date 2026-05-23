@@ -185,7 +185,7 @@ has the deeper history; this is the short version you need on the 5090 side.
   `d2ee` registrations so init_grid doesn't fail when those kernels can't fit
   even with the attribute (happens on g1_floating for fdsva_so).
 - XmatsHom helper serial-section split (reg pressure 140 → ~50). Required to
-  fit `__launch_bounds__(SUGGESTED_THREADS)` cleanly on ee_pose_gradient_hessian.
+  fit `__launch_bounds__(MAX_PERF_LEVEL_THREADS)` cleanly on ee_pose_gradient_hessian.
 - Anti-LICM rewrite: `__noinline__ grid_licm_barrier` (brittle, was being
   optimized away as no-op self-stores) replaced with **rep-stomp + output→input
   feedback**. Every `_single_timing` rep now reads previous reps' outputs back
@@ -433,7 +433,7 @@ is the next biggest win.
 ### Architecture: any-thread-count library functions
 
 Carry-over design question: GRiD kernels currently pin `__launch_bounds__(
-SUGGESTED_THREADS)`. People calling GRiD from inside their own kernels may
+MAX_PERF_LEVEL_THREADS)`. People calling GRiD from inside their own kernels may
 want different thread counts. Need perf-mode (current) + compat-mode (no
 launch_bounds, fallback inner variants) per algorithm. Open design;
 1-2 days to scope.

@@ -15,7 +15,7 @@ for a specific GPU (filename includes hardware tag, e.g.
 Empirical resource matrix for the v2.0 resource-tier design. For each
 algorithm × robot config, captures:
 
-- Per-thread register count + spill stores at `__launch_bounds__(SUGGESTED_THREADS)`
+- Per-thread register count + spill stores at `__launch_bounds__(MAX_PERF_LEVEL_THREADS)`
   (perf tier) and `__launch_bounds__(1024)` (minimal tier).
 - Per-block dynamic shared memory bytes (from the codegen-emitted
   `*_DYNAMIC_SHARED_MEM_BYTES<float>()` constexpr).
