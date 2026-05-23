@@ -607,7 +607,16 @@ int main(int argc, char **argv) {
     // that is correct only within a single warp).
     if (argc > 1) {
         int requested = std::atoi(argv[1]);
-        if (requested > 0) { g_num_threads = requested; }
+        // 0 (or non-positive) is the sentinel for "launch at the robot's
+        // SUGGESTED_THREADS" — see the clamp below. >0 requests an explicit count.
+        g_num_threads = requested > 0 ? requested : 0;
+    }
+    // Dynamic clamp: the kernels carry __launch_bounds__(tier_max_threads<TIER>())
+    // (= grid::SUGGESTED_THREADS at the default tier), so launching with MORE
+    // threads is an invalid configuration. Derive the cap from the generated
+    // header per-robot rather than hardcoding it; 0 => use SUGGESTED exactly.
+    if (g_num_threads <= 0 || g_num_threads > grid::SUGGESTED_THREADS) {
+        g_num_threads = grid::SUGGESTED_THREADS;
     }
     run<float>();
     return 0;

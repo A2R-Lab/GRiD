@@ -601,14 +601,17 @@ def _run_runner(executable: Path, sample_input: str, compile_cmd: list[str], num
 def _thread_counts() -> tuple[int, ...]:
     """Block thread counts to sweep each CUDA equivalence case over.
 
-    Defaults to a single warp (32) plus multi-warp counts (one a non-multiple
-    of 32 to exercise partial trailing warps, plus SUGGESTED_THREADS=448, the
-    count real GRiD usage launches at) and one session-random multi-warp count.
+    Defaults to a single warp (32), a non-multiple of 32 (96) to exercise partial
+    trailing warps, the sentinel 0 = the robot's SUGGESTED_THREADS (the count real
+    GRiD usage launches at, resolved DYNAMICALLY in the runner from the generated
+    header — never hardcoded, since it varies per robot: iiwa14=352, go2=288,
+    g1/h1_2=512), and one session-random multi-warp count. The runner clamps every
+    requested count to SUGGESTED_THREADS (the kernels' __launch_bounds__ cap).
     Sweeping thread counts catches thread-count-dependent races (missing
     __syncthreads between a write phase and a read/accumulate phase that happens
     to be correct only within a single warp) that a fixed 32-thread launch hides.
-    Override via GRID_CUDA_THREAD_COUNTS (comma-separated ints, or "random" for
-    a fresh multi-warp value)."""
+    Override via GRID_CUDA_THREAD_COUNTS (comma-separated ints, "suggested" for the
+    SUGGESTED_THREADS sentinel, or "random" for a fresh multi-warp value)."""
     raw = os.environ.get("GRID_CUDA_THREAD_COUNTS")
     if raw:
         counts = []
@@ -618,10 +621,12 @@ def _thread_counts() -> tuple[int, ...]:
                 continue
             if part == "random":
                 counts.append(_random_thread_count())
+            elif part == "suggested":
+                counts.append(0)
             else:
                 counts.append(int(part))
         return tuple(dict.fromkeys(counts)) or (32,)
-    return (32, 96, 448, _random_thread_count())
+    return (32, 96, 0, _random_thread_count())
 
 
 def _random_thread_count() -> int:
@@ -1041,7 +1046,7 @@ def _assert_close(
         ) from exc
 
 
-@pytest.mark.parametrize("num_threads", _thread_counts(), ids=lambda t: f"threads{t}")
+@pytest.mark.parametrize("num_threads", _thread_counts(), ids=lambda t: f"threads{'suggested' if t == 0 else t}")
 @pytest.mark.parametrize(("spec", "base_mode"), build_fixed_cuda_case_params())
 def test_fixed_base_generated_cuda_matches_python_reference(spec, base_mode, num_threads, tmp_path, request):
     selection = _sample_name_selection(base_mode)
@@ -1058,7 +1063,7 @@ def test_fixed_base_generated_cuda_matches_python_reference(spec, base_mode, num
     )
 
 
-@pytest.mark.parametrize("num_threads", _thread_counts(), ids=lambda t: f"threads{t}")
+@pytest.mark.parametrize("num_threads", _thread_counts(), ids=lambda t: f"threads{'suggested' if t == 0 else t}")
 @pytest.mark.parametrize(("spec", "base_mode"), build_floating_cuda_case_params())
 def test_floating_base_generated_cuda_matches_python_reference(spec, base_mode, num_threads, tmp_path, request):
     selection = _sample_name_selection(base_mode)
