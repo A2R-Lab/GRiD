@@ -354,6 +354,34 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "gate": "GRID_HAS_FDSVA_SO",
         "shared_mem_skip": "FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES",
     },
+    # Time integrators. Host signatures take an extra `dt` (const T) between
+    # `gravity` and `num_timesteps`; IntegratorType defaults to EULER and gridData
+    # already allocates the integrator I/O (d_x_kp1, d_dAB). A fixed bench dt is
+    # used (its value doesn't affect timing).
+    "integrator": {
+        "single_call":        "grid::integrator_single_timing<float>(hd_data,d_robotModel,GRAVITY,static_cast<float>(0.01),SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::integrator<float>(d,m,GRAVITY,static_cast<float>(0.01),N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::integrator_compute_only<float>(d,m,GRAVITY,static_cast<float>(0.01),N,dim3(N,1,1),dimms)",
+        "batch_label": "INTEGRATOR",
+        "gate": "GRID_HAS_INTEGRATOR",
+        "shared_mem_skip": "INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "integrator_gradient": {
+        "single_call":        "grid::integrator_gradient_single_timing<float>(hd_data,d_robotModel,GRAVITY,static_cast<float>(0.01),SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::integrator_gradient<float>(d,m,GRAVITY,static_cast<float>(0.01),N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::integrator_gradient_compute_only<float>(d,m,GRAVITY,static_cast<float>(0.01),N,dim3(N,1,1),dimms)",
+        "batch_label": "INTEGRATOR_GRADIENT",
+        "gate": "GRID_HAS_INTEGRATOR_GRADIENT",
+        "shared_mem_skip": "INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "integrator_with_gradient": {
+        "single_call":        "grid::integrator_gradient_with_x_kp1_single_timing<float>(hd_data,d_robotModel,GRAVITY,static_cast<float>(0.01),SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::integrator_gradient_with_x_kp1<float>(d,m,GRAVITY,static_cast<float>(0.01),N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::integrator_gradient_with_x_kp1_compute_only<float>(d,m,GRAVITY,static_cast<float>(0.01),N,dim3(N,1,1),dimms)",
+        "batch_label": "INTEGRATOR_WITH_GRADIENT",
+        "gate": "GRID_HAS_INTEGRATOR_GRADIENT",
+        "shared_mem_skip": "INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES",
+    },
 }
 
 

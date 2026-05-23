@@ -132,6 +132,35 @@ __host__ void measure_idsva_so_batch(int N, cudaStream_t *streams, grid::robotMo
         [&]{ grid::idsva_so_compute_only<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms); });
 }
 #endif
+// Time integrators (host signatures take an extra dt; IntegratorType defaults to EULER).
+#if GRID_HAS_INTEGRATOR
+template <typename T, int TEST_ITERS>
+__host__ void measure_integrator_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("INTEGRATOR", N, INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES);
+    dim3 dimms = grid_timing_dimms();
+    measure_batch_pair<TEST_ITERS>("INTEGRATOR", N,
+        [&]{ grid::integrator<T>(d,m,GRAVITY,static_cast<T>(0.01),N,dim3(N,1,1),dimms,streams); },
+        [&]{ grid::integrator_compute_only<T>(d,m,GRAVITY,static_cast<T>(0.01),N,dim3(N,1,1),dimms); });
+}
+#endif
+#if GRID_HAS_INTEGRATOR_GRADIENT
+template <typename T, int TEST_ITERS>
+__host__ void measure_integrator_gradient_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("INTEGRATOR_GRADIENT", N, INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES);
+    dim3 dimms = grid_timing_dimms();
+    measure_batch_pair<TEST_ITERS>("INTEGRATOR_GRADIENT", N,
+        [&]{ grid::integrator_gradient<T>(d,m,GRAVITY,static_cast<T>(0.01),N,dim3(N,1,1),dimms,streams); },
+        [&]{ grid::integrator_gradient_compute_only<T>(d,m,GRAVITY,static_cast<T>(0.01),N,dim3(N,1,1),dimms); });
+}
+template <typename T, int TEST_ITERS>
+__host__ void measure_integrator_with_gradient_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("INTEGRATOR_WITH_GRADIENT", N, INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES);
+    dim3 dimms = grid_timing_dimms();
+    measure_batch_pair<TEST_ITERS>("INTEGRATOR_WITH_GRADIENT", N,
+        [&]{ grid::integrator_gradient_with_x_kp1<T>(d,m,GRAVITY,static_cast<T>(0.01),N,dim3(N,1,1),dimms,streams); },
+        [&]{ grid::integrator_gradient_with_x_kp1_compute_only<T>(d,m,GRAVITY,static_cast<T>(0.01),N,dim3(N,1,1),dimms); });
+}
+#endif
 
 template <typename T, int TEST_ITERS>
 __host__ void run_batch_at(bool floating_base, int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
@@ -156,6 +185,13 @@ __host__ void run_batch_at(bool floating_base, int N, cudaStream_t *streams, gri
 #if GRID_HAS_FDSVA_SO
     measure_fdsva_so_batch<T,TEST_ITERS>(N, streams, m, d);
     (void)floating_base;
+#endif
+#if GRID_HAS_INTEGRATOR
+    measure_integrator_batch<T,TEST_ITERS>(N, streams, m, d);
+#endif
+#if GRID_HAS_INTEGRATOR_GRADIENT
+    measure_integrator_gradient_batch<T,TEST_ITERS>(N, streams, m, d);
+    measure_integrator_with_gradient_batch<T,TEST_ITERS>(N, streams, m, d);
 #endif
 }
 

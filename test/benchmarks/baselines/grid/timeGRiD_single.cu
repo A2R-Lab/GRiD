@@ -86,6 +86,27 @@ __host__ void measure_idsva_so_single(cudaStream_t *streams, grid::robotModel<T>
     grid::idsva_so_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 #endif
+// Time integrators. Host signatures take an extra dt (const T) before num_timesteps;
+// IntegratorType defaults to EULER. A fixed bench dt is used (it doesn't affect timing).
+#if GRID_HAS_INTEGRATOR
+template <typename T, int TEST_ITERS>
+__host__ void measure_integrator_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
+    GRID_SKIP_IF_KERNEL_TOO_BIG("INTEGRATOR", INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES);
+    grid::integrator_single_timing<T>(hd_data,d_robotModel,GRAVITY,static_cast<T>(0.01),TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
+}
+#endif
+#if GRID_HAS_INTEGRATOR_GRADIENT
+template <typename T, int TEST_ITERS>
+__host__ void measure_integrator_gradient_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
+    GRID_SKIP_IF_KERNEL_TOO_BIG("INTEGRATOR_GRADIENT", INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES);
+    grid::integrator_gradient_single_timing<T>(hd_data,d_robotModel,GRAVITY,static_cast<T>(0.01),TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
+}
+template <typename T, int TEST_ITERS>
+__host__ void measure_integrator_with_gradient_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
+    GRID_SKIP_IF_KERNEL_TOO_BIG("INTEGRATOR_WITH_GRADIENT", INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES);
+    grid::integrator_gradient_with_x_kp1_single_timing<T>(hd_data,d_robotModel,GRAVITY,static_cast<T>(0.01),TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
+}
+#endif
 
 template <typename T, int TEST_ITERS>
 __host__ void run_single_timings(bool floating_base, cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
@@ -111,6 +132,13 @@ __host__ void run_single_timings(bool floating_base, cudaStream_t *streams, grid
     #if GRID_HAS_FDSVA_SO
     measure_fdsva_so_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
     (void)floating_base;
+    #endif
+    #if GRID_HAS_INTEGRATOR
+    measure_integrator_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    #endif
+    #if GRID_HAS_INTEGRATOR_GRADIENT
+    measure_integrator_gradient_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    measure_integrator_with_gradient_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
     #endif
 #endif
 }
