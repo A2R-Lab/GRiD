@@ -119,7 +119,7 @@ def compile_all_tiers(grid_cuh: Path, emitted: list[str], build_dir: Path) -> di
     sizing_asserts = """
     // fdsva_so_inner: 4*nv^3 scratch
     // fdsva_so_inner scratch constants are now keyed on the placement bool
-    // SCRATCH_IN_SMEM (true = s_temp/shared, false = s_workspace/global).
+    // SCRATCH_IN_SMEM (true = s_temp/shared, false = d_workspace/global).
     static_assert(grid::FDSVA_SO_INNER_SMEM_BYTES<T, true>() > 0,
                   "FDSVA_SO_INNER_SMEM_BYTES<smem> must include scratch");
     static_assert(grid::FDSVA_SO_INNER_SMEM_BYTES<T, false>() == 0,
