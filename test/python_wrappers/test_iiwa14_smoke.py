@@ -220,3 +220,34 @@ def test_fdsva_so_shape(handle, samples):
     for t in out:
         assert t.shape == (samples["q"].shape[0], NV, NV, NV)
         assert np.all(np.isfinite(t))
+
+
+_INTEGRATOR_TYPES = ("euler", "semi_implicit_euler", "midpoint", "rk3", "rk4")
+
+
+@pytest.mark.parametrize("it_name", _INTEGRATOR_TYPES)
+def test_integrator(handle, ref, samples, it_name):
+    """Integrator value matches RBDReference for all 5 types."""
+    dt = 0.01
+    NJ, NV = handle.num_joints, handle.num_vel
+    grid = handle.integrator(samples["q"], samples["qd"], samples["u"], dt,
+                             integrator_type=it_name)
+    assert grid.shape == (samples["q"].shape[0], NJ + NV)
+    for i, (q, qd, u) in enumerate(zip(samples["q"], samples["qd"], samples["u"])):
+        x_ref = ref.integrator(q.astype(np.float64), qd.astype(np.float64),
+                               u.astype(np.float64), dt, integrator_type=it_name)
+        assert _max_err(grid[i], x_ref) < _TOL
+
+
+@pytest.mark.parametrize("it_name", _INTEGRATOR_TYPES)
+def test_integrator_gradient(handle, ref, samples, it_name):
+    """Integrator gradient (dAB) matches RBDReference for all 5 types."""
+    dt = 0.01
+    NV = handle.num_vel
+    grid = handle.integrator_gradient(samples["q"], samples["qd"], samples["u"], dt,
+                                      integrator_type=it_name)
+    assert grid.shape == (samples["q"].shape[0], 2 * NV, 3 * NV)
+    for i, (q, qd, u) in enumerate(zip(samples["q"], samples["qd"], samples["u"])):
+        dAB_ref = ref.integrator_grad(q.astype(np.float64), qd.astype(np.float64),
+                                      u.astype(np.float64), dt, integrator_type=it_name)
+        assert _max_err(grid[i], dAB_ref) < _TOL

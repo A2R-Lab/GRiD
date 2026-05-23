@@ -54,6 +54,11 @@ extern "C" {
     using fn_ee_t           = int (*)(const float*, float*, int);
     // q, qd, qdd_opt, out, batch, gravity   — idsva_so (same as rnea)
     // q, qd, u, out, batch, gravity         — fdsva_so (same as fd)
+    // q, qd, u, out, batch, dt, it          — integrator, integrator_gradient
+    //   (dt is the runtime timestep; it selects the IntegratorType; gravity is
+    //    the standard 9.81 constant baked in the wrapper)
+    using fn_integrator_t   = int (*)(const float*, const float*, const float*,
+                                      float*, int, float, int);
 }
 
 
@@ -93,6 +98,8 @@ public:
         fn_ee_pose_hessian_  = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose_hessian"));
         fn_idsva_so_         = reinterpret_cast<fn_rnea_t>(require_sym("grid_rbd_idsva_so"));
         fn_fdsva_so_         = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_fdsva_so"));
+        fn_integrator_       = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator"));
+        fn_integrator_grad_  = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator_gradient"));
 
         // Cache constants (avoid the indirect-function-call cost on every read).
         num_joints_ = fn_num_joints_();
@@ -378,6 +385,40 @@ public:
         return out;
     }
 
+    // integrator(q, qd, u, dt, it) -> x_kp1 (batch, NUM_POS + NUM_VEL).
+    // gravity is the standard 9.81 constant (baked in the wrapper).
+    py::array_t<float> integrator(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+        float dt, int it)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        py::array_t<float> out({batch, num_joints_ + num_vel_});
+        int rc = fn_integrator_(q.data(), qd.data(), u.data(),
+                                out.mutable_data(), batch, dt, it);
+        if (rc != 0) throw std::runtime_error("grid_rbd_integrator failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // integrator_gradient(q, qd, u, dt, it) -> flat dAB (batch, 2*NV*3*NV),
+    // column-major per timestep ([d/dq | d/dqd | d/du]); reshaped Python-side.
+    py::array_t<float> integrator_gradient(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+        float dt, int it)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        py::array_t<float> out({batch, 2 * num_vel_ * 3 * num_vel_});
+        int rc = fn_integrator_grad_(q.data(), qd.data(), u.data(),
+                                     out.mutable_data(), batch, dt, it);
+        if (rc != 0) throw std::runtime_error("grid_rbd_integrator_gradient failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
 private:
     void* require_sym(const char* name) {
         dlerror();  // clear errors
@@ -444,6 +485,8 @@ private:
     fn_ee_t    fn_ee_pose_hessian_ = nullptr;
     fn_rnea_t  fn_idsva_so_       = nullptr;
     fn_fd_t    fn_fdsva_so_       = nullptr;
+    fn_integrator_t fn_integrator_      = nullptr;
+    fn_integrator_t fn_integrator_grad_ = nullptr;
 
     int num_joints_ = 0;
     int num_vel_    = 0;
@@ -506,5 +549,11 @@ PYBIND11_MODULE(_core, m) {
         .def("fdsva_so", &Runner::fdsva_so,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("second_order_tensor_size"),
-             py::arg("gravity") = 9.81f);
+             py::arg("gravity") = 9.81f)
+        .def("integrator", &Runner::integrator,
+             py::arg("q"), py::arg("qd"), py::arg("u"),
+             py::arg("dt"), py::arg("it") = 0)
+        .def("integrator_gradient", &Runner::integrator_gradient,
+             py::arg("q"), py::arg("qd"), py::arg("u"),
+             py::arg("dt"), py::arg("it") = 0);
 }

@@ -399,6 +399,82 @@ extern "C" int grid_rbd_fdsva_so(
 
 
 // ────────────────────────────────────────────────────────────────────────────
+// Time integrator (value + gradient)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// dt is a runtime float; gravity is the standard constant (9.81). The
+// integrator type is selected at call time via an int code (0=EULER,
+// 1=SEMI_IMPLICIT_EULER, 2=MIDPOINT, 3=RK3, 4=RK4) dispatched onto the
+// compile-time `IntegratorType IT` template. x_kp1 is size (NUM_POS + NUM_VEL)
+// per timestep; dAB is (2*NUM_VEL) x (3*NUM_VEL) per timestep (column-major).
+
+// host-path launchers (call the host wrappers, which stage memory + own streams)
+template <grid::IntegratorType IT>
+static void launch_integrator_host(int batch, T dt) {
+    grid::integrator<T, IT>(g_data, g_robot, /*gravity=*/static_cast<T>(9.81),
+                            dt, batch, g_block_dimms, g_thread_dimms, g_streams);
+}
+template <grid::IntegratorType IT>
+static void launch_integrator_grad_host(int batch, T dt) {
+    grid::integrator_gradient<T, IT>(g_data, g_robot, /*gravity=*/static_cast<T>(9.81),
+                                     dt, batch, g_block_dimms, g_thread_dimms, g_streams);
+}
+
+#define GRID_RBD_IT_DISPATCH(it_code, FN, ...)                                   \
+    switch (it_code) {                                                           \
+        case 0: FN<grid::IntegratorType::EULER>(__VA_ARGS__); break;             \
+        case 1: FN<grid::IntegratorType::SEMI_IMPLICIT_EULER>(__VA_ARGS__); break;\
+        case 2: FN<grid::IntegratorType::MIDPOINT>(__VA_ARGS__); break;          \
+        case 3: FN<grid::IntegratorType::RK3>(__VA_ARGS__); break;               \
+        case 4: FN<grid::IntegratorType::RK4>(__VA_ARGS__); break;               \
+        default: return 3;                                                       \
+    }
+
+// integrator(q, qd, u, dt, it) → x_kp1  (size NUM_POS + NUM_VEL per timestep)
+extern "C" int grid_rbd_integrator(
+    const T* q, const T* qd, const T* u,
+    T* x_kp1_out, int batch, T dt, int it)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+
+    const int nj = grid::NUM_JOINTS;
+    pack_q_qd_u(q, qd, u, batch, nj);
+
+    GRID_RBD_IT_DISPATCH(it, launch_integrator_host, batch, dt);
+
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    std::memcpy(x_kp1_out, g_data->h_x_kp1,
+                batch * (grid::NUM_POS + grid::NUM_VEL) * sizeof(T));
+    return 0;
+}
+
+// integrator_gradient(q, qd, u, dt, it) → dAB  (2*NV x 3*NV per timestep)
+extern "C" int grid_rbd_integrator_gradient(
+    const T* q, const T* qd, const T* u,
+    T* dAB_out, int batch, T dt, int it)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+
+    const int nj = grid::NUM_JOINTS;
+    pack_q_qd_u(q, qd, u, batch, nj);
+
+    GRID_RBD_IT_DISPATCH(it, launch_integrator_grad_host, batch, dt);
+
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    const int nv = grid::NUM_VEL;
+    std::memcpy(dAB_out, g_data->h_dAB,
+                batch * (2 * nv) * (3 * nv) * sizeof(T));
+    return 0;
+}
+
+
+// ────────────────────────────────────────────────────────────────────────────
 // JAX FFI handlers
 // ────────────────────────────────────────────────────────────────────────────
 //
@@ -1031,6 +1107,119 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
         .Ret<ffi::Buffer<ffi::F32>>()
+);
+
+
+// Integrator. dt + it are FFI attributes (runtime scalars; gravity is the
+// standard constant). q/qd/u are packed D→D like aba; the integrator kernels
+// are launched directly on the JAX stream.
+template <grid::IntegratorType IT>
+static void launch_integrator_kernel_jax(cudaStream_t stream, int batch, float dt) {
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::integrator_kernel<T, IT><<<
+        g_block_dimms, g_thread_dimms,
+        grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+            g_data->d_x_kp1, g_data->d_q_qd_u, stride,
+            g_robot, /*gravity=*/static_cast<T>(9.81), static_cast<T>(dt), batch);
+}
+template <grid::IntegratorType IT>
+static void launch_integrator_grad_kernel_jax(cudaStream_t stream, int batch, float dt) {
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::integrator_gradient_kernel<T, IT><<<
+        g_block_dimms, g_thread_dimms,
+        grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+            g_data->d_dAB, g_data->d_workspace, g_data->d_q_qd_u, stride,
+            g_robot, /*gravity=*/static_cast<T>(9.81), static_cast<T>(dt), batch);
+}
+
+#define GRID_RBD_IT_DISPATCH_FFI(it_code, FN, ...)                                 \
+    switch (it_code) {                                                             \
+        case 0: FN<grid::IntegratorType::EULER>(__VA_ARGS__); break;               \
+        case 1: FN<grid::IntegratorType::SEMI_IMPLICIT_EULER>(__VA_ARGS__); break;  \
+        case 2: FN<grid::IntegratorType::MIDPOINT>(__VA_ARGS__); break;            \
+        case 3: FN<grid::IntegratorType::RK3>(__VA_ARGS__); break;                 \
+        case 4: FN<grid::IntegratorType::RK4>(__VA_ARGS__); break;                 \
+        default: return ffi::Error::InvalidArgument("integrator: bad it code");    \
+    }
+
+// q/qd/u D→D pack into the singleton's d_q_qd_u (layout [q,qd,u] per timestep).
+static void grid_rbd_jax_pack_qqdu(cudaStream_t stream, int batch, int nj,
+                                   ffi::Buffer<ffi::F32>& q,
+                                   ffi::Buffer<ffi::F32>& qd,
+                                   ffi::Buffer<ffi::F32>& u) {
+    const size_t row_bytes = nj * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],     dst_pitch, q.typed_data(),  row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj],    dst_pitch, qd.typed_data(), row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj],  dst_pitch, u.typed_data(),  row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+}
+
+// integrator(q, qd, u; dt, it) → x_kp1  (B, NUM_POS + NUM_VEL)
+static ffi::Error grid_rbd_jax_integrator_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q, ffi::Buffer<ffi::F32> qd, ffi::Buffer<ffi::F32> u,
+    ffi::ResultBuffer<ffi::F32> x_kp1_out,
+    float dt, int64_t it)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    GRID_RBD_FFI_VALIDATE_2D(q, "integrator: q", grid::NUM_JOINTS);
+    int batch = (int)q.dimensions()[0];
+    int nj    = grid::NUM_JOINTS;
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("integrator: batch > max_batch");
+
+    grid_rbd_jax_pack_qqdu(stream, batch, nj, q, qd, u);
+    GRID_RBD_IT_DISPATCH_FFI((int)it, launch_integrator_kernel_jax, stream, batch, dt);
+
+    cudaMemcpyAsync(x_kp1_out->typed_data(), g_data->d_x_kp1,
+                    batch * (grid::NUM_POS + grid::NUM_VEL) * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_integrator,
+    grid_rbd_jax_integrator_impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+        .Attr<float>("dt").Attr<int64_t>("it")
+);
+
+// integrator_gradient(q, qd, u; dt, it) → dAB  (B, 2*NV, 3*NV)
+static ffi::Error grid_rbd_jax_integrator_gradient_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q, ffi::Buffer<ffi::F32> qd, ffi::Buffer<ffi::F32> u,
+    ffi::ResultBuffer<ffi::F32> dAB_out,
+    float dt, int64_t it)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    GRID_RBD_FFI_VALIDATE_2D(q, "integrator_gradient: q", grid::NUM_JOINTS);
+    int batch = (int)q.dimensions()[0];
+    int nj    = grid::NUM_JOINTS;
+    int nv    = grid::NUM_VEL;
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("integrator_gradient: batch > max_batch");
+
+    grid_rbd_jax_pack_qqdu(stream, batch, nj, q, qd, u);
+    GRID_RBD_IT_DISPATCH_FFI((int)it, launch_integrator_grad_kernel_jax, stream, batch, dt);
+
+    cudaMemcpyAsync(dAB_out->typed_data(), g_data->d_dAB,
+                    batch * (2 * nv) * (3 * nv) * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_integrator_gradient,
+    grid_rbd_jax_integrator_gradient_impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+        .Attr<float>("dt").Attr<int64_t>("it")
 );
 
 #endif  // GRID_RBD_WITH_JAX

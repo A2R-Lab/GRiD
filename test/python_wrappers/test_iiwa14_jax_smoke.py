@@ -314,6 +314,53 @@ def test_fdsva_so_jit_matches_eager(jax_handle, samples):
         assert np.max(np.abs(a - b)) < 1e-6
 
 
+_INTEGRATOR_TYPES = ("euler", "semi_implicit_euler", "midpoint", "rk3", "rk4")
+
+
+@pytest.mark.parametrize("it_name", _INTEGRATOR_TYPES)
+def test_integrator_eager_matches_plain(jax_handle, plain_handle, samples, it_name):
+    dt = 0.01
+    x_jax   = np.asarray(jax_handle.integrator(samples["q"], samples["qd"], samples["u"], dt,
+                                               integrator_type=it_name))
+    x_plain = plain_handle.integrator(samples["q"], samples["qd"], samples["u"], dt,
+                                      integrator_type=it_name)
+    assert x_jax.shape == x_plain.shape
+    assert np.max(np.abs(x_jax - x_plain)) < _TOL
+
+
+@pytest.mark.parametrize("it_name", _INTEGRATOR_TYPES)
+def test_integrator_gradient_eager_matches_plain(jax_handle, plain_handle, samples, it_name):
+    dt = 0.01
+    g_jax   = np.asarray(jax_handle.integrator_gradient(samples["q"], samples["qd"], samples["u"], dt,
+                                                        integrator_type=it_name))
+    g_plain = plain_handle.integrator_gradient(samples["q"], samples["qd"], samples["u"], dt,
+                                               integrator_type=it_name)
+    assert g_jax.shape == g_plain.shape
+    assert np.max(np.abs(g_jax - g_plain)) < _TOL
+
+
+def test_integrator_jit_matches_eager(jax_handle, samples):
+    import jax
+    @jax.jit
+    def f(q, qd, u):
+        return jax_handle.integrator(q, qd, u, 0.01, integrator_type="rk4")
+    a = np.asarray(f(samples["q"], samples["qd"], samples["u"]))
+    b = np.asarray(jax_handle.integrator(samples["q"], samples["qd"], samples["u"], 0.01,
+                                         integrator_type="rk4"))
+    assert np.max(np.abs(a - b)) < 1e-6
+
+
+def test_integrator_gradient_jit_matches_eager(jax_handle, samples):
+    import jax
+    @jax.jit
+    def f(q, qd, u):
+        return jax_handle.integrator_gradient(q, qd, u, 0.01, integrator_type="euler")
+    a = np.asarray(f(samples["q"], samples["qd"], samples["u"]))
+    b = np.asarray(jax_handle.integrator_gradient(samples["q"], samples["qd"], samples["u"], 0.01,
+                                                  integrator_type="euler"))
+    assert np.max(np.abs(a - b)) < 1e-6
+
+
 def test_all_methods_jit(jax_handle, samples):
     """Every method must slot into a single jax.jit graph."""
     import jax

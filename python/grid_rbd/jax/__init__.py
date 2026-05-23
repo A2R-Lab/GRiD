@@ -322,6 +322,41 @@ class JaxRobotHandle:
             for i in range(4)
         )
 
+    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler"):
+        """One integration step. Returns (B, NUM_POS + NUM_VEL).
+
+        ``dt`` and the integrator type are passed as FFI attributes (runtime
+        scalars); gravity is the standard 9.81 constant.
+        """
+        import numpy as np
+        import jax
+        import jax.numpy as jnp
+        from .._handle import _integrator_code
+        target = _register_method_target(
+            self._so_path, self._cache_key, "integrator", "grid_rbd_jax_integrator")
+        (q, qd, u), B = self._prep_2d("integrator", q, qd, u)
+        out_type = jax.ShapeDtypeStruct((B, self.num_joints + self.num_vel), jnp.float32)
+        return jax.ffi.ffi_call(target, out_type)(
+            q, qd, u, dt=np.float32(dt), it=np.int64(_integrator_code(integrator_type)))
+
+    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler"):
+        """Gradient of the integrator step. Returns (B, 2*NV, 3*NV) — column
+        blocks [d/dq | d/dqd | d/du] in tangent space."""
+        import numpy as np
+        import jax
+        import jax.numpy as jnp
+        from .._handle import _integrator_code
+        target = _register_method_target(
+            self._so_path, self._cache_key,
+            "integrator_gradient", "grid_rbd_jax_integrator_gradient")
+        (q, qd, u), B = self._prep_2d("integrator_gradient", q, qd, u)
+        nv = self.num_vel
+        out_type = jax.ShapeDtypeStruct((B, 2 * nv * 3 * nv), jnp.float32)
+        flat = jax.ffi.ffi_call(target, out_type)(
+            q, qd, u, dt=np.float32(dt), it=np.int64(_integrator_code(integrator_type)))
+        # h_dAB is (2*NV x 3*NV) column-major per timestep; recover row-major.
+        return flat.reshape(B, 3 * nv, 2 * nv).transpose(0, 2, 1)
+
 
 # ─── public API ─────────────────────────────────────────────────────────────
 
