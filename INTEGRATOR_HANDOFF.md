@@ -129,11 +129,13 @@ In rough priority order:
 1. **Floating FD-sanity test.** `test_integrator_gradient_fd_sanity.py` is
    fixed-base only; floating needs an SE(3) log for the tangent-space
    perturbation of the q columns.
-2. **Integrator VALUE-path spill (optional).** Only the gradient kernel is
-   tier-spillable so far (its `s_D_qdd_stage` dominates). The value kernel's
-   scaffold (`s_stage_*`) is small and fits everywhere, so it stays full-smem;
-   add the same `d_workspace` plumbing only if a big robot's value path ever
-   overflows.
+2. **Integrator VALUE-path spill — DONE 2026-05-23.** The value kernel now
+   threads the FD inner's `MINV_F_IN_SMEM` lever: at LITE/MINIMAL (and PERF on
+   h1_2) the Minv F-region (`6·NV²`) spills to `d_workspace`, keeping the hot FD
+   path in smem. h1_2 fixed/floating drop from 103/124 KB to ~41/46 KB.
+   `integrator_kernel` gained `unsigned char *d_workspace` (2nd arg);
+   `INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T, TIER>` is tier-aware. Validated:
+   iiwa14 equivalence passes at TIER_MINIMAL.
 3. **Bench the integrator algos — DONE 2026-05-23.** `integrator`,
    `integrator_gradient`, and `integrator_with_gradient` are now timed by the
    bench: `PER_ALGO_SPECS` rows (per-algo path) + measures in the monolithic
@@ -183,14 +185,18 @@ extra-buffer, hence the per-tier-body approach rather than a single placement bo
   remains the s_D_qdd_stage smem spill. Verified: compiles under rdc at all 3
   tiers (go2-floating) + MINIMAL equivalence still passes (iiwa14). The earlier
   "verified at MINIMAL" only covered the inlined (no-rdc) equivalence build.
-- **Integrator smem overflow on big floating robots (OPEN).** The sweep showed
-  `integrator_gradient` requesting ~228 KB (g1_floating) and `integrator` ~103 KB
-  (h1_2_fixed) — both exceed the sm_120 ~101 KB cap. The kernels now skip
-  registration gracefully (init_grid_kernel_attrs guards every kernel by
-  smem<=target as of 2026-05-23) instead of aborting, so they don't crash the
-  binary — but they can't actually RUN on those robots until the value/gradient
-  scaffold gets a real per-tier smem spill (the gradient spills s_D_qdd_stage but
-  the rest of its scaffold + the value kernel don't). Tracked as follow-up.
+- **Integrator smem overflow on big floating robots — RESOLVED 2026-05-23.**
+  Both kernels now have surgical per-tier spill ladders (see §4 items 2-3 and
+  `docs/source/user_guide/concepts/resource_tier_system.rst` → "Integrator
+  surgical spill"). Value: spills the Minv F-region. Gradient: 4-rung ladder
+  (Dqdd → +dAB+id_du-selective → +whole FD-grad inner) composing the existing
+  fd_du levers. All robots/tiers now fit the sm_120 ~100 KB cap — g1_floating
+  PERF keeps the hot path in smem via the selective rung; h1_2 (both) use the
+  whole-inner rung (the FD-grad inner alone is 160-441 KB, physically can't fit
+  smem, so the spill is forced). Verified: all integrator kernels compile at all
+  tiers (incl. g1_floating selective rung + h1_2 whole-inner); iiwa14 numerical
+  equivalence passes at TIER_MINIMAL (value F-spill + gradient whole-inner).
+  g1_floating numerical equivalence (selective rung) in progress.
 
 ---
 

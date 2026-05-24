@@ -1135,7 +1135,7 @@ static void launch_integrator_kernel_jax(cudaStream_t stream, int batch, float d
     grid::integrator_kernel<T, IT><<<
         g_block_dimms, g_thread_dimms,
         grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
-            g_data->d_x_kp1, g_data->d_q_qd_u, stride,
+            g_data->d_x_kp1, g_data->d_workspace, g_data->d_q_qd_u, stride,
             g_robot, /*gravity=*/static_cast<T>(gravity), static_cast<T>(dt), batch);
 }
 template <grid::IntegratorType IT>

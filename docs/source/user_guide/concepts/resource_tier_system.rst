@@ -2,9 +2,12 @@ Resource-Tier System (v2.0)
 ============================
 
 **Status**: shipped in v2.0 + Phase 3a/b/c/d/e spill machinery + L2 pinning
-default-on. Inner-controlled placement refactor (below) implemented for
-fdsva_so/Minv/FD/ABA/EE_GRAD — pending numerical-equivalence testing. One
-surgical-spill follow-up deferred (IDSVA_SO_B/W; see "Immediate next steps").
+default-on. Inner-controlled placement refactor (below) implemented and
+numerically validated for fdsva_so/Minv/FD/ABA/EE_GRAD. Per-tier surgical
+spill now also lands for **idsva_so (body + world frame)** and the
+**time-integrator value + gradient** kernels — see "Integrator surgical spill"
+below. The global scratch arena is named ``d_workspace`` (device memory);
+earlier revisions of this doc called it ``d_workspace``.
 
 **Audience**: inline-CUDA users (``#include "grid.cuh"`` from their own
 kernel). The Python wrappers (``grid_rbd.RobotHandle``,
@@ -71,7 +74,7 @@ entirely in the bottom one:
   in shared memory vs. global memory, how scratch is laid out, what gets
   spilled under resource pressure, and what gets recomputed vs. cached. It
   takes the caller's input/output pointers plus a shared scratch arena
-  (``s_temp``) and a global scratch arena (``s_workspace``), and decides
+  (``s_temp``) and a global scratch arena (``d_workspace``), and decides
   internally — via a compile-time placement parameter — which buffers go
   where. Nothing above this layer needs to understand the algorithm's memory
   layout.
@@ -160,7 +163,7 @@ can pick a profile that fits *their* outer kernel's pressure.
 
 **Placement is the inner's job, not the kernel's.** Each inline-callable inner
 is keyed on a placement template parameter and chooses ``s_temp`` (shared) vs.
-``s_workspace`` (global) for each spillable buffer *at the top of the
+``d_workspace`` (global) for each spillable buffer *at the top of the
 function*. The caller (kernel, device wrapper, or your own code) is a thin
 shim: it sizes both arenas from the exposed constants, hands both pointers in,
 and passes the placement. A surgical-spill change — moving one more buffer to
@@ -193,6 +196,12 @@ existing call sites are unchanged):
    * - ``fdsva_so_inner``
      - ``bool SCRATCH_IN_SMEM``
      - the 4·NV³ contraction scratch
+   * - ``integrator_inner``
+     - ``bool MINV_F_IN_SMEM``
+     - the FD inner's Minv F-region (value path); see "Integrator surgical spill"
+   * - ``integrator_gradient_kernel``
+     - per-tier rung (Dqdd / dAB / inner level)
+     - composes id_du selective/global_temp + spills Dqdd & the dAB output
    * - ``*_device`` (id_du / fd_du / idsva_so / d2ee)
      - ``int RESOURCE_TIER``
      - whole inner ``s_temp`` arena (via the ``tier_workspace_expr`` helper)
@@ -207,7 +216,7 @@ shared-vs-L2 latency gap, not the shared-vs-HBM gap.
 
 **Spill levels and the per-robot tier→level map.** Each algorithm has a fixed
 *menu* of spill levels (level 0 = everything in shared memory; higher levels
-progressively move buffers to ``s_workspace``). Which level a given
+progressively move buffers to ``d_workspace``). Which level a given
 ``RESOURCE_TIER`` maps to is decided **at code-generation time, per robot**,
 based on what actually fits the smem budget for that robot. Small robots
 (e.g. iiwa14, go2) keep every tier at level 0 — there is nothing to spill, so
@@ -264,9 +273,9 @@ Rule of thumb for an inline call:
 #. Reserve ``..._INNER_SMEM_BYTES<T, placement>()`` in your block's dynamic
    shared memory for the primitive's ``s_temp``.
 #. ``cudaMalloc`` (once) ``..._INNER_WORKSPACE_BYTES<T, placement>()`` per
-   concurrently-resident block for ``s_workspace`` (0 when the placement keeps
+   concurrently-resident block for ``d_workspace`` (0 when the placement keeps
    everything in shared). Pin it in L2 if you spill (see ``grid_begin_l2_persisting``).
-#. Call ``<algo>_inner<T, placement>(..., s_temp, s_workspace, ...)``.
+#. Call ``<algo>_inner<T, placement>(..., s_temp, d_workspace, ...)``.
 
 **Testing status of the refactor**: all five converted algos
 (fdsva_so / Minv / FD / ABA / EE_GRAD) compile clean at all three tiers across
@@ -275,73 +284,78 @@ passes. Numerical equivalence (``cuda_equivalence``) and the per-tier perf
 sweep are pending a joint testing session — the Minv/FD arena layout changed
 (no_F-then-F instead of F-then-no_F), so equivalence is the gating check.
 
-Immediate next steps
----------------------
+Integrator surgical spill (value + gradient)
+--------------------------------------------
 
-One algorithm still needs per-algorithm surgical-spill design before
-it can be unlocked at h1_2-scale humanoids:
+The time-integrator kernels follow the same "spill the cold buffers, keep the
+hot path in shared memory" philosophy. Both compose **existing** placement
+levers from their callees rather than introducing a whole-arena dump.
 
-1. **IDSVA_SO_B / IDSVA_SO_W (Phase 3f)** — overflow at 146-168 KB
-   on h1_2. ``use_global_output`` (Level 1) already spills the 4*NV³
-   output tensor; ``grav_full_spill`` (Level 2, floating-only) already
-   spills the d2X/d2a/d2f gravity-Hessian helper tensors. What's left
-   is the recursion-hot inner band (per-body 6x6 spatial matrices,
-   per-velocity 6-vectors). A naïve full-band spill (analogous to
-   ABA Phase 3c) would be a perf cliff because the band is touched
-   every BFS step — needs per-sub-buffer hot/cold analysis to find a
-   cold/write-once slice that's safe to spill.
+**Value path** (``integrator_kernel``). The kernel runs forward dynamics per
+stage; its dominant inner buffer is the FD inner's Minv F-region (``6·NV²``).
+It threads the existing ``forward_dynamics_inner<T, MINV_F_IN_SMEM>`` lever:
 
-   Entry points for the analysis:
-   ``GRiDCodeGenerator/algorithms/_idsva_so.py:gen_idsva_so_body_frame_inner_temp_mem_size``
-   shows the smem layout (``body_mat_count``, ``body_vec_count``,
-   ``vel_vec_count``, ``vel_mat_count``); the inner function body
-   (``gen_idsva_so_body_frame_inner``) is where access patterns live.
+* Level 0 (PERF on robots that fit): F stays in ``s_temp`` (shared).
+* Level 1 (LITE/MINIMAL, or PERF on h1_2): F spills to ``d_workspace`` while the
+  hot FD path stays in smem. The overflow on h1_2 is only a few KB, so this
+  single surgical lever is enough — h1_2 fixed/floating drop from 103/124 KB to
+  ~41/46 KB. ``integrator_kernel`` gained ``unsigned char *d_workspace`` as its
+  2nd argument; ``INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T, TIER>`` and
+  ``INTEGRATOR_MINV_F_IN_SMEM<TIER>`` are tier-aware.
 
-What's *not* a concern (already addressed by L2 pinning):
+**Gradient path** (``integrator_gradient_kernel`` / ``..._with_x_kp1``). A
+4-rung ladder, least-spill first, spilling only cold / output / coalesced
+matrices to **distinct, non-aliasing** ``d_workspace`` sub-offsets (the
+gradient never runs concurrently with id_du/fd_du/fdsva_so, so it reuses those
+sections):
 
-* Phase 3a/3b/3c spilled buffers (``s_F``, ABA's 140*NJ band) ARE
-  recursion-hot, but L2 pinning (default-on) means access is
-  ~smem→L2 cost, not ~smem→HBM. The perf cost relative to keeping
-  them in smem is bounded by the L2-vs-shared latency gap. Measure
-  via the post-Phase-3 baseline sweep before treating as a problem.
+.. list-table:: Integrator-gradient spill ladder
+   :header-rows: 1
+   :widths: 8 52 40
 
-* Phase 3e (FDSVA_SO ``s_df_du``, ``s_Minv``) is more naturally
-  output-like (write-then-read in disjoint phases) — less perf-
-  sensitive than 3a-3c.
+   * - Rung
+     - Spills (all in ``d_workspace``)
+     - Example tier/robot
+   * - 0
+     - nothing (full smem)
+     - small robots at PERF
+   * - 1
+     - ``s_D_qdd_stage`` (``max_stages·NV·3NV``)
+     - g1_fixed PERF
+   * - 2
+     - + ``s_dAB`` output (``2NV·3NV``) + id_du **selective** (da_df band only;
+       the FD-grad inner stays in smem, just smaller)
+     - g1_floating PERF — hot path stays in smem
+   * - 3
+     - + the **whole** FD-grad inner ``s_temp`` (id_du global_temp)
+     - h1_2 fixed/floating — the inner is 160-441 KB, physically can't fit a
+       100 KB box, so this is unavoidable
 
-Immediate next steps
----------------------
+The sub-offsets are ``GRID_INTEGRATOR_DU_DAB_OFFSET_BYTES`` and
+``GRID_INTEGRATOR_DU_INNER_OFFSET_BYTES`` (Dqdd sits at offset 0); the
+placement per tier is exposed via ``INTEGRATOR_DU_{D_QDD,DAB}_IN_SMEM<TIER>``
+and ``INTEGRATOR_DU_INNER_LEVEL<TIER>``. The gradient scaffold that feeds the
+final dAB assembly (``s_dc_du`` / ``s_vaf`` / ``s_Minv``) always stays in smem.
 
-One algorithm still needs per-algorithm surgical-spill design before
-it can be unlocked at h1_2-scale humanoids:
+**Why a whole-inner rung exists here but not for, e.g., the value path.** For
+the value path the overflow is tiny, so one surgical lever closes it. For the
+gradient on the biggest *floating* humanoid (h1_2), the FD-gradient inner
+scratch *alone* exceeds the per-block smem cap, so some of the hot path must go
+to L2-pinned global at MINIMAL — there is no surgical decomposition that keeps
+it in smem. Rung 3 is therefore a physically-forced backstop used only where
+rung 2 can't fit, not the default.
 
-1. **IDSVA_SO_B / IDSVA_SO_W (Phase 3f)** — overflow at 146-168 KB
-   on h1_2. ``use_global_output`` (Level 1) already spills the 4*NV³
-   output tensor; ``grav_full_spill`` (Level 2, floating-only) already
-   spills the d2X/d2a/d2f gravity-Hessian helper tensors. What's left
-   is the recursion-hot inner band (per-body 6x6 spatial matrices,
-   per-velocity 6-vectors). A naïve full-band spill (analogous to
-   ABA Phase 3c) would be a perf cliff because the band is touched
-   every BFS step — needs per-sub-buffer hot/cold analysis to find a
-   cold/write-once slice that's safe to spill.
+idsva_so (body + world frame) — done
+------------------------------------
 
-   Entry points for the analysis:
-   ``GRiDCodeGenerator/algorithms/_idsva_so.py:gen_idsva_so_body_frame_inner_temp_mem_size``
-   shows the smem layout (``body_mat_count``, ``body_vec_count``,
-   ``vel_vec_count``, ``vel_mat_count``); the inner function body
-   (``gen_idsva_so_body_frame_inner``) is where access patterns live.
-
-What's *not* a concern (already addressed by L2 pinning):
-
-* Phase 3a/3b/3c spilled buffers (``s_F``, ABA's 140*NJ band) ARE
-  recursion-hot, but L2 pinning (default-on) means access is
-  ~smem→L2 cost, not ~smem→HBM. The perf cost relative to keeping
-  them in smem is bounded by the L2-vs-shared latency gap. Measure
-  via the post-Phase-3 baseline sweep before treating as a problem.
-
-* Phase 3e (FDSVA_SO ``s_df_du``, ``s_Minv``) is more naturally
-  output-like (write-then-read in disjoint phases) — less perf-
-  sensitive than 3a-3c.
+The IDSVA-SO surgical-spill follow-up that earlier revisions of this doc listed
+as deferred is **implemented**: both frames use a ``select_shared_tier_3way``
+ladder. Body rungs are {full, output→global, +BC→global (surgical),
++whole-s_temp→global}; world rungs are {full, output→global,
++whole-s_temp→global}. The fixed body inner is monolithic/aliased, so the
+surgical BC spill is small relative to a humanoid's smem gap and the whole-arena
+rung is what makes h1_2 fit (at a perf cost); a finer hot/cold de-alias of that
+inner remains a tracked refactor (``docs/idsva_so_inner_refactor_notes.md``).
 
 What the tier system is
 ------------------------
@@ -370,14 +384,14 @@ The three tiers:
    * - ``TIER_LITE``
      - ``min(2*SUGGESTED, 768)``
      - ~85 regs/thread
-     - **Currently same as MINIMAL**: inner scratch routes to caller-
-       provided ``s_workspace``. Distinct from MINIMAL only on the
-       register axis. **Planned upgrade**: partial-spill with 48 KB
-       smem target (see "Deferred work").
+     - Picks the lowest spill rung that fits the ~48 KB LITE smem target
+       (``cuda_target_lite_shared_mem_bytes``), clamped to be ≥ the PERF
+       rung. On robots/algos with multi-rung ladders this is now a
+       genuinely intermediate spill level, not an alias of MINIMAL.
    * - ``TIER_MINIMAL``
      - ``1024`` (hardware cap)
      - ~64 regs/thread
-     - Inner scratch routes entirely to ``s_workspace``. Smallest
+     - Inner scratch routes entirely to ``d_workspace``. Smallest
        smem footprint; maximum block-size flexibility for tight
        outer kernels.
 
@@ -392,24 +406,24 @@ What's plumbed today
 The tier knob is exposed at the kernel level on every emitted
 ``*_kernel<T, RESOURCE_TIER>``. At the inline-CUDA ``_device`` /
 ``_inner`` level, these functions accept ``RESOURCE_TIER`` + a
-caller-provided ``T *s_workspace`` argument:
+caller-provided ``T *d_workspace`` argument:
 
 * ``fdsva_so_inner<T, RESOURCE_TIER>(s_df2, s_idsva_so, s_Minv,
-  s_df_du, s_XImats, s_temp, s_workspace, gravity)`` — 4*nv³ inner
-  scratch routes between ``s_temp`` (PERF) and ``s_workspace``
+  s_df_du, s_XImats, s_temp, d_workspace, gravity)`` — 4*nv³ inner
+  scratch routes between ``s_temp`` (PERF) and ``d_workspace``
   (LITE/MINIMAL).
 * ``forward_dynamics_gradient_device<T, RESOURCE_TIER>(s_df_du,
   s_q, s_qd, [s_qdd, s_Minv | s_u], d_robotModel, gravity,
-  s_workspace)`` — whole s_temp arena routes per tier.
+  d_workspace)`` — whole s_temp arena routes per tier.
 * ``inverse_dynamics_gradient_device<T, RESOURCE_TIER>(s_dc_du,
-  s_q, s_qd, [s_qdd], d_robotModel, gravity, s_workspace)`` — whole
+  s_q, s_qd, [s_qdd], d_robotModel, gravity, d_workspace)`` — whole
   s_temp arena routes per tier.
 * ``end_effector_pose_gradient_hessian_device<T, RESOURCE_TIER>
-  (s_d2eePos, s_deePos, s_q, d_robotModel, s_workspace)`` —
+  (s_d2eePos, s_deePos, s_q, d_robotModel, d_workspace)`` —
   ``s_d2eeTemp`` slot (the 2*16*num_ees*n² portion) routes per tier;
   inner_no_d2 stays in smem at all tiers.
 * ``idsva_so_device<T, RESOURCE_TIER>(s_idsva_so, s_q, s_qd, s_qdd,
-  d_robotModel, gravity, s_workspace)`` — codegen-time frame
+  d_robotModel, gravity, d_workspace)`` — codegen-time frame
   dispatcher: ``body_frame_inner`` for fixed-base, ``world_frame_inner``
   for floating-base. Inner temp arena routes per tier.
 
@@ -421,7 +435,7 @@ buffers:
    template <typename T, int TIER = TIER_PERF>
    constexpr size_t FDSVA_SO_INNER_SMEM_BYTES();           // bytes for s_temp at TIER
    template <typename T, int TIER = TIER_PERF>
-   constexpr size_t FDSVA_SO_INNER_WORKSPACE_BYTES();      // bytes for s_workspace at TIER
+   constexpr size_t FDSVA_SO_INNER_WORKSPACE_BYTES();      // bytes for d_workspace at TIER
 
    // Same pattern: FD_DU_DEVICE_INLINE_*, ID_DU_DEVICE_INLINE_*,
    //               D2EE_DEVICE_INLINE_*, IDSVA_SO_DEVICE_INLINE_*
@@ -448,7 +462,7 @@ Inline-CUDA usage example::
        grid::fdsva_so_inner<T, grid::TIER_MINIMAL>(
            s_df2, s_idsva_so, s_Minv, s_df_du, s_XImats,
            /* s_temp */ nullptr,       // unused at MINIMAL
-           /* s_workspace */ workspace, // global mem
+           /* d_workspace */ workspace, // global mem
            gravity);
    }
 
@@ -458,7 +472,7 @@ Design choices
 **Why not three completely independent bodies per tier?**
 Numerical equivalence: the math is identical at every tier;
 ``if constexpr`` branches only differ in pointer routing
-(s_temp vs s_workspace). One body per algo, with up to two
+(s_temp vs d_workspace). One body per algo, with up to two
 pointer-routing branches. Less code duplication, fewer drift bugs.
 
 **Why is JAX/Python locked to TIER_PERF?**
@@ -493,11 +507,13 @@ What's in the framework but not yet exercised at LITE-distinct-from-MINIMAL:
   is binary (PERF in smem / non-PERF in workspace). The follow-up
   extends it to ternary picks.
 
-In-flight humanoid follow-up (``humanoid-tier-spill`` branch)
--------------------------------------------------------------
+Humanoid-scale spill (``humanoid-tier-spill``, landed)
+------------------------------------------------------
 
-The next bundle, branching off ``modernizing-tests``, is staged in three
-chunks:
+This bundle (branched off ``modernizing-tests``) brought every overflowing
+kernel under the sm_120 ~100 KB cap on humanoid-scale robots. It was staged in
+chunks; all are now landed (the integrator + idsva_so surgical spills described
+above were the final pieces):
 
 **Chunk 1: bench harness h1_2 enablement + failure tolerance** (shipped)
   - ``h1_2`` (Unitree H1.2, NV=51 fixed, 57 floating) added to the
@@ -608,88 +624,30 @@ For robots where picks collapse, the kernel emits a single body (current
 behavior, byte-identical to pre-Phase-2b). For divergent rows, the kernel
 emits 2 or 3 specialized bodies inside ``if constexpr`` branches.
 
-**Chunk 4: new spill levels for h1_2-overflowing kernels** (deferred — design fixed)
-  - With Chunk 1's failure tolerance, h1_2's overflowing kernels (FDSVA_SO,
-    IDSVA_SO_B, IDSVA_SO_W, EE_POSE_GRAD, Minv/FD/ABA on floating-base)
-    SKIP cleanly at runtime. To actually *run* them, the codegen needs
-    new spill levels.
+**Chunk 4: new spill levels for h1_2-overflowing kernels** (landed)
+  All h1_2-overflowing kernels now have surgical spill ladders that bring them
+  under the sm_120 ~100 KB cap. The design that landed matches the v2.0
+  philosophy — push the cold / output / coalesced buffers first, keep the hot
+  recursion in smem, and fall back to a whole-inner spill only where the inner
+  alone exceeds the cap (physically forced, e.g. fdsva_so / idsva_so / the
+  integrator gradient on h1_2). ``select_shared_tier_3way`` picks the lowest
+  fitting rung per tier. Per-algo specifics:
 
-  **Design — two-level surgical + full per algo** (matches the v2.0 tier
-  philosophy: surgical wins are the default, full-spill is a backstop):
+  * **Minv / FD**: split the ``6·NV²`` ``s_F`` region out as a separate
+    ``s_F`` / ``d_workspace`` parameter (Level 1 surgical). On h1_2_fixed this
+    alone drops Minv 100 KB → ~38 KB.
+  * **ABA**: the 140·NJ recursion band has no clean sub-split, so its Level 1
+    redirects the whole inner ``s_temp`` to L2-pinned workspace.
+  * **EE_POSE_GRAD / D2EE / id_du / fd_du / fdsva_so**: 3-6 level ladders
+    spilling inner_temp, then the output, then (fdsva_so) ``s_df_du`` / ``s_Minv``.
+  * **idsva_so (body + world)**: ladders spilling the 4·NV³ output, then BC
+    (body, surgical), then the whole inner. See "idsva_so — done" above.
+  * **integrator (value + gradient)**: see "Integrator surgical spill" above.
 
-  * **Level 1 — surgical**: push the *single largest contributor* in
-    ``inner_temp`` to L2-pinned workspace, keep everything else (and small
-    hot buffers) in shared memory. For ``direct_minv`` on h1_2_fixed the
-    target is ``s_F`` (6\*nv² = ~62 KB on NV=51), which alone is enough to
-    drop Minv from 100 KB to ~38 KB and clear the 99 KB sm_120 opt-in cap.
-    The pattern repeats for ``forward_dynamics`` (its ``s_F``-equivalent
-    inner buffer), ``aba`` (the 12\*NJ partial-tree storage), and
-    ``ee_pose_gradient`` (per-EE Jacobian column workspace).
-  * **Level 2 — full-spill backstop**: push the entire inner-temp arena
-    to workspace. Coarse and slow but guaranteed-correct fallback when
-    Level 1 still overflows (e.g. ``fdsva_so`` on h1_2_floating at 244 KB
-    needs more than just the largest buffer).
-  * The codegen's ``select_shared_tier_3way`` picks the lowest spill level
-    fitting each tier's target: PERF prefers Level 0 (no spill), then
-    Level 1; LITE adds Level 1 at 48 KB target; MINIMAL is always
-    most-spill.
-
-  **L2 cache pinning** is on-by-default whenever any kernel in the
-  generated header is at Level ≥ 1: workspace bytes get read/written
-  every timestep and are HBM-cold without pinning. The codegen flips
-  ``GRID_CUDA_ENABLE_L2_PERSISTING`` to 1 in the emitted header when any
-  algo has ``use_workspace_temp`` (or surgical equivalent) set; the
-  existing ``grid_begin_l2_persisting`` helper covers the runtime mechanics.
-
-  **Implementation cost per algo** (estimate from Minv inspection):
-
-  * ``gen_direct_minv_inner`` has 21 ``FOffset`` references; surgical
-    refactor splits ``s_F`` out as a separate parameter (default-routes
-    to ``&s_temp[FOffset]`` when not spilled, to a workspace pointer
-    when spilled). Other offsets re-base to 0.
-  * Every caller that composes ``direct_minv_inner`` (forward dynamics,
-    forward_dynamics_gradient, fdsva_so) also passes the new ``s_F``
-    pointer.
-  * ``gen_direct_minv_inner_temp_mem_size`` splits into
-    ``gen_direct_minv_inner_temp_mem_size`` (rest of s_temp, minus F) and
-    ``gen_direct_minv_inner_F_size`` (the F-region size).
-  * ``GRiDCodeGenerator.py`` arena math + 3-way pick tables for Minv.
-  * Tier-aware ``MINV_DYNAMIC_SHARED_MEM_BYTES<T, TIER>`` constexpr
-    reports the per-tier smem footprint.
-  * Workspace sizing in ``GRID_WORKSPACE_BYTES_PER_TIMESTEP`` extended to
-    cover Minv's F-region when Level 1 active.
-
-  Per algo this is ~150 lines of careful refactor + smoke + nvcc compile
-  test on h1_2. For 5-6 h1_2-overflowing algos that's multi-day work
-  best done in a focused follow-up session, not bundled with Phase 1-2b.
-
-**Phase 3f IDSVA_SO_B + W — surgical spill needs design (no clean win)**
-
-The IDSVA_SO_B/W kernels overflow on h1_2 (146-168 KB) but the design
-needs to be surgical for it to be worth landing:
-
-* **Already spilled at Level 1** (``use_global_output``): the 4*NV³ output
-  tensor (``s_idsva_so``). Write-once + read-at-end → ideal spill target.
-* **Already spilled at Level 2** (floating-base only, ``grav_full_spill``):
-  the d2X/d2a/d2f gravity-Hessian helper tensors. Moderate access.
-* **What's left in smem** is the recursion-hot inner working set
-  (per-body 6x6 spatial matrices, per-velocity 6-vectors, etc.) — every
-  step of the BFS recursion touches multiple sub-buffers per thread.
-  *Pushing this band to workspace is a perf cliff*, not a surgical spill.
-
-The naïve "redirect entire ``s_temp`` to L2-pinned workspace" approach
-(analogous to ABA Phase 3c) would tank perf on every divergent (algo, robot)
-cell — and ABA only got away with it because its band is small relative
-to its dispatch overhead. For IDSVA_SO_B the inner is the main cost.
-
-**Surgical Phase 3f needs**: identify which sub-buffers in the IDSVA_SO_B
-inner are cold-or-write-once vs. recursion-hot. Then split a separate
-parameter for the cold ones (similar to ``s_F``/``s_minv_F`` in Phase 3a/3b).
-
-This is a per-algorithm design exercise requiring access to the inner's
-recursion structure. **Deferred to a focused next session** until we have
-that analysis — for now h1_2 IDSVA_SO_B/W SKIP cleanly via the
-failure-tolerant bench (Phase 1).
+  Where a surgical sub-split exists it is preferred; the whole-inner rung is the
+  guaranteed-fit backstop. The remaining finer-grained win (de-aliasing the
+  monolithic idsva_so / fdsva_so inners so even MINIMAL keeps more of the hot
+  band in smem) is tracked in ``docs/idsva_so_inner_refactor_notes.md``.
 
 **L2 cache pinning (default-ON in v2.0)**
 
@@ -797,107 +755,12 @@ Status (commits ``da831dd`` + ``0795442``):
   and FD inner. Both call sites updated to pass ``minv_s_F`` (the local
   slot at the start of ``s_temp``) through to the new signatures.
 
-**Phase 3a — Minv surgical spill (concrete implementation plan, executed above)**
-
-The Minv inner function has ~15 references to ``s_temp[FOffset + X]`` across
-the backward pass (lines ~71, 173, 212-216, 226), debug prints (314, 362,
-412, 438, 457), and the forward pass (402-404, 422, 448). All other
-references (IAOffset, UOffset, DinvOffset, IaOffset, IaTempOffset) are
-self-contained within s_temp.
-
-**Implementation steps (in order, each independently testable):**
-
-1. **Refactor ``gen_direct_minv_inner`` signature**:
-
-   .. code-block:: python
-
-      # Old:
-      func_def_start = "void direct_minv_inner(T *s_Minv, const T *s_q, "
-      # New:
-      func_def_start = "void direct_minv_inner(T *s_Minv, T *s_F, const T *s_q, "
-      # And add template <typename T, bool SPILL_F = false> at the top.
-
-2. **Unified pointer-alias setup at top of body** (replaces lines 52-60):
-
-   .. code-block:: cpp
-
-      // Before existing offset declarations, emit:
-      constexpr int F_in_temp = SPILL_F ? 0 : 6 * NUM_VEL * NUM_VEL;
-      // Offsets re-base to 0 when F is spilled out
-      // (Existing FOffset/IAOffset/UOffset constants get adjusted accordingly)
-
-   In Python (codegen-side):
-
-   .. code-block:: python
-
-      FOffset = 0  # always — F refs use F_ptr below
-      IAOffset = 0 if spill_F else 6*n*n
-      UOffset = IAOffset + 36*n
-      # ... etc, all shifted
-
-3. **Body F-reference substitution** (~15 sites):
-   Replace ``s_temp[FOffset + X]`` → ``s_F[X]`` everywhere F is accessed.
-   The non-F references (IA, U, Dinv, Ia, IaTemp) automatically pick up
-   the new offsets via the Python variables — no body edit needed.
-
-4. **Update ``gen_direct_minv_inner_function_call``**:
-   Add ``s_F_name`` parameter (default ``"s_F"``), thread it through the
-   emitted call site.
-
-5. **Update ``gen_direct_minv_inner_temp_mem_size``**:
-   Return ``6*n*n + 36*n + 6*n + d_inv_count + 36*2*max_bfs_width``
-   (current), OR the same minus 6*n*n when SPILL_F. Add a new helper
-   ``gen_direct_minv_inner_F_size()`` returning ``6*n*n``.
-
-6. **Update ``gen_direct_minv_kernel``** to dispatch on the 3-way
-   ``minv_spill_tier_3way`` pick (Level 0 = full smem; Level 1 = surgical
-   F-to-workspace). At Level 1: allocate ``s_F = reinterpret_cast<T *>(&d_workspace[...])``
-   and ``s_temp`` arena from smem (sized for everything except F).
-
-7. **Update callers**: ``gen_forward_dynamics_inner`` (line 99),
-   ``gen_forward_dynamics_gradient_inner_python`` (line 18 of
-   ``_forward_dynamics_gradient.py``), and the 3 calls in
-   ``_fdsva_so.py`` (lines 265, 329, 360). Each passes ``s_F = &s_temp[0]``
-   so their existing smem layout is preserved (Level 0 behavior).
-
-8. **GRiDCodeGenerator.py arena math**:
-
-   .. code-block:: python
-
-      _minv_inner_temp_count = self.gen_direct_minv_inner_temp_mem_size()
-      _minv_F_count = self.gen_direct_minv_inner_F_size()  # = 6*n*n
-      # Level 0: full smem
-      _minv_t_count_full = n + n*n + _minv_F_count + _minv_inner_temp_count + XI_size
-      # Level 1: F to workspace
-      _minv_t_count_surgical = n + n*n + _minv_inner_temp_count + XI_size
-      self.minv_spill_tier_3way = select_shared_tier_3way(_minv_t_count_full, _minv_t_count_surgical)
-
-9. **Tier-aware ``MINV_DYNAMIC_SHARED_MEM_BYTES<T, TIER>``**:
-   Emit if-constexpr branch picking the per-tier t_count.
-
-10. **Workspace sizing**: extend ``GRID_WORKSPACE_BYTES_PER_TIMESTEP`` to
-    account for Minv-F when ``self.minv_spill_tier_3way`` has any
-    non-zero pick.
-
-11. **L2 pinning default-on**: in ``GRiDCodeGenerator.py``, when any algo
-    has spill flag set, flip the ``#define GRID_CUDA_ENABLE_L2_PERSISTING``
-    default to 1 in the emitted header.
-
-12. **Smoke + nvcc compile** on h1_2_fixed: ``Minv`` should compile at
-    all 3 tiers; TIER_PERF arena bytes should drop from ~100 KB to ~38 KB
-    (= subtract 6 × 51² × sizeof(float) = ~62 KB).
-
-13. **Numerical correctness**: extend
-    ``test/pinocchio_equivalents/test_direct_minv_equivalence.py`` to
-    cover the per-tier paths on h1_2_fixed (PERF only, since the
-    Python wrapper is locked to PERF; inline-CUDA users at LITE/MINIMAL
-    are covered by the smoke-only "compiles" guarantee until a
-    dedicated test_resource_tiers harness exists).
-
-Once Phase 3a is in, Phase 3b (FD), 3c (ABA), 3d (EE_POSE_GRAD), and
-3e (FDSVA_SO level 4) follow the same pattern — each per-algo identifies
-its largest inner-temp buffer, splits it as a separate parameter, and
-plumbs through callers.
+The surgical-spill pattern each of these algos used (split the largest
+inner-temp buffer — e.g. Minv's ``s_F`` — into a separate ``s_F`` /
+``d_workspace`` parameter, re-base the other offsets to 0, and pick the
+placement per tier via ``select_shared_tier_3way``) is the same one the
+integrator and idsva_so now follow. See the per-algo ``gen_*`` functions in
+``GRiDCodeGenerator/algorithms/`` for the concrete signatures.
 
 Deferred work — LITE 48 KB smem target
 ---------------------------------------
@@ -955,18 +818,15 @@ streaming, recompute-vs-cache trade-offs in inner functions, or
 algorithmic recursion refactoring). When that work happens, the
 LITE 48 KB target falls out as a natural intermediate level.
 
-Inline-CUDA inner functions still needing tier plumbing
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Remaining inner-plumbing refinement
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* ``idsva_so_body_frame_inner`` and ``idsva_so_world_frame_inner`` —
-  caller currently controls ``s_temp`` location directly (no
-  template). For humanoid use, callers may want a partial-spill
-  knob the way ``fdsva_so_inner`` has one. Will need symmetric
-  ``s_workspace`` plumbing.
-* Some intermediates inside the SO body emitters that have
-  heavily-aliased lifetimes — partial spill requires lifetime
-  analysis to decide which buffers can safely go to workspace
-  during which phase.
+``idsva_so_body_frame_inner`` / ``idsva_so_world_frame_inner`` now take a
+unified ``(s_temp, d_workspace)`` signature and spill per tier (whole-arena at
+the deepest rung). The remaining refinement is a *finer-grained* partial spill:
+the SO body emitters have heavily-aliased intermediate lifetimes, so keeping
+more of the hot band in smem even at MINIMAL needs per-sub-buffer lifetime
+analysis. Tracked in ``docs/idsva_so_inner_refactor_notes.md``.
 
 How it relates to other v2.0 work
 ----------------------------------
