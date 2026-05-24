@@ -251,6 +251,11 @@ Compiled 2026-05-23. Grouped by theme; rough priority within each.
 - **ABA whole-arena spill → surgical retrofit**: ABA Level 1 dumps its entire
   140·NJ inner band to global; give it a surgical sub-split like Minv-F.
 
+### Perf investigations (from the 2026-05-24 tier sweep)
+- **`ee_pose_gradient` FLOATING is a ~535µs batch-N=256 outlier** (vs ~8µs fixed, ~1µs Pinocchio) — the floating world-frame Jacobian is on a slow path. Real perf bug; investigate the floating EE-Jacobian codegen.
+- **GRiD loses to Pinocchio at batch N=256 on some core-dynamics cells** (e.g. FD g1-fixed 136 vs 108; ABA go2-floating 127 vs 72, iiwa-floating 108 vs 100). Expected GRiD-on-GPU to beat Pinocchio-CPU at batch — investigate why FD/ABA/CRBA/Minv underperform on those cells (launch overhead? occupancy? per-block work).
+- **Document second-order speedups vs Pinocchio**: the report currently shows GRiD-only for IDSVA_SO/FDSVA_SO. Pinocchio's CPU second-order is ms-scale (huge GRiD speedup) — wire the Pinocchio IDSVA_SO/FDSVA_SO baseline measurement + render its column so the speedup is documented.
+
 ### C. Correctness / coverage
 - **Remaining warnings sweep** — RBDReference `mxS` is fixed and the Python
   reference path is now DeprecationWarning-clean (verified). Still want a pass
