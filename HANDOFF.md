@@ -137,9 +137,12 @@ Fix commits: GRiDCodeGenerator `501501b`, RBDReference `df76001`.
 
 In rough priority order:
 
-1. **Floating FD-sanity test.** `test_integrator_gradient_fd_sanity.py` is
-   fixed-base only; floating needs an SE(3) log for the tangent-space
-   perturbation of the q columns.
+1. **Floating FD-sanity test — WON'T DO (covered elsewhere).** A floating
+   version of `test_integrator_gradient_fd_sanity.py` would need SE(3)-log
+   machinery for the tangent-space q perturbation and output difference. Not
+   worth it: the floating integrator gradient is already validated by
+   `test_integrator_pinocchio_equivalence.py` (vs `pin.dIntegrate`) and the CUDA
+   equivalence suite (g1_floating passes). The FD-sanity test stays fixed-base.
 2. **Integrator VALUE-path spill — DONE 2026-05-23.** The value kernel now
    threads the FD inner's `MINV_F_IN_SMEM` lever: at LITE/MINIMAL (and PERF on
    h1_2) the Minv F-region (`6·NV²`) spills to `d_workspace`, keeping the hot FD
@@ -249,11 +252,11 @@ Compiled 2026-05-23. Grouped by theme; rough priority within each.
   140·NJ inner band to global; give it a surgical sub-split like Minv-F.
 
 ### C. Correctness / coverage
-- **Floating FD-sanity test for the integrator gradient** —
-  `test_integrator_gradient_fd_sanity.py` is fixed-base only; floating needs an
-  SE(3) log for the tangent-space q-column perturbation (§4 item 1).
-- **Remaining warnings sweep** — RBDReference `mxS` is fixed; still want a pass
-  for nvcc/ptxas compile warnings + any other Python warnings.
+- **Remaining warnings sweep** — RBDReference `mxS` is fixed and the Python
+  reference path is now DeprecationWarning-clean (verified). Still want a pass
+  for nvcc/ptxas *compile* warnings (a `-Werror`-style build sweep).
+  (Floating FD-sanity test was considered and dropped — covered by
+  `pin.dIntegrate` + CUDA equivalence; see §4 item 1.)
 
 ### D. Naming / API clarity
 - **Autotune `performance_threads`**: binary-search the launch thread count that
