@@ -66,16 +66,31 @@ their outer kernel.
   work amortized over fewer threads); larger block sizes need
   TIER_LITE or TIER_MINIMAL.
 
-### Known limit (deferred to humanoid follow-up)
+### Humanoid-scale spill (`humanoid-tier-spill`, landed 2026-05-23)
 
-- **TIER_LITE smem currently behaves identically to TIER_MINIMAL on
-  the smem axis** (both route the whole inner scratch arena to
-  workspace). They differ on the register axis (launch_bounds
-  768 vs 1024). The planned upgrade is a 48 KB smem target for LITE
-  via the existing per-algo multi-tier spill machinery — deferred
-  alongside humanoid-scale (DOF≥50) work because h1_2 needs new
-  spill levels added that should be co-designed with the tier
-  targets. See `resource_tier_system.rst` "Deferred work".
+- **TIER_LITE now picks a genuine intermediate smem rung** (~48 KB
+  target via `select_shared_tier_3way`), no longer an alias of
+  TIER_MINIMAL on the smem axis.
+- **Every previously-overflowing kernel now fits the sm_120 ~100 KB
+  cap at all tiers** via surgical per-tier spill: Minv/FD (Minv-F),
+  ABA (whole inner), EE_POSE_GRAD/D2EE/id_du/fd_du/fdsva_so (3-6 level
+  ladders), **idsva_so body+world** (output → BC → whole inner), and
+  the **time-integrator value + gradient**. Value spills the FD
+  inner's Minv-F; the gradient uses a 4-rung ladder (Dqdd → +dAB +
+  id_du-selective → +whole inner). Validated: iiwa14 @ MINIMAL,
+  g1_floating @ PERF (selective rung), tier_instantiation_smoke on
+  iiwa14/go2/h1_2. See `resource_tier_system.rst` + `HANDOFF.md`.
+- Still open: a finer hot/cold de-alias of the monolithic
+  idsva_so/fdsva_so inners (so MINIMAL keeps more hot data in smem),
+  the ABA surgical retrofit, and tuning the 48 KB LITE target via the
+  deferred full sweep. See `HANDOFF.md` → Backlog.
+
+### Warnings
+
+- RBDReference `mxS` flattens its subspace column to 1-D so `mx1-mx6`
+  receive a scalar `alpha` — fixes the NumPy `ndim>0 to scalar`
+  DeprecationWarning at the source (was ~177k/run in the integrator
+  equivalence suite).
 
 ### Python / JAX wrappers
 

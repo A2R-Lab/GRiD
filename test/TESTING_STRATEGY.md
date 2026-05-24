@@ -85,7 +85,7 @@ accumulation (a) zeroed then `+=`-accumulated with no `__syncthreads` between,
 and (b) had 6 floating-root axes `+=` into the same destination via a
 single-writer helper. Both were correct at 32 threads and produced
 non-deterministic wrong gradients (and wrong integrator gradients) at 448. See
-`INTEGRATOR_HANDOFF.md` §"FIXED 2026-05-22".
+`HANDOFF.md` §3 ("RESOLVED 2026-05-22").
 
 **When adding a CUDA test:** route kernel launches through the runner's thread
 count (`g_num_threads` / argv, or the `_TEST_THREADS` macro) — never hard-code

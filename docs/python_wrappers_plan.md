@@ -1,17 +1,19 @@
 # Python Wrappers Plan
 
-> **Status (2026-05-18 — v0.1 LANDED):** Phases A-C (scaffolding +
-> register_robot + 12 algorithm methods + ee_joint_names) and Phase E
-> (examples + Sphinx docs page) are shipped. Phase F (delete
-> ``bindings/``) shipped. Phase D (JAX FFI) deferred. v0.1 commits:
-> 0e1f126 (initial 9 methods), 4d1812d (Phase-C extensions).
+> **Status (updated 2026-05-23 — v0.3 SHIPPED, this doc is now historical):**
+> All phases are landed. The `grid_rbd` package ships BOTH surfaces —
+> pybind11 ``RobotHandle`` and the JAX FFI ``JaxRobotHandle`` (Phase D is
+> **done**, not deferred); the old ``bindings/`` was deleted. Integrators
+> (value + gradient, all 5 IntegratorTypes, runtime ``dt``) and a runtime
+> ``gravity`` param are exposed on both surfaces. Build-at-``register_robot``
+> with a content-addressed ``~/.cache/grid-rbd`` store (cache key includes the
+> urdf, options, package version, cuda arch, AND a hash of
+> ``wrapper_template.cu`` so wrapper edits invalidate the cache).
 >
-> See ``python/`` in the repo for the implementation, and
-> :doc:`/user_guide/tutorials/python_wrappers` in the docs.
->
-> One v1 simplification vs the original plan below: the small Runner
-> module uses **pybind11** instead of nanobind. The user-facing API is
-> identical; migration to nanobind is a localized v2 change if needed.
+> The Runner module uses **pybind11** (not nanobind); the user-facing API is
+> identical. See ``python/`` for the implementation and
+> :doc:`/user_guide/tutorials/python_wrappers`. The phase-by-phase plan below
+> is retained for historical context only.
 
 ## Goal
 

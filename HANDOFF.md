@@ -1,10 +1,21 @@
-# Time-Integrator Codegen — Handoff
+# GRiD `humanoid-tier-spill` — Handoff
 
-Status as of 2026-05-22 (branch `humanoid-tier-spill`; RBDReference on
-`modernizing-tests`). Documents the time-integrator work (Euler /
-Semi-Implicit Euler / Midpoint / RK3 / RK4): what is built, what is validated,
-and what is still open. The floating Euler gradient bug that earlier versions of
-this doc flagged as a "CRITICAL OPEN QUESTION" is **RESOLVED** — see §3.
+Status as of 2026-05-23 (branch `humanoid-tier-spill`; RBDReference + URDFParser
+submodules on `modernizing-tests`). This is the single handoff for the branch.
+It covers three intertwined efforts:
+
+1. **Time-integrator codegen** (Euler / Semi-Implicit Euler / Midpoint / RK3 /
+   RK4) — value + gradient. Detailed below (§1-6).
+2. **Resource-tier shared-memory spill rollout** — every overflowing kernel now
+   fits the sm_120 ~100 KB cap at all tiers via surgical per-tier spill. The
+   architecture + per-algo details live in the concepts doc
+   `docs/source/user_guide/concepts/resource_tier_system.rst`.
+3. **Warning cleanup** — the RBDReference `mxS` NumPy `ndim>0` deprecation is
+   fixed at the source.
+
+See **Backlog / open items** at the end for what's left. The floating Euler
+gradient bug that earlier revisions flagged as a "CRITICAL OPEN QUESTION" is
+**RESOLVED** — see §3.
 
 ---
 
@@ -195,8 +206,9 @@ extra-buffer, hence the per-tier-body approach rather than a single placement bo
   whole-inner rung (the FD-grad inner alone is 160-441 KB, physically can't fit
   smem, so the spill is forced). Verified: all integrator kernels compile at all
   tiers (incl. g1_floating selective rung + h1_2 whole-inner); iiwa14 numerical
-  equivalence passes at TIER_MINIMAL (value F-spill + gradient whole-inner).
-  g1_floating numerical equivalence (selective rung) in progress.
+  equivalence passes at TIER_MINIMAL (value F-spill + gradient whole-inner) and
+  g1_floating passes at PERF (the selective rung). tier_instantiation_smoke
+  passes for iiwa14/go2/h1_2 at all 3 tiers.
 
 ---
 
@@ -211,3 +223,54 @@ misdiagnosis** — the real cause was the 32-thread launch hiding a multi-warp r
 sweep thread counts including a random non-multiple-of-32 (see
 `test/TESTING_STRATEGY.md`, Principle 2). Do not reintroduce fixed-32-thread
 launches.
+
+---
+
+## Backlog / open items
+
+Compiled 2026-05-23. Grouped by theme; rough priority within each.
+
+### A. Performance characterization (long pole — unblocks B/D)
+- **Full tier-validation sweep (P7/P8)**: iiwa/go2/g1/h1_2 × fixed/floating ×
+  {PERF, LITE, MINIMAL} × all algos × single+batch, vs Pinocchio + Frax
+  baselines; failure-tolerant; one matrix → `test/benchmarks/tier_validation_matrix.md`.
+  This is the deferred overnight task. See the "Deferred validation sweep" +
+  "LITE 48 KB target — tuning remains" sections of `resource_tier_system.rst`.
+- **Tune the LITE smem target** (48 KB vs 32/64) — falls out of the sweep.
+- **Integrator bench numbers** in the sweep matrix (integrators are now wired
+  into `timeGRiD_{single,batch}.cu` + `PER_ALGO_SPECS`).
+
+### B. Spill perf refinements (surgical; gated on sweep data)
+- **De-alias the idsva_so / fdsva_so monolithic inners** so even MINIMAL keeps
+  more of the hot band in smem instead of a whole-arena spill — see
+  `docs/idsva_so_inner_refactor_notes.md`. Same idea helps the integrator
+  gradient's rung-3 on h1_2.
+- **ABA whole-arena spill → surgical retrofit**: ABA Level 1 dumps its entire
+  140·NJ inner band to global; give it a surgical sub-split like Minv-F.
+
+### C. Correctness / coverage
+- **Floating FD-sanity test for the integrator gradient** —
+  `test_integrator_gradient_fd_sanity.py` is fixed-base only; floating needs an
+  SE(3) log for the tangent-space q-column perturbation (§4 item 1).
+- **Remaining warnings sweep** — RBDReference `mxS` is fixed; still want a pass
+  for nvcc/ptxas compile warnings + any other Python warnings.
+
+### D. Naming / API clarity
+- **Autotune `performance_threads`**: binary-search the launch thread count that
+  maximizes *batched* PERF-tier throughput (≤ `MAX_PERF_LEVEL_THREADS`), expose
+  it alongside the cap.
+- **Broader name audit**: `*_DYNAMIC_SHARED_MEM_BYTES`, the tier names,
+  `s_temp_spill` (an `s_`-named pointer that is actually device memory), etc.
+
+### E. Pinocchio-alignment backlog (lower urgency)
+- URDFParser/RBDReference additive improvements: strict-parse API, structured
+  parse diagnostics, Pinocchio-shaped metadata helpers (`nq`/`nv`/quaternion
+  order), mark fixed-base-only methods. See
+  `test/pinocchio_equivalents/PINOCCHIO_ALIGNMENT_BACKLOG.md`.
+
+### Reference docs (kept separate, linked from here)
+- `docs/source/user_guide/concepts/resource_tier_system.rst` — tier/spill architecture.
+- `docs/idsva_so_inner_refactor_notes.md` — deferred inner de-alias design.
+- `docs/python_wrappers_plan.md` — grid-rbd bindings (historical plan; v0.3 shipped).
+- `test/benchmarks/overnight_tier_sweep.md` — partial sweep results (pre-fix run).
+- `test/pinocchio_equivalents/PINOCCHIO_ALIGNMENT_BACKLOG.md` — Pinocchio alignment.

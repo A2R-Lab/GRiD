@@ -762,61 +762,20 @@ placement per tier via ``select_shared_tier_3way``) is the same one the
 integrator and idsva_so now follow. See the per-algo ``gen_*`` functions in
 ``GRiDCodeGenerator/algorithms/`` for the concrete signatures.
 
-Deferred work — LITE 48 KB smem target
----------------------------------------
+LITE 48 KB smem target — shipped; value tuning remains
+-------------------------------------------------------
 
-**Target design** (to ship alongside humanoid-scale support):
+The machinery this section once described as deferred is **landed**:
+``cuda_target_lite_shared_mem_bytes`` (default 48 KB, env-overridable),
+``select_shared_tier_3way`` picking a per-tier rung against the PERF / LITE /
+MINIMAL targets, per-tier ``if constexpr`` emission, the ternary
+``gen_declare_shared_arena`` arena helper, and the new spill levels that bring
+every previously-overflowing h1_2 kernel (IDSVA_SO, FDSVA_SO, EE_POSE_GRAD,
+Minv/FD/ABA, and the integrator value+gradient) under the sm_120 cap.
 
-.. code-block:: cpp
-
-   // Three smem targets the codegen picks against:
-   constexpr size_t GRID_TIER_PERF_SMEM_TARGET    = /* cuda_target_shared_mem_bytes, ~100 KB */;
-   constexpr size_t GRID_TIER_LITE_SMEM_TARGET    = 48 * 1024;       // configurable, default 48 KB
-   constexpr size_t GRID_TIER_MINIMAL_SMEM_TARGET = /* ~XImats only */;
-
-**Codegen-time per-algo selection**:
-
-For algos with multi-level spill machinery
-(``fdsva_so_use_global_tensors`` / ``fdsva_so_use_workspace_temp`` /
-``fdsva_so_fd_grad_use_spill``, ``d2ee_use_workspace_temp`` /
-``d2ee_use_workspace_d2xhom``, ``id_du_spill_tier`` /
-``fd_du_spill_tier``, ``idsva_so_body_frame_use_global_output`` /
-``idsva_so_body_frame_grav_full_spill``):
-
-* For each tier in {PERF, LITE, MINIMAL}, pick the lowest-spill
-  level whose ``py_arena_bytes`` is ≤ that tier's target.
-* If three picks collapse to one (small robot, all fit PERF): emit
-  one body, alias LITE/MINIMAL to PERF via ``using``.
-* Else: emit per-tier ``if constexpr`` branches selecting the
-  appropriate spill flags.
-
-**Code paths affected** (rough):
-
-* ``GRiDCodeGenerator/GRiDCodeGenerator.py:240-350`` — compute three
-  spill picks per tiered algo instead of one.
-* ``GRiDCodeGenerator/algorithms/_fdsva_so.py``,
-  ``_eepose_gradient_hessian.py``, ``_forward_dynamics_gradient.py``,
-  ``_inverse_dynamics_gradient.py``, ``_idsva_so.py`` — convert
-  current single-tier ``if codegen_flag:`` blocks to per-tier
-  ``if constexpr (RESOURCE_TIER == TIER_X)`` blocks.
-* ``GRiDCodeGenerator/helpers/_code_generation_helpers.py`` —
-  extend ``gen_declare_shared_arena(tier_workspace_expr=...)`` from
-  binary to ternary (separate PERF / LITE / MINIMAL allocations).
-
-**Co-design with humanoid (DOF ≥ 50)**:
-
-For h1_2 (NV=51 fixed, 57 floating), several algos overflow the
-sm_120 100 KB cap even at the current most-aggressive spill tier:
-
-* ``h1_2_floating IDSVA_SO_B`` = 168 KB
-* ``h1_2_floating FDSVA_SO`` = 244 KB
-* ``h1_2_fixed FDSVA_SO`` = 178 KB
-* ``h1_2_fixed EE_POSE_GRAD`` = 179 KB
-
-These need new spill levels added (e.g. partial output-tensor
-streaming, recompute-vs-cache trade-offs in inner functions, or
-algorithmic recursion refactoring). When that work happens, the
-LITE 48 KB target falls out as a natural intermediate level.
+What remains is **tuning, not plumbing**: is 48 KB the right LITE cliff, or
+would 32/64 KB fit the real perf curve better? That is a knob to sweep, not a
+feature to build — see the deferred validation sweep below.
 
 Remaining inner-plumbing refinement
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
