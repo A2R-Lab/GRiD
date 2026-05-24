@@ -818,7 +818,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("EE_POSE_GRADIENT direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
 
-            if(is_algo_active(enabled_algo, "idsva_so")){
+            if(is_algo_active(enabled_algo, "idsva_so_body_frame")){
                 // IDSVA_SO is expensive — use fewer iterations
                 int idsva_so_iters = std::max(1, TEST_ITERS/10);
                 clock_gettime(CLOCK_MONOTONIC,&start);
@@ -827,7 +827,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                         qs[0].template cast<double>(), qds[0].template cast<double>(), zeros_d);
                 }
                 clock_gettime(CLOCK_MONOTONIC,&end);
-                printf("IDSVA_SO direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(idsva_so_iters));
+                printf("idsva_so_body_frame direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(idsva_so_iters));
             }
 
             // FDSVA_SO: no Pinocchio equivalent
@@ -1012,7 +1012,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("----------------------------------------\n");
             }
 
-            if(is_algo_active(enabled_algo, "idsva_so")){
+            if(is_algo_active(enabled_algo, "idsva_so_body_frame")){
                 // IDSVA_SO uses fewer TEST_ITERS due to high cost (especially for large robots)
                 int idsva_so_iters = std::max(1, TEST_ITERS/10);
                 for(int iter = 0; iter < idsva_so_iters; iter++){
@@ -1021,7 +1021,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                     clock_gettime(CLOCK_MONOTONIC,&end);
                     times.push_back(time_delta_us_timespec(start,end));
                 }
-                printf("[N:%d]: IDSVA_SO direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("[N:%d]: idsva_so_body_frame direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
                 printf("----------------------------------------\n");
             }
 

@@ -34,7 +34,7 @@ from GRiDCodeGenerator.algo_registry import (
 ALGO_DISPLAY: dict[str, str] = _build_display()
 ALGO_SECTIONS: dict[str, list[str]] = _build_sections()
 
-ROBOTS_DISPLAY = ["iiwa14", "go2", "g1"]
+ROBOTS_DISPLAY = ["iiwa14", "go2", "g1", "h1_2"]
 BASES = ["fixed", "floating"]
 BATCH_SIZES = [16, 32, 64, 128, 256]
 
