@@ -229,52 +229,78 @@ launches.
 
 ---
 
-## Backlog / open items
+## Backlog / open items — CURRENT TODO LIST
 
-Compiled 2026-05-23. Grouped by theme; rough priority within each.
+Last updated 2026-05-25. Grouped by theme; rough priority within each.
 
-### A. Performance characterization (long pole — unblocks B/D)
-- **Full tier-validation sweep (P7/P8)**: iiwa/go2/g1/h1_2 × fixed/floating ×
-  {PERF, LITE, MINIMAL} × all algos × single+batch, vs Pinocchio + Frax
-  baselines; failure-tolerant; one matrix → `test/benchmarks/tier_validation_matrix.md`.
-  This is the deferred overnight task. See the "Deferred validation sweep" +
-  "LITE 48 KB target — tuning remains" sections of `resource_tier_system.rst`.
+### Resolved 2026-05-24/25 (no longer backlog)
+- **LITE/MINIMAL spill crashes fixed**: (a) null-`s_temp` passed to the
+  XImats/XmatsHom load helper in whole-arena spill rungs — `aba`,
+  `ee_pose_gradient`; (b) a bug *class* — a single-valued PERF-pick macro
+  (`GRID_*_USES_DA_DF_SPILL`) used as a **per-rung inner template flag** —
+  `id_du`, `fd_du`, `integrator_gradient`. All committed; generated C++
+  verified (LITE=`true`, PERF/MIN=`false`).
+- **fdsva_so / idsva_so big-robot fit** via inner-owns-placement
+  (`fdsva_so_full_inner` + world-inner `SCRATCH_IN_SMEM` + pool→global tier).
+  h1_2 fdsva 198/142 KB → 53.8/45.8 KB; overnight gate + SO equivalence PASSED.
+- **Full tier-validation sweep** ran (overnight + targeted re-sweep);
+  iiwa/go2 12/12 all tiers; matrix in `test/benchmarks/results/tier_sweep_20260525_002438/`.
+
+### 1. Inner-owns-placement UNITY (new 2026-05-25; current code works via kernel-repoint — purity, not correctness)
+- **Full orchestrator → `*_full_inner` migration** for `id_du`, `fd_du`,
+  `integrator_gradient` (mirror `fdsva_so_full_inner`) so the kernel never
+  repoints `s_temp`. The crash bug is fixed; this is the remaining design-purity
+  step. Standard is documented in `docs/idsva_so_inner_refactor_notes.md`.
+- **`gen_fdsva_so_device`** (inline API) still duplicates the orchestration →
+  rewire to call `fdsva_so_full_inner`.
+- **Standalone idsva body kernel `output_temp` rung** → fold its kernel-level
+  `s_temp` repoint into a body-inner `SCRATCH_IN_SMEM`.
+- **L2-persisting gates** in 5 host wrappers (`id_du`/`fd_du`/`fdsva`/`d2ee`/
+  `ee_grad`) key off the PERF-pick macro → LITE/MINIMAL spills aren't L2-*pinned*.
+  Perf nit, not correctness (`d_workspace` is allocated unconditionally for
+  `GRID_DATA_ALL`). Make the gate per-tier.
+
+### 2. Spill perf refinements (surgical; gated on sweep data)
+- **De-alias the idsva_so / fdsva_so inners** for surgical cold-only spill
+  instead of whole-arena — `docs/idsva_so_inner_refactor_notes.md`. Same idea
+  helps the integrator-gradient rung-3 on h1_2.
+- **ABA whole-arena spill → surgical retrofit** (sub-split like Minv-F).
 - **Tune the LITE smem target** (48 KB vs 32/64) — falls out of the sweep.
-- **Integrator bench numbers** in the sweep matrix (integrators are now wired
-  into `timeGRiD_{single,batch}.cu` + `PER_ALGO_SPECS`).
 
-### B. Spill perf refinements (surgical; gated on sweep data)
-- **De-alias the idsva_so / fdsva_so monolithic inners** so even MINIMAL keeps
-  more of the hot band in smem instead of a whole-arena spill — see
-  `docs/idsva_so_inner_refactor_notes.md`. Same idea helps the integrator
-  gradient's rung-3 on h1_2.
-- **ABA whole-arena spill → surgical retrofit**: ABA Level 1 dumps its entire
-  140·NJ inner band to global; give it a surgical sub-split like Minv-F.
+### 3. Perf investigations (from the tier sweeps)
+- **`ee_pose_gradient` FLOATING ~535µs batch-N=256 outlier** (vs ~8µs fixed,
+  ~1µs Pinocchio) — slow floating world-frame EE-Jacobian path.
+- **GRiD loses to Pinocchio at batch N=256 on some core-dynamics cells**
+  (FD/ABA/CRBA/Minv) — launch overhead / occupancy / per-block work.
+- **GRiD second-order ~3× slower than Pinocchio on g1/h1_2 at N=256** —
+  big-robot SO regression.
+- **Document SO speedups vs Pinocchio**: finish wiring + rendering the Pinocchio
+  IDSVA_SO/FDSVA_SO baseline column (Pinocchio CPU SO is ms-scale).
 
-### Perf investigations (from the 2026-05-24 tier sweep)
-- **`ee_pose_gradient` FLOATING is a ~535µs batch-N=256 outlier** (vs ~8µs fixed, ~1µs Pinocchio) — the floating world-frame Jacobian is on a slow path. Real perf bug; investigate the floating EE-Jacobian codegen.
-- **GRiD loses to Pinocchio at batch N=256 on some core-dynamics cells** (e.g. FD g1-fixed 136 vs 108; ABA go2-floating 127 vs 72, iiwa-floating 108 vs 100). Expected GRiD-on-GPU to beat Pinocchio-CPU at batch — investigate why FD/ABA/CRBA/Minv underperform on those cells (launch overhead? occupancy? per-block work).
-- **Document second-order speedups vs Pinocchio**: the report currently shows GRiD-only for IDSVA_SO/FDSVA_SO. Pinocchio's CPU second-order is ms-scale (huge GRiD speedup) — wire the Pinocchio IDSVA_SO/FDSVA_SO baseline measurement + render its column so the speedup is documented.
+### 4. Reporting / tooling
+- **Tier (LITE/MINIMAL) columns in `generate_report.py`** — data is captured in
+  the per-cell JSONs, not yet rendered.
+- **Autotune `performance_threads`**: binary-search the batch-throughput-
+  maximizing launch thread count (≤ `MAX_PERF_LEVEL_THREADS`); expose it.
 
-### C. Correctness / coverage
-- **Remaining warnings sweep** — RBDReference `mxS` is fixed and the Python
-  reference path is now DeprecationWarning-clean (verified). Still want a pass
-  for nvcc/ptxas *compile* warnings (a `-Werror`-style build sweep).
-  (Floating FD-sanity test was considered and dropped — covered by
-  `pin.dIntegrate` + CUDA equivalence; see §4 item 1.)
+### 5. Correctness / coverage
+- **nvcc/ptxas compile-warnings sweep** (`-Werror`-style build pass). Python
+  reference path is already DeprecationWarning-clean.
 
-### D. Naming / API clarity
-- **Autotune `performance_threads`**: binary-search the launch thread count that
-  maximizes *batched* PERF-tier throughput (≤ `MAX_PERF_LEVEL_THREADS`), expose
-  it alongside the cap.
-- **Broader name audit**: `*_DYNAMIC_SHARED_MEM_BYTES`, the tier names,
-  `s_temp_spill` (an `s_`-named pointer that is actually device memory), etc.
+### 6. Naming / API clarity
+- **Broader name audit**: `*_DYNAMIC_SHARED_MEM_BYTES`, the tier names, and the
+  `s_*`-named-but-device pointers (e.g. `s_temp_spill` → `d_`).
 
-### E. Pinocchio-alignment backlog (lower urgency)
+### 7. Pinocchio-alignment backlog (lower urgency)
 - URDFParser/RBDReference additive improvements: strict-parse API, structured
   parse diagnostics, Pinocchio-shaped metadata helpers (`nq`/`nv`/quaternion
   order), mark fixed-base-only methods. See
   `test/pinocchio_equivalents/PINOCCHIO_ALIGNMENT_BACKLOG.md`.
+
+### 8. Branch merge (the big one)
+- **FF-merge `humanoid-tier-spill` → `modernizing-tests`** — held pending final
+  validation; most is now green. Gate on the targeted re-sweep + equivalence
+  confirming the complete dataset.
 
 ### Reference docs (kept separate, linked from here)
 - `docs/source/user_guide/concepts/resource_tier_system.rst` — tier/spill architecture.
