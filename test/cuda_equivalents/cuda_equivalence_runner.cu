@@ -6,9 +6,6 @@
 
 #include "grid.cuh"
 
-#ifndef GRID_CUDA_RUN_FLOATING_EEPOSE_HESSIAN
-#define GRID_CUDA_RUN_FLOATING_EEPOSE_HESSIAN 0
-#endif
 
 // Block thread count for all kernel launches. Defaults to 32 (one warp) and is
 // overridable via argv[1] so the test harness can sweep warp counts to catch
@@ -176,7 +173,9 @@ bool floating_algorithm_requested(const std::string &name) {
                name == "forward_dynamics_gradient_qd" ||
                name == "aba" ||
                name == "crba" ||
-               name == "end_effector_pose";
+               name == "end_effector_pose" ||
+               name == "end_effector_pose_gradient" ||
+               name == "end_effector_pose_hessian";
     }
     const std::string selected(raw);
     if (selected == "all") {
@@ -318,7 +317,6 @@ void run() {
             static_cast<int>(grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>())
         ));
     }
-    #if GRID_CUDA_RUN_FLOATING_EEPOSE_HESSIAN
     if (floating_algorithm_requested("end_effector_pose_hessian")) {
         gpuErrchk(cudaFuncSetAttribute(
             grid::end_effector_pose_gradient_hessian_kernel<T>,
@@ -326,7 +324,6 @@ void run() {
             static_cast<int>(grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>())
         ));
     }
-    #endif
 
     if (floating_algorithm_requested("inverse_dynamics")) {
         floating_inverse_dynamics_runner<T><<<1, g_num_threads, grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
@@ -340,7 +337,7 @@ void run() {
 
     if (floating_algorithm_requested("direct_minv")) {
         grid::direct_minv_kernel<T><<<1, g_num_threads, grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
-            d_mat, /*d_workspace=*/nullptr, d_q, grid::NUM_JOINTS, d_robot_model, 1
+            d_mat, hd_data->d_workspace, d_q, grid::NUM_JOINTS, d_robot_model, 1
         );
         gpuErrchk(cudaPeekAtLastError());
         gpuErrchk(cudaDeviceSynchronize());
@@ -361,7 +358,7 @@ void run() {
     if (floating_algorithm_requested("aba")) {
         grid::aba_kernel<T><<<1, g_num_threads, grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_vec,
-            /*d_workspace=*/nullptr,
+            hd_data->d_workspace,
             d_q_qd_u,
             grid::NUM_JOINTS + 2 * grid::NUM_VEL,
             d_robot_model,
@@ -406,7 +403,7 @@ void run() {
     if (floating_algorithm_requested("end_effector_pose_gradient")) {
         grid::end_effector_pose_gradient_kernel<T><<<1, g_num_threads, grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_dee,
-            /*d_workspace=*/nullptr,
+            hd_data->d_workspace,
             d_q,
             grid::NUM_JOINTS,
             d_robot_model,
@@ -418,7 +415,6 @@ void run() {
         print_vector("end_effector_pose_gradient", h_dee.data(), 6 * grid::NUM_JOINTS * grid::NUM_EES);
     }
 
-    #if GRID_CUDA_RUN_FLOATING_EEPOSE_HESSIAN
     if (floating_algorithm_requested("end_effector_pose_hessian")) {
         if (grid::GRID_D2EE_USES_WORKSPACE_TEMP) {
             gpuErrchk(grid::grid_begin_l2_persisting(
@@ -442,7 +438,6 @@ void run() {
         gpuErrchk(cudaMemcpy(h_d2ee.data(), d_d2ee, 6 * grid::NUM_JOINTS * grid::NUM_JOINTS * grid::NUM_EES * sizeof(T), cudaMemcpyDeviceToHost));
         print_vector("end_effector_pose_hessian", h_d2ee.data(), 6 * grid::NUM_JOINTS * grid::NUM_JOINTS * grid::NUM_EES);
     }
-    #endif
 
     if (floating_algorithm_requested("inverse_dynamics_gradient_q") ||
         floating_algorithm_requested("inverse_dynamics_gradient_qd")) {

@@ -322,6 +322,14 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "gate": None,
         "shared_mem_skip": "DEE_POS_DYNAMIC_SHARED_MEM_BYTES",
     },
+    "ee_pose_hessian": {
+        "single_call":        "grid::end_effector_pose_gradient_hessian_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::end_effector_pose_gradient_hessian<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::end_effector_pose_gradient_hessian_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "EE_POSE_HESSIAN",
+        "gate": None,
+        "shared_mem_skip": "D2EE_POS_DYNAMIC_SHARED_MEM_BYTES",
+    },
     "idsva_so": {
         "single_call":        "grid::idsva_so_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
         "batch_with_mem":     "grid::idsva_so<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",

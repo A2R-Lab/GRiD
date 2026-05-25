@@ -517,8 +517,6 @@ def _compile_runner(
     defines = [f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}"]
     if l2_persisting is not None:
         defines.append(f"-DGRID_CUDA_ENABLE_L2_PERSISTING={l2_define}")
-    if enable_floating_eepose_hessian:
-        defines.append("-DGRID_CUDA_RUN_FLOATING_EEPOSE_HESSIAN=1")
 
     cmd = [
         nvcc,
