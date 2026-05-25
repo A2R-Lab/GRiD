@@ -6,6 +6,14 @@ helps when you want to compose generated functions, call kernels from
 your own CUDA host code, or read the emitter source in
 ``GRiDCodeGenerator/algorithms/``.
 
+.. note::
+
+   New here (human or agent)? Read :doc:`design_principles` first — it is the
+   shared mental model (smart inners / thin wrappers, *the inner owns its memory
+   placement*, the spill ladder, validation discipline, and the anti-patterns to
+   avoid). This page covers the *mechanics* of the four layers; that page covers
+   the *ethos* behind them.
+
 The four emission layers
 ------------------------
 
