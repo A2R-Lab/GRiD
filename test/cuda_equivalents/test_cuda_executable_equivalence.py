@@ -52,6 +52,9 @@ FIXED_CUDA_ALGORITHMS = (
     "forward_dynamics_gradient_qd",
     "aba",
     "crba",
+    "end_effector_pose",
+    "end_effector_pose_gradient",
+    "end_effector_pose_hessian",
 )
 FLOATING_CUDA_ALGORITHMS = (
     "inverse_dynamics",

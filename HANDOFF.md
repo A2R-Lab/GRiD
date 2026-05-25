@@ -299,14 +299,16 @@ Last updated 2026-05-25. Grouped by theme; rough priority within each.
   for it. Do NOT run heavy CPU/GPU work concurrently (skews timing).
 
 ### 5. Correctness / coverage
-- **FIXED-path kinematics accuracy gap (newly surfaced 2026-05-25)**: the
-  equivalence runner's FIXED branch (`#else`, `cuda_equivalence_runner.cu`
-  ~500-593) is **dynamics-only** — it uses the host wrappers (id/minv/fd/id_du/
-  fd_du/aba/crba) and runs **no kinematics**. So the `ee_pose` / `ee_pose_gradient`
-  / `ee_pose_hessian` (d2ee) accuracy I standardized is validated **FLOATING-only**
-  (iiwa14-floating passed). FIXED-base EE-pose/gradient/hessian accuracy is NOT
-  yet wired into the runner. To close: add the three kinematics kernels (or host
-  wrappers) to the FIXED branch + extend the requested set there.
+- **FIXED-path kinematics now wired + validated on iiwa14 (2026-05-25)**: the
+  equivalence runner's FIXED branch (`#else`) now calls the `end_effector_pose` /
+  `_gradient` / `_gradient_hessian` host wrappers and prints `h_eePos`/`h_deePos`/
+  `h_d2eePos`; all three added to `FIXED_CUDA_ALGORITHMS`. iiwa14-fixed PASSED
+  (threads32 + threadssuggested) against the Python reference, alongside the
+  earlier iiwa14-floating pass. ⚠️ **BROADER VALIDATION STILL NEEDED**: FIXED-base
+  EE accuracy is confirmed for iiwa14 ONLY — go2 / g1 / h1_2 (fixed + floating),
+  and the **spilled tiers** (LITE/MINIMAL, where d2ee uses `d_workspace`), are not
+  yet run for these kinematics. Run the full robot × base × tier matrix before
+  considering EE-pose/gradient/hessian accuracy fully validated.
 - **nvcc/ptxas compile-warnings sweep** (`-Werror`-style build pass). Python
   reference path is already DeprecationWarning-clean.
 

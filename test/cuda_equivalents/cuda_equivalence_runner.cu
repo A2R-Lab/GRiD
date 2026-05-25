@@ -590,6 +590,30 @@ void run() {
     print_matrix_col_major(
         "crba", hd_data->h_M, grid::NUM_JOINTS, grid::NUM_JOINTS
     );
+
+    grid::end_effector_pose<T>(
+        hd_data, d_robot_model, 1, block_dimms, thread_dimms, streams
+    );
+    gpuErrchk(cudaPeekAtLastError());
+    print_vector("end_effector_pose", hd_data->h_eePos, 6 * grid::NUM_EES);
+
+    grid::end_effector_pose_gradient<T>(
+        hd_data, d_robot_model, 1, block_dimms, thread_dimms, streams
+    );
+    gpuErrchk(cudaPeekAtLastError());
+    print_vector(
+        "end_effector_pose_gradient", hd_data->h_deePos,
+        6 * grid::NUM_JOINTS * grid::NUM_EES
+    );
+
+    grid::end_effector_pose_gradient_hessian<T>(
+        hd_data, d_robot_model, 1, block_dimms, thread_dimms, streams
+    );
+    gpuErrchk(cudaPeekAtLastError());
+    print_vector(
+        "end_effector_pose_hessian", hd_data->h_d2eePos,
+        6 * grid::NUM_JOINTS * grid::NUM_JOINTS * grid::NUM_EES
+    );
 #endif
 
     grid::close_grid<T>(streams, d_robot_model, hd_data);
