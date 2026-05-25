@@ -5,6 +5,77 @@ Revisit **after a benchmark sweep** quantifies how much LITE/MINIMAL perf we
 actually lose with the current "whole-inner-to-global" fallback. Only invest in
 this refactor if the sweep shows the whole-arena spill is a real bottleneck.
 
+## Core design principle: the INNER owns scratch placement (read this first)
+
+When a kernel's scratch arena does not fit the device shared-memory cap, the
+spill decision belongs to the **inner device function**, not the caller. Every
+`*_inner` is templated on a placement flag (`SCRATCH_IN_SMEM` — or, equivalently,
+the `RESOURCE_TIER`) and takes **both** pointers: `s_temp` (shared) and
+`d_workspace` (global). At the very top of the inner it selects where its scratch
+lives via `if constexpr`:
+
+```cpp
+template <typename T, bool SCRATCH_IN_SMEM = true>
+__device__ void foo_inner(..., T *s_temp, T *d_workspace, ...) {
+    if constexpr (!SCRATCH_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }
+    // ... rest of the body is unchanged; it just uses s_temp ...
+}
+```
+
+The **caller** (a standalone kernel, or a composing kernel such as `fdsva_so`
+which embeds the `idsva_so` inner) only (a) sizes both arenas from the inner's
+exposed `*_SMEM_BYTES` / `*_WORKSPACE_BYTES` constants, and (b) threads the
+per-tier flag down. It must **never** hard-repoint or alias the inner's scratch
+from the outside.
+
+Why this is the rule, not a stylistic preference:
+
+* **Single source of truth.** The inner sizes *and* places its own scratch, so
+  the shared-mem-bytes macro, the workspace-bytes macro, and the actual pointer
+  arithmetic can never drift out of sync across callers.
+* **Surgical improvements propagate for free.** If a future change teaches an
+  inner to spill only its *cold* buffers (keeping the hot loop in smem), every
+  caller — the standalone kernel *and* every composing kernel — inherits that
+  improvement just by passing the flag. No caller edits, no re-derived offsets.
+* **Backward-compatible by default.** `SCRATCH_IN_SMEM = true` keeps small robots
+  byte-identical; only robots that overflow flip it to `false`.
+
+Reference implementations that already follow this: `aba_inner`,
+`forward_dynamics_inner`, `fdsva_so_inner`. The `idsva_so` body- and world-frame
+inners adopt the same `SCRATCH_IN_SMEM` template; `fdsva_so` then spills the
+embedded idsva_so scratch purely by passing `SCRATCH_IN_SMEM=false` to it (its
+dominant cost), instead of the caller aliasing pointers.
+
+### Project-wide propagation status (this is the standard for ALL algorithms)
+
+This is not an SO-specific pattern — every algorithm's inner should own its
+scratch placement. Conformance audit (2026-05-24):
+
+| Inner | Placement template | Status |
+|-------|--------------------|--------|
+| `aba_inner` | `TEMP_IN_SMEM` (whole arena) | conforms |
+| `forward_dynamics_inner` | `MINV_F_IN_SMEM` (F region) | conforms (surgical-F) |
+| `direct_minv_inner` | `F_IN_SMEM` (F region) | conforms (surgical-F) |
+| `integrator_inner` | `MINV_F_IN_SMEM` | conforms |
+| `fdsva_so_inner` | `SCRATCH_IN_SMEM` (4·NV³) | conforms |
+| `end_effector_pose_gradient_inner` | `TEMP_IN_SMEM` | conforms |
+| `idsva_so_body_frame_inner` | `BC_IN_SMEM` (surgical BC only) | **partial** — needs whole-arena `SCRATCH_IN_SMEM` so callers stop repointing `s_temp` from outside |
+| `idsva_so_world_frame_inner` | none | **needs migration** — add `SCRATCH_IN_SMEM` |
+| `inverse_dynamics_gradient_inner` (id_du) | none | **needs migration** — kernel repoints `s_temp` from outside (`_inverse_dynamics_gradient.py:1015,1034`) |
+| `forward_dynamics_gradient_inner` (fd_du) | none | **needs migration** — kernel repoints `s_temp` (`_forward_dynamics_gradient.py:159,182`) |
+| `integrator_gradient` inner | none | **needs migration** — kernel `_emit_spill_pointers` repoints `s_temp` (`_integrator_gradient.py:744`) |
+
+**Caveat — the XImats/XmatsHom helper is a separate caller-level scratch user.**
+Even once the inner owns its arena, the kernel still calls
+`load_update_X*mats_helpers(..., s_temp)` *outside* the inner, and that helper
+dereferences `s_temp` for its sincos scratch (`2*num_pos` floats). When the inner
+arena is spilled and the smem `s_temp` slot is `nullptr`, the helper segfaults
+(this was the 2026-05-24 null-`s_temp` crash in `aba` + `ee_pose_gradient`). Two
+acceptable resolutions, pick one and apply uniformly: (a) the kernel repoints
+`s_temp` at the spilled workspace before the helper call (current fix), or
+(b) always reserve the tiny `2*num_pos` helper scratch in smem regardless of
+inner spill (keeps sincos fast). (b) is the cleaner long-term target.
+
 ## Why this exists
 
 The per-tier spill we shipped can keep idsva_so under the smem budgets, but the

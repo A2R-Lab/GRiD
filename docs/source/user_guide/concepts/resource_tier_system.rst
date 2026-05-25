@@ -232,6 +232,30 @@ reuse and for evolving spills), while the *choice* of flag per tier is a
 per-robot, fit-driven decision made once at codegen time (good for not paying
 for a spill you don't need).
 
+**This is the required standard for every algorithm, not a per-kernel option.**
+New algorithms and refactors must put the spill decision *in the inner* (a
+placement template + ``if constexpr`` selecting ``s_temp`` vs ``d_workspace`` at
+the top), never repoint the inner's scratch from the kernel/host caller. A
+caller that aliases or reassigns ``s_temp`` from the outside is a smell to
+migrate. Two consequences worth calling out:
+
+* **Composing kernels inherit spills for free.** ``fdsva_so`` embeds the
+  ``idsva_so`` inner; once that inner owns its placement, ``fdsva_so`` spills the
+  (dominant) idsva_so scratch just by passing ``SCRATCH_IN_SMEM=false`` — no
+  pointer surgery in ``fdsva_so`` — and any future *surgical* (cold-only) idsva_so
+  spill propagates to ``fdsva_so`` automatically.
+* **The XImats/XmatsHom load helper is a separate scratch user.** It is called
+  from the kernel *outside* the inner and dereferences ``s_temp`` for its
+  ``2*num_pos`` sincos scratch, so a spilled (null) ``s_temp`` crashes it. Handle
+  this uniformly: either keep the tiny sincos scratch in smem always, or repoint
+  ``s_temp`` at the workspace before the helper call. (See the null-``s_temp``
+  fix history for ``aba``/``ee_pose_gradient``.)
+
+Conformance audit and the remaining migration list (``idsva_so`` world inner,
+``id_du``/``fd_du``/``integrator_gradient`` kernel-side repoints) live in
+``docs/idsva_so_inner_refactor_notes.md`` — that table is the source of truth for
+propagating this pattern across the project.
+
 
 Exposed sizing + placement constants (power-user reference)
 -----------------------------------------------------------
