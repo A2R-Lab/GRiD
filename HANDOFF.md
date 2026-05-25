@@ -245,6 +245,12 @@ Last updated 2026-05-25. Grouped by theme; rough priority within each.
   h1_2 fdsva 198/142 KB → 53.8/45.8 KB; overnight gate + SO equivalence PASSED.
 - **Full tier-validation sweep** ran (overnight + targeted re-sweep);
   iiwa/go2 12/12 all tiers; matrix in `test/benchmarks/results/tier_sweep_20260525_002438/`.
+- **`ee_pose_hessian` (d2ee) promoted to a first-class algo**: registered in
+  `ALGO_REGISTRY`; fixed the codegen single-timing printf label (was
+  `EE_POSE_GRADIENT`); added to bench `PER_ALGO_SPECS`; equivalence runner
+  standardized (real `hd_data->d_workspace`, removed the bespoke
+  `GRID_CUDA_RUN_FLOATING_EEPOSE_HESSIAN` gate). FLOATING accuracy validated
+  (iiwa14). Timing recapture + FIXED accuracy are backlogged (§4, §5).
 
 ### 1. Inner-owns-placement UNITY (new 2026-05-25; current code works via kernel-repoint — purity, not correctness)
 - **Full orchestrator → `*_full_inner` migration** for `id_du`, `fd_du`,
@@ -282,8 +288,25 @@ Last updated 2026-05-25. Grouped by theme; rough priority within each.
   the per-cell JSONs, not yet rendered.
 - **Autotune `performance_threads`**: binary-search the batch-throughput-
   maximizing launch thread count (≤ `MAX_PERF_LEVEL_THREADS`); expose it.
+- **Spilled-tier re-sweep — `fdsva_so` single_us + `ee_pose_hessian` (d2ee)
+  timing** (bundle into ONE re-run). `ee_pose_hessian` is now in the bench
+  (`PER_ALGO_SPECS`) but has never been timed; `fdsva_so` single_us was dropped
+  when its TU hit the -rdc regcount error (now fixed) so single-call numbers need
+  recapture. ⚠️ **TIER-DEBUGGING RISK**: the d2ee and fdsva_so *spill* paths at
+  LITE/MINIMAL on big robots (g1/h1_2) are **unexercised by the bench so far** —
+  this re-sweep is the first time they run under the timing harness, so expect
+  possible per-cell crashes/OOB to debug (same bug classes as §Resolved). Budget
+  for it. Do NOT run heavy CPU/GPU work concurrently (skews timing).
 
 ### 5. Correctness / coverage
+- **FIXED-path kinematics accuracy gap (newly surfaced 2026-05-25)**: the
+  equivalence runner's FIXED branch (`#else`, `cuda_equivalence_runner.cu`
+  ~500-593) is **dynamics-only** — it uses the host wrappers (id/minv/fd/id_du/
+  fd_du/aba/crba) and runs **no kinematics**. So the `ee_pose` / `ee_pose_gradient`
+  / `ee_pose_hessian` (d2ee) accuracy I standardized is validated **FLOATING-only**
+  (iiwa14-floating passed). FIXED-base EE-pose/gradient/hessian accuracy is NOT
+  yet wired into the runner. To close: add the three kinematics kernels (or host
+  wrappers) to the FIXED branch + extend the requested set there.
 - **nvcc/ptxas compile-warnings sweep** (`-Werror`-style build pass). Python
   reference path is already DeprecationWarning-clean.
 
