@@ -172,3 +172,37 @@ LITE perf matters. (Production floating path is world frame; fixed is body.)
   via `URDFParser`, `cg.gen_idsva_so_body_frame_inner_temp_mem_size()`,
   `cg.py_arena_bytes(t_count)`, `cg.cuda_target_shared_mem_bytes` /
   `cuda_target_lite_shared_mem_bytes`.
+
+## Implementation log — 2026-05-25 (UNVALIDATED working tree; commits need approval)
+
+Done (no-compile probe shows it generates + fits; NOT yet compiled/equivalence-tested):
+
+1. **idsva_so world inner** owns placement: `SCRATCH_IN_SMEM` template +
+   top-of-body `if constexpr(!SCRATCH_IN_SMEM){s_temp=d_workspace;}`;
+   `gen_idsva_so_world_frame_inner_function_call` gained `scratch_in_smem_expr`
+   (default `"true"` → standalone idsva world kernel byte-identical).
+2. **`fdsva_so_full_inner`** (new): wraps the whole fdsva orchestration
+   (XImats-helper → minv → fd → fd-grad-inline → idsva → contraction) as one
+   inner templated `<T, SCRATCH_IN_SMEM, FD_GRAD_USE_SPILL, CONTRACT_IN_SMEM>`.
+   The `s_temp` repoint at the top covers EVERY consumer incl. the helper sincos,
+   so the kernel never repoints. `gen_fdsva_so_full_inner_function_call` mirrors
+   the def. Both fdsva kernel paths now call it (rungs 0–5 behavior-preserving;
+   new rung 6 = pool→global). Registered in the class import list.
+3. **fdsva tier level-6 (both bases)**: `("pool_global", base_t_count, T,T,F,F,F,T)`.
+   The full inner hands the placed pool to the idsva inner (world OR body), so it
+   works for fixed too without touching the aliased body inner.
+   Probe: h1_2_floating fdsva 198→**53.8 KB**, fits; (re-probe fixed pending).
+
+REMAINING for full unity (these kernels currently WORK via kernel-side repoint —
+deferred, not broken):
+- `gen_fdsva_so_device` (inline API) still has a duplicate inline orchestration →
+  rewire to call `fdsva_so_full_inner`.
+- `id_du`, `fd_du`, `integrator_gradient`: migrate kernel-side `s_temp` repoints
+  into `*_full_inner` orchestration inners (same pattern as fdsva).
+- standalone idsva body kernel `output_temp` rung: migrate its kernel repoint to a
+  body-inner `SCRATCH_IN_SMEM` (or leave — it works).
+
+VALIDATION OWED before commit: regen all robots; compile iiwa14 + g1 + h1_2;
+idsva_so / fdsva_so / world-frame CUDA equivalence at PERF and MINIMAL, fixed +
+floating. Rungs 0–5 MUST be numerically identical (pure relocation); rung 6 must
+match too. Sanitizer on h1_2_floating MINIMAL.
