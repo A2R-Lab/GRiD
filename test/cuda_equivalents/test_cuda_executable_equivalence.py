@@ -18,7 +18,7 @@ from RBDReference.equivalents.model_sources import (
     iter_robot_cases,
     resolve_robot_spec,
 )
-from RBDReference.equivalents import build_adapter, resolve_backend
+from RBDReference.equivalents.reference_backend import build_project_adapter
 from RBDReference.equivalents.state_sampling import (
     DynamicsSample,
     _joint_ranges,
@@ -1116,9 +1116,12 @@ def _run_cuda_equivalence_case(
             f"Could not resolve manifest {spec.robot_id}. Run ./developer_install.sh before "
             f"executing CUDA equivalence tests. Resolution error: {exc}"
         )
-    backend = resolve_backend(None)  # GRID_REFERENCE_BACKEND (default: reference)
-    _progress(config, f"building {backend} reference adapter for {spec.robot_id}-{base_mode}")
-    project_model = build_adapter(spec, resolved, base_mode=base_mode, backend=backend)
+    # Single pure-Python oracle: this harness compares the analytic d2ee, for
+    # which Pinocchio's finite-difference hessian is not a valid oracle (it blows
+    # up near the rpy atan2 wraps). The Pinocchio backend swap is used by the
+    # second-order tests, where pin_so_ext provides an EXACT analytic oracle.
+    _progress(config, f"building reference adapter for {spec.robot_id}-{base_mode}")
+    project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
 
     build_dir = tmp_path / f"cuda_{spec.robot_id}_{base_mode}"
     build_dir.mkdir()
@@ -1188,6 +1191,20 @@ def _run_cuda_equivalence_case(
                     verbose=True,
                 )
                 expected_value = _expected_output(project_model, sample, name)
+                # The reference quantity can be genuinely UNDEFINED at degenerate
+                # configs — e.g. baxter's q=0 puts the EE frame at an rpy/atan2
+                # gimbal-lock singularity (pitch_sqrt_term -> 0), so the
+                # roll/pitch/yaw pose Jacobian / Hessian is non-finite in the
+                # reference AND in CUDA. We cannot validate CUDA against an
+                # undefined value, so skip when the REFERENCE itself is non-finite.
+                # This only fires where the math has no answer; a finite reference
+                # is always asserted, so a real CUDA NaN/bug is never masked.
+                if not np.all(np.isfinite(np.asarray(expected_value, dtype=np.float64))):
+                    skipped.append(
+                        f"{spec.robot_id}/{sample.name}/{name} "
+                        "(reference undefined at this config: non-finite, e.g. rpy gimbal lock)"
+                    )
+                    continue
                 # Known float32 limitation: the ABA recursion can go non-finite
                 # on moderately ill-conditioned floating-base configs (e.g. the
                 # quaternion corner samples) where the robust Minv-based

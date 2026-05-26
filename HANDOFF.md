@@ -255,10 +255,13 @@ hide bugs). Both point to the same fix: a fast reference + broader, faster valid
   (coalesced dot doesn't fit the n^2-stride contraction; SO-spill cost is inherent
   global-mem latency, not coalescing).
 
-**P0 — finish current wave:** DONE except the **broadened CUDA re-validation** (4 gate
-robots + baxter/fetch to confirm the crba S-index fix and probe whether old code was
-buggy there) — INTENTIONALLY DEFERRED to run *fast* after P1-A, rather than grind the
-slow Python reference now.
+**P0 — finish current wave:** DONE. The **crba S-index fix is CONFIRMED GREEN**
+(2026-05-26) on the branched robots that exercise the path: baxter + fetch, fixed +
+floating, all pass CUDA equivalence (crba never appears in any failure). One incidental
+finding: baxter-**fixed** `q=0` is an rpy/atan2 **gimbal-lock singularity** — the EE
+pose Jacobian/Hessian is non-finite in BOTH the reference and CUDA (not a codegen bug).
+Handled by a harness guard that skips a comparison only when the *reference* itself is
+non-finite (a finite reference is always asserted, so no real NaN is masked).
 
 **P1 — Validation & measurement infra (TOP PRIORITY, unblocks everything):**
 - **P1-A · Pinocchio + C++ fast reference** (keystone — see §7 item): sub-call
@@ -281,11 +284,23 @@ slow Python reference now.
     (numpy+sympy) vs `requirements-dev.txt` (pin/robot_descriptions/bs4/pybind11/
     pytest). All 7 GRiD importers + `developer_install.sh` pin_so_ext path rewired;
     validated both backends build + agree on rnea (iiwa14, 7e-15) and iiwa14 rnea
-    equivalence passes through the moved suite. **NOT yet committed** (awaiting git
-    approval: new RBDReference branch + submodule commit + parent gitlink bump).
-  - **TODO (still P1-A):** point the slow second-order refs (`idsva_so`/`fdsva_so`)
-    at the pinocchio backend in the CUDA harness so big-robot references are C++ ms,
-    then run the deferred broad re-validation below.
+    equivalence passes through the moved suite. **Committed + pushed** on `perf-cleanup`
+    (submodule `abdbd95`, parent `3da85d2`, gitlink bumped).
+  - **Pinocchio-as-oracle scope, settled 2026-05-26 (iiwa14-fixed end-to-end test):**
+    the pinocchio backend is an **EXACT** CUDA oracle for ALL dynamics
+    (rnea/aba/fd/minv/crba/rnea_grad/fd_grad) **and** `ee_pose` **and**
+    `ee_pose_gradient`. It is **NOT** a valid oracle for **`d2ee`**: pinocchio's d2ee is
+    finite-difference and blows up order-1 near the rpy/atan2 wraps (iiwa14 high_velocity:
+    CUDA-analytic −2.08 vs finite-diff +0.11), so the CUDA *executable* harness — which
+    compares analytic d2ee — stays a **single pure-Python oracle** (no half-pinocchio
+    mix; `build_project_adapter`, documented inline). This revises the earlier
+    "C++ finite-diff hessian" plan: keep analytic d2ee; a fast d2ee oracle, if ever
+    needed, must be analytic, not finite-diff. See [[project-grid-pinocchio-reference-backlog]].
+  - **TODO (still P1-A) — the real pinocchio win:** wire the **EXACT** `pin_so_ext`
+    oracle into the **second-order CUDA tests** (`idsva_so`/`fdsva_so`), the actual
+    documented multi-hour pole, via the same project(codegen)/reference(oracle) split
+    proven on the executable harness; expand those SO tests beyond iiwa14 to the big
+    robots (g1/h1_2) where the pure-Python SO reference takes hours.
 - **P1-B · Perf-measurement tooling:** `run_multi_version.py` stalls / 25-min compiles /
   can't parallelize (it's a bench). Fix (parallel compiles, isolate only the timing
   window) or build a light per-algorithm timing harness. *We have ZERO perf numbers.*
