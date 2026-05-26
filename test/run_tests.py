@@ -11,15 +11,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from test.pinocchio_equivalents.utils.model_sources import (
+from RBDReference.equivalents.model_sources import (
     load_manifest,
     resolve_robot_spec,
     select_robot_specs,
 )
-from test.pinocchio_equivalents.utils.source_lock import build_lock_entry
+from RBDReference.equivalents.source_lock import build_lock_entry
+from RBDReference.equivalents import MANIFEST_PATH, SOURCE_LOCK_PATH
 
 
-SUITE_ROOT = REPO_ROOT / "test" / "pinocchio_equivalents"
+SUITE_ROOT = REPO_ROOT / "RBDReference" / "tests"
 DEFAULT_TARGET = SUITE_ROOT / "test_all.py"
 
 
@@ -75,7 +76,7 @@ def prepare_models(manifest_path: Path, tier: str | None, update_lock: bool) -> 
     )
 
     if update_lock:
-        checked_in_lock_path = SUITE_ROOT / "ROBOT_SOURCE_LOCK.json"
+        checked_in_lock_path = SOURCE_LOCK_PATH
         checked_in_lock_path.write_text(
             json.dumps(generated_lock, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -124,7 +125,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    manifest_path = SUITE_ROOT / "robot_manifest.json"
+    manifest_path = MANIFEST_PATH
     if args.list_tests:
         return list_tests(manifest_path, args.tier)
     if args.prepare_models:
