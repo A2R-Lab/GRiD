@@ -311,6 +311,24 @@ Last updated 2026-05-25. Grouped by theme; rough priority within each.
   considering EE-pose/gradient/hessian accuracy fully validated.
 - **nvcc/ptxas compile-warnings sweep** (`-Werror`-style build pass). Python
   reference path is already DeprecationWarning-clean.
+- **Parallel equivalence testing** (proven 2026-05-26): the CUDA equivalence tests are
+  correctness-only and independent per `(robot, base)`, so they run concurrently — ran
+  5 cases in parallel with no issue. Each full `grid.cuh` `nvcc -O0` compile peaks
+  ~5 GB RSS; size parallelism to `min(nproc, free_RAM/~5 GB)` (this box 24c/62 GB →
+  ~8–10 wide). Clear `.pytest_cache/grid_cuda` after codegen changes (cache key is
+  model+config, NOT source). Use `-s` for live progress (`-q` buffers to the end).
+  TODO: make the harness auto-parallel — add `pytest-xdist` `-n` sized by cores+RAM, or
+  a custom `(robot,base)` sharding runner. The PERF sweep must stay isolated.
+- **h1_2-floating inline DEVICE path exceeds the sm_120 ~99 KB smem cap** (found
+  2026-05-26): the always-smem inline `*_device` paths (forward_dynamics, etc.) request
+  >99 KB dynamic smem on the biggest floating robot, so the equivalence runner's
+  `cudaFuncSetAttribute(...MaxDynamicSharedMemorySize...)` fails ("invalid argument")
+  *before any kernel runs* → h1_2-floating equivalence aborts early. **PRE-EXISTING**
+  (the device-path code + `FD_DEVICE_DYNAMIC_SHARED_MEM_BYTES` are byte-identical to
+  pre-wave base); the production KERNEL path spills and fits, and g1-floating already
+  validates the floating spill rungs. FIX: make the inline device paths tier-aware/
+  spillable (completes the deferred fd audit) OR guard the runner to skip device-path
+  setattr above the device cap; then h1_2-floating kernel paths can validate too.
 
 ### 6. Naming / API clarity
 - **Broader name audit**: `*_DYNAMIC_SHARED_MEM_BYTES`, the tier names, and the
@@ -321,6 +339,21 @@ Last updated 2026-05-25. Grouped by theme; rough priority within each.
   parse diagnostics, Pinocchio-shaped metadata helpers (`nq`/`nv`/quaternion
   order), mark fixed-base-only methods. See
   `test/pinocchio_equivalents/PINOCCHIO_ALIGNMENT_BACKLOG.md`.
+- **Pinocchio as a FAST reference — CORE, run as a dedicated project AFTER this
+  perf-cleanup session** (user 2026-05-26): the pure-Python `RBDReference` is the
+  equivalence-test bottleneck (the second-order `idsva_so`/`fdsva_so` refs on h1_2 take
+  *hours* of single-threaded Python). Replace with 1:1 pinocchio (C++) references
+  wherever they match, to make the reference fast and never the bottleneck:
+  - Compose pinocchio sub-calls + thin C++ glue for GRiD algos lacking a direct entry
+    (`fdsva_so` ← `idsva_so` + `minv`; `fd` ← `rnea`/`minv`; etc.).
+  - Use pinocchio kinematics + kinematic derivatives for `ee_pose`/`_gradient`.
+  - Use a **C++ finite-difference** reference for the `d2ee` hessian (vs pure Python).
+  - Cleanest architecture: a hooks file in `RBDReference` exposing pinocchio-equivalent
+    inputs/outputs for every function; simplify the tests to call one shared interface
+    for both the CUDA and reference sides (true 1:1, fairest, most testable).
+  - Keep pure-Python `RBDReference` as the fallback/cross-check where pinocchio lacks an
+    identical quantity/layout. Builds on `test/pinocchio_equivalents/`. Mind joint-order/
+    frame conventions (adapter already resolves pinocchio order) + float32 tolerance.
 
 ### 8. Branch merge (the big one)
 - **FF-merge `humanoid-tier-spill` → `modernizing-tests`** — held pending final
