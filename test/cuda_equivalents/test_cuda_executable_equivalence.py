@@ -13,13 +13,13 @@ import numpy as np
 import pytest
 
 from GRiDCodeGenerator import GRiDCodeGenerator
-from test.pinocchio_equivalents.conftest import MANIFEST_PATH
-from test.pinocchio_equivalents.utils.model_sources import (
+from RBDReference.equivalents import MANIFEST_PATH
+from RBDReference.equivalents.model_sources import (
     iter_robot_cases,
     resolve_robot_spec,
 )
-from test.pinocchio_equivalents.utils.project_adapter import build_project_adapter
-from test.pinocchio_equivalents.utils.state_sampling import (
+from RBDReference.equivalents import build_adapter, resolve_backend
+from RBDReference.equivalents.state_sampling import (
     DynamicsSample,
     _joint_ranges,
     build_dynamics_samples,
@@ -1116,8 +1116,9 @@ def _run_cuda_equivalence_case(
             f"Could not resolve manifest {spec.robot_id}. Run ./developer_install.sh before "
             f"executing CUDA equivalence tests. Resolution error: {exc}"
         )
-    _progress(config, f"building project adapter for {spec.robot_id}-{base_mode}")
-    project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
+    backend = resolve_backend(None)  # GRID_REFERENCE_BACKEND (default: reference)
+    _progress(config, f"building {backend} reference adapter for {spec.robot_id}-{base_mode}")
+    project_model = build_adapter(spec, resolved, base_mode=base_mode, backend=backend)
 
     build_dir = tmp_path / f"cuda_{spec.robot_id}_{base_mode}"
     build_dir.mkdir()

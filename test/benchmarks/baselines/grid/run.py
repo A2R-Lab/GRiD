@@ -28,7 +28,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from GRiDCodeGenerator import GRiDCodeGenerator  # noqa: E402
 from GRiDCodeGenerator.algo_registry import ALGO_REGISTRY  # noqa: E402
-from test.pinocchio_equivalents.utils.project_adapter import strict_parse_robot  # noqa: E402
+from RBDReference.equivalents.reference_backend import strict_parse_robot  # noqa: E402
 from test.benchmarks.timing_parser import (  # noqa: E402
     parse_grid_output, fill_nulls, build_metadata,
 )

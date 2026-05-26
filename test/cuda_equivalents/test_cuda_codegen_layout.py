@@ -13,12 +13,12 @@ from GRiDCodeGenerator.algorithms._idsva_so import (
     idsva_so_parent_topology_needs_reference_order_output_repair,
 )
 from test.cuda_equivalents.test_cuda_executable_equivalence import _detect_cuda_arch
-from test.pinocchio_equivalents.conftest import MANIFEST_PATH
-from test.pinocchio_equivalents.utils.model_sources import (
+from RBDReference.equivalents import MANIFEST_PATH
+from RBDReference.equivalents.model_sources import (
     iter_robot_cases,
     resolve_robot_spec,
 )
-from test.pinocchio_equivalents.utils.project_adapter import build_project_adapter
+from RBDReference.equivalents.reference_backend import build_project_adapter
 
 
 CONST_RE = re.compile(r"const int (?P<name>[A-Z0-9_]+) = (?P<value>-?[0-9]+);")

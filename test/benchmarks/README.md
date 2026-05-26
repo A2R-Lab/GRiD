@@ -112,7 +112,7 @@ sudo apt-get install libcppadcg-dev
 
 #### Pinocchio C++ binding for the equivalence suite (`pin_so_ext`)
 
-The `test/pinocchio_equivalents/` suite uses Pinocchio's C++ implementation
+The `RBDReference/` suite uses Pinocchio's C++ implementation
 as the golden oracle for RBDReference + CUDA equivalence tests
 (particularly for second-order derivatives, where Python Pinocchio's
 SO API isn't directly comparable). This binding is built automatically
@@ -140,7 +140,7 @@ the cmeel prefix in the same venv.
 
 ```bash
 # Builds pin_so_ext on first run (~30s); subsequent runs are cache hits.
-.venv/bin/pytest test/pinocchio_equivalents/test_idsva_so_equivalence.py -k iiwa14 -x
+.venv/bin/pytest RBDReference/tests/test_second_order_pinocchio_equivalence.py -k iiwa14 -x
 ```
 
 If you hit build errors, the most common fixes are:

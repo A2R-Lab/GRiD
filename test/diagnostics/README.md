@@ -76,7 +76,7 @@ codegen variants. Conventions:
   Strict numerical equivalence.
 - `test/python_wrappers/` — pytest suites for `grid_rbd` Python +
   JAX APIs.
-- `test/pinocchio_equivalents/` — correctness tests against Pinocchio.
+- `RBDReference/tests/` — correctness tests against Pinocchio.
 
 Diagnostics sit alongside these as a fourth category: tooling that
 informs design decisions, not assertion suites.

@@ -47,7 +47,7 @@ Canonical Python lives in the `RBDReference` submodule (not the adapter):
 
 `ProjectModelAdapter.integrator / integrator_gradient` are thin pass-throughs
 that wrap RBDReference and apply `normalize_vector` / `normalize_matrix`
-([project_adapter.py:112-119](test/pinocchio_equivalents/utils/project_adapter.py#L112)).
+([project_adapter.py:112-119](RBDReference/equivalents/reference_backend.py#L112)).
 `normalize_matrix` is the IDENTITY; RBDReference already emits in GRiD internal
 order, so CUDA-vs-ProjectModelAdapter is an apples-to-apples internal-order
 comparison.
@@ -94,8 +94,8 @@ CUDA codegen:
 Test files:
 - CUDA equivalence: `test/cuda_equivalents/test_cuda_integrator_equivalence.py`
   (smoke runner `cuda_integrator_smoke_runner.cu`).
-- Pinocchio equivalence: `test/pinocchio_equivalents/tests/test_integrator_pinocchio_equivalence.py`.
-- FD sanity (analytical ↔ finite diff): `test/pinocchio_equivalents/tests/test_integrator_gradient_fd_sanity.py`
+- Pinocchio equivalence: `RBDReference/tests/test_integrator_pinocchio_equivalence.py`.
+- FD sanity (analytical ↔ finite diff): `RBDReference/tests/test_integrator_gradient_fd_sanity.py`
   (fixed-base only).
 
 ---
@@ -266,6 +266,26 @@ slow Python reference now.
   for the d2ee hessian, a `RBDReference` hooks file (one shared interface both sides),
   hybrid pure-Python fallback. Turns hours-long references into seconds. Then run the
   deferred P0 broad re-validation (now fast) to confirm crba + the whole wave.
+  - **DONE 2026-05-26 — relocation + shared interface + one-line swap.** The whole
+    pinocchio-equivalence layer moved OUT of `test/pinocchio_equivalents/` INTO the
+    `RBDReference` submodule, so the reference is self-contained + self-testing:
+    `RBDReference/equivalents/` is the reusable lib (`conventions.py` ← normalization;
+    `reference_backend.py` ← the pure-Python adapter; `pinocchio_backend.py` ← the
+    pinocchio+`pin_so_ext` adapter — both expose the IDENTICAL surface; plus
+    `model_sources`/`source_lock`/`state_sampling`/`tolerances`/`comparators`, the two
+    JSON manifests, and the `pin_so_ext` C++ ext). `RBDReference/tests/` holds the 17
+    equivalence tests + conftest (817 cases collect green). The **one-line swap** is
+    `RBDReference.equivalents.build_adapter(..., backend="reference"|"pinocchio")` /
+    env `GRID_REFERENCE_BACKEND` — wired into the CUDA harness at the
+    `build_adapter(...)` call. Requirements split: base `requirements.txt`
+    (numpy+sympy) vs `requirements-dev.txt` (pin/robot_descriptions/bs4/pybind11/
+    pytest). All 7 GRiD importers + `developer_install.sh` pin_so_ext path rewired;
+    validated both backends build + agree on rnea (iiwa14, 7e-15) and iiwa14 rnea
+    equivalence passes through the moved suite. **NOT yet committed** (awaiting git
+    approval: new RBDReference branch + submodule commit + parent gitlink bump).
+  - **TODO (still P1-A):** point the slow second-order refs (`idsva_so`/`fdsva_so`)
+    at the pinocchio backend in the CUDA harness so big-robot references are C++ ms,
+    then run the deferred broad re-validation below.
 - **P1-B · Perf-measurement tooling:** `run_multi_version.py` stalls / 25-min compiles /
   can't parallelize (it's a bench). Fix (parallel compiles, isolate only the timing
   window) or build a light per-algorithm timing harness. *We have ZERO perf numbers.*
@@ -399,7 +419,7 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
 - URDFParser/RBDReference additive improvements: strict-parse API, structured
   parse diagnostics, Pinocchio-shaped metadata helpers (`nq`/`nv`/quaternion
   order), mark fixed-base-only methods. See
-  `test/pinocchio_equivalents/PINOCCHIO_ALIGNMENT_BACKLOG.md`.
+  `RBDReference/tests/PINOCCHIO_ALIGNMENT_BACKLOG.md`.
 - **Pinocchio as a FAST reference — CORE, run as a dedicated project AFTER this
   perf-cleanup session** (user 2026-05-26): the pure-Python `RBDReference` is the
   equivalence-test bottleneck (the second-order `idsva_so`/`fdsva_so` refs on h1_2 take
@@ -413,7 +433,7 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
     inputs/outputs for every function; simplify the tests to call one shared interface
     for both the CUDA and reference sides (true 1:1, fairest, most testable).
   - Keep pure-Python `RBDReference` as the fallback/cross-check where pinocchio lacks an
-    identical quantity/layout. Builds on `test/pinocchio_equivalents/`. Mind joint-order/
+    identical quantity/layout. Builds on `RBDReference/equivalents/`. Mind joint-order/
     frame conventions (adapter already resolves pinocchio order) + float32 tolerance.
 
 ### 8. Branch merge (the big one)
@@ -426,4 +446,4 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
 - `docs/idsva_so_inner_refactor_notes.md` — deferred inner de-alias design.
 - `docs/python_wrappers_plan.md` — grid-rbd bindings (historical plan; v0.3 shipped).
 - `test/benchmarks/overnight_tier_sweep.md` — partial sweep results (pre-fix run).
-- `test/pinocchio_equivalents/PINOCCHIO_ALIGNMENT_BACKLOG.md` — Pinocchio alignment.
+- `RBDReference/tests/PINOCCHIO_ALIGNMENT_BACKLOG.md` — Pinocchio alignment.

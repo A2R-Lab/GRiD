@@ -10,7 +10,7 @@ GRiD generates CUDA rigid-body-dynamics kernels. We trust them only as far as we
 can show they match an independent reference. There are two equivalence layers,
 and the order matters:
 
-1. **Python reference ↔ Pinocchio** (`test/pinocchio_equivalents/`), float64 vs
+1. **Python reference ↔ Pinocchio** (`RBDReference/`), float64 vs
    float64. Pinocchio is the canonical, independently-implemented authority.
    This validates `RBDReference` (the hand-written Python reference).
 2. **Generated CUDA ↔ Python reference** (`test/cuda_equivalents/`), float32 vs
@@ -31,7 +31,7 @@ whose contribution is proportional to `|qd|`, `|qd|²`, or `|qdd|`. At a near-ze
 state these terms are ~0, so a test that only samples small states is
 **structurally blind** to the most common class of bug.
 
-Therefore the shared sampler (`test/pinocchio_equivalents/utils/state_sampling.py`,
+Therefore the shared sampler (`RBDReference/equivalents/state_sampling.py`,
 `build_dynamics_samples`) deliberately includes high-energy states:
 
 - `zero`, `conservative` (|qd|≤1, |qdd|≤2) — sanity / low energy.

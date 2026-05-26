@@ -248,7 +248,7 @@ Tests
   lines 135-147 is reused for any-thread-count coverage in (B).
 * :file:`test/python_wrappers/*` — no changes expected; already
   SIMT-only and thread-count-agnostic at the test level.
-* :file:`test/pinocchio_equivalents/*` — no backend dependency; no
+* :file:`RBDReference/equivalents/* + RBDReference/tests/*` — no backend dependency; no
   change.
 
 GLASS submodule
@@ -275,7 +275,7 @@ Existing suites cover this thoroughly. Re-run after each phase:
 
    PYTHONPATH=. .venv/bin/pytest \
        test/python_wrappers/ \
-       test/pinocchio_equivalents/tests/ \
+       RBDReference/tests/ \
        test/cuda_equivalents/ \
        -q
 

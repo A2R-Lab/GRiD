@@ -68,7 +68,7 @@ The Pinocchio-side floating convention regression suite exercises both public
 floating-base orderings across the current floating robot manifest:
 
 ```bash
-.venv/bin/python -m pytest test/pinocchio_equivalents/tests/test_floating_base_conventions.py -q
+.venv/bin/python -m pytest RBDReference/tests/test_floating_base_conventions.py -q
 ```
 
 The CUDA executable equivalence suite still defaults to the Pinocchio-facing

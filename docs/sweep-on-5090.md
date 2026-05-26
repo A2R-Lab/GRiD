@@ -130,7 +130,7 @@ pipeline. Three concurrent threads:
 1. **Codegen modernization** — clean shared-memory arena, opt-in dynamic shared mem
    via `cudaFuncSetAttribute`, proper anti-LICM machinery for single-call timings,
    the GLASS round-2 linalg backend wired through.
-2. **Pinocchio-grounded equivalence** — `test/pinocchio_equivalents/` now uses the
+2. **Pinocchio-grounded equivalence** — `RBDReference/` now uses the
    Pinocchio C++ implementation as the golden oracle for every RBDReference public
    algorithm. 320 pass / 12 narrow singular-Minv skips across all 8 manifest robots
    × fixed+floating.
@@ -447,7 +447,7 @@ your sweep). Parked until someone runs on sm_86 and cares.
 ### Pinocchio-equivalence cleanup (P4)
 
 - Audit comparison plumbing (shapes, value scales, semantics) →
-  `test/pinocchio_equivalents/COVERAGE.md` summary table.
+  `RBDReference/COVERAGE.md` summary table.
 - Spot-check `test/cuda_equivalents/` routes through validated Python algs.
 - Dropped: sample-diversity sweep, rnea∘aba identity, apply_external_forces
   test, binding-bootstrap hardening.
@@ -484,7 +484,7 @@ GRiD-A2R/
 │   │   ├── run_multi_version.py      # multi-column sweep driver
 │   │   ├── timing_parser.py          # parses stdout → JSON schema
 │   │   └── generate_report.py        # JSON → markdown report
-│   ├── pinocchio_equivalents/        # Python ↔ Pinocchio golden tests
+│   ├── RBDReference/equivalents + tests/        # Python ↔ Pinocchio golden tests
 │   └── cuda_equivalents/             # CUDA ↔ Python tests
 └── docs/
     └── sweep-on-5090.md              # this file

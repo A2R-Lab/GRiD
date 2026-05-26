@@ -34,12 +34,12 @@ from test.cuda_equivalents.test_cuda_executable_equivalence import (
     _sample_to_stdin,
     _thread_counts,
 )
-from test.pinocchio_equivalents.conftest import MANIFEST_PATH
-from test.pinocchio_equivalents.utils.model_sources import (
+from RBDReference.equivalents import MANIFEST_PATH
+from RBDReference.equivalents.model_sources import (
     iter_robot_cases,
     resolve_robot_spec,
 )
-from test.pinocchio_equivalents.utils.project_adapter import build_project_adapter
+from RBDReference.equivalents.reference_backend import build_project_adapter
 
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_integrator_smoke_runner.cu")
