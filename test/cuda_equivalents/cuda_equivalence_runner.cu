@@ -374,6 +374,7 @@ void run() {
     if (floating_algorithm_requested("crba")) {
         grid::crba_kernel<T><<<1, g_num_threads, grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_mat,
+            hd_data->d_workspace,
             d_q_qd,
             grid::NUM_JOINTS + grid::NUM_VEL,
             d_robot_model,
