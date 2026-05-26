@@ -19,6 +19,7 @@ from RBDReference.tests.model_sources import (
     resolve_robot_spec,
 )
 from RBDReference.equivalents.reference_backend import build_project_adapter
+from RBDReference.equivalents import build_adapter, resolve_backend
 from RBDReference.tests.state_sampling import (
     DynamicsSample,
     _joint_ranges,
@@ -919,9 +920,9 @@ def _normalize_cuda_minv(matrix: np.ndarray) -> np.ndarray:
     return normalized
 
 
-def _has_invertible_project_mass_matrix(project_model, q, min_singular_value=1e-12):
+def _has_invertible_project_mass_matrix(reference_model, q, min_singular_value=1e-12):
     try:
-        mass = np.asarray(project_model.crba(q), dtype=np.float64)
+        mass = np.asarray(reference_model.crba(q), dtype=np.float64)
         singular_values = np.linalg.svd(mass, compute_uv=False)
     except np.linalg.LinAlgError:
         return False
@@ -933,7 +934,7 @@ def _has_invertible_project_mass_matrix(project_model, q, min_singular_value=1e-
     )
 
 
-def _forward_dynamics_float32_matches(project_model, sample, cuda) -> bool:
+def _forward_dynamics_float32_matches(reference_model, project_model, sample, cuda, robot_id) -> bool:
     """True if the CUDA Minv-based forward_dynamics for this sample is finite and
     matches the float64 reference within the FD tolerance.
 
@@ -948,8 +949,8 @@ def _forward_dynamics_float32_matches(project_model, sample, cuda) -> bool:
     actual = np.asarray(cuda["forward_dynamics"], dtype=np.float64)
     if not np.all(np.isfinite(actual)):
         return False
-    expected = _expected_output(project_model, sample, "forward_dynamics")
-    tol = _cuda_tolerance(project_model.spec.robot_id, "forward_dynamics")
+    expected = _expected_output(reference_model, project_model, sample, "forward_dynamics")
+    tol = _cuda_tolerance(robot_id, "forward_dynamics")
     return bool(
         np.allclose(actual, expected, rtol=tol["rtol"], atol=tol["atol"])
         or (
@@ -960,45 +961,52 @@ def _forward_dynamics_float32_matches(project_model, sample, cuda) -> bool:
     )
 
 
-def _expected_output(project_model, sample, name: str):
-    zeros = np.zeros(project_model.nv, dtype=np.float64)
+def _expected_output(reference_model, project_model, sample, name: str):
+    # reference_model is the oracle (default pinocchio, exact) for every algorithm
+    # EXCEPT d2ee. `end_effector_pose_hessian` always comes from project_model
+    # (analytic pure-Python) because pinocchio's d2ee is finite-diff and invalid at
+    # rpy/atan2 wraps. EE targets are enumerated from the model-under-test `robot` so
+    # the compared set matches what CUDA emits (the same names resolve in both backends).
+    robot = project_model.robot
+    zeros = np.zeros(reference_model.nv, dtype=np.float64)
     if name == "inverse_dynamics":
-        return project_model.rnea(sample.q, sample.qd, zeros).reshape(1, -1)
+        return reference_model.rnea(sample.q, sample.qd, zeros).reshape(1, -1)
     if name == "direct_minv":
-        return project_model.minv(sample.q)
+        return reference_model.minv(sample.q)
     if name == "forward_dynamics":
-        return project_model.forward_dynamics(sample.q, sample.qd, sample.qdd).reshape(
+        return reference_model.forward_dynamics(sample.q, sample.qd, sample.qdd).reshape(
             1, -1
         )
     if name == "inverse_dynamics_gradient_q":
-        return project_model.rnea_grad(sample.q, sample.qd, zeros)[0]
+        return reference_model.rnea_grad(sample.q, sample.qd, zeros)[0]
     if name == "inverse_dynamics_gradient_qd":
-        return project_model.rnea_grad(sample.q, sample.qd, zeros)[1]
+        return reference_model.rnea_grad(sample.q, sample.qd, zeros)[1]
     if name == "forward_dynamics_gradient_q":
-        return project_model.forward_dynamics_grad(sample.q, sample.qd, sample.qdd)[0]
+        return reference_model.forward_dynamics_grad(sample.q, sample.qd, sample.qdd)[0]
     if name == "forward_dynamics_gradient_qd":
-        return project_model.forward_dynamics_grad(sample.q, sample.qd, sample.qdd)[1]
+        return reference_model.forward_dynamics_grad(sample.q, sample.qd, sample.qdd)[1]
     if name == "aba":
-        return project_model.aba(sample.q, sample.qd, sample.qdd).reshape(1, -1)
+        return reference_model.aba(sample.q, sample.qd, sample.qdd).reshape(1, -1)
     if name == "crba":
-        return project_model.crba(sample.q)
+        return reference_model.crba(sample.q)
     if name == "end_effector_pose":
         poses = []
-        for jid in project_model.robot.get_leaf_nodes():
-            target = project_model.robot.get_joint_by_id(jid).get_name()
-            poses.append(project_model.end_effector_pose(sample.q, target))
+        for jid in robot.get_leaf_nodes():
+            target = robot.get_joint_by_id(jid).get_name()
+            poses.append(reference_model.end_effector_pose(sample.q, target))
         return np.concatenate(poses, axis=0).reshape(1, -1)
     if name == "end_effector_pose_gradient":
         gradients = []
-        for jid in project_model.robot.get_leaf_nodes():
-            target = project_model.robot.get_joint_by_id(jid).get_name()
-            gradient = project_model.end_effector_pose_gradient(sample.q, target)
+        for jid in robot.get_leaf_nodes():
+            target = robot.get_joint_by_id(jid).get_name()
+            gradient = reference_model.end_effector_pose_gradient(sample.q, target)
             gradients.append(np.asarray(gradient, dtype=np.float64).reshape(-1, order="F"))
         return np.concatenate(gradients, axis=0).reshape(1, -1)
     if name == "end_effector_pose_hessian":
+        # d2ee: analytic pure-Python ONLY (pinocchio finite-diff invalid here).
         hessians = []
-        for jid in project_model.robot.get_leaf_nodes():
-            target = project_model.robot.get_joint_by_id(jid).get_name()
+        for jid in robot.get_leaf_nodes():
+            target = robot.get_joint_by_id(jid).get_name()
             hessian = project_model.end_effector_pose_hessian(sample.q, target)
             hessians.append(np.asarray(hessian, dtype=np.float64).reshape(-1))
         return np.concatenate(hessians, axis=0).reshape(1, -1)
@@ -1116,12 +1124,24 @@ def _run_cuda_equivalence_case(
             f"Could not resolve manifest {spec.robot_id}. Run ./developer_install.sh before "
             f"executing CUDA equivalence tests. Resolution error: {exc}"
         )
-    # Single pure-Python oracle: this harness compares the analytic d2ee, for
-    # which Pinocchio's finite-difference hessian is not a valid oracle (it blows
-    # up near the rpy atan2 wraps). The Pinocchio backend swap is used by the
-    # second-order tests, where pin_so_ext provides an EXACT analytic oracle.
-    _progress(config, f"building reference adapter for {spec.robot_id}-{base_mode}")
+    # Two roles, never an arbitrary mix:
+    #  - project_model (always the pure-Python URDFParser adapter) is the
+    #    MODEL-UNDER-TEST input: codegen `robot`, EE-target/joint-bound enumeration,
+    #    AND the analytic `d2ee` oracle (pinocchio's d2ee is finite-diff and invalid
+    #    at rpy/atan2 gimbal wraps, so it can NEVER be the d2ee oracle).
+    #  - reference_model is the ORACLE for every other algorithm. It defaults to the
+    #    EXACT, independent pinocchio backend (the C++ authority) and can be forced to
+    #    the pure-Python reference via GRID_REFERENCE_BACKEND=reference. The single
+    #    documented exception (d2ee -> project_model) is forced by correctness, not an
+    #    arbitrary half-split.
     project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
+    oracle_backend = resolve_backend(os.environ.get("GRID_REFERENCE_BACKEND", "pinocchio"))
+    reference_model = (
+        project_model
+        if oracle_backend == "reference"
+        else build_adapter(spec, resolved, base_mode=base_mode, backend=oracle_backend)
+    )
+    _progress(config, f"oracle backend={oracle_backend} (d2ee always analytic) for {spec.robot_id}-{base_mode}")
 
     build_dir = tmp_path / f"cuda_{spec.robot_id}_{base_mode}"
     build_dir.mkdir()
@@ -1178,7 +1198,7 @@ def _run_cuda_equivalence_case(
         if "direct_minv" in cuda:
             cuda["direct_minv"] = _normalize_cuda_minv(cuda["direct_minv"])
         invertible_mass_matrix = _has_invertible_project_mass_matrix(
-            project_model, sample.q
+            reference_model, sample.q
         )
         for name in algorithms:
             if name in SINGULAR_DEPENDENT_ALGORITHMS and not invertible_mass_matrix:
@@ -1190,7 +1210,7 @@ def _run_cuda_equivalence_case(
                     f"{spec.robot_id}-{base_mode}/{sample.name}/{name}: comparing",
                     verbose=True,
                 )
-                expected_value = _expected_output(project_model, sample, name)
+                expected_value = _expected_output(reference_model, project_model, sample, name)
                 # The reference quantity can be genuinely UNDEFINED at degenerate
                 # configs — e.g. baxter's q=0 puts the EE frame at an rpy/atan2
                 # gimbal-lock singularity (pitch_sqrt_term -> 0), so the
@@ -1217,7 +1237,7 @@ def _run_cuda_equivalence_case(
                     name == "aba"
                     and not np.all(np.isfinite(np.asarray(cuda[name], dtype=np.float64)))
                     and np.all(np.isfinite(np.asarray(expected_value, dtype=np.float64)))
-                    and _forward_dynamics_float32_matches(project_model, sample, cuda)
+                    and _forward_dynamics_float32_matches(reference_model, project_model, sample, cuda, spec.robot_id)
                 ):
                     skipped.append(
                         f"{spec.robot_id}/{sample.name}/aba "
