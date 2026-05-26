@@ -13,13 +13,13 @@ import numpy as np
 import pytest
 
 from GRiDCodeGenerator import GRiDCodeGenerator
-from RBDReference.equivalents import MANIFEST_PATH
-from RBDReference.equivalents.model_sources import (
+from RBDReference.tests import MANIFEST_PATH
+from RBDReference.tests.model_sources import (
     iter_robot_cases,
     resolve_robot_spec,
 )
 from RBDReference.equivalents.reference_backend import build_project_adapter
-from RBDReference.equivalents.state_sampling import (
+from RBDReference.tests.state_sampling import (
     DynamicsSample,
     _joint_ranges,
     build_dynamics_samples,

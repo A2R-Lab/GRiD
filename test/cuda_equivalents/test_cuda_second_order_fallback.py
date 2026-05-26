@@ -17,8 +17,8 @@ from test.cuda_equivalents.test_cuda_executable_equivalence import (
     _run_runner,
     _sample_to_stdin,
 )
-from RBDReference.equivalents import MANIFEST_PATH
-from RBDReference.equivalents.model_sources import (
+from RBDReference.tests import MANIFEST_PATH
+from RBDReference.tests.model_sources import (
     iter_robot_cases,
     resolve_robot_spec,
 )

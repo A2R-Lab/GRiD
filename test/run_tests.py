@@ -11,13 +11,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from RBDReference.equivalents.model_sources import (
+from RBDReference.tests.model_sources import (
     load_manifest,
     resolve_robot_spec,
     select_robot_specs,
 )
-from RBDReference.equivalents.source_lock import build_lock_entry
-from RBDReference.equivalents import MANIFEST_PATH, SOURCE_LOCK_PATH
+from RBDReference.tests.source_lock import build_lock_entry
+from RBDReference.tests import MANIFEST_PATH, SOURCE_LOCK_PATH
 
 
 SUITE_ROOT = REPO_ROOT / "RBDReference" / "tests"
