@@ -233,6 +233,67 @@ launches.
 
 Last updated 2026-05-25. Grouped by theme; rough priority within each.
 
+## CURRENT PLAN — re-prioritized 2026-05-26 (perf-cleanup)
+
+Branch `perf-cleanup` (parent HEAD d414915, codegen 6cdba85, GLASS 3e910e1).
+Key re-prioritization: **validation + measurement infrastructure (P1) is now ABOVE
+further perf work**, driven by two hard learnings this effort — (1) we are optimizing
+**unmeasured** (the sweep tooling stalls), and (2) the crba pass uncovered a **latent
+branched-robot bug** that the 4-robot equivalence gate did not expose (coverage gaps
+hide bugs). Both point to the same fix: a fast reference + broader, faster validation.
+
+**DONE (committed/pushed on perf-cleanup):**
+- Inner-owns + surgical-spill correctness wave, all 9 algorithms (validated 6/8 gate
+  cases incl. g1 fixed+floating spill rungs; pure-relocation/byte-identical).
+- GLASS primitives (segmented_gemv, indexed_batched_gemm, dot_strided_coalesced) wired
+  into codegen. 5 perf passes: **id P1** (BFS-level GEMV fusion) + **minv P1**
+  (forward-pass sync fusion) — green, racecheck-clean; **crba P1** (depth-stepped fill)
+  — green + **fixed a latent parent-vs-jid S-index bug** on branched robots
+  (matches `RBDReference H[ind,j]=S_j^T*fh`; numpy old=1.6err/fixed=0); **ee/d2ee P2**
+  (floating dense->in-chain compaction, the ~535us outlier) — numpy byte-identical,
+  CUDA re-validation DEFERRED to fast-reference; **fdsva_so P3** — documented NO-OP
+  (coalesced dot doesn't fit the n^2-stride contraction; SO-spill cost is inherent
+  global-mem latency, not coalescing).
+
+**P0 — finish current wave:** DONE except the **broadened CUDA re-validation** (4 gate
+robots + baxter/fetch to confirm the crba S-index fix and probe whether old code was
+buggy there) — INTENTIONALLY DEFERRED to run *fast* after P1-A, rather than grind the
+slow Python reference now.
+
+**P1 — Validation & measurement infra (TOP PRIORITY, unblocks everything):**
+- **P1-A · Pinocchio + C++ fast reference** (keystone — see §7 item): sub-call
+  composition + thin C++ glue, pinocchio kinematics/derivatives for EE, C++ finite-diff
+  for the d2ee hessian, a `RBDReference` hooks file (one shared interface both sides),
+  hybrid pure-Python fallback. Turns hours-long references into seconds. Then run the
+  deferred P0 broad re-validation (now fast) to confirm crba + the whole wave.
+- **P1-B · Perf-measurement tooling:** `run_multi_version.py` stalls / 25-min compiles /
+  can't parallelize (it's a bench). Fix (parallel compiles, isolate only the timing
+  window) or build a light per-algorithm timing harness. *We have ZERO perf numbers.*
+- **P1-C · Coverage + parallel testing:** once P1-A is fast, validate all 9 manifest
+  robots x bases x tiers; add cores+RAM-sized parallel test launch (pytest-xdist `-n`
+  or a (robot,base) sharding runner). See "Parallel equivalence testing" item below.
+
+**P2 — Correctness/cleanup debts (from the wave):**
+- **h1_2-floating device-path smem cap**: make inline `*_device` paths tier-aware/
+  spillable (also completes the deferred **fd audit**) OR guard the runner setattr;
+  then validate h1_2-floating kernels. (See §6 item.)
+- **`gen_idsva_so_device` dispatcher reconcile**: drop the now-redundant XImats reload,
+  thread `scratch_in_smem` by tier (body+world inners now own the load + take d_robotModel).
+- **Stage 5**: naming/uniformity sweep; nvcc `-Werror` warnings sweep; code-bloat/
+  streamlining audit (consolidate dup helpers across the 14 algos); design-doc
+  reconciliation + encode friction corrections (crba NOT called by fd; idsva world cold
+  buffer is `Xdown` not `f_w`; `integrator_with_gradient` lives in `_integrator_gradient.py`;
+  add base `end_effector_pose_inner` conformance-table row; stale inner-signature docstrings).
+
+**P3 — Data-driven perf (ONLY after P1-B tooling exists):**
+- Full sweep (wave + GLASS passes) vs baseline `tier_sweep_20260525_002438`, incl.
+  lite/minimal tiers. Then *measured* refinements: id backward distinct-parent grouping;
+  aba floating interior-cold-hole; **idsva body-frame ~7x slower than world** (seen in the
+  partial sweep block: body single ~3945us vs world ~547us) — investigate.
+
+**P4 — Longer-term:** branch merge perf-cleanup -> modernizing-tests once validated;
+remaining naming (§6) + pinocchio-alignment (§7) items.
+
 ### Resolved 2026-05-24/25 (no longer backlog)
 - **LITE/MINIMAL spill crashes fixed**: (a) null-`s_temp` passed to the
   XImats/XmatsHom load helper in whole-arena spill rungs — `aba`,
