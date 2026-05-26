@@ -295,7 +295,16 @@ non-finite (a finite reference is always asserted, so no real NaN is masked).
     compares analytic d2ee — stays a **single pure-Python oracle** (no half-pinocchio
     mix; `build_project_adapter`, documented inline). This revises the earlier
     "C++ finite-diff hessian" plan: keep analytic d2ee; a fast d2ee oracle, if ever
-    needed, must be analytic, not finite-diff. See [[project-grid-pinocchio-reference-backlog]].
+    needed, must be analytic, not finite-diff.
+  - **Two distinct multi-hour reference poles (profiled h1_2-fixed, nv=51, 2026-05-26):**
+    every dynamics algo + ee_pose/ee_pose_gradient is <1.1s; the poles are (1) the SO
+    refs (`idsva_so`/`fdsva_so`) — solved cleanly by the exact `pin_so_ext` oracle; and
+    (2) **`ee_pose_hessian` = ~4347s (≈72 min) for ONE evaluation** (12 leaves, analytic
+    pure-Python). The executable harness runs d2ee per sample (~10), so h1_2-fixed
+    executable equivalence is many hours, dominated entirely by analytic d2ee. Pinocchio
+    CANNOT fix this (finite-diff invalid). Options for the d2ee pole (separate task):
+    derive an analytic fast d2ee (pinocchio frame 2nd derivatives / C++), down-sample
+    d2ee for the largest robots, or accept the cost. Distinct from the SO win.
   - **TODO (still P1-A) — the real pinocchio win:** wire the **EXACT** `pin_so_ext`
     oracle into the **second-order CUDA tests** (`idsva_so`/`fdsva_so`), the actual
     documented multi-hour pole, via the same project(codegen)/reference(oracle) split
