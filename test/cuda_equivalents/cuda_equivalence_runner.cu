@@ -1,3 +1,4 @@
+#include <cstdio>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
@@ -203,6 +204,31 @@ bool floating_algorithm_requested(const std::string &name) {
 }
 #endif
 
+// Register a kernel's opt-in dynamic shared memory, but if the request exceeds
+// this device's per-block cap, emit the standard GRID message and exit cleanly
+// (rc=2) instead of letting gpuErrchk hard-abort with "invalid argument". The
+// Python harness (_run_runner) treats that message as a SKIP, so a robot whose
+// PERF-tier kernel doesn't fit this GPU (e.g. h1_2-floating direct_minv) skips
+// honestly rather than failing. Unlike the generated init_grid_kernel_attrs,
+// this floating runner block registers a few RUNNER-LOCAL kernels too, so it
+// needs its own guard. (A spilled tier would fit; default tier is PERF.)
+template <typename FuncT>
+static void grid_runner_set_smem_or_skip(FuncT func, const char *name, size_t bytes) {
+    int dev = 0;
+    gpuErrchk(cudaGetDevice(&dev));
+    int smem_max = 0;
+    gpuErrchk(cudaDeviceGetAttribute(&smem_max, cudaDevAttrMaxSharedMemoryPerBlockOptin, dev));
+    if (bytes > static_cast<size_t>(smem_max)) {
+        fprintf(stderr,
+                "GRID shared-memory request for %s is %zu bytes, but this device "
+                "supports %d bytes per block\n",
+                name, bytes, smem_max);
+        std::exit(2);
+    }
+    gpuErrchk(cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                   static_cast<int>(bytes)));
+}
+
 template <typename T>
 void run() {
     const T gravity = static_cast<T>(9.81);
@@ -280,49 +306,25 @@ void run() {
     gpuErrchk(cudaMemcpy(h_vec.data(), d_vec, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
     print_vector("runtime_probe", h_vec.data(), grid::NUM_VEL);
 
-    gpuErrchk(cudaFuncSetAttribute(
-        floating_inverse_dynamics_runner<T>,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,
-        static_cast<int>(grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>())
-    ));
-    gpuErrchk(cudaFuncSetAttribute(
-        grid::direct_minv_kernel<T>,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,
-        static_cast<int>(grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>())
-    ));
-    gpuErrchk(cudaFuncSetAttribute(
-        floating_forward_dynamics_runner<T>,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,
-        static_cast<int>(grid::FD_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>())
-    ));
-    gpuErrchk(cudaFuncSetAttribute(
-        grid::aba_kernel<T>,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,
-        static_cast<int>(grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>())
-    ));
-    gpuErrchk(cudaFuncSetAttribute(
-        grid::crba_kernel<T>,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,
-        static_cast<int>(grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T>())
-    ));
-    gpuErrchk(cudaFuncSetAttribute(
-        grid::end_effector_pose_kernel<T>,
-        cudaFuncAttributeMaxDynamicSharedMemorySize,
-        static_cast<int>(grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>())
-    ));
+    grid_runner_set_smem_or_skip(floating_inverse_dynamics_runner<T>,
+        "inverse_dynamics", grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>());
+    grid_runner_set_smem_or_skip(grid::direct_minv_kernel<T>,
+        "direct_minv", grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>());
+    grid_runner_set_smem_or_skip(floating_forward_dynamics_runner<T>,
+        "forward_dynamics", grid::FD_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>());
+    grid_runner_set_smem_or_skip(grid::aba_kernel<T>,
+        "aba", grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>());
+    grid_runner_set_smem_or_skip(grid::crba_kernel<T>,
+        "crba", grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T>());
+    grid_runner_set_smem_or_skip(grid::end_effector_pose_kernel<T>,
+        "end_effector_pose", grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>());
     if (floating_algorithm_requested("end_effector_pose_gradient")) {
-        gpuErrchk(cudaFuncSetAttribute(
-            grid::end_effector_pose_gradient_kernel<T>,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,
-            static_cast<int>(grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>())
-        ));
+        grid_runner_set_smem_or_skip(grid::end_effector_pose_gradient_kernel<T>,
+            "end_effector_pose_gradient", grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>());
     }
     if (floating_algorithm_requested("end_effector_pose_hessian")) {
-        gpuErrchk(cudaFuncSetAttribute(
-            grid::end_effector_pose_gradient_hessian_kernel<T>,
-            cudaFuncAttributeMaxDynamicSharedMemorySize,
-            static_cast<int>(grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>())
-        ));
+        grid_runner_set_smem_or_skip(grid::end_effector_pose_gradient_hessian_kernel<T>,
+            "end_effector_pose_hessian", grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>());
     }
 
     if (floating_algorithm_requested("inverse_dynamics")) {
