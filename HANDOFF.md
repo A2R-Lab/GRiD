@@ -279,17 +279,30 @@ fallback must wait for the `idsva_so` spill.
 - **Real d2ee bug found + filed** (see KNOWN BUG below); d2ee compared vs the independent
   oracle + listed in `KNOWN_FAILING_ALGORITHMS` (tracked, loud, non-fatal, NOT masked).
 
+**DONE since the snapshot (committed+pushed):**
+- **Vestigial sweep (Stage-5)** — `test/dev_notes/` removed (`c88153b`); restructure audited
+  clean (no dead code/dups/orphans/shims); stale doc link fixed (`8c4e9d5`).
+- **P1-B perf tooling FIXED** (`27ebfc7`): the sweep serialized CPU-bound nvcc compiles on the
+  false premise "GPU work is serial" (iiwa14-fixed alone = 460s compile; big-robot floating =
+  the 25-min cases). Split into a parallel **BUILD** phase + serial isolated **MEASURE** phase:
+  `run.py` gained `--compile-only` (compile + populate the content-keyed binary cache, skip
+  timing) and `--build-dir` (isolate per-case working grid.cuh/.o/.exe — the shared `results/`
+  dir was the only real collision risk; caches are content-keyed). `run_multi_version.py`
+  gained `--build-jobs` (auto from cores+free RAM, =8 on this box) that fans all GRiD compiles
+  across cores, then the existing measure loop runs `--no-recompile` = pure cache-hit + GPU
+  timing. `runner_key` hashes only compile inputs (not build_dir/compile_only), so the build
+  phase produces the EXACT binary the measure phase loads; timing stays strictly serial →
+  numbers unaffected. Validated: cold parallel build of iiwa14-fixed×{perf,lite,minimal} =
+  ~499s wall (max, not the 919s sum), 3/3 no collision, measure phase hit every cache (0.0s).
+
 **REMAINING TODOS (current):**
-1. **Vestigial sweep (Stage-5)**: stage+delete `test/dev_notes/` (user-confirmed vestigial)
-   + dead-code/dup cleanup.
-2. **P1-B** perf tooling fix (`run_multi_version.py` stalls / 25-min compiles); **P1-C**
-   coverage all 9×bases×tiers + auto-parallel sizing.
-3. **P2 — `idsva_so` device-path smem cap** (now CONCRETE, blocks h1_2 SO): `idsva_so`
+1. **P1-C** coverage all 9×bases×tiers (now cheap via pinocchio) + auto-parallel test sizing.
+2. **P2 — `idsva_so` device-path smem cap** (now CONCRETE, blocks h1_2 SO): `idsva_so`
    body+world lack the per-tier surgical spill; h1_2 requests 168784 B > 101376 B/block.
    Give the inline `*_device` paths tier-aware/spillable behavior + reconcile
    `gen_idsva_so_device` dispatcher; then h1_2 fallback can pass. (= perf-cleanup agent-11.)
    Also naming/warnings/docs sweep.
-4. **P3** full sweep vs `tier_sweep_20260525_002438` + measured refinements; **P4** merge
+3. **P3** full sweep vs `tier_sweep_20260525_002438` + measured refinements; **P4** merge
    `perf-cleanup → modernizing-tests`.
 
 ---
