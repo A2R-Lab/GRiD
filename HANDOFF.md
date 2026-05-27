@@ -295,15 +295,28 @@ fallback must wait for the `idsva_so` spill.
   numbers unaffected. Validated: cold parallel build of iiwa14-fixed×{perf,lite,minimal} =
   ~499s wall (max, not the 919s sum), 3/3 no collision, measure phase hit every cache (0.0s).
 
+**P2 RESOLVED/RE-SCOPED (2026-05-26):** the idsva_so surgical de-alias spill + inner-owns
+placement + fdsva pool→global are ALREADY committed (`a0f3df0`, `86ad706`). The residual gap
+— h1_2 body-frame IDSVA-SO requests 168784 B > the ~101 KB device cap *even at the forced
+10 KB budget* (both `test_fixed_second_order_forced_fallback[h1_2-fixed]` and
+`test_floating_second_order_diagnostic[h1_2-floating]`) — is the DEEP ancestor-pair-scratch
+de-alias that `docs/idsva_so_inner_refactor_notes.md` explicitly DEFERS until a perf sweep
+proves whole-arena spill is a real bottleneck. Per user (2026-05-26): **sweep-first, defer
+the deep de-alias.** Interim: a self-healing device-cap SKIP landed in `_run_runner`
+(`308f950`) — any kernel whose most-spilled smem request exceeds the per-block cap now skips
+honestly (h1_2 body-frame SO; world-frame is h1_2's production path and passes). Skip
+auto-disappears if the de-alias later makes it fit.
+
 **REMAINING TODOS (current):**
-1. **P1-C** coverage all 9×bases×tiers (now cheap via pinocchio) + auto-parallel test sizing.
-2. **P2 — `idsva_so` device-path smem cap** (now CONCRETE, blocks h1_2 SO): `idsva_so`
-   body+world lack the per-tier surgical spill; h1_2 requests 168784 B > 101376 B/block.
-   Give the inline `*_device` paths tier-aware/spillable behavior + reconcile
-   `gen_idsva_so_device` dispatcher; then h1_2 fallback can pass. (= perf-cleanup agent-11.)
-   Also naming/warnings/docs sweep.
-3. **P3** full sweep vs `tier_sweep_20260525_002438` + measured refinements; **P4** merge
-   `perf-cleanup → modernizing-tests`.
+1. **P1-C** broad correctness — RUNNING (9 robots × fixed+floating, pinocchio oracle, 6-way
+   parallel, fresh cache `grid_cuda_p1c`). NOTE: this run was launched just BEFORE `308f950`,
+   so an h1_2-fixed idsva overflow here may show as a FAIL rather than the new skip; re-run
+   h1_2 alone if so. TODO: auto-parallel test sizing (this used a manual 6-way shell shard).
+2. **P3** full sweep vs `tier_sweep_20260525_002438` (now parallelized by P1-B; MUST run with
+   the GPU idle — no concurrent compiles/tests — so timing isn't skewed). If it shows
+   whole-arena idsva_so spill is a real LITE/MINIMAL bottleneck, THEN do the deferred deep
+   de-alias (refactor idea 1 in the notes). Also naming/warnings/docs sweep.
+3. **P4** merge `perf-cleanup → modernizing-tests` once validated.
 
 ---
 
