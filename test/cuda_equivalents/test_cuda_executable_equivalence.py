@@ -942,6 +942,20 @@ def _normalize_cuda_minv(matrix: np.ndarray) -> np.ndarray:
     return normalized
 
 
+def _model_inertia_is_degenerate(reference_model, nv):
+    """True if the resolved model has effectively zero inertia (all-zero mass
+    matrix). Indicates a broken URDF asset (e.g. rizon4's upstream flexiv xacro
+    emits bare mass/inertia tags NOT wrapped in <inertial>, so every link parses
+    massless) — the dynamics are physically undefined and the float32 CUDA path
+    divides by the zero-mass structure (-> NaN). Not a GRiD bug; skip honestly.
+    Self-heals if a corrected asset later resolves with real inertias."""
+    try:
+        mass = np.asarray(reference_model.crba(np.zeros(nv)), dtype=np.float64)
+    except Exception:
+        return False
+    return bool(mass.size and np.max(np.abs(mass)) < 1e-12)
+
+
 def _has_invertible_project_mass_matrix(reference_model, q, min_singular_value=1e-12):
     try:
         mass = np.asarray(reference_model.crba(q), dtype=np.float64)
@@ -1339,6 +1353,14 @@ def _run_cuda_equivalence_case(
         else build_adapter(spec, resolved, base_mode=base_mode, backend=oracle_backend)
     )
     _progress(config, f"oracle backend={oracle_backend} (d2ee always analytic) for {spec.robot_id}-{base_mode}")
+
+    if _model_inertia_is_degenerate(reference_model, project_model.nv):
+        pytest.skip(
+            f"{spec.robot_id}-{base_mode} resolves to a zero-inertia model (all-zero mass "
+            "matrix) — a broken upstream URDF asset, not a GRiD defect. Dynamics are "
+            "physically undefined; skip until a corrected asset resolves. "
+            "(rizon4: flexiv xacro emits bare mass/inertia tags not wrapped in <inertial>.)"
+        )
 
     build_dir = tmp_path / f"cuda_{spec.robot_id}_{base_mode}"
     build_dir.mkdir()
