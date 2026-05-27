@@ -330,9 +330,17 @@ of robots beyond the old gate, and NONE were core GRiD dynamics-math bugs:
   registration guard/skip over-cap like the rest. (Distinct from the idsva_so body cap.)
 See memory `project_grid_broad_coverage_findings.md`.
 
+**BACKLOG / FEATURE REQUEST (user-filed 2026-05-26):** GRiD doesn't support all URDF
+features. Do a single AUDIT of URDF features (`URDFParser` + codegen) vs the spec and add the
+missing ones in ONE clean pass later. First concrete gap = **mimic joints** (fr3); other
+candidates: continuous/planar joints, `<dynamics>` damping/friction, `<limit>`, massless-link
+robustness, `<transmission>`. See memory `project_grid_urdf_feature_support_backlog.md`. NOT
+scheduled — backlog.
+
 **REMAINING TODOS (current):**
-1. **OPEN from P1-C:** fr3 mimic-joint support (or skip); h1_2 `direct_minv` over-cap
-   kernel-attr guard. Also: auto-parallel test sizing (P1-C used a manual 6-way shell shard).
+1. **OPEN from P1-C:** h1_2 `direct_minv` over-cap kernel-attr guard (investigating a quick
+   fix now); fr3 mimic-joint → folded into the URDF-feature audit backlog above. Also:
+   auto-parallel test sizing (P1-C used a manual 6-way shell shard).
 2. **P3** full sweep vs `tier_sweep_20260525_002438` (now parallelized by P1-B; MUST run with
    the GPU idle — no concurrent compiles/tests — so timing isn't skewed). If it shows
    whole-arena idsva_so spill is a real LITE/MINIMAL bottleneck, THEN do the deferred deep
