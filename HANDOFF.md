@@ -259,11 +259,16 @@ The pinocchio harness DOES support `idsva_so_body_frame` (`PINOCCHIO_ALGOS`); `f
 equivalent). Add the pinocchio column to the next sweep. Caveat: pinocchio nv³ SO codegen for g1/h1_2
 may be very slow / hit the 1500s/algo timeout.
 
-**NEXT (gated on baxter correctness): commit crba fix, then ONE collection:**
-`run_multi_version --columns glass pinocchio --bases fixed --tiers perf lite minimal` →
-(a) corrected fixed-base crba perf (replaces last night's regressed crba), (b) pinocchio
-`idsva_so_body_frame` SO timing. Reuse: pre_glass (phase7), floating + non-crba glass (last night),
-other pinocchio algos (05-24). Then assemble the full combined picture.
+**crba FIX COMMITTED + COLLECTION DONE (`crba_so_collection`, EXIT 0):** crba recovered to baseline
+(iiwa14 N=256 27.3→11.05µs, go2→13.0, g1→60.4, h1_2→103.7) and now BEATS pinocchio at batch
+(2.5×/8.9×/1.2×/1.2×). Pinocchio second-order timing collected for ALL robots (no timeout).
+**KEY FINDING — GRiD second-order LOSES to pinocchio on big robots:** idsva_so N=256/prob iiwa14
+GRiD 6.8× / go2 4.5× WIN, but g1 pin 2.5× / h1_2 pin 2.7× LOSS. GRiD idsva_so scales badly with DOF
+(nv³, compute+smem-bound) → **TOP optimization target** (see memory `project_grid_competitive_analysis.md`).
+
+**NEXT: P4 — crba regression resolved, so the branch is mergeable.** Decide P4 merge
+`perf-cleanup → modernizing-tests`. Open perf items (not merge-blockers): idsva_so big-robot SO
+scaling (top target), minv/aba/crba batch-occupancy, single-call launch-overhead, idsva_so de-alias.
 
 ### P3 PERF SWEEP RESULTS — 2026-05-27
 Ran the first trustworthy sweep on the P1-B-parallelized tooling: glass × {iiwa14,go2,g1,h1_2}
