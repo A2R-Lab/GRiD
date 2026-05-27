@@ -263,6 +263,23 @@ pose Jacobian/Hessian is non-finite in BOTH the reference and CUDA (not a codege
 Handled by a harness guard that skips a comparison only when the *reference* itself is
 non-finite (a finite reference is always asserted, so no real NaN is masked).
 
+**KNOWN BUG — d2ee orientation rows (found 2026-05-26, deferred fix):** the
+`end_effector_pose_hessian` (d2ee) **orientation (roll/pitch/yaw) rows are wrong at
+non-small joint angles in BOTH the GRiD CUDA codegen AND the RBDReference analytic
+hessian** — they match each other (so CUDA-vs-analytic equivalence passed and hid it),
+but both diverge from the truth as joint angles grow (iiwa14-fixed: orientation-row
+error 3e-6 near q=0 → 1.1e-3 at ~0.8 rad → **4.789 at large angle**, analytic max ~8.6).
+Position (xyz) rows are correct everywhere. Found by pointing d2ee at the INDEPENDENT
+finite-diff/pinocchio oracle (step-convergent, position rows exact, worst q not at
+gimbal lock → the FD is the truth). Locus: the d²(roll/pitch/yaw)/dq² atan2 chain-rule
+(`RBDReference.py:~1159-1165` + the matching GRiD `ee_pose_hessian` codegen). The CUDA
+executable harness now compares d2ee against the independent oracle and lists it in
+`KNOWN_FAILING_ALGORITHMS`, so mismatches are reported as a tracked known bug (loud, NOT
+masked) but non-fatal. **TODO: fix the orientation-hessian formula in both, then drop
+d2ee from `KNOWN_FAILING_ALGORITHMS`.** Note this also moots the "d2ee 72-min pole" plan:
+the analytic d2ee was both slow AND wrong; the pinocchio finite-diff d2ee is fast
+(~seconds) and correct, so it is the right oracle.
+
 **P1 — Validation & measurement infra (TOP PRIORITY, unblocks everything):**
 - **P1-A · Pinocchio + C++ fast reference** (keystone — see §7 item): sub-call
   composition + thin C++ glue, pinocchio kinematics/derivatives for EE, C++ finite-diff
