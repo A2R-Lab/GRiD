@@ -188,13 +188,22 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
                   ptxas_opt_level: int | None = None,
                   split_compile: int | None = None,
                   ofast_compile: str | None = None,
-                  tier: str | None = None) -> list[str]:
+                  tier: str | None = None,
+                  build_dir: Path | None = None,
+                  compile_only: bool = False,
+                  compile_workers: int | None = None) -> list[str]:
     cmd = [
         sys.executable,
         str(harness_repo_root / "test" / "benchmarks" / "baselines" / "grid" / "run.py"),
         "--robot", robot, "--base", base, "--output", str(output),
         "--ee-frame", ee_frame,
     ]
+    if build_dir is not None:
+        cmd += ["--build-dir", str(build_dir)]
+    if compile_only:
+        cmd.append("--compile-only")
+    if compile_workers is not None:
+        cmd += ["--compile-workers", str(compile_workers)]
     if no_recompile:
         cmd.append("--no-recompile")
     if no_rdc:
@@ -417,6 +426,95 @@ def merge_to_unified(json_paths: list[Path]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Parallel build phase
+# ---------------------------------------------------------------------------
+def _auto_build_jobs() -> int:
+    """Default BUILD-phase parallelism from cores + free RAM. Compiles are
+    CPU-bound and ~6GB RSS each (the SO kernels dominate), so cap on whichever
+    of cores/RAM is tighter. Timing is unaffected (measure phase is serial)."""
+    cores = os.cpu_count() or 4
+    free_gb = None
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    free_gb = int(line.split()[1]) / (1024 * 1024)
+                    break
+    except OSError:
+        pass
+    by_cores = max(1, cores // 3)            # each case drives ~2-3 cicc/ptxas
+    by_ram = max(1, int(free_gb // 6)) if free_gb else by_cores
+    return max(1, min(by_cores, by_ram, 8))
+
+
+def _build_grid_binaries(grid_columns, robots, bases, tiers, *, build_jobs,
+                         worktree_path, output_dir, skip_set, no_rdc,
+                         no_licm_barrier, single_call_iters, batch_iters,
+                         ptxas_opt_level, split_compile, ofast_compile) -> None:
+    """Parallel BUILD phase: compile + cache every GRiD (column,robot,base,tier)
+    binary across `build_jobs` workers, WITHOUT timing. The serial measure phase
+    re-runs each with --no-recompile (instant content-keyed cache hit), so timing
+    stays isolated on the GPU. Each task gets its own --build-dir so working files
+    don't collide; the binary cache is shared + content-keyed, so the keys (and
+    thus the cache hits) match the measure phase as long as compile flags match."""
+    tasks = []
+    for column in grid_columns:
+        for robot in robots:
+            for base in bases:
+                if f"{robot}_{base}" in skip_set:
+                    continue
+                for tier in tiers:
+                    # mirror run_grid_column's pre_glass limitations
+                    if column == "pre_glass" and (base != "fixed" or (tier and tier != "perf")):
+                        continue
+                    tasks.append((column, robot, base, tier))
+    if not tasks:
+        return
+    cores = os.cpu_count() or 4
+    per_task_workers = max(1, cores // max(1, build_jobs))
+    print(f"[{ts()}] === BUILD phase: {len(tasks)} GRiD binaries, {build_jobs} parallel "
+          f"(compile-workers={per_task_workers} each); timing stays serial ===")
+
+    def _one(task: tuple[str, str, str, str]) -> bool:
+        column, robot, base, tier = task
+        ee_frame = EE_FRAMES_GRID.get(robot, "")
+        harness_root = worktree_path if column == "pre_glass" else REPO_ROOT
+        bdir = output_dir / "_build" / f"{column}_{robot}_{base}_{tier}"
+        bdir.mkdir(parents=True, exist_ok=True)
+        scratch = bdir / "scratch.json"
+        if column == "pre_glass":
+            cmd = _grid_run_cmd(harness_root, robot, base, scratch, ee_frame,
+                                no_recompile=False, build_dir=bdir, compile_only=True,
+                                compile_workers=per_task_workers)
+        else:
+            effective_ptxas = ptxas_opt_level if base == "floating" else None
+            cmd = _grid_run_cmd(harness_root, robot, base, scratch, ee_frame,
+                                no_recompile=False, no_rdc=no_rdc,
+                                no_licm_barrier=no_licm_barrier,
+                                single_call_iters=single_call_iters, batch_iters=batch_iters,
+                                ptxas_opt_level=effective_ptxas,
+                                split_compile=split_compile, ofast_compile=ofast_compile,
+                                tier=tier, build_dir=bdir, compile_only=True,
+                                compile_workers=per_task_workers)
+        t0 = datetime.now()
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        dur = (datetime.now() - t0).total_seconds()
+        tag = f"{column} {robot}/{base} tier={tier}"
+        if r.returncode == 0:
+            print(f"  [build ✓] {tag} ({dur:.0f}s)")
+            return True
+        print(f"  [build ✗] {tag} ({dur:.0f}s)\n{r.stdout[-800:]}\n{r.stderr[-800:]}",
+              file=sys.stderr)
+        return False
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=build_jobs) as ex:
+        results = list(ex.map(_one, tasks))
+    ok = sum(1 for x in results if x)
+    print(f"[{ts()}] === BUILD phase done: {ok}/{len(tasks)} compiled "
+          f"(failures will recompile or surface in the measure phase) ===")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -495,6 +593,12 @@ def main() -> None:
     parser.add_argument("--report", type=Path,
                         default=THIS_DIR / "benchmark_multi_version.md",
                         help="Markdown report output path")
+    parser.add_argument("--build-jobs", type=int, default=None,
+                        help="Parallelism for the GRiD compile (BUILD) phase. The compile is "
+                             "CPU-bound (nvcc/cicc/ptxas), so it fans across cores; the timing "
+                             "(MEASURE) phase always stays SERIAL on the isolated GPU, so this "
+                             "never affects the numbers. Default: auto (from cores + free RAM, "
+                             "~6GB/compile). Pass 1 for the legacy fully-serial behavior.")
     args = parser.parse_args()
 
     if args.fixed_only:
@@ -527,13 +631,36 @@ def main() -> None:
         sys.exit(1)
     args.columns = runnable_columns
 
-    # 2) Run all (column, robot, base) combinations sequentially. GPU work is
-    #    inherently serial; running in parallel would cause cache races and
-    #    contend for the single GPU.
+    skip_set = {s.strip() for s in args.skip}
+
+    # 1c) BUILD phase (parallel, CPU-bound). Compiles are nvcc/cicc/ptxas work, NOT
+    #     GPU work, so they fan across cores; the per-case binary cache is content-
+    #     keyed, so the serial measure phase below finds the same binaries. This
+    #     collapses the dominant cost (e.g. iiwa14-fixed alone is a ~460s compile)
+    #     from sequential to parallel without touching the (still-serial) timing.
+    grid_columns = [c for c in args.columns if c in ("glass", "pre_glass")]
+    build_jobs = args.build_jobs if args.build_jobs is not None else _auto_build_jobs()
+    measure_no_recompile = False
+    if grid_columns and build_jobs > 1:
+        _build_grid_binaries(
+            grid_columns, args.robots, args.bases, args.tiers,
+            build_jobs=build_jobs, worktree_path=args.worktree_path,
+            output_dir=args.output_dir, skip_set=skip_set,
+            no_rdc=args.no_rdc, no_licm_barrier=args.no_licm_barrier,
+            single_call_iters=args.single_call_iters, batch_iters=args.batch_iters,
+            ptxas_opt_level=args.ptxas_opt_level, split_compile=args.split_compile,
+            ofast_compile=args.ofast_compile,
+        )
+        # Measure phase pulls from the warm cache; never compile during timing.
+        measure_no_recompile = True
+
+    # 2) MEASURE phase: run all (column, robot, base) combinations sequentially.
+    #    The GPU is the shared serial resource; timing must not contend. GRiD
+    #    columns hit the cache built above (measure_no_recompile), so this loop
+    #    is pure timing for them.
     produced: list[Path] = []
     skipped: list[tuple[str, str, str]] = []
 
-    skip_set = {s.strip() for s in args.skip}
     for column in args.columns:
         for robot in args.robots:
             for base in args.bases:
@@ -567,7 +694,7 @@ def main() -> None:
                         p = run_grid_column(
                             column, robot, base,
                             output_dir=args.output_dir, worktree_path=args.worktree_path,
-                            no_recompile=args.no_recompile,
+                            no_recompile=args.no_recompile or measure_no_recompile,
                             no_rdc=args.no_rdc, no_licm_barrier=args.no_licm_barrier,
                             single_call_iters=args.single_call_iters,
                             batch_iters=args.batch_iters,

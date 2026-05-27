@@ -1218,10 +1218,22 @@ def main() -> None:
                              "preserves current behavior; LITE/MINIMAL launch the spill bodies "
                              "with their tier-specific launch_bounds + smem. Used for Phase 4 "
                              "per-tier perf validation; output JSON gains a 'tier' field.")
+    parser.add_argument("--build-dir", type=Path, default=None,
+                        help="Override the working build directory (default: "
+                             "test/benchmarks/results). Give each parallel invocation its own "
+                             "dir so the per-case working grid.cuh / .o / .exe don't collide "
+                             "(the binary cache is content-keyed + shared, so cache hits still "
+                             "work across dirs). Used by the orchestrator's parallel build phase.")
+    parser.add_argument("--compile-only", action="store_true",
+                        help="Compile + populate the binary cache, then exit WITHOUT timing. "
+                             "Used by the orchestrator to fan compiles across cores in a build "
+                             "phase; the serial measure phase then re-runs with --no-recompile "
+                             "(instant cache hit) so timing stays isolated on the GPU.")
     args = parser.parse_args()
 
     ee_frame = args.ee_frame or DEFAULT_EE_FRAMES.get(args.robot, "")
-    build_dir = REPO_ROOT / "test" / "benchmarks" / "results"
+    build_dir = args.build_dir if args.build_dir is not None else (
+        REPO_ROOT / "test" / "benchmarks" / "results")
     build_dir.mkdir(parents=True, exist_ok=True)
 
     # Propagate the CLI flag to codegen via env var (the helpers read it at
@@ -1265,6 +1277,10 @@ def main() -> None:
         print(f"  [grid] ERROR compiling binaries: {e}", file=sys.stderr)
         sys.exit(1)
     print(f"  [grid] compile wall time: {time.perf_counter() - t_compile:.1f}s")
+
+    if args.compile_only:
+        print(f"  [grid] --compile-only: binary cache populated, skipping timing.")
+        return
 
     print(f"  [grid] running timing binaries (single + batch)...")
     try:
