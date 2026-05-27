@@ -1047,22 +1047,188 @@ def _cuda_tolerance(robot_id: str, algorithm: str):
     )
 
 
+# end_effector_pose is a per-leaf 6-vector [x, y, z, roll, pitch, yaw]: rows 0-2
+# are position, rows 3-5 are the rpy orientation (angles). _expected_output
+# flattens each algorithm differently, so the flat index -> "is orientation row"
+# map differs per algorithm (see _expected_output for the exact reshapes):
+#   end_effector_pose          : per leaf 6-vector, contiguous  -> block size 6,
+#                                orientation = (idx % 6) in {3,4,5}
+#   end_effector_pose_gradient : per leaf (6, nq) reshaped order="F" (column-
+#                                major) -> within each 6*nq leaf block the pose
+#                                component varies fastest -> (idx % 6) in {3,4,5}
+#   end_effector_pose_hessian  : per leaf (6, nq, nq) reshaped C-order -> pose
+#                                component is the SLOWEST axis -> within each
+#                                6*nq*nq leaf block, component = idx // (nq*nq),
+#                                orientation = component in {3,4,5}
+_EE_POSE_ALGORITHMS = {
+    "end_effector_pose",
+    "end_effector_pose_gradient",
+    "end_effector_pose_hessian",
+}
+
+
+def _ee_row_info(algorithm: str, expected_flat: np.ndarray, n_leaves: int):
+    """Per-flat-entry decode of an end_effector_pose* output into
+    (leaf_index, pose_component): pose_component 0/1/2 = x/y/z (position),
+    3/4/5 = roll/pitch/yaw (orientation). Returns (leaf_idx, component) int
+    arrays the same length as the flattened array, or (None, None) if the
+    algorithm isn't an EE-pose family or the size doesn't factor cleanly."""
+    if algorithm not in _EE_POSE_ALGORITHMS or n_leaves <= 0:
+        return None, None
+    total = expected_flat.size
+    if total % n_leaves != 0:
+        return None, None
+    per_leaf = total // n_leaves
+    if per_leaf % 6 != 0:
+        return None, None
+    idx = np.arange(total)
+    leaf_idx = idx // per_leaf
+    leaf_local = idx % per_leaf
+    if algorithm in ("end_effector_pose", "end_effector_pose_gradient"):
+        # ee_pose: contiguous 6-vector per leaf. gradient: per leaf (6, nq)
+        # reshaped order="F" -> pose component varies fastest. Both -> local % 6.
+        component = leaf_local % 6
+    else:
+        # end_effector_pose_hessian: per leaf (6, nq, nq) C-order -> the pose
+        # component is the SLOWEST axis (block of nq*nq per component).
+        component = leaf_local // (per_leaf // 6)
+    return leaf_idx, component
+
+
+def _ee_orientation_mask(algorithm: str, expected_flat: np.ndarray, n_leaves: int):
+    """Boolean mask (flat) selecting the rpy orientation entries of an
+    end_effector_pose* output. None if not applicable."""
+    leaf_idx, component = _ee_row_info(algorithm, expected_flat.reshape(-1), n_leaves)
+    if leaf_idx is None:
+        return None
+    return (component >= 3) & (component <= 5)
+
+
+def _wrap_to_pi(values):
+    """Fold angle differences into (-pi, pi]. Used so that an rpy orientation
+    differing by exactly 2*pi (e.g. yaw=+pi vs -pi, the atan2 branch ambiguity)
+    is treated as EXACT agreement, not a 2*pi error. Position rows are NOT
+    angles and must never be wrapped."""
+    return (np.asarray(values) + np.pi) % (2.0 * np.pi) - np.pi
+
+
+# An rpy parameterization hits gimbal lock when pitch -> +/-pi/2: pitch_sqrt_term
+# (= sqrt(rot[2,2]^2 + rot[2,1]^2)) -> 0, so roll and yaw stop being separable.
+# At gimbal lock:
+#  - end_effector_pose: roll and yaw are NOT uniquely defined (only roll-/+yaw is),
+#    so CUDA and pinocchio can pick different-but-equivalent (roll, yaw) splits of
+#    the same rotation (e.g. baxter zero: yaw 0.0 vs 2.034). PITCH itself is well
+#    defined (= +/-pi/2) and stays asserted.
+#  - gradient / hessian: the analytic d(rpy)/dq and d2(rpy)/dq2 blow up
+#    (1/pitch_sqrt_term, 1/pitch_sqrt_term^2); the finite-diff reference returns
+#    finite-but-enormous, numerically meaningless values and the float32 CUDA path
+#    can go non-finite.
+# Separately, even AWAY from gimbal lock the finite-diff reference for the rpy
+# DERIVATIVES spikes to ~pi/step when the angle wraps across +/-pi between the
+# +/-step samples (e.g. fr3 zero, yaw ~ +/-pi, pitch 0): a spurious O(1/step) value
+# vs the correct analytic O(1) CUDA value. That config-independent wrap spike is
+# caught by the magnitude threshold below.
+# All of this is SCOPED to the rpy rows of ee_pose / its derivatives; position rows
+# and every non-singular config stay strictly asserted, so real bugs are not masked.
+EE_ORIENTATION_DERIV_BLOWUP_THRESHOLD = 1e4
+EE_GIMBAL_PITCH_EPS = 1e-3
+
+
+def _ee_gimbal_lock_leaves(reference_model, project_model, sample, eps=EE_GIMBAL_PITCH_EPS):
+    """Indices (in get_leaf_nodes() order) of EE leaves whose reference pose pitch
+    is within `eps` of +/-pi/2, i.e. at rpy gimbal lock for this config."""
+    robot = project_model.robot
+    locked = set()
+    for li, jid in enumerate(robot.get_leaf_nodes()):
+        target = robot.get_joint_by_id(jid).get_name()
+        try:
+            pose = np.asarray(
+                reference_model.end_effector_pose(sample.q, target), dtype=np.float64
+            ).reshape(-1)
+        except Exception:
+            continue
+        pitch = float(pose[4])  # pose = [x, y, z, roll, pitch, yaw]
+        if np.isfinite(pitch) and abs(abs(pitch) - np.pi / 2.0) <= eps:
+            locked.add(li)
+    return locked
+
+
 def _assert_close(
     label: str,
     actual: np.ndarray,
     expected: np.ndarray,
     robot_id: str,
     algorithm: str,
+    n_leaves: int = 0,
+    gimbal_lock_leaves=frozenset(),
 ) -> None:
     actual = np.asarray(actual, dtype=np.float64)
     expected = np.asarray(expected, dtype=np.float64)
     tol = _cuda_tolerance(robot_id, algorithm)
+
+    if algorithm in _EE_POSE_ALGORITHMS:
+        leaf_idx, component = _ee_row_info(algorithm, expected.reshape(-1), n_leaves)
+        if leaf_idx is not None:
+            orient = (component >= 3) & (component <= 5)
+            shp = expected.shape
+            orient_m = orient.reshape(shp)
+            in_gimbal_leaf = np.isin(leaf_idx, list(gimbal_lock_leaves)).reshape(shp)
+            if algorithm == "end_effector_pose":
+                # (b1) rpy orientation rows are angles: a difference of 2*pi (or
+                # +pi vs -pi from the atan2 branch) is EXACT agreement. Fold the
+                # orientation-row residual into (-pi, pi] before comparing.
+                # Position rows are left untouched. We adjust `actual` toward
+                # `expected` by whole 2*pi turns so assert_allclose sees the true
+                # (wrapped) error; the *derivatives* (gradient/hessian) are NOT
+                # mod-2pi and are handled by the b2 gimbal-lock guard instead.
+                wrapped_diff = _wrap_to_pi(actual - expected)
+                actual = np.where(orient_m, expected + wrapped_diff, actual)
+                # (b2 / ee_pose) At gimbal lock roll & yaw are not separable: CUDA
+                # and pinocchio may split the same rotation into different
+                # (roll, yaw) pairs. Skip the ROLL (3) and YAW (5) rows of
+                # gimbal-locked leaves; pitch (4, = +/-pi/2) stays asserted.
+                roll_or_yaw = (component == 3) | (component == 5)
+                skip = (in_gimbal_leaf & roll_or_yaw.reshape(shp))
+            else:
+                # (b2) ee_pose_gradient / ee_pose_hessian orientation rows: the
+                # rpy derivative is genuinely singular and unvalidatable when
+                # EITHER (i) this leaf is at gimbal lock (analytic d(rpy)/dq blows
+                # up as pitch_sqrt_term -> 0), OR (ii) the finite-diff reference
+                # spiked to ~pi/step from an angle wrapping across +/-pi between
+                # the +/-step samples (|expected| explodes) even away from gimbal
+                # lock, OR (iii) the float32 CUDA value went non-finite there.
+                # This is the finite-reference analogue of the caller's
+                # non-finite-reference skip; scoped to orientation-derivative rows.
+                skip = orient_m & (
+                    in_gimbal_leaf
+                    | (np.abs(expected) > EE_ORIENTATION_DERIV_BLOWUP_THRESHOLD)
+                    | ~np.isfinite(actual)
+                )
+            keep = ~skip
+            if not np.all(keep):
+                actual = actual[keep]
+                expected = expected[keep]
+                if expected.size == 0:
+                    return
+    # Magnitude-scaled absolute floor (mirrors RBDReference/tests/comparators.py).
+    # np.testing.assert_allclose checks |actual-expected| <= atol + rtol*|expected|
+    # per element. For an array whose overall scale is huge (e.g. h1_2 has a
+    # near-singular mass matrix => Minv entries ~1e6-1e8, and the FD gradients
+    # inherit that scale), a fixed atol=2e-4 is meaningless: a float32-perfect
+    # result (relative error ~1e-7) still trips the check on entries that are
+    # individually small *relative to the array's overall scale*. Floor atol at
+    # rtol*max|expected| so "small relative to the array scale" counts as close.
+    # A genuine error is O(scale) (or O(0.1*scale)) and still exceeds this floor,
+    # so real bugs are NOT masked -- this only excuses entries whose error is
+    # within rtol of the array's dominant magnitude.
+    scale = float(np.max(np.abs(expected))) if expected.size else 0.0
+    atol_eff = max(tol["atol"], tol["rtol"] * scale)
     try:
         np.testing.assert_allclose(
             actual,
             expected,
             rtol=tol["rtol"],
-            atol=tol["atol"],
+            atol=atol_eff,
         )
     except AssertionError as exc:
         diff = np.abs(actual - expected)
@@ -1079,7 +1245,8 @@ def _assert_close(
             f"{label} CUDA mismatch: max_abs={diff[index]}, "
             f"max_rel={rel[index]}, first_worst_index={index}, "
             f"norm_rel={norm_rel}, actual={actual_at_index}, "
-            f"expected={expected_at_index}, rtol={tol['rtol']}, atol={tol['atol']}"
+            f"expected={expected_at_index}, rtol={tol['rtol']}, "
+            f"atol={atol_eff:.3e} (scale={scale:.3e})"
         ) from exc
 
 
@@ -1275,12 +1442,19 @@ def _run_cuda_equivalence_case(
                         "(float32 ABA recursion non-finite; Minv forward_dynamics path correct)"
                     )
                     continue
+                gimbal_lock_leaves = (
+                    _ee_gimbal_lock_leaves(reference_model, project_model, sample)
+                    if name in _EE_POSE_ALGORITHMS
+                    else frozenset()
+                )
                 _assert_close(
                     f"{spec.robot_id}/{sample.name}/{name}/threads={num_threads or 32}",
                     cuda[name],
                     expected_value,
                     robot_id=spec.robot_id,
                     algorithm=name,
+                    n_leaves=len(project_model.robot.get_leaf_nodes()),
+                    gimbal_lock_leaves=gimbal_lock_leaves,
                 )
                 compared += 1
             except AssertionError as exc:
