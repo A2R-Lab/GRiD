@@ -23,6 +23,15 @@ from RBDReference.tests.model_sources import (
     resolve_robot_spec,
 )
 from RBDReference.equivalents.reference_backend import build_project_adapter
+from RBDReference.equivalents import build_adapter, resolve_backend
+
+
+def _build_so_oracle(spec, resolved, base_mode):
+    """Independent second-order oracle (default: EXACT pinocchio pin_so_ext).
+    Lets the slow pure-Python SO reference be replaced by C++ ms-scale calls on
+    big robots; GRID_REFERENCE_BACKEND=reference forces the pure-Python path."""
+    backend = resolve_backend(os.environ.get("GRID_REFERENCE_BACKEND", "pinocchio"))
+    return build_adapter(spec, resolved, base_mode=base_mode, backend=backend)
 
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_second_order_smoke_runner.cu")
@@ -431,6 +440,7 @@ def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path, r
             f"before executing CUDA equivalence tests. Resolution error: {exc}"
         )
     project_model = build_project_adapter(spec, resolved, base_mode="fixed")
+    reference_model = _build_so_oracle(spec, resolved, "fixed")
     samples = _second_order_samples(project_model)
     target_shared_bytes = _second_order_target_shared_bytes()
     expected_flags = _second_order_expected_flags()
@@ -453,7 +463,7 @@ def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path, r
         )
         assert np.all(forced_fallback["second_order_config"][0, 0:2] > 0.0)
         expected_idsva = _flatten_second_order_tensors(
-            project_model.idsva_so_body_frame(sample.q, sample.qd, sample.qdd)
+            reference_model.idsva_so_body_frame(sample.q, sample.qd, sample.qdd)
         )
         np.testing.assert_allclose(
             forced_fallback["idsva_so_body_frame"],
@@ -465,12 +475,12 @@ def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path, r
             atol=1e-3,
             err_msg=f"{robot_id}-fixed {sample.name} IDSVA-SO",
         )
-        if _has_invertible_project_mass_matrix(project_model, sample.q):
+        if _has_invertible_project_mass_matrix(reference_model, sample.q):
             fdsva_tolerance = _fdsva_so_tolerance(robot_id)
             _assert_allclose_with_optional_norm_guard(
                 forced_fallback["fdsva_so"],
                 _flatten_second_order_tensors(
-                    project_model.fdsva_so(sample.q, sample.qd, sample.qdd)
+                    reference_model.fdsva_so(sample.q, sample.qd, sample.qdd)
                 ),
                 rtol=2e-4,
                 atol=2e-4,
@@ -494,6 +504,7 @@ def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, rob
             f"before executing CUDA equivalence tests. Resolution error: {exc}"
         )
     project_model = build_project_adapter(spec, resolved, base_mode="floating")
+    reference_model = _build_so_oracle(spec, resolved, "floating")
     samples = _floating_second_order_samples(project_model)
     target_shared_bytes = _second_order_target_shared_bytes()
     enable_fdsva = os.environ.get("GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA", "0") == "1"
@@ -537,7 +548,7 @@ def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, rob
             err_msg=f"{robot_id}-floating {sample.name} dimension config",
         )
         expected_idsva = _flatten_second_order_tensors(
-            project_model.idsva_so_body_frame(sample.q, sample.qd, sample.qdd)
+            reference_model.idsva_so_body_frame(sample.q, sample.qd, sample.qdd)
         )
         _assert_idsva_blocks_close(
             actual["idsva_so_body_frame"],
@@ -551,7 +562,7 @@ def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, rob
                 f"{[IDSVA_BLOCK_NAMES[index] for index in block_indices]}"
             ),
         )
-        if enable_fdsva and _has_invertible_project_mass_matrix(project_model, sample.q):
+        if enable_fdsva and _has_invertible_project_mass_matrix(reference_model, sample.q):
             _assert_allclose_with_optional_norm_guard(
                 actual["fdsva_so"],
                 _flatten_second_order_tensors(

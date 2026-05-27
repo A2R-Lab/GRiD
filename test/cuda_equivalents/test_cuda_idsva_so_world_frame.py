@@ -31,7 +31,7 @@ from test.cuda_equivalents.test_cuda_executable_equivalence import (
     _run_runner,
     _sample_to_stdin,
 )
-from test.cuda_equivalents.test_cuda_second_order_fallback import _temporary_env
+from test.cuda_equivalents.test_cuda_second_order_fallback import _temporary_env, _build_so_oracle
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import (
     iter_robot_cases,
@@ -250,6 +250,7 @@ def test_cuda_world_frame_matches_python_reference(tmp_path, robot_id):
             f"before executing CUDA equivalence tests. Resolution error: {exc}"
         )
     project_model = build_project_adapter(spec, resolved, base_mode="floating")
+    reference_model = _build_so_oracle(spec, resolved, "floating")
     target_shared_bytes = _world_frame_target_shared_bytes()
     executable, compile_cmd = _build_world_frame_case(
         project_model, tmp_path, f"{robot_id}_cuda_world_frame", target_shared_bytes
@@ -275,8 +276,11 @@ def test_cuda_world_frame_matches_python_reference(tmp_path, robot_id):
             atol=0.0,
             err_msg=f"{robot_id} world-frame dimension config @ {sample.name}",
         )
+        # Independent oracle: pinocchio's body-frame IDSVA-SO returns the SAME
+        # second-order tensors as the world-frame computation (mathematically
+        # equivalent; frame is an internal choice), via the exact pin_so_ext C++.
         expected_idsva = _flatten_idsva_blocks(
-            project_model.reference.idsva_so_world_frame(sample.q, sample.qd, sample.qdd)
+            reference_model.idsva_so_body_frame(sample.q, sample.qd, sample.qdd)
         )
         _assert_blocks_close(
             actual["idsva_so_body_frame"], expected_idsva, project_model.nv, sample.name
