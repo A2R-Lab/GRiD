@@ -235,6 +235,51 @@ Last updated 2026-05-25. Grouped by theme; rough priority within each.
 
 ## CURRENT PLAN — re-prioritized 2026-05-26 (perf-cleanup)
 
+### STATUS SNAPSHOT — 2026-05-26 (LATEST; pick up here)
+Branch `perf-cleanup`: **parent HEAD `d8a6d36`, RBDReference submodule `216f616`, codegen
+`6cdba85`, GLASS `3e910e1` — all pushed.** (Uncommitted working-tree noise NOT ours and
+left alone: `URDFParser` t8.txt deletion, `test/dev_notes/` deletions [vestigial, to fold
+into the Stage-5 sweep], `benchmark_multi_version.md`, an untracked tier matrix md.)
+
+**DONE this session (committed + pushed):**
+- **P1-A restructure**: the whole pinocchio-equivalence layer moved into the RBDReference
+  submodule. `RBDReference/equivalents/` = reusable lib (conventions + `reference_backend`
+  + `pinocchio_backend` + `pin_so_ext`); `RBDReference/tests/` = the suite + its infra
+  (manifest/sampling/tolerances/comparators/model_sources/source_lock). Base vs dev
+  requirements; README documents the swap. All GRiD importers + `developer_install.sh`
+  rewired; 936 tests collect.
+- **crba S-index fix CONFIRMED** on baxter+fetch fixed+floating.
+- **Independent pinocchio oracle wired** as the default (`GRID_REFERENCE_BACKEND=pinocchio`):
+  `build_adapter(backend=…)`; project_model (pure-Python URDFParser) is ONLY the codegen /
+  model-under-test input, never a value oracle. Executable harness validated green on
+  iiwa14 + go2 (fixed+floating). SO tests (idsva_so body+world, fdsva_so) wired to the EXACT
+  `pin_so_ext` oracle, validated green on iiwa14.
+- **Real d2ee bug found + filed** (see KNOWN BUG below); d2ee compared vs the independent
+  oracle + listed in `KNOWN_FAILING_ALGORITHMS` (tracked, loud, non-fatal, NOT masked).
+
+**IN FLIGHT (background, started 2026-05-26):** g1/h1_2 SO expansion — running the SO CUDA
+tests on g1+h1_2 (fixed+floating, fallback + world-frame) via env-var robot overrides
+(`GRID_CUDA_SECOND_ORDER_SMOKE_ROBOTS` / `_FLOATING_SECOND_ORDER_ROBOTS` /
+`_IDSVA_SO_WORLD_FRAME_ROBOTS` = `g1`/`h1_2`) under the pinocchio oracle. Multi-hour
+compiles. When done: if green, this is the SO speed-win proof (commit nothing — it's an
+env-var run, default stays iiwa14, OR widen the defaults if we want it permanent); h1_2-
+floating may hit the known device-path smem cap (P2).
+
+**REMAINING TODOS (current):**
+1. **g1/h1_2 SO expansion** — analyze background results; decide whether to widen SO test
+   default robot lists; diagnose any big-robot SO codegen issues surfaced.
+2. **d2ee FIX** (deferred): fix `d²(roll/pitch/yaw)/dq²` atan2 chain-rule in
+   `RBDReference.py:~1159-1165` + the GRiD `ee_pose_hessian` codegen; validate vs the
+   finite-diff/pinocchio oracle; then drop d2ee from `KNOWN_FAILING_ALGORITHMS`.
+3. **Vestigial sweep (Stage-5)**: stage+delete `test/dev_notes/` (user-confirmed vestigial)
+   + dead-code/dup cleanup.
+4. **P1-B** perf tooling fix; **P1-C** coverage all 9×bases×tiers + auto-parallel sizing;
+   **P2** h1_2-floating device-path + `gen_idsva_so_device` reconcile + naming/warnings/docs;
+   **P3** full sweep vs `tier_sweep_20260525_002438` + measured refinements; **P4** merge
+   `perf-cleanup → modernizing-tests`.
+
+---
+
 Branch `perf-cleanup` (parent HEAD d414915, codegen 6cdba85, GLASS 3e910e1).
 Key re-prioritization: **validation + measurement infrastructure (P1) is now ABOVE
 further perf work**, driven by two hard learnings this effort — (1) we are optimizing
