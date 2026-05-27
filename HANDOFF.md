@@ -236,10 +236,32 @@ Last updated 2026-05-25. Grouped by theme; rough priority within each.
 ## CURRENT PLAN — re-prioritized 2026-05-26 (perf-cleanup)
 
 ### STATUS SNAPSHOT — 2026-05-26 (LATEST; pick up here)
-Branch `perf-cleanup`: **parent HEAD `d8a6d36`, RBDReference submodule `216f616`, codegen
-`6cdba85`, GLASS `3e910e1` — all pushed.** (Uncommitted working-tree noise NOT ours and
+Branch `perf-cleanup`: **parent HEAD `d5be248`, RBDReference submodule `3e012b7`, codegen
+`0b3cd29`, GLASS `3e910e1` — all pushed.** (Uncommitted working-tree noise NOT ours and
 left alone: `URDFParser` t8.txt deletion, `test/dev_notes/` deletions [vestigial, to fold
 into the Stage-5 sweep], `benchmark_multi_version.md`, an untracked tier matrix md.)
+
+**d2ee BUG IS FIXED (2026-05-26, committed+pushed)** — see "KNOWN BUG — d2ee" below, now
+resolved. Root cause: the pitch-row sqrt-term 2nd derivative used `s'_i = T_i/s` as the
+quotient-rule numerator where it must use `T_i` (dropped a `1/s` factor), so the error
+vanished near home (`s≈1`) and grew with joint angle. Fixed in BOTH the RBDReference
+analytic hessian (both joint-loop copies, `3e012b7`) and the GRiD `ee_pose_hessian` codegen
+(`_eepose_gradient_hessian.py`, `0b3cd29`). Validated: CPU finite-diff of the verified
+gradient on iiwa14/go2/g1-fixed (~1e-11), and CUDA hard-pass vs the pinocchio oracle on
+iiwa14 **fixed and floating** (KNOWN_FAILING now empty → d2ee is a hard requirement again).
+
+**SO expansion RESULTS (2026-05-26):** g1 fallback (fixed+floating) GREEN (~12m, compile-
+bound), g1 world-frame GREEN (35s), h1_2 world-frame GREEN (60s) — all via the pinocchio
+oracle = the SO speed-win proof (was hours of pure-Python reference, now nvcc-compile-bound).
+**h1_2 fallback (fixed + floating diag) FAILS**: `idsva_so` requests **168784 B** of shared
+mem but the device caps at **101376 B/block** → `GPUassert: invalid configuration argument`.
+This is the known device-path smem cap (P2 / perf-cleanup agent-11): `idsva_so` body+world
+are the two kernels that still lack the per-tier surgical spill the other 9 kernels got, so
+the largest robot overflows even on the forced-fallback path. NOT a regression, NOT from
+d2ee. **Decision: SO test defaults stay `iiwa14`** (g1 fallback is a ~12m compile; the
+`GRID_CUDA_*_ROBOTS` env vars already make g1/h1_2 zero-code for nightly/broad runs).
+g1 is validated-green for permanent inclusion if a slower default is ever wanted; h1_2
+fallback must wait for the `idsva_so` spill.
 
 **DONE this session (committed + pushed):**
 - **P1-A restructure**: the whole pinocchio-equivalence layer moved into the RBDReference
@@ -257,25 +279,17 @@ into the Stage-5 sweep], `benchmark_multi_version.md`, an untracked tier matrix 
 - **Real d2ee bug found + filed** (see KNOWN BUG below); d2ee compared vs the independent
   oracle + listed in `KNOWN_FAILING_ALGORITHMS` (tracked, loud, non-fatal, NOT masked).
 
-**IN FLIGHT (background, started 2026-05-26):** g1/h1_2 SO expansion — running the SO CUDA
-tests on g1+h1_2 (fixed+floating, fallback + world-frame) via env-var robot overrides
-(`GRID_CUDA_SECOND_ORDER_SMOKE_ROBOTS` / `_FLOATING_SECOND_ORDER_ROBOTS` /
-`_IDSVA_SO_WORLD_FRAME_ROBOTS` = `g1`/`h1_2`) under the pinocchio oracle. Multi-hour
-compiles. When done: if green, this is the SO speed-win proof (commit nothing — it's an
-env-var run, default stays iiwa14, OR widen the defaults if we want it permanent); h1_2-
-floating may hit the known device-path smem cap (P2).
-
 **REMAINING TODOS (current):**
-1. **g1/h1_2 SO expansion** — analyze background results; decide whether to widen SO test
-   default robot lists; diagnose any big-robot SO codegen issues surfaced.
-2. **d2ee FIX** (deferred): fix `d²(roll/pitch/yaw)/dq²` atan2 chain-rule in
-   `RBDReference.py:~1159-1165` + the GRiD `ee_pose_hessian` codegen; validate vs the
-   finite-diff/pinocchio oracle; then drop d2ee from `KNOWN_FAILING_ALGORITHMS`.
-3. **Vestigial sweep (Stage-5)**: stage+delete `test/dev_notes/` (user-confirmed vestigial)
+1. **Vestigial sweep (Stage-5)**: stage+delete `test/dev_notes/` (user-confirmed vestigial)
    + dead-code/dup cleanup.
-4. **P1-B** perf tooling fix; **P1-C** coverage all 9×bases×tiers + auto-parallel sizing;
-   **P2** h1_2-floating device-path + `gen_idsva_so_device` reconcile + naming/warnings/docs;
-   **P3** full sweep vs `tier_sweep_20260525_002438` + measured refinements; **P4** merge
+2. **P1-B** perf tooling fix (`run_multi_version.py` stalls / 25-min compiles); **P1-C**
+   coverage all 9×bases×tiers + auto-parallel sizing.
+3. **P2 — `idsva_so` device-path smem cap** (now CONCRETE, blocks h1_2 SO): `idsva_so`
+   body+world lack the per-tier surgical spill; h1_2 requests 168784 B > 101376 B/block.
+   Give the inline `*_device` paths tier-aware/spillable behavior + reconcile
+   `gen_idsva_so_device` dispatcher; then h1_2 fallback can pass. (= perf-cleanup agent-11.)
+   Also naming/warnings/docs sweep.
+4. **P3** full sweep vs `tier_sweep_20260525_002438` + measured refinements; **P4** merge
    `perf-cleanup → modernizing-tests`.
 
 ---
@@ -308,7 +322,8 @@ pose Jacobian/Hessian is non-finite in BOTH the reference and CUDA (not a codege
 Handled by a harness guard that skips a comparison only when the *reference* itself is
 non-finite (a finite reference is always asserted, so no real NaN is masked).
 
-**KNOWN BUG — d2ee orientation rows (found 2026-05-26, deferred fix):** the
+**KNOWN BUG — d2ee orientation rows (found 2026-05-26 — ✅ FIXED 2026-05-26, see STATUS
+SNAPSHOT above for the fix + validation):** the
 `end_effector_pose_hessian` (d2ee) **orientation (roll/pitch/yaw) rows are wrong at
 non-small joint angles in BOTH the GRiD CUDA codegen AND the RBDReference analytic
 hessian** — they match each other (so CUDA-vs-analytic equivalence passed and hid it),
