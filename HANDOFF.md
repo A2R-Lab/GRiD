@@ -337,10 +337,20 @@ candidates: continuous/planar joints, `<dynamics>` damping/friction, `<limit>`, 
 robustness, `<transmission>`. See memory `project_grid_urdf_feature_support_backlog.md`. NOT
 scheduled — backlog.
 
+**h1_2-floating over-cap crash FIXED (`d4d601f`):** the runner's floating block re-registered
+kernels with UNGUARDED `cudaFuncSetAttribute` (the generated `init_grid` path is guarded; this
+block isn't, for its runner-local kernels). h1_2-floating `forward_dynamics` (120624 B) /
+`direct_minv` exceed the ~101 KB cap at PERF tier → hard GPUassert. New
+`grid_runner_set_smem_or_skip` helper emits the standard "shared-memory request … device
+supports" message + exits cleanly → harness SKIPS (whole-case). Validated: iiwa14-floating
+8 passed (no regression); h1_2-fixed 4 passed; h1_2-floating 4 skipped (clear reason). Whole-
+case skip is coarse (loses h1_2-floating's fitting algos) — finer per-kernel skip / tier-aware
+big-robot testing is future refinement.
+
 **REMAINING TODOS (current):**
-1. **OPEN from P1-C:** h1_2 `direct_minv` over-cap kernel-attr guard (investigating a quick
-   fix now); fr3 mimic-joint → folded into the URDF-feature audit backlog above. Also:
-   auto-parallel test sizing (P1-C used a manual 6-way shell shard).
+1. **OPEN from P1-C:** fr3 mimic-joint → folded into the URDF-feature audit backlog above.
+   Also: auto-parallel test sizing (P1-C used a manual 6-way shell shard); finer per-kernel
+   over-cap skip + tier-aware h1_2-floating testing.
 2. **P3** full sweep vs `tier_sweep_20260525_002438` (now parallelized by P1-B; MUST run with
    the GPU idle — no concurrent compiles/tests — so timing isn't skewed). If it shows
    whole-arena idsva_so spill is a real LITE/MINIMAL bottleneck, THEN do the deferred deep
