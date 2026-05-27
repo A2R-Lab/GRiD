@@ -96,14 +96,7 @@ SINGULAR_DEPENDENT_ALGORITHMS = {
 # independent oracle are reported as expected/known failures (not silent masks,
 # not hard suite failures) pending a fix. The oracle stays correct so the bug is
 # never hidden by comparing buggy-vs-buggy.
-KNOWN_FAILING_ALGORITHMS = {
-    "end_effector_pose_hessian": (
-        "d2ee orientation (roll/pitch/yaw) rows are wrong at non-small joint angles "
-        "in BOTH the GRiD CUDA codegen AND the RBDReference analytic hessian (they "
-        "match each other; position rows are correct). Found 2026-05-26 vs the "
-        "independent finite-diff/pinocchio oracle. Deferred fix — see HANDOFF."
-    ),
-}
+KNOWN_FAILING_ALGORITHMS = {}
 CUDA_DEFAULT_TOLERANCE = {
     "rtol": 2e-4,
     "atol": 2e-4,
