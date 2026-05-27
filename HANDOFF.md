@@ -235,7 +235,37 @@ Last updated 2026-05-25. Grouped by theme; rough priority within each.
 
 ## CURRENT PLAN — re-prioritized 2026-05-26 (perf-cleanup)
 
-### P3 PERF SWEEP RESULTS — 2026-05-27 (LATEST; pick up here)
+### COMPETITIVE ANALYSIS + crba FIX + SO DATA GAP — 2026-05-27 (LATEST; pick up here)
+
+**crba regression FIXED (code; perf re-measure pending):** root cause = `6cdba85`'s depth-stepped
+M-fill (3 `__syncthreads`/chain-depth → sync storm; regressed crba 2.5–6×, even unbranched iiwa14).
+Reverted to the sync-free one-thread-per-jid ancestor walk, KEEPING the S-index correctness (M
+entry now indexes by the PARENT's S index/sign via compile-time tables). Correctness validating
+(b9g9c2kvg): go2 (branched) + iiwa14 PASS; baxter pending. NOT yet committed (gated on baxter).
+
+**Limb-parallelism diagnostic (user asked if go2>iiwa means lost BFS parallelism):** NO — at
+single-call go2/iiwa is 0.88–1.39× across all algos (limb parallelism works); go2>iiwa is purely a
+BATCH effect (saturated GPU → work-bound, 12 vs 7 DOF). id_du/fd_du clean (1.07–1.08×), disconfirming
+a systemic regression. Only crba regressed; minv/aba/crba share a pre-existing ~1.8× go2/iiwa
+batch-occupancy gap (not a regression).
+
+**Competitive vs Pinocchio (see memory `project_grid_competitive_analysis.md`):** throughput-vs-
+latency split — pinocchio codegen-CPU wins single-call EVERYWHERE (sub-µs); GRiD wins batch N=256
+(1.2–11×/prob), except crba (regression artifact → ~parity post-fix). GRiD numbers are compute-only
+(GPU-resident assumption). pre_glass id/minv/id_du (iiwa14+go2 fixed, reused): glass HELD/beat it.
+
+**SECOND-ORDER pinocchio data GAP (user-flagged, collect next sweep):** no pinocchio SO timing yet.
+The pinocchio harness DOES support `idsva_so_body_frame` (`PINOCCHIO_ALGOS`); `fdsva_so` skipped (no
+equivalent). Add the pinocchio column to the next sweep. Caveat: pinocchio nv³ SO codegen for g1/h1_2
+may be very slow / hit the 1500s/algo timeout.
+
+**NEXT (gated on baxter correctness): commit crba fix, then ONE collection:**
+`run_multi_version --columns glass pinocchio --bases fixed --tiers perf lite minimal` →
+(a) corrected fixed-base crba perf (replaces last night's regressed crba), (b) pinocchio
+`idsva_so_body_frame` SO timing. Reuse: pre_glass (phase7), floating + non-crba glass (last night),
+other pinocchio algos (05-24). Then assemble the full combined picture.
+
+### P3 PERF SWEEP RESULTS — 2026-05-27
 Ran the first trustworthy sweep on the P1-B-parallelized tooling: glass × {iiwa14,go2,g1,h1_2}
 × {fixed,floating} × {perf,lite,minimal}, 24/24 cases produced (EXIT 0, ~4h21m). Output:
 `test/benchmarks/results/perf_cleanup_overnight/` + report `test/benchmarks/perf_cleanup_overnight.md`.
