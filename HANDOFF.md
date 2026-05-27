@@ -47,7 +47,7 @@ Canonical Python lives in the `RBDReference` submodule (not the adapter):
 
 `ProjectModelAdapter.integrator / integrator_gradient` are thin pass-throughs
 that wrap RBDReference and apply `normalize_vector` / `normalize_matrix`
-([project_adapter.py:112-119](RBDReference/equivalents/reference_backend.py#L112)).
+([reference_backend.py:112-119](RBDReference/equivalents/reference_backend.py#L112)).
 `normalize_matrix` is the IDENTITY; RBDReference already emits in GRiD internal
 order, so CUDA-vs-ProjectModelAdapter is an apples-to-apples internal-order
 comparison.
