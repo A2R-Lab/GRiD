@@ -307,11 +307,32 @@ the deep de-alias.** Interim: a self-healing device-cap SKIP landed in `_run_run
 honestly (h1_2 body-frame SO; world-frame is h1_2's production path and passes). Skip
 auto-disappears if the de-alias later makes it fit.
 
+**P1-C DONE (2026-05-26) — broad correctness, all 9 robots × fixed+floating vs pinocchio:**
+5 clean pass (iiwa14, go2, g1, gen3, fetch). The 4 "failures" were ALL first-time coverage
+of robots beyond the old gate, and NONE were core GRiD dynamics-math bugs:
+- **Comparator gaps (fixed, `f2c73e9`)** — not GRiD bugs: (A) added a magnitude-scaled atol
+  floor `max(atol, rtol·max|expected|)` (mirrors `RBDReference/tests/comparators.py`) so
+  large-`Minv` robots (h1_2 near-singular M, entries ~1e6–1e8, rel err ~1e-7) stop
+  false-failing; does NOT re-mask d2ee (O(1)-scale). (B) EE-pose orientation rows fold ±π
+  (atan2 branch) to exact agreement + a scoped rpy gimbal-lock/derivative-blowup skip;
+  POSITION rows always stay strict. → baxter now green.
+- **rizon4 = broken upstream asset (fixed, `0e58f74`)**: resolved URDF has 0 `<inertial>`
+  blocks (flexiv xacro emits bare inertia tags) → zero-mass model → crba NaN. Honest
+  `_model_inertia_is_degenerate` skip (self-heals if a fixed asset resolves). NOT a GRiD bug.
+- **fr3 finger-2 position — OPEN (intentionally still failing, not masked)**: `fr3_finger_joint2`
+  is a `<mimic>` joint; GRiD doesn't model mimic coupling so finger-2 position (+ derivs)
+  diverge from pinocchio. Orientation matches. A model/convention LIMITATION. DECISION
+  PENDING: add mimic-joint support vs skip mimic-affected leaves.
+- **h1_2 `direct_minv` dynamic-smem crash — OPEN (GRiD robustness)**: at high (session-random)
+  thread counts `cudaFuncSetAttribute(MaxDynamicSharedMemorySize)` hard-fails (`GPUassert:
+  invalid argument`) instead of the graceful "shared-memory request … device supports" guard
+  the other kernels use → FLAKY by thread count. Fix: make direct_minv's kernel-attr
+  registration guard/skip over-cap like the rest. (Distinct from the idsva_so body cap.)
+See memory `project_grid_broad_coverage_findings.md`.
+
 **REMAINING TODOS (current):**
-1. **P1-C** broad correctness — RUNNING (9 robots × fixed+floating, pinocchio oracle, 6-way
-   parallel, fresh cache `grid_cuda_p1c`). NOTE: this run was launched just BEFORE `308f950`,
-   so an h1_2-fixed idsva overflow here may show as a FAIL rather than the new skip; re-run
-   h1_2 alone if so. TODO: auto-parallel test sizing (this used a manual 6-way shell shard).
+1. **OPEN from P1-C:** fr3 mimic-joint support (or skip); h1_2 `direct_minv` over-cap
+   kernel-attr guard. Also: auto-parallel test sizing (P1-C used a manual 6-way shell shard).
 2. **P3** full sweep vs `tier_sweep_20260525_002438` (now parallelized by P1-B; MUST run with
    the GPU idle — no concurrent compiles/tests — so timing isn't skewed). If it shows
    whole-arena idsva_so spill is a real LITE/MINIMAL bottleneck, THEN do the deferred deep
