@@ -1232,8 +1232,12 @@ def main() -> None:
     args = parser.parse_args()
 
     ee_frame = args.ee_frame or DEFAULT_EE_FRAMES.get(args.robot, "")
-    build_dir = args.build_dir if args.build_dir is not None else (
-        REPO_ROOT / "test" / "benchmarks" / "results")
+    # MUST be absolute: the generated header path is baked into the nvcc compile
+    # line (-DGRID_HEADER_FILE=...) and nvcc may run from a different cwd, so a
+    # relative --build-dir (e.g. from a relative --output-dir) would fail to
+    # resolve the header. The default REPO_ROOT-based path was already absolute.
+    build_dir = (args.build_dir if args.build_dir is not None else (
+        REPO_ROOT / "test" / "benchmarks" / "results")).resolve()
     build_dir.mkdir(parents=True, exist_ok=True)
 
     # Propagate the CLI flag to codegen via env var (the helpers read it at
