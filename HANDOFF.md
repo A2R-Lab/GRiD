@@ -235,7 +235,40 @@ Last updated 2026-05-25. Grouped by theme; rough priority within each.
 
 ## CURRENT PLAN — re-prioritized 2026-05-26 (perf-cleanup)
 
-### STATUS SNAPSHOT — 2026-05-26 (LATEST; pick up here)
+### P3 PERF SWEEP RESULTS — 2026-05-27 (LATEST; pick up here)
+Ran the first trustworthy sweep on the P1-B-parallelized tooling: glass × {iiwa14,go2,g1,h1_2}
+× {fixed,floating} × {perf,lite,minimal}, 24/24 cases produced (EXIT 0, ~4h21m). Output:
+`test/benchmarks/results/perf_cleanup_overnight/` + report `test/benchmarks/perf_cleanup_overnight.md`.
+Compared vs baseline `tier_sweep_20260525_002438` on N=256 compute-only (script in /tmp/compare_sweep.py).
+
+**Headline: 101 wins, 71 regressions (>5%). Net = big-robot dynamics got ~2× faster, but crba
+regressed hard.**
+- **WINS (the GLASS/inner-owns payoff):** h1_2 (and g1) dynamics roughly HALVED vs baseline —
+  h1_2-fixed minv 95 vs 178µs (0.54×), fd 147 vs 285 (0.51×), ee_pose_gradient 85 vs 167
+  (0.51×), integrator 0.53×. ~100 cases >5% faster.
+- **REGRESSION #1 — crba, systemic, MOST ACTIONABLE:** crba is 2.5–6× slower than baseline on
+  EVERY robot, and the gap GROWS with batch (iiwa14 1.6×→2.5×, g1 1.6×→4.9× single→N=256;
+  h1_2 ~6×, g1-fixed-minimal 8.5×). It hits even UNBRANCHED iiwa14, so it is NOT just the
+  branched S-index correctness fix — it's a systemic crba codegen perf issue introduced
+  relative to the 05-25 baseline (prime suspect: the crba P1 "depth-stepped fill" GLASS pass —
+  verify whether the baseline pre/post-dates it via git archaeology on `_crba.py`). NEEDS
+  root-cause; decide correctness-vs-perf tradeoff with user.
+- **REGRESSION #2 — ee_pose_gradient on iiwa14 ~1.9× slower** (all tiers). Minor vs crba.
+- **idsva_so whole-arena spill cost (the deferred-de-alias signal): CONFIRMED a real bottleneck
+  on big robots** — g1-fixed idsva_so N=256: perf 3001µs → lite 6162 (2.05×) → minimal 5475
+  (1.82×); h1_2-fixed: perf 21687 → lite 29455 (1.36×) → minimal 25887 (1.19×). Small robots
+  noisy/flat. So the design-notes gate is MET: the deferred surgical ancestor-scratch de-alias
+  IS warranted (would avoid the ~2× lite penalty on g1). See `docs/idsva_so_inner_refactor_notes.md`.
+
+**Caveats:** glass-vs-glass only (pre_glass/pinocchio/mjx/frax columns not run); some small-robot
+(<100µs) tier numbers are measurement noise (lite occasionally "faster" than perf).
+
+**Suggested next (AM):** (1) root-cause the crba regression (git-bisect `_crba.py` vs baseline;
+likely the depth-stepped-fill pass — may need to revert/retune it); (2) given the confirmed
+lite/minimal spill cost, schedule the idsva_so surgical de-alias; (3) P4 merge once crba is
+understood (don't merge a 6× crba regression unexamined).
+
+### STATUS SNAPSHOT — 2026-05-26 (pick up at the P3 results above)
 Branch `perf-cleanup`: **parent HEAD `d5be248`, RBDReference submodule `3e012b7`, codegen
 `0b3cd29`, GLASS `3e910e1` — all pushed.** (Uncommitted working-tree noise NOT ours and
 left alone: `URDFParser` t8.txt deletion, `test/dev_notes/` deletions [vestigial, to fold
