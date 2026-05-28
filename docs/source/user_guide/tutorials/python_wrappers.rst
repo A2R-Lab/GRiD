@@ -84,8 +84,10 @@ cross-validation.
      - ``(B, 6*NUM_EES)``
      - ``[xyz, rpy]`` per EE.
    * - ``end_effector_pose_gradient(q)``
-     - ``(B, 6*NUM_EES, NJ)``
-     - EE pose Jacobian.
+     - ``(B, 6*NUM_EES, NV)``
+     - EE pose Jacobian ``d(pose)/dv`` in **tangent space** (matches pinocchio).
+       Fixed-base ``NV == NJ``; floating-base ``NV = 6 + n_joints`` (spatial
+       twist, ``[omega; v]``) rather than the older quaternion-derivative columns.
    * - ``end_effector_pose_hessian(q)``
      - ``(B, 6*NUM_EES, NJ, NJ)``
      - EE pose Hessian (∂²ee/∂q²).

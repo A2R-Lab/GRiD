@@ -42,8 +42,14 @@ Currently implemented algorithms include:
 **End-effector kinematics**
 
 * Pose: ``ee = rbd.end_effector_pose(q, ee_joint_names=None, ee_offsets=None)``
-* Pose Jacobian: ``dee = rbd.end_effector_pose_gradient(q, ...)``
-* Pose Hessian: ``d2ee = rbd.end_effector_pose_hessian(q, ...)``
+* Pose Jacobian: ``dee = rbd.end_effector_pose_gradient(q, ...)`` —
+  ``d(pose)/dv`` in **tangent space** (6 × nv per EE), matching pinocchio's
+  convention. Fixed-base ``nv == nq`` so the shape is unchanged from earlier
+  versions; floating-base outputs the spatial Jacobian (``[omega; v]`` base
+  block, ``nv = 6 + n_joints``) rather than the older non-standard
+  quaternion-derivative columns.
+* Pose Hessian: ``d2ee = rbd.end_effector_pose_hessian(q, ...)`` — still ``d²(pose)/dq²``
+  for now; a follow-up will switch it to ``d²(pose)/dv²`` for consistency.
 
 **Second-order**
 
