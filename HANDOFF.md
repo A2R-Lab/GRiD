@@ -259,6 +259,36 @@ Floating-zero is degenerate (pitch=0 zeros the `sp/cp` term in row5, identity ro
 hides axis-mapping bugs). The non-degenerate sample set on iiwa14+go2 floating is the
 load-bearing validation — both passed. Algorithm is solid.
 
+**Important validation-gap fix:** `FLOATING_CUDA_ALGORITHMS` (the default for floating
+equivalence tests) excludes `end_effector_pose_gradient` / `end_effector_pose_hessian`
+(they sit in `FLOATING_CUDA_CANDIDATE_ALGORITHMS` instead, opt-in via
+`GRID_CUDA_FLOATING_ALGORITHMS=all`). Earlier "iiwa14/go2 floating GREEN" runs were
+therefore not actually comparing ee_pose_gradient on CUDA — they tested every other
+algo. Fixed with focused re-runs:
+- iiwa14-floating `GRID_CUDA_FLOATING_ALGORITHMS=end_effector_pose,end_effector_pose_gradient`
+  + 6 non-degenerate samples: GREEN
+- go2-floating same args: GREEN (branched + multi-EE + floating + non-zero pitch ⇒
+  exercises every codegen path that matters)
+The CUDA d/dv ee_pose_gradient is now genuinely validated.
+
+### ee_pose_hessian d/dv (RBDReference + pinocchio_backend ONLY) — 2026-05-28
+
+Python d²(pose)/dv² landed (RBDReference `342465d`, parent `2748c4f`):
+- `RBDReference.end_effector_pose_hessian` rewritten as central-difference FD of the
+  (now-correct) d/dv Jacobian on `self.integrate(q, h*e_i)`, then symmetrized. Replaces
+  ~285 lines of analytic d²/dq² (whose per-row atan2 second derivatives had known
+  orientation-row errors at non-small angles).
+- `pinocchio_backend.end_effector_pose_hessian` symmetrized FD of d/dv Jacobian on
+  `pin.integrate` — matches the project adapter.
+- iiwa14 fixed + floating Python equivalence GREEN.
+
+**CUDA d2ee codegen STILL emits d²/dq² (6×nq×nq).** Default floating equivalence tests
+do not include d2ee so they still pass. Opt-in `GRID_CUDA_FLOATING_ALGORITHMS=all` would
+shape-mismatch floating because RBDReference now returns 6×nv×nv. The GPU d2ee rewrite
+is a separate (large) ripple deferred for now — would need either FD-on-d/dv-gradient on
+device or analytic d²/dv² (spatial second derivatives, pinocchio-frame-Hessian style).
+Recommendation: defer until a real consumer needs d/dv on GPU.
+
 - **Step C (`df70675` in GRiDCodeGenerator, `d8b1bcb` in parent):**
   - `_eepose_gradient_hessian.py::gen_end_effector_pose_gradient_inner` rewritten as
     shared-chain geometric Jacobian: one FK pass builds world transforms for every joint
