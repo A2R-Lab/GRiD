@@ -308,6 +308,86 @@ Top floating-base first-order targets if/when this becomes the next priority:
 2. **go2-floating aba** (pin 1.75x) — second biggest.
 3. **iiwa14-floating minv/fd** (pin 1.51x/1.29x) — small robot launch overhead.
 
+### NEXT: GPU d2ee floating-base d/dv rewrite (pick up here post-compact)
+
+**Status of d2ee after this session's Python d/dv landing:**
+- Python (RBDReference + pinocchio_backend): d²(pose)/dv² via FD-on-d/dv-Jacobian, GREEN.
+- CUDA fixed-base d2ee: **already correct** (nq==nv ⇒ d²/dq² == d²/dv² numerically;
+  existing analytic codegen produces the right numbers; iiwa14-fixed equivalence
+  with d2ee included PASSED 10/10 samples after Python change).
+- CUDA floating-base d2ee: emits 6×nq×nq d²/dq² with quaternion-derivative columns.
+  Default FLOATING_CUDA_ALGORITHMS list excludes d2ee so default tests pass; opt-in
+  (`GRID_CUDA_FLOATING_ALGORITHMS=all`) would shape-mismatch vs the Python 6×nv×nv.
+  **This is the remaining gap — the GPU floating d2ee rewrite.**
+
+**Pickup recipe (substantial work, Step C-sized):**
+
+1. **Architectural change.** d2ee inner currently takes pre-computed `s_Xhom`, `s_dXhom`,
+   `s_d2Xhom` and assumes one fixed q. FD-on-Jacobian needs to recompute Xhom for each
+   perturbed q, which means the inner has to call `load_update_XmatsHom_helpers` + the
+   new `end_effector_pose_gradient_inner` internally — requires `d_robotModel` and
+   `s_topology_helpers` in the inner signature. Look at the canonical pattern in
+   `_eepose_gradient_hessian.py::gen_end_effector_pose_gradient_hessian_inner`
+   (line 1362) to see what's changing.
+
+2. **Algorithm.** Mirror `RBDReference.end_effector_pose_hessian` (the FD-on-d/dv-J
+   approach): for each `vi ∈ [0, nv)`:
+     - SE(3) integrate `q_plus = integrate(q, +h*e_vi)`, `q_minus = integrate(q, -h*e_vi)`.
+     - Recompute Xhom for each perturbed q via `load_update_XmatsHom_helpers`.
+     - Compute J(q_plus) and J(q_minus) via `end_effector_pose_gradient_inner`.
+     - `H[:, :, vi] = (J_plus - J_minus) / (2h)`.
+   Then symmetrize: `H[a, i, j] = 0.5 * (H[a, i, j] + H[a, j, i])`.
+
+3. **SE(3) integrate codegen** for the perturbation. Codegen-time specialized per vi:
+     - **Fixed-base:** trivially `q_pert = q + h*e_vi` (just add h to q[vi]).
+     - **Floating vi ∈ [0, 3):** linear base — `q_pert[0..3] = q[0..3] + h*R(q[3:7])[:, vi]`;
+       quat and joints unchanged.
+     - **Floating vi ∈ [3, 6):** angular base — quaternion multiplication by small
+       axis quat `(h/2 * e_{vi-3}; sqrt(1 - h²/4))`; xyz and joints unchanged.
+     - **Floating vi ≥ 6:** arm joint — `q_pert[vi+1] = q[vi+1] + h`; rest unchanged
+       (assumes single-DOF arm joints; check `get_joint_index_q` if any multi-DOF).
+   Reference implementation: `RBDReference.RBDReference.integrate(q, v_dt)`.
+
+4. **Output shape & consumer ripple.** `d_d2eePos` allocator changes from
+   `6*NUM_JOINTS*NUM_JOINTS*NUM_EES` → `6*NUM_VEL*NUM_VEL*NUM_EES`. Update:
+     - `GRiDCodeGenerator.py:1157,1161` (gridData allocator).
+     - `test/cuda_equivalents/cuda_equivalence_runner.cu` (h_d2ee/d_d2ee sizing,
+       memcpy, print_vector). 5+ sites.
+     - `python/grid_rbd/wrapper_template.cu` (C extern + JAX FFI memcpy + buffer
+       validation; the d2ee handler around line 875+).
+     - `python/src/_core.cpp` (`py::array_t<float> out({batch, 6*nees, nv, nv})`).
+     - `python/grid_rbd/_handle.py` + `python/grid_rbd/jax/__init__.py`
+       (d2ee reshape: use `num_vel` instead of `num_joints`).
+     - `printGRiD.cu` (`printMat<T,NUM_VEL,NUM_VEL>` for d2eePos block, offset
+       calculation uses NUM_VEL).
+     - `test/cuda_equivalents/test_cuda_executable_equivalence.py:1041-1054`
+       (the d2ee oracle path; already calls `reference_model.end_effector_pose_hessian`
+       which now returns 6×nv×nv — so this might be OK already, just verify).
+
+5. **Smem budget.** For h1_2 floating, s_d2eePos = 6*57*57*12 ≈ 900 KB — way over the
+   ~101 KB cap. Will need workspace spilling like the existing d2ee (existing macros
+   like `GRID_D2EE_USES_WORKSPACE_TEMP` may need re-keying for the new layout). Scratch
+   for the per-iter J_plus + J_minus + q_pert + Xhom_pert + inner_temp is ~14K floats
+   (~57 KB) for h1_2-floating — fits in smem at PERF tier; LITE/MINIMAL spill the
+   inner workspace as the current d2ee already does.
+
+6. **Validation.** After codegen + consumer ripple, run iiwa14-floating CUDA
+   equivalence with `GRID_CUDA_FLOATING_ALGORITHMS=end_effector_pose,end_effector_pose_gradient,end_effector_pose_hessian`
+   and a non-degenerate sample set (e.g. conservative, high_velocity,
+   high_acceleration, floating_quat_positive, floating_quat_mixed). Once GREEN, expand
+   to go2-floating then g1/h1_2-floating.
+
+**Independent cleanup tasks the user flagged for later:**
+- Remove orphaned helpers in `_eepose_gradient_hessian.py`: `_emit_eepose_grad_extraction`
+  (line 647), `_emit_eepose_grad_compacted_nonserial` (line 682). The new gradient inner
+  doesn't call them. Verify with grep before deleting.
+- Drop `s_dXhom` param from `end_effector_pose_gradient_inner` signature (currently
+  takes it as `(void)`-marked dead arg) — propagate through device/kernel call sites.
+- Per-tier smem allocator can also drop the dxhom-shared logic (the spilling-to-workspace
+  path for dxhom is now never taken on the gradient path).
+- Documentation: add the d/dv convention note + the geometric-Jacobian explanation in
+  `docs/source/user_guide/concepts/`, and a section in `docs/python_wrappers_plan.md`.
+
 ### ee_pose_hessian d/dv (RBDReference + pinocchio_backend ONLY) — 2026-05-28
 
 Python d²(pose)/dv² landed (RBDReference `342465d`, parent `2748c4f`):
