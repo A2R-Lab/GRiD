@@ -237,7 +237,30 @@ Last updated 2026-05-25. Grouped by theme; rough priority within each.
 
 ### ee_pose_gradient GEOMETRIC-JACOBIAN REWRITE — 2026-05-27 (LATEST; pick up here)
 
-**PROVEN in Python (`/tmp/geom_jac_proto.py`), ready to implement.** The floating ee_pose_gradient
+**STEP A + B LANDED + PUSHED (2026-05-27). CHECKPOINT before GPU reached.** Branch HEAD:
+parent `df36d40`, RBDReference `0e71d06`.
+- **Step A (`087d458` in RBDReference):** `RBDReference.end_effector_pose_gradient` rewritten as
+  shared-chain geometric Jacobian producing d/dv (tangent), 6×nv per ee. Validated 96/96 ee×scale
+  combos vs the proven prototype on 5 robots × 2 bases, worst max-abs-err 2.4e-15 (machine
+  precision); FD-validated on non-zero offset (~1e-9, FD floor).
+- **Step B (`0e71d06`):** `pinocchio_backend.end_effector_pose_gradient` rewritten to d/dv via
+  central-difference FD on `pin.integrate(q, h*e_i)` (Lie-group tangent). All 9 robots × 2 bases
+  GREEN in `test_kinematics_derivatives_equivalence.py` — RBDReference d/dv ≡ pinocchio d/dv. The
+  "match pinocchio" property is proven.
+- **Step C — GPU codegen rewrite — PENDING.** Multi-file ripple:
+  (a) `_eepose_gradient_hessian.py::gen_end_effector_pose_gradient_inner` — replace per-(djid,ee)
+  re-chain with shared-chain FK + per-chain-joint J_v/J_w via cross-products + E(rpy)⁻¹·J_w.
+  (b) Output buffer size for floating: `6 * NUM_EES * NUM_JOINTS` → `6 * NUM_EES * NUM_VEL` in the
+  `gridData<T>` allocator (`GRiDCodeGenerator.py:1156,1160`), all `6*n*num_ees` strides in the
+  codegen, kernel save-result sizes, and the host-copy memcpy bytes.
+  (c) Consumers: `wrapper_template.cu` (FFI), JAX bindings reshape, CUDA equivalence harness
+  expected shape, `python_wrappers` smoke tests, `printGRiD.cu`.
+  (d) For fixed-base nq==nv so no buffer-size change; only floating shape flips. C++ constant
+  `NUM_VEL` is already emitted (`GRiDCodeGenerator.py:715`) so no new constant needed.
+  Per-robot regen + CUDA equivalence (fixed + floating) is the validation gate.
+
+**PROVEN in Python (`/tmp/geom_jac_proto.py` → `test/benchmarks/_scratch_geom_jac_proto.py`),
+ready to implement.** The floating ee_pose_gradient
 "outlier" is ALGORITHMIC, not a bug: GRiD re-chains a full 4×4 transform PER Jacobian column
 (`O(nq·depth)`); the fix is the shared-chain geometric (spatial) Jacobian (`O(nq+depth)`) — FK once,
 then `J_v=â×(p_ee−p_j)`, `J_w=â` (revolute) / `J_v=â` (prismatic), pose-grad `=[J_v; E(rpy)⁻¹ J_w]`.
