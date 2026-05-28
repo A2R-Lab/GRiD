@@ -235,7 +235,40 @@ Last updated 2026-05-25. Grouped by theme; rough priority within each.
 
 ## CURRENT PLAN — re-prioritized 2026-05-26 (perf-cleanup)
 
-### COMPETITIVE ANALYSIS + crba FIX + SO DATA GAP — 2026-05-27 (LATEST; pick up here)
+### ee_pose_gradient GEOMETRIC-JACOBIAN REWRITE — 2026-05-27 (LATEST; pick up here)
+
+**PROVEN in Python (`/tmp/geom_jac_proto.py`), ready to implement.** The floating ee_pose_gradient
+"outlier" is ALGORITHMIC, not a bug: GRiD re-chains a full 4×4 transform PER Jacobian column
+(`O(nq·depth)`); the fix is the shared-chain geometric (spatial) Jacobian (`O(nq+depth)`) — FK once,
+then `J_v=â×(p_ee−p_j)`, `J_w=â` (revolute) / `J_v=â` (prismatic), pose-grad `=[J_v; E(rpy)⁻¹ J_w]`.
+(The earlier "100× vs fixed" was inflated — fixed ee_pose_gradient is partially LICM-elided in the
+bench; real gap ≈16× vs pinocchio.) PROOF: matches the existing analytic gradient to MACHINE
+PRECISION (fixed iiwa14/go2/baxter incl. branched; floating arm cols); **3–22.7× fewer 4×4-mults**
+(grows with size: h1_2 22.7×). E(rpy) for GRiD's RPY convention (R=Rz(yaw)Ry(pitch)Rx(roll))
+verified: E=[[cy·cp,−sy,0],[sy·cp,cy,0],[−sp,0,1]].
+
+**DECISION (user 2026-05-27): output d/dv (tangent, 6×nv) to MATCH PINOCCHIO; document in
+RBDReference + GPU code + docs. d/dv ONLY** (no d/dq — no current consumers; d/dq is non-standard
+quaternion-component derivs; trivially derivable later via `d/dq = d/dv · base quaternion-rate map`).
+Fixed base: nq==nv, unchanged. Floating: switches current d/dq(6×nq) → d/dv(6×nv tangent).
+
+**IMPL PLAN (ordered, with checkpoints):**
+1. **RBDReference.end_effector_pose_gradient** → geometric shared-chain Jacobian (d/dv). Preserve
+   interface (q, ee_joint_names, ee_offsets → list of 6×nv per ee) + offset + fixed-joint handling
+   (offset only shifts p_ee; fixed-joint EE: X_ee=X_world[parent]@fixed_T, chain=parent's). Use
+   `get_S_by_id` + `get_joint_index_v` (both exist). Validate new==prototype (machine precision).
+2. **pinocchio_backend.end_effector_pose_gradient** → d/dv (pin frame Jacobian, LOCAL_WORLD_ALIGNED,
+   mapped to [xyz,rpy] via E⁻¹). Validate RBDReference d/dv == pinocchio d/dv ALL robots = the
+   "match pinocchio" proof. CHECKPOINT before GPU.
+3. **GPU codegen** `gen_end_effector_pose_gradient*` → shared-chain d/dv (kills the per-column
+   re-chain + the floating non-serial compacted path). Re-validate equivalence + perf (expect the
+   16× floating gap to close + the fixed path to drop too).
+4. Docs + JAX bindings note the d/dv (tangent, pinocchio-matching) convention + the floating
+   shape change (6×nv).
+5. **RIPPLE (separate task):** ee_pose_hessian (d2ee) needs the same d/dv treatment for consistency.
+Proof + scaling + E(rpy) in memory `project_grid_competitive_analysis.md`.
+
+### COMPETITIVE ANALYSIS + crba FIX + SO DATA GAP — 2026-05-27
 
 **crba regression FIXED (code; perf re-measure pending):** root cause = `6cdba85`'s depth-stepped
 M-fill (3 `__syncthreads`/chain-depth → sync storm; regressed crba 2.5–6×, even unbranched iiwa14).
