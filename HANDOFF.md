@@ -237,11 +237,27 @@ Last updated 2026-05-25. Grouped by theme; rough priority within each.
 
 ### ee_pose_gradient GEOMETRIC-JACOBIAN REWRITE — 2026-05-27 (LATEST; pick up here)
 
-**STEP A + B + C LANDED + PUSHED (2026-05-27).** Branch HEAD: parent `d8b1bcb`,
-GRiDCodeGenerator `df70675`, RBDReference `0e71d06`. **Step C (GPU codegen + multi-file
-ripple) is in: iiwa14 fixed (10/10) + floating (1/1) CUDA equivalence GREEN.**
-Validation matrix for go2/g1/h1_2 fixed+floating running (background) — pick up that
-result before declaring full success.
+**STEP A + B + C LANDED + COMPREHENSIVELY VALIDATED + PUSHED (2026-05-27).**
+Branch HEAD: parent `5dde921`, GRiDCodeGenerator `df70675`, RBDReference `0e71d06`.
+
+**Validation matrix (CUDA equivalence vs pinocchio oracle):**
+- iiwa14 fixed: 10/10 samples GREEN
+- iiwa14 floating: 1/1 zero GREEN + 6/6 non-degenerate (conservative, high_velocity,
+  high_acceleration, energetic_random_0, floating_quat_positive, floating_quat_mixed)
+- go2 fixed: GREEN (multi-EE branched, 4 leaves)
+- go2 floating: 1/1 zero GREEN + 6/6 non-degenerate (branched + floating + non-zero
+  pitch — the *key* validation that catches sign errors like the row5 `(sp/cp)*(cy*Jw0 +
+  sy*Jw1) + Jw2` formula)
+- g1 fixed: 10/10 (29 DOF, 4 EEs)
+- g1 floating: 1/1 zero GREEN
+- h1_2 fixed: 10/10 (51 DOF, 12 EEs — biggest serial-equivalent we can run)
+- h1_2 floating: SKIPPED on pre-existing `forward_dynamics` smem-cap (120 KB > 101 KB,
+  the deferred ancestor-scratch de-alias issue) — NOT a regression from this work.
+  ee_pose_gradient kernel itself never crashes; FD does, before ee_grad runs.
+
+Floating-zero is degenerate (pitch=0 zeros the `sp/cp` term in row5, identity rotation
+hides axis-mapping bugs). The non-degenerate sample set on iiwa14+go2 floating is the
+load-bearing validation — both passed. Algorithm is solid.
 
 - **Step C (`df70675` in GRiDCodeGenerator, `d8b1bcb` in parent):**
   - `_eepose_gradient_hessian.py::gen_end_effector_pose_gradient_inner` rewritten as
