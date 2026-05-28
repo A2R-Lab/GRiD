@@ -237,8 +237,38 @@ Last updated 2026-05-25. Grouped by theme; rough priority within each.
 
 ### ee_pose_gradient GEOMETRIC-JACOBIAN REWRITE — 2026-05-27 (LATEST; pick up here)
 
-**STEP A + B LANDED + PUSHED (2026-05-27). CHECKPOINT before GPU reached.** Branch HEAD:
-parent `df36d40`, RBDReference `0e71d06`.
+**STEP A + B + C LANDED + PUSHED (2026-05-27).** Branch HEAD: parent `d8b1bcb`,
+GRiDCodeGenerator `df70675`, RBDReference `0e71d06`. **Step C (GPU codegen + multi-file
+ripple) is in: iiwa14 fixed (10/10) + floating (1/1) CUDA equivalence GREEN.**
+Validation matrix for go2/g1/h1_2 fixed+floating running (background) — pick up that
+result before declaring full success.
+
+- **Step C (`df70675` in GRiDCodeGenerator, `d8b1bcb` in parent):**
+  - `_eepose_gradient_hessian.py::gen_end_effector_pose_gradient_inner` rewritten as
+    shared-chain geometric Jacobian: one FK pass builds world transforms for every joint
+    via BFS-level chain-up; per-(ee, chain joint, S-col) compile-time-unrolled column
+    fills compute `J_v = aw x (p_ee - p_j)` (revolute) or `J_v = aw` (prismatic) with
+    `aw = R_j_world * S_local`; per-ee `(cy,sy,cp,sp)` cached for `E(rpy)^{-1}`; closed-
+    form rpy rows: row3 `(cy*Jw0 + sy*Jw1)/cp`, row4 `-sy*Jw0 + cy*Jw1`, row5
+    `(sp/cp)*(cy*Jw0 + sy*Jw1) + Jw2`. (Sign on row5's sy term took one iteration to
+    catch — adj(E)[2,1] = sy*sp, plus not minus.) The old per-(djid,ee) re-chain + the
+    floating compacted nonserial path are dead code (helpers `_emit_eepose_grad_*`
+    still in the file as harmless orphans; cleanup pass later).
+  - Scratch layout (in s_temp): `Xworld[16*n_joints] | Jv[3*nv*ee] | Jw[3*nv*ee] | E_sc[4*ee]`.
+    Much smaller than the old `2*2*16*nq*ee` arena.
+  - Output buffer flips `6*nq*num_ees` -> `6*nv*num_ees`. For fixed-base nq==nv so no
+    functional change; for floating the base block is now the spatial Jacobian (omega; v)
+    matching pinocchio's tangent convention.
+  - Ripple: `GRiDCodeGenerator.py` allocator (`d_deePos`/`h_deePos` use `NUM_VEL`);
+    `cuda_equivalence_runner.cu` (h_dee/d_dee sized to NUM_VEL); `wrapper_template.cu`
+    (FFI memcpy uses NUM_VEL for both C extern + JAX); `_core.cpp` pybind output array
+    `(batch, 6*NUM_EES, NV)`; `_handle.py` + `jax/__init__.py` reshape to NV; `printGRiD.cu`
+    uses `printMat<T,6,NUM_VEL>`.
+  - Fixed-target gradient (`fixed_target_name` != "") raises NotImplementedError in the
+    rewrite; the only caller is `examples/quickstart_iiwa14.py` (unused by bench /
+    equivalence). Re-add when a real consumer surfaces.
+
+- **Step A (`087d458` in RBDReference):** `RBDReference.end_effector_pose_gradient` rewritten as
 - **Step A (`087d458` in RBDReference):** `RBDReference.end_effector_pose_gradient` rewritten as
   shared-chain geometric Jacobian producing d/dv (tangent), 6×nv per ee. Validated 96/96 ee×scale
   combos vs the proven prototype on 5 robots × 2 bases, worst max-abs-err 2.4e-15 (machine
