@@ -271,6 +271,43 @@ algo. Fixed with focused re-runs:
   exercises every codegen path that matters)
 The CUDA d/dv ee_pose_gradient is now genuinely validated.
 
+### PERF WIN — Step C closes the floating ee_pose_gradient gap (2026-05-28)
+
+Sweep `test/benchmarks/results/ee_grad_step_c_perf_v2/` (parent `1200115` =
+shared-chain geometric Jacobian + dxhom-skip). The dxhom-skip was the load-bearing
+change: the new inner doesn't use `s_dXhom` (`(void)`-ed) but the device+kernel were
+still computing the per-joint LOCAL d-transforms — for floating base that includes an
+expensive quaternion-derivative of the base transform. Setting `include_gradients=False`
+in the helpers + passing `s_dXhom=nullptr` to the inner killed that wasted work.
+
+ee_pose_gradient batch (N=256 compute-only µs/prob), GRiD vs pinocchio:
+| robot  | base     | OLD-GRiD | new-GRiD | pin     | OLD ratio (vs pin) | new ratio          |
+|--------|----------|----------|----------|---------|--------------------|--------------------|
+| iiwa14 | fixed    | 0.058    | 0.057    | 0.138   | GRiD 2.38x         | GRiD 2.43x         |
+| iiwa14 | floating | 2.116    | **0.178**| 0.133   | pin 15.9x          | **pin 1.34x**      |
+| go2    | fixed    | 0.064    | 0.058    | 0.133   | GRiD 2.08x         | GRiD 2.28x         |
+| go2    | floating | (n/a)    | **0.179**| 0.151   | (pin 14.0x est.)   | **pin 1.18x**      |
+| g1     | fixed    | 0.166    | 0.102    | 0.193   | GRiD 1.16x         | GRiD 1.89x         |
+| g1     | floating | 2.200    | **0.219**| 0.288   | pin 7.52x          | **GRiD 1.31x WIN** |
+| h1_2   | fixed    | 0.333    | 0.157    | 0.245   | pin 1.16x          | GRiD 1.56x WIN     |
+| h1_2   | floating | 2.434    | **0.286**| 0.315   | pin 7.14x          | **GRiD 1.10x WIN** |
+
+Single-call ee_pose_gradient (floating) went 260-312µs → **16-29µs** (10-16× faster);
+pinocchio still wins single-call (sub-µs codegen-CPU) but the gap is reasonable now.
+
+### Floating-base first-order vs pinocchio (snapshot from same sweep)
+
+Same `ee_grad_step_c_perf_v2` data — N=256 compute-only µs/prob, GRiD vs pin:
+- **Big robots win across the board (h1_2):** aba 1.31x, crba 1.22x, minv 3.83x, fd 2.43x, id 1.34x.
+- **iiwa14 (small floating) GRiD loses:** aba pin 1.08x, minv pin 1.51x, fd pin 1.29x. (crba 4.48x WIN, id 1.44x WIN.)
+- **go2 (small floating, branched) GRiD loses several:** aba pin 1.75x, crba pin 1.01x ~tie, minv pin 1.11x, fd pin 1.15x. (id 1.35x WIN.)
+- **g1 mixed:** aba pin 1.40x, crba **pin 1.73x (biggest concrete loss)**, minv/fd/id WIN.
+
+Top floating-base first-order targets if/when this becomes the next priority:
+1. **g1-floating crba** (pin 1.73x) — biggest concrete miss.
+2. **go2-floating aba** (pin 1.75x) — second biggest.
+3. **iiwa14-floating minv/fd** (pin 1.51x/1.29x) — small robot launch overhead.
+
 ### ee_pose_hessian d/dv (RBDReference + pinocchio_backend ONLY) — 2026-05-28
 
 Python d²(pose)/dv² landed (RBDReference `342465d`, parent `2748c4f`):
