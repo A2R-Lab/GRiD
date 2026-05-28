@@ -196,22 +196,21 @@ class RobotHandle:
         return self._runner.end_effector_pose(q)
 
     def end_effector_pose_gradient(self, q):
-        """End-effector pose Jacobian. Returns shape (B, 6*NUM_EES, NJ).
+        """End-effector pose Jacobian d/dv (TANGENT, pinocchio convention).
 
-        GRiD's `h_deePos` is stored column-major as (6, NUM_EES*NJ) per
-        timestep. We re-orient to match RBDReference's per-EE
-        (6, NJ) convention; for a multi-EE robot the output stacks
-        them as (6*NUM_EES, NJ) along axis -2.
+        Returns shape (B, 6*NUM_EES, NV). Floating-base produces the
+        spatial Jacobian (omega; v) base block, not the older non-standard
+        quaternion-derivative columns. Fixed-base shape unchanged (NV == NJ).
+
+        GRiD's `h_deePos` is stored column-major as (6, NUM_EES*NV) per
+        timestep; we re-orient to (6*NUM_EES, NV) per timestep.
         """
         q = np.ascontiguousarray(q, dtype=np.float32)
         raw = self._runner.end_effector_pose_gradient(q)
         B = raw.shape[0]
         NEE = self.num_ees
-        NJ = self.num_joints
-        # raw is (B, 6*NEE, NJ) row-major over the flat buffer. The flat
-        # buffer is (6, NEE*NJ) column-major, i.e. raw_flat[r + 6*c] where
-        # c = ee*NJ + j, r = output index 0..5. Reinterpret:
-        return raw.reshape(B, NEE, NJ, 6).transpose(0, 1, 3, 2).reshape(B, 6 * NEE, NJ)
+        NV = self.num_vel
+        return raw.reshape(B, NEE, NV, 6).transpose(0, 1, 3, 2).reshape(B, 6 * NEE, NV)
 
     def rnea_grad(self, q, qd, qdd=None, *, gravity: float = 9.81):
         """∂c/∂(q, qd). Returns shape (B, NJ, 2*NJ) — concatenated

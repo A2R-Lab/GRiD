@@ -249,7 +249,7 @@ void run() {
     std::vector<T> h_mat(grid::NUM_VEL * grid::NUM_VEL);
     std::vector<T> h_grad(grid::NUM_VEL * 2 * grid::NUM_VEL);
     std::vector<T> h_ee(6 * grid::NUM_EES);
-    std::vector<T> h_dee(6 * grid::NUM_JOINTS * grid::NUM_EES);
+    std::vector<T> h_dee(6 * grid::NUM_VEL * grid::NUM_EES);
     std::vector<T> h_d2ee(6 * grid::NUM_JOINTS * grid::NUM_JOINTS * grid::NUM_EES);
 
     read_vector(h_q.data(), grid::NUM_JOINTS);
@@ -291,7 +291,7 @@ void run() {
     gpuErrchk(cudaMalloc((void**)&d_mat, grid::NUM_JOINTS * grid::NUM_JOINTS * sizeof(T)));
     gpuErrchk(cudaMalloc((void**)&d_grad, grid::NUM_VEL * 2 * grid::NUM_VEL * sizeof(T)));
     gpuErrchk(cudaMalloc((void**)&d_ee, 6 * grid::NUM_EES * sizeof(T)));
-    gpuErrchk(cudaMalloc((void**)&d_dee, 6 * grid::NUM_JOINTS * grid::NUM_EES * sizeof(T)));
+    gpuErrchk(cudaMalloc((void**)&d_dee, 6 * grid::NUM_VEL * grid::NUM_EES * sizeof(T)));
     gpuErrchk(cudaMalloc((void**)&d_d2ee, 6 * grid::NUM_JOINTS * grid::NUM_JOINTS * grid::NUM_EES * sizeof(T)));
     gpuErrchk(cudaMemcpy(d_q, h_q.data(), grid::NUM_JOINTS * sizeof(T), cudaMemcpyHostToDevice));
     gpuErrchk(cudaMemcpy(d_qd, h_qd.data(), grid::NUM_VEL * sizeof(T), cudaMemcpyHostToDevice));
@@ -414,8 +414,8 @@ void run() {
         );
         gpuErrchk(cudaPeekAtLastError());
         gpuErrchk(cudaDeviceSynchronize());
-        gpuErrchk(cudaMemcpy(h_dee.data(), d_dee, 6 * grid::NUM_JOINTS * grid::NUM_EES * sizeof(T), cudaMemcpyDeviceToHost));
-        print_vector("end_effector_pose_gradient", h_dee.data(), 6 * grid::NUM_JOINTS * grid::NUM_EES);
+        gpuErrchk(cudaMemcpy(h_dee.data(), d_dee, 6 * grid::NUM_VEL * grid::NUM_EES * sizeof(T), cudaMemcpyDeviceToHost));
+        print_vector("end_effector_pose_gradient", h_dee.data(), 6 * grid::NUM_VEL * grid::NUM_EES);
     }
 
     if (floating_algorithm_requested("end_effector_pose_hessian")) {
@@ -606,7 +606,7 @@ void run() {
     gpuErrchk(cudaPeekAtLastError());
     print_vector(
         "end_effector_pose_gradient", hd_data->h_deePos,
-        6 * grid::NUM_JOINTS * grid::NUM_EES
+        6 * grid::NUM_VEL * grid::NUM_EES
     );
 
     grid::end_effector_pose_gradient_hessian<T>(

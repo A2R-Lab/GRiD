@@ -221,11 +221,15 @@ class JaxRobotHandle:
         return jax.ffi.ffi_call(target, out_type)(q)
 
     def end_effector_pose_gradient(self, q):
-        """End-effector pose Jacobian. Returns (B, 6*NUM_EES, NJ).
+        """End-effector pose Jacobian d/dv (TANGENT space, pinocchio convention).
 
-        The kernel writes a column-major (6, NEE*NJ) buffer per timestep;
+        Returns (B, 6*NUM_EES, NV). Floating-base now produces the spatial
+        Jacobian (omega; v) base block, not the older non-standard quaternion
+        derivative columns. Fixed-base shape is unchanged (NV == NJ).
+
+        The kernel writes a column-major (6, NEE*NV) buffer per timestep;
         we mirror the plain wrapper's reshape/transpose to the row-major
-        (6*NEE, NJ) convention.
+        (6*NEE, NV) convention.
         """
         import jax
         import jax.numpy as jnp
@@ -234,10 +238,10 @@ class JaxRobotHandle:
             "end_effector_pose_gradient", "grid_rbd_jax_end_effector_pose_gradient")
         (q,), B = self._prep_2d("end_effector_pose_gradient", q)
         nee = self.num_ees
-        nj = self.num_joints
-        out_type = jax.ShapeDtypeStruct((B, 6 * nee * nj), jnp.float32)
+        nv = self.num_vel
+        out_type = jax.ShapeDtypeStruct((B, 6 * nee * nv), jnp.float32)
         raw = jax.ffi.ffi_call(target, out_type)(q)
-        return raw.reshape(B, nee, nj, 6).transpose(0, 1, 3, 2).reshape(B, 6 * nee, nj)
+        return raw.reshape(B, nee, nv, 6).transpose(0, 1, 3, 2).reshape(B, 6 * nee, nv)
 
     def end_effector_pose_hessian(self, q):
         """End-effector pose Hessian. Returns (B, 6*NUM_EES, NJ, NJ)."""

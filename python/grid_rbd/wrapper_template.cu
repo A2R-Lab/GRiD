@@ -246,7 +246,11 @@ extern "C" int grid_rbd_end_effector_pose(
     return 0;
 }
 
-// End-effector pose Jacobian: 6×NUM_EES×NUM_JOINTS per timestep.
+// End-effector pose Jacobian (d/dv tangent, pinocchio convention):
+// 6×NUM_EES×NUM_VEL per timestep. Floating-base now produces the spatial
+// Jacobian columns rather than the older non-standard quaternion-derivative
+// columns (the v-tangent dimension is nv = 6 + n_joints vs the old nq = 7 +
+// n_joints). Fixed-base shape unchanged (nq == nv).
 extern "C" int grid_rbd_end_effector_pose_gradient(
     const T* q,
     T* dee_out,
@@ -256,6 +260,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient(
     if (batch > kMaxBatch) return 2;
 
     const int nj = grid::NUM_JOINTS;
+    const int nv = grid::NUM_VEL;
     pack_q_qd_u(q, q, nullptr, batch, nj);
 
     grid::end_effector_pose_gradient<T, /*USE_COMPRESSED_MEM=*/false>(
@@ -265,7 +270,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient(
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(dee_out, g_data->h_deePos,
-                batch * 6 * grid::NUM_EES * nj * sizeof(T));
+                batch * 6 * grid::NUM_EES * nv * sizeof(T));
     return 0;
 }
 
@@ -821,9 +826,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 
-// end_effector_pose_gradient(q) → deePos  flat (B, 6*NUM_EES*NJ)
-// Python side reshapes/transposes to the (B, 6*NUM_EES, NJ) row-major
-// convention (see _handle.py:end_effector_pose_gradient).
+// end_effector_pose_gradient(q) → deePos d/dv flat (B, 6*NUM_EES*NV).
+// Output convention: d/dv tangent (pinocchio); floating-base shape uses NV
+// (= 6 + n_joints) NOT NJ. Python side reshapes/transposes to the
+// (B, 6*NUM_EES, NV) row-major convention (see _handle.py).
 static ffi::Error grid_rbd_jax_end_effector_pose_gradient_impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> q,
@@ -833,6 +839,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_gradient_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose_gradient: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj    = grid::NUM_JOINTS;
+    int nv    = grid::NUM_VEL;
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("end_effector_pose_gradient: batch > max_batch");
 
     const size_t row_bytes = nj * sizeof(T);
@@ -850,7 +857,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_gradient_impl(
             g_robot, batch);
 
     cudaMemcpyAsync(dee_out->typed_data(), g_data->d_deePos,
-                    batch * 6 * grid::NUM_EES * nj * sizeof(T),
+                    batch * 6 * grid::NUM_EES * nv * sizeof(T),
                     cudaMemcpyDeviceToDevice, stream);
     return ffi::Error::Success();
 }

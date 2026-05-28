@@ -75,22 +75,18 @@ void test(){
     // grid::end_effector_pose_panda_grasptarget_hand<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
     // printMat<T,1,6*grid::NUM_EES>(hd_data->h_eePos,1);
 
-    printf("deePos\n");
+    printf("deePos (d/dv tangent, pinocchio convention; 6 x NUM_VEL per ee)\n");
     grid::end_effector_pose_gradient<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
     for(int ee=0; ee < grid::NUM_EES; ee++){
         printf("deePos[%d]\n",ee);
-        printMat<T,6,grid::NUM_JOINTS>(&hd_data->h_deePos[ee*6*grid::NUM_JOINTS],6);
+        printMat<T,6,grid::NUM_VEL>(&hd_data->h_deePos[ee*6*grid::NUM_VEL],6);
     }
-
-    // printf("deePos - for panda_grasptarget_hand\n");
-    // grid::end_effector_pose_gradient_panda_grasptarget_hand<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
-    // printMat<T,6,grid::NUM_JOINTS>(&hd_data->h_deePos[0],6);
 
     printf("d2eePos\n");
     grid::end_effector_pose_gradient_hessian<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
     for(int ee=0; ee < grid::NUM_EES; ee++){
         printf("deePos[%d]\n",ee);
-        printMat<T,6,grid::NUM_JOINTS>(&hd_data->h_deePos[ee*6*grid::NUM_JOINTS],6);
+        printMat<T,6,grid::NUM_VEL>(&hd_data->h_deePos[ee*6*grid::NUM_VEL],6);
         printf("d2eePos[%d]\n",ee);
         for (int i=0; i < 6; i++){
             int offset = ee*6*grid::NUM_JOINTS*grid::NUM_JOINTS + i*grid::NUM_JOINTS*grid::NUM_JOINTS;
