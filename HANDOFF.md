@@ -816,113 +816,95 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
   `GRID_CUDA_RUN_FLOATING_EEPOSE_HESSIAN` gate). FLOATING accuracy validated
   (iiwa14). Timing recapture + FIXED accuracy are backlogged (§4, §5).
 
-### 1. Inner-owns-placement UNITY (new 2026-05-25; current code works via kernel-repoint — purity, not correctness)
-- **Full orchestrator → `*_full_inner` migration** for `id_du`, `fd_du`,
-  `integrator_gradient` (mirror `fdsva_so_full_inner`) so the kernel never
-  repoints `s_temp`. The crash bug is fixed; this is the remaining design-purity
-  step. Standard is documented in `docs/idsva_so_inner_refactor_notes.md`.
-- **`gen_fdsva_so_device`** (inline API) still duplicates the orchestration →
-  rewire to call `fdsva_so_full_inner`.
-- **Standalone idsva body kernel `output_temp` rung** → fold its kernel-level
-  `s_temp` repoint into a body-inner `SCRATCH_IN_SMEM`.
-- **L2-persisting gates** in 5 host wrappers (`id_du`/`fd_du`/`fdsva`/`d2ee`/
-  `ee_grad`) key off the PERF-pick macro → LITE/MINIMAL spills aren't L2-*pinned*.
-  Perf nit, not correctness (`d_workspace` is allocated unconditionally for
-  `GRID_DATA_ALL`). Make the gate per-tier.
+### A. Pinocchio competitive gaps (perf work)
+1. **d2ee** — write an analytic d/dv-convention Hessian on GPU. d2ee FD-on-Jacobian
+   correctness rewrite landed 2026-05-28 (all robots × fixed/floating CUDA
+   equivalence GREEN), but pin's analytic `computeJointKinematicHessians` beats
+   our FD by 3–36× at N=256 on big/floating robots (iiwa14-fixed: GRiD wins 2.2×;
+   h1_2-floating: pin 35.9×). The gap is structural — `2·nv+1` gradient calls
+   vs O(N) analytic. Mirrors what Step C did for `ee_pose_gradient`.
+2. **idsva_so big-robot scaling** — g1/h1_2 lose 2.5–2.7× at N=256 batch; nv³
+   kernel is compute+smem-bound. Same family as A.1, ties to ancestor-scratch
+   de-alias.
+3. **Core-dynamics batch losses** — FD/ABA/CRBA/Minv lose to pinocchio at some
+   N=256 cells. Launch overhead / occupancy / per-block work.
+4. **`fdsva_so` pinocchio baseline** — still no oracle; collect to scope A.1–A.3
+   and confirm the SO-wide gap shape.
 
-### 2. Spill perf refinements (surgical; gated on sweep data)
-- **De-alias the idsva_so / fdsva_so inners** for surgical cold-only spill
-  instead of whole-arena — `docs/idsva_so_inner_refactor_notes.md`. Same idea
-  helps the integrator-gradient rung-3 on h1_2.
-- **ABA whole-arena spill → surgical retrofit** (sub-split like Minv-F).
-- **Tune the LITE smem target** (48 KB vs 32/64) — falls out of the sweep.
+### B. Architecture cleanup (gated on perf data)
+1. **API simplification — collapse to `_host` / `_kernel` / `_device`.** Drop the
+   auto-allocating `_device` (training-wheels for naive inline-CUDA users; only
+   the equivalence runner calls it). Rename `_full_inner` → `_device` (canonical
+   CUDA `__device__` naming: takes caller-supplied buffer pointers, called from
+   inside a kernel). Rename single-step sub-inners to their specific role (e.g.
+   `fdsva_so_inner` for the contraction → `fdsva_so_contract`). Touch-points:
+   ~5 algos with `_full_inner` today, equivalence-runner rewrite (~3 lines per
+   runner), drop `X_DEVICE_DYNAMIC_SHARED_MEM_BYTES` / `X_DEVICE_INLINE_SMEM_BYTES`
+   macros.
+2. **Multi-algo orchestrator migration** — `id_du`, `fd_du`, `integrator_gradient`
+   get their orchestrated `_device` (mirroring `fdsva_so`). Each kernel becomes
+   `kernel { call _device }` — no kernel-side `s_temp` repointing.
+3. **De-alias `idsva_so` / `fdsva_so` inners** — cold-only surgical spill (vs
+   whole-arena). Also helps integrator-gradient rung-3 on h1_2. See
+   `docs/idsva_so_inner_refactor_notes.md`.
+4. **ABA whole-arena → surgical retrofit** (Minv-F sub-split pattern).
+5. **idsva body kernel `output_temp` rung** → fold into body-`_device`
+   `SCRATCH_IN_SMEM`.
+6. **Per-tier L2-persisting gates** — currently key off PERF-pick macro; LITE/
+   MINIMAL spills aren't pinned. Make the gate per-tier.
+7. **h1_2-floating inline DEVICE path smem cap** — exceeds sm_120 ~99 KB cap;
+   make device paths tier-aware/spillable.
 
-### 3. Perf investigations (from the tier sweeps)
-- **`ee_pose_gradient` FLOATING ~535µs batch-N=256 outlier** (vs ~8µs fixed,
-  ~1µs Pinocchio) — slow floating world-frame EE-Jacobian path.
-- **GRiD loses to Pinocchio at batch N=256 on some core-dynamics cells**
-  (FD/ABA/CRBA/Minv) — launch overhead / occupancy / per-block work.
-- **GRiD second-order ~3× slower than Pinocchio on g1/h1_2 at N=256** —
-  big-robot SO regression.
-- **Document SO speedups vs Pinocchio**: finish wiring + rendering the Pinocchio
-  IDSVA_SO/FDSVA_SO baseline column (Pinocchio CPU SO is ms-scale).
+### C. Cleanup + comprehensive perf re-sweep (do as one phase)
+1. **Validation matrix completion** — full robot × base × tier EE kinematics
+   matrix. PERF green for all 4×2; LITE/MINIMAL on big robots unexercised.
+2. **Auto-parallel equivalence harness** — `pytest-xdist -n` sized by cores+RAM
+   (~5 GB/compile). Today proven safe at ~5-wide manually.
+3. **nvcc/ptxas `-Werror`-style warnings sweep** (Python ref is already
+   DeprecationWarning-clean).
+4. **LITE/MINIMAL tier columns in `generate_report.py`** — data captured per-cell,
+   not yet rendered.
+5. **Autotune `performance_threads`** — binary-search batch-throughput-max thread
+   count (≤ `MAX_PERF_LEVEL_THREADS`); expose it.
+6. **`fdsva_so` single_us recapture** — was dropped on -rdc regcount error
+   (now fixed).
+7. **Macro/name audit** — `*_DYNAMIC_SHARED_MEM_BYTES`, tier names,
+   `s_*`-named-but-device pointers (e.g. `s_temp_spill` → `d_`).
+8. **→ Full perf re-sweep** with everything cleaned up. Captures fdsva_so
+   single_us + d2ee timing under the standard pipeline (today both required
+   manual binary runs).
 
-### 4. Reporting / tooling
-- **Tier (LITE/MINIMAL) columns in `generate_report.py`** — data is captured in
-  the per-cell JSONs, not yet rendered.
-- **Autotune `performance_threads`**: binary-search the batch-throughput-
-  maximizing launch thread count (≤ `MAX_PERF_LEVEL_THREADS`); expose it.
-- **Spilled-tier re-sweep — `fdsva_so` single_us + `ee_pose_hessian` (d2ee)
-  timing** (bundle into ONE re-run). `ee_pose_hessian` is now in the bench
-  (`PER_ALGO_SPECS`) but has never been timed; `fdsva_so` single_us was dropped
-  when its TU hit the -rdc regcount error (now fixed) so single-call numbers need
-  recapture. ⚠️ **TIER-DEBUGGING RISK**: the d2ee and fdsva_so *spill* paths at
-  LITE/MINIMAL on big robots (g1/h1_2) are **unexercised by the bench so far** —
-  this re-sweep is the first time they run under the timing harness, so expect
-  possible per-cell crashes/OOB to debug (same bug classes as §Resolved). Budget
-  for it. Do NOT run heavy CPU/GPU work concurrently (skews timing).
+### D. Reference modernization (separate effort, post-perf)
+1. **URDFParser/RBDReference pinocchio-alignment** — strict-parse API, structured
+   diagnostics, `nq`/`nv`/quat-order helpers, mark fixed-base-only methods. See
+   `RBDReference/tests/PINOCCHIO_ALIGNMENT_BACKLOG.md`.
+2. **URDF feature support** — audit vs spec, add missing (**mimic joints first**).
+3. *(Nit)* Swap the pinocchio backend's FD-based `end_effector_pose_hessian`
+   (`pinocchio_backend.py:536`) for the analytic
+   `computeForwardKinematicsDerivatives` + `computeJointKinematicHessians` +
+   `getJointKinematicHessian` flow we used in the d2ee bench. Speeds up the
+   Python equivalence-oracle path.
 
-### 5. Correctness / coverage
-- **FIXED-path kinematics now wired + validated on iiwa14 (2026-05-25)**: the
-  equivalence runner's FIXED branch (`#else`) now calls the `end_effector_pose` /
-  `_gradient` / `_gradient_hessian` host wrappers and prints `h_eePos`/`h_deePos`/
-  `h_d2eePos`; all three added to `FIXED_CUDA_ALGORITHMS`. iiwa14-fixed PASSED
-  (threads32 + threadssuggested) against the Python reference, alongside the
-  earlier iiwa14-floating pass. ⚠️ **BROADER VALIDATION STILL NEEDED**: FIXED-base
-  EE accuracy is confirmed for iiwa14 ONLY — go2 / g1 / h1_2 (fixed + floating),
-  and the **spilled tiers** (LITE/MINIMAL, where d2ee uses `d_workspace`), are not
-  yet run for these kinematics. Run the full robot × base × tier matrix before
-  considering EE-pose/gradient/hessian accuracy fully validated.
-- **nvcc/ptxas compile-warnings sweep** (`-Werror`-style build pass). Python
-  reference path is already DeprecationWarning-clean.
-- **Parallel equivalence testing** (proven 2026-05-26): the CUDA equivalence tests are
-  correctness-only and independent per `(robot, base)`, so they run concurrently — ran
-  5 cases in parallel with no issue. Each full `grid.cuh` `nvcc -O0` compile peaks
-  ~5 GB RSS; size parallelism to `min(nproc, free_RAM/~5 GB)` (this box 24c/62 GB →
-  ~8–10 wide). Clear `.pytest_cache/grid_cuda` after codegen changes (cache key is
-  model+config, NOT source). Use `-s` for live progress (`-q` buffers to the end).
-  TODO: make the harness auto-parallel — add `pytest-xdist` `-n` sized by cores+RAM, or
-  a custom `(robot,base)` sharding runner. The PERF sweep must stay isolated.
-- **h1_2-floating inline DEVICE path exceeds the sm_120 ~99 KB smem cap** (found
-  2026-05-26): the always-smem inline `*_device` paths (forward_dynamics, etc.) request
-  >99 KB dynamic smem on the biggest floating robot, so the equivalence runner's
-  `cudaFuncSetAttribute(...MaxDynamicSharedMemorySize...)` fails ("invalid argument")
-  *before any kernel runs* → h1_2-floating equivalence aborts early. **PRE-EXISTING**
-  (the device-path code + `FD_DEVICE_DYNAMIC_SHARED_MEM_BYTES` are byte-identical to
-  pre-wave base); the production KERNEL path spills and fits, and g1-floating already
-  validates the floating spill rungs. FIX: make the inline device paths tier-aware/
-  spillable (completes the deferred fd audit) OR guard the runner to skip device-path
-  setattr above the device cap; then h1_2-floating kernel paths can validate too.
+### E. Branch merge
+- **`perf-cleanup` → `modernizing-tests`** — held pending validation; most is
+  green. Gate on C.1 (full validation matrix) + any d2ee/fdsva_so spill-path
+  bugs surfaced. (The earlier `humanoid-tier-spill` merge happened pre-branch.)
 
-### 6. Naming / API clarity
-- **Broader name audit**: `*_DYNAMIC_SHARED_MEM_BYTES`, the tier names, and the
-  `s_*`-named-but-device pointers (e.g. `s_temp_spill` → `d_`).
-
-### 7. Pinocchio-alignment backlog (lower urgency)
-- URDFParser/RBDReference additive improvements: strict-parse API, structured
-  parse diagnostics, Pinocchio-shaped metadata helpers (`nq`/`nv`/quaternion
-  order), mark fixed-base-only methods. See
-  `RBDReference/tests/PINOCCHIO_ALIGNMENT_BACKLOG.md`.
-- **Pinocchio as a FAST reference — CORE, run as a dedicated project AFTER this
-  perf-cleanup session** (user 2026-05-26): the pure-Python `RBDReference` is the
-  equivalence-test bottleneck (the second-order `idsva_so`/`fdsva_so` refs on h1_2 take
-  *hours* of single-threaded Python). Replace with 1:1 pinocchio (C++) references
-  wherever they match, to make the reference fast and never the bottleneck:
-  - Compose pinocchio sub-calls + thin C++ glue for GRiD algos lacking a direct entry
-    (`fdsva_so` ← `idsva_so` + `minv`; `fd` ← `rnea`/`minv`; etc.).
-  - Use pinocchio kinematics + kinematic derivatives for `ee_pose`/`_gradient`.
-  - Use a **C++ finite-difference** reference for the `d2ee` hessian (vs pure Python).
-  - Cleanest architecture: a hooks file in `RBDReference` exposing pinocchio-equivalent
-    inputs/outputs for every function; simplify the tests to call one shared interface
-    for both the CUDA and reference sides (true 1:1, fairest, most testable).
-  - Keep pure-Python `RBDReference` as the fallback/cross-check where pinocchio lacks an
-    identical quantity/layout. Builds on `RBDReference/equivalents/`. Mind joint-order/
-    frame conventions (adapter already resolves pinocchio order) + float32 tolerance.
-
-### 8. Branch merge (the big one)
-- **FF-merge `humanoid-tier-spill` → `modernizing-tests`** — held pending final
-  validation; most is now green. Gate on the targeted re-sweep + equivalence
-  confirming the complete dataset.
+### Done (since this backlog was last refactored 2026-05-28)
+- Floating `ee_pose_gradient` gap **CLOSED** (Step C, 2026-05-28: pin 7-16× → GRiD
+  wins/parity on g1/h1_2 floating, pin only 1.18-1.34× on iiwa14/go2 floating).
+- `ee_pose_hessian` (d2ee) Python d/dv rewrite (RBDReference + pinocchio_backend).
+- d2ee GPU codegen rewrite (FD-on-Jacobian, d/dv tangent, pinocchio convention);
+  iiwa14/go2/g1/h1_2 fixed + iiwa14/go2/g1 floating CUDA equivalence GREEN.
+- d2ee timing wired into the bench (`timeGRiD_batch.cu` +
+  `pinocchio/timePinocchio.cpp` via `computeJointKinematicHessians`) and measured
+  end-to-end vs pinocchio (today).
+- FIXED-path kinematics wired in CUDA equivalence runner (iiwa14 validated).
+- `crba` regression fix (2026-05-27, 34edcfc) — recovered to baseline + beats
+  pinocchio at batch on all robots.
+- Pinocchio-as-fast-reference (equivalence-test oracle now defaults to pinocchio
+  via `RBDReference/equivalents/pinocchio_backend.py`; first + second-order +
+  d2ee all covered; pure-Python `RBDReference` is the fallback).
 
 ### Reference docs (kept separate, linked from here)
 - `docs/source/user_guide/concepts/resource_tier_system.rst` — tier/spill architecture.
