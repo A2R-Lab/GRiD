@@ -23,21 +23,32 @@ what spills, the *caller* only sizes the arenas and passes a flag.
 1. Smart inners, thin wrappers
 ------------------------------
 
-Each algorithm ``X`` is emitted in four layers (see :doc:`codegen_architecture`):
-``X_inner`` (block-cooperative device routine — *all the value is here*),
-``X_device`` (inline entry that loads ``XImats`` once and calls inners),
-``X_kernel`` (grid-stride loop over timesteps), and ``X`` (host launcher).
+Each algorithm ``X`` is emitted in **three layers** (see :doc:`codegen_architecture`):
+``X_device`` (the canonical ``__device__`` orchestrator — *all the value is
+here*; takes caller-supplied ``s_temp`` + ``d_workspace``, owns its placement),
+``X_kernel`` (grid-stride loop over timesteps; allocates smem and calls
+``_device``), and ``X`` (host launcher).
 
-* **Value is concentrated in ``X_inner``.** The kernel and host layers are noise
-  to the performance user; keep them mechanical so there is exactly one place
-  where the hard decisions live, audit, and get fixed.
-* **Inners are block-cooperative, not fixed-lane.** Every parallel region is a
-  block-stride loop (``for (i = tid; i < N; i += blockDim...)``), so any block
+Internal ``X_inner`` helpers (and role-specific sub-step helpers like
+``fdsva_so_contract``) still exist where useful — they are the placement-free
+math building blocks that one ``_device`` may call into another to amortize
+shared work (e.g. an XImats load).
+
+* **Value is concentrated in ``X_device`` (and its ``_inner`` building blocks).**
+  The kernel and host layers are noise to the performance user; keep them
+  mechanical so there is exactly one place where the hard decisions (placement,
+  spill, orchestration) live, audit, and get fixed.
+* **``_device`` is block-cooperative, not fixed-lane.** Every parallel region is
+  a block-stride loop (``for (i = tid; i < N; i += blockDim...)``), so any block
   size that fits is correct. Batching is the kernel's grid-stride loop over
   ``blockIdx``. Never assume a specific thread count.
-* **Compose by calling ``_inner``, not ``_device``.** A higher-level algorithm
-  (e.g. ``fdsva_so`` embeds ``idsva_so``) loads ``XImats`` once and calls the
-  ``_inner`` variants so the load is paid once, not per sub-algorithm.
+* **Compose by calling other algorithms' ``_inner``.** A higher-level algorithm
+  (e.g. ``fdsva_so`` embeds ``idsva_so``) loads ``XImats`` once at the top of its
+  ``_device`` and calls placement-free ``_inner`` variants of sub-algorithms so
+  the load is paid once, not per sub-algorithm. (Historically a separate
+  auto-allocating ``_device`` wrapper existed for orchestrators; that
+  training-wheels layer was dropped in 2026-05 — orchestrators are now a clean
+  three layers like every other algorithm.)
 
 
 2. The inner owns its memory placement (the central rule)
@@ -73,7 +84,7 @@ Why this is a rule, not a preference:
   robots byte-identical; only robots that overflow flip it to ``false``.
 
 **Composing kernels inherit spills.** ``fdsva_so`` wraps its whole orchestration
-in ``fdsva_so_full_inner`` and spills the (dominant) embedded ``idsva_so`` scratch
+in ``fdsva_so_device`` and spills the (dominant) embedded ``idsva_so`` scratch
 purely by passing ``SCRATCH_IN_SMEM=false`` — no pointer surgery in the caller.
 
 **The ``XImats`` / ``XmatsHom`` load helper is also a scratch consumer.** It is
@@ -82,12 +93,14 @@ called near the top and writes its sincos scratch into ``s_temp``. Put that call
 guarantee it a valid pointer — **never pass it a ``nullptr`` ``s_temp``** (see the
 anti-patterns below; this was a real crash class).
 
-Reference inners that already follow this: ``aba_inner``,
-``forward_dynamics_inner``, ``direct_minv_inner``, ``fdsva_so_inner``,
-``fdsva_so_full_inner``, ``end_effector_pose_gradient_inner``, and the
-``idsva_so`` world inner. (A few orchestrators — ``id_du``, ``fd_du``,
-``integrator_gradient`` — still repoint from the kernel; that works but is a
-documented "unity" debt to migrate, see ``HANDOFF.md`` §1.)
+Reference points that already follow this: ``aba_inner``,
+``forward_dynamics_inner``, ``direct_minv_inner``, ``fdsva_so_inner`` (the
+rank-3 contraction sub-step), ``fdsva_so_device``,
+``inverse_dynamics_gradient_device``, ``forward_dynamics_gradient_device``,
+``integrator_gradient_device``, ``end_effector_pose_gradient_inner``, and the
+``idsva_so`` world inner. As of 2026-05-28 every orchestrator owns its
+placement inside the ``_device`` body — no kernel-side ``s_temp`` repoint
+remains.
 
 
 3. Memory-hierarchy design
@@ -193,8 +206,8 @@ the most-spilled rung fits the device cap.
 Go deeper
 ---------
 
-* :doc:`codegen_architecture` — the four emission layers and ``_inner``/``_device``
-  composition contract.
+* :doc:`codegen_architecture` — the three emission layers and ``_device`` /
+  ``_inner`` composition contract.
 * :doc:`resource_tier_system` — tiers, spill levels, ``select_shared_tier_3way``,
   L2 pinning, the placement-parameter table, and the per-robot tier→level map.
 * ``docs/idsva_so_inner_refactor_notes.md`` — the inner-owns-placement standard,
