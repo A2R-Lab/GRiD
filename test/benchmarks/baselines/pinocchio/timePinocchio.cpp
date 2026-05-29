@@ -501,6 +501,236 @@ void idsvaSoThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
 }
 
 // ---------------------------------------------------------------------------
+// FDSVA_SO synthesis: pinocchio has no direct fdsva_so. We compose it from
+// pinocchio primitives following Singh/Carpentier (Second Order Derivatives of
+// Rigid Body Dynamics, 2022) and the formulation already used by the
+// equivalence harness in RBDReference/equivalents/pinocchio_backend.py::fdsva_so.
+//
+// Inputs:  q, qd, u    (qdd is computed via ABA)
+// Outputs: daba_dqdq, daba_dvdq, daba_dvdv, daba_dtdq (rank-3 (nv,nv,nv) tensors)
+//
+// Pipeline per sample:
+//   1. ABA(q, qd, u)                                   -> qdd                (data.ddq)
+//   2. ComputeRNEASecondOrderDerivatives(q, qd, qdd)   -> d2tau_d{qq,vv,qv}, dM/dq (data.d2tau_dadq)
+//   3. computeABADerivatives(q, qd, u)                 -> fd_dq, fd_dqd, Minv (upper)
+//      Symmetrize Minv.
+//   4. Contractions (Python einsum notation, ":" = sum):
+//        T1[i,j,k] = sum_l dM_dq[i,l,k] * fd_dq[l,j]
+//        daba_dqdq[i,j,k] = -sum_l Minv[i,l] * ( d2tau_dqdq[l,j,k] + T1[l,j,k] + T1[l,k,j] )
+//        T2[i,j,k] = sum_l dM_dq[i,l,k] * fd_dqd[l,j]
+//        daba_dvdq[i,j,k] = -sum_l Minv[i,l] * ( d2tau_dvdq[l,j,k] + T2[l,j,k] )
+//          where d2tau_dvdq = d2tau_dqdv.transpose(1,2)
+//        daba_dvdv[i,j,k] = -sum_l Minv[i,l] * d2tau_dvdv[l,j,k]
+//        T3[i,j,k] = sum_l dM_dq[i,l,k] * Minv[l,j]
+//        daba_dtdq[i,j,k] = -sum_l Minv[i,l] * T3[l,j,k]
+//
+// We allocate scratch buffers once per thread and reuse them across the
+// timed loop. The synthesis dominates the SO RNEA cost for large robots
+// (multiple nv^4 contractions) but is the only way to get a pinocchio-based
+// fdsva_so baseline — no library function exposes it directly. This is what
+// any downstream pinocchio user would write.
+// ---------------------------------------------------------------------------
+
+struct FdsvaSoScratch {
+    int nv = 0;
+    Eigen::MatrixXd Minv;        // nv x nv (symmetric)
+    Eigen::MatrixXd fd_dq;       // nv x nv
+    Eigen::MatrixXd fd_dqd;      // nv x nv
+    Eigen::MatrixXd ddq_dtau;    // nv x nv (unused output of computeABADerivatives)
+    // Per-page (n0=nv) row-major scratch slabs nv*nv for one fixed k page.
+    std::vector<double> page_a;  // nv*nv
+    std::vector<double> page_b;  // nv*nv
+    // Output tensors (column-major, like pinocchio's Tensor3x).
+    Eigen::Tensor<double, 3> daba_dqdq;
+    Eigen::Tensor<double, 3> daba_dvdq;
+    Eigen::Tensor<double, 3> daba_dvdv;
+    Eigen::Tensor<double, 3> daba_dtdq;
+
+    void resize(int nv_in){
+        if (nv == nv_in) return;
+        nv = nv_in;
+        Minv.setZero(nv, nv);
+        fd_dq.setZero(nv, nv);
+        fd_dqd.setZero(nv, nv);
+        ddq_dtau.setZero(nv, nv);
+        page_a.assign(nv*nv, 0.0);
+        page_b.assign(nv*nv, 0.0);
+        daba_dqdq.resize(nv, nv, nv);
+        daba_dvdq.resize(nv, nv, nv);
+        daba_dvdv.resize(nv, nv, nv);
+        daba_dtdq.resize(nv, nv, nv);
+    }
+};
+
+// Contract: out[i,j,k] = sum_l dM_dq[i,l,k] * A[l,j]
+// dM_dq is Tensor3x (column-major Eigen tensor); A is Eigen::MatrixXd (col-major).
+// Result stored in `out` (Tensor3x). Computed page-by-page in k for cache locality.
+static inline void contract_ilk_lj_ijk(
+    const Eigen::Tensor<double, 3> &dM_dq,
+    const Eigen::MatrixXd &A,
+    Eigen::Tensor<double, 3> &out)
+{
+    const int nv = static_cast<int>(A.rows());
+    // For each fixed k, dM_dq[:,:,k] is an nv x nv matrix (slice). Map it,
+    // multiply by A on the right, write into out[:,:,k].
+    for (int k = 0; k < nv; ++k) {
+        Eigen::Map<const Eigen::MatrixXd> dMk(dM_dq.data() + static_cast<ptrdiff_t>(k)*nv*nv, nv, nv);
+        Eigen::Map<Eigen::MatrixXd>       Ok (out.data()  + static_cast<ptrdiff_t>(k)*nv*nv, nv, nv);
+        Ok.noalias() = dMk * A;
+    }
+}
+
+// In-place add: dst[i,j,k] += src[i,k,j]  (transpose pages 1<->2 elementwise add)
+static inline void add_transpose_jk(
+    const Eigen::Tensor<double, 3> &src,
+    Eigen::Tensor<double, 3> &dst)
+{
+    const auto &dims = src.dimensions();
+    const int n0 = static_cast<int>(dims[0]);
+    const int n1 = static_cast<int>(dims[1]);
+    const int n2 = static_cast<int>(dims[2]);
+    // src(i,j,k) -> dst(i,k,j) means dst index (i,k_dst=j_src,j_dst=k_src)
+    // Use raw column-major layout: t(i,j,k) at i + j*n0 + k*n0*n1
+    const double *S = src.data();
+    double       *D = dst.data();
+    for (int k = 0; k < n2; ++k) {
+        for (int j = 0; j < n1; ++j) {
+            for (int i = 0; i < n0; ++i) {
+                // dst(i,j,k) += src(i,k,j)
+                D[i + j*n0 + k*n0*n1] += S[i + k*n0 + j*n0*n1];
+            }
+        }
+    }
+}
+
+// Compute: out[i,j,k] = -sum_l Minv[i,l] * A[l,j,k]
+// (i.e. apply Minv along axis 0 of A and negate).
+static inline void apply_minv_neg(
+    const Eigen::MatrixXd &Minv,
+    const Eigen::Tensor<double, 3> &A,
+    Eigen::Tensor<double, 3> &out)
+{
+    const int nv = static_cast<int>(Minv.rows());
+    for (int k = 0; k < nv; ++k) {
+        Eigen::Map<const Eigen::MatrixXd> Ak(A.data() + static_cast<ptrdiff_t>(k)*nv*nv, nv, nv);
+        Eigen::Map<Eigen::MatrixXd>       Ok(out.data() + static_cast<ptrdiff_t>(k)*nv*nv, nv, nv);
+        Ok.noalias() = -Minv * Ak;
+    }
+}
+
+// Build d2tau_dvdq from d2tau_dqdv by transposing pages 1<->2 (per the
+// pinocchio_backend convention: d2tau_dqdv[i,j,k] = d²τ_i/(dq_j dv_k);
+// we want d2tau_dvdq[i,j,k] = d²τ_i/(dv_j dq_k) = d2tau_dqdv[i,k,j]).
+static inline void transpose_jk_into(
+    const Eigen::Tensor<double, 3> &src,
+    Eigen::Tensor<double, 3> &dst)
+{
+    const auto &dims = src.dimensions();
+    const int n0 = static_cast<int>(dims[0]);
+    const int n1 = static_cast<int>(dims[1]);
+    const int n2 = static_cast<int>(dims[2]);
+    const double *S = src.data();
+    double       *D = dst.data();
+    for (int k = 0; k < n2; ++k) {
+        for (int j = 0; j < n1; ++j) {
+            for (int i = 0; i < n0; ++i) {
+                D[i + j*n0 + k*n0*n1] = S[i + k*n0 + j*n0*n1];
+            }
+        }
+    }
+}
+
+// Single sample: synthesize fdsva_so for one (q, qd, u). Reuses scratch.
+template<typename T>
+inline void fdsvaSoSynth_one(const pinocchio::Model &model, pinocchio::Data &data,
+                              const Matrix<T, Eigen::Dynamic, 1> &q,
+                              const Matrix<T, Eigen::Dynamic, 1> &qd,
+                              const Matrix<T, Eigen::Dynamic, 1> &u,
+                              FdsvaSoScratch &S)
+{
+    const int nv = model.nv;
+    S.resize(nv);
+
+    // Cast inputs once.
+    Eigen::VectorXd q_d  = q.template  cast<double>();
+    Eigen::VectorXd qd_d = qd.template cast<double>();
+    Eigen::VectorXd u_d  = u.template  cast<double>();
+
+    // (1) ABA to get qdd in data.ddq.
+    pinocchio::aba(model, data, q_d, qd_d, u_d);
+    Eigen::VectorXd qdd_d = data.ddq;
+
+    // (2) Second-order RNEA derivatives. Pinocchio requires the four Tensor3x
+    // in data to be zeroed before this call.
+    data.d2tau_dqdq.setZero();
+    data.d2tau_dvdv.setZero();
+    data.d2tau_dqdv.setZero();
+    data.d2tau_dadq.setZero();
+    pinocchio::ComputeRNEASecondOrderDerivatives(model, data, q_d, qd_d, qdd_d);
+
+    // (3) First-order ABA derivatives: fills data.Minv (upper), data.ddq_dq,
+    // data.ddq_dv. Note this internally redoes some RNEA work, but matches what
+    // a real pinocchio fdsva_so synthesis user would do.
+    pinocchio::computeABADerivatives(model, data, q_d, qd_d, u_d,
+                                     S.fd_dq, S.fd_dqd, S.ddq_dtau);
+    // Symmetrize Minv.
+    S.Minv = data.Minv;
+    S.Minv.triangularView<Eigen::StrictlyLower>() =
+        S.Minv.transpose().triangularView<Eigen::StrictlyLower>();
+
+    // (4) Tensor contractions.
+    //   d2tau_dvdq = transpose_jk(d2tau_dqdv)
+    Eigen::Tensor<double, 3> d2tau_dvdq(nv, nv, nv);
+    transpose_jk_into(data.d2tau_dqdv, d2tau_dvdq);
+
+    //   work[i,j,k] = sum_l dM_dq[i,l,k] * fd_dq[l,j]    (dM_dq == data.d2tau_dadq)
+    Eigen::Tensor<double, 3> work(nv, nv, nv);
+    contract_ilk_lj_ijk(data.d2tau_dadq, S.fd_dq, work);
+
+    //   tmp_qq = d2tau_dqdq + work + transpose_jk(work)
+    Eigen::Tensor<double, 3> tmp(nv, nv, nv);
+    tmp = data.d2tau_dqdq + work;
+    add_transpose_jk(work, tmp);
+    apply_minv_neg(S.Minv, tmp, S.daba_dqdq);
+
+    //   tmp_vq = d2tau_dvdq + (work = dM_dq <ilk,lj> fd_dqd)
+    contract_ilk_lj_ijk(data.d2tau_dadq, S.fd_dqd, work);
+    tmp = d2tau_dvdq + work;
+    apply_minv_neg(S.Minv, tmp, S.daba_dvdq);
+
+    //   daba_dvdv = -Minv * d2tau_dvdv
+    apply_minv_neg(S.Minv, data.d2tau_dvdv, S.daba_dvdv);
+
+    //   daba_dtdq = -Minv * (dM_dq <ilk,lj> Minv)
+    contract_ilk_lj_ijk(data.d2tau_dadq, S.Minv, work);
+    apply_minv_neg(S.Minv, work, S.daba_dtdq);
+}
+
+template<typename T>
+void fdsvaSoThreaded_inner(const pinocchio::Model *model, pinocchio::Data *data,
+                            Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
+                            Matrix<T, Eigen::Dynamic, 1> *us, int tid, int kStart, int kMax){
+    FdsvaSoScratch scratch;
+    for(int k = kStart; k < kMax; k++){
+        fdsvaSoSynth_one<T>(*model, *data, qs[k], qds[k], us[k], scratch);
+    }
+}
+
+template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
+void fdsvaSoThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
+                      Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
+                      Matrix<T, Eigen::Dynamic, 1> *us, ReusableThreads<NUM_THREADS> *threads){
+    constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+    for(int tid = 0; tid < ET; tid++){
+        int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+        if(tid == ET-1){kMax = NUM_TIME_STEPS;}
+        threads->addTask(tid, &fdsvaSoThreaded_inner<T>, model, &datas[tid],
+                          std::ref(qs), std::ref(qds), std::ref(us), tid, kStart, kMax);
+    }
+    threads->sync();
+}
+
+// ---------------------------------------------------------------------------
 // Main test function
 // ---------------------------------------------------------------------------
 
@@ -882,9 +1112,18 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("idsva_so_body_frame direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(idsva_so_iters));
             }
 
-            // FDSVA_SO: no Pinocchio equivalent
+            // FDSVA_SO: pinocchio has no direct equivalent — synthesize via the
+            // Singh/Carpentier chain rule (RNEA SO + ABA derivatives + Minv).
             if(is_algo_active(enabled_algo, "fdsva_so")){
-                printf("FDSVA_SO direct null\n");
+                // FDSVA_SO is expensive — use the same iters/10 budget as IDSVA_SO.
+                int fdsva_so_iters = std::max(1, TEST_ITERS/10);
+                FdsvaSoScratch scratch;
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < fdsva_so_iters; i++){
+                    fdsvaSoSynth_one<T>(model, datas[0], qs[0], qds[0], us[0], scratch);
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("fdsva_so direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(fdsva_so_iters));
             }
         }
         else{
@@ -1087,7 +1326,18 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("----------------------------------------\n");
             }
 
-            // FDSVA_SO: no Pinocchio equivalent — not timed
+            if(is_algo_active(enabled_algo, "fdsva_so")){
+                // FDSVA_SO synthesized from pinocchio primitives — same budget as IDSVA_SO.
+                int fdsva_so_iters = std::max(1, TEST_ITERS/10);
+                for(int iter = 0; iter < fdsva_so_iters; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    fdsvaSoThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, us, &threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: fdsva_so direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
+            }
         }
     #endif
 

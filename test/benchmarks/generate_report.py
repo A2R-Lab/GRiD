@@ -42,7 +42,9 @@ NOTE_SECOND_ORDER = (
     "> **Note (IDSVA_SO)**: Pinocchio's IDSVA_SO computes a rank-3 nv×nv×nv tensor on CPU "
     "— expect very slow CPU times especially for G1 (36 DOF: 36³ = 46,656 elements). "
     "The large GRiD speedup here is expected.\n\n"
-    "> **Note (FDSVA_SO)**: No Pinocchio equivalent — GRiD numbers only."
+    "> **Note (FDSVA_SO)**: Pinocchio has no direct FDSVA_SO; the baseline is synthesized "
+    "in-harness via the Singh/Carpentier chain rule (RNEA SO + ABA derivatives + Minv). "
+    "This is what any downstream pinocchio user would write."
 )
 
 NOTE_JETSON = (

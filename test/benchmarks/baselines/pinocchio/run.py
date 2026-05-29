@@ -351,13 +351,16 @@ def _runtime_env() -> dict[str, str]:
     return env
 
 
-# Pinocchio actively-timed algos. Skip "fdsva_so" — Pinocchio has no equivalent;
-# fill_nulls() will keep it as None in the final JSON. EE algos still need the
-# binary built with a valid frame_name; they run as fast as the others. The
-# main expense (cppadcg JIT) is gated inside timePinocchio.cpp by --algo.
+# Pinocchio actively-timed algos. fdsva_so is now timed via in-harness synthesis
+# (RNEA SO + ABA derivatives + Minv chain rule) — pinocchio has no direct
+# fdsva_so but the synthesis is what any downstream user would write. EE algos
+# still need the binary built with a valid frame_name; they run as fast as the
+# others. The main expense (cppadcg JIT) is gated inside timePinocchio.cpp by
+# --algo.
 PINOCCHIO_ALGOS: tuple[str, ...] = (
     "id", "minv", "fd", "aba", "crba", "id_du", "fd_du",
-    "ee_pose", "ee_pose_gradient", "ee_pose_hessian", "idsva_so_body_frame",
+    "ee_pose", "ee_pose_gradient", "ee_pose_hessian",
+    "idsva_so_body_frame", "fdsva_so",
 )
 # d2ee-focused fast path: env PIN_BENCH_D2EE_ONLY=1 narrows the per-algo fan-out
 # to ee_pose_hessian only. Skips all the heavy cppadcg JIT (rnea/minv/aba/crba/...)

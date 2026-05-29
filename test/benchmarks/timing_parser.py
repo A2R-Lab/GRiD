@@ -72,6 +72,7 @@ _PIN_SINGLE_LABELS: dict[str, str] = {
     "ee_pose_gradient direct":  "ee_pose_gradient",
     "ee_pose_hessian direct":   "ee_pose_hessian",
     "idsva_so_body_frame direct":          "idsva_so_body_frame",
+    "fdsva_so direct":                     "fdsva_so",
 }
 
 # Pinocchio batch labels
@@ -94,6 +95,7 @@ _PIN_BATCH_LABELS: dict[str, str] = {
     "ee_pose_gradient direct":  "ee_pose_gradient",
     "ee_pose_hessian direct":   "ee_pose_hessian",
     "idsva_so_body_frame direct":          "idsva_so_body_frame",
+    "fdsva_so direct":                     "fdsva_so",
 }
 
 
