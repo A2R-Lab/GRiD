@@ -870,11 +870,16 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    `SCRATCH_IN_SMEM`.
 4. **h1_2-floating inline DEVICE path smem cap** — exceeds sm_120 ~99 KB cap;
    make device paths tier-aware/spillable.
-5. *(deferred B.1 follow-ups)* Cosmetic rename `fdsva_so_inner` →
-   `fdsva_so_contract` (the rank-3 contraction sub-step); collapse the
-   simple-algo auto-alloc `_device` wrappers (id / minv / fd / aba / crba /
-   ee_pose* / integrator / idsva_so_*) — touches the equivalence-runner test
-   kernels that still consume them.
+5. *(deferred B.1 follow-ups)*
+   ✅ **B.5.b cosmetic rename DONE 2026-05-29 (codegen f433d9c, parent
+   124e690):** `fdsva_so_inner` → `fdsva_so_contract` across 20 refs in
+   `_fdsva_so.py` + `GRiDCodeGenerator.py` + `tier_instantiation_smoke.py`;
+   ``_temp_no_inner`` local var also renamed to `_temp_no_contract`.
+   iiwa14 fixed + floating regen verified.
+   - **REMAINING:** collapse the simple-algo auto-alloc `_device` wrappers
+     (id / minv / fd / aba / crba / ee_pose* / integrator / idsva_so_*).
+     Touches the equivalence-runner test kernels that still consume them
+     (~2-4 hour refactor).
 6. **Codegen interface cleanup.** Pays back on every future algorithm
    addition. Sub-items:
    (a) **Drop thread-group plumbing** — `use_thread_group` is `False` on every
@@ -887,19 +892,22 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    (c) **Dedup repeated branches** — algorithm emitters fan out on
    `compute_c` / `use_qdd_input` / `use_qdd_Minv_input` with near-identical
    bodies; factor those into table-driven helpers.
-   (d) **Codegen author guide** — once the surface is smaller, write a
-   "how to add a new algorithm" doc that walks through the canonical pattern
-   (uses fdsva_so as the worked example). Update `GRiDCodeGenerator/README.md`
-   accordingly. Pairs with a refresh of
-   `docs/source/user_guide/tutorials/codegen.rst`.
+   (d) ✅ **Codegen author guide DONE 2026-05-29 (parent 4394343):**
+   `docs/source/user_guide/tutorials/adding_an_algorithm.rst` — step-by-
+   step worked example using fdsva_so, common pitfalls (caller-side
+   s_temp repoint, single-thread invert, PERF-pick macro misuse), helper
+   cheat sheet. Linked from the tutorials index.
    Large surgery but high leverage — directly attacks the code-bloat the user
    has flagged repeatedly.
 
 ### C. Cleanup + comprehensive perf re-sweep (do as one phase)
 1. **Validation matrix completion** — full robot × base × tier EE kinematics
    matrix. PERF green for all 4×2; LITE/MINIMAL on big robots unexercised.
-2. **Auto-parallel equivalence harness** — `pytest-xdist -n` sized by cores+RAM
-   (~5 GB/compile). Today proven safe at ~5-wide manually.
+2. ✅ **Auto-parallel equivalence harness DONE 2026-05-29 (parent
+   084af68):** `test/cuda_equivalents/run_parallel.sh` sizes
+   `pytest-xdist -n` from `free -g / GB_PER_JOB` (default 5 GB), clamps
+   to `nproc`, uses `--dist loadgroup` to keep header cache hot per
+   (robot, base). `pytest-xdist` added to `requirements-dev.txt`.
 3. **nvcc/ptxas `-Werror`-style warnings sweep** (Python ref is already
    DeprecationWarning-clean). *2026-05-28: probed iiwa14-fixed runner
    compile with `-Wall -Wextra`; only 42 instances of one warning class
