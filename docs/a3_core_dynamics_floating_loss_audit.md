@@ -102,23 +102,29 @@ gemv/gemm already). Pass 1 of `profile_aba.sh` gives the kernel SOL %.
 Even halving the ABA latency would put iiwa14-floating ABA at ~54 μs vs
 pin 56 μs — i.e. win, not lose.
 
-### MEASURED — iiwa14-floating ABA (2026-05-29, cudaEvent A/B)
+### MEASURED — iiwa14-floating ABA / CRBA / Minv (2026-05-29, cudaEvent A/B)
 
-Microbench: `/tmp/grid_prof/aba_microbench.cu`, BATCH=256, 16 timed
-launches after 8 warm-ups, sm_120 (RTX 5090), GRID_CUDA_LINALG_BACKEND=GLASS.
+Microbench: `/tmp/grid_prof/{aba,crba_minv}_microbench.cu`, BATCH=256, 16
+timed launches after 8 warm-ups, sm_120 (RTX 5090),
+GRID_CUDA_LINALG_BACKEND=GLASS.
 
-| variant                                    | μs/launch | μs/problem |
-|--------------------------------------------|-----------|-----------:|
-| baseline (single-threaded invert)          | 109.7     |      0.429 |
-| **new** (`glass::invertMatrix_dense`)      | **51.9**  |  **0.203** |
-| pinocchio CPU (from prior sweep)           | (56.9 batch ÷ 256) | 0.222 |
+| algo | baseline µs/launch | v3 µs/launch | speedup | µs/prob v3 | pin µs/prob | GRiD/pin |
+|------|--------------------|--------------|---------|------------|-------------|----------|
+| ABA  | 109.7              | **51.9**     | **2.12×** | 0.203    | 0.222       | **0.91× (WIN)** |
+| Minv | 66.7               | **37.6**     | **1.77×** | 0.146    | 0.226       | **0.65× (WIN)** |
+| CRBA | 35.0               | 35.0         | 1.00×    | 0.136    | 0.096       | 1.42× (still loss) |
 
-**2.12× speedup on iiwa14-floating ABA.** Beats pinocchio by ~9% per
-problem — the 1.89× pin loss flips to a 1.09× GRiD win.
+**Confirmed exactly what the audit predicted:** ABA and Minv hit the
+floating-base 6×6 single-threaded invert (1.89× and 1.11× pin losses
+respectively); GLASS-ifying the invert flips both to wins. CRBA had no
+invert in its hot path, so it shows zero speedup — its 1.32× pin gap is
+from a different mechanism (likely the floating-base XImats
+quaternion→rotation conversion or the larger H matrix; see HANDOFF A.3
+for the next-iteration target).
 
-Same primitive change applies to `_aba.py:225` (second 6×6 invert per
-floating ABA) and `_direct_minv.py:165` (floating Minv root invert); both
-benefit identically. Expect Minv-floating loss (1.11–1.22×) to flip too.
+Other expected wins (not yet measured because they need a separate
+microbench): same change applies to `_aba.py:225` (second 6×6 invert per
+floating ABA, in the second forward pass).
 
 ## Original hypothesis (kept for completeness)
 

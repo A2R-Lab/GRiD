@@ -837,25 +837,21 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
 2. **idsva_so big-robot scaling.** g1/h1_2 lose 2.5–2.7× at N=256 batch; nv³
    kernel is compute+smem-bound. Same family as A.1; ties to ancestor-scratch
    de-alias (B.1).
-3. **Core-dynamics batch losses (floating-base only).** ALL losses are
-   floating-base — every fixed-base cell is a WIN (typically 0.18–0.66×).
-   Sorted by ratio (N=256 GRiD compute-only μs vs pin CPU with-mem μs):
-   iiwa14-float aba 1.89×, go2-float aba 1.47×, g1/go2/iiwa14-float crba
-   1.32-1.33×, go2-float minv 1.22×, g1-float aba 1.11×, iiwa14-float
-   minv 1.11×. **Root cause CONFIRMED (static audit, 2026-05-29):** the
-   shared 6×6 root-block matrix invert (`gen_invert_matrix` in
-   `_lin_alg_helpers.py:198-243`) runs *single-threaded* (447/448 threads
-   idle on iiwa14). Called 2× per floating ABA timestep and 1× per
-   floating Minv timestep — matches the loss ranks exactly. **Fix is
-   mechanical:** GLASS already has block-cooperative `invertMatrix`
-   (`GLASS/src/L3/inv.cuh`) and `cholDecomp_InPlace`
-   (`GLASS/src/L3/chol_InPlace.cuh`); IA/I are SPD so Cholesky+trsm is the
-   ideal swap. CRBA's 1.32× gap is a *different* mechanism (no invert in
-   `gen_crba_inner_floating`) — TBD via ncu pass 2. ncu profile setup
-   ready in `/tmp/grid_prof/` (aba + crba/minv microbenches built,
-   `profile_aba.sh` three-pass script, `summarize_ncu.py`). See
+3. **Core-dynamics batch losses (floating-base only).**
+   **2026-05-29 — ABA + Minv FIXED, CRBA remains.** ALL losses are/were
+   floating-base. Root cause was the single-threaded 6×6 root invert.
+   GLASS `invertMatrix_dense` swap landed (GLASS 773cff5, codegen 0e0a9e2,
+   call-site cleanup 617a057). **Measured wins on iiwa14-floating:**
+   ABA 2.12× (109.7→51.9 µs, 1.89× pin loss → 1.09× win); Minv 1.77×
+   (66.7→37.6 µs, 1.11× pin loss → 1.55× win). CRBA unchanged (1.32× pin
+   loss persists — it has no invert; needs a *different* fix, likely the
+   floating-base XImats quaternion→rotation conversion or the larger H
+   matrix). **Next iteration for CRBA:** profile the floating crba_kernel
+   (microbench at `/tmp/grid_prof/crba_minv_microbench.cu`) and look at
+   whether the floating-base XImats load + the dense H[:6,:6] fill in
+   `_crba.py:291-298` is the hotspot. See
    `docs/a3_core_dynamics_floating_loss_audit.md` for the full audit +
-   Option-A/B fix plans.
+   measured A/B table.
 4. **`fdsva_so` pinocchio baseline.** No oracle yet; collect to scope A.1–A.3
    and confirm the SO-wide gap shape.
 
