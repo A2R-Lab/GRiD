@@ -324,7 +324,7 @@ extern "C" int grid_rbd_forward_dynamics_grad(
     return 0;
 }
 
-// End-effector pose Hessian: 6×NUM_EES×NJ×NJ per timestep.
+// End-effector pose Hessian: 6×NUM_EES×NV×NV per timestep (d^2/dv^2 tangent).
 // Calls grid::end_effector_pose_gradient_hessian which fills BOTH d2eePos AND
 // deePos; we only copy d2eePos out. If the caller wants both they should
 // call end_effector_pose_gradient separately (the kernels are fast enough
@@ -338,6 +338,7 @@ extern "C" int grid_rbd_end_effector_pose_hessian(
     if (batch > kMaxBatch) return 2;
 
     const int nj = grid::NUM_JOINTS;
+    const int nv = grid::NUM_VEL;
     pack_q_qd_u(q, q, nullptr, batch, nj);
 
     grid::end_effector_pose_gradient_hessian<T, /*USE_COMPRESSED_MEM=*/false>(
@@ -347,7 +348,7 @@ extern "C" int grid_rbd_end_effector_pose_hessian(
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(d2ee_out, g_data->h_d2eePos,
-                batch * 6 * grid::NUM_EES * nj * nj * sizeof(T));
+                batch * 6 * grid::NUM_EES * nv * nv * sizeof(T));
     return 0;
 }
 
@@ -872,7 +873,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 
-// end_effector_pose_hessian(q) → d2eePos  flat (B, 6*NUM_EES*NJ*NJ)
+// end_effector_pose_hessian(q) → d2eePos  flat (B, 6*NUM_EES*NV*NV)
 // The kernel also writes d_deePos as a byproduct; we only return d2.
 static ffi::Error grid_rbd_jax_end_effector_pose_hessian_impl(
     cudaStream_t stream,
@@ -883,6 +884,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_hessian_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose_hessian: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj    = grid::NUM_JOINTS;
+    int nv    = grid::NUM_VEL;
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("end_effector_pose_hessian: batch > max_batch");
 
     const size_t row_bytes = nj * sizeof(T);
@@ -900,7 +902,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_hessian_impl(
             g_data->d_q_qd_u, stride_q, g_robot, batch);
 
     cudaMemcpyAsync(d2ee_out->typed_data(), g_data->d_d2eePos,
-                    batch * 6 * grid::NUM_EES * nj * nj * sizeof(T),
+                    batch * 6 * grid::NUM_EES * nv * nv * sizeof(T),
                     cudaMemcpyDeviceToDevice, stream);
     return ffi::Error::Success();
 }

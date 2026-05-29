@@ -244,7 +244,9 @@ class JaxRobotHandle:
         return raw.reshape(B, nee, nv, 6).transpose(0, 1, 3, 2).reshape(B, 6 * nee, nv)
 
     def end_effector_pose_hessian(self, q):
-        """End-effector pose Hessian. Returns (B, 6*NUM_EES, NJ, NJ)."""
+        """End-effector pose Hessian d^2(pose)/dv^2 (tangent space, pinocchio convention).
+        Returns (B, 6*NUM_EES, NV, NV). For fixed-base NV == NJ; for floating-base
+        the (NV, NV) block indexes spatial twist components."""
         import jax
         import jax.numpy as jnp
         target = _register_method_target(
@@ -252,8 +254,8 @@ class JaxRobotHandle:
             "end_effector_pose_hessian", "grid_rbd_jax_end_effector_pose_hessian")
         (q,), B = self._prep_2d("end_effector_pose_hessian", q)
         nee = self.num_ees
-        nj = self.num_joints
-        out_type = jax.ShapeDtypeStruct((B, 6 * nee, nj, nj), jnp.float32)
+        nv = self.num_vel
+        out_type = jax.ShapeDtypeStruct((B, 6 * nee, nv, nv), jnp.float32)
         return jax.ffi.ffi_call(target, out_type)(q)
 
     def rnea_grad(self, q, qd, *, gravity: float = 9.81):

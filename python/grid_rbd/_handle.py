@@ -242,7 +242,9 @@ class RobotHandle:
         return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
     def end_effector_pose_hessian(self, q):
-        """End-effector pose Hessian ∂²ee/∂q². Returns shape (B, 6*NUM_EES, NJ, NJ)."""
+        """End-effector pose Hessian ∂²(pose)/∂v² (tangent-space, pinocchio convention).
+        Returns shape (B, 6*NUM_EES, NV, NV). For fixed-base NV == NJ; for
+        floating-base the (NV, NV) block indexes spatial twist components."""
         q = np.ascontiguousarray(q, dtype=np.float32)
         return self._runner.end_effector_pose_hessian(q)
 

@@ -89,8 +89,8 @@ void test(){
         printMat<T,6,grid::NUM_VEL>(&hd_data->h_deePos[ee*6*grid::NUM_VEL],6);
         printf("d2eePos[%d]\n",ee);
         for (int i=0; i < 6; i++){
-            int offset = ee*6*grid::NUM_JOINTS*grid::NUM_JOINTS + i*grid::NUM_JOINTS*grid::NUM_JOINTS;
-            printf("[%d]\n",i); printMat<T,grid::NUM_JOINTS,grid::NUM_JOINTS>(&hd_data->h_d2eePos[offset],grid::NUM_JOINTS);
+            int offset = ee*6*grid::NUM_VEL*grid::NUM_VEL + i*grid::NUM_VEL*grid::NUM_VEL;
+            printf("[%d]\n",i); printMat<T,grid::NUM_VEL,grid::NUM_VEL>(&hd_data->h_d2eePos[offset],grid::NUM_VEL);
         }
     }
     grid::close_grid<T>(streams,d_robotModel,hd_data);

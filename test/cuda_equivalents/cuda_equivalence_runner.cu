@@ -250,7 +250,7 @@ void run() {
     std::vector<T> h_grad(grid::NUM_VEL * 2 * grid::NUM_VEL);
     std::vector<T> h_ee(6 * grid::NUM_EES);
     std::vector<T> h_dee(6 * grid::NUM_VEL * grid::NUM_EES);
-    std::vector<T> h_d2ee(6 * grid::NUM_JOINTS * grid::NUM_JOINTS * grid::NUM_EES);
+    std::vector<T> h_d2ee(6 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_EES);
 
     read_vector(h_q.data(), grid::NUM_JOINTS);
     read_vector(h_qd.data(), grid::NUM_VEL);
@@ -292,7 +292,7 @@ void run() {
     gpuErrchk(cudaMalloc((void**)&d_grad, grid::NUM_VEL * 2 * grid::NUM_VEL * sizeof(T)));
     gpuErrchk(cudaMalloc((void**)&d_ee, 6 * grid::NUM_EES * sizeof(T)));
     gpuErrchk(cudaMalloc((void**)&d_dee, 6 * grid::NUM_VEL * grid::NUM_EES * sizeof(T)));
-    gpuErrchk(cudaMalloc((void**)&d_d2ee, 6 * grid::NUM_JOINTS * grid::NUM_JOINTS * grid::NUM_EES * sizeof(T)));
+    gpuErrchk(cudaMalloc((void**)&d_d2ee, 6 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_EES * sizeof(T)));
     gpuErrchk(cudaMemcpy(d_q, h_q.data(), grid::NUM_JOINTS * sizeof(T), cudaMemcpyHostToDevice));
     gpuErrchk(cudaMemcpy(d_qd, h_qd.data(), grid::NUM_VEL * sizeof(T), cudaMemcpyHostToDevice));
     gpuErrchk(cudaMemcpy(d_u, h_u.data(), grid::NUM_VEL * sizeof(T), cudaMemcpyHostToDevice));
@@ -438,8 +438,8 @@ void run() {
         if (grid::GRID_D2EE_USES_WORKSPACE_TEMP) {
             gpuErrchk(grid::grid_end_l2_persisting(0));
         }
-        gpuErrchk(cudaMemcpy(h_d2ee.data(), d_d2ee, 6 * grid::NUM_JOINTS * grid::NUM_JOINTS * grid::NUM_EES * sizeof(T), cudaMemcpyDeviceToHost));
-        print_vector("end_effector_pose_hessian", h_d2ee.data(), 6 * grid::NUM_JOINTS * grid::NUM_JOINTS * grid::NUM_EES);
+        gpuErrchk(cudaMemcpy(h_d2ee.data(), d_d2ee, 6 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_EES * sizeof(T), cudaMemcpyDeviceToHost));
+        print_vector("end_effector_pose_hessian", h_d2ee.data(), 6 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_EES);
     }
 
     if (floating_algorithm_requested("inverse_dynamics_gradient_q") ||
@@ -615,7 +615,7 @@ void run() {
     gpuErrchk(cudaPeekAtLastError());
     print_vector(
         "end_effector_pose_hessian", hd_data->h_d2eePos,
-        6 * grid::NUM_JOINTS * grid::NUM_JOINTS * grid::NUM_EES
+        6 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_EES
     );
 #endif
 

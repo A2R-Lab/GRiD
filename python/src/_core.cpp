@@ -339,7 +339,7 @@ public:
             throw std::invalid_argument(
                 "end_effector_pose_hessian: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
         }
-        py::array_t<float> out({batch, 6 * num_ees_, num_joints_, num_joints_});
+        py::array_t<float> out({batch, 6 * num_ees_, num_vel_, num_vel_});
         int rc = fn_ee_pose_hessian_(q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_hessian failed: rc=" + std::to_string(rc));
         return out;
