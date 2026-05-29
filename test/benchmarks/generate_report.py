@@ -178,20 +178,23 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
     rows = []
     for robot in section_robots:
         for base in BASES:
-            pg = (results.get(robot, {}).get(base, {}).get("grid_pre_glass") or {}).get(algo)
-            gl = (results.get(robot, {}).get(base, {}).get("grid_glass") or {}).get(algo)
-            pi = (results.get(robot, {}).get(base, {}).get("pinocchio") or {}).get(algo)
-            mx = (results.get(robot, {}).get(base, {}).get("mjx") or {}).get(algo)
+            base_dict = results.get(robot, {}).get(base, {})
+            pg = (base_dict.get("grid_pre_glass") or {}).get(algo)
+            gl = (base_dict.get("grid_glass") or {}).get(algo)
+            gl_lite = (base_dict.get("grid_glass_tier_lite") or {}).get(algo)
+            gl_min  = (base_dict.get("grid_glass_tier_minimal") or {}).get(algo)
+            pi = (base_dict.get("pinocchio") or {}).get(algo)
+            mx = (base_dict.get("mjx") or {}).get(algo)
             # Frax columns: split into CPU + GPU since Frax advertises both as fast.
             # Back-compat: legacy JSONs with key "frax" populate frax_gpu (the prior
             # default), leaving frax_cpu as `—`.
-            base_dict = results.get(robot, {}).get(base, {})
             fx_cpu = (base_dict.get("frax_cpu") or {}).get(algo)
             fx_gpu = (base_dict.get("frax_gpu") or base_dict.get("frax") or {}).get(algo)
 
             if metric == "single":
                 vals = [
-                    _entry_single(pg), _entry_single(gl),
+                    _entry_single(pg),
+                    _entry_single(gl), _entry_single(gl_lite), _entry_single(gl_min),
                     _entry_single(pi) + _codegen_flag(pi),
                     _entry_single(mx),
                     _entry_single(fx_cpu), _entry_single(fx_gpu),
@@ -202,6 +205,8 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
                 vals = [
                     _entry_batch(pg, n, "compute_only"),
                     _entry_batch(gl, n, "compute_only"),
+                    _entry_batch(gl_lite, n, "compute_only"),
+                    _entry_batch(gl_min, n, "compute_only"),
                     _entry_batch(pi, n),
                     _entry_batch(mx, n, "compute_only"),
                     _entry_batch(fx_cpu, n, "compute_only"),
@@ -249,7 +254,14 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
         "Columns:",
         "- **pre_glass**: GRiD at the pre-GLASS reference. Fixed-base only "
         "(pre_glass harness does not support floating-base).",
-        "- **glass**: GRiD HEAD with the pure-SIMT GLASS backend.",
+        "- **glass**: GRiD HEAD with the pure-SIMT GLASS backend at the PERF tier "
+        "(max smem; lowest spill).",
+        "- **glass_lite**: GRiD HEAD at the LITE tier — partial spill of cold/large "
+        "buffers to L2-pinned d_workspace; trades some throughput for ~50% smem "
+        "headroom so more blocks fit per SM. `—` if the algorithm has a single tier.",
+        "- **glass_min**: GRiD HEAD at the MINIMAL tier — most aggressive spill so "
+        "the kernel fits on lower-spec GPUs / leaves smem free for the caller. `—` "
+        "if the algorithm has a single tier.",
         "- **pin**: Pinocchio CPU reference (codegen where available).",
         "- **mjx**: MuJoCo MJX (JAX) GPU reference. Subset of algos only "
         "(id / fd / ee_pose / id_du); others render `—`.",
@@ -283,12 +295,12 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
                 "n256":   "batch N=256",
             }
             col_header = (
-                "| Robot | Base | pre_glass | glass | pin | mjx | frax_cpu | frax_gpu "
-                "| glass/pre |"
+                "| Robot | Base | pre_glass | glass | glass_lite | glass_min "
+                "| pin | mjx | frax_cpu | frax_gpu | glass/pre |"
             )
             col_align = (
-                "|-------|------|:---------:|:-----:|:---:|:---:|:--------:|:--------:"
-                "|:---------:|"
+                "|-------|------|:---------:|:-----:|:----------:|:---------:"
+                "|:---:|:---:|:--------:|:--------:|:---------:|"
             )
             for metric in ("single", "n16", "n256"):
                 lines += [f"**{metric_header[metric]}**", ""]
