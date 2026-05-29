@@ -8,6 +8,7 @@ These tutorials will help you get started with different aspects of GRID.
 
    python_algorithms
    codegen
+   adding_an_algorithm
    urdf_parser
    python_wrappers
    benchmarks
