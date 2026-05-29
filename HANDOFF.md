@@ -836,11 +836,20 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    Sorted by ratio (N=256 GRiD compute-only μs vs pin CPU with-mem μs):
    iiwa14-float aba 1.89×, go2-float aba 1.47×, g1/go2/iiwa14-float crba
    1.32-1.33×, go2-float minv 1.22×, g1-float aba 1.11×, iiwa14-float
-   minv 1.11×. Likely driver: floating-base 6×6 root block in ABA isn't
-   GLASS-ified (scalar fma loop), and CRBA/Minv walk the floating root
-   DOF-by-DOF. See `docs/a3_core_dynamics_floating_loss_audit.md` for the
-   full audit + concrete optimization plan (GLASS-ify root 6×6 block; add
-   `gen_crba_inner_floating`; profile first).
+   minv 1.11×. **Root cause CONFIRMED (static audit, 2026-05-29):** the
+   shared 6×6 root-block matrix invert (`gen_invert_matrix` in
+   `_lin_alg_helpers.py:198-243`) runs *single-threaded* (447/448 threads
+   idle on iiwa14). Called 2× per floating ABA timestep and 1× per
+   floating Minv timestep — matches the loss ranks exactly. **Fix is
+   mechanical:** GLASS already has block-cooperative `invertMatrix`
+   (`GLASS/src/L3/inv.cuh`) and `cholDecomp_InPlace`
+   (`GLASS/src/L3/chol_InPlace.cuh`); IA/I are SPD so Cholesky+trsm is the
+   ideal swap. CRBA's 1.32× gap is a *different* mechanism (no invert in
+   `gen_crba_inner_floating`) — TBD via ncu pass 2. ncu profile setup
+   ready in `/tmp/grid_prof/` (aba + crba/minv microbenches built,
+   `profile_aba.sh` three-pass script, `summarize_ncu.py`). See
+   `docs/a3_core_dynamics_floating_loss_audit.md` for the full audit +
+   Option-A/B fix plans.
 4. **`fdsva_so` pinocchio baseline.** No oracle yet; collect to scope A.1–A.3
    and confirm the SO-wide gap shape.
 
@@ -884,11 +893,16 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
 2. **Auto-parallel equivalence harness** — `pytest-xdist -n` sized by cores+RAM
    (~5 GB/compile). Today proven safe at ~5-wide manually.
 3. **nvcc/ptxas `-Werror`-style warnings sweep** (Python ref is already
-   DeprecationWarning-clean). *2026-05-28: probed iiwa14-fixed runner compile
-   with `-Wall -Wextra`; only 42 instances of one warning class (#177-D
-   "d_temp_spill declared but never referenced") — silenced via `(void)`
-   cast across 6 emitter sites. Remaining `-Werror` items: re-probe with a
-   floating + bigger robot to catch the residual surface.*
+   DeprecationWarning-clean). *2026-05-28: probed iiwa14-fixed runner
+   compile with `-Wall -Wextra`; only 42 instances of one warning class
+   (#177-D "d_temp_spill declared but never referenced") — silenced via
+   `(void)` cast across 6 emitter sites. **2026-05-29:** iiwa14-FLOATING
+   micro-bench compile surfaces a second class — 5× `dof_id` declared but
+   never referenced in `inverse_dynamics_gradient_device_qdd` (grid.cuh
+   lines 13767, 13784, 13801, 13818, 13835 — `int dof_id = 1+5; ... 5+5;`).
+   Emitter site is in `_inverse_dynamics_gradient.py` for the floating
+   path; one more `(void)dof_id;` or a guarded emission. Bigger robots /
+   non-PERF tiers TBD.*
 4. **Autotune `performance_threads`** — binary-search batch-throughput-max thread
    count (≤ `MAX_PERF_LEVEL_THREADS`); expose it.
 5. **`fdsva_so` single_us recapture** — was dropped on -rdc regcount error

@@ -34,17 +34,85 @@ arithmetic.
 walks the floating base "DOF by DOF" (6 sweeps), which is cache- and ILP-poor
 compared to a single block 6×6 sweep.
 
-## Hypothesis (needs profiling to confirm)
+## Root cause **CONFIRMED** by static audit (2026-05-29) — single-threaded 6×6 invert
 
-1. **Root 6×6 block in ABA isn't using GLASS block-matmul primitives** — it's
-   coded as scalar element fmas. Pinocchio's Eigen-emitted root block uses LDLT
-   with unrolled fixed-size kernels.
-2. **CRBA/Minv floating root walks the 6 DOFs serially** instead of treating the
-   floating joint as a single 6-DOF unit. Each scalar walk pays full chain-walk
-   overhead.
-3. **Floating-base XImats / Xhom load** computes the floating base's body-to-
-   world quaternion-to-rotation map; this is more expensive than a single-axis
-   joint and may dominate for small robots.
+The 6×6 root-block matrix inverse used by floating ABA + Minv is
+**single-threaded Gauss-Jordan**.
+
+`gen_invert_matrix` in [_lin_alg_helpers.py:198-243](../GRiDCodeGenerator/helpers/_lin_alg_helpers.py#L198-L243)
+emits a body wrapped in `gen_add_serial_ops` ( `if (threadIdx.x == 0 &&
+threadIdx.y == 0)` ), and inside that single thread runs `for pivRC in
+range(6); for ind in range(36); ...`. So **at block size 448 (the iiwa14
+`MAX_PERF_LEVEL_THREADS` default), 447 threads sit idle while one thread
+walks 6 × (6 + 36) = 252 sequential ops** per invert.
+
+**Call sites (per floating-base ABA / Minv timestep):**
+- `_aba.py:154` — invert the root `D_fb` 6×6 for the backward pass.
+- `_aba.py:225` — second 6×6 invert for the root acceleration solve.
+- `_direct_minv.py:165` — invert the root `I_fb` 6×6.
+
+So **floating ABA pays 2× this stall per call, Minv pays 1×**. That maps
+exactly to the loss ranks observed: ABA worst (1.89× / 1.47×), Minv lighter
+(1.11× / 1.22×). **CRBA is different** — `gen_crba_inner_floating`
+[_crba.py:291-298](../GRiDCodeGenerator/algorithms/_crba.py#L291-L298)
+does the root-block fill in 36 parallel threads (no invert), so the 1.32×
+CRBA gap must come from a *different* hotspot (likely the floating-base
+XImats quaternion-to-rotation conversion and the larger H matrix; needs
+the ncu profile to confirm).
+
+## Fix is mechanical: GLASS already has the parallel primitives
+
+GLASS exposes BOTH replacements out-of-the-box:
+
+- `invertMatrix<T>(dimA, A, s_temp, cgrps::thread_group)` —
+  [GLASS/src/L3/inv.cuh:9-37](../GLASS/src/L3/inv.cuh#L9-L37). Inner loop is
+  `for (ind = g.thread_rank(); ind < dimA*(dimA+1); ind += g.size())` —
+  block-cooperative Gauss-Jordan.
+- `cholDecomp_InPlace<T>` (in `GLASS/src/L3/chol_InPlace.cuh`) — block-
+  cooperative Cholesky. IA / Iₑ are SPD by construction (inertia matrices),
+  so Cholesky + two trsm solves is the right factor.
+
+The GRiD `_lin_alg_helpers.gen_invert_matrix` was authored before GLASS
+existed; it predates the GLASS-first-party policy. Two ways to migrate:
+
+**Option A (minimal patch, low risk):** Rewrite `gen_invert_matrix` to drop
+the `gen_add_serial_ops` wrap and parallelize the pivot-row update across
+the block (same algorithm structure, just `tid + N`-strided over the
+`dimA*dimA` inner loop, with a single-thread step for the pivot inverse
+computation and a `__syncthreads` between pivots). Keeps the same out-of-
+place `(A, Ainv, s_temp)` signature so call sites are untouched.
+
+**Option B (cleaner, uses GLASS):** Replace each `invert_matrix(...)` call
+in `_aba.py` / `_direct_minv.py` with a copy-then-`glass::invertMatrix`
+sequence (the GLASS impl is in-place), or with a `glass::cholDecomp_InPlace`
++ two `glass::trsm` calls for the SPD-aware path (fewer flops on SPD).
+
+Recommended: **A first** (one helper change, mechanical, ~1 commit), then
+**B** as the second step alongside the per-algorithm sub-agent pass for the
+A.3 backlog.
+
+### Expected speedup ceiling
+
+If the single-threaded invert IS the iiwa14-floating ABA bottleneck (to be
+confirmed in pass-2 ncu instruction-mix), going from 1 active thread to
+~36 active threads on the `dimA*dimA` inner loop drops that phase's cycles
+by ~36×. The whole-kernel impact depends on what fraction of the kernel
+is spent in the invert vs in the chain forward/backward (which use GLASS
+gemv/gemm already). Pass 1 of `profile_aba.sh` gives the kernel SOL %.
+Even halving the ABA latency would put iiwa14-floating ABA at ~54 μs vs
+pin 56 μs — i.e. win, not lose.
+
+## Original hypothesis (kept for completeness)
+
+1. ~~Root 6×6 block in ABA isn't using GLASS block-matmul primitives.~~
+   The 6×6 gemm/gemv calls ALREADY use GLASS — see `_aba.py:179, 186, 187`
+   (`grid_linalg_gemv<T,6,6,true>`, `grid_linalg_gemm<T,6,6,6>`). The hot
+   spot is the INVERT, not the gemm.
+2. **CRBA loss source TBD** — `gen_crba_inner_floating` doesn't invert; the
+   1.32× pin gap is a different mechanism (XImats? H-matrix fill?). Profile
+   pass 2 on `crba_kernel` answers it.
+3. Floating-base XImats / Xhom quaternion → rotation conversion — still a
+   plausible secondary hotspot; pass 2 LSU/FMA ratio will show it.
 
 ## Concrete next steps (next perf session)
 
