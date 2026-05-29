@@ -133,13 +133,74 @@ For iiwa14 (7 chain joints), the floating path executes ~42
 that's ~2-8 µs of sync overhead per kernel invocation — squarely in the
 range of the measured 35 µs vs pin's 24.6 µs gap.
 
-**Fix:** port the per-joint thread-parallel pattern from
-`gen_crba_inner` to `gen_crba_inner_floating`. The shapes are different
-(floating root joint is 6×6 vs scalar joints' 1×1), so the chain walk
-needs a small adaptation, but the core idea (one thread per leaf, walk
-the chain independently, write its own M cells with no inter-thread sync)
-transfers. Estimated 2-4 hours including equivalence + perf re-bench.
-Backlog: HANDOFF A.3 follow-up.
+### CRBA floating refactor — detailed plan
+
+**Fix:** split into two phases that mirror `gen_crba_inner` (fixed):
+
+Phase 1 (sequential, mostly unchanged): body recursions. For each `jid`
+from NJ-1 down to 1, the two `grid_linalg_gemm<T,6,6,6,...>` calls that
+write `IC[parent] += X^T IC[jid] X`. Plus the diagonal `s_M[dof, dof]`
+fill (one scalar per jid). No chain walk yet.
+
+Phase 2 (one parallel-jid launch, no inter-thread syncs):
+```c
+// Compile-time tables (built at codegen time from URDF):
+//   s_Sidx_by_jid[NJ] = {S_index per scalar joint}
+//   s_Ssgn_by_jid[NJ] = {S_sign per scalar joint}
+//   per-jid switch-case populates int jid_parents[max_depth] + num_parents.
+
+parallel_loop(jid_off, NJ-1):                  // threads 0..NJ-2
+    int jid = (NJ-1) - jid_off;                 // jid in [1, NJ)
+    int dof = jid + 5;
+    int jid_parents[MAX_DEPTH] = ...;          // from switch-case
+    int num_parents = ...;
+
+    T s_fh[6];                                  // per-thread, in registers
+    int S_ind = s_Sidx_by_jid[jid];
+    T S_sgn  = s_Ssgn_by_jid[jid];
+    for (int k=0; k<6; k++)
+        s_fh[k] = S_sgn * s_temp[IC_OFFSET + 36*jid + 6*S_ind + k];
+
+    for (int i=0; i<num_parents; i++) {
+        int X_ind = (i==0) ? jid : jid_parents[i-1];
+        T s_alpha[6];
+        for (int k=0; k<6; k++) s_alpha[k] = s_fh[k];
+        for (int k=0; k<6; k++)
+            s_fh[k] = dot_prod<T,6,1,1>(&s_XImats[36*X_ind + k*6], s_alpha);
+
+        int p = jid_parents[i];
+        if (p > 0) {                            // scalar-joint ancestor
+            int p_dof = p + 5;
+            T p_sgn = s_Ssgn_by_jid[p];
+            int p_idx = s_Sidx_by_jid[p];
+            s_M[dof*NV + p_dof] = p_sgn * s_fh[p_idx];
+            s_M[p_dof*NV + dof] = s_M[dof*NV + p_dof];
+        } else {                                // floating root (6 cols)
+            for (int col=0; col<6; col++) {
+                int S_col = col < 3 ? col + 3 : col - 3;
+                s_M[dof + NV*col] = s_fh[S_col];
+                s_M[col + NV*dof] = s_M[dof + NV*col];
+            }
+        }
+    }
+end parallel_loop
+__syncthreads();
+
+// Phase 3 (unchanged): root H[:6, :6] = IC[0] (permuted by S).
+```
+
+**Race-freedom:** each thread writes only to M cells indexed by its OWN
+`dof` (and the symmetric `p_dof` rows but in different (row, col) pairs
+across threads). No two threads write the same M cell.
+
+**Why it speeds things up:** the current floating impl emits ~3
+`__syncthreads` per (jid, ancestor) pair = ~42 syncs for iiwa14. The new
+plan emits ZERO syncs in the chain walk (one launch covers everything),
+plus 1 sync at the end. ~40 sync removals × ~100 ns = ~4 µs saved per
+launch — matches the measured 35 vs 24.6 µs gap.
+
+Estimated: 2-3 hours including emit + iiwa14-floating + go2-floating
+equivalence + perf re-bench. Backlog: HANDOFF A.3 follow-up.
 
 Other expected wins (not yet measured because they need a separate
 microbench): same change applies to `_aba.py:225` (second 6×6 invert per
