@@ -857,7 +857,13 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
 1. **De-alias `idsva_so` / `fdsva_so` inners** — cold-only surgical spill (vs
    whole-arena). Also helps integrator-gradient rung-3 on h1_2. See
    `docs/idsva_so_inner_refactor_notes.md`.
-2. **ABA whole-arena → surgical retrofit** (Minv-F sub-split pattern).
+2. ~~**ABA whole-arena → surgical retrofit** (Minv-F sub-split pattern).~~
+   **DONE (pre-2026-05-29 audit):** `gen_aba_inner_floating`
+   (`_aba.py:7-60`) already exposes the `TEMP_IN_SMEM` × `COLD_IN_SMEM`
+   selective-spill levers — the cold `vcross` slab `[36*NJ, 72*NJ)` and the
+   floating-base root tail `[140*NJ, 140*NJ+138)` spill via `s_vcross_cold`
+   / `s_fb_cold` to packed `d_cold` (`= d_workspace`); the hot recursion
+   stays in `s_temp`. This backlog entry was stale.
 3. **idsva body kernel `output_temp` rung** → fold into body-`_device`
    `SCRATCH_IN_SMEM`.
 4. **h1_2-floating inline DEVICE path smem cap** — exceeds sm_120 ~99 KB cap;
@@ -905,8 +911,11 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    non-PERF tiers TBD.*
 4. **Autotune `performance_threads`** — binary-search batch-throughput-max thread
    count (≤ `MAX_PERF_LEVEL_THREADS`); expose it.
-5. **`fdsva_so` single_us recapture** — was dropped on -rdc regcount error
-   (now fixed).
+5. ~~**`fdsva_so` single_us recapture** — was dropped on -rdc regcount
+   error (now fixed).~~ **DONE — verified 2026-05-29:** iiwa14-fixed
+   `fdsva_so` reports `single_us` = 49.5 μs in the latest sweep
+   (`ee_grad_step_c_perf_v2`); idsva_so + aba also present. The single_us
+   pipeline is healthy on all collected algos.
 6. **Vendor URDFs instead of pulling `robot_descriptions`.** The
    `robot_descriptions` package drags in a large transitive install (multi-GB
    venv impact). Vendor the ~4–10 URDFs we actually exercise (iiwa14 / go2 /
