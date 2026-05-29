@@ -1,4 +1,5 @@
 pytest
+pytest-xdist     # parallel CUDA equivalence runs (see test/cuda_equivalents/run_parallel.sh)
 pin
 robot_descriptions>=1.23.0
 xacrodoc
