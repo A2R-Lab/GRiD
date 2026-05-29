@@ -823,11 +823,17 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    on big/floating robots (iiwa14-fixed: GRiD wins 2.2×; h1_2-floating: pin 35.9×).
    Structural — `2·nv+1` gradient calls vs O(N) analytic. Mirrors what Step C
    did for `ee_pose_gradient`.
-   **Status 2026-05-28:** math derivation + fixed-base/single-DOF formula
-   worked out (validated machine-precision in Python); **floating-base intra-
-   joint multi-DOF case is the open gap** — needs a Lie-group second-order term
-   the single-DOF formula misses. See `docs/d2ee_analytic_derivation.md` for the
-   full derivation, the cleanest next-session plan, and pinocchio source pointers.
+   **Status 2026-05-29 — Python LANDED:** `RBDReference.end_effector_pose_hessian_analytic`
+   (RBDReference `843a302`) is a closed-form analytic via direct 2nd-order Taylor
+   expansion of the chain world transform; handles per-joint Δ + intra-joint
+   multi-DOF (revolute / prismatic / SE(3) free-flyer) uniformly via chain
+   composition `L_a · A^{local}_i · P_{a→b} · A^{local}_j · R_b`. Validated to
+   ~1e-9 on iiwa14/floating + go2/floating; FD-noise-floor (1.6e-7) on
+   iiwa14/fixed near pitch=π/2. **Next:** port to GPU codegen (`_eepose_gradient_hessian.py`
+   d2ee inner). Full algorithm + GPU-port guidance in
+   `docs/d2ee_analytic_derivation.md`. Side benefit: surfaced an fr3 mimic-joint
+   bug in URDFParser (the FD oracle was masking it via antisymmetric cancellation
+   on the broken gradient column; D.2 URDF-feature audit takes it).
 2. **idsva_so big-robot scaling.** g1/h1_2 lose 2.5–2.7× at N=256 batch; nv³
    kernel is compute+smem-bound. Same family as A.1; ties to ancestor-scratch
    de-alias (B.1).
