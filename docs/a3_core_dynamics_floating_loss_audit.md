@@ -108,17 +108,27 @@ Microbench: `/tmp/grid_prof/{aba,crba_minv}_microbench.cu`, BATCH=256, 16
 timed launches after 8 warm-ups, sm_120 (RTX 5090),
 GRID_CUDA_LINALG_BACKEND=GLASS.
 
-| algo | baseline µs/launch | v3 µs/launch | speedup | µs/prob v3 | pin µs/prob | GRiD/pin |
-|------|--------------------|--------------|---------|------------|-------------|----------|
-| ABA  | 109.7              | **51.9**     | **2.12×** | 0.203    | 0.222       | **0.91× (WIN)** |
-| Minv | 66.7               | **37.6**     | **1.77×** | 0.146    | 0.226       | **0.65× (WIN)** |
-| CRBA | 35.0               | 35.0         | 1.00×    | 0.136    | 0.096       | 1.42× (still loss) |
+| algo | baseline µs/launch | v3 µs/launch | v4 µs/launch | total speedup | pin µs/prob | GRiD/pin |
+|------|--------------------|--------------|--------------|---------------|-------------|----------|
+| ABA  | 109.7              | **51.9**     | 51.9 (unchanged in v4) | **2.12×** | 0.222 | **0.91× (WIN)** |
+| Minv | 66.7               | **37.6**     | 37.4 (unchanged in v4) | **1.78×** | 0.226 | **0.65× (WIN)** |
+| CRBA | 35.0               | 35.0         | **27.8** (v4 = per-jid thread-parallel) | **1.26×** | 0.096 | **1.14× (still losing, but closer)** |
+
+v3 = GLASS-ify floating root 6×6 invert (commit `0e0a9e2`). v4 adds the
+CRBA per-jid thread-parallel chain walk (commit `9eb51a6`); ABA/Minv
+unchanged because they don't share the chain-walk hot path.
 
 **Confirmed exactly what the audit predicted:** ABA and Minv hit the
 floating-base 6×6 single-threaded invert (1.89× and 1.11× pin losses
 respectively); GLASS-ifying the invert flips both to wins. CRBA had no
-invert in its hot path, so it shows zero speedup — its 1.32× pin gap is
-from a different mechanism.
+invert in its hot path; the per-jid thread-parallel chain walk closes
+about half of its remaining 1.32× pin gap (1.32× → 1.14×). The
+residual CRBA gap is likely the sequential body recursion (gemm-by-gemm
+with per-jid sync) and the floating-base XImats quaternion→rotation
+conversion; reducing those further would either require porting the
+fixed-base BFS-parallel body recursion (only helps branched robots, and
+iiwa14 is serial) or a per-tier surgical optimization of the floating
+root path.
 
 #### CRBA floating loss — diagnosed by static audit (2026-05-29)
 

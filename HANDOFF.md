@@ -841,15 +841,14 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    **2026-05-29 — ABA + Minv FIXED, CRBA remains.** ALL losses are/were
    floating-base. Root cause was the single-threaded 6×6 root invert.
    GLASS `invertMatrix_dense` swap landed (GLASS 773cff5, codegen 0e0a9e2,
-   call-site cleanup 617a057). **Measured wins on iiwa14-floating:**
-   ABA 2.12× (109.7→51.9 µs, 1.89× pin loss → 1.09× win); Minv 1.77×
-   (66.7→37.6 µs, 1.11× pin loss → 1.55× win). CRBA unchanged (1.32× pin
-   loss persists — it has no invert; needs a *different* fix, likely the
-   floating-base XImats quaternion→rotation conversion or the larger H
-   matrix). **Next iteration for CRBA:** profile the floating crba_kernel
-   (microbench at `/tmp/grid_prof/crba_minv_microbench.cu`) and look at
-   whether the floating-base XImats load + the dense H[:6,:6] fill in
-   `_crba.py:291-298` is the hotspot. See
+   call-site cleanup 617a057, CRBA refactor 9eb51a6).
+   **Measured wins on iiwa14-floating:** ABA 2.12× (109.7→51.9 µs, 1.89×
+   pin loss → 1.09× win); Minv 1.77× (66.7→37.6 µs, 1.11× pin loss →
+   1.55× win); **CRBA 1.26× (35.0→27.8 µs, 1.42× pin loss → 1.14× pin
+   loss).** Residual CRBA gap is sequential body recursion + floating
+   XImats; reducing further would require BFS-parallel body (only helps
+   branched robots) or a per-tier surgical floating XImats path —
+   bounded but multi-hour work, deferred. See
    `docs/a3_core_dynamics_floating_loss_audit.md` for the full audit +
    measured A/B table.
 4. **`fdsva_so` pinocchio baseline.** No oracle yet; collect to scope A.1–A.3
