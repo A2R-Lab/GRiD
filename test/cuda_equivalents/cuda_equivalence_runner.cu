@@ -69,17 +69,27 @@ __global__ void floating_direct_minv_runner(
     }
 }
 
+// forward_dynamics_device is tier-aware (mirrors idsva_so_device / d2ee_device).
+// We pick the smallest-smem rung that's still safe: TIER_MINIMAL routes the whole
+// FD inner s_temp arena (incl. the Minv-F band at its tail) to L2-pinned
+// d_workspace, freeing ~120 KB of smem on humanoid-scale robots. For smaller
+// robots TIER_MINIMAL is byte-identical to TIER_PERF in numerical output (only
+// the pointer routing changes). The d_workspace pointer comes from the
+// already-allocated hd_data->d_workspace (size GRID_WORKSPACE_BYTES_PER_TIMESTEP).
 template <typename T>
 __global__ void floating_forward_dynamics_runner(
     T *d_out, const T *d_q, const T *d_qd, const T *d_u,
-    const grid::robotModel<T> *d_robot_model, const T gravity
+    const grid::robotModel<T> *d_robot_model, const T gravity,
+    unsigned char *d_workspace
 ) {
     __shared__ T s_q[grid::NUM_JOINTS];
     __shared__ T s_qd[grid::NUM_VEL];
     __shared__ T s_u[grid::NUM_VEL];
     __shared__ T s_out[grid::NUM_VEL];
     load_floating_inputs(s_q, s_qd, s_u, d_q, d_qd, d_u);
-    grid::forward_dynamics_device<T>(s_out, s_q, s_qd, s_u, d_robot_model, gravity);
+    grid::forward_dynamics_device<T, grid::TIER_MINIMAL>(
+        s_out, s_q, s_qd, s_u, d_robot_model, gravity,
+        reinterpret_cast<T *>(d_workspace));
     __syncthreads();
     for (int ind = threadIdx.x; ind < grid::NUM_VEL; ind += blockDim.x) {
         d_out[ind] = s_out[ind];
@@ -273,7 +283,7 @@ void run() {
     grid_runner_set_smem_or_skip(grid::direct_minv_kernel<T>,
         "direct_minv", grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>());
     grid_runner_set_smem_or_skip(floating_forward_dynamics_runner<T>,
-        "forward_dynamics", grid::FD_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>());
+        "forward_dynamics", grid::FD_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>());
     grid_runner_set_smem_or_skip(grid::aba_kernel<T>,
         "aba", grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>());
     grid_runner_set_smem_or_skip(grid::crba_kernel<T>,
@@ -310,8 +320,8 @@ void run() {
     }
 
     if (floating_algorithm_requested("forward_dynamics")) {
-        floating_forward_dynamics_runner<T><<<1, g_num_threads, grid::FD_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
-            d_vec, d_q, d_qd, d_u, d_robot_model, gravity
+        floating_forward_dynamics_runner<T><<<1, g_num_threads, grid::FD_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>()>>>(
+            d_vec, d_q, d_qd, d_u, d_robot_model, gravity, hd_data->d_workspace
         );
         gpuErrchk(cudaPeekAtLastError());
         gpuErrchk(cudaDeviceSynchronize());
