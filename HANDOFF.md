@@ -948,6 +948,15 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    diagnostics, `nq`/`nv`/quat-order helpers, mark fixed-base-only methods. See
    `RBDReference/tests/PINOCCHIO_ALIGNMENT_BACKLOG.md`.
 2. **URDF feature support** — audit vs spec, add missing (**mimic joints first**).
+   *2026-05-29 reinforcement:* A.1 GPU port surfaced an fr3 mimic-joint
+   bug — `fr3_finger_joint2` has `<mimic joint="fr3_finger_joint1"/>` that
+   GRiD's URDFParser does NOT model. Its analytic d²(pose)/dv² disagrees
+   with the FD oracle for that EE because the FD masked the broken
+   `∂J[:,8]` sign via antisymmetric cancellation, whereas the analytic
+   computes the true 2nd derivative directly. The right fix is in
+   URDFParser mimic-joint handling (folds into this D.2 item). Until
+   fixed, fr3 is the only robot where A.1's analytic disagrees with
+   the FD oracle and the disagreement is the FD's fault, not ours.
 3. **PyTorch in-memory compile + re-link → CUDA-Graphs callable.** Use
    `torch.utils.cpp_extension.load_inline` (or equivalent JIT path) to compile
    a per-robot generated header *in memory* and expose the resulting kernels
