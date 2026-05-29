@@ -895,8 +895,16 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    accumulated many one-off `gen_add_*` shims; collapse into a small canonical
    set (e.g. one parallel-loop helper, one workspace-pointer-carve helper).
    (c) **Dedup repeated branches** — algorithm emitters fan out on
-   `compute_c` / `use_qdd_input` / `use_qdd_Minv_input` with near-identical
-   bodies; factor those into table-driven helpers.
+   `compute_c` / `use_qdd_input` / `use_qdd_Minv_input`; factor into
+   table-driven helpers. *2026-05-29 scoping note:* surveyed
+   `_inverse_dynamics.py`, `_forward_dynamics.py`,
+   `_inverse_dynamics_gradient.py`, `_forward_dynamics_gradient.py` (~78
+   flag refs). These flags gate conditionally-augmented emission inside
+   one body (function-name string, extra param, extra code line) — NOT
+   duplicate parallel blocks. Real dedup requires a new design layer
+   (emit-spec dataclass per variant, then a single shared traversal) —
+   non-mechanical, multi-hour. Deferred until paired with a wider
+   emitter rewrite.
    (d) ✅ **Codegen author guide DONE 2026-05-29 (parent 4394343):**
    `docs/source/user_guide/tutorials/adding_an_algorithm.rst` — step-by-
    step worked example using fdsva_so, common pitfalls (caller-side
@@ -913,17 +921,13 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    `pytest-xdist -n` from `free -g / GB_PER_JOB` (default 5 GB), clamps
    to `nproc`, uses `--dist loadgroup` to keep header cache hot per
    (robot, base). `pytest-xdist` added to `requirements-dev.txt`.
-3. **nvcc/ptxas `-Werror`-style warnings sweep** (Python ref is already
-   DeprecationWarning-clean). *2026-05-28: probed iiwa14-fixed runner
-   compile with `-Wall -Wextra`; only 42 instances of one warning class
-   (#177-D "d_temp_spill declared but never referenced") — silenced via
-   `(void)` cast across 6 emitter sites. **2026-05-29:** iiwa14-FLOATING
-   micro-bench compile surfaces a second class — 5× `dof_id` declared but
-   never referenced in `inverse_dynamics_gradient_device_qdd` (grid.cuh
-   lines 13767, 13784, 13801, 13818, 13835 — `int dof_id = 1+5; ... 5+5;`).
-   Emitter site is in `_inverse_dynamics_gradient.py` for the floating
-   path; one more `(void)dof_id;` or a guarded emission. Bigger robots /
-   non-PERF tiers TBD.*
+3. ✅ **nvcc/ptxas `-Werror`-style warnings sweep DONE 2026-05-29:** iiwa14
+   floating compile clean under `-Wall -Wextra` (no #177-D). The
+   `(void)dof_id;` casts at all 5 emit sites in
+   `_inverse_dynamics_gradient.py:365` already suppress the
+   `inverse_dynamics_gradient_device_qdd` warning class; the earlier
+   HANDOFF entry was stale. **Bigger robots / non-PERF tiers still TBD**;
+   would re-probe after the overnight sweep.
 4. **Autotune `performance_threads`** — binary-search batch-throughput-max thread
    count (≤ `MAX_PERF_LEVEL_THREADS`); expose it.
 5. ~~**`fdsva_so` single_us recapture** — was dropped on -rdc regcount

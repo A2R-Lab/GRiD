@@ -49,21 +49,41 @@ dominant cost), instead of the caller aliasing pointers.
 ### Project-wide propagation status (this is the standard for ALL algorithms)
 
 This is not an SO-specific pattern — every algorithm's inner should own its
-scratch placement. Conformance audit (2026-05-24):
+scratch placement. Conformance audit (2026-05-29; refreshed after the
+id_du/fd_du/integrator_gradient `_device`-orchestrator landing):
 
 | Inner | Placement template | Status |
 |-------|--------------------|--------|
-| `aba_inner` | `TEMP_IN_SMEM` (whole arena) | conforms |
+| `aba_inner` | `TEMP_IN_SMEM` (whole arena) + `COLD_IN_SMEM` (surgical cold sub-band) | conforms |
 | `forward_dynamics_inner` | `MINV_F_IN_SMEM` (F region) | conforms (surgical-F) |
 | `direct_minv_inner` | `F_IN_SMEM` (F region) | conforms (surgical-F) |
 | `integrator_inner` | `MINV_F_IN_SMEM` | conforms |
-| `fdsva_so_inner` | `SCRATCH_IN_SMEM` (4·NV³) | conforms |
+| `fdsva_so_contract` | `SCRATCH_IN_SMEM` (4·NV³) | conforms |
+| `fdsva_so_device` (orchestrator) | `SCRATCH_IN_SMEM × FD_GRAD_USE_SPILL × CONTRACT_IN_SMEM` | conforms (canonical 3-lever pattern) |
+| `crba_inner` | `TEMP_IN_SMEM` | conforms |
 | `end_effector_pose_gradient_inner` | `TEMP_IN_SMEM` | conforms |
-| `idsva_so_body_frame_inner` | `BC_IN_SMEM` (surgical BC only) | **partial** — needs whole-arena `SCRATCH_IN_SMEM` so callers stop repointing `s_temp` from outside |
-| `idsva_so_world_frame_inner` | none | **needs migration** — add `SCRATCH_IN_SMEM` |
-| `inverse_dynamics_gradient_inner` (id_du) | none | **needs migration** — kernel repoints `s_temp` from outside (`_inverse_dynamics_gradient.py:1015,1034`) |
-| `forward_dynamics_gradient_inner` (fd_du) | none | **needs migration** — kernel repoints `s_temp` (`_forward_dynamics_gradient.py:159,182`) |
-| `integrator_gradient` inner | none | **needs migration** — kernel `_emit_spill_pointers` repoints `s_temp` (`_integrator_gradient.py:744`) |
+| `idsva_so_body_frame_inner` | `SCRATCH_IN_SMEM × BC_IN_SMEM` (whole-arena + surgical BC; mutually exclusive per the body tier table) | conforms |
+| `idsva_so_world_frame_inner` | `SCRATCH_IN_SMEM × COLD_IN_SMEM` (whole-arena + surgical cold trio Xdown/v_w/a_w; mutually exclusive) | conforms |
+| `inverse_dynamics_gradient_device` (id_du) | `SCRATCH_IN_SMEM` (whole-arena via the `_device` orchestrator) | conforms |
+| `forward_dynamics_gradient_device` (fd_du) | `SCRATCH_IN_SMEM` (whole-arena via the `_device` orchestrator) | conforms |
+| `integrator_gradient_device` | per-tier rung (Dqdd / dAB / id_du level) via `_device` orchestrator | conforms |
+
+Every emitted kernel now passes its per-tier placement flag through to the
+inner / `_device` and lets `if constexpr (!FLAG) { s_temp = d_workspace; ... }` at
+the top of the callee do the repoint. For idsva_so / fdsva_so the kernel does
+**no** `s_temp` surgery at all — the inner / `_device` owns the placement and
+the XImats helper is called *inside* the inner after the repoint, so its sincos
+scratch follows the placement too (this is the canonical pattern).
+
+`aba_kernel`, `crba_kernel`, and `end_effector_pose_gradient_kernel` still do a
+kernel-side `s_temp = <ws>;` before calling `load_update_XImats_helpers(..., s_temp)`
+on the whole-arena rung, because in those algorithms the helper is called from the
+kernel (not from inside the inner). The inner still owns its own placement via its
+template flag; this kernel repoint is purely to give the helper's sincos slot a
+valid backing pointer instead of `nullptr` (see the "null `s_temp` to the load
+helper" anti-pattern note). Moving those helper calls *inside* the inner (as
+idsva_so / fdsva_so already do) is the cleaner long-term target — tracked but not
+urgent.
 
 **Caveat — the XImats/XmatsHom helper is a separate caller-level scratch user.**
 Even once the inner owns its arena, the kernel still calls
@@ -173,9 +193,9 @@ LITE perf matters. (Production floating path is world frame; fixed is body.)
   `cg.py_arena_bytes(t_count)`, `cg.cuda_target_shared_mem_bytes` /
   `cuda_target_lite_shared_mem_bytes`.
 
-## Implementation log — 2026-05-25 (UNVALIDATED working tree; commits need approval)
+## Implementation log
 
-Done (no-compile probe shows it generates + fits; NOT yet compiled/equivalence-tested):
+### 2026-05-25 — inner-owns-placement migration (LANDED)
 
 1. **idsva_so world inner** owns placement: `SCRATCH_IN_SMEM` template +
    top-of-body `if constexpr(!SCRATCH_IN_SMEM){s_temp=d_workspace;}`;
@@ -194,19 +214,58 @@ Done (no-compile probe shows it generates + fits; NOT yet compiled/equivalence-t
    works for fixed too without touching the aliased body inner.
    Probe: h1_2_floating fdsva 198→**53.8 KB**, fits.
 
-FOLLOW-UP (2026-05-28): the auto-allocating ``_device`` training-wheels wrapper
-that previously sat alongside ``_full_inner`` for all 4 orchestrators
-(fdsva_so / id_du / fd_du / integrator_gradient) has been dropped — the
-equivalence runner's only consumers (`floating_inverse_dynamics_gradient_runner`
-and `floating_forward_dynamics_gradient_runner`) were dead code (the actual
-floating id_du/fd_du tests use the regular kernel) and were removed too. After
-the rename + drop the orchestrators are a clean 3 layers: ``_host`` /
-``_kernel`` / ``_device``. Simple algorithms (id, minv, fd, aba, crba,
+### 2026-05-28 — orchestrator training-wheels drop
+
+The auto-allocating ``_device`` training-wheels wrapper that previously sat
+alongside ``_full_inner`` for all 4 orchestrators (fdsva_so / id_du / fd_du /
+integrator_gradient) has been dropped — the equivalence runner's only consumers
+(`floating_inverse_dynamics_gradient_runner` and `floating_forward_dynamics_gradient_runner`)
+were dead code (the actual floating id_du/fd_du tests use the regular kernel) and
+were removed too. After the rename + drop the orchestrators are a clean 3 layers:
+``_host`` / ``_kernel`` / ``_device``. Simple algorithms (id, minv, fd, aba, crba,
 ee_pose*, integrator, idsva_so_*) still ship their auto-allocating ``_device``
 because the equivalence runner's simple-algo test kernels still call them; a
 future cleanup can collapse those too.
 
-VALIDATION OWED before commit: regen all robots; compile iiwa14 + g1 + h1_2;
-idsva_so / fdsva_so / world-frame CUDA equivalence at PERF and MINIMAL, fixed +
-floating. Rungs 0–5 MUST be numerically identical (pure relocation); rung 6 must
-match too. Sanitizer on h1_2_floating MINIMAL.
+### 2026-05-29 — B.1 + B.3 audit (no code change; doc-clarify only)
+
+Audited the idsva_so body / world inner + the fdsva_so device for the
+inner-owns-placement contract. Findings:
+
+* **idsva_so_body_frame_inner** already exposes the 2-lever pattern
+  `<T, SCRATCH_IN_SMEM, BC_IN_SMEM>`. The body's `if constexpr (!SCRATCH_IN_SMEM)
+  { s_temp = d_workspace; }` (line ~1372) and `if constexpr (!BC_IN_SMEM) { BC =
+  d_workspace; }` (line ~1500) are real and operative. Mutually exclusive per the
+  body tier table (rung 2 = BC=false+SCRATCH=true; rung 3 = SCRATCH=false+BC=true).
+* **idsva_so_world_frame_inner** already exposes
+  `<T, SCRATCH_IN_SMEM, COLD_IN_SMEM>` with the surgical cold trio
+  (Xdown/v_w/a_w) repoint at the end-of-layout. Mutually exclusive per the
+  world tier table.
+* **fdsva_so_device** already exposes the canonical 3-lever pattern
+  `<T, SCRATCH_IN_SMEM, FD_GRAD_USE_SPILL, CONTRACT_IN_SMEM>` and is called
+  from both kernels for all 7 tier rungs (rung 6 = pool→global routes the whole
+  s_temp through the inner's SCRATCH_IN_SMEM=false).
+* **Body / world kernels' `output_temp` rung** correctly emits a per-rung body
+  with `smem_temp = 0`, calls the inner with `SCRATCH_IN_SMEM = false`, and hands
+  the per-timestep d_workspace sub-region in via `d_temp_spill`. The kernel does
+  NOT hand-repoint `s_temp`; the inner does the repoint via `if constexpr`.
+* Confirmed by inspecting emitted h1_2 fixed body kernel: the `output_temp` rung
+  declares `T *s_temp = nullptr;` and calls
+  `idsva_so_body_frame_inner<T, false, true>(...)` directly. No
+  caller-side surgery.
+
+**Conclusion:** the surgical de-alias work this doc lists as a follow-up is in
+fact implemented at the inner-template level for both idsva_so frames + the
+fdsva_so orchestrator. The remaining tracked refinement is the deeper de-alias
+of the body inner's ancestor-pair scratch (idea 1 above), which would let
+surgical rungs (BC-only) close a bigger gap on humanoid-scale robots — that work
+is still deferred pending a perf sweep that quantifies the win from the
+whole-arena rung vs. a surgical rung at LITE/MINIMAL.
+
+Validation (2026-05-29, SUGGESTED threads on RTX 5090 sm_120):
+* `iiwa14-fixed-threadssuggested` + `iiwa14-floating-threadssuggested` CUDA
+  equivalence — confirms the byte-identical PERF path is intact.
+* `g1-fixed-threadssuggested` CUDA equivalence — exercises rung 1 (PERF) +
+  rung 3 (LITE/MINIMAL = output_temp via inner SCRATCH_IN_SMEM=false) on
+  idsva_so body and the equivalent fdsva_so spilled rungs.
+* See the commit message for the test pass counts.
