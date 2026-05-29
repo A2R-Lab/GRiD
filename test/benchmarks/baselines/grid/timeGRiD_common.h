@@ -39,10 +39,38 @@
 #include GRID_HEADER_FILE
 #endif
 #include "../util/experiment_helpers.h"
+#include <cstdlib>   // std::getenv, std::strtol — used by grid_resolve_threads_per_block()
 
 #define GRAVITY 9.81
 
-inline dim3 grid_timing_dimms() { return dim3(grid::MAX_PERF_LEVEL_THREADS, 1, 1); }
+// Per-block thread count for the timing kernels.
+//
+// Compile-time default = grid::MAX_PERF_LEVEL_THREADS (codegen-emitted per
+// robot, baked into grid.cuh). Runtime override = GRID_AUTOTUNE_THREAD_COUNT
+// env var, used by the benchmark autotuner (run.py --autotune-threads) to
+// sweep a small grid of block sizes per (robot, base, algo) and pick the
+// batch-throughput winner without recompiling. Resolved once at first call
+// and cached.
+//
+// Env var must be a positive integer; 0 / unset / unparseable falls back to
+// the codegen default. The autotuner is opt-in — when GRID_AUTOTUNE_THREAD_COUNT
+// is unset, this function returns exactly what it always did (MAX_PERF_LEVEL_THREADS).
+inline int grid_resolve_threads_per_block() {
+    const char *env = std::getenv("GRID_AUTOTUNE_THREAD_COUNT");
+    if (env != nullptr && env[0] != '\0') {
+        char *endp = nullptr;
+        long v = std::strtol(env, &endp, 10);
+        if (endp != env && v > 0 && v <= 1024) {
+            return static_cast<int>(v);
+        }
+    }
+    return grid::MAX_PERF_LEVEL_THREADS;
+}
+
+inline dim3 grid_timing_dimms() {
+    static const int cached = grid_resolve_threads_per_block();
+    return dim3(cached, 1, 1);
+}
 
 // ---------------------------------------------------------------------------
 // Shared timing loop for one (with-memory, compute-only) batch pair. Takes

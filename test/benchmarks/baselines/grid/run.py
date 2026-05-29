@@ -1141,6 +1141,152 @@ def run_timing(binaries: tuple[Path | None, Path | None], base: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Per-(robot, base, algo) thread-count autotune (C.4, 2026-05-29)
+#
+# The benchmark binary's batch kernels honor a runtime override of the
+# per-block thread count via the GRID_AUTOTUNE_THREAD_COUNT env var (see
+# timeGRiD_common.h::grid_resolve_threads_per_block). When --autotune-threads
+# is passed, we re-run JUST the batch binary at a small grid of thread counts
+# (with cut-down --batch-iters so the sweep is cheap), parse the batch-256
+# compute-only timing for each algo, and persist the per-algo winner.
+#
+# Bisect strategy: a coarse sweep + a one-level refinement around the winner.
+# Cheap (~30s/robot) and good enough — the SIMT loops are smooth on block
+# size and the noise floor is the dominant uncertainty for fast kernels.
+#
+# Output: result["algo_picks"][algo] = {
+#     "threads_optimal": N, "us_at_optimal": <µs>, "sweep_us": {N: us, ...}
+# }
+# ---------------------------------------------------------------------------
+DEFAULT_AUTOTUNE_THREAD_GRID: tuple[int, ...] = (32, 64, 96, 128, 192, 256, 384, 512)
+DEFAULT_AUTOTUNE_N: int = 256            # batch size on which we tune (matches default bench)
+DEFAULT_AUTOTUNE_BATCH_ITERS: int = 50    # outer rep count per (algo, thread count) cell
+
+
+def _autotune_batch_iters_for_binary(batch_binary: Path, base: str, threads: int,
+                                     env_extra: dict[str, str]) -> str:
+    """Run the batch binary with GRID_AUTOTUNE_THREAD_COUNT=threads and return stdout.
+    Caller is responsible for handling parsing/errors."""
+    env = os.environ.copy()
+    env.update(env_extra)
+    env["GRID_AUTOTUNE_THREAD_COUNT"] = str(int(threads))
+    floating_arg = "T" if base == "floating" else "F"
+    result = subprocess.run(
+        [str(batch_binary), floating_arg],
+        capture_output=True, text=True, env=env,
+    )
+    if result.returncode != 0:
+        print(f"  [autotune] WARN: batch binary exited {result.returncode} "
+              f"at threads={threads}; stderr (tail):\n{result.stderr[-400:]}",
+              file=sys.stderr)
+    return result.stdout
+
+
+def _autotune_pick_winners(
+    batch_binary: Path,
+    base: str,
+    thread_grid: tuple[int, ...] = DEFAULT_AUTOTUNE_THREAD_GRID,
+    autotune_N: int = DEFAULT_AUTOTUNE_N,
+) -> dict[str, dict]:
+    """Sweep `thread_grid` on the batch binary, parse the batch-N compute-only
+    timing per algo for each thread count, and return the per-algo winner.
+
+    Returns:
+        {
+            algo_name: {
+                "threads_optimal": int,
+                "us_at_optimal": float,
+                "sweep_us": {int(threads): float(us)},
+            }
+        }
+
+    Algos missing a batch-N reading at some thread count (e.g., smem too big)
+    contribute no entry for that cell. Algos with no readings at any thread
+    count are omitted from the returned dict.
+    """
+    # batch-N compute-only key in the parser's record
+    target_key = f"batch_{autotune_N}_compute_only_us"
+    # algo -> {threads: us}
+    sweeps: dict[str, dict[int, float]] = {}
+
+    print(f"  [autotune] sweeping {len(thread_grid)} thread counts on N={autotune_N} "
+          f"batch compute-only: {list(thread_grid)}", file=sys.stderr)
+    for threads in thread_grid:
+        stdout = _autotune_batch_iters_for_binary(batch_binary, base, threads, {})
+        parsed = parse_grid_output(stdout)
+        for algo, entry in parsed.items():
+            if not isinstance(entry, dict):
+                continue
+            bucket = entry.get(target_key)
+            if not bucket:
+                continue
+            us = bucket.get("median") or bucket.get("mean")
+            if us is None:
+                continue
+            sweeps.setdefault(algo, {})[int(threads)] = float(us)
+
+    picks: dict[str, dict] = {}
+    for algo, sweep in sweeps.items():
+        if not sweep:
+            continue
+        winner = min(sweep, key=lambda t: sweep[t])
+        picks[algo] = {
+            "threads_optimal": int(winner),
+            "us_at_optimal": float(sweep[winner]),
+            "sweep_us": {str(int(t)): float(us) for t, us in sorted(sweep.items())},
+        }
+
+    # One-level refinement around the winner: probe the midpoints between the
+    # winning thread count and its grid neighbours. Cheap (~2 extra cells per
+    # algo, but we only do it ONCE for the union of winners), and smooths out
+    # the coarse-grid coarseness on robots whose true optimum lies between
+    # two adjacent grid points.
+    refine_candidates: set[int] = set()
+    sorted_grid = sorted(thread_grid)
+    for algo, info in picks.items():
+        w = info["threads_optimal"]
+        if w in sorted_grid:
+            idx = sorted_grid.index(w)
+            if idx > 0:
+                mid = (sorted_grid[idx - 1] + w) // 2
+                if mid not in sorted_grid and mid >= 32:
+                    refine_candidates.add(mid)
+            if idx < len(sorted_grid) - 1:
+                mid = (w + sorted_grid[idx + 1]) // 2
+                if mid not in sorted_grid and mid <= 1024:
+                    refine_candidates.add(mid)
+
+    if refine_candidates:
+        print(f"  [autotune] refinement probes: {sorted(refine_candidates)}",
+              file=sys.stderr)
+        for threads in sorted(refine_candidates):
+            stdout = _autotune_batch_iters_for_binary(batch_binary, base, threads, {})
+            parsed = parse_grid_output(stdout)
+            for algo, entry in parsed.items():
+                if not isinstance(entry, dict):
+                    continue
+                bucket = entry.get(target_key)
+                if not bucket:
+                    continue
+                us = bucket.get("median") or bucket.get("mean")
+                if us is None:
+                    continue
+                sweeps[algo][int(threads)] = float(us)
+
+        # Recompute winners with refinement data.
+        for algo, sweep in sweeps.items():
+            if not sweep:
+                continue
+            winner = min(sweep, key=lambda t: sweep[t])
+            picks[algo] = {
+                "threads_optimal": int(winner),
+                "us_at_optimal": float(sweep[winner]),
+                "sweep_us": {str(int(t)): float(us) for t, us in sorted(sweep.items())},
+            }
+    return picks
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -1235,6 +1381,24 @@ def main() -> None:
                              "Used by the orchestrator to fan compiles across cores in a build "
                              "phase; the serial measure phase then re-runs with --no-recompile "
                              "(instant cache hit) so timing stays isolated on the GPU.")
+    parser.add_argument("--autotune-threads", action="store_true",
+                        help="After the standard timing run, sweep a small grid of per-block "
+                             "thread counts on the batch binary (default: 32,64,96,128,192,256,"
+                             "384,512 + one-level refinement) and pick the min-µs/sample winner "
+                             "per algo on the N=256 compute-only path. The picks are written into "
+                             "the JSON output under 'algo_picks[algo]' = "
+                             "{'threads_optimal', 'us_at_optimal', 'sweep_us'}. "
+                             "Default OFF; opt-in. Per (robot, base) cost: ~30s on RTX 5090 / "
+                             "iiwa14. Thread overrides are applied via GRID_AUTOTUNE_THREAD_COUNT "
+                             "env var read at first launch by timeGRiD_common.h::grid_timing_dimms.")
+    parser.add_argument("--autotune-thread-grid", type=str, default=None,
+                        help="Comma-separated thread counts to sweep when --autotune-threads is "
+                             "set. Default: '32,64,96,128,192,256,384,512'. Useful for narrowing "
+                             "the sweep on slow robots (e.g. '128,256,384' for a quick re-tune).")
+    parser.add_argument("--autotune-N", type=int, default=DEFAULT_AUTOTUNE_N,
+                        help=f"Batch size to autotune on (default: {DEFAULT_AUTOTUNE_N}). The "
+                             "winner is the thread count that minimizes batch_<N>_compute_only "
+                             "µs/sample.")
     args = parser.parse_args()
 
     ee_frame = args.ee_frame or DEFAULT_EE_FRAMES.get(args.robot, "")
@@ -1302,6 +1466,43 @@ def main() -> None:
     timings = parse_grid_output(output)
     filled = fill_nulls(timings)
 
+    # --autotune-threads: sweep per-block thread count on the batch binary,
+    # pick the min-µs/sample winner per algo, and persist into the JSON
+    # under 'algo_picks'. This is opt-in; when off, output schema is
+    # identical to pre-C.4. Sweep uses the env-var override read by
+    # timeGRiD_common.h::grid_resolve_threads_per_block — no recompile.
+    algo_picks: dict[str, dict] = {}
+    autotune_grid_used: tuple[int, ...] | None = None
+    if args.autotune_threads:
+        if args.autotune_thread_grid:
+            try:
+                autotune_grid_used = tuple(int(x.strip()) for x in args.autotune_thread_grid.split(",")
+                                           if x.strip())
+            except ValueError:
+                print(f"  [grid] ERROR: could not parse --autotune-thread-grid "
+                      f"{args.autotune_thread_grid!r}", file=sys.stderr)
+                sys.exit(1)
+            if not autotune_grid_used:
+                print(f"  [grid] ERROR: --autotune-thread-grid must list at least one int",
+                      file=sys.stderr)
+                sys.exit(1)
+        else:
+            autotune_grid_used = DEFAULT_AUTOTUNE_THREAD_GRID
+        _, batch_binary = binaries
+        if batch_binary is None:
+            print(f"  [grid] WARN: --autotune-threads requested but batch binary unavailable; "
+                  f"skipping autotune", file=sys.stderr)
+        else:
+            t_autotune = time.perf_counter()
+            algo_picks = _autotune_pick_winners(
+                batch_binary, args.base, autotune_grid_used, autotune_N=args.autotune_N,
+            )
+            print(f"  [grid] autotune wall time: {time.perf_counter() - t_autotune:.1f}s "
+                  f"({len(algo_picks)} algos picked at N={args.autotune_N})")
+            for algo, info in sorted(algo_picks.items()):
+                print(f"    [autotune] {algo:24s} threads_optimal={info['threads_optimal']:>4d} "
+                      f"us_at_optimal={info['us_at_optimal']:>8.2f}")
+
     meta = build_metadata(include_gpu=True)
     meta["robot"] = args.robot
     meta["base"] = args.base
@@ -1309,8 +1510,16 @@ def main() -> None:
     meta["cuda_arch"] = arch
     meta["grid_linalg_backend"] = "glass"
     meta["resource_tier"] = args.tier if args.tier is not None else "perf"
+    if args.autotune_threads:
+        meta["autotune_threads"] = {
+            "thread_grid": list(autotune_grid_used or DEFAULT_AUTOTUNE_THREAD_GRID),
+            "autotune_N":  int(args.autotune_N),
+        }
 
-    result = {"metadata": meta, "results": {args.robot: {args.base: {"grid": filled}}}}
+    grid_block: dict = {"grid": filled}
+    if args.autotune_threads:
+        grid_block["algo_picks"] = algo_picks
+    result = {"metadata": meta, "results": {args.robot: {args.base: grid_block}}}
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(f"  [grid] results saved: {args.output}")
 

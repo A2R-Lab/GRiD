@@ -18,6 +18,16 @@ Full sweep:
 
 Worktree for the pre-glass column is created at $GRID_PRE_GLASS_WORKTREE
 (default: ../GRiD-A2R-pre-glass/ relative to this repo's root).
+
+Per-(robot, base, algo) thread-count autotune (C.4, 2026-05-29):
+    --autotune-threads opt-in flag (off by default; default behavior unchanged).
+    Forwarded to the GRiD glass column only. For each algo, sweeps a small grid
+    of per-block thread counts on the batch binary (default 32..512 + one-level
+    refinement) and picks the min-µs/sample winner. Picks land in the per-column
+    JSON under results[robot][base]["algo_picks"][algo] =
+    {"threads_optimal", "us_at_optimal", "sweep_us": {threads: us, ...}}.
+    Cost: ~30s extra per (robot, base) on RTX 5090. Implementation: the batch
+    binary's grid_timing_dimms() honors GRID_AUTOTUNE_THREAD_COUNT env var.
 """
 
 from __future__ import annotations
@@ -191,7 +201,10 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
                   tier: str | None = None,
                   build_dir: Path | None = None,
                   compile_only: bool = False,
-                  compile_workers: int | None = None) -> list[str]:
+                  compile_workers: int | None = None,
+                  autotune_threads: bool = False,
+                  autotune_thread_grid: str | None = None,
+                  autotune_N: int | None = None) -> list[str]:
     cmd = [
         sys.executable,
         str(harness_repo_root / "test" / "benchmarks" / "baselines" / "grid" / "run.py"),
@@ -222,6 +235,12 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
         cmd += ["--ofast-compile", ofast_compile]
     if tier is not None:
         cmd += ["--tier", tier]
+    if autotune_threads:
+        cmd.append("--autotune-threads")
+        if autotune_thread_grid is not None:
+            cmd += ["--autotune-thread-grid", autotune_thread_grid]
+        if autotune_N is not None:
+            cmd += ["--autotune-N", str(autotune_N)]
     return cmd
 
 
@@ -234,7 +253,10 @@ def run_grid_column(column: str, robot: str, base: str, *,
                     ptxas_opt_level: int | None = None,
                     split_compile: int | None = None,
                     ofast_compile: str | None = None,
-                    tier: str | None = None) -> Path | None:
+                    tier: str | None = None,
+                    autotune_threads: bool = False,
+                    autotune_thread_grid: str | None = None,
+                    autotune_N: int | None = None) -> Path | None:
     """Run the appropriate GRiD harness for `column`. Returns output JSON path or None."""
     ee_frame = EE_FRAMES_GRID.get(robot, "")
     baseline_key = COLUMN_TO_BASELINE_KEY[column]
@@ -262,7 +284,10 @@ def run_grid_column(column: str, robot: str, base: str, *,
                             single_call_iters=single_call_iters, batch_iters=batch_iters,
                             ptxas_opt_level=effective_ptxas,
                             split_compile=split_compile, ofast_compile=ofast_compile,
-                            tier=tier)
+                            tier=tier,
+                            autotune_threads=autotune_threads,
+                            autotune_thread_grid=autotune_thread_grid,
+                            autotune_N=autotune_N)
     else:
         raise ValueError(f"Unknown grid column: {column}")
 
@@ -599,6 +624,20 @@ def main() -> None:
                              "(MEASURE) phase always stays SERIAL on the isolated GPU, so this "
                              "never affects the numbers. Default: auto (from cores + free RAM, "
                              "~6GB/compile). Pass 1 for the legacy fully-serial behavior.")
+    parser.add_argument("--autotune-threads", action="store_true",
+                        help="Forward --autotune-threads to the GRiD glass column. For each "
+                             "(robot, base, algo) tuple, sweep a small grid of per-block thread "
+                             "counts on the batch binary (default: 32,64,96,128,192,256,384,512 "
+                             "+ one-level refinement) and pick the min-µs/sample winner. The "
+                             "picks land in the per-column JSON under 'algo_picks[algo]' = "
+                             "{'threads_optimal', 'us_at_optimal', 'sweep_us'}. Opt-in; default OFF. "
+                             "Adds ~30s per (robot, base) on RTX 5090 / iiwa14.")
+    parser.add_argument("--autotune-thread-grid", type=str, default=None,
+                        help="Override the autotune thread grid (comma-separated). "
+                             "Default: '32,64,96,128,192,256,384,512'.")
+    parser.add_argument("--autotune-N", type=int, default=None,
+                        help="Batch size to autotune on (default: 256). The winner is the thread "
+                             "count that minimizes batch_<N>_compute_only µs/sample.")
     args = parser.parse_args()
 
     if args.fixed_only:
@@ -702,6 +741,11 @@ def main() -> None:
                             split_compile=args.split_compile,
                             ofast_compile=args.ofast_compile,
                             tier=tier,
+                            # --autotune-threads applies only to the glass column;
+                            # pre_glass predates the env-var override in timeGRiD_common.h.
+                            autotune_threads=(args.autotune_threads and column == "glass"),
+                            autotune_thread_grid=args.autotune_thread_grid,
+                            autotune_N=args.autotune_N,
                         )
                         if p is not None:
                             produced.append(p)
