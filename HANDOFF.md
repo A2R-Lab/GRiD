@@ -823,11 +823,24 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    on big/floating robots (iiwa14-fixed: GRiD wins 2.2×; h1_2-floating: pin 35.9×).
    Structural — `2·nv+1` gradient calls vs O(N) analytic. Mirrors what Step C
    did for `ee_pose_gradient`.
+   **Status 2026-05-28:** math derivation + fixed-base/single-DOF formula
+   worked out (validated machine-precision in Python); **floating-base intra-
+   joint multi-DOF case is the open gap** — needs a Lie-group second-order term
+   the single-DOF formula misses. See `docs/d2ee_analytic_derivation.md` for the
+   full derivation, the cleanest next-session plan, and pinocchio source pointers.
 2. **idsva_so big-robot scaling.** g1/h1_2 lose 2.5–2.7× at N=256 batch; nv³
    kernel is compute+smem-bound. Same family as A.1; ties to ancestor-scratch
    de-alias (B.1).
-3. **Core-dynamics batch losses.** FD/ABA/CRBA/Minv lose to pinocchio at some
-   N=256 cells. Launch overhead / occupancy / per-block work.
+3. **Core-dynamics batch losses (floating-base only).** ALL losses are
+   floating-base — every fixed-base cell is a WIN (typically 0.18–0.66×).
+   Sorted by ratio (N=256 GRiD compute-only μs vs pin CPU with-mem μs):
+   iiwa14-float aba 1.89×, go2-float aba 1.47×, g1/go2/iiwa14-float crba
+   1.32-1.33×, go2-float minv 1.22×, g1-float aba 1.11×, iiwa14-float
+   minv 1.11×. Likely driver: floating-base 6×6 root block in ABA isn't
+   GLASS-ified (scalar fma loop), and CRBA/Minv walk the floating root
+   DOF-by-DOF. See `docs/a3_core_dynamics_floating_loss_audit.md` for the
+   full audit + concrete optimization plan (GLASS-ify root 6×6 block; add
+   `gen_crba_inner_floating`; profile first).
 4. **`fdsva_so` pinocchio baseline.** No oracle yet; collect to scope A.1–A.3
    and confirm the SO-wide gap shape.
 
@@ -871,7 +884,11 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
 2. **Auto-parallel equivalence harness** — `pytest-xdist -n` sized by cores+RAM
    (~5 GB/compile). Today proven safe at ~5-wide manually.
 3. **nvcc/ptxas `-Werror`-style warnings sweep** (Python ref is already
-   DeprecationWarning-clean).
+   DeprecationWarning-clean). *2026-05-28: probed iiwa14-fixed runner compile
+   with `-Wall -Wextra`; only 42 instances of one warning class (#177-D
+   "d_temp_spill declared but never referenced") — silenced via `(void)`
+   cast across 6 emitter sites. Remaining `-Werror` items: re-probe with a
+   floating + bigger robot to catch the residual surface.*
 4. **Autotune `performance_threads`** — binary-search batch-throughput-max thread
    count (≤ `MAX_PERF_LEVEL_THREADS`); expose it.
 5. **`fdsva_so` single_us recapture** — was dropped on -rdc regcount error
@@ -921,6 +938,12 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
   bugs surfaced. (The earlier `humanoid-tier-spill` merge happened pre-branch.)
 
 ### Done (since this backlog was last refactored 2026-05-28)
+- **A.1 + A.3 scoping (2026-05-28 PM):** d2ee analytic derivation captured in
+  `docs/d2ee_analytic_derivation.md` (fixed-base machine-precision validated in
+  Python; floating intra-joint open gap); core-dynamics floating loss audit in
+  `docs/a3_core_dynamics_floating_loss_audit.md` (top targets: ABA + CRBA
+  floating root). C.3 partial: `-Wall` warnings probe on iiwa14-fixed runner
+  found one class (42× `d_temp_spill` #177-D), silenced via `(void)` cast.
 - **Cleanup batch** (2026-05-28): collapsed orchestrators to 3 layers
   (`_host` / `_kernel` / `_device`); per-tier L2 gates for fdsva_so;
   LITE/MINIMAL tier columns in `generate_report.py`; analytic d2ee in
