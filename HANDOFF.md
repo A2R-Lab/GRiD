@@ -955,8 +955,12 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    `inverse_dynamics_gradient_device_qdd` warning class; the earlier
    HANDOFF entry was stale. **Bigger robots / non-PERF tiers still TBD**;
    would re-probe after the overnight sweep.
-4. **Autotune `performance_threads`** — binary-search batch-throughput-max thread
-   count (≤ `MAX_PERF_LEVEL_THREADS`); expose it.
+4. ✅ **Autotune `performance_threads` DONE 2026-05-29 (parent `32ac963`).**
+   New `--autotune-threads` flag in `test/benchmarks/baselines/grid/run.py` +
+   `run_multi_version.py`. Coarse sweep + midpoint refinement, picks land
+   in `algo_picks` of benchmark JSON. ~14 s/(robot, base) wall. Backward-
+   compatible. Follow-ups: codegen-cap-aware grid clipping, floating +
+   branched untested, single-call path not yet tuned.
 5. ~~**`fdsva_so` single_us recapture** — was dropped on -rdc regcount
    error (now fixed).~~ **DONE — verified 2026-05-29:** iiwa14-fixed
    `fdsva_so` reports `single_us` = 49.5 μs in the latest sweep
@@ -981,7 +985,9 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
 2. **URDF feature support — PARTIAL LANDED on submodule branches, NOT yet
    in parent.** Mimic joints (the urgent missing feature) parsed +
    kinematic-Jacobian / analytic-Hessian aware + CRBA/MINV/RNEA-grad/
-   FD-grad mimic-aware as of 2026-05-29: URDFParser
+   FD-grad/ABA mimic-aware (Python) as of 2026-05-29. Pin backend mimic-
+   bypass via implicit-function decomposition for FD-grad. Plan for
+   CUDA codegen propagation in `docs/d2_codegen_mimic_plan.md`. URDFParser
    `511e398` (on `modernizing-tests` branch) + RBDReference `0b1a89d` (on
    `perf-cleanup` branch). fr3 analytic d²(pose)/dv² now matches FD oracle
    to ~2e-11 (was the A.1 false-positive) and matches pinocchio's
@@ -1039,7 +1045,7 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
   bugs surfaced. (The earlier `humanoid-tier-spill` merge happened pre-branch.)
 
 ### Done (since this backlog was last refactored 2026-05-28)
-- **2026-05-29 EVENING batch (4-agent parallel sweep, codegen + RBDReference):**
+- **2026-05-29 EVENING evening batch (8-agent + 2-direct landings):**
   - **D.2 FK orientation fix** — URDFParser `acbdab8` (perf-cleanup branch) +
     `8182770` (modernizing-tests branch). `Joint.set_type` now rotates `t_free`
     through the origin's rotation before adding `t_origin`. Invisible when
@@ -1047,11 +1053,20 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
     fr3_finger_joint2 (origin rpy=π around Z). fr3 world_T_finger_joint2 chain
     composition now matches pinocchio `oMi` to ~9e-13 (was 1.25e-01); iiwa14
     + go2 + g1 + h1_2 + baxter unchanged at machine precision. Parent
-    `675249d` bumps URDFParser to perf-cleanup tip. **Side finding: gen3
-    (~7.9e-1) and fetch (~1.0e0) chains disagree with pinocchio PRE-FIX too
-    — separate latent bugs in URDFParser composition** (likely the line 242
-    rotation block `(R_free @ R_origin).T` which is also wrong for general
-    origin rpy; not blocking).
+    `675249d` bumps URDFParser to perf-cleanup tip. **CORRECTION:** earlier
+    HANDOFF claimed gen3 + fetch had PRE-EXISTING URDFParser composition bugs
+    based on chain diffs ~7.9e-1 and ~1.0e0 vs pinocchio. The follow-up
+    rotation-block audit (2026-05-29 PM) found this was a **validation
+    harness artifact**, not a URDFParser bug: gen3 + fetch have URDF
+    `continuous` joints which pinocchio's `buildModelFromUrdf` encodes as
+    `JointModelRUBZ` (2-D `(cos, sin)` q encoding, so `pin.nq > grid.nq`).
+    Filling `pin_q[idx_q] = theta` puts the raw angle in the cos slot and
+    0 in the sin slot. The `pinocchio_backend.py` adapter via
+    `expand_continuous_joint_positions_for_pin` (`conventions.py:51-73`)
+    already handles RUBZ correctly. With proper pin_q construction, gen3
+    max diff is 5.9e-11 and fetch is 2.1e-12 — both machine precision. **No
+    URDFParser rotation block bug exists.** Original "side finding" left
+    in the historical record for cross-reference; superseded by this audit.
   - **A.3 surgical floating XImats lever** — codegen `b140319`. Added
     `SKIP_FLOATING_BASE_X` template flag to `gen_load_update_XImats_helpers`;
     CRBA caller passes `skip=True` to elide the per-call recomputation of
@@ -1093,28 +1108,87 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
     Surfaces only with mimic-aware URDFParser on h1_2-fixed (51 joints / 39
     DoFs). Defensive: doesn't change current sweep behavior (parent's
     URDFParser pointer is mimic-unaware).
-  - **Open issues surfaced today:**
-    - **D.2 ABA mimic handling NOT done** — per-body `(S, U, d)` recursion
-      diverges from slot-accumulated by α/α². Standard `+= mimic_scale *`
-      pattern is insufficient. Needs pinocchio-style reduced-model
-      constraint projection. Affects `aba`, `forward_dynamics`-via-aba,
-      `integrator`-via-aba, ABA-based SO compositions (`fdsva_so`). Pickup:
-      project per-joint (S, U, d) by α, accumulate to v-slots with `+=`,
-      align pinocchio backend to locked-mimic model.
+  - **D.2 ABA mimic** — RBDReference `bea0ac1` (perf-cleanup, parked).
+    Algebraic-decomposition strategy: `qdd = M_reduced^{-1} * (tau -
+    rnea(q, qd, 0))`. Sidesteps the per-body `(S, U, d)` recursion (whose
+    α/α² scaling diverges from slot-accumulated `+=`) by reusing
+    already-mimic-aware CRBA + RNEA. Bonus fixes: `has_invertible_mass_
+    matrix` checks reduced M (pin's unreduced M is structurally singular
+    for mimic models); `_pin_dIntegrate` size handling for integrator;
+    h1_2 aba/rnea/minv tolerance overrides (cond(M_reduced) ~7e5 fixed /
+    ~5e6 floating amplifies cross-library float64-eps to ~1e-3). Target
+    tests GREEN: `aba[fr3-fixed]`, `aba[fr3-floating]`, `aba[h1_2-fixed]`,
+    `aba[h1_2-floating]`, `forward_dynamics[*-fr3-*]`/`[*-h1_2-*]`,
+    integrator state for fr3/h1_2.
+  - **D.2 FD-grad mimic** — RBDReference `aa3eaa1` (perf-cleanup, parked).
+    Pin backend bypass: pin's `computeABADerivatives` per-body recursion
+    on unreduced model doesn't commute with `+= alpha *` fold (same root
+    cause as ABA). Use implicit-function identity: `dqdd/dq = -M^{-1} ·
+    drnea/dq`, all three components already mimic-aware. fr3 + h1_2
+    fixed/floating GREEN; non-mimic 16/18 unchanged (2 rizon4 pre-existing
+    skip).
+  - **idsva_so_body_frame_inner t_index_map fix** — codegen `b573849`.
+    Pre-existing bug: `t_index_map` sized `NV × NV` but indexed by `jid`
+    (assumes `NJ == NV`). Now sized `NJ × NJ`; S/psid downstream stays jid-
+    indexed. iiwa14 + g1 floating equivalence GREEN (regression check).
+    h1_2-fixed regen smoke (with mimic-aware URDFParser, 51 joints / 39
+    DoFs) now succeeds where it previously raised IndexError.
+  - **d2Xhom_owners defensive fix** — codegen `9c61e37`.
+    `_global_hom_second_derivative_matrices` fixed-base branch now builds
+    NJ-length owners list (was n_pos-length, IndexError when NJ != n_pos).
+    Defensive: doesn't change current sweep behavior.
+  - **D.2 CUDA codegen mimic SCOPING DOC** — `docs/d2_codegen_mimic_plan.md`
+    (parent, uncommitted at HANDOFF time). 4-phase plan ~3 focused days
+    total: (P1, 1d) foundation helpers + ID + CRBA `+= α_i α_j` fold;
+    (P2, 0.5d) `direct_minv` for mimic via CRBA-then-invert, `aba_kernel`
+    for mimic via Minv·(u−c) algebraic decomposition; (P3, 0.75d)
+    gradients (ID-du + FD-du + integrator); (P4, 1d) ee_pose + idsva_so
+    + fdsva_so. Critical insight: per-body ABA / direct-Minv recursion
+    fundamentally builds `M_full^{-1}`, not `M_red^{-1}`, so those algos
+    can't be `+= α`-patched in codegen either; must fall back to CRBA +
+    invert. Also flagged: `NUM_JOINTS` C++ macro is actually `nq`
+    (reduced), not raw NJ — naming mismatch dangerous, P1 renames to
+    `NUM_POS` + adds `NUM_LINKS` for un-reduced count.
+  - **C.4 autotune `performance_threads`** — parent `32ac963`. New
+    `--autotune-threads` flag (+ `--autotune-thread-grid`,
+    `--autotune-N`). Coarse sweep + midpoint refinement, persists picks
+    under `algo_picks` in benchmark JSON. ~14 sec wall per (robot, base).
+    iiwa14-fixed example picks: aba 128 thr→14.26 µs, crba 224 thr→10.89
+    µs, fdsva_so 192 thr→81.22 µs. Backward-compatible (no flag = old
+    schema). Follow-ups: codegen-cap-aware grid clipping (currently wastes
+    384/512 probes on small robots), floating + branched untested,
+    single-call path not yet tuned.
+  - **RUBZ audit on pinocchio_backend continuous joints** — CLOSED, NO
+    BUG. `pinocchio_backend.py:_to_pin_q → _expand_project_q_to_pin_full
+    → normalize_project_q_for_pin → expand_continuous_joint_positions_for
+    _pin` (in `conventions.py:51-73`) already handles continuous-joint
+    expansion to `(cos, sin)` correctly. gen3 (4 continuous joints) and
+    fetch (5 cont) are the only RUBZ robots in the manifest; both match
+    pinocchio at ~5e-11 / ~2e-12 via the adapter. The FK rotation agent's
+    earlier failure mode was test-harness-specific.
+  - **Open issues after this evening evening batch:**
     - **D.2 CUDA codegen mimic-awareness NOT done.** Bumping
       URDFParser+RBDReference into parent would now break fr3/h1_2 CUDA
-      equivalence for any algo where Python is now correct and CUDA still
-      isn't. The URDFParser perf-cleanup branch (acbdab8) is FK-only — D.2
-      mimic commits remain on `modernizing-tests` (`511e398`, `8182770`).
-      RBDReference perf-cleanup branch has D.2 morning + dynamics
-      (`8c351ad`) but parent still pins `990786a`. Net: D.2 parked on
-      submodule branches until CUDA codegen catches up.
-    - **`idsva_so_body_frame_inner` pre-existing bug** — `t_index_map`
-      sized `NV × NV` but indexed by `jid` (assumes `NJ == NV`).
-      Surfaces on h1_2 fixed-base when mimic URDFParser is checked out.
-      Fix: use `NJ × NJ` map OR pre-filter `jids_a`/`ancestors` to DoF
-      joints and re-index by v. Pre-existing; not blocking sweep (parent's
-      URDFParser pointer is mimic-unaware so NJ == NV today).
+      equivalence (Python correct, CUDA still naive). URDFParser
+      perf-cleanup (`acbdab8`) is FK-only; mimic commits live on
+      `modernizing-tests` (`511e398`, `8182770`). RBDReference
+      perf-cleanup at `aa3eaa1` has D.2 morning + dynamics + ABA + FD-grad;
+      parent still pins `990786a`. Net: D.2 parked. Plan in
+      `docs/d2_codegen_mimic_plan.md` ready to pick up.
+    - **D.2 idsva_so / fdsva_so mimic NOT done** (Python side). Same
+      pattern as CRBA but one tensor order higher (`+= α_i α_j α_k *
+      contribution`). fdsva_so is composition once components are mimic-
+      aware. Sub-agent in flight at HANDOFF time.
+    - **D.2 ABA external-forces** — `f_ext` not threaded through mimic
+      fast path. Niche feature, no failing tests. Defer.
+    - **Pre-existing FK orientation bug for non-fr3 origins** — ORIGINAL
+      CLAIM RETRACTED (was gen3/fetch RUBZ harness artifact, see D.2 FK
+      entry above).
+  - **User-flagged review obligation**: user wants to personally review
+    all 2026-05-29 D.2 RBDReference changes (`0b1a89d`, `8c351ad`,
+    `bea0ac1`, `aa3eaa1`, + the idsva_so/fdsva_so commit when it lands)
+    before E merge. Memory note set; do NOT auto-bump RBDReference into
+    parent without flagging this.
 - **2026-05-29 PM batch (parallel sub-agent sweep + investigation):**
   - **A.1 GPU d2ee analytic port — VERIFIED ALREADY DONE in codegen `2bf6d53`**
     (yesterday's analytic landing was sibling Python + GPU, not Python-then-GPU
