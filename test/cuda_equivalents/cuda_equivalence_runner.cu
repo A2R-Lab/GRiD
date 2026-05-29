@@ -86,44 +86,6 @@ __global__ void floating_forward_dynamics_runner(
     }
 }
 
-template <typename T>
-__global__ void floating_inverse_dynamics_gradient_runner(
-    T *d_out, const T *d_q, const T *d_qd,
-    const grid::robotModel<T> *d_robot_model, const T gravity
-) {
-    __shared__ T s_q[grid::NUM_JOINTS];
-    __shared__ T s_qd[grid::NUM_VEL];
-    __shared__ T s_out[grid::NUM_VEL * 2 * grid::NUM_VEL];
-    for (int ind = threadIdx.x; ind < grid::NUM_JOINTS; ind += blockDim.x) {
-        s_q[ind] = d_q[ind];
-    }
-    for (int ind = threadIdx.x; ind < grid::NUM_VEL; ind += blockDim.x) {
-        s_qd[ind] = d_qd[ind];
-    }
-    __syncthreads();
-    grid::inverse_dynamics_gradient_device<T>(s_out, s_q, s_qd, d_robot_model, gravity);
-    __syncthreads();
-    for (int ind = threadIdx.x; ind < grid::NUM_VEL * 2 * grid::NUM_VEL; ind += blockDim.x) {
-        d_out[ind] = s_out[ind];
-    }
-}
-
-template <typename T>
-__global__ void floating_forward_dynamics_gradient_runner(
-    T *d_out, const T *d_q, const T *d_qd, const T *d_u,
-    const grid::robotModel<T> *d_robot_model, const T gravity
-) {
-    __shared__ T s_q[grid::NUM_JOINTS];
-    __shared__ T s_qd[grid::NUM_VEL];
-    __shared__ T s_u[grid::NUM_VEL];
-    __shared__ T s_out[grid::NUM_VEL * 2 * grid::NUM_VEL];
-    load_floating_inputs(s_q, s_qd, s_u, d_q, d_qd, d_u);
-    grid::forward_dynamics_gradient_device<T>(s_out, s_q, s_qd, s_u, d_robot_model, gravity);
-    __syncthreads();
-    for (int ind = threadIdx.x; ind < grid::NUM_VEL * 2 * grid::NUM_VEL; ind += blockDim.x) {
-        d_out[ind] = s_out[ind];
-    }
-}
 #endif
 
 template <typename T>
