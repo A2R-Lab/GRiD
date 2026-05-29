@@ -817,49 +817,34 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
   (iiwa14). Timing recapture + FIXED accuracy are backlogged (§4, §5).
 
 ### A. Pinocchio competitive gaps (perf work)
-1. **d2ee** — write an analytic d/dv-convention Hessian on GPU. d2ee FD-on-Jacobian
-   correctness rewrite landed 2026-05-28 (all robots × fixed/floating CUDA
-   equivalence GREEN), but pin's analytic `computeJointKinematicHessians` beats
-   our FD by 3–36× at N=256 on big/floating robots (iiwa14-fixed: GRiD wins 2.2×;
-   h1_2-floating: pin 35.9×). The gap is structural — `2·nv+1` gradient calls
-   vs O(N) analytic. Mirrors what Step C did for `ee_pose_gradient`.
-2. **idsva_so big-robot scaling** — g1/h1_2 lose 2.5–2.7× at N=256 batch; nv³
-   kernel is compute+smem-bound. Same family as A.1, ties to ancestor-scratch
-   de-alias.
-3. **Core-dynamics batch losses** — FD/ABA/CRBA/Minv lose to pinocchio at some
+1. **d2ee analytic d/dv Hessian on GPU.** d2ee FD-on-Jacobian correctness rewrite
+   landed 2026-05-28 (all robots × fixed/floating CUDA equivalence GREEN), but
+   pin's analytic `computeJointKinematicHessians` beats our FD by 3–36× at N=256
+   on big/floating robots (iiwa14-fixed: GRiD wins 2.2×; h1_2-floating: pin 35.9×).
+   Structural — `2·nv+1` gradient calls vs O(N) analytic. Mirrors what Step C
+   did for `ee_pose_gradient`.
+2. **idsva_so big-robot scaling.** g1/h1_2 lose 2.5–2.7× at N=256 batch; nv³
+   kernel is compute+smem-bound. Same family as A.1; ties to ancestor-scratch
+   de-alias (B.1).
+3. **Core-dynamics batch losses.** FD/ABA/CRBA/Minv lose to pinocchio at some
    N=256 cells. Launch overhead / occupancy / per-block work.
-4. **`fdsva_so` pinocchio baseline** — still no oracle; collect to scope A.1–A.3
+4. **`fdsva_so` pinocchio baseline.** No oracle yet; collect to scope A.1–A.3
    and confirm the SO-wide gap shape.
 
 ### B. Architecture cleanup (gated on perf data)
-1. ~~**API simplification — collapse to `_host` / `_kernel` / `_device`**~~ ✅
-   Landed 2026-05-28: dropped the auto-allocating `_device` wrapper for the 4
-   orchestrators (fdsva_so / id_du / fd_du / integrator_gradient); renamed
-   `_full_inner` → `_device` (canonical CUDA `__device__` semantics: caller-
-   supplied `s_temp` + `d_workspace` + spill flags). Dropped the dead
-   `floating_inverse_dynamics_gradient_runner` / `floating_forward_dynamics_gradient_runner`
-   test kernels in the equivalence runner (the floating id_du/fd_du tests
-   already use the regular kernel). Dropped `ID_DU_DEVICE_DYNAMIC_SHARED_MEM_BYTES`
-   / `FD_DU_DEVICE_DYNAMIC_SHARED_MEM_BYTES`. Deferred: the cosmetic rename of
-   `fdsva_so_inner` → `fdsva_so_contract`; the simple-algo (id, minv, fd, aba,
-   crba, ee_pose*, integrator, idsva_so_*) auto-alloc `_device` collapse
-   (still consumed by simple-algo test kernels in the equivalence runner).
-2. ~~**Multi-algo orchestrator migration**~~ ✅ Done as a consequence of B.1 —
-   id_du, fd_du, integrator_gradient each got their orchestrated `_device`
-   pattern; kernels are now `kernel { call _device }` with no kernel-side
-   `s_temp` repoint.
-3. **De-alias `idsva_so` / `fdsva_so` inners** — cold-only surgical spill (vs
+1. **De-alias `idsva_so` / `fdsva_so` inners** — cold-only surgical spill (vs
    whole-arena). Also helps integrator-gradient rung-3 on h1_2. See
    `docs/idsva_so_inner_refactor_notes.md`.
-4. **ABA whole-arena → surgical retrofit** (Minv-F sub-split pattern).
-5. **idsva body kernel `output_temp` rung** → fold into body-`_device`
+2. **ABA whole-arena → surgical retrofit** (Minv-F sub-split pattern).
+3. **idsva body kernel `output_temp` rung** → fold into body-`_device`
    `SCRATCH_IN_SMEM`.
-6. ~~**Per-tier L2-persisting gates**~~ ✅ Landed 2026-05-28: added
-   `GRID_FDSVA_SO_USES_WORKSPACE_ANY_TIER` (was PERF-pick only) and switched
-   fdsva_so's host begin/end-L2-persisting to it. id_du / fd_du /
-   integrator_gradient / ee_grad / d2ee already used `_ANY_TIER` form.
-7. **h1_2-floating inline DEVICE path smem cap** — exceeds sm_120 ~99 KB cap;
+4. **h1_2-floating inline DEVICE path smem cap** — exceeds sm_120 ~99 KB cap;
    make device paths tier-aware/spillable.
+5. *(deferred B.1 follow-ups)* Cosmetic rename `fdsva_so_inner` →
+   `fdsva_so_contract` (the rank-3 contraction sub-step); collapse the
+   simple-algo auto-alloc `_device` wrappers (id / minv / fd / aba / crba /
+   ee_pose* / integrator / idsva_so_*) — touches the equivalence-runner test
+   kernels that still consume them.
 
 ### C. Cleanup + comprehensive perf re-sweep (do as one phase)
 1. **Validation matrix completion** — full robot × base × tier EE kinematics
@@ -868,19 +853,11 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    (~5 GB/compile). Today proven safe at ~5-wide manually.
 3. **nvcc/ptxas `-Werror`-style warnings sweep** (Python ref is already
    DeprecationWarning-clean).
-4. ~~**LITE/MINIMAL tier columns in `generate_report.py`**~~ ✅ Landed
-   2026-05-28: report now renders `glass_lite` and `glass_min` columns next to
-   `glass`; algorithms with a single tier render `—`.
-5. **Autotune `performance_threads`** — binary-search batch-throughput-max thread
+4. **Autotune `performance_threads`** — binary-search batch-throughput-max thread
    count (≤ `MAX_PERF_LEVEL_THREADS`); expose it.
-6. **`fdsva_so` single_us recapture** — was dropped on -rdc regcount error
+5. **`fdsva_so` single_us recapture** — was dropped on -rdc regcount error
    (now fixed).
-7. ~~**Macro/name audit**~~ ✅ Pass landed 2026-05-28: confirmed tier names
-   uniform (TIER_PERF/LITE/MINIMAL), device pointers all use `d_` prefix (no
-   stray `s_temp_spill`), orchestrator auto-alloc smem macros dropped, simple-
-   algo `*_DEVICE_DYNAMIC_SHARED_MEM_BYTES` retained (equivalence runner still
-   consumes them).
-8. **→ Full perf re-sweep** with everything cleaned up. Captures fdsva_so
+6. **→ Full perf re-sweep** with everything cleaned up. Captures fdsva_so
    single_us + d2ee timing under the standard pipeline (today both required
    manual binary runs).
 
@@ -889,13 +866,6 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    diagnostics, `nq`/`nv`/quat-order helpers, mark fixed-base-only methods. See
    `RBDReference/tests/PINOCCHIO_ALIGNMENT_BACKLOG.md`.
 2. **URDF feature support** — audit vs spec, add missing (**mimic joints first**).
-3. ~~*(Nit)* Swap the pinocchio backend's FD-based `end_effector_pose_hessian`~~
-   ✅ Landed 2026-05-28: joint-target + default-offset path uses pinocchio's
-   analytic `computeForwardKinematicsDerivatives` + `computeJointKinematicHessians`
-   + `getJointKinematicHessian(LOCAL_WORLD_ALIGNED)` flow; frame targets and
-   non-default offsets fall back to FD. iiwa14 fixed + floating pose_hessian
-   equivalence GREEN (Python adapter d/dv FD-on-Jacobian matches the analytic
-   path within tolerance).
 
 ### E. Branch merge
 - **`perf-cleanup` → `modernizing-tests`** — held pending validation; most is
@@ -903,11 +873,12 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
   bugs surfaced. (The earlier `humanoid-tier-spill` merge happened pre-branch.)
 
 ### Done (since this backlog was last refactored 2026-05-28)
-- **B.1 + B.2 + B.6 + C.4 + C.7 + D.3 cleanup batch** (2026-05-28): collapsed
-  orchestrators to 3 layers (`_host` / `_kernel` / `_device`); per-tier L2
-  gates for fdsva_so; LITE/MINIMAL columns in `generate_report.py`; analytic
-  d2ee in pinocchio_backend; design docs + emitter README updated to the
-  3-layer convention. See B.1/B.2/B.6/C.4/C.7/D.3 above for details.
+- **Cleanup batch** (2026-05-28): collapsed orchestrators to 3 layers
+  (`_host` / `_kernel` / `_device`); per-tier L2 gates for fdsva_so;
+  LITE/MINIMAL tier columns in `generate_report.py`; analytic d2ee in
+  pinocchio_backend (joint targets + default offset); design docs + emitter
+  README updated to the 3-layer convention; macro/name audit pass.
+  iiwa14 fixed + floating CUDA equivalence GREEN.
 - Floating `ee_pose_gradient` gap **CLOSED** (Step C, 2026-05-28: pin 7-16× → GRiD
   wins/parity on g1/h1_2 floating, pin only 1.18-1.34× on iiwa14/go2 floating).
 - `ee_pose_hessian` (d2ee) Python d/dv rewrite (RBDReference + pinocchio_backend).
@@ -915,7 +886,7 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
   iiwa14/go2/g1/h1_2 fixed + iiwa14/go2/g1 floating CUDA equivalence GREEN.
 - d2ee timing wired into the bench (`timeGRiD_batch.cu` +
   `pinocchio/timePinocchio.cpp` via `computeJointKinematicHessians`) and measured
-  end-to-end vs pinocchio (today).
+  end-to-end vs pinocchio.
 - FIXED-path kinematics wired in CUDA equivalence runner (iiwa14 validated).
 - `crba` regression fix (2026-05-27, 34edcfc) — recovered to baseline + beats
   pinocchio at batch on all robots.
