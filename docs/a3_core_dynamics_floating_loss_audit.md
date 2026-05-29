@@ -102,6 +102,24 @@ gemv/gemm already). Pass 1 of `profile_aba.sh` gives the kernel SOL %.
 Even halving the ABA latency would put iiwa14-floating ABA at ~54 μs vs
 pin 56 μs — i.e. win, not lose.
 
+### MEASURED — iiwa14-floating ABA (2026-05-29, cudaEvent A/B)
+
+Microbench: `/tmp/grid_prof/aba_microbench.cu`, BATCH=256, 16 timed
+launches after 8 warm-ups, sm_120 (RTX 5090), GRID_CUDA_LINALG_BACKEND=GLASS.
+
+| variant                                    | μs/launch | μs/problem |
+|--------------------------------------------|-----------|-----------:|
+| baseline (single-threaded invert)          | 109.7     |      0.429 |
+| **new** (`glass::invertMatrix_dense`)      | **51.9**  |  **0.203** |
+| pinocchio CPU (from prior sweep)           | (56.9 batch ÷ 256) | 0.222 |
+
+**2.12× speedup on iiwa14-floating ABA.** Beats pinocchio by ~9% per
+problem — the 1.89× pin loss flips to a 1.09× GRiD win.
+
+Same primitive change applies to `_aba.py:225` (second 6×6 invert per
+floating ABA) and `_direct_minv.py:165` (floating Minv root invert); both
+benefit identically. Expect Minv-floating loss (1.11–1.22×) to flip too.
+
 ## Original hypothesis (kept for completeness)
 
 1. ~~Root 6×6 block in ABA isn't using GLASS block-matmul primitives.~~
