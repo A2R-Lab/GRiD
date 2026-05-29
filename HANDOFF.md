@@ -881,10 +881,16 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
      (~2-4 hour refactor).
 6. **Codegen interface cleanup.** Pays back on every future algorithm
    addition. Sub-items:
-   (a) **Drop thread-group plumbing** — `use_thread_group` is `False` on every
-   production path but threads a branch through every emitter signature,
-   docstring, and function-call helper. Rip it out; if we want cooperative
-   groups back later, it's a different mechanism than what's there.
+   (a) **Drop thread-group plumbing.** ✅ **PARTIAL DONE 2026-05-29 (codegen
+   b228756, parent 01aa046):** stripped 191 lines of dead
+   `if use_thread_group:` branches across 15 codegen files (production
+   paths always pass `use_thread_group=False`; the conditional emit
+   produced broken stubs like `cgrps::thread_group tgrp = TBD;`).
+   iiwa14-floating equivalence GREEN.
+   **REMAINING:** drop the `use_thread_group` parameter itself from
+   helper signatures (`gen_add_sync`, `gen_add_parallel_loop`,
+   `gen_add_serial_ops`, `gen_kernel_load_inputs`, etc.) and the ~1000
+   call sites that pass it. Bounded but mechanical follow-up.
    (b) **Consolidate emitter helpers** — `_code_generation_helpers.py` has
    accumulated many one-off `gen_add_*` shims; collapse into a small canonical
    set (e.g. one parallel-loop helper, one workspace-pointer-carve helper).
