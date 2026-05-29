@@ -983,6 +983,14 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
   bugs surfaced. (The earlier `humanoid-tier-spill` merge happened pre-branch.)
 
 ### Done (since this backlog was last refactored 2026-05-28)
+- **B.6.a + B.6.b (2026-05-29):** dropped the dead `use_thread_group`
+  parameter from helper signatures + 1079 call sites across 16 codegen files
+  (production always passes False; the conditional branches had been stripped
+  earlier in b228756, leaving only signatures + plumbing); consolidated
+  `gen_kernel_load_inputs` with `_single_timing` (same for save) into one fn
+  each via optional `stride` kwarg (74 call sites rewritten). iiwa14
+  fixed+floating + go2 floating CUDA equivalence GREEN. codegen `75089f8`,
+  parent `1ff8d54`.
 - **A.1 + A.3 scoping (2026-05-28 PM):** d2ee analytic derivation captured in
   `docs/d2ee_analytic_derivation.md` (fixed-base machine-precision validated in
   Python; floating intra-joint open gap); core-dynamics floating loss audit in
