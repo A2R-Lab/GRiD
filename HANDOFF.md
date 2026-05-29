@@ -918,16 +918,14 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    `fdsva_so` reports `single_us` = 49.5 μs in the latest sweep
    (`ee_grad_step_c_perf_v2`); idsva_so + aba also present. The single_us
    pipeline is healthy on all collected algos.
-6. **Vendor URDFs instead of pulling `robot_descriptions`.** The
-   `robot_descriptions` package drags in a large transitive install (multi-GB
-   venv impact). Vendor the ~4–10 URDFs we actually exercise (iiwa14 / go2 /
-   g1 / h1_2 / baxter / fr3 / rizon4 / a few broad-coverage robots), each
-   pinned to a specific upstream commit/tag with provenance recorded in a
-   `URDF_SOURCES.md`. Sidesteps the broken-upstream class of bug we already
-   hit (rizon4 zero-inertia, fr3 mimic-joint missing). Update
-   `RBDReference/tests/model_sources.py` + `test/benchmarks/baselines/grid/run.py`
-   to read from the vendored copies. Likely shrinks venv install by ~70%+ and
-   makes CI reproducible across `robot_descriptions` releases.
+6. ~~**Vendor URDFs instead of pulling `robot_descriptions`.**~~
+   **DONE 2026-05-29 (parent 34492f7, RBDReference 990786a):** vendored
+   the 9 smoke-tier URDFs (~255 KB total) at `robot_assets/` with SHA
+   provenance in `URDF_SOURCES.md`. Added `"vendored"` source_kind to
+   `model_sources.py`; manifest now lists it FIRST with the
+   `robot_descriptions` candidate as fallback. Equivalence resolution
+   verified vendored-first; the multi-GB `robot_descriptions` cache is
+   now only needed for new robots not yet vendored.
 7. **→ Full perf re-sweep** with everything cleaned up. Captures fdsva_so
    single_us + d2ee timing under the standard pipeline (today both required
    manual binary runs).
