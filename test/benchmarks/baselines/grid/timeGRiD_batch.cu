@@ -92,6 +92,14 @@ __host__ void measure_ee_pose_gradient_batch(int N, cudaStream_t *streams, grid:
         [&]{ grid::end_effector_pose_gradient<T>(d,m,N,dim3(N,1,1),dimms,streams); },
         [&]{ grid::end_effector_pose_gradient_compute_only<T>(d,m,N,dim3(N,1,1),dimms); });
 }
+template <typename T, int TEST_ITERS>
+__host__ void measure_ee_pose_hessian_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("EE_POSE_HESSIAN", N, D2EE_POS_DYNAMIC_SHARED_MEM_BYTES);
+    dim3 dimms = grid_timing_dimms();
+    measure_batch_pair<TEST_ITERS>("EE_POSE_HESSIAN", N,
+        [&]{ grid::end_effector_pose_gradient_hessian<T>(d,m,N,dim3(N,1,1),dimms,streams); },
+        [&]{ grid::end_effector_pose_gradient_hessian_compute_only<T>(d,m,N,dim3(N,1,1),dimms); });
+}
 #if GRID_HAS_IDSVA_SO_BODY_FRAME
 template <typename T, int TEST_ITERS>
 __host__ void measure_idsva_so_body_frame_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
@@ -164,6 +172,11 @@ __host__ void measure_integrator_with_gradient_batch(int N, cudaStream_t *stream
 
 template <typename T, int TEST_ITERS>
 __host__ void run_batch_at(bool floating_base, int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+#if defined(GRID_BENCH_D2EE_ONLY) && GRID_BENCH_D2EE_ONLY
+    // d2ee-only fast bench: only measure ee_pose_hessian to keep compile+run short.
+    (void)floating_base;
+    measure_ee_pose_hessian_batch<T,TEST_ITERS>(N, streams, m, d);
+#else
     measure_id_batch<T,TEST_ITERS>(N, streams, m, d);
     measure_minv_batch<T,TEST_ITERS>(N, streams, m, d);
     measure_fd_batch<T,TEST_ITERS>(N, streams, m, d);
@@ -173,6 +186,7 @@ __host__ void run_batch_at(bool floating_base, int N, cudaStream_t *streams, gri
     measure_fd_du_batch<T,TEST_ITERS>(N, streams, m, d);
     measure_ee_pose_batch<T,TEST_ITERS>(N, streams, m, d);
     measure_ee_pose_gradient_batch<T,TEST_ITERS>(N, streams, m, d);
+    measure_ee_pose_hessian_batch<T,TEST_ITERS>(N, streams, m, d);
 #if GRID_HAS_IDSVA_SO
     measure_idsva_so_batch<T,TEST_ITERS>(N, streams, m, d);
 #endif
@@ -192,6 +206,7 @@ __host__ void run_batch_at(bool floating_base, int N, cudaStream_t *streams, gri
 #if GRID_HAS_INTEGRATOR_GRADIENT
     measure_integrator_gradient_batch<T,TEST_ITERS>(N, streams, m, d);
     measure_integrator_with_gradient_batch<T,TEST_ITERS>(N, streams, m, d);
+#endif
 #endif
 }
 

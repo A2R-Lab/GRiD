@@ -70,6 +70,7 @@ _PIN_SINGLE_LABELS: dict[str, str] = {
     "fd_du direct":             "fd_du",
     "ee_pose direct":           "ee_pose",
     "ee_pose_gradient direct":  "ee_pose_gradient",
+    "ee_pose_hessian direct":   "ee_pose_hessian",
     "idsva_so_body_frame direct":          "idsva_so_body_frame",
 }
 
@@ -91,6 +92,7 @@ _PIN_BATCH_LABELS: dict[str, str] = {
     "fd_du direct":             "fd_du",
     "ee_pose direct":           "ee_pose",
     "ee_pose_gradient direct":  "ee_pose_gradient",
+    "ee_pose_hessian direct":   "ee_pose_hessian",
     "idsva_so_body_frame direct":          "idsva_so_body_frame",
 }
 
@@ -315,7 +317,8 @@ def build_metadata(include_gpu: bool = True, include_pinocchio: bool = False) ->
 # ---------------------------------------------------------------------------
 
 ALL_ALGOS = ["id", "minv", "fd", "aba", "crba", "id_du", "fd_du",
-             "ee_pose", "ee_pose_gradient", "idsva_so_body_frame", "idsva_so_world_frame", "fdsva_so"]
+             "ee_pose", "ee_pose_gradient", "ee_pose_hessian",
+             "idsva_so_body_frame", "idsva_so_world_frame", "fdsva_so"]
 
 
 def fill_nulls(result: dict[str, Optional[dict]], algos: list[str] = ALL_ALGOS) -> dict[str, Optional[dict]]:

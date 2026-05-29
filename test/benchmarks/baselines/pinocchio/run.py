@@ -357,8 +357,13 @@ def _runtime_env() -> dict[str, str]:
 # main expense (cppadcg JIT) is gated inside timePinocchio.cpp by --algo.
 PINOCCHIO_ALGOS: tuple[str, ...] = (
     "id", "minv", "fd", "aba", "crba", "id_du", "fd_du",
-    "ee_pose", "ee_pose_gradient", "idsva_so_body_frame",
+    "ee_pose", "ee_pose_gradient", "ee_pose_hessian", "idsva_so_body_frame",
 )
+# d2ee-focused fast path: env PIN_BENCH_D2EE_ONLY=1 narrows the per-algo fan-out
+# to ee_pose_hessian only. Skips all the heavy cppadcg JIT (rnea/minv/aba/crba/...)
+# so a full 4-robot sweep finishes in under a minute. Used by the d2ee perf sweep.
+if os.environ.get("PIN_BENCH_D2EE_ONLY", "0") != "0":
+    PINOCCHIO_ALGOS = ("ee_pose_hessian",)
 
 # Per-algo subprocess wall-clock timeout. g1 codegen for any one algo
 # (e.g., fd_du which needs rnea + minv + rnea_d) can take 20+ minutes;

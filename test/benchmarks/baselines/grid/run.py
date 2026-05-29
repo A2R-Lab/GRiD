@@ -915,6 +915,12 @@ def compile_binaries(
         if tier_macro is None:
             raise ValueError(f"unknown tier: {tier!r}; expected perf/lite/minimal")
         linalg_flags.append(f"-DGRID_DEFAULT_RESOURCE_TIER={tier_macro}")
+    # Optional: GRID_BENCH_D2EE_ONLY=1 in env forwards a -D into nvcc so the
+    # batch dispatcher's #if GRID_BENCH_D2EE_ONLY path is taken, measuring only
+    # ee_pose_hessian. Cuts compile + run time dramatically for d2ee-focused
+    # sweeps. Default off.
+    if os.environ.get("GRID_BENCH_D2EE_ONLY", "0") != "0":
+        linalg_flags.append("-DGRID_BENCH_D2EE_ONLY=1")
 
     runner_key = _hash_bytes(
         json.dumps({

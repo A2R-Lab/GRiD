@@ -437,6 +437,44 @@ void eePoseGradientThreaded(const pinocchio::Model *model, pinocchio::Data *data
     threads->sync();
 }
 
+// ee_pose_hessian: pinocchio's analytic kinematic Hessian per joint, then
+// returned as a (6, nv, nv) Tensor in LOCAL_WORLD_ALIGNED frame to match
+// GRiD's d/dv tangent convention. computeForwardKinematicsDerivatives must
+// run first (it sets up the data state computeJointKinematicHessians needs);
+// then getJointKinematicHessian(model, data, joint_id, ref_frame, H_out)
+// extracts the analytic 3D tensor for a chosen joint.
+template<typename T>
+void eePoseHessianThreaded_inner(const pinocchio::Model *model, pinocchio::Data *data,
+                                  pinocchio::FrameIndex frame_id,
+                                  Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
+                                  int tid, int kStart, int kMax){
+    Eigen::VectorXd a_zero = Eigen::VectorXd::Zero(model->nv);
+    pinocchio::JointIndex joint_id = model->frames[frame_id].parent;
+    Eigen::Tensor<double, 3> H(6, model->nv, model->nv);
+    for(int k = kStart; k < kMax; k++){
+        pinocchio::computeForwardKinematicsDerivatives(*model, *data,
+            qs[k].template cast<double>(), qds[k].template cast<double>(), a_zero);
+        pinocchio::computeJointKinematicHessians(*model, *data);
+        pinocchio::getJointKinematicHessian(*model, *data, joint_id,
+            pinocchio::LOCAL_WORLD_ALIGNED, H);
+    }
+}
+
+template<typename T, int NUM_THREADS, int NUM_TIME_STEPS>
+void eePoseHessianThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
+                            pinocchio::FrameIndex frame_id,
+                            Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
+                            ReusableThreads<NUM_THREADS> *threads){
+    constexpr int ET = effective_thread_count(NUM_TIME_STEPS, NUM_THREADS);
+    for(int tid = 0; tid < ET; tid++){
+        int kStart = NUM_TIME_STEPS/ET*tid; int kMax = NUM_TIME_STEPS/ET*(tid+1);
+        if(tid == ET-1){kMax = NUM_TIME_STEPS;}
+        threads->addTask(tid, &eePoseHessianThreaded_inner<T>, model, &datas[tid], frame_id,
+                                                                 std::ref(qs), std::ref(qds), tid, kStart, kMax);
+    }
+    threads->sync();
+}
+
 template<typename T>
 void idsvaSoThreaded_inner(const pinocchio::Model *model, pinocchio::Data *data,
                             Matrix<T, Eigen::Dynamic, 1> *qs, Matrix<T, Eigen::Dynamic, 1> *qds,
@@ -817,6 +855,20 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 clock_gettime(CLOCK_MONOTONIC,&end);
                 printf("EE_POSE_GRADIENT direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
+            if(have_frame && is_algo_active(enabled_algo, "ee_pose_hessian")){
+                pinocchio::JointIndex joint_id = model.frames[frame_id].parent;
+                Eigen::Tensor<double, 3> H_single(6, model.nv, model.nv);
+                clock_gettime(CLOCK_MONOTONIC,&start);
+                for(int i = 0; i < TEST_ITERS; i++){
+                    pinocchio::computeForwardKinematicsDerivatives(model, datas[0],
+                        qs[0].template cast<double>(), qds[0].template cast<double>(), zeros_d);
+                    pinocchio::computeJointKinematicHessians(model, datas[0]);
+                    pinocchio::getJointKinematicHessian(model, datas[0], joint_id,
+                        pinocchio::LOCAL_WORLD_ALIGNED, H_single);
+                }
+                clock_gettime(CLOCK_MONOTONIC,&end);
+                printf("EE_POSE_HESSIAN direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+            }
 
             if(is_algo_active(enabled_algo, "idsva_so_body_frame")){
                 // IDSVA_SO is expensive — use fewer iterations
@@ -1009,6 +1061,16 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                     times.push_back(time_delta_us_timespec(start,end));
                 }
                 printf("[N:%d]: EE_POSE_GRADIENT direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("----------------------------------------\n");
+            }
+            if(have_frame && is_algo_active(enabled_algo, "ee_pose_hessian")){
+                for(int iter = 0; iter < TEST_ITERS; iter++){
+                    clock_gettime(CLOCK_MONOTONIC,&start);
+                    eePoseHessianThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, frame_id, qs, qds, &threads);
+                    clock_gettime(CLOCK_MONOTONIC,&end);
+                    times.push_back(time_delta_us_timespec(start,end));
+                }
+                printf("[N:%d]: EE_POSE_HESSIAN direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
                 printf("----------------------------------------\n");
             }
 
