@@ -118,9 +118,28 @@ GRID_CUDA_LINALG_BACKEND=GLASS.
 floating-base 6×6 single-threaded invert (1.89× and 1.11× pin losses
 respectively); GLASS-ifying the invert flips both to wins. CRBA had no
 invert in its hot path, so it shows zero speedup — its 1.32× pin gap is
-from a different mechanism (likely the floating-base XImats
-quaternion→rotation conversion or the larger H matrix; see HANDOFF A.3
-for the next-iteration target).
+from a different mechanism.
+
+#### CRBA floating loss — diagnosed by static audit (2026-05-29)
+
+`gen_crba_inner_floating` (`_crba.py:241-289`) uses a **sequential
+joint-loop** with parallel-over-6 inner loops + multiple `__syncthreads`
+per iteration. `gen_crba_inner` (fixed-base, `_crba.py:168-193`) uses a
+**per-joint thread-parallel chain walk** — "each thread owns ONE jid and
+walks its ancestor chain serially; no inter-thread syncs."
+
+For iiwa14 (7 chain joints), the floating path executes ~42
+`__syncthreads` calls; the fixed path executes ~3. At ~50-200 ns per sync,
+that's ~2-8 µs of sync overhead per kernel invocation — squarely in the
+range of the measured 35 µs vs pin's 24.6 µs gap.
+
+**Fix:** port the per-joint thread-parallel pattern from
+`gen_crba_inner` to `gen_crba_inner_floating`. The shapes are different
+(floating root joint is 6×6 vs scalar joints' 1×1), so the chain walk
+needs a small adaptation, but the core idea (one thread per leaf, walk
+the chain independently, write its own M cells with no inter-thread sync)
+transfers. Estimated 2-4 hours including equivalence + perf re-bench.
+Backlog: HANDOFF A.3 follow-up.
 
 Other expected wins (not yet measured because they need a separate
 microbench): same change applies to `_aba.py:225` (second 6×6 invert per
