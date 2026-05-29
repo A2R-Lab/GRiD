@@ -845,6 +845,25 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    simple-algo auto-alloc `_device` wrappers (id / minv / fd / aba / crba /
    ee_pose* / integrator / idsva_so_*) — touches the equivalence-runner test
    kernels that still consume them.
+6. **Codegen interface cleanup.** Pays back on every future algorithm
+   addition. Sub-items:
+   (a) **Drop thread-group plumbing** — `use_thread_group` is `False` on every
+   production path but threads a branch through every emitter signature,
+   docstring, and function-call helper. Rip it out; if we want cooperative
+   groups back later, it's a different mechanism than what's there.
+   (b) **Consolidate emitter helpers** — `_code_generation_helpers.py` has
+   accumulated many one-off `gen_add_*` shims; collapse into a small canonical
+   set (e.g. one parallel-loop helper, one workspace-pointer-carve helper).
+   (c) **Dedup repeated branches** — algorithm emitters fan out on
+   `compute_c` / `use_qdd_input` / `use_qdd_Minv_input` with near-identical
+   bodies; factor those into table-driven helpers.
+   (d) **Codegen author guide** — once the surface is smaller, write a
+   "how to add a new algorithm" doc that walks through the canonical pattern
+   (uses fdsva_so as the worked example). Update `GRiDCodeGenerator/README.md`
+   accordingly. Pairs with a refresh of
+   `docs/source/user_guide/tutorials/codegen.rst`.
+   Large surgery but high leverage — directly attacks the code-bloat the user
+   has flagged repeatedly.
 
 ### C. Cleanup + comprehensive perf re-sweep (do as one phase)
 1. **Validation matrix completion** — full robot × base × tier EE kinematics
@@ -857,15 +876,44 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    count (≤ `MAX_PERF_LEVEL_THREADS`); expose it.
 5. **`fdsva_so` single_us recapture** — was dropped on -rdc regcount error
    (now fixed).
-6. **→ Full perf re-sweep** with everything cleaned up. Captures fdsva_so
+6. **Vendor URDFs instead of pulling `robot_descriptions`.** The
+   `robot_descriptions` package drags in a large transitive install (multi-GB
+   venv impact). Vendor the ~4–10 URDFs we actually exercise (iiwa14 / go2 /
+   g1 / h1_2 / baxter / fr3 / rizon4 / a few broad-coverage robots), each
+   pinned to a specific upstream commit/tag with provenance recorded in a
+   `URDF_SOURCES.md`. Sidesteps the broken-upstream class of bug we already
+   hit (rizon4 zero-inertia, fr3 mimic-joint missing). Update
+   `RBDReference/tests/model_sources.py` + `test/benchmarks/baselines/grid/run.py`
+   to read from the vendored copies. Likely shrinks venv install by ~70%+ and
+   makes CI reproducible across `robot_descriptions` releases.
+7. **→ Full perf re-sweep** with everything cleaned up. Captures fdsva_so
    single_us + d2ee timing under the standard pipeline (today both required
    manual binary runs).
 
-### D. Reference modernization (separate effort, post-perf)
+### D. Reference + runtime modernization (separate effort, post-perf)
 1. **URDFParser/RBDReference pinocchio-alignment** — strict-parse API, structured
    diagnostics, `nq`/`nv`/quat-order helpers, mark fixed-base-only methods. See
    `RBDReference/tests/PINOCCHIO_ALIGNMENT_BACKLOG.md`.
 2. **URDF feature support** — audit vs spec, add missing (**mimic joints first**).
+3. **PyTorch in-memory compile + re-link → CUDA-Graphs callable.** Use
+   `torch.utils.cpp_extension.load_inline` (or equivalent JIT path) to compile
+   a per-robot generated header *in memory* and expose the resulting kernels
+   as PyTorch ops. The CUDA-Graphs angle is the load-bearing motivation: ops
+   that survive `torch.cuda.graph(...)` stream-capture let downstream MPC /
+   training loops capture a whole step into a graph, avoiding per-launch
+   overhead. Today GRiD generates a `.cuh` that has to be compiled offline
+   into a `.so` then loaded — slow iteration loop for users specializing per
+   robot. Pair with the grid-rbd binding so PyTorch users can `import` a
+   newly-codegen'd robot without touching nvcc.
+4. **Runtime mass / inertia parameters (two-variant emit).** Today XImats and
+   robot constants are baked into the codegen (consts folded into PTX → fast).
+   Add a runtime-parameter variant: kernels read inertias from a per-robot
+   parameter struct passed at launch, enabling system-ID, adaptive control,
+   parameter sweeps, and online adaptation without re-codegen. Keep the
+   baked-constant fast path as the default; the runtime path is opt-in and
+   expected to cost ~10–30% (more on small robots where constant folding
+   matters most, less on big robots where memory bandwidth dominates). Two
+   templates per algorithm: emit both, measure the gap on the standard sweep.
 
 ### E. Branch merge
 - **`perf-cleanup` → `modernizing-tests`** — held pending validation; most is
