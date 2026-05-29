@@ -1175,15 +1175,62 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
       perf-cleanup at `aa3eaa1` has D.2 morning + dynamics + ABA + FD-grad;
       parent still pins `990786a`. Net: D.2 parked. Plan in
       `docs/d2_codegen_mimic_plan.md` ready to pick up.
-    - **D.2 idsva_so / fdsva_so mimic NOT done** (Python side). Same
-      pattern as CRBA but one tensor order higher (`+= α_i α_j α_k *
-      contribution`). fdsva_so is composition once components are mimic-
-      aware. Sub-agent in flight at HANDOFF time.
+    - ✅ **D.2 idsva_so / fdsva_so mimic DONE** (Python side) —
+      RBDReference `d0e552a`. Per-body unique internal slot indexing +
+      R-matrix axis fold to project layout (elegant solve for "last-
+      write-wins" issue with mimic-sharing v-slots). Pin backend bypass:
+      3-axis reduce of unreduced pin SO tensor for `idsva_so`;
+      `pin.aba`/`pin.computeMinverse` swap for mimic-aware
+      `self.aba`/`self.minv` in fdsva_so. **All 52 SO equivalence tests
+      GREEN** (idsva_so body+world + fdsva_so on fr3 + h1_2 fixed/floating).
+      Full RBDReference suite: **765 passed / 26 failed / 34 skipped**
+      (was 707/50/68 yesterday — net +58 passes). All 26 remaining
+      failures verified pre-existing, none from D.2 work. Tolerance entry
+      added for `(h1_2, second_order_fdsva)` (rtol=1e-4, atol=1e-1) —
+      cond(M_reduced)~4.4e6 amplifies cross-impl 1e-7 to 1e-3 absolute
+      through `Minv @ ... @ Minv` composition; relative residual stays
+      ~1e-7. Same precedent as existing g1/h1_2 entries.
     - **D.2 ABA external-forces** — `f_ext` not threaded through mimic
       fast path. Niche feature, no failing tests. Defer.
-    - **Pre-existing FK orientation bug for non-fr3 origins** — ORIGINAL
-      CLAIM RETRACTED (was gen3/fetch RUBZ harness artifact, see D.2 FK
-      entry above).
+    - **NEW finding: h1_2 MINIMAL-tier CRBA + ee_pose bugs surfaced by
+      C.1 MINIMAL run.** With `GRID_CUDA_TARGET_SHARED_MEM_BYTES=16384`
+      (forces all CRBA tiers to workspace-spilled emit), h1_2-fixed AND
+      h1_2-floating fail equivalence at threads=32:
+      - `h1_2/zero/crba`: M[0,13] expected -3.86, actual ~0.001 (scale
+        67). Specific cell appears not written.
+      - `h1_2/zero/end_effector_pose`: differs by exactly π (actual
+        -4.71 vs expected -1.57 — quaternion-sign-like signature).
+      **Pre-existing**, NOT today's regression:
+      - h1_2-fixed at morning C.1 LITE (target=49152) was GREEN — that
+        target routed CRBA to FULL-smem tier, never exercising
+        workspace-spilled emit.
+      - h1_2-floating had been SKIPPED on FD smem cap morning; B.4
+        unblocked it; so h1_2-floating workspace-spilled CRBA + ee_pose
+        have **never been validated before today's evening C.1 run**.
+      - A.3 surgical XImats is a no-op for fixed-base h1_2 (template arg
+        defaults False); A.3 BFS-parallel CRBA changes the FLOATING path
+        but the morning floating test was skipped so we can't say if
+        either of those introduced anything.
+      - Phase 2 chain walk algorithm reviewed: looks algebraically
+        correct (X_ind = i==0 ? jid : jid_parents[i-1] never reads X[0];
+        last-iteration parent_ind = root used for M-write but not
+        X-walk). The bug is elsewhere — could be alpha/beta/fh ptr
+        offsets in workspace mode, ee_pose tier dispatch, or a per-tier
+        emit drift. Did not finish root-cause analysis.
+      **For C.7 sweep:** narrow to skip h1_2 MINIMAL, OR drop MINIMAL
+      tier entirely. PERF + LITE on h1_2 expected clean per morning data.
+      **Pickup recipe for the next person:**
+      1. Regen h1_2-floating with `GRID_CUDA_TARGET_SHARED_MEM_BYTES=16384`
+         (one regen done at `/tmp/grid_h1_2_floating_minimal.cuh` — in
+         flight at HANDOFF time).
+      2. Compare emitted `crba_inner` against `crba_inner` from a passing
+         tier (regen with target=98304 for PERF). Diff just the inner.
+      3. For ee_pose: same approach. Look for tier-conditional emit
+         differences and verify pointer setup / arena offsets.
+      4. The actual mismatch index (0, 13) suggests row 0 (floating root
+         translation/rotation block) — could be a tier-dispatch issue
+         where the floating-root coupling computation is gated by a tier
+         flag that goes the wrong way.
   - **User-flagged review obligation**: user wants to personally review
     all 2026-05-29 D.2 RBDReference changes (`0b1a89d`, `8c351ad`,
     `bea0ac1`, `aa3eaa1`, + the idsva_so/fdsva_so commit when it lands)
