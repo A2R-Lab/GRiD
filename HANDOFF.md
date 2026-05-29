@@ -817,47 +817,58 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
   (iiwa14). Timing recapture + FIXED accuracy are backlogged (§4, §5).
 
 ### A. Pinocchio competitive gaps (perf work)
-1. **d2ee analytic d/dv Hessian on GPU.** d2ee FD-on-Jacobian correctness rewrite
-   landed 2026-05-28 (all robots × fixed/floating CUDA equivalence GREEN), but
-   pin's analytic `computeJointKinematicHessians` beats our FD by 3–36× at N=256
-   on big/floating robots (iiwa14-fixed: GRiD wins 2.2×; h1_2-floating: pin 35.9×).
-   Structural — `2·nv+1` gradient calls vs O(N) analytic. Mirrors what Step C
-   did for `ee_pose_gradient`.
-   **Status 2026-05-29 — Python LANDED:** `RBDReference.end_effector_pose_hessian_analytic`
-   (RBDReference `843a302`) is a closed-form analytic via direct 2nd-order Taylor
-   expansion of the chain world transform; handles per-joint Δ + intra-joint
-   multi-DOF (revolute / prismatic / SE(3) free-flyer) uniformly via chain
-   composition `L_a · A^{local}_i · P_{a→b} · A^{local}_j · R_b`. Validated to
-   ~1e-9 on iiwa14/floating + go2/floating; FD-noise-floor (1.6e-7) on
-   iiwa14/fixed near pitch=π/2. **Next:** port to GPU codegen (`_eepose_gradient_hessian.py`
-   d2ee inner). Full algorithm + GPU-port guidance in
-   `docs/d2ee_analytic_derivation.md`. Side benefit: surfaced an fr3 mimic-joint
-   bug in URDFParser (the FD oracle was masking it via antisymmetric cancellation
-   on the broken gradient column; D.2 URDF-feature audit takes it).
+1. ✅ **d2ee analytic d/dv Hessian on GPU DONE (codegen `2bf6d53`, 2026-05-28
+   shipped + 2026-05-29 PM verified).** Closed-form analytic via direct
+   2nd-order Taylor expansion of the chain world transform; handles per-joint
+   Δ + intra-joint multi-DOF (revolute / prismatic / SE(3) free-flyer)
+   uniformly via chain composition `L_a · A^{local}_i · P_{a→b} · A^{local}_j ·
+   R_b`. Python reference: `RBDReference.end_effector_pose_hessian_analytic`
+   (RBDReference `843a302`). Validated to ~1e-9 on iiwa14/floating +
+   go2/floating; FD-noise-floor (1.6e-7) on iiwa14/fixed near pitch=π/2. GPU
+   path validated via the analytic-vs-pinocchio-analytic oracle (`pin_so_ext`):
+   iiwa14 fixed + iiwa14 floating GREEN at machine precision. Full derivation
+   in `docs/d2ee_analytic_derivation.md`. **Open speedup measurement
+   (analytic-vs-pin at N=256) → C.7 sweep will capture.** Side benefit:
+   surfaced an fr3 mimic-joint bug in URDFParser (D.2; partial Python fix
+   landed but parked, see Done list).
 2. **idsva_so big-robot scaling.** g1/h1_2 lose 2.5–2.7× at N=256 batch; nv³
    kernel is compute+smem-bound. Same family as A.1; ties to ancestor-scratch
    de-alias (B.1).
 3. **Core-dynamics batch losses (floating-base only).**
-   **2026-05-29 — ABA + Minv FIXED, CRBA remains.** ALL losses are/were
-   floating-base. Root cause was the single-threaded 6×6 root invert.
-   GLASS `invertMatrix_dense` swap landed (GLASS 773cff5, codegen 0e0a9e2,
-   call-site cleanup 617a057, CRBA refactor 9eb51a6).
-   **Measured wins on iiwa14-floating:** ABA 2.12× (109.7→51.9 µs, 1.89×
-   pin loss → 1.09× win); Minv 1.77× (66.7→37.6 µs, 1.11× pin loss →
-   1.55× win); **CRBA 1.26× (35.0→27.8 µs, 1.42× pin loss → 1.14× pin
-   loss).** Residual CRBA gap is sequential body recursion + floating
-   XImats; reducing further would require BFS-parallel body (only helps
-   branched robots) or a per-tier surgical floating XImats path —
-   bounded but multi-hour work, deferred. See
+   **2026-05-29 — ABA + Minv FIXED, CRBA per-jid Phase 2 + BFS-parallel
+   Phase 1 BOTH LANDED.** ALL losses are/were floating-base. Root cause was
+   the single-threaded 6×6 root invert. GLASS `invertMatrix_dense` swap
+   landed (GLASS 773cff5, codegen 0e0a9e2, call-site cleanup 617a057, CRBA
+   refactor `9eb51a6` per-jid Phase 2 + `809b145` BFS-parallel Phase 1).
+   **Measured wins on iiwa14-floating** (pre-`809b145`): ABA 2.12×
+   (109.7→51.9 µs, 1.89× pin loss → 1.09× win); Minv 1.77× (66.7→37.6 µs,
+   1.11× pin loss → 1.55× win); CRBA 1.26× (35.0→27.8 µs, 1.42× pin
+   loss → 1.14× pin loss). **Post-`809b145`:** iiwa14 stays byte-identical
+   (1-wide BFS); go2/g1/h1_2 floating expected to pick up additional wins
+   from sync reduction (go2 Phase 1 ~24→6 syncs ≈ ~1.8 µs/launch; g1 ~38
+   syncs ≈ ~3.8 µs/launch). **Remaining lever:** surgical floating XImats
+   (per-tier `include_base_inertia` / `include_gradients` to skip dead
+   quaternion-derivative terms on the CRBA path) — closes the rest of the
+   iiwa14 gap. Bounded but multi-touch; deferred. See
    `docs/a3_core_dynamics_floating_loss_audit.md` for the full audit +
    measured A/B table.
-4. **`fdsva_so` pinocchio baseline.** No oracle yet; collect to scope A.1–A.3
-   and confirm the SO-wide gap shape.
+4. ✅ **`fdsva_so` pinocchio baseline DONE (parent `c6ab64c`, 2026-05-29).**
+   Pinocchio has no direct fdsva_so; synthesized via chain rule:
+   `ComputeRNEASecondOrderDerivatives` (RNEA SO tensors) +
+   `computeABADerivatives` (Minv + fd_dq + fd_dqd) → apply chain rule. Wired
+   into `timing_parser.py` + `run.py` + `generate_report.py` so C.7 sweep
+   picks it up. iiwa14 fixed single 22.4 µs/iter, floating 67.4 µs/iter.
+   **Open:** numerical cross-check vs GRiD output deferred (formula matches
+   Python `pinocchio_backend.fdsva_so` exactly).
 
 ### B. Architecture cleanup (gated on perf data)
-1. **De-alias `idsva_so` / `fdsva_so` inners** — cold-only surgical spill (vs
-   whole-arena). Also helps integrator-gradient rung-3 on h1_2. See
-   `docs/idsva_so_inner_refactor_notes.md`.
+1. ✅ **De-alias `idsva_so` / `fdsva_so` inners — DONE in prior commits,
+   verified 2026-05-29 (codegen `124be77` docs only).** The body inner now
+   has `SCRATCH_IN_SMEM × BC_IN_SMEM` (whole-arena + surgical BC); world
+   inner has `SCRATCH_IN_SMEM × COLD_IN_SMEM` (whole-arena + surgical cold
+   trio Xdown/v_w/a_w); fdsva_so_device has the canonical 3-lever pattern.
+   Conformance audit in `docs/idsva_so_inner_refactor_notes.md` shows ALL
+   algorithms now conform to the inner-owns-placement design.
 2. ~~**ABA whole-arena → surgical retrofit** (Minv-F sub-split pattern).~~
    **DONE (pre-2026-05-29 audit):** `gen_aba_inner_floating`
    (`_aba.py:7-60`) already exposes the `TEMP_IN_SMEM` × `COLD_IN_SMEM`
@@ -865,8 +876,12 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    floating-base root tail `[140*NJ, 140*NJ+138)` spill via `s_vcross_cold`
    / `s_fb_cold` to packed `d_cold` (`= d_workspace`); the hot recursion
    stays in `s_temp`. This backlog entry was stale.
-3. **idsva body kernel `output_temp` rung** → fold into body-`_device`
-   `SCRATCH_IN_SMEM`.
+3. ✅ **idsva body kernel `output_temp` → body-`_device` `SCRATCH_IN_SMEM` —
+   ALREADY DONE in prior commits, verified 2026-05-29 (codegen `124be77`
+   docs only).** The body kernel at `_idsva_so.py:2390` maps
+   `s_temp_in_global=True` → `SCRATCH_IN_SMEM=false` and calls the body
+   inner via `gen_idsva_so_body_frame_inner_function_call(... scratch_in_
+   smem_expr = ...)`; the inner does the repoint at line 1372.
 4. **h1_2-floating inline DEVICE path smem cap** — exceeds sm_120 ~99 KB cap;
    make device paths tier-aware/spillable.
 5. *(deferred B.1 follow-ups)*
@@ -914,8 +929,12 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    has flagged repeatedly.
 
 ### C. Cleanup + comprehensive perf re-sweep (do as one phase)
-1. **Validation matrix completion** — full robot × base × tier EE kinematics
-   matrix. PERF green for all 4×2; LITE/MINIMAL on big robots unexercised.
+1. **Validation matrix completion** — PERF green for all 4×2 (pre-existing);
+   **LITE on big robots NOW GREEN 2026-05-29** (g1-fixed + g1-floating +
+   h1_2-fixed all PASSED at `GRID_CUDA_TARGET_SHARED_MEM_BYTES=49152`).
+   h1_2-floating SKIPPED on the pre-existing `forward_dynamics` smem cap
+   (120 KB > 101 KB) → tracks as B.4. MINIMAL on big robots (target=16384
+   or similar) still uncollected; ~1 hr run if wanted before C.7.
 2. ✅ **Auto-parallel equivalence harness DONE 2026-05-29 (parent
    084af68):** `test/cuda_equivalents/run_parallel.sh` sizes
    `pytest-xdist -n` from `free -g / GB_PER_JOB` (default 5 GB), clamps
@@ -951,16 +970,40 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
 1. **URDFParser/RBDReference pinocchio-alignment** — strict-parse API, structured
    diagnostics, `nq`/`nv`/quat-order helpers, mark fixed-base-only methods. See
    `RBDReference/tests/PINOCCHIO_ALIGNMENT_BACKLOG.md`.
-2. **URDF feature support** — audit vs spec, add missing (**mimic joints first**).
-   *2026-05-29 reinforcement:* A.1 GPU port surfaced an fr3 mimic-joint
-   bug — `fr3_finger_joint2` has `<mimic joint="fr3_finger_joint1"/>` that
-   GRiD's URDFParser does NOT model. Its analytic d²(pose)/dv² disagrees
-   with the FD oracle for that EE because the FD masked the broken
-   `∂J[:,8]` sign via antisymmetric cancellation, whereas the analytic
-   computes the true 2nd derivative directly. The right fix is in
-   URDFParser mimic-joint handling (folds into this D.2 item). Until
-   fixed, fr3 is the only robot where A.1's analytic disagrees with
-   the FD oracle and the disagreement is the FD's fault, not ours.
+2. **URDF feature support — PARTIAL LANDED on submodule branches, NOT yet
+   in parent.** Mimic joints (the urgent missing feature) parsed +
+   kinematic-Jacobian / analytic-Hessian aware as of 2026-05-29: URDFParser
+   `511e398` (on `modernizing-tests` branch) + RBDReference `0b1a89d` (on
+   `perf-cleanup` branch). fr3 analytic d²(pose)/dv² now matches FD oracle
+   to ~2e-11 (was the A.1 false-positive) and matches pinocchio's
+   `getJointKinematicHessian(LOCAL_WORLD_ALIGNED)`. h1_2 (12 mimics,
+   multipliers 1.0/1.6/2.4) kinematics + RNEA tests GREEN (173/173 across
+   kinematics+RNEA+metadata).
+   **Why parked, not bumped into parent:**
+   (a) **Dynamics ripple OPEN.** `aba`, `crba`, `minv`, RNEA-grad, fd-grad
+   still ASSIGN to mimicked column instead of `+= mimic_scale * …`. The
+   Robot.py nq/nv reduction surfaces this; tests
+   `test_aba_equivalence[fr3]`, `test_crba_equivalence[fr3,h1_2]`,
+   `test_minv_equivalence[fr3]`, `test_integrator_pinocchio_equivalence[fr3]`
+   now fail (were passing by coincidence with naive-on-naive). Fix mirrors
+   the RNEA pattern.
+   (b) **CUDA codegen has NO mimic awareness.** Kernel signatures use
+   `NUM_POS`/`NUM_VEL` macros that don't drop mimic; S/Xmat unpack treats
+   each joint independently. Bumping submodules into parent without
+   codegen propagation makes CUDA-equiv vs RBDReference mismatch on
+   fr3/h1_2 across multiple algos.
+   (c) **Pre-existing FK orientation bug surfaces here.**
+   `URDFParser/Joint.set_type` composes `Xmat_sp_hom` by directly summing
+   `t_free + t_origin` without rotating `t_free` through the origin's
+   rotation. Invisible on every robot whose origin rpy is zero (iiwa, go2,
+   g1, fr3_finger_joint1 — most cases). Mis-places fr3_finger_joint2
+   (origin rpy = π around Z). Independent of mimic but blocks fr3
+   selection of finger_joint2 as an EE target.
+   **Pickup recipe:** finish dynamics ripple in RBDReference; propagate
+   mimic awareness into CUDA codegen (NUM_VEL macros, S/Xmat for mimic);
+   fix the FK orientation bug; then bump submodules into parent and
+   un-skip fr3/h1_2 in CUDA equivalence. Estimated: 1 focused day for the
+   dynamics ripple, 1+ day for codegen propagation, ~hour for the FK bug.
 3. **PyTorch in-memory compile + re-link → CUDA-Graphs callable.** Use
    `torch.utils.cpp_extension.load_inline` (or equivalent JIT path) to compile
    a per-robot generated header *in memory* and expose the resulting kernels
@@ -987,6 +1030,69 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
   bugs surfaced. (The earlier `humanoid-tier-spill` merge happened pre-branch.)
 
 ### Done (since this backlog was last refactored 2026-05-28)
+- **2026-05-29 PM batch (parallel sub-agent sweep + investigation):**
+  - **A.1 GPU d2ee analytic port — VERIFIED ALREADY DONE in codegen `2bf6d53`**
+    (yesterday's analytic landing was sibling Python + GPU, not Python-then-GPU
+    as HANDOFF previously suggested). Re-validated iiwa14 fixed + iiwa14
+    floating (with `GRID_CUDA_FLOATING_ALGORITHMS=…hessian`) GREEN.
+  - **A.3 BFS-parallel CRBA floating body** — codegen `809b145`: fused per-
+    level forward+backward over `36*k` siblings at each BFS level; iiwa14
+    stays byte-identical (1-wide BFS); go2 Phase 1 collapses ~24 syncs → ~6;
+    g1 has partial-shared-parent siblings handled via atomic accumulation.
+    iiwa14 floating + go2 floating + g1 floating equivalence GREEN. Estimated
+    saves go2 ~1.8 µs/launch, g1 ~3.8 µs/launch (C.7 sweep will measure).
+  - **A.4 pinocchio fdsva_so synthesis baseline** — parent `c6ab64c`: chain
+    `ComputeRNEASecondOrderDerivatives` + `computeABADerivatives` + `Minv`
+    (mirrors `pinocchio_backend.fdsva_so`). Wired into `timing_parser.py` +
+    `run.py` + `generate_report.py`. iiwa14 fixed single 22.4 µs/iter,
+    floating 67.4 µs/iter. Numerical cross-check vs GRiD output deferred
+    (formula matches the Python backend so high confidence).
+  - **B.3 idsva body `output_temp` → SCRATCH_IN_SMEM + B.1 idsva/fdsva
+    cold-only de-alias** — VERIFIED ALREADY IMPLEMENTED in prior commits.
+    Body kernel at `_idsva_so.py:2390` maps `s_temp_in_global=True` →
+    `SCRATCH_IN_SMEM=false`; inner does the repoint at line 1372; the
+    world inner already has `SCRATCH_IN_SMEM × COLD_IN_SMEM` (surgical cold
+    trio Xdown/v_w/a_w). Docs landed in codegen `124be77` make the contract
+    explicit; conformance audit in `docs/idsva_so_inner_refactor_notes.md`
+    refreshed.
+  - **C.1 LITE on g1+h1_2** — 3/4 GREEN (g1-fixed + g1-floating + h1_2-fixed).
+    h1_2-floating SKIPPED on the pre-existing `forward_dynamics` smem cap
+    (120 KB > 101 KB; matches B.4 backlog item, ancestor-scratch de-alias).
+    NOT a regression.
+  - **D.2 mimic-joint support — PARTIAL LANDING (parked on submodule branches,
+    NOT bumped into parent yet).**
+    - URDFParser `511e398` (on `modernizing-tests`): parse `<mimic>`,
+      `Joint.get_num_dof()` returns 0 for mimic joints, `Robot._refresh_
+      mimic_index_maps` builds dense q/v slot maps, `Robot.q_for_joint`
+      exposes `mult * q[target] + offset`.
+    - RBDReference `0b1a89d` (on `perf-cleanup`): kinematic Jacobian +
+      analytic Hessian accumulate per-chain contributions and scale by
+      mimic multiplier; pinocchio backend expands project→pin and reduces
+      pin→project with mimic folding; new `test_pose_hessian_analytic_
+      matches_fd[fr3-fixed]` smoke. Test suites GREEN for kinematics +
+      RNEA + parse/metadata (173/173).
+    - **Why parked (not yet bumped into parent):**
+      1. Dynamics ripple is OPEN: `aba`, `crba`, `minv`, RNEA-grad, fd-grad
+         still ASSIGN to the mimicked column instead of `+= mimic_scale * …`;
+         the Robot.py nq/nv reduction now exposes this. Tests
+         `test_aba_equivalence[fr3]`, `test_crba_equivalence[fr3,h1_2]`,
+         `test_minv_equivalence[fr3]`, `test_integrator_pinocchio_
+         equivalence[fr3]` now fail (they were passing by coincidence with
+         naive sides on both).
+      2. **CUDA codegen has no mimic awareness.** Bumping submodules into
+         parent would make CUDA-equivalence-vs-RBDReference mismatch on
+         fr3/h1_2 across multiple algos.
+      3. Pre-existing FK orientation bug in `URDFParser/Joint.set_type`
+         (sums `t_free + t_origin` without rotating `t_free` through origin
+         rpy) surfaces only on `fr3_finger_joint2` (origin rpy = π around Z).
+         Independent of mimic but in the way.
+    - **fr3 analytic d²(pose)/dv² now matches FD oracle ~2e-11 and matches
+      pinocchio's `getJointKinematicHessian(LOCAL_WORLD_ALIGNED)`**. h1_2
+      (12 mimics, multipliers 1.0/1.6/2.4) kinematics + RNEA GREEN.
+    - **Pickup recipe:** finish dynamics ripple in RBDReference (per the
+      RNEA pattern, every `… = …` becomes `+= mimic_scale * …`); propagate
+      mimic awareness into CUDA codegen; then bump submodules into parent.
+      Or: gate fr3/h1_2 mimic-touching tests as xfail with link to this entry.
 - **B.6.a + B.6.b (2026-05-29):** dropped the dead `use_thread_group`
   parameter from helper signatures + 1079 call sites across 16 codegen files
   (production always passes False; the conditional branches had been stripped
