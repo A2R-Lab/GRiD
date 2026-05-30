@@ -1191,8 +1191,44 @@ Phase 3 (sequential merge back, lowest-risk first).
 - T4 + T1 both audit pinocchio features; cross-check feature-list outputs.
 
 **Merge-back order (sequential, lowest-risk first):**
-T6 (plant additions) → T1 (RBD reorg) → T4 (fext) → T3 (mimic codegen) →
-T5 (tier autotune) → T2 (perf gaps).
+T6 (plant additions) → T1 (RBD audit/docs only — split deferred) → T4 (fext) →
+T3 (mimic codegen) → T5 (tier autotune) → T2 (perf gaps).
+
+**SYNTHESIS GATE OUTCOME — 2026-05-30 (Phase-1 plans reviewed, user-ratified):**
+- **Reference repos located on disk** (resolves T4 + T6 "no GATO/spatial_v2" blocker):
+  `~/Desktop/GATO/gato/dynamics/iiwa14/{iiwa14_fext.cuh, iiwa14_plant.cuh}` +
+  `integrator.cuh`; `~/Desktop/PDDP/include/cuda-include/{cg_v4_iiwaplant.cuh,
+  costGradKern_wEEpose_sequence.cuh, dynamics_arm.cuh}` + `reference/TrajoptCost.py`.
+  `spatial_v2_extended` NOT present — pinocchio is the authoritative fext cross-check.
+- **Merge danger is smaller than feared:** T4 is the ONLY signature-mutator (trailing
+  `d_f_ext`/`s_f_ext`). T5 is a pure value-rename `TIER_PERF→TIER_SHARED` (keeps the
+  `RESOURCE_TIER` template param) shipped with a `TIER_PERF=TIER_SHARED` alias so T2
+  (merges last, still says `TIER_PERF`) compiles untouched. T2/T3 change ZERO
+  signatures (T3 constant-folds all mimic logic; T2 is loop-restructuring). T6 is
+  additive (new `namespace grid_plant`). `GRiDCodeGenerator.py` is the one shared
+  hotspot (5 tasks, different regions) — MAIN AGENT owns/serializes all edits to it.
+- **DECISION 1 (ratified): defer T1's RBDReference file-split (D.5) to B+C.** T1 ships
+  only the D.1 pinocchio-alignment audit + URDF feature matrix + comment→`docs/open-tasks/notes.md`
+  relocation this batch. The mixin file-split (method→file map is in T1's plan) moves
+  to the B+C pass, AFTER T3/T4 land, to avoid rewriting every line they edit.
+- **DECISION 2 (ratified): drop T3's `NUM_JOINTS→NUM_POS` macro rename** from
+  `d2_codegen_mimic_plan.md`. The macro already == reduced `get_num_pos()`; rename is
+  unnecessary and would break the byte-identical non-mimic PERF guarantee. Do all
+  raw-NJ mimic work via constant-folded Python integers inside the inners. (T3 also
+  found: "size-57 vs 45" HANDOFF note is STALE; real bug is raw-NJ inner loop bounds.
+  Genuine latent bug surfaced: idsva_so world-frame `vel_to_body` overwrites for
+  shared v-slots — fix in P4, may want its own sub-PR.)
+- **DECISION 3 (ratified): T6 plant/integrator hessian = Gauss-Newton outer-product
+  of the gradient** (faster/simpler); NO finite-diff hessian; leave the true analytic
+  2nd-order hessian as a TODO. (grid has no analytic 2nd-order integrator; adding one
+  would violate "additive".)
+- **Convention defaults (main-agent-decided, agents reconcile against GATO+pinocchio):**
+  T4 replaces the buggy `apply_external_forces` (uninitialized `Xa`, joint-id-as-q) with
+  the local-frame subtract convention; T4 f_ext is constant-local-frame so id_du/fd_du
+  get it only through the corrected `vaf` (no new gradient term); T4 passes `d_f_ext`
+  global straight to the inner (read once at subtract) → `*_DYNAMIC_SHARED_MEM_BYTES`
+  byte-identical, no tier-pick perturbation. T6 constraint barriers take explicit bound
+  pointers (URDF parses only position limits today — no URDFParser change).
 
 **Backlogged (not assigned this batch):**
 - D.3 PyTorch in-memory compile + CUDA-Graphs callable.
