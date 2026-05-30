@@ -1056,6 +1056,27 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    expected to cost ~10–30% (more on small robots where constant folding
    matters most, less on big robots where memory bandwidth dominates). Two
    templates per algorithm: emit both, measure the gap on the standard sweep.
+5. **RBDReference file split — user-filed 2026-05-30.** `RBDReference.py` has
+   grown SOOOO long (~3000+ lines) — split it the way `GRiDCodeGenerator/` is
+   organized:
+   - `helpers.py` — spatial-algebra primitives, quaternion utilities, small
+     utility math (the `mx0…mx6` / cross-product / Lie-group helpers).
+   - `kinematics.py` — all pose-related: `end_effector_pose`,
+     `end_effector_pose_gradient`, `end_effector_pose_hessian` (+ analytic
+     variants).
+   - `dynamics.py` — `id` (rnea), `fd`, `aba`, `minv`, `crba`.
+   - `gradients_and_hessians.py` — 1st and 2nd-order dynamics gradients:
+     `rnea_grad`, `forward_dynamics_grad`, `idsva_so`, `fdsva_so`, etc.
+   - Top-level `RBDReference.py` (or `__init__.py`) imports each module and
+     either assembles a single class via mixins or re-exports a thin facade
+     so existing call sites (`from RBDReference import RBDReference`)
+     continue to work unchanged.
+   **Why:** the file is currently the dominant readability bottleneck —
+   browsing for a specific algorithm is painful. The codegen split (one
+   `_algo.py` per algorithm under `algorithms/`) is a proven model.
+   **Risk:** import / mixin shim has to preserve method-resolution-order so
+   `self.X(...)` cross-calls (e.g. `fd` calling `aba`, `aba` calling `crba`)
+   keep working. Tests must run unchanged. Not urgent.
 
 ### E. Branch merge
 - **`perf-cleanup` → `modernizing-tests`** — held pending validation; most is
