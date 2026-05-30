@@ -284,6 +284,16 @@ MRO-composed, public import unchanged). Execute that map verbatim.
 the mixin boundaries touch `self.robot` shared state — the test-count gate is the
 safety net. **F dependency:** hard ordering after T3/T4.
 
+**`grid_plant` numpy reference (additive follow-on, lands with the split):** add a
+fifth `_plant.py` `_PlantMixin` (plant_step + quadratic/EE costs + joint barriers)
+as the CPU oracle for the CUDA `grid_plant` surface, and rewire
+`test_cuda_plant_equivalence.py` from FD-only self-validation to a real
+CUDA-vs-RBDReference equivalence test (+ a new `RBDReference/tests/test_plant_equivalence.py`).
+Pure additive after the move (counted separately from the split's test-count gate).
+Full spec in `rbdreference_split_plan.md` → "grid_plant reference module". Converges
+with D.4's regressor reference (`d4_runtime_inertia_params_plan.md §G.5`) and the
+`grid_plant` handle surface (`notebook_examples_plan.md`).
+
 ---
 
 ## 5. URDF feature additions (C)
