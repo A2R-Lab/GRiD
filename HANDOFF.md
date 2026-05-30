@@ -1269,6 +1269,39 @@ T3 (mimic codegen) → T5 (tier autotune) → T2 (perf gaps).
   comprehensive perf re-sweep — fold the naming/uniformity residuals from
   [[project-grid-naming-audit-backlog]] in too. Do as ONE phase after F lands.
 
+### G. Round-2 batch plan — 2026-05-30 (user-approved; launch when post-F validation green)
+
+Scope chosen by user: all four feature tasks + **B+C consolidation FIRST**. Sequencing
+resolves "T3-finisher mandatory-first" vs "consolidate-first" by splitting the footgun
+fix (immediate) from the full mimic-gradient implementation (after consolidation).
+
+- **G0 — footgun hotfix (immediate, tiny):** make the MIMIC gradient codegen path emit
+  a clear "unsupported" compile/runtime error instead of silently returning ZEROS
+  (`inverse_dynamics_gradient`/`forward_dynamics_gradient`/ee-grad/idsva_so/fdsva_so on
+  mimic robots). Neutralizes the F-deferred footgun without waiting for P3/P4.
+- **G1 — consolidate (serial on codegen core) + bindings (parallel):**
+  - **B+C architecture consolidation:** device-`_device`-wrapper collapse +
+    table-driven tier-dispatch dedup (`docs/open-tasks/bc_cleanup_plan.md` items 1–2).
+    Byte-identical validation. New G2 algos emit against the deduped base.
+  - **Bindings track (parallel, `python/grid_rbd/` — independent of codegen core):**
+    D.3 PyTorch in-memory compile + autograd + CUDA-Graphs + notebook UX
+    (`d3_pytorch_cudagraphs_plan.md`) AND the `grid_plant` Python/handle surface
+    (CUDA-only today). + reference-oracle numpy layer finishing (merges at back).
+- **G2 — feature wave on the deduped base (parallel among themselves, different algos):**
+  - **T3-finisher:** mimic P3/P4 gradients (id_du/fd_du/ee-grad/idsva_so/fdsva_so) +
+    h1_2 branched-root ID topology fix (NJ/nv, fixed-base-gated) + `vel_to_body` fix +
+    h1_2 fd/aba `norm_rtol`. Replaces the G0 error path with real support.
+  - **Centroidal + R1 quick wins:** energy/g/Coriolis + CCRBA A(q)/h + CoM/J_com
+    (`centroidal_quickwins_plan.md`). Oracle = reference-oracle layer.
+  - **f_ext gradients:** ∂tau/∂f_ext=−Jᵀ, ∂q̈/∂f_ext=M⁻¹Jᵀ, ∂(id_du)/∂f_ext
+    (`differentiability_extensions_plan.md §A`).
+  - **Warp/thread FK fix+rename (customer):** generalize beyond hardcoded iiwa14 +
+    fix broken `mat4_mul` branch + rename `X_{single_thread,warp}`→`ee_pose_inner_{thread,warp}`
+    (`kinematics_warp_thread_plan.md`).
+- **Deferred to a later round:** D.4 runtime inertia + regressor; joint types
+  (continuous-first); notebook examples (needs bindings); R4 frame Jacobians; R5 OSC/Λ;
+  rest of B+C (D.5 split, naming, warnings, comprehensive perf re-sweep).
+
 ### Future directions / roadmap (planned during the F-batch downtime — 2026-05-30)
 
 Full implementer-ready plans live in `docs/open-tasks/`. `library_capability_roadmap.md`
