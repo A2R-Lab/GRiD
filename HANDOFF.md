@@ -1239,6 +1239,28 @@ T3 (mimic codegen) → T5 (tier autotune) → T2 (perf gaps).
   comprehensive perf re-sweep — fold the naming/uniformity residuals from
   [[project-grid-naming-audit-backlog]] in too. Do as ONE phase after F lands.
 
+### Future directions / roadmap (planned during the F-batch downtime — 2026-05-30)
+
+Full implementer-ready plans live in `docs/open-tasks/`. `library_capability_roadmap.md`
+is the umbrella (GRiD vs Pinocchio vs **frax** = arXiv 2604.04310, the direct JAX
+competitor; GRiD's moat = analytic 2nd-order + contact/constraint + control/MPC, which
+frax/Brax lack). Index:
+- `library_capability_roadmap.md` — capability matrix + R1–R5 prioritized adds.
+- `centroidal_quickwins_plan.md` — R1 energy/g(q)/Coriolis (near-free), R2 centroidal
+  CCRBA `A(q)`/`h`/`ḣ` + derivatives (flagship), R3 CoM + CoM-Jacobian. Quick wins.
+- `kinematics_warp_thread_plan.md` — **customer-driven, near-term:** verify + rename the
+  no-derivative single-thread/warp FK path (`ee_pose_inner_{thread,warp}`) for
+  sampling-based kinematics. EXECUTE AFTER T2+T3 merge (they touch `_eepose_gradient_hessian.py`).
+- `joint_types_plan.md` — more joint types (continuous cheap; planar/spherical reuse the
+  floating-base + mimic NV≠NQ machinery), ripple-rated, cheap-first.
+- `d3_pytorch_cudagraphs_plan.md` (PyTorch + CUDA-Graphs + notebook UX),
+  `d4_runtime_inertia_params_plan.md` (runtime inertia + sysID regressor),
+  `differentiability_extensions_plan.md` (∂/∂f_ext, ∂(du)/∂π derivative matrix),
+  `notebook_examples_plan.md`, `rbdreference_split_plan.md` (D.5 split + grid_plant
+  numpy ref), `urdf_feature_matrix.md`, `notes.md`.
+- Follow-ons noted: expose `grid_plant` via a `grid_rbd` Python/handle surface (it's
+  CUDA-only today); add RBDReference numpy refs for plant + regressor.
+
 ### Done (since this backlog was last refactored 2026-05-28)
 - **2026-05-29 EVENING-2 batch (h1_2 MINIMAL bug verification + rpy-snap fix + polish/cleanup):**
   - **Bug 1 (h1_2 MINIMAL CRBA `M[0,13]≈0`) — STALE, RETRACTED.** The earlier
