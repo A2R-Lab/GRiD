@@ -1151,9 +1151,57 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    keep working. Tests must run unchanged. Not urgent.
 
 ### E. Branch merge
-- **`perf-cleanup` → `modernizing-tests`** — held pending validation; most is
-  green. Gate on C.1 (full validation matrix) + any d2ee/fdsva_so spill-path
-  bugs surfaced. (The earlier `humanoid-tier-spill` merge happened pre-branch.)
+- ✅ **`perf-cleanup` → `modernizing-tests` DONE 2026-05-30.** Parent
+  `c29cae7..44ba497`. Submodules: URDFParser merge commit `e2a0c9a` (perf-cleanup
+  rpy-snap + modernizing-tests D.2 mimic — FK fix landed on both branches as
+  cherry-pick); GRiDCodeGenerator FF to `bd1bdd3`; RBDReference FF to `d0e552a`.
+  All four pushed to origin/modernizing-tests. Submodule pointers in the parent
+  match each submodule's HEAD exactly. GLASS stays on `main` (intentional
+  exception per user).
+
+### F. Parallel work batch — 2026-05-30 (PICK UP HERE)
+
+Six tasks in parallel, each in its own clone + branch off `modernizing-tests`
+(except T2 and T6 which run in main repo on their own branches). Per-agent
+contract: read `docs/source/user_guide/concepts/{design_principles,
+codegen_architecture, resource_tier_system}.rst` +
+`docs/idsva_so_inner_refactor_notes.md` + relevant HANDOFF/memory sections,
+then produce a written plan that the main agent reviews **before** any
+implementation (Phase 1 is read-only).
+
+**Phasing:** Phase 1 (planning, all 6 agents in parallel, read-only) →
+synthesis gate (main agent reviews plans + surfaces overlaps to user) →
+Phase 2 (parallel implementation with GPU serialized for perf measurement) →
+Phase 3 (sequential merge back, lowest-risk first).
+
+| # | Task | Folder | Branch | Sub-agents | Notes |
+|---|---|---|---|---|---|
+| **T1** | Pinocchio-alignment + RBDReference split + URDF feature audit + comment→notes cleanup | `~/Desktop/GRiD-T1-rbd-align` (new clone) | `rbd-align-split` | 1 | D.1 + D.5 + URDF audit folded. Touches RBDReference + URDFParser. Sub-step: audit pinocchio joint/feature support gaps; propose adds in RBDReference first with notes on CUDA propagation. Move stale "TODO/FIXME/concern" comments out of code into `docs/open-tasks/notes.md` with line refs. |
+| **T2** | A.5 idsva_so + A.6 ee_pose_gradient + A.7 crba perf gaps (+ A.4 fdsva_so sanity) | main repo `~/Desktop/GRiD` | `perf-gaps` | 3 (one per algo file) | Different files (`_idsva_so.py`, `_eepose_gradient_hessian.py`, `_crba.py`) — parallel-safe edits, serialize on PERF measurement. |
+| **T3** | D.2 CUDA codegen mimic-joint propagation | `~/Desktop/GRiD-T3-mimic-codegen` (new clone) | `mimic-codegen` | 1 (orchestrator) | Follow `docs/d2_codegen_mimic_plan.md`. **MUST NOT perf-regress non-mimic.** Validate iiwa14/go2/g1/h1_2 stay byte-identical at PERF; un-skip fr3/h1_2 mimic CUDA-equivalence at end. |
+| **T4** | External-forces threading | `~/Desktop/GRiD-T4-fext` (new clone) | `external-forces` | 1 | Reference GATO `iiwa14_fext.cuh` + spatial_v2_extended; cross-check pinocchio `fext` plumbing. Add `d_f_ext` to RNEA / FD / ABA / ID-grad / FD-grad where appropriate (direct add, in-frame). Python (RBDReference) first, then CUDA codegen. |
+| **T5** | PERF-tier rethink + dynamic autotune | `~/Desktop/GRiD-T5-tier-autotune` (new clone) | `tier-autotune` | 1 | Investigate why MIN/LITE beat PERF on big-robot N=256 (smem-occupancy hypothesis from C.7). Rename current PERF→SHARED; add post-codegen autotune that picks PERF = whichever-tier-best-at-current-launch-config. Folds A.7 h1_2.fixed LITE id mis-tune + C.4 autotune follow-ups. |
+| **T6** | Plant file + cost/constraint primitives | main repo `~/Desktop/GRiD` | `plant-namespace` | 1 | `namespace grid_plant` over existing `grid`. Expose integrator/grad/hessian + cost/grad/hessian (quadratic state-deviation, quadratic input, EE-position) + constraint barriers (joint pos/vel/torque bounds, mirror GATO `iiwa14_plant.cuh`). Additive, no collisions. |
+
+**Watchpoints flagged at the synthesis gate:**
+- T2 + T5 both touch perf-measurement infrastructure; coordinate on `algo_picks`
+  / autotune wiring.
+- T3 + T1 both touch URDFParser + RBDReference Python layer; coordinate on
+  any shared signature changes.
+- T4 + T1 both audit pinocchio features; cross-check feature-list outputs.
+
+**Merge-back order (sequential, lowest-risk first):**
+T6 (plant additions) → T1 (RBD reorg) → T4 (fext) → T3 (mimic codegen) →
+T5 (tier autotune) → T2 (perf gaps).
+
+**Backlogged (not assigned this batch):**
+- D.3 PyTorch in-memory compile + CUDA-Graphs callable.
+- D.4 Runtime mass/inertia parameters (two-variant emit).
+- Combined **B+C**: architecture cleanup (`_device` wrapper collapse, table-driven
+  emitter dedup, `s_temp_spill` rename, tier-name macros, etc.) + warnings sweep
+  (RBDReference `mxS` NumPy `ndim>0` deprecation + nvcc/ptxas on bigger robots) +
+  comprehensive perf re-sweep — fold the naming/uniformity residuals from
+  [[project-grid-naming-audit-backlog]] in too. Do as ONE phase after F lands.
 
 ### Done (since this backlog was last refactored 2026-05-28)
 - **2026-05-29 EVENING-2 batch (h1_2 MINIMAL bug verification + rpy-snap fix + polish/cleanup):**
