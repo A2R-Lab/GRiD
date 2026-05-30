@@ -308,19 +308,30 @@ Top floating-base first-order targets if/when this becomes the next priority:
 2. **go2-floating aba** (pin 1.75x) — second biggest.
 3. **iiwa14-floating minv/fd** (pin 1.51x/1.29x) — small robot launch overhead.
 
-### NEXT: GPU d2ee floating-base d/dv rewrite (pick up here post-compact)
+### ✅ GPU d2ee floating-base d/dv rewrite — DONE 2026-05-29 (audit-verified)
 
-**Status of d2ee after this session's Python d/dv landing:**
-- Python (RBDReference + pinocchio_backend): d²(pose)/dv² via FD-on-d/dv-Jacobian, GREEN.
-- CUDA fixed-base d2ee: **already correct** (nq==nv ⇒ d²/dq² == d²/dv² numerically;
-  existing analytic codegen produces the right numbers; iiwa14-fixed equivalence
-  with d2ee included PASSED 10/10 samples after Python change).
-- CUDA floating-base d2ee: emits 6×nq×nq d²/dq² with quaternion-derivative columns.
-  Default FLOATING_CUDA_ALGORITHMS list excludes d2ee so default tests pass; opt-in
-  (`GRID_CUDA_FLOATING_ALGORITHMS=all`) would shape-mismatch vs the Python 6×nv×nv.
-  **This is the remaining gap — the GPU floating d2ee rewrite.**
+**Closed via analytic, not the FD-on-Jacobian recipe below.** The original section
+described an FD-on-Jacobian approach. The actual implementation went analytic:
+- **RBDReference `843a302` (A.1 Python):** closed-form analytic d²(pose)/dv² via
+  direct 2nd-order Taylor expansion of the chain world transform. No FD.
+- **GRiDCodeGenerator `2bf6d53` (A.1 GPU, parent `080debd`):** analytic chain-
+  composition Hessian replaces the older FD-on-Jacobian; iiwa14 fixed+floating +
+  go2 floating CUDA equivalence GREEN; matches `RBDReference.end_effector_pose_
+  hessian_analytic` to ~1e-13 numpy sim.
+- **CUDA emits 6×nv×nv** (the tangent-space output, pinocchio convention).
+- **ee_pose_hessian d/dv:** Python `342465d`, GPU codegen `10282e9` (FD-on-
+  Jacobian d/dv rewrite, 6*nv*nv output; iiwa14/go2/g1/h1_2 fixed + iiwa14/go2/g1
+  floating CUDA equivalence GREEN). The d2ee-vs-pin oracle uses `pin_so_ext`
+  (composed `getJointKinematicHessian(LOCAL_WORLD_ALIGNED)`).
+- **C.7 sweep will measure analytic-vs-pin speedup at N=256** (deferred until
+  the sweep runs).
 
-**Pickup recipe (substantial work, Step C-sized):**
+The original FD-on-Jacobian pickup recipe is preserved below for historical
+reference but is no longer the active plan.
+
+---
+
+**ORIGINAL (HISTORICAL) PICKUP RECIPE — superseded by the analytic path above:**
 
 1. **Architectural change.** d2ee inner currently takes pre-computed `s_Xhom`, `s_dXhom`,
    `s_d2Xhom` and assumes one fixed q. FD-on-Jacobian needs to recompute Xhom for each
@@ -377,16 +388,20 @@ Top floating-base first-order targets if/when this becomes the next priority:
    high_acceleration, floating_quat_positive, floating_quat_mixed). Once GREEN, expand
    to go2-floating then g1/h1_2-floating.
 
-**Independent cleanup tasks the user flagged for later:**
-- Remove orphaned helpers in `_eepose_gradient_hessian.py`: `_emit_eepose_grad_extraction`
-  (line 647), `_emit_eepose_grad_compacted_nonserial` (line 682). The new gradient inner
-  doesn't call them. Verify with grep before deleting.
-- Drop `s_dXhom` param from `end_effector_pose_gradient_inner` signature (currently
-  takes it as `(void)`-marked dead arg) — propagate through device/kernel call sites.
-- Per-tier smem allocator can also drop the dxhom-shared logic (the spilling-to-workspace
-  path for dxhom is now never taken on the gradient path).
-- Documentation: add the d/dv convention note + the geometric-Jacobian explanation in
-  `docs/source/user_guide/concepts/`, and a section in `docs/python_wrappers_plan.md`.
+**Independent cleanup tasks the user flagged for later (2026-05-29 EVENING-2 audit
+re-verified):**
+- Remove orphaned helper `_emit_eepose_grad_compacted_nonserial` in
+  `_eepose_gradient_hessian.py:667` (zero callers, ~18 lines). **NOTE: the sibling
+  `_emit_eepose_grad_extraction` at line 632 is NOT orphaned — it still has 1 caller
+  at line 853** (the eepose_grad_hessian path). Earlier HANDOFF note conflated the
+  two; only `_compacted_nonserial` is safe to drop.
+- Drop `s_dXhom` param from `end_effector_pose_gradient_inner` signature (still
+  `(void)`-marked dead arg at `_eepose_gradient_hessian.py:467`) — propagate through
+  device/kernel call sites.
+- Per-tier smem allocator can also drop the dxhom-shared logic (the spilling-to-
+  workspace path for dxhom is never taken on the gradient path).
+- Documentation: add the d/dv convention note + the geometric-Jacobian explanation
+  in `docs/source/user_guide/concepts/`, and a section in `docs/python_wrappers_plan.md`.
 
 ### ee_pose_hessian d/dv (RBDReference + pinocchio_backend ONLY) — 2026-05-28
 
@@ -904,19 +919,22 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
      (~2-4 hour refactor).
 6. **Codegen interface cleanup.** Pays back on every future algorithm
    addition. Sub-items:
-   (a) **Drop thread-group plumbing.** ✅ **PARTIAL DONE 2026-05-29 (codegen
-   b228756, parent 01aa046):** stripped 191 lines of dead
-   `if use_thread_group:` branches across 15 codegen files (production
-   paths always pass `use_thread_group=False`; the conditional emit
-   produced broken stubs like `cgrps::thread_group tgrp = TBD;`).
-   iiwa14-floating equivalence GREEN.
-   **REMAINING:** drop the `use_thread_group` parameter itself from
-   helper signatures (`gen_add_sync`, `gen_add_parallel_loop`,
-   `gen_add_serial_ops`, `gen_kernel_load_inputs`, etc.) and the ~1000
-   call sites that pass it. Bounded but mechanical follow-up.
-   (b) **Consolidate emitter helpers** — `_code_generation_helpers.py` has
-   accumulated many one-off `gen_add_*` shims; collapse into a small canonical
-   set (e.g. one parallel-loop helper, one workspace-pointer-carve helper).
+   (a) ✅ **Drop thread-group plumbing — FULLY DONE 2026-05-29 (codegen
+   `b228756` partial, then `75089f8`/parent `1ff8d54` complete).**
+   `b228756` stripped 191 lines of dead `if use_thread_group:` branches
+   across 15 codegen files. `75089f8` dropped the `use_thread_group`
+   parameter itself across 1079 scrubs in 16 files. Audit 2026-05-29
+   EVENING-2: grep `use_thread_group` across `GRiDCodeGenerator/**.py`
+   returns 0 hits. iiwa14 fixed+floating + go2 floating equivalence GREEN.
+   (b) ✅ **Consolidate emitter helpers — MAIN PASS DONE 2026-05-29 (codegen
+   `75089f8`):** consolidated `gen_kernel_load_inputs` / `gen_kernel_save_result`
+   with their `_single_timing` variants (single fn each via optional stride
+   kwarg, 74 call sites rewritten). 2026-05-29 EVENING-2 polish also dropped
+   `select_shared_tier` (singular, shadowed by 3way), `gen_add_debug_print_code_line`
+   (singular), and several dead `_temp_mem_size` shells (codegen `bd1bdd3`).
+   Residual: one-off `gen_add_*` shims in `_code_generation_helpers.py` could
+   still collapse into a smaller canonical set (parallel-loop helper, workspace
+   pointer-carve helper) — fold this into the next emitter rewrite.
    (c) **Dedup repeated branches** — algorithm emitters fan out on
    `compute_c` / `use_qdd_input` / `use_qdd_Minv_input`; factor into
    table-driven helpers. *2026-05-29 scoping note:* surveyed
@@ -1045,6 +1063,65 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
   bugs surfaced. (The earlier `humanoid-tier-spill` merge happened pre-branch.)
 
 ### Done (since this backlog was last refactored 2026-05-28)
+- **2026-05-29 EVENING-2 batch (h1_2 MINIMAL bug verification + rpy-snap fix + polish/cleanup):**
+  - **Bug 1 (h1_2 MINIMAL CRBA `M[0,13]≈0`) — STALE, RETRACTED.** The earlier
+    HANDOFF entry (lines 1195+ in the previous revision) flagged this as a
+    pre-existing tier-emit bug. An empirical verification run (compiled MINIMAL
+    runner direct-probe on h1_2-floating-zero) shows the current codebase
+    returns `M[0,13] = -3.856656` (matches expected ~-3.86) **deterministically
+    across threads ∈ {32, 64, 128, 256, 384, 512}**, with M symmetric to ~1e-7.
+    No memory-ordering hazard. No codegen edit needed. The BFS-parallel CRBA
+    refactor (`809b145`) + per-jid chain-walk refactor (`9eb51a6`) +
+    URDFParser FK + rpy-snap fixes closed the gap silently. **The h1_2-fixed
+    `M[0,13]=0` value is analytically correct** (jid 0 = `left_hip_yaw`,
+    jid 13 = `left_shoulder_pitch`, disjoint subtrees → zero cross-inertia);
+    the old HANDOFF leaked the floating-base "expected -3.86" into the
+    fixed-base narrative incorrectly.
+  - **Bug 2 (h1_2 ee_pose ±π) — FIXED in URDFParser `ce01c53`** (perf-cleanup).
+    Root cause: `sp.nsimplify(tolerance=1e-6)` in `Joint.py` leaves a 3.67e-6
+    residual on URDF rpy=`"-1.5708"` (which means -π/2 truncated). The residual
+    cascades through float32 kinematic chains and the GPU `atan2` in ee_pose
+    rpy extraction flips a yaw component by exactly π (e.g. h1_2 L_thumb_distal
+    yaw -4.71 vs CPU-ref -1.57). Fix: rpy-grid snap before nsimplify — snap to
+    exact `N*π/2` for `|N| ≤ 4` when input is within 1e-5 of the grid point.
+    Bounded N keeps the snap targeted. **Byte-identical for iiwa14/go2/g1**
+    (their URDF rpy values are either exact 0 or full-precision π/2, already
+    captured by existing nsimplify). **Snaps 6 joints on h1_2** (thumb proximal
+    yaw/pitch L+R, R_middle_proximal, etc.). Pure URDFParser-side fix; no codegen
+    edit. Equivalence validation in flight at HANDOFF time.
+  - **Polish/cleanup A-batch — codegen `bd1bdd3`.** Dropped ~110 lines of pure
+    dead Python (zero callers verified across `.py`/`.cu`/`.cuh`): the singular
+    `select_shared_tier` (shadowed by the 3-way variant), `gen_add_debug_print_code_line`
+    (singular; only the `_lines` plural is used), `_any_algo_uses_workspace_spill`
+    (planned L2-persistence hook that landed elsewhere), `_gravity_shim_full_spill_count`
+    (replaced by `_gravity_shim_use_full_spill`), `gen_idsva_so_body_frame_device`
+    + `gen_idsva_so_body_frame_device_temp_mem_size` (no callers — body_frame is
+    dispatched through `gen_idsva_so_device`), and the two
+    `gen_end_effector_pose_gradient{,_hessian}_device_temp_mem_size` shells.
+    Also removed the stale `# self.gen_idsva_so_body_frame_device(False) TODO`
+    commented call. **Codegen output unchanged** (Python-only dead-code).
+  - **REAL h1_2-floating MINIMAL equivalence failure (the one the morning
+    C.1 MINIMAL run actually surfaced):** a **shape mismatch** — CUDA M is
+    (57, 57) while the mimic-aware RBDReference/`pinocchio_backend` reference
+    is (45, 45). h1_2 has 12 mimic joints (51 raw → 39 reduced) + 6 base =
+    45. This is the D.2 CUDA codegen-mimic gap, planned at
+    `docs/d2_codegen_mimic_plan.md` (4-phase, ~3 focused days). Affects every
+    algo whose output dimension scales with NV (crba, minv, rnea, fd,
+    ee_pose_gradient, ee_pose_hessian). Does NOT affect `ee_pose` (the rpy
+    extraction output is `6 * N_ee`, independent of NV).
+    **For the C.7 perf sweep:** timing is unaffected by the shape mismatch
+    (the sweep measures kernel runtime, not equivalence). h1_2 floating timing
+    will be reported on size-57 not size-45 matrices, same as the prior
+    `tier_sweep_20260525_002438` baseline (apples-to-apples comparison).
+  - **Sweep scoping decision** (resolved this session): **launch the full
+    sweep, all 4 robots × {fixed, floating} × {PERF, LITE, MINIMAL}**. No
+    h1_2 MINIMAL skip needed — the equivalence shape-mismatch is irrelevant
+    for timing. Plan: `python test/benchmarks/run_multi_version.py
+    --robots iiwa14 go2 g1 h1_2 --bases fixed floating --columns glass
+    --tiers perf lite minimal --autotune-threads --output-dir
+    test/benchmarks/results/perf_cleanup_<ts>`. Gated on (a) the rpy-snap
+    equivalence validation clearing, (b) the user's personal review of D.2
+    RBDReference (`0b1a89d` → `d0e552a`).
 - **2026-05-29 EVENING evening batch (8-agent + 2-direct landings):**
   - **D.2 FK orientation fix** — URDFParser `acbdab8` (perf-cleanup branch) +
     `8182770` (modernizing-tests branch). `Joint.set_type` now rotates `t_free`
@@ -1193,44 +1270,16 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
     - **D.2 ABA external-forces** — `f_ext` not threaded through mimic
       fast path. Niche feature, no failing tests. Defer.
     - **NEW finding: h1_2 MINIMAL-tier CRBA + ee_pose bugs surfaced by
-      C.1 MINIMAL run.** With `GRID_CUDA_TARGET_SHARED_MEM_BYTES=16384`
-      (forces all CRBA tiers to workspace-spilled emit), h1_2-fixed AND
-      h1_2-floating fail equivalence at threads=32:
-      - `h1_2/zero/crba`: M[0,13] expected -3.86, actual ~0.001 (scale
-        67). Specific cell appears not written.
-      - `h1_2/zero/end_effector_pose`: differs by exactly π (actual
-        -4.71 vs expected -1.57 — quaternion-sign-like signature).
-      **Pre-existing**, NOT today's regression:
-      - h1_2-fixed at morning C.1 LITE (target=49152) was GREEN — that
-        target routed CRBA to FULL-smem tier, never exercising
-        workspace-spilled emit.
-      - h1_2-floating had been SKIPPED on FD smem cap morning; B.4
-        unblocked it; so h1_2-floating workspace-spilled CRBA + ee_pose
-        have **never been validated before today's evening C.1 run**.
-      - A.3 surgical XImats is a no-op for fixed-base h1_2 (template arg
-        defaults False); A.3 BFS-parallel CRBA changes the FLOATING path
-        but the morning floating test was skipped so we can't say if
-        either of those introduced anything.
-      - Phase 2 chain walk algorithm reviewed: looks algebraically
-        correct (X_ind = i==0 ? jid : jid_parents[i-1] never reads X[0];
-        last-iteration parent_ind = root used for M-write but not
-        X-walk). The bug is elsewhere — could be alpha/beta/fh ptr
-        offsets in workspace mode, ee_pose tier dispatch, or a per-tier
-        emit drift. Did not finish root-cause analysis.
-      **For C.7 sweep:** narrow to skip h1_2 MINIMAL, OR drop MINIMAL
-      tier entirely. PERF + LITE on h1_2 expected clean per morning data.
-      **Pickup recipe for the next person:**
-      1. Regen h1_2-floating with `GRID_CUDA_TARGET_SHARED_MEM_BYTES=16384`
-         (one regen done at `/tmp/grid_h1_2_floating_minimal.cuh` — in
-         flight at HANDOFF time).
-      2. Compare emitted `crba_inner` against `crba_inner` from a passing
-         tier (regen with target=98304 for PERF). Diff just the inner.
-      3. For ee_pose: same approach. Look for tier-conditional emit
-         differences and verify pointer setup / arena offsets.
-      4. The actual mismatch index (0, 13) suggests row 0 (floating root
-         translation/rotation block) — could be a tier-dispatch issue
-         where the floating-root coupling computation is gated by a tier
-         flag that goes the wrong way.
+      C.1 MINIMAL run** — **RETRACTED / SUPERSEDED** by the EVENING-2
+      batch above. CRBA `M[0,13]≈0.001` claim was stale (current codebase
+      returns -3.856656 deterministically; HANDOFF entry pre-dated the
+      BFS-parallel CRBA refactor `809b145` + chain-walk refactor `9eb51a6`
+      + URDFParser FK fix `acbdab8` + rpy-snap `ce01c53`). For h1_2-fixed
+      `M[0,13]=0` is analytically correct (disjoint subtrees).
+      `end_effector_pose ±π` was real but is fixed by the rpy-grid snap
+      in URDFParser `ce01c53`. The actual remaining h1_2-floating MINIMAL
+      equivalence failure is the D.2 codegen-mimic shape mismatch (57 vs
+      45), tracked in `docs/d2_codegen_mimic_plan.md`.
   - **User-flagged review obligation**: user wants to personally review
     all 2026-05-29 D.2 RBDReference changes (`0b1a89d`, `8c351ad`,
     `bea0ac1`, `aa3eaa1`, + the idsva_so/fdsva_so commit when it lands)
