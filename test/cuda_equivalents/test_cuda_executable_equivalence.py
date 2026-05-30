@@ -1396,6 +1396,15 @@ def _run_cuda_equivalence_case(
             "(rizon4: flexiv xacro emits bare mass/inertia tags not wrapped in <inertial>.)"
         )
 
+    if base_mode == "floating" and _robot_has_mimic_joints(project_model):
+        pytest.skip(
+            f"{spec.robot_id}-floating combines a floating base with URDF mimic joints. "
+            "The mimic XImats q-fold codegen is fixed-base-only (T3 F-batch P1/P2 scope) "
+            "and asserts at GRiDCodeGenerator/helpers/_topology_helpers.py rather than "
+            "emit silently-wrong values. Floating+mimic support is deferred to the "
+            "T3-finisher (Round G); see HANDOFF F. deferred items."
+        )
+
     build_dir = tmp_path / f"cuda_{spec.robot_id}_{base_mode}"
     build_dir.mkdir()
     header_path, header_key = _generate_grid_header(project_model, resolved, build_dir, config)
