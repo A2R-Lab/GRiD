@@ -340,3 +340,232 @@ same function — verify the 2×2 instantiation matrix compiles).
    `gen_load_update_XImats_helpers_function_call` template params.
 5. Tests §5.1 (byte-identical), §5.2 (runtime==baked bit-for-bit), §5.3 (perturbed
    vs RBDReference).
+
+---
+
+## Parameter gradients for system identification
+
+**Status:** planning extension (read-only exploration 2026-05-30, branch
+`modernizing-tests`). **Goal:** expose ANALYTIC gradients of dynamics outputs
+w.r.t. the per-link inertial parameters π, for gradient-based system-ID. This
+*builds on* the D.4 runtime path (it shares the 10-param buffer + basis of §2) but
+is an *additive* new kernel family — it does not change the runtime forward rebuild.
+
+### G.0 The one load-bearing fact: inverse dynamics is LINEAR in π
+
+With per-link standard inertial parameters (the "barycentric" / link-frame 10-vector)
+
+```
+π_i = [ m_i , h_i(3)=m_i·c_i , I_O,i(6) ]            // 10 numbers, I about the link-frame ORIGIN
+```
+
+the joint torque is `tau = Y(q,q̇,q̈)·π` where `π = [π_1;…;π_{n}]` (10·n stacked) and
+`Y` is the **joint-torque regressor** (`n_v × 10·n`). Hence
+
+```
+∂tau/∂π = Y(q,q̇,q̈)        // EXACT, analytic, no finite differences
+```
+
+This is exact because RNEA is affine in each link's spatial inertia: the only places
+inertia enters the forward/backward RNEA pass are `f_i = I_i·a_i + v_i ×* (I_i·v_i)`
+and the back-propagation `f_{λ(i)} += Xᵀ f_i`, both **linear in `I_i`**, and `tau`
+is a fixed linear projection of `f` through the joint subspace (the backward pass at
+`GRiDCodeGenerator/algorithms/_inverse_dynamics.py:322-339`,
+`s_c[dof] = ±s_vaf[12*n + 6*jid + S_ind]`).
+
+### G.1 Per-link 6×10 body regressor (reusing RNEA's v_i, a_i)
+
+RNEA already computes, per link, the spatial velocity `v_i` and acceleration `a_i`
+(the latter already gravity-loaded at the root, `_inverse_dynamics.py:122-135`) and
+stores them in the SAME `s_vaf` buffer the regressor needs:
+`v_i = &s_vaf[6*jid]`, `a_i = &s_vaf[6*n + 6*jid]`, `f_i = &s_vaf[12*n + 6*jid]`
+(layout v|a|f, see `_inverse_dynamics.py:231-238,265-289`). The **body regressor**
+`Y_body,i` is the 6×10 matrix with
+
+```
+f_i = Y_body,i(v_i, a_i) · π_i
+```
+
+Column structure (each column is a 6-vector spatial force; `S(x)` = 3×3 skew):
+
+- **col 0  (m):**  the force produced by a unit mass = `a_i` acted on the COM-free
+  part plus the centrifugal term: in the standard basis the mass column is
+  `[ S(a_ω)·0 + (a_v + v_ω × v_v) ; … ]` — concretely the linear-acceleration block
+  `dot(a) + v ×* v` evaluated at unit mass. (Pinocchio's `bodyRegressor` gives the
+  exact column ordering; we mirror it — see G.4.)
+- **cols 1-3  (h = m·c, first moment):** built from the cross-product operators on
+  `v_i` and `a_i`. These are exactly the `crm`/`crf` motion/force cross matrices
+  already emitted (`_spatial_algebra_helpers.py:35-58` `crm_mul`, `:60` `crm`,
+  `:253` `crf = -crmᵀ`).
+- **cols 4-9  (I_O = [Ixx,Ixy,Ixz,Iyy,Iyz,Izz]):** the map `I ↦ I·a_i + v_i ×* (I·v_i)`.
+  Crucially, the linear-in-I operator is **already in the codebase as `icrf`**
+  (`_spatial_algebra_helpers.py:390-433`, "icrf is defined such that v crf f = f icrf v"):
+  the angular-inertia columns are `icrf(a_i)` + `crf(v_i)·icrf(v_i)` selected on the 6
+  independent I-entries. We reuse `icrf`/`crf` verbatim rather than emit new algebra.
+
+So `Y_body,i` is assembled from quantities (`v_i`, `a_i`) RNEA already left in
+`s_vaf`, using cross operators (`crm`, `crf`, `icrf`) GRiD already emits. No new
+spatial-algebra primitive is required.
+
+### G.2 From body regressor to joint regressor Y
+
+The joint regressor column block for link i is the body Jacobian transpose applied to
+`Y_body,i`, accumulated up the kinematic tree exactly like the RNEA force back-prop:
+
+```
+Y[:, 10*i : 10*i+10]  =  Σ_{k : i ∈ subtree(k)}  S_kᵀ · ( Π_{m on path k→i} X_m )ᵀ · Y_body,i
+```
+
+Operationally this is the SAME backward sweep RNEA uses for `f` — propagate each
+link's 6×10 block toward the root with `Xᵀ` (the `Xᵀ f` step at
+`_inverse_dynamics.py:312`) and project onto each ancestor DoF's subspace with the
+`±S` selection used for `s_c` (`:336-337`). I.e. **the regressor backward pass is the
+RNEA backward pass run with a 6×10 right-hand side instead of a 6×1 force.** Output
+`Y` is `n_v × 10*n` (row-major: row = DoF, col block = link×10).
+
+### G.3 Forward-dynamics param gradient via implicit differentiation
+
+From `M(π)·q̈ + c(q,q̇,π) = tau` with `tau` fixed, differentiate in π:
+
+```
+∂q̈/∂π  =  − M(π)⁻¹ · ∂(ID)/∂π |_{q̈=q̈_actual}  =  − M⁻¹ · Y(q, q̇, q̈_actual)
+```
+
+because ID(q,q̇,q̈,π)=`M q̈ + c` is linear in π with Jacobian Y at the *actual*
+acceleration. **This reuses GRiD's existing `direct_minv`** (`_direct_minv.py:46-65`,
+`direct_minv_inner` produces `s_Minv`, the explicit M⁻¹) — no new factorization:
+compute `q̈_actual` (ABA/`forward_dynamics`), build `Y` (G.1-G.2) at that `q̈`, form
+`s_Minv`, and emit `dqdd_dπ = − s_Minv · Y` (one `n_v×n_v · n_v×10n` GEMM via the
+existing `grid_linalg` GEMM primitives, `_lin_alg_helpers.py`). Result `n_v × 10*n`.
+
+### G.4 Validation oracle (numpy + pinocchio)
+
+**RBDReference has NO regressor today** (grep `regressor` across `RBDReference/` →
+zero hits; `RBDReference/equivalents/pinocchio_backend.py` exposes rnea/aba/minv/
+crba/grad but no `*_regressor`). So validation requires adding the oracle:
+
+1. **Pinocchio backend (exact):** add `joint_torque_regressor(q,q̇,q̈)` calling
+   `pin.computeJointTorqueRegressor(model, data, q_pin, v_pin, a_pin)` (→ `data.jointTorqueRegressor`,
+   `n_v × 10*nlinks`) and optionally `pin.bodyRegressor(v,a)` for the per-link 6×10
+   check. Mind the project↔pin reindexing already handled in this file:
+   `_to_pin_q` / `_expand_project_v_to_pin` / `_reduce_pin_v_to_project`
+   (`pinocchio_backend.py:200-207,473-570`) for the rows (DoF axis), and a
+   **link-id remap** for the 10-column blocks (pin orders by its own joint/link id;
+   reduce/permute the column blocks the same way `_reduce_pin_matrix_to_project`
+   folds mimic axes, `:135-159`). Pinocchio's π ordering is `[m, m·c(3), Ixx,Ixy,Iyy,Ixz,Iyz,Izz]`
+   (`pin.Inertia.toDynamicParameters()`) — **note the col-4..9 ordering differs from
+   URDF's `[Ixx,Ixy,Ixz,Iyy,Iyz,Izz]`; pick ONE basis (recommend pin's, since it is
+   the oracle) and permute consistently in both the device emit and `Robot.get_inertia_params`.**
+2. **Numpy reference (`reference_backend.py`):** add a self-contained
+   `joint_torque_regressor` that assembles `Y_body` per link from the existing
+   reference RNEA's `v_i,a_i` and back-propagates — so equivalence does not require
+   pinocchio to be installed, matching the rest of the dual-oracle layer
+   (memory `project_grid_pinocchio_reference_backlog`).
+3. **CUDA-side checks:** (a) `Y_cuda` vs `pin.computeJointTorqueRegressor` (exact,
+   ULP-class up to FP order); (b) **finite-difference consistency with the D.4 runtime
+   forward path** — perturb one π entry via `set_inertia_params` (§2b), re-run runtime
+   `inverse_dynamics`, and assert `(tau(π+δ)−tau(π))/δ ≈ Y[:,col]`. This cross-checks
+   the gradient path against the runtime-inertia forward path and pins the two to the
+   SAME basis (G.5). Likewise FD-check `∂q̈/∂π` against runtime `forward_dynamics`.
+
+### G.5 Standard ↔ COM-folded basis (consistency with D.4 storage)
+
+D.4 stores the runtime params as `[m, mc(3), topLeft_6]` (§2a/§2c), where
+`topLeft = I_com + m·S(c)·S(c)ᵀ = I_O` is the inertia about the **link-frame origin**
+(parallel-axis fold, `URDFParser/Link.py:54-63`: `topLeft = inertia.to_matrix() + mccT`).
+The regressor's standard basis π also uses `I_O` (G.0) and `h = m·c = mc`. **Therefore
+the basis Jacobian between D.4's stored 10-vector and the regressor's π is the
+IDENTITY on the `[m, mc, I_O]` block** — by design, because D.4 already pre-folds to
+origin-frame. The only care item is the **I-entry ORDERING** (URDF `topLeft` is read
+out as `[Ixx,Ixy,Ixz,Iyy,Iyz,Izz]`; pin/regressor want `[Ixx,Ixy,Iyy,Ixz,Iyz,Izz]`):
+fix a single permutation `P` (a constant 10×10 with a 6×6 index swap, mass+mc identity)
+and apply it once in `Robot.get_inertia_params_ordered_by_id` so the runtime forward
+buffer and the regressor columns are in the *same* order. (If one preferred the
+COM-frame `I_com` basis instead, the Jacobian would carry the constant parallel-axis
+term `∂I_O/∂(m,c) = S(c)S(c)ᵀ`, `∂h/∂c = m·I3`, etc. — we DO NOT, since D.4 stores
+origin-frame; documenting it only to justify the identity choice.)
+
+### G.6 Which outputs get param-gradients
+
+- **`tau` (inverse dynamics): primary** — exact via `Y` (G.0-G.2).
+- **`q̈` (forward dynamics):** via `−M⁻¹Y` (G.3), reusing `direct_minv`.
+- **`M` / CRBA:** each entry `M_{ab}` is also linear in π (CRBA composite inertia is a
+  linear accumulation of `I_i`), so a mass-matrix regressor is derivable from the same
+  `Y_body` machinery if needed — list as a **stretch**; `−M⁻¹Y` already covers the FD
+  use-case without it.
+- **`ee_pose` / kinematics (`eepose_gradient_hessian`): OUT OF SCOPE** — end-effector
+  pose and its q-gradients/Hessians read only the X/Xhom region of `s_XImats` and carry
+  NO inertia (already noted inertia-free in §4). `∂ee_pose/∂π = 0` identically; do not
+  emit a param-gradient for it.
+- **Second-order (`idsva_so`, `fdsva_so`): OUT OF SCOPE for v1** — these are q/q̇
+  second derivatives; mixed inertia×state second-order terms are a separate, larger
+  effort. Note as backlog.
+
+### G.7 Codegen hook (new `param_gradient` / regressor emit)
+
+Add a new algorithm family mirroring the existing `*_gradient` kernel pattern
+(`_inverse_dynamics_gradient.py`) and registered in `GRiDCodeGenerator.py:24-37`'s
+function-import block:
+
+- `gen_inverse_dynamics_regressor_inner` (`__device__`, `template <typename T, bool ...>`):
+  call `gen_load_update_XImats_helpers_function_call()` (so it automatically gets the
+  D.4 `RUNTIME_INERTIA` template wiring, §3), run the standard RNEA forward sweep to
+  populate `s_vaf` (reuse `inverse_dynamics_inner` or its forward portion,
+  `_inverse_dynamics.py:83-258`), then a **parallel loop over links × 10 params**
+  building `Y_body,i` from `s_vaf` (G.1) and back-propagating to `Y` (G.2).
+  Output buffer `s_Y` size `n_v * 10 * n_bodies`.
+- **Parallelization:** the natural grid is the existing `gen_add_parallel_loop`
+  (`_code_generation_helpers.py:72-79`) over a flattened `(link, param∈[0,10))` index
+  (10·n columns); each thread builds one 6-vector body-regressor column and scatters
+  it; the tree back-prop reuses the RNEA backward-sweep ordering (bfs levels). Block
+  level (`gen_add_parallel_loop(..., block_level=True)`) loops over `NUM_TIMESTEPS`
+  like `_inverse_dynamics_gradient.py:1054`.
+- **scratch/smem:** reuse `s_vaf` (18·n, already sized for ID) + a 6×10 per-link
+  staging tile in `s_temp`; **no new shared inertia buffer** (regressor reads `v/a`
+  from `s_vaf` and inertia is not even needed for `Y` itself — only `tau`'s value is,
+  not its π-derivative). The FD-gradient variant additionally needs `s_Minv`
+  (`6*n*n` per `direct_minv`) + a GEMM scratch for `−M⁻¹Y`.
+- **Output-pointer / signature convention:** follow the trailing-pointer convention
+  (`s_Y` output placed by caller, like `s_dc_du` at `_inverse_dynamics_gradient.py:997`);
+  if a per-call `d_inertia_params` override is threaded (R3), add it as a trailing
+  `nullptr`-default pointer to mirror T4's `d_f_ext`.
+- Emit the full family: `_inner_temp_mem_size`, `_inner_function_call`, `_inner`,
+  `_device`, `_kernel`, `_host`, top-level dispatcher (the 7-function pattern in the
+  import block `GRiDCodeGenerator.py:24-37`).
+
+### G.8 Identifiability caveat (expose full Y, user reduces)
+
+`Y` is **structurally rank-deficient**: only the "base parameters" (identifiable
+linear combinations of the 10·n) are observable from joint torques; typically far
+fewer than 10·n columns are independent (fixed links, gravity-only-coupled
+parameters, etc. drop out). **We expose the FULL `n_v × 10*n` regressor and explicitly
+do NOT claim all 10·n params are identifiable.** Base-parameter reduction (QR/SVD on a
+stacked multi-sample `Y`, or `pin.computeJointTorqueRegressor` + a structural base-set
+algorithm) is a **downstream user step** — document it in the kernel header notes,
+ship the dense regressor, and let the user form the reduced, well-conditioned basis
+for their sysID solve.
+
+### G.9 F-batch interplay
+
+- **T3 (mimic):** inertia is per-LINK; the regressor indexes the 10-column block by
+  **link id**, never reduced DoF — mimic-agnostic exactly like D.4 (§6 R2). The DoF
+  (row) axis of `Y` folds through the same mimic reduction `Y` shares with `tau`
+  (`pinocchio_backend.py` `_reduce_pin_v_to_project`). So mimic only touches the row
+  reduction in the ORACLE, not the device column construction.
+- **T4 (fext):** a constant external force `f_ext` does **not** depend on inertial
+  params, so `∂(ID with f_ext)/∂π = Y` unchanged (`∂f_ext/∂π = 0`). The regressor is
+  identical whether or not f_ext is present; note it and ignore f_ext in the π-gradient.
+- **Shared buffer:** the regressor's `tau`-value path and D.4's runtime forward path
+  read the SAME `d_inertia_params` buffer in the SAME basis (G.5) — this is what makes
+  the §G.4(3b) finite-difference cross-check valid.
+
+### G.10 Sequencing
+
+1. Lands AFTER the D.4 runtime path core (§7 steps 1-4) so the FD cross-check
+   (§G.4-3b) and the shared param buffer/basis (G.5) exist.
+2. Add the numpy + pinocchio regressor oracle to RBDReference FIRST (it is missing
+   today) — `pin.computeJointTorqueRegressor` + `pin.bodyRegressor` in
+   `pinocchio_backend.py`, plus a self-contained `reference_backend.py` version.
+3. Emit `inverse_dynamics_regressor` (Y) → validate vs oracle (§G.4-1/2/3a).
+4. Emit the FD param-gradient `−M⁻¹Y` reusing `direct_minv` → validate vs §G.4-3b FD.
+5. (stretch) CRBA/M regressor; second-order param gradients (backlog).
