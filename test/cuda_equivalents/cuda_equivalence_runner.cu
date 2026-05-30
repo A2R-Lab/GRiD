@@ -38,14 +38,14 @@ __device__ void load_floating_inputs(
 template <typename T>
 __global__ void floating_inverse_dynamics_runner(
     T *d_out, const T *d_q, const T *d_qd, const T *d_u,
-    const grid::robotModel<T> *d_robot_model, const T gravity
+    const grid::robotModel<T> *d_robot_model, const T gravity, T *d_f_ext = nullptr
 ) {
     __shared__ T s_q[grid::NUM_JOINTS];
     __shared__ T s_qd[grid::NUM_VEL];
     __shared__ T s_u[grid::NUM_VEL];
     __shared__ T s_out[grid::NUM_VEL];
     load_floating_inputs(s_q, s_qd, s_u, d_q, d_qd, d_u);
-    grid::inverse_dynamics_device<T>(s_out, s_q, s_qd, s_u, d_robot_model, gravity);
+    grid::inverse_dynamics_device<T>(s_out, s_q, s_qd, s_u, d_robot_model, d_f_ext, gravity);
     __syncthreads();
     for (int ind = threadIdx.x; ind < grid::NUM_VEL; ind += blockDim.x) {
         d_out[ind] = s_out[ind];
@@ -80,7 +80,7 @@ template <typename T>
 __global__ void floating_forward_dynamics_runner(
     T *d_out, const T *d_q, const T *d_qd, const T *d_u,
     const grid::robotModel<T> *d_robot_model, const T gravity,
-    unsigned char *d_workspace
+    unsigned char *d_workspace, T *d_f_ext = nullptr
 ) {
     __shared__ T s_q[grid::NUM_JOINTS];
     __shared__ T s_qd[grid::NUM_VEL];
@@ -88,7 +88,7 @@ __global__ void floating_forward_dynamics_runner(
     __shared__ T s_out[grid::NUM_VEL];
     load_floating_inputs(s_q, s_qd, s_u, d_q, d_qd, d_u);
     grid::forward_dynamics_device<T, grid::TIER_MINIMAL>(
-        s_out, s_q, s_qd, s_u, d_robot_model, gravity,
+        s_out, s_q, s_qd, s_u, d_robot_model, d_f_ext, gravity,
         reinterpret_cast<T *>(d_workspace));
     __syncthreads();
     for (int ind = threadIdx.x; ind < grid::NUM_VEL; ind += blockDim.x) {
@@ -278,6 +278,20 @@ void run() {
     gpuErrchk(cudaMemcpy(h_vec.data(), d_vec, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
     print_vector("runtime_probe", h_vec.data(), grid::NUM_VEL);
 
+    // External forces (opt-in via GRID_RUNNER_FEXT=1): read 6*NUM_BODIES values
+    // (body-major, local-frame [angular; linear]) into hd_data->d_f_ext and run
+    // the fext-aware launches below. d_f_ext_active is nullptr in the default
+    // (no-fext) path, so existing behavior is byte-identical.
+    const bool g_use_fext = (std::getenv("GRID_RUNNER_FEXT") != nullptr);
+    T *d_f_ext_active = nullptr;
+    if (g_use_fext) {
+        read_vector(hd_data->h_f_ext, 6 * grid::NUM_BODIES);
+        gpuErrchk(cudaMemcpy(hd_data->d_f_ext, hd_data->h_f_ext,
+                             6 * grid::NUM_BODIES * sizeof(T), cudaMemcpyHostToDevice));
+        d_f_ext_active = hd_data->d_f_ext;
+        print_vector("input_f_ext", hd_data->h_f_ext, 6 * grid::NUM_BODIES);
+    }
+
     grid_runner_set_smem_or_skip(floating_inverse_dynamics_runner<T>,
         "inverse_dynamics", grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>());
     grid_runner_set_smem_or_skip(grid::direct_minv_kernel<T>,
@@ -301,7 +315,7 @@ void run() {
 
     if (floating_algorithm_requested("inverse_dynamics")) {
         floating_inverse_dynamics_runner<T><<<1, g_num_threads, grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
-            d_vec, d_q, d_qd, d_zero, d_robot_model, gravity
+            d_vec, d_q, d_qd, d_zero, d_robot_model, gravity, /*d_f_ext=*/nullptr
         );
         gpuErrchk(cudaPeekAtLastError());
         gpuErrchk(cudaDeviceSynchronize());
@@ -321,7 +335,7 @@ void run() {
 
     if (floating_algorithm_requested("forward_dynamics")) {
         floating_forward_dynamics_runner<T><<<1, g_num_threads, grid::FD_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>()>>>(
-            d_vec, d_q, d_qd, d_u, d_robot_model, gravity, hd_data->d_workspace
+            d_vec, d_q, d_qd, d_u, d_robot_model, gravity, hd_data->d_workspace, /*d_f_ext=*/nullptr
         );
         gpuErrchk(cudaPeekAtLastError());
         gpuErrchk(cudaDeviceSynchronize());
@@ -335,6 +349,7 @@ void run() {
             hd_data->d_workspace,
             d_q_qd_u,
             grid::NUM_JOINTS + 2 * grid::NUM_VEL,
+            /*d_f_ext=*/nullptr,
             d_robot_model,
             gravity,
             1
@@ -421,6 +436,7 @@ void run() {
             hd_data->d_workspace,
             d_q_qd,
             grid::NUM_JOINTS + grid::NUM_VEL,
+            /*d_f_ext=*/nullptr,
             d_robot_model,
             gravity,
             1
@@ -444,6 +460,7 @@ void run() {
             hd_data->d_workspace,
             d_q_qd_u,
             grid::NUM_JOINTS + 2 * grid::NUM_VEL,
+            /*d_f_ext=*/nullptr,
             d_robot_model,
             gravity,
             1
@@ -458,6 +475,59 @@ void run() {
             grid::NUM_VEL,
             grid::NUM_VEL
         );
+    }
+
+    // External forces (opt-in via GRID_RUNNER_FEXT=1): re-run the dynamics that
+    // thread d_f_ext, emitting *_fext-labeled outputs. The default outputs above
+    // used nullptr (byte-identical to no-fext). d_f_ext_active was populated from
+    // stdin earlier in this block.
+    if (g_use_fext) {
+        floating_inverse_dynamics_runner<T><<<1, g_num_threads, grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+            d_vec, d_q, d_qd, d_zero, d_robot_model, gravity, d_f_ext_active
+        );
+        gpuErrchk(cudaPeekAtLastError());
+        gpuErrchk(cudaDeviceSynchronize());
+        gpuErrchk(cudaMemcpy(h_vec.data(), d_vec, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
+        print_vector("inverse_dynamics_fext", h_vec.data(), grid::NUM_VEL);
+
+        floating_forward_dynamics_runner<T><<<1, g_num_threads, grid::FD_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>()>>>(
+            d_vec, d_q, d_qd, d_u, d_robot_model, gravity, hd_data->d_workspace, d_f_ext_active
+        );
+        gpuErrchk(cudaPeekAtLastError());
+        gpuErrchk(cudaDeviceSynchronize());
+        gpuErrchk(cudaMemcpy(h_vec.data(), d_vec, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
+        print_vector("forward_dynamics_fext", h_vec.data(), grid::NUM_VEL);
+
+        grid::aba_kernel<T><<<1, g_num_threads, grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+            d_vec, hd_data->d_workspace, d_q_qd_u, grid::NUM_JOINTS + 2 * grid::NUM_VEL,
+            d_f_ext_active, d_robot_model, gravity, 1
+        );
+        gpuErrchk(cudaPeekAtLastError());
+        gpuErrchk(cudaDeviceSynchronize());
+        gpuErrchk(cudaMemcpy(h_vec.data(), d_vec, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
+        print_vector("aba_fext", h_vec.data(), grid::NUM_VEL);
+
+        grid::inverse_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::ID_DU_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+            d_grad, hd_data->d_workspace, d_q_qd, grid::NUM_JOINTS + grid::NUM_VEL,
+            d_f_ext_active, d_robot_model, gravity, 1
+        );
+        gpuErrchk(cudaPeekAtLastError());
+        gpuErrchk(cudaDeviceSynchronize());
+        gpuErrchk(cudaMemcpy(h_grad.data(), d_grad, grid::NUM_VEL * 2 * grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
+        print_matrix_col_major("inverse_dynamics_gradient_q_fext", h_grad.data(), grid::NUM_VEL, grid::NUM_VEL);
+        print_matrix_col_major("inverse_dynamics_gradient_qd_fext",
+            &h_grad[grid::NUM_VEL * grid::NUM_VEL], grid::NUM_VEL, grid::NUM_VEL);
+
+        grid::forward_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::FD_DU_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+            d_grad, hd_data->d_workspace, d_q_qd_u, grid::NUM_JOINTS + 2 * grid::NUM_VEL,
+            d_f_ext_active, d_robot_model, gravity, 1
+        );
+        gpuErrchk(cudaPeekAtLastError());
+        gpuErrchk(cudaDeviceSynchronize());
+        gpuErrchk(cudaMemcpy(h_grad.data(), d_grad, grid::NUM_VEL * 2 * grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
+        print_matrix_col_major("forward_dynamics_gradient_q_fext", h_grad.data(), grid::NUM_VEL, grid::NUM_VEL);
+        print_matrix_col_major("forward_dynamics_gradient_qd_fext",
+            &h_grad[grid::NUM_VEL * grid::NUM_VEL], grid::NUM_VEL, grid::NUM_VEL);
     }
 
     gpuErrchk(cudaFree(d_q));
@@ -589,6 +659,56 @@ void run() {
         "end_effector_pose_hessian", hd_data->h_d2eePos,
         6 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_EES
     );
+
+    // External forces (opt-in via GRID_RUNNER_FEXT=1). The host wrappers read
+    // hd_data->d_f_ext (body-major 6*NUM_BODIES local-frame); it is zeroed at
+    // init so all the outputs above are byte-identical to the no-fext path.
+    // Here we read a nonzero f_ext, copy it into d_f_ext, and re-run the
+    // dynamics that thread external forces, emitting *_fext-labeled outputs.
+    if (std::getenv("GRID_RUNNER_FEXT") != nullptr) {
+        read_vector(hd_data->h_f_ext, 6 * grid::NUM_BODIES);
+        gpuErrchk(cudaMemcpy(hd_data->d_f_ext, hd_data->h_f_ext,
+                             6 * grid::NUM_BODIES * sizeof(T), cudaMemcpyHostToDevice));
+        print_vector("input_f_ext", hd_data->h_f_ext, 6 * grid::NUM_BODIES);
+
+        grid::inverse_dynamics<T, false, true>(
+            hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+        );
+        gpuErrchk(cudaPeekAtLastError());
+        print_vector("inverse_dynamics_fext", hd_data->h_c, grid::NUM_JOINTS);
+
+        grid::forward_dynamics<T>(
+            hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+        );
+        gpuErrchk(cudaPeekAtLastError());
+        print_vector("forward_dynamics_fext", hd_data->h_qdd, grid::NUM_JOINTS);
+
+        grid::aba<T>(
+            hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+        );
+        gpuErrchk(cudaPeekAtLastError());
+        print_vector("aba_fext", hd_data->h_qdd, grid::NUM_JOINTS);
+
+        grid::inverse_dynamics_gradient<T, false, true>(
+            hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+        );
+        gpuErrchk(cudaPeekAtLastError());
+        print_matrix_col_major("inverse_dynamics_gradient_q_fext",
+            hd_data->h_dc_du, grid::NUM_JOINTS, grid::NUM_JOINTS);
+        print_matrix_col_major("inverse_dynamics_gradient_qd_fext",
+            &hd_data->h_dc_du[grid::NUM_JOINTS * grid::NUM_JOINTS],
+            grid::NUM_JOINTS, grid::NUM_JOINTS);
+
+        grid::forward_dynamics_gradient<T, false>(
+            hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+        );
+        gpuErrchk(cudaPeekAtLastError());
+        print_matrix_col_major("forward_dynamics_gradient_q_fext",
+            hd_data->h_df_du, grid::NUM_JOINTS, grid::NUM_JOINTS);
+        print_matrix_col_major("forward_dynamics_gradient_qd_fext",
+            &hd_data->h_df_du[grid::NUM_JOINTS * grid::NUM_JOINTS],
+            grid::NUM_JOINTS, grid::NUM_JOINTS);
+    }
 #endif
 
     grid::close_grid<T>(streams, d_robot_model, hd_data);
