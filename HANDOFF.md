@@ -1159,7 +1159,37 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
   match each submodule's HEAD exactly. GLASS stays on `main` (intentional
   exception per user).
 
-### F. Parallel work batch — 2026-05-30 (PICK UP HERE)
+### F. Parallel work batch — 2026-05-30
+
+**✅ MERGE COMPLETE 2026-05-30.** All six tasks merged into `modernizing-tests`
+(parent `c9af492`, GRiDCodeGenerator `819328a`, RBDReference `5dcabf4`,
+URDFParser `b74e6bc`). Merge order T6→T1→T4→T3→T5→T2 went with only ONE conflict
+(a stale T1 comment vs T4's implemented f_ext, resolved to T4); T3/T5/T2 auto-merged
+clean. Consolidated post-merge equivalence validation run separately. NOT yet pushed.
+
+**⚠️ DEFERRED FROM F — backlog (the incomplete parts; some are footguns):**
+- **T3 mimic CUDA codegen is PARTIAL (P1+P2 only).** Done: id/crba/minv/fd/aba
+  mimic-aware, gated byte-identical for non-mimic; fr3-fixed fully passes. NOT done:
+  - **P3/P4 mimic GRADIENTS are safe-stubbed to ZEROS and gated out of tests** —
+    `inverse_dynamics_gradient`/`forward_dynamics_gradient`/ee_pose-grad/idsva_so/
+    fdsva_so return zeros for MIMIC robots (fr3/h1_2). **Footgun:** silently wrong,
+    not an error. Fix forward: implement P3/P4 mimic folds, and meanwhile consider
+    making the mimic-gradient path emit a clear "unsupported" error vs silent zeros.
+  - **h1_2 branched-root `inverse_dynamics` fails** — root-caused: topology-helper
+    sizing uses `get_num_pos()`/`get_num_vel()` but sections are built NJ-wide; for
+    mimic (NJ>nv) the device reads wrong parent/S-index at multi-joint BFS levels.
+    Fix must be **gated fixed-base** (floating non-mimic legitimately has NJ≠nv — a
+    blanket swap breaks Gate A; verified + reverted).
+  - **`vel_to_body` latent bug** (floating mimic SO path, `_idsva_so_floating_velocity_metadata`)
+    — overwrites on shared v-slot; not exercised by the runner (no idsva_so in it) but
+    real for P4.
+  - Add h1_2 `norm_rtol` override for fd/aba (float32-on-1e6 noise; mirror go2/g1).
+  → A **T3-finisher** is the natural next cascade launch (GPU now free).
+- **T2 left crba unmodified** (its Phase-2 is already parallel; the gap is batch
+  occupancy/tier) → handled by T5's autotune, not a codegen restructure.
+- **T5 propose-only follow-ups** (`docs/open-tasks/tier_autotune_followups.md`):
+  feed autotuned best-tier back into codegen per-robot defaults; deeper A.7 fix
+  (LITE aliases SHARED launch_bounds for no-smem-spill algos) — belongs in B+C.
 
 Six tasks in parallel, each in its own clone + branch off `modernizing-tests`
 (except T2 and T6 which run in main repo on their own branches). Per-agent
