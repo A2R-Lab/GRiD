@@ -119,7 +119,7 @@ void run() {
     const dim3 block_dimms(1, 1, 1);
     // The integrator kernels are compiled with
     // __launch_bounds__(tier_max_threads<TIER>()) (= MAX_PERF_LEVEL_THREADS at
-    // TIER_PERF). Launching with MORE threads than that bound fails with
+    // TIER_SHARED). Launching with MORE threads than that bound fails with
     // cudaErrorInvalidValue, so a swept count above the bound (e.g. 448 on a
     // small robot whose MAX_PERF_LEVEL_THREADS is 352) must be clamped down. The
     // clamped value is still multi-warp, so thread-count race coverage holds.

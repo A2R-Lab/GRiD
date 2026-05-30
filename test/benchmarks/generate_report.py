@@ -100,6 +100,24 @@ def _entry_batch(entry: Optional[dict], n: int, kind: str = "with_mem") -> str:
     return _fmt(b.get("median") or b.get("mean"))
 
 
+def _entry_best(picks: Optional[dict], algo: str) -> str:
+    """Render the autotuned best (tier, threads) winner µs for `algo` as
+    'µs (tier@threads)'. `picks` is results[robot][base]['algo_picks']. `—` if
+    no autotune pick exists for this algo/cell (autotune is opt-in; tuned at
+    N=256 compute-only)."""
+    if not picks:
+        return "—"
+    info = picks.get(algo)
+    if not info:
+        return "—"
+    us = info.get("us_at_optimal")
+    if us is None:
+        return "—"
+    tier = info.get("tier_optimal", "?")
+    threads = info.get("threads_optimal", "?")
+    return f"{_fmt(us)} ({tier}@{threads})"
+
+
 def _speedup(grid_entry: Optional[dict], pin_entry: Optional[dict], n: int) -> str:
     if grid_entry is None or pin_entry is None:
         return "—"
@@ -192,11 +210,14 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
             # default), leaving frax_cpu as `—`.
             fx_cpu = (base_dict.get("frax_cpu") or {}).get(algo)
             fx_gpu = (base_dict.get("frax_gpu") or base_dict.get("frax") or {}).get(algo)
+            picks = base_dict.get("algo_picks")  # autotune (tier×threads) winners
 
             if metric == "single":
                 vals = [
                     _entry_single(pg),
                     _entry_single(gl), _entry_single(gl_lite), _entry_single(gl_min),
+                    # grid_best is tuned on the N=256 compute-only path only.
+                    "—",
                     _entry_single(pi) + _codegen_flag(pi),
                     _entry_single(mx),
                     _entry_single(fx_cpu), _entry_single(fx_gpu),
@@ -209,6 +230,8 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
                     _entry_batch(gl, n, "compute_only"),
                     _entry_batch(gl_lite, n, "compute_only"),
                     _entry_batch(gl_min, n, "compute_only"),
+                    # grid_best winner is from the N=256 autotune; show only there.
+                    _entry_best(picks, algo) if n == 256 else "—",
                     _entry_batch(pi, n),
                     _entry_batch(mx, n, "compute_only"),
                     _entry_batch(fx_cpu, n, "compute_only"),
@@ -256,14 +279,18 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
         "Columns:",
         "- **pre_glass**: GRiD at the pre-GLASS reference. Fixed-base only "
         "(pre_glass harness does not support floating-base).",
-        "- **glass**: GRiD HEAD with the pure-SIMT GLASS backend at the PERF tier "
-        "(max smem; lowest spill).",
+        "- **glass**: GRiD HEAD with the pure-SIMT GLASS backend at the SHARED tier "
+        "(formerly 'PERF'; max smem, lowest spill — full inner scratch in shared memory).",
         "- **glass_lite**: GRiD HEAD at the LITE tier — partial spill of cold/large "
         "buffers to L2-pinned d_workspace; trades some throughput for ~50% smem "
         "headroom so more blocks fit per SM. `—` if the algorithm has a single tier.",
         "- **glass_min**: GRiD HEAD at the MINIMAL tier — most aggressive spill so "
         "the kernel fits on lower-spec GPUs / leaves smem free for the caller. `—` "
         "if the algorithm has a single tier.",
+        "- **grid_best**: the autotuned global winner over (tier × thread-count) at "
+        "**batch N=256 compute-only**, formatted `µs (tier@threads)`. Populated only "
+        "when the sweep ran with `--autotune-threads`; `—` otherwise and in the "
+        "single-call / N=16 sub-tables (the autotune tunes the N=256 path).",
         "- **pin**: Pinocchio CPU reference (codegen where available).",
         "- **mjx**: MuJoCo MJX (JAX) GPU reference. Subset of algos only "
         "(id / fd / ee_pose / id_du); others render `—`.",
@@ -297,11 +324,11 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
                 "n256":   "batch N=256",
             }
             col_header = (
-                "| Robot | Base | pre_glass | glass | glass_lite | glass_min "
+                "| Robot | Base | pre_glass | glass | glass_lite | glass_min | grid_best "
                 "| pin | mjx | frax_cpu | frax_gpu | glass/pre |"
             )
             col_align = (
-                "|-------|------|:---------:|:-----:|:----------:|:---------:"
+                "|-------|------|:---------:|:-----:|:----------:|:---------:|:--------:"
                 "|:---:|:---:|:--------:|:--------:|:---------:|"
             )
             for metric in ("single", "n16", "n256"):

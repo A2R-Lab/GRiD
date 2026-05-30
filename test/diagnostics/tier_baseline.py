@@ -247,7 +247,7 @@ def dump_smem_bytes(grid_cuh: Path, emitted_labels: set[str], build_dir: Path) -
 
 def needs_real_downgrade(perf: dict | None, relax: dict | None, smem_bytes: int) -> str:
     """Decide whether a (kernel, robot) cell needs real downgrade code vs
-    free-aliasing TIER_LITE/MINIMAL to TIER_PERF.
+    free-aliasing TIER_LITE/MINIMAL to TIER_SHARED.
 
     Signals (tightened to avoid false positives):
       A. relax.sp ≥ 500 AND relax.sp > 2 × max(perf.sp, 100):
@@ -332,7 +332,7 @@ def main():
         "- `YES (smem)`: smem ≥ 80 KB (~80% of the sm_120 100 KB per-block cap).",
         "  Outer-kernel inline users hit smem pressure even at perf — they want",
         "  a smem-axis downgrade variant.",
-        "- `no`: free-alias TIER_LITE/MINIMAL to TIER_PERF; no body changes needed.",
+        "- `no`: free-alias TIER_LITE/MINIMAL to TIER_SHARED; no body changes needed.",
         "",
         "**Per-robot `MAX_PERF_LEVEL_THREADS`**: " +
             ", ".join(f"{r}={n}" for r, n in sug.items()),

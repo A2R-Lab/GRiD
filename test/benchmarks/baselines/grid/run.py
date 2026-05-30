@@ -911,9 +911,14 @@ def compile_binaries(
     # spill body). Defaulting via #ifndef in grid.cuh keeps PERF as the
     # baseline when --tier is not passed.
     if tier is not None:
-        tier_macro = {"perf": "grid::TIER_PERF", "lite": "grid::TIER_LITE", "minimal": "grid::TIER_MINIMAL"}.get(tier)
+        tier_macro = {
+            "shared": "grid::TIER_SHARED",
+            "perf": "grid::TIER_SHARED",  # deprecated alias for "shared"
+            "lite": "grid::TIER_LITE",
+            "minimal": "grid::TIER_MINIMAL",
+        }.get(tier)
         if tier_macro is None:
-            raise ValueError(f"unknown tier: {tier!r}; expected perf/lite/minimal")
+            raise ValueError(f"unknown tier: {tier!r}; expected shared/lite/minimal (perf=shared alias)")
         linalg_flags.append(f"-DGRID_DEFAULT_RESOURCE_TIER={tier_macro}")
     # Optional: GRID_BENCH_D2EE_ONLY=1 in env forwards a -D into nvcc so the
     # batch dispatcher's #if GRID_BENCH_D2EE_ONLY path is taken, measuring only
@@ -1141,25 +1146,77 @@ def run_timing(binaries: tuple[Path | None, Path | None], base: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Per-(robot, base, algo) thread-count autotune (C.4, 2026-05-29)
+# Per-(robot, base, algo) JOINT (tier × thread-count) autotune
+#   C.4 (2026-05-29): thread-count sweep on the SHARED-tier batch binary.
+#   T5  (2026-05-30): generalized to a joint (tier × threads) pick — the inner
+#                     thread-grid sweep is run on EACH per-tier batch binary
+#                     (shared / lite / minimal), and the winner is the global
+#                     argmin µs over (tier, threads).
 #
-# The benchmark binary's batch kernels honor a runtime override of the
-# per-block thread count via the GRID_AUTOTUNE_THREAD_COUNT env var (see
-# timeGRiD_common.h::grid_resolve_threads_per_block). When --autotune-threads
-# is passed, we re-run JUST the batch binary at a small grid of thread counts
-# (with cut-down --batch-iters so the sweep is cheap), parse the batch-256
-# compute-only timing for each algo, and persist the per-algo winner.
+# The benchmark binary's kernels honor a runtime override of the per-block
+# thread count via the GRID_AUTOTUNE_THREAD_COUNT env var (see
+# timeGRiD_common.h::grid_resolve_threads_per_block). The per-tier *binaries*
+# are produced by recompiling with -DGRID_DEFAULT_RESOURCE_TIER=grid::TIER_<X>;
+# they are content-cached (see compile_binaries' runner_key), so the per-tier
+# binaries that run_multi_version.py's BUILD phase already produced are reused
+# here as cache hits — no new compiles in the common case.
 #
-# Bisect strategy: a coarse sweep + a one-level refinement around the winner.
-# Cheap (~30s/robot) and good enough — the SIMT loops are smooth on block
-# size and the noise floor is the dominant uncertainty for fast kernels.
+# Cap-aware clipping (C.4 follow-up): each tier's launch_bounds is
+# tier_max_threads<TIER>() (SHARED=MAX_PERF_LEVEL_THREADS, LITE=min(2×,768),
+# MINIMAL=1024). Probing a thread count above that cap would exceed the kernel's
+# __launch_bounds__ and fail the launch, so the grid is clipped per tier before
+# sweeping. (cudaFuncAttributes.maxThreadsPerBlock is the runtime equivalent;
+# the tier cap is the tighter static bound and is what we clip to.)
 #
-# Output: result["algo_picks"][algo] = {
-#     "threads_optimal": N, "us_at_optimal": <µs>, "sweep_us": {N: us, ...}
+# Output (schema 2): result["algo_picks"][algo] = {
+#     "schema": 2,
+#     "tier_optimal": "shared"|"lite"|"minimal",
+#     "threads_optimal": N,
+#     "us_at_optimal": <µs>,
+#     "sweep": {"shared": {threads: us, ...}, "lite": {...}, "minimal": {...}},
+#     # flattened back-compat view (the C.4 schema-1 keys), pointing at the
+#     # winning tier's per-threads sweep so existing generate_report.py
+#     # consumers keep working unchanged:
+#     "sweep_us": {threads: us, ...},
 # }
 # ---------------------------------------------------------------------------
 DEFAULT_AUTOTUNE_THREAD_GRID: tuple[int, ...] = (32, 64, 96, 128, 192, 256, 384, 512)
 DEFAULT_AUTOTUNE_N: int = 256            # batch size on which we tune (matches default bench)
+AUTOTUNE_TIERS: tuple[str, ...] = ("shared", "lite", "minimal")
+
+
+def _read_max_perf_level_threads(header_path: Path) -> int | None:
+    """Extract `const int MAX_PERF_LEVEL_THREADS = N;` from a generated grid.cuh.
+
+    Used for cap-aware thread-grid clipping. Returns None if not found (callers
+    then fall back to the hardware cap of 1024)."""
+    import re
+    try:
+        text = header_path.read_text()
+    except OSError:
+        return None
+    m = re.search(r"MAX_PERF_LEVEL_THREADS\s*=\s*(\d+)\s*;", text)
+    return int(m.group(1)) if m else None
+
+
+def _tier_thread_cap(tier: str, max_perf: int | None) -> int:
+    """Mirror grid.cuh's tier_max_threads<TIER>() so we don't probe above the
+    kernel's __launch_bounds__ (which would fail the launch)."""
+    mp = max_perf if max_perf is not None else 1024
+    if tier == "minimal":
+        return 1024
+    if tier == "lite":
+        return min(mp * 2, 768)
+    return mp  # shared (== ex-PERF)
+
+
+def _clip_grid_to_cap(thread_grid: tuple[int, ...], cap: int) -> tuple[int, ...]:
+    """Drop probes exceeding `cap`; keep at least the largest fitting one."""
+    fit = tuple(t for t in thread_grid if t <= cap)
+    if fit:
+        return fit
+    # Degenerate: every grid point exceeds the cap — fall back to the cap itself.
+    return (cap,)
 DEFAULT_AUTOTUNE_BATCH_ITERS: int = 50    # outer rep count per (algo, thread count) cell
 
 
@@ -1182,37 +1239,67 @@ def _autotune_batch_iters_for_binary(batch_binary: Path, base: str, threads: int
     return result.stdout
 
 
-def _autotune_pick_winners(
-    batch_binary: Path,
+def build_tier_binaries(
+    header_path: Path,
+    arch: str,
+    build_dir: Path,
+    *,
     base: str,
-    thread_grid: tuple[int, ...] = DEFAULT_AUTOTUNE_THREAD_GRID,
-    autotune_N: int = DEFAULT_AUTOTUNE_N,
-) -> dict[str, dict]:
-    """Sweep `thread_grid` on the batch binary, parse the batch-N compute-only
-    timing per algo for each thread count, and return the per-algo winner.
+    mode: str,
+    tiers: tuple[str, ...] = AUTOTUNE_TIERS,
+    **compile_kwargs,
+) -> dict[str, Path]:
+    """Build (or cache-hit) the per-tier binary needed for the autotune sweep.
 
-    Returns:
-        {
-            algo_name: {
-                "threads_optimal": int,
-                "us_at_optimal": float,
-                "sweep_us": {int(threads): float(us)},
-            }
-        }
+    Reuses `compile_binaries` per tier; because compile_binaries content-keys its
+    binary cache (runner_key includes the GRID_DEFAULT_RESOURCE_TIER macro), the
+    per-tier binaries that run_multi_version.py's BUILD phase already compiled are
+    cache hits here — no new compiles in the common case.
 
-    Algos missing a batch-N reading at some thread count (e.g., smem too big)
-    contribute no entry for that cell. Algos with no readings at any thread
-    count are omitted from the returned dict.
+    `mode` selects which binary the autotune needs: 'batch'/'both' → the batch
+    binary; 'single' → the single binary. Returns {tier: binary_path} omitting
+    tiers whose required binary failed to build.
     """
-    # batch-N compute-only key in the parser's record
-    target_key = f"batch_{autotune_N}_compute_only_us"
-    # algo -> {threads: us}
-    sweeps: dict[str, dict[int, float]] = {}
+    want_single = mode == "single"
+    out: dict[str, Path] = {}
+    for tier in tiers:
+        try:
+            single_bin, batch_bin = compile_binaries(
+                header_path, arch, build_dir, tier=tier, **compile_kwargs,
+            )
+        except Exception as e:  # noqa: BLE001 — collect, don't crash the sweep
+            print(f"  [autotune] WARN: tier={tier} build failed, skipping: {e}",
+                  file=sys.stderr)
+            continue
+        binary = single_bin if want_single else batch_bin
+        if binary is None:
+            print(f"  [autotune] WARN: tier={tier} {'single' if want_single else 'batch'} "
+                  f"binary unavailable, skipping", file=sys.stderr)
+            continue
+        out[tier] = binary
+    return out
 
-    print(f"  [autotune] sweeping {len(thread_grid)} thread counts on N={autotune_N} "
-          f"batch compute-only: {list(thread_grid)}", file=sys.stderr)
+
+def _target_key_for_mode(mode: str, autotune_N: int) -> str:
+    """Parser record key the autotune minimizes. batch → batch-N compute-only;
+    single → single-call µs."""
+    if mode == "single":
+        return "single_us"
+    return f"batch_{autotune_N}_compute_only_us"
+
+
+def _sweep_one_binary(
+    binary: Path,
+    base: str,
+    thread_grid: tuple[int, ...],
+    target_key: str,
+) -> dict[str, dict[int, float]]:
+    """Run `binary` once per thread count in `thread_grid`, parse `target_key`
+    per algo, and return {algo: {threads: us}}. Thread counts already clipped to
+    the tier cap by the caller."""
+    sweeps: dict[str, dict[int, float]] = {}
     for threads in thread_grid:
-        stdout = _autotune_batch_iters_for_binary(batch_binary, base, threads, {})
+        stdout = _autotune_batch_iters_for_binary(binary, base, threads, {})
         parsed = parse_grid_output(stdout)
         for algo, entry in parsed.items():
             if not isinstance(entry, dict):
@@ -1224,66 +1311,170 @@ def _autotune_pick_winners(
             if us is None:
                 continue
             sweeps.setdefault(algo, {})[int(threads)] = float(us)
+    return sweeps
 
-    picks: dict[str, dict] = {}
-    for algo, sweep in sweeps.items():
-        if not sweep:
-            continue
-        winner = min(sweep, key=lambda t: sweep[t])
-        picks[algo] = {
-            "threads_optimal": int(winner),
-            "us_at_optimal": float(sweep[winner]),
-            "sweep_us": {str(int(t)): float(us) for t, us in sorted(sweep.items())},
+
+def _refine_grid_for_winner(winner: int, sorted_grid: list[int], cap: int) -> set[int]:
+    """Midpoints between `winner` and its grid neighbours (one-level refinement),
+    clipped to [32, cap]."""
+    out: set[int] = set()
+    if winner not in sorted_grid:
+        return out
+    idx = sorted_grid.index(winner)
+    if idx > 0:
+        mid = (sorted_grid[idx - 1] + winner) // 2
+        if mid not in sorted_grid and 32 <= mid <= cap:
+            out.add(mid)
+    if idx < len(sorted_grid) - 1:
+        mid = (winner + sorted_grid[idx + 1]) // 2
+        if mid not in sorted_grid and 32 <= mid <= cap:
+            out.add(mid)
+    return out
+
+
+def _autotune_pick_winners(
+    tier_binaries: dict[str, Path],
+    base: str,
+    thread_grid: tuple[int, ...] = DEFAULT_AUTOTUNE_THREAD_GRID,
+    autotune_N: int = DEFAULT_AUTOTUNE_N,
+    *,
+    max_perf_level_threads: int | None = None,
+    mode: str = "batch",
+) -> dict[str, dict]:
+    """Joint (tier × thread-count) autotune.
+
+    For each tier in `tier_binaries` (its batch — or, in single mode, single —
+    binary), sweep the per-tier-cap-clipped `thread_grid` and parse the target
+    timing per algo. The per-algo winner is the global argmin µs over
+    (tier, threads).
+
+    Returns schema-2 picks:
+        {
+            algo: {
+                "schema": 2,
+                "tier_optimal": str, "threads_optimal": int, "us_at_optimal": float,
+                "sweep": {tier: {threads: us, ...}, ...},
+                "sweep_us": {threads: us, ...},   # flat back-compat (winning tier)
+            }
         }
 
-    # One-level refinement around the winner: probe the midpoints between the
-    # winning thread count and its grid neighbours. Cheap (~2 extra cells per
-    # algo, but we only do it ONCE for the union of winners), and smooths out
-    # the coarse-grid coarseness on robots whose true optimum lies between
-    # two adjacent grid points.
-    refine_candidates: set[int] = set()
-    sorted_grid = sorted(thread_grid)
-    for algo, info in picks.items():
-        w = info["threads_optimal"]
-        if w in sorted_grid:
-            idx = sorted_grid.index(w)
-            if idx > 0:
-                mid = (sorted_grid[idx - 1] + w) // 2
-                if mid not in sorted_grid and mid >= 32:
-                    refine_candidates.add(mid)
-            if idx < len(sorted_grid) - 1:
-                mid = (w + sorted_grid[idx + 1]) // 2
-                if mid not in sorted_grid and mid <= 1024:
-                    refine_candidates.add(mid)
+    Algos with no readings at any (tier, thread) cell are omitted.
+    """
+    target_key = _target_key_for_mode(mode, autotune_N)
+    # algo -> tier -> {threads: us}
+    sweeps: dict[str, dict[str, dict[int, float]]] = {}
 
-    if refine_candidates:
-        print(f"  [autotune] refinement probes: {sorted(refine_candidates)}",
-              file=sys.stderr)
-        for threads in sorted(refine_candidates):
-            stdout = _autotune_batch_iters_for_binary(batch_binary, base, threads, {})
-            parsed = parse_grid_output(stdout)
-            for algo, entry in parsed.items():
-                if not isinstance(entry, dict):
-                    continue
-                bucket = entry.get(target_key)
-                if not bucket:
-                    continue
-                us = bucket.get("median") or bucket.get("mean")
-                if us is None:
-                    continue
-                sweeps[algo][int(threads)] = float(us)
+    for tier, binary in tier_binaries.items():
+        if binary is None:
+            continue
+        cap = _tier_thread_cap(tier, max_perf_level_threads)
+        tier_grid = _clip_grid_to_cap(thread_grid, cap)
+        print(f"  [autotune] tier={tier:<7s} cap={cap:>4d} sweeping {len(tier_grid)} "
+              f"thread counts ({mode}): {list(tier_grid)}", file=sys.stderr)
+        tier_sweep = _sweep_one_binary(binary, base, tier_grid, target_key)
+        for algo, by_threads in tier_sweep.items():
+            sweeps.setdefault(algo, {})[tier] = by_threads
 
-        # Recompute winners with refinement data.
-        for algo, sweep in sweeps.items():
-            if not sweep:
-                continue
-            winner = min(sweep, key=lambda t: sweep[t])
-            picks[algo] = {
-                "threads_optimal": int(winner),
-                "us_at_optimal": float(sweep[winner]),
-                "sweep_us": {str(int(t)): float(us) for t, us in sorted(sweep.items())},
-            }
+    # One-level refinement around each algo's current (tier, threads) winner.
+    # Probe per tier so we never exceed that tier's launch_bounds cap.
+    refine_by_tier: dict[str, set[int]] = {t: set() for t in tier_binaries}
+    for algo, by_tier in sweeps.items():
+        best = _argmin_tier_threads(by_tier)
+        if best is None:
+            continue
+        wtier, wthreads, _ = best
+        cap = _tier_thread_cap(wtier, max_perf_level_threads)
+        grid_for_tier = sorted(_clip_grid_to_cap(thread_grid, cap))
+        refine_by_tier[wtier] |= _refine_grid_for_winner(wthreads, grid_for_tier, cap)
+
+    for tier, extra in refine_by_tier.items():
+        extra = {t for t in extra if t not in (sweeps_for_tier_threads(sweeps, tier))}
+        if not extra:
+            continue
+        binary = tier_binaries.get(tier)
+        if binary is None:
+            continue
+        print(f"  [autotune] tier={tier} refinement probes: {sorted(extra)}", file=sys.stderr)
+        tier_sweep = _sweep_one_binary(binary, base, tuple(sorted(extra)), target_key)
+        for algo, by_threads in tier_sweep.items():
+            sweeps.setdefault(algo, {}).setdefault(tier, {}).update(by_threads)
+
+    picks: dict[str, dict] = {}
+    for algo, by_tier in sweeps.items():
+        best = _argmin_tier_threads(by_tier)
+        if best is None:
+            continue
+        wtier, wthreads, wus = best
+        picks[algo] = {
+            "schema": 2,
+            "tier_optimal": wtier,
+            "threads_optimal": int(wthreads),
+            "us_at_optimal": float(wus),
+            "sweep": {
+                t: {str(int(th)): float(us) for th, us in sorted(s.items())}
+                for t, s in sorted(by_tier.items())
+            },
+            # Flat back-compat view (schema-1 'sweep_us'): the winning tier's
+            # per-threads sweep, so existing generate_report.py consumers work.
+            "sweep_us": {
+                str(int(th)): float(us)
+                for th, us in sorted(by_tier.get(wtier, {}).items())
+            },
+        }
     return picks
+
+
+def sweeps_for_tier_threads(sweeps: dict, tier: str) -> set[int]:
+    """All thread counts already probed for `tier` across every algo."""
+    out: set[int] = set()
+    for by_tier in sweeps.values():
+        out |= set(by_tier.get(tier, {}).keys())
+    return out
+
+
+def _update_autotune_best(best_path: Path, robot: str, base: str,
+                          algo_picks: dict[str, dict], meta: dict) -> None:
+    """Merge this (robot, base)'s autotune winners into the canonical
+    autotune_best_<host>.json artifact (read-modify-write; other cells preserved).
+
+    Layout:
+        {"metadata": {...host/gpu...},
+         "best": {robot: {base: {algo: {tier, threads, us}}}}}
+    """
+    doc: dict = {}
+    if best_path.exists():
+        try:
+            doc = json.loads(best_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            doc = {}
+    doc.setdefault("metadata", {})
+    # Keep a light host/gpu fingerprint so a best file isn't silently reused on
+    # a different GPU (the winners are device-specific).
+    for k in ("hostname", "gpu_name", "cuda_arch"):
+        if k in meta:
+            doc["metadata"][k] = meta[k]
+    best = doc.setdefault("best", {})
+    cell = best.setdefault(robot, {}).setdefault(base, {})
+    for algo, info in algo_picks.items():
+        cell[algo] = {
+            "tier": info["tier_optimal"],
+            "threads": int(info["threads_optimal"]),
+            "us": float(info["us_at_optimal"]),
+        }
+    best_path.parent.mkdir(parents=True, exist_ok=True)
+    best_path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+
+
+def _argmin_tier_threads(
+    by_tier: dict[str, dict[int, float]],
+) -> tuple[str, int, float] | None:
+    """Global argmin over (tier, threads). Returns (tier, threads, us) or None."""
+    best: tuple[str, int, float] | None = None
+    for tier, sweep in by_tier.items():
+        for threads, us in sweep.items():
+            if best is None or us < best[2]:
+                best = (tier, int(threads), float(us))
+    return best
 
 
 # ---------------------------------------------------------------------------
@@ -1364,10 +1555,11 @@ def main() -> None:
                         help="Thread pool size for the per-algo parallel compile. Default: "
                              "0.75 × CPU count (capped at 2 minimum). nvcc forks cicc/ptxas "
                              "subprocesses already, so don't oversubscribe.")
-    parser.add_argument("--tier", default=None, choices=["perf", "lite", "minimal"],
+    parser.add_argument("--tier", default=None, choices=["shared", "perf", "lite", "minimal"],
                         help="Resource-tier override. Compiles bench with "
-                             "-DGRID_DEFAULT_RESOURCE_TIER=grid::TIER_<X>. PERF default "
-                             "preserves current behavior; LITE/MINIMAL launch the spill bodies "
+                             "-DGRID_DEFAULT_RESOURCE_TIER=grid::TIER_<X>. SHARED (a.k.a. the "
+                             "deprecated alias 'perf') is the default and preserves current "
+                             "behavior; LITE/MINIMAL launch the spill bodies "
                              "with their tier-specific launch_bounds + smem. Used for Phase 4 "
                              "per-tier perf validation; output JSON gains a 'tier' field.")
     parser.add_argument("--build-dir", type=Path, default=None,
@@ -1382,23 +1574,31 @@ def main() -> None:
                              "phase; the serial measure phase then re-runs with --no-recompile "
                              "(instant cache hit) so timing stays isolated on the GPU.")
     parser.add_argument("--autotune-threads", action="store_true",
-                        help="After the standard timing run, sweep a small grid of per-block "
-                             "thread counts on the batch binary (default: 32,64,96,128,192,256,"
-                             "384,512 + one-level refinement) and pick the min-µs/sample winner "
-                             "per algo on the N=256 compute-only path. The picks are written into "
-                             "the JSON output under 'algo_picks[algo]' = "
-                             "{'threads_optimal', 'us_at_optimal', 'sweep_us'}. "
-                             "Default OFF; opt-in. Per (robot, base) cost: ~30s on RTX 5090 / "
-                             "iiwa14. Thread overrides are applied via GRID_AUTOTUNE_THREAD_COUNT "
-                             "env var read at first launch by timeGRiD_common.h::grid_timing_dimms.")
+                        help="After the standard timing run, do a JOINT (tier × thread-count) "
+                             "autotune: for each tier (shared/lite/minimal) sweep a small grid of "
+                             "per-block thread counts (default: 32,64,96,128,192,256,384,512 + "
+                             "one-level refinement, clipped per tier to its launch_bounds cap) and "
+                             "pick the global min-µs/sample winner (tier, threads) per algo. The "
+                             "per-tier binaries are reused from the content-keyed binary cache (no "
+                             "new compiles in the common case). Picks land in the JSON under "
+                             "'algo_picks[algo]' (schema 2) = {'tier_optimal','threads_optimal',"
+                             "'us_at_optimal','sweep':{tier:{threads:us}},'sweep_us':{threads:us}}. "
+                             "Default OFF; opt-in. Thread overrides are applied via "
+                             "GRID_AUTOTUNE_THREAD_COUNT env var read at first launch by "
+                             "timeGRiD_common.h::grid_timing_dimms.")
     parser.add_argument("--autotune-thread-grid", type=str, default=None,
                         help="Comma-separated thread counts to sweep when --autotune-threads is "
                              "set. Default: '32,64,96,128,192,256,384,512'. Useful for narrowing "
                              "the sweep on slow robots (e.g. '128,256,384' for a quick re-tune).")
     parser.add_argument("--autotune-N", type=int, default=DEFAULT_AUTOTUNE_N,
                         help=f"Batch size to autotune on (default: {DEFAULT_AUTOTUNE_N}). The "
-                             "winner is the thread count that minimizes batch_<N>_compute_only "
-                             "µs/sample.")
+                             "winner is the (tier, thread count) that minimizes "
+                             "batch_<N>_compute_only µs/sample.")
+    parser.add_argument("--autotune-mode", default="batch", choices=["batch", "single", "both"],
+                        help="Which timing path the autotune minimizes. 'batch' (default) tunes "
+                             "the batch-N compute-only path; 'single' tunes the single-call "
+                             "(single_us) path; 'both' runs each and writes batch picks under "
+                             "'algo_picks' + single picks under 'algo_picks_single'.")
     args = parser.parse_args()
 
     ee_frame = args.ee_frame or DEFAULT_EE_FRAMES.get(args.robot, "")
@@ -1466,12 +1666,14 @@ def main() -> None:
     timings = parse_grid_output(output)
     filled = fill_nulls(timings)
 
-    # --autotune-threads: sweep per-block thread count on the batch binary,
-    # pick the min-µs/sample winner per algo, and persist into the JSON
-    # under 'algo_picks'. This is opt-in; when off, output schema is
-    # identical to pre-C.4. Sweep uses the env-var override read by
-    # timeGRiD_common.h::grid_resolve_threads_per_block — no recompile.
+    # --autotune-threads: JOINT (tier × thread-count) autotune. For each tier
+    # (shared/lite/minimal) we cache-hit/build its batch (or single) binary and
+    # sweep the per-tier-cap-clipped thread grid; the winner is the global argmin
+    # µs over (tier, threads). Opt-in; when off the output schema is identical to
+    # pre-C.4. Thread overrides use the env-var read by
+    # timeGRiD_common.h::grid_resolve_threads_per_block — no recompile per probe.
     algo_picks: dict[str, dict] = {}
+    algo_picks_single: dict[str, dict] = {}
     autotune_grid_used: tuple[int, ...] | None = None
     if args.autotune_threads:
         if args.autotune_thread_grid:
@@ -1488,19 +1690,44 @@ def main() -> None:
                 sys.exit(1)
         else:
             autotune_grid_used = DEFAULT_AUTOTUNE_THREAD_GRID
-        _, batch_binary = binaries
-        if batch_binary is None:
-            print(f"  [grid] WARN: --autotune-threads requested but batch binary unavailable; "
-                  f"skipping autotune", file=sys.stderr)
-        else:
+
+        max_perf = _read_max_perf_level_threads(header_path)
+        # Shared compile kwargs so the per-tier (cache-hit) rebuilds match the
+        # main build's flags exactly (→ same runner_key → cache hit).
+        _tier_compile_kwargs = dict(
+            no_recompile=args.no_recompile, no_rdc=args.no_rdc,
+            single_call_iters=args.single_call_iters, batch_iters=args.batch_iters,
+            ptxas_opt_level=args.ptxas_opt_level, split_compile=args.split_compile,
+            ofast_compile=args.ofast_compile, per_algo_tus=args.per_algo_tus,
+            compile_workers=args.compile_workers,
+        )
+
+        # Modes to run: 'both' → batch then single.
+        _modes = ["batch", "single"] if args.autotune_mode == "both" else [args.autotune_mode]
+        for _mode in _modes:
             t_autotune = time.perf_counter()
-            algo_picks = _autotune_pick_winners(
-                batch_binary, args.base, autotune_grid_used, autotune_N=args.autotune_N,
+            tier_binaries = build_tier_binaries(
+                header_path, arch, build_dir, base=args.base, mode=_mode,
+                **_tier_compile_kwargs,
             )
-            print(f"  [grid] autotune wall time: {time.perf_counter() - t_autotune:.1f}s "
-                  f"({len(algo_picks)} algos picked at N={args.autotune_N})")
-            for algo, info in sorted(algo_picks.items()):
-                print(f"    [autotune] {algo:24s} threads_optimal={info['threads_optimal']:>4d} "
+            if not tier_binaries:
+                print(f"  [grid] WARN: --autotune-threads ({_mode}) requested but no per-tier "
+                      f"binary available; skipping", file=sys.stderr)
+                continue
+            picks = _autotune_pick_winners(
+                tier_binaries, args.base, autotune_grid_used, autotune_N=args.autotune_N,
+                max_perf_level_threads=max_perf, mode=_mode,
+            )
+            if _mode == "single":
+                algo_picks_single = picks
+            else:
+                algo_picks = picks
+            print(f"  [grid] autotune ({_mode}) wall time: "
+                  f"{time.perf_counter() - t_autotune:.1f}s "
+                  f"({len(picks)} algos picked; tiers={list(tier_binaries)})")
+            for algo, info in sorted(picks.items()):
+                print(f"    [autotune:{_mode}] {algo:22s} tier={info['tier_optimal']:<7s} "
+                      f"threads_optimal={info['threads_optimal']:>4d} "
                       f"us_at_optimal={info['us_at_optimal']:>8.2f}")
 
     meta = build_metadata(include_gpu=True)
@@ -1509,19 +1736,38 @@ def main() -> None:
     meta["ee_frame"] = ee_frame
     meta["cuda_arch"] = arch
     meta["grid_linalg_backend"] = "glass"
-    meta["resource_tier"] = args.tier if args.tier is not None else "perf"
+    # Canonicalize the reported tier name: None (no flag) and the deprecated
+    # "perf" alias both report as "shared" (the TIER_SHARED default).
+    meta["resource_tier"] = "shared" if (args.tier in (None, "perf")) else args.tier
     if args.autotune_threads:
         meta["autotune_threads"] = {
             "thread_grid": list(autotune_grid_used or DEFAULT_AUTOTUNE_THREAD_GRID),
             "autotune_N":  int(args.autotune_N),
+            "mode": args.autotune_mode,
+            "tiers": list(AUTOTUNE_TIERS),
+            "schema": 2,
         }
 
     grid_block: dict = {"grid": filled}
     if args.autotune_threads:
         grid_block["algo_picks"] = algo_picks
+        if algo_picks_single:
+            grid_block["algo_picks_single"] = algo_picks_single
     result = {"metadata": meta, "results": {args.robot: {args.base: grid_block}}}
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(f"  [grid] results saved: {args.output}")
+
+    # Canonical best artifact: a flat per-(robot, base, algo) record of the
+    # autotuned (tier, threads) winner, merged across invocations so a full
+    # sweep accumulates one authoritative file. generate_report.py's grid_best
+    # column reads this.
+    if args.autotune_threads and algo_picks:
+        import platform
+        host = platform.node().replace(" ", "_")
+        best_path = (REPO_ROOT / "test" / "benchmarks" / "results"
+                     / f"autotune_best_{host}.json")
+        _update_autotune_best(best_path, args.robot, args.base, algo_picks, meta)
+        print(f"  [grid] autotune_best updated: {best_path}")
 
     # Print quick summary: single + N=16 + N=256 compute-only so it's obvious
     # the batch tests actually ran. Full data (all 5 batch sizes, with_mem +

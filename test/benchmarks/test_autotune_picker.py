@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""Unit tests for the joint (tier × threads) autotune picker (T5, Part 2).
+
+These exercise the picker logic on SYNTHETIC per-tier timing data — the heavy
+N=256 GPU timing sweep is deferred to the main agent's serialized perf run, so
+the correctness of the argmin / cap-clipping / schema-2 emission is validated
+here without touching nvcc or the GPU.
+
+Run: pytest test/benchmarks/test_autotune_picker.py
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+
+# run.py lives in a non-package dir; load it by path.
+import importlib.util
+
+_RUN_PY = REPO_ROOT / "test" / "benchmarks" / "baselines" / "grid" / "run.py"
+_spec = importlib.util.spec_from_file_location("grid_bench_run", _RUN_PY)
+run = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(run)
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers: tier caps + grid clipping
+# ---------------------------------------------------------------------------
+def test_tier_thread_cap_matches_codegen_formula():
+    # SHARED = MAX_PERF_LEVEL_THREADS; LITE = min(2x, 768); MINIMAL = 1024.
+    assert run._tier_thread_cap("shared", 512) == 512
+    assert run._tier_thread_cap("lite", 512) == 768       # min(1024, 768)
+    assert run._tier_thread_cap("lite", 288) == 576       # min(576, 768)
+    assert run._tier_thread_cap("minimal", 512) == 1024
+    # Unknown max_perf → fall back to 1024 hardware cap.
+    assert run._tier_thread_cap("shared", None) == 1024
+
+
+def test_clip_grid_drops_above_cap_but_keeps_one():
+    grid = (32, 64, 128, 256, 512, 768)
+    assert run._clip_grid_to_cap(grid, 256) == (32, 64, 128, 256)
+    # Degenerate: cap below every grid point → fall back to the cap itself.
+    assert run._clip_grid_to_cap((512, 768), 256) == (256,)
+
+
+def test_argmin_tier_threads_picks_global_min():
+    by_tier = {
+        "shared":  {128: 10.0, 256: 9.0},
+        "lite":    {128: 12.0},
+        "minimal": {256: 8.5, 512: 11.0},
+    }
+    tier, threads, us = run._argmin_tier_threads(by_tier)
+    assert (tier, threads, us) == ("minimal", 256, 8.5)
+
+
+def test_argmin_returns_none_on_empty():
+    assert run._argmin_tier_threads({}) is None
+    assert run._argmin_tier_threads({"shared": {}}) is None
+
+
+# ---------------------------------------------------------------------------
+# Joint picker on synthetic per-tier sweeps (monkeypatch the binary sweep)
+# ---------------------------------------------------------------------------
+def _install_synthetic_sweep(monkeypatch, table: dict[str, dict[str, dict[int, float]]]):
+    """table[tier][algo][threads] = us. The monkeypatched _sweep_one_binary
+    returns the rows for the tier identified by the (sentinel) binary path,
+    restricted to the threads actually requested (so cap-clipping is honored)."""
+    # Map sentinel Path -> tier via the dict we hand to the picker.
+    def fake_sweep(binary, base, thread_grid, target_key):
+        tier = str(binary)  # we pass the tier name as the "binary path"
+        out: dict[str, dict[int, float]] = {}
+        for algo, by_threads in table.get(tier, {}).items():
+            for th in thread_grid:
+                if th in by_threads:
+                    out.setdefault(algo, {})[int(th)] = by_threads[th]
+        return out
+    monkeypatch.setattr(run, "_sweep_one_binary", fake_sweep)
+
+
+def test_joint_pick_schema2_and_winner(monkeypatch):
+    # algo "fd": minimal@256 is the global best (7.0) even though shared@256=9.0.
+    table = {
+        "shared":  {"fd": {128: 11.0, 256: 9.0}},
+        "lite":    {"fd": {128: 12.0, 256: 10.0}},
+        "minimal": {"fd": {128: 8.0,  256: 7.0}},
+    }
+    _install_synthetic_sweep(monkeypatch, table)
+    tier_binaries = {"shared": Path("shared"), "lite": Path("lite"), "minimal": Path("minimal")}
+    picks = run._autotune_pick_winners(
+        tier_binaries, "fixed", thread_grid=(128, 256),
+        autotune_N=256, max_perf_level_threads=512, mode="batch",
+    )
+    assert "fd" in picks
+    info = picks["fd"]
+    assert info["schema"] == 2
+    assert info["tier_optimal"] == "minimal"
+    assert info["threads_optimal"] == 256
+    assert info["us_at_optimal"] == 7.0
+    # sweep carries every tier we measured
+    assert set(info["sweep"]) == {"shared", "lite", "minimal"}
+    assert info["sweep"]["minimal"]["256"] == 7.0
+    # flat back-compat view points at the WINNING tier's per-threads sweep
+    assert info["sweep_us"] == {"128": 8.0, "256": 7.0}
+
+
+def test_cap_clipping_excludes_oversized_probes_for_shared(monkeypatch):
+    # shared cap = MAX_PERF_LEVEL_THREADS = 256, so a 512 probe must never be
+    # offered to the shared binary. We assert the picker never records shared@512
+    # even though the table "would" have a (fast) reading there.
+    table = {
+        "shared":  {"id": {256: 10.0, 512: 1.0}},   # 512 is a trap: above shared cap
+        "minimal": {"id": {256: 9.0, 512: 9.5}},
+    }
+    _install_synthetic_sweep(monkeypatch, table)
+    tier_binaries = {"shared": Path("shared"), "minimal": Path("minimal")}
+    picks = run._autotune_pick_winners(
+        tier_binaries, "fixed", thread_grid=(256, 512),
+        autotune_N=256, max_perf_level_threads=256, mode="batch",
+    )
+    info = picks["id"]
+    # shared@512 must be clipped out, so the (fake) 1.0us trap can't win.
+    assert "512" not in info["sweep"].get("shared", {})
+    assert info["tier_optimal"] == "minimal" and info["threads_optimal"] == 256
+
+
+def test_algo_with_no_readings_is_omitted(monkeypatch):
+    _install_synthetic_sweep(monkeypatch, {"shared": {}, "minimal": {}})
+    picks = run._autotune_pick_winners(
+        {"shared": Path("shared"), "minimal": Path("minimal")},
+        "fixed", thread_grid=(128, 256), autotune_N=256,
+        max_perf_level_threads=512, mode="batch",
+    )
+    assert picks == {}
+
+
+# ---------------------------------------------------------------------------
+# A.7: h1_2.fixed `id` must NEVER tune to LITE.
+#
+# `inverse_dynamics` has no smem spill, so SHARED and LITE share a body and
+# differ only in __launch_bounds__; LITE's looser bound starves registers, so
+# LITE is slower. The joint picker must land on shared or minimal. We encode
+# that with a synthetic table where LITE is uniformly the slowest tier (the
+# empirical signature of the bug) and assert the property.
+# ---------------------------------------------------------------------------
+def test_h1_2_fixed_id_never_picks_lite(monkeypatch):
+    # LITE is slowest everywhere (register starvation); SHARED and MINIMAL are
+    # close and either could legitimately win — but never LITE.
+    table = {
+        "shared":  {"id": {256: 20.0, 384: 19.5}},
+        "lite":    {"id": {256: 28.0, 384: 27.0, 512: 26.0}},  # always worst
+        "minimal": {"id": {256: 19.8, 512: 19.0, 1024: 21.0}},
+    }
+    _install_synthetic_sweep(monkeypatch, table)
+    tier_binaries = {"shared": Path("shared"), "lite": Path("lite"), "minimal": Path("minimal")}
+    picks = run._autotune_pick_winners(
+        tier_binaries, "fixed",
+        thread_grid=(256, 384, 512, 768, 1024),
+        autotune_N=256, max_perf_level_threads=384, mode="batch",
+    )
+    assert "id" in picks
+    assert picks["id"]["tier_optimal"] in {"shared", "minimal"}, (
+        f"A.7 violated: id tuned to {picks['id']['tier_optimal']!r}, expected shared/minimal"
+    )
+
+
+def test_single_mode_targets_single_us_key(monkeypatch):
+    # In single mode the target key is single_us; the picker still works the same
+    # over the synthetic sweep (which is keyed by tier, not by metric).
+    captured = {}
+
+    def fake_sweep(binary, base, thread_grid, target_key):
+        captured["target_key"] = target_key
+        return {"fd": {th: float(th) for th in thread_grid}}  # smaller threads win
+
+    monkeypatch.setattr(run, "_sweep_one_binary", fake_sweep)
+    picks = run._autotune_pick_winners(
+        {"shared": Path("shared")}, "fixed", thread_grid=(64, 128),
+        autotune_N=256, max_perf_level_threads=512, mode="single",
+    )
+    assert captured["target_key"] == "single_us"
+    assert picks["fd"]["threads_optimal"] == 64
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__, "-v"]))

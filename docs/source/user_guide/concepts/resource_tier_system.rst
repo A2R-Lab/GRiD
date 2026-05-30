@@ -11,7 +11,7 @@ earlier revisions of this doc called it ``d_workspace``.
 
 **Audience**: inline-CUDA users (``#include "grid.cuh"`` from their own
 kernel). The Python wrappers (``grid_rbd.RobotHandle``,
-``grid_rbd.jax.JaxRobotHandle``) always use ``TIER_PERF`` by design.
+``grid_rbd.jax.JaxRobotHandle``) always use ``TIER_SHARED`` by design.
 
 
 Who this is for (read this first)
@@ -36,7 +36,7 @@ memory myself." Pick the rung that matches how much control you need:
      - You manage…
    * - Just the answer, from Python
      - ``grid_rbd.RobotHandle`` / ``grid_rbd.jax.JaxRobotHandle``
-     - Nothing. Arrays in, arrays out. Always ``TIER_PERF``.
+     - Nothing. Arrays in, arrays out. Always ``TIER_SHARED``.
    * - The answer, from C++/CUDA host code
      - ``grid::<algo>(hd_data, ...)`` **host** wrapper
      - Nothing on-device. The wrapper does H2D/D2H copies, picks
@@ -220,7 +220,16 @@ progressively move buffers to ``d_workspace``). Which level a given
 ``RESOURCE_TIER`` maps to is decided **at code-generation time, per robot**,
 based on what actually fits the smem budget for that robot. Small robots
 (e.g. iiwa14, go2) keep every tier at level 0 — there is nothing to spill, so
-``TIER_PERF``/``LITE``/``MINIMAL`` are byte-identical. Large robots (e.g.
+the tiers share the **same spill placement** and emit a single kernel *body*.
+Note this does **not** make them byte-identical SASS: each tier still carries
+its own ``__launch_bounds__(tier_max_threads<TIER>())`` (SHARED =
+``MAX_PERF_LEVEL_THREADS``, LITE = ``min(2×, 768)``, MINIMAL = ``1024``), so
+ptxas budgets a different register cap per tier and can produce different
+register counts / SASS even when the placement is identical. For algorithms
+with **no** smem spill at all (e.g. ``inverse_dynamics``) the launch_bounds is
+in fact the *only* thing that differs between tiers — which is exactly why a
+looser-bounds tier can run *slower* via register starvation (see the autotune
+A.7 note). Large robots (e.g.
 h1_2) map the lower tiers to deeper spill levels. Because the mapping is
 per-robot, **multiple tiers can share a level**, and the generated
 ``*_IN_SMEM<TIER>()`` / ``*_SCRATCH_IN_SMEM<TIER>()`` constexprs expose
@@ -386,7 +395,7 @@ What the tier system is
 
 Every emitted ``__global__`` kernel and every inline-callable
 ``_device``/``_inner`` function takes a non-type template parameter
-``int RESOURCE_TIER`` (defaulting to ``TIER_PERF``). The tier picks a
+``int RESOURCE_TIER`` (defaulting to ``TIER_SHARED``). The tier picks a
 ``(launch_bounds, smem footprint, register cap)`` profile so an
 inline-CUDA caller can fit a GRiD primitive into their outer kernel's
 resource budget.
@@ -401,7 +410,7 @@ The three tiers:
      - ``launch_bounds``
      - Register cap (sm_120)
      - Smem behavior
-   * - ``TIER_PERF`` (default)
+   * - ``TIER_SHARED`` (default)
      - ``MAX_PERF_LEVEL_THREADS`` (288-512 per robot)
      - ~128-186 regs/thread
      - Full inner scratch lives in shared memory; current best perf.
@@ -456,15 +465,15 @@ buffers:
 
 .. code-block:: cpp
 
-   template <typename T, int TIER = TIER_PERF>
+   template <typename T, int TIER = TIER_SHARED>
    constexpr size_t FDSVA_SO_INNER_SMEM_BYTES();           // bytes for s_temp at TIER
-   template <typename T, int TIER = TIER_PERF>
+   template <typename T, int TIER = TIER_SHARED>
    constexpr size_t FDSVA_SO_INNER_WORKSPACE_BYTES();      // bytes for d_workspace at TIER
 
    // Same pattern: FD_DU_DEVICE_INLINE_*, ID_DU_DEVICE_INLINE_*,
    //               D2EE_DEVICE_INLINE_*, IDSVA_SO_DEVICE_INLINE_*
 
-At ``TIER_PERF`` the SMEM_BYTES value matches current behavior
+At ``TIER_SHARED`` the SMEM_BYTES value matches current behavior
 (the temp is in shared); at ``TIER_LITE``/``TIER_MINIMAL`` the
 SMEM_BYTES value drops (temp moved out) and the WORKSPACE_BYTES
 value covers the moved temp.
@@ -499,12 +508,12 @@ Numerical equivalence: the math is identical at every tier;
 (s_temp vs d_workspace). One body per algo, with up to two
 pointer-routing branches. Less code duplication, fewer drift bugs.
 
-**Why is JAX/Python locked to TIER_PERF?**
+**Why is JAX/Python locked to TIER_SHARED?**
 The Python wrapper persona is "sealed product, never touches
 nvcc". They aren't fighting outer-kernel register/smem pressure
 because they don't have an outer kernel. Exposing tier switching
 through Python would add API surface without clear demand. The
-host wrappers always launch ``*_kernel<T, TIER_PERF>`` (= current
+host wrappers always launch ``*_kernel<T, TIER_SHARED>`` (= current
 behavior).
 
 **Why no LITE smem target between PERF and MINIMAL today?**
@@ -577,7 +586,7 @@ above were the final pieces):
     single body (current behavior), divergent picks emit
     ``if constexpr (RESOURCE_TIER == TIER_X)`` branches with per-tier
     spill flags. The tier-aware ``*_DYNAMIC_SHARED_MEM_BYTES<T, TIER>``
-    constexpr reports per-tier smem requirements (default ``TIER = TIER_PERF``
+    constexpr reports per-tier smem requirements (default ``TIER = TIER_SHARED``
     preserves all existing single-arg call sites).
   - **Shipped**: ``d2ee``, ``id_du``, ``fd_du``, ``fdsva_so`` (commit
     ``8e5ff50``). Verified via nvcc compile of go2_fixed (FULL 3-way
@@ -762,7 +771,7 @@ Status (commits ``da831dd`` + ``0795442``):
   (LITE, 48 KB), and "always max spill" (MINIMAL) targets.
 * ``MINV_DYNAMIC_SHARED_MEM_BYTES<T, TIER>`` and
   ``FD_DYNAMIC_SHARED_MEM_BYTES<T, TIER>`` are now tier-aware constexprs
-  reporting per-tier smem footprints (default ``TIER = TIER_PERF`` preserves
+  reporting per-tier smem footprints (default ``TIER = TIER_SHARED`` preserves
   every existing single-arg call site).
 * Verified via nvcc compile of h1_2_fixed at all 3 tiers:
 
@@ -861,7 +870,7 @@ Existing entry points to extend:
   add a ``--tiers perf lite minimal`` argument that fans out the
   GRiD column 3-way. Each tier is a separate run of the GRiD
   harness with the appropriate template-arg-specifying compile flag
-  (TIER_PERF default, TIER_LITE/MINIMAL via a new ``--resource-tier``
+  (TIER_SHARED default, TIER_LITE/MINIMAL via a new ``--resource-tier``
   passthrough on the GRiD harness).
 * ``test/benchmarks/run_overnight_sweep.sh`` — already wraps the
   big runs; add the tiers parameter.

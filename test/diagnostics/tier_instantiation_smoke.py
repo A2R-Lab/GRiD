@@ -1,5 +1,5 @@
 """Tier-template smoke test: verify every emitted kernel template can be
-instantiated at TIER_PERF, TIER_LITE, and TIER_MINIMAL without compile errors,
+instantiated at TIER_SHARED, TIER_LITE, and TIER_MINIMAL without compile errors,
 and that nvcc -Xptxas -v reports distinct register/launch_bounds per tier.
 
 This is the minimum-viable correctness check for the v2.0 resource-tier
@@ -40,7 +40,7 @@ KERNELS = [
     "fdsva_so_kernel",
 ]
 
-TIERS = ["TIER_PERF", "TIER_LITE", "TIER_MINIMAL"]
+TIERS = ["TIER_SHARED", "TIER_LITE", "TIER_MINIMAL"]
 
 # Integrator kernels carry an extra `IntegratorType IT` template arg BEFORE
 # RESOURCE_TIER, so the 2-arg address trick above doesn't apply — they get a
@@ -110,7 +110,7 @@ def compile_all_tiers(grid_cuh: Path, emitted: list[str], build_dir: Path) -> di
                     f"    (void) reinterpret_cast<void*>(&grid::{k}<T, grid::IntegratorType::{it}, grid::{tier}>);"
                 )
     # Validate the tier-aware sizing constexprs for inline-CUDA users. At
-    # TIER_PERF the SMEM_BYTES values should be non-zero (full smem
+    # TIER_SHARED the SMEM_BYTES values should be non-zero (full smem
     # footprint, current behavior) and WORKSPACE_BYTES values should be 0.
     # At TIER_LITE/MINIMAL the SMEM_BYTES values should drop (some / all
     # scratch moved out) and WORKSPACE_BYTES should be non-zero. These
@@ -130,30 +130,36 @@ def compile_all_tiers(grid_cuh: Path, emitted: list[str], build_dir: Path) -> di
                   "FDSVA_SO_INNER_WORKSPACE_BYTES<global> must hold scratch");
 
     // fd_du_device, id_du_device, idsva_so_device: whole s_temp arena
-    static_assert(grid::FD_DU_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_PERF>() >
+    static_assert(grid::FD_DU_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_SHARED>() >
                   grid::FD_DU_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
                   "FD_DU_DEVICE_INLINE_SMEM_BYTES LITE must drop below PERF");
-    static_assert(grid::FD_DU_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_PERF>() == 0,
+    static_assert(grid::FD_DU_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_SHARED>() == 0,
                   "FD_DU_DEVICE_INLINE_WORKSPACE_BYTES PERF must be zero");
     static_assert(grid::FD_DU_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
                   "FD_DU_DEVICE_INLINE_WORKSPACE_BYTES LITE must hold scratch");
 
-    static_assert(grid::ID_DU_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_PERF>() >
+    static_assert(grid::ID_DU_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_SHARED>() >
                   grid::ID_DU_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
                   "ID_DU_DEVICE_INLINE_SMEM_BYTES LITE must drop below PERF");
     static_assert(grid::ID_DU_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
                   "ID_DU_DEVICE_INLINE_WORKSPACE_BYTES LITE must hold scratch");
 
-    static_assert(grid::IDSVA_SO_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_PERF>() >
+    static_assert(grid::IDSVA_SO_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_SHARED>() >
                   grid::IDSVA_SO_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
                   "IDSVA_SO_DEVICE_INLINE_SMEM_BYTES LITE must drop below PERF");
     static_assert(grid::IDSVA_SO_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
                   "IDSVA_SO_DEVICE_INLINE_WORKSPACE_BYTES LITE must hold scratch");
 
-    // d2ee: only d2eeTemp slot moves (inner_no_d2 stays in smem at all tiers)
-    static_assert(grid::D2EE_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_PERF>() >
+    // d2ee: only the d2eeTemp slot moves to d_workspace; the d2ee s_temp arena
+    // (inner_no_d2) stays in smem at all tiers, so on the small/curated robots
+    // the D2EE SMEM constexpr is tier-independent (SHARED == LITE == MINIMAL)
+    // and only the WORKSPACE bytes differ (0 at SHARED, >0 at LITE/MINIMAL).
+    // The SMEM invariant is therefore "LITE never EXCEEDS SHARED" (>=), not a
+    // strict drop. (A strict '>' here was a latent bug — it failed on every
+    // robot whose d2ee SMEM is tier-independent, i.e. all of iiwa14/go2/h1_2.)
+    static_assert(grid::D2EE_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_SHARED>() >=
                   grid::D2EE_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
-                  "D2EE_DEVICE_INLINE_SMEM_BYTES LITE must drop below PERF");
+                  "D2EE_DEVICE_INLINE_SMEM_BYTES LITE must not exceed SHARED");
     static_assert(grid::D2EE_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
                   "D2EE_DEVICE_INLINE_WORKSPACE_BYTES LITE must hold d2eeTemp");
 """

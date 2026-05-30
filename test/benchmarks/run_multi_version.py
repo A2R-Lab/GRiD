@@ -19,15 +19,19 @@ Full sweep:
 Worktree for the pre-glass column is created at $GRID_PRE_GLASS_WORKTREE
 (default: ../GRiD-A2R-pre-glass/ relative to this repo's root).
 
-Per-(robot, base, algo) thread-count autotune (C.4, 2026-05-29):
+Per-(robot, base, algo) JOINT (tier × thread-count) autotune (C.4 + T5):
     --autotune-threads opt-in flag (off by default; default behavior unchanged).
     Forwarded to the GRiD glass column only. For each algo, sweeps a small grid
-    of per-block thread counts on the batch binary (default 32..512 + one-level
-    refinement) and picks the min-µs/sample winner. Picks land in the per-column
-    JSON under results[robot][base]["algo_picks"][algo] =
-    {"threads_optimal", "us_at_optimal", "sweep_us": {threads: us, ...}}.
-    Cost: ~30s extra per (robot, base) on RTX 5090. Implementation: the batch
-    binary's grid_timing_dimms() honors GRID_AUTOTUNE_THREAD_COUNT env var.
+    of per-block thread counts on EACH per-tier batch binary (shared/lite/minimal,
+    reused from the content-keyed binary cache — no new compiles), clipping the
+    grid per tier to its launch_bounds cap, and picks the global min-µs/sample
+    winner (tier, threads). Picks land in the per-column JSON under
+    results[robot][base]["algo_picks"][algo] (schema 2) =
+    {"tier_optimal", "threads_optimal", "us_at_optimal",
+     "sweep": {tier: {threads: us}}, "sweep_us": {threads: us}}.
+    Implementation: the binaries' grid_timing_dimms() honors the
+    GRID_AUTOTUNE_THREAD_COUNT env var; the per-tier body is selected by the
+    -DGRID_DEFAULT_RESOURCE_TIER macro at compile time.
 """
 
 from __future__ import annotations
@@ -260,17 +264,18 @@ def run_grid_column(column: str, robot: str, base: str, *,
     """Run the appropriate GRiD harness for `column`. Returns output JSON path or None."""
     ee_frame = EE_FRAMES_GRID.get(robot, "")
     baseline_key = COLUMN_TO_BASELINE_KEY[column]
-    # Tier-tagged output filename so PERF/LITE/MINIMAL runs don't overwrite
-    # each other. PERF keeps the legacy name (no _tier_ suffix) so historical
-    # filenames stay stable when no tier sweep is requested.
-    tier_suffix = "" if (tier is None or tier == "perf") else f"_tier_{tier}"
+    # Tier-tagged output filename so SHARED/LITE/MINIMAL runs don't overwrite
+    # each other. SHARED (and its deprecated alias "perf") keeps the legacy name
+    # (no _tier_ suffix) so historical filenames stay stable when no tier sweep
+    # is requested.
+    tier_suffix = "" if (tier is None or tier in ("shared", "perf")) else f"_tier_{tier}"
     output = output_dir / f"{robot}_{base}_{baseline_key}{tier_suffix}.json"
 
     if column == "pre_glass":
         if base != "fixed":
             print(f"  [{column}] skipping {robot}/{base}: pre-glass harness doesn't support floating-base")
             return None
-        if tier is not None and tier != "perf":
+        if tier is not None and tier not in ("shared", "perf"):
             print(f"  [{column}] skipping {robot}/{base}: pre-glass harness predates tier system")
             return None
         # pre_glass harness predates --no-rdc; don't pass it.
@@ -302,7 +307,7 @@ def run_grid_column(column: str, robot: str, base: str, *,
     # instead of the generic "grid" the inner harness emits. For tier sweeps,
     # also append the tier suffix so PERF/LITE/MINIMAL results live as distinct
     # keys in the merged output.
-    keyed = baseline_key + (f"_tier_{tier}" if (tier is not None and tier != "perf") else "")
+    keyed = baseline_key + (f"_tier_{tier}" if (tier is not None and tier not in ("shared", "perf")) else "")
     _rename_grid_key(output, keyed)
 
     # The pre_glass worktree's grid/run.py (frozen at d2c0d18) predates the
@@ -490,7 +495,7 @@ def _build_grid_binaries(grid_columns, robots, bases, tiers, *, build_jobs,
                     continue
                 for tier in tiers:
                     # mirror run_grid_column's pre_glass limitations
-                    if column == "pre_glass" and (base != "fixed" or (tier and tier != "perf")):
+                    if column == "pre_glass" and (base != "fixed" or (tier and tier not in ("shared", "perf"))):
                         continue
                     tasks.append((column, robot, base, tier))
     if not tasks:
@@ -606,11 +611,12 @@ def main() -> None:
                         help="Override Pinocchio CPU_THREADS_GLOBAL (default: physical "
                              "cores). Logical/SMT siblings are skipped because every "
                              "thread runs the same JIT'd code; HT hurts.")
-    parser.add_argument("--tiers", nargs="+", default=["perf"],
-                        choices=["perf", "lite", "minimal"],
+    parser.add_argument("--tiers", nargs="+", default=["shared"],
+                        choices=["shared", "perf", "lite", "minimal"],
                         help="Resource tiers to sweep for the GRiD columns. Default: "
-                             "['perf'] (legacy single-tier behavior). Pass "
-                             "'--tiers perf lite minimal' for full Phase 4 sweep — each "
+                             "['shared'] (legacy single-tier behavior; 'perf' is a "
+                             "deprecated alias for 'shared'). Pass "
+                             "'--tiers shared lite minimal' for full Phase 4 sweep — each "
                              "GRiD column gets one full run per tier with results "
                              "tagged grid_glass / grid_glass_tier_lite / grid_glass_tier_minimal "
                              "in the merged JSON. Non-GRiD columns (pinocchio/mjx/frax) "
@@ -626,12 +632,14 @@ def main() -> None:
                              "~6GB/compile). Pass 1 for the legacy fully-serial behavior.")
     parser.add_argument("--autotune-threads", action="store_true",
                         help="Forward --autotune-threads to the GRiD glass column. For each "
-                             "(robot, base, algo) tuple, sweep a small grid of per-block thread "
-                             "counts on the batch binary (default: 32,64,96,128,192,256,384,512 "
-                             "+ one-level refinement) and pick the min-µs/sample winner. The "
-                             "picks land in the per-column JSON under 'algo_picks[algo]' = "
-                             "{'threads_optimal', 'us_at_optimal', 'sweep_us'}. Opt-in; default OFF. "
-                             "Adds ~30s per (robot, base) on RTX 5090 / iiwa14.")
+                             "(robot, base, algo) tuple, do the JOINT (tier × thread-count) "
+                             "autotune: sweep a per-tier-cap-clipped thread grid (default: "
+                             "32,64,96,128,192,256,384,512 + one-level refinement) on each per-tier "
+                             "batch binary (shared/lite/minimal, reused from the binary cache) and "
+                             "pick the global min-µs/sample winner (tier, threads). The picks land "
+                             "in the per-column JSON under 'algo_picks[algo]' (schema 2) = "
+                             "{'tier_optimal','threads_optimal','us_at_optimal',"
+                             "'sweep':{tier:{threads:us}},'sweep_us':{threads:us}}. Opt-in; default OFF.")
     parser.add_argument("--autotune-thread-grid", type=str, default=None,
                         help="Override the autotune thread grid (comma-separated). "
                              "Default: '32,64,96,128,192,256,384,512'.")
