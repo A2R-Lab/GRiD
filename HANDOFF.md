@@ -235,6 +235,40 @@ Last updated 2026-05-25. Grouped by theme; rough priority within each.
 
 ## CURRENT PLAN — re-prioritized 2026-05-26 (perf-cleanup)
 
+### C.7 OVERNIGHT PERF SWEEP RESULTS — 2026-05-30 (PICK UP HERE)
+
+**Sweep:** `test/benchmarks/results/perf_cleanup_20260530_000808/` (11h40m,
+24/24 GRiD cells GREEN, zero crashes/errors). Full matrix: iiwa14/go2/g1/h1_2 ×
+fixed/floating × {PERF, LITE, MINIMAL} × {N=1, 16, 256} with `--autotune-threads`.
+Pinocchio column merged in from `tier_sweep_20260523_2200/` (pin CPU baseline
+doesn't move). Comparison summary file: `grid_vs_pin_summary.md` in the same dir.
+
+**Headline score @ N=256 with-mem:** GRiD-best-tier wins **47 / 80** comparable
+cells; pinocchio wins **30**; **3** ties.
+
+**Big GRiD wins (≥2×, sorted):**
+- h1_2.fixed ee_pose 6.44× · iiwa14.fixed id_du 5.46× · iiwa14.floating crba
+  3.90× · h1_2.fixed id 3.85× · go2.fixed fd_du 3.77× · iiwa14.fixed id 3.20×
+- h1_2.fixed aba 2.60× · iiwa14.fixed aba 2.56× · h1_2.floating fd 2.41× ·
+  go2.fixed aba 2.35× · h1_2.fixed fd 2.27× · iiwa14.floating aba 2.16× ·
+  h1_2.floating aba 2.10× · go2.fixed ee_pose 2.08×
+
+**Tier story:** **MIN tier wins most batch-256 cells on big robots** — confirms
+the spill-to-L2 occupancy hypothesis. Examples: g1.fixed id PERF 52.7 → MIN
+31.0 µs (40% faster); h1_2.floating id PERF 94.4 → MIN 56.4 µs. **One LITE
+regression:** h1_2.fixed id LITE 82.8 µs vs PERF 50.0 µs / MIN 46.9 µs — likely
+a bad LITE smem-target on this specific (robot, base, algo) cell (backlog item
+A.7).
+
+**Three loss-cluster backlog items filed below** (A.5–A.7):
+- **A.5 idsva_so big-robot regression** — pin 3.2–10.5× faster on every
+  big robot. Worst: g1.fixed 0.09×, h1_2.fixed 0.11×, g1.floating 0.13×.
+- **A.6 ee_pose_gradient big-robot tail** — pin 2.2–6.2× faster on h1_2 /
+  big floating. Worst: h1_2.fixed 0.16×, h1_2.floating 0.18×.
+- **A.7 crba big-robot floating tail + h1_2.fixed LITE id regression** — pin
+  2.1–2.7× faster on g1.floating (0.36×), h1_2.fixed (0.47×), h1_2.floating
+  (0.56×).
+
 ### ee_pose_gradient GEOMETRIC-JACOBIAN REWRITE — 2026-05-27 (LATEST; pick up here)
 
 **STEP A + B + C LANDED + COMPREHENSIVELY VALIDATED + PUSHED (2026-05-27).**
@@ -876,6 +910,44 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    picks it up. iiwa14 fixed single 22.4 µs/iter, floating 67.4 µs/iter.
    **Open:** numerical cross-check vs GRiD output deferred (formula matches
    Python `pinocchio_backend.fdsva_so` exactly).
+5. **idsva_so big-robot regression** — C.7 (2026-05-30, N=256 batch with-mem).
+   GRiD loses to pin 3.2–10.5× on every big robot. Worst cells:
+   - g1.fixed body_frame: 998 µs pin vs 10,518 µs GRiD (**0.09×**)
+   - h1_2.fixed body_frame: 6,632 µs pin vs 61,234 µs GRiD (**0.11×**)
+   - g1.floating world_frame: 2,055 µs pin vs 16,021 µs GRiD (**0.13×**)
+   - h1_2.floating world_frame: 16,122 µs pin vs 65,740 µs GRiD (**0.25×**)
+   - iiwa14.floating world_frame: 404 µs pin vs 1,280 µs GRiD (**0.32×**)
+   - go2.fixed body_frame: 325 µs pin vs 641 µs GRiD (**0.51×**)
+   - go2.floating world_frame: 495 µs pin vs 2,547 µs GRiD (**0.19×**)
+   iiwa14.fixed body_frame is the lone competitive cell (**1.09×**).
+   Same family as A.1 / A.2 (compute+smem-bound nv³ kernel); ties to
+   ancestor-scratch de-alias / parallelism work. Body and world frames are
+   algorithmically equivalent — the dispatcher picks body for fixed, world
+   for floating, and we compare against pin's body-frame baseline (pin only
+   exposes one variant).
+6. **ee_pose_gradient big-robot tail** — C.7 (2026-05-30, N=256 batch
+   with-mem). Step-C geometric-Jacobian rewrite closed the floating gap on
+   small robots, but big-robot floating and the h1_2 cluster regressed:
+   - h1_2.fixed: 62.7 µs pin vs 389.8 µs GRiD (**0.16×**, pin 6.2× faster)
+   - h1_2.floating: 80.7 µs pin vs 451.0 µs GRiD (**0.18×**, pin 5.6× faster)
+   - go2.floating: 38.8 µs pin vs 91.9 µs GRiD (**0.42×**)
+   - g1.fixed: 49.4 µs pin vs 107.5 µs GRiD (**0.46×**)
+   - g1.floating: 73.7 µs pin vs 139.7 µs GRiD (**0.53×**)
+   The h1_2 regression is the standout — likely an inner-loop bottleneck
+   that scales poorly with NEE=12 (h1_2 has 12 end-effectors, more than
+   any other robot in the sweep). Audit per-EE accumulation and shared
+   chain-walk reuse.
+7. **CRBA floating-base tail + h1_2.fixed LITE id regression** — C.7
+   (2026-05-30, N=256 batch with-mem). CRBA losses on big floating-base
+   robots (consistent with the longstanding "CRBA weakest" memory note):
+   - g1.floating: 62.2 µs pin vs 170.9 µs GRiD (**0.36×**)
+   - h1_2.fixed: 129.6 µs pin vs 273.0 µs GRiD (**0.47×**)
+   - h1_2.floating: 233.9 µs pin vs 415.9 µs GRiD (**0.56×**)
+   - g1.fixed: 73.6 µs pin vs 130.7 µs GRiD (**0.56×**)
+   - go2.floating: 39.0 µs pin vs 60.4 µs GRiD (**0.65×**)
+   Plus a tier-sizing bug: **h1_2.fixed id LITE = 82.8 µs vs PERF 50.0 µs
+   / MIN 46.9 µs** — LITE smem-target on this cell is mis-tuned. Should be
+   a quick LITE-target re-tune for that (robot, base, algo) triple.
 
 ### B. Architecture cleanup (gated on perf data)
 1. ✅ **De-alias `idsva_so` / `fdsva_so` inners — DONE in prior commits,
@@ -1142,7 +1214,10 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
     --tiers perf lite minimal --autotune-threads --output-dir
     test/benchmarks/results/perf_cleanup_<ts>`. Gated on (a) the rpy-snap
     equivalence validation clearing, (b) the user's personal review of D.2
-    RBDReference (`0b1a89d` → `d0e552a`).
+    RBDReference (`0b1a89d` → `d0e552a`). **2026-05-30 UPDATE:** sweep ran
+    to completion green; D.2 review verdict = "fine for now, backlog captures
+    the rest" — gate is closed, perf-cleanup is cleared to merge into
+    `modernizing-tests`.
 - **2026-05-29 EVENING evening batch (8-agent + 2-direct landings):**
   - **D.2 FK orientation fix** — URDFParser `acbdab8` (perf-cleanup branch) +
     `8182770` (modernizing-tests branch). `Joint.set_type` now rotates `t_free`
