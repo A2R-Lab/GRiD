@@ -216,6 +216,169 @@ don't introduce a `qdd` gradient path the other surfaces lack.
 
 ---
 
+## 2b. Notebook / interactive register-then-run UX
+
+**This is a first-class requirement of the torch backend, not a nice-to-have.**
+The canonical interactive workflow is: a user (in a Jupyter / Colab cell) defines
+or points at a URDF, calls `register_robot(...)` in one cell, and a few cells
+later calls algorithm methods on the returned handle — and on a notebook *re-run*
+(kernel restart, "Run All") the registration cell is a **cache hit**, not a
+recompile. The torch handle must deliver exactly the same two-tier UX the JAX
+path already gives (§0): register-once (slow, compile) → call-many (fast), backed
+by the existing content-addressed cache (`_cache.py:97-107`).
+
+### The handle is the notebook object
+
+`grid_rbd.register_robot(name=..., urdf_path=..., backend="torch", ...)` (or the
+mirror entry point `grid_rbd.torch.register_robot(...)`, parallel to
+`grid_rbd.jax.register_robot` at `jax/__init__.py:380`) returns a
+`TorchRobotHandle` whose methods (§2) are autograd-aware torch ops returning
+`torch.Tensor`. Decision: expose **both** a `backend=` kwarg on the top-level
+`register_robot` (`__init__.py:54`) *and* a `grid_rbd.torch` submodule, so a
+notebook can do either:
+
+```python
+import grid_rbd
+h = grid_rbd.register_robot("iiwa14", urdf_path="iiwa14.urdf", backend="torch")  # cell 1
+# ... markdown, plots, other cells ...
+qdd = h.forward_dynamics(q, qd, u)            # cell N — torch.Tensor, autograd-aware
+qdd.sum().backward()                           # gradient flows (§2 autograd wiring)
+```
+
+The `backend=` kwarg just dispatches to the right handle constructor; the
+underlying `register_robot` body (parse → `generate_and_compile` → cache →
+manifest) is **unchanged** (`__init__.py:131-141`). The torch handle, like
+`JaxRobotHandle`, wraps the base `RobotHandle` plus the `.so`/`cache_key` pulled
+from the manifest (`jax/__init__.py:410-420`).
+
+### Why register-then-run "just works" across cells and re-runs
+
+- **First call in the session compiles** (or cache-hits). `register_robot` is
+  idempotent and content-addressed: the `.so` lands under
+  `store_dir(cache_dir, cache_key)` (`_cache.py:114`). A notebook kernel restart
+  + "Run All" recomputes the same `cache_key` (sha256 over urdf+options+version+
+  arch+wrapper hash, `_cache.py:97-107`) and the `if not so_path.exists()` guard
+  (`__init__.py:131`) skips straight to loading the cached `.so` — **no nvcc**.
+  This is the same mechanism that makes the JAX smoke test "start in <1s" on the
+  second run (`test/python_wrappers/test_iiwa14_smoke.py:6-7`).
+- **Process-global op registration is idempotent.** The torch
+  `TORCH_LIBRARY(grid_rbd_<key>, ...)` registration (§2) is keyed by `cache_key`
+  (like `_ffi_target_name` at `jax/__init__.py:51`) and guarded by a
+  `_REGISTERED` set + lock exactly like the JAX FFI target registry
+  (`jax/__init__.py:47-48, 67-86`). So calling a method in a *later* cell
+  registers-on-first-use and is a no-op thereafter — re-running a downstream cell
+  many times never re-registers or re-loads.
+- **One `.so` per kernel process; survives `get_robot`.** A second handle to the
+  same robot in a later cell (`grid_rbd.get_robot(name, ...)` →
+  torch variant, mirror of `jax/__init__.py:423`) reuses the cached `.so` and the
+  already-registered ops. (Note the single-robot-singleton device-state caveat,
+  §6.5: two *different* robots are fine; concurrent capture of two robots sharing
+  the singleton scratch is the v2 limitation.)
+
+### `urdf_string=` support — inline URDFs with no file on disk (REQUIRED for fully inline notebooks)
+
+A notebook cell should be able to define the URDF as a Python string literal and
+register it without writing a file first. Today `register_robot` only accepts
+`urdf_path` and immediately does `Path(urdf_path).read_bytes()`
+(`__init__.py:108-111`). Add a mutually-exclusive `urdf_string: str | None = None`
+parameter. **This is a small, surgical change with two exact touch points:**
+
+1. **`__init__.py` `register_robot` (`__init__.py:105-127`)** — the only place
+   bytes are sourced and the cache key is computed. Replace the
+   `urdf_path`-resolve-and-read block with:
+   - if `urdf_string` is given: `urdf_bytes = urdf_string.encode("utf-8")` (no
+     filesystem touch); else the existing `urdf_p.read_bytes()` path.
+   - **the cache key already hashes `urdf_bytes`** (`compute_cache_key`,
+     `_cache.py:97-107` / `:102` `h.update(urdf_bytes)`), so an inline string and
+     the equivalent file produce the **identical** `cache_key` — *no change to
+     `compute_cache_key` is needed*. Two notebook cells with byte-identical URDF
+     text are automatic cache hits, and an inline URDF that matches an on-disk one
+     dedupes to the same `.so`.
+   - Mirror the same `urdf_string` branch in `grid_rbd.jax.register_robot`
+     (`jax/__init__.py:380-409`) and the torch `register_robot`, since both
+     delegate to the base `register_robot` (`jax/__init__.py:400`) — so passing
+     `urdf_string=` through the base is all that's required; the jax/torch
+     wrappers just forward the new kwarg.
+
+2. **`_compile.generate_and_compile` / `generate_grid_cuh`
+   (`_compile.py:70-90, 212-226`)** — the URDF reaches the parser as a *path*
+   (`URDFParser().parse(str(urdf_path), ...)`, `_compile.py:86-90`). Two options,
+   pick the **temp-file** one for v1 (lowest risk, parser API unchanged):
+   - **(chosen) temp-file:** in `register_robot`, when `urdf_string` is given,
+     write it to a `NamedTemporaryFile(suffix=".urdf")` inside the cache entry dir
+     (`entry_dir`, `__init__.py:128`) — i.e. persist it as `entry_dir/robot.urdf`
+     so re-runs and debugging can see the exact source — and pass that path into
+     `generate_and_compile`. The cache key is still computed from the *string
+     bytes*, not the temp path, so the path being non-deterministic doesn't leak
+     into the key.
+   - (deferred) feed the parser directly: add a `parse_string` entry point to
+     `URDFParser` and thread an in-memory branch through `generate_grid_cuh`
+     (`_compile.py:86`). More invasive (parser change); defer to v2.
+
+   Net: `generate_and_compile`'s signature is unchanged — it still receives a
+   `Path`. Only `register_robot` learns to materialize the string to a temp path
+   under `entry_dir` before calling it.
+
+**Gap flag:** until `urdf_string=` lands, fully self-contained inline notebooks
+must `urdf_path=` a file (e.g. one fetched via `robot_descriptions`, as the
+existing examples do — `examples/quickstart_iiwa14.py:16-21`). `urdf_string=` is
+therefore a **D.3 prerequisite** for the "define the URDF in a cell" notebooks
+(see the notebook plan, `notebook_examples_plan.md`). It is independent of the
+torch op work and could land first.
+
+### First-compile latency guidance (set notebook expectations)
+
+The first `register_robot` of a robot runs `nvcc` on the generated `grid.cuh`
+(`_compile.py:154-209`), and **`grid.cuh` is large** (the repo's checked-in one
+is ~1.1 MB; per-robot ones scale with DOF and with the SO kernels, which
+`generate_grid_cuh` always enables — `_compile.py:118` `enable_floating_second_order=True`).
+Practical guidance to put in every notebook's first cell:
+
+- **iiwa14 (7-DOF fixed-base): seconds to tens of seconds** of nvcc — fine for a
+  live demo.
+- **g1 / h1_2 (floating-base humanoids, ~30-40 DOF): minutes** of nvcc (the SO
+  kernels dominate). For these, either pre-warm the cache out-of-band (run
+  `register_robot` once in a setup script / CI cache-priming step before the demo)
+  or scope the live cells to the kinematics/first-order methods. **Recommend small
+  robots (iiwa14, go2) for live/CI notebooks; gate the humanoid notebook behind a
+  "this cell compiles for minutes / use a pre-warmed cache" markdown banner.**
+- **Cache pre-warming pattern for CI/demos:** call `register_robot(...)` in a
+  fixture or a `make warm-cache` step so the notebook's registration cell is a
+  guaranteed cache hit (`so_path.exists()` true → no nvcc, `__init__.py:131`).
+  The cache is content-addressed and host-local, so a warmed `~/.cache/grid-rbd/`
+  is reusable across notebook runs and across the JAX/torch/numpy surfaces (they
+  share the `.so`, `jax/__init__.py:18-21`).
+
+### Runtime smem opt-in + L2 setup timing in a notebook context
+
+The interactive path inherits the device-global-state setup already required for
+correctness (§1, §3):
+
+- The **>48 KB dynamic-shared-memory opt-in** (`cudaFuncSetAttribute` via
+  `init_grid_kernel_attrs<T>()`, `grid.cuh:18713`, called from `grid_rbd_init()`,
+  `wrapper_template.cu:52`) happens **once, lazily, on the first method call** in
+  the notebook (the `if (!g_data)` guard, §1). So a user who registers in cell 1
+  and first *calls* a method in cell 5 pays the one-time init at cell 5, not at
+  registration. This is correct and invisible, but worth a one-line doc note so a
+  user doesn't misread the first call's latency as per-call overhead.
+- The **L2-persisting window setup** is *not* on the per-call torch path (the
+  torch ops launch kernels kernel-direct, bypassing the host wrappers that call
+  `grid_begin_l2_persisting`, §3 point 2). So an interactive (non-captured) call
+  does no L2 stream-attribute setup; the L2 window only matters for the
+  CUDA-Graphs capture path (§3, risk #1), which is an explicit `handle.capture(...)`
+  the notebook opts into (see the CUDA-Graphs micro-demo in
+  `notebook_examples_plan.md`).
+
+**Consistency with §1:** all of the above reuses the `grid_rbd` build pipeline
+and the existing cache — the notebook UX adds **no new compile path**. It is the
+same `subprocess`-driven nvcc + `-DGRID_RBD_WITH_TORCH` flag (§1 option C), driven
+the same way whether the caller is a script, a pytest fixture, or a notebook cell.
+We do **not** introduce `torch.utils.cpp_extension.load_inline` for the notebook
+path — `load_inline` remains only the documented fallback for torch-ABI brittleness
+(§1 option A). A notebook is just another caller of the one canonical pipeline.
+
+---
+
 ## 3. CUDA-Graphs capture design
 
 ### The callable
