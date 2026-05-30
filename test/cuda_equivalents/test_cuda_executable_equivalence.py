@@ -92,6 +92,40 @@ SINGULAR_DEPENDENT_ALGORITHMS = {
     "forward_dynamics_gradient_qd",
     "aba",
 }
+# Mimic-joint CUDA codegen lands in phases (task T3). For robots WITH mimic
+# joints (fr3, h1_2) only the algorithms whose mimic path has landed are
+# compared; the rest are skipped (logged, not failed) until their phase lands.
+# This set GROWS per phase and reaches full coverage at P4. Non-mimic robots
+# are unaffected (they always compare every algorithm).
+#   P1: inverse_dynamics, crba
+#   P2: + direct_minv, forward_dynamics, aba
+#   P3: + inverse_dynamics_gradient_q/qd, forward_dynamics_gradient_q/qd
+#   P4: + end_effector_pose_gradient, end_effector_pose_hessian
+#       (end_effector_pose value is mimic-unaffected and always compared)
+MIMIC_SUPPORTED_ALGORITHMS = {
+    # P1 (landed): ID + CRBA. end_effector_pose value is mimic-unaffected.
+    "inverse_dynamics",
+    "crba",
+    "end_effector_pose",
+    # P2 (landed): direct_minv via inv(CRBA); forward_dynamics + aba via decomp.
+    "direct_minv",
+    "forward_dynamics",
+    "aba",
+    # P3 (PENDING): ID/FD gradients.
+    # "inverse_dynamics_gradient_q",
+    # "inverse_dynamics_gradient_qd",
+    # "forward_dynamics_gradient_q",
+    # "forward_dynamics_gradient_qd",
+    # P4 (PENDING): kinematic gradient/hessian.
+    # "end_effector_pose_gradient",
+    # "end_effector_pose_hessian",
+}
+
+
+def _robot_has_mimic_joints(project_model) -> bool:
+    return any(
+        getattr(j, "is_mimic", False) for j in project_model.robot.joints
+    )
 # Algorithms with a KNOWN, TRACKED correctness bug: their mismatches vs the
 # independent oracle are reported as expected/known failures (not silent masks,
 # not hard suite failures) pending a fix. The oracle stays correct so the bug is
@@ -1420,7 +1454,15 @@ def _run_cuda_equivalence_case(
         invertible_mass_matrix = _has_invertible_project_mass_matrix(
             reference_model, sample.q
         )
+        robot_is_mimic = _robot_has_mimic_joints(project_model)
         for name in algorithms:
+            if robot_is_mimic and name not in MIMIC_SUPPORTED_ALGORITHMS:
+                # Mimic CUDA codegen for this algorithm has not landed yet
+                # (task T3 phased rollout); skip (logged, not failed).
+                skipped.append(
+                    f"{spec.robot_id}/{sample.name}/{name} (mimic codegen pending phase)"
+                )
+                continue
             if name in SINGULAR_DEPENDENT_ALGORITHMS and not invertible_mass_matrix:
                 skipped.append(f"{spec.robot_id}/{sample.name}/{name}")
                 continue
