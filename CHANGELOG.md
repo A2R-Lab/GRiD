@@ -5,6 +5,15 @@ changes since the GLASS rollout for our own historical reference.
 
 ## Unreleased — v2.0 — cuBLASDx removal + resource-tier system
 
+### 2026-05-31 — frame Jacobian / OSC, mimic gradients, SO parallelization
+
+- General-frame geometric Jacobian (`LOCAL`/`WORLD`/`LOCAL_WORLD_ALIGNED`) added: numpy reference `frame_jacobian` + `frame_jacobian_dot` (J̇) + `osc_inertia` (Λ=(J·M⁻¹·Jᵀ)⁻¹), validated vs pinocchio `getFrameJacobian`/`getJointJacobian`/`computeJointJacobiansTimeVariation` across all three frames on iiwa14 + go2.
+- CUDA codegen emits the frame Jacobian J (opt-in `frame_jacobian` key, requires `ee_pose`, non-mimic robots); J̇ and OSC Λ remain reference-only (CUDA on the roadmap).
+- Floating-base mimic robots now support `ee_pose_gradient` / `ee_pose_hessian` codegen (the 6 independent root v-slots decompose into singleton columns).
+- Fixed-base mimic robots now support second-order codegen (`idsva_so` / `fdsva_so`) via the body-frame internal-NUM_BODIES sweep with an alpha-fold to the reduced output.
+- Fixed a shared `matmul` block-index wrap bug (`%NUM_JOINTS` → `%NUM_BODIES`) that corrupted the composite-inertia path on mimic robots.
+- Parallelized `id_du` and the world-frame `idsva_so` inner; deduplicated the `fdsva_so` emitter.
+
 ### 2026-05-30 — external forces, plant layer, torch backend, tier rename
 
 This subsection collects the features merged onto `modernizing-tests`
@@ -99,6 +108,10 @@ threaded through the CUDA codegen and the Python reference:
   `NotImplementedError` instead of silently emitting zeroed gradients.
   Non-gradient algorithms work for mimic robots; mimic gradients (and
   floating+mimic) are deferred (roadmap; `docs/open-tasks/`).
+  *(Superseded by the 2026-05-31 entry above: `id_du`/`fd_du`,
+  `ee_pose_gradient`/`ee_pose_hessian`, and fixed-base second-order now
+  emit correct mimic-reduced gradients; only integrator/`f_ext`
+  gradients and floating-base second-order still refuse.)*
 
 **Archive tag for pre-rip state:** `archive/last-cublasdx` (commit
 `5177070`). Use `git show archive/last-cublasdx -- <path>` to see the
