@@ -326,3 +326,75 @@ that to step 4 (spherical), where it's unavoidable.
 - `get_S_index_by_id` / `get_S_sign_by_id` (`Robot.py:840-855`) and
   `get_S_inds` (`:887`) — the single-axis `S` assumption that steps 2–4 must lift
   or route around.
+
+---
+
+## E4 implementation status (2026-05-31)
+
+Landed on branch `i-urdf` (URDFParser + RBDReference submodules + this doc).
+
+### Step 0 — typed exception (DONE)
+`URDFParser/errors.py` adds `URDFParseError` (base) and
+`UnsupportedJointTypeError(jtype, joint_name)`. `Joint.set_type`'s old
+`print(...)+exit()` is replaced by `raise UnsupportedJointTypeError(...)`.
+`URDFParser.parse()` now re-raises `URDFParseError` (other failures still
+degrade to `None` for backward compat). Valid-URDF parses are BYTE-IDENTICAL
+(sha256 of (id, name, jtype, S, Xmat_sp) verified unchanged for iiwa14, go2,
+g1, h1_2, fr3, gen3, fetch, baxter). Tests: `URDFParser/tests/test_errors.py`.
+
+### Step 1 — continuous joints (VERIFIED + green)
+gen3 (4 continuous joints) is modeled correctly: 1-DOF, NQ==NV, ±inf limits,
+single cardinal S — numerically identical to revolute. The cross-library
+divergence vs Pinocchio's RUBZ (cos/sin, NQ=2) representation is pure float64
+round-off (scales with sample energy, ~1e-8 at rest up to ~2.4e-4 relative;
+cond(M)~6e4 amplification on the synthetic floating-base config). Sized the
+gen3 tolerance buckets (`rnea`, `minv`, `aba`, `pose_gradient`, `f_ext_grad`,
+`second_order_fdsva`) to that documented round-off in
+`RBDReference/tests/tolerances.py`. Added
+`RBDReference/tests/test_continuous_joint_equivalence.py` (asserts the
+NQ==NV contract and that dynamics OUTPUTS match Pinocchio even at large WRAPPED
+angles — the "compare outputs, never raw q" guard) plus
+`URDFParser/tests/test_continuous_joint.py`.
+
+### Step 3 — planar + spherical PARSER/Robot groundwork (PARTIAL — reference dynamics + CUDA emit DEFERRED)
+`Joint.set_type` now parses `planar` (3-DOF: 2 in-plane translations + normal
+rotation, NQ=NV=3, 6×3 S, vector-add update) and `spherical` (3-DOF rotation,
+NV=3/NQ=4 unit quaternion, 6×3 angular S) into a correct native
+representation. `Robot.get_joint_index_q/v` return CONTIGUOUS BLOCKS for a
+non-root multi-DOF joint (single-DOF joints still return scalars, byte-identical);
+`Robot.get_num_pos` counts the spherical quaternion NQ−NV=+1 offset.
+Tests: `URDFParser/tests/test_planar_spherical_groundwork.py`.
+
+**DEFERRED (precise hand-off):**
+1. **numpy-reference dynamics consumption of the multi-column S.** The RNEA /
+   CRBA / ABA recursions in `RBDReference/RBDReference.py` read
+   `get_S_by_id` and `q[get_joint_index_q(jid)]` per joint; they must be
+   exercised/validated for a 6×3 S and a multi-slot q/v block on a NON-root
+   joint. (The index machinery now returns the right blocks; the recursions
+   were not re-validated for multi-column S in this slice.) Validate against
+   `pin.JointModelPlanar` / `pin.JointModelSpherical`.
+2. **spherical SO(3) per-joint retract.** `RBDReference.integrate` /
+   `dIntegrate` today hardcode a single free-flyer prefix at q[0:7]/v[0:6].
+   Supporting a MID-CHAIN spherical joint needs generalizing those to iterate
+   joints and apply the per-joint retract by type (reusing the existing
+   `_quat_exp_from_half_omega` / `_so3_right_jacobian` primitives). Planar's
+   update is a plain vector add and needs no retract change.
+3. **CUDA codegen multi-column non-root S emit (the h-mimic-adjacent piece —
+   route AFTER h-mimic lands).** `Robot.get_S_index_by_id` / `get_S_sign_by_id`
+   (`Robot.py`) scan the flat S for exactly one ±1 unit entry and **raise
+   `ValueError("Joint subspace does not contain a unit axis.")` for a 6×3 S**.
+   `get_S_inds` emits that single signed index into `h_topology_helpers`, and
+   `GRiDCodeGenerator/_topology_helpers.py` consumes it as a scalar
+   `S_ind`/`S_sign`. To emit planar/spherical the codegen must carry a full
+   per-joint S COLUMN SET (generalize the floating-base `_inner_*` per-algorithm
+   handling — e.g. `_crba.py gen_crba_inner_floating` — to ANY NV-per-joint>1,
+   non-root) AND, for spherical, the NV≠NQ q/v slot routing
+   (`get_joint_index_q/v` blocks, mirroring the D.2 mimic `get_joint_index_v`
+   pattern). This is the multi-column-S emit the plan's step 3 (native route b)
+   / step 4 defers; it overlaps the shared NV≠NQ codegen path h-mimic is
+   actively editing, so it was NOT touched. The cheaper alternative for planar
+   alone (parse-time decomposition into 2 prismatic + 1 revolute through
+   zero-mass dummy links) was assessed and NOT taken in this slice — it requires
+   a renumber/subtree/fixed-joint-removal-aware injection helper plus a
+   dummy-link whitelist past `Link.is_world_base_frame` (zero-mass links are
+   currently flagged as the world frame).
