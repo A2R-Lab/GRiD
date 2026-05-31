@@ -1330,47 +1330,62 @@ L2-pin default-on. Deferred TAIL only: crba 2.5-6x regression (I-crba) + idsva_s
 deep de-alias (recursion-hot, no clean split — after h-mimic) + the comprehensive perf
 re-sweep (= the 4pm sweep). That tail folds into F2; it is NOT a separate pending campaign.
 
-**A. Correctness bugs (tracked + gated; NOT silently passing)**
-- A1. **h1_2 branched-multi-root `inverse_dynamics` VALUE bug** *(top item)* — ID diverges
-  (norm_rel ~69, c[2]) on the 3-root (0/6/12) topology; corrupts id/fd/aba/id_du/fd_du.
-  fr3 (single-root) passes; pin+RBDReference agree. Gated per-(robot,algo) KNOWN-FAILING.
-  Needs device-level debugging of the force-propagation value path.
-- A2. **d2ee (`ee_pose_hessian`) orientation-hessian bug** — CUDA+analytic share it; in
-  `KNOWN_FAILING_ALGORITHMS`; pin-parity scoped to {iiwa14, fr3}.
+### CLOSED on the 2026-05-31 H/I/J/K agent campaign (merged @ 6a2a20c)
+- **A1 DONE** (h-mimic): h1_2 ID value bug = mimic scratch arena under-sized by `get_num_pos()`
+  not `get_num_joints()` (`s_vaf` overflowed `s_XImats`) + `id_du`/`fd_du` dropped `alpha*s_sign`.
+  h1_2 UN-GATED.
+- **A2 DONE** (J-d2ee): the "orientation-hessian bug" lived in a RETIRED d²/dq² path; the
+  production tangent d²/dv² (kinematic Hessian) is correct — validated fleet-wide vs pin
+  `getJointKinematicHessian`. d2ee UN-GATED to a HARD requirement, NO codegen change.
+- **B1 DONE** (K-b1): floating+mimic `id_du`/`fd_du` via per-root-DoF subspace fold.
+- **B2 PARTIAL** (K-ee): fixed-base mimic `ee_pose_gradient`+`ee_pose_hessian` un-refused (fr3 green).
+- **C1 DONE fixed-base** (h-fext): `−∂Jᵀ/∂q` GPU emit + `f_ext_gradient_dq` kernel/host + test (D1a).
+- **C2 DONE** (h-centroidal): centroidal `∂h/∂q` + `ḣ` + pin oracle.
+- **D1 DONE**: dedicated f_ext_gradient, 5 centroidal kernels, com/momentum cost, batched-FK cuda tests.
+- **E1 DONE** (I-regressor): sysID joint-torque regressor CUDA emit + test.
+- **E4 DONE** (I-urdf): URDFParser typed exceptions + continuous-joint verify + planar/spherical
+  PARSER groundwork.  **E5/E6 DONE** (H-roadmap): notebooks + python/torch f_ext handle.
+- **PERF**: crba dead-buffer removal (3.3× smaller smem, I-crba); idsva_so body `output_tp`
+  de-alias rung (K-idsva). Both part of the F2 perf-cleanup tail.
 
-**B. Mimic codegen incomplete (T3-finisher landed P3 fixed-base only)**
-- B1. floating+mimic gradients (id_du/fd_du refuse floating mimic).
-- B2. P4 mimic: `ee_pose_gradient` α-accumulate implemented but still refused (paired with
-  `ee_pose_hessian`, unfolded); `idsva_so`/`fdsva_so` mimic not done.
+### REMAINING backlog (prioritized)
+**A. Correctness — open/deferred**
+- A-d2ee-gate. d2ee is now a HARD cuda-equivalence requirement; the integrated green-gate must
+  confirm CUDA d2ee passes fleet-wide (reference confirmed; kernel unchanged). Re-gate if any robot fails.
 
-**C. G2 features that landed partial**
-- C1. f_ext `−∂Jᵀ/∂q` GPU emit (§A.3) — FD-loop bug; numpy+pin oracle ships+tested.
-- C2. centroidal derivatives `∂h/∂q` — value layer done.
-- C3. Coriolis matrix fixed-base only (raises on floating).
+**B. Mimic codegen — remaining deferrals**
+- B2-ee-float. floating+mimic `ee_pose_gradient`/`ee_pose_hessian` (root 6-DoF subspace fold; still refused).
+- B2-SO. `idsva_so`/`fdsva_so` mimic: K-idsva-predecessor (J-idsva) BUILT it but the CUDA internal
+  NB³ sweep produces wrong values for NB>NV (mimic) — REVERTED; precise resume hint in
+  `docs/idsva_so_inner_refactor_notes.md`. Still refused.
 
-**D. Test-coverage gaps (IN PROGRESS — the immediate work)**
-- D1. CUDA-equivalence tests MISSING: dedicated `f_ext_gradient` algo, 5 centroidal device
-  kernels, `com_cost`/`momentum_cost`, warp/thread/batched FK (validated ad-hoc, no
-  committed test). [com/momentum numpy refs + gen3 f_ext comparator: DONE.]
+**C. Partial-feature remainders**
+- C1-float. floating-base `−∂Jᵀ/∂q` GPU emit (needs on-device SE(3) Lie root-twist integrator;
+  numpy+pin oracle already ships both bases).
+- C3. floating-base Coriolis matrix (pin's floating Coriolis skew ≠ tangent Christoffel; needs a
+  port of pin's body-frame Bcrb recursion — RBDReference-only, CPU, can overlap the sweep).
 
-**E. Roadmap — planned, not started (`docs/open-tasks/`)**
-- E1. D.4 runtime inertia params (two-variant emit) + sysID regressor CUDA emit (numpy ref exists).
+**E. Roadmap — not started**
+- E1-rem. mimic-robot regressor `Y` CUDA validation (codegen works, no equiv run = gap, not a bug);
+  FD param-gradient `∂q̈/∂π=−M⁻¹Y`; runtime-inertia two-variant emit (plan only, `d4_*` doc); CRBA regressor.
 - E2. R4 general frame Jacobians (LOCAL/WORLD/aligned + J̇); R5 OSC / Λ=(JM⁻¹Jᵀ)⁻¹ (M⁻¹Jᵀ landed).
 - E3. **Contact/constraint dynamics** (constraint Jac, KKT/Delassus, constrained FD, impulse) — biggest moat vs frax.
-- E4. More joint types (continuous-verify/planar/spherical/helical/translation/composite, cheap-first) + URDFParser print+exit→typed exception.
-- E5. Notebook examples (now unblocked: D.3 torch + grid_plant Python surface landed).
-- E6. PyTorch f_ext on the `grid_rbd` handle (d_f_ext is CUDA-only today).
+- E4-cuda. planar/spherical CUDA multi-column-S emit (parser groundwork landed; needs multi-column-S
+  + NV≠NQ codegen — guard raises `UnsupportedJointTypeError` today). Other joint types (helical/translation/composite).
 
-**F. B+C cleanup remainder (consolidation landed in G1; rest deferred)**
-- F1. D.5 RBDReference file-split (mixin map written: `rbdreference_split_plan.md`).
+**F. Cleanup**
+- F1. D.5 RBDReference file-split (mixin map: `rbdreference_split_plan.md`).
 - F2. Naming/uniformity residuals; warnings sweep (`mxS` NumPy `ndim>0` + nvcc/ptxas);
-  comprehensive perf re-sweep.
-- F3. T5 propose-only: autotuned best-tier → per-robot codegen defaults; LITE-aliases-SHARED
-  launch_bounds for no-smem-spill algos (deeper A.7 fix).
+  comprehensive perf re-sweep (= the planned 4pm sweep). Perf tail: floating idsva_so de-alias,
+  crba MINIMAL 3rd-rung (keep small hot band in smem instead of whole-arena), idsva_so big-robot gap.
+- F3. T5 propose-only: autotuned best-tier → per-robot codegen defaults; LITE-aliases-SHARED launch_bounds.
 
 **G. Housekeeping**
-- G1. NOT pushed to origin (whole F+G stack local).
-- G2. A few register-pressure / smem-cap thread-count skips (fr3-floating max-threads; h1_2 168KB SO).
+- G1. NOT pushed to origin (whole H/I/J/K stack local on `modernizing-tests`).
+- G2. Deliberate skips: fr3-floating max-threads; h1_2 body-frame SO 168KB smem-cap (world-frame is production).
+- G3. **Merge-checklist lesson (2026-05-31):** after any URDFParser/Robot.py or shared-GCG.py merge,
+  run a FLOATING+FIXED codegen smoke (`cli <urdf>` and `cli <urdf> -f`), not just py_compile — a
+  floating-codegen regression (E4 single-axis-S guard hitting the 6-DoF root) slipped past py_compile.
 
 **API STABILITY NOTE:** the core/benchmarked algorithm signatures are STABLE now — the only
 signature churn (T4 `d_f_ext`, T5 `TIER_PERF`→`TIER_SHARED`+alias) is DONE+landed, and the B+C
