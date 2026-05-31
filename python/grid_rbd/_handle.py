@@ -136,19 +136,52 @@ class RobotHandle:
     # inputs. They return either (B, num_joints) or (B, num_joints, num_joints)
     # depending on the algorithm.
 
-    def rnea(self, q, qd, qdd=None, *, gravity: float = 9.81):
+    @property
+    def num_bodies(self) -> int:
+        """Number of bodies/links (incl. the base for floating-base). The
+        external-force array ``f_ext`` is shaped ``(B, 6*num_bodies)``."""
+        return self._runner.num_bodies
+
+    def _prep_f_ext(self, f_ext):
+        """Validate + coerce the optional external-force argument.
+
+        ``f_ext`` is ``(B, 6*num_bodies)`` float32, body-major, each per-body
+        wrench ordered ``[angular(3); linear(3)]`` in that link's LOCAL frame.
+        This matches ``RBDReference.apply_external_forces`` (which subtracts the
+        local wrench from the per-body force, ``f[:, i] -= f_ext[i]``) and the
+        GATO/CUDA ``f -= f_ext`` convention. Returns None (no-op) if f_ext is
+        None, keeping the no-f_ext path identical to before.
+        """
+        if f_ext is None:
+            return None
+        fe = np.ascontiguousarray(f_ext, dtype=np.float32)
+        nb = self.num_bodies
+        if fe.ndim != 2 or fe.shape[1] != 6 * nb:
+            raise ValueError(
+                f"f_ext must be (batch, 6*num_bodies) = (batch, {6 * nb}); "
+                f"got shape {fe.shape}. Layout is body-major, each body a "
+                f"length-6 [angular; linear] wrench in the body's local frame."
+            )
+        return fe
+
+    def rnea(self, q, qd, qdd=None, *, gravity: float = 9.81, f_ext=None):
         """Inverse dynamics (RNEA). Returns the bias term c = M·qdd_zero + h − g.
 
         Currently `qdd` is accepted for API stability but ignored (the
         underlying wrapper uses USE_QDD_FLAG=false). Future v2 will plumb
         through user-provided qdd.
+
+        ``f_ext`` (optional): per-body external forces, shape
+        ``(B, 6*num_bodies)``, body-major, each ``[angular; linear]`` in the
+        body's local frame (subtracted from the per-body force, matching
+        ``RBDReference.rnea(..., f_ext=...)``). Default None ⇒ no external force.
         """
         q  = np.ascontiguousarray(q,  dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         qdd_arr = None
         if qdd is not None:
             qdd_arr = np.ascontiguousarray(qdd, dtype=np.float32)
-        return self._runner.rnea(q, qd, qdd_arr, gravity)
+        return self._runner.rnea(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
 
     def minv(self, q):
         """Direct mass-matrix inverse Minv(q). Returns shape (B, NJ, NJ).
@@ -166,21 +199,27 @@ class RobotHandle:
         m_full[:, diag_idx, diag_idx] -= np.diagonal(m, axis1=-2, axis2=-1)
         return m_full
 
-    def forward_dynamics(self, q, qd, u, *, gravity: float = 9.81):
-        """Forward dynamics qdd = M⁻¹·(τ − c). Returns shape (B, NJ)."""
+    def forward_dynamics(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
+        """Forward dynamics qdd = M⁻¹·(τ − c). Returns shape (B, NJ).
+
+        ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``,
+        body-major, ``[angular; linear]`` local-frame (see :py:meth:`rnea`)."""
         q  = np.ascontiguousarray(q,  dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         u  = np.ascontiguousarray(u,  dtype=np.float32)
-        return self._runner.forward_dynamics(q, qd, u, gravity)
+        return self._runner.forward_dynamics(q, qd, u, gravity, self._prep_f_ext(f_ext))
 
-    def aba(self, q, qd, u, *, gravity: float = 9.81):
+    def aba(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
         """Recursive forward dynamics via Articulated Body Algorithm.
         Returns shape (B, NJ). Alternative to forward_dynamics() with the
-        same output but a different implementation."""
+        same output but a different implementation.
+
+        ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``,
+        body-major, ``[angular; linear]`` local-frame (see :py:meth:`rnea`)."""
         q  = np.ascontiguousarray(q,  dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         u  = np.ascontiguousarray(u,  dtype=np.float32)
-        return self._runner.aba(q, qd, u, gravity)
+        return self._runner.aba(q, qd, u, gravity, self._prep_f_ext(f_ext))
 
     def crba(self, q, *, gravity: float = 9.81):
         """Joint-space mass matrix M(q) via Composite Rigid Body Algorithm.
@@ -226,15 +265,19 @@ class RobotHandle:
         NV = self.num_vel
         return raw.reshape(B, NEE, NV, 6).transpose(0, 1, 3, 2).reshape(B, 6 * NEE, NV)
 
-    def rnea_grad(self, q, qd, qdd=None, *, gravity: float = 9.81):
+    def rnea_grad(self, q, qd, qdd=None, *, gravity: float = 9.81, f_ext=None):
         """∂c/∂(q, qd). Returns shape (B, NJ, 2*NJ) — concatenated
-        [dc_dq | dc_dqd]. Slice with `[..., :NJ]` / `[..., NJ:]`."""
+        [dc_dq | dc_dqd]. Slice with `[..., :NJ]` / `[..., NJ:]`.
+
+        ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``.
+        f_ext enters RNEA affinely, so for a CONSTANT f_ext the Jacobian
+        ∂c/∂(q,qd) is unchanged; the kwarg is for consistency with rnea()."""
         q  = np.ascontiguousarray(q,  dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         qdd_arr = None
         if qdd is not None:
             qdd_arr = np.ascontiguousarray(qdd, dtype=np.float32)
-        raw = self._runner.rnea_grad(q, qd, qdd_arr, gravity)
+        raw = self._runner.rnea_grad(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
         # GRiD's h_dc_du = [dc_dq (NJ×NJ col-major), dc_dqd (NJ×NJ col-major)]
         # per timestep, total 2*NJ² floats. Reshape to (B, 2, NJ, NJ) col-major,
         # transpose each block, hstack to match RBDReference's (NJ, 2*NJ).
@@ -243,12 +286,15 @@ class RobotHandle:
         blocks = raw.reshape(B, 2, NJ, NJ).transpose(0, 1, 3, 2)  # row-major now
         return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
-    def forward_dynamics_grad(self, q, qd, u, *, gravity: float = 9.81):
-        """∂qdd/∂(q, qd). Returns shape (B, NJ, 2*NJ)."""
+    def forward_dynamics_grad(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
+        """∂qdd/∂(q, qd). Returns shape (B, NJ, 2*NJ).
+
+        ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
+        affine in f_ext so a constant f_ext leaves this Jacobian unchanged."""
         q  = np.ascontiguousarray(q,  dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         u  = np.ascontiguousarray(u,  dtype=np.float32)
-        raw = self._runner.forward_dynamics_grad(q, qd, u, gravity)
+        raw = self._runner.forward_dynamics_grad(q, qd, u, gravity, self._prep_f_ext(f_ext))
         # Same layout as h_dc_du: [df_dq, df_dqd] col-major blocks.
         B = raw.shape[0]
         NJ = self.num_joints

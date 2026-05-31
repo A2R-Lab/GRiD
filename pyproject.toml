@@ -51,4 +51,5 @@ markers = [
     "robot_nightly: Nightly-tier robot coverage.",
     "cuda_equivalence: CUDA executable equivalence coverage for generated GRiD code.",
     "python_wrappers: grid-rbd Python wrapper coverage; requires CUDA + grid-rbd installed.",
+    "notebooks: Executable example notebooks (run via nbval-lax); requires CUDA + grid-rbd installed.",
 ]

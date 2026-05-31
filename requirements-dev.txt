@@ -1,5 +1,6 @@
 pytest
 pytest-xdist     # parallel CUDA equivalence runs (see test/cuda_equivalents/run_parallel.sh)
+nbval            # execute example notebooks as smoke tests (pytest --nbval-lax notebooks/)
 pin
 robot_descriptions>=1.23.0
 xacrodoc

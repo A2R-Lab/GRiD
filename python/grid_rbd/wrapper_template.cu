@@ -69,6 +69,7 @@ extern "C" int grid_rbd_close() {
 extern "C" int grid_rbd_num_joints()     { return grid::NUM_JOINTS; }
 extern "C" int grid_rbd_num_vel()        { return grid::NUM_VEL; }
 extern "C" int grid_rbd_num_ees()        { return grid::NUM_EES; }
+extern "C" int grid_rbd_num_bodies()     { return grid::NUM_BODIES; }
 extern "C" int grid_rbd_max_batch()      { return kMaxBatch; }
 extern "C" int grid_rbd_max_perf_level_threads() { return grid::MAX_PERF_LEVEL_THREADS; }
 extern "C" int grid_rbd_threads_per_block() { return (int)g_thread_dimms.x; }
@@ -107,13 +108,43 @@ static inline void pack_q_qd_u(const T* q, const T* qd, const T* u,
     }
 }
 
+// ─── external-force helper ───────────────────────────────────────────────────
+//
+// f_ext layout (caller side): (batch, 6*NUM_BODIES) row-major, body-major per
+// timestep, each per-body wrench ordered [angular(3); linear(3)] in the body's
+// LOCAL frame — identical to gridData::h_f_ext / d_f_ext and to RBDReference's
+// apply_external_forces (the kernel does f -= f_ext). A null f_ext leaves the
+// (zeroed) singleton buffer untouched, so the no-f_ext path is byte-identical
+// to before this surface existed.
+//
+// apply_f_ext() copies the user's wrench into the device buffer; reset_f_ext()
+// re-zeroes it after the launch so a later no-f_ext call sees a clean buffer
+// (the singleton is shared across calls). batch must be <= kMaxBatch.
+
+static inline int apply_f_ext(const T* f_ext, int batch) {
+    if (!f_ext) return 0;
+    const size_t n = (size_t)6 * grid::NUM_BODIES * batch;
+    std::memcpy(g_data->h_f_ext, f_ext, n * sizeof(T));
+    if (cudaMemcpy(g_data->d_f_ext, g_data->h_f_ext, n * sizeof(T),
+                   cudaMemcpyHostToDevice) != cudaSuccess) return 5;
+    return 0;
+}
+
+static inline void reset_f_ext(const T* f_ext, int batch) {
+    if (!f_ext) return;
+    const size_t n = (size_t)6 * grid::NUM_BODIES * batch;
+    std::memset(g_data->h_f_ext, 0, n * sizeof(T));
+    cudaMemset(g_data->d_f_ext, 0, n * sizeof(T));
+}
+
 // ─── algorithms ──────────────────────────────────────────────────────────────
 
 // RNEA: c = M(q)·qdd + h(q,qd) − g(q)  (with qdd defaulting to 0 if null)
+// f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
 extern "C" int grid_rbd_rnea(
     const T* q, const T* qd, const T* qdd_opt,
     T* c_out,
-    int batch, T gravity)
+    int batch, T gravity, const T* f_ext)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;  // caller should chunk
@@ -125,11 +156,13 @@ extern "C" int grid_rbd_rnea(
 
     const int nj = grid::NUM_JOINTS;
     pack_q_qd_u(q, qd, nullptr, batch, nj);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
     grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false>(
         g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(c_out, g_data->h_c, batch * nj * sizeof(T));
@@ -159,21 +192,24 @@ extern "C" int grid_rbd_minv(
 }
 
 // Forward dynamics: qdd = Minv(q)·(τ − c(q,qd))
+// f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
 extern "C" int grid_rbd_forward_dynamics(
     const T* q, const T* qd, const T* u,
     T* qdd_out,
-    int batch, T gravity)
+    int batch, T gravity, const T* f_ext)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
 
     const int nj = grid::NUM_JOINTS;
     pack_q_qd_u(q, qd, u, batch, nj);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
     grid::forward_dynamics<T>(
         g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(qdd_out, g_data->h_qdd, batch * nj * sizeof(T));
@@ -181,21 +217,24 @@ extern "C" int grid_rbd_forward_dynamics(
 }
 
 // Articulated body algorithm: qdd = aba(q, qd, u)
+// f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
 extern "C" int grid_rbd_aba(
     const T* q, const T* qd, const T* u,
     T* qdd_out,
-    int batch, T gravity)
+    int batch, T gravity, const T* f_ext)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
 
     const int nj = grid::NUM_JOINTS;
     pack_q_qd_u(q, qd, u, batch, nj);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
     grid::aba<T>(g_data, g_robot, gravity, batch,
                  g_block_dimms, g_thread_dimms, g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(qdd_out, g_data->h_qdd, batch * nj * sizeof(T));
@@ -318,10 +357,13 @@ extern "C" int grid_rbd_end_effector_pose_gradient(
 }
 
 // ∂c/∂(q, qd): output shape (batch, NJ, 2*NJ) — concatenated [dc_dq | dc_dqd].
+// f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
+// f_ext enters RNEA additively (affine), so dc/d(q,qd) is unchanged for a
+// CONSTANT f_ext; this just keeps the bias consistent with grid_rbd_rnea.
 extern "C" int grid_rbd_rnea_grad(
     const T* q, const T* qd, const T* qdd_opt,
     T* dc_du_out,
-    int batch, T gravity)
+    int batch, T gravity, const T* f_ext)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
@@ -329,6 +371,7 @@ extern "C" int grid_rbd_rnea_grad(
 
     const int nj = grid::NUM_JOINTS;
     pack_q_qd_u(q, qd, nullptr, batch, nj);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
     grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/false,
                                        /*USE_COMPRESSED_MEM=*/false>(
@@ -336,6 +379,7 @@ extern "C" int grid_rbd_rnea_grad(
         g_block_dimms, g_thread_dimms, g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(dc_du_out, g_data->h_dc_du,
@@ -344,22 +388,25 @@ extern "C" int grid_rbd_rnea_grad(
 }
 
 // ∂qdd/∂(q, qd): output shape (batch, NJ, 2*NJ).
+// f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
 extern "C" int grid_rbd_forward_dynamics_grad(
     const T* q, const T* qd, const T* u,
     T* df_du_out,
-    int batch, T gravity)
+    int batch, T gravity, const T* f_ext)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
 
     const int nj = grid::NUM_JOINTS;
     pack_q_qd_u(q, qd, u, batch, nj);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
     grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false>(
         g_data, g_robot, gravity, batch,
         g_block_dimms, g_thread_dimms, g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(df_du_out, g_data->h_df_du,
@@ -1583,20 +1630,47 @@ static inline void grid_torch_init_or_throw() {
     if (!g_data) { int rc = grid_rbd_init(); TORCH_CHECK(rc == 0, "grid_rbd_init failed"); }
 }
 
+// Optional external-force application (stream-ordered, graph-capturable).
+// f_ext (if present) is (batch, 6*NUM_BODIES) float32 CUDA, body-major,
+// [angular; linear] local-frame — same layout as d_f_ext and the numpy
+// surface. Copies D->D into the singleton's d_f_ext on `stream`; pair with
+// grid_torch_f_ext_reset() AFTER the kernel launch (also on `stream`) so a
+// later no-f_ext call sees the zeroed buffer. A null/absent f_ext is a no-op,
+// keeping the no-f_ext path byte-identical and capture-clean.
+static inline void grid_torch_f_ext_apply(cudaStream_t stream, int batch,
+                                          const c10::optional<torch::Tensor>& f_ext) {
+    if (!f_ext.has_value()) return;
+    const torch::Tensor& fe = f_ext.value();
+    const int row = 6 * grid::NUM_BODIES;
+    grid_torch_check(fe, "f_ext", row);
+    cudaMemcpyAsync(g_data->d_f_ext, fe.data_ptr<float>(),
+                    (size_t)batch * row * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+}
+
+static inline void grid_torch_f_ext_reset(cudaStream_t stream, int batch,
+                                          const c10::optional<torch::Tensor>& f_ext) {
+    if (!f_ext.has_value()) return;
+    const int row = 6 * grid::NUM_BODIES;
+    cudaMemsetAsync(g_data->d_f_ext, 0, (size_t)batch * row * sizeof(T), stream);
+}
+
 // ── forward ops ──
 
-torch::Tensor torch_rnea(torch::Tensor q, torch::Tensor qd, double gravity) {
+torch::Tensor torch_rnea(torch::Tensor q, torch::Tensor qd, double gravity,
+                         c10::optional<torch::Tensor> f_ext) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
     grid_torch_check(q, "rnea: q", nj); grid_torch_check(qd, "rnea: qd", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
+    grid_torch_f_ext_apply(stream, batch, f_ext);
     auto out = grid_torch_empty(batch, nj, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::inverse_dynamics_kernel<T><<<g_block_dimms, g_thread_dimms, grid::ID_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_c, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_c, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
 
@@ -1615,33 +1689,39 @@ torch::Tensor torch_minv(torch::Tensor q) {
     return out;
 }
 
-torch::Tensor torch_forward_dynamics(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity) {
+torch::Tensor torch_forward_dynamics(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity,
+                                     c10::optional<torch::Tensor> f_ext) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
     grid_torch_check(q, "fd: q", nj); grid_torch_check(qd, "fd: qd", nj); grid_torch_check(u, "fd: u", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, &qd, &u);
+    grid_torch_f_ext_apply(stream, batch, f_ext);
     auto out = grid_torch_empty(batch, nj, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::forward_dynamics_kernel<T><<<g_block_dimms, g_thread_dimms, grid::FD_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_qdd, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_qdd, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
 
-torch::Tensor torch_aba(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity) {
+torch::Tensor torch_aba(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity,
+                        c10::optional<torch::Tensor> f_ext) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
     grid_torch_check(q, "aba: q", nj); grid_torch_check(qd, "aba: qd", nj); grid_torch_check(u, "aba: u", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, &qd, &u);
+    grid_torch_f_ext_apply(stream, batch, f_ext);
     auto out = grid_torch_empty(batch, nj, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::aba_kernel<T><<<g_block_dimms, g_thread_dimms, grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_qdd, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_qdd, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
 
@@ -1705,33 +1785,39 @@ torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q) {
     return out;
 }
 
-torch::Tensor torch_rnea_grad(torch::Tensor q, torch::Tensor qd, double gravity) {
+torch::Tensor torch_rnea_grad(torch::Tensor q, torch::Tensor qd, double gravity,
+                              c10::optional<torch::Tensor> f_ext) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
     grid_torch_check(q, "rnea_grad: q", nj); grid_torch_check(qd, "rnea_grad: qd", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
+    grid_torch_f_ext_apply(stream, batch, f_ext);
     auto out = grid_torch_empty(batch, nj * 2 * nj, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::inverse_dynamics_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::ID_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_dc_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_dc_du, batch * nj * 2 * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
 
-torch::Tensor torch_forward_dynamics_grad(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity) {
+torch::Tensor torch_forward_dynamics_grad(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity,
+                                          c10::optional<torch::Tensor> f_ext) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
     grid_torch_check(q, "fd_grad: q", nj); grid_torch_check(qd, "fd_grad: qd", nj); grid_torch_check(u, "fd_grad: u", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, &qd, &u);
+    grid_torch_f_ext_apply(stream, batch, f_ext);
     auto out = grid_torch_empty(batch, nj * 2 * nj, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::forward_dynamics_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::FD_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_df_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_df_du, batch * nj * 2 * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
 
@@ -1835,16 +1921,16 @@ torch::Tensor torch_integrator_gradient(torch::Tensor q, torch::Tensor qd, torch
 #define GRID_RBD_TORCH_LIBRARY_IMPL(ns, k, m) TORCH_LIBRARY_IMPL(ns, k, m)
 
 GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
-    m.def("rnea(Tensor q, Tensor qd, float gravity) -> Tensor");
+    m.def("rnea(Tensor q, Tensor qd, float gravity, Tensor? f_ext=None) -> Tensor");
     m.def("minv(Tensor q) -> Tensor");
-    m.def("forward_dynamics(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
-    m.def("aba(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
+    m.def("forward_dynamics(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
+    m.def("aba(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
     m.def("crba(Tensor q, float gravity) -> Tensor");
     m.def("end_effector_pose(Tensor q) -> Tensor");
     m.def("end_effector_pose_gradient(Tensor q) -> Tensor");
     m.def("end_effector_pose_hessian(Tensor q) -> Tensor");
-    m.def("rnea_grad(Tensor q, Tensor qd, float gravity) -> Tensor");
-    m.def("forward_dynamics_grad(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
+    m.def("rnea_grad(Tensor q, Tensor qd, float gravity, Tensor? f_ext=None) -> Tensor");
+    m.def("forward_dynamics_grad(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
     m.def("idsva_so(Tensor q, Tensor qd, float gravity) -> Tensor");
     m.def("fdsva_so(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
     m.def("integrator(Tensor q, Tensor qd, Tensor u, float dt, int it, float gravity) -> Tensor");

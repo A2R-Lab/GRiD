@@ -100,16 +100,19 @@ def _make_autograd(ns):
 
     class RneaFn(torch.autograd.Function):
         @staticmethod
-        def forward(ctx, q, qd, gravity):
+        def forward(ctx, q, qd, gravity, f_ext):
             ctx.save_for_backward(q, qd)
             ctx.gravity = gravity
-            return ops.rnea(q, qd, gravity)
+            ctx.f_ext = f_ext
+            return ops.rnea(q, qd, gravity, f_ext)
 
         @staticmethod
         def backward(ctx, grad_c):
             q, qd = ctx.saved_tensors
             nj = q.shape[1]
-            raw = ops.rnea_grad(q, qd, ctx.gravity)  # (B, 2*NJ*NJ) col-major blocks
+            # f_ext is affine in RNEA → ∂c/∂(q,qd) is unchanged by a constant
+            # f_ext; we pass it through for bias consistency only.
+            raw = ops.rnea_grad(q, qd, ctx.gravity, ctx.f_ext)  # (B, 2*NJ*NJ) col-major
             B = raw.shape[0]
             blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)  # row-major (B,2,NJ,NJ)
             dc_dq, dc_dqd = blocks[:, 0], blocks[:, 1]  # (B, NJ, NJ): rows=out, cols=in
@@ -117,23 +120,24 @@ def _make_autograd(ns):
             gc = grad_c.unsqueeze(1)
             grad_q = torch.bmm(gc, dc_dq).squeeze(1)
             grad_qd = torch.bmm(gc, dc_dqd).squeeze(1)
-            return grad_q, grad_qd, None
+            return grad_q, grad_qd, None, None
 
     def _make_fd_like(fwd_op):
         # forward_dynamics & aba share the qdd output and the fd-grad backward
         # (∂qdd/∂(q,qd) from fd_grad; ∂qdd/∂u = M⁻¹). One factory, two ops.
         class FDLikeFn(torch.autograd.Function):
             @staticmethod
-            def forward(ctx, q, qd, u, gravity):
+            def forward(ctx, q, qd, u, gravity, f_ext):
                 ctx.save_for_backward(q, qd, u)
                 ctx.gravity = gravity
-                return fwd_op(q, qd, u, gravity)
+                ctx.f_ext = f_ext
+                return fwd_op(q, qd, u, gravity, f_ext)
 
             @staticmethod
             def backward(ctx, grad_qdd):
                 q, qd, u = ctx.saved_tensors
                 nj = q.shape[1]
-                raw = ops.forward_dynamics_grad(q, qd, u, ctx.gravity)
+                raw = ops.forward_dynamics_grad(q, qd, u, ctx.gravity, ctx.f_ext)
                 B = raw.shape[0]
                 blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
                 df_dq, df_dqd = blocks[:, 0], blocks[:, 1]
@@ -145,11 +149,11 @@ def _make_autograd(ns):
                 grad_q = torch.bmm(g, df_dq).squeeze(1)
                 grad_qd = torch.bmm(g, df_dqd).squeeze(1)
                 grad_u = torch.bmm(g, minv).squeeze(1)
-                return grad_q, grad_qd, grad_u, None
+                return grad_q, grad_qd, grad_u, None, None
         return FDLikeFn
 
-    FDFn = _make_fd_like(lambda q, qd, u, g: ops.forward_dynamics(q, qd, u, g))
-    AbaFn = _make_fd_like(lambda q, qd, u, g: ops.aba(q, qd, u, g))
+    FDFn = _make_fd_like(lambda q, qd, u, g, fe: ops.forward_dynamics(q, qd, u, g, fe))
+    AbaFn = _make_fd_like(lambda q, qd, u, g, fe: ops.aba(q, qd, u, g, fe))
 
     class IntegratorFn(torch.autograd.Function):
         @staticmethod
@@ -246,23 +250,36 @@ class TorchRobotHandle:
     @property
     def num_ees(self) -> int:     return self._base.num_ees
     @property
+    def num_bodies(self) -> int:  return self._base.num_bodies
+    @property
     def floating_base(self) -> bool: return self._base.floating_base
     @property
     def max_batch(self) -> int:   return self._base.max_batch
 
     # ─── differentiable algorithms ───────────────────────────────────────
 
-    def rnea(self, q, qd, *, gravity: float = 9.81):
-        """Inverse dynamics c (B, NJ). Autograd-aware wrt (q, qd)."""
-        return self._fns["rnea"].apply(q, qd, float(gravity))
+    def rnea(self, q, qd, *, gravity: float = 9.81, f_ext=None):
+        """Inverse dynamics c (B, NJ). Autograd-aware wrt (q, qd).
 
-    def forward_dynamics(self, q, qd, u, *, gravity: float = 9.81):
-        """qdd = M⁻¹(τ − c) (B, NJ). Autograd-aware wrt (q, qd, u)."""
-        return self._fns["fd"].apply(q, qd, u, float(gravity))
+        ``f_ext`` (optional): per-body external forces, a CUDA float32 tensor
+        ``(B, 6*num_bodies)``, body-major, each ``[angular; linear]`` in the
+        body's local frame (subtracted from the per-body force; matches the
+        numpy handle and ``RBDReference.rnea(..., f_ext=...)``)."""
+        return self._fns["rnea"].apply(q, qd, float(gravity), f_ext)
 
-    def aba(self, q, qd, u, *, gravity: float = 9.81):
-        """qdd via ABA (B, NJ). Autograd-aware wrt (q, qd, u)."""
-        return self._fns["aba"].apply(q, qd, u, float(gravity))
+    def forward_dynamics(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
+        """qdd = M⁻¹(τ − c) (B, NJ). Autograd-aware wrt (q, qd, u).
+
+        ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``
+        CUDA float32 (see :py:meth:`rnea`)."""
+        return self._fns["fd"].apply(q, qd, u, float(gravity), f_ext)
+
+    def aba(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
+        """qdd via ABA (B, NJ). Autograd-aware wrt (q, qd, u).
+
+        ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``
+        CUDA float32 (see :py:meth:`rnea`)."""
+        return self._fns["aba"].apply(q, qd, u, float(gravity), f_ext)
 
     def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = 9.81):
         """x_{k+1} (B, NP+NV). Autograd-aware wrt (q, qd, u)."""
@@ -300,18 +317,24 @@ class TorchRobotHandle:
         nee, nv = self.num_ees, self.num_vel
         return self._ops.end_effector_pose_hessian(q).reshape(-1, 6 * nee, nv, nv)
 
-    def rnea_grad(self, q, qd, *, gravity: float = 9.81):
-        """∂c/∂(q,qd) (B, NJ, 2*NJ) = [dc_dq | dc_dqd]."""
+    def rnea_grad(self, q, qd, *, gravity: float = 9.81, f_ext=None):
+        """∂c/∂(q,qd) (B, NJ, 2*NJ) = [dc_dq | dc_dqd].
+
+        ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
+        affine in f_ext so a constant f_ext leaves this Jacobian unchanged."""
         nj = self.num_joints
-        raw = self._ops.rnea_grad(q, qd, float(gravity))
+        raw = self._ops.rnea_grad(q, qd, float(gravity), f_ext)
         B = raw.shape[0]
         blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
         return _concat_blocks(blocks)
 
-    def forward_dynamics_grad(self, q, qd, u, *, gravity: float = 9.81):
-        """∂qdd/∂(q,qd) (B, NJ, 2*NJ)."""
+    def forward_dynamics_grad(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
+        """∂qdd/∂(q,qd) (B, NJ, 2*NJ).
+
+        ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
+        affine in f_ext so a constant f_ext leaves this Jacobian unchanged."""
         nj = self.num_joints
-        raw = self._ops.forward_dynamics_grad(q, qd, u, float(gravity))
+        raw = self._ops.forward_dynamics_grad(q, qd, u, float(gravity), f_ext)
         B = raw.shape[0]
         blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
         return _concat_blocks(blocks)

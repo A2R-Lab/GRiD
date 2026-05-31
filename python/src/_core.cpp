@@ -9,7 +9,8 @@
 //   int grid_rbd_init();
 //   int grid_rbd_num_joints();
 //   int grid_rbd_rnea(const float* q, const float* qd, const float* qdd_opt,
-//                     float* c_out, int batch, float gravity);
+//                     float* c_out, int batch, float gravity,
+//                     const float* f_ext_opt);  // f_ext_opt may be nullptr
 //   ... etc ...
 //
 // The Runner constructor dlopens the .so and resolves every symbol it
@@ -41,13 +42,21 @@ namespace py = pybind11;
 extern "C" {
     using fn_int_v_t        = int (*)();
     using fn_int_i_t        = int (*)(int);
-    // q, qd, qdd_opt, out, batch, gravity
+    // q, qd, qdd_opt, out, batch, gravity, f_ext_opt   — rnea, rnea_grad, idsva_so
+    //   f_ext_opt: (batch, 6*NUM_BODIES) local-frame body wrenches, or null
     using fn_rnea_t         = int (*)(const float*, const float*, const float*,
-                                      float*, int, float);
+                                      float*, int, float, const float*);
     // q, out, batch
     using fn_minv_t         = int (*)(const float*, float*, int);
-    // q, qd, u, out, batch, gravity   — fd, aba, fd_grad
+    // q, qd, u, out, batch, gravity, f_ext_opt   — fd, aba, fd_grad
+    //   f_ext_opt: (batch, 6*NUM_BODIES) local-frame body wrenches, or null
     using fn_fd_t           = int (*)(const float*, const float*, const float*,
+                                      float*, int, float, const float*);
+    // q, qd, qdd_opt, out, batch, gravity   — idsva_so (no f_ext; 2nd-order surface)
+    using fn_rnea_no_fext_t = int (*)(const float*, const float*, const float*,
+                                      float*, int, float);
+    // q, qd, u, out, batch, gravity   — fdsva_so (no f_ext; second-order surface)
+    using fn_fd_no_fext_t   = int (*)(const float*, const float*, const float*,
                                       float*, int, float);
     // q, out, batch, gravity          — crba
     using fn_crba_t         = int (*)(const float*, float*, int, float);
@@ -93,6 +102,10 @@ public:
         fn_num_joints_       = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_num_joints"));
         fn_num_vel_          = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_num_vel"));
         fn_num_ees_          = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_num_ees"));
+        // num_bodies — OPTIONAL (older .so built before the f_ext surface lacks
+        // it). Used to size/validate the optional f_ext arg; fall back to 0
+        // (f_ext then rejected with a clear error) if absent.
+        fn_num_bodies_       = reinterpret_cast<fn_int_v_t>(opt_sym("grid_rbd_num_bodies"));
         fn_max_batch_        = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_max_batch"));
         fn_max_perf_level_threads_ = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_max_perf_level_threads"));
         fn_threads_per_block_ = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_threads_per_block"));
@@ -112,8 +125,8 @@ public:
         fn_fd_grad_          = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_forward_dynamics_grad"));
         // Phase-C extension: hessian + SO. Required for v0.1+ .so files.
         fn_ee_pose_hessian_  = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose_hessian"));
-        fn_idsva_so_         = reinterpret_cast<fn_rnea_t>(require_sym("grid_rbd_idsva_so"));
-        fn_fdsva_so_         = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_fdsva_so"));
+        fn_idsva_so_         = reinterpret_cast<fn_rnea_no_fext_t>(require_sym("grid_rbd_idsva_so"));
+        fn_fdsva_so_         = reinterpret_cast<fn_fd_no_fext_t>  (require_sym("grid_rbd_fdsva_so"));
         fn_integrator_       = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator"));
         fn_integrator_grad_  = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator_gradient"));
 
@@ -137,6 +150,7 @@ public:
         num_vel_    = fn_num_vel_();
         num_ees_    = fn_num_ees_();
         max_batch_  = fn_max_batch_();
+        num_bodies_ = fn_num_bodies_ ? fn_num_bodies_() : 0;
 
         // Initialize device buffers eagerly. wrapper_template.cu does this
         // lazily on first algo call too, but eager init surfaces CUDA errors
@@ -157,6 +171,7 @@ public:
     int num_joints() const { return num_joints_; }
     int num_vel()    const { return num_vel_; }
     int num_ees()    const { return num_ees_; }
+    int num_bodies() const { return num_bodies_; }
     int max_batch()  const { return max_batch_; }
     int max_perf_level_threads() const { return fn_max_perf_level_threads_(); }
     int threads_per_block() const { return fn_threads_per_block_(); }
@@ -186,7 +201,8 @@ public:
         py::array_t<float, py::array::c_style | py::array::forcecast> q,
         py::array_t<float, py::array::c_style | py::array::forcecast> qd,
         py::object qdd_opt,
-        float gravity)
+        float gravity,
+        py::object f_ext_opt)
     {
         int batch = check_inputs_2d(q, qd, /*last_dim=*/num_joints_);
         const float* qdd_ptr = nullptr;
@@ -196,10 +212,12 @@ public:
             check_array_2d(qdd, batch, num_joints_, "qdd");
             qdd_ptr = qdd.data();
         }
+        py::array_t<float, py::array::c_style | py::array::forcecast> fe_hold;
+        const float* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
 
         py::array_t<float> out({batch, num_joints_});
         int rc = fn_rnea_(q.data(), qd.data(), qdd_ptr,
-                          out.mutable_data(), batch, gravity);
+                          out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) {
             throw std::runtime_error("grid_rbd_rnea failed: rc=" + std::to_string(rc));
         }
@@ -232,14 +250,17 @@ public:
         py::array_t<float, py::array::c_style | py::array::forcecast> q,
         py::array_t<float, py::array::c_style | py::array::forcecast> qd,
         py::array_t<float, py::array::c_style | py::array::forcecast> u,
-        float gravity)
+        float gravity,
+        py::object f_ext_opt)
     {
         int batch = check_inputs_2d(q, qd, /*last_dim=*/num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
+        py::array_t<float, py::array::c_style | py::array::forcecast> fe_hold;
+        const float* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
 
         py::array_t<float> out({batch, num_joints_});
         int rc = fn_fd_(q.data(), qd.data(), u.data(),
-                        out.mutable_data(), batch, gravity);
+                        out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) {
             throw std::runtime_error("grid_rbd_forward_dynamics failed: rc=" + std::to_string(rc));
         }
@@ -251,13 +272,16 @@ public:
         py::array_t<float, py::array::c_style | py::array::forcecast> q,
         py::array_t<float, py::array::c_style | py::array::forcecast> qd,
         py::array_t<float, py::array::c_style | py::array::forcecast> u,
-        float gravity)
+        float gravity,
+        py::object f_ext_opt)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
+        py::array_t<float, py::array::c_style | py::array::forcecast> fe_hold;
+        const float* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<float> out({batch, num_joints_});
         int rc = fn_aba_(q.data(), qd.data(), u.data(),
-                         out.mutable_data(), batch, gravity);
+                         out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error("grid_rbd_aba failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -355,7 +379,8 @@ public:
         py::array_t<float, py::array::c_style | py::array::forcecast> q,
         py::array_t<float, py::array::c_style | py::array::forcecast> qd,
         py::object qdd_opt,
-        float gravity)
+        float gravity,
+        py::object f_ext_opt)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         const float* qdd_ptr = nullptr;
@@ -365,9 +390,11 @@ public:
             check_array_2d(qdd, batch, num_joints_, "qdd");
             qdd_ptr = qdd.data();
         }
+        py::array_t<float, py::array::c_style | py::array::forcecast> fe_hold;
+        const float* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<float> out({batch, num_joints_, 2 * num_joints_});
         int rc = fn_rnea_grad_(q.data(), qd.data(), qdd_ptr,
-                               out.mutable_data(), batch, gravity);
+                               out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error("grid_rbd_rnea_grad failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -376,13 +403,16 @@ public:
         py::array_t<float, py::array::c_style | py::array::forcecast> q,
         py::array_t<float, py::array::c_style | py::array::forcecast> qd,
         py::array_t<float, py::array::c_style | py::array::forcecast> u,
-        float gravity)
+        float gravity,
+        py::object f_ext_opt)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
+        py::array_t<float, py::array::c_style | py::array::forcecast> fe_hold;
+        const float* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<float> out({batch, num_joints_, 2 * num_joints_});
         int rc = fn_fd_grad_(q.data(), qd.data(), u.data(),
-                             out.mutable_data(), batch, gravity);
+                             out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_grad failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -673,11 +703,34 @@ private:
         }
     }
 
+    // Validate the optional f_ext kwarg and return its data pointer (or nullptr
+    // if None). f_ext is (batch, 6*NUM_BODIES) float32 C-contiguous, body-major,
+    // [angular; linear] in each body's LOCAL frame — same layout as the kernel's
+    // d_f_ext / RBDReference.apply_external_forces. The caller must keep the
+    // py::array alive across the C-ABI call (hold it in a local).
+    const float* f_ext_ptr(py::object f_ext_opt,
+                           py::array_t<float, py::array::c_style | py::array::forcecast>& hold,
+                           int batch) const
+    {
+        if (f_ext_opt.is_none()) return nullptr;
+        if (num_bodies_ <= 0) {
+            throw std::runtime_error(
+                "f_ext: this robot .so does not export grid_rbd_num_bodies "
+                "(built before the external-force surface). Re-register with "
+                "force_rebuild=True.");
+        }
+        hold = f_ext_opt.cast<
+            py::array_t<float, py::array::c_style | py::array::forcecast>>();
+        check_array_2d(hold, batch, 6 * num_bodies_, "f_ext");
+        return hold.data();
+    }
+
     void* handle_ = nullptr;
 
     fn_int_v_t fn_num_joints_ = nullptr;
     fn_int_v_t fn_num_vel_    = nullptr;
     fn_int_v_t fn_num_ees_    = nullptr;
+    fn_int_v_t fn_num_bodies_ = nullptr;
     fn_int_v_t fn_max_batch_  = nullptr;
     fn_int_v_t fn_max_perf_level_threads_      = nullptr;
     fn_int_v_t fn_threads_per_block_      = nullptr;
@@ -695,8 +748,8 @@ private:
     fn_fd_t    fn_fd_grad_        = nullptr;
     fn_ee_t    fn_ee_pose_hessian_ = nullptr;
     fn_fk_batched_t fn_fk_batched_ = nullptr;
-    fn_rnea_t  fn_idsva_so_       = nullptr;
-    fn_fd_t    fn_fdsva_so_       = nullptr;
+    fn_rnea_no_fext_t fn_idsva_so_ = nullptr;
+    fn_fd_no_fext_t   fn_fdsva_so_ = nullptr;
     fn_integrator_t fn_integrator_      = nullptr;
     fn_integrator_t fn_integrator_grad_ = nullptr;
     // grid_plant surface (optional symbols)
@@ -711,6 +764,7 @@ private:
     int num_joints_ = 0;
     int num_vel_    = 0;
     int num_ees_    = 0;
+    int num_bodies_ = 0;
     int max_batch_  = 0;
 };
 
@@ -725,6 +779,9 @@ PYBIND11_MODULE(_core, m) {
         .def_property_readonly("num_joints", &Runner::num_joints)
         .def_property_readonly("num_vel",    &Runner::num_vel)
         .def_property_readonly("num_ees",    &Runner::num_ees)
+        .def_property_readonly("num_bodies", &Runner::num_bodies,
+            "Number of bodies/links (incl. base for floating-base). f_ext is "
+            "(batch, 6*num_bodies). 0 if the .so predates the f_ext surface.")
         .def_property_readonly("max_batch",  &Runner::max_batch)
         .def_property_readonly("max_perf_level_threads", &Runner::max_perf_level_threads,
             "Codegen-time thread-count hint (DOF-aware, warp-rounded). "
@@ -739,15 +796,18 @@ PYBIND11_MODULE(_core, m) {
         .def("rnea", &Runner::rnea,
              py::arg("q"), py::arg("qd"),
              py::arg("qdd") = py::none(),
-             py::arg("gravity") = 9.81f)
+             py::arg("gravity") = 9.81f,
+             py::arg("f_ext") = py::none())
         .def("minv", &Runner::minv,
              py::arg("q"))
         .def("forward_dynamics", &Runner::forward_dynamics,
              py::arg("q"), py::arg("qd"), py::arg("u"),
-             py::arg("gravity") = 9.81f)
+             py::arg("gravity") = 9.81f,
+             py::arg("f_ext") = py::none())
         .def("aba", &Runner::aba,
              py::arg("q"), py::arg("qd"), py::arg("u"),
-             py::arg("gravity") = 9.81f)
+             py::arg("gravity") = 9.81f,
+             py::arg("f_ext") = py::none())
         .def("crba", &Runner::crba,
              py::arg("q"), py::arg("gravity") = 9.81f)
         .def("end_effector_pose", &Runner::end_effector_pose,
@@ -758,10 +818,12 @@ PYBIND11_MODULE(_core, m) {
              py::arg("q"))
         .def("rnea_grad", &Runner::rnea_grad,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
-             py::arg("gravity") = 9.81f)
+             py::arg("gravity") = 9.81f,
+             py::arg("f_ext") = py::none())
         .def("forward_dynamics_grad", &Runner::forward_dynamics_grad,
              py::arg("q"), py::arg("qd"), py::arg("u"),
-             py::arg("gravity") = 9.81f)
+             py::arg("gravity") = 9.81f,
+             py::arg("f_ext") = py::none())
         .def("end_effector_pose_hessian", &Runner::end_effector_pose_hessian,
              py::arg("q"))
         .def("idsva_so", &Runner::idsva_so,
