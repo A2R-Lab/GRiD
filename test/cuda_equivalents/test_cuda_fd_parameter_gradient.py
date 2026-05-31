@@ -42,12 +42,13 @@ from RBDReference.tests.tolerances import get_tolerance
 RUNNER_SOURCE = Path(__file__).with_name("cuda_fd_parameter_gradient_smoke_runner.cu")
 
 # (robot_id, base_mode). iiwa14 gated first (fixed), then a floating-base case.
-# iiwa14-floating (nv=13, nb=8) is used for the floating validation: the kernel
-# holds Minv + the full nv x 10*NB regressor Y + scratch all in shared memory, so
-# big humanoid floating robots (g1: nv=35, nb=30 -> ~138 KB) exceed this GPU's
-# per-block smem cap and SKIP (hardware limit; a tiered/spilled fpg path is future
-# work). iiwa14-floating exercises the full 6-DoF free-flyer root path within cap.
-_CASES = [("iiwa14", "fixed"), ("iiwa14", "floating")]
+# iiwa14-floating (nv=13, nb=8) exercises the full 6-DoF free-flyer root path while
+# keeping everything in shared memory (PERF level 0). g1-floating (nv=35, nb=30 ->
+# ~138 KB at level 0) overflows this GPU's per-block smem cap, so it exercises the
+# g1-spill rung: the nv x 10*NB regressor Y spills to the L2-pinned d_workspace
+# while Minv + vaf + the inner stay in smem, dropping the arena to ~94 KB (under
+# the sm_120 ~99 KB cap). Validates the spilled FD-param-gradient path end to end.
+_CASES = [("iiwa14", "fixed"), ("iiwa14", "floating"), ("g1", "floating")]
 
 
 def _robot_spec(robot_id, base_mode):
