@@ -5,6 +5,101 @@ changes since the GLASS rollout for our own historical reference.
 
 ## Unreleased — v2.0 — cuBLASDx removal + resource-tier system
 
+### 2026-05-30 — external forces, plant layer, torch backend, tier rename
+
+This subsection collects the features merged onto `modernizing-tests`
+(parent `164b655`) after the initial tier rollout below.
+
+**External forces (`f_ext`).** Opt-in per-body external forces are now
+threaded through the CUDA codegen and the Python reference:
+
+- A new trailing `T *d_f_ext` arg on RNEA / forward_dynamics / ABA /
+  `inverse_dynamics_gradient` (id_du) / `forward_dynamics_gradient`
+  (fd_du) and the integrator surfaces. It is **GLOBAL, body-major
+  (`6*NUM_BODIES`), local-frame**, and **subtracted** from the per-body
+  force at a single site. `nullptr` (the default) reproduces the prior
+  no-fext path byte-for-byte.
+- `RBDReference` gains `apply_external_forces(f_in, f_ext)` and an
+  `f_ext=` kwarg on `rnea`/`rnea_fpass`/`aba` (same subtract convention
+  as the CUDA path and GATO/pinocchio `fext`). An empty/`None` `f_ext`
+  is a no-op.
+- f_ext **gradients** are not yet wired (roadmap; see
+  `docs/open-tasks/`).
+
+**`grid_plant` cost / barrier / plant-step layer + Python surface.**
+
+- `_plant.py` emits a sibling `namespace grid_plant { ... }` after the
+  `grid` namespace: `plant_step` / `plant_step_gradient[_and_value]`
+  (thin wrappers over `grid::integrator`), quadratic state/input costs,
+  `ee_pos_cost` (Gauss-Newton hessian `J_pᵀ W J_p`), and joint
+  position/velocity/torque log-barriers (value + grad + diag-hessian).
+- These are now callable from the Python `RobotHandle`:
+  `quadratic_state_cost`, `quadratic_input_cost`, `ee_pos_cost`,
+  `joint_position_barrier`, `joint_velocity_barrier`,
+  `joint_torque_barrier`, `plant_step`. Validated against
+  `RBDReference._PlantMixin`.
+
+**PyTorch backend (`grid_rbd.torch`).**
+
+- `register_robot(..., backend="torch")` returns a `TorchRobotHandle`
+  whose four differentiable algorithms (rnea / forward_dynamics / aba /
+  integrator) are autograd-aware torch ops with analytic backward
+  passes that reuse the existing `*_gradient` kernels; the rest are
+  forward-only ops. `register_robot` now also accepts
+  `backend="numpy"|"jax"|"torch"` and `urdf_string=` (inline URDF).
+- CUDA-Graphs capture/replay via `handle.capture(method, *example_inputs)`
+  → `GraphCallable` for fixed-batch low-launch-overhead replay (MPC /
+  training), with a mandatory off-graph warmup for the >48 KB dynamic-
+  smem opt-in.
+- The torch op block is compiled into the shared `.so` under
+  `-DGRID_RBD_WITH_TORCH` when torch is present at register time.
+- **Env caveat:** torch's own backward kernels (bmm/eye) must support
+  the GPU arch, so the installed torch build must match it — on sm_120
+  (RTX 5090) use a torch cu128 (or newer) build; a cu124 wheel cannot
+  launch on sm_120.
+
+**Resource-tier rename + autotune.**
+
+- `TIER_PERF` → `TIER_SHARED` everywhere (it is the default tier).
+  A deprecated alias `constexpr int TIER_PERF = TIER_SHARED;` is still
+  emitted so sibling branches keep compiling; prefer `TIER_SHARED` in
+  new code.
+- New post-codegen joint **(tier × threads) autotune picker** in
+  `test/benchmarks/baselines/grid/run.py`: it argmin's per-tier timing
+  data (with per-tier thread caps: SHARED = max-perf threads,
+  LITE = `min(2×, 768)`, MINIMAL = 1024) and emits a schema-2
+  `algo_picks` block. Covered by
+  `test/benchmarks/test_autotune_picker.py`.
+
+**Codegen consolidation (internal).**
+
+- Shared emitters `gen_device_wrapper` (×7) and `gen_tier_dispatch`
+  (×12) replace the per-algorithm copies; output is byte-identical
+  across all robots.
+
+**`pin_so_ext` self-building.**
+
+- `RBDReference/equivalents/pin_so_ext/` (the second-order pinocchio
+  oracle) now builds on demand, prepending its own `PKG_CONFIG_PATH`,
+  so fresh clones need no manual build step before the SO equivalence
+  tests run.
+
+**RBDReference numpy reference oracles.**
+
+- New mixins validated against pinocchio, available as a reference /
+  oracle surface: `_energy.py` (generalized gravity, nonlinear
+  effects, kinetic/potential/mechanical energy, Coriolis matrix),
+  `_centroidal.py` (CoM, CoM Jacobian, CCRBA, centroidal momentum),
+  `_regressor.py` (joint-torque regressor), `_plant.py` (the plant /
+  cost / barrier reference for the CUDA `grid_plant` layer).
+
+**G0 mimic-gradient guard.**
+
+- Gradient codegen for robots with **mimic joints** now raises a clear
+  `NotImplementedError` instead of silently emitting zeroed gradients.
+  Non-gradient algorithms work for mimic robots; mimic gradients (and
+  floating+mimic) are deferred (roadmap; `docs/open-tasks/`).
+
 **Archive tag for pre-rip state:** `archive/last-cublasdx` (commit
 `5177070`). Use `git show archive/last-cublasdx -- <path>` to see the
 exact pre-rip content of any file.
