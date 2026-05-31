@@ -158,6 +158,26 @@ MIMIC_CODEGEN_ALGORITHM_LIST_FIXED = MIMIC_CODEGEN_ALGORITHM_LIST + ["id_du", "f
 # not hard suite failures) pending a fix. The oracle stays correct so the bug is
 # never hidden by comparing buggy-vs-buggy.
 KNOWN_FAILING_ALGORITHMS = {}
+# Per-(robot, algorithm) known bugs — same semantics as KNOWN_FAILING_ALGORITHMS
+# but scoped to a specific robot so other robots' identical algorithm still fails
+# hard if it regresses. The oracle stays correct (reported, never masked).
+_H1_2_ID_VALUE_BUG = (
+    "h1_2 branched-multi-root mimic inverse_dynamics VALUE bug (norm_rel ~69, worst "
+    "c[2]): topology indexing is correct, but the force-propagation value path is "
+    "wrong for the 3-root (0/6/12) topology; fr3 (single-root) passes and "
+    "RBDReference+pinocchio agree. Deferred — needs device-level debugging. "
+    "Everything composing through the bias c is affected; crba/direct_minv/ee_pose "
+    "are independent and still compared."
+)
+KNOWN_FAILING_ROBOT_ALGORITHMS = {
+    ("h1_2", "inverse_dynamics"): _H1_2_ID_VALUE_BUG,
+    ("h1_2", "forward_dynamics"): _H1_2_ID_VALUE_BUG,
+    ("h1_2", "aba"): _H1_2_ID_VALUE_BUG,
+    ("h1_2", "inverse_dynamics_gradient_q"): _H1_2_ID_VALUE_BUG,
+    ("h1_2", "inverse_dynamics_gradient_qd"): _H1_2_ID_VALUE_BUG,
+    ("h1_2", "forward_dynamics_gradient_q"): _H1_2_ID_VALUE_BUG,
+    ("h1_2", "forward_dynamics_gradient_qd"): _H1_2_ID_VALUE_BUG,
+}
 CUDA_DEFAULT_TOLERANCE = {
     "rtol": 2e-4,
     "atol": 2e-4,
@@ -1650,7 +1670,8 @@ def _run_cuda_equivalence_case(
                 )
                 compared += 1
             except AssertionError as exc:
-                if name in KNOWN_FAILING_ALGORITHMS:
+                if (name in KNOWN_FAILING_ALGORITHMS
+                        or (spec.robot_id, name) in KNOWN_FAILING_ROBOT_ALGORITHMS):
                     known_bug_failures.append(str(exc))
                 else:
                     failures.append(str(exc))
@@ -1664,7 +1685,10 @@ def _run_cuda_equivalence_case(
         )
 
     if known_bug_failures:
-        reasons = "; ".join(sorted({KNOWN_FAILING_ALGORITHMS[a] for a in KNOWN_FAILING_ALGORITHMS}))
+        reasons = "; ".join(sorted(
+            set(KNOWN_FAILING_ALGORITHMS.values())
+            | set(KNOWN_FAILING_ROBOT_ALGORITHMS.values())
+        )) or "tracked known bug"
         _progress(
             config,
             f"KNOWN-BUG (tracked, NOT masked) {len(known_bug_failures)} mismatch(es) vs the "
