@@ -1373,8 +1373,18 @@ codegen smoke + additive-GCG reconcile).
   timed/untimed emitter dedup byte-identical + A2 Minv-apply hotspot profiling PLAN (SO-fdsva).
 - **TEST/DOCS**: `docs/open-tasks/test_coverage_matrix.md` (per-algo × robot both-layer matrix) +
   `test_cuda_matmul_blockwrap_regression.py` (NB>NV pin, passes/fails-on-revert); README + CHANGELOG +
-  new `frame_jacobian.rst` + stale-mimic corrections (docs-sweep); coverage-fill in flight (robot-default
-  widenings + the continuous-joint CUDA test).
+  new `frame_jacobian.rst` + stale-mimic corrections (docs-sweep); coverage-fill (robot-default
+  widenings + the continuous-joint CUDA test = the one algo-family that had no CUDA coverage).
+
+**Second backlog batch (post green-gate, while holding for the ~9pm sweep):**
+- **floating-mimic SO LANDED** (8547ea2): floating-base mimic idsva_so/fdsva_so via the world-frame
+  inner's internal-coordinate scatter-fold → MIMIC SECOND-ORDER now COMPLETE (fixed + floating).
+- **E2 on-device Λ Minv-compose LANDED** (516c15e): `osc_inertia` is self-contained.
+- **F1 RBDReference split** (4006→45-line shell + cohesive mixins, public surface identical 126/126):
+  validated in clone, merge pending a clean full-suite baseline comparison — F1 is RBDReference-only
+  (not in the CUDA sweep path) so it does NOT gate the sweep.
+- Pre-sweep green-gate PASSED earlier: **31 passed / 1 skipped / 0 failed** (iiwa14/go2/g1/fr3 full
+  matrix, fresh-compile @ 49f2208). CUDA tree validated for the sweep at the current tip.
 
 ### REMAINING backlog (prioritized)
 **A. Correctness — open/deferred**
@@ -1389,24 +1399,26 @@ codegen smoke + additive-GCG reconcile).
 
 **B. Mimic codegen — remaining deferrals**
 - B2-ee-float. **CLOSED 2026-05-31** (floating-mimic-ee) — see post-compaction closures above.
-- B2-SO. **CLOSED for FIXED-base 2026-05-31** (B2-SO mimic; root cause = shared `matmul` `%NUM_JOINTS`
-  block-wrap, fixed to `%NUM_BODIES`). REMAINING: **floating-base** mimic `idsva_so`/`fdsva_so` still
-  refused (the floating root needs a per-root-DoF 6-DoF subspace fold, not the scalar v-slot/alpha fold).
-  Also: h1_2-fixed body SO stays world-frame in production (its 4·NB³ internal slab at NB=51 ≈ 2.1M
-  floats is impractical) — fr3 is the landed fixed-mimic case.
+- B2-SO. **CLOSED — FIXED + FLOATING 2026-05-31.** Fixed-base = internal-NB body-frame sweep +
+  alpha-fold (root cause of the old NB>NV bug = shared `matmul` `%NUM_JOINTS`→`%NUM_BODIES` block-wrap).
+  Floating-base = the world-frame inner's internal-coordinate scatter-fold (per-root-DoF treatment
+  emerges from per-column internal slotting); fr3-floating green. h1_2 SO stays world-frame non-mimic
+  scope (NB=51/52 internal slab impractical) — fr3 is the landed mimic case (fixed + floating).
+  Only mimic refusals left: integrator gradients + `f_ext_grad`.
 
 **C. Partial-feature remainders**
-- C1-float. floating-base `−∂Jᵀ/∂q` GPU emit (needs on-device SE(3) Lie root-twist integrator;
-  numpy+pin oracle already ships both bases).
-- C3. floating-base Coriolis matrix (pin's floating Coriolis skew ≠ tangent Christoffel; needs a
-  port of pin's body-frame Bcrb recursion — RBDReference-only, CPU, can overlap the sweep).
+- C1-float. **ALREADY DONE** (the A.3 `−∂Jᵀ/∂q` block emits for BOTH bases — floating perturbs via
+  `grid_integrate_floating_q`; tested go2/g1-floating in `test_cuda_f_ext_gradient_equivalence.py`).
+- C3. **ALREADY DONE** (`coriolis_matrix` handles fixed+floating via the Bcrb recursion; tested in
+  `test_energy_equivalence.py`). [Both were stale REMAINING entries — corrected 2026-05-31.]
 
 **E. Roadmap — not started**
 - E1-rem. mimic-robot regressor `Y` CUDA validation (codegen works, no equiv run = gap, not a bug);
   FD param-gradient `∂q̈/∂π=−M⁻¹Y`; runtime-inertia two-variant emit (plan only, `d4_*` doc); CRBA regressor.
-- E2. **CLOSED 2026-05-31** (numpy + CUDA J/J̇/Λ; see closures above). FOLLOW-UPS: on-device
-  `osc_inertia` M⁻¹ compose (folds `direct_minv_inner` in vs taking precomputed M⁻¹); mimic-robot
-  frame-Jacobian CUDA (currently gated ¬mimic); broader-robot CUDA coverage.
+- E2. **CLOSED 2026-05-31** (numpy + CUDA J/J̇/Λ). On-device `osc_inertia` M⁻¹ compose **also DONE**
+  (self-contained kernel folds `direct_minv_inner` in; iiwa14/go2/g1 green). REMAINING follow-up:
+  mimic-robot frame-Jacobian CUDA (gated ¬mimic — needs the multiplier/effective-angle fold + the
+  crba-based mimic Minv branch validated).
 - E3. **Contact/constraint dynamics** (constraint Jac, KKT/Delassus, constrained FD, impulse) — biggest moat vs frax.
 - E4-cuda. planar/spherical CUDA multi-column-S emit (parser groundwork landed; needs multi-column-S
   + NV≠NQ codegen — guard raises `UnsupportedJointTypeError` today). Other joint types (helical/translation/composite).
