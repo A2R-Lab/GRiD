@@ -21,6 +21,23 @@ mapping strategies:
 No gradients, no hessians. The customer wants (1) confirmation these still work
 after recent refactors and (2) clearer names.
 
+## PRIMARY GOAL (user, 2026-05-30): large-batch FK
+
+The point is **throughput over large batches** — the API must take a **vector of B
+input configurations** (a batch) plus a **batch-size `B`** parameter, and compute B
+end-effector poses in one launch. The two mapping strategies are *per-sample*:
+- **single-thread variant** — launch ~B threads, **one thread per sample**, each
+  walking its sample's full chain serially. Output: B EE poses.
+- **warp variant** — launch ~B warps, **one warp per sample** (32-lane cooperative
+  chain walk), `__syncwarp` between levels. Output: B EE poses.
+
+So the deliverable is a **batched kernel + host wrapper + grid_rbd binding** taking
+`B` and a `(B × input)` array, returning `(B × 6·N_ee)` — NOT a single-call device
+helper. The existing `X_single_thread`/`X_warp` device helpers become the *per-sample
+inner* of the batched kernel. Mirror the batch/stride conventions of the existing
+`end_effector_pose` batched path (and the generalize-beyond-iiwa14 + `mat4_mul` fixes
+still apply to the inner).
+
 ---
 
 ## Step 1 — What actually exists (current names + locations)
