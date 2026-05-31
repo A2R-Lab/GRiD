@@ -1,18 +1,28 @@
 """CUDA equivalence test for the generated general-frame geometric Jacobian
-device kernel (E2).
+family (E2): J, its time derivative Jdot, and the operational-space inertia
+Lambda.
 
-Validates grid::frame_jacobian_device against the RBDReference numpy oracle
-(`RBDReference.frame_jacobian`), which itself matches pinocchio's
-getFrameJacobian / getJointJacobian to ~1e-14, for the three pinocchio
-reference frames (LOCAL / WORLD / LOCAL_WORLD_ALIGNED).
+Validates against the RBDReference numpy oracle, which itself matches
+pinocchio to ~1e-14:
+  * grid::frame_jacobian_device      vs RBDReference.frame_jacobian
+                                        (getFrameJacobian / getJointJacobian)
+  * grid::frame_jacobian_dot_device  vs RBDReference.frame_jacobian_dot
+                                        (computeJointJacobiansTimeVariation)
+  * grid::osc_inertia_device         vs RBDReference.osc_inertia
+                                        (inv(J Minv J^T))
+for the three pinocchio reference frames (LOCAL / WORLD / LOCAL_WORLD_ALIGNED).
+
+Lambda obtains Minv on-device: the runner calls grid::direct_minv_device,
+densifies the SYMMETRIC_UPPER output to a full symmetric matrix, and feeds it
+into grid::osc_inertia_device (which is decoupled from direct_minv's tiering).
 
 The CUDA path is float32, so the comparison uses a float32-scale tolerance like
 the other CUDA smoke tests. The frame target is the leaf joint id of each robot
 (the project joint id passed straight through to the device as target_jid; the
 numpy oracle is queried by the same joint's name).
 
-Robots: iiwa14-fixed + go2-floating (override with
-GRID_CUDA_FRAME_JAC_ROBOTS="iiwa14:fixed,go2:floating").
+Robots: iiwa14-fixed + go2-floating + g1-floating (override with
+GRID_CUDA_FRAME_JAC_ROBOTS="iiwa14:fixed,go2:floating,g1:floating").
 """
 
 from __future__ import annotations
@@ -39,11 +49,18 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_frame_jacobian_smoke_runner.cu")
-_REF_FRAMES = (("J_local", "LOCAL"), ("J_world", "WORLD"), ("J_lwa", "LOCAL_WORLD_ALIGNED"))
+# (J block, Jdot block, Lambda block, pinocchio reference frame).
+_REF_FRAMES = (
+    ("J_local", "Jd_local", "L_local", "LOCAL"),
+    ("J_world", "Jd_world", "L_world", "WORLD"),
+    ("J_lwa", "Jd_lwa", "L_lwa", "LOCAL_WORLD_ALIGNED"),
+)
+_ALGO_KEYS = ["frame_jacobian", "frame_jacobian_dot", "osc_inertia"]
 
 
 def _robot_modes():
-    raw = os.environ.get("GRID_CUDA_FRAME_JAC_ROBOTS", "iiwa14:fixed,go2:floating")
+    raw = os.environ.get("GRID_CUDA_FRAME_JAC_ROBOTS",
+                         "iiwa14:fixed,go2:floating,g1:floating")
     out = []
     for tok in raw.split(","):
         tok = tok.strip()
@@ -65,7 +82,7 @@ def _generate_header(project_model, build_dir):
     header = build_dir / "grid.cuh"
     codegen = GRiDCodeGenerator(project_model.robot, FILE_NAMESPACE="grid")
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        codegen.gen_all_code(algorithm_list=["frame_jacobian"], output_path=str(header))
+        codegen.gen_all_code(algorithm_list=_ALGO_KEYS, output_path=str(header))
     return header
 
 
@@ -92,9 +109,10 @@ def _compile_runner(build_dir):
     return executable, cmd
 
 
-def _stdin(target_jid, q):
+def _stdin(target_jid, q, qd):
     rows = [str(int(target_jid)),
-            " ".join(f"{v:.9g}" for v in np.asarray(q, dtype=np.float32))]
+            " ".join(f"{v:.9g}" for v in np.asarray(q, dtype=np.float32)),
+            " ".join(f"{v:.9g}" for v in np.asarray(qd, dtype=np.float32))]
     return "\n".join(rows) + "\n"
 
 
@@ -121,9 +139,8 @@ def test_cuda_frame_jacobian_matches_reference(tmp_path, robot_id, base_mode):
     nv = project_model.nv
 
     samples = _build_cuda_samples(project_model, random_count=3, include_corner_samples=True)
-    rtol, atol = 2e-3, 2e-3
 
-    def close(actual, expected, msg):
+    def close(actual, expected, msg, rtol=2e-3, atol=2e-3):
         expected = np.asarray(expected, dtype=np.float64)
         scale = float(np.max(np.abs(expected))) if expected.size else 0.0
         np.testing.assert_allclose(
@@ -133,9 +150,30 @@ def test_cuda_frame_jacobian_matches_reference(tmp_path, robot_id, base_mode):
 
     for sample in samples:
         q = np.asarray(sample.q, np.float64)
-        out = _parse_runner_output(_run_runner(executable, _stdin(leaf_id, q), cmd))
-        for block, ref_frame in _REF_FRAMES:
+        qd = np.asarray(sample.qd, np.float64)
+        out = _parse_runner_output(_run_runner(executable, _stdin(leaf_id, q, qd), cmd))
+        for jblk, dblk, lblk, ref_frame in _REF_FRAMES:
+            tag = f"{robot_id}-{base_mode} @ {sample.name} {ref_frame}"
+            # J: analytic vs analytic (tight).
             J_ref = np.asarray(
                 project_model.frame_jacobian(q, leaf_name, ref_frame), dtype=np.float64)
-            J_cuda = out[block].reshape(6, nv, order="F")
-            close(J_cuda, J_ref, f"{robot_id}-{base_mode} @ {sample.name} {ref_frame}")
+            close(out[jblk].reshape(6, nv, order="F"), J_ref, f"J {tag}")
+            # Jdot: both sides are finite differences of the same analytic J
+            # (numpy oracle h=1e-6, device h=1e-4) -> looser float32-FD tolerance.
+            Jd_ref = np.asarray(
+                project_model.frame_jacobian_dot(q, qd, leaf_name, ref_frame),
+                dtype=np.float64)
+            close(out[dblk].reshape(6, nv, order="F"), Jd_ref, f"Jdot {tag}",
+                  rtol=5e-2, atol=5e-2)
+            # Lambda = (J Minv J^T)^-1: 6x6. At singular configs (e.g. the q=0
+            # corner sample for a 6<nv arm) the task matrix J Minv J^T is rank
+            # deficient and the inverse is ill-defined for BOTH the oracle and
+            # the device; skip those (the inverse is not a meaningful target).
+            task = (J_ref @ np.asarray(project_model.minv(q), dtype=np.float64)
+                    @ J_ref.T)
+            if np.linalg.cond(task) < 1e8:
+                L_ref = np.asarray(
+                    project_model.osc_inertia(q, leaf_name, ref_frame),
+                    dtype=np.float64)
+                close(out[lblk].reshape(6, 6, order="F"), L_ref, f"Lambda {tag}",
+                      rtol=5e-3, atol=5e-3)
