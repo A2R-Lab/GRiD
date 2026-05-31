@@ -103,5 +103,7 @@ Known Caveats
   second-order) raise a clear ``NotImplementedError`` rather than emitting
   silently-zeroed gradients (the rest of the mimic-gradient fold is on the
   roadmap).
-* External-force **gradients** are not yet wired; ``d_f_ext`` flows only into
-  the first-order algorithms and the bias terms of the gradients.
+* External-force **gradients** are wired for non-mimic robots: ``f_ext_gradient``
+  (∂τ/∂f_ext = −Jᵀ, ∂q̈/∂f_ext = M⁻¹Jᵀ) and the fixed-base ``f_ext_gradient_dq``
+  (−∂Jᵀ/∂q), both with CUDA equivalence tests. On mimic robots they still raise
+  ``NotImplementedError`` (the mimic-reduced f_ext-gradient fold is on the roadmap).

@@ -8,7 +8,7 @@ changes since the GLASS rollout for our own historical reference.
 ### 2026-05-31 — frame Jacobian / OSC, mimic gradients, SO parallelization
 
 - General-frame geometric Jacobian (`LOCAL`/`WORLD`/`LOCAL_WORLD_ALIGNED`) added: numpy reference `frame_jacobian` + `frame_jacobian_dot` (J̇) + `osc_inertia` (Λ=(J·M⁻¹·Jᵀ)⁻¹), validated vs pinocchio `getFrameJacobian`/`getJointJacobian`/`computeJointJacobiansTimeVariation` across all three frames on iiwa14 + go2.
-- CUDA codegen emits the frame Jacobian J (opt-in `frame_jacobian` key, requires `ee_pose`, non-mimic robots); J̇ and OSC Λ remain reference-only (CUDA on the roadmap).
+- CUDA codegen emits the frame Jacobian J (`frame_jacobian`), J̇ (`frame_jacobian_dot`), and OSC Λ (`osc_inertia`) as opt-in keys (require `ee_pose`, non-mimic robots), each validated on-device vs the numpy reference across all three frames on iiwa14 + go2 + g1. The Λ kernel takes a precomputed M⁻¹ (on-device `direct_minv_inner` compose is a follow-up).
 - Floating-base mimic robots now support `ee_pose_gradient` / `ee_pose_hessian` codegen (the 6 independent root v-slots decompose into singleton columns).
 - Fixed-base mimic robots now support second-order codegen (`idsva_so` / `fdsva_so`) via the body-frame internal-NUM_BODIES sweep with an alpha-fold to the reduced output.
 - Fixed a shared `matmul` block-index wrap bug (`%NUM_JOINTS` → `%NUM_BODIES`) that corrupted the composite-inertia path on mimic robots.

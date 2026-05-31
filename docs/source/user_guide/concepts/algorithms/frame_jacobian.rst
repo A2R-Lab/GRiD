@@ -73,12 +73,18 @@ CUDA codegen lives in
 **opt-in, additive** family: the kernels are only emitted when the
 ``frame_jacobian`` key is explicitly selected (it pulls in the
 ``ee_pose`` world-transform machinery), so existing profiles' headers
-are byte-identical. The current CUDA path emits the geometric Jacobian
+are byte-identical. The CUDA path emits the geometric Jacobian
 :math:`J` (all three reference frames) via ``frame_jacobian_inner`` /
-``frame_jacobian_device``. The :math:`\dot J` and OSC :math:`\Lambda`
-quantities are available in the numpy reference today; their CUDA
-emission is on the roadmap. Mimic-joint robots are not yet supported on
-the CUDA frame-Jacobian path.
+``frame_jacobian_device``, the Jacobian time-variation :math:`\dot J`
+via ``frame_jacobian_dot_device`` (opt-in ``frame_jacobian_dot`` key),
+and the OSC inertia :math:`\Lambda` via ``osc_inertia_device`` (opt-in
+``osc_inertia`` key). All three are validated on-device against the numpy
+reference across the three reference frames. The :math:`\Lambda` kernel
+currently takes a precomputed :math:`M^{-1}` as input (the smoke runner
+feeds it from ``direct_minv_device``); folding ``direct_minv_inner`` into
+``osc_inertia_device`` so it composes :math:`M^{-1}` on-device is a
+follow-up. Mimic-joint robots are not yet supported on the CUDA
+frame-Jacobian path.
 
 See Also
 --------
