@@ -130,15 +130,13 @@ MIMIC_SUPPORTED_ALGORITHMS = {
 
 # Gradient algorithms that are in MIMIC_SUPPORTED_ALGORITHMS (so FIXED-base mimic
 # compares them) but are NOT yet emitted for FLOATING-base mimic robots. B1 landed
-# floating-base mimic id_du/fd_du (the floating root's 6-DoF motion subspace is
-# folded via a per-root-DoF loop in _gen_id_du_mimic_inner), so those four are
-# compared for floating mimic now. The ee pose grad/hessian mimic fold is still
-# FIXED-BASE only (its floating root needs a separate 6-DoF subspace fold), so
-# those stay refused at codegen and are skipped for floating mimic robots.
-MIMIC_FLOATING_UNSUPPORTED_GRADIENTS = {
-    "end_effector_pose_gradient",
-    "end_effector_pose_hessian",
-}
+# floating-base mimic id_du/fd_du; B2-ee FLOATING (2026-05-31) landed the floating
+# mimic ee pose grad/hessian. The floating root contributes 6 INDEPENDENT velocity
+# slots (vi 0..5) and so decomposes into 6 singleton single-column fills, NEVER a
+# shared-v-slot mimic group — the scalar-alpha mimic fold (Step 3b grad / Step 2
+# hess) operates orthogonally on the 1-DoF mimic joints, so floating + mimic ee
+# derivatives compose with no separate 6-DoF root fold. Nothing remains refused.
+MIMIC_FLOATING_UNSUPPORTED_GRADIENTS = set()
 
 
 def _robot_has_mimic_joints(project_model) -> bool:
@@ -161,11 +159,11 @@ MIMIC_CODEGEN_ALGORITHM_LIST = ["id", "crba", "ee_pose", "minv", "fd", "aba"]
 MIMIC_CODEGEN_ALGORITHM_LIST_FIXED = MIMIC_CODEGEN_ALGORITHM_LIST + [
     "id_du", "fd_du", "ee_pose_gradient", "ee_pose_hessian",
 ]
-# Floating-base mimic supports the ID/FD gradients (B1) but NOT the ee pose
-# grad/hessian (their floating-root 6-DoF subspace fold is deferred and still
-# refused at codegen), so floating mimic codegen includes id_du/fd_du only.
+# Floating-base mimic supports the ID/FD gradients (B1) AND the ee pose
+# grad/hessian (B2-ee FLOATING, 2026-05-31: the floating root decomposes into 6
+# singleton velocity-slot fills, orthogonal to the 1-DoF mimic alpha fold).
 MIMIC_CODEGEN_ALGORITHM_LIST_FLOATING = MIMIC_CODEGEN_ALGORITHM_LIST + [
-    "id_du", "fd_du",
+    "id_du", "fd_du", "ee_pose_gradient", "ee_pose_hessian",
 ]
 # Algorithms with a KNOWN, TRACKED correctness bug: their mismatches vs the
 # independent oracle are reported as expected/known failures (not silent masks,
@@ -571,8 +569,9 @@ def _run_gen_all_code(codegen, project_model, output_path, include_homogenous_tr
     )
     if _robot_has_mimic_joints(project_model):
         # Fixed-base mimic includes ID/FD gradients (P3) + ee pose grad/hessian
-        # (B2-ee). Floating-base mimic includes ID/FD gradients (B1) but not the
-        # ee pose grad/hessian (still refused; floating-root subspace fold deferred).
+        # (B2-ee). Floating-base mimic includes ID/FD gradients (B1) + ee pose
+        # grad/hessian (B2-ee FLOATING, 2026-05-31; floating root = 6 singleton
+        # velocity-slot fills, orthogonal to the 1-DoF mimic alpha fold).
         if project_model.base_mode == "floating":
             kwargs["algorithm_list"] = MIMIC_CODEGEN_ALGORITHM_LIST_FLOATING
         else:
@@ -1581,14 +1580,11 @@ def _run_cuda_equivalence_case(
         # emit id_du/fd_du, so the runner always compiles its dynamics-gradient
         # block. (Never skip the whole gradient block for mimic robots.)
         skip_gradients=False,
-        # ee_pose gradients/hessian: fixed-base mimic emits them (B2-ee, the
-        # alpha-weighted geometric-Jacobian / world-frame-generator fold), but
-        # floating-base mimic ee derivatives are still refused (floating-root
-        # 6-DoF subspace fold deferred), so skip ONLY the ee-pose gradient block
-        # in the runner for floating mimic robots.
-        skip_eepose_gradients=(
-            _robot_has_mimic_joints(project_model) and base_mode == "floating"
-        ),
+        # ee_pose gradients/hessian: both fixed-base mimic (B2-ee) and floating-base
+        # mimic (B2-ee FLOATING, 2026-05-31) emit the alpha-weighted geometric-
+        # Jacobian / world-frame-generator fold, so the runner always compiles the
+        # ee-pose gradient block. (Never skip it for mimic robots.)
+        skip_eepose_gradients=False,
         config=config,
     )
 
