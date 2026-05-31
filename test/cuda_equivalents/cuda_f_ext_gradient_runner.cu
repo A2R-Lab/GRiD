@@ -21,12 +21,12 @@
 
 #include "grid.cuh"
 
-// Detect whether the A.3 (-dJ^T/dq) host wrapper was emitted (fixed base). The
-// codegen registers f_ext_gradient_dq only for fixed-base robots.
+// The A.3 (-dJ^T/dq) host wrapper is now emitted for BOTH base modes (fixed:
+// scalar FD; floating: SE(3) Lie-group root retract via grid_integrate_floating_q).
 #ifndef GRID_CUDA_FLOATING_BASE
 #define GRID_CUDA_FLOATING_BASE 0
 #endif
-#define GRID_HAS_F_EXT_GRAD_DQ (!GRID_CUDA_FLOATING_BASE)
+#define GRID_HAS_F_EXT_GRAD_DQ 1
 
 template <typename T>
 void read_vector(T *dst, int count) {

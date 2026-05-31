@@ -12,11 +12,13 @@ outputs against the RBDReference + pinocchio oracle:
                                                                 fixed base only
 
 All three are q-only (f_ext enters RNEA additively & linearly), so the runner
-reads only q. The A.3 block (-dJ^T/dq) is emitted for FIXED-BASE robots only
-(the FD-on-Jacobian needs the SE(3) Lie integrator for floating-base tangent
-perturbations; deferred), so the floating case checks the first-order pair only.
+reads only q. The A.3 block (-dJ^T/dq) is now emitted for BOTH base modes: fixed
+base perturbs each q coordinate by a scalar q[i] += h; floating base perturbs the
+root (jid 0) along its 6-DoF twist via the on-device SE(3) Lie-group retract
+grid_integrate_floating_q (revolute joints keep the scalar add), exactly mirroring
+the numpy + pinocchio oracle's self.integrate(q, dv) FD.
 
-Gated iiwa14 (fixed, all three) first, then a floating robot (first-order pair).
+Gated iiwa14 (fixed, all three) plus go2 / g1 (floating, all three).
 """
 import os
 import shutil
@@ -44,8 +46,9 @@ from test.cuda_equivalents.test_cuda_executable_equivalence import (
 RUNNER_SOURCE = Path(__file__).with_name("cuda_f_ext_gradient_runner.cu")
 
 # (robot_id, base_mode). iiwa14 (fixed) exercises all three outputs incl. the
-# A.3 -dJ^T/dq block; go2 (floating) exercises the first-order pair.
-_CASES = [("iiwa14", "fixed"), ("go2", "floating")]
+# A.3 -dJ^T/dq block (scalar FD); go2 / g1 (floating) exercise all three incl.
+# the A.3 block via the SE(3) Lie-group root retract.
+_CASES = [("iiwa14", "fixed"), ("go2", "floating"), ("g1", "floating")]
 
 
 def _build_adapters(robot_id, base_mode):
@@ -154,16 +157,15 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
     _check("dtau_dfext", _cuda("f_ext_gradient_dtau_dfext"), a_dtau, e_dtau, "f_ext_grad")
     _check("dqdd_dfext", _cuda("f_ext_gradient_dqdd_dfext"), a_dqdd, e_dqdd, "f_ext_grad")
 
-    # A.3 -dJ^T/dq (fixed base only). The runner prints it as a (nv*6NB) x nv
+    # A.3 -dJ^T/dq (both base modes). The runner prints it as a (nv*6NB) x nv
     # matrix with the q-coordinate as the column and the flattened -J^T (row
     # v_j + nv*col, column-major) as the row; rebuild to the oracle's
     # (nv, 6NB, nv) = [v_j, col, qi] layout before comparing.
-    if not floating:
-        cuda_djt = _cuda("f_ext_gradient_did_du_dfext_dq")  # (nv*6NB) x nv
-        cuda3 = np.empty((nv, 6 * nb, nv), dtype=np.float64)
-        for vj in range(nv):
-            for col in range(6 * nb):
-                cuda3[vj, col, :] = cuda_djt[vj + nv * col, :]
-        _check("did_du_dfext_dq", cuda3, a_djt, e_djt, "f_ext_grad_so")
+    cuda_djt = _cuda("f_ext_gradient_did_du_dfext_dq")  # (nv*6NB) x nv
+    cuda3 = np.empty((nv, 6 * nb, nv), dtype=np.float64)
+    for vj in range(nv):
+        for col in range(6 * nb):
+            cuda3[vj, col, :] = cuda_djt[vj + nv * col, :]
+    _check("did_du_dfext_dq", cuda3, a_djt, e_djt, "f_ext_grad_so")
 
     assert not failures, "f_ext_gradient CUDA equivalence failures:\n" + "\n".join(failures)
