@@ -12,9 +12,10 @@ pinocchio to ~1e-14:
                                         (inv(J Minv J^T))
 for the three pinocchio reference frames (LOCAL / WORLD / LOCAL_WORLD_ALIGNED).
 
-Lambda obtains Minv on-device: the runner calls grid::direct_minv_device,
-densifies the SYMMETRIC_UPPER output to a full symmetric matrix, and feeds it
-into grid::osc_inertia_device (which is decoupled from direct_minv's tiering).
+Lambda is self-contained: grid::osc_inertia_device composes Minv on device
+(via direct_minv_inner, F-region spilled to a shared s_F buffer) and densifies
+the SYMMETRIC_UPPER output internally during the J*Minv*J^T contraction — the
+runner feeds it q alone, no external Minv.
 
 The CUDA path is float32, so the comparison uses a float32-scale tolerance like
 the other CUDA smoke tests. The frame target is the leaf joint id of each robot

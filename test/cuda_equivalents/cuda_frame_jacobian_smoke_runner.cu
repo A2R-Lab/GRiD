@@ -1,7 +1,8 @@
 // CUDA smoke runner for the generated general-frame geometric Jacobian family
 // (E2): J (grid::frame_jacobian_device), Jdot (grid::frame_jacobian_dot_device),
-// and the operational-space inertia Lambda (grid::osc_inertia_device). Drives
-// each from a single-block kernel for the three pinocchio reference frames and
+// and the operational-space inertia Lambda (grid::osc_inertia_device, which is
+// SELF-CONTAINED — it composes Minv on device from q alone, no external feed).
+// Drives each from a single-block kernel for the three pinocchio reference frames and
 // prints the results in BEGIN/END framed blocks (column-major), to be
 // cross-checked against the RBDReference numpy oracle (which matches pinocchio's
 // getFrameJacobian / getJointJacobian / computeJointJacobiansTimeVariation and
@@ -111,56 +112,32 @@ __global__ void frame_jac_dot_kernel(const T *g_q, const T *g_qd, const int targ
     __syncthreads();
 }
 
-// Minv kernel: compute Minv (SYMMETRIC_UPPER) then densify into a full
-// symmetric matrix the osc kernel can read directly.
+// Lambda kernel: SELF-CONTAINED. grid::osc_inertia_device composes Minv on
+// device (via direct_minv_inner) from q alone — no external Minv feed — then
+// emits Lambda for the three reference frames.
 template <typename T>
-__global__ void minv_dense_kernel(const T *g_q, const grid::robotModel<T> *d_robotModel,
-                                  T *o_minv) {
-    __shared__ T s_q[NQ];
-    __shared__ T s_Minv[NV * NV];
-
-    const int tid = threadIdx.x + threadIdx.y * blockDim.x;
-    const int nth = blockDim.x * blockDim.y;
-    for (int i = tid; i < NQ; i += nth) s_q[i] = g_q[i];
-    __syncthreads();
-
-    grid::direct_minv_device<T>(s_Minv, s_q, d_robotModel);
-    __syncthreads();
-    // densify SYMMETRIC_UPPER -> full symmetric (column-major).
-    for (int ind = tid; ind < NV * NV; ind += nth) {
-        int r = ind % NV, c = ind / NV;
-        int r0 = (r < c) ? r : c, c0 = (r < c) ? c : r;
-        o_minv[ind] = s_Minv[r0 + NV * c0];
-    }
-    __syncthreads();
-}
-
-// Lambda kernel: read the densified Minv and emit Lambda for the three frames.
-template <typename T>
-__global__ void osc_kernel(const T *g_q, const T *g_minv, const int target_jid,
+__global__ void osc_kernel(const T *g_q, const int target_jid,
                            const grid::robotModel<T> *d_robotModel,
                            T *o_local, T *o_world, T *o_lwa) {
     __shared__ T s_q[NQ];
-    __shared__ T s_minv[NV * NV];
     __shared__ T s_L[36];
 
     const int tid = threadIdx.x + threadIdx.y * blockDim.x;
     const int nth = blockDim.x * blockDim.y;
     for (int i = tid; i < NQ; i += nth) s_q[i] = g_q[i];
-    for (int i = tid; i < NV * NV; i += nth) s_minv[i] = g_minv[i];
     __syncthreads();
 
-    grid::osc_inertia_device<T>(s_L, target_jid, 0, s_q, s_minv, d_robotModel);
+    grid::osc_inertia_device<T>(s_L, target_jid, 0, s_q, d_robotModel);
     __syncthreads();
     for (int i = tid; i < 36; i += nth) o_local[i] = s_L[i];
     __syncthreads();
 
-    grid::osc_inertia_device<T>(s_L, target_jid, 1, s_q, s_minv, d_robotModel);
+    grid::osc_inertia_device<T>(s_L, target_jid, 1, s_q, d_robotModel);
     __syncthreads();
     for (int i = tid; i < 36; i += nth) o_world[i] = s_L[i];
     __syncthreads();
 
-    grid::osc_inertia_device<T>(s_L, target_jid, 2, s_q, s_minv, d_robotModel);
+    grid::osc_inertia_device<T>(s_L, target_jid, 2, s_q, d_robotModel);
     __syncthreads();
     for (int i = tid; i < 36; i += nth) o_lwa[i] = s_L[i];
     __syncthreads();
@@ -197,7 +174,6 @@ void run() {
     T *o_jl = dmalloc<T>(6 * NV), *o_jw = dmalloc<T>(6 * NV), *o_jx = dmalloc<T>(6 * NV);
     T *o_dl = dmalloc<T>(6 * NV), *o_dw = dmalloc<T>(6 * NV), *o_dx = dmalloc<T>(6 * NV);
     T *o_ll = dmalloc<T>(36), *o_lw = dmalloc<T>(36), *o_lx = dmalloc<T>(36);
-    T *g_minv = dmalloc<T>(NV * NV);
 
     const int nthreads = grid::MAX_PERF_LEVEL_THREADS;
 
@@ -209,14 +185,11 @@ void run() {
     cudaFuncSetAttribute(frame_jac_dot_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)dyn_d);
     frame_jac_dot_kernel<T><<<1, nthreads, dyn_d>>>(g_q, g_qd, target_jid, d_robotModel, o_dl, o_dw, o_dx);
 
-    size_t dyn_m = grid::MINV_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>();
-    cudaFuncSetAttribute(minv_dense_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)dyn_m);
-    minv_dense_kernel<T><<<1, nthreads, dyn_m>>>(g_q, d_robotModel, g_minv);
-    cudaDeviceSynchronize();
-
+    // Self-contained Lambda: osc_inertia_device composes Minv on device, so the
+    // runner no longer pre-computes/densifies a Minv to feed in.
     size_t dyn_o = grid::OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(osc_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)dyn_o);
-    osc_kernel<T><<<1, nthreads, dyn_o>>>(g_q, g_minv, target_jid, d_robotModel, o_ll, o_lw, o_lx);
+    osc_kernel<T><<<1, nthreads, dyn_o>>>(g_q, target_jid, d_robotModel, o_ll, o_lw, o_lx);
     cudaDeviceSynchronize();
 
     dcopy_out("J_local", o_jl, 6, NV);
