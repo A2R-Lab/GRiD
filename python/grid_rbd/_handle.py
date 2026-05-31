@@ -307,6 +307,84 @@ class RobotHandle:
         NV = self.num_vel
         return raw.reshape(B, 3 * NV, 2 * NV).transpose(0, 2, 1)
 
+    # ─── grid_plant surface (cost / barrier / plant-step) ────────────────────
+    #
+    # Composed over the grid:: device surface (integrator + EE pose/Jacobian).
+    # Validated against RBDReference._PlantMixin. All take/return 2D arrays with
+    # axis 0 = batch. Cost methods return (value, grad, hess); barriers return
+    # (value, grad, hess_diag). Conventions mirror RBDReference/_plant.py.
+
+    def quadratic_state_cost(self, x, x_des, Q):
+        """1/2 * sum_i Q_i (x_i - x_des_i)^2 over the full state x = [q; qd].
+
+        x / x_des / Q are (B, NUM_POS + NUM_VEL). Returns:
+          value (B,), grad (B, NX), hess = diag(Q) (B, NX, NX).
+        """
+        x = np.ascontiguousarray(x, dtype=np.float32)
+        x_des = np.ascontiguousarray(x_des, dtype=np.float32)
+        Q = np.ascontiguousarray(Q, dtype=np.float32)
+        return self._runner.quadratic_state_cost(x, x_des, Q)
+
+    def quadratic_input_cost(self, u, u_des, R):
+        """1/2 * sum_i R_i (u_i - u_des_i)^2 over the input u (size NUM_VEL).
+
+        u / u_des / R are (B, NUM_VEL). Returns:
+          value (B,), grad (B, NV), hess = diag(R) (B, NV, NV).
+        """
+        u = np.ascontiguousarray(u, dtype=np.float32)
+        u_des = np.ascontiguousarray(u_des, dtype=np.float32)
+        R = np.ascontiguousarray(R, dtype=np.float32)
+        return self._runner.quadratic_input_cost(u, u_des, R)
+
+    def ee_pos_cost(self, q, p_des, W):
+        """End-effector position cost over the 3 position axes (EE 0).
+
+        q is (B, NUM_POS); p_des / W are (B, 3). Returns:
+          value (B,), grad_x (B, NX) = [J_p^T (W·r); 0], GN hess_x (B, NX, NX)
+          with the top-left NV×NV q-block = J_p^T diag(W) J_p.
+        The hessian is returned in the kernel's column-major layout; since the
+        GN hessian J_p^T W J_p is symmetric the row/col-major distinction is
+        immaterial.
+        """
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        p_des = np.ascontiguousarray(p_des, dtype=np.float32)
+        W = np.ascontiguousarray(W, dtype=np.float32)
+        return self._runner.ee_pos_cost(q, p_des, W)
+
+    def joint_position_barrier(self, var, lower, upper, mu):
+        """Log-barrier b = -mu·(log(x-lo)+log(hi-x)) over NUM_POS positions.
+
+        var / lower / upper are (B, NUM_POS); an ±inf bound contributes zero.
+        Returns (value (B,), grad (B, NUM_POS), hess_diag (B, NUM_POS)).
+        """
+        return self._barrier("joint_position_barrier", var, lower, upper, mu)
+
+    def joint_velocity_barrier(self, var, lower, upper, mu):
+        """Log-barrier over NUM_VEL velocities. See joint_position_barrier."""
+        return self._barrier("joint_velocity_barrier", var, lower, upper, mu)
+
+    def joint_torque_barrier(self, var, lower, upper, mu):
+        """Log-barrier over NUM_VEL torques. See joint_position_barrier."""
+        return self._barrier("joint_torque_barrier", var, lower, upper, mu)
+
+    def _barrier(self, method, var, lower, upper, mu):
+        var = np.ascontiguousarray(var, dtype=np.float32)
+        lower = np.ascontiguousarray(lower, dtype=np.float32)
+        upper = np.ascontiguousarray(upper, dtype=np.float32)
+        return getattr(self._runner, method)(var, lower, upper, float(mu))
+
+    def plant_step(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = 9.81):
+        """x_{k+1} = integrator(x_k, u_k, dt). Thin wrapper over grid::integrator.
+
+        x is (B, NUM_POS + NUM_VEL); u is (B, NUM_VEL). Returns (B, NX).
+        `integrator_type` is one of euler / semi_implicit_euler / midpoint /
+        rk3 / rk4 (same codes as :py:meth:`integrator`).
+        """
+        x = np.ascontiguousarray(x, dtype=np.float32)
+        u = np.ascontiguousarray(u, dtype=np.float32)
+        it = _integrator_code(integrator_type)
+        return self._runner.plant_step(x, u, float(dt), it, float(gravity))
+
     # ─── lifecycle ───────────────────────────────────────────────────────────
 
     def close(self) -> None:

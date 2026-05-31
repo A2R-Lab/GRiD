@@ -481,6 +481,224 @@ extern "C" int grid_rbd_integrator_gradient(
 
 
 // ────────────────────────────────────────────────────────────────────────────
+// grid_plant C ABI (G1 binding layer)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Exposes the `grid_plant::` device surface (cost / barrier / plant-step) as
+// `extern "C"` host functions. Each launches one block per timestep against the
+// per-timestep kernels emitted by GRiDCodeGenerator/algorithms/_plant.py.
+//
+// Plant-specific in/out buffers (desired states, weights, bounds, scalar
+// outputs, dense hessians) are device-allocated lazily here, sized to
+// kMaxBatch, and reused across calls (single-robot singleton, like g_data).
+// Inputs are staged H->D, outputs copied D->H, with a device sync per call
+// (the host-path ABI is synchronous, matching the other algorithms).
+
+namespace {
+
+// Lazily-allocated plant scratch (device). Sized to kMaxBatch * per-timestep.
+struct PlantBuffers {
+    // generic packed in/out (large enough for the biggest per-call need)
+    T* d_in_a   = nullptr;   // var / x / u / q
+    T* d_in_b   = nullptr;   // des / lower / p_des
+    T* d_in_c   = nullptr;   // weight / upper
+    T* d_out    = nullptr;   // scalar cost (1 per timestep)
+    T* d_grad   = nullptr;   // gradient
+    T* d_hess   = nullptr;   // dense hessian / hess-diagonal
+    T* d_eePos  = nullptr;   // ee-pose scratch
+    T* d_deePos = nullptr;   // ee-jacobian scratch
+    bool allocated = false;
+};
+static PlantBuffers g_plant;
+
+static int plant_alloc() {
+    if (g_plant.allocated) return 0;
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    const int nv = grid::NUM_VEL;
+    const int nee = grid::NUM_EES;
+    const size_t B = (size_t)kMaxBatch;
+    // size every buffer for the worst-case per-timestep footprint across calls.
+    const size_t vec = (size_t)nx;                  // >= nv, >= nq, >= 3
+    const size_t mat = (size_t)nx * (size_t)nx;     // dense hessian
+    auto ok = [](cudaError_t e){ return e == cudaSuccess; };
+    bool good = true;
+    good &= ok(cudaMalloc(&g_plant.d_in_a,  B * vec * sizeof(T)));
+    good &= ok(cudaMalloc(&g_plant.d_in_b,  B * vec * sizeof(T)));
+    good &= ok(cudaMalloc(&g_plant.d_in_c,  B * vec * sizeof(T)));
+    good &= ok(cudaMalloc(&g_plant.d_out,   B * sizeof(T)));
+    good &= ok(cudaMalloc(&g_plant.d_grad,  B * vec * sizeof(T)));
+    good &= ok(cudaMalloc(&g_plant.d_hess,  B * mat * sizeof(T)));
+    good &= ok(cudaMalloc(&g_plant.d_eePos, B * (size_t)(6 * nee) * sizeof(T)));
+    good &= ok(cudaMalloc(&g_plant.d_deePos, B * (size_t)(6 * nv * nee) * sizeof(T)));
+    if (!good) return 1;
+    g_plant.allocated = true;
+    return 0;
+}
+
+}  // namespace
+
+// quadratic_state_cost / quadratic_input_cost: value + grad + GN-diag hess.
+// var/des/weight are (batch, N); out (batch); grad (batch, N); hess (batch, N*N).
+template <bool STATE>
+static int plant_quadratic_cost_impl(
+    const T* var, const T* des, const T* w,
+    T* out, T* grad, T* hess, int batch)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    if (plant_alloc()) return 4;
+    const int N = STATE ? (grid::NUM_POS + grid::NUM_VEL) : grid::NUM_VEL;
+    cudaMemcpy(g_plant.d_in_a, var, batch * N * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_b, des, batch * N * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_c, w,   batch * N * sizeof(T), cudaMemcpyHostToDevice);
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    if (STATE) {
+        grid_plant::quadratic_state_cost_kernel<T><<<grid_dim, g_thread_dimms, 0, g_streams[0]>>>(
+            g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+            g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, batch);
+    } else {
+        grid_plant::quadratic_input_cost_kernel<T><<<grid_dim, g_thread_dimms, 0, g_streams[0]>>>(
+            g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+            g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, batch);
+    }
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(grad, g_plant.d_grad, batch * N * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(hess, g_plant.d_hess, batch * N * N * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+
+extern "C" int grid_plant_quadratic_state_cost(
+    const T* x, const T* x_des, const T* Q, T* out, T* grad, T* hess, int batch) {
+    return plant_quadratic_cost_impl<true>(x, x_des, Q, out, grad, hess, batch);
+}
+extern "C" int grid_plant_quadratic_input_cost(
+    const T* u, const T* u_des, const T* R, T* out, T* grad, T* hess, int batch) {
+    return plant_quadratic_cost_impl<false>(u, u_des, R, out, grad, hess, batch);
+}
+
+// joint_{position,velocity,torque}_barrier: value + grad + hess-diagonal.
+// var/lower/upper are (batch, N); out (batch); grad/hess_diag (batch, N).
+enum class PlantBarrier { POSITION, VELOCITY, TORQUE };
+
+static int plant_barrier_impl(
+    PlantBarrier which,
+    const T* var, const T* lower, const T* upper, float mu,
+    T* out, T* grad, T* hess_diag, int batch)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    if (plant_alloc()) return 4;
+    const int N = (which == PlantBarrier::POSITION) ? grid::NUM_POS : grid::NUM_VEL;
+    cudaMemcpy(g_plant.d_in_a, var,   batch * N * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_b, lower, batch * N * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_c, upper, batch * N * sizeof(T), cudaMemcpyHostToDevice);
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    switch (which) {
+        case PlantBarrier::POSITION:
+            grid_plant::joint_position_barrier_kernel<T><<<grid_dim, g_thread_dimms, 0, g_streams[0]>>>(
+                g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+                g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch); break;
+        case PlantBarrier::VELOCITY:
+            grid_plant::joint_velocity_barrier_kernel<T><<<grid_dim, g_thread_dimms, 0, g_streams[0]>>>(
+                g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+                g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch); break;
+        case PlantBarrier::TORQUE:
+            grid_plant::joint_torque_barrier_kernel<T><<<grid_dim, g_thread_dimms, 0, g_streams[0]>>>(
+                g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+                g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch); break;
+    }
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(out,       g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(grad,      g_plant.d_grad, batch * N * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(hess_diag, g_plant.d_hess, batch * N * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+
+extern "C" int grid_plant_joint_position_barrier(
+    const T* var, const T* lower, const T* upper, float mu,
+    T* out, T* grad, T* hess_diag, int batch) {
+    return plant_barrier_impl(PlantBarrier::POSITION, var, lower, upper, mu, out, grad, hess_diag, batch);
+}
+extern "C" int grid_plant_joint_velocity_barrier(
+    const T* var, const T* lower, const T* upper, float mu,
+    T* out, T* grad, T* hess_diag, int batch) {
+    return plant_barrier_impl(PlantBarrier::VELOCITY, var, lower, upper, mu, out, grad, hess_diag, batch);
+}
+extern "C" int grid_plant_joint_torque_barrier(
+    const T* var, const T* lower, const T* upper, float mu,
+    T* out, T* grad, T* hess_diag, int batch) {
+    return plant_barrier_impl(PlantBarrier::TORQUE, var, lower, upper, mu, out, grad, hess_diag, batch);
+}
+
+#ifdef GRID_PLANT_HAS_STEP
+// plant_step: x_{k+1} = integrator(x_k, u_k, dt). x (batch, NX); u (batch, NV);
+// out (batch, NX). Gated on GRID_PLANT_HAS_STEP (emitted only when the
+// integrator algorithm is generated). Integrator type via the same int code.
+template <grid::IntegratorType IT>
+static void launch_plant_step(int batch, T gravity, T dt) {
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::plant_step_kernel<T, IT><<<grid_dim, g_thread_dimms,
+        grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>(), g_streams[0]>>>(
+            g_plant.d_grad /*reuse as d_x_kp1, size NX*/, g_plant.d_in_a, g_plant.d_in_b,
+            nx, grid::NUM_VEL, g_robot, gravity, dt, batch);
+}
+
+extern "C" int grid_plant_step(
+    const T* x, const T* u, T* x_kp1, int batch, float gravity, float dt, int it) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    if (plant_alloc()) return 4;
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    const int nv = grid::NUM_VEL;
+    cudaMemcpy(g_plant.d_in_a, x, batch * nx * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_b, u, batch * nv * sizeof(T), cudaMemcpyHostToDevice);
+    GRID_RBD_IT_DISPATCH(it, launch_plant_step, batch, (T)gravity, (T)dt);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(x_kp1, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_PLANT_HAS_STEP
+
+#ifdef GRID_PLANT_HAS_EE_COST
+// ee_pos_cost: value + grad over x=[q;qd] + GN hess_x. q (batch, NQ);
+// p_des (batch, 3); W (batch, 3); out (batch); grad (batch, NX); hess (batch, NX*NX).
+// Gated on GRID_PLANT_HAS_EE_COST (ee_pose + ee_pose_gradient generated).
+extern "C" int grid_plant_ee_pos_cost(
+    const T* q, const T* p_des, const T* W,
+    T* out, T* grad, T* hess, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    if (plant_alloc()) return 4;
+    const int nq = grid::NUM_POS;
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    cudaMemcpy(g_plant.d_in_a, q,     batch * nq * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_b, p_des, batch * 3  * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_c, W,     batch * 3  * sizeof(T), cudaMemcpyHostToDevice);
+    // The kernel internally calls ee-pose (value), ee-pose-gradient, and uses
+    // the hessian-free GN J^T W J. The dynamic smem must cover the largest of
+    // the device fns it invokes (pose-gradient dominates pose).
+    size_t smem = grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>();
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::ee_pos_cost_kernel<T, 0><<<grid_dim, g_thread_dimms, smem, g_streams[0]>>>(
+        g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+        g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
+        g_plant.d_eePos, g_plant.d_deePos, g_robot, batch);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(grad, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(hess, g_plant.d_hess, batch * nx * nx * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_PLANT_HAS_EE_COST
+
+
+// ────────────────────────────────────────────────────────────────────────────
 // JAX FFI handlers
 // ────────────────────────────────────────────────────────────────────────────
 //
@@ -555,7 +773,7 @@ static ffi::Error grid_rbd_jax_rnea_impl(
         grid::ID_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
             g_data->d_c, g_data->d_q_qd_u, stride_q_qd,
-            g_robot, /*gravity=*/gravity, batch);
+            g_data->d_f_ext, g_robot, /*gravity=*/gravity, batch);
 
     // D→D copy the result into JAX's output buffer on the same stream.
     cudaMemcpyAsync(c->typed_data(), g_data->d_c,
@@ -668,7 +886,7 @@ static ffi::Error grid_rbd_jax_forward_dynamics_impl(
         stream>>>(
             g_data->d_qdd, g_data->d_workspace,
             g_data->d_q_qd_u, stride_q_qd_u,
-            g_robot, /*gravity=*/gravity, batch);
+            g_data->d_f_ext, g_robot, /*gravity=*/gravity, batch);
 
     cudaMemcpyAsync(qdd_out->typed_data(), g_data->d_qdd,
                     batch * nj * sizeof(T),
@@ -721,7 +939,7 @@ static ffi::Error grid_rbd_jax_aba_impl(
         stream>>>(
             g_data->d_qdd, g_data->d_workspace,
             g_data->d_q_qd_u, stride_q_qd,
-            g_robot, /*gravity=*/gravity, batch);
+            g_data->d_f_ext, g_robot, /*gravity=*/gravity, batch);
 
     cudaMemcpyAsync(qdd_out->typed_data(), g_data->d_qdd,
                     batch * nj * sizeof(T),
@@ -949,7 +1167,7 @@ static ffi::Error grid_rbd_jax_rnea_grad_impl(
         stream>>>(
             g_data->d_dc_du, g_data->d_workspace,
             g_data->d_q_qd_u, stride_q_qd,
-            g_robot, /*gravity=*/gravity, batch);
+            g_data->d_f_ext, g_robot, /*gravity=*/gravity, batch);
 
     cudaMemcpyAsync(dc_du_out->typed_data(), g_data->d_dc_du,
                     batch * nj * 2 * nj * sizeof(T),
@@ -1003,7 +1221,7 @@ static ffi::Error grid_rbd_jax_forward_dynamics_grad_impl(
         stream>>>(
             g_data->d_df_du, g_data->d_workspace,
             g_data->d_q_qd_u, stride_q_qd_u,
-            g_robot, /*gravity=*/gravity, batch);
+            g_data->d_f_ext, g_robot, /*gravity=*/gravity, batch);
 
     cudaMemcpyAsync(df_du_out->typed_data(), g_data->d_df_du,
                     batch * nj * 2 * nj * sizeof(T),
@@ -1249,3 +1467,362 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 #endif  // GRID_RBD_WITH_JAX
+
+
+// ────────────────────────────────────────────────────────────────────────────
+// PyTorch custom ops (D.3)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Gated on -DGRID_RBD_WITH_TORCH (set by _compile.py when torch is installed at
+// register_robot time). Structurally identical to the JAX FFI block: each op
+//   1. asserts CUDA / contiguous / float32 / (B, NJ),
+//   2. grabs the current torch CUDA stream,
+//   3. lazily grid_rbd_init() (same guard as the JAX handlers),
+//   4. D->D repacks inputs into g_data->d_q_qd_u via the same cudaMemcpy2DAsync
+//      pitch trick,
+//   5. allocates the output with torch::empty on the same device,
+//   6. launches the SAME kernel kernel-direct on the stream (matching smem),
+//   7. D->D copies the singleton output buffer into the output tensor,
+//   8. returns the tensor with NO host sync — async / stream-ordered so it is
+//      CUDA-graph-capturable. (Reshapes to the _handle.py conventions are done
+//      Python-side, exactly like the JAX surface.)
+//
+// Registered under a per-robot op namespace keyed by the cache_key
+// (-DGRID_RBD_TORCH_KEY=<hex>) so two robots in one process don't collide.
+
+#ifdef GRID_RBD_WITH_TORCH
+
+// Use the Python-free C++ frontend (torch/library.h) rather than
+// torch/extension.h, which pulls in <Python.h>. We register ops via the
+// TORCH_LIBRARY dispatcher and load them with torch.ops.load_library — no
+// pybind/Python C-API needed in the .so.
+#include <torch/library.h>
+#include <torch/types.h>
+#include <ATen/ATen.h>
+#include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAStream.h>
+
+namespace {
+
+// ── input validation + D->D pack helpers (mirror the JAX handlers) ──
+static inline void grid_torch_check(const torch::Tensor& t, const char* name, int last_dim) {
+    TORCH_CHECK(t.is_cuda(), name, ": must be a CUDA tensor");
+    TORCH_CHECK(t.is_contiguous(), name, ": must be contiguous");
+    TORCH_CHECK(t.scalar_type() == torch::kFloat32, name, ": must be float32");
+    TORCH_CHECK(t.dim() == 2, name, ": must be 2D (B, ", last_dim, ")");
+    TORCH_CHECK(t.size(1) == last_dim, name, ": last dim != ", last_dim);
+}
+
+static inline int grid_torch_batch(const torch::Tensor& q) {
+    int batch = (int)q.size(0);
+    TORCH_CHECK(batch <= kMaxBatch, "batch ", batch, " > compiled-in max_batch ", kMaxBatch);
+    return batch;
+}
+
+static inline torch::Tensor grid_torch_empty(int rows, int cols, const torch::Tensor& like) {
+    auto opts = torch::TensorOptions().dtype(torch::kFloat32).device(like.device());
+    return torch::empty({rows, cols}, opts);
+}
+
+// pack q[, qd[, u]] D->D into d_q_qd_u on `stream` (layout [q,qd,u] per ts).
+static inline void grid_torch_pack(cudaStream_t stream, int batch, int nj,
+                                   const torch::Tensor* q,
+                                   const torch::Tensor* qd,
+                                   const torch::Tensor* u) {
+    const size_t row_bytes = nj * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    if (q)  cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],      dst_pitch, q->data_ptr<float>(),  row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    if (qd) cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj],     dst_pitch, qd->data_ptr<float>(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    if (u)  cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj],   dst_pitch, u->data_ptr<float>(),  row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+}
+
+static inline void grid_torch_init_or_throw() {
+    if (!g_data) { int rc = grid_rbd_init(); TORCH_CHECK(rc == 0, "grid_rbd_init failed"); }
+}
+
+// ── forward ops ──
+
+torch::Tensor torch_rnea(torch::Tensor q, torch::Tensor qd, double gravity) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS;
+    grid_torch_check(q, "rnea: q", nj); grid_torch_check(qd, "rnea: qd", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
+    auto out = grid_torch_empty(batch, nj, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::inverse_dynamics_kernel<T><<<g_block_dimms, g_thread_dimms, grid::ID_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_c, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_c, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
+torch::Tensor torch_minv(torch::Tensor q) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS;
+    grid_torch_check(q, "minv: q", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
+    auto out = grid_torch_empty(batch, nj * nj, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::direct_minv_kernel<T><<<g_block_dimms, g_thread_dimms, grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_Minv, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_Minv, batch * nj * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
+torch::Tensor torch_forward_dynamics(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS;
+    grid_torch_check(q, "fd: q", nj); grid_torch_check(qd, "fd: qd", nj); grid_torch_check(u, "fd: u", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, &qd, &u);
+    auto out = grid_torch_empty(batch, nj, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::forward_dynamics_kernel<T><<<g_block_dimms, g_thread_dimms, grid::FD_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_qdd, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_qdd, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
+torch::Tensor torch_aba(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS;
+    grid_torch_check(q, "aba: q", nj); grid_torch_check(qd, "aba: qd", nj); grid_torch_check(u, "aba: u", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, &qd, &u);
+    auto out = grid_torch_empty(batch, nj, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::aba_kernel<T><<<g_block_dimms, g_thread_dimms, grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_qdd, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_qdd, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
+torch::Tensor torch_crba(torch::Tensor q, double gravity) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS;
+    grid_torch_check(q, "crba: q", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
+    auto out = grid_torch_empty(batch, nj * nj, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::crba_kernel<T><<<g_block_dimms, g_thread_dimms, grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_M, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_M, batch * nj * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
+torch::Tensor torch_end_effector_pose(torch::Tensor q) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS, nee = grid::NUM_EES;
+    grid_torch_check(q, "end_effector_pose: q", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
+    auto out = grid_torch_empty(batch, 6 * nee, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::end_effector_pose_kernel<T><<<g_block_dimms, g_thread_dimms, grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_eePos, g_data->d_q_qd_u, stride, g_robot, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_eePos, batch * 6 * nee * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
+torch::Tensor torch_end_effector_pose_gradient(torch::Tensor q) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL, nee = grid::NUM_EES;
+    grid_torch_check(q, "end_effector_pose_gradient: q", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
+    auto out = grid_torch_empty(batch, 6 * nee * nv, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::end_effector_pose_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_deePos, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_deePos, batch * 6 * nee * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
+torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL, nee = grid::NUM_EES;
+    grid_torch_check(q, "end_effector_pose_hessian: q", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
+    auto out = grid_torch_empty(batch, 6 * nee * nv * nv, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::end_effector_pose_gradient_hessian_kernel<T><<<g_block_dimms, g_thread_dimms, grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_d2eePos, g_data->d_deePos, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_d2eePos, batch * 6 * nee * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
+torch::Tensor torch_rnea_grad(torch::Tensor q, torch::Tensor qd, double gravity) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS;
+    grid_torch_check(q, "rnea_grad: q", nj); grid_torch_check(qd, "rnea_grad: qd", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
+    auto out = grid_torch_empty(batch, nj * 2 * nj, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::inverse_dynamics_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::ID_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_dc_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_dc_du, batch * nj * 2 * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
+torch::Tensor torch_forward_dynamics_grad(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS;
+    grid_torch_check(q, "fd_grad: q", nj); grid_torch_check(qd, "fd_grad: qd", nj); grid_torch_check(u, "fd_grad: u", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, &qd, &u);
+    auto out = grid_torch_empty(batch, nj * 2 * nj, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::forward_dynamics_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::FD_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_df_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_df_du, batch * nj * 2 * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
+torch::Tensor torch_idsva_so(torch::Tensor q, torch::Tensor qd, double gravity) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS;
+    grid_torch_check(q, "idsva_so: q", nj); grid_torch_check(qd, "idsva_so: qd", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
+    auto out = grid_torch_empty(batch, grid::SECOND_ORDER_TENSOR_SIZE, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::idsva_so_body_frame_kernel<T><<<g_block_dimms, g_thread_dimms, grid::IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_idsva_so, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_idsva_so, batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
+torch::Tensor torch_fdsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS;
+    grid_torch_check(q, "fdsva_so: q", nj); grid_torch_check(qd, "fdsva_so: qd", nj); grid_torch_check(u, "fdsva_so: u", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, &qd, &u);
+    auto out = grid_torch_empty(batch, grid::SECOND_ORDER_TENSOR_SIZE, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::fdsva_so_kernel<T><<<g_block_dimms, g_thread_dimms, grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_df2, g_data->d_q_qd_u, stride, g_data->d_workspace, g_data->d_idsva_so, g_robot, (T)gravity, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_df2, batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
+// torch-local integrator-type dispatch (self-contained; the JAX variant lives
+// inside the JAX #ifdef and its default branch returns ffi::Error).
+#define GRID_RBD_IT_DISPATCH_TORCH(it_code, FN, ...)                              \
+    switch (it_code) {                                                            \
+        case 0: FN<grid::IntegratorType::EULER>(__VA_ARGS__); break;              \
+        case 1: FN<grid::IntegratorType::SEMI_IMPLICIT_EULER>(__VA_ARGS__); break;\
+        case 2: FN<grid::IntegratorType::MIDPOINT>(__VA_ARGS__); break;           \
+        case 3: FN<grid::IntegratorType::RK3>(__VA_ARGS__); break;                \
+        case 4: FN<grid::IntegratorType::RK4>(__VA_ARGS__); break;                \
+        default: TORCH_CHECK(false, "integrator: bad integrator-type code");      \
+    }
+
+template <grid::IntegratorType IT>
+static void torch_launch_integrator(cudaStream_t stream, int batch, double dt, double gravity) {
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::integrator_kernel<T, IT><<<g_block_dimms, g_thread_dimms, grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_x_kp1, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, (T)dt, batch);
+}
+template <grid::IntegratorType IT>
+static void torch_launch_integrator_grad(cudaStream_t stream, int batch, double dt, double gravity) {
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::integrator_gradient_kernel<T, IT><<<g_block_dimms, g_thread_dimms, grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_dAB, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, (T)dt, batch);
+}
+
+torch::Tensor torch_integrator(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double dt, int64_t it, double gravity) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS;
+    grid_torch_check(q, "integrator: q", nj); grid_torch_check(qd, "integrator: qd", nj); grid_torch_check(u, "integrator: u", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, &qd, &u);
+    auto out = grid_torch_empty(batch, grid::NUM_POS + grid::NUM_VEL, q);
+    GRID_RBD_IT_DISPATCH_TORCH((int)it, torch_launch_integrator, stream, batch, dt, gravity);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_x_kp1, batch * (grid::NUM_POS + grid::NUM_VEL) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
+torch::Tensor torch_integrator_gradient(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double dt, int64_t it, double gravity) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    grid_torch_check(q, "integrator_gradient: q", nj); grid_torch_check(qd, "integrator_gradient: qd", nj); grid_torch_check(u, "integrator_gradient: u", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, &qd, &u);
+    auto out = grid_torch_empty(batch, 2 * nv * 3 * nv, q);
+    GRID_RBD_IT_DISPATCH_TORCH((int)it, torch_launch_integrator_grad, stream, batch, dt, gravity);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_dAB, batch * (2 * nv) * (3 * nv) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
+}  // namespace
+
+// The op library name is keyed by the cache_key so two robots don't collide.
+#ifndef GRID_RBD_TORCH_KEY
+#define GRID_RBD_TORCH_KEY default
+#endif
+#define GRID_RBD_TORCH_CONCAT2(a, b) a##b
+#define GRID_RBD_TORCH_CONCAT(a, b) GRID_RBD_TORCH_CONCAT2(a, b)
+#define GRID_RBD_TORCH_LIB GRID_RBD_TORCH_CONCAT(grid_rbd_torch_, GRID_RBD_TORCH_KEY)
+
+// Indirection so GRID_RBD_TORCH_LIB is fully expanded BEFORE TORCH_LIBRARY
+// stringizes/token-pastes it. Without this, TORCH_LIBRARY(GRID_RBD_TORCH_LIB,..)
+// registers under the literal token "GRID_RBD_TORCH_LIB" (token-paste suppresses
+// expansion), while TORCH_LIBRARY_IMPL's extra macro layer expands it — a
+// namespace mismatch that hides every op. The wrapper forces expansion for both.
+#define GRID_RBD_TORCH_LIBRARY(ns, m) TORCH_LIBRARY(ns, m)
+#define GRID_RBD_TORCH_LIBRARY_IMPL(ns, k, m) TORCH_LIBRARY_IMPL(ns, k, m)
+
+GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
+    m.def("rnea(Tensor q, Tensor qd, float gravity) -> Tensor");
+    m.def("minv(Tensor q) -> Tensor");
+    m.def("forward_dynamics(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
+    m.def("aba(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
+    m.def("crba(Tensor q, float gravity) -> Tensor");
+    m.def("end_effector_pose(Tensor q) -> Tensor");
+    m.def("end_effector_pose_gradient(Tensor q) -> Tensor");
+    m.def("end_effector_pose_hessian(Tensor q) -> Tensor");
+    m.def("rnea_grad(Tensor q, Tensor qd, float gravity) -> Tensor");
+    m.def("forward_dynamics_grad(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
+    m.def("idsva_so(Tensor q, Tensor qd, float gravity) -> Tensor");
+    m.def("fdsva_so(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
+    m.def("integrator(Tensor q, Tensor qd, Tensor u, float dt, int it, float gravity) -> Tensor");
+    m.def("integrator_gradient(Tensor q, Tensor qd, Tensor u, float dt, int it, float gravity) -> Tensor");
+}
+
+GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+    m.impl("rnea", torch_rnea);
+    m.impl("minv", torch_minv);
+    m.impl("forward_dynamics", torch_forward_dynamics);
+    m.impl("aba", torch_aba);
+    m.impl("crba", torch_crba);
+    m.impl("end_effector_pose", torch_end_effector_pose);
+    m.impl("end_effector_pose_gradient", torch_end_effector_pose_gradient);
+    m.impl("end_effector_pose_hessian", torch_end_effector_pose_hessian);
+    m.impl("rnea_grad", torch_rnea_grad);
+    m.impl("forward_dynamics_grad", torch_forward_dynamics_grad);
+    m.impl("idsva_so", torch_idsva_so);
+    m.impl("fdsva_so", torch_fdsva_so);
+    m.impl("integrator", torch_integrator);
+    m.impl("integrator_gradient", torch_integrator_gradient);
+}
+
+#endif  // GRID_RBD_WITH_TORCH

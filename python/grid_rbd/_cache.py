@@ -85,6 +85,17 @@ def _wrapper_template_hash() -> str:
         return ""
 
 
+def _torch_abi_tag() -> str:
+    """Torch version + CXX11-ABI tag, mixed into the cache key so a torch-aware
+    .so isn't reused across incompatible torch ABIs. Empty when torch is absent
+    (a no-torch build is valid and shouldn't carry a torch tag)."""
+    try:
+        import torch
+        return f"torch={torch.__version__},cxxabi={int(torch._C._GLIBCXX_USE_CXX11_ABI)}"
+    except Exception:
+        return ""
+
+
 def canonical_options(options: dict[str, Any]) -> str:
     """Canonical JSON serialization of compile options for hashing.
 
@@ -104,6 +115,10 @@ def compute_cache_key(urdf_bytes: bytes, options: dict[str, Any], cuda_arch: int
     h.update(f"arch={cuda_arch}".encode())
     h.update(f"grid_rbd={package_version()}".encode())
     h.update(f"wrapper={_wrapper_template_hash()}".encode())
+    # Mix in the torch ABI tag so a torch-aware build isn't reused under an
+    # incompatible torch version (the TORCH_LIBRARY symbols bake in the ABI).
+    # Empty string when torch is absent → no effect on no-torch builds.
+    h.update(f"{_torch_abi_tag()}".encode())
     return h.hexdigest()
 
 

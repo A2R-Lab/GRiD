@@ -31,6 +31,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 
 namespace py = pybind11;
 
@@ -59,6 +60,19 @@ extern "C" {
     //    the standard 9.81 constant baked in the wrapper)
     using fn_integrator_t   = int (*)(const float*, const float*, const float*,
                                       float*, int, float, float, int);
+    // grid_plant C ABI (G1 binding layer)
+    // quadratic cost: (var, des, w, out, grad, hess, batch)
+    using fn_plant_cost_t   = int (*)(const float*, const float*, const float*,
+                                      float*, float*, float*, int);
+    // barrier: (var, lower, upper, mu, out, grad, hess_diag, batch)
+    using fn_plant_barrier_t = int (*)(const float*, const float*, const float*, float,
+                                       float*, float*, float*, int);
+    // plant_step: (x, u, x_kp1, batch, gravity, dt, it)
+    using fn_plant_step_t   = int (*)(const float*, const float*, float*,
+                                      int, float, float, int);
+    // ee_pos_cost: (q, p_des, W, out, grad, hess, batch)
+    using fn_plant_ee_t     = int (*)(const float*, const float*, const float*,
+                                      float*, float*, float*, int);
 }
 
 
@@ -100,6 +114,17 @@ public:
         fn_fdsva_so_         = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_fdsva_so"));
         fn_integrator_       = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator"));
         fn_integrator_grad_  = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator_gradient"));
+
+        // grid_plant C ABI (G1) — OPTIONAL: resolve if present (older .so files
+        // built before the plant surface won't have them; the handle methods
+        // raise a clear error at call time if the symbol is null).
+        fn_plant_state_cost_ = reinterpret_cast<fn_plant_cost_t>(opt_sym("grid_plant_quadratic_state_cost"));
+        fn_plant_input_cost_ = reinterpret_cast<fn_plant_cost_t>(opt_sym("grid_plant_quadratic_input_cost"));
+        fn_plant_pos_barrier_ = reinterpret_cast<fn_plant_barrier_t>(opt_sym("grid_plant_joint_position_barrier"));
+        fn_plant_vel_barrier_ = reinterpret_cast<fn_plant_barrier_t>(opt_sym("grid_plant_joint_velocity_barrier"));
+        fn_plant_tor_barrier_ = reinterpret_cast<fn_plant_barrier_t>(opt_sym("grid_plant_joint_torque_barrier"));
+        fn_plant_step_       = reinterpret_cast<fn_plant_step_t>(opt_sym("grid_plant_step"));
+        fn_plant_ee_cost_    = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_plant_ee_pos_cost"));
 
         // Cache constants (avoid the indirect-function-call cost on every read).
         num_joints_ = fn_num_joints_();
@@ -420,6 +445,146 @@ public:
         return out;
     }
 
+    // ─── grid_plant surface (G1 binding layer) ───────────────────────────────
+    //
+    // Each returns a tuple (value, grad, hess[/hess_diag]). value is (batch,);
+    // grad/hess shapes depend on the cost. The plant kernels are emitted in the
+    // grid_plant namespace; symbols are optional (raise if the .so lacks them).
+
+    void require_plant(void* fn, const char* name) const {
+        if (!fn) throw std::runtime_error(
+            std::string("this robot .so does not export ") + name +
+            " (grid_plant surface not generated for it). Re-register with a "
+            "build that includes the plant namespace.");
+    }
+
+    // quadratic cost (state or input). var/des/w are (batch, N).
+    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    plant_quadratic_cost(fn_plant_cost_t fn, const char* name,
+        py::array_t<float, py::array::c_style | py::array::forcecast> var,
+        py::array_t<float, py::array::c_style | py::array::forcecast> des,
+        py::array_t<float, py::array::c_style | py::array::forcecast> w,
+        int N)
+    {
+        require_plant((void*)fn, name);
+        if (var.ndim() != 2 || var.shape(1) != N)
+            throw std::invalid_argument(std::string(name) + ": var must be (batch, " + std::to_string(N) + ")");
+        int batch = (int)var.shape(0);
+        if (batch > max_batch_) throw std::invalid_argument(std::string(name) + ": batch > max_batch");
+        check_array_2d(des, batch, N, "des");
+        check_array_2d(w, batch, N, "weight");
+        py::array_t<float> out({batch});
+        py::array_t<float> grad({batch, N});
+        py::array_t<float> hess({batch, N, N});
+        int rc = fn(var.data(), des.data(), w.data(),
+                    out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error(std::string(name) + " failed: rc=" + std::to_string(rc));
+        return {out, grad, hess};
+    }
+
+    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    quadratic_state_cost(
+        py::array_t<float, py::array::c_style | py::array::forcecast> x,
+        py::array_t<float, py::array::c_style | py::array::forcecast> x_des,
+        py::array_t<float, py::array::c_style | py::array::forcecast> Q)
+    { return plant_quadratic_cost(fn_plant_state_cost_, "quadratic_state_cost", x, x_des, Q, num_joints_ + num_vel_); }
+
+    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    quadratic_input_cost(
+        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+        py::array_t<float, py::array::c_style | py::array::forcecast> u_des,
+        py::array_t<float, py::array::c_style | py::array::forcecast> R)
+    { return plant_quadratic_cost(fn_plant_input_cost_, "quadratic_input_cost", u, u_des, R, num_vel_); }
+
+    // barrier (position/velocity/torque). var/lower/upper are (batch, N).
+    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    plant_barrier(fn_plant_barrier_t fn, const char* name,
+        py::array_t<float, py::array::c_style | py::array::forcecast> var,
+        py::array_t<float, py::array::c_style | py::array::forcecast> lower,
+        py::array_t<float, py::array::c_style | py::array::forcecast> upper,
+        float mu, int N)
+    {
+        require_plant((void*)fn, name);
+        if (var.ndim() != 2 || var.shape(1) != N)
+            throw std::invalid_argument(std::string(name) + ": var must be (batch, " + std::to_string(N) + ")");
+        int batch = (int)var.shape(0);
+        if (batch > max_batch_) throw std::invalid_argument(std::string(name) + ": batch > max_batch");
+        check_array_2d(lower, batch, N, "lower");
+        check_array_2d(upper, batch, N, "upper");
+        py::array_t<float> out({batch});
+        py::array_t<float> grad({batch, N});
+        py::array_t<float> hess_diag({batch, N});
+        int rc = fn(var.data(), lower.data(), upper.data(), mu,
+                    out.mutable_data(), grad.mutable_data(), hess_diag.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error(std::string(name) + " failed: rc=" + std::to_string(rc));
+        return {out, grad, hess_diag};
+    }
+
+    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    joint_position_barrier(
+        py::array_t<float, py::array::c_style | py::array::forcecast> var,
+        py::array_t<float, py::array::c_style | py::array::forcecast> lower,
+        py::array_t<float, py::array::c_style | py::array::forcecast> upper, float mu)
+    { return plant_barrier(fn_plant_pos_barrier_, "joint_position_barrier", var, lower, upper, mu, num_joints_); }
+
+    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    joint_velocity_barrier(
+        py::array_t<float, py::array::c_style | py::array::forcecast> var,
+        py::array_t<float, py::array::c_style | py::array::forcecast> lower,
+        py::array_t<float, py::array::c_style | py::array::forcecast> upper, float mu)
+    { return plant_barrier(fn_plant_vel_barrier_, "joint_velocity_barrier", var, lower, upper, mu, num_vel_); }
+
+    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    joint_torque_barrier(
+        py::array_t<float, py::array::c_style | py::array::forcecast> var,
+        py::array_t<float, py::array::c_style | py::array::forcecast> lower,
+        py::array_t<float, py::array::c_style | py::array::forcecast> upper, float mu)
+    { return plant_barrier(fn_plant_tor_barrier_, "joint_torque_barrier", var, lower, upper, mu, num_vel_); }
+
+    // plant_step: x (batch, NX), u (batch, NV) -> x_kp1 (batch, NX).
+    py::array_t<float> plant_step(
+        py::array_t<float, py::array::c_style | py::array::forcecast> x,
+        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+        float dt, int it, float gravity)
+    {
+        require_plant((void*)fn_plant_step_, "plant_step");
+        int nx = num_joints_ + num_vel_;
+        if (x.ndim() != 2 || x.shape(1) != nx)
+            throw std::invalid_argument("plant_step: x must be (batch, " + std::to_string(nx) + ")");
+        int batch = (int)x.shape(0);
+        if (batch > max_batch_) throw std::invalid_argument("plant_step: batch > max_batch");
+        check_array_2d(u, batch, num_vel_, "u");
+        py::array_t<float> out({batch, nx});
+        int rc = fn_plant_step_(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
+        if (rc != 0) throw std::runtime_error("plant_step failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // ee_pos_cost: q (batch, NQ), p_des (batch, 3), W (batch, 3)
+    // -> (value (batch,), grad_x (batch, NX), hess_x (batch, NX, NX)).
+    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    ee_pos_cost(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        py::array_t<float, py::array::c_style | py::array::forcecast> p_des,
+        py::array_t<float, py::array::c_style | py::array::forcecast> W)
+    {
+        require_plant((void*)fn_plant_ee_cost_, "ee_pos_cost");
+        int nx = num_joints_ + num_vel_;
+        if (q.ndim() != 2 || q.shape(1) != num_joints_)
+            throw std::invalid_argument("ee_pos_cost: q must be (batch, " + std::to_string(num_joints_) + ")");
+        int batch = (int)q.shape(0);
+        if (batch > max_batch_) throw std::invalid_argument("ee_pos_cost: batch > max_batch");
+        check_array_2d(p_des, batch, 3, "p_des");
+        check_array_2d(W, batch, 3, "W");
+        py::array_t<float> out({batch});
+        py::array_t<float> grad({batch, nx});
+        py::array_t<float> hess({batch, nx, nx});
+        int rc = fn_plant_ee_cost_(q.data(), p_des.data(), W.data(),
+                                   out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("ee_pos_cost failed: rc=" + std::to_string(rc));
+        return {out, grad, hess};
+    }
+
 private:
     void* require_sym(const char* name) {
         dlerror();  // clear errors
@@ -429,6 +594,15 @@ private:
             throw std::runtime_error(
                 std::string("missing symbol ") + name + " in robot .so: " + err);
         }
+        return sym;
+    }
+
+    // Optional symbol: returns nullptr if absent (no throw). Used for the
+    // grid_plant ABI, which an older .so may not export.
+    void* opt_sym(const char* name) {
+        dlerror();
+        void* sym = dlsym(handle_, name);
+        (void)dlerror();
         return sym;
     }
 
@@ -488,6 +662,14 @@ private:
     fn_fd_t    fn_fdsva_so_       = nullptr;
     fn_integrator_t fn_integrator_      = nullptr;
     fn_integrator_t fn_integrator_grad_ = nullptr;
+    // grid_plant surface (optional symbols)
+    fn_plant_cost_t    fn_plant_state_cost_  = nullptr;
+    fn_plant_cost_t    fn_plant_input_cost_  = nullptr;
+    fn_plant_barrier_t fn_plant_pos_barrier_ = nullptr;
+    fn_plant_barrier_t fn_plant_vel_barrier_ = nullptr;
+    fn_plant_barrier_t fn_plant_tor_barrier_ = nullptr;
+    fn_plant_step_t    fn_plant_step_        = nullptr;
+    fn_plant_ee_t      fn_plant_ee_cost_     = nullptr;
 
     int num_joints_ = 0;
     int num_vel_    = 0;
@@ -556,5 +738,21 @@ PYBIND11_MODULE(_core, m) {
              py::arg("dt"), py::arg("it") = 0, py::arg("gravity") = 9.81f)
         .def("integrator_gradient", &Runner::integrator_gradient,
              py::arg("q"), py::arg("qd"), py::arg("u"),
-             py::arg("dt"), py::arg("it") = 0, py::arg("gravity") = 9.81f);
+             py::arg("dt"), py::arg("it") = 0, py::arg("gravity") = 9.81f)
+        // ─── grid_plant surface (G1) ──────────────────────────────────────
+        .def("quadratic_state_cost", &Runner::quadratic_state_cost,
+             py::arg("x"), py::arg("x_des"), py::arg("Q"))
+        .def("quadratic_input_cost", &Runner::quadratic_input_cost,
+             py::arg("u"), py::arg("u_des"), py::arg("R"))
+        .def("joint_position_barrier", &Runner::joint_position_barrier,
+             py::arg("var"), py::arg("lower"), py::arg("upper"), py::arg("mu"))
+        .def("joint_velocity_barrier", &Runner::joint_velocity_barrier,
+             py::arg("var"), py::arg("lower"), py::arg("upper"), py::arg("mu"))
+        .def("joint_torque_barrier", &Runner::joint_torque_barrier,
+             py::arg("var"), py::arg("lower"), py::arg("upper"), py::arg("mu"))
+        .def("plant_step", &Runner::plant_step,
+             py::arg("x"), py::arg("u"), py::arg("dt"),
+             py::arg("it") = 0, py::arg("gravity") = 9.81f)
+        .def("ee_pos_cost", &Runner::ee_pos_cost,
+             py::arg("q"), py::arg("p_des"), py::arg("W"));
 }

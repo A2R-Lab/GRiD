@@ -151,6 +151,27 @@ def _jax_ffi_include_dir() -> Path | None:
         return None
 
 
+def _torch_build_flags() -> dict | None:
+    """Return torch include/lib paths + ABI flag if torch is installed, else None.
+
+    Mirrors _jax_ffi_include_dir(): the torch custom-op headers
+    (torch/extension.h) bake the torch C++ ABI into the .so, so we must use
+    torch's own include paths AND its _GLIBCXX_USE_CXX11_ABI setting, or the
+    TORCH_LIBRARY symbols won't be ABI-compatible at torch.ops.load_library().
+    """
+    try:
+        import torch
+        from torch.utils.cpp_extension import include_paths, library_paths
+        return {
+            "includes": [Path(p) for p in include_paths()],
+            "libdirs": [Path(p) for p in library_paths()],
+            "cxx11_abi": int(torch._C._GLIBCXX_USE_CXX11_ABI),
+            "version": torch.__version__,
+        }
+    except Exception:
+        return None
+
+
 def compile_so(
     wrapper_cu: Path,
     out_so: Path,
@@ -159,6 +180,8 @@ def compile_so(
     glass_root: Path | None = None,
     extra_flags: list[str] | None = None,
     enable_jax_ffi: bool = True,
+    enable_torch: bool = True,
+    torch_op_key: str | None = None,
 ) -> None:
     """Invoke nvcc to build wrapper.cu → robot.so.
 
@@ -193,6 +216,27 @@ def compile_so(
                 f"-I{jax_inc}",
                 "--expt-relaxed-constexpr",  # required by xla/ffi/api headers
             ])
+
+    # PyTorch custom ops: optionally enabled. When torch is available, point
+    # nvcc at its include/lib dirs, match its CXX11 ABI, and define
+    # GRID_RBD_WITH_TORCH so the wrapper emits its op block. The op-library
+    # name is keyed by the cache_key so two robots don't collide.
+    if enable_torch:
+        tflags = _torch_build_flags()
+        if tflags is not None:
+            cmd.append("-DGRID_RBD_WITH_TORCH=1")
+            for inc in tflags["includes"]:
+                cmd.append(f"-I{inc}")
+            for ld in tflags["libdirs"]:
+                # -rpath must go through the linker (nvcc rejects bare -Wl,...).
+                cmd.extend([f"-L{ld}", "-Xlinker", f"-rpath,{ld}"])
+            cmd.extend(["-ltorch", "-ltorch_cpu", "-ltorch_cuda", "-lc10", "-lc10_cuda"])
+            cmd.append(f"-D_GLIBCXX_USE_CXX11_ABI={tflags['cxx11_abi']}")
+            if "--expt-relaxed-constexpr" not in cmd:
+                cmd.append("--expt-relaxed-constexpr")
+            key = (torch_op_key or "default")
+            # op-namespace token must be a valid C identifier (hex prefix is).
+            cmd.append(f"-DGRID_RBD_TORCH_KEY={key}")
 
     if extra_flags:
         cmd.extend(extra_flags)
@@ -235,8 +279,13 @@ def generate_and_compile(
         glass_root = root / "GLASS"
 
     so_path = target_dir / "robot.so"
+    # The torch op-library namespace is keyed by the cache_key (== entry dir
+    # name) so two robots registered in one process don't collide on op names.
+    # Prefix with 'k' to guarantee a valid C identifier (hex may start 0-9).
+    torch_op_key = "k" + target_dir.name[:12]
     compile_so(wrapper_cu, so_path, cuda_arch=cuda_arch,
-               max_batch=max_batch, glass_root=glass_root)
+               max_batch=max_batch, glass_root=glass_root,
+               torch_op_key=torch_op_key)
 
     # Persist meta.json
     meta["cuda_arch"] = cuda_arch

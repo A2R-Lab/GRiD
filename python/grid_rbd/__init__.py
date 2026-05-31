@@ -34,7 +34,7 @@ from ._compile import generate_and_compile
 from ._handle import RobotHandle
 
 
-__version__ = "0.1.0"
+__version__ = "0.4.0"
 
 
 class RobotNotRegisteredError(KeyError):
@@ -53,14 +53,16 @@ class RobotNotRegisteredError(KeyError):
 
 def register_robot(
     name: str,
-    urdf_path: str,
+    urdf_path: str | None = None,
     *,
+    urdf_string: str | None = None,
     floating_base: bool = False,
     ee_joint_names: list[str] | tuple[str, ...] | None = None,
     max_batch_size: int = 256,
     cache_dir: str | Path | None = None,
     force_rebuild: bool = False,
     cuda_arch: int | None = None,
+    backend: str = "numpy",
 ) -> RobotHandle:
     """Register a robot for fast subsequent calls.
 
@@ -75,8 +77,17 @@ def register_robot(
         Human-friendly handle name. Re-registering under the same name with
         a different URDF overwrites the binding (the old .so lingers in the
         cache for manual GC).
-    urdf_path : str
-        Path to the robot's URDF file.
+    urdf_path : str | None
+        Path to the robot's URDF file. Mutually exclusive with urdf_string.
+    urdf_string : str | None, optional
+        Inline URDF text (no file on disk). Mutually exclusive with urdf_path.
+        The cache key hashes the URDF bytes, so an inline string and the
+        equivalent file dedupe to the same compiled .so. The string is
+        persisted as entry_dir/robot.urdf for re-runs / debugging.
+    backend : str, optional
+        "numpy" (default) → a numpy RobotHandle; "jax" → a JaxRobotHandle
+        (grid_rbd.jax); "torch" → a TorchRobotHandle (grid_rbd.torch). The
+        jax/torch backends forward to their submodule's register_robot.
     floating_base : bool, optional
         Treat the robot as floating-base. Default False (fixed-base).
     ee_joint_names : list[str] | None, optional
@@ -102,13 +113,37 @@ def register_robot(
     RobotHandle
         Ready for forward_dynamics / rnea / minv / etc.
     """
+    if backend not in ("numpy", "jax", "torch"):
+        raise ValueError(f"backend must be 'numpy', 'jax', or 'torch'; got {backend!r}")
+    if backend == "jax":
+        from . import jax as _jax_backend
+        return _jax_backend.register_robot(
+            name, urdf_path, urdf_string=urdf_string, floating_base=floating_base,
+            ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
+            cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch)
+    if backend == "torch":
+        from . import torch as _torch_backend
+        return _torch_backend.register_robot(
+            name, urdf_path, urdf_string=urdf_string, floating_base=floating_base,
+            ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
+            cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch)
+
     cache_dir = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    urdf_p = Path(urdf_path).expanduser().resolve()
-    if not urdf_p.exists():
-        raise FileNotFoundError(f"URDF not found: {urdf_p}")
-    urdf_bytes = urdf_p.read_bytes()
+    # Source the URDF bytes from either an inline string or a file. The cache
+    # key hashes these bytes (compute_cache_key), so an inline string and the
+    # equivalent file dedupe to the same .so automatically.
+    if (urdf_path is None) == (urdf_string is None):
+        raise ValueError("pass exactly one of urdf_path= or urdf_string=")
+    urdf_p: Path | None = None
+    if urdf_string is not None:
+        urdf_bytes = urdf_string.encode("utf-8")
+    else:
+        urdf_p = Path(urdf_path).expanduser().resolve()
+        if not urdf_p.exists():
+            raise FileNotFoundError(f"URDF not found: {urdf_p}")
+        urdf_bytes = urdf_p.read_bytes()
 
     if cuda_arch is None:
         cuda_arch = detect_cuda_arch()
@@ -129,8 +164,17 @@ def register_robot(
     so_path = entry_dir / "robot.so"
 
     if force_rebuild or not so_path.exists():
+        # generate_and_compile takes a Path. For an inline URDF, persist the
+        # string under entry_dir/robot.urdf (visible for re-runs / debugging)
+        # and pass that path. The cache key is computed from the string bytes,
+        # not the path, so the path doesn't leak into the key.
+        gen_urdf_path = urdf_p
+        if urdf_string is not None:
+            entry_dir.mkdir(parents=True, exist_ok=True)
+            gen_urdf_path = entry_dir / "robot.urdf"
+            gen_urdf_path.write_text(urdf_string)
         meta = generate_and_compile(
-            urdf_p, code_options, entry_dir,
+            gen_urdf_path, code_options, entry_dir,
             cuda_arch=cuda_arch, max_batch=max_batch_size,
         )
     else:

@@ -379,8 +379,9 @@ class JaxRobotHandle:
 
 def register_robot(
     name: str,
-    urdf_path: str,
+    urdf_path: str | None = None,
     *,
+    urdf_string: str | None = None,
     floating_base: bool = False,
     ee_joint_names: list[str] | tuple[str, ...] | None = None,
     max_batch_size: int = 256,
@@ -400,6 +401,7 @@ def register_robot(
     base = _grid_rbd.register_robot(
         name=name,
         urdf_path=urdf_path,
+        urdf_string=urdf_string,
         floating_base=floating_base,
         ee_joint_names=ee_joint_names,
         max_batch_size=max_batch_size,
