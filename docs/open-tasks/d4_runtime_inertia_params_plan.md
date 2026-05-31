@@ -1,10 +1,66 @@
 # D.4 — Runtime mass/inertia parameters (two-variant emit) — implementation plan
 
-**Status:** planning (read-only exploration done 2026-05-30, branch `modernizing-tests`).
+**Status:** planning (read-only exploration done 2026-05-30; refreshed 2026-05-31
+after E1 landed). The runtime-inertia CORE (§0–§7) is STILL plan-only — it touches
+core inertia handling broadly and would conflict with in-flight agents; do NOT
+implement it yet. The regressor sub-thread (§G) has LANDED independently as E1
+(see the "E1 — LANDED" box below); §G is kept as design context + records what the
+implementation actually chose.
 **Goal:** Add a codegen variant that reads each link's mass/inertia as RUNTIME inputs
 (so users can do system-ID / domain-randomization / payload changes WITHOUT
 regenerating + recompiling the per-robot header), while KEEPING the existing fast
 baked-constant path. Selectable by a codegen flag and a kernel-side template bool.
+
+---
+
+## E1 — joint-torque regressor: LANDED (2026-05-31, branch `i-regressor`)
+
+The joint-torque regressor `Y(q,q̇,q̈)` (`tau = Y·π`, `Y = ∂tau/∂π`) is now emitted
+as a standalone GRiD CUDA algorithm, validated against the verified numpy
+reference `RBDReference._RegressorMixin` (and through it, pinocchio) on iiwa14
+(fixed, rel err ~1.5e-7) and g1 (floating, rel err ~3.5e-7).
+
+**What it added (all ADDITIVE; no core-inertia change — it does NOT depend on the
+D.4 runtime path):**
+- `GRiDCodeGenerator/algorithms/_regressor.py` — the full
+  inner/device/kernel/host family `inverse_dynamics_regressor*`.
+- registry: `algo_registry.py` `regressor` entry; `GRiDCodeGenerator.py`
+  function imports, `regressor_t_count` + `INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES`
+  macro, kernel-attr manifest entry (opt-in >48 KB smem), `gen_all_code` dispatch,
+  `_normalize_codegen_algorithms` (`regressor` key + `regressor` profile + aliases).
+- test: `test/cuda_equivalents/test_cuda_regressor.py` + `cuda_regressor_smoke_runner.cu`.
+
+**Basis chosen (load-bearing for any future param-gradient work, §G.5):** the
+emit uses the URDF/GRiD basis `π_i = [m, h(3)=m·c, I_O(6)=[Ixx,Ixy,Ixz,Iyy,Iyz,Izz]]`,
+[angular; linear] spatial order — IDENTICAL to `_RegressorMixin` and to what a
+future D.4 runtime buffer should store (§2a). It is NOT pinocchio's I-ordering
+`[Ixx,Ixy,Iyy,Ixz,Iyz,Izz]`; the pinocchio backend applies the 6×6 permutation
+`P`. **If D.4 later stores runtime params, store them in THIS basis so the
+regressor `Y` columns and the runtime forward buffer share one order** (closes
+the §G.5 / §G.9 finite-difference cross-check by construction).
+
+**Implementation notes that differ from / sharpen §G:**
+- Output is `nv × 10*NUM_BODIES`, indexed by BODY id (mimic-agnostic, §G.9). It is
+  NOT a `gridData` field — the host launcher takes an explicit caller-allocated
+  `d_Y` device pointer, keeping the `gridData` struct untouched (zero conflict
+  surface with other agents). A future bench wrapper can add a gridData slot.
+- The inner reuses the RNEA forward sweep via `inverse_dynamics_inner_vaf` (so it
+  REQUIRES `id` to be co-emitted; the `regressor` profile pulls in `{id, regressor}`).
+  Per-link 6×10 body regressor is built from `s_vaf` (v,a) and back-propagated up
+  the tree with a PER-THREAD X^Tf matvec (NOT the block-cooperative
+  `grid_linalg_gemv` — each thread owns one (link, param) column), then projected
+  onto each ancestor DOF with the same ±S / mimic-α selection RNEA uses for `s_c`.
+- The `dI_k` body-regressor columns are emitted as fixed sparse expressions from
+  the same 10 basis spatial-inertia matrices `_BASIS_I` the reference uses, so the
+  body regressor matches the reference to the ULP (only float32 accumulation order
+  differs). `crf(v)·(dI_k v)` reuses the existing `fx_times_v` helper (`crf=-crm^T`).
+- gravity sign: CUDA takes `+9.81` to match the reference `GRAVITY=-9.81` (the
+  established cuda_equivalents convention).
+- **Deferred:** the FD param-gradient `∂q̈/∂π = −M⁻¹Y` (§G.3/G.6) is NOT emitted yet
+  (needs `direct_minv` composition + a GEMM); mimic-robot CUDA validation of `Y`
+  is unverified (codegen succeeds for fr3, but no CUDA equivalence run — the numpy
+  ref IS mimic-aware and the emit mirrors it, so this is a validation gap, not a
+  known bug); CRBA/M regressor and 2nd-order param gradients remain backlog (§G.6).
 
 ---
 
