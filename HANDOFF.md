@@ -1313,6 +1313,62 @@ T3 (mimic codegen) → T5 (tier autotune) → T2 (perf gaps).
 
 ---
 
+## OPEN ITEMS — canonical prioritized backlog (2026-05-30)
+
+Single source of truth; supersedes the scattered "deferred" notes above. Detail in
+`docs/open-tasks/` (esp. `coverage_parity_matrix.md`, `library_capability_roadmap.md`).
+
+**A. Correctness bugs (tracked + gated; NOT silently passing)**
+- A1. **h1_2 branched-multi-root `inverse_dynamics` VALUE bug** *(top item)* — ID diverges
+  (norm_rel ~69, c[2]) on the 3-root (0/6/12) topology; corrupts id/fd/aba/id_du/fd_du.
+  fr3 (single-root) passes; pin+RBDReference agree. Gated per-(robot,algo) KNOWN-FAILING.
+  Needs device-level debugging of the force-propagation value path.
+- A2. **d2ee (`ee_pose_hessian`) orientation-hessian bug** — CUDA+analytic share it; in
+  `KNOWN_FAILING_ALGORITHMS`; pin-parity scoped to {iiwa14, fr3}.
+
+**B. Mimic codegen incomplete (T3-finisher landed P3 fixed-base only)**
+- B1. floating+mimic gradients (id_du/fd_du refuse floating mimic).
+- B2. P4 mimic: `ee_pose_gradient` α-accumulate implemented but still refused (paired with
+  `ee_pose_hessian`, unfolded); `idsva_so`/`fdsva_so` mimic not done.
+
+**C. G2 features that landed partial**
+- C1. f_ext `−∂Jᵀ/∂q` GPU emit (§A.3) — FD-loop bug; numpy+pin oracle ships+tested.
+- C2. centroidal derivatives `∂h/∂q` — value layer done.
+- C3. Coriolis matrix fixed-base only (raises on floating).
+
+**D. Test-coverage gaps (IN PROGRESS — the immediate work)**
+- D1. CUDA-equivalence tests MISSING: dedicated `f_ext_gradient` algo, 5 centroidal device
+  kernels, `com_cost`/`momentum_cost`, warp/thread/batched FK (validated ad-hoc, no
+  committed test). [com/momentum numpy refs + gen3 f_ext comparator: DONE.]
+
+**E. Roadmap — planned, not started (`docs/open-tasks/`)**
+- E1. D.4 runtime inertia params (two-variant emit) + sysID regressor CUDA emit (numpy ref exists).
+- E2. R4 general frame Jacobians (LOCAL/WORLD/aligned + J̇); R5 OSC / Λ=(JM⁻¹Jᵀ)⁻¹ (M⁻¹Jᵀ landed).
+- E3. **Contact/constraint dynamics** (constraint Jac, KKT/Delassus, constrained FD, impulse) — biggest moat vs frax.
+- E4. More joint types (continuous-verify/planar/spherical/helical/translation/composite, cheap-first) + URDFParser print+exit→typed exception.
+- E5. Notebook examples (now unblocked: D.3 torch + grid_plant Python surface landed).
+- E6. PyTorch f_ext on the `grid_rbd` handle (d_f_ext is CUDA-only today).
+
+**F. B+C cleanup remainder (consolidation landed in G1; rest deferred)**
+- F1. D.5 RBDReference file-split (mixin map written: `rbdreference_split_plan.md`).
+- F2. Naming/uniformity residuals; warnings sweep (`mxS` NumPy `ndim>0` + nvcc/ptxas);
+  comprehensive perf re-sweep.
+- F3. T5 propose-only: autotuned best-tier → per-robot codegen defaults; LITE-aliases-SHARED
+  launch_bounds for no-smem-spill algos (deeper A.7 fix).
+
+**G. Housekeeping**
+- G1. NOT pushed to origin (whole F+G stack local).
+- G2. A few register-pressure / smem-cap thread-count skips (fr3-floating max-threads; h1_2 168KB SO).
+
+**API STABILITY NOTE:** the core/benchmarked algorithm signatures are STABLE now — the only
+signature churn (T4 `d_f_ext`, T5 `TIER_PERF`→`TIER_SHARED`+alias) is DONE+landed, and the B+C
+consolidation was byte-identical. Remaining work is additive (new algos: centroidal/f_ext-grad/
+frame-Jac/OSC/contact), internal bug-fixes (no signature change), or — the ONE deliberate
+API-changer — the F2 naming/uniformity pass (renames for consistency, perf-neutral). So a perf
+sweep on the current green tree stays valid through the remaining work.
+
+---
+
 Scope chosen by user: all four feature tasks + **B+C consolidation FIRST**. Sequencing
 resolves "T3-finisher mandatory-first" vs "consolidate-first" by splitting the footgun
 fix (immediate) from the full mimic-gradient implementation (after consolidation).
