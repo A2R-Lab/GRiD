@@ -1,8 +1,15 @@
 # d²(pose)/dv² analytic derivation — closed-form algorithm
 
-**Status (2026-05-29):** Math complete and validated. The analytic d²(pose)/dv²
-is implemented as `RBDReference.end_effector_pose_hessian_analytic` and matches
-the FD oracle (`end_effector_pose_hessian`) to ~1e-9 on iiwa14-fixed,
+**Status (2026-05-31):** Math complete and validated FLEET-WIDE. The analytic
+d²(pose)/dv² is implemented as `RBDReference.end_effector_pose_hessian_analytic`
+and matches BOTH the FD oracle (`end_effector_pose_hessian`) AND pinocchio's
+analytic `getJointKinematicHessian(LOCAL_WORLD_ALIGNED)` to the FD-noise floor on
+EVERY manifest robot × base (iiwa14/go2/g1/h1_2/fr3/rizon4/gen3/fetch/baxter,
+fixed + floating, incl. mimic fr3/h1_2) — pin-parity widened accordingly (HANDOFF
+A2 resolved). The CUDA codegen mirrors this analytic path and is GREEN vs the
+pinocchio oracle. (The earlier "orientation-hessian bug" was in the now-retired
+analytic d²/dq² path; this d²/dv² derivation has no such bug.) Original 2026-05-29
+validation note: matched the FD oracle to ~1e-9 on iiwa14-fixed,
 iiwa14-floating, and go2-floating across 3 non-degenerate samples each. The
 single near-gimbal-lock sample (iiwa14 fixed sample 1, pitch ~87°) reduces from
 1.8e-5 to 1.6e-7 when the FD oracle drops h from 1e-5 to 1e-6, confirming the

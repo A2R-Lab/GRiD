@@ -1211,13 +1211,12 @@ def _expected_output(reference_model, project_model, sample, name: str):
             gradients.append(np.asarray(gradient, dtype=np.float64).reshape(-1, order="F"))
         return np.concatenate(gradients, axis=0).reshape(1, -1)
     if name == "end_effector_pose_hessian":
-        # d2ee uses the independent oracle too. The pinocchio backend's finite-diff
-        # of its own (matching) pose IS the ground truth here — it exposed that the
-        # analytic d2ee orientation rows (and the CUDA codegen that matches them) are
-        # wrong at non-small joint angles. We do NOT use the analytic d2ee as the
-        # oracle (it would mask the bug by comparing buggy-vs-buggy). d2ee is listed
-        # in KNOWN_FAILING_ALGORITHMS so its high-angle mismatches are reported as a
-        # tracked known bug rather than silently masked. See HANDOFF (d2ee bug).
+        # d2ee uses the independent pinocchio oracle (default backend). The pinocchio
+        # backend's d2ee is the analytic getJointKinematicHessian(LOCAL_WORLD_ALIGNED)
+        # -- a valid d/dv ground truth that agrees with the project analytic
+        # chain-composition d2(pose)/dv2 to the FD-noise floor fleet-wide (A2 resolved
+        # 2026-05-31). The CUDA codegen mirrors that analytic path; this comparison is
+        # genuine (independent oracle), no buggy-vs-buggy masking.
         hessians = []
         for jid in robot.get_leaf_nodes():
             target = robot.get_joint_by_id(jid).get_name()
@@ -1515,8 +1514,10 @@ def _run_cuda_equivalence_case(
     #    It defaults to the EXACT pinocchio backend (the C++ authority) and can be
     #    forced to the pure-Python reference via GRID_REFERENCE_BACKEND=reference (a
     #    debug fallback that re-enables buggy-vs-buggy masking, so avoid it for CI).
-    #    d2ee is listed in KNOWN_FAILING_ALGORITHMS: its high-angle mismatches are a
-    #    tracked known bug, reported (never silently masked) but non-fatal pending fix.
+    #    d2ee is now a HARD requirement (A2 resolved 2026-05-31): the pinocchio
+    #    backend's d2ee uses the analytic getJointKinematicHessian(LOCAL_WORLD_ALIGNED)
+    #    -- a valid d/dv oracle that agrees with the project analytic chain-composition
+    #    d2(pose)/dv2 fleet-wide -- so it is no longer in KNOWN_FAILING_ALGORITHMS.
     project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
     oracle_backend = resolve_backend(os.environ.get("GRID_REFERENCE_BACKEND", "pinocchio"))
     reference_model = (
@@ -1524,7 +1525,7 @@ def _run_cuda_equivalence_case(
         if oracle_backend == "reference"
         else build_adapter(spec, resolved, base_mode=base_mode, backend=oracle_backend)
     )
-    _progress(config, f"oracle backend={oracle_backend} (d2ee always analytic) for {spec.robot_id}-{base_mode}")
+    _progress(config, f"oracle backend={oracle_backend} for {spec.robot_id}-{base_mode}")
 
     if _model_inertia_is_degenerate(reference_model, project_model.nv):
         pytest.skip(
