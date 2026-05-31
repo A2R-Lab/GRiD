@@ -384,7 +384,69 @@ production SO path is world frame (unchanged) and the h1_2 body-frame smem-cap s
 stays. The body t/p de-alias closes the g1-class fixed-base gap; the world-frame surgical
 cold trio (already landed) covers the floating humanoids.
 
-### 2026-05-31 — fixed-base mimic SO (idsva_so / fdsva_so) — DEFERRED (bug localized)
+### 2026-05-31 — fixed-base mimic SO (idsva_so / fdsva_so) — LANDED (root-caused + fixed)
+
+**Status: FIXED.** The J-idsva internal-NB sweep strategy (described in the
+SUPERSEDED section below) was correct; the value bug was a single shared-helper
+modulus, not anything in the SO assembly, fold, arena, or inputs (all of which the
+prior session had already proven correct).
+
+**Root cause — the `matmul` helper's `% NUM_JOINTS` block wrap.**
+`gen_matmul` (`helpers/_lin_alg_helpers.py`) computed the per-block offset as
+`int cur = 36*((index/num)%NUM_JOINTS);`. The fixed-body idsva_so inner is the
+ONLY caller of `matmul`, and its IC forward build calls it over `36*NUM_BODIES`
+elements (`matmul<T>(i, Xup, I, I_Xup, 36, false)`). For a mimic robot
+`NUM_BODIES > NUM_JOINTS` (the extra mimic-sibling bodies), so the LAST mimic body
+(`index/36 == NUM_BODIES-1`) wrapped `% NUM_JOINTS` back to block 0 and computed
+`Xup[last] @ I[0]` — reading body 0's inertia instead of its own. That corrupted
+the mimic body's composite inertia `IC`, which then propagated up the entire
+backward IC accumulation (`IC[parent] += IC[child]`), corrupting EVERY body's
+`IC` → every D-matrix → all four output tensors GLOBALLY (exactly why the symptom
+looked un-localized: every `[0:7]^3` cell was wrong, not just body-8 rows). For
+fr3: `NUM_JOINTS=8`, `NUM_BODIES=9`, so body 8 (the finger mimic) wrapped to 0.
+
+**Fix:** `% NUM_JOINTS` → `% NUM_BODIES` in `gen_matmul`. `matmul` is used only by
+`_idsva_so.py` (the two Xup call sites pass `index/num == 0`, so the modulus is a
+no-op there; only the IC build exercises the wrap). `NUM_BODIES == NUM_JOINTS` for
+every non-mimic fixed robot, so the constant is numerically identical there
+(non-mimic SO output byte-for-byte unchanged; the generated text differs only by
+the macro token on that one line). MAIN-OWNED shared helper — **FLAG for reconcile.**
+
+How it was found (per the resume hint's cell-by-cell dump): the CUDA internal
+`4*NB^3` buffer diffed GLOBALLY vs the oracle internal ⇒ not an output-write bug.
+Forward-sweep dumps showed per-body `Xup[8]`/`I[8]`/`S[8]` all CORRECT but per-body
+LOCAL `IC[8]` (pre-accumulation) already wrong by ~160× ⇒ the `Xup[8] @ I[8]`
+matmul with correct inputs ⇒ the block index. Dumping `I_Xup[8]` confirmed it
+equalled `Xup[8] @ I[0]`, exposing the `% NUM_JOINTS` wrap.
+
+**Validation (RTX 5090 sm_120, vs `RBDReference.idsva_so_body_frame` =
+pin_so_ext-backed oracle, fresh-compiled clean cache):**
+* fr3-fixed idsva_so: GREEN at PERF (smem 43168 B, relmax 7.9e-7) AND a forced
+  spilled tier (`GRID_CUDA_TARGET_SHARED_MEM_BYTES=20000` → use_global_output,
+  smem 2912 B, relmax 7.9e-7), seeds 7/13/99, all 4 tensors at the fp32 noise floor.
+* fr3-fixed fdsva_so (composes the same inner): GREEN (relmax ~5e-6).
+* Gate-A: iiwa14-fixed + go2-fixed identical to the ec00b71 baseline except the
+  single `matmul` macro-token line (numerically identical; `NUM_BODIES==NUM_JOINTS`).
+* Non-mimic branched `fetch` (NB=NV=14, shared repair/D-matrix machinery): GREEN
+  (relmax 9e-7) — no regression.
+* Floating-base mimic SO stays REFUSED (floating root needs a per-root-DoF 6-DoF
+  subspace fold, not the scalar v-slot/alpha fold).
+
+**Mechanism (the strategy that was always correct):** inner temp sized by NB for
+mimic + a `4*NB^3` internal output slab; a function-local
+`const int SECOND_ORDER_COORDS = NUM_BODIES;` shadow retargets every output-stride
+site to the NB stride; output pointers repoint at the internal slab; qd/qdd reads
+fold `body_alpha[jid] * s_qd[body_vslot[jid]]` (fixes the legacy OOB
+`s_qd[body_id]`); after assembly a scatter-accumulate fold
+`public[v(i),v(j),v(k)] += a_i*a_j*a_k * internal[i,j,k]` (atomicAdd; mimic
+siblings collide on a public cell) reduces 4*NB^3 → 4*NV^3. `idsva_so_body_frame`/
+`fdsva_so` removed from the G0 mimic refusal set for FIXED-base (kept for floating).
+h1_2-fixed body SO is impractically large (4*NB^3, NB=51 ≈ 2.1M floats) so its
+production SO path stays world-frame; fr3 is the landed fixed-mimic case.
+
+---
+
+### 2026-05-31 — fixed-base mimic SO (idsva_so / fdsva_so) — DEFERRED (bug localized) [SUPERSEDED — root-caused + fixed above]
 
 Attempted fixed-base mimic support for the body-frame SO inner via the
 oracle-proven strategy (mirrors `RBDReference.idsva_so_body_frame`'s `has_mimic`

@@ -125,18 +125,27 @@ MIMIC_SUPPORTED_ALGORITHMS = {
     # skipped for floating mimic via MIMIC_FLOATING_UNSUPPORTED_GRADIENTS below.
     "end_effector_pose_gradient",
     "end_effector_pose_hessian",
+    # B2-SO (landed, FIXED-BASE): second-order idsva_so/fdsva_so via the per-body
+    # INTERNAL NUM_BODIES-coordinate sweep into a 4*NB^3 slab + alpha-R fold to the
+    # reduced 4*NV^3 public output. Floating-base mimic SO is still refused (needs a
+    # per-root-DoF 6-DoF subspace fold) and is skipped via the floating set below.
+    "idsva_so_body_frame",
+    "fdsva_so",
 }
 
 
 # Gradient algorithms that are in MIMIC_SUPPORTED_ALGORITHMS (so FIXED-base mimic
 # compares them) but are NOT yet emitted for FLOATING-base mimic robots. B1 landed
 # floating-base mimic id_du/fd_du; B2-ee FLOATING (2026-05-31) landed the floating
-# mimic ee pose grad/hessian. The floating root contributes 6 INDEPENDENT velocity
-# slots (vi 0..5) and so decomposes into 6 singleton single-column fills, NEVER a
-# shared-v-slot mimic group — the scalar-alpha mimic fold (Step 3b grad / Step 2
-# hess) operates orthogonally on the 1-DoF mimic joints, so floating + mimic ee
-# derivatives compose with no separate 6-DoF root fold. Nothing remains refused.
-MIMIC_FLOATING_UNSUPPORTED_GRADIENTS = set()
+# mimic ee pose grad/hessian (the floating root's 6 INDEPENDENT velocity slots
+# decompose into singleton single-column fills, orthogonal to the 1-DoF mimic alpha
+# fold — nothing ee remains refused). B2-SO landed FIXED-base mimic second-order,
+# but FLOATING-base mimic idsva_so/fdsva_so stay refused (their floating root needs
+# a per-root-DoF 6-DoF subspace fold, not the scalar v-slot/alpha fold).
+MIMIC_FLOATING_UNSUPPORTED_GRADIENTS = {
+    "idsva_so_body_frame",
+    "fdsva_so",
+}
 
 
 def _robot_has_mimic_joints(project_model) -> bool:
@@ -158,6 +167,8 @@ MIMIC_CODEGEN_ALGORITHM_LIST = ["id", "crba", "ee_pose", "minv", "fd", "aba"]
 # refused, so floating uses the base list.
 MIMIC_CODEGEN_ALGORITHM_LIST_FIXED = MIMIC_CODEGEN_ALGORITHM_LIST + [
     "id_du", "fd_du", "ee_pose_gradient", "ee_pose_hessian",
+    # B2-SO: fixed-base mimic second-order (idsva_so body frame + fdsva_so).
+    "idsva_so_body_frame", "fdsva_so",
 ]
 # Floating-base mimic supports the ID/FD gradients (B1) AND the ee pose
 # grad/hessian (B2-ee FLOATING, 2026-05-31: the floating root decomposes into 6
