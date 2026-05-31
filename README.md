@@ -102,6 +102,12 @@ GRiD currently implements the following rigid body dynamics algorithms:
 + End-effector pose, pose gradient (Jacobian), and pose Hessian
 + Second-Order Inverse Dynamics (IDSVA-SO) from [Singh, Russell, & Wensing](https://arxiv.org/abs/2302.06001) — both body-frame and world-frame variants. A codegen-time dispatcher picks body-frame for fixed-base (multi-pass amortizes, ~30× faster) and world-frame for floating-base (single-pass + no gravity shim, 2–4× faster)
 + Second-Order Forward Dynamics (FDSVA-SO) from [Singh, Russell, & Wensing](https://arxiv.org/abs/2302.06001) on both fixed and floating bases
++ Optional per-body **external forces** (`f_ext`), threaded through RNEA, forward dynamics, ABA, and the inverse-/forward-dynamics gradients. Opt-in (a `nullptr`/empty default reproduces the no-force path exactly), supplied in the body-local frame (`6*NUM_BODIES`, body-major) and subtracted from the per-body force.
++ A trajectory-optimization-oriented **`grid_plant` layer** (emitted as a sibling `grid_plant` namespace): a `plant_step` integrator wrapper, quadratic state/input costs, an end-effector position cost (with Gauss-Newton Hessian), and joint position/velocity/torque log-barriers.
+
+`RBDReference` additionally provides numpy reference oracles — validated against [Pinocchio](https://github.com/stack-of-tasks/pinocchio) — for generalized gravity, nonlinear effects, kinetic/potential/mechanical energy, the Coriolis matrix, the centroidal quantities (CoM, CoM Jacobian, CCRBA, centroidal momentum), the joint-torque regressor, and the plant/cost/barrier layer above.
+
+**Mimic-joint support:** non-gradient algorithms (RNEA, forward dynamics, ABA, CRBA, …) work for robots with mimic joints; **gradient** codegen for mimic robots currently raises a clear `NotImplementedError` (no silently-zeroed gradients) — mimic gradients are on the roadmap.
 
 Additional algorithms and features are in development. If you have a particular algorithm or feature in mind please let us know by posting a GitHub issue. We'd also love your collaboration in implementing the Python reference implementation of any algorithm you'd like implemented!
 
@@ -112,6 +118,28 @@ shared-mem inputs), `*_device` (allocates scratch + calls `_inner`),
 host wrapper (CPU launcher with H↔D copies). See the
 [codegen architecture docs](docs/source/user_guide/concepts/codegen_architecture.rst)
 for the rationale and concrete signatures.
+
+## Python API (`grid-rbd`)
+
+For Python users the `grid-rbd` package (in [`python/`](python/)) wraps
+the per-robot codegen behind a register-then-run UX with `numpy`, `jax`,
+and `torch` backends:
+
+```python
+import grid_rbd
+
+# numpy (default), jax, or torch; urdf_string= also accepted instead of urdf_path
+handle = grid_rbd.register_robot("iiwa14", urdf_path="iiwa.urdf", backend="torch")
+
+qdd = handle.forward_dynamics(q, qd, u)   # autograd-aware torch.Tensor
+qdd.sum().backward()                      # gradients flow to q, qd, u
+```
+
+The `torch` backend exposes autograd-aware `rnea` / `forward_dynamics` /
+`aba` / `integrator` (analytic backward passes) plus CUDA-Graphs capture,
+and the handle also surfaces the `grid_plant` cost/barrier methods. See
+[`python/README.md`](python/README.md) and the
+[Python wrappers docs](docs/source/user_guide/tutorials/python_wrappers.rst).
 
 ## Citing GRiD
 To cite GRiD in your research, please use the following bibtex for our paper ["GRiD: GPU-Accelerated Rigid Body Dynamics with Analytical Gradients"](https://brianplancher.com/publication/grid/):
