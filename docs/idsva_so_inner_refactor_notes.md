@@ -446,6 +446,90 @@ production SO path stays world-frame; fr3 is the landed fixed-mimic case.
 
 ---
 
+### 2026-05-31 — FLOATING-base mimic SO (idsva_so / fdsva_so) — LANDED (world-frame)
+
+**Status: LANDED.** The last mimic-SO refusal (floating-base) is closed. The
+production floating SO path is the **WORLD frame** (the dispatcher routes all
+floating SO to `idsva_so_world_frame`), so the fold lives in the world-frame
+inner — NOT the fixed-base body inner's internal-NB sweep. The body-frame
+floating *reference shim* (`gen_idsva_so_body_frame_floating_reference_inner`)
+is deliberately left un-mimic'd: it is the documented NON-production diagnostic
+path (SO-AUDIT FLAG ~L1077) and is already numerically red for ALL floating
+robots incl. non-mimic iiwa14 (verified on the baseline branch), so it is not a
+valid oracle to fold against.
+
+**Mechanism (world-frame inner, `gen_idsva_so_world_frame_inner`):** the world
+inner already walks the triple ancestor recursion PER-VELOCITY-COLUMN of each
+body (so the floating root's 6 DoF are native — 6 columns), but keyed on the
+SHARED reduced v-slot, so mimic siblings clobber each other in the S/psid bands
+and collide on output cells. Fix mirrors `RBDReference.idsva_so_world_frame`'s
+`has_mimic` path EXACTLY:
+
+* `_idsva_so_floating_velocity_metadata` now also emits INTERNAL-coordinate
+  tables: `body_vint_index` (a UNIQUE internal slot 0..n_int-1 per body-velocity
+  column; n_int = total column count >= NV), `int_true_vel` (internal -> reduced
+  slot), `int_alpha` (internal -> mimic multiplier), `int_s_index/sign`.
+* In the inner, gated on `robot_has_mimic_joints()`: `SO_N` stride = `SO_N_INT`
+  (= n_int) instead of `NUM_VEL`; the S/Sd/psid/psidd bands size by n_int;
+  `wf_body_v_index` holds internal slots; `wf_vel_s_*` index by internal slot.
+  The forward sweep reads `alpha*qd[true]`, `alpha*qdd[true]`. The triple-walk
+  output writes + the final dvdq transpose use the `SO_N_INT` stride into a
+  `4*n_int^3` INTERNAL slab (anchored in the always-hot region, BEFORE the cold
+  trio, so the surgical COLD spill never disturbs it). After the transpose a
+  scatter-accumulate fold `public[true_i,true_j,true_k] += a_i*a_j*a_k *
+  internal[i,j,k]` (atomicAdd; siblings collide) reduces 4*n_int^3 -> 4*NV^3 —
+  exactly the oracle's `einsum('ia,ijk,jb,kc->abc', R, T, R, R)` with
+  `R[i, true(i)] = alpha_i`.
+* **The per-root-DoF fold is EMERGENT, not separate.** The floating root's 6
+  columns get 6 DISTINCT internal slots that fold identity (alpha=1) to reduced
+  slots 0..5. So the "per-root-DoF loop" the B1 id_du needs is automatically
+  achieved by the per-column internal slotting — no special 6-DoF root code.
+* Arena (`gen_idsva_so_world_frame_temp_mem_size`) grows by `4*n_int^3` + the
+  n_int-vs-NV band delta for mimic only.
+
+Non-mimic stays CHARACTER-IDENTICAL: every mimic branch is gated on
+`robot_has_mimic_joints()`; for non-mimic `SO_N == "NUM_VEL"`, no slab, no fold,
+no `SO_N_INT`/`wf_int_*` tables. Confirmed byte-identical headers for
+iiwa14/go2/g1 floating + iiwa14/go2 fixed; fr3-fixed differs only in the
+(forced-on, non-production) world-frame section, body-frame production untouched.
+
+**fdsva_so floating-mimic:** composes the (now-correct) world inner, so it needed
+no fdsva edit. It DID surface a pre-existing dependency bug: the mimic Minv path
+(`_direct_minv.py`) forward-declares + calls `crba_inner<T,true>` but
+`_normalize_codegen_algorithms` didn't pull in `crba` for `minv` on mimic robots
+(non-mimic Minv never touches crba), so fdsva_so floating-mimic hit `nvlink:
+unresolved extern crba_inner`. Fixed with a 1-line additive dep:
+`if "minv" in algorithms and self.robot_has_mimic_joints(): algorithms.add("crba")`
+(GCG.py, FLAGGED — non-mimic byte-identical). fdsva_so floating has NO
+independent equivalence oracle in the harness (the floating diagnostic only
+checks the idsva block via the broken body-shim; fixed-base does check fdsva),
+so its floating value-correctness rests on (a) the GREEN world idsva_so inner it
+consumes, (b) GREEN mimic minv/crba, (c) the GREEN fixed-base fr3 fdsva landing.
+
+**Validation (RTX 5090 sm_120, vs pin_so_ext oracle via
+`reference_model.idsva_so_body_frame`, fresh-compiled clean cache):**
+* fr3-floating world-frame idsva_so: GREEN at default PERF (smem ~52KB internal
+  slab fits) AND a forced spilled tier (`...TARGET_SHARED_BYTES=20000` ->
+  whole-arena -> d_workspace), samples zero/conservative + 3 random.
+* fr3-floating fdsva_so: compiles clean (crba dep), composes the GREEN inner.
+* Gate-A byte-identity: iiwa14/go2/g1 floating + iiwa14/go2 fixed idsva_so
+  headers + iiwa14-floating fdsva header IDENTICAL to the 15374aa baseline; fr3
+  body-frame production untouched. iiwa14/go2 floating world-frame GREEN;
+  fr3-fixed matmul-blockwrap (body-frame mimic SO sentinel) GREEN.
+* fr3-floating added to the world-frame test's default MIMIC SO coverage.
+* `idsva_so_body_frame`/`fdsva_so` removed from the FLOATING branch of
+  `_MIMIC_GRADIENT_ALGORITHMS` (GCG.py, FLAGGED additive ungate).
+
+**h1_2-floating feasibility:** NB=52, NV=45, n_int=57 -> internal slab alone =
+4*57^3 ≈ 741K floats (~2.9 MB), far beyond any smem budget (PERF=96KB) and the
+public 4*NV^3 (~1.4 MB). It can ONLY run via the whole-arena spill to global
+d_workspace, and the n_int^3 sweep + fold is impractically large/slow — same
+verdict as h1_2-fixed body SO. Not added to default coverage; production h1_2
+floating SO uses the (non-mimic-shaped... it IS mimic) world spill rung if ever
+needed, but is practically a non-target. fr3 is the landed floating-mimic case.
+
+---
+
 ### 2026-05-31 — fixed-base mimic SO (idsva_so / fdsva_so) — DEFERRED (bug localized) [SUPERSEDED — root-caused + fixed above]
 
 Attempted fixed-base mimic support for the body-frame SO inner via the

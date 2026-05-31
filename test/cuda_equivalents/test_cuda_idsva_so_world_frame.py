@@ -52,7 +52,11 @@ def _comma_separated_env(name: str, default: str) -> tuple[str, ...]:
 
 
 def _world_frame_robot_ids() -> tuple[str, ...]:
-    return _comma_separated_env("GRID_CUDA_IDSVA_SO_WORLD_FRAME_ROBOTS", "iiwa14,go2,g1")
+    # fr3 is the floating-base MIMIC sentinel: the world-frame inner runs the triple
+    # ancestor walk in per-column INTERNAL coordinates (the floating root's 6 DoF + the
+    # finger mimic's shared slot) into a 4*n_int^3 slab, then alpha-folds to the reduced
+    # 4*NV^3 output (mirrors RBDReference.idsva_so_world_frame's has_mimic path).
+    return _comma_separated_env("GRID_CUDA_IDSVA_SO_WORLD_FRAME_ROBOTS", "iiwa14,go2,g1,fr3")
 
 
 def _world_frame_target_shared_bytes() -> int:
