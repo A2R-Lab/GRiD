@@ -848,7 +848,14 @@ def _thread_counts() -> tuple[int, ...]:
             else:
                 counts.append(int(part))
         return tuple(dict.fromkeys(counts)) or (32,)
-    return (32, 96, 0, _random_thread_count())
+    # DETERMINISTIC default (xdist-safe): a single warp (32), a multi-warp count
+    # (96), a fixed NON-multiple-of-32 (100 = 3 warps + 4) to exercise a partial
+    # trailing warp, and the sentinel 0 = MAX_PERF_LEVEL_THREADS. The default MUST
+    # be deterministic across processes — pytest-xdist workers each call this and
+    # any per-process randomness makes them collect different test ids ("Different
+    # tests were collected between gw0 and gwN"). Time-varying partial-warp fuzzing
+    # stays available as the explicit opt-in GRID_CUDA_THREAD_COUNTS=...,random.
+    return (32, 96, 100, 0)
 
 
 def _random_thread_count() -> int:
