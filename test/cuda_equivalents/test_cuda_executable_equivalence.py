@@ -199,15 +199,6 @@ KNOWN_FAILING_ALGORITHMS = {}
 # fxS already carried the sign. h1_2 id_du/fd_du now match pinocchio and are
 # UN-GATED. (Non-mimic robots never hit the dense inner -> Gate A unaffected.)
 KNOWN_FAILING_ROBOT_ALGORITHMS = {
-    # h1_2 mimic ee_pose_hessian (d2ee): the fixed-base mimic alpha-fold (B2-ee,
-    # validated on fr3 = 1 mimic joint) does NOT yet cover h1_2's 12 mimic joints
-    # (both hands). The CUDA d2ee emits exact 0.0 at some output columns where the
-    # oracle expects O(0.2) (norm_rel stays ~1e-3 but per-entry rel=1.0). The
-    # ANALYTIC reference is correct (J-d2ee's 36 hessian tests pass incl. h1_2);
-    # this is a CUDA mimic-fold coverage gap, not a reference bug. d2ee stays a
-    # HARD requirement for every other robot. Tracked: fix the h1_2 mimic d2ee
-    # column fold, then remove this entry. (fr3 mimic d2ee + all non-mimic pass.)
-    ("h1_2", "ee_pose_hessian"): "h1_2 12-mimic-joint d2ee CUDA alpha-fold incomplete (analytic ref correct)",
 }
 CUDA_DEFAULT_TOLERANCE = {
     "rtol": 2e-4,
