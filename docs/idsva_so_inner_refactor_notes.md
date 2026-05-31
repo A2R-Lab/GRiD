@@ -314,6 +314,76 @@ It was NOT landed here to avoid stacking a new spill rung on top of the deferred
 mimic-SO work in one session (value-path-stability mandate); it is the clear next
 step and no longer blocked.
 
+### 2026-05-31 — ancestor-pair (`t`/`p`) de-alias surgical spill — LANDED (body frame)
+
+Implemented exactly as the re-examination above scoped it. The body inner now
+carries a 3rd placement lever `TP_IN_SMEM` (4th template param, default `true`):
+
+```cpp
+template <typename T, bool SCRATCH_IN_SMEM = true, bool BC_IN_SMEM = true, bool TP_IN_SMEM = true>
+```
+
+Mechanism (`algorithms/_idsva_so.py`, fixed body inner var block):
+
+* A FIXED in-smem anchor `T *tp_anchor = D2 + 36*NUM_BODIES;` marks the end of the
+  recursion-hot chain. `t` (and `p1..p6`, which overlay it) anchors here when in smem.
+* `if constexpr (!TP_IN_SMEM) { t = d_workspace; }` repoints the whole ancestor-pair
+  scratch (t/p1..p6 = `36*len(jids_a)` floats) to the L2-pinned global workspace. p1=t
+  and p2..p6 derive off t, so they follow automatically.
+* `T *BC = tp_anchor + (TP_IN_SMEM ? 36*var_offset : 0);` — BC re-bases off the SAME
+  in-smem anchor (NOT off `p6`, which would move to global). When t/p is in smem BC sits
+  exactly where the legacy `p6 + 6*var_offset` put it (byte-identical); when t/p spills,
+  BC slides DOWN to `tp_anchor`, reclaiming the vacated `36*len(jids_a)` smem so the
+  arena shrinks by exactly the t/p span. The existing `BC_IN_SMEM=false` repoint still
+  overrides BC for the BC rung; the two surgical levers are mutually exclusive rungs.
+
+Why it's correct: `t`/`p` is written/read ONLY in the final block-parallel output
+assembly (t1-t9 / p-phase, `:~1942-2322`) and is DEAD before that — the entire
+recursion-hot forward sweep + D-matrix build never touch it, and the
+`reference_order_output_repair` (branched robots) recomputes its own PRIVATE
+`rt*/rp*` register scratch rather than reading shared t/p. So spilling t/p keeps every
+recursion-hot buffer in smem. Block-stride writes-then-reads across p1..p6 are ordered
+by the existing `__syncthreads()` (valid for global mem too).
+
+Tier wiring (`GRiDCodeGenerator.py`, body ladder only — I-regressor owns its additive
+rows elsewhere): new rung `output_tp` inserted between `output_bc` (rung2) and
+`output_temp` (now rung4): `("output_tp", _idsva_bf_out - _idsva_bf_TP, True, False, False, True)`
+with `_idsva_bf_TP = 36*len(jids_a)`. All body tuples gained a 4th `tp_in_global` flag;
+`_idsva_body_ws_floats` updated for the index shift (4=whole inner, 3=t/p, 2=BC).
+`select_shared_tier_3way` auto-picks it (MINIMAL stays the deepest = whole-arena
+guaranteed-fit fallback). The kernel threads `tp_in_smem_expr` to the inner only when
+t/p actually spills, so every non-tp rung emits the same `<T,SCRATCH,BC>` instantiation
+as before (Gate A byte-identical default).
+
+Measured smem (sm_120, RTX 5090), body fixed:
+
+| robot       | NV | jids_a | t/p   | rung1 global_output | rung2 output_bc | **rung3 output_tp** | rung4 output_temp |
+|-------------|----|--------|-------|---------------------|-----------------|---------------------|-------------------|
+| iiwa14 fix  |  7 |  28    | 3.9KB | 17088 B             | 16080 B         | **13056 B**         | 2112 B            |
+| g1 fix      | 29 | 146    | 20.5KB| 74992 B             | 70816 B         | **53968 B**         | 8704 B            |
+
+At default tier targets (PERF 96KB / LITE 48KB) iiwa14 fits PERF so output_tp isn't
+picked there; g1 PERF picks global_output, LITE/MIN pick output_temp — so the new rung
+sits between BC and the whole-arena hammer. It becomes the PERF+LITE pick whenever the
+smem target lands in (output_temp, output_bc]: e.g. at a 60KB target g1-fixed picks
+`(3,3,4) = (output_tp, output_tp, output_temp)`, keeping the full recursion-hot chain in
+smem at ~54KB instead of dropping to the 8.7KB whole-arena rung. This is the intermediate
+the LITE tier was missing for g1-class fixed robots.
+
+Validation (vs pin_so_ext oracle, RTX 5090, suggested threads):
+* iiwa14-fixed: GREEN at default PERF AND forced output_tp tier (target=14000B → picks (3,3,4)).
+* g1-fixed: GREEN at default PERF AND forced output_tp tier (target=60000B → picks (3,3,4)).
+* iiwa14-floating + g1-floating: GREEN (world-frame path, unchanged — confirms no
+  floating regression).
+* Gate A: iiwa14-fixed + g1-fixed default `grid.cuh` byte-identical to the
+  `modernizing-tests` (25c00f2) baseline (TP spill is fully opt-in/tier-gated).
+
+Scope note: h1_2 fixed body SO is mimic-refused (idsva_so_body_frame is on the G0
+gradient-refusal set), so the body-frame t/p rung can't be exercised there; h1_2's
+production SO path is world frame (unchanged) and the h1_2 body-frame smem-cap skip
+stays. The body t/p de-alias closes the g1-class fixed-base gap; the world-frame surgical
+cold trio (already landed) covers the floating humanoids.
+
 ### 2026-05-31 — fixed-base mimic SO (idsva_so / fdsva_so) — DEFERRED (bug localized)
 
 Attempted fixed-base mimic support for the body-frame SO inner via the
