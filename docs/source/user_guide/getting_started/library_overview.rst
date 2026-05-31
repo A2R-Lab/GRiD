@@ -73,7 +73,11 @@ include:
   ``_inner`` surface takes a ``RESOURCE_TIER`` template parameter defaulting to
   ``TIER_SHARED`` (a deprecated ``TIER_PERF = TIER_SHARED`` alias is kept). See
   :doc:`../concepts/resource_tier_system`.
-* **Mimic joints:** non-gradient algorithms support mimic robots; gradient
-  codegen for a mimic robot raises a clear ``NotImplementedError`` rather than
-  emitting silently-zeroed gradients (mimic gradients are on the roadmap).
+* **Mimic joints:** non-gradient algorithms support mimic robots, and most
+  gradient codegen now folds correctly to the reduced coordinates — ``id_du`` /
+  ``fd_du`` (both bases), ``ee_pose_gradient`` / ``ee_pose_hessian`` (both bases),
+  and fixed-base second-order (``idsva_so`` / ``fdsva_so``). The remaining
+  selections (integrator gradients and ``f_ext`` gradients on either base, plus
+  floating-base second-order) still raise a clear ``NotImplementedError`` rather
+  than emitting silently-zeroed gradients (the rest is on the roadmap).
 
