@@ -269,3 +269,98 @@ Validation (2026-05-29, SUGGESTED threads on RTX 5090 sm_120):
   rung 3 (LITE/MINIMAL = output_temp via inner SCRATCH_IN_SMEM=false) on
   idsva_so body and the equivalent fdsva_so spilled rungs.
 * See the commit message for the test pass counts.
+
+### 2026-05-31 — ancestor-pair (`t`/`p`) de-alias RE-EXAMINATION (verdict: NOW VIABLE)
+
+Re-examined the "no clean surgical de-alias" stance (the old idea-1 blocker was
+that the ancestor-pair scratch aliased `Xup`). **That blocker is GONE.** A prior
+refactor (the BC-de-alias landing) already moved the `t`/`p1..p6` ancestor-pair
+scratch into its **own** arena region: in the current layout
+(`algorithms/_idsva_so.py`, fixed body inner var block) it is anchored
+`T *t = D2 + 36*NUM_BODIES;` followed by `p1=t`, `p2..p6` each `+6*var_offset`,
+then `BC = p6 + 6*var_offset`. It is **no longer aliased to `Xup`**, so it can be
+relocated independently.
+
+Size + lifetime (measured 2026-05-31, sm_120):
+
+| robot (base)  | NV | NB | jids_a | t/p floats | t/p KB | body arena KB | t/p frac |
+|---------------|----|----|--------|------------|--------|---------------|----------|
+| iiwa14 fixed  |  7 |  7 |  28    | 1008       |  3     | 14            | 27%      |
+| g1 fixed      | 29 | 29 | 146    | 5256       | 20     | 64            | 32%      |
+| g1 floating   | 35 | 30 | 176    | 6336       | 24     | 78            | 32%      |
+| h1_2 fixed    | 39 | 51 | 349    | 12564      | 49     | 108           | 45%      |
+
+* **Lifetime:** `t`/`p` are written+read ONLY in the final block-parallel output
+  assembly (the t-loop / p-phase, `_idsva_so.py:~2056-2358`). They are **dead**
+  through the entire recursion-hot forward sweep (Xup → IC → v/a/Sd/psid/psidd →
+  IC/BC backward propagation) and the D-matrix build. So spilling `t`/`p` to
+  `d_workspace` keeps every recursion-hot buffer in smem — the exact "spill cold,
+  keep hot in smem" target the whole-arena rung fails to achieve.
+* **Access pattern:** the t-loop distributes ancestor-pairs across the block,
+  each thread owning a disjoint `t_index_map[jid][anc]*36` slice → coalescible;
+  with L2-pinning a spilled access is ~L2 latency, not HBM.
+* **Payoff:** at 30–45% of the body arena, spilling `t`/`p` alone could let
+  LITE/MINIMAL (and PERF on h1_2) avoid the whole-arena hammer while keeping the
+  forward recursion fast. This is the single highest-payoff cold sub-band.
+
+**Verdict: implement-able, not implemented this session.** The surgical de-alias
+is now a clean, well-scoped change: add a 3rd placement lever to the body inner
+(`TP_IN_SMEM`, mirroring `BC_IN_SMEM`), repoint `t`/`p1..p6` to `d_workspace` at
+the top when false (BC/internal anchors must then re-base off the in-smem end of
+the hot chain, NOT off `p6`, since `p6` would move to global), wire a new tier
+rung into `select_shared_tier_3way` for the body table, and validate per-tier
+equivalence (fixed+floating, small iiwa14 + big g1/h1_2) + report smem deltas.
+It was NOT landed here to avoid stacking a new spill rung on top of the deferred
+mimic-SO work in one session (value-path-stability mandate); it is the clear next
+step and no longer blocked.
+
+### 2026-05-31 — fixed-base mimic SO (idsva_so / fdsva_so) — DEFERRED (bug localized)
+
+Attempted fixed-base mimic support for the body-frame SO inner via the
+oracle-proven strategy (mirrors `RBDReference.idsva_so_body_frame`'s `has_mimic`
+path): run the whole per-body sweep in **unique-per-body internal coordinates**
+(n_int = NUM_BODIES; internal slot == body id on a fixed base) into an internal
+`4*NB^3` buffer, then **fold** to the reduced `4*NV^3` public output with the
+alpha reduction `R[i, v_slot(i)] += alpha_i` along all three axes. The mechanics
+that were built and individually VERIFIED correct:
+
+* **Arena:** body-inner temp sized by NB (not NV) for mimic + a `4*NB^3` internal
+  output slab on top (`gen_idsva_so_body_frame_inner_temp_mem_size`). Offsets
+  computed: internal slab `[5100, 8016)` for fr3, non-overlapping with every
+  hot buffer and within the grown arena. Gate A confirmed byte-identical
+  (iiwa14/go2 fixed + iiwa14 floating-world).
+* **Stride shadow:** a function-local `const int SECOND_ORDER_COORDS = NUM_BODIES;`
+  retargets all ~106 output-stride/zeroing sites (incl. the inline
+  reference-order repair) to the internal NB stride for free; output pointers
+  repoint at the internal slab; qd/qdd reads fold `alpha * s_qd[v_slot]` (fixes a
+  real OOB: the legacy `s_qd[body_id]` reads index NB-1 > NV-1 for mimic).
+* **Fold:** PROVEN correct — `R-fold(oracle_internal) == oracle_public` to 0.0,
+  and the emitted gather-fold tables (`so_fold_start={...,7,9}` summing internal
+  rows 7,8→reduced 7 for fr3) are correct.
+
+**Why deferred — the bug:** the CUDA **internal NB^3 sweep itself** produces wrong
+values for fr3, even though (a) the fold is proven correct, (b) the effective
+internal qd vector matches the oracle (`[...,qd7,qd7]` for bodies 7,8), and (c)
+the IDENTICAL machinery (repair path, D-matrices, IC/BC propagation) is GREEN for
+the branched **non-mimic** robot `fetch` (NB=NV=14) to 1e-7. Decisive isolation
+(q≠0, qd=qdd=0, gravity=0): `d2tau_dvdq` is correct (0), but `dM_dq` and
+`d2tau_dqd2` are numerically wrong (rel ~20) and `d2tau_dq2` carries garbage
+(~40 where the zero-force oracle is ~0). So the defect is in the internal sweep's
+**q+inertia-dependent** path for the mimic body — NOT the fold, NOT the inputs,
+NOT the arena offsets (all verified). Since CRBA (composite IC) is GREEN for fr3,
+the composite inertia is right; the discrepancy is SO-specific (likely the
+D-matrix / B(IC,S) / repair use of the extra mimic body's row, or a subtle
+interaction of the shadowed stride with a buffer the sweep reads). Root-cause
+was localized but not found within the session; landing a numerically-wrong SO
+path was rejected per the value-path-stability mandate, so the change was REVERTED
+and `idsva_so_body_frame`/`fdsva_so` remain in the G0 mimic refusal set.
+Floating-base mimic SO stays deferred regardless (the floating root's 6-DoF
+subspace needs a loop over root DoFs, not the scalar v-slot/alpha fold).
+
+**Resume hint for next session:** dump the CUDA internal `4*NB^3` buffer in full
+(the truncation-runner trick: patch the fold to `s_idsva_so[...] = src[(a*SO_INT+
+b)*SO_INT+c]`) and diff cell-by-cell vs the oracle internal captured by hooking
+`np.einsum('ia,ijk,jb,kc->abc', ...)` in `RBDReference.idsva_so_body_frame`. The
+zero-force `d2tau_dq2` garbage is the highest-signal lead (a block that should be
+~0 but isn't ⇒ a stale/mis-strided read in the internal layout, despite the
+offset math checking out).
