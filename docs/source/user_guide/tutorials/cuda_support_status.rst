@@ -21,6 +21,12 @@ Fixed-base CUDA coverage includes the core dynamics and kinematics paths:
 * IDSVA-SO (body-frame and world-frame variants) and FDSVA-SO. Body-frame
   is selected by the dispatcher for fixed-base because it wins by a wide
   margin (multi-pass amortizes when the tree is fixed).
+* Optional per-body external forces (``d_f_ext``) on RNEA, forward
+  dynamics, ABA, and the inverse-/forward-dynamics gradients (opt-in;
+  ``nullptr`` reproduces the no-force path).
+* The ``grid_plant`` layer (``plant_step``, quadratic state/input costs,
+  end-effector position cost, and joint position/velocity/torque
+  log-barriers), emitted as a sibling ``grid_plant`` namespace.
 
 Second-order fixed-base diagnostics are still developer-only. The current
 green zero-sample set includes ``iiwa14``, ``go2``, ``gen3``, ``fr3``, and
@@ -86,4 +92,11 @@ Known Caveats
   treating fallback paths as fully sanitizer-clean.
 * Performance tier choices can depend on register pressure and occupancy; use
   ptxas output and timing kernels on the target GPU before saving local
-  baselines.
+  baselines. Tiers are now named ``TIER_SHARED`` (default) / ``TIER_LITE`` /
+  ``TIER_MINIMAL``; ``TIER_PERF`` remains as a deprecated alias of
+  ``TIER_SHARED``. See :doc:`../concepts/resource_tier_system`.
+* Robots with **mimic joints**: non-gradient algorithms are supported, but
+  gradient codegen raises a clear ``NotImplementedError`` rather than emitting
+  silently-zeroed gradients (mimic gradients are on the roadmap).
+* External-force **gradients** are not yet wired; ``d_f_ext`` flows only into
+  the first-order algorithms and the bias terms of the gradients.

@@ -4,7 +4,13 @@ Python Wrappers (``grid-rbd``)
 The ``grid-rbd`` package wraps GRiD's per-robot CUDA codegen behind a
 two-tier Python API: a slow one-time ``register_robot()`` step that
 generates and compiles a per-robot ``.so``, and fast subsequent
-algorithm calls on the returned ``RobotHandle``.
+algorithm calls on the returned handle.
+
+``register_robot`` accepts a ``backend=`` argument — ``"numpy"`` (the
+default, returning a ``RobotHandle``), ``"jax"`` (a ``JaxRobotHandle``),
+or ``"torch"`` (a ``TorchRobotHandle``) — and a ``urdf_string=`` argument
+to register from inline URDF text instead of a file on disk. All three
+backends share the same content-addressed ``.so`` cache.
 
 Source: ``python/`` in the GRiD repo.
 
@@ -178,14 +184,98 @@ methods listed in the table above are bound via FFI and JIT-compatible.
 The SO methods (``idsva_so``, ``fdsva_so``) follow the plain wrapper's
 tuple-of-four convention.
 
+PyTorch backend (``backend="torch"``)
+-------------------------------------
+
+``register_robot(..., backend="torch")`` returns a ``TorchRobotHandle``
+whose methods return ``torch.Tensor``. The four differentiable
+algorithms (``rnea`` / ``forward_dynamics`` / ``aba`` / ``integrator``)
+are autograd-aware — their backward passes are analytic, reusing the
+existing ``*_gradient`` kernels — while the remaining methods are
+forward-only ops. The ``.so`` is shared with the numpy/JAX surfaces; the
+torch op block is compiled in under ``-DGRID_RBD_WITH_TORCH`` when torch
+is present at register time.
+
+.. code-block:: python
+
+   import grid_rbd, torch
+
+   h = grid_rbd.register_robot("iiwa14", urdf_path="iiwa.urdf", backend="torch")
+
+   q  = torch.randn(64, h.num_joints, device="cuda", requires_grad=True)
+   qd = torch.randn(64, h.num_joints, device="cuda", requires_grad=True)
+   u  = torch.randn(64, h.num_joints, device="cuda", requires_grad=True)
+
+   qdd = h.forward_dynamics(q, qd, u)   # autograd-aware torch.Tensor
+   qdd.sum().backward()                 # gradients flow to q, qd, u
+
+For fixed-batch, low-launch-overhead replay (MPC / training),
+``handle.capture(method, *example_inputs, **kwargs)`` returns a
+``GraphCallable`` backed by a CUDA graph. A mandatory off-graph warmup
+runs the one-time >48 KB dynamic-smem opt-in (illegal during capture)
+before the graph is recorded:
+
+.. code-block:: python
+
+   g = h.capture("forward_dynamics", q, qd, u)   # warmup + capture
+   qdd = g(q_new, qd_new, u_new)                 # copy_ + replay
+
+.. note::
+
+   The backward VJP contractions run torch's own CUDA kernels, so the
+   installed torch build must support the GPU's compute capability. On an
+   RTX 5090 (sm_120) you need a torch **cu128** (or newer) build — a
+   cu124 wheel (max sm_90) cannot launch on sm_120. The ``grid`` /
+   ``grid_plant`` kernels themselves are always nvcc-built for the
+   detected arch and are unaffected.
+
+``grid_plant`` cost / barrier / plant-step methods
+--------------------------------------------------
+
+The handle also exposes the generated ``grid_plant`` trajectory-
+optimization surface (validated against ``RBDReference._PlantMixin``).
+All take/return 2D arrays with axis 0 = batch; cost methods return
+``(value, grad, hess)`` and barriers return ``(value, grad, hess_diag)``.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 50 50
+
+   * - Method
+     - Returns
+   * - ``quadratic_state_cost(x, x_des, Q)``
+     - ``value (B,)``, ``grad (B, NX)``, ``hess (B, NX, NX)``
+   * - ``quadratic_input_cost(u, u_des, R)``
+     - ``value (B,)``, ``grad (B, NV)``, ``hess (B, NV, NV)``
+   * - ``ee_pos_cost(q, p_des, W)``
+     - ``value (B,)``, ``grad (B, NX)``, Gauss-Newton ``hess (B, NX, NX)``
+   * - ``joint_position_barrier(var, lower, upper, mu)``
+     - ``value (B,)``, ``grad (B, NP)``, ``hess_diag (B, NP)``
+   * - ``joint_velocity_barrier(var, lower, upper, mu)``
+     - as above over ``NV``
+   * - ``joint_torque_barrier(var, lower, upper, mu)``
+     - as above over ``NV``
+   * - ``plant_step(x, u, dt, integrator_type="euler")``
+     - ``(B, NX)`` next state
+
+External forces (``f_ext``)
+---------------------------
+
+Per-body external forces are an opt-in feature of the underlying CUDA
+codegen and the ``RBDReference`` oracle (body-local frame, subtracted
+from the per-body force; an empty/``None`` value reproduces the no-force
+path). The generated host wrappers carry the ``d_f_ext`` argument; an
+``f_ext=`` kwarg on the ``RobotHandle`` algorithm methods is on the
+roadmap.
+
 Coming next
 -----------
 
 * Floating-base JAX FFI for ``idsva_so`` (currently routes to the
   body-frame kernel; world-frame fallback for floating-base needs the
   codegen to emit a preprocessor-visible dispatcher).
-* Any-thread-count library functions for CUDA-inline users (see
-  :doc:`../concepts/cublasdx_removal_design`).
+* An ``f_ext=`` kwarg on the Python handle algorithm methods (the CUDA
+  codegen already threads ``d_f_ext``).
 * CLI shortcut: ``grid-rbd register iiwa.urdf --name iiwa14``.
 
 See also
