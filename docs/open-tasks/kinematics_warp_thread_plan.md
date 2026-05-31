@@ -38,6 +38,41 @@ inner* of the batched kernel. Mirror the batch/stride conventions of the existin
 `end_effector_pose` batched path (and the generalize-beyond-iiwa14 + `mat4_mul` fixes
 still apply to the inner).
 
+## Reference usage: HJCD-IK (https://github.com/a2r-lab/HJCD-IK)
+
+The a2r-lab HJCD-IK project (batched GPU inverse kinematics) is the canonical consumer.
+How it actually uses the FK device functions (`src/hjcd_kernel.cu`):
+- **Launch:** `forward_kinematics_kernel<T><<<num_configs, 32>>>(d_q, d_pose7, nullptr,
+  d_robotModel, num_configs)` — **one block per sample**, 32 threads/block; the batch
+  size is the grid dim (`B = gridDim.x`, `b = blockIdx.x`).
+- **Input layout:** batch-major, stride N (DoF): `s_q[j] = q[b * N + j]` (cooperative
+  load over `threadIdx.x`).
+- **Output:** **7-element pose = position + quaternion** per sample, extracted from the
+  EE's 4×4 homogeneous transform: `pose7[b*7+0..2] = Cee[12..14]` (translation column),
+  `pose7[b*7+3..6]` = quaternion from the rotation block. (NOT the 6-elem rpy that
+  `end_effector_pose` emits — consumers want pos+quat.)
+- **Device call (the functions to generalize + rename):**
+  `grid::X_single_thread<T>(s_jointX, s_XmatsHom, s_q, FLANGE_IDX)` and
+  `grid::X_warp<T>(s_jointX, s_XmatsHom, s_x, FLANGE_IDX)` — args
+  `(out joint transforms [16/joint = 4×4 homogeneous], XmatsHom scratch, q in,
+  target-frame idx)`. The customer reads the **FULL `s_jointX`** (all joint transforms,
+  any frame), not just the EE — it reuses intermediates in the IK/collision loop and
+  recalls `X_warp` each LM iteration (`warp_id==0`) before `compute_pos_err`/`compute_ori_err`.
+- HJCD-IK regenerates its own `grid.cuh` via `scripts/generate_grid.py` → these ARE
+  GRiD-emitted device functions today.
+
+**So the G2 deliverable is two levels:**
+1. The **robot-general device inner** `ee_pose_inner_{thread,warp}<T>(s_jointX,
+   s_XmatsHom, s_q, target_idx)` — generalized beyond hardcoded iiwa14, `mat4_mul`
+   fixed, full `s_jointX` output — so consumers like HJCD-IK call it inside their own
+   per-sample kernel.
+2. A **convenience batched kernel + host wrapper + grid_rbd binding** doing the
+   `<<<B, threads>>>` one-block-(or-warp)-per-sample launch, `q[b*N]` in →
+   `pose7[b*7]` (position+quaternion) out, for the "just give me batched FK" path.
+
+Keep full `s_jointX` accessible; offer pos+quat (7) as the packaged batched output
+(matching HJCD-IK), not only the 6-elem rpy.
+
 ---
 
 ## Step 1 — What actually exists (current names + locations)
