@@ -161,23 +161,30 @@ KNOWN_FAILING_ALGORITHMS = {}
 # Per-(robot, algorithm) known bugs — same semantics as KNOWN_FAILING_ALGORITHMS
 # but scoped to a specific robot so other robots' identical algorithm still fails
 # hard if it regresses. The oracle stays correct (reported, never masked).
-_H1_2_ID_VALUE_BUG = (
-    "h1_2 branched-multi-root mimic inverse_dynamics VALUE bug (norm_rel ~69, worst "
-    "c[2]): topology indexing is correct, but the force-propagation value path is "
-    "wrong for the 3-root (0/6/12) topology; fr3 (single-root) passes and "
-    "RBDReference+pinocchio agree. Deferred — needs device-level debugging. "
-    "Everything composing through the bias c is affected; crba/direct_minv/ee_pose "
-    "are independent and still compared."
-)
-KNOWN_FAILING_ROBOT_ALGORITHMS = {
-    ("h1_2", "inverse_dynamics"): _H1_2_ID_VALUE_BUG,
-    ("h1_2", "forward_dynamics"): _H1_2_ID_VALUE_BUG,
-    ("h1_2", "aba"): _H1_2_ID_VALUE_BUG,
-    ("h1_2", "inverse_dynamics_gradient_q"): _H1_2_ID_VALUE_BUG,
-    ("h1_2", "inverse_dynamics_gradient_qd"): _H1_2_ID_VALUE_BUG,
-    ("h1_2", "forward_dynamics_gradient_q"): _H1_2_ID_VALUE_BUG,
-    ("h1_2", "forward_dynamics_gradient_qd"): _H1_2_ID_VALUE_BUG,
-}
+# A1 VALUE-PATH FIXED (2026-05-31): the h1_2 branched-multi-root inverse_dynamics
+# VALUE bug was a shared-arena s_vaf/s_temp UNDER-SIZING for mimic robots. The ID
+# inner indexes s_vaf and the I*v scratch by RAW body id (get_num_joints() bodies),
+# but the device/kernel wrappers and the inner temp size reserved only
+# get_num_pos()-many bodies. For mimic robots get_num_joints() > get_num_pos()
+# (mimic joints carry 0 DoF), so the high-body force writes overflowed s_vaf into
+# the adjacent s_XImats region, silently corrupting the LOW-jid X matrices (here
+# the left leg, root 0). Fixed by sizing s_vaf/s_temp/XImats-scratch by
+# get_num_joints() when robot_has_mimic_joints() (byte-identical for non-mimic).
+# h1_2 inverse_dynamics / forward_dynamics / aba (and crba/direct_minv/ee_pose)
+# now MATCH pinocchio and are UN-GATED.
+#
+# A second, related mimic bug was found+fixed in the same pass (2026-05-31): the
+# DENSE mimic id_du/fd_du gradient fold called mx<s_ind>_peq_scaled with only the
+# mimic multiplier alpha as the scale, DROPPING the joint motion-subspace sign
+# s_sign (the helper applies the UNIT axis column, so S = s_sign*e_{s_ind} needs
+# alpha*s_sign). Bodies with s_sign=-1 (h1_2's whole LEFT hand: index/middle/
+# pinky/ring/thumb mimics + their proximals) got sign-flipped dv/da gradient
+# contributions, so id_du/fd_du diverged at those v-slots. fr3's single mimic has
+# s_sign=+1 so it was unaffected (alpha*1 == alpha, byte-identical). Fixed the
+# four forward mx<s_ind>_peq_scaled calls to scale by alpha*s_sign; the backward
+# fxS already carried the sign. h1_2 id_du/fd_du now match pinocchio and are
+# UN-GATED. (Non-mimic robots never hit the dense inner -> Gate A unaffected.)
+KNOWN_FAILING_ROBOT_ALGORITHMS = {}
 CUDA_DEFAULT_TOLERANCE = {
     "rtol": 2e-4,
     "atol": 2e-4,
