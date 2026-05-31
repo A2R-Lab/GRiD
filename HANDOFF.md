@@ -1318,6 +1318,18 @@ T3 (mimic codegen) → T5 (tier autotune) → T2 (perf gaps).
 Single source of truth; supersedes the scattered "deferred" notes above. Detail in
 `docs/open-tasks/` (esp. `coverage_parity_matrix.md`, `library_capability_roadmap.md`).
 
+**NEXT-ROUND PRIORITY (user, 2026-05-31):** A1, A2, B2, F1, F2 first → then E1, E4 → then
+F3. Any agent deferral triggers a fresh focused explore round to resolve it.
+
+**Round status (2026-05-31):** Round H landed E5/E6 (notebooks + python/torch f_ext) + the
+batched-FK cuda test; h-fext (C1) / h-centroidal (C2/C3) / h-mimic (A1+B2) still in flight.
+Round I in flight: I-crba (perf de-alias tail), I-regressor (E1), I-urdf (E4). NOTE the
+`perf-cleanup` surgical-spill campaign ALREADY LANDED + merged (branch 0 ahead of
+modernizing-tests) — Minv/FD/fd_du/aba/integrator/ee/idsva inner-owns + surgical spill +
+L2-pin default-on. Deferred TAIL only: crba 2.5-6x regression (I-crba) + idsva_so body/world
+deep de-alias (recursion-hot, no clean split — after h-mimic) + the comprehensive perf
+re-sweep (= the 4pm sweep). That tail folds into F2; it is NOT a separate pending campaign.
+
 **A. Correctness bugs (tracked + gated; NOT silently passing)**
 - A1. **h1_2 branched-multi-root `inverse_dynamics` VALUE bug** *(top item)* — ID diverges
   (norm_rel ~69, c[2]) on the 3-root (0/6/12) topology; corrupts id/fd/aba/id_du/fd_du.
