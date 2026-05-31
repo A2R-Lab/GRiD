@@ -1348,6 +1348,34 @@ re-sweep (= the 4pm sweep). That tail folds into F2; it is NOT a separate pendin
 - **PERF**: crba dead-buffer removal (3.3× smaller smem, I-crba); idsva_so body `output_tp`
   de-alias rung (K-idsva). Both part of the F2 perf-cleanup tail.
 
+### CLOSED on the 2026-05-31 post-compaction wave (merged @ `182ef91`)
+Nine file-isolated agents merged onto `modernizing-tests`; tree green. Each landed with the
+hardened checklist (clean-cache equivalence + Gate-A byte-identical / opt-in + floating+fixed
+codegen smoke + additive-GCG reconcile).
+- **B2-ee-float DONE** (floating-mimic-ee): floating+mimic `ee_pose_gradient`/`ee_pose_hessian`
+  un-refused. KEY FINDING: needs NO new fold — the free-flyer root's 6 DoF decompose into 6
+  independent v-slot singleton columns, orthogonal to the 1-DoF mimic alpha fold; pure ungate,
+  `_eepose_gradient_hessian.py` byte-identical. fr3-floating + h1_2-floating (3-way thumb folds) green.
+- **B2-SO DONE (fixed-base)** + **shared `matmul` bug fix** (B2-SO mimic): fixed-base mimic
+  `idsva_so`/`fdsva_so` un-refused via the internal-NUM_BODIES sweep + alpha-fold. ROOT CAUSE of the
+  long-deferred NB>NV value bug = a SHARED helper: `gen_matmul` used `36*((index/num)%NUM_JOINTS)`;
+  for mimic robots (NB>NJ) the last mimic body wrapped to block 0 and read body-0's inertia,
+  corrupting the whole composite-inertia chain (no-op for non-mimic NB==NJ). Fixed `%NUM_JOINTS`→
+  `%NUM_BODIES`. fr3-fixed SO green PERF+spilled. Floating-base mimic SO still refused.
+- **E2 DONE (numpy + CUDA)**: general-frame Jacobian J (LOCAL/WORLD/LOCAL_WORLD_ALIGNED) + J̇ +
+  OSC Λ=(JM⁻¹Jᵀ)⁻¹. numpy ref vs pin (getFrameJacobian/getJointJacobian/computeJointJacobiansTimeVariation);
+  CUDA `frame_jacobian`/`frame_jacobian_dot`/`osc_inertia` (opt-in, validated on-device on
+  iiwa14/go2/g1 × 3 frames). Λ kernel takes precomputed M⁻¹ (on-device compose = follow-up).
+- **g1-spill DONE**: g1-floating now runs `f_ext_gradient` + `fd_parameter_gradient` via surgical
+  smem-cap spill (135→94 KB, 99→75 KB) to the L2-pinned SO workspace; Gate-A PERF arena byte-identical.
+- **PERF (SO audit G4 partial)**: `id_du` branched-fixed + mimic-dense column-parallel (K-iddu);
+  world-frame `idsva_so` forward-sweep parallelized + Xdown/rt-rp dedup (SO-idsva); `fdsva_so`
+  timed/untimed emitter dedup byte-identical + A2 Minv-apply hotspot profiling PLAN (SO-fdsva).
+- **TEST/DOCS**: `docs/open-tasks/test_coverage_matrix.md` (per-algo × robot both-layer matrix) +
+  `test_cuda_matmul_blockwrap_regression.py` (NB>NV pin, passes/fails-on-revert); README + CHANGELOG +
+  new `frame_jacobian.rst` + stale-mimic corrections (docs-sweep); coverage-fill in flight (robot-default
+  widenings + the continuous-joint CUDA test).
+
 ### REMAINING backlog (prioritized)
 **A. Correctness — open/deferred**
 - A-d2ee-gate. **RESOLVED 2026-05-31 (`5ff1ce1`).** Integrated green-gate caught h1_2-fixed d2ee
@@ -1360,10 +1388,12 @@ re-sweep (= the 4pm sweep). That tail folds into F2; it is NOT a separate pendin
   headers give phantom id_du/fd_du failures.)
 
 **B. Mimic codegen — remaining deferrals**
-- B2-ee-float. floating+mimic `ee_pose_gradient`/`ee_pose_hessian` (root 6-DoF subspace fold; still refused).
-- B2-SO. `idsva_so`/`fdsva_so` mimic: K-idsva-predecessor (J-idsva) BUILT it but the CUDA internal
-  NB³ sweep produces wrong values for NB>NV (mimic) — REVERTED; precise resume hint in
-  `docs/idsva_so_inner_refactor_notes.md`. Still refused.
+- B2-ee-float. **CLOSED 2026-05-31** (floating-mimic-ee) — see post-compaction closures above.
+- B2-SO. **CLOSED for FIXED-base 2026-05-31** (B2-SO mimic; root cause = shared `matmul` `%NUM_JOINTS`
+  block-wrap, fixed to `%NUM_BODIES`). REMAINING: **floating-base** mimic `idsva_so`/`fdsva_so` still
+  refused (the floating root needs a per-root-DoF 6-DoF subspace fold, not the scalar v-slot/alpha fold).
+  Also: h1_2-fixed body SO stays world-frame in production (its 4·NB³ internal slab at NB=51 ≈ 2.1M
+  floats is impractical) — fr3 is the landed fixed-mimic case.
 
 **C. Partial-feature remainders**
 - C1-float. floating-base `−∂Jᵀ/∂q` GPU emit (needs on-device SE(3) Lie root-twist integrator;
@@ -1374,7 +1404,9 @@ re-sweep (= the 4pm sweep). That tail folds into F2; it is NOT a separate pendin
 **E. Roadmap — not started**
 - E1-rem. mimic-robot regressor `Y` CUDA validation (codegen works, no equiv run = gap, not a bug);
   FD param-gradient `∂q̈/∂π=−M⁻¹Y`; runtime-inertia two-variant emit (plan only, `d4_*` doc); CRBA regressor.
-- E2. R4 general frame Jacobians (LOCAL/WORLD/aligned + J̇); R5 OSC / Λ=(JM⁻¹Jᵀ)⁻¹ (M⁻¹Jᵀ landed).
+- E2. **CLOSED 2026-05-31** (numpy + CUDA J/J̇/Λ; see closures above). FOLLOW-UPS: on-device
+  `osc_inertia` M⁻¹ compose (folds `direct_minv_inner` in vs taking precomputed M⁻¹); mimic-robot
+  frame-Jacobian CUDA (currently gated ¬mimic); broader-robot CUDA coverage.
 - E3. **Contact/constraint dynamics** (constraint Jac, KKT/Delassus, constrained FD, impulse) — biggest moat vs frax.
 - E4-cuda. planar/spherical CUDA multi-column-S emit (parser groundwork landed; needs multi-column-S
   + NV≠NQ codegen — guard raises `UnsupportedJointTypeError` today). Other joint types (helical/translation/composite).
