@@ -94,3 +94,85 @@ family (`gen_floating_gravity_d2tau_dq_lie_inline` ~250-747 + the metadata/count
 
 Validate everything with the per-tier CUDA equivalence gate (clear the generated-header cache
 first — stale headers give phantom failures) + Gate-A byte-identical for untouched paths.
+
+---
+
+## A2 — fdsva_so Minv-apply hotspot: profiling + optimization plan (PLAN ONLY)
+
+This section is the concrete, in-context profile + prototype plan that A2 demands as a
+prerequisite. **Do NOT change `_fdsva_so.py` against this section blind** — it has been
+twice-rejected already (see "Prior rejections" below). The bar to clear is at the bottom.
+
+### The target (exact code)
+`gen_fdsva_so_contract` in `_fdsva_so.py`, the **final `parallel_loop("ind", 4*n^3)`**
+(the "Multiply by -Minv to finish algorithm" loop). Four disjoint `n^3` bands each compute
+`d2a_* = -dot_prod<T,n,n,n*n>(&s_Minv[i], &<inner>[j + k*n])`. Mathematically this is the
+contraction `iL,Ljk->ijk` with `<inner> ∈ {inner_dq, inner_cross, d2tau_dvdv, inner_tau}`.
+- Parallelism today: 4·n³ threads, each doing a **serial length-n dot** with stride `n²`
+  over the contracted axis `L`. FMA count ≈ 4·n⁴; on g1_floating this loop is ≈6M of the
+  ≈9M total contract FMAs — the single hottest block in fdsva_so.
+- The two upstream `parallel_loop`s (`n³+n²` Minv-fill and `3n³` subterms) are cheaper and
+  NOT the A2 target; profile may incidentally cover them but the -Minv loop is the subject.
+
+### What to profile (and on which configs)
+Profile the **whole `fdsva_so_kernel`** (untimed body) at a representative tier, on:
+- **iiwa14-fixed** (n=7, all-smem, CONTRACT_IN_SMEM=true) — the compute-bound smem case.
+- **g1_floating** (n=35, spill tier, CONTRACT_IN_SMEM likely false) — the spilled case where
+  the contracted `L` axis is a stride-n² **global** gather (the expensive one).
+Nsight Compute (`ncu`) section/metric checklist for the -Minv loop specifically:
+1. **Bound classification** — `SpeedOfLight` / roofline: is the loop compute-bound,
+   memory-bound, or latency/sync-bound? This is the gating question; cuBLASDx/gemm only
+   helps if it is genuinely compute-bound. (In-file comment has long suspected it may be
+   bandwidth- or sync-bound, in which case do nothing.)
+2. **Shared-mem bank conflicts** — `l1tex__data_bank_conflicts_pipe_lsu_mem_shared_*`
+   (smem case): does the stride-n² read of `inner_*` from smem serialize across the warp?
+3. **Memory throughput + sectors/req** — `dram__throughput`, `l1tex__t_sectors_pipe_lsu_*`
+   (spilled case): quantify the stride-n² **uncoalesced global** gather cost the in-file
+   COALESCED-DOT note predicts (consecutive ranks read `inner[... + L*n²]`).
+4. **Warp occupancy / stall reasons** — `sm__warps_active`, `smsp__warp_issue_stalled_*`
+   (esp. `long_scoreboard` = waiting on memory): confirm whether the serial dot stalls on
+   loads vs is ALU-bound.
+5. **Register pressure / spills** — `launch__registers_per_thread`, ptxas `-v` spill bytes:
+   any gemm/cuBLASDx retry must NOT push regcount past the tier `launch_bounds` budget
+   (80 LITE / 64 MINIMAL) — see the fdsva_so_device __forceinline__ note in the source.
+
+### The transposed-layout hypothesis (the only retry worth prototyping)
+Both prior rejections share one root cause: the contracted axis `L` maps to the **slowest**
+(stride-n²) index of the `inner_*` buffers, because those buffers were written `[i][j][k]`
+upstream and re-read `[j + k*n + L*n²]`. Hypothesis: **emit the `inner_*` producers in a
+transposed `[L][j][k]` (i.e. L-contiguous) layout** so the contraction reads `inner[L]` at
+stride 1. That would:
+- make the warp gather coalesced (spilled case) / bank-conflict-free (smem case), and
+- make the summed axis contiguous, which is the ONE precondition under which
+  `grid_linalg_dot_strided_coalesced` (or a small register-tiled gemm) could win.
+Cost to weigh in the prototype: the transpose is not free — the three upstream loops
+(`inner_dq`, `inner_cross`/`inner_tau`, `d2tau_dvdv` staging) would write the new layout, OR
+a separate transpose pass adds one full 4·n³ global read+write. The prototype must show the
+contraction win **exceeds** the added transpose/producer cost end-to-end, not just for the
+isolated loop. Prototype on **one robot** (g1_floating, the worst stride-n² case) before
+generalizing across tiers/robots.
+
+### Prior rejections (do not re-attempt these two as-is)
+1. **cuBLASDx in-kernel gemm** (rejected): standalone autotune on sm_120 wins 2.4–5.2× at
+   size 24–48, but does NOT translate in-kernel — register pressure with all SO state live,
+   non-gemm `iL,Ljk` strides, extra smem cuBLASDx wants (g1 already in spill tier), and
+   per-block-per-timestep sync overhead. Re-attempt ONLY after a transposed (gemm-friendly)
+   layout exists AND the profile says compute-bound.
+2. **`grid_linalg_dot_strided_coalesced`** (rejected): it coalesces *along* the contraction
+   stride, but here `L` is the stride-n² axis → it would issue **stride-n² loads across the
+   warp (worse, not better)**; and it is block-cooperative (one scalar/call), so 4·n³ outputs
+   = 4·n³ sequential block-reductions (~343k `__syncthreads` on g1), collapsing the current
+   4·n³-way thread parallelism. Only viable AFTER the transposed layout makes `L` contiguous
+   AND with a per-thread (not per-block) reduction.
+
+### Validation gate any future A2 change MUST pass (non-negotiable)
+- **Bit-exact**: the smem path output is already correct; a layout change is NOT byte-identical
+  codegen, so Gate-A does not apply — instead the **CUDA equivalence test for fdsva_so must be
+  GREEN vs the pinocchio reference** on iiwa14-fixed + go2-floating + at least one big floating
+  robot (g1_floating), per-tier, with a CLEARED generated-header cache (stale header =
+  phantom pass/fail).
+- **Perf**: an in-context before/after Nsight trace of the -Minv loop AND an end-to-end
+  fdsva_so timing sweep must show a net win at N=256 on the affected robots — a standalone-loop
+  win that regresses end-to-end (transpose cost, occupancy drop, tier escalation) is a REJECT.
+- **No tier regression**: regcount must stay within each tier's `launch_bounds`; do not push a
+  robot into a worse spill tier to win the contraction.
