@@ -118,9 +118,13 @@ MIMIC_SUPPORTED_ALGORITHMS = {
     "inverse_dynamics_gradient_qd",
     "forward_dynamics_gradient_q",
     "forward_dynamics_gradient_qd",
-    # P4 (PENDING): kinematic gradient/hessian.
-    # "end_effector_pose_gradient",
-    # "end_effector_pose_hessian",
+    # P4 (landed, FIXED-BASE): kinematic gradient/hessian via the alpha-weighted
+    # geometric-Jacobian column fold (ee_pose_gradient) + world-frame generator
+    # fold (ee_pose_hessian). Floating-base mimic ee gradients are still refused
+    # (the floating root needs a 6-DoF subspace fold, not a scalar alpha fold);
+    # skipped for floating mimic via MIMIC_FLOATING_UNSUPPORTED_GRADIENTS below.
+    "end_effector_pose_gradient",
+    "end_effector_pose_hessian",
 }
 
 
@@ -133,6 +137,11 @@ MIMIC_FLOATING_UNSUPPORTED_GRADIENTS = {
     "inverse_dynamics_gradient_qd",
     "forward_dynamics_gradient_q",
     "forward_dynamics_gradient_qd",
+    # ee pose grad/hessian mimic fold is FIXED-BASE only (B2-ee); floating mimic
+    # ee derivatives are still refused at codegen (floating-root 6-DoF subspace
+    # fold deferred), so skip comparing them for floating mimic robots.
+    "end_effector_pose_gradient",
+    "end_effector_pose_hessian",
 }
 
 
@@ -150,9 +159,12 @@ def _robot_has_mimic_joints(project_model) -> bool:
 # forward_dynamics / aba. As each mimic-gradient phase lands (T3-finisher),
 # extend both this list and MIMIC_SUPPORTED_ALGORITHMS together.
 MIMIC_CODEGEN_ALGORITHM_LIST = ["id", "crba", "ee_pose", "minv", "fd", "aba"]
-# Fixed-base mimic additionally supports the ID/FD gradients (T3-finisher P3).
-# Floating-base mimic gradients are still refused, so floating uses the base list.
-MIMIC_CODEGEN_ALGORITHM_LIST_FIXED = MIMIC_CODEGEN_ALGORITHM_LIST + ["id_du", "fd_du"]
+# Fixed-base mimic additionally supports the ID/FD gradients (T3-finisher P3) and
+# the ee pose gradient/hessian (B2-ee P4). Floating-base mimic gradients are still
+# refused, so floating uses the base list.
+MIMIC_CODEGEN_ALGORITHM_LIST_FIXED = MIMIC_CODEGEN_ALGORITHM_LIST + [
+    "id_du", "fd_du", "ee_pose_gradient", "ee_pose_hessian",
+]
 # Algorithms with a KNOWN, TRACKED correctness bug: their mismatches vs the
 # independent oracle are reported as expected/known failures (not silent masks,
 # not hard suite failures) pending a fix. The oracle stays correct so the bug is
@@ -1549,8 +1561,13 @@ def _run_cuda_equivalence_case(
         skip_gradients=(
             _robot_has_mimic_joints(project_model) and base_mode == "floating"
         ),
-        # ee_pose gradients/hessian (P4) not yet emitted for any mimic robot.
-        skip_eepose_gradients=_robot_has_mimic_joints(project_model),
+        # ee_pose gradients/hessian (P4): fixed-base mimic now emits them (the
+        # alpha-weighted geometric-Jacobian / world-frame-generator fold), so the
+        # runner compiles its ee-pose gradient/hessian block; floating-base mimic
+        # ee derivatives are still refused, so skip them in the runner there.
+        skip_eepose_gradients=(
+            _robot_has_mimic_joints(project_model) and base_mode == "floating"
+        ),
         config=config,
     )
 
