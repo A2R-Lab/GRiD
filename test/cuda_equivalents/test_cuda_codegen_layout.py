@@ -198,7 +198,11 @@ def _compile_header_consumer(
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 def test_fixed_default_header_keeps_gradient_paths_all_shared(tmp_path):
-    header = _generate_header(tmp_path, "fr3", "fixed")
+    # iiwa14 (non-mimic fixed-base) exercises the full gradient/SO surface. fr3
+    # is a MIMIC robot whose gradient codegen is now refused (G0 footgun guard;
+    # mimic gradients deferred to T3-finisher), so it can no longer emit the
+    # gradient spill-tier constants this test asserts.
+    header = _generate_header(tmp_path, "iiwa14", "fixed")
     constants = _constants(header)
 
     assert "__shared__ T" not in header
@@ -213,7 +217,9 @@ def test_fixed_default_header_keeps_gradient_paths_all_shared(tmp_path):
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 def test_fixed_forced_low_shared_header_selects_fallbacks(tmp_path):
-    header = _generate_header(tmp_path, "fr3", "fixed", target_shared_bytes=10000)
+    # iiwa14 (non-mimic) — fr3's gradient/SO codegen is refused under the G0
+    # mimic-gradient guard, so it can't exercise the forced-low-shared fallbacks.
+    header = _generate_header(tmp_path, "iiwa14", "fixed", target_shared_bytes=10000)
     constants = _constants(header)
 
     assert "__shared__ T" not in header
@@ -223,6 +229,41 @@ def test_fixed_forced_low_shared_header_selects_fallbacks(tmp_path):
     assert constants["GRID_FDSVA_SO_USES_WORKSPACE_TEMP"] == 1
     assert "grid_begin_l2_persisting" in header
     assert "grid_end_l2_persisting" in header
+
+
+# Gradient algorithms that the G0 footgun guard refuses to codegen for a robot
+# with mimic joints (mimic-reduced gradients are deferred to T3-finisher). Each
+# must raise rather than emit silently-zeroed output.
+_MIMIC_REFUSED_GRADIENT_PROFILES = [
+    "all",
+    "dynamics",
+    "dynamics-gradients",
+    "second-order",
+    "kinematics-derivatives",
+    "integrators",
+]
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.parametrize("profile", _MIMIC_REFUSED_GRADIENT_PROFILES)
+def test_mimic_gradient_codegen_is_refused_not_zeroed(tmp_path, profile):
+    """G0 footgun guard: a mimic robot (fr3) requesting any gradient algorithm
+    must raise a clear NotImplementedError at codegen time — NOT silently emit
+    zeroed gradients. Non-gradient mimic codegen (covered separately) still
+    works."""
+    with pytest.raises(NotImplementedError, match="mimic gradients not yet supported"):
+        _generate_header(tmp_path, "fr3", "fixed", codegen_profile=profile)
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.parametrize("profile", ["dynamics-core", "kinematics"])
+def test_mimic_nongradient_codegen_still_works(tmp_path, profile):
+    """The G0 guard is scoped to GRADIENT algorithms: a mimic robot still
+    codegens its non-gradient surface (id/fd/aba/crba/minv/ee_pose) normally."""
+    header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile=profile)
+    assert "Generated algorithms:" in header
 
 
 @pytest.mark.cuda_equivalence
@@ -455,7 +496,10 @@ def test_d2ee_spill_tiers_are_size_and_base_selected(robot_id, base_mode, expect
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 def test_generated_header_includes_grid_data_variants_and_rnea_aliases(tmp_path):
-    header = _generate_header(tmp_path, "fr3", "fixed")
+    # iiwa14 (non-mimic): the default "all" profile emits gradients, which is
+    # refused for mimic fr3 under the G0 guard. The gridData/rnea-alias surface
+    # asserted here is robot-agnostic.
+    header = _generate_header(tmp_path, "iiwa14", "fixed")
 
     assert "enum gridDataKind { GRID_DATA_ALL = 0, GRID_DATA_DYNAMICS = 1, GRID_DATA_KINEMATICS = 2 };" in header
     assert "template <typename T, gridDataKind KIND = GRID_DATA_ALL>" in header
@@ -559,7 +603,10 @@ int main() { return 0; }
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 def test_dynamics_grid_data_variant_wrappers_compile(tmp_path):
-    header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="dynamics")
+    # iiwa14 (non-mimic): the "dynamics" profile includes gradient algos, which
+    # are refused for mimic fr3 under the G0 guard. The DYNAMICS gridData-variant
+    # wrapper surface asserted below is robot-agnostic.
+    header = _generate_header(tmp_path, "iiwa14", "fixed", codegen_profile="dynamics")
     source = r'''
 #include "grid.cuh"
 
@@ -617,7 +664,10 @@ int main() {
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 def test_fixed_kinematics_derivative_wrappers_compile(tmp_path):
-    header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="kinematics-derivatives")
+    # iiwa14 (non-mimic): kinematics-derivatives includes ee_pose_gradient/hessian,
+    # which the G0 guard refuses for mimic fr3. The wrapper surface is robot-agnostic
+    # (the floating variant below already uses iiwa14).
+    header = _generate_header(tmp_path, "iiwa14", "fixed", codegen_profile="kinematics-derivatives")
     source = r'''
 #include "grid.cuh"
 
@@ -722,7 +772,10 @@ def test_grid_data_variant_invalid_wrappers_fail_to_compile(
     source,
     expected_error,
 ):
-    header = _generate_header(tmp_path, "fr3", "fixed")
+    # iiwa14 (non-mimic): needs the full "all" header (gridData variant wrappers),
+    # which the G0 guard refuses for mimic fr3. The KIND-mismatch negative-compile
+    # checks are robot-agnostic.
+    header = _generate_header(tmp_path, "iiwa14", "fixed")
     _compile_header_consumer(
         tmp_path,
         header,
@@ -769,7 +822,10 @@ def test_kinematics_profile_generates_kinematics_hosts_only(tmp_path):
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 def test_algorithm_list_override_expands_dependencies(tmp_path):
-    header = _generate_header(tmp_path, "fr3", "fixed", algorithm_list="fd-gradient")
+    # iiwa14 (non-mimic): this asserts the fd-gradient dependency expansion emits
+    # gradient wrappers, which the G0 guard refuses for mimic fr3. The
+    # algorithm_list expansion logic under test is robot-agnostic.
+    header = _generate_header(tmp_path, "iiwa14", "fixed", algorithm_list="fd-gradient")
 
     assert "Generated algorithms:" in header
     assert "void inverse_dynamics(gridData<T, KIND> *hd_data" in header

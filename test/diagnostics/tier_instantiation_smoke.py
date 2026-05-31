@@ -57,6 +57,12 @@ INTEGRATOR_ITS = ["EULER", "RK4"]
 def generate(robot_label: str, urdf: Path, floating: bool, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "grid.cuh"
+    # Mimic robots (e.g. h1_2) have their GRADIENT algorithms refused at codegen
+    # time (G0 footgun guard: no silent-zero mimic gradients; deferred to
+    # T3-finisher). gen_all_code("all") would raise NotImplementedError for them,
+    # so codegen the non-gradient tier-bearing surface instead — this still
+    # exercises the fd/minv/aba/crba/integrator per-tier spill ladders, which is
+    # what this smoke gates. Non-mimic robots keep the full "all" surface.
     code = f"""
 import sys
 sys.path.insert(0, "{REPO_ROOT}")
@@ -65,7 +71,11 @@ from GRiDCodeGenerator import GRiDCodeGenerator
 p = URDFParser()
 r = p.parse("{urdf}", floating_base={floating})
 cg = GRiDCodeGenerator(r, 0, FILE_NAMESPACE="grid")
-cg.gen_all_code(output_path="{out_path}")
+if cg.robot_has_mimic_joints():
+    cg.gen_all_code(output_path="{out_path}",
+                    algorithm_list=["id", "minv", "fd", "aba", "crba", "integrator"])
+else:
+    cg.gen_all_code(output_path="{out_path}")
 """
     rc = subprocess.run([str(REPO_ROOT / ".venv/bin/python"), "-c", code],
                         capture_output=True, text=True)

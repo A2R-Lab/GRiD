@@ -8,6 +8,15 @@
 #include "grid.cuh"
 
 
+// Mimic robots (fr3, h1_2) do NOT emit gradient algorithms (the G0 footgun guard
+// refuses mimic-gradient codegen — deferred to T3-finisher). The test passes
+// -DGRID_RUNNER_SKIP_GRADIENTS=1 for those robots so this runner compiles against
+// their gradient-free header. Default 0 for non-mimic robots (full surface).
+#ifndef GRID_RUNNER_SKIP_GRADIENTS
+#define GRID_RUNNER_SKIP_GRADIENTS 0
+#endif
+
+
 // Block thread count for all kernel launches. Defaults to 32 (one warp) and is
 // overridable via argv[1] so the test harness can sweep warp counts to catch
 // thread-count-dependent races.
@@ -588,6 +597,12 @@ void run() {
     gpuErrchk(cudaPeekAtLastError());
     print_vector("forward_dynamics", hd_data->h_qdd, grid::NUM_JOINTS);
 
+    // Gradient algorithms are NOT emitted for mimic robots (the G0 footgun guard
+    // refuses mimic-gradient codegen — deferred to T3-finisher). The test passes
+    // -DGRID_RUNNER_SKIP_GRADIENTS=1 for mimic robots so this runner compiles
+    // against their (gradient-free) header; the suite already skips comparing
+    // gradient algorithms for mimic robots (MIMIC_SUPPORTED_ALGORITHMS).
+#if !GRID_RUNNER_SKIP_GRADIENTS
     grid::inverse_dynamics_gradient<T, false, true>(
         hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
     );
@@ -621,6 +636,7 @@ void run() {
         grid::NUM_JOINTS,
         grid::NUM_JOINTS
     );
+#endif
 
     grid::aba<T>(
         hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
@@ -642,6 +658,7 @@ void run() {
     gpuErrchk(cudaPeekAtLastError());
     print_vector("end_effector_pose", hd_data->h_eePos, 6 * grid::NUM_EES);
 
+#if !GRID_RUNNER_SKIP_GRADIENTS
     grid::end_effector_pose_gradient<T>(
         hd_data, d_robot_model, 1, block_dimms, thread_dimms, streams
     );
@@ -659,6 +676,7 @@ void run() {
         "end_effector_pose_hessian", hd_data->h_d2eePos,
         6 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_EES
     );
+#endif
 
     // External forces (opt-in via GRID_RUNNER_FEXT=1). The host wrappers read
     // hd_data->d_f_ext (body-major 6*NUM_BODIES local-frame); it is zeroed at
@@ -689,6 +707,7 @@ void run() {
         gpuErrchk(cudaPeekAtLastError());
         print_vector("aba_fext", hd_data->h_qdd, grid::NUM_JOINTS);
 
+#if !GRID_RUNNER_SKIP_GRADIENTS
         grid::inverse_dynamics_gradient<T, false, true>(
             hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
         );
@@ -708,6 +727,7 @@ void run() {
         print_matrix_col_major("forward_dynamics_gradient_qd_fext",
             &hd_data->h_df_du[grid::NUM_JOINTS * grid::NUM_JOINTS],
             grid::NUM_JOINTS, grid::NUM_JOINTS);
+#endif
     }
 #endif
 

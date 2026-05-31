@@ -126,6 +126,16 @@ def _robot_has_mimic_joints(project_model) -> bool:
     return any(
         getattr(j, "is_mimic", False) for j in project_model.robot.joints
     )
+
+# Codegen algorithm selection for MIMIC robots (fr3, h1_2). Their GRADIENT
+# algorithms are refused at codegen time (G0 footgun guard: mimic gradients are
+# not folded yet — deferred to T3-finisher — and the old silent-zero stub was
+# removed). gen_all_code("all") therefore raises NotImplementedError for them,
+# so we codegen only the non-gradient surface this suite actually compares for
+# mimic robots (MIMIC_SUPPORTED_ALGORITHMS): id / crba / ee_pose / direct_minv /
+# forward_dynamics / aba. As each mimic-gradient phase lands (T3-finisher),
+# extend both this list and MIMIC_SUPPORTED_ALGORITHMS together.
+MIMIC_CODEGEN_ALGORITHM_LIST = ["id", "crba", "ee_pose", "minv", "fd", "aba"]
 # Algorithms with a KNOWN, TRACKED correctness bug: their mismatches vs the
 # independent oracle are reported as expected/known failures (not silent masks,
 # not hard suite failures) pending a fix. The oracle stays correct so the bug is
@@ -429,12 +439,30 @@ def _header_cache_key(project_model, resolved_model, include_homogenous_transfor
         "target_shared_mem_bytes": os.environ.get("GRID_CUDA_TARGET_SHARED_MEM_BYTES", "default"),
         "shared_mem_type_size_bytes": os.environ.get("GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES", "default"),
         "codegen_profile": os.environ.get("GRID_CODEGEN_PROFILE", "all"),
+        # Mimic robots codegen a reduced (non-gradient) algorithm list; fold it
+        # into the key so their headers never collide with a full-"all" header.
+        "mimic_algorithm_list": (
+            MIMIC_CODEGEN_ALGORITHM_LIST
+            if _robot_has_mimic_joints(project_model) else None
+        ),
         "include_homogenous_transforms": include_homogenous_transforms,
         "debug_mode": False,
         "need_print_mat": True,
         "file_namespace": "grid",
     }
     return _stable_json_hash(payload)
+
+
+def _run_gen_all_code(codegen, project_model, output_path, include_homogenous_transforms):
+    """Codegen the header, selecting the mimic-safe (non-gradient) algorithm
+    list for mimic robots so the G0 gradient-refusal guard isn't tripped."""
+    kwargs = dict(
+        include_homogenous_transforms=include_homogenous_transforms,
+        output_path=str(output_path),
+    )
+    if _robot_has_mimic_joints(project_model):
+        kwargs["algorithm_list"] = MIMIC_CODEGEN_ALGORITHM_LIST
+    codegen.gen_all_code(**kwargs)
 
 
 def _generate_grid_header(project_model, resolved_model, build_dir: Path, config) -> tuple[Path, str]:
@@ -454,10 +482,7 @@ def _generate_grid_header(project_model, resolved_model, build_dir: Path, config
             FILE_NAMESPACE="grid",
         )
         with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-            codegen.gen_all_code(
-                include_homogenous_transforms=include_homogenous_transforms,
-                output_path=str(header_path),
-            )
+            _run_gen_all_code(codegen, project_model, header_path, include_homogenous_transforms)
         return header_path, header_key
 
     cached_dir = _cache_root() / "headers" / header_key
@@ -476,10 +501,7 @@ def _generate_grid_header(project_model, resolved_model, build_dir: Path, config
         FILE_NAMESPACE="grid",
     )
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        codegen.gen_all_code(
-            include_homogenous_transforms=include_homogenous_transforms,
-            output_path=str(cached_header),
-        )
+        _run_gen_all_code(codegen, project_model, cached_header, include_homogenous_transforms)
     (cached_dir / "manifest.json").write_text(
         json.dumps(
             {
@@ -503,6 +525,7 @@ def _compile_runner(
     *,
     floating_base: bool = False,
     header_key: str,
+    skip_gradients: bool = False,
     config=None,
 ) -> tuple[Path, list[str]]:
     nvcc = shutil.which("nvcc")
@@ -537,6 +560,7 @@ def _compile_runner(
             "floating_base": bool(floating_base),
             "l2_persisting": l2_define,
             "floating_eepose_hessian": enable_floating_eepose_hessian,
+            "skip_gradients": bool(skip_gradients),
             "compile_flags": compile_flags,
         }
     )
@@ -560,6 +584,10 @@ def _compile_runner(
     defines = [f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}"]
     if l2_persisting is not None:
         defines.append(f"-DGRID_CUDA_ENABLE_L2_PERSISTING={l2_define}")
+    # Mimic robots emit no gradient algorithms (G0 guard); compile the runner
+    # without its gradient calls so it links against the gradient-free header.
+    if skip_gradients:
+        defines.append("-DGRID_RUNNER_SKIP_GRADIENTS=1")
 
     cmd = [
         nvcc,
@@ -1413,6 +1441,7 @@ def _run_cuda_equivalence_case(
         build_dir,
         floating_base=base_mode == "floating",
         header_key=header_key,
+        skip_gradients=_robot_has_mimic_joints(project_model),
         config=config,
     )
 
