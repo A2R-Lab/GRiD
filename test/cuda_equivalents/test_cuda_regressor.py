@@ -41,8 +41,10 @@ from RBDReference.tests.tolerances import get_tolerance
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_regressor_smoke_runner.cu")
 
-# (robot_id, base_mode). iiwa14 gated first, then one floating robot.
-_CASES = [("iiwa14", "fixed"), ("g1", "floating")]
+# (robot_id, base_mode). iiwa14 gated first, then fr3 (mimic), then one floating
+# robot. fr3 is a MIMIC robot — validates the mimic-aware regressor emit
+# (alpha*s_sign projection + NUM_BODIES sizing) against the mimic numpy oracle.
+_CASES = [("iiwa14", "fixed"), ("fr3", "fixed"), ("g1", "floating")]
 
 
 def _robot_spec(robot_id, base_mode):
@@ -77,9 +79,16 @@ def _generate_header(project_model, build_dir: Path) -> Path:
         project_model.robot, DEBUG_MODE=False, NEED_PRINT_MAT=False, FILE_NAMESPACE="grid"
     )
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
+        # Use the mimic-safe "regressor" profile ({id, regressor}) rather than the
+        # default "all": the regressor is NOT a refused mimic-gradient algorithm,
+        # but "all" pulls in gradient algos (f_ext_grad/fdsva_so/idsva_so/...) whose
+        # mimic codegen is guarded by a NotImplementedError footgun (would emit
+        # silently-zeroed output). fr3 (mimic) only codegens under a non-gradient
+        # profile; the regressor + its RNEA forward dep ("id") are both present here.
         codegen.gen_all_code(
             include_homogenous_transforms=True,
             output_path=str(header_path),
+            codegen_profile="regressor",
         )
     return header_path
 
