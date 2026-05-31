@@ -195,6 +195,20 @@ class RobotHandle:
         q = np.ascontiguousarray(q, dtype=np.float32)
         return self._runner.end_effector_pose(q)
 
+    def fk_batched(self, q, *, use_warp: bool = False):
+        """Large-batch forward kinematics, one block (thread variant) or warp
+        (warp variant) per sample.
+
+        Input  q:     (B, NUM_POS)  joint positions (batch-major).
+        Output pose7: (B, 7) = [tx, ty, tz, qw, qx, qy, qz] for the leaf EE
+        frame, where the last four are the unit quaternion (w, x, y, z).
+
+        `use_warp=True` runs the warp-cooperative per-sample inner; both
+        variants return identical poses. Only available for fixed-base,
+        non-mimic robots (raises otherwise)."""
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        return self._runner.fk_batched(q, use_warp)
+
     def end_effector_pose_gradient(self, q):
         """End-effector pose Jacobian d/dv (TANGENT, pinocchio convention).
 

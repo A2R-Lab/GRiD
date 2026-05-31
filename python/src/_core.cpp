@@ -53,6 +53,8 @@ extern "C" {
     using fn_crba_t         = int (*)(const float*, float*, int, float);
     // q, out, batch                   — ee_pose, ee_pose_gradient, ee_pose_hessian
     using fn_ee_t           = int (*)(const float*, float*, int);
+    // q, pose7_out, batch, use_warp    — fk_batched (pos+quat, one block/warp per sample)
+    using fn_fk_batched_t   = int (*)(const float*, float*, int, int);
     // q, qd, qdd_opt, out, batch, gravity   — idsva_so (same as rnea)
     // q, qd, u, out, batch, gravity         — fdsva_so (same as fd)
     // q, qd, u, out, batch, dt, it          — integrator, integrator_gradient
@@ -125,6 +127,10 @@ public:
         fn_plant_tor_barrier_ = reinterpret_cast<fn_plant_barrier_t>(opt_sym("grid_plant_joint_torque_barrier"));
         fn_plant_step_       = reinterpret_cast<fn_plant_step_t>(opt_sym("grid_plant_step"));
         fn_plant_ee_cost_    = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_plant_ee_pos_cost"));
+
+        // G2 batched FK (pos+quat) — OPTIONAL: only present in newer .so files
+        // (and only non-null for fixed-base/non-mimic robots).
+        fn_fk_batched_      = reinterpret_cast<fn_fk_batched_t>(opt_sym("grid_rbd_fk_batched"));
 
         // Cache constants (avoid the indirect-function-call cost on every read).
         num_joints_ = fn_num_joints_();
@@ -292,6 +298,36 @@ public:
         py::array_t<float> out({batch, 6 * num_ees_});
         int rc = fn_ee_pose_(q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // ─── fk_batched (large-batch FK, pos+quat) ───────────────────────────────
+    // Input  q:     (batch, NUM_POS)
+    // Output pose7: (batch, 7) = [tx,ty,tz, qw,qx,qy,qz]
+    // use_warp selects the warp-cooperative per-sample inner.
+    py::array_t<float> fk_batched(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        bool use_warp)
+    {
+        if (!fn_fk_batched_) {
+            throw std::runtime_error(
+                "fk_batched not available in this robot .so (rebuild after adding "
+                "the G2 batched-FK surface)");
+        }
+        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
+            throw std::invalid_argument(
+                "fk_batched: q must be (batch, " + std::to_string(num_joints_) + ")");
+        }
+        int batch = (int)q.shape(0);
+        if (batch > max_batch_) {
+            throw std::invalid_argument(
+                "fk_batched: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
+        }
+        py::array_t<float> out({batch, 7});
+        int rc = fn_fk_batched_(q.data(), out.mutable_data(), batch, use_warp ? 1 : 0);
+        if (rc == 3) throw std::runtime_error(
+            "fk_batched: not supported for this robot (floating-base / mimic)");
+        if (rc != 0) throw std::runtime_error("grid_rbd_fk_batched failed: rc=" + std::to_string(rc));
         return out;
     }
 
@@ -658,6 +694,7 @@ private:
     fn_rnea_t  fn_rnea_grad_      = nullptr;
     fn_fd_t    fn_fd_grad_        = nullptr;
     fn_ee_t    fn_ee_pose_hessian_ = nullptr;
+    fn_fk_batched_t fn_fk_batched_ = nullptr;
     fn_rnea_t  fn_idsva_so_       = nullptr;
     fn_fd_t    fn_fdsva_so_       = nullptr;
     fn_integrator_t fn_integrator_      = nullptr;
@@ -715,6 +752,8 @@ PYBIND11_MODULE(_core, m) {
              py::arg("q"), py::arg("gravity") = 9.81f)
         .def("end_effector_pose", &Runner::end_effector_pose,
              py::arg("q"))
+        .def("fk_batched", &Runner::fk_batched,
+             py::arg("q"), py::arg("use_warp") = false)
         .def("end_effector_pose_gradient", &Runner::end_effector_pose_gradient,
              py::arg("q"))
         .def("rnea_grad", &Runner::rnea_grad,

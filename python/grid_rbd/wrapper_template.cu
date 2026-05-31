@@ -246,6 +246,49 @@ extern "C" int grid_rbd_end_effector_pose(
     return 0;
 }
 
+// Batched forward kinematics (large-batch, one block/warp per sample):
+//   q layout:     (batch, NUM_POS)            -> q[b*NUM_POS + j]
+//   pose7 layout: (batch, 7) = [tx,ty,tz, qw,qx,qy,qz]
+// use_warp selects the warp-cooperative inner (1) vs the thread inner (0).
+// Only present when the generated header supports the standalone FK inner
+// (fixed-base, non-mimic robots); floating-base/mimic robots return rc=3.
+extern "C" int grid_rbd_fk_batched(
+    const T* q,
+    T* pose7_out,
+    int batch, int use_warp)
+{
+#ifdef GRID_HAS_FK_BATCHED
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+
+    const int n = grid::NUM_POS;
+    // device scratch (cached, grown to kMaxBatch on first use)
+    static T* d_q_fk = nullptr;
+    static T* d_pose7 = nullptr;
+    if (!d_q_fk) {
+        if (cudaMalloc(&d_q_fk, sizeof(T) * kMaxBatch * n) != cudaSuccess) return 4;
+        if (cudaMalloc(&d_pose7, sizeof(T) * kMaxBatch * 7) != cudaSuccess) return 4;
+    }
+    cudaMemcpy(d_q_fk, q, sizeof(T) * batch * n, cudaMemcpyHostToDevice);
+
+    if (use_warp)
+        grid::ee_pose_fk_batched<T, /*USE_WARP=*/true >(d_pose7, d_q_fk, batch, g_robot,
+                                                        (int)g_thread_dimms.x < 32 ? 32 : (int)g_thread_dimms.x);
+    else
+        grid::ee_pose_fk_batched<T, /*USE_WARP=*/false>(d_pose7, d_q_fk, batch, g_robot,
+                                                        (int)g_thread_dimms.x);
+
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    cudaMemcpy(pose7_out, d_pose7, sizeof(T) * batch * 7, cudaMemcpyDeviceToHost);
+    return 0;
+#else
+    (void)q; (void)pose7_out; (void)batch; (void)use_warp;
+    return 3;  // not supported for this robot (floating-base / mimic)
+#endif
+}
+
 // End-effector pose Jacobian (d/dv tangent, pinocchio convention):
 // 6×NUM_EES×NUM_VEL per timestep. Floating-base now produces the spatial
 // Jacobian columns rather than the older non-standard quaternion-derivative

@@ -1,9 +1,19 @@
 # Kinematics warp/thread (no-derivative FK) — viability + rename plan
 
-**Status:** customer-driven, near-term. READ-ONLY exploration done 2026-05-30.
-**Sequencing gate:** EXECUTE AFTER T2 (ee_pose_gradient perf gaps) and T3 (mimic
-codegen) merge — both edit `_eepose_gradient_hessian.py` (the same file these
-functions live in). See [Sequencing](#sequencing).
+**Status:** IMPLEMENTED 2026-05-30 (branch `g2-warp-fk`). The warp/thread FK
+inners were renamed `X_single_thread`/`X_warp` → `ee_pose_inner_thread`/
+`ee_pose_inner_warp`, generalized beyond iiwa14 (driven by the robot's symbolic
+per-joint Xmats + parent array; serial AND branched trees), and a batched
+`ee_pose_fk_batched_kernel`/`ee_pose_fk_batched` host + `grid_rbd.fk_batched`
+binding were added ((B×NUM_POS) q → (B×7) pos+quat, one block/warp per sample).
+Validated on iiwa14 + gen3 (non-iiwa14 7R) + go2 (branched 12-DoF) at B=64,
+both thread+warp variants, vs the RBDReference oracle (max pos/quat err ~1e-7).
+`fixed_target` (Caveat B / `mat4_mul`) was dropped from these inners rather than
+fixed: the standalone FK inner targets leaf-EE / any-frame via `target_idx`, not
+the fixed-flange path. Floating-base / mimic robots are not supported by the
+standalone inner (they route through `end_effector_pose`).
+**Sequencing gate (historical):** was gated AFTER T2/T3 merge; executed off the
+G1-merged tree.
 
 ## Customer use case
 
