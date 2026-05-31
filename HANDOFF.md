@@ -1185,6 +1185,53 @@ clean. Consolidated post-merge equivalence validation run separately. NOT yet pu
     real for P4.
   - Add h1_2 `norm_rtol` override for fd/aba (float32-on-1e6 noise; mirror go2/g1).
   → A **T3-finisher** is the natural next cascade launch (GPU now free).
+
+  **T3-FINISHER STATUS (2026-05-30) — landed on `g2-mimic-finisher`:**
+  - ✅ **P3 mimic gradients (fixed-base): `inverse_dynamics_gradient` + `forward_dynamics_gradient`.**
+    Implemented as a DENSE serial reduced-space fold mirroring RBDReference.rnea_grad
+    (`_gen_id_du_mimic_inner` in `_inverse_dynamics_gradient.py`); fd_du composes through
+    it via `-Minv·dc_du` (no extra mimic work). Removed from the G0 refusal set for
+    fixed-base. Dense buffers spill to d_workspace at the global-temp tier. **fr3-fixed
+    PASSES the full gradient surface vs pinocchio** (id_du_q/qd + fd_du_q/qd). Gate A
+    byte-identical (iiwa14/go2/g1 × {fixed,floating}). Also fixed a latent s_vaf sizing
+    bug: s_vaf is body-indexed (18*NB) but the id_du/fd_du arenas sized it 18*nv, which
+    overflowed into s_qdd/s_Minv for mimic (NB>nv) — now `18*(NB if mimic else nv)`.
+  - ✅ **floating+mimic q-fold** (`_topology_helpers._emit_mimic_q_fold`): the fixed-base-only
+    assertion is gone; the XImats + XmatsHom q-folds now support a floating root with mimic
+    joints. **ID/CRBA floating-root mimic fold** added (`_inverse_dynamics` c-fold from the
+    root S-matrix; `_gen_crba_mimic_floating_phase2` serial reduced-space H assembly).
+    **fr3-floating PASSES** id/crba/minv/fd/aba/ee_pose vs pinocchio (the floating+mimic
+    equivalence skip is removed; un-skipped). Added a register-pressure launch-limit skip
+    for the autotuned MAX_PERF_LEVEL_THREADS sweep point (fr3-floating FD inline).
+  - ✅ **`vel_to_body` shared-slot fix** (`_idsva_so_floating_velocity_metadata`): a mimic
+    joint no longer overwrites its target's canonical owner mapping. Gated on `is_mimic`
+    (byte-identical for non-mimic).
+  - ✅ **Topology-helper NJ-consistency**: `gen_topology_helpers_size` now sizes on
+    `max(nq, NJ)` (byte-identical for every non-mimic robot since nq≥NJ there; never
+    shrinks → Gate A preserved) so the NJ-wide build no longer overflows for mimic;
+    `gen_topology_helpers_pointers_for_cpp` / `gen_topology_S_sign_for_cpp` use an
+    NJ stride for the **fixed-base mimic** read path. h1_2-fixed/floating topology arrays
+    are now correctly sized (313/307 ints) and read at the NJ stride.
+  - ✅ **h1_2 fd/aba `norm_rtol` overrides** + h1_2 mimic gradient `norm_rtol` overrides.
+  - 🟡 **ee_pose_gradient mimic alpha-accumulate** implemented (serial fold for shared
+    v-slot columns; byte-identical non-mimic) but STILL G0-refused: it ships with
+    `ee_pose_hessian`, which is NOT yet mimic-folded, so the pair stays refused.
+
+  **STILL DEFERRED (carried forward):**
+  - ❌ **h1_2-fixed branched-mimic ID *value* bug persists.** The topology sizing/stride
+    fix above is necessary but NOT sufficient: h1_2-fixed `inverse_dynamics` still
+    diverges (norm_rel ~69 at q=qd=qdd=0, worst at c[2]) while fr3-fixed/floating pass.
+    The topology arrays/reads are verified correct (NJ-consistent, in-bounds); the
+    remaining bug is in the branched **multi-root** (roots 0/6/12) force-propagation
+    *value* path, not the index path. RBDReference + pinocchio agree (c[2]=-0.413), so
+    the oracle is right and the CUDA inner is wrong. Needs device-level debugging of the
+    backward f-pass for the multi-root tree. ⇒ h1_2-fixed/floating equivalence still RED.
+  - ❌ **P4 mimic: ee_pose_hessian + idsva_so + fdsva_so** not implemented (still G0-refused).
+    ee_pose_hessian (analytic 2nd-order) + idsva_so (~3589 LOC) + fdsva_so are the heavy
+    remaining folds; ee_pose_gradient groundwork is in place.
+  - ❌ **floating+mimic GRADIENTS** still refused (the dense id_du inner asserts fixed-base;
+    `gen_all_code` refuses id_du/fd_du for floating mimic). fr3/h1_2-floating gradient
+    surface is the next floating extension after the h1_2 multi-root value bug is closed.
 - **T2 left crba unmodified** (its Phase-2 is already parallel; the gap is batch
   occupancy/tier) → handled by T5's autotune, not a codegen restructure.
 - **T5 propose-only follow-ups** (`docs/open-tasks/tier_autotune_followups.md`):
@@ -1269,27 +1316,7 @@ T3 (mimic codegen) → T5 (tier autotune) → T2 (perf gaps).
   comprehensive perf re-sweep — fold the naming/uniformity residuals from
   [[project-grid-naming-audit-backlog]] in too. Do as ONE phase after F lands.
 
-### G. Round-2 batch plan — 2026-05-30 (PICK UP HERE)
-
-**STATUS 2026-05-30:**
-- **F-batch:** ✅ MERGED + validated GREEN (tier smoke / iiwa14 all-algo / fext 3-way /
-  fr3-fixed mimic; floating+mimic guarded+test-skipped). Reference-oracle numpy layer
-  (plant/energy/centroidal/regressor, 72/0 vs pinocchio) ✅ MERGED.
-- **G0 + G1:** ✅ MERGED + validated GREEN (parent `164b655`, GRiDCodeGenerator `85e239c`,
-  RBDReference `fe5af8c`). G0 footgun fixed (mimic gradients → clear `NotImplementedError`,
-  NOT silent zeros). B+C consolidation: `gen_device_wrapper` (×7 device emitters),
-  `gen_tier_dispatch` (×12 tier ladders), byte-identical all robots, ~182 lines removed.
-  `grid_plant` now Python-callable (C-ABI + kernels + `grid_rbd` handle). D.3 PyTorch +
-  CUDA-Graphs backend (`backend="torch"`, autograd on 4 algos, `urdf_string=`, 1.69× graph
-  replay). Fixed a real bug: T4's `d_f_ext` had broken the JAX FFI compile.
-- **G2:** 🟢 IN PROGRESS (4 agents on clones off `164b655`): T3-finisher (mimic P3/P4 +
-  h1_2 ID + vel_to_body + floating+mimic, removing G0 refusals as algos land); centroidal
-  + R1 (energy/g/Coriolis + CCRBA + CoM); f_ext gradients (−Jᵀ, M⁻¹Jᵀ); warp/thread batched
-  FK (HJCD-IK pattern). Merge order on landing: lowest-risk first; reconcile overlaps on
-  `_eepose_gradient_hessian.py` / `id_du`.
-- **NOT yet pushed** to origin (whole F+G stack local on `modernizing-tests`).
-
----
+### G. Round-2 batch plan — 2026-05-30 (user-approved; launch when post-F validation green)
 
 Scope chosen by user: all four feature tasks + **B+C consolidation FIRST**. Sequencing
 resolves "T3-finisher mandatory-first" vs "consolidate-first" by splitting the footgun

@@ -16,6 +16,16 @@
 #define GRID_RUNNER_SKIP_GRADIENTS 0
 #endif
 
+// Finer-grained: ee_pose gradient/hessian (kinematic 1st/2nd order) land in a
+// LATER mimic phase (P4) than the dynamics gradients id_du/fd_du (P3). Fixed-base
+// mimic emits id_du/fd_du (so GRID_RUNNER_SKIP_GRADIENTS=0) but NOT the ee_pose
+// gradients yet, so the test sets -DGRID_RUNNER_SKIP_EEPOSE_GRADIENTS=1 for mimic
+// robots to skip only those. Defaults to GRID_RUNNER_SKIP_GRADIENTS so non-mimic
+// robots and the floating-skip path behave exactly as before.
+#ifndef GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
+#define GRID_RUNNER_SKIP_EEPOSE_GRADIENTS GRID_RUNNER_SKIP_GRADIENTS
+#endif
+
 
 // Block thread count for all kernel launches. Defaults to 32 (one warp) and is
 // overridable via argv[1] so the test harness can sweep warp counts to catch
@@ -313,6 +323,7 @@ void run() {
         "crba", grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T>());
     grid_runner_set_smem_or_skip(grid::end_effector_pose_kernel<T>,
         "end_effector_pose", grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>());
+#if !GRID_RUNNER_SKIP_GRADIENTS
     if (floating_algorithm_requested("end_effector_pose_gradient")) {
         grid_runner_set_smem_or_skip(grid::end_effector_pose_gradient_kernel<T>,
             "end_effector_pose_gradient", grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>());
@@ -321,6 +332,7 @@ void run() {
         grid_runner_set_smem_or_skip(grid::end_effector_pose_gradient_hessian_kernel<T>,
             "end_effector_pose_hessian", grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>());
     }
+#endif  // !GRID_RUNNER_SKIP_GRADIENTS
 
     if (floating_algorithm_requested("inverse_dynamics")) {
         floating_inverse_dynamics_runner<T><<<1, g_num_threads, grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
@@ -399,6 +411,7 @@ void run() {
         print_vector("end_effector_pose", h_ee.data(), 6 * grid::NUM_EES);
     }
 
+#if !GRID_RUNNER_SKIP_GRADIENTS
     if (floating_algorithm_requested("end_effector_pose_gradient")) {
         grid::end_effector_pose_gradient_kernel<T><<<1, g_num_threads, grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_dee,
@@ -485,6 +498,7 @@ void run() {
             grid::NUM_VEL
         );
     }
+#endif  // !GRID_RUNNER_SKIP_GRADIENTS
 
     // External forces (opt-in via GRID_RUNNER_FEXT=1): re-run the dynamics that
     // thread d_f_ext, emitting *_fext-labeled outputs. The default outputs above
@@ -516,6 +530,7 @@ void run() {
         gpuErrchk(cudaMemcpy(h_vec.data(), d_vec, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
         print_vector("aba_fext", h_vec.data(), grid::NUM_VEL);
 
+#if !GRID_RUNNER_SKIP_GRADIENTS
         grid::inverse_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::ID_DU_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_grad, hd_data->d_workspace, d_q_qd, grid::NUM_JOINTS + grid::NUM_VEL,
             d_f_ext_active, d_robot_model, gravity, 1
@@ -537,6 +552,7 @@ void run() {
         print_matrix_col_major("forward_dynamics_gradient_q_fext", h_grad.data(), grid::NUM_VEL, grid::NUM_VEL);
         print_matrix_col_major("forward_dynamics_gradient_qd_fext",
             &h_grad[grid::NUM_VEL * grid::NUM_VEL], grid::NUM_VEL, grid::NUM_VEL);
+#endif  // !GRID_RUNNER_SKIP_GRADIENTS
     }
 
     gpuErrchk(cudaFree(d_q));
@@ -658,7 +674,7 @@ void run() {
     gpuErrchk(cudaPeekAtLastError());
     print_vector("end_effector_pose", hd_data->h_eePos, 6 * grid::NUM_EES);
 
-#if !GRID_RUNNER_SKIP_GRADIENTS
+#if !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
     grid::end_effector_pose_gradient<T>(
         hd_data, d_robot_model, 1, block_dimms, thread_dimms, streams
     );
