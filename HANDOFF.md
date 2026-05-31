@@ -1392,13 +1392,16 @@ re-sweep (= the 4pm sweep). That tail folds into F2; it is NOT a separate pendin
 - G3. **Merge-checklist lesson (2026-05-31):** after any URDFParser/Robot.py or shared-GCG.py merge,
   run a FLOATING+FIXED codegen smoke (`cli <urdf>` and `cli <urdf> -f`), not just py_compile — a
   floating-codegen regression (E4 single-axis-S guard hitting the 6-DoF root) slipped past py_compile.
-- G4. **SO audit (user-requested, later) + idsva_so floating-reference fallback KEPT.**
-  `gen_idsva_so_body_frame_floating_reference_inner` (~`_idsva_so.py:959`, ~700 lines + its
-  gravity-shim family) is confirmed NOT-emitted-in-production (dispatcher routes floating-base SO to
-  world_frame) and NOT a live test oracle — BUT it is a DELIBERATELY-KEPT fallback ("world-frame
-  co-exists with" it, `_idsva_so.py:2606`). Decision (user, 2026-05-31): KEEP for now; revisit in a
-  dedicated SO audit (parallelism + whether to retire the body-frame floating path). The code is
-  flagged inline at the def. Do NOT delete without that audit.
+- G4. **SO audit (user-requested, later) — full plan: [`docs/open-tasks/so_audit_plan.md`](docs/open-tasks/so_audit_plan.md).**
+  Dedicated second-order (`idsva_so` body+world, `fdsva_so`) pass: A parallelism (world-frame
+  thread-0 6-vec chains; the twice-rejected fdsva_so Minv-apply hotspot — Nsight+transpose first),
+  B dedup (Xdown Plücker-inverse 3× [P-dedup may land this]; reference-order assembly 2×; fdsva_so
+  timing/non-timing emitters), C mimic-SO completion (the NB>NV internal-sweep VALUE bug J-idsva
+  built+reverted), D the floating-reference fallback decision. The fallback
+  `gen_idsva_so_body_frame_floating_reference_inner` (~`_idsva_so.py:959`, ~700 lines) is confirmed
+  NOT-emitted-in-production + NOT a live oracle but a DELIBERATELY-KEPT fallback ("world-frame
+  co-exists with" it, ~`_idsva_so.py:2606`). Decision (user, 2026-05-31): KEEP for now; flagged
+  inline at the def. Do NOT delete without the audit.
 
 **API STABILITY NOTE:** the core/benchmarked algorithm signatures are STABLE now — the only
 signature churn (T4 `d_f_ext`, T5 `TIER_PERF`→`TIER_SHARED`+alias) is DONE+landed, and the B+C
