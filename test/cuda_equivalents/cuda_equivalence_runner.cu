@@ -323,7 +323,9 @@ void run() {
         "crba", grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T>());
     grid_runner_set_smem_or_skip(grid::end_effector_pose_kernel<T>,
         "end_effector_pose", grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>());
-#if !GRID_RUNNER_SKIP_GRADIENTS
+    // ee-pose grad/hessian SMEM registration: gate on SKIP_EEPOSE so floating
+    // mimic (id_du/fd_du emitted, ee derivatives not) skips only the ee kernels.
+#if !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
     if (floating_algorithm_requested("end_effector_pose_gradient")) {
         grid_runner_set_smem_or_skip(grid::end_effector_pose_gradient_kernel<T>,
             "end_effector_pose_gradient", grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>());
@@ -332,7 +334,7 @@ void run() {
         grid_runner_set_smem_or_skip(grid::end_effector_pose_gradient_hessian_kernel<T>,
             "end_effector_pose_hessian", grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>());
     }
-#endif  // !GRID_RUNNER_SKIP_GRADIENTS
+#endif  // !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
 
     if (floating_algorithm_requested("inverse_dynamics")) {
         floating_inverse_dynamics_runner<T><<<1, g_num_threads, grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
@@ -412,6 +414,13 @@ void run() {
     }
 
 #if !GRID_RUNNER_SKIP_GRADIENTS
+    // ee_pose grad/hessian for FLOATING base. Gated separately from the dynamics
+    // gradients so a floating MIMIC robot (which emits id_du/fd_du but NOT the
+    // ee-pose derivatives — their floating-root subspace fold is deferred) can
+    // compile the id_du/fd_du block while skipping the un-emitted ee kernels.
+    // GRID_RUNNER_SKIP_EEPOSE_GRADIENTS defaults to GRID_RUNNER_SKIP_GRADIENTS,
+    // so non-mimic floating (both 0) still compiles the ee blocks as before.
+#if !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
     if (floating_algorithm_requested("end_effector_pose_gradient")) {
         grid::end_effector_pose_gradient_kernel<T><<<1, g_num_threads, grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_dee,
@@ -450,6 +459,7 @@ void run() {
         gpuErrchk(cudaMemcpy(h_d2ee.data(), d_d2ee, 6 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_EES * sizeof(T), cudaMemcpyDeviceToHost));
         print_vector("end_effector_pose_hessian", h_d2ee.data(), 6 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_EES);
     }
+#endif  // !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
 
     if (floating_algorithm_requested("inverse_dynamics_gradient_q") ||
         floating_algorithm_requested("inverse_dynamics_gradient_qd")) {
