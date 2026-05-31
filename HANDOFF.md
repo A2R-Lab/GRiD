@@ -1350,8 +1350,14 @@ re-sweep (= the 4pm sweep). That tail folds into F2; it is NOT a separate pendin
 
 ### REMAINING backlog (prioritized)
 **A. Correctness — open/deferred**
-- A-d2ee-gate. d2ee is now a HARD cuda-equivalence requirement; the integrated green-gate must
-  confirm CUDA d2ee passes fleet-wide (reference confirmed; kernel unchanged). Re-gate if any robot fails.
+- A-d2ee-gate. **RESOLVED 2026-05-31 (`5ff1ce1`).** Integrated green-gate caught h1_2-fixed d2ee
+  emitting exact-0 columns — the fixed-base mimic d2ee fold (B2-ee, fr3-validated) didn't sum over
+  MULTI-BLOCK v-slots (h1_2 thumb = proximal + 2 mimics → 3 blocks on one slot; last-writer-win
+  dropped terms). Fix: emit the alpha-weighted block-pair SUM per shared v-slot. h1_2-fixed +
+  fr3-fixed d2ee GREEN on clean rebuild; gate removed; d2ee HARD for all robots. (Lesson: the
+  integrated gate caught a coverage gap no isolated-clone validation could — fr3 has 1 mimic
+  joint, h1_2 has 12. Also: clear the generated-header cache before re-validating, or stale
+  headers give phantom id_du/fd_du failures.)
 
 **B. Mimic codegen — remaining deferrals**
 - B2-ee-float. floating+mimic `ee_pose_gradient`/`ee_pose_hessian` (root 6-DoF subspace fold; still refused).
