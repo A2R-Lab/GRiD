@@ -1269,7 +1269,27 @@ T3 (mimic codegen) → T5 (tier autotune) → T2 (perf gaps).
   comprehensive perf re-sweep — fold the naming/uniformity residuals from
   [[project-grid-naming-audit-backlog]] in too. Do as ONE phase after F lands.
 
-### G. Round-2 batch plan — 2026-05-30 (user-approved; launch when post-F validation green)
+### G. Round-2 batch plan — 2026-05-30 (PICK UP HERE)
+
+**STATUS 2026-05-30:**
+- **F-batch:** ✅ MERGED + validated GREEN (tier smoke / iiwa14 all-algo / fext 3-way /
+  fr3-fixed mimic; floating+mimic guarded+test-skipped). Reference-oracle numpy layer
+  (plant/energy/centroidal/regressor, 72/0 vs pinocchio) ✅ MERGED.
+- **G0 + G1:** ✅ MERGED + validated GREEN (parent `164b655`, GRiDCodeGenerator `85e239c`,
+  RBDReference `fe5af8c`). G0 footgun fixed (mimic gradients → clear `NotImplementedError`,
+  NOT silent zeros). B+C consolidation: `gen_device_wrapper` (×7 device emitters),
+  `gen_tier_dispatch` (×12 tier ladders), byte-identical all robots, ~182 lines removed.
+  `grid_plant` now Python-callable (C-ABI + kernels + `grid_rbd` handle). D.3 PyTorch +
+  CUDA-Graphs backend (`backend="torch"`, autograd on 4 algos, `urdf_string=`, 1.69× graph
+  replay). Fixed a real bug: T4's `d_f_ext` had broken the JAX FFI compile.
+- **G2:** 🟢 IN PROGRESS (4 agents on clones off `164b655`): T3-finisher (mimic P3/P4 +
+  h1_2 ID + vel_to_body + floating+mimic, removing G0 refusals as algos land); centroidal
+  + R1 (energy/g/Coriolis + CCRBA + CoM); f_ext gradients (−Jᵀ, M⁻¹Jᵀ); warp/thread batched
+  FK (HJCD-IK pattern). Merge order on landing: lowest-risk first; reconcile overlaps on
+  `_eepose_gradient_hessian.py` / `id_du`.
+- **NOT yet pushed** to origin (whole F+G stack local on `modernizing-tests`).
+
+---
 
 Scope chosen by user: all four feature tasks + **B+C consolidation FIRST**. Sequencing
 resolves "T3-finisher mandatory-first" vs "consolidate-first" by splitting the footgun
