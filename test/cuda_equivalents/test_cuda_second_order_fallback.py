@@ -50,7 +50,11 @@ def _second_order_smoke_robot_ids() -> tuple[str, ...]:
         return _comma_separated_env("GRID_CUDA_SECOND_ORDER_SMOKE_ROBOTS", "")
     return _comma_separated_env(
         "GRID_CUDA_SECOND_ORDER_SMOKE_ROBOT",
-        "iiwa14",
+        # iiwa14 (gate) + go2 (quadruped) by default. g1/h1_2 also work but their
+        # large all-profile headers take many minutes to nvcc-compile, so widen to
+        # them via the env var in the (time-budgeted) sweep, e.g.
+        # GRID_CUDA_SECOND_ORDER_SMOKE_ROBOTS=iiwa14,go2,g1.
+        "iiwa14,go2",
     )
 
 
@@ -89,7 +93,9 @@ def _robot_spec(robot_id: str, base_mode: str):
 def _floating_second_order_robot_ids() -> tuple[str, ...]:
     return _comma_separated_env(
         "GRID_CUDA_FLOATING_SECOND_ORDER_ROBOTS",
-        "iiwa14",
+        # iiwa14 (gate) + go2 (quadruped) by default; widen to g1/h1_2 via the env
+        # var in the sweep (their all-profile headers are many-minute nvcc compiles).
+        "iiwa14,go2",
     )
 
 

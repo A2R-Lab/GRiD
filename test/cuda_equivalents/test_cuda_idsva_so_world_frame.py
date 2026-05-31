@@ -52,7 +52,7 @@ def _comma_separated_env(name: str, default: str) -> tuple[str, ...]:
 
 
 def _world_frame_robot_ids() -> tuple[str, ...]:
-    return _comma_separated_env("GRID_CUDA_IDSVA_SO_WORLD_FRAME_ROBOTS", "iiwa14")
+    return _comma_separated_env("GRID_CUDA_IDSVA_SO_WORLD_FRAME_ROBOTS", "iiwa14,go2,g1")
 
 
 def _world_frame_target_shared_bytes() -> int:
