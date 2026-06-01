@@ -1418,8 +1418,9 @@ codegen smoke + additive-GCG reconcile).
   `test_energy_equivalence.py`). [Both were stale REMAINING entries — corrected 2026-05-31.]
 
 **E. Roadmap — not started**
-- E1-rem. mimic-robot regressor `Y` CUDA validation (codegen works, no equiv run = gap, not a bug);
-  FD param-gradient `∂q̈/∂π=−M⁻¹Y`; runtime-inertia two-variant emit (plan only, `d4_*` doc); CRBA regressor.
+- E1-rem. mimic regressor `Y` CUDA validation **ALREADY DONE** (fr3-fixed case landed at `2b5afbe`,
+  confirmed green on fresh compile 2026-05-31 — stale entry). FD param-gradient `∂q̈/∂π=−M⁻¹Y` also
+  DONE (g1-spill validated). REMAINING: runtime-inertia two-variant emit (plan only, `d4_*` doc); CRBA regressor.
 - E2. **CLOSED 2026-05-31** (numpy + CUDA J/J̇/Λ). On-device `osc_inertia` M⁻¹ compose **also DONE**
   (self-contained kernel folds `direct_minv_inner` in; iiwa14/go2/g1 green). REMAINING follow-up:
   mimic-robot frame-Jacobian CUDA (gated ¬mimic — needs the multiplier/effective-angle fold + the
