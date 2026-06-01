@@ -1435,6 +1435,20 @@ codegen smoke + additive-GCG reconcile).
 - E3. **Contact/constraint dynamics** (constraint Jac, KKT/Delassus, constrained FD, impulse) — biggest moat vs frax.
 - E4-cuda. planar/spherical CUDA multi-column-S emit (parser groundwork landed; needs multi-column-S
   + NV≠NQ codegen — guard raises `UnsupportedJointTypeError` today). Other joint types (helical/translation/composite).
+- **E-customer. CUSTOMER-DRIVEN roadmap** (from the GATO/PDDP/HJCD-IK reviews —
+  [`docs/customer-reviews/SYNTHESIS.md`](docs/customer-reviews/SYNTHESIS.md)). All 3 customers are on
+  STALE GRiD/GLASS and hand-roll plant/2nd-order/linalg we now ship. Demand-ranked asks:
+  (1) **`plant_step_hessian`** (analytic 2nd-order plant Hessian — `_plant.py` omits it; PDDP+GATO
+  justify it = highest-value addition); (2) **auto-allocating `plant_step_gradient`** overload (GATO
+  ergonomics — biggest cutover friction); (3) **parallelize `frame_jacobian_inner`** (HJCD: it's
+  correctness-first SERIAL, slower than their hand version — our newest kinematics needs the
+  column-parallel treatment); (4) fused terminal-aware `cost_value_grad_hess` (GATO); (5)
+  constraint primitives beyond log-barriers — aug-Lagrangian/penalty (PDDP); (6) frame_jacobian
+  fixed-tool-frame target + joint-limits emitted helper (HJCD); (7) IntegratorType SI-Euler +
+  trapezoidal byte-match (GATO); (8) lean kinematics-only codegen profile (HJCD); (9) upstream GATO's
+  block-tridiagonal SpMV into GLASS. Cross-cutting: a customer "integrating/regenerating GRiD safely"
+  guide (the silent-launch-check pitfall hit ALL 3 in the wild) + kill the "patch-the-header"
+  anti-pattern that freezes their pins.
 
 **F. Cleanup**
 - F1. D.5 RBDReference file-split (mixin map: `rbdreference_split_plan.md`). **ATTEMPTED + DEFERRED
