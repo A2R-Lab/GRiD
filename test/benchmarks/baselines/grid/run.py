@@ -306,6 +306,56 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "gate": None,
         "shared_mem_skip": "FD_DU_DYNAMIC_SHARED_MEM_BYTES",
     },
+    # f_ext gradients (A1). Host wrappers write into gridData's d_dtau_dfext /
+    # d_dqdd_dfext / d_did_du_dfext buffers (allocated in gen_init_gridData), so
+    # the call convention matches the standard (hd_data, d_robotModel, N, ...)
+    # shape — no gravity arg (RNEA bias is folded into the kernel) and no extra
+    # caller buffer. See GRiDCodeGenerator/algorithms/_f_ext_gradient.py:
+    # gen_f_ext_gradient_host (mode 0/1/2) and gen_f_ext_gradient_dq_host.
+    "f_ext_gradient": {
+        "single_call":        "grid::f_ext_gradient_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::f_ext_gradient<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::f_ext_gradient_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "F_EXT_GRADIENT",
+        "gate": None,
+        "shared_mem_skip": "F_EXT_GRAD_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "f_ext_gradient_dq": {
+        "single_call":        "grid::f_ext_gradient_dq_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::f_ext_gradient_dq<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::f_ext_gradient_dq_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "F_EXT_GRADIENT_DQ",
+        "gate": None,
+        "shared_mem_skip": "F_EXT_GRAD_DQ_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    # Joint-torque regressor (A1). The grid:: symbol is `inverse_dynamics_regressor`
+    # (the registry key is `regressor`); its host wrapper takes an extra
+    # CALLER-OWNED output buffer `d_Y` (10*NUM_BODIES*NUM_VEL floats per timestep)
+    # that is NOT part of gridData. We provide it as a TU-static device buffer
+    # sized for the batch max (256). The kernel writes out_size per timestep with
+    # stride out_size, so the batch buffer is out_size*256. It also takes the
+    # gravity arg (RNEA forward sweep). See _regressor.py:gen_inverse_dynamics_regressor_host.
+    "regressor": {
+        "single_call":        "static float *_d_Y_s=[]{float*p;cudaMalloc(&p,sizeof(float)*10*grid::NUM_BODIES*grid::NUM_VEL);return p;}(); grid::inverse_dynamics_regressor_single_timing<float>(hd_data,_d_Y_s,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "static float *_d_Y_b=[]{float*p;cudaMalloc(&p,sizeof(float)*10*grid::NUM_BODIES*grid::NUM_VEL*256);return p;}(); grid::inverse_dynamics_regressor<float>(d,_d_Y_b,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "static float *_d_Y_c=[]{float*p;cudaMalloc(&p,sizeof(float)*10*grid::NUM_BODIES*grid::NUM_VEL*256);return p;}(); grid::inverse_dynamics_regressor_compute_only<float>(d,_d_Y_c,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "batch_label": "REGRESSOR",
+        "gate": None,
+        "shared_mem_skip": "INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    # FD parameter gradient dqdd/dpi = -Minv.Y (A1). grid:: symbol is
+    # `fd_parameter_gradient`; like the regressor its host wrapper takes a
+    # CALLER-OWNED output buffer `d_dqdd_dpi` (10*NUM_BODIES*NUM_VEL floats per
+    # timestep, NOT in gridData) plus the gravity arg. TU-static device buffer,
+    # batch sized for N=256. See _regressor.py:gen_fd_parameter_gradient_host.
+    "fd_parameter_gradient": {
+        "single_call":        "static float *_d_dpi_s=[]{float*p;cudaMalloc(&p,sizeof(float)*10*grid::NUM_BODIES*grid::NUM_VEL);return p;}(); grid::fd_parameter_gradient_single_timing<float>(hd_data,_d_dpi_s,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "static float *_d_dpi_b=[]{float*p;cudaMalloc(&p,sizeof(float)*10*grid::NUM_BODIES*grid::NUM_VEL*256);return p;}(); grid::fd_parameter_gradient<float>(d,_d_dpi_b,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "static float *_d_dpi_c=[]{float*p;cudaMalloc(&p,sizeof(float)*10*grid::NUM_BODIES*grid::NUM_VEL*256);return p;}(); grid::fd_parameter_gradient_compute_only<float>(d,_d_dpi_c,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "batch_label": "FD_PARAMETER_GRADIENT",
+        "gate": None,
+        "shared_mem_skip": "FD_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
+    },
     "ee_pose": {
         "single_call":        "grid::end_effector_pose_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
         "batch_with_mem":     "grid::end_effector_pose<float>(d,m,N,dim3(N,1,1),dimms,streams)",
@@ -361,6 +411,62 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_label": "FDSVA_SO",
         "gate": "GRID_HAS_FDSVA_SO",
         "shared_mem_skip": "FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    # Centroidal / energy quick-wins (A1). Host wrappers write into gridData
+    # buffers (d_c for the RNEA-bias families; d_com / d_ccrba / d_energy).
+    #   - generalized_gravity / nonlinear_effects: RNEA-bias wrappers, take the
+    #     gravity arg; signature mirrors `id` + gravity. Emitted whenever `id`
+    #     is generated (always, under codegen_profile='all'). Shared smem macro
+    #     is ID_BIAS_DYNAMIC_SHARED_MEM_BYTES for BOTH.
+    #     See GRiDCodeGenerator/algorithms/_centroidal.py:gen_id_bias_host.
+    #   - com: kinematics-domain, NO gravity / NO qd. ccrba: NO gravity (uses qd).
+    #     energy: takes the gravity arg (uses qd). Output sizes: com=3+3*NUM_VEL,
+    #     ccrba=6*NUM_VEL+6, energy=3.  See _centroidal.py:_gen_kin_centroidal_host.
+    # NOTE: com/ccrba/energy are SKIPPED at codegen for MIMIC robots (their
+    # per-body Jacobian fold is not mimic-reduced) — for a mimic robot these
+    # grid:: symbols are absent and the TU would fail to compile. The current
+    # sweep robots (iiwa14/go2/g1/h1_2) are all non-mimic, so no gate is needed
+    # here; there is no GRID_HAS_* preprocessor macro emitted for these families
+    # to gate on. (generalized_gravity / nonlinear_effects are always emitted.)
+    "generalized_gravity": {
+        "single_call":        "grid::generalized_gravity_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::generalized_gravity<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::generalized_gravity_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "batch_label": "GENERALIZED_GRAVITY",
+        "gate": None,
+        "shared_mem_skip": "ID_BIAS_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "nonlinear_effects": {
+        "single_call":        "grid::nonlinear_effects_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::nonlinear_effects<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::nonlinear_effects_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "batch_label": "NONLINEAR_EFFECTS",
+        "gate": None,
+        "shared_mem_skip": "ID_BIAS_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "energy": {
+        "single_call":        "grid::energy_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::energy<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::energy_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "batch_label": "ENERGY",
+        "gate": None,
+        "shared_mem_skip": "ENERGY_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "com": {
+        "single_call":        "grid::com_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::com<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::com_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "COM",
+        "gate": None,
+        "shared_mem_skip": "COM_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "ccrba": {
+        "single_call":        "grid::ccrba_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::ccrba<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::ccrba_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "CCRBA",
+        "gate": None,
+        "shared_mem_skip": "CCRBA_DYNAMIC_SHARED_MEM_BYTES",
     },
     # Time integrators. Host signatures take an extra `dt` (const T) between
     # `gravity` and `num_timesteps`; IntegratorType defaults to EULER and gridData
