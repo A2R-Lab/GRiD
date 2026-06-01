@@ -1433,9 +1433,15 @@ codegen smoke + additive-GCG reconcile).
 - F1. D.5 RBDReference file-split (mixin map: `rbdreference_split_plan.md`). **ATTEMPTED + DEFERRED
   2026-05-31** — all-at-once split broke ~93 tests (mis-wired mixin MRO behind an identical public
   surface). Redo INCREMENTALLY: one mixin at a time, full numpy suite green after each.
-- F2. Naming/uniformity residuals; warnings sweep (`mxS` NumPy `ndim>0` + nvcc/ptxas);
-  comprehensive perf re-sweep (= the planned 4pm sweep). Perf tail: floating idsva_so de-alias,
-  crba MINIMAL 3rd-rung (keep small hot band in smem instead of whole-arena), idsva_so big-robot gap.
+- F2. Naming/uniformity + warnings sweep + **two systemic bug-class audits** — full worklist in
+  [`docs/open-tasks/f2_audit_findings.md`](docs/open-tasks/f2_audit_findings.md):
+  (A) **silent CUDA launch-failure pattern** — smoke runners that launch without a
+  `cudaGetLastError` check (osc-Λ zero-output was one; `cuda_centroidal_smoke_runner.cu` +
+  `cuda_plant_smoke_runner.cu` still unguarded). (B) **per-body scratch sized by NV not NB**
+  (mimic overflow class — 3 fixed this session; `_centroidal.py` `s_vaf=18*n` is a latent suspect).
+  Plus the `grid::SUGGESTED_THREADS`→perf-cap printGRiD.cu rename, nvcc/ptxas warnings, naming
+  uniformity. (`mxS` ndim>0 ALREADY fixed — dropped.) Perf tail: floating idsva_so de-alias,
+  crba MINIMAL 3rd-rung, idsva_so big-robot gap. Do AFTER the sweep (needs codegen/compiles).
 - F3. T5 propose-only: autotuned best-tier → per-robot codegen defaults; LITE-aliases-SHARED launch_bounds.
 
 **G. Housekeeping**
