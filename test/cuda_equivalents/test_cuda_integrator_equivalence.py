@@ -47,7 +47,9 @@ RUNNER_SOURCE = Path(__file__).with_name("cuda_integrator_smoke_runner.cu")
 # (prefix, python-side integrator name, has_gradient)
 # Both fixed- and floating-base emit value + gradient + both-at-once kernels for
 # all five integrators (the floating SI-Euler / Midpoint / RK3 / RK4 gradients
-# carry the SE(3) dIntegrate chain-rule wiring).
+# carry the SE(3) dIntegrate chain-rule wiring). EXCEPTION: floating-base MIMIC
+# robots refuse the gradient (the floating multi-stage mimic gradient is deferred;
+# see the has_mimic skip in the test body) — those cases are skipped.
 _INTEGRATORS = (
     ("integrator_euler",    "euler",                True),
     ("integrator_si_euler", "semi_implicit_euler",  True),
@@ -63,7 +65,11 @@ def _comma_separated_env(name: str, default: str) -> tuple[str, ...]:
 
 
 def _robot_ids() -> tuple[str, ...]:
-    return _comma_separated_env("GRID_CUDA_INTEGRATOR_ROBOTS", "iiwa14,go2")
+    # fr3 is the mimic case (fixed + floating): its integrator gradient COMPOSES
+    # the mimic-reduced FD gradient and assembles dAB in reduced NV space. The
+    # mimic path needs s_vaf sized 18*NB (NB>NV for fr3 fixed) so the composed
+    # FD-grad inner's body-indexed writes don't overflow into s_Minv/s_qdd.
+    return _comma_separated_env("GRID_CUDA_INTEGRATOR_ROBOTS", "iiwa14,go2,fr3")
 
 
 def _dts() -> tuple[float, ...]:
@@ -196,6 +202,23 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
             f"before executing CUDA equivalence tests. Resolution error: {exc}"
         )
     project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
+    # Floating-base mimic robots (e.g. fr3-floating): the integrator GRADIENT is
+    # still refused by codegen. The fixed-base mimic integrator gradient is fully
+    # supported and exact (all 5 integrators); the floating single-stage gradient
+    # is correct too, but the floating MULTI-stage (Midpoint/RK3/RK4) gradient is
+    # wrong for mimic only and is deferred — so the `integrators` profile refuses
+    # to emit the floating-mimic gradient rather than ship a silently-wrong RK
+    # value path. Skip here (the gradient header cannot be generated).
+    has_mimic = any(
+        getattr(j, "is_mimic", False)
+        for j in project_model.robot.get_joints_ordered_by_id()
+    )
+    if has_mimic and base_mode == "floating":
+        pytest.skip(
+            f"{robot_id}-floating is a mimic robot; the floating-base mimic integrator "
+            "gradient (multi-stage RK) is deferred and codegen refuses it. Fixed-base "
+            "mimic integrator gradients are validated separately."
+        )
     executable, compile_cmd = _build_case(project_model, tmp_path, f"{robot_id}_{base_mode}_cuda_integrator")
     samples = _samples(project_model)
     dts = _dts()
