@@ -195,12 +195,34 @@ void run() {
     frame_jac_dot_kernel<T><<<1, nthreads, dyn_d>>>(g_q, g_qd, target_jid, d_robotModel, o_dl, o_dw, o_dx);
 
     // Self-contained Lambda: osc_inertia_device composes Minv on device, so the
-    // runner no longer pre-computes/densifies a Minv to feed in. Skipped for
-    // mimic robots (osc_inertia not emitted -> GRID_FRAME_JAC_MIMIC defined).
+    // runner no longer pre-computes/densifies a Minv to feed in. This is emitted
+    // for BOTH non-mimic and mimic robots (the mimic path composes Minv via
+    // direct_minv_inner -> crba_inner -> invert, which the fr3-fixed CUDA crba/minv
+    // tests already prove correct); GRID_FRAME_JAC_MIMIC is only defined when
+    // osc_inertia was NOT selected at all.
 #ifndef GRID_FRAME_JAC_MIMIC
     size_t dyn_o = grid::OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(osc_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)dyn_o);
-    osc_kernel<T><<<1, nthreads, dyn_o>>>(g_q, target_jid, d_robotModel, o_ll, o_lw, o_lx);
+    // osc_kernel is NOT __launch_bounds__-annotated and inlines the heavy
+    // direct_minv_inner / crba_inner / invert_matrix routines (~100+ regs). At
+    // MAX_PERF_LEVEL_THREADS (512) the launch overflows the per-block register
+    // budget -> "too many resources requested for launch", which is silent unless
+    // checked and leaves the (zeroed) outputs untouched. Clamp to the kernel's
+    // attribute-reported maxThreadsPerBlock (the register-limited cap) and assert
+    // the launch succeeds so a real failure never masquerades as an all-zero Lambda.
+    cudaFuncAttributes osc_attr;
+    cudaFuncGetAttributes(&osc_attr, osc_kernel<T>);
+    int osc_threads = nthreads;
+    if (osc_attr.maxThreadsPerBlock > 0 && osc_threads > osc_attr.maxThreadsPerBlock)
+        osc_threads = osc_attr.maxThreadsPerBlock;
+    osc_kernel<T><<<1, osc_threads, dyn_o>>>(g_q, target_jid, d_robotModel, o_ll, o_lw, o_lx);
+    cudaError_t osc_launch_err = cudaGetLastError();
+    if (osc_launch_err != cudaSuccess) {
+        std::cerr << "osc_kernel launch failed: "
+                  << cudaGetErrorString(osc_launch_err)
+                  << " (threads=" << osc_threads << ")\n";
+        std::exit(3);
+    }
 #endif
     cudaDeviceSynchronize();
 

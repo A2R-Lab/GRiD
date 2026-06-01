@@ -22,8 +22,14 @@ the other CUDA smoke tests. The frame target is the leaf joint id of each robot
 (the project joint id passed straight through to the device as target_jid; the
 numpy oracle is queried by the same joint's name).
 
-Robots: iiwa14-fixed + go2-floating + g1-floating + fr3-fixed (override with
-GRID_CUDA_FRAME_JAC_ROBOTS="iiwa14:fixed,go2:floating,g1:floating,fr3:fixed").
+Robots: iiwa14-fixed + go2-floating + g1-floating + fr3-fixed + fr3-floating
+(override with GRID_CUDA_FRAME_JAC_ROBOTS=
+"iiwa14:fixed,go2:floating,g1:floating,fr3:fixed,fr3:floating").
+
+fr3 (mimic) now exercises Lambda too: osc_inertia composes Minv on device via
+direct_minv_inner -> crba_inner -> invert (== RBDReference.minv's mimic fast
+path inv(CRBA(q))), matching the numpy oracle to float32 on both bases x all 3
+reference frames.
 
 fr3 is a MIMIC robot (fr3_finger_joint2 mimics fr3_finger_joint1, multiplier 1.0,
 sharing one velocity coordinate). It exercises the geometric-Jacobian mimic fold:
@@ -67,7 +73,7 @@ _ALGO_KEYS = ["frame_jacobian", "frame_jacobian_dot", "osc_inertia"]
 
 def _robot_modes():
     raw = os.environ.get("GRID_CUDA_FRAME_JAC_ROBOTS",
-                         "iiwa14:fixed,go2:floating,g1:floating,fr3:fixed")
+                         "iiwa14:fixed,go2:floating,g1:floating,fr3:fixed,fr3:floating")
     out = []
     for tok in raw.split(","):
         tok = tok.strip()
@@ -172,10 +178,11 @@ def test_cuda_frame_jacobian_matches_reference(tmp_path, robot_id, base_mode):
                 dtype=np.float64)
             close(out[dblk].reshape(6, nv, order="F"), Jd_ref, f"Jdot {tag}",
                   rtol=5e-2, atol=5e-2)
-            # Lambda = (J Minv J^T)^-1: 6x6. Mimic robots (e.g. fr3) skip this:
-            # osc_inertia is currently ¬mimic in codegen (its on-device mimic-Minv
-            # route is deferred), so the runner #ifdef's out the Lambda blocks and
-            # the L_* keys are absent from the output. J / Jdot ARE mimic-correct.
+            # Lambda = (J Minv J^T)^-1: 6x6. Now emitted for mimic robots too
+            # (e.g. fr3): osc_inertia composes Minv on device via
+            # direct_minv_inner -> crba_inner -> invert, which the fr3-fixed CUDA
+            # crba/minv equivalence already proves correct. The L_* keys are
+            # absent only if osc_inertia was not selected at all (then skip).
             if lblk not in out:
                 continue
             # At singular configs (e.g. the q=0 corner sample for a 6<nv arm) the
