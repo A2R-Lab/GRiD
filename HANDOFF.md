@@ -1380,9 +1380,14 @@ codegen smoke + additive-GCG reconcile).
 - **floating-mimic SO LANDED** (8547ea2): floating-base mimic idsva_so/fdsva_so via the world-frame
   inner's internal-coordinate scatter-fold → MIMIC SECOND-ORDER now COMPLETE (fixed + floating).
 - **E2 on-device Λ Minv-compose LANDED** (516c15e): `osc_inertia` is self-contained.
-- **F1 RBDReference split** (4006→45-line shell + cohesive mixins, public surface identical 126/126):
-  validated in clone, merge pending a clean full-suite baseline comparison — F1 is RBDReference-only
-  (not in the CUDA sweep path) so it does NOT gate the sweep.
+- **F1 RBDReference split — DEFERRED (broken).** The agent's split (4006→45-line shell + mixins) had an
+  IDENTICAL public surface (126/126) but the full numpy suite diverged: **131 failed / 824 passed** vs the
+  main baseline's **38 failed / 917 passed** → ~93 regressions (mis-wired mixin MRO / cross-`self` helper
+  references hidden behind the identical surface). NOT merged; main stays single-file. LESSON: a mechanical
+  4006-line class→mixin split must verify cross-method `self.` resolution + shared-helper inclusion against a
+  FULL before/after suite diff, not just the public-name set. Future redo: split incrementally (one mixin,
+  re-run suite, repeat) rather than all-at-once. (RBDReference baseline itself has 38 pre-existing fails:
+  h1_2 minv, plant-floating, floating-quaternion d2tau — known pinocchio-alignment gaps.)
 - Pre-sweep green-gate PASSED earlier: **31 passed / 1 skipped / 0 failed** (iiwa14/go2/g1/fr3 full
   matrix, fresh-compile @ 49f2208). CUDA tree validated for the sweep at the current tip.
 
@@ -1424,7 +1429,9 @@ codegen smoke + additive-GCG reconcile).
   + NV≠NQ codegen — guard raises `UnsupportedJointTypeError` today). Other joint types (helical/translation/composite).
 
 **F. Cleanup**
-- F1. D.5 RBDReference file-split (mixin map: `rbdreference_split_plan.md`).
+- F1. D.5 RBDReference file-split (mixin map: `rbdreference_split_plan.md`). **ATTEMPTED + DEFERRED
+  2026-05-31** — all-at-once split broke ~93 tests (mis-wired mixin MRO behind an identical public
+  surface). Redo INCREMENTALLY: one mixin at a time, full numpy suite green after each.
 - F2. Naming/uniformity residuals; warnings sweep (`mxS` NumPy `ndim>0` + nvcc/ptxas);
   comprehensive perf re-sweep (= the planned 4pm sweep). Perf tail: floating idsva_so de-alias,
   crba MINIMAL 3rd-rung (keep small hot band in smem instead of whole-arena), idsva_so big-robot gap.
