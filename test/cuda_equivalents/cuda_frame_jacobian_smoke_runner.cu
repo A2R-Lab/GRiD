@@ -115,6 +115,12 @@ __global__ void frame_jac_dot_kernel(const T *g_q, const T *g_qd, const int targ
 // Lambda kernel: SELF-CONTAINED. grid::osc_inertia_device composes Minv on
 // device (via direct_minv_inner) from q alone — no external Minv feed — then
 // emits Lambda for the three reference frames.
+//
+// osc_inertia is currently ¬mimic in codegen (its on-device mimic-Minv route is
+// deferred), so mimic headers do NOT emit it and instead define GRID_FRAME_JAC_MIMIC.
+// Guard the whole Lambda path so the runner still builds for mimic robots (e.g.
+// fr3); the test detects the missing L_* blocks and skips the Lambda check.
+#ifndef GRID_FRAME_JAC_MIMIC
 template <typename T>
 __global__ void osc_kernel(const T *g_q, const int target_jid,
                            const grid::robotModel<T> *d_robotModel,
@@ -142,6 +148,7 @@ __global__ void osc_kernel(const T *g_q, const int target_jid,
     for (int i = tid; i < 36; i += nth) o_lwa[i] = s_L[i];
     __syncthreads();
 }
+#endif  // GRID_FRAME_JAC_MIMIC
 
 template <typename T>
 T *dmalloc(int count) { T *p; cudaMalloc(&p, count * sizeof(T)); return p; }
@@ -173,7 +180,9 @@ void run() {
 
     T *o_jl = dmalloc<T>(6 * NV), *o_jw = dmalloc<T>(6 * NV), *o_jx = dmalloc<T>(6 * NV);
     T *o_dl = dmalloc<T>(6 * NV), *o_dw = dmalloc<T>(6 * NV), *o_dx = dmalloc<T>(6 * NV);
+#ifndef GRID_FRAME_JAC_MIMIC
     T *o_ll = dmalloc<T>(36), *o_lw = dmalloc<T>(36), *o_lx = dmalloc<T>(36);
+#endif
 
     const int nthreads = grid::MAX_PERF_LEVEL_THREADS;
 
@@ -186,10 +195,13 @@ void run() {
     frame_jac_dot_kernel<T><<<1, nthreads, dyn_d>>>(g_q, g_qd, target_jid, d_robotModel, o_dl, o_dw, o_dx);
 
     // Self-contained Lambda: osc_inertia_device composes Minv on device, so the
-    // runner no longer pre-computes/densifies a Minv to feed in.
+    // runner no longer pre-computes/densifies a Minv to feed in. Skipped for
+    // mimic robots (osc_inertia not emitted -> GRID_FRAME_JAC_MIMIC defined).
+#ifndef GRID_FRAME_JAC_MIMIC
     size_t dyn_o = grid::OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(osc_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)dyn_o);
     osc_kernel<T><<<1, nthreads, dyn_o>>>(g_q, target_jid, d_robotModel, o_ll, o_lw, o_lx);
+#endif
     cudaDeviceSynchronize();
 
     dcopy_out("J_local", o_jl, 6, NV);
@@ -198,9 +210,11 @@ void run() {
     dcopy_out("Jd_local", o_dl, 6, NV);
     dcopy_out("Jd_world", o_dw, 6, NV);
     dcopy_out("Jd_lwa", o_dx, 6, NV);
+#ifndef GRID_FRAME_JAC_MIMIC
     dcopy_out("L_local", o_ll, 6, 6);
     dcopy_out("L_world", o_lw, 6, 6);
     dcopy_out("L_lwa", o_lx, 6, 6);
+#endif
 
     grid::close_grid<T>(streams, d_robotModel, hd_data);
 }

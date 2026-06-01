@@ -22,8 +22,14 @@ the other CUDA smoke tests. The frame target is the leaf joint id of each robot
 (the project joint id passed straight through to the device as target_jid; the
 numpy oracle is queried by the same joint's name).
 
-Robots: iiwa14-fixed + go2-floating + g1-floating (override with
-GRID_CUDA_FRAME_JAC_ROBOTS="iiwa14:fixed,go2:floating,g1:floating").
+Robots: iiwa14-fixed + go2-floating + g1-floating + fr3-fixed (override with
+GRID_CUDA_FRAME_JAC_ROBOTS="iiwa14:fixed,go2:floating,g1:floating,fr3:fixed").
+
+fr3 is a MIMIC robot (fr3_finger_joint2 mimics fr3_finger_joint1, multiplier 1.0,
+sharing one velocity coordinate). It exercises the geometric-Jacobian mimic fold:
+each chain joint accumulates its column contribution scaled by its mimic
+multiplier onto the shared reduced v-slot (mirrors the ee_pose_gradient Step 3b
+alpha-accumulate and RBDReference.frame_jacobian's `scale = mimic_scale(j)`).
 """
 
 from __future__ import annotations
@@ -61,7 +67,7 @@ _ALGO_KEYS = ["frame_jacobian", "frame_jacobian_dot", "osc_inertia"]
 
 def _robot_modes():
     raw = os.environ.get("GRID_CUDA_FRAME_JAC_ROBOTS",
-                         "iiwa14:fixed,go2:floating,g1:floating")
+                         "iiwa14:fixed,go2:floating,g1:floating,fr3:fixed")
     out = []
     for tok in raw.split(","):
         tok = tok.strip()
@@ -166,10 +172,16 @@ def test_cuda_frame_jacobian_matches_reference(tmp_path, robot_id, base_mode):
                 dtype=np.float64)
             close(out[dblk].reshape(6, nv, order="F"), Jd_ref, f"Jdot {tag}",
                   rtol=5e-2, atol=5e-2)
-            # Lambda = (J Minv J^T)^-1: 6x6. At singular configs (e.g. the q=0
-            # corner sample for a 6<nv arm) the task matrix J Minv J^T is rank
-            # deficient and the inverse is ill-defined for BOTH the oracle and
-            # the device; skip those (the inverse is not a meaningful target).
+            # Lambda = (J Minv J^T)^-1: 6x6. Mimic robots (e.g. fr3) skip this:
+            # osc_inertia is currently ¬mimic in codegen (its on-device mimic-Minv
+            # route is deferred), so the runner #ifdef's out the Lambda blocks and
+            # the L_* keys are absent from the output. J / Jdot ARE mimic-correct.
+            if lblk not in out:
+                continue
+            # At singular configs (e.g. the q=0 corner sample for a 6<nv arm) the
+            # task matrix J Minv J^T is rank deficient and the inverse is
+            # ill-defined for BOTH the oracle and the device; skip those (the
+            # inverse is not a meaningful target).
             task = (J_ref @ np.asarray(project_model.minv(q), dtype=np.float64)
                     @ J_ref.T)
             if np.linalg.cond(task) < 1e8:
