@@ -181,6 +181,27 @@ __host__ void run_all_tests(bool floating_base, DispatcherFn do_timings){
 
     do_timings(streams, d_robotModel, hd_data);
 
+    // Silent-launch-failure guard (audit trail). A kernel that fails to LAUNCH
+    // (e.g. register-limited above its occupancy cap at a high autotuned thread
+    // count, or any "too many resources requested") does NOT abort — the timing
+    // wrappers sync but don't check the error, so they would record a bogus-fast
+    // time that the autotune argmin could then wrongly pick as "best". The
+    // benchmarked kernels carry __launch_bounds__ (compiler fits registers), so
+    // this should be rare, but surface ANY pending CUDA error LOUDLY here — on
+    // stdout (in the per-cell log) and stderr (in the sweep log) with a distinct
+    // [GRID_LAUNCH_ERROR] token — so the post-sweep silent-error audit can flag
+    // and exclude this (robot,base,tier,threads) cell. Log-only: we do NOT change
+    // the exit code (that would drop the cell's GOOD algos too) or any timing.
+    cudaDeviceSynchronize();
+    cudaError_t grid_launch_err = cudaGetLastError();
+    if (grid_launch_err != cudaSuccess) {
+        printf("[GRID_LAUNCH_ERROR] a kernel launch/exec failed during timing: %s "
+               "(timings in this cell may be bogus — flagged for audit)\n",
+               cudaGetErrorString(grid_launch_err));
+        fflush(stdout);
+        fprintf(stderr, "[GRID_LAUNCH_ERROR] %s\n", cudaGetErrorString(grid_launch_err));
+    }
+
     grid::close_grid<T>(streams,d_robotModel,hd_data);
 }
 
