@@ -47,8 +47,18 @@ RUNNER_SOURCE = Path(__file__).with_name("cuda_f_ext_gradient_runner.cu")
 
 # (robot_id, base_mode). iiwa14 (fixed) exercises all three outputs incl. the
 # A.3 -dJ^T/dq block (scalar FD); go2 / g1 (floating) exercise all three incl.
-# the A.3 block via the SE(3) Lie-group root retract.
-_CASES = [("iiwa14", "fixed"), ("go2", "floating"), ("g1", "floating")]
+# the A.3 block via the SE(3) Lie-group root retract. fr3 (fixed + floating) is a
+# MIMIC robot: its mimic joint shares its target's reduced v-slot, so its
+# geometric-Jacobian column folds (alpha-weighted) into that shared column — the
+# mimic path in _f_ext_gradient.py's J^T inner. (The full default profile pulls in
+# the still-refused integrator gradients for mimic robots, so fr3 is codegen'd with
+# the 'f-ext-gradient' profile {id, minv, f_ext_grad}; non-mimic cases use 'all'.)
+_CASES = [("iiwa14", "fixed"), ("go2", "floating"), ("g1", "floating"),
+          ("fr3", "fixed"), ("fr3", "floating")]
+
+# Robots whose full default codegen profile would hit a still-refused mimic
+# gradient (integrator gradients); generate them with the f-ext-gradient profile.
+_MIMIC_FEG_PROFILE = {"fr3"}
 
 
 def _build_adapters(robot_id, base_mode):
@@ -62,14 +72,15 @@ def _build_adapters(robot_id, base_mode):
     pytest.skip(f"case {robot_id}/{base_mode} not in manifest")
 
 
-def _gen_and_compile(proj, build_dir, floating_base):
+def _gen_and_compile(proj, build_dir, floating_base, codegen_profile="all"):
     header = build_dir / "grid.cuh"
     codegen = GRiDCodeGenerator(
         proj.robot, DEBUG_MODE=False, NEED_PRINT_MAT=True, FILE_NAMESPACE="grid"
     )
     import contextlib
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        codegen.gen_all_code(include_homogenous_transforms=True, output_path=str(header))
+        codegen.gen_all_code(include_homogenous_transforms=True, output_path=str(header),
+                             codegen_profile=codegen_profile)
     nvcc = shutil.which("nvcc") or "/usr/local/cuda/bin/nvcc"
     if not Path(nvcc).exists():
         pytest.skip("nvcc not found; install CUDA Toolkit to run CUDA equivalence tests.")
@@ -118,7 +129,18 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
     sample = build_dynamics_samples(proj)[1]
     q = sample.q
 
-    exe = _gen_and_compile(proj, tmp_path, floating)
+    profile = "f-ext-gradient" if robot_id in _MIMIC_FEG_PROFILE else "all"
+    exe = _gen_and_compile(proj, tmp_path, floating, codegen_profile=profile)
+
+    # Mimic robots: GRiD/RBDReference expose a per-BODY f_ext column for ALL NB
+    # bodies (the mimic body is a real physical link that can receive an external
+    # wrench), so the f_ext-gradient is nv x 6*NB. Pinocchio's reduced model
+    # collapses the mimic body, so its f_ext_gradient adapter only exposes the
+    # NB-1 actuated bodies (nv x 6*(NB-1)) — a different, incomplete column layout.
+    # The two cannot be element-compared, so the pinocchio cross-check is skipped
+    # for mimic robots; RBDReference (which the CUDA matches exactly) is the
+    # authoritative oracle here.
+    has_mimic = any(getattr(j, "is_mimic", False) for j in ref.robot.joints)
 
     def row(v):
         return " ".join(f"{x:.9g}" for x in np.asarray(v, dtype=np.float32))
@@ -127,7 +149,10 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
     # oracle (project RBDReference + pinocchio); both exact for the first-order
     # pair, FD-of-exact for A.3.
     a_dtau, a_dqdd, a_djt = proj.f_ext_gradient(q)
-    e_dtau, e_dqdd, e_djt = pin.f_ext_gradient(q)
+    if has_mimic:
+        e_dtau = e_dqdd = e_djt = None
+    else:
+        e_dtau, e_dqdd, e_djt = pin.f_ext_gradient(q)
 
     def _cuda(name):
         assert name in outputs, f"missing CUDA output {name}; have {list(outputs)}"
@@ -137,7 +162,6 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
 
     def _check(label, cuda_flat, ref_arr, pin_arr, tol_algo):
         ref_arr = np.asarray(ref_arr, dtype=np.float64).reshape(-1)
-        pin_arr = np.asarray(pin_arr, dtype=np.float64).reshape(-1)
         cuda_flat = np.asarray(cuda_flat, dtype=np.float64).reshape(-1)
         tol = get_tolerance(tol_algo, robot_id=robot_id)
         scale = max(1.0, float(np.max(np.abs(ref_arr))) if ref_arr.size else 1.0)
@@ -147,7 +171,12 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
         if err_ref > atol:
             failures.append(f"{label}: CUDA-vs-RBDReference maxerr={err_ref:.3e} > {atol:.3e}")
         # RBDReference == pinocchio (the convention itself); honors the per-robot
-        # tolerance (e.g. gen3's RNEA-difference round-off override).
+        # tolerance (e.g. gen3's RNEA-difference round-off override). Skipped for
+        # mimic robots (pinocchio's reduced model omits the mimic body's f_ext
+        # column, so the layouts differ — see has_mimic note above).
+        if pin_arr is None:
+            return
+        pin_arr = np.asarray(pin_arr, dtype=np.float64).reshape(-1)
         err_pin = float(np.max(np.abs(ref_arr - pin_arr)))
         ptol = tol.atol + tol.rtol * scale
         if err_pin > ptol:
