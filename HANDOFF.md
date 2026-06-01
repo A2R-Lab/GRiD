@@ -17,6 +17,13 @@ See **Backlog / open items** at the end for what's left. The floating Euler
 gradient bug that earlier revisions flagged as a "CRITICAL OPEN QUESTION" is
 **RESOLVED** — see §3.
 
+> **🛠 Debugging / doing a refactor / hunting a mimic or perf bug? READ FIRST:**
+> [`docs/agent_debugging_guide.md`](docs/agent_debugging_guide.md) — the validation checklist +
+> recurring bug classes (NV-vs-NB scratch sizing, shared-helper NB/NJ index bugs, silent CUDA
+> launch failures), debugging methodology, refactor traps, the optimization patterns that worked,
+> merge discipline, and oracle gotchas. Distilled from ~15 agent operations. Open systemic-bug
+> worklist: [`docs/open-tasks/f2_audit_findings.md`](docs/open-tasks/f2_audit_findings.md).
+
 ---
 
 ## 1. What was built
