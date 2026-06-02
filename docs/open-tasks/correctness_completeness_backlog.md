@@ -42,7 +42,11 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
 - ⬜ **V2 / C4 — centroidal CUDA breadth + mimic.** `generalized_gravity`/`nonlinear_effects` support
   mimic but are never CUDA-checked on a mimic robot → need the **mimic-safe centroidal runner** (also
   the runtime check the `s_vaf` NB-fix still lacks). `com`/`ccrba`/`energy` are non-mimic-only (structural).
-- ⬜ **V3 / C5 — integrator family CUDA only on small robots** (iiwa14,go2,fr3) — no g1/h1_2 spill paths.
+- 🔵 **V3 / C5 — integrator CUDA breadth to g1/h1_2 + PERF/LITE tier sweep** (committed `6aaad70`). Test infra
+  done: 5 robots × 2 base × 2 tiers = 20 cells; floating-mimic runs value-only (B3-refused gradient); mimic
+  `s_vaf=18*NB` sizing confirmed. VALIDATED subset green (g1-fixed SHARED+LITE, h1_2-fixed-LITE mimic spill —
+  the hardest cell). REMAINING (reasoned, not run, due to ~8-way contention): h1_2-fixed-PERF, g1-floating×2,
+  h1_2-floating value-only → **must get a full-matrix green run in the pre-sweep gate** (see I1 area).
 - ⬜ **V4 / C7 — `integrator_with_gradient` no standalone numpy test**; **FK-batched** has no equivalence
   diff vs `end_effector_pose` (binding coverage ≠ correctness).
 - ⬜ **V5 — widen d2ee + SO tests to big/floating robots** once B1/B2 land.
@@ -83,6 +87,11 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
 
 ## 7. INFRA (mostly done)
 - ✅ Sweep efficiency: collapse + narrow + aliasing-fix + SASS tier-dedup (~6× faster, correct per-tier).
+- ⬜ **PRE-SWEEP VALIDATION GATE** (run once the backlog is otherwise green, in a GPU-idle/overnight window,
+  BEFORE I1): a single clean full-matrix equivalence run with cleared header cache covering every robot × base
+  × representative tiers — INCLUDING the big-robot integrator cells C5 only reasoned (h1_2-fixed-PERF,
+  g1-floating×2, h1_2-floating value-only) and V6's kinematics thread×batch matrix. No known-open bug at sweep
+  time (user directive). Any red cell = a bug to fix before the sweep, not after.
 - ⬜ **I1 — re-sweep on the fixed harness** to set real autotune defaults + true best-tier numbers (later).
 
 ## Proposed sequence (for discussion)
