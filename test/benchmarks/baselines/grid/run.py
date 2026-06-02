@@ -391,6 +391,14 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "gate": "GRID_HAS_FRAME_JACOBIAN_DOT",
         "shared_mem_skip": "FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES",
     },
+    "osc_inertia": {
+        "single_call":        "grid::osc_inertia_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::osc_inertia<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::osc_inertia_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "OSC_INERTIA",
+        "gate": "GRID_HAS_OSC_INERTIA",
+        "shared_mem_skip": "OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES",
+    },
     "end_effector_pose_hessian": {
         "single_call":        "grid::end_effector_pose_hessian_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
         "batch_with_mem":     "grid::end_effector_pose_hessian<float>(d,m,N,dim3(N,1,1),dimms,streams)",

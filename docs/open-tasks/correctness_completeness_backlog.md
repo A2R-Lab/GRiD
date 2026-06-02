@@ -90,22 +90,23 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
   backlog bug to fix BEFORE the sweep.
 
 ## 3. COMPLETENESS — missing surfaces
-- 🔄 **S1 — `frame_jacobian` / `frame_jacobian_dot` / `osc_inertia` were DEVICE-ONLY.** Add
-  kernel + 3-mode host + batch wrappers + gridData output buffers → benchmarkable + bindable. Prereq for
-  the HJCD "parallelize frame_jacobian" perf ask.
-  **`frame_jacobian` DONE:** `frame_jacobian_kernel` (+`_single_timing`) + 3-mode host
-  (`frame_jacobian`/`_single_timing`/`_compute_only`) + `gridData` `d_/h_frame_jacobian` (6×NV) buffers;
-  registered in `KERNEL_ATTR_MANIFEST` + bench `PER_ALGO_SPECS` (gate `GRID_HAS_FRAME_JACOBIAN`); host
-  surface validated vs the numpy oracle (`test_cuda_frame_jacobian_host.py`, iiwa14-fixed rel err ~1.8e-7,
-  go2-floating ~7.5e-8). The launchable surface bakes a fixed target (leaf-EE joint) + `LOCAL_WORLD_ALIGNED`
-  frame; `frame_jacobian_device` stays the arbitrary-target/-frame entry point. Also fixed a latent
-  `_plant.py` bug: `com_cost`/`momentum_cost` were emitted whenever `end_effector_pose` was present
-  (referencing undefined `grid::com_device`/`ccrba_device`) — now gated on `com`+`ccrba` keys. `d_/h_osc_inertia`
-  (6×6) + `d_/h_frame_jacobian_dot` (6×NV) gridData buffers landed alongside.
-  **`frame_jacobian_dot` DONE:** `frame_jacobian_dot_kernel` (+`_single_timing`) + 3-mode host writing
-  `d_/h_frame_jacobian_dot`; gate `GRID_HAS_FRAME_JACOBIAN_DOT`; bench `PER_ALGO_SPECS` row;
-  host-surface test extended (FJD checked when present). The kernel keeps I/O in static `__shared__`
-  (the `_device` wrapper owns the dynamic arena). **TODO:** `osc_inertia` kernel/host surface.
+- ✅ **S1 — `frame_jacobian` / `frame_jacobian_dot` / `osc_inertia` were DEVICE-ONLY → now full surface.**
+  Each gained `*_kernel` (+`_single_timing`) + 3-mode host (`<algo>`/`_single_timing`/`_compute_only`) +
+  `gridData` output buffers (`d_/h_frame_jacobian` 6×NV, `d_/h_frame_jacobian_dot` 6×NV, `d_/h_osc_inertia`
+  6×6) → benchmarkable + bindable. All three registered in `KERNEL_ATTR_MANIFEST` + bench `PER_ALGO_SPECS`
+  (gates `GRID_HAS_FRAME_JACOBIAN[_DOT]` / `GRID_HAS_OSC_INERTIA`; the bench codegen now requests the opt-in
+  keys via `algorithm_list=["all",...]`). The launchable surface bakes a fixed target (leaf-EE joint) +
+  `LOCAL_WORLD_ALIGNED` frame; the `_device` functions stay the arbitrary-target/-frame entry points.
+  `frame_jacobian` calls its `_inner` directly (kernel owns the dynamic arena, I/O in the arena);
+  `frame_jacobian_dot` + `osc_inertia` call their auto-smem `_device` wrappers (which own the dynamic arena),
+  so those kernels keep I/O in static `__shared__`; `osc_inertia_kernel` carries `__launch_bounds__` to
+  register-fit the heavy minv/J/invert path. Host surfaces validated vs the numpy oracle in
+  `test/cuda_equivalents/test_cuda_frame_jacobian_host.py` (+ `cuda_frame_jacobian_host_runner.cu`):
+  iiwa14-fixed J rel err ~1.8e-7, go2-floating ~7.5e-8; FJD (5e-2 FD tol) + Λ (5e-3, non-singular) also
+  checked. Byte-identical for non-frame_jac profiles (only the additive gridData buffers differ). Also fixed
+  a latent `_plant.py` bug: `com_cost`/`momentum_cost` were emitted whenever `end_effector_pose` was present
+  (referencing undefined `grid::com_device`/`ccrba_device`) — now gated on `com`+`ccrba` keys. Unblocks P2
+  (parallelize `frame_jacobian_inner`) + F2 bindings.
 - ⬜ **S2 — uniform `_inner` missing** for `fd_du` (reuses id_du band), `f_ext_gradient_dq` (kernel-only),
   `integrator_gradient` (uses `_multistage`).
 

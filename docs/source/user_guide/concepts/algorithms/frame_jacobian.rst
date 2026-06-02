@@ -108,6 +108,16 @@ whole dynamic-smem arena; the same fixed leaf-EE / ``LOCAL_WORLD_ALIGNED``
 default applies. It is covered by the same host-surface test (validated for
 iiwa14-fixed + go2-floating).
 
+``osc_inertia`` (opt-in ``osc_inertia`` key) likewise gains
+``osc_inertia_kernel`` (+ ``_single_timing``) and the 3-mode host
+``osc_inertia`` / ``_single_timing`` / ``_compute_only``, writing
+``hd_data->d_osc_inertia`` (6 × 6). It is **self-contained** (q-only input;
+composes :math:`M^{-1}` on-device), keeps its q input + Λ output in static
+``__shared__``, and carries ``__launch_bounds__`` so nvcc fits the heavy
+``minv``/``J``/``invert`` register footprint to the tier thread cap (the
+un-annotated device smoke runner instead clamps threads manually). Same
+host-surface test coverage (Λ checked at non-singular configs).
+
 See Also
 --------
 * :doc:`crba` — joint-space mass matrix :math:`M` (used to form
