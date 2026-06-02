@@ -110,7 +110,7 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
 - ✅ **R3 — reorder `fdsva_so_kernel` args (`d_workspace`→2nd)** done (kernel sig + host launchers + func-ptr attr cast; byte-identical otherwise; iiwa14-fixed/go2-floating equivalence green).
 - ⬜ **R4 — drop** `_host`/`_with_x_kp1`/`direct_` + `rnea`/`eepos`/`deepos` labels + `SUGGESTED_THREADS` alias.
 - ⬜ **R5 — unify gravity-sign convention** (GRiD `+9.81` vs RBDReference `-9.81`).
-- ⬜ **R6 — emit centroidal family on OWN keys** (com/ccrba/energy/gg/nle currently gated on a sibling key).
+- ✅ **R6 — emit centroidal family on OWN keys** done: com/ccrba/energy/generalized_gravity/nonlinear_effects are now first-class `algorithm_list` keys (each auto-expands its real dep: com/ccrba/energy→ee_pose, gg/nle→id); requesting a sibling key no longer silently emits them. `all` byte-identical (banner list only). iiwa14/go2 + mimic-safe centroidal equivalence green.
 
 ## 6. PERFORMANCE — max-perf completion (single-block ONLY)
 - ⬜ **P1 — big-robot `crba`/`aba`/`minv`/`fd` in-block parallelism.** They lose to Pinocchio CPU on h1_2;

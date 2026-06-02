@@ -57,7 +57,7 @@ literature-standard algorithm name vs a fully-descriptive name).
 | `frame_jacobian` | **`frame_jacobian`** ✅ | + add kernel/host/timing surfaces (device-only today) |
 | `frame_jacobian_dot` | **`frame_jacobian_dot`** ✅ | + add surfaces; add to PER_ALGO_SPECS |
 | `osc_inertia` | **`operational_space_inertia`** ⚠️ | osc = operational-space control. Descriptive, or keep `osc_inertia`? + add surfaces |
-| `com` | **`center_of_mass`** ⚠️ | keep `com` (standard) or spell out? emit on its own key, not gated on `ee_pose` |
+| `com` | **`center_of_mass`** ⚠️ | keep `com` (standard) or spell out? ✅ R6 done: emits on its own `com` key (auto-pulls `ee_pose` dep), not gated on `ee_pose` |
 | `ccrba` | **`ccrba`** ⚠️ | proper name (Centroidal Composite Rigid Body Algorithm) → or `centroidal_momentum_matrix`? add `gravity` param for signature uniformity |
 | `energy` | **`energy`** ✅ | |
 | `generalized_gravity` | **`generalized_gravity`** ✅ | |
@@ -69,7 +69,7 @@ literature-standard algorithm name vs a fully-descriptive name).
 - Uniform host signature block: `(hd_data, d_robotModel, [gravity], [dt], …, d_workspace, …)`.
 - Resolve the gravity-sign convention split (GRiD `+9.81` vs RBDReference `-9.81`) to ONE convention.
 - Remove the `SUGGESTED_THREADS` back-compat alias (keep `MAX_PERF_LEVEL_THREADS`).
-- `com`/`ccrba`/`energy`/`generalized_gravity`/`nonlinear_effects` emit on their OWN keys, not gated on a sibling.
+- ✅ R6 done: `com`/`ccrba`/`energy`/`generalized_gravity`/`nonlinear_effects` emit on their OWN keys (each a recognized `algorithm_list` key that auto-expands its real dep), not gated on a sibling.
 
 ## The ⚠️ judgment calls that need your ruling
 1. **Proper literature names** — `aba`, `crba`, `ccrba`, `idsva_so`, `fdsva_so`: keep the standard

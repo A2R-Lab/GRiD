@@ -149,13 +149,14 @@ def _mimic_robot_modes():
     return out
 
 
-# Restricted algorithm list: `id` alone makes gen_centroidal_quickwins emit the two
-# RNEA bias wrappers (generalized_gravity / nonlinear_effects) and SKIP com/ccrba/
-# energy (kin-domain, mimic-refused) AND skip the grid_plant com_cost/momentum_cost
-# (gen_grid_plant: centroidal_ok requires ee_pose + non-mimic). So the resulting
-# header defines ONLY the mimic-supported centroidal symbols this runner references
-# — it links for mimic AND non-mimic robots alike.
-_MIMIC_SAFE_ALGORITHMS = ["inverse_dynamics"]
+# Restricted algorithm list: request the two RNEA bias wrappers by their OWN keys
+# (R6) — generalized_gravity / nonlinear_effects auto-pull `inverse_dynamics` as
+# their dep — and SKIP com/ccrba/energy (kin-domain, not requested + mimic-refused)
+# AND skip the grid_plant com_cost/momentum_cost (gen_grid_plant: centroidal_ok
+# requires ee_pose + non-mimic). So the resulting header defines ONLY the mimic-
+# supported centroidal symbols this runner references — it links for mimic AND
+# non-mimic robots alike.
+_MIMIC_SAFE_ALGORITHMS = ["generalized_gravity", "nonlinear_effects"]
 
 
 def _generate_mimic_header(project_model, build_dir):
