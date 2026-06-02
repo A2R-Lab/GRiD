@@ -1,7 +1,7 @@
 """Collection-level skip guards for the example-notebook smoke tests.
 
-The notebooks under ``notebooks/`` double as CI smoke tests: they are executed
-end-to-end via ``pytest --nbval-lax notebooks/`` and validate numbers in-cell
+The notebooks under ``examples/notebooks/`` double as CI smoke tests: they are executed
+end-to-end via ``pytest --nbval-lax examples/notebooks/`` and validate numbers in-cell
 (asserts against ``RBDReference`` / closed-form checks), so a green run == passing
 docs. They require a real CUDA GPU + ``nvcc`` on PATH + ``grid_rbd`` installed —
 the same triad as the python-wrapper smokes. nbval is required to collect ``.ipynb``
