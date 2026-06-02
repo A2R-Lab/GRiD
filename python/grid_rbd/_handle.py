@@ -342,7 +342,11 @@ class RobotHandle:
         """
         q  = np.ascontiguousarray(q,  dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
-        qdd_arr = np.ascontiguousarray(qdd, dtype=np.float32) if qdd is not None else None
+        # qdd is packed into the device acceleration slot; pass explicit zeros for
+        # the default (qdd=None ⇒ zero acceleration) so the result never depends on
+        # a stale device buffer from a previous call.
+        qdd_in = qdd if qdd is not None else np.zeros_like(q)
+        qdd_arr = np.ascontiguousarray(qdd_in, dtype=np.float32)
         NV = self.num_vel
         flat = self._runner.idsva_so(q, qd, qdd_arr, 4 * NV ** 3, gravity)
         # Slice the 4 NV^3 blocks. Each block is stored as raw column/row

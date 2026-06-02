@@ -203,6 +203,26 @@ def test_frame_jacobian_nondefault_frame(robot):
     assert _max_err(J_str, J_int) == 0.0
 
 
+def test_frame_jacobian_default_target_explicit_frame(robot):
+    """Regression: an explicit reference_frame with the DEFAULT (leaf-EE) target
+    must be honored. The C-ABI once gated on `target_jid < 0 || reference_frame
+    < 0`, so a default target (sentinel -1) silently dropped the explicit frame
+    and returned LWA. Each arg must resolve INDEPENDENTLY."""
+    handle, ref, s = robot
+    fn = _leaf_frame_name(ref)
+    for rf_name, rf_code in (("WORLD", 1), ("LOCAL", 0)):
+        # default target (omitted) + explicit non-LWA frame
+        J = handle.frame_jacobian(s["q"], reference_frame=rf_code)
+        for i, q in enumerate(s["q"]):
+            ref_J = ref.frame_jacobian(q.astype(np.float64), fn, rf_name)
+            assert _max_err(J[i], ref_J) < _TOL, f"default-target {rf_name}"
+    # The explicit-frame result must actually DIFFER from the LWA default
+    # (else the frame was dropped) — unless the leaf frame is trivially aligned.
+    J_lwa = handle.frame_jacobian(s["q"])
+    J_world = handle.frame_jacobian(s["q"], reference_frame="WORLD")
+    assert _max_err(J_lwa, J_world) > 1e-3, "explicit WORLD frame was ignored on default target"
+
+
 def test_frame_jacobian_dot(robot):
     handle, ref, s = robot
     fn = _leaf_frame_name(ref)

@@ -453,10 +453,11 @@ extern "C" int grid_rbd_idsva_so(
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
-    (void)qdd;  // USE_QDD_FLAG=false for now; future v2
 
     const int nj = grid::NUM_JOINTS;
-    pack_q_qd_u(q, qd, nullptr, batch, nj);
+    // idsva_so reads the joint acceleration from the u-slot of d_q_qd_u (s_qdd);
+    // pack qdd there so the second-order tensors use the requested acceleration.
+    pack_q_qd_u(q, qd, qdd, batch, nj);
 
     grid::idsva_so<T>(
         g_data, g_robot, gravity, batch,
@@ -594,12 +595,10 @@ extern "C" int grid_rbd_frame_jacobian(const T* q, T* out, int batch,
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
-    // target_jid < 0 / reference_frame < 0 => use the host's leaf-EE / LWA defaults.
-    if (target_jid < 0 || reference_frame < 0)
-        grid::frame_jacobian<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
-    else
-        grid::frame_jacobian<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams,
-                                target_jid, reference_frame);
+    // -1 per arg => "use default" (leaf-EE / LWA); the host resolves each
+    // INDEPENDENTLY, so a default target with an explicit frame is honored.
+    grid::frame_jacobian<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams,
+                            target_jid, reference_frame);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_frame_jacobian, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
@@ -618,11 +617,10 @@ extern "C" int grid_rbd_frame_jacobian_dot(const T* q, const T* qd, T* out, int 
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    if (target_jid < 0 || reference_frame < 0)
-        grid::frame_jacobian_dot<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
-    else
-        grid::frame_jacobian_dot<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams,
-                                    target_jid, reference_frame);
+    // -1 per arg => "use default" (leaf-EE / LWA), resolved INDEPENDENTLY by the
+    // host so a default target with an explicit frame is honored.
+    grid::frame_jacobian_dot<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams,
+                                target_jid, reference_frame);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_frame_jacobian_dot, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));

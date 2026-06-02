@@ -212,6 +212,35 @@ def test_idsva_so_shape(handle, samples):
         assert np.all(np.isfinite(t))
 
 
+def test_idsva_so_honors_qdd(handle, ref, samples):
+    """Regression: idsva_so must USE the qdd argument. The binding once dropped
+    it (`(void)qdd` in the wrapper), so d2tau_dq was silently computed at qdd=0.
+    Assert (a) every block matches RBDReference at a nonzero qdd, (b) qdd=None
+    means qdd=0 (never a stale device buffer), (c) the qdd-dependent block
+    actually changes with qdd."""
+    NV = handle.num_vel
+    q, qd = samples["q"], samples["qd"]
+    qdd = samples["u"]  # reuse as a nonzero acceleration
+    names = ("d2tau_dq", "d2tau_dqd", "d2tau_cross", "dM_dq")
+    out = handle.idsva_so(q, qd, qdd)
+    for name, t in zip(names, out):
+        for i in range(q.shape[0]):
+            ref_block = np.asarray(
+                ref.idsva_so(q[i].astype(np.float64), qd[i].astype(np.float64),
+                             qdd[i].astype(np.float64), GRAVITY=-9.81)[names.index(name)],
+                dtype=np.float64)
+            scale = max(1.0, float(np.max(np.abs(ref_block))))
+            assert _max_err(t[i].astype(np.float64), ref_block) / scale < 5e-3, \
+                f"idsva_so {name} mismatch at sample {i}"
+    # qdd=None ⇒ qdd=0 even right after a nonzero-qdd call (no stale buffer reuse).
+    zero = handle.idsva_so(q, qd, None)[0]
+    ref0 = np.asarray(ref.idsva_so(q[0].astype(np.float64), qd[0].astype(np.float64),
+                                   np.zeros(handle.num_joints), GRAVITY=-9.81)[0], np.float64)
+    assert _max_err(zero[0].astype(np.float64), ref0) / max(1.0, np.abs(ref0).max()) < 5e-3
+    # and the qdd-dependent block (d2tau_dq) genuinely depends on qdd.
+    assert _max_err(out[0], zero) > 1e-2, "idsva_so d2tau_dq ignored qdd"
+
+
 def test_fdsva_so_shape(handle, samples):
     """Smoke: fdsva_so returns 4 tensors of shape (B, NV, NV, NV)."""
     out = handle.fdsva_so(samples["q"], samples["qd"], samples["u"])
