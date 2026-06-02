@@ -185,5 +185,166 @@ def test_single_mode_targets_single_us_key(monkeypatch):
     assert picks["fd"]["threads_optimal"] == 64
 
 
+# ---------------------------------------------------------------------------
+# Provable tier-equivalence dedup.
+#
+# The picker fingerprints each algo's kernel SASS per tier and, when two tiers
+# emit a BYTE-IDENTICAL kernel for an algo, times one and copies the other's
+# numbers (marking `tier_equiv_to`). These tests monkeypatch the two structural
+# probes (`_present_algos_in_binary` + `_tier_algo_signature`) with synthetic
+# signatures so the dedup decision logic is validated without nvcc/cuobjdump.
+# ---------------------------------------------------------------------------
+def _install_synthetic_signatures(monkeypatch, present, sig_table):
+    """present: list[algo] in every binary. sig_table[tier][algo] = signature
+    string (equal strings ⇒ byte-identical kernels ⇒ eligible to dedup)."""
+    monkeypatch.setattr(run, "_present_algos_in_binary",
+                        lambda binary, elf_text=None: list(present))
+
+    def fake_sig(binary, algo, elf_text=None):
+        return sig_table.get(str(binary), {}).get(algo)
+    monkeypatch.setattr(run, "_tier_algo_signature", fake_sig)
+    # The picker dumps the ELF once and threads it through; the monkeypatched
+    # probes ignore it, so stub the dump to a non-None sentinel so the dedup
+    # path is exercised (a None dump would treat the binary as unreadable).
+    monkeypatch.setattr(run, "_cuobjdump_elf", lambda binary: "stub-elf")
+
+
+def test_dedup_collapses_identical_tier_and_copies_sweep(monkeypatch):
+    # Big-robot collapse: lite's `fd` kernel is byte-identical to shared's, so
+    # lite is NOT re-swept — it copies shared's numbers and is marked equiv.
+    # minimal differs (distinct signature) and is swept normally.
+    sweep_calls = []
+
+    def fake_sweep(binary, base, thread_grid, target_key):
+        sweep_calls.append(str(binary))
+        rows = {
+            "shared":  {"fd": {128: 11.0, 256: 9.0}},
+            "minimal": {"fd": {128: 8.5,  256: 8.0}},
+        }
+        out = {}
+        for algo, by in rows.get(str(binary), {}).items():
+            for th in thread_grid:
+                if th in by:
+                    out.setdefault(algo, {})[int(th)] = by[th]
+        return out
+
+    monkeypatch.setattr(run, "_sweep_one_binary", fake_sweep)
+    _install_synthetic_signatures(
+        monkeypatch, present=["fd"],
+        sig_table={
+            "shared":  {"fd": "SIG_A"},
+            "lite":    {"fd": "SIG_A"},   # identical to shared
+            "minimal": {"fd": "SIG_B"},   # distinct
+        },
+    )
+    tier_binaries = {"shared": Path("shared"), "lite": Path("lite"), "minimal": Path("minimal")}
+    picks = run._autotune_pick_winners(
+        tier_binaries, "fixed", thread_grid=(128, 256),
+        autotune_N=256, max_perf_level_threads=512, mode="batch",
+    )
+    # lite's binary was NEVER swept (deduped to shared); shared + minimal were.
+    assert "lite" not in sweep_calls, f"lite should be deduped, but was swept: {sweep_calls}"
+    assert "shared" in sweep_calls and "minimal" in sweep_calls
+    info = picks["fd"]
+    # All three tier columns are still populated (report stays complete).
+    assert set(info["sweep"]) == {"shared", "lite", "minimal"}
+    # lite's copied numbers exactly equal shared's (byte-identical kernel).
+    assert info["sweep"]["lite"] == info["sweep"]["shared"]
+    # The equivalence is recorded.
+    assert info.get("tier_equiv_to") == {"lite": "shared"}
+    # Global winner unaffected: minimal@256 (8.0) is fastest.
+    assert info["tier_optimal"] == "minimal" and info["us_at_optimal"] == 8.0
+
+
+def test_dedup_skips_whole_binary_when_all_algos_collapse(monkeypatch):
+    # If EVERY present algo in lite is byte-identical to shared, lite's binary is
+    # skipped entirely (the big-robot all-collapse case).
+    swept = []
+
+    def fake_sweep(binary, base, thread_grid, target_key):
+        swept.append(str(binary))
+        return {a: {int(th): 10.0 for th in thread_grid} for a in ("id", "fd")}
+
+    monkeypatch.setattr(run, "_sweep_one_binary", fake_sweep)
+    _install_synthetic_signatures(
+        monkeypatch, present=["id", "fd"],
+        sig_table={
+            "shared": {"id": "X", "fd": "Y"},
+            "lite":   {"id": "X", "fd": "Y"},   # both identical to shared
+        },
+    )
+    picks = run._autotune_pick_winners(
+        {"shared": Path("shared"), "lite": Path("lite")}, "fixed",
+        thread_grid=(128, 256), autotune_N=256, max_perf_level_threads=512, mode="batch",
+    )
+    # lite's binary is never run (main sweep OR refinement); shared is.
+    assert "lite" not in swept, f"lite binary should be skipped wholesale; swept={swept}"
+    assert "shared" in swept
+    for algo in ("id", "fd"):
+        assert picks[algo]["sweep"]["lite"] == picks[algo]["sweep"]["shared"]
+        assert picks[algo].get("tier_equiv_to") == {"lite": "shared"}
+
+
+def test_dedup_does_not_collapse_distinct_signatures(monkeypatch):
+    # Small-robot case: every tier has a DISTINCT signature → no dedup, all three
+    # binaries swept, no tier_equiv_to recorded.
+    swept = []
+
+    def fake_sweep(binary, base, thread_grid, target_key):
+        swept.append(str(binary))
+        base_us = {"shared": 9.0, "lite": 10.0, "minimal": 8.0}[str(binary)]
+        return {"fd": {int(th): base_us for th in thread_grid}}
+
+    monkeypatch.setattr(run, "_sweep_one_binary", fake_sweep)
+    _install_synthetic_signatures(
+        monkeypatch, present=["fd"],
+        sig_table={
+            "shared":  {"fd": "S0"},
+            "lite":    {"fd": "S1"},
+            "minimal": {"fd": "S2"},
+        },
+    )
+    picks = run._autotune_pick_winners(
+        {"shared": Path("shared"), "lite": Path("lite"), "minimal": Path("minimal")},
+        "fixed", thread_grid=(128, 256), autotune_N=256,
+        max_perf_level_threads=512, mode="batch",
+    )
+    # Every tier is swept at least once (refinement may add extra calls); the
+    # key property is that no tier is deduped away.
+    assert set(swept) == {"shared", "lite", "minimal"}, (
+        f"all tiers must be swept when signatures differ; swept={swept}"
+    )
+    assert "tier_equiv_to" not in picks["fd"]
+
+
+def test_dedup_blind_spot_forces_sweep(monkeypatch):
+    # If a present algo cannot be fingerprinted (sig None) in a tier, that tier
+    # is NEVER skipped wholesale even if the fingerprintable algos all collapse.
+    swept = []
+
+    def fake_sweep(binary, base, thread_grid, target_key):
+        swept.append(str(binary))
+        return {a: {int(th): 10.0 for th in thread_grid} for a in ("id", "fd")}
+
+    monkeypatch.setattr(run, "_sweep_one_binary", fake_sweep)
+    _install_synthetic_signatures(
+        monkeypatch, present=["id", "fd"],
+        sig_table={
+            "shared": {"id": "X", "fd": "Y"},
+            "lite":   {"id": "X"},   # fd has NO signature (blind spot) in lite
+        },
+    )
+    picks = run._autotune_pick_winners(
+        {"shared": Path("shared"), "lite": Path("lite")}, "fixed",
+        thread_grid=(128, 256), autotune_N=256, max_perf_level_threads=512, mode="batch",
+    )
+    # lite must still be swept (fd couldn't be proven identical).
+    assert "lite" in swept
+    # id WAS proven identical, so it is marked equiv even though the binary ran.
+    assert picks["id"].get("tier_equiv_to") == {"lite": "shared"}
+    # fd was swept fresh in lite (no equiv).
+    assert "lite" not in picks["fd"].get("tier_equiv_to", {})
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

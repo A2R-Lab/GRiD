@@ -1388,7 +1388,22 @@ def build_tier_binaries(
             print(f"  [autotune] WARN: tier={tier} {'single' if want_single else 'batch'} "
                   f"binary unavailable, skipping", file=sys.stderr)
             continue
-        out[tier] = binary
+        # compile_binaries returns the WORKING-DIR binary (build_dir/<name>.exe),
+        # which it overwrites on every tier (each tier's cache binary is copied
+        # onto the same path). Snapshot each tier's binary to a tier-stamped
+        # filename so the three coexist — otherwise all tiers would alias the
+        # last-built file and the sweep (and the tier-equivalence dedup) would
+        # see them as identical regardless of their real per-tier contents.
+        stamped = binary.with_name(f"{binary.stem}__tier_{tier}{binary.suffix}")
+        try:
+            shutil.copyfile(binary, stamped)
+            os.chmod(stamped, 0o755)
+            out[tier] = stamped
+        except OSError as e:
+            print(f"  [autotune] WARN: tier={tier} could not snapshot binary "
+                  f"({e}); using shared working path (tiers may alias)",
+                  file=sys.stderr)
+            out[tier] = binary
     return out
 
 
@@ -1444,6 +1459,143 @@ def _refine_grid_for_winner(winner: int, sorted_grid: list[int], cap: int) -> se
     return out
 
 
+# ---------------------------------------------------------------------------
+# Tier-equivalence dedup (provable, structural — NOT a timing heuristic).
+#
+# The per-tier binaries differ ONLY in the compile-time RESOURCE_TIER baked in
+# via -DGRID_DEFAULT_RESOURCE_TIER. For a given algo, that tier feeds three
+# tier-varying inputs into the kernel template: the resolved dynamic-smem bytes,
+# the boolean smem/inner-level toggles (*_IN_SMEM<TIER>, *_INNER_LEVEL<TIER>),
+# AND the per-tier __launch_bounds__ cap (tier_max_threads<TIER>()). All three
+# are captured *exactly* by the kernel's emitted machine code (SASS). So the
+# provable signature for an (algo, tier) is the hash of that algo's kernel SASS,
+# with the tier-enum template immediate (Li0/Li1/Li2) in the mangled symbol name
+# normalized out (it is a pure name artifact, not a code difference). Two tiers
+# whose kernel SASS hashes match for an algo are BYTE-IDENTICAL kernels: the
+# thread sweep on one is, by construction, the thread sweep on the other, so we
+# time it once and copy. Tiers whose SASS differs (the common small-robot case,
+# where the launch_bounds caps 352/704/1024 already force distinct register
+# allocation) are NEVER collapsed — they are swept normally. There is no
+# timing-closeness fudge anywhere in this path.
+#
+# Granularity is per-(tier, algo): a single algo can be deduped between two tiers
+# even if other algos in the same binary are not.
+# ---------------------------------------------------------------------------
+import re as _re  # module-level imports don't include re; alias keeps it local
+
+
+def _algo_kernel_symbol_base(algo: str) -> str | None:
+    """Map an algo key to its CUDA kernel symbol base (e.g. 'id' ->
+    'inverse_dynamics_kernel'). Derived from the algo's batch_compute_only call
+    `grid::<base>_compute_only<...>` (the launched kernel is `<base>_kernel`).
+    Returns None if the spec is missing/unparseable (algo then never dedups)."""
+    spec = PER_ALGO_SPECS.get(algo)
+    if not spec:
+        return None
+    m = _re.search(r"grid::([A-Za-z0-9_]+)_compute_only<", spec.get("batch_compute_only", ""))
+    if not m:
+        return None
+    return f"{m.group(1)}_kernel"
+
+
+def _cuobjdump_elf(binary: Path) -> str | None:
+    """`cuobjdump -elf <binary>` stdout, or None on failure."""
+    try:
+        elf = subprocess.run(["cuobjdump", "-elf", str(binary)],
+                             capture_output=True, text=True)
+    except OSError:
+        return None
+    return elf.stdout if elf.returncode == 0 else None
+
+
+def _kernel_sass_hash(binary: Path, kernel_base: str,
+                      elf_text: str | None = None) -> str | None:
+    """SHA-256 of the SASS for `grid::<kernel_base><float, TIER>` in `binary`,
+    normalized so the result is tier-independent EXCEPT for genuine code diffs.
+
+    Normalization: (1) the mangled tier immediate `IfLi[0-2]E` in the function
+    symbol is collapsed to a placeholder, so two tiers that emit identical code
+    don't differ merely by their template-enum name; (2) the per-instruction
+    encoded-hex columns (/* 0x... */) and absolute addresses are stripped, so we
+    hash the instruction stream + operands, not load addresses.
+
+    `elf_text` may be a pre-fetched `cuobjdump -elf` dump (avoids re-running it
+    per algo). Returns None (→ algo is not deduped, swept normally) if the symbol
+    is absent or cuobjdump fails."""
+    # Find the exact mangled symbol for this kernel base (the _kernel form, NOT
+    # _kernel_single_timing). Match `<...NNkernel_baseIfLi[0-2]E...>` in the ELF
+    # section table, then dump just that function's SASS.
+    if elf_text is None:
+        elf_text = _cuobjdump_elf(binary)
+    if elf_text is None:
+        return None
+    # Section names look like `.text._ZN4grid23inverse_dynamics_kernelIfLi0EEEv...`.
+    # Require the base immediately followed by `IfLi<d>E` so `crba_kernel` does
+    # not also match `crba_kernel_single_timing`.
+    pat = _re.compile(r"(_ZN4grid\d+" + _re.escape(kernel_base) + r"IfLi[0-2]E\S*)")
+    sym = None
+    for m in pat.finditer(elf_text):
+        cand = m.group(1)
+        # Exclude the single_timing variant (its base is `<base>_single_timing`,
+        # so it won't match here, but guard defensively).
+        if "_single_timing" in cand:
+            continue
+        sym = cand
+        break
+    if sym is None:
+        return None
+    try:
+        sass = subprocess.run(["cuobjdump", "-sass", "-fun", sym, str(binary)],
+                              capture_output=True, text=True)
+    except OSError:
+        return None
+    if sass.returncode != 0 or not sass.stdout:
+        return None
+    lines: list[str] = []
+    for ln in sass.stdout.splitlines():
+        ln = _re.sub(r"/\*[0-9a-fA-F]+\*/", "", ln)  # encoded hex / addr columns
+        ln = ln.strip()
+        if not ln:
+            continue
+        lines.append(ln)
+    body = "\n".join(lines)
+    # Collapse the tier immediate in the symbol name so it doesn't pollute the
+    # hash (the symbol name appears in the SASS header line).
+    body = _re.sub(r"IfLi[0-2]E", "IfLiXE", body)
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+def _present_algos_in_binary(binary: Path, elf_text: str | None = None) -> list[str]:
+    """Registry algos (PER_ALGO_SPECS order) whose compute kernel symbol is
+    actually present in `binary`. These are the algos the bench will time, so
+    they are exactly the ones the dedup must account for. Empty list if the ELF
+    can't be read."""
+    if elf_text is None:
+        elf_text = _cuobjdump_elf(binary)
+    if elf_text is None:
+        return []
+    out: list[str] = []
+    for algo in _algo_keys_in_registry_order():
+        base = _algo_kernel_symbol_base(algo)
+        if base is None:
+            continue
+        # `<NN><base>IfLi<d>E` — base immediately followed by the tier immediate,
+        # so `crba_kernel` does not match `crba_kernel_single_timing`.
+        if _re.search(r"\d+" + _re.escape(base) + r"IfLi[0-2]E", elf_text):
+            out.append(algo)
+    return out
+
+
+def _tier_algo_signature(binary: Path, algo: str,
+                         elf_text: str | None = None) -> str | None:
+    """Provable per-(tier, algo) kernel signature, or None if unavailable
+    (caller then sweeps that (tier, algo) normally — never wrongly collapses)."""
+    base = _algo_kernel_symbol_base(algo)
+    if base is None:
+        return None
+    return _kernel_sass_hash(binary, base, elf_text=elf_text)
+
+
 def _autotune_pick_winners(
     tier_binaries: dict[str, Path],
     base: str,
@@ -1475,17 +1627,92 @@ def _autotune_pick_winners(
     target_key = _target_key_for_mode(mode, autotune_N)
     # algo -> tier -> {threads: us}
     sweeps: dict[str, dict[str, dict[int, float]]] = {}
+    # algo -> tier -> "tier this (algo, tier) was proven byte-identical to and
+    # whose sweep numbers were copied" (omitted when the algo was swept fresh).
+    tier_equiv: dict[str, dict[str, str]] = {}
+    # tier -> {algo: provable kernel-SASS signature}. Cached so each tier's
+    # binary is fingerprinted once.
+    tier_sigs: dict[str, dict[str, str]] = {}
 
     for tier, binary in tier_binaries.items():
         if binary is None:
             continue
         cap = _tier_thread_cap(tier, max_perf_level_threads)
         tier_grid = _clip_grid_to_cap(thread_grid, cap)
-        print(f"  [autotune] tier={tier:<7s} cap={cap:>4d} sweeping {len(tier_grid)} "
-              f"thread counts ({mode}): {list(tier_grid)}", file=sys.stderr)
-        tier_sweep = _sweep_one_binary(binary, base, tier_grid, target_key)
+
+        # --- Provable tier-equivalence dedup ---------------------------------
+        # Fingerprint every algo's kernel SASS in this tier, then for each algo
+        # whose signature exactly matches an ALREADY-SWEPT tier's signature,
+        # copy that tier's sweep numbers (byte-identical kernel ⇒ identical
+        # timing) instead of re-timing. If EVERY fingerprintable algo collapses
+        # this way, the whole binary run is skipped (the big-robot case). Algos
+        # with a unique signature (or no obtainable signature) are swept.
+        # `present` = registry algos whose kernel symbol exists in THIS binary
+        # (so it will actually be timed). `my_sigs` = those of them we could
+        # fingerprint. A present algo that we could NOT fingerprint (sig is None
+        # despite the symbol existing) is a "blind spot": we cannot prove it
+        # identical, so it forces the binary to be swept (never skipped).
+        elf_text = _cuobjdump_elf(binary)  # one dump reused for all algos here
+        present = _present_algos_in_binary(binary, elf_text=elf_text)
+        my_sigs: dict[str, str] = {}
+        blind: set[str] = set()
+        for algo in present:
+            sig = _tier_algo_signature(binary, algo, elf_text=elf_text)
+            if sig is None:
+                blind.add(algo)
+            else:
+                my_sigs[algo] = sig
+        tier_sigs[tier] = my_sigs
+
+        # algo -> source tier it is byte-identical to (first prior tier that has
+        # the same signature AND was actually swept for that algo).
+        copy_from: dict[str, str] = {}
+        for algo, sig in my_sigs.items():
+            # Earliest prior tier (insertion order) with a matching signature
+            # that we already have fresh sweep numbers for.
+            for prev_tier in tier_binaries:
+                if prev_tier == tier:
+                    break  # only consider tiers swept before this one
+                if (tier_sigs.get(prev_tier, {}).get(algo) == sig
+                        and algo in sweeps and prev_tier in sweeps[algo]):
+                    copy_from[algo] = prev_tier
+                    break
+
+        # Skip the whole binary run ONLY if every present algo is a proven
+        # dedup copy (no blind spots, at least one algo present).
+        all_deduped = (bool(present)
+                       and not blind
+                       and all(a in copy_from for a in present))
+
+        if all_deduped:
+            src = sorted(set(copy_from.values()))
+            print(f"  [autotune] tier={tier:<7s} cap={cap:>4d} DEDUP: all "
+                  f"{len(copy_from)} algos byte-identical to tier(s) {src} "
+                  f"(SASS-equal) — skipping thread sweep, copying numbers",
+                  file=sys.stderr)
+            tier_sweep = {}
+        else:
+            print(f"  [autotune] tier={tier:<7s} cap={cap:>4d} sweeping "
+                  f"{len(tier_grid)} thread counts ({mode}): {list(tier_grid)}"
+                  + (f" (dedup-copied {len(copy_from)} algo(s): "
+                     f"{sorted(copy_from)})" if copy_from else ""),
+                  file=sys.stderr)
+            tier_sweep = _sweep_one_binary(binary, base, tier_grid, target_key)
+
+        # Fresh-swept algos.
         for algo, by_threads in tier_sweep.items():
+            if algo in copy_from:
+                continue  # deduped algos get copied numbers below, not raw ones
             sweeps.setdefault(algo, {})[tier] = by_threads
+        # Deduped algos: copy the byte-identical source tier's sweep verbatim so
+        # the per-tier `sweep` column is still fully populated and the global
+        # argmin sees this tier as a (tied) candidate.
+        for algo, src_tier in copy_from.items():
+            src_sweep = sweeps.get(algo, {}).get(src_tier)
+            if src_sweep is None:
+                continue
+            sweeps.setdefault(algo, {})[tier] = dict(src_sweep)
+            tier_equiv.setdefault(algo, {})[tier] = src_tier
 
     # One-level refinement around each algo's current (tier, threads) winner.
     # Probe per tier so we never exceed that tier's launch_bounds cap.
@@ -1499,6 +1726,12 @@ def _autotune_pick_winners(
         grid_for_tier = sorted(_clip_grid_to_cap(thread_grid, cap))
         refine_by_tier[wtier] |= _refine_grid_for_winner(wthreads, grid_for_tier, cap)
 
+    # Algos whose (tier) cell was a dedup copy must never be re-timed in
+    # refinement (they have no independent kernel). They are re-synced from
+    # their byte-identical source tier after refinement instead.
+    def _is_deduped(algo: str, tier: str) -> bool:
+        return tier in tier_equiv.get(algo, {})
+
     for tier, extra in refine_by_tier.items():
         extra = {t for t in extra if t not in (sweeps_for_tier_threads(sweeps, tier))}
         if not extra:
@@ -1506,10 +1739,28 @@ def _autotune_pick_winners(
         binary = tier_binaries.get(tier)
         if binary is None:
             continue
+        # If every algo that would be refined in this tier is a dedup copy,
+        # there is no fresh kernel to time — skip the launch (its numbers come
+        # from the source tier's refinement via the re-sync below).
+        fresh_algos = {a for a in sweeps if tier in sweeps.get(a, {})
+                       and not _is_deduped(a, tier)}
+        if not fresh_algos:
+            continue
         print(f"  [autotune] tier={tier} refinement probes: {sorted(extra)}", file=sys.stderr)
         tier_sweep = _sweep_one_binary(binary, base, tuple(sorted(extra)), target_key)
         for algo, by_threads in tier_sweep.items():
+            if _is_deduped(algo, tier):
+                continue  # don't overwrite a dedup copy with this tier's own run
             sweeps.setdefault(algo, {}).setdefault(tier, {}).update(by_threads)
+
+    # Re-sync every deduped (algo, tier) cell from its byte-identical source so
+    # any refinement points the source gained are reflected (the cells stay
+    # exactly equal, as they must — same kernel).
+    for algo, equivs in tier_equiv.items():
+        for tier, src_tier in equivs.items():
+            src_sweep = sweeps.get(algo, {}).get(src_tier)
+            if src_sweep is not None:
+                sweeps[algo][tier] = dict(src_sweep)
 
     picks: dict[str, dict] = {}
     for algo, by_tier in sweeps.items():
@@ -1517,7 +1768,7 @@ def _autotune_pick_winners(
         if best is None:
             continue
         wtier, wthreads, wus = best
-        picks[algo] = {
+        pick = {
             "schema": 2,
             "tier_optimal": wtier,
             "threads_optimal": int(wthreads),
@@ -1533,6 +1784,13 @@ def _autotune_pick_winners(
                 for th, us in sorted(by_tier.get(wtier, {}).items())
             },
         }
+        # Record which tiers were proven byte-identical (SASS-equal) to an
+        # earlier-swept tier and therefore had their sweep numbers COPIED rather
+        # than re-timed. {deduped_tier: source_tier}. Absent ⇒ all tiers were
+        # swept independently for this algo.
+        if algo in tier_equiv and tier_equiv[algo]:
+            pick["tier_equiv_to"] = dict(sorted(tier_equiv[algo].items()))
+        picks[algo] = pick
     return picks
 
 
