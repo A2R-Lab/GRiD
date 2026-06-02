@@ -12,7 +12,7 @@ This skips the :doc:`crba` step entirely and is the right choice when
 forward dynamics is the only downstream consumer.
 
 GRiD's standard forward-dynamics path composes ``minv`` with
-:doc:`rnea`:
+:doc:`inverse_dynamics`:
 
 .. math::
 
@@ -42,7 +42,7 @@ See Also
 --------
 * :doc:`crba` — full mass matrix (use this if you need :math:`M`
   itself, not just :math:`M^{-1}`).
-* :doc:`rnea` — inverse dynamics (the ``c`` term in the FD
-  composition).
+* :doc:`inverse_dynamics` — inverse dynamics (RNEA); the ``c`` term in
+  the FD composition.
 * :doc:`aba` — recursive forward dynamics (independent of
   :math:`M^{-1}`).

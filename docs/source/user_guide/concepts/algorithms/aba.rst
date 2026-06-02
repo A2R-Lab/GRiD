@@ -10,8 +10,8 @@ forward-dynamics algorithm: given joint positions, velocities, and
 applied torques, compute joint accelerations directly without forming
 or inverting the mass matrix.
 
-GRiD also provides a "FD" variant that composes
-:doc:`minv` ∘ :doc:`rnea` (i.e. ``qdd = M⁻¹·(τ − c)``). The two
+GRiD also provides a ``forward_dynamics`` variant that composes
+:doc:`minv` ∘ :doc:`inverse_dynamics` (i.e. ``qdd = M⁻¹·(τ − c)``). The two
 forward-dynamics paths are independent implementations; the
 benchmark suite reports both so users can pick by their downstream
 workload.
@@ -32,6 +32,6 @@ The Python reference is ``RBDReference.aba`` in
 
 See Also
 --------
-* :doc:`rnea` — inverse dynamics counterpart.
+* :doc:`inverse_dynamics` — inverse dynamics counterpart (RNEA).
 * :doc:`minv` — direct mass-matrix inverse (used by the FD variant).
 * :doc:`crba` — composite-rigid-body mass matrix.

@@ -64,5 +64,5 @@ generated benchmark report for current per-cell numbers.
 See Also
 --------
 * :doc:`idsva` — second-order inverse dynamics (the inner pass)
-* :doc:`rnea`
+* :doc:`inverse_dynamics`
 * :doc:`aba`

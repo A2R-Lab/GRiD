@@ -75,7 +75,7 @@ the full robot manifest.
 See Also
 --------
 * :doc:`fdsva_so` — second-order forward dynamics
-* :doc:`rnea`
+* :doc:`inverse_dynamics`
 * :doc:`crba`
 * :doc:`aba`
 * :doc:`minv`

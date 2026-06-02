@@ -96,8 +96,9 @@ Known Caveats
   ``TIER_MINIMAL``; ``TIER_PERF`` remains as a deprecated alias of
   ``TIER_SHARED``. See :doc:`../concepts/resource_tier_system`.
 * Robots with **mimic joints**: non-gradient algorithms are supported, and most
-  gradients now emit a correct mimic-reduced result — ``id_du`` / ``fd_du`` (both
-  bases), ``ee_pose_gradient`` / ``ee_pose_hessian`` (both bases), and fixed-base
+  gradients now emit a correct mimic-reduced result — ``inverse_dynamics_gradient`` /
+  ``forward_dynamics_gradient`` (both bases), ``end_effector_pose_gradient`` /
+  ``end_effector_pose_hessian`` (both bases), and fixed-base
   second-order (``idsva_so`` / ``fdsva_so``). The still-unsupported selections
   (integrator gradients and ``f_ext`` gradients on either base, and floating-base
   second-order) raise a clear ``NotImplementedError`` rather than emitting

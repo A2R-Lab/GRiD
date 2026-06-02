@@ -94,7 +94,7 @@ guarantee it a valid pointer — **never pass it a ``nullptr`` ``s_temp``** (see
 anti-patterns below; this was a real crash class).
 
 Reference points that already follow this: ``aba_inner``,
-``forward_dynamics_inner``, ``direct_minv_inner``, ``fdsva_so_inner`` (the
+``forward_dynamics_inner``, ``minv_inner``, ``fdsva_so_inner`` (the
 rank-3 contraction sub-step), ``fdsva_so_device``,
 ``inverse_dynamics_gradient_device``, ``forward_dynamics_gradient_device``,
 ``integrator_gradient_device``, ``end_effector_pose_gradient_inner``, and the

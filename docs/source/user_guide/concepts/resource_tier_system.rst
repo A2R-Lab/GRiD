@@ -181,7 +181,7 @@ existing call sites are unchanged):
    * - Inner
      - Placement param
      - Buffer it routes
-   * - ``direct_minv_inner``
+   * - ``minv_inner``
      - ``bool F_IN_SMEM``
      - the 6·NV² articulated-body F-region
    * - ``forward_dynamics_inner``
@@ -201,8 +201,8 @@ existing call sites are unchanged):
      - the FD inner's Minv F-region (value path); see "Integrator surgical spill"
    * - ``integrator_gradient_kernel``
      - per-tier rung (Dqdd / dAB / inner level)
-     - composes id_du selective/global_temp + spills Dqdd & the dAB output
-   * - ``*_device`` (id_du / fd_du / idsva_so / d2ee)
+     - composes inverse_dynamics_gradient selective/global_temp + spills Dqdd & the dAB output
+   * - ``*_device`` (inverse_dynamics_gradient / forward_dynamics_gradient / idsva_so / end_effector_pose_hessian)
      - ``int RESOURCE_TIER``
      - whole inner ``s_temp`` arena (via the ``tier_workspace_expr`` helper)
 
@@ -258,10 +258,11 @@ migrate. Two consequences worth calling out:
   ``2*num_pos`` sincos scratch, so a spilled (null) ``s_temp`` crashes it. Handle
   this uniformly: either keep the tiny sincos scratch in smem always, or repoint
   ``s_temp`` at the workspace before the helper call. (See the null-``s_temp``
-  fix history for ``aba``/``ee_pose_gradient``.)
+  fix history for ``aba``/``end_effector_pose_gradient``.)
 
 Conformance audit and the remaining migration list (``idsva_so`` world inner,
-``id_du``/``fd_du``/``integrator_gradient`` kernel-side repoints) live in
+``inverse_dynamics_gradient``/``forward_dynamics_gradient``/``integrator_gradient``
+kernel-side repoints) live in
 ``docs/idsva_so_inner_refactor_notes.md`` — that table is the source of truth for
 propagating this pattern across the project.
 
@@ -292,7 +293,7 @@ placement bool named for the buffer it controls:
 * ``ABA_INNER_{SMEM,WORKSPACE}_BYTES<T, TEMP_IN_SMEM>`` + ``ABA_TEMP_IN_SMEM<TIER>``
 * ``EE_GRAD_INNER_{SMEM,WORKSPACE}_BYTES<T, TEMP_IN_SMEM>`` + ``EE_GRAD_TEMP_IN_SMEM<TIER>``
 
-The ``*_device`` inline entry points (id_du / fd_du / idsva_so / d2ee) still
+The ``*_device`` inline entry points (inverse_dynamics_gradient / forward_dynamics_gradient / idsva_so / end_effector_pose_hessian) still
 expose their sizing as ``*_DEVICE_INLINE_{SMEM,WORKSPACE}_BYTES<T, TIER>``
 (keyed on tier rather than a placement bool); they decide placement internally
 via the ``tier_workspace_expr`` arena helper, and their kernels inline + spill
@@ -339,7 +340,8 @@ It threads the existing ``forward_dynamics_inner<T, MINV_F_IN_SMEM>`` lever:
 **Gradient path** (``integrator_gradient_kernel`` / ``..._with_x_kp1``). A
 4-rung ladder, least-spill first, spilling only cold / output / coalesced
 matrices to **distinct, non-aliasing** ``d_workspace`` sub-offsets (the
-gradient never runs concurrently with id_du/fd_du/fdsva_so, so it reuses those
+gradient never runs concurrently with
+inverse_dynamics_gradient/forward_dynamics_gradient/fdsva_so, so it reuses those
 sections):
 
 .. list-table:: Integrator-gradient spill ladder
@@ -356,11 +358,11 @@ sections):
      - ``s_D_qdd_stage`` (``max_stages·NV·3NV``)
      - g1_fixed PERF
    * - 2
-     - + ``s_dAB`` output (``2NV·3NV``) + id_du **selective** (da_df band only;
+     - + ``s_dAB`` output (``2NV·3NV``) + inverse_dynamics_gradient **selective** (da_df band only;
        the FD-grad inner stays in smem, just smaller)
      - g1_floating PERF — hot path stays in smem
    * - 3
-     - + the **whole** FD-grad inner ``s_temp`` (id_du global_temp)
+     - + the **whole** FD-grad inner ``s_temp`` (inverse_dynamics_gradient global_temp)
      - h1_2 fixed/floating — the inner is 160-441 KB, physically can't fit a
        100 KB box, so this is unavoidable
 
@@ -451,7 +453,7 @@ caller-provided ``T *d_workspace`` argument:
 * ``inverse_dynamics_gradient_device<T, RESOURCE_TIER>(s_dc_du,
   s_q, s_qd, [s_qdd], d_robotModel, gravity, d_workspace)`` — whole
   s_temp arena routes per tier.
-* ``end_effector_pose_gradient_hessian_device<T, RESOURCE_TIER>
+* ``end_effector_pose_hessian_device<T, RESOURCE_TIER>
   (s_d2eePos, s_deePos, s_q, d_robotModel, d_workspace)`` —
   ``s_d2eeTemp`` slot (the 2*16*num_ees*n² portion) routes per tier;
   inner_no_d2 stays in smem at all tiers.
@@ -518,8 +520,9 @@ behavior).
 
 **Why no LITE smem target between PERF and MINIMAL today?**
 Honest answer: implementation cost. The existing per-algo multi-
-tier spill machinery (``fdsva_so`` has 4 levels, ``d2ee``/``id_du``/
-``fd_du`` have 3, ``idsva_so_body_frame`` has 2) picks **one** spill
+tier spill machinery (``fdsva_so`` has 4 levels,
+``end_effector_pose_hessian``/``inverse_dynamics_gradient``/
+``forward_dynamics_gradient`` have 3, ``idsva_so_body_frame`` has 2) picks **one** spill
 level at codegen time based on ``cuda_target_shared_mem_bytes``. To
 make LITE pick a different level than PERF/MINIMAL we need to
 emit three code paths and have codegen compute three picks per
@@ -588,10 +591,12 @@ above were the final pieces):
     spill flags. The tier-aware ``*_DYNAMIC_SHARED_MEM_BYTES<T, TIER>``
     constexpr reports per-tier smem requirements (default ``TIER = TIER_SHARED``
     preserves all existing single-arg call sites).
-  - **Shipped**: ``d2ee``, ``id_du``, ``fd_du``, ``fdsva_so`` (commit
+  - **Shipped**: ``end_effector_pose_hessian``, ``inverse_dynamics_gradient``,
+    ``forward_dynamics_gradient``, ``fdsva_so`` (commit
     ``8e5ff50``). Verified via nvcc compile of go2_fixed (FULL 3-way
-    divergence on d2ee + fdsva_so picks) and h1_2_fixed (PERF=1, LITE/MIN=2
-    divergence on d2ee + id_du). Smoke test passes on iiwa14 (picks
+    divergence on end_effector_pose_hessian + fdsva_so picks) and h1_2_fixed
+    (PERF=1, LITE/MIN=2 divergence on end_effector_pose_hessian +
+    inverse_dynamics_gradient). Smoke test passes on iiwa14 (picks
     collapse).
   - **Deferred**: ``idsva_so_body_frame``. Its current spill machinery is
     asymmetric (``grav_full_spill`` only applies to floating-base, and is
@@ -609,9 +614,9 @@ survey across 4 robots × 2 bases):
 
    * - Robot
      - fdsva_so
-     - d2ee
-     - id_du
-     - fd_du
+     - end_effector_pose_hessian
+     - inverse_dynamics_gradient
+     - forward_dynamics_gradient
    * - iiwa14_fixed
      - (0,0,3) divergent
      - (0,0,2) divergent
@@ -671,7 +676,7 @@ emits 2 or 3 specialized bodies inside ``if constexpr`` branches.
     alone drops Minv 100 KB → ~38 KB.
   * **ABA**: the 140·NJ recursion band has no clean sub-split, so its Level 1
     redirects the whole inner ``s_temp`` to L2-pinned workspace.
-  * **EE_POSE_GRAD / D2EE / id_du / fd_du / fdsva_so**: 3-6 level ladders
+  * **end_effector_pose_gradient / end_effector_pose_hessian / inverse_dynamics_gradient / forward_dynamics_gradient / fdsva_so**: 3-6 level ladders
     spilling inner_temp, then the output, then (fdsva_so) ``s_df_du`` / ``s_Minv``.
   * **idsva_so (body + world)**: ladders spilling the 4·NV³ output, then BC
     (body, surgical), then the whole inner. See "idsva_so — done" above.
@@ -701,16 +706,16 @@ would be sharp. With L2 pinning, the kernel still mostly hits L2.
 If your workload requires the L2 cache for other concurrent kernels and
 you want to opt out, compile with ``-DGRID_CUDA_ENABLE_L2_PERSISTING=0``.
 
-**Phase 3a + 3b + 3c + 3d + 3e shipped — Minv + FD + ABA + EE_POSE_GRAD + FDSVA_SO L4-5 spill landed**
+**Phase 3a + 3b + 3c + 3d + 3e shipped — Minv + FD + ABA + END_EFFECTOR_POSE_GRADIENT + FDSVA_SO L4-5 spill landed**
 
-* **Phase 3d (EE_POSE_GRAD)**: mirrors the D2EE 3-tier spill pattern. PERF
+* **Phase 3d (END_EFFECTOR_POSE_GRADIENT)**: mirrors the END_EFFECTOR_POSE_HESSIAN 3-tier spill pattern. PERF
   keeps the full inner_temp + s_deePos + dXmatsHom in smem; LITE pushes the
   recursion-hot inner_temp (2*2*16*num_ees*n T = ~52 KB on humanoid-scale)
   to L2-pinned workspace and writes ``s_deePos`` directly into global
   output; MINIMAL also pushes ``s_dXmatsHom`` (16*n T) to workspace.
   ``end_effector_pose_gradient_kernel`` now takes ``unsigned char *d_workspace``
   as its new 2nd argument. ``DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T, TIER>()``
-  is tier-aware. The workspace section reuses the SO offset (EE_POSE_GRAD
+  is tier-aware. The workspace section reuses the SO offset (END_EFFECTOR_POSE_GRADIENT
   and SO algos don't run concurrently). Per-(robot) picks:
 
   - iiwa14_fixed/floating: (0, 0, 2) — PERF/LITE alias to full smem;
@@ -721,7 +726,7 @@ you want to opt out, compile with ``-DGRID_CUDA_ENABLE_L2_PERSISTING=0``.
 
   Smoke (nvcc -gencode arch=compute_120,code=sm_120, all 9 emitted kernels
   × 3 tiers per robot): iiwa14_fixed/go2_fixed/h1_2_fixed all 27/27 PASS.
-  h1_2_fixed EE_POSE_GRAD compiles clean at 40/40/50 registers (PERF/LITE/MINIMAL).
+  h1_2_fixed END_EFFECTOR_POSE_GRADIENT compiles clean at 40/40/50 registers (PERF/LITE/MINIMAL).
 
 * **Phase 3e (FDSVA_SO Level 4 + 5)**: extends the existing 4-level spill machinery
   with two new top levels. Level 4 pushes ``s_df_du`` (2*NV²) to a new
@@ -746,8 +751,8 @@ Status (commits ``da831dd`` + ``0795442`` + (3c-tbd)):
 * **Phase 3c (ABA)** uses a different spill pattern than 3a/3b. ABA's 140*NJ+138
   interleaved scratch band has no natural surgical sub-split — it's all one
   tightly-coupled recursion. So Level 1 redirects the *entire* ``s_temp``
-  arena to L2-pinned workspace (analogous to the existing ``id_du``
-  ``use_global_temp`` pattern). A side effect of Phase 3b: ABA's
+  arena to L2-pinned workspace (analogous to the existing
+  ``inverse_dynamics_gradient`` ``use_global_temp`` pattern). A side effect of Phase 3b: ABA's
   ``inner_temp_mem_size`` decreased on floating-base because the defensive
   ``max(140*NJ+138, fd_inner_size)`` formula now sees a smaller FD inner
   (post-F-removal). On h1_2_floating ABA's Level 0 arena dropped enough
@@ -759,12 +764,12 @@ Status (commits ``da831dd`` + ``0795442`` + (3c-tbd)):
 
 Status (commits ``da831dd`` + ``0795442``):
 
-* ``direct_minv_inner`` now takes ``T *s_F`` as a separate 6*NV*NV scratch
+* ``minv_inner`` now takes ``T *s_F`` as a separate 6*NV*NV scratch
   parameter; ``forward_dynamics_inner`` analogously takes ``T *s_minv_F``.
   Callers decide whether the F-region lives in extra smem (Level 0,
   preserves current behavior on small robots) or L2-pinned workspace
   (Level 1, frees ~62 KB smem on humanoid-scale robots).
-* ``direct_minv_kernel`` and ``forward_dynamics_kernel`` now both take
+* ``minv_kernel`` and ``forward_dynamics_kernel`` now both take
   ``unsigned char *d_workspace`` as their new 2nd argument. The per-tier
   ``select_shared_tier_3way`` picks Level 0 vs Level 1 based on the
   ``cuda_target_shared_mem_bytes`` (PERF, 98 KB), ``cuda_target_lite_shared_mem_bytes``
@@ -803,7 +808,7 @@ The machinery this section once described as deferred is **landed**:
 ``select_shared_tier_3way`` picking a per-tier rung against the PERF / LITE /
 MINIMAL targets, per-tier ``if constexpr`` emission, the ternary
 ``gen_declare_shared_arena`` arena helper, and the new spill levels that bring
-every previously-overflowing h1_2 kernel (IDSVA_SO, FDSVA_SO, EE_POSE_GRAD,
+every previously-overflowing h1_2 kernel (IDSVA_SO, FDSVA_SO, END_EFFECTOR_POSE_GRADIENT,
 Minv/FD/ABA, and the integrator value+gradient) under the sm_120 cap.
 
 What remains is **tuning, not plumbing**: is 48 KB the right LITE cliff, or

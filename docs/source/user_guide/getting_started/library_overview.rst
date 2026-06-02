@@ -19,20 +19,20 @@ dynamics algorithms in Python.
 
 It currently supports the following algorithmic functions which can be viewed from the function glossary:
 
-* ``apply_external_forces`` and an ``f_ext=`` kwarg on ``rnea`` / ``rnea_fpass`` / ``aba`` — opt-in per-body external forces (body-local frame, subtracted from the per-body force; an empty/``None`` value is a no-op)
-* ``rnea``
-* ``rnea_grad``
+* ``apply_external_forces`` and an ``f_ext=`` kwarg on ``inverse_dynamics`` / ``inverse_dynamics_fpass`` / ``aba`` — opt-in per-body external forces (body-local frame, subtracted from the per-body force; an empty/``None`` value is a no-op)
+* ``inverse_dynamics`` (RNEA / Recursive Newton-Euler Algorithm)
+* ``inverse_dynamics_gradient``
 * ``minv``
 * ``aba``
 * ``crba``
-* ``forward_dynamics_grad``
+* ``forward_dynamics_gradient``
 
 In addition, the mixins provide numpy reference oracles validated against
 Pinocchio:
 
 * Energy / forces (``_energy.py``): ``generalized_gravity``, ``nonlinear_effects``, ``kinetic_energy``, ``potential_energy``, ``mechanical_energy``, ``coriolis_matrix``
 * Centroidal (``_centroidal.py``): ``com``, ``jacobian_com``, ``ccrba``, ``centroidal_momentum``
-* Regressor (``_regressor.py``): ``joint_torque_regressor``
+* Regressor (``_regressor.py``): ``inverse_dynamics_regressor``
 * Plant / costs / barriers (``_plant.py``): ``plant_step``, ``quadratic_state_cost``, ``quadratic_input_cost``, ``ee_pos_cost``, and the joint position/velocity/torque log-barriers — the reference for the generated ``grid_plant`` CUDA layer
 
 Each of these functions and more included within the file call upon getters from URDFParser which initializes a convenient ``robotObj``.
@@ -74,8 +74,9 @@ include:
   ``TIER_SHARED`` (a deprecated ``TIER_PERF = TIER_SHARED`` alias is kept). See
   :doc:`../concepts/resource_tier_system`.
 * **Mimic joints:** non-gradient algorithms support mimic robots, and most
-  gradient codegen now folds correctly to the reduced coordinates — ``id_du`` /
-  ``fd_du`` (both bases), ``ee_pose_gradient`` / ``ee_pose_hessian`` (both bases),
+  gradient codegen now folds correctly to the reduced coordinates — ``inverse_dynamics_gradient`` /
+  ``forward_dynamics_gradient`` (both bases), ``end_effector_pose_gradient`` /
+  ``end_effector_pose_hessian`` (both bases),
   and fixed-base second-order (``idsva_so`` / ``fdsva_so``). The remaining
   selections (integrator gradients and ``f_ext`` gradients on either base, plus
   floating-base second-order) still raise a clear ``NotImplementedError`` rather

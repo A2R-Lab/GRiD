@@ -59,10 +59,10 @@ Method surface
 --------------
 
 All methods take and return 2D ``float32`` arrays where axis 0 is the
-batch. Gravity is passed as a **positive magnitude** (default 9.81),
-following GRiD's internal convention; this differs from
-``RBDReference.rnea(..., GRAVITY=-9.81)`` so use ``gravity=9.81`` for
-cross-validation.
+batch. ``gravity`` is the **signed gravitational acceleration**, default
+``-9.81`` (standard downward gravity) — the same convention as
+``RBDReference.inverse_dynamics(..., GRAVITY=-9.81)`` and pinocchio, so
+pass the same value to both for cross-validation.
 
 .. list-table::
    :header-rows: 1
@@ -71,9 +71,9 @@ cross-validation.
    * - Method
      - Returns
      - Notes
-   * - ``rnea(q, qd, qdd=None)``
+   * - ``inverse_dynamics(q, qd, qdd=None)``
      - ``(B, NJ)``
-     - Inverse dynamics bias.
+     - Inverse dynamics bias (RNEA).
    * - ``minv(q)``
      - ``(B, NJ, NJ)``
      - Direct mass-matrix inverse.
@@ -97,10 +97,10 @@ cross-validation.
    * - ``end_effector_pose_hessian(q)``
      - ``(B, 6*NUM_EES, NJ, NJ)``
      - EE pose Hessian (∂²ee/∂q²).
-   * - ``rnea_grad(q, qd, qdd=None)``
+   * - ``inverse_dynamics_gradient(q, qd, qdd=None)``
      - ``(B, NJ, 2*NJ)``
      - ``[dc_dq | dc_dqd]``.
-   * - ``forward_dynamics_grad(q, qd, u)``
+   * - ``forward_dynamics_gradient(q, qd, u)``
      - ``(B, NJ, 2*NJ)``
      - ``[df_dq | df_dqd]``.
    * - ``idsva_so(q, qd, qdd=None)``
@@ -189,7 +189,7 @@ PyTorch backend (``backend="torch"``)
 
 ``register_robot(..., backend="torch")`` returns a ``TorchRobotHandle``
 whose methods return ``torch.Tensor``. The four differentiable
-algorithms (``rnea`` / ``forward_dynamics`` / ``aba`` / ``integrator``)
+algorithms (``inverse_dynamics`` / ``forward_dynamics`` / ``aba`` / ``integrator``)
 are autograd-aware — their backward passes are analytic, reusing the
 existing ``*_gradient`` kernels — while the remaining methods are
 forward-only ops. The ``.so`` is shared with the numpy/JAX surfaces; the
@@ -264,9 +264,10 @@ External forces (``f_ext``)
 Per-body external forces are an opt-in feature of the underlying CUDA
 codegen and the ``RBDReference`` oracle (body-local frame, subtracted
 from the per-body force; an empty/``None`` value reproduces the no-force
-path). The generated host wrappers carry the ``d_f_ext`` argument; an
-``f_ext=`` kwarg on the ``RobotHandle`` algorithm methods is on the
-roadmap.
+path). The generated host wrappers carry the ``d_f_ext`` argument, and an
+``f_ext=`` kwarg is exposed on the ``RobotHandle`` algorithm methods that
+support it (``inverse_dynamics`` / ``forward_dynamics`` / ``aba`` and
+their gradients); the default ``None`` reproduces the no-force path.
 
 Coming next
 -----------
@@ -274,8 +275,6 @@ Coming next
 * Floating-base JAX FFI for ``idsva_so`` (currently routes to the
   body-frame kernel; world-frame fallback for floating-base needs the
   codegen to emit a preprocessor-visible dispatcher).
-* An ``f_ext=`` kwarg on the Python handle algorithm methods (the CUDA
-  codegen already threads ``d_f_ext``).
 * CLI shortcut: ``grid-rbd register iiwa.urdf --name iiwa14``.
 
 See also
@@ -283,4 +282,4 @@ See also
 
 * :doc:`benchmarks` — bench harness and what the methods cost.
 * :doc:`../concepts/algorithms/index` — algorithm-level docs.
-* ``docs/python_wrappers_plan.md`` (repo root) — design rationale.
+* ``docs/open-tasks/archive/python_wrappers_plan.md`` — design rationale (archived).

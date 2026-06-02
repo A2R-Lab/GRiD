@@ -25,8 +25,8 @@ Currently implemented algorithms include:
 
 **Core dynamics**
 
-* Recursive Newton Euler Algorithm (RNEA):
-  ``(c, v, a, f) = rbd.rnea(q, qd, qdd=None, GRAVITY=-9.81)``
+* Inverse dynamics (``inverse_dynamics``; the Recursive Newton-Euler Algorithm, RNEA):
+  ``(c, v, a, f) = rbd.inverse_dynamics(q, qd, qdd=None, GRAVITY=-9.81)``
 * Articulated Body Algorithm (ABA, forward dynamics):
   ``qdd = rbd.aba(q, qd, tau, f_ext=[], GRAVITY=-9.81)``
 * Composite Rigid Body Algorithm (mass matrix): ``M = rbd.crba(q)``
@@ -35,9 +35,9 @@ Currently implemented algorithms include:
 
 **Gradients**
 
-* ``dc_du = rbd.rnea_grad(q, qd, qdd=None, GRAVITY=-9.81)`` returning
+* ``dc_du = rbd.inverse_dynamics_gradient(q, qd, qdd=None, GRAVITY=-9.81)`` returning
   ``np.hstack((dc_dq, dc_dqd))``
-* ``(dqdd_dq, dqdd_dqd) = rbd.forward_dynamics_grad(q, qd, u)``
+* ``(dqdd_dq, dqdd_dqd) = rbd.forward_dynamics_gradient(q, qd, u)``
 
 **End-effector kinematics**
 
@@ -526,7 +526,7 @@ Functions
 
 ----
 
-.. function:: rnea_fpass(self, q, qd, qdd=None, GRAVITY=-9.81)
+.. function:: inverse_dynamics_fpass(self, q, qd, qdd=None, GRAVITY=-9.81)
 
    Description
    ^^^^^^^^^^^
@@ -570,12 +570,12 @@ Functions
       q = np.array([1, 2, 3])
       qd = np.array([0, 1, 0])
       rbd_ref = RBDReference(robot_obj)
-      v, a, f = rbd_ref.rnea_fpass(q, qd)
+      v, a, f = rbd_ref.inverse_dynamics_fpass(q, qd)
       print(v, a, f)
 
 ----
 
-.. function:: rnea_bpass(self, q, f)
+.. function:: inverse_dynamics_bpass(self, q, f)
 
    Description
    ^^^^^^^^^^^
@@ -610,12 +610,12 @@ Functions
       q = np.array([1, 2, 3])
       f = np.array([0, 0, 0, 0, 0, 0])
       rbd_ref = RBDReference(robot_obj)
-      c, f = rbd_ref.rnea_bpass(q, f)
+      c, f = rbd_ref.inverse_dynamics_bpass(q, f)
       print(c, f)
 
 ----
 
-.. function:: rnea(self, q, qd, qdd=None, GRAVITY=-9.81, f_ext=None)
+.. function:: inverse_dynamics(self, q, qd, qdd=None, GRAVITY=-9.81, f_ext=None)
 
    Description
    ^^^^^^^^^^^
@@ -665,12 +665,12 @@ Functions
       q = np.array([1, 2, 3])
       qd = np.array([0, 1, 0])
       rbd_ref = RBDReference(robot_obj)
-      c, v, a, f = rbd_ref.rnea(q, qd)
+      c, v, a, f = rbd_ref.inverse_dynamics(q, qd)
       print(c, v, a, f)
 
 ----
 
-.. function:: rnea_grad_fpass_dq(self, q, qd, v, a, GRAVITY=-9.81)
+.. function:: inverse_dynamics_gradient_fpass_dq(self, q, qd, v, a, GRAVITY=-9.81)
 
    Description
    ^^^^^^^^^^^
@@ -719,12 +719,12 @@ Functions
       v = np.array([0, 0, 0])
       a = np.array([0, 0, 0])
       rbd_ref = RBDReference(robot_obj)
-      dv_dq, da_dq, df_dq = rbd_ref.rnea_grad_fpass_dq(q, qd, v, a)
+      dv_dq, da_dq, df_dq = rbd_ref.inverse_dynamics_gradient_fpass_dq(q, qd, v, a)
       print(dv_dq, da_dq, df_dq)
 
 ----
 
-.. function:: rnea_grad_fpass_dqd(self, q, qd, v)
+.. function:: inverse_dynamics_gradient_fpass_dqd(self, q, qd, v)
 
    Description
    ^^^^^^^^^^^
@@ -766,12 +766,12 @@ Functions
       qd = np.array([0, 1, 0])
       v = np.array([0, 0, 0])
       rbd_ref = RBDReference(robot_obj)
-      dv_dqd, da_dqd, df_dqd = rbd_ref.rnea_grad_fpass_dqd(q, qd, v)
+      dv_dqd, da_dqd, df_dqd = rbd_ref.inverse_dynamics_gradient_fpass_dqd(q, qd, v)
       print(dv_dqd, da_dqd, df_dqd)
 
 ----
 
-.. function:: rnea_grad_bpass_dq(self, q, f, df_dq)
+.. function:: inverse_dynamics_gradient_bpass_dq(self, q, f, df_dq)
 
    Description
    ^^^^^^^^^^^
@@ -807,7 +807,7 @@ Functions
       f = np.array([0, 0, 0, 0, 0, 0])
       df_dq = np.array([0, 0, 0])
       rbd_ref = RBDReference(robot_obj)
-      dc_dq = rbd_ref.rnea_grad_bpass_dq(q, f,
+      dc_dq = rbd_ref.inverse_dynamics_gradient_bpass_dq(q, f,
 
      
 

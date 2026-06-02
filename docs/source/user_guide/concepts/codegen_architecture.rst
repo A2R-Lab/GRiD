@@ -44,7 +44,7 @@ Inner helpers (``X_inner``, sub-step helpers like ``fdsva_so_contract``) still
 exist where useful, but they are **internal to ``X_device``** — not part of the
 external surface. Sub-algorithm composition routes through other algorithms'
 ``_inner`` helpers when they are placement-free building blocks (e.g.
-``fdsva_so_device`` calls ``direct_minv_inner`` and ``forward_dynamics_inner``
+``fdsva_so_device`` calls ``minv_inner`` and ``forward_dynamics_inner``
 to reuse one XImats load across all of them).
 
 Why orchestration moved into ``_device`` (history)
@@ -89,7 +89,7 @@ needs both forward dynamics and direct inverse-mass-matrix outputs internally.
    fdsva_so_device
      ├── [s_temp repoint based on SCRATCH_IN_SMEM]
      ├── load_update_XImats()       # once
-     ├── direct_minv_inner()        # reuses s_XImats
+     ├── minv_inner()               # reuses s_XImats
      ├── forward_dynamics_inner()   # reuses s_XImats
      ├── fd_gradient_inline()       # may surgically spill to d_fd_grad_spill
      ├── idsva_so_{world,body}_inner()
@@ -131,8 +131,8 @@ Concrete signatures (RNEA / inverse_dynamics)
        const T gravity, const int num_timesteps,
        dim3 block_dimms, dim3 thread_dimms, cudaStream_t *streams);
 
-Orchestrator signature (fdsva_so / id_du / fd_du / integrator_gradient)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Orchestrator signature (fdsva_so / inverse_dynamics_gradient / forward_dynamics_gradient / integrator_gradient)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The orchestrators take the placement flags + a ``d_workspace`` pointer in
 addition to the standard inputs:

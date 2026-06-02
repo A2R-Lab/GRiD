@@ -21,11 +21,11 @@ package.
    RBDReference = RBDReference(robot)
    outputs = RBDReference.ALGORITHM(inputs)
 
-Currently implemented algorithms include the: + Recursive Newton Euler
-Algorithm (RNEA):
-``(c,v,a,f) = rbdReference.rnea(q, qd, qdd = None, GRAVITY = -9.81)`` +
-The Gradient of the RNEA:
-``dc_du = rnea_grad(q, qd, qdd = None, GRAVITY = -9.81)`` where
+Currently implemented algorithms include the: + Inverse dynamics
+(``inverse_dynamics``; the Recursive Newton-Euler Algorithm, RNEA):
+``(c,v,a,f) = rbdReference.inverse_dynamics(q, qd, qdd = None, GRAVITY = -9.81)`` +
+The gradient of inverse dynamics:
+``dc_du = inverse_dynamics_gradient(q, qd, qdd = None, GRAVITY = -9.81)`` where
 ``dc_du = np.hstack((dc_dq,dc_dqd))`` + The Direct Inverse of the Mass
 Matrix Algorithm: ``Minv = rbdReference.minv(q, output_dense = True)`` +
 The Composite Rigid Body Algorithm: ``M = rbdReference.crba(q,qd)``

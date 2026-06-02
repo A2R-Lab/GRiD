@@ -91,7 +91,7 @@ Step-by-step recipe (worked example: ``fdsva_so``)
       def gen_fdsva_so_contract_temp_mem_size(self):
           return 4 * self.robot.get_num_vel() ** 3
 
-   The orchestrator (``fdsva_so_device``) also embeds ``direct_minv``
+   The orchestrator (``fdsva_so_device``) also embeds ``minv``
    and ``forward_dynamics`` and the IDSVA-SO sub-algorithms. Sum their
    smem footprints (or take the ``max`` for arenas that get reused
    across phases) to size the outer scratch arena.
@@ -139,7 +139,7 @@ Step-by-step recipe (worked example: ``fdsva_so``)
 #. **Write the orchestrator** (``gen_X_device``)
 
    For a composing algorithm like ``fdsva_so`` that builds on
-   ``direct_minv``, ``forward_dynamics``, and the IDSVA-SO sub-inners,
+   ``minv``, ``forward_dynamics``, and the IDSVA-SO sub-inners,
    the device wrapper does ONE ``XImats`` load and then calls each
    sub-algorithm's placement-free ``_inner`` with the SAME ``s_temp``:
 
@@ -151,7 +151,7 @@ Step-by-step recipe (worked example: ``fdsva_so``)
           " else { (void)d_workspace; }"
       )
       self.gen_load_update_XImats_helpers_function_call(use_thread_group)
-      self.gen_direct_minv_inner_function_call(use_thread_group, f_in_smem_expr="true")
+      self.gen_minv_inner_function_call(use_thread_group, f_in_smem_expr="true")
       self.gen_add_code_line(
           "forward_dynamics_inner<T, true>(s_qdd, s_q, s_qd, s_u, "
           + self.gen_insert_helpers_function_call()
@@ -249,7 +249,7 @@ Step-by-step recipe (worked example: ``fdsva_so``)
    runner has shape-aware comparators in
    ``test/cuda_equivalents/test_cuda_executable_equivalence.py``; if
    your algorithm has a non-standard output shape, add it there. The
-   pre-existing ``ee_pose_hessian`` shape is ``6 * NUM_VEL² * NUM_EE``
+   pre-existing ``end_effector_pose_hessian`` shape is ``6 * NUM_VEL² * NUM_EE``
    per timestep (row-major in the EE / column / row axes), for
    example.
 
@@ -271,7 +271,7 @@ Common pitfalls
   selective-sized arena → smem OOB on big robots. Pass the actual
   per-rung value as a literal.
 * **Single-thread Gauss-Jordan inverse.** This was a real performance
-  hotspot in ``aba`` / ``direct_minv`` floating-base root invert. Use
+  hotspot in ``aba`` / ``minv`` floating-base root invert. Use
   ``glass::invertMatrix_dense`` (block-cooperative). If your algorithm
   needs an inverse / factor, reach for GLASS first.
 * **Spill rung 0..N−1 only relocates code — must be numerically

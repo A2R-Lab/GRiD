@@ -46,15 +46,15 @@ The bench reports 14 rows per cell:
 
 **First-order set (9 algorithms)**:
 
-* ``id`` — inverse dynamics (RNEA).
+* ``inverse_dynamics`` — inverse dynamics (RNEA).
 * ``minv`` — direct mass-matrix inverse.
-* ``fd`` — forward dynamics via ``Minv·(τ − c)``.
+* ``forward_dynamics`` — forward dynamics via ``Minv·(τ − c)``.
 * ``aba`` — articulated body algorithm (independent forward dynamics).
 * ``crba`` — composite rigid body algorithm (mass matrix).
-* ``id_du`` — ∂id/∂(q, qd).
-* ``fd_du`` — ∂fd/∂(q, qd).
-* ``ee_pose`` — end-effector pose.
-* ``ee_pose_gradient`` — end-effector Jacobian.
+* ``inverse_dynamics_gradient`` — ∂(inverse_dynamics)/∂(q, qd).
+* ``forward_dynamics_gradient`` — ∂(forward_dynamics)/∂(q, qd).
+* ``end_effector_pose`` — end-effector pose.
+* ``end_effector_pose_gradient`` — end-effector Jacobian.
 
 **Second-order set (4 algorithms)**:
 

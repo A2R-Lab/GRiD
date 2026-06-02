@@ -72,7 +72,7 @@ CUDA codegen lives in
 <https://github.com/A2R-Lab/GRiDCodeGenerator>`__. It is an
 **opt-in, additive** family: the kernels are only emitted when the
 ``frame_jacobian`` key is explicitly selected (it pulls in the
-``ee_pose`` world-transform machinery), so existing profiles' headers
+``end_effector_pose`` world-transform machinery), so existing profiles' headers
 are byte-identical. The CUDA path emits the geometric Jacobian
 :math:`J` (all three reference frames) via ``frame_jacobian_inner`` /
 ``frame_jacobian_device``, the Jacobian time-variation :math:`\dot J`
@@ -81,7 +81,7 @@ and the OSC inertia :math:`\Lambda` via ``osc_inertia_device`` (opt-in
 ``osc_inertia`` key). All three are validated on-device against the numpy
 reference across the three reference frames. The :math:`\Lambda` kernel
 currently takes a precomputed :math:`M^{-1}` as input (the smoke runner
-feeds it from ``direct_minv_device``); folding ``direct_minv_inner`` into
+feeds it from ``minv_device``); folding ``minv_inner`` into
 ``osc_inertia_device`` so it composes :math:`M^{-1}` on-device is a
 follow-up. Mimic-joint robots are not yet supported on the CUDA
 frame-Jacobian path.
@@ -92,4 +92,4 @@ See Also
   :math:`\Lambda`).
 * :doc:`minv` — direct :math:`M^{-1}` (the inverse used inside
   :math:`J\,M^{-1}\,J^{\top}`).
-* :doc:`rnea` — inverse dynamics.
+* :doc:`inverse_dynamics` — inverse dynamics (RNEA).

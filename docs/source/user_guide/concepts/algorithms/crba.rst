@@ -36,5 +36,5 @@ See Also
 --------
 * :doc:`minv` — direct mass-matrix inverse (skip ``crba`` if you
   only need :math:`M^{-1}` for forward dynamics).
-* :doc:`rnea` — inverse dynamics.
+* :doc:`inverse_dynamics` — inverse dynamics (RNEA).
 * :doc:`aba` — recursive forward dynamics (no explicit mass matrix).
