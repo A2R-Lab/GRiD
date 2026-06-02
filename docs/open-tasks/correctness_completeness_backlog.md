@@ -142,6 +142,11 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
   archived): `d2_codegen_mimic_plan.md` ("scoping doc, NOT yet implemented" + T3-tracked),
   `a3_…audit` (referenced by `_crba.py` code as the refactor plan), `idsva_so_inner_refactor_notes`
   (cited as source-of-truth by live Sphinx concept pages + CUDA-equivalence tests; names fixed in place).
+- ⬜ **A5 — internal identifiers the rename MISSED** (public API + docs are consistent; these are internal):
+  (a) `GRiDCodeGenerator/_test.py` still has `rnea`/`rnea_grad`/`fd_grad` method names (dev script);
+  (b) emitted constants `ID_DU_DEVICE_INLINE_*` / `FD_DU_DEVICE_INLINE_*` / `D2EE_DEVICE_INLINE_*` and the
+  `*_spill_tier_3way` attr prefixes (`ID_DU`/`FD_DU`/`D2EE`) use old short forms. Verbosify for full unity
+  (low priority; (b) changes emitted output + consumers — do with the structural pass).
   `perf_cleanup_overnight.md` does not exist under `docs/` (only a stale mention in a bench-result file).
 - (Non-gaps confirmed: `integrator_with_gradient` covered via the integrator+gradient pairing (C7);
   `plant_step_hessian` absence == F1, already tracked.)
