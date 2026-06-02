@@ -23,6 +23,8 @@ emitting CUDA C++ from URDFs; numpy/pinocchio reference oracle lives in `RBDRefe
    agents add the same `(robot, algo)` key → silent duplicate dict keys.
 5. **For refactors: compare the full before/after test SET, not the count.** (See §3, F1.)
 6. **Confirm your merge touched ONLY the files you expect** (`git diff --stat HEAD~1 HEAD`).
+7. **Propagate to docs + READMEs (main + ALL submodules) + examples** for any rename / new feature /
+   convention change — grep them for the OLD names/values too. Code-only changes leave docs stale (§8).
 
 ---
 
@@ -211,6 +213,15 @@ work serial to "save" SM occupancy. Justify every serial block.
   agent left a cell-level diagnosis.
 - **Scope-discipline for big features:** land the smallest fully-validated slice FIRST (E2: frame
   Jacobian J solid before J̇/Λ; partial-but-green beats broad-but-unvalidated).
+- **Docs + READMEs are part of "done" — propagate EVERY change to keep the project UNIFIED.** A code
+  change (rename, new feature, convention shift, API tweak) that doesn't also update the user-facing
+  docs + ALL relevant READMEs (top-level AND every submodule: RBDReference / URDFParser /
+  GRiDCodeGenerator / python) + examples/notebooks leaves the project inconsistent. The verbose rename
+  touched code but left `docs/source/**`, the `RBDReference/README.md` submodule README, and a `rnea.rst`
+  page stale (audit A3). For any change: in the SAME pass update its doc page, the relevant main+submodule
+  README(s), examples/notebooks, and do the cleanup (names/tokens/dead code/comments). After a rename/
+  convention change, grep docs/READMEs/submodule-READMEs for the OLD names/values too — code-only greps
+  miss them. Keep it consistent + clean + COMPACT.
 
 ---
 
