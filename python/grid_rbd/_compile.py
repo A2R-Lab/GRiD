@@ -111,10 +111,21 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # the chatty per-stage printouts. enable_floating_second_order=True so
     # idsva_so / fdsva_so are always available — user paid for the compile,
     # may as well include the methods.
+    #
+    # algorithm_list = the full "all" profile PLUS the opt-in frame_jacobian
+    # family (frame_jacobian / frame_jacobian_dot / osc_inertia). These are NOT
+    # part of the default "all" profile (kept opt-in so the bench/default header
+    # stays byte-identical), but the grid_rbd surface binds them, so we request
+    # them explicitly here. The codegen emits `#define GRID_HAS_FRAME_JACOBIAN`
+    # which gates the wrapper's frame_jacobian C-ABI symbols. mimic robots refuse
+    # gradient algos inside gen_all_code; that refusal is unchanged (the opt-in
+    # frame family is non-gradient, so this addition is mimic-safe).
     with contextlib.redirect_stdout(io.StringIO()):
         cg.gen_all_code(
             output_path=str(out_path),
             fixed_target_name=fixed_target_name,
+            algorithm_list=["all", "frame_jacobian",
+                            "frame_jacobian_dot", "osc_inertia"],
             enable_floating_second_order=True,
             enable_idsva_so_world_frame=options.get("floating_base", False),
         )

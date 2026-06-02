@@ -495,6 +495,152 @@ extern "C" int grid_rbd_fdsva_so(
 
 
 // ────────────────────────────────────────────────────────────────────────────
+// Centroidal / energy / general-frame kinematics surface (F2 binding layer)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Thin host-path wrappers over grid::{com,ccrba,energy,generalized_gravity,
+// nonlinear_effects,frame_jacobian,frame_jacobian_dot,osc_inertia}. Each stages
+// the (q[,qd]) inputs into the singleton gridData, launches the host wrapper
+// (which owns the H->D / D->H staging + its own kernel launch), then copies the
+// per-timestep output buffer out. Output layouts (per timestep) mirror the
+// gridData buffers documented in GRiDCodeGenerator/algorithms/_centroidal.py:
+//   com                 : 3 + 3*NUM_VEL  ([p_com(3); J_com(3 x NV, col-major)])
+//   ccrba               : 6*NUM_VEL + 6  ([A(6 x NV, col-major); h(6)], Pinocchio [lin;ang]@CoM)
+//   energy              : 3              ([KE, PE, KE+PE])
+//   generalized_gravity : NUM_VEL       (g(q) = RNEA(q,0,0))
+//   nonlinear_effects   : NUM_VEL       (c(q,qd) = RNEA(q,qd,0))
+//   frame_jacobian      : 6*NUM_VEL     (6 x NV col-major, [linear;angular], leaf-EE / LWA frame)
+//   frame_jacobian_dot  : 6*NUM_VEL     (time-derivative of frame_jacobian along qd)
+//   osc_inertia         : 36            (6x6 task inertia Lambda = (J Minv J^T)^-1)
+//
+// target frame for frame_jacobian / frame_jacobian_dot / osc_inertia is baked
+// at codegen time (the leaf-EE joint, LOCAL_WORLD_ALIGNED reference frame) — it
+// is NOT a runtime parameter of the host/kernel surface, so these methods do
+// not take a frame kwarg here.
+
+// com uses the COMPRESSED input layout (h_q / d_q, stride NUM_JOINTS), unlike
+// the other surfaces which read the [q,qd,u]-interleaved h_q_qd_u.
+static inline void pack_q(const T* q, int batch, int num_joints) {
+    std::memcpy(g_data->h_q, q, (size_t)batch * num_joints * sizeof(T));
+}
+
+// com(q) -> [p_com(3); J_com(3 x NV)] per timestep, total 3 + 3*NUM_VEL floats.
+extern "C" int grid_rbd_com(const T* q, T* out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q(q, batch, grid::NUM_JOINTS);
+    grid::com<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_com, (size_t)batch * (3 + 3 * grid::NUM_VEL) * sizeof(T));
+    return 0;
+}
+
+// ccrba(q, qd) -> [A(6 x NV); h(6)] per timestep, total 6*NUM_VEL + 6 floats.
+extern "C" int grid_rbd_ccrba(const T* q, const T* qd, T* out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::ccrba<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_ccrba, (size_t)batch * (6 * grid::NUM_VEL + 6) * sizeof(T));
+    return 0;
+}
+
+// energy(q, qd) -> [KE, PE, KE+PE] per timestep, total 3 floats. Takes gravity.
+extern "C" int grid_rbd_energy(const T* q, const T* qd, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::energy<T>(g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_energy, (size_t)batch * 3 * sizeof(T));
+    return 0;
+}
+
+// generalized_gravity(q) -> g(q) = RNEA(q,0,0) per timestep, NUM_VEL floats. Takes gravity.
+extern "C" int grid_rbd_generalized_gravity(const T* q, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd unused (zeroed internally)
+    grid::generalized_gravity<T>(g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+
+// nonlinear_effects(q, qd) -> c(q,qd) = RNEA(q,qd,0) per timestep, NUM_VEL floats. Takes gravity.
+extern "C" int grid_rbd_nonlinear_effects(const T* q, const T* qd, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::nonlinear_effects<T>(g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+
+// frame_jacobian(q) -> 6 x NUM_VEL geometric Jacobian (col-major, [linear;angular])
+// at the leaf-EE frame, LOCAL_WORLD_ALIGNED. Gated on GRID_HAS_FRAME_JACOBIAN
+// (the frame_jacobian family is opt-in codegen; only present when requested).
+extern "C" int grid_rbd_frame_jacobian(const T* q, T* out, int batch) {
+#ifdef GRID_HAS_FRAME_JACOBIAN
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
+    grid::frame_jacobian<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_frame_jacobian, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)out; (void)batch;
+    return 3;  // frame_jacobian not generated for this .so
+#endif
+}
+
+// frame_jacobian_dot(q, qd) -> d/dt of the leaf-EE frame Jacobian along v=qd,
+// 6 x NUM_VEL (col-major, [linear;angular]). Gated on GRID_HAS_FRAME_JACOBIAN.
+extern "C" int grid_rbd_frame_jacobian_dot(const T* q, const T* qd, T* out, int batch) {
+#ifdef GRID_HAS_FRAME_JACOBIAN
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::frame_jacobian_dot<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_frame_jacobian_dot, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)qd; (void)out; (void)batch;
+    return 3;
+#endif
+}
+
+// osc_inertia(q) -> 6x6 operational-space (task) inertia Lambda = (J Minv J^T)^-1
+// at the leaf-EE frame (LWA), 36 floats per timestep. Gated on GRID_HAS_FRAME_JACOBIAN.
+extern "C" int grid_rbd_osc_inertia(const T* q, T* out, int batch) {
+#ifdef GRID_HAS_FRAME_JACOBIAN
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
+    grid::osc_inertia<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_osc_inertia, (size_t)batch * 36 * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)out; (void)batch;
+    return 3;
+#endif
+}
+
+
+// ────────────────────────────────────────────────────────────────────────────
 // Time integrator (value + gradient)
 // ────────────────────────────────────────────────────────────────────────────
 //
@@ -1423,8 +1569,8 @@ static ffi::Error grid_rbd_jax_fdsva_so_impl(
         g_block_dimms, g_thread_dimms,
         grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
-            g_data->d_df2, g_data->d_q_qd_u, stride_q_qd_u,
-            g_data->d_workspace, g_data->d_idsva_so,
+            g_data->d_df2, g_data->d_workspace,
+            g_data->d_q_qd_u, stride_q_qd_u, g_data->d_idsva_so,
             g_robot, /*gravity=*/gravity, batch);
 
     cudaMemcpyAsync(out->typed_data(), g_data->d_df2,
@@ -1846,7 +1992,7 @@ torch::Tensor torch_fdsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor u,
     auto out = grid_torch_empty(batch, grid::SECOND_ORDER_TENSOR_SIZE, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::fdsva_so_kernel<T><<<g_block_dimms, g_thread_dimms, grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
-        g_data->d_df2, g_data->d_q_qd_u, stride, g_data->d_workspace, g_data->d_idsva_so, g_robot, (T)gravity, batch);
+        g_data->d_df2, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_idsva_so, g_robot, (T)gravity, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_df2, batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }

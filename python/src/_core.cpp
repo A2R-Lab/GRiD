@@ -84,6 +84,16 @@ extern "C" {
     // ee_pos_cost: (q, p_des, W, out, grad, hess, batch)
     using fn_plant_ee_t     = int (*)(const float*, const float*, const float*,
                                       float*, float*, float*, int);
+
+    // ─── centroidal / energy / general-frame kinematics (F2) ─────────────────
+    // com / frame_jacobian / osc_inertia: (q, out, batch)
+    using fn_q_out_t        = int (*)(const float*, float*, int);
+    // ccrba / frame_jacobian_dot: (q, qd, out, batch)
+    using fn_q_qd_out_t     = int (*)(const float*, const float*, float*, int);
+    // energy / nonlinear_effects: (q, qd, out, batch, gravity)
+    using fn_q_qd_out_grav_t = int (*)(const float*, const float*, float*, int, float);
+    // generalized_gravity: (q, out, batch, gravity)
+    using fn_q_out_grav_t   = int (*)(const float*, float*, int, float);
 }
 
 
@@ -144,6 +154,19 @@ public:
         // G2 batched FK (pos+quat) — OPTIONAL: only present in newer .so files
         // (and only non-null for fixed-base/non-mimic robots).
         fn_fk_batched_      = reinterpret_cast<fn_fk_batched_t>(opt_sym("grid_rbd_fk_batched"));
+
+        // F2 centroidal / energy / general-frame kinematics — OPTIONAL: present
+        // in newer .so files. com/ccrba/energy/gg/nle are always emitted with
+        // the "all" profile; frame_jacobian* / osc_inertia are opt-in codegen
+        // (the C-ABI symbol returns rc=3 if the family wasn't generated).
+        fn_com_                = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_com"));
+        fn_ccrba_              = reinterpret_cast<fn_q_qd_out_t>(opt_sym("grid_rbd_ccrba"));
+        fn_energy_             = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_energy"));
+        fn_generalized_gravity_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_generalized_gravity"));
+        fn_nonlinear_effects_  = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_nonlinear_effects"));
+        fn_frame_jacobian_     = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_frame_jacobian"));
+        fn_frame_jacobian_dot_ = reinterpret_cast<fn_q_qd_out_t>(opt_sym("grid_rbd_frame_jacobian_dot"));
+        fn_osc_inertia_        = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_osc_inertia"));
 
         // Cache constants (avoid the indirect-function-call cost on every read).
         num_joints_ = fn_num_joints_();
@@ -651,6 +674,131 @@ public:
         return {out, grad, hess};
     }
 
+    // ─── centroidal / energy / general-frame kinematics (F2) ─────────────────
+    //
+    // Each takes q (or q,qd) of shape (batch, NUM_JOINTS) and returns the flat
+    // per-timestep gridData output buffer (the Python handle reshapes). The
+    // frame_jacobian family is opt-in codegen; its C-ABI symbol returns rc=3 if
+    // the family wasn't generated for this robot's .so.
+
+    int check_q(const py::array_t<float>& q, const char* name) const {
+        if (q.ndim() != 2 || q.shape(1) != num_joints_)
+            throw std::invalid_argument(
+                std::string(name) + ": q must be (batch, " + std::to_string(num_joints_) + ")");
+        int batch = (int)q.shape(0);
+        if (batch > max_batch_)
+            throw std::invalid_argument(std::string(name) + ": batch > max_batch");
+        return batch;
+    }
+
+    // com(q) -> (batch, 3 + 3*NUM_VEL): [p_com(3); J_com(3 x NV, col-major)].
+    py::array_t<float> com(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q)
+    {
+        if (!fn_com_) throw std::runtime_error("com not available in this .so (re-register with force_rebuild=True)");
+        int batch = check_q(q, "com");
+        py::array_t<float> out({batch, 3 + 3 * num_vel_});
+        int rc = fn_com_(q.data(), out.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("grid_rbd_com failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // ccrba(q, qd) -> (batch, 6*NUM_VEL + 6): [A(6 x NV, col-major); h(6)].
+    py::array_t<float> ccrba(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        py::array_t<float, py::array::c_style | py::array::forcecast> qd)
+    {
+        if (!fn_ccrba_) throw std::runtime_error("ccrba not available in this .so (re-register with force_rebuild=True)");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<float> out({batch, 6 * num_vel_ + 6});
+        int rc = fn_ccrba_(q.data(), qd.data(), out.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("grid_rbd_ccrba failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // energy(q, qd, gravity) -> (batch, 3): [KE, PE, KE+PE].
+    py::array_t<float> energy(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+        float gravity)
+    {
+        if (!fn_energy_) throw std::runtime_error("energy not available in this .so (re-register with force_rebuild=True)");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<float> out({batch, 3});
+        int rc = fn_energy_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_energy failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // generalized_gravity(q, gravity) -> (batch, NUM_VEL): g(q) = RNEA(q,0,0).
+    py::array_t<float> generalized_gravity(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        float gravity)
+    {
+        if (!fn_generalized_gravity_) throw std::runtime_error("generalized_gravity not available in this .so (re-register with force_rebuild=True)");
+        int batch = check_q(q, "generalized_gravity");
+        py::array_t<float> out({batch, num_vel_});
+        int rc = fn_generalized_gravity_(q.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_generalized_gravity failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // nonlinear_effects(q, qd, gravity) -> (batch, NUM_VEL): c(q,qd) = RNEA(q,qd,0).
+    py::array_t<float> nonlinear_effects(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+        float gravity)
+    {
+        if (!fn_nonlinear_effects_) throw std::runtime_error("nonlinear_effects not available in this .so (re-register with force_rebuild=True)");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<float> out({batch, num_vel_});
+        int rc = fn_nonlinear_effects_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_nonlinear_effects failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // frame_jacobian(q) -> (batch, 6*NUM_VEL): leaf-EE frame Jacobian (col-major,
+    // [linear;angular], LOCAL_WORLD_ALIGNED). Opt-in codegen: rc=3 if absent.
+    py::array_t<float> frame_jacobian(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q)
+    {
+        if (!fn_frame_jacobian_) throw std::runtime_error("frame_jacobian not available in this .so (frame_jacobian family not generated; re-register with force_rebuild=True)");
+        int batch = check_q(q, "frame_jacobian");
+        py::array_t<float> out({batch, 6 * num_vel_});
+        int rc = fn_frame_jacobian_(q.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error("frame_jacobian not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // frame_jacobian_dot(q, qd) -> (batch, 6*NUM_VEL). Opt-in codegen: rc=3 if absent.
+    py::array_t<float> frame_jacobian_dot(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        py::array_t<float, py::array::c_style | py::array::forcecast> qd)
+    {
+        if (!fn_frame_jacobian_dot_) throw std::runtime_error("frame_jacobian_dot not available in this .so (frame_jacobian family not generated; re-register with force_rebuild=True)");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<float> out({batch, 6 * num_vel_});
+        int rc = fn_frame_jacobian_dot_(q.data(), qd.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error("frame_jacobian_dot not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_dot failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // osc_inertia(q) -> (batch, 36): 6x6 task inertia Lambda = (J Minv J^T)^-1
+    // at the leaf-EE frame (LWA). Opt-in codegen: rc=3 if absent.
+    py::array_t<float> osc_inertia(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q)
+    {
+        if (!fn_osc_inertia_) throw std::runtime_error("osc_inertia not available in this .so (frame_jacobian family not generated; re-register with force_rebuild=True)");
+        int batch = check_q(q, "osc_inertia");
+        py::array_t<float> out({batch, 36});
+        int rc = fn_osc_inertia_(q.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error("osc_inertia not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_osc_inertia failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
 private:
     void* require_sym(const char* name) {
         dlerror();  // clear errors
@@ -760,6 +908,15 @@ private:
     fn_plant_barrier_t fn_plant_tor_barrier_ = nullptr;
     fn_plant_step_t    fn_plant_step_        = nullptr;
     fn_plant_ee_t      fn_plant_ee_cost_     = nullptr;
+    // F2 centroidal / energy / general-frame kinematics (optional symbols)
+    fn_q_out_t         fn_com_                 = nullptr;
+    fn_q_qd_out_t      fn_ccrba_               = nullptr;
+    fn_q_qd_out_grav_t fn_energy_              = nullptr;
+    fn_q_out_grav_t    fn_generalized_gravity_ = nullptr;
+    fn_q_qd_out_grav_t fn_nonlinear_effects_   = nullptr;
+    fn_q_out_t         fn_frame_jacobian_      = nullptr;
+    fn_q_qd_out_t      fn_frame_jacobian_dot_  = nullptr;
+    fn_q_out_t         fn_osc_inertia_         = nullptr;
 
     int num_joints_ = 0;
     int num_vel_    = 0;
@@ -855,5 +1012,18 @@ PYBIND11_MODULE(_core, m) {
              py::arg("x"), py::arg("u"), py::arg("dt"),
              py::arg("it") = 0, py::arg("gravity") = -9.81f)
         .def("ee_pos_cost", &Runner::ee_pos_cost,
-             py::arg("q"), py::arg("p_des"), py::arg("W"));
+             py::arg("q"), py::arg("p_des"), py::arg("W"))
+        // ─── centroidal / energy / general-frame kinematics (F2) ───────────
+        .def("com", &Runner::com, py::arg("q"))
+        .def("ccrba", &Runner::ccrba, py::arg("q"), py::arg("qd"))
+        .def("energy", &Runner::energy,
+             py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
+        .def("generalized_gravity", &Runner::generalized_gravity,
+             py::arg("q"), py::arg("gravity") = -9.81f)
+        .def("nonlinear_effects", &Runner::nonlinear_effects,
+             py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
+        .def("frame_jacobian", &Runner::frame_jacobian, py::arg("q"))
+        .def("frame_jacobian_dot", &Runner::frame_jacobian_dot,
+             py::arg("q"), py::arg("qd"))
+        .def("osc_inertia", &Runner::osc_inertia, py::arg("q"));
 }
