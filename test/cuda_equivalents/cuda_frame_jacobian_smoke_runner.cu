@@ -189,10 +189,14 @@ void run() {
     size_t dyn_j = grid::FRAME_JACOBIAN_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(frame_jac_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)dyn_j);
     frame_jac_kernel<T><<<1, nthreads, dyn_j>>>(g_q, target_jid, d_robotModel, o_jl, o_jw, o_jx);
+    // Fail loudly on a bad launch (an unchecked failure leaves zeroed outputs that
+    // masquerade as a real result). gpuErrchkKernel() (grid.cuh) peeks + syncs + aborts.
+    gpuErrchkKernel();
 
     size_t dyn_d = grid::FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(frame_jac_dot_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)dyn_d);
     frame_jac_dot_kernel<T><<<1, nthreads, dyn_d>>>(g_q, g_qd, target_jid, d_robotModel, o_dl, o_dw, o_dx);
+    gpuErrchkKernel();
 
     // Self-contained Lambda: osc_inertia_device composes Minv on device, so the
     // runner no longer pre-computes/densifies a Minv to feed in. This is emitted

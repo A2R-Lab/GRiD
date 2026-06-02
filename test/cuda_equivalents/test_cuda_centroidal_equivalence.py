@@ -22,7 +22,11 @@ gravity / energy — the same pairing the main rnea CUDA-equivalence test uses.
 
 Robots: iiwa14-fixed (cheap, gate first) + a floating robot (default go2, an
 18-DoF quadruped that compiles quickly; g1/h1_2 also work but their large
-all-profile headers take many minutes to nvcc-compile).
+all-profile headers take many minutes to nvcc-compile). NOTE: this runner is
+NON-MIMIC ONLY — it drives grid_plant com_cost/momentum_cost (and com/ccrba
+device fns) which codegen emits for non-mimic robots only (_plant.py). Mimic
+validation of the centroidal id-bias `s_vaf` (NB-sized) path needs a dedicated
+generalized_gravity/nonlinear_effects-only runner (backlog: f2_audit_findings).
 Override with GRID_CUDA_CENTROIDAL_ROBOTS="iiwa14:fixed,g1:floating".
 """
 

@@ -225,11 +225,15 @@ void run() {
 
     centroidal_kernel<T><<<1, nthreads, dyn>>>(g_q, g_qd, d_robotModel, gravity,
         o_grav, o_nle, o_com, o_jcom, o_A, o_h, o_energy);
-    cudaDeviceSynchronize();
+    // Fail loudly on a bad launch: an unchecked launch failure leaves the (zeroed)
+    // outputs untouched, which then masquerades as a real (wrong) result the Python
+    // oracle would silently diff against. gpuErrchkKernel() (from grid.cuh) does
+    // cudaPeekAtLastError() + cudaDeviceSynchronize() and aborts on any error.
+    gpuErrchkKernel();
 
     cost_kernel<T><<<1, nthreads, dyn>>>(g_q, g_qd, d_robotModel,
         o_cv, o_cg, o_ch, o_mv, o_mg, o_mh);
-    cudaDeviceSynchronize();
+    gpuErrchkKernel();
 
     // D1b blocks
     dcopy_out("gen_gravity", o_grav, 1, NV);

@@ -302,10 +302,13 @@ void run() {
         o_sv, o_sg, o_sh, o_iv, o_ig, o_ih, o_ev, o_eg, o_eh,
         o_pbv, o_pbg, o_pbh, o_vbv, o_vbg, o_cbv, o_cbg,
         o_pdab, o_idab, o_pxk, o_ixk, o_eepos);
-    cudaDeviceSynchronize();
+    // Fail loudly on a bad launch: an unchecked launch failure leaves the (zeroed)
+    // outputs untouched and masquerades as a real (wrong) result. gpuErrchkKernel()
+    // (from grid.cuh) does cudaPeekAtLastError() + cudaDeviceSynchronize() + abort.
+    gpuErrchkKernel();
 
     plant_step_kernel<T><<<1, nthreads, step_dyn>>>(g_q, g_qd, g_u, dt, d_robotModel, gravity, o_pxk, o_pdab);
-    cudaDeviceSynchronize();
+    gpuErrchkKernel();
 
     // grid:: integrator pass-through oracle, via the host wrappers.
     const int input_count = NQ + 2 * NV;

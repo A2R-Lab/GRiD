@@ -16,7 +16,7 @@ template <typename T>
 __host__
 void test(){
     T gravity = static_cast<T>(9.81);
-    dim3 dimms(grid::SUGGESTED_THREADS,1,1);
+    dim3 dimms(grid::MAX_PERF_LEVEL_THREADS,1,1);
     cudaStream_t *streams = grid::init_grid<T>();
     grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T,1>();
