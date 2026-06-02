@@ -1,11 +1,11 @@
 // Test runner for the CUDA joint-torque regressor kernel.
 //
-// Mirrors `cuda_idsva_so_world_frame_smoke_runner.cu` but invokes
-// `inverse_dynamics_regressor` (host launcher) with an explicit caller-allocated
-// d_Y output buffer (the regressor output is nv x 10*NUM_BODIES and is NOT a
-// gridData field). Used by `test_cuda_regressor` to validate the CUDA emission
-// against `RBDReference.inverse_dynamics_regressor` (the verified numpy reference)
-// and the structural identity Y @ pi == inverse_dynamics(q,qd,qdd).
+// Mirrors `cuda_idsva_so_world_frame_smoke_runner.cu` and invokes
+// `inverse_dynamics_regressor` (host launcher). R2: the regressor output d_Y is
+// now a gridData field (hd_data->d_Y, nv x 10*NUM_BODIES); the host copies it back
+// into hd_data->h_Y, which this runner reads directly. Used by `test_cuda_regressor`
+// to validate the CUDA emission against `RBDReference.inverse_dynamics_regressor`
+// (the verified numpy reference) and the identity Y @ pi == inverse_dynamics(q,qd,qdd).
 
 #include <cmath>
 #include <cstdlib>
@@ -70,16 +70,13 @@ int run() {
     read_vector(&hd_data->h_q_qd_u[grid::NUM_POS], grid::NUM_VEL);
     read_vector(&hd_data->h_q_qd_u[grid::NUM_POS + grid::NUM_VEL], grid::NUM_VEL);
 
-    // caller-allocated output buffer for the regressor.
-    T *d_Y = nullptr;
-    gpuErrchk(cudaMalloc((void **)&d_Y, Y_size * sizeof(T)));
-    T *h_Y = (T *)malloc(Y_size * sizeof(T));
-
+    // R2: regressor output lives in gridData (hd_data->d_Y / hd_data->h_Y); the
+    // host launcher copies device->host into hd_data->h_Y.
     grid::inverse_dynamics_regressor<T>(
-        hd_data, d_Y, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+        hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
     );
     gpuErrchk(cudaPeekAtLastError());
-    gpuErrchk(cudaMemcpy(h_Y, d_Y, Y_size * sizeof(T), cudaMemcpyDeviceToHost));
+    const T *h_Y = hd_data->h_Y;
 
     int first_bad = -1;
     for (int i = 0; i < Y_size; ++i) {
@@ -99,8 +96,6 @@ int run() {
     print_flat("regressor_config", config, 1, 5);
     print_flat("regressor", h_Y, Y_rows, Y_cols);
 
-    free(h_Y);
-    gpuErrchk(cudaFree(d_Y));
     grid::close_grid<T>(streams, d_robot_model, hd_data);
     return 0;
 }

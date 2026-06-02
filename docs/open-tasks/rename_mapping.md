@@ -64,7 +64,7 @@ literature-standard algorithm name vs a fully-descriptive name).
 | `nonlinear_effects` | **`nonlinear_effects`** ✅ | |
 
 ## Cross-cutting (no name choice, just cleanup)
-- Outputs into `gridData` for `regressor`/`fd_parameter_gradient` (uniform `(hd_data, model, …)` shape).
+- ✅ R2 done: outputs into `gridData` for `inverse_dynamics_regressor` (`d_Y`) / `forward_dynamics_parameter_gradient` (`d_dqdd_dpi`) — uniform `(hd_data, model, …)` host shape; explicit caller-owned param dropped.
 - Uniform surface set per algo: `_inner` → `_device` → `_kernel` → `_host` → `_single_timing`/`_compute_only` → batch.
 - Uniform host signature block: `(hd_data, d_robotModel, [gravity], [dt], …, d_workspace, …)`.
 - Resolve the gravity-sign convention split (GRiD `+9.81` vs RBDReference `-9.81`) to ONE convention.

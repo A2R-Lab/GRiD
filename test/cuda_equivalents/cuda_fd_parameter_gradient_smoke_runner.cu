@@ -1,10 +1,11 @@
 // Test runner for the CUDA FD parameter-gradient kernel (dqdd/dpi = -Minv . Y).
 //
-// Mirrors `cuda_regressor_smoke_runner.cu` but invokes
-// `forward_dynamics_parameter_gradient` (host launcher) with an explicit caller-allocated
-// d_dqdd_dpi output buffer (the output is nv x 10*NUM_BODIES and is NOT a
-// gridData field). Used by `test_cuda_fd_parameter_gradient` to validate the
-// CUDA emission against `RBDReference.forward_dynamics_parameter_gradient` (numpy reference).
+// Mirrors `cuda_regressor_smoke_runner.cu` and invokes
+// `forward_dynamics_parameter_gradient` (host launcher). R2: the output
+// d_dqdd_dpi is now a gridData field (hd_data->d_dqdd_dpi, nv x 10*NUM_BODIES);
+// the host copies it back into hd_data->h_dqdd_dpi, which this runner reads
+// directly. Used by `test_cuda_fd_parameter_gradient` to validate the CUDA
+// emission against `RBDReference.forward_dynamics_parameter_gradient` (numpy reference).
 //
 // Input block is q|qd|u (positions, velocities, torques) packed into the
 // q_qd_u host buffer in the standard floating-aware layout.
@@ -71,15 +72,13 @@ int run() {
     read_vector(&hd_data->h_q_qd_u[grid::NUM_POS], grid::NUM_VEL);
     read_vector(&hd_data->h_q_qd_u[grid::NUM_POS + grid::NUM_VEL], grid::NUM_VEL);
 
-    T *d_out = nullptr;
-    gpuErrchk(cudaMalloc((void **)&d_out, out_size * sizeof(T)));
-    T *h_out = (T *)malloc(out_size * sizeof(T));
-
+    // R2: output lives in gridData (hd_data->d_dqdd_dpi / hd_data->h_dqdd_dpi);
+    // the host launcher copies device->host into hd_data->h_dqdd_dpi.
     grid::forward_dynamics_parameter_gradient<T>(
-        hd_data, d_out, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
+        hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
     );
     gpuErrchk(cudaPeekAtLastError());
-    gpuErrchk(cudaMemcpy(h_out, d_out, out_size * sizeof(T), cudaMemcpyDeviceToHost));
+    const T *h_out = hd_data->h_dqdd_dpi;
 
     int first_bad = -1;
     for (int i = 0; i < out_size; ++i) {
@@ -99,8 +98,6 @@ int run() {
     print_flat("fpg_config", config, 1, 5);
     print_flat("forward_dynamics_parameter_gradient", h_out, out_rows, out_cols);
 
-    free(h_out);
-    gpuErrchk(cudaFree(d_out));
     grid::close_grid<T>(streams, d_robot_model, hd_data);
     return 0;
 }

@@ -106,7 +106,7 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
 ## 5. READABILITY — clean-break rename + uniformity (scheme LOCKED: rename_mapping.md)
 - ⬜ **R1 — verbose rename** (id→inverse_dynamics, etc.; keep aba/crba/ccrba/minv/idsva_so/fdsva_so;
   rnea→docstring not alias). One name as key==symbol==bench==token==label.
-- ⬜ **R2 — outputs into `gridData`** for `regressor`/`fd_parameter_gradient` (drop caller-owned buffers).
+- ✅ **R2 — outputs into `gridData`** for `inverse_dynamics_regressor` (`d_Y`/`h_Y`) + `forward_dynamics_parameter_gradient` (`d_dqdd_dpi`/`h_dqdd_dpi`) done: added to gridData struct + alloc/free, hosts write `hd_data->d_*` and copy back to `hd_data->h_*` (uniform `(hd_data, model, ...)` sig; dropped explicit param). Bench drops TU-static malloc; runners read from gridData. Byte-identity confined to struct/init/free + the two hosts; regressor + fd_param equivalence green (g1-floating fd `@ zero` is the pre-existing float32 conditioning floor, fails identically pre-R2).
 - ✅ **R3 — reorder `fdsva_so_kernel` args (`d_workspace`→2nd)** done (kernel sig + host launchers + func-ptr attr cast; byte-identical otherwise; iiwa14-fixed/go2-floating equivalence green).
 - ⬜ **R4 — drop** `_host`/`_with_x_kp1`/`direct_` + `rnea`/`eepos`/`deepos` labels + `SUGGESTED_THREADS` alias.
 - ⬜ **R5 — unify gravity-sign convention** (GRiD `+9.81` vs RBDReference `-9.81`).
