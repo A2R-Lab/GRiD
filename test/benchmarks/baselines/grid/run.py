@@ -259,9 +259,9 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "shared_mem_skip": "ID_DYNAMIC_SHARED_MEM_BYTES",
     },
     "minv": {
-        "single_call":        "grid::direct_minv_single_timing<float,true>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
-        "batch_with_mem":     "grid::direct_minv<float,true>(d,m,N,dim3(N,1,1),dimms,streams)",
-        "batch_compute_only": "grid::direct_minv_compute_only<float,true>(d,m,N,dim3(N,1,1),dimms)",
+        "single_call":        "grid::minv_single_timing<float,true>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::minv<float,true>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::minv_compute_only<float,true>(d,m,N,dim3(N,1,1),dimms)",
         "batch_label": "Minv",
         "gate": None,
         "shared_mem_skip": "MINV_DYNAMIC_SHARED_MEM_BYTES",
@@ -328,31 +328,31 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "gate": None,
         "shared_mem_skip": "F_EXT_GRAD_DQ_DYNAMIC_SHARED_MEM_BYTES",
     },
-    # Joint-torque regressor (A1). The grid:: symbol is `inverse_dynamics_regressor`
-    # (the registry key is `regressor`); its host wrapper takes an extra
+    # Joint-torque regressor (A1). The grid:: symbol AND registry key are now both
+    # `inverse_dynamics_regressor`; its host wrapper takes an extra
     # CALLER-OWNED output buffer `d_Y` (10*NUM_BODIES*NUM_VEL floats per timestep)
     # that is NOT part of gridData. We provide it as a TU-static device buffer
     # sized for the batch max (256). The kernel writes out_size per timestep with
     # stride out_size, so the batch buffer is out_size*256. It also takes the
     # gravity arg (RNEA forward sweep). See _regressor.py:gen_inverse_dynamics_regressor_host.
-    "regressor": {
+    "inverse_dynamics_regressor": {
         "single_call":        "static float *_d_Y_s=[]{float*p;cudaMalloc(&p,sizeof(float)*10*grid::NUM_BODIES*grid::NUM_VEL);return p;}(); grid::inverse_dynamics_regressor_single_timing<float>(hd_data,_d_Y_s,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
         "batch_with_mem":     "static float *_d_Y_b=[]{float*p;cudaMalloc(&p,sizeof(float)*10*grid::NUM_BODIES*grid::NUM_VEL*256);return p;}(); grid::inverse_dynamics_regressor<float>(d,_d_Y_b,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
         "batch_compute_only": "static float *_d_Y_c=[]{float*p;cudaMalloc(&p,sizeof(float)*10*grid::NUM_BODIES*grid::NUM_VEL*256);return p;}(); grid::inverse_dynamics_regressor_compute_only<float>(d,_d_Y_c,m,GRAVITY,N,dim3(N,1,1),dimms)",
-        "batch_label": "REGRESSOR",
+        "batch_label": "INVERSE_DYNAMICS_REGRESSOR",
         "gate": None,
         "shared_mem_skip": "INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES",
     },
-    # FD parameter gradient dqdd/dpi = -Minv.Y (A1). grid:: symbol is
-    # `fd_parameter_gradient`; like the regressor its host wrapper takes a
-    # CALLER-OWNED output buffer `d_dqdd_dpi` (10*NUM_BODIES*NUM_VEL floats per
-    # timestep, NOT in gridData) plus the gravity arg. TU-static device buffer,
-    # batch sized for N=256. See _regressor.py:gen_fd_parameter_gradient_host.
-    "fd_parameter_gradient": {
-        "single_call":        "static float *_d_dpi_s=[]{float*p;cudaMalloc(&p,sizeof(float)*10*grid::NUM_BODIES*grid::NUM_VEL);return p;}(); grid::fd_parameter_gradient_single_timing<float>(hd_data,_d_dpi_s,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
-        "batch_with_mem":     "static float *_d_dpi_b=[]{float*p;cudaMalloc(&p,sizeof(float)*10*grid::NUM_BODIES*grid::NUM_VEL*256);return p;}(); grid::fd_parameter_gradient<float>(d,_d_dpi_b,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
-        "batch_compute_only": "static float *_d_dpi_c=[]{float*p;cudaMalloc(&p,sizeof(float)*10*grid::NUM_BODIES*grid::NUM_VEL*256);return p;}(); grid::fd_parameter_gradient_compute_only<float>(d,_d_dpi_c,m,GRAVITY,N,dim3(N,1,1),dimms)",
-        "batch_label": "FD_PARAMETER_GRADIENT",
+    # FD parameter gradient dqdd/dpi = -Minv.Y (A1). grid:: symbol AND registry key
+    # are now both `forward_dynamics_parameter_gradient`; like the regressor its host
+    # wrapper takes a CALLER-OWNED output buffer `d_dqdd_dpi` (10*NUM_BODIES*NUM_VEL
+    # floats per timestep, NOT in gridData) plus the gravity arg. TU-static device
+    # buffer, batch sized for N=256. See _regressor.py:gen_forward_dynamics_parameter_gradient_host.
+    "forward_dynamics_parameter_gradient": {
+        "single_call":        "static float *_d_dpi_s=[]{float*p;cudaMalloc(&p,sizeof(float)*10*grid::NUM_BODIES*grid::NUM_VEL);return p;}(); grid::forward_dynamics_parameter_gradient_single_timing<float>(hd_data,_d_dpi_s,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "static float *_d_dpi_b=[]{float*p;cudaMalloc(&p,sizeof(float)*10*grid::NUM_BODIES*grid::NUM_VEL*256);return p;}(); grid::forward_dynamics_parameter_gradient<float>(d,_d_dpi_b,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "static float *_d_dpi_c=[]{float*p;cudaMalloc(&p,sizeof(float)*10*grid::NUM_BODIES*grid::NUM_VEL*256);return p;}(); grid::forward_dynamics_parameter_gradient_compute_only<float>(d,_d_dpi_c,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "batch_label": "FORWARD_DYNAMICS_PARAMETER_GRADIENT",
         "gate": None,
         "shared_mem_skip": "FD_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
     },
@@ -389,17 +389,17 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "shared_mem_skip": "IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES",
     },
     "idsva_so_body_frame": {
-        "single_call":        "grid::idsva_so_body_frame_host_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
-        "batch_with_mem":     "grid::idsva_so_body_frame_host<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
-        "batch_compute_only": "grid::idsva_so_body_frame_host_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "single_call":        "grid::idsva_so_body_frame_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::idsva_so_body_frame<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::idsva_so_body_frame_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "IDSVA_SO_BODY_FRAME",
         "gate": "GRID_HAS_IDSVA_SO_BODY_FRAME",
         "shared_mem_skip": "IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES",
     },
     "idsva_so_world_frame": {
-        "single_call":        "grid::idsva_so_world_frame_host_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
-        "batch_with_mem":     "grid::idsva_so_world_frame_host<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
-        "batch_compute_only": "grid::idsva_so_world_frame_host_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "single_call":        "grid::idsva_so_world_frame_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::idsva_so_world_frame<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::idsva_so_world_frame_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "IDSVA_SO_WORLD_FRAME",
         "gate": "GRID_HAS_IDSVA_SO_WORLD_FRAME",
         "shared_mem_skip": "IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES",
@@ -489,9 +489,9 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "shared_mem_skip": "INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES",
     },
     "integrator_with_gradient": {
-        "single_call":        "grid::integrator_gradient_with_x_kp1_single_timing<float>(hd_data,d_robotModel,GRAVITY,static_cast<float>(0.01),SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
-        "batch_with_mem":     "grid::integrator_gradient_with_x_kp1<float>(d,m,GRAVITY,static_cast<float>(0.01),N,dim3(N,1,1),dimms,streams)",
-        "batch_compute_only": "grid::integrator_gradient_with_x_kp1_compute_only<float>(d,m,GRAVITY,static_cast<float>(0.01),N,dim3(N,1,1),dimms)",
+        "single_call":        "grid::integrator_with_gradient_single_timing<float>(hd_data,d_robotModel,GRAVITY,static_cast<float>(0.01),SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::integrator_with_gradient<float>(d,m,GRAVITY,static_cast<float>(0.01),N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::integrator_with_gradient_compute_only<float>(d,m,GRAVITY,static_cast<float>(0.01),N,dim3(N,1,1),dimms)",
         "batch_label": "INTEGRATOR_WITH_GRADIENT",
         "gate": "GRID_HAS_INTEGRATOR_GRADIENT",
         "shared_mem_skip": "INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES",

@@ -6,7 +6,7 @@ Validates `gen_fd_parameter_gradient` (CUDA) against
     dqdd/dpi = -Minv . Y(q, qd, qdd_actual)   with qdd_actual = FD(q, qd, u)
 
 `pi_i = [m, m*c(3), I_O(6)=[Ixx,Ixy,Ixz,Iyy,Iyz,Izz]]` per link (GRiD/URDF basis).
-The CUDA kernel composes direct_minv (Minv), the regressor (Y) at the actual
+The CUDA kernel composes minv (Minv), the regressor (Y) at the actual
 acceleration, and the symmetric-upper -Minv . Y apply.
 
 The runner streams q|qd|u (the sample's third vector is used as the torque u).
@@ -148,7 +148,7 @@ def test_cuda_fd_parameter_gradient_matches_reference(robot_id, base_mode, tmp_p
         )
 
         G_cuda = np.asarray(
-            outputs["fd_parameter_gradient"], dtype=np.float64
+            outputs["forward_dynamics_parameter_gradient"], dtype=np.float64
         ).reshape(nv, 10 * nb)
 
         # numpy reference: dqdd/dpi = -Minv . Y(q,qd,FD(q,qd,u))

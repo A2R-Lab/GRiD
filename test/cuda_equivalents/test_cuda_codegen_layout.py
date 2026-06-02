@@ -431,13 +431,13 @@ def test_floating_second_order_opt_in_header_compiles(
     assert constants["SECOND_ORDER_COORDS"] == constants["NUM_VEL"]
     assert constants["SECOND_ORDER_TENSOR_SIZE"] == 4 * constants["NUM_VEL"]**3
     assert constants["Q_QD_U_STRIDE"] == constants["NUM_POS"] + 2 * constants["NUM_VEL"]
-    assert "void idsva_so_body_frame_host(gridData<T, KIND> *hd_data" in header
+    assert "void idsva_so_body_frame(gridData<T, KIND> *hd_data" in header
     if generates_fdsva:
         assert "void fdsva_so(gridData<T, KIND> *hd_data" in header
     else:
         assert "void fdsva_so(gridData<T, KIND> *hd_data" not in header
     if enable_world_frame:
-        assert "void idsva_so_world_frame_host(gridData<T, KIND> *hd_data" in header
+        assert "void idsva_so_world_frame(gridData<T, KIND> *hd_data" in header
         assert "void idsva_so_world_frame_inner(" in header
         assert "void idsva_so_world_frame_kernel(" in header
     else:
@@ -621,7 +621,7 @@ int main() {
         data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
     grid::rnea<T, false, false, grid::GRID_DATA_DYNAMICS>(
         data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
-    grid::direct_minv<T, false, grid::GRID_DATA_DYNAMICS>(
+    grid::minv<T, false, grid::GRID_DATA_DYNAMICS>(
         data, model, 1, blocks, threads, streams);
     grid::forward_dynamics<T, grid::GRID_DATA_DYNAMICS>(
         data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
@@ -793,7 +793,7 @@ def test_dynamics_core_profile_generates_only_core_dynamics_hosts(tmp_path):
 
     assert "Codegen profile: dynamics-core" in header
     assert "void inverse_dynamics(gridData<T, KIND> *hd_data" in header
-    assert "void direct_minv(gridData<T, KIND> *hd_data" in header
+    assert "void minv(gridData<T, KIND> *hd_data" in header
     assert "void forward_dynamics(gridData<T, KIND> *hd_data" in header
     assert "void dynamics_core(gridData<T, KIND> *hd_data" in header
     assert "void id_minv_fd(gridData<T, KIND> *hd_data" in header
@@ -801,7 +801,7 @@ def test_dynamics_core_profile_generates_only_core_dynamics_hosts(tmp_path):
     assert "void forward_dynamics_gradient(gridData<T, KIND> *hd_data" not in header
     assert "void all_dynamics(gridData<T, KIND> *hd_data" not in header
     assert "void end_effector_pose(gridData<T, KIND> *hd_data" not in header
-    assert "void idsva_so_body_frame_host(gridData<T, KIND> *hd_data" not in header
+    assert "void idsva_so_body_frame(gridData<T, KIND> *hd_data" not in header
     assert "void fdsva_so(gridData<T, KIND> *hd_data" not in header
 
 
@@ -815,7 +815,7 @@ def test_kinematics_profile_generates_kinematics_hosts_only(tmp_path):
     assert "void kinematics_only(gridData<T, KIND> *hd_data" in header
     assert "static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS" in header
     assert "void inverse_dynamics(gridData<T, KIND> *hd_data" not in header
-    assert "void direct_minv(gridData<T, KIND> *hd_data" not in header
+    assert "void minv(gridData<T, KIND> *hd_data" not in header
     assert "void forward_dynamics(gridData<T, KIND> *hd_data" not in header
 
 
@@ -829,7 +829,7 @@ def test_algorithm_list_override_expands_dependencies(tmp_path):
 
     assert "Generated algorithms:" in header
     assert "void inverse_dynamics(gridData<T, KIND> *hd_data" in header
-    assert "void direct_minv(gridData<T, KIND> *hd_data" in header
+    assert "void minv(gridData<T, KIND> *hd_data" in header
     assert "void forward_dynamics(gridData<T, KIND> *hd_data" in header
     assert "void inverse_dynamics_gradient(gridData<T, KIND> *hd_data" in header
     assert "void forward_dynamics_gradient(gridData<T, KIND> *hd_data" in header

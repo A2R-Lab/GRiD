@@ -13,7 +13,7 @@ pinocchio to ~1e-14:
 for the three pinocchio reference frames (LOCAL / WORLD / LOCAL_WORLD_ALIGNED).
 
 Lambda is self-contained: grid::osc_inertia_device composes Minv on device
-(via direct_minv_inner, F-region spilled to a shared s_F buffer) and densifies
+(via minv_inner, F-region spilled to a shared s_F buffer) and densifies
 the SYMMETRIC_UPPER output internally during the J*Minv*J^T contraction — the
 runner feeds it q alone, no external Minv.
 
@@ -27,7 +27,7 @@ Robots: iiwa14-fixed + go2-floating + g1-floating + fr3-fixed + fr3-floating
 "iiwa14:fixed,go2:floating,g1:floating,fr3:fixed,fr3:floating").
 
 fr3 (mimic) now exercises Lambda too: osc_inertia composes Minv on device via
-direct_minv_inner -> crba_inner -> invert (== RBDReference.minv's mimic fast
+minv_inner -> crba_inner -> invert (== RBDReference.minv's mimic fast
 path inv(CRBA(q))), matching the numpy oracle to float32 on both bases x all 3
 reference frames.
 
@@ -180,7 +180,7 @@ def test_cuda_frame_jacobian_matches_reference(tmp_path, robot_id, base_mode):
                   rtol=5e-2, atol=5e-2)
             # Lambda = (J Minv J^T)^-1: 6x6. Now emitted for mimic robots too
             # (e.g. fr3): osc_inertia composes Minv on device via
-            # direct_minv_inner -> crba_inner -> invert, which the fr3-fixed CUDA
+            # minv_inner -> crba_inner -> invert, which the fr3-fixed CUDA
             # crba/minv equivalence already proves correct. The L_* keys are
             # absent only if osc_inertia was not selected at all (then skip).
             if lblk not in out:

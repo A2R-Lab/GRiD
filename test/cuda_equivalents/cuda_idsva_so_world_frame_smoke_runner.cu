@@ -1,7 +1,7 @@
 // Test runner for the CUDA world-frame IDSVA-SO kernel.
 //
 // Mirrors `cuda_second_order_smoke_runner.cu` but invokes
-// `idsva_so_world_frame_host` instead of `idsva_so_body_frame_host`. Used by the new
+// `idsva_so_world_frame` instead of `idsva_so_body_frame`. Used by the new
 // `test_cuda_idsva_so_world_frame` to validate the CUDA emission against
 // `RBDReference.idsva_so_world_frame` (the verified Python reference).
 
@@ -61,7 +61,7 @@ int run() {
     read_vector(&hd_data->h_q_qd_u[grid::NUM_POS], grid::NUM_VEL);
     read_vector(&hd_data->h_q_qd_u[grid::NUM_POS + grid::NUM_VEL], grid::NUM_VEL);
 
-    grid::idsva_so_world_frame_host<T>(
+    grid::idsva_so_world_frame<T>(
         hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
     );
     gpuErrchk(cudaPeekAtLastError());

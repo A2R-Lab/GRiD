@@ -21,7 +21,7 @@ __host__ void measure_id_single(cudaStream_t *streams, grid::robotModel<T> *d_ro
 template <typename T, int TEST_ITERS>
 __host__ void measure_minv_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
     GRID_SKIP_IF_KERNEL_TOO_BIG("Minv", MINV_DYNAMIC_SHARED_MEM_BYTES);
-    grid::direct_minv_single_timing<T,true>(hd_data,d_robotModel,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
+    grid::minv_single_timing<T,true>(hd_data,d_robotModel,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_fd_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
@@ -67,14 +67,14 @@ __host__ void measure_ee_pose_hessian_single(cudaStream_t *streams, grid::robotM
 template <typename T, int TEST_ITERS>
 __host__ void measure_idsva_so_body_frame_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
     GRID_SKIP_IF_KERNEL_TOO_BIG("IDSVA_SO_BODY_FRAME", IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES);
-    grid::idsva_so_body_frame_host_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
+    grid::idsva_so_body_frame_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 #endif
 #if GRID_HAS_IDSVA_SO_WORLD_FRAME
 template <typename T, int TEST_ITERS>
 __host__ void measure_idsva_so_world_frame_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
     GRID_SKIP_IF_KERNEL_TOO_BIG("IDSVA_SO_WORLD_FRAME", IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES);
-    grid::idsva_so_world_frame_host_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
+    grid::idsva_so_world_frame_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 #endif
 #if GRID_HAS_FDSVA_SO
@@ -109,7 +109,7 @@ __host__ void measure_integrator_gradient_single(cudaStream_t *streams, grid::ro
 template <typename T, int TEST_ITERS>
 __host__ void measure_integrator_with_gradient_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
     GRID_SKIP_IF_KERNEL_TOO_BIG("INTEGRATOR_WITH_GRADIENT", INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES);
-    grid::integrator_gradient_with_x_kp1_single_timing<T>(hd_data,d_robotModel,GRAVITY,static_cast<T>(0.01),TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
+    grid::integrator_with_gradient_single_timing<T>(hd_data,d_robotModel,GRAVITY,static_cast<T>(0.01),TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 #endif
 

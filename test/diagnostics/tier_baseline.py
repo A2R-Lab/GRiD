@@ -52,7 +52,7 @@ BATCH_CU = REPO_ROOT / "test/benchmarks/baselines/grid/timeGRiD_batch.cu"
 # Friendly label per kernel name. Names match emitted symbols in grid.cuh.
 KERNEL_LABELS = {
     "inverse_dynamics_kernel":                  "ID",
-    "direct_minv_kernel":                       "Minv",
+    "minv_kernel":                       "Minv",
     "forward_dynamics_kernel":                  "FD",
     "aba_kernel":                               "ABA",
     "crba_kernel":                              "CRBA",

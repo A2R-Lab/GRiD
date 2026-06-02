@@ -33,8 +33,8 @@ __host__ void measure_minv_batch(int N, cudaStream_t *streams, grid::robotModel<
     GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("Minv", N, MINV_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("Minv", N,
-        [&]{ grid::direct_minv<T,true>(d,m,N,dim3(N,1,1),dimms,streams); },
-        [&]{ grid::direct_minv_compute_only<T,true>(d,m,N,dim3(N,1,1),dimms); });
+        [&]{ grid::minv<T,true>(d,m,N,dim3(N,1,1),dimms,streams); },
+        [&]{ grid::minv_compute_only<T,true>(d,m,N,dim3(N,1,1),dimms); });
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_fd_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
@@ -106,8 +106,8 @@ __host__ void measure_idsva_so_body_frame_batch(int N, cudaStream_t *streams, gr
     GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("IDSVA_SO_BODY_FRAME", N, IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("IDSVA_SO_BODY_FRAME", N,
-        [&]{ grid::idsva_so_body_frame_host<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
-        [&]{ grid::idsva_so_body_frame_host_compute_only<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms); });
+        [&]{ grid::idsva_so_body_frame<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
+        [&]{ grid::idsva_so_body_frame_compute_only<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms); });
 }
 #endif
 #if GRID_HAS_IDSVA_SO_WORLD_FRAME
@@ -116,8 +116,8 @@ __host__ void measure_idsva_so_world_frame_batch(int N, cudaStream_t *streams, g
     GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("IDSVA_SO_WORLD_FRAME", N, IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("IDSVA_SO_WORLD_FRAME", N,
-        [&]{ grid::idsva_so_world_frame_host<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
-        [&]{ grid::idsva_so_world_frame_host_compute_only<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms); });
+        [&]{ grid::idsva_so_world_frame<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
+        [&]{ grid::idsva_so_world_frame_compute_only<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms); });
 }
 #endif
 #if GRID_HAS_FDSVA_SO
@@ -165,8 +165,8 @@ __host__ void measure_integrator_with_gradient_batch(int N, cudaStream_t *stream
     GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("INTEGRATOR_WITH_GRADIENT", N, INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("INTEGRATOR_WITH_GRADIENT", N,
-        [&]{ grid::integrator_gradient_with_x_kp1<T>(d,m,GRAVITY,static_cast<T>(0.01),N,dim3(N,1,1),dimms,streams); },
-        [&]{ grid::integrator_gradient_with_x_kp1_compute_only<T>(d,m,GRAVITY,static_cast<T>(0.01),N,dim3(N,1,1),dimms); });
+        [&]{ grid::integrator_with_gradient<T>(d,m,GRAVITY,static_cast<T>(0.01),N,dim3(N,1,1),dimms,streams); },
+        [&]{ grid::integrator_with_gradient_compute_only<T>(d,m,GRAVITY,static_cast<T>(0.01),N,dim3(N,1,1),dimms); });
 }
 #endif
 

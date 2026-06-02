@@ -45,7 +45,7 @@ CUDA_CORNER_SAMPLE_NAMES = (
 )
 FIXED_CUDA_ALGORITHMS = (
     "inverse_dynamics",
-    "direct_minv",
+    "minv",
     "forward_dynamics",
     "inverse_dynamics_gradient_q",
     "inverse_dynamics_gradient_qd",
@@ -59,7 +59,7 @@ FIXED_CUDA_ALGORITHMS = (
 )
 FLOATING_CUDA_ALGORITHMS = (
     "inverse_dynamics",
-    "direct_minv",
+    "minv",
     "forward_dynamics",
     "inverse_dynamics_gradient_q",
     "inverse_dynamics_gradient_qd",
@@ -86,7 +86,7 @@ GPU_UNAVAILABLE_PATTERNS = (
     "all cuda-capable devices are busy or unavailable",
 )
 SINGULAR_DEPENDENT_ALGORITHMS = {
-    "direct_minv",
+    "minv",
     "forward_dynamics",
     "forward_dynamics_gradient_q",
     "forward_dynamics_gradient_qd",
@@ -98,7 +98,7 @@ SINGULAR_DEPENDENT_ALGORITHMS = {
 # This set GROWS per phase and reaches full coverage at P4. Non-mimic robots
 # are unaffected (they always compare every algorithm).
 #   P1: inverse_dynamics, crba
-#   P2: + direct_minv, forward_dynamics, aba
+#   P2: + minv, forward_dynamics, aba
 #   P3: + inverse_dynamics_gradient_q/qd, forward_dynamics_gradient_q/qd
 #   P4: + end_effector_pose_gradient, end_effector_pose_hessian
 #       (end_effector_pose value is mimic-unaffected and always compared)
@@ -107,8 +107,8 @@ MIMIC_SUPPORTED_ALGORITHMS = {
     "inverse_dynamics",
     "crba",
     "end_effector_pose",
-    # P2 (landed): direct_minv via inv(CRBA); forward_dynamics + aba via decomp.
-    "direct_minv",
+    # P2 (landed): minv via inv(CRBA); forward_dynamics + aba via decomp.
+    "minv",
     "forward_dynamics",
     "aba",
     # P3 (landed, FIXED-BASE): ID/FD gradients via the dense serial reduced-space
@@ -175,7 +175,7 @@ def _robot_has_mimic_joints(project_model) -> bool:
 # not folded yet — deferred to T3-finisher — and the old silent-zero stub was
 # removed). gen_all_code("all") therefore raises NotImplementedError for them,
 # so we codegen only the non-gradient surface this suite actually compares for
-# mimic robots (MIMIC_SUPPORTED_ALGORITHMS): id / crba / ee_pose / direct_minv /
+# mimic robots (MIMIC_SUPPORTED_ALGORITHMS): id / crba / ee_pose / minv /
 # forward_dynamics / aba. As each mimic-gradient phase lands (T3-finisher),
 # extend both this list and MIMIC_SUPPORTED_ALGORITHMS together.
 MIMIC_CODEGEN_ALGORITHM_LIST = ["id", "crba", "ee_pose", "minv", "fd", "aba"]
@@ -218,7 +218,7 @@ KNOWN_FAILING_ALGORITHMS = {}
 # the adjacent s_XImats region, silently corrupting the LOW-jid X matrices (here
 # the left leg, root 0). Fixed by sizing s_vaf/s_temp/XImats-scratch by
 # get_num_joints() when robot_has_mimic_joints() (byte-identical for non-mimic).
-# h1_2 inverse_dynamics / forward_dynamics / aba (and crba/direct_minv/ee_pose)
+# h1_2 inverse_dynamics / forward_dynamics / aba (and crba/minv/ee_pose)
 # now MATCH pinocchio and are UN-GATED.
 #
 # A second, related mimic bug was found+fixed in the same pass (2026-05-31): the
@@ -1248,7 +1248,7 @@ def _expected_output(reference_model, project_model, sample, name: str):
     zeros = np.zeros(reference_model.nv, dtype=np.float64)
     if name == "inverse_dynamics":
         return reference_model.rnea(sample.q, sample.qd, zeros).reshape(1, -1)
-    if name == "direct_minv":
+    if name == "minv":
         return reference_model.minv(sample.q)
     if name == "forward_dynamics":
         return reference_model.forward_dynamics(sample.q, sample.qd, sample.qdd).reshape(
@@ -1666,8 +1666,8 @@ def _run_cuda_equivalence_case(
             atol=1e-7,
         )
 
-        if "direct_minv" in cuda:
-            cuda["direct_minv"] = _normalize_cuda_minv(cuda["direct_minv"])
+        if "minv" in cuda:
+            cuda["minv"] = _normalize_cuda_minv(cuda["minv"])
         invertible_mass_matrix = _has_invertible_project_mass_matrix(
             reference_model, sample.q
         )

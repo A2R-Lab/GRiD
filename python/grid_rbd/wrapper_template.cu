@@ -181,7 +181,7 @@ extern "C" int grid_rbd_minv(
     const int nj = grid::NUM_JOINTS;
     pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, nj);  // qd/u unused by minv
 
-    grid::direct_minv<T, /*USE_COMPRESSED_MEM=*/false>(
+    grid::minv<T, /*USE_COMPRESSED_MEM=*/false>(
         g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -918,7 +918,7 @@ static ffi::Error grid_rbd_jax_minv_impl(
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
 
     constexpr int stride_q_qd_u = 3 * grid::NUM_JOINTS;
-    grid::direct_minv_kernel<T><<<
+    grid::minv_kernel<T><<<
         g_block_dimms, g_thread_dimms,
         grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
@@ -1683,7 +1683,7 @@ torch::Tensor torch_minv(torch::Tensor q) {
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, nj * nj, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::direct_minv_kernel<T><<<g_block_dimms, g_thread_dimms, grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::minv_kernel<T><<<g_block_dimms, g_thread_dimms, grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_Minv, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_Minv, batch * nj * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;

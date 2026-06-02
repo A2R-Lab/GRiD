@@ -109,7 +109,7 @@ KERNEL_PATTERNS = {
     "end_effector_pose_gradient_kernel": "EE_POSE_GRAD",
     "inverse_dynamics_kernel": "ID",
     "crba_kernel": "CRBA",
-    "direct_minv_kernel": "Minv",
+    "minv_kernel": "Minv",
 }
 
 

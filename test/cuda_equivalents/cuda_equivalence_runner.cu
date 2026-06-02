@@ -72,7 +72,7 @@ __global__ void floating_inverse_dynamics_runner(
 }
 
 template <typename T>
-__global__ void floating_direct_minv_runner(
+__global__ void floating_minv_runner(
     T *d_out, const T *d_q, const grid::robotModel<T> *d_robot_model
 ) {
     __shared__ T s_q[grid::NUM_JOINTS];
@@ -81,7 +81,7 @@ __global__ void floating_direct_minv_runner(
         s_q[ind] = d_q[ind];
     }
     __syncthreads();
-    grid::direct_minv_device<T>(s_out, s_q, d_robot_model);
+    grid::minv_device<T>(s_out, s_q, d_robot_model);
     __syncthreads();
     for (int ind = threadIdx.x; ind < grid::NUM_VEL * grid::NUM_VEL; ind += blockDim.x) {
         d_out[ind] = s_out[ind];
@@ -157,7 +157,7 @@ bool floating_algorithm_requested(const std::string &name) {
     const char *raw = std::getenv("GRID_CUDA_FLOATING_ALGORITHMS");
     if (raw == nullptr || std::string(raw).empty()) {
         return name == "inverse_dynamics" ||
-               name == "direct_minv" ||
+               name == "minv" ||
                name == "forward_dynamics" ||
                name == "inverse_dynamics_gradient_q" ||
                name == "inverse_dynamics_gradient_qd" ||
@@ -199,7 +199,7 @@ bool floating_algorithm_requested(const std::string &name) {
 // this device's per-block cap, emit the standard GRID message and exit cleanly
 // (rc=2) instead of letting gpuErrchk hard-abort with "invalid argument". The
 // Python harness (_run_runner) treats that message as a SKIP, so a robot whose
-// PERF-tier kernel doesn't fit this GPU (e.g. h1_2-floating direct_minv) skips
+// PERF-tier kernel doesn't fit this GPU (e.g. h1_2-floating minv) skips
 // honestly rather than failing. Unlike the generated init_grid_kernel_attrs,
 // this floating runner block registers a few RUNNER-LOCAL kernels too, so it
 // needs its own guard. (A spilled tier would fit; default tier is PERF.)
@@ -313,8 +313,8 @@ void run() {
 
     grid_runner_set_smem_or_skip(floating_inverse_dynamics_runner<T>,
         "inverse_dynamics", grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>());
-    grid_runner_set_smem_or_skip(grid::direct_minv_kernel<T>,
-        "direct_minv", grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>());
+    grid_runner_set_smem_or_skip(grid::minv_kernel<T>,
+        "minv", grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>());
     grid_runner_set_smem_or_skip(floating_forward_dynamics_runner<T>,
         "forward_dynamics", grid::FD_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>());
     grid_runner_set_smem_or_skip(grid::aba_kernel<T>,
@@ -346,14 +346,14 @@ void run() {
         print_vector("inverse_dynamics", h_vec.data(), grid::NUM_VEL);
     }
 
-    if (floating_algorithm_requested("direct_minv")) {
-        grid::direct_minv_kernel<T><<<1, g_num_threads, grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+    if (floating_algorithm_requested("minv")) {
+        grid::minv_kernel<T><<<1, g_num_threads, grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_mat, hd_data->d_workspace, d_q, grid::NUM_JOINTS, d_robot_model, 1
         );
         gpuErrchk(cudaPeekAtLastError());
         gpuErrchk(cudaDeviceSynchronize());
         gpuErrchk(cudaMemcpy(h_mat.data(), d_mat, grid::NUM_VEL * grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
-        print_matrix_col_major("direct_minv", h_mat.data(), grid::NUM_VEL, grid::NUM_VEL);
+        print_matrix_col_major("minv", h_mat.data(), grid::NUM_VEL, grid::NUM_VEL);
     }
 
     if (floating_algorithm_requested("forward_dynamics")) {
@@ -609,12 +609,12 @@ void run() {
     gpuErrchk(cudaPeekAtLastError());
     print_vector("inverse_dynamics", hd_data->h_c, grid::NUM_JOINTS);
 
-    grid::direct_minv<T, true>(
+    grid::minv<T, true>(
         hd_data, d_robot_model, 1, block_dimms, thread_dimms, streams
     );
     gpuErrchk(cudaPeekAtLastError());
     print_matrix_col_major(
-        "direct_minv", hd_data->h_Minv, grid::NUM_JOINTS, grid::NUM_JOINTS
+        "minv", hd_data->h_Minv, grid::NUM_JOINTS, grid::NUM_JOINTS
     );
 
     grid::forward_dynamics<T>(

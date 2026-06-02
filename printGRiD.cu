@@ -40,7 +40,7 @@ void test(){
     printMat<T,1,grid::NUM_JOINTS>(hd_data->h_c,1);
 
     printf("Minv via direct minv\n");
-    grid::direct_minv<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
+    grid::minv<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
     printMat<T,grid::NUM_JOINTS,grid::NUM_JOINTS>(hd_data->h_Minv,grid::NUM_JOINTS);
 
     printf("qdd via forward dynamics\n");

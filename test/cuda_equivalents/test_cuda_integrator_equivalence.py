@@ -1,7 +1,7 @@
 """CUDA equivalence test for the generated time-integrator kernels.
 
 Validates `grid::integrator<EULER|SEMI_IMPLICIT_EULER>` and the matching
-`integrator_gradient<...>` / `integrator_gradient_with_x_kp1<...>` host
+`integrator_gradient<...>` / `integrator_with_gradient<...>` host
 wrappers against the Python reference composed in
 `ProjectModelAdapter.integrator` / `integrator_gradient`. Mirrors the
 world-frame IDSVA-SO smoke-runner pattern: codegen iiwa14 with the

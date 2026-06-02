@@ -75,7 +75,7 @@ int run() {
     gpuErrchk(cudaMalloc((void **)&d_out, out_size * sizeof(T)));
     T *h_out = (T *)malloc(out_size * sizeof(T));
 
-    grid::fd_parameter_gradient<T>(
+    grid::forward_dynamics_parameter_gradient<T>(
         hd_data, d_out, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams
     );
     gpuErrchk(cudaPeekAtLastError());
@@ -97,7 +97,7 @@ int run() {
     config[4] = static_cast<T>(grid::FD_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>());
 
     print_flat("fpg_config", config, 1, 5);
-    print_flat("fd_parameter_gradient", h_out, out_rows, out_cols);
+    print_flat("forward_dynamics_parameter_gradient", h_out, out_rows, out_cols);
 
     free(h_out);
     gpuErrchk(cudaFree(d_out));

@@ -28,7 +28,7 @@ ARCH = "120"
 # by the 84-test python_wrappers suite. Including them here would need explicit
 # signature casts per overload, which is brittle.
 KERNELS = [
-    "direct_minv_kernel",
+    "minv_kernel",
     "forward_dynamics_kernel",
     "aba_kernel",
     "crba_kernel",
@@ -49,7 +49,7 @@ TIERS = ["TIER_SHARED", "TIER_LITE", "TIER_MINIMAL"]
 INTEGRATOR_KERNELS = [
     "integrator_kernel",
     "integrator_gradient_kernel",
-    "integrator_gradient_with_x_kp1_kernel",
+    "integrator_with_gradient_kernel",
 ]
 INTEGRATOR_ITS = ["EULER", "RK4"]
 

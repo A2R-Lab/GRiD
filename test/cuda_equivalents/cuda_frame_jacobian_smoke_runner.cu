@@ -113,7 +113,7 @@ __global__ void frame_jac_dot_kernel(const T *g_q, const T *g_qd, const int targ
 }
 
 // Lambda kernel: SELF-CONTAINED. grid::osc_inertia_device composes Minv on
-// device (via direct_minv_inner) from q alone — no external Minv feed — then
+// device (via minv_inner) from q alone — no external Minv feed — then
 // emits Lambda for the three reference frames.
 //
 // osc_inertia is currently ¬mimic in codegen (its on-device mimic-Minv route is
@@ -201,14 +201,14 @@ void run() {
     // Self-contained Lambda: osc_inertia_device composes Minv on device, so the
     // runner no longer pre-computes/densifies a Minv to feed in. This is emitted
     // for BOTH non-mimic and mimic robots (the mimic path composes Minv via
-    // direct_minv_inner -> crba_inner -> invert, which the fr3-fixed CUDA crba/minv
+    // minv_inner -> crba_inner -> invert, which the fr3-fixed CUDA crba/minv
     // tests already prove correct); GRID_FRAME_JAC_MIMIC is only defined when
     // osc_inertia was NOT selected at all.
 #ifndef GRID_FRAME_JAC_MIMIC
     size_t dyn_o = grid::OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(osc_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)dyn_o);
     // osc_kernel is NOT __launch_bounds__-annotated and inlines the heavy
-    // direct_minv_inner / crba_inner / invert_matrix routines (~100+ regs). At
+    // minv_inner / crba_inner / invert_matrix routines (~100+ regs). At
     // MAX_PERF_LEVEL_THREADS (512) the launch overflows the per-block register
     // budget -> "too many resources requested for launch", which is silent unless
     // checked and leaves the (zeroed) outputs untouched. Clamp to the kernel's
