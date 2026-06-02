@@ -206,10 +206,10 @@ def test_fixed_default_header_keeps_gradient_paths_all_shared(tmp_path):
     constants = _constants(header)
 
     assert "__shared__ T" not in header
-    assert constants["GRID_ID_DU_USES_GLOBAL_TEMP"] == 0
-    assert constants["GRID_FD_DU_USES_GLOBAL_TEMP"] == 0
-    assert constants["GRID_ID_DU_USES_DA_DF_SPILL"] == 0
-    assert constants["GRID_FD_DU_USES_DA_DF_SPILL"] == 0
+    assert constants["GRID_INVERSE_DYNAMICS_GRADIENT_USES_GLOBAL_TEMP"] == 0
+    assert constants["GRID_FORWARD_DYNAMICS_GRADIENT_USES_GLOBAL_TEMP"] == 0
+    assert constants["GRID_INVERSE_DYNAMICS_GRADIENT_USES_DA_DF_SPILL"] == 0
+    assert constants["GRID_FORWARD_DYNAMICS_GRADIENT_USES_DA_DF_SPILL"] == 0
     assert constants["GRID_GENERATES_IDSVA_SO_BODY_FRAME"] == 1
     assert constants["GRID_GENERATES_FDSVA_SO"] == 1
 
@@ -223,7 +223,7 @@ def test_fixed_forced_low_shared_header_selects_fallbacks(tmp_path):
     constants = _constants(header)
 
     assert "__shared__ T" not in header
-    assert constants["GRID_FD_DU_USES_DA_DF_SPILL"] == 1
+    assert constants["GRID_FORWARD_DYNAMICS_GRADIENT_USES_DA_DF_SPILL"] == 1
     assert constants["GRID_IDSVA_SO_USES_GLOBAL_OUTPUT"] == 1
     assert constants["GRID_FDSVA_SO_USES_GLOBAL_TENSORS"] == 1
     assert constants["GRID_FDSVA_SO_USES_WORKSPACE_TEMP"] == 1
@@ -389,9 +389,9 @@ def test_floating_header_does_not_require_second_order_kernels(tmp_path, robot_i
     assert constants["GRID_GENERATES_IDSVA_SO_BODY_FRAME"] == 0
     assert constants["GRID_GENERATES_FDSVA_SO"] == 0
     assert constants["GRID_GENERATES_D2EE"] == 1
-    assert constants["GRID_D2EE_USES_WORKSPACE_TEMP"] == expected_d2ee_workspace
-    assert constants["GRID_D2EE_USES_WORKSPACE_D2XHOM"] == 0
-    assert constants["GRID_D2EE_SHARED_TIER_VALUE"] == expected_d2ee_workspace
+    assert constants["GRID_END_EFFECTOR_POSE_HESSIAN_USES_WORKSPACE_TEMP"] == expected_d2ee_workspace
+    assert constants["GRID_END_EFFECTOR_POSE_HESSIAN_USES_WORKSPACE_D2XHOM"] == 0
+    assert constants["GRID_END_EFFECTOR_POSE_HESSIAN_SHARED_TIER_VALUE"] == expected_d2ee_workspace
     assert "!GRID_GENERATES_IDSVA_SO_BODY_FRAME" in header
     assert "!GRID_GENERATES_FDSVA_SO" in header
     assert "void end_effector_pose(gridData<T, KIND> *hd_data" in header
@@ -493,9 +493,9 @@ def test_d2ee_spill_tiers_are_size_and_base_selected(robot_id, base_mode, expect
     codegen.gen_add_constants_helpers(include_homogenous_transforms=True)
     constants = _constants(codegen.code_str)
 
-    assert constants["GRID_D2EE_SHARED_TIER_VALUE"] == expected_tier
-    assert constants["GRID_D2EE_USES_WORKSPACE_TEMP"] == int(expected_tier >= 1)
-    assert constants["GRID_D2EE_USES_WORKSPACE_D2XHOM"] == int(expected_tier >= 2)
+    assert constants["GRID_END_EFFECTOR_POSE_HESSIAN_SHARED_TIER_VALUE"] == expected_tier
+    assert constants["GRID_END_EFFECTOR_POSE_HESSIAN_USES_WORKSPACE_TEMP"] == int(expected_tier >= 1)
+    assert constants["GRID_END_EFFECTOR_POSE_HESSIAN_USES_WORKSPACE_D2XHOM"] == int(expected_tier >= 2)
 
 
 @pytest.mark.cuda_equivalence

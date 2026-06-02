@@ -437,7 +437,7 @@ void run() {
     }
 
     if (floating_algorithm_requested("end_effector_pose_hessian")) {
-        if (grid::GRID_D2EE_USES_WORKSPACE_TEMP) {
+        if (grid::GRID_END_EFFECTOR_POSE_HESSIAN_USES_WORKSPACE_TEMP) {
             gpuErrchk(grid::grid_begin_l2_persisting(
                 0, hd_data->d_workspace, grid::GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()
             ));
@@ -453,7 +453,7 @@ void run() {
         );
         gpuErrchk(cudaPeekAtLastError());
         gpuErrchk(cudaDeviceSynchronize());
-        if (grid::GRID_D2EE_USES_WORKSPACE_TEMP) {
+        if (grid::GRID_END_EFFECTOR_POSE_HESSIAN_USES_WORKSPACE_TEMP) {
             gpuErrchk(grid::grid_end_l2_persisting(0));
         }
         gpuErrchk(cudaMemcpy(h_d2ee.data(), d_d2ee, 6 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_EES * sizeof(T), cudaMemcpyDeviceToHost));

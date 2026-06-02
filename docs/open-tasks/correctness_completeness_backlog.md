@@ -168,16 +168,21 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
 - ⬜ **I1 — re-sweep on the fixed harness** to set real autotune defaults + true best-tier numbers (later).
 
 ## AUDIT FINDINGS (submodule features / docs / consistency — 2026-06-02, ongoing)
-- ⬜ **A1 — `f_ext_gradient_dq` has NO RBDReference oracle.** GRiD emits the kernel (∂(id_du)/∂f_ext,
-  fixed-base) but RBDReference lacks a `f_ext_gradient_dq` method → the kernel is unverifiable vs a numpy
-  reference (only `f_ext_gradient` is checked). Add the reference method + an equivalence test.
-- ⬜ **A2 — planar/spherical are PHANTOM support (interface inconsistency).** URDFParser PARSES them
-  (Joint.py px_pl/py_pl/theta_pl) and `errors.py` advertises them as "supported", but the CODEGEN transform
-  chain (`_topology_helpers.py`) does NOT handle them, RBDReference does NOT model them, and NO fixture uses
-  them. So the parser advertises joint types the rest of the stack can't codegen/validate. FIX (pick one):
-  (a) DEMOTE — make URDFParser raise a clear "planar/spherical not yet codegen-supported" error + drop them
-  from the advertised-supported list + doc note (honest, small); or (b) IMPLEMENT full support (parse +
-  codegen transforms + RBDReference reference + planar/spherical test URDFs) — a real feature. Lean (a) now.
+- ✅ **A1 — `f_ext_gradient_dq` now has an analytic RBDReference oracle (fixed base).** Added
+  `RBDReference.f_ext_jacobian_transpose_dq(q)` = closed-form `∂Jᵀ/∂q` (Featherstone pushdown +
+  `dX[m]/dq_m = -crm(S_m)·X[m]`; mimic folds via the shared-v-slot reduction); `f_ext_gradient` uses it for
+  fixed base (`f_ext_gradient_dq = -∂Jᵀ/∂q`). The CUDA equivalence test now asserts the kernel against this
+  analytic oracle (was FD-of-Jᵀ). Validated: analytic vs central-FD 1.5e-10 (iiwa14) / 2.0e-10 (fr3 mimic);
+  CUDA `[iiwa14-fixed]` passes. RBDReference `ac7b1ce`, parent `806b475`. Floating-base A.3 oracle stays FD
+  (the scalar motion-cross identity is revolute-only) — future item.
+- ✅ **A2 — planar/spherical PHANTOM support DEMOTED (option a).** The parser groundwork stays (intentional,
+  covered by `test_planar_spherical_groundwork.py`, tracked toward future full support in
+  `joint_types_plan.md`), but the stack is now HONEST about end-to-end support: (1) `errors.py` advertises only
+  the fully-supported types (revolute/continuous/prismatic/fixed/floating) and documents planar/spherical as
+  parse-only groundwork; (2) `GRiDCodeGenerator.__init__` raises a clear `NotImplementedError` if a robot
+  carrying planar/spherical joints reaches codegen (instead of silently mis-generating). Verified: iiwa14
+  codegen unaffected, a planar robot is rejected with a clear message. Full support (option b: codegen
+  transforms + RBDReference model + test URDFs) remains a future feature.
 - ✅ **A3 — user-facing docs were STALE post-rename** (old names across `docs/source/**` + submodule
   `RBDReference/README.md` + a `rnea.rst` page; gravity docs said +9.81). DONE: verbose names + signed
   gravity applied across Sphinx + READMEs; `rnea.rst` → `inverse_dynamics.rst` (toctree fixed); sphinx
@@ -204,14 +209,17 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
     (kept-proper) verbose function name. Emitters (`_f_ext_gradient.py`, `GRiDCodeGenerator.py`) + consumers
     (`run.py` `shared_mem_skip` keys, `cuda_f_ext_gradient_runner.cu`, `algo_registry` desc) updated; regen header
     verified — macro defs + all device/kernel/host call-sites consistent, zero `F_EXT_GRAD_` residuals.
-  - ⬜ **A5b-residual (DEFERRED)** — internal-only, tangled naming left as-is: (a) `GRiDCodeGenerator/_test.py`
-    still has `rnea`/`rnea_grad`/`fd_grad` method names (dev script); (b) the spill-decision flags
-    `GRID_ID_DU_*`/`GRID_FD_DU_*`/`GRID_D2EE_*`/`GRID_EE_GRAD_*` (`_USES_*`, `_SHARED_TIER*`,
-    `_WORKSPACE_*_OFFSET_BYTES`) + the `*_INNER_{SMEM,WORKSPACE}_BYTES`/`*_F_IN_SMEM`/`*_TEMP_IN_SMEM` tier
-    bools + `*_spill_tier_3way` attrs still use old short segments. NOT done because each short segment spans a
-    LARGER macro family beyond the `_USES_` flags (renaming only `_USES_` would split `GRID_ID_DU_*`/`GRID_D2EE_*`
-    internally), and the `test_cuda_codegen_layout.py` / `test_cuda_executable_equivalence.py` assertions track
-    them — verbosify the whole internal family in one structural pass.
+  - 🟡 **A5b-residual (EMITTED MACROS DONE; deepest internal layer remains)** — the EMITTED `GRID_*` spill-flag
+    macro families are now verbose: `GRID_ID_DU_*`→`GRID_INVERSE_DYNAMICS_GRADIENT_*`,
+    `GRID_FD_DU_*`→`GRID_FORWARD_DYNAMICS_GRADIENT_*`, `GRID_D2EE_*`→`GRID_END_EFFECTOR_POSE_HESSIAN_*`,
+    `GRID_EE_GRAD_*`→`GRID_END_EFFECTOR_POSE_GRADIENT_*`, `GRID_INTEGRATOR_DU_*`→`GRID_INTEGRATOR_GRADIENT_*`
+    — the WHOLE `GRID_` family per algo (`_USES_*`, `_SHARED_TIER*`, `_WORKSPACE_*_OFFSET_BYTES`) renamed
+    together (no split). Emitters (5 codegen files) + the `test_cuda_codegen_layout.py` /
+    `test_cuda_executable_equivalence.py` / `cuda_equivalence_runner.cu` assertions updated; regen verified zero
+    old `GRID_` short-family macros, layout test green. STILL DEFERRED (deepest internal, not emitted as named
+    `GRID_` macros): (a) `GRiDCodeGenerator/_test.py` `rnea`/`rnea_grad`/`fd_grad` dev-script method names;
+    (b) the function-local `*_IN_SMEM` constexpr tier bools + Python `*_spill_tier_3way` attrs that still use
+    short algo-segment prefixes — low value (not header-visible), high churn; leave unless a reason arises.
   `perf_cleanup_overnight.md` does not exist under `docs/` (only a stale mention in a bench-result file).
 - ⬜ **A6 — RBDReference test suite is PATHOLOGICALLY SLOW (infra).** The 1026-test suite runs >2h even at
   `-n 12` (serial was killed at 2h); a long tail of a few big-robot pinocchio comparisons (likely h1_2/g1
