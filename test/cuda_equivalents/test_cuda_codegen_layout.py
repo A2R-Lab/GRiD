@@ -495,20 +495,22 @@ def test_d2ee_spill_tiers_are_size_and_base_selected(robot_id, base_mode, expect
 
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
-def test_generated_header_includes_grid_data_variants_and_rnea_aliases(tmp_path):
+def test_generated_header_includes_grid_data_variants_and_no_rnea_alias(tmp_path):
     # iiwa14 (non-mimic): the default "all" profile emits gradients, which is
-    # refused for mimic fr3 under the G0 guard. The gridData/rnea-alias surface
-    # asserted here is robot-agnostic.
+    # refused for mimic fr3 under the G0 guard. The gridData surface asserted
+    # here is robot-agnostic.
     header = _generate_header(tmp_path, "iiwa14", "fixed")
 
     assert "enum gridDataKind { GRID_DATA_ALL = 0, GRID_DATA_DYNAMICS = 1, GRID_DATA_KINEMATICS = 2 };" in header
     assert "template <typename T, gridDataKind KIND = GRID_DATA_ALL>" in header
     assert "gridData<T, KIND> *init_gridData" in header
     assert "void close_grid(cudaStream_t *streams, robotModel<T> *d_robotModel, gridData<T, KIND> *hd_data)" in header
-    assert "void rnea(gridData<T, KIND> *hd_data" in header
-    assert "void rnea_single_timing(gridData<T, KIND> *hd_data" in header
-    assert "void rnea_compute_only(gridData<T, KIND> *hd_data" in header
-    assert "inverse_dynamics<T,USE_QDD_FLAG,USE_COMPRESSED_MEM,KIND>" in header
+    # Clean-break: there is NO grid::rnea alias — inverse_dynamics is the single
+    # canonical name (RNEA stays greppable via docstrings/comments only).
+    assert "void rnea(gridData<T, KIND> *hd_data" not in header
+    assert "void rnea_single_timing(gridData<T, KIND> *hd_data" not in header
+    assert "void rnea_compute_only(gridData<T, KIND> *hd_data" not in header
+    assert "void inverse_dynamics(gridData<T, KIND> *hd_data" in header
 
 
 @pytest.mark.cuda_equivalence
@@ -618,8 +620,6 @@ int main() {
     dim3 blocks(1, 1, 1);
     dim3 threads(32, 1, 1);
     grid::inverse_dynamics<T, false, false, grid::GRID_DATA_DYNAMICS>(
-        data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
-    grid::rnea<T, false, false, grid::GRID_DATA_DYNAMICS>(
         data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
     grid::minv<T, false, grid::GRID_DATA_DYNAMICS>(
         data, model, 1, blocks, threads, streams);
