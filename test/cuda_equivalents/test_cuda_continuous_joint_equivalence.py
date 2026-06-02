@@ -19,10 +19,9 @@ If the CUDA codegen ever mishandled a continuous joint (e.g. wrapped its scalar
 angle through an SO(2) layout, or got the transform's cos/sin wrong), this test
 fails at the large-wrapped-angle samples while a small-angle smoke would pass.
 
-Gravity convention: the runner passes gravity = +9.81 (GRiD convention); the
-RBDReference adapter's rnea uses its default -9.81, which yields the same
-physical inverse-dynamics torque -- the pairing every CUDA dynamics
-equivalence test relies on.
+Gravity convention: unified at -9.81. The runner passes gravity = -9.81 to GRiD,
+matching the RBDReference adapter's rnea default -9.81 -- both sides use one
+convention, the pairing every CUDA dynamics equivalence test relies on.
 """
 
 import contextlib
@@ -109,7 +108,7 @@ def _generate_header(project_model, build_dir):
         codegen.gen_all_code(
             include_homogenous_transforms=True,
             output_path=str(header),
-            algorithm_list="id,minv,fd,aba,crba,ee_pose",
+            algorithm_list="inverse_dynamics,minv,forward_dynamics,aba,crba,end_effector_pose",
         )
     return header
 
@@ -198,8 +197,8 @@ def test_cuda_continuous_joint_matches_reference_at_wrapped_angles(tmp_path):
         out = _run(exe, q, qd, zeros)
         tag = f"gen3 wrapped-angle trial {trial}"
 
-        # ---- inverse_dynamics (qdd=0 -> gravity + coriolis), runner +9.81 vs
-        # the adapter rnea's default -9.81 (same physical torque). The adapter
+        # ---- inverse_dynamics (qdd=0 -> gravity + coriolis); runner and the
+        # adapter rnea both use -9.81 (unified convention). The adapter
         # surface returns the normalized c vector (the raw reference returns a
         # 4-tuple), matching the runner output layout.
         cuda_id = np.asarray(out["inverse_dynamics"], dtype=np.float64).reshape(-1)

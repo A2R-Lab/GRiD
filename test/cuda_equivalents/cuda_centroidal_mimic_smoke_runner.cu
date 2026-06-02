@@ -94,7 +94,7 @@ void dcopy_out(const std::string &name, T *dptr, int rows, int cols) {
 
 template <typename T>
 void run() {
-    const T gravity = static_cast<T>(9.81);
+    const T gravity = static_cast<T>(-9.81);
     cudaStream_t *streams = grid::init_grid<T>();
     grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();

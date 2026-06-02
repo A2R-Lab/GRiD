@@ -41,7 +41,7 @@ void print_flat(const std::string &name, const T *data, int count) {
 
 template <typename T>
 int run() {
-    const T gravity = static_cast<T>(9.81);
+    const T gravity = static_cast<T>(-9.81);
     const dim3 block_dimms(1, 1, 1);
     // Clamp to the robot's MAX_PERF_LEVEL_THREADS (the kernels' __launch_bounds__ cap,
     // resolved dynamically from the generated header) so a swept count above the

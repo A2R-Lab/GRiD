@@ -620,17 +620,17 @@ int main() {
     dim3 blocks(1, 1, 1);
     dim3 threads(32, 1, 1);
     grid::inverse_dynamics<T, false, false, grid::GRID_DATA_DYNAMICS>(
-        data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
+        data, model, static_cast<T>(-9.81), 1, blocks, threads, streams);
     grid::minv<T, false, grid::GRID_DATA_DYNAMICS>(
         data, model, 1, blocks, threads, streams);
     grid::forward_dynamics<T, grid::GRID_DATA_DYNAMICS>(
-        data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
+        data, model, static_cast<T>(-9.81), 1, blocks, threads, streams);
     grid::inverse_dynamics_gradient<T, false, false, grid::GRID_DATA_DYNAMICS>(
-        data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
+        data, model, static_cast<T>(-9.81), 1, blocks, threads, streams);
     grid::forward_dynamics_gradient<T, false, grid::GRID_DATA_DYNAMICS>(
-        data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
+        data, model, static_cast<T>(-9.81), 1, blocks, threads, streams);
     grid::dynamics_only<T, grid::GRID_DATA_DYNAMICS>(
-        data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
+        data, model, static_cast<T>(-9.81), 1, blocks, threads, streams);
     return 0;
 }
 '''
@@ -739,7 +739,7 @@ int main() {
     dim3 blocks(1, 1, 1);
     dim3 threads(32, 1, 1);
     grid::inverse_dynamics<T, false, false, grid::GRID_DATA_KINEMATICS>(
-        data, model, static_cast<T>(9.81), 1, blocks, threads, streams);
+        data, model, static_cast<T>(-9.81), 1, blocks, threads, streams);
     return 0;
 }
 ''',
@@ -825,7 +825,7 @@ def test_algorithm_list_override_expands_dependencies(tmp_path):
     # iiwa14 (non-mimic): this asserts the fd-gradient dependency expansion emits
     # gradient wrappers, which the G0 guard refuses for mimic fr3. The
     # algorithm_list expansion logic under test is robot-agnostic.
-    header = _generate_header(tmp_path, "iiwa14", "fixed", algorithm_list="fd-gradient")
+    header = _generate_header(tmp_path, "iiwa14", "fixed", algorithm_list="forward_dynamics_gradient")
 
     assert "Generated algorithms:" in header
     assert "void inverse_dynamics(gridData<T, KIND> *hd_data" in header

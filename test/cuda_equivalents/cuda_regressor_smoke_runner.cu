@@ -47,10 +47,8 @@ void print_flat(const std::string &name, const T *data, int rows, int cols) {
 
 template <typename T>
 int run() {
-    // CUDA gravity convention is sign-opposite to the RBDReference GRAVITY arg:
-    // the reference computes with GRAVITY=-9.81, the CUDA kernels take +9.81
-    // (matches every other cuda_equivalents runner, e.g. the world-frame runner).
-    const T gravity = static_cast<T>(9.81);
+    // Unified gravity convention: GRiD and the RBDReference oracle both use -9.81.
+    const T gravity = static_cast<T>(-9.81);
     const dim3 block_dimms(1, 1, 1);
     const int _req_threads = GRID_CUDA_REGRESSOR_TEST_THREADS;
     const int _nthreads = _req_threads < grid::MAX_PERF_LEVEL_THREADS ? _req_threads : grid::MAX_PERF_LEVEL_THREADS;

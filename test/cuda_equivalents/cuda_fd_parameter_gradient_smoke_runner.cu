@@ -49,7 +49,7 @@ void print_flat(const std::string &name, const T *data, int rows, int cols) {
 
 template <typename T>
 int run() {
-    const T gravity = static_cast<T>(9.81);
+    const T gravity = static_cast<T>(-9.81);
     const dim3 block_dimms(1, 1, 1);
     const int _req_threads = GRID_CUDA_FPG_TEST_THREADS;
     const int _nthreads = _req_threads < grid::MAX_PERF_LEVEL_THREADS ? _req_threads : grid::MAX_PERF_LEVEL_THREADS;

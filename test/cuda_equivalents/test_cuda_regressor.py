@@ -165,8 +165,8 @@ def test_cuda_regressor_matches_reference(robot_id, base_mode, tmp_path):
 
         Y_cuda = np.asarray(outputs["regressor"], dtype=np.float64).reshape(nv, 10 * nb)
 
-        # numpy reference (verified _RegressorMixin); CUDA gravity is +9.81 which
-        # the runner passes, matching the reference GRAVITY=-9.81 convention.
+        # numpy reference (verified _RegressorMixin); GRiD and the reference now
+        # share one gravity convention (-9.81), so the runner passes -9.81 too.
         Y_ref = np.asarray(
             reference.joint_torque_regressor(q, qd, qdd, GRAVITY=-9.81), dtype=np.float64
         )

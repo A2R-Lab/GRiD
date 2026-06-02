@@ -15,10 +15,9 @@ D1c validates the grid_plant CoM / centroidal-momentum tracking costs
 (value / gradient over x=[q;qd] / Gauss-Newton hessian) against a NumPy
 recompute from the double-precision reference CoM-Jacobian / CMM.
 
-Gravity convention: the runner passes gravity = +9.81 (GRiD convention); the
-RBDReference oracles use their default GRAVITY = -9.81 (opposite sign baked into
-the opposite RNEA seeding), which produces the same physical generalized
-gravity / energy — the same pairing the main rnea CUDA-equivalence test uses.
+Gravity convention: unified at -9.81. The runner passes gravity = -9.81 to GRiD,
+matching the RBDReference oracles' default GRAVITY = -9.81 — both sides now use
+one convention (the same pairing the main rnea CUDA-equivalence test uses).
 
 Robots: iiwa14-fixed (cheap, gate first) + a floating robot (default go2, an
 18-DoF quadruped that compiles quickly; g1/h1_2 also work but their large
@@ -156,7 +155,7 @@ def _mimic_robot_modes():
 # (gen_grid_plant: centroidal_ok requires ee_pose + non-mimic). So the resulting
 # header defines ONLY the mimic-supported centroidal symbols this runner references
 # — it links for mimic AND non-mimic robots alike.
-_MIMIC_SAFE_ALGORITHMS = ["id"]
+_MIMIC_SAFE_ALGORITHMS = ["inverse_dynamics"]
 
 
 def _generate_mimic_header(project_model, build_dir):

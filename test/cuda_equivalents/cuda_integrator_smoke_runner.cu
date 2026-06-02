@@ -115,7 +115,7 @@ void run_one(const std::string &prefix,
 
 template <typename T>
 void run() {
-    const T gravity = static_cast<T>(9.81);
+    const T gravity = static_cast<T>(-9.81);
     const dim3 block_dimms(1, 1, 1);
     // The integrator kernels are compiled with
     // __launch_bounds__(tier_max_threads<TIER>()) (= MAX_PERF_LEVEL_THREADS at

@@ -222,7 +222,7 @@ static void grid_runner_set_smem_or_skip(FuncT func, const char *name, size_t by
 
 template <typename T>
 void run() {
-    const T gravity = static_cast<T>(9.81);
+    const T gravity = static_cast<T>(-9.81);
     const dim3 block_dimms(1, 1, 1);
     const dim3 thread_dimms(g_num_threads, 1, 1);
 
