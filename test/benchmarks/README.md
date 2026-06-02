@@ -3,8 +3,9 @@
 Performance comparison of GRiD vs. Pinocchio vs. MJX across 14 core algorithms,
 for `iiwa14`, `go2`, and `g1` robots in fixed and floating-base configurations.
 
-The 14 rows are the first-order set (`id`, `minv`, `fd`, `aba`, `crba`, `id_du`,
-`fd_du`, `ee_pose`, `ee_pose_gradient`) plus the second-order set (`idsva_so`
+The 14 rows are the first-order set (`inverse_dynamics`, `minv`, `forward_dynamics`,
+`aba`, `crba`, `inverse_dynamics_gradient`, `forward_dynamics_gradient`,
+`end_effector_pose`, `end_effector_pose_gradient`) plus the second-order set (`idsva_so`
 — the dispatched winner, `idsva_so_body_frame`, `idsva_so_world_frame`,
 `fdsva_so`). The two IDSVA-SO variants are mathematically equivalent and ship
 side-by-side so the table shows the body-vs-world crossover; `idsva_so` itself
@@ -22,7 +23,7 @@ All commands use the project virtualenv.  Create it once if it doesn't exist:
 python -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 # For an apples-to-apples Pinocchio comparison, also install CppADCodeGen
-# (enables the codegen-accelerated id/minv/aba/fd/crba/id_du/fd_du paths;
+# (enables the codegen-accelerated inverse_dynamics/minv/aba/forward_dynamics/crba/inverse_dynamics_gradient/forward_dynamics_gradient paths;
 # without it those algorithms appear as null in the Pinocchio results):
 .venv/bin/pip install cmeel-cppadcodegen
 ```
@@ -81,10 +82,11 @@ Verify:
 ```
 
 **CppADCodeGen (recommended for an apples-to-apples comparison):** The codegen-
-accelerated algorithms (ID, Minv, ABA, FD, CRBA, ID_DU, FD_DU) require CppADCodeGen
+accelerated algorithms (inverse_dynamics, minv, aba, forward_dynamics, crba,
+inverse_dynamics_gradient, forward_dynamics_gradient) require CppADCodeGen
 headers.  The benchmark runner detects availability automatically — if not found,
 those algorithms are silently reported as null and the direct-API algorithms
-(EE_POSE, EE_POSE_GRADIENT, IDSVA_SO_BODY_FRAME, IDSVA_SO_WORLD_FRAME) still run.
+(end_effector_pose, end_effector_pose_gradient, idsva_so_body_frame, idsva_so_world_frame) still run.
 The dispatched `IDSVA_SO` row mirrors whichever variant the codegen picked.
 FDSVA_SO has no Pinocchio equivalent and is GRiD-only.
 
@@ -218,11 +220,11 @@ MJX exposes a subset of algorithms via `mujoco.mjx`:
 
 | Algorithm | MJX Function | Notes |
 |-----------|-------------|-------|
-| **ID** | `mjx.inverse()` | RNEA |
-| **FD** | `mjx.forward()` | Full forward dynamics |
-| **EE_POSE** | `mjx.kinematics()` | Forward kinematics |
-| **ID_DU** | `jax.jacobian(mjx.inverse)` | AD through RNEA |
-| Minv, CRBA, ABA, FD_DU, IDSVA_SO_BODY_FRAME, IDSVA_SO_WORLD_FRAME, FDSVA_SO | — | Not available in MJX |
+| **inverse_dynamics** | `mjx.inverse()` | RNEA |
+| **forward_dynamics** | `mjx.forward()` | Full forward dynamics |
+| **end_effector_pose** | `mjx.kinematics()` | Forward kinematics |
+| **inverse_dynamics_gradient** | `jax.jacobian(mjx.inverse)` | AD through RNEA |
+| minv, crba, aba, forward_dynamics_gradient, idsva_so_body_frame, idsva_so_world_frame, fdsva_so | — | Not available in MJX |
 
 MJX uses `jax.vmap` for batching and `jax.block_until_ready()` to ensure GPU completion
 before stopping the timer. The first two calls (JIT compilation + GPU warm-up) are discarded.
@@ -230,8 +232,8 @@ before stopping the timer. The first two calls (JIT compilation + GPU warm-up) a
 ### ABA vs. FD (GRiD forward dynamics)
 
 GRiD has two forward dynamics implementations:
-- **FD**: Minv + RNEA composition (`forward_dynamics`)
-- **ABA**: Articulated Body Algorithm (`aba`) — independent implementation
+- **forward_dynamics**: Minv + RNEA composition (`forward_dynamics`)
+- **aba**: Articulated Body Algorithm (`aba`) — independent implementation
 
 Both are benchmarked and shown separately.
 
@@ -257,8 +259,9 @@ references: **pre-GLASS** (git ref `d2c0d18`, the last commit before the GLASS
 work), **glass** (HEAD with pure-SIMT GLASS), **pinocchio** (CPU codegen),
 **mjx** (MuJoCo MJX on JAX-GPU), and **frax** (Frax on JAX-GPU,
 https://github.com/danielpmorton/frax). The orchestrator manages a separate
-git worktree for the pre-GLASS column. MJX exposes id/fd/ee_pose/id_du;
-Frax exposes id/fd/crba/minv; the others render `—`.
+git worktree for the pre-GLASS column. MJX exposes
+inverse_dynamics/forward_dynamics/end_effector_pose/inverse_dynamics_gradient;
+Frax exposes inverse_dynamics/forward_dynamics/crba/minv; the others render `—`.
 
 **Prereqs on a fresh machine:**
 

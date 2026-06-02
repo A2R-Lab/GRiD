@@ -105,14 +105,14 @@ GRiD currently implements the following rigid body dynamics algorithms:
 + Second-Order Forward Dynamics (FDSVA-SO) from [Singh, Russell, & Wensing](https://arxiv.org/abs/2302.06001) on both fixed and floating bases
 + A **time-integrator** family: the discrete step `x_{k+1}` plus its gradient `∂x_{k+1}/∂(x,u)` and a fused value-and-gradient variant
 + Optional per-body **external forces** (`f_ext`), threaded through RNEA, forward dynamics, ABA, and the inverse-/forward-dynamics gradients. Opt-in (a `nullptr`/empty default reproduces the no-force path exactly), supplied in the body-local frame (`6*NUM_BODIES`, body-major) and subtracted from the per-body force.
-+ **External-force gradients**: `∂tau/∂f_ext = -Jᵀ` and `∂q̈/∂f_ext = M⁻¹Jᵀ`, plus the fixed-base `∂(id_du)/∂f_ext = -∂Jᵀ/∂q`
++ **External-force gradients**: `∂tau/∂f_ext = -Jᵀ` and `∂q̈/∂f_ext = M⁻¹Jᵀ`, plus the fixed-base `∂(inverse_dynamics_gradient)/∂f_ext = -∂Jᵀ/∂q`
 + A trajectory-optimization-oriented **`grid_plant` layer** (emitted as a sibling `grid_plant` namespace): a `plant_step` integrator wrapper, quadratic state/input costs, an end-effector position cost (with Gauss-Newton Hessian), and joint position/velocity/torque log-barriers.
 
-`RBDReference` additionally provides numpy reference oracles — validated against [Pinocchio](https://github.com/stack-of-tasks/pinocchio) — for generalized gravity, nonlinear effects, kinetic/potential/mechanical energy, the Coriolis matrix, the centroidal quantities (CoM, CoM Jacobian, CCRBA, centroidal momentum), the joint-torque regressor, the general-frame Jacobian / J̇ / OSC inertia described above, and the plant/cost/barrier layer above.
+`RBDReference` additionally provides numpy reference oracles — validated against [Pinocchio](https://github.com/stack-of-tasks/pinocchio) — for generalized gravity, nonlinear effects, kinetic/potential/mechanical energy, the Coriolis matrix, the centroidal quantities (CoM, CoM Jacobian, CCRBA, centroidal momentum), the inverse-dynamics regressor (`inverse_dynamics_regressor`), the general-frame Jacobian / J̇ / OSC inertia described above, and the plant/cost/barrier layer above.
 
 **Dual-surface equivalence.** Every algorithm exists on two surfaces that are tested for numerical agreement: the `RBDReference` numpy implementation (the oracle, checked against Pinocchio) and the generated CUDA C++ kernels (checked against that same numpy reference). This keeps the GPU codegen honest against an independent, Pinocchio-validated baseline.
 
-**Mimic-joint support:** non-gradient algorithms (RNEA, forward dynamics, ABA, CRBA, …) work for robots with mimic joints, and most **gradients** now emit a correct mimic-reduced result: `id_du`/`fd_du` (fixed and floating base), `ee_pose_gradient`/`ee_pose_hessian` (fixed and floating base), and fixed-base second-order (`idsva_so`/`fdsva_so`). The remaining mimic selections — integrator gradients and external-force gradients on either base, plus floating-base second-order — still raise a clear `NotImplementedError` (no silently-zeroed gradients) and are on the roadmap.
+**Mimic-joint support:** non-gradient algorithms (RNEA, forward dynamics, ABA, CRBA, …) work for robots with mimic joints, and most **gradients** now emit a correct mimic-reduced result: `inverse_dynamics_gradient`/`forward_dynamics_gradient` (fixed and floating base), `end_effector_pose_gradient`/`end_effector_pose_hessian` (fixed and floating base), and fixed-base second-order (`idsva_so`/`fdsva_so`). The remaining mimic selections — integrator gradients and external-force gradients on either base, plus floating-base second-order — still raise a clear `NotImplementedError` (no silently-zeroed gradients) and are on the roadmap.
 
 Additional algorithms and features are in development. If you have a particular algorithm or feature in mind please let us know by posting a GitHub issue. We'd also love your collaboration in implementing the Python reference implementation of any algorithm you'd like implemented!
 
@@ -140,7 +140,7 @@ qdd = handle.forward_dynamics(q, qd, u)   # autograd-aware torch.Tensor
 qdd.sum().backward()                      # gradients flow to q, qd, u
 ```
 
-The `torch` backend exposes autograd-aware `rnea` / `forward_dynamics` /
+The `torch` backend exposes autograd-aware `inverse_dynamics` / `forward_dynamics` /
 `aba` / `integrator` (analytic backward passes) plus CUDA-Graphs capture,
 and the handle also surfaces the `grid_plant` cost/barrier methods. See
 [`python/README.md`](python/README.md) and the

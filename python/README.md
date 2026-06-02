@@ -32,18 +32,18 @@ at float32 precision:
 
 | Method | Returns | max_err vs RBDReference |
 |---|---|---|
-| `rnea(q, qd, qdd=None, gravity=9.81)` | `(B, NJ)` | 4.9e-6 |
+| `inverse_dynamics(q, qd, qdd=None, gravity=-9.81)` | `(B, NJ)` | 4.9e-6 |
 | `minv(q)` | `(B, NJ, NJ)` | 1.1e-4 |
-| `forward_dynamics(q, qd, u, gravity=9.81)` | `(B, NJ)` | 5.7e-5 |
-| `aba(q, qd, u, gravity=9.81)` | `(B, NJ)` | 5.7e-5 |
-| `crba(q, gravity=9.81)` | `(B, NJ, NJ)` | 2.7e-7 |
+| `forward_dynamics(q, qd, u, gravity=-9.81)` | `(B, NJ)` | 5.7e-5 |
+| `aba(q, qd, u, gravity=-9.81)` | `(B, NJ)` | 5.7e-5 |
+| `crba(q, gravity=-9.81)` | `(B, NJ, NJ)` | 2.7e-7 |
 | `end_effector_pose(q)` | `(B, 6*NUM_EES)` | 1.4e-7 |
 | `end_effector_pose_gradient(q)` | `(B, 6*NUM_EES, NJ)` | 3.1e-7 |
 | `end_effector_pose_hessian(q)` | `(B, 6*NUM_EES, NJ, NJ)` | 3.1e-7 |
-| `rnea_grad(q, qd, qdd=None, gravity=9.81)` | `(B, NJ, 2*NJ)` | 1.6e-5 |
-| `forward_dynamics_grad(q, qd, u, gravity=9.81)` | `(B, NJ, 2*NJ)` | 1.3e-4 |
-| `idsva_so(q, qd, qdd, gravity=9.81)` | tuple of 4 × `(B, NV, NV, NV)` | 1e-4 |
-| `fdsva_so(q, qd, u, gravity=9.81)` | tuple of 4 × `(B, NV, NV, NV)` | 1e-4 |
+| `inverse_dynamics_gradient(q, qd, qdd=None, gravity=-9.81)` | `(B, NJ, 2*NJ)` | 1.6e-5 |
+| `forward_dynamics_gradient(q, qd, u, gravity=-9.81)` | `(B, NJ, 2*NJ)` | 1.3e-4 |
+| `idsva_so(q, qd, qdd, gravity=-9.81)` | tuple of 4 × `(B, NV, NV, NV)` | 1e-4 |
+| `fdsva_so(q, qd, u, gravity=-9.81)` | tuple of 4 × `(B, NV, NV, NV)` | 1e-4 |
 
 `register_robot` accepts `ee_joint_names=[...]` to pin specific
 end-effector frames (default: all leaf links).
@@ -70,7 +70,7 @@ Full parity with the plain wrapper as of v0.3.
 
 `register_robot(..., backend="torch")` returns a `TorchRobotHandle`
 whose methods return `torch.Tensor`. The four differentiable algorithms
-(`rnea` / `forward_dynamics` / `aba` / `integrator`) are autograd-aware,
+(`inverse_dynamics` / `forward_dynamics` / `aba` / `integrator`) are autograd-aware,
 with analytic backward passes that reuse the existing `*_gradient`
 kernels; the remaining methods are forward-only ops. The `.so` is shared
 with the numpy/JAX surfaces (same content-addressed cache):
