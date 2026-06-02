@@ -130,9 +130,13 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
 - ⬜ **A1 — `f_ext_gradient_dq` has NO RBDReference oracle.** GRiD emits the kernel (∂(id_du)/∂f_ext,
   fixed-base) but RBDReference lacks a `f_ext_gradient_dq` method → the kernel is unverifiable vs a numpy
   reference (only `f_ext_gradient` is checked). Add the reference method + an equivalence test.
-- ⬜ **A2 — planar/spherical joint codegen UNVERIFIED.** URDFParser advertises `planar`/`spherical`
-  (errors.py) but NO robot in `robot_assets/` exercises them → that parser+codegen path is untested. Add a
-  planar + a spherical test URDF (or confirm + document the support level), else demote the advertised support.
+- ⬜ **A2 — planar/spherical are PHANTOM support (interface inconsistency).** URDFParser PARSES them
+  (Joint.py px_pl/py_pl/theta_pl) and `errors.py` advertises them as "supported", but the CODEGEN transform
+  chain (`_topology_helpers.py`) does NOT handle them, RBDReference does NOT model them, and NO fixture uses
+  them. So the parser advertises joint types the rest of the stack can't codegen/validate. FIX (pick one):
+  (a) DEMOTE — make URDFParser raise a clear "planar/spherical not yet codegen-supported" error + drop them
+  from the advertised-supported list + doc note (honest, small); or (b) IMPLEMENT full support (parse +
+  codegen transforms + RBDReference reference + planar/spherical test URDFs) — a real feature. Lean (a) now.
 - ✅ **A3 — user-facing docs were STALE post-rename** (old names across `docs/source/**` + submodule
   `RBDReference/README.md` + a `rnea.rst` page; gravity docs said +9.81). DONE: verbose names + signed
   gravity applied across Sphinx + READMEs; `rnea.rst` → `inverse_dynamics.rst` (toctree fixed); sphinx
@@ -148,6 +152,11 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
   `*_spill_tier_3way` attr prefixes (`ID_DU`/`FD_DU`/`D2EE`) use old short forms. Verbosify for full unity
   (low priority; (b) changes emitted output + consumers — do with the structural pass).
   `perf_cleanup_overnight.md` does not exist under `docs/` (only a stale mention in a bench-result file).
+- ⬜ **A6 — RBDReference test suite is PATHOLOGICALLY SLOW (infra).** The 1026-test suite runs >2h even at
+  `-n 12` (serial was killed at 2h); a long tail of a few big-robot pinocchio comparisons (likely h1_2/g1
+  SO + param-grad numpy refs) dominates. This blocks full-suite validation after any RBDReference change.
+  Profile (`--durations=20`), mark the slowest as `slow`/`developer_only` so the default suite is fast, and
+  cache/vectorize the worst numpy refs. Until then, validate RBDReference changes with a representative subset.
 - (Non-gaps confirmed: `integrator_with_gradient` covered via the integrator+gradient pairing (C7);
   `plant_step_hessian` absence == F1, already tracked.)
 
