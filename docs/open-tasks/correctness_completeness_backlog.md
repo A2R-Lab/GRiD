@@ -25,6 +25,14 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
 - ⬜ **B3 — floating-mimic `integrator_gradient`/`integrator_with_gradient` multi-stage RK bug** (stage
   projection at floating∩multistage∩mimic). numpy ref is correct; CUDA refused. The only remaining true
   mimic refusal.
+- ⬜ **B5 — grid_rbd FLOATING `end_effector_pose_gradient` binding broken** (surfaced by V6; BINDING bug, NOT
+  a kernel bug — the kernel passes vs pin at threads {1,32,128} via the .cu path). Two parts in `python/grid_rbd`:
+  (a) `_handle.py:end_effector_pose_gradient` reshapes raw to `(B,NEE,NV,6)` but the kernel emits NUM_POS
+  columns (go2 19≠18) → `ValueError` crash; (b) the RAW floating `ee_pose_gradient` device buffer comes back
+  uninitialized/garbage (~1e31, non-finite, launch-dependent) through the binding output path. Also a NUM_POS-vs-NV
+  (position vs tangent) convention question to resolve for the public surface. Customer-facing (grid_rbd v0.3).
+  Fixed-base is fine + thread-invariant. Lower urgency than kernel bugs; does NOT block the CUDA sweep but should
+  land before shipping. *(V6 test skips these cells with documented reason.)*
 - ⬜ **B4 — suspected `idsva_so_body_frame` fr3 mimic-column bug** (surfaced by B2, INDEPENDENT of it):
   fr3 mimic column 13 shows `last_two_axis_transpose_rel_norm=1.16` (huge) — fails identically with B2's fix
   stashed, so pre-existing and not fdsva-related. Investigate the body-frame inner's last-two-axis transpose
