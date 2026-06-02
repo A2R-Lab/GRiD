@@ -118,11 +118,10 @@ MIMIC_SUPPORTED_ALGORITHMS = {
     "inverse_dynamics_gradient_qd",
     "forward_dynamics_gradient_q",
     "forward_dynamics_gradient_qd",
-    # P4 (landed, FIXED-BASE): kinematic gradient/hessian via the alpha-weighted
-    # geometric-Jacobian column fold (ee_pose_gradient) + world-frame generator
-    # fold (ee_pose_hessian). Floating-base mimic ee gradients are still refused
-    # (the floating root needs a 6-DoF subspace fold, not a scalar alpha fold);
-    # skipped for floating mimic via MIMIC_FLOATING_UNSUPPORTED_GRADIENTS below.
+    # P4 (landed): kinematic gradient/hessian via the alpha-weighted geometric-Jacobian
+    # column fold (ee_pose_gradient) + world-frame generator fold (ee_pose_hessian).
+    # Floating-base mimic ee gradients are SUPPORTED too (B2-ee: the floating root's 6
+    # velocity slots are singleton column fills, orthogonal to the 1-DoF alpha fold).
     "end_effector_pose_gradient",
     "end_effector_pose_hessian",
     # B2-SO (landed, FIXED-BASE): second-order idsva_so/fdsva_so via the per-body
@@ -134,35 +133,13 @@ MIMIC_SUPPORTED_ALGORITHMS = {
 }
 
 
-# Gradient algorithms that are in MIMIC_SUPPORTED_ALGORITHMS (so FIXED-base mimic
-# compares them) but are NOT yet trustworthy for FLOATING-base mimic robots. B1 landed
-# floating-base mimic id_du/fd_du; B2-ee FLOATING (2026-05-31) landed the floating
-# mimic ee pose grad/hessian (the floating root's 6 INDEPENDENT velocity slots
-# decompose into singleton single-column fills, orthogonal to the 1-DoF mimic alpha
-# fold — nothing ee remains refused).
-#
-# SECOND ORDER (C6 desync resolved 2026-06-01; C6b fdsva bug FIXED 2026-06-01): the
-# codegen EMITS floating-base mimic second-order (idsva_so via the WORLD-frame inner +
-# fdsva_so) since the B2-SO-FLOATING ungate — the GRiDCodeGenerator `_MIMIC_GRADIENT_
-# ALGORITHMS` gate only refuses integrator_gradient/integrator_with_gradient for
-# floating-base. Both SO surfaces are now correct on floating base:
-#   * idsva_so (world-frame): CORRECT (rel ~5e-7) — exercised by
-#     test_cuda_idsva_so_world_frame.py (fr3 is its floating-mimic sentinel).
-#   * fdsva_so: the daba_dqdq (q-q) floating bug (rel ~6e-2 fr3-floating / ~4.4e-2
-#     go2-floating NON-mimic) is FIXED. Root cause was a jk-transpose in the
-#     fdsva_so_contract daba_dqdq assembly: the final -Minv reduction reads inner_dq
-#     jk-transposed, which is a no-op for the (symmetric) dM_dq*da_dq part but DROPS the
-#     genuine jk-asymmetry of d2tau_dqdq carried by the 6-DoF FLOATING ROOT q-q columns
-#     (1-DoF fixed-base joints are jk-symmetric, so fixed-base was correct & is unchanged).
-#     Fixed in _fdsva_so.py gen_fdsva_so_contract by adding d2tau_dqdq jk-transposed on
-#     the floating branch only (fixed-base byte-identical). Verified vs pin_so_ext:
-#     go2-floating now passes the strict floating SO diagnostic (norm_rel ~1e-6, was
-#     4.4e-2); fr3-floating daba_dqdq norm_rel 6e-2 -> ~6e-3 (residual is float32
-#     amplification through the ill-conditioned mimic reduced Minv, cond ~1.5e4 — NOT a
-#     structural error: the double-precision emulation of the exact fixed kernel math
-#     matches pin to ~3e-16). fdsva_so is no longer refused; floating-mimic fdsva
-#     correctness is exercised by test_floating_second_order_diagnostic (env-gated).
-MIMIC_FLOATING_UNSUPPORTED_GRADIENTS = set()
+# All gradients once refused for floating-base mimic are now SUPPORTED + compared above:
+# id_du/fd_du (B1), ee pose grad/hessian (B2-ee), and second-order idsva_so (world-frame)
+# + fdsva_so (B2 jk-transpose fix / B4 idsva body-frame fix; correctness exercised by
+# test_cuda_idsva_so_world_frame.py + test_floating_second_order_diagnostic). The ONE
+# remaining mimic refusal — floating-base mimic INTEGRATOR gradients (B3) — is gated at
+# codegen (NotImplementedError) and isn't in FLOATING_CUDA_ALGORITHMS, so this suite never
+# requests it; no skip-set needed here.
 
 
 def _robot_has_mimic_joints(project_model) -> bool:
@@ -1678,15 +1655,6 @@ def _run_cuda_equivalence_case(
                 # (task T3 phased rollout); skip (logged, not failed).
                 skipped.append(
                     f"{spec.robot_id}/{sample.name}/{name} (mimic codegen pending phase)"
-                )
-                continue
-            # Mimic ID/FD gradients (P3) are FIXED-BASE only so far; floating-base
-            # mimic gradients are still refused at codegen (skip_gradients) and not
-            # emitted, so don't try to compare them for a floating mimic robot.
-            if (robot_is_mimic and base_mode == "floating"
-                    and name in MIMIC_FLOATING_UNSUPPORTED_GRADIENTS):
-                skipped.append(
-                    f"{spec.robot_id}/{sample.name}/{name} (floating+mimic gradient pending)"
                 )
                 continue
             if name in SINGULAR_DEPENDENT_ALGORITHMS and not invertible_mass_matrix:

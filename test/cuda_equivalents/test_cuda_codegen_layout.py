@@ -231,29 +231,34 @@ def test_fixed_forced_low_shared_header_selects_fallbacks(tmp_path):
     assert "grid_end_l2_persisting" in header
 
 
-# Gradient algorithms that the G0 footgun guard refuses to codegen for a robot
-# with mimic joints (mimic-reduced gradients are deferred to T3-finisher). Each
-# must raise rather than emit silently-zeroed output.
-_MIMIC_REFUSED_GRADIENT_PROFILES = [
-    "all",
-    "dynamics",
-    "dynamics-gradients",
-    "second-order",
-    "kinematics-derivatives",
-    "integrators",
-]
+# The G0 footgun guard now refuses exactly ONE remaining mimic gradient:
+# floating-base mimic INTEGRATOR gradients (B3 — multi-stage RK stage-projection,
+# deferred). Everything else that was once refused is now SUPPORTED + emits:
+# fixed-base mimic id_du/fd_du + ee grad/hessian (P3/P4) and floating-base mimic
+# id_du/fd_du (B1) + second-order idsva_so/fdsva_so (B2/B4).
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.parametrize("base,profile", [("floating", "integrators"), ("floating", "all")])
+def test_mimic_integrator_gradient_codegen_refused_not_zeroed(tmp_path, base, profile):
+    """G0 footgun guard for the ONE remaining unsupported mimic gradient
+    (floating-base mimic integrator gradients, B3): codegen must RAISE a clear
+    NotImplementedError — NOT silently emit zeroed output."""
+    with pytest.raises(NotImplementedError, match="mimic gradients not yet supported"):
+        _generate_header(tmp_path, "fr3", base, codegen_profile=profile)
 
 
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
-@pytest.mark.parametrize("profile", _MIMIC_REFUSED_GRADIENT_PROFILES)
-def test_mimic_gradient_codegen_is_refused_not_zeroed(tmp_path, profile):
-    """G0 footgun guard: a mimic robot (fr3) requesting any gradient algorithm
-    must raise a clear NotImplementedError at codegen time — NOT silently emit
-    zeroed gradients. Non-gradient mimic codegen (covered separately) still
-    works."""
-    with pytest.raises(NotImplementedError, match="mimic gradients not yet supported"):
-        _generate_header(tmp_path, "fr3", "fixed", codegen_profile=profile)
+@pytest.mark.parametrize(
+    "base,profile",
+    [("fixed", "dynamics-gradients"), ("fixed", "second-order"),
+     ("floating", "dynamics-gradients"), ("floating", "second-order")],
+)
+def test_mimic_gradient_codegen_now_emits(tmp_path, base, profile):
+    """Fixed-base mimic gradients (P3/P4) + floating-base mimic id_du/fd_du (B1)
+    and second-order (B2/B4) are SUPPORTED now — they emit, no longer refused."""
+    header = _generate_header(tmp_path, "fr3", base, codegen_profile=profile)
+    assert "Generated algorithms:" in header
 
 
 @pytest.mark.cuda_equivalence
