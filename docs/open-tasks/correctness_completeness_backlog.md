@@ -40,11 +40,24 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
   predating `d8b1bcb`), not a repo artifact. `pip install`/`build_ext --inplace` rebuild it from source, so wheel
   users were never affected. Residual dev hazard: a stale local `_core.so` mis-reports ABI ripples → consider a
   test-time freshness guard or a documented rebuild step in CONTRIBUTING. Low priority.)*
-- ⬜ **B4 — suspected `idsva_so_body_frame` fr3 mimic-column bug** (surfaced by B2, INDEPENDENT of it):
-  fr3 mimic column 13 shows `last_two_axis_transpose_rel_norm=1.16` (huge) — fails identically with B2's fix
-  stashed, so pre-existing and not fdsva-related. Investigate the body-frame inner's last-two-axis transpose
-  on mimic columns. Lower priority than B3 (body-frame SO on a mimic robot is a narrow path), but a real
-  suspected wrong-result. Also blocks the fr3-floating SO diagnostic upstream. *(also noted in C6b audit.)*
+- ✅ **B4 — `idsva_so_body_frame` fr3 mimic-column bug** FIXED 2026-06-02. The `last_two_axis_transpose=1.16`
+  diagnostic was a red herring (just the natural j,k asymmetry of dvdq; the real failure was O(magnitude) on
+  slot 13 = the mimic body's SHARED reduced velocity slot). TWO distinct NB-vs-NV mimic bugs: (1) the **floating
+  body-frame inner** (`gen_idsva_so_body_frame_floating_reference_inner`) keyed its whole velocity-indexed sweep
+  AND output on the REDUCED slot (`body_v_index`/`subtree_v_index` carrying the duplicate `...,13,13`) with plain
+  `=` writes, so a mimic joint's contribution CLOBBERED its target's at the shared slot instead of alpha-folding.
+  Ported it to the (already-correct) world-frame scheme: UNIQUE per-column INTERNAL slots (n_int) → 4*n_int^3
+  internal slab → alpha-fold to the reduced 4*NV^3 output. The **gravity shim**
+  (`gen_floating_gravity_d2tau_dq_lie_inline` + `_floating_gravity_lie_metadata`) had the same reduced-slot
+  overwrite, so it too now runs in internal slots and ADDS into the internal slab BEFORE the single fold (matching
+  the oracle's internal-coord gravity Hessian + R-fold). (2) the **fixed-base mimic** repair-path Pass-1 zero
+  (`gen_idsva_so_body_frame_reference_order_output_repair`) zeroed only `SECOND_ORDER_TENSOR_SIZE` (=4*NV^3) of the
+  NB-strided internal slab (4*NB^3), leaving the dM_dq block + dvdq tail stale (latent: harmless on the current
+  fixed-base sample because the optimized-assembly write-set was re-covered by the repair, but a genuine
+  undersize) → now zeroes `4*NB^3` for mimic. All gated mimic-only; non-mimic emission BYTE-IDENTICAL (fixed-base
+  g1+iiwa14 diff empty; floating iiwa14+go2 SO diagnostics still pass). fr3-floating body-frame SO now asserts
+  green vs pin_so_ext (all 4 blocks ~1e-7, was O(0.2) on slot 13). B4 skip guard removed; fr3 added to the
+  fixed+floating SO test sets. Fix in `GRiDCodeGenerator/algorithms/_idsva_so.py`.
 
 ## 2. CORRECTNESS — verification gaps (untested code that could hide bugs)
 - ✅ **C2 — `fd_parameter_gradient` numpy** now tested vs −M⁻¹Y pin oracle (ref was correct). *(committed)*
