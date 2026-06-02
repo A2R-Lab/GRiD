@@ -98,10 +98,10 @@ def test_metadata(handle):
     assert handle.max_batch == 8
 
 
-def test_rnea(handle, ref, samples):
-    grid = handle.rnea(samples["q"], samples["qd"])
+def test_inverse_dynamics(handle, ref, samples):
+    grid = handle.inverse_dynamics(samples["q"], samples["qd"])
     for i, (q, qd) in enumerate(zip(samples["q"], samples["qd"])):
-        c_ref, *_ = ref.rnea(q.astype(np.float64), qd.astype(np.float64), GRAVITY=-9.81)
+        c_ref, *_ = ref.inverse_dynamics(q.astype(np.float64), qd.astype(np.float64), GRAVITY=-9.81)
         assert _max_err(grid[i], c_ref) < _TOL
 
 
@@ -145,18 +145,18 @@ def test_end_effector_pose_gradient(handle, ref, samples):
         assert _max_err(grid[i], dee_ref) < _TOL
 
 
-def test_rnea_grad(handle, ref, samples):
-    grid = handle.rnea_grad(samples["q"], samples["qd"])
+def test_inverse_dynamics_gradient(handle, ref, samples):
+    grid = handle.inverse_dynamics_gradient(samples["q"], samples["qd"])
     for i, (q, qd) in enumerate(zip(samples["q"], samples["qd"])):
-        dc_ref = ref.rnea_grad(q.astype(np.float64), qd.astype(np.float64), GRAVITY=-9.81)
+        dc_ref = ref.inverse_dynamics_gradient(q.astype(np.float64), qd.astype(np.float64), GRAVITY=-9.81)
         assert _max_err(grid[i], dc_ref) < _TOL
 
 
-def test_forward_dynamics_grad(handle, ref, samples):
-    grid = handle.forward_dynamics_grad(samples["q"], samples["qd"], samples["u"])
+def test_forward_dynamics_gradient(handle, ref, samples):
+    grid = handle.forward_dynamics_gradient(samples["q"], samples["qd"], samples["u"])
     NJ = handle.num_joints
     for i, (q, qd, u) in enumerate(zip(samples["q"], samples["qd"], samples["u"])):
-        dq, dqd = ref.forward_dynamics_grad(q.astype(np.float64), qd.astype(np.float64), u.astype(np.float64))
+        dq, dqd = ref.forward_dynamics_gradient(q.astype(np.float64), qd.astype(np.float64), u.astype(np.float64))
         assert _max_err(grid[i][:, :NJ], dq)  < _TOL
         assert _max_err(grid[i][:, NJ:], dqd) < _TOL
 
@@ -248,6 +248,6 @@ def test_integrator_gradient(handle, ref, samples, it_name):
                                       integrator_type=it_name)
     assert grid.shape == (samples["q"].shape[0], 2 * NV, 3 * NV)
     for i, (q, qd, u) in enumerate(zip(samples["q"], samples["qd"], samples["u"])):
-        dAB_ref = ref.integrator_grad(q.astype(np.float64), qd.astype(np.float64),
-                                      u.astype(np.float64), dt, integrator_type=it_name)
+        dAB_ref = ref.integrator_gradient(q.astype(np.float64), qd.astype(np.float64),
+                                          u.astype(np.float64), dt, integrator_type=it_name)
         assert _max_err(grid[i], dAB_ref) < _TOL

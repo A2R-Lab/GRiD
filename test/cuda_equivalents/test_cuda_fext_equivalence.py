@@ -6,7 +6,7 @@ This is a dedicated, self-contained companion to
 (``cuda_equivalence_runner.cu``) but with ``GRID_RUNNER_FEXT=1`` so the runner
 reads a per-body external force (body-major ``6*NUM_BODIES`` local frame,
 [angular; linear]) and emits ``*_fext``-labeled outputs for the dynamics that
-thread external forces (rnea / fd / aba / rnea-grad / fd-grad). We feed the
+thread external forces (inverse_dynamics / fd / aba / inverse_dynamics-grad / fd-grad). We feed the
 IDENTICAL f_ext to RBDReference and pinocchio and assert all three agree.
 
 Gated iiwa14 (fixed) first, then g1 (floating).
@@ -133,21 +133,21 @@ def test_cuda_fext_three_way_equivalence(robot_id, base_mode, tmp_path):
     from functools import lru_cache
 
     @lru_cache(maxsize=None)
-    def _ref_rnea_grad():
-        return proj.rnea_grad(q, qd, zeros, f_ext=f_ext)
+    def _ref_inverse_dynamics_gradient():
+        return proj.inverse_dynamics_gradient(q, qd, zeros, f_ext=f_ext)
 
     @lru_cache(maxsize=None)
-    def _pin_rnea_grad():
-        return pin.rnea_grad(q, qd, zeros, f_ext=f_ext)
+    def _pin_inverse_dynamics_gradient():
+        return pin.inverse_dynamics_gradient(q, qd, zeros, f_ext=f_ext)
 
     @lru_cache(maxsize=None)
     def _ref_fd_grad():
-        return proj.forward_dynamics_grad(q, qd, u, f_ext=f_ext)
+        return proj.forward_dynamics_gradient(q, qd, u, f_ext=f_ext)
 
     def expect(name):
         if name == "inverse_dynamics":
-            return (proj.rnea(q, qd, zeros, f_ext=f_ext),
-                    pin.rnea(q, qd, zeros, f_ext=f_ext))
+            return (proj.inverse_dynamics(q, qd, zeros, f_ext=f_ext),
+                    pin.inverse_dynamics(q, qd, zeros, f_ext=f_ext))
         if name == "forward_dynamics":
             return (proj.forward_dynamics(q, qd, u, f_ext=f_ext),
                     pin.aba(q, qd, u, f_ext=f_ext))
@@ -155,9 +155,9 @@ def test_cuda_fext_three_way_equivalence(robot_id, base_mode, tmp_path):
             return (proj.aba(q, qd, u, f_ext=f_ext),
                     pin.aba(q, qd, u, f_ext=f_ext))
         if name == "inverse_dynamics_gradient_q":
-            return (_ref_rnea_grad()[0], _pin_rnea_grad()[0])
+            return (_ref_inverse_dynamics_gradient()[0], _pin_inverse_dynamics_gradient()[0])
         if name == "inverse_dynamics_gradient_qd":
-            return (_ref_rnea_grad()[1], _pin_rnea_grad()[1])
+            return (_ref_inverse_dynamics_gradient()[1], _pin_inverse_dynamics_gradient()[1])
         if name == "forward_dynamics_gradient_q":
             fdg = _ref_fd_grad()[0]
             return (fdg, fdg)  # pinocchio not 3-way checked for fd-grad-with-fext
@@ -169,17 +169,17 @@ def test_cuda_fext_three_way_equivalence(robot_id, base_mode, tmp_path):
     # Algorithms whose CUDA fext output we 3-way check. fd/aba grads are checked
     # CUDA-vs-RBDReference (pinocchio has no direct fd-grad-with-fext entry, and
     # the RBDReference fd-grad is itself pinocchio-cross-checked in the Python
-    # suite). rnea/aba/fd/rnea-grad are checked against BOTH refs.
+    # suite). inverse_dynamics/aba/fd/inverse_dynamics-grad are checked against BOTH refs.
     pin_checked = {
         "inverse_dynamics", "forward_dynamics", "aba",
         "inverse_dynamics_gradient_q", "inverse_dynamics_gradient_qd",
     }
     checks = [
-        ("inverse_dynamics", "rnea"),
+        ("inverse_dynamics", "inverse_dynamics"),
         ("forward_dynamics", "forward_dynamics"),
         ("aba", "aba"),
-        ("inverse_dynamics_gradient_q", "rnea_grad"),
-        ("inverse_dynamics_gradient_qd", "rnea_grad"),
+        ("inverse_dynamics_gradient_q", "inverse_dynamics_gradient"),
+        ("inverse_dynamics_gradient_qd", "inverse_dynamics_gradient"),
         ("forward_dynamics_gradient_q", "forward_dynamics"),
         ("forward_dynamics_gradient_qd", "forward_dynamics"),
     ]

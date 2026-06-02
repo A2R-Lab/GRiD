@@ -1247,7 +1247,7 @@ def _expected_output(reference_model, project_model, sample, name: str):
     robot = project_model.robot
     zeros = np.zeros(reference_model.nv, dtype=np.float64)
     if name == "inverse_dynamics":
-        return reference_model.rnea(sample.q, sample.qd, zeros).reshape(1, -1)
+        return reference_model.inverse_dynamics(sample.q, sample.qd, zeros).reshape(1, -1)
     if name == "minv":
         return reference_model.minv(sample.q)
     if name == "forward_dynamics":
@@ -1255,13 +1255,13 @@ def _expected_output(reference_model, project_model, sample, name: str):
             1, -1
         )
     if name == "inverse_dynamics_gradient_q":
-        return reference_model.rnea_grad(sample.q, sample.qd, zeros)[0]
+        return reference_model.inverse_dynamics_gradient(sample.q, sample.qd, zeros)[0]
     if name == "inverse_dynamics_gradient_qd":
-        return reference_model.rnea_grad(sample.q, sample.qd, zeros)[1]
+        return reference_model.inverse_dynamics_gradient(sample.q, sample.qd, zeros)[1]
     if name == "forward_dynamics_gradient_q":
-        return reference_model.forward_dynamics_grad(sample.q, sample.qd, sample.qdd)[0]
+        return reference_model.forward_dynamics_gradient(sample.q, sample.qd, sample.qdd)[0]
     if name == "forward_dynamics_gradient_qd":
-        return reference_model.forward_dynamics_grad(sample.q, sample.qd, sample.qdd)[1]
+        return reference_model.forward_dynamics_gradient(sample.q, sample.qd, sample.qdd)[1]
     if name == "aba":
         return reference_model.aba(sample.q, sample.qd, sample.qdd).reshape(1, -1)
     if name == "crba":

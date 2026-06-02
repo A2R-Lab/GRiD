@@ -1,8 +1,8 @@
 """CUDA equivalence test for the joint-torque regressor emission (E1).
 
 Validates `gen_inverse_dynamics_regressor` (CUDA) against
-`RBDReference.joint_torque_regressor` (the verified numpy reference,
-`_RegressorMixin`) and the structural identity `Y @ pi == rnea(q,qd,qdd)`.
+`RBDReference.inverse_dynamics_regressor` (the verified numpy reference,
+`_RegressorMixin`) and the structural identity `Y @ pi == inverse_dynamics(q,qd,qdd)`.
 
 `tau = Y(q,qd,qdd) . pi` with `pi_i = [m, m*c(3), I_O(6)=[Ixx,Ixy,Ixz,Iyy,Iyz,Izz]]`
 per link (GRiD/URDF basis). The CUDA kernel reuses the RNEA forward sweep to get
@@ -81,7 +81,7 @@ def _generate_header(project_model, build_dir: Path) -> Path:
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
         # Use the mimic-safe "regressor" profile ({id, regressor}) rather than the
         # default "all": the regressor is NOT a refused mimic-gradient algorithm,
-        # but "all" pulls in gradient algos (f_ext_grad/fdsva_so/idsva_so/...) whose
+        # but "all" pulls in gradient algos (f_ext_gradient/fdsva_so/idsva_so/...) whose
         # mimic codegen is guarded by a NotImplementedError footgun (would emit
         # silently-zeroed output). fr3 (mimic) only codegens under a non-gradient
         # profile; the regressor + its RNEA forward dep ("id") are both present here.
@@ -168,16 +168,16 @@ def test_cuda_regressor_matches_reference(robot_id, base_mode, tmp_path):
         # numpy reference (verified _RegressorMixin); GRiD and the reference now
         # share one gravity convention (-9.81), so the runner passes -9.81 too.
         Y_ref = np.asarray(
-            reference.joint_torque_regressor(q, qd, qdd, GRAVITY=-9.81), dtype=np.float64
+            reference.inverse_dynamics_regressor(q, qd, qdd, GRAVITY=-9.81), dtype=np.float64
         )
         assert Y_cuda.shape == Y_ref.shape, (
             f"{robot_id}: CUDA Y shape {Y_cuda.shape} != ref {Y_ref.shape}"
         )
 
-        # structural identity Y @ pi == rnea(q,qd,qdd)
-        tau = np.asarray(reference.rnea(q, qd, qdd, GRAVITY=-9.81)[0], dtype=np.float64)
+        # structural identity Y @ pi == inverse_dynamics(q,qd,qdd)
+        tau = np.asarray(reference.inverse_dynamics(q, qd, qdd, GRAVITY=-9.81)[0], dtype=np.float64)
 
-        tol = get_tolerance("rnea", robot_id=robot_id)
+        tol = get_tolerance("inverse_dynamics", robot_id=robot_id)
         scale = max(1.0, float(np.max(np.abs(Y_ref))) if Y_ref.size else 1.0)
         atol = tol.atol + tol.rtol * scale + 5e-3 * scale  # float32 CUDA headroom
 
@@ -191,7 +191,7 @@ def test_cuda_regressor_matches_reference(robot_id, base_mode, tmp_path):
         atol_id = tol.atol + tol.rtol * tau_scale + 5e-3 * tau_scale
         if err_id > atol_id:
             failures.append(
-                f"{robot_id} @ {sample.name}: Y@pi-vs-rnea maxerr={err_id:.3e} > {atol_id:.3e}"
+                f"{robot_id} @ {sample.name}: Y@pi-vs-inverse_dynamics maxerr={err_id:.3e} > {atol_id:.3e}"
             )
 
     assert not failures, "regressor CUDA equivalence failures:\n" + "\n".join(failures)

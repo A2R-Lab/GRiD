@@ -1,10 +1,10 @@
 // Test runner for the CUDA FD parameter-gradient kernel (dqdd/dpi = -Minv . Y).
 //
 // Mirrors `cuda_regressor_smoke_runner.cu` but invokes
-// `fd_parameter_gradient` (host launcher) with an explicit caller-allocated
+// `forward_dynamics_parameter_gradient` (host launcher) with an explicit caller-allocated
 // d_dqdd_dpi output buffer (the output is nv x 10*NUM_BODIES and is NOT a
 // gridData field). Used by `test_cuda_fd_parameter_gradient` to validate the
-// CUDA emission against `RBDReference.fd_parameter_gradient` (numpy reference).
+// CUDA emission against `RBDReference.forward_dynamics_parameter_gradient` (numpy reference).
 //
 // Input block is q|qd|u (positions, velocities, torques) packed into the
 // q_qd_u host buffer in the standard floating-aware layout.

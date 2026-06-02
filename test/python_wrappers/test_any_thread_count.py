@@ -98,7 +98,7 @@ def reference(handle, samples):
     handle.set_threads_per_block(handle.max_perf_level_threads)
     q, qd, u = samples["q"], samples["qd"], samples["u"]
     return {
-        "rnea":                          handle.rnea(q, qd),
+        "inverse_dynamics":                   handle.inverse_dynamics(q, qd),
         "minv":                          handle.minv(q),
         "forward_dynamics":              handle.forward_dynamics(q, qd, u),
         "aba":                           handle.aba(q, qd, u),
@@ -106,8 +106,8 @@ def reference(handle, samples):
         "end_effector_pose":             handle.end_effector_pose(q),
         "end_effector_pose_gradient":    handle.end_effector_pose_gradient(q),
         "end_effector_pose_hessian":     handle.end_effector_pose_hessian(q),
-        "rnea_grad":                     handle.rnea_grad(q, qd),
-        "forward_dynamics_grad":         handle.forward_dynamics_grad(q, qd, u),
+        "inverse_dynamics_gradient":          handle.inverse_dynamics_gradient(q, qd),
+        "forward_dynamics_gradient":          handle.forward_dynamics_gradient(q, qd, u),
         "idsva_so":                      handle.idsva_so(q, qd),
         "fdsva_so":                      handle.fdsva_so(q, qd, u),
     }
@@ -127,7 +127,7 @@ _BLOCK_SIZES = [64, 128, 256]
 def _call_method(handle, method, samples):
     q, qd, u = samples["q"], samples["qd"], samples["u"]
     return {
-        "rnea":                          lambda: handle.rnea(q, qd),
+        "inverse_dynamics":                   lambda: handle.inverse_dynamics(q, qd),
         "minv":                          lambda: handle.minv(q),
         "forward_dynamics":              lambda: handle.forward_dynamics(q, qd, u),
         "aba":                           lambda: handle.aba(q, qd, u),
@@ -135,8 +135,8 @@ def _call_method(handle, method, samples):
         "end_effector_pose":             lambda: handle.end_effector_pose(q),
         "end_effector_pose_gradient":    lambda: handle.end_effector_pose_gradient(q),
         "end_effector_pose_hessian":     lambda: handle.end_effector_pose_hessian(q),
-        "rnea_grad":                     lambda: handle.rnea_grad(q, qd),
-        "forward_dynamics_grad":         lambda: handle.forward_dynamics_grad(q, qd, u),
+        "inverse_dynamics_gradient":          lambda: handle.inverse_dynamics_gradient(q, qd),
+        "forward_dynamics_gradient":          lambda: handle.forward_dynamics_gradient(q, qd, u),
         "idsva_so":                      lambda: handle.idsva_so(q, qd),
         "fdsva_so":                      lambda: handle.fdsva_so(q, qd, u),
     }[method]()
@@ -167,9 +167,9 @@ def test_set_threads_per_block_rejects_negative(handle):
 
 @pytest.mark.parametrize("threads", _BLOCK_SIZES)
 @pytest.mark.parametrize("method", [
-    "rnea", "minv", "forward_dynamics", "aba", "crba",
+    "inverse_dynamics", "minv", "forward_dynamics", "aba", "crba",
     "end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
-    "rnea_grad", "forward_dynamics_grad",
+    "inverse_dynamics_gradient", "forward_dynamics_gradient",
     "idsva_so", "fdsva_so",
 ])
 def test_method_at_block_size(handle, samples, reference, threads, method):

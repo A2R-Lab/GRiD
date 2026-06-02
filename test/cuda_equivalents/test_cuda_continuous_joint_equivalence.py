@@ -20,7 +20,7 @@ angle through an SO(2) layout, or got the transform's cos/sin wrong), this test
 fails at the large-wrapped-angle samples while a small-angle smoke would pass.
 
 Gravity convention: unified at -9.81. The runner passes gravity = -9.81 to GRiD,
-matching the RBDReference adapter's rnea default -9.81 -- both sides use one
+matching the RBDReference adapter's inverse_dynamics default -9.81 -- both sides use one
 convention, the pairing every CUDA dynamics equivalence test relies on.
 """
 
@@ -198,11 +198,11 @@ def test_cuda_continuous_joint_matches_reference_at_wrapped_angles(tmp_path):
         tag = f"gen3 wrapped-angle trial {trial}"
 
         # ---- inverse_dynamics (qdd=0 -> gravity + coriolis); runner and the
-        # adapter rnea both use -9.81 (unified convention). The adapter
+        # adapter inverse_dynamics both use -9.81 (unified convention). The adapter
         # surface returns the normalized c vector (the raw reference returns a
         # 4-tuple), matching the runner output layout.
         cuda_id = np.asarray(out["inverse_dynamics"], dtype=np.float64).reshape(-1)
-        ref_id = np.asarray(project_model.rnea(q, qd, zeros), dtype=np.float64).reshape(-1)
+        ref_id = np.asarray(project_model.inverse_dynamics(q, qd, zeros), dtype=np.float64).reshape(-1)
         _check(failures, f"{tag} inverse_dynamics", cuda_id, ref_id)
 
         # ---- crba (mass matrix M)

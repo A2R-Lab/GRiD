@@ -1,7 +1,7 @@
 """CUDA equivalence for the DEDICATED f_ext_gradient algorithm family (section A
 of the differentiability extensions plan), as distinct from
 ``test_cuda_fext_equivalence.py`` (which checks f_ext as a *parameter* threaded
-through rnea / fd / aba / their gradients).
+through inverse_dynamics / fd / aba / their gradients).
 
 This test drives the emitted f_ext-gradient host wrappers and compares their
 outputs against the RBDReference + pinocchio oracle:

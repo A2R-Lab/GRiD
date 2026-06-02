@@ -68,16 +68,16 @@ def _check_preconditions():
         sys.exit(1)
 
 
-def _bench_rnea(handle, q, qd, threads: int, iters: int = 500) -> float:
-    """Return median per-call µs for handle.rnea at the given block size."""
+def _bench_inverse_dynamics(handle, q, qd, threads: int, iters: int = 500) -> float:
+    """Return median per-call µs for handle.inverse_dynamics at the given block size."""
     handle.set_threads_per_block(threads)
     # Warmup (touches caches; first call after set may also re-init).
     for _ in range(10):
-        handle.rnea(q, qd)
+        handle.inverse_dynamics(q, qd)
     times = []
     for _ in range(iters):
         t0 = time.perf_counter()
-        handle.rnea(q, qd)
+        handle.inverse_dynamics(q, qd)
         times.append((time.perf_counter() - t0) * 1e6)  # µs
     return median(times)
 
@@ -115,7 +115,7 @@ def bench_robot(robot: str, batch: int = 16, iters: int = 500) -> dict:
                "max_perf_level_threads": sug, "batch": batch, "iters": iters,
                "per_block_us": {}}
     for n in block_sizes:
-        us = _bench_rnea(handle, q, qd, n, iters=iters)
+        us = _bench_inverse_dynamics(handle, q, qd, n, iters=iters)
         label = f"{n} (default)" if n == sug else str(n)
         print(f"    threads={label:>16s}: {us:8.3f} µs")
         results["per_block_us"][n] = us
@@ -146,7 +146,7 @@ def main() -> None:
     p.add_argument("--robot", choices=list(URDFS), default=None,
                    help="Run one robot (default: all available).")
     p.add_argument("--batch", type=int, default=16,
-                   help="Batch size for the rnea timings (default 16).")
+                   help="Batch size for the inverse_dynamics timings (default 16).")
     p.add_argument("--iters", type=int, default=500,
                    help="Number of timed iterations per cell (default 500).")
     p.add_argument("--output", type=Path, default=None,

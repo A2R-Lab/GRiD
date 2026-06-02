@@ -91,41 +91,41 @@ def test_metadata(jax_handle):
     assert jax_handle.floating_base is False
 
 
-def test_rnea_eager_matches_plain(jax_handle, plain_handle, samples):
-    """JAX FFI rnea (eager) must produce identical results to the plain
+def test_inverse_dynamics_eager_matches_plain(jax_handle, plain_handle, samples):
+    """JAX FFI inverse_dynamics (eager) must produce identical results to the plain
     Python wrapper, since both ultimately dispatch the same CUDA kernel."""
-    c_jax   = np.asarray(jax_handle.rnea(samples["q"], samples["qd"]))
-    c_plain = plain_handle.rnea(samples["q"], samples["qd"])
+    c_jax   = np.asarray(jax_handle.inverse_dynamics(samples["q"], samples["qd"]))
+    c_plain = plain_handle.inverse_dynamics(samples["q"], samples["qd"])
     assert c_jax.shape == c_plain.shape
     assert np.max(np.abs(c_jax - c_plain)) < _TOL
 
 
-def test_rnea_jit_matches_eager(jax_handle, samples):
+def test_inverse_dynamics_jit_matches_eager(jax_handle, samples):
     """jax.jit compilation must not change the result."""
     import jax
     @jax.jit
     def f(q, qd):
-        return jax_handle.rnea(q, qd)
+        return jax_handle.inverse_dynamics(q, qd)
     c_jit  = np.asarray(f(samples["q"], samples["qd"]))
-    c_eager = np.asarray(jax_handle.rnea(samples["q"], samples["qd"]))
+    c_eager = np.asarray(jax_handle.inverse_dynamics(samples["q"], samples["qd"]))
     assert c_jit.shape == c_eager.shape
     assert np.max(np.abs(c_jit - c_eager)) < 1e-6  # should be bitwise identical
 
 
-def test_rnea_accepts_numpy_input(jax_handle, samples):
+def test_inverse_dynamics_accepts_numpy_input(jax_handle, samples):
     """JAX accepts CPU numpy arrays and moves them to GPU transparently;
     the FFI handler sees device-resident buffers either way."""
     q  = samples["q"]
     qd = samples["qd"]
     # Numpy in:
-    c1 = np.asarray(jax_handle.rnea(q, qd))
+    c1 = np.asarray(jax_handle.inverse_dynamics(q, qd))
     # JAX device array in:
     import jax.numpy as jnp
-    c2 = np.asarray(jax_handle.rnea(jnp.asarray(q), jnp.asarray(qd)))
+    c2 = np.asarray(jax_handle.inverse_dynamics(jnp.asarray(q), jnp.asarray(qd)))
     assert np.allclose(c1, c2, atol=1e-6)
 
 
-def test_rnea_under_vmap(jax_handle, samples):
+def test_inverse_dynamics_under_vmap(jax_handle, samples):
     """jax.vmap doesn't apply here (our handler already batches on axis 0),
     but composing under jit + asarray should be fine."""
     import jax
@@ -133,7 +133,7 @@ def test_rnea_under_vmap(jax_handle, samples):
     def f(q, qd):
         # Add a noop transformation around the FFI call to test that the
         # call slots into a larger JIT graph.
-        return jax_handle.rnea(q, qd) + 0.0
+        return jax_handle.inverse_dynamics(q, qd) + 0.0
     c = np.asarray(f(samples["q"], samples["qd"]))
     assert c.shape == samples["q"].shape
     assert np.all(np.isfinite(c))
@@ -244,25 +244,25 @@ def test_end_effector_pose_hessian_jit_matches_eager(jax_handle, samples):
     assert np.max(np.abs(a - b)) < 1e-6
 
 
-def test_rnea_grad_eager_matches_plain(jax_handle, plain_handle, samples):
-    dc_jax   = np.asarray(jax_handle.rnea_grad(samples["q"], samples["qd"]))
-    dc_plain = plain_handle.rnea_grad(samples["q"], samples["qd"])
+def test_inverse_dynamics_gradient_eager_matches_plain(jax_handle, plain_handle, samples):
+    dc_jax   = np.asarray(jax_handle.inverse_dynamics_gradient(samples["q"], samples["qd"]))
+    dc_plain = plain_handle.inverse_dynamics_gradient(samples["q"], samples["qd"])
     assert dc_jax.shape == dc_plain.shape
     assert np.max(np.abs(dc_jax - dc_plain)) < _TOL
 
 
-def test_rnea_grad_jit_matches_eager(jax_handle, samples):
+def test_inverse_dynamics_gradient_jit_matches_eager(jax_handle, samples):
     import jax
     @jax.jit
-    def f(q, qd): return jax_handle.rnea_grad(q, qd)
+    def f(q, qd): return jax_handle.inverse_dynamics_gradient(q, qd)
     a = np.asarray(f(samples["q"], samples["qd"]))
-    b = np.asarray(jax_handle.rnea_grad(samples["q"], samples["qd"]))
+    b = np.asarray(jax_handle.inverse_dynamics_gradient(samples["q"], samples["qd"]))
     assert np.max(np.abs(a - b)) < 1e-6
 
 
 def test_forward_dynamics_grad_eager_matches_plain(jax_handle, plain_handle, samples):
-    df_jax   = np.asarray(jax_handle.forward_dynamics_grad(samples["q"], samples["qd"], samples["u"]))
-    df_plain = plain_handle.forward_dynamics_grad(samples["q"], samples["qd"], samples["u"])
+    df_jax   = np.asarray(jax_handle.forward_dynamics_gradient(samples["q"], samples["qd"], samples["u"]))
+    df_plain = plain_handle.forward_dynamics_gradient(samples["q"], samples["qd"], samples["u"])
     assert df_jax.shape == df_plain.shape
     assert np.max(np.abs(df_jax - df_plain)) < _TOL
 
@@ -270,9 +270,9 @@ def test_forward_dynamics_grad_eager_matches_plain(jax_handle, plain_handle, sam
 def test_forward_dynamics_grad_jit_matches_eager(jax_handle, samples):
     import jax
     @jax.jit
-    def f(q, qd, u): return jax_handle.forward_dynamics_grad(q, qd, u)
+    def f(q, qd, u): return jax_handle.forward_dynamics_gradient(q, qd, u)
     a = np.asarray(f(samples["q"], samples["qd"], samples["u"]))
-    b = np.asarray(jax_handle.forward_dynamics_grad(samples["q"], samples["qd"], samples["u"]))
+    b = np.asarray(jax_handle.forward_dynamics_gradient(samples["q"], samples["qd"], samples["u"]))
     assert np.max(np.abs(a - b)) < 1e-6
 
 
@@ -366,7 +366,7 @@ def test_all_methods_jit(jax_handle, samples):
     import jax
     @jax.jit
     def f(q, qd, u):
-        c    = jax_handle.rnea(q, qd)
+        c    = jax_handle.inverse_dynamics(q, qd)
         qdd1 = jax_handle.forward_dynamics(q, qd, u)
         qdd2 = jax_handle.aba(q, qd, u)
         Minv = jax_handle.minv(q)
@@ -374,8 +374,8 @@ def test_all_methods_jit(jax_handle, samples):
         ee   = jax_handle.end_effector_pose(q)
         dee  = jax_handle.end_effector_pose_gradient(q)
         d2ee = jax_handle.end_effector_pose_hessian(q)
-        dc   = jax_handle.rnea_grad(q, qd)
-        df   = jax_handle.forward_dynamics_grad(q, qd, u)
+        dc   = jax_handle.inverse_dynamics_gradient(q, qd)
+        df   = jax_handle.forward_dynamics_gradient(q, qd, u)
         return c, qdd1, qdd2, Minv, M, ee, dee, d2ee, dc, df
     outs = f(samples["q"], samples["qd"], samples["u"])
     for x in outs:

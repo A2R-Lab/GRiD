@@ -17,7 +17,7 @@ recompute from the double-precision reference CoM-Jacobian / CMM.
 
 Gravity convention: unified at -9.81. The runner passes gravity = -9.81 to GRiD,
 matching the RBDReference oracles' default GRAVITY = -9.81 — both sides now use
-one convention (the same pairing the main rnea CUDA-equivalence test uses).
+one convention (the same pairing the main inverse_dynamics CUDA-equivalence test uses).
 
 Robots: iiwa14-fixed (cheap, gate first) + a floating robot (default go2, an
 18-DoF quadruped that compiles quickly; g1/h1_2 also work but their large

@@ -4,8 +4,8 @@
 // `inverse_dynamics_regressor` (host launcher) with an explicit caller-allocated
 // d_Y output buffer (the regressor output is nv x 10*NUM_BODIES and is NOT a
 // gridData field). Used by `test_cuda_regressor` to validate the CUDA emission
-// against `RBDReference.joint_torque_regressor` (the verified numpy reference)
-// and the structural identity Y @ pi == rnea(q,qd,qdd).
+// against `RBDReference.inverse_dynamics_regressor` (the verified numpy reference)
+// and the structural identity Y @ pi == inverse_dynamics(q,qd,qdd).
 
 #include <cmath>
 #include <cstdlib>

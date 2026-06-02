@@ -505,9 +505,9 @@ def test_generated_header_includes_grid_data_variants_and_no_rnea_alias(tmp_path
     assert "template <typename T, gridDataKind KIND = GRID_DATA_ALL>" in header
     assert "gridData<T, KIND> *init_gridData" in header
     assert "void close_grid(cudaStream_t *streams, robotModel<T> *d_robotModel, gridData<T, KIND> *hd_data)" in header
-    # Clean-break: there is NO grid::rnea alias — inverse_dynamics is the single
+    # Clean-break: there is NO grid::inverse_dynamics alias — inverse_dynamics is the single
     # canonical name (RNEA stays greppable via docstrings/comments only).
-    assert "void rnea(gridData<T, KIND> *hd_data" not in header
+    assert "void inverse_dynamics(gridData<T, KIND> *hd_data" not in header
     assert "void rnea_single_timing(gridData<T, KIND> *hd_data" not in header
     assert "void rnea_compute_only(gridData<T, KIND> *hd_data" not in header
     assert "void inverse_dynamics(gridData<T, KIND> *hd_data" in header

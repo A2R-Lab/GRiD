@@ -1,9 +1,9 @@
 """External-force (f_ext) handle coverage for `grid-rbd` (E6).
 
 Exercises the optional ``f_ext=`` kwarg threaded through the numpy ``RobotHandle``
-and (when torch is available) the ``TorchRobotHandle`` for rnea / forward_dynamics
+and (when torch is available) the ``TorchRobotHandle`` for inverse_dynamics / forward_dynamics
 / aba on iiwa14 (fixed-base), and asserts numerical agreement with the
-``RBDReference`` external-force reference (``rnea(..., f_ext=...)`` /
+``RBDReference`` external-force reference (``inverse_dynamics(..., f_ext=...)`` /
 ``aba(..., f_ext=...)``, which subtract the per-body local-frame wrench
 ``f[:, i] -= f_ext[i]``).
 
@@ -102,12 +102,12 @@ def test_num_bodies(handle):
 # ─── numpy handle vs RBDReference ───────────────────────────────────────────
 
 
-def test_rnea_f_ext(handle, ref, samples):
+def test_inverse_dynamics_f_ext(handle, ref, samples):
     NB = handle.num_bodies
-    grid = handle.rnea(samples["q"], samples["qd"], f_ext=samples["f_ext"])
+    grid = handle.inverse_dynamics(samples["q"], samples["qd"], f_ext=samples["f_ext"])
     for i, (q, qd) in enumerate(zip(samples["q"], samples["qd"])):
         fe = _f_ext_list(samples["f_ext"][i], NB)
-        c_ref, *_ = ref.rnea(q.astype(np.float64), qd.astype(np.float64),
+        c_ref, *_ = ref.inverse_dynamics(q.astype(np.float64), qd.astype(np.float64),
                              GRAVITY=_GRAVITY, f_ext=fe)
         assert _max_err(grid[i], c_ref) < _TOL
 
@@ -118,9 +118,9 @@ def test_forward_dynamics_f_ext(handle, ref, samples):
                                    f_ext=samples["f_ext"])
     for i, (q, qd, u) in enumerate(zip(samples["q"], samples["qd"], samples["u"])):
         fe = _f_ext_list(samples["f_ext"][i], NB)
-        # qdd = Minv (u - rnea(q,qd,0; f_ext)); reference forward_dynamics has no
-        # f_ext arg, so recompute via the bias from rnea(..., f_ext).
-        c_ref, *_ = ref.rnea(q.astype(np.float64), qd.astype(np.float64),
+        # qdd = Minv (u - inverse_dynamics(q,qd,0; f_ext)); reference forward_dynamics has no
+        # f_ext arg, so recompute via the bias from inverse_dynamics(..., f_ext).
+        c_ref, *_ = ref.inverse_dynamics(q.astype(np.float64), qd.astype(np.float64),
                              GRAVITY=_GRAVITY, f_ext=fe)
         Minv = ref.minv(q.astype(np.float64))
         qdd_ref = Minv @ (u.astype(np.float64) - c_ref)
@@ -144,30 +144,30 @@ def test_no_f_ext_path_unchanged(handle, samples):
     """f_ext=None == omitting f_ext == zeros: byte-identical."""
     NB = handle.num_bodies
     zeros = np.zeros((samples["B"], 6 * NB), dtype=np.float32)
-    base = handle.rnea(samples["q"], samples["qd"])
-    none = handle.rnea(samples["q"], samples["qd"], f_ext=None)
-    zero = handle.rnea(samples["q"], samples["qd"], f_ext=zeros)
+    base = handle.inverse_dynamics(samples["q"], samples["qd"])
+    none = handle.inverse_dynamics(samples["q"], samples["qd"], f_ext=None)
+    zero = handle.inverse_dynamics(samples["q"], samples["qd"], f_ext=zeros)
     assert np.array_equal(base, none)
     assert np.array_equal(base, zero)
     # And a nonzero f_ext must actually change the answer (sanity).
-    nz = handle.rnea(samples["q"], samples["qd"], f_ext=samples["f_ext"])
+    nz = handle.inverse_dynamics(samples["q"], samples["qd"], f_ext=samples["f_ext"])
     assert _max_err(base, nz) > 1e-3
     # The singleton buffer is reset after each call: a no-f_ext call AFTER a
     # nonzero one returns the no-f_ext answer (no stale f_ext leakage).
-    after = handle.rnea(samples["q"], samples["qd"])
+    after = handle.inverse_dynamics(samples["q"], samples["qd"])
     assert np.array_equal(base, after)
 
 
 def test_f_ext_bad_shape_raises(handle, samples):
     bad = np.zeros((samples["B"], 5), dtype=np.float32)  # wrong last dim
     with pytest.raises(ValueError):
-        handle.rnea(samples["q"], samples["qd"], f_ext=bad)
+        handle.inverse_dynamics(samples["q"], samples["qd"], f_ext=bad)
 
 
 # ─── torch handle (optional) ────────────────────────────────────────────────
 
 
-def test_torch_rnea_f_ext(handle, ref, samples):
+def test_torch_inverse_dynamics_f_ext(handle, ref, samples):
     torch = pytest.importorskip("torch", reason="torch not installed")
     if not torch.cuda.is_available():
         pytest.skip("CUDA not available for torch")
@@ -179,23 +179,23 @@ def test_torch_rnea_f_ext(handle, ref, samples):
     qd = torch.tensor(samples["qd"], device="cuda", dtype=torch.float32)
     fe = torch.tensor(samples["f_ext"], device="cuda", dtype=torch.float32)
 
-    out = th.rnea(q, qd, f_ext=fe).detach().cpu().numpy()
+    out = th.inverse_dynamics(q, qd, f_ext=fe).detach().cpu().numpy()
     for i in range(samples["B"]):
         fel = _f_ext_list(samples["f_ext"][i], NB)
-        c_ref, *_ = ref.rnea(samples["q"][i].astype(np.float64),
+        c_ref, *_ = ref.inverse_dynamics(samples["q"][i].astype(np.float64),
                              samples["qd"][i].astype(np.float64),
                              GRAVITY=_GRAVITY, f_ext=fel)
         assert _max_err(out[i], c_ref) < _TOL
 
     # parity with the numpy handle's f_ext path
-    npy = handle.rnea(samples["q"], samples["qd"], f_ext=samples["f_ext"])
+    npy = handle.inverse_dynamics(samples["q"], samples["qd"], f_ext=samples["f_ext"])
     assert _max_err(out, npy) < _TOL
 
     # no-f_ext torch path unchanged + autograd still flows with f_ext
-    base = th.rnea(q, qd).detach().cpu().numpy()
-    none = th.rnea(q, qd, f_ext=None).detach().cpu().numpy()
+    base = th.inverse_dynamics(q, qd).detach().cpu().numpy()
+    none = th.inverse_dynamics(q, qd, f_ext=None).detach().cpu().numpy()
     assert np.allclose(base, none, atol=0, rtol=0)
 
     qg = q.clone().requires_grad_(True)
-    th.rnea(qg, qd, f_ext=fe).sum().backward()
+    th.inverse_dynamics(qg, qd, f_ext=fe).sum().backward()
     assert qg.grad is not None and torch.isfinite(qg.grad).all()

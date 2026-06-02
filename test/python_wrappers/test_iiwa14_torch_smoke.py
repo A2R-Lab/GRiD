@@ -4,7 +4,7 @@ Registers iiwa14 (fixed-base) with the torch backend, exercises every method,
 and asserts:
   1. forward parity vs the numpy `RobotHandle` (same .so/cache),
   2. analytic backward (autograd) vs central-difference VJP for the 4
-     differentiable ops (rnea / forward_dynamics / aba / integrator),
+     differentiable ops (inverse_dynamics / forward_dynamics / aba / integrator),
   3. CUDA-Graphs capture/replay equivalence vs eager.
 
 Skips when torch / CUDA / nvcc are unavailable.
@@ -86,7 +86,7 @@ def test_forward_parity(th, nh, samples):
     qn, qdn, un = samples["qn"], samples["qdn"], samples["un"]
     q, qd, u = _t(qn), _t(qdn), _t(un)
     checks = {
-        "rnea": (th.rnea(q, qd).cpu().numpy(), nh.rnea(qn, qdn)),
+        "inverse_dynamics": (th.inverse_dynamics(q, qd).cpu().numpy(), nh.inverse_dynamics(qn, qdn)),
         "forward_dynamics": (th.forward_dynamics(q, qd, u).cpu().numpy(), nh.forward_dynamics(qn, qdn, un)),
         "aba": (th.aba(q, qd, u).cpu().numpy(), nh.aba(qn, qdn, un)),
         "minv": (th.minv(q).cpu().numpy(), nh.minv(qn)),
@@ -94,8 +94,8 @@ def test_forward_parity(th, nh, samples):
         "end_effector_pose": (th.end_effector_pose(q).cpu().numpy(), nh.end_effector_pose(qn)),
         "ee_pose_gradient": (th.end_effector_pose_gradient(q).cpu().numpy(), nh.end_effector_pose_gradient(qn)),
         "ee_pose_hessian": (th.end_effector_pose_hessian(q).cpu().numpy(), nh.end_effector_pose_hessian(qn)),
-        "rnea_grad": (th.rnea_grad(q, qd).cpu().numpy(), nh.rnea_grad(qn, qdn)),
-        "fd_grad": (th.forward_dynamics_grad(q, qd, u).cpu().numpy(), nh.forward_dynamics_grad(qn, qdn, un)),
+        "inverse_dynamics_gradient": (th.inverse_dynamics_gradient(q, qd).cpu().numpy(), nh.inverse_dynamics_gradient(qn, qdn)),
+        "forward_dynamics_gradient": (th.forward_dynamics_gradient(q, qd, u).cpu().numpy(), nh.forward_dynamics_gradient(qn, qdn, un)),
         "integrator": (th.integrator(q, qd, u, 0.01).detach().cpu().numpy(), nh.integrator(qn, qdn, un, 0.01)),
         "integrator_grad": (th.integrator_gradient(q, qd, u, 0.01).cpu().numpy(), nh.integrator_gradient(qn, qdn, un, 0.01)),
     }
@@ -137,11 +137,11 @@ def _fd_vjp_err(fn_apply, args_np, eps=1e-3):
     return max(errs)
 
 
-def test_autograd_rnea(th, samples):
+def test_autograd_inverse_dynamics(th, samples):
     b = 2
-    err = _fd_vjp_err(lambda a, c: th.rnea(a, c),
+    err = _fd_vjp_err(lambda a, c: th.inverse_dynamics(a, c),
                       [samples["qn"][:b], samples["qdn"][:b]])
-    assert err < _GTOL, f"rnea VJP err {err:.3e}"
+    assert err < _GTOL, f"inverse_dynamics VJP err {err:.3e}"
 
 
 def test_autograd_forward_dynamics(th, samples):

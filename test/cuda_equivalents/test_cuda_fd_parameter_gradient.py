@@ -1,7 +1,7 @@
 """CUDA equivalence test for the FD parameter-gradient emission.
 
-Validates `gen_fd_parameter_gradient` (CUDA) against
-`RBDReference.fd_parameter_gradient` (numpy reference):
+Validates `gen_forward_dynamics_parameter_gradient` (CUDA) against
+`RBDReference.forward_dynamics_parameter_gradient` (numpy reference):
 
     dqdd/dpi = -Minv . Y(q, qd, qdd_actual)   with qdd_actual = FD(q, qd, u)
 
@@ -65,7 +65,7 @@ def _generate_header(project_model, build_dir: Path) -> Path:
     )
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
         # Lean "fd-param-gradient" profile ({id, minv, fd, regressor,
-        # fd_parameter_gradient}) instead of "all": emits exactly the kernels this
+        # forward_dynamics_parameter_gradient}) instead of "all": emits exactly the kernels this
         # runner needs and skips the heavy second-order kernels (fdsva_so/idsva_so),
         # cutting the floating-base nvcc compile time substantially. Also keeps the
         # header mimic-safe (no refused gradient algos) for consistency.
@@ -153,7 +153,7 @@ def test_cuda_fd_parameter_gradient_matches_reference(robot_id, base_mode, tmp_p
 
         # numpy reference: dqdd/dpi = -Minv . Y(q,qd,FD(q,qd,u))
         G_ref = np.asarray(
-            reference.fd_parameter_gradient(q, qd, u, GRAVITY=-9.81), dtype=np.float64
+            reference.forward_dynamics_parameter_gradient(q, qd, u, GRAVITY=-9.81), dtype=np.float64
         )
         assert G_cuda.shape == G_ref.shape, (
             f"{robot_id}: CUDA dqdd/dpi shape {G_cuda.shape} != ref {G_ref.shape}"
