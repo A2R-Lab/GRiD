@@ -444,6 +444,105 @@ class RobotHandle:
         it = _integrator_code(integrator_type)
         return self._runner.plant_step(x, u, float(dt), it, float(gravity))
 
+    # ─── centroidal / energy / general-frame kinematics (F2) ─────────────────
+    #
+    # Convenience compositions over the grid:: kinematics/dynamics surface,
+    # validated against RBDReference's centroidal / energy / frame mixins. All
+    # take 2D float32 (B, NUM_JOINTS) inputs. The frame_jacobian family targets a
+    # frame fixed at codegen time (the leaf end-effector joint,
+    # LOCAL_WORLD_ALIGNED reference frame); a runtime frame/reference_frame kwarg
+    # is not yet supported on the GPU surface (the host/kernel bake the target).
+
+    def com(self, q):
+        """Center-of-mass world position p_com (3,) and CoM Jacobian J_com.
+
+        Returns ``(p_com, J_com)`` where ``p_com`` is ``(B, 3)`` and ``J_com``
+        is ``(B, 3, NV)`` = ``d(p_com)/dv``. Matches ``RBDReference.com(q)``
+        (= ``p_com``) and ``RBDReference.jacobian_com(q)`` (= ``J_com``).
+        """
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        raw = self._runner.com(q)  # (B, 3 + 3*NV): [p_com(3); J_com(3 x NV col-major)]
+        B = raw.shape[0]
+        NV = self.num_vel
+        p_com = raw[:, :3]
+        # J_com stored column-major (3 x NV): J[r + 3*c]; recover (B, 3, NV).
+        j_com = raw[:, 3:].reshape(B, NV, 3).transpose(0, 2, 1)
+        return p_com, j_com
+
+    def ccrba(self, q, qd):
+        """Centroidal momentum matrix A (6 x NV) and momentum h = A·qd (6,).
+
+        Returns ``(A, h)`` where ``A`` is ``(B, 6, NV)`` and ``h`` is ``(B, 6)``,
+        in the Pinocchio convention (``[linear; angular]`` at the CoM, world
+        aligned). Matches ``RBDReference.ccrba(q, qd)``.
+        """
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        raw = self._runner.ccrba(q, qd)  # (B, 6*NV + 6): [A(6 x NV col-major); h(6)]
+        B = raw.shape[0]
+        NV = self.num_vel
+        A = raw[:, : 6 * NV].reshape(B, NV, 6).transpose(0, 2, 1)
+        h = raw[:, 6 * NV:]
+        return A, h
+
+    def energy(self, q, qd, *, gravity: float = -9.81):
+        """Kinetic / potential / mechanical energy. Returns ``(B, 3)`` =
+        ``[KE, PE, KE+PE]``. Matches ``RBDReference.kinetic_energy`` /
+        ``potential_energy`` / ``mechanical_energy`` (PE uses ``gravity``).
+        """
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        return self._runner.energy(q, qd, float(gravity))
+
+    def generalized_gravity(self, q, *, gravity: float = -9.81):
+        """Generalized gravity torque g(q) = RNEA(q, 0, 0). Returns ``(B, NV)``.
+        Matches ``RBDReference.generalized_gravity(q, GRAVITY=gravity)``."""
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        return self._runner.generalized_gravity(q, float(gravity))
+
+    def nonlinear_effects(self, q, qd, *, gravity: float = -9.81):
+        """Nonlinear (bias) effects c(q,qd) = RNEA(q, qd, 0) = C(q,qd)·qd + g(q).
+        Returns ``(B, NV)``. Matches ``RBDReference.nonlinear_effects(q, qd,
+        GRAVITY=gravity)``."""
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        return self._runner.nonlinear_effects(q, qd, float(gravity))
+
+    def frame_jacobian(self, q):
+        """Geometric Jacobian (6 x NV, ``[linear; angular]``) of the leaf
+        end-effector frame in the ``LOCAL_WORLD_ALIGNED`` reference frame.
+        Returns ``(B, 6, NV)``. Matches ``RBDReference.frame_jacobian(q)``
+        (default ``frame_name`` = leaf, ``reference_frame='LOCAL_WORLD_ALIGNED'``).
+
+        The target frame + reference frame are baked at codegen time (the GPU
+        host/kernel surface does not take them as runtime arguments), so this
+        method does not expose a frame kwarg.
+        """
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        raw = self._runner.frame_jacobian(q)  # (B, 6*NV) col-major: J[r + 6*c]
+        B = raw.shape[0]
+        NV = self.num_vel
+        return raw.reshape(B, NV, 6).transpose(0, 2, 1)
+
+    def frame_jacobian_dot(self, q, qd):
+        """Time derivative Jdot of :py:meth:`frame_jacobian` along v = qd
+        (6 x NV, ``[linear; angular]``, leaf-EE / LWA frame). Returns
+        ``(B, 6, NV)``. Matches ``RBDReference.frame_jacobian_dot(q, qd)``."""
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        raw = self._runner.frame_jacobian_dot(q, qd)  # (B, 6*NV) col-major
+        B = raw.shape[0]
+        NV = self.num_vel
+        return raw.reshape(B, NV, 6).transpose(0, 2, 1)
+
+    def osc_inertia(self, q):
+        """Operational-space (task) inertia Lambda = (J·M⁻¹·Jᵀ)⁻¹ (6 x 6) for
+        the leaf-EE frame (LWA). Returns ``(B, 6, 6)``. Matches
+        ``RBDReference.osc_inertia(q)``."""
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        raw = self._runner.osc_inertia(q)  # (B, 36) row/col-major (symmetric)
+        return raw.reshape(raw.shape[0], 6, 6)
+
     # ─── lifecycle ───────────────────────────────────────────────────────────
 
     def close(self) -> None:

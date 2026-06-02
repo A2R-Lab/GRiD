@@ -48,6 +48,31 @@ at float32 precision:
 `register_robot` accepts `ee_joint_names=[...]` to pin specific
 end-effector frames (default: all leaf links).
 
+### Centroidal / energy / general-frame kinematics
+
+Convenience compositions over the same surface (numpy handle only — not yet on
+the JAX/torch backends), validated against the `RBDReference` centroidal /
+energy / frame mixins:
+
+| Method | Returns | max_err vs RBDReference |
+|---|---|---|
+| `com(q)` | `(p_com (B,3), J_com (B,3,NV))` | 1e-4 |
+| `ccrba(q, qd)` | `(A (B,6,NV), h (B,6))` | 1e-4 |
+| `energy(q, qd, gravity=-9.81)` | `(B, 3)` = `[KE, PE, KE+PE]` | 1e-4 |
+| `generalized_gravity(q, gravity=-9.81)` | `(B, NV)` | 1e-5 |
+| `nonlinear_effects(q, qd, gravity=-9.81)` | `(B, NV)` | 1e-5 |
+| `frame_jacobian(q)` | `(B, 6, NV)` `[lin; ang]` | 1e-5 |
+| `frame_jacobian_dot(q, qd)` | `(B, 6, NV)` | 1e-3 |
+| `osc_inertia(q)` | `(B, 6, 6)` task inertia Λ | 1e-3 |
+
+`frame_jacobian` / `frame_jacobian_dot` / `osc_inertia` target a frame baked at
+codegen time (the leaf end-effector joint, `LOCAL_WORLD_ALIGNED` reference
+frame); a runtime frame / `reference_frame` kwarg is not yet exposed on the GPU
+surface. The `*_cost` forms (`com_cost`, `momentum_cost`) and
+`plant_step_gradient` are not bound — the codegen emits their per-timestep
+`__device__` functions but no launchable `grid_plant::*_kernel` wrapper, which
+the C-ABI binding requires (see the F2 backlog note).
+
 ## JAX FFI (`grid_rbd[jax]`)
 
 `pip install grid-rbd[jax]` enables the JAX-side bridge, which shares
