@@ -25,14 +25,21 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
 - ⬜ **B3 — floating-mimic `integrator_gradient`/`integrator_with_gradient` multi-stage RK bug** (stage
   projection at floating∩multistage∩mimic). numpy ref is correct; CUDA refused. The only remaining true
   mimic refusal.
-- ⬜ **B5 — grid_rbd FLOATING `end_effector_pose_gradient` binding broken** (surfaced by V6; BINDING bug, NOT
-  a kernel bug — the kernel passes vs pin at threads {1,32,128} via the .cu path). Two parts in `python/grid_rbd`:
-  (a) `_handle.py:end_effector_pose_gradient` reshapes raw to `(B,NEE,NV,6)` but the kernel emits NUM_POS
-  columns (go2 19≠18) → `ValueError` crash; (b) the RAW floating `ee_pose_gradient` device buffer comes back
-  uninitialized/garbage (~1e31, non-finite, launch-dependent) through the binding output path. Also a NUM_POS-vs-NV
-  (position vs tangent) convention question to resolve for the public surface. Customer-facing (grid_rbd v0.3).
-  Fixed-base is fine + thread-invariant. Lower urgency than kernel bugs; does NOT block the CUDA sweep but should
-  land before shipping. *(V6 test skips these cells with documented reason.)*
+- ✅ **B5 — grid_rbd FLOATING `end_effector_pose_gradient`** RESOLVED. Root cause: the in-tree precompiled
+  `python/grid_rbd/_core*.so` was STALE (predated commit `d8b1bcb`, the d/dv-tangent convention ripple). The
+  codegen kernel, `wrapper_template.cu`, `src/_core.cpp`, and `_handle.py` had ALL already been updated to the
+  NV-column (`6*NUM_EES*NUM_VEL`) tangent convention in source, but the loaded `_core.so` still used the old
+  NUM_POS-column ABI → it allocated/read a 19-col (NUM_POS) output for go2 while the freshly-built per-robot `.so`
+  filled 18 NV cols, surfacing as BOTH the `(B,NEE,NV,6)` reshape `ValueError` (1824 vs 432) AND the
+  garbage/uninitialized tail (~1e31..1e35, launch-dependent reads past the filled region). FIX: rebuilt `_core`
+  from `python/src/_core.cpp` in place — no source edit needed; the convention is settled (public surface returns
+  the d/dv TANGENT spatial Jacobian, NV columns, pinocchio convention, base block (omega; v)). go2-floating now
+  matches the RBDReference/pin oracle to **2.0e-7** norm-rel (iiwa14-fixed 1.3e-7) across threads {1,2,16,32,64,
+  128,256}; raw output finite + thread-invariant. V6 floating cells un-skipped (40/40 pass, 0 skipped).
+  *(Note: `_core*.so` is GITIGNORED (`.gitignore` `*.so`), not checked-in — this was a STALE LOCAL build (May 23,
+  predating `d8b1bcb`), not a repo artifact. `pip install`/`build_ext --inplace` rebuild it from source, so wheel
+  users were never affected. Residual dev hazard: a stale local `_core.so` mis-reports ABI ripples → consider a
+  test-time freshness guard or a documented rebuild step in CONTRIBUTING. Low priority.)*
 - ⬜ **B4 — suspected `idsva_so_body_frame` fr3 mimic-column bug** (surfaced by B2, INDEPENDENT of it):
   fr3 mimic column 13 shows `last_two_axis_transpose_rel_norm=1.16` (huge) — fails identically with B2's fix
   stashed, so pre-existing and not fdsva-related. Investigate the body-frame inner's last-two-axis transpose

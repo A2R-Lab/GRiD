@@ -33,27 +33,17 @@ grid_rbd (and its GRiDCodeGenerator + wrapper_template.cu) win import resolution
 Run with:
     PYTHONPATH=$PWD/python pytest test/python_wrappers/test_kinematics_thread_batch_matrix.py -v
 
-FINDINGS (uncovered while building this matrix; BINDING bugs, NOT single-block
-kernel thread-count-invariance races):
-  * grid_rbd FLOATING-base end_effector_pose_gradient is broken end-to-end:
-    (a) The PUBLIC wrapper `_handle.py:end_effector_pose_gradient` does
-        `raw.reshape(B, NEE, NV, 6)...` but the raw kernel emits NUM_POS columns,
-        not NV. For go2-floating the raw tensor is (B, 6*NEE, NUM_POS=19) while
-        the reshape demands 6*NEE*NV(=18) → `ValueError: cannot reshape array of
-        size <6*NEE*19*B> into shape (B,NEE,18,6)`. The wrapper crashes before
-        returning.
-    (b) The RAW runner output itself (`_runner.end_effector_pose_gradient`) for
-        go2-floating is UNINITIALIZED/garbage: entries ~1e31..1e35, non-finite,
-        and DIFFERENT per launch and per thread count. So the floating
-        ee_pose_gradient device output is never properly computed/zeroed through
-        this binding path. This is a grid_rbd binding output-path bug, NOT a clean
-        reduction/sync race (the values are garbage memory, not slightly-off
-        sums). FIXED-base ee_pose_gradient is fine and IS thread-count-invariant.
-    Fix belongs in python/grid_rbd (_handle.py reshape by NUM_POS + the binding's
-    floating deePos buffer wiring) — out of scope for this test-only task.
-    Floating ee_pose_gradient *correctness* + thread sweeps are exercised by the
-    CUDA executable-equivalence runner (cuda_equivalence_runner.cu, which uses
-    proper device buffers and floats GRID_CUDA_FLOATING_ALGORITHMS=...gradient).
+B5 (RESOLVED): grid_rbd FLOATING-base end_effector_pose_gradient now returns the
+d/dv TANGENT Jacobian (NV columns; pinocchio convention) through a correctly-sized,
+finite device buffer, matching fixed-base. The historical end-to-end break (public
+reshape ValueError on NUM_POS!=NV + garbage/uninitialized raw output ~1e31..1e35)
+was a STALE precompiled grid_rbd._core: the d/dv-convention ripple (codegen kernel +
+wrapper_template.cu + _core.cpp + _handle.py, all now sized 6*NUM_EES*NUM_VEL) had
+landed in source, but the in-tree _core.so predated it and still used the old
+NUM_POS-column ABI. Rebuilding _core (src/_core.cpp → grid_rbd/_core*.so) fixed both
+the floating reshape crash and the garbage values; the floating cells below are now
+un-skipped and assert thread-invariance + oracle correctness directly through the
+binding.
 """
 from __future__ import annotations
 
@@ -246,27 +236,11 @@ def test_end_effector_pose_gradient_thread_count_invariant(rname, urdf, floating
     Gradients fan independent columns across threads, so a missing sync between
     the FK-cache write and the per-column read would show as thread-dependence.
 
-    Operates on the RAW kernel tensor (handle._runner.end_effector_pose_gradient)
-    so the broken floating-base host reshape doesn't mask the kernel signal — the
-    invariance property is a KERNEL property, validated directly on kernel output.
-
-    Scoped to FIXED-BASE: the go2-FLOATING raw ee_pose_gradient tensor through the
-    grid_rbd binding is GARBAGE (entries ~1e31..1e35, non-finite, and varying per
-    launch / thread count) — the floating ee_pose_gradient OUTPUT PATH in the
-    grid_rbd binding is broken (uninitialized device memory; the public wrapper
-    that would post-process it also crashes on the NUM_POS!=NV reshape). Comparing
-    garbage across thread counts is meaningless, so we skip it here and report it
-    as a FINDING (module note). Floating ee_pose_gradient correctness AND thread
-    sweeps are validated through the CUDA executable-equivalence runner (proper
-    device buffers), not the grid_rbd binding."""
-    if floating:
-        pytest.skip(
-            "floating ee_pose_gradient via grid_rbd returns uninitialized/garbage "
-            "device memory (~1e31, non-finite, launch-dependent) — a grid_rbd "
-            "binding output-path bug, not a kernel reduction race. See module "
-            "FINDINGS. Floating ee_pose_gradient is covered by the CUDA "
-            "executable-equivalence suite (proper buffers + thread sweep)."
-        )
+    Operates on the RAW kernel tensor (handle._runner.end_effector_pose_gradient);
+    the invariance property is a KERNEL property, validated directly on kernel
+    output. Both fixed- and floating-base are exercised (B5 fixed): the binding now
+    emits NV (d/dv tangent) columns through a correctly-sized, finite device
+    buffer."""
     handle = _register(rname, urdf, floating)
     q = _random_q(handle, batch, floating, seed=202)
 
@@ -337,22 +311,11 @@ def test_end_effector_pose_gradient_matches_reference(rname, urdf, floating, thr
     EE whose reference is non-finite (rpy gimbal lock → analytic d(rpy)/dq blows
     up); the position-row Jacobian is always well posed and asserted.
 
-    Scoped to FIXED-BASE robots: there NUM_POS == NV, so the kernel's per-column
-    output aligns 1:1 with the oracle's d/dv tangent Jacobian. For FLOATING-BASE
-    the kernel emits NUM_POS (=7+njoints) position-derivative columns while the
-    oracle returns NV (=6+njoints) tangent columns — different conventions — AND
-    the grid_rbd host wrapper's reshape is currently broken for that case (see the
-    module-level FINDINGS note). Floating ee_pose_gradient *correctness* vs the
-    oracle is owned by the CUDA executable-equivalence suite; here we only assert
-    the floating KERNEL's thread-count INVARIANCE (the test above)."""
-    if floating:
-        pytest.skip(
-            "floating ee_pose_gradient: kernel emits NUM_POS columns vs oracle NV "
-            "(tangent) columns + grid_rbd host reshape is broken for floating "
-            "(NUM_POS!=NV). Thread-count invariance is covered on the raw kernel "
-            "by test_end_effector_pose_gradient_thread_count_invariant; oracle "
-            "correctness is covered by the CUDA executable-equivalence suite."
-        )
+    Both fixed- and floating-base are exercised. The kernel emits the d/dv TANGENT
+    Jacobian (NV columns; pinocchio convention), so for floating-base it aligns 1:1
+    with the oracle's NV-column tangent Jacobian — the base block is the spatial
+    Jacobian (omega; v), not the older non-standard quaternion-derivative columns
+    (B5 fixed: binding now returns correctly-sized finite NV-column output)."""
     handle = _register(rname, urdf, floating)
     ref = _reference(urdf, floating)
     targets = _ee_targets(ref.robot)
