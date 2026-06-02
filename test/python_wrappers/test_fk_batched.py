@@ -191,6 +191,34 @@ def test_fk_batched_matches_reference(name, urdf, n_pos, serial):
     assert max_rot_err < _ROT_TOL, f"{name}: max rotation error {max_rot_err:.2e}"
 
 
+@pytest.mark.parametrize("use_warp", [False, True], ids=["thread", "warp"])
+def test_fk_batched_variant_invariant_to_block_threads(use_warp):
+    """The dedicated restricted-execution FK variants use a FIXED slice of each
+    block — the single-thread variant (use_warp=False) only thread 0, the
+    single-warp variant (use_warp=True) only warp 0 — so their output MUST be
+    invariant to the block thread count set via set_threads_per_block. (Reference
+    correctness of each variant is covered by test_fk_batched_matches_reference;
+    this isolates the one-thread / one-warp restriction property.) The warp variant
+    needs >=32 threads (a full warp); the thread variant works at any >=1."""
+    handle = _register("iiwa14", "iiwa14.urdf")
+    NJ = handle.num_joints
+    q = np.random.default_rng(13).uniform(-2.5, 2.5, size=(_B, NJ)).astype(np.float32)
+    thread_counts = (32, 64, 128, 256) if use_warp else (1, 2, 32, 128, 256)
+
+    handle.set_threads_per_block(thread_counts[0])
+    baseline = np.asarray(handle.fk_batched(q, use_warp=use_warp), dtype=np.float64)
+    for n in thread_counts:
+        handle.set_threads_per_block(n)
+        out = np.asarray(handle.fk_batched(q, use_warp=use_warp), dtype=np.float64)
+        assert out.shape == baseline.shape
+        d = float(np.max(np.abs(out - baseline)))
+        assert d < _VARIANT_TOL, (
+            f"{'warp' if use_warp else 'thread'} FK variant NOT invariant to block "
+            f"size: threads={n} differs from threads={thread_counts[0]} by {d:.2e} "
+            f"(the variant must use only thread-0 / warp-0 regardless of block size)"
+        )
+
+
 def test_fk_batched_layout_distinct_per_sample():
     """Confirms the batch-major `q[b*N]` / `pose7[b*7]` layout actually carries
     per-sample data: distinct configs must yield distinct poses, and a shuffled
