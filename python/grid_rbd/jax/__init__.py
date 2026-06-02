@@ -292,12 +292,15 @@ class JaxRobotHandle:
         blocks = raw.reshape(B, 2, nj, nj).transpose(0, 1, 3, 2)
         return jnp.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
-    def idsva_so(self, q, qd, *, gravity: float = -9.81):
-        """Second-order inverse dynamics.
+    def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81):
+        """Second-order inverse dynamics at joint acceleration ``qdd``.
 
         Returns a tuple of 4 jax.Arrays each shape (B, NV, NV, NV):
         (d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq). Uses the codegen-time
         dispatcher (body-frame for fixed-base, world-frame for floating-base).
+
+        ``qdd=None`` ⇒ zero acceleration (explicit zeros are passed so the
+        result never depends on a stale device buffer from a prior call).
         """
         import jax
         import jax.numpy as jnp
@@ -305,10 +308,12 @@ class JaxRobotHandle:
         target = _register_method_target(
             self._so_path, self._cache_key,
             "idsva_so", "grid_rbd_jax_idsva_so")
-        (q, qd), B = self._prep_2d("idsva_so", q, qd)
+        if qdd is None:
+            qdd = jnp.zeros_like(jnp.asarray(q, dtype=jnp.float32))
+        (q, qd, qdd), B = self._prep_2d("idsva_so", q, qd, qdd)
         nv = self.num_vel
         out_type = jax.ShapeDtypeStruct((B, 4 * nv ** 3), jnp.float32)
-        flat = jax.ffi.ffi_call(target, out_type)(q, qd, gravity=np.float32(gravity))
+        flat = jax.ffi.ffi_call(target, out_type)(q, qd, qdd, gravity=np.float32(gravity))
         return tuple(
             flat[:, i * nv ** 3:(i + 1) * nv ** 3].reshape(B, nv, nv, nv)
             for i in range(4)

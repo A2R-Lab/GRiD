@@ -339,10 +339,17 @@ class TorchRobotHandle:
         blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
         return _concat_blocks(blocks)
 
-    def idsva_so(self, q, qd, *, gravity: float = -9.81):
-        """Second-order ID: 4 tensors each (B, NV, NV, NV)."""
+    def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81):
+        """Second-order ID at joint acceleration ``qdd``: 4 tensors each (B, NV, NV, NV).
+
+        ``qdd=None`` ⇒ zero acceleration (explicit zeros are passed so the
+        result never depends on a stale device buffer from a prior call)."""
+        import torch
         nv = self.num_vel
-        flat = self._ops.idsva_so(q, qd, float(gravity))
+        if qdd is None:
+            q = torch.as_tensor(q)
+            qdd = torch.zeros_like(q)
+        flat = self._ops.idsva_so(q, qd, qdd, float(gravity))
         B = flat.shape[0]
         return tuple(flat[:, i*nv**3:(i+1)*nv**3].reshape(B, nv, nv, nv) for i in range(4))
 

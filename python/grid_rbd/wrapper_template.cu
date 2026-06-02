@@ -1598,14 +1598,18 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 
-// idsva_so(q, qd) → packed (B, SECOND_ORDER_TENSOR_SIZE)
-// USE_QDD_FLAG=false. The codegen-time dispatcher picks body- vs world-frame;
-// we dispatch here at compile time using the GRID_GENERATES_* macros so a
-// per-robot .so calls whichever kernel was emitted.
+// idsva_so(q, qd, qdd) → packed (B, SECOND_ORDER_TENSOR_SIZE)
+// The codegen-time dispatcher picks body- vs world-frame; we dispatch here at
+// compile time using the GRID_GENERATES_* macros so a per-robot .so calls
+// whichever kernel was emitted. qdd is packed into the acceleration (u) slot of
+// d_q_qd_u, which the kernel reads as s_qdd — mirroring the numpy
+// pack_q_qd_u(q, qd, qdd). The Python surface passes explicit zeros when the
+// caller omits qdd, so the result never depends on a stale device buffer.
 static ffi::Error grid_rbd_jax_idsva_so_impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> q,
     ffi::Buffer<ffi::F32> qd,
+    ffi::Buffer<ffi::F32> qdd,
     ffi::ResultBuffer<ffi::F32> out,
     float gravity)
 {
@@ -1617,11 +1621,14 @@ static ffi::Error grid_rbd_jax_idsva_so_impl(
 
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
-    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],  dst_pitch,
-                      q.typed_data(),        row_bytes,
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],    dst_pitch,
+                      q.typed_data(),          row_bytes,
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch,
-                      qd.typed_data(),       row_bytes,
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj],   dst_pitch,
+                      qd.typed_data(),         row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj], dst_pitch,
+                      qdd.typed_data(),        row_bytes,
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
 
     constexpr int stride_q_qd_u = 3 * grid::NUM_JOINTS;
@@ -1648,7 +1655,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_idsva_so_impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("gravity")
 );
@@ -2089,13 +2096,17 @@ torch::Tensor torch_forward_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
     return out;
 }
 
-torch::Tensor torch_idsva_so(torch::Tensor q, torch::Tensor qd, double gravity) {
+torch::Tensor torch_idsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor qdd, double gravity) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
     grid_torch_check(q, "idsva_so: q", nj); grid_torch_check(qd, "idsva_so: qd", nj);
+    grid_torch_check(qdd, "idsva_so: qdd", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
+    // qdd is packed into the acceleration (u) slot, read by the kernel as s_qdd
+    // (mirrors numpy pack_q_qd_u(q, qd, qdd)). The Python surface passes explicit
+    // zeros for the default so we never read a stale device buffer.
+    grid_torch_pack(stream, batch, nj, &q, &qd, &qdd);
     auto out = grid_torch_empty(batch, grid::SECOND_ORDER_TENSOR_SIZE, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::idsva_so_body_frame_kernel<T><<<g_block_dimms, g_thread_dimms, grid::IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
@@ -2199,7 +2210,7 @@ GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
     m.def("end_effector_pose_hessian(Tensor q) -> Tensor");
     m.def("inverse_dynamics_gradient(Tensor q, Tensor qd, float gravity, Tensor? f_ext=None) -> Tensor");
     m.def("forward_dynamics_gradient(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
-    m.def("idsva_so(Tensor q, Tensor qd, float gravity) -> Tensor");
+    m.def("idsva_so(Tensor q, Tensor qd, Tensor qdd, float gravity) -> Tensor");
     m.def("fdsva_so(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
     m.def("integrator(Tensor q, Tensor qd, Tensor u, float dt, int it, float gravity) -> Tensor");
     m.def("integrator_gradient(Tensor q, Tensor qd, Tensor u, float dt, int it, float gravity) -> Tensor");
