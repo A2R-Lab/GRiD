@@ -39,6 +39,13 @@ python examples/print_reference_values.py path/to/robot.urdf
 python examples/print_grid.py path/to/robot.urdf
 ```
 
+Write your own CUDA kernel against the generated header:
+```shell
+# Step-by-step walkthrough + compiling/validated example kernels:
+#   examples/cuda/README.md   (and examples/cuda/wrapper_types.md)
+bash examples/cuda/build_and_validate.sh   # generate → nvcc → run → validate
+```
+
 > **Requires a C++17-capable host compiler** (e.g., g++ ≥ 7, clang++ ≥ 5).
 > The benchmark and codegen runtime compile with `-std=c++17` — needed for
 > inline variables in the bench common header.

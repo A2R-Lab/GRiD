@@ -109,6 +109,18 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
   (parallelize `frame_jacobian_inner`) + F2 bindings.
 - ⬜ **S2 — uniform `_inner` missing** for `fd_du` (reuses id_du band), `f_ext_gradient_dq` (kernel-only),
   `integrator_gradient` (uses `_multistage`).
+- ✅ **S3 — CUDA-level USAGE EXAMPLES (the "write your own kernel against grid.cuh" gap).** Added
+  `examples/cuda/`: the flagship `inverse_dynamics_kernel_example.cu` (one-line codegen invocation →
+  `#include "grid.cuh"` → single-block kernels hitting BOTH the auto-scratch `inverse_dynamics_device` and
+  the caller-scratch `inverse_dynamics_inner` + `load_update_XImats_helpers`, with the
+  `cudaFuncSetAttribute(MaxDynamicSharedMemorySize)` + `cudaPeekAtLastError` discipline, then a batched
+  one-block-per-timestep grid-stride launch); a second-order `idsva_so_host_example.cu` showing the heavy
+  `_host` surface; `README.md` (the step-by-step walkthrough) + `wrapper_types.md` (the
+  `_inner`→`_device`→`_kernel`→`_host`→batch layering + when to use each). nvcc-compiles on sm_120 and is
+  validated end-to-end (`build_and_validate.sh` + `validate.py`/`validate_so.py`): ID worst rel err 2.7e-7,
+  idsva_so worst 2.7e-6 (float32) vs `RBDReference`. NOTE: the emitted smem macro is `ID_DYNAMIC_SHARED_MEM_BYTES`
+  / `ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES` (NOT `INVERSE_DYNAMICS_*` — the emitter abbreviates to `ID_`).
+  Generated headers stay build artifacts (gitignored).
 
 ## 4. COMPLETENESS — missing features
 - ⬜ **F1 — `plant_step_hessian`** (true analytic 2nd-order plant/integrator Hessian) is absent; needs an
