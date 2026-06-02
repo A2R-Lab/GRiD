@@ -126,6 +126,20 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
   time (user directive). Any red cell = a bug to fix before the sweep, not after.
 - ⬜ **I1 — re-sweep on the fixed harness** to set real autotune defaults + true best-tier numbers (later).
 
+## AUDIT FINDINGS (submodule features / docs / consistency — 2026-06-02, ongoing)
+- ⬜ **A1 — `f_ext_gradient_dq` has NO RBDReference oracle.** GRiD emits the kernel (∂(id_du)/∂f_ext,
+  fixed-base) but RBDReference lacks a `f_ext_gradient_dq` method → the kernel is unverifiable vs a numpy
+  reference (only `f_ext_gradient` is checked). Add the reference method + an equivalence test.
+- ⬜ **A2 — planar/spherical joint codegen UNVERIFIED.** URDFParser advertises `planar`/`spherical`
+  (errors.py) but NO robot in `robot_assets/` exercises them → that parser+codegen path is untested. Add a
+  planar + a spherical test URDF (or confirm + document the support level), else demote the advertised support.
+- ⬜ **A3 — user-facing docs were STALE post-rename** (old names across `docs/source/**` + submodule
+  `RBDReference/README.md` + a `rnea.rst` page; gravity docs said +9.81). Docs-update agent in flight.
+- ⬜ **A4 — stale completed planning docs** in `docs/` (d2_codegen_mimic_plan, idsva_so_inner_refactor_notes,
+  python_wrappers_plan, a3_…audit, perf_cleanup_overnight) → archive to `docs/open-tasks/archive/`.
+- (Non-gaps confirmed: `integrator_with_gradient` covered via the integrator+gradient pairing (C7);
+  `plant_step_hessian` absence == F1, already tracked.)
+
 ## Proposed sequence (for discussion)
 1. **Correctness bugs first** — B1, B2, B3. (Don't ship known-wrong results.)
 2. **Verification** — V1–V5 lock the rest with tests (cheap, high-confidence).
