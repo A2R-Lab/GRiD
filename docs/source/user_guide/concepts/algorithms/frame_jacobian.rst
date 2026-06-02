@@ -98,6 +98,16 @@ host surface is validated end-to-end against the numpy oracle in
 ``test/cuda_equivalents/test_cuda_frame_jacobian_host.py`` (the device functions
 are covered by ``test_cuda_frame_jacobian.py``).
 
+``frame_jacobian_dot`` (opt-in ``frame_jacobian_dot`` key) now has the same
+launchable set: ``frame_jacobian_dot_kernel`` (+ ``_single_timing``) and the
+3-mode host ``frame_jacobian_dot`` / ``_single_timing`` / ``_compute_only``,
+reading the packed ``[q; qd]`` input and writing
+``hd_data->d_frame_jacobian_dot`` (6 × NUM_VEL). The kernel keeps its input /
+output in static ``__shared__`` because ``frame_jacobian_dot_device`` owns the
+whole dynamic-smem arena; the same fixed leaf-EE / ``LOCAL_WORLD_ALIGNED``
+default applies. It is covered by the same host-surface test (validated for
+iiwa14-fixed + go2-floating).
+
 See Also
 --------
 * :doc:`crba` — joint-space mass matrix :math:`M` (used to form

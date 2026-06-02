@@ -101,8 +101,11 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
   frame; `frame_jacobian_device` stays the arbitrary-target/-frame entry point. Also fixed a latent
   `_plant.py` bug: `com_cost`/`momentum_cost` were emitted whenever `end_effector_pose` was present
   (referencing undefined `grid::com_device`/`ccrba_device`) — now gated on `com`+`ccrba` keys. `d_/h_osc_inertia`
-  (6×6) + `d_/h_frame_jacobian_dot` (6×NV) gridData buffers landed alongside. **TODO:** `frame_jacobian_dot`
-  + `osc_inertia` kernel/host surfaces.
+  (6×6) + `d_/h_frame_jacobian_dot` (6×NV) gridData buffers landed alongside.
+  **`frame_jacobian_dot` DONE:** `frame_jacobian_dot_kernel` (+`_single_timing`) + 3-mode host writing
+  `d_/h_frame_jacobian_dot`; gate `GRID_HAS_FRAME_JACOBIAN_DOT`; bench `PER_ALGO_SPECS` row;
+  host-surface test extended (FJD checked when present). The kernel keeps I/O in static `__shared__`
+  (the `_device` wrapper owns the dynamic arena). **TODO:** `osc_inertia` kernel/host surface.
 - ⬜ **S2 — uniform `_inner` missing** for `fd_du` (reuses id_du band), `f_ext_gradient_dq` (kernel-only),
   `integrator_gradient` (uses `_multistage`).
 
