@@ -57,7 +57,7 @@ static void make_inputs(std::vector<T> &q, std::vector<T> &qd, std::vector<T> &q
 // (`extern __shared__`), carves out s_vaf / s_XImats / s_temp / the linalg
 // scratch for you, runs load_update_XImats_helpers(), then calls the `_inner`.
 // You only hand it inputs + outputs. The launch must reserve exactly
-// grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>() bytes of dynamic shared memory.
+// grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>() bytes of dynamic shared memory.
 //
 // Signature (fixed base, qdd-input variant, from the generated header):
 //   inverse_dynamics_device<T>(T *s_c, const T *s_q, const T *s_qd,
@@ -239,7 +239,7 @@ static void run() {
     // PATH A: _device (auto scratch).
     launch_and_print<T>("inverse_dynamics_device", id_device_kernel<T>,
         d_robotModel, d_q, d_qd, d_qdd, d_c, n, threads,
-        grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>(), gravity);
+        grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>(), gravity);
 
     // PATH B: _inner (caller scratch). No dynamic smem registration needed -- all
     // its scratch is the __shared__ arrays declared in the kernel, so launch with
@@ -266,7 +266,7 @@ static void run() {
     gpuErrchk(cudaMemcpy(d_qdB,  h_qdB.data(),  B * n * sizeof(T), cudaMemcpyHostToDevice));
     gpuErrchk(cudaMemcpy(d_qddB, h_qddB.data(), B * n * sizeof(T), cudaMemcpyHostToDevice));
 
-    const size_t smem = grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>();
+    const size_t smem = grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>();
     gpuErrchk(cudaFuncSetAttribute(id_batched_kernel<T>,
         cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(smem)));
     id_batched_kernel<T><<<B, threads, smem>>>(

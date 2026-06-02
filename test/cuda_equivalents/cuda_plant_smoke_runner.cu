@@ -353,8 +353,8 @@ void run() {
     // allocated at launch (the wrappers use `extern __shared__`). Size each
     // kernel's dynamic smem to the max device requirement it composes and raise
     // the opt-in attribute so big arenas are allowed.
-    size_t plant_dyn = grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>();
-    if (grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>() > plant_dyn) plant_dyn = grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>();
+    size_t plant_dyn = grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
+    if (grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>() > plant_dyn) plant_dyn = grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>();
     size_t step_dyn = grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>();
     // com_cost composes grid::com_device, momentum_cost composes grid::ccrba_device;
     // both use an extern __shared__ dynamic arena, so size to the max of the two.

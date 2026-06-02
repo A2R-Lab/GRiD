@@ -4,7 +4,9 @@ For every algorithm, the GRiD codegen emits the **same five layers** of surface,
 each wrapping the one before. Picking the right layer is the main decision when
 you write CUDA against `grid.cuh`. This tour uses `inverse_dynamics` (companion to
 `inverse_dynamics_kernel_example.cu`); every other algorithm follows the identical
-shape with its own abbreviated prefix (`MINV_`, `FD_`, `ABA_`, `ID_DU_`, …).
+shape with its own macro prefix, which matches the verbose function name
+(`FORWARD_DYNAMICS_`, `INVERSE_DYNAMICS_GRADIENT_`, …); a few keep their
+established proper names (`MINV_`, `ABA_`, `CRBA_`, …).
 
 ## The layers (innermost → outermost)
 
@@ -33,7 +35,7 @@ Wraps `_inner`. It declares the `extern __shared__` arena, carves out
 `s_vaf`/`s_XImats`/`s_temp`/linalg scratch from it, calls
 `load_update_XImats_helpers`, then `_inner`. You supply only inputs/outputs
 (shared-memory pointers) + the model. The launch must reserve
-`grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()`.
+`grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()`.
 
 **Reach for it when:** you want to drop GRiD dynamics into a kernel *you* launch
 (custom grid/stream/fusion at the launch level) but don't want to hand-manage the
@@ -42,14 +44,14 @@ it's exactly Path A in the flagship example.
 
 ### 3. `_kernel` — launchable `__global__`
 ```cpp
-inverse_dynamics_kernel<T><<<B, threads, ID_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+inverse_dynamics_kernel<T><<<B, threads, INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
     d_c, d_q_qd, stride_q_qd, d_qdd, d_f_ext, d_robotModel, gravity, NUM_TIMESTEPS);
 ```
 A ready-made `__global__` that reads packed device inputs (`d_q_qd` with a
 `stride_q_qd`), runs the per-timestep block loop (`for k in NUM_TIMESTEPS` at
 block level), and writes packed device outputs. Carries
 `__launch_bounds__(tier_max_threads<TIER>())`. Note its arena macro is
-`ID_DYNAMIC_SHARED_MEM_BYTES` (slightly larger than the `_device` one — it also
+`INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES` (slightly larger than the `_device` one — it also
 holds `s_q_qd`/`s_c`/`s_vaf` for the load/store).
 
 **Reach for it when:** you want the batched launcher but are managing the device

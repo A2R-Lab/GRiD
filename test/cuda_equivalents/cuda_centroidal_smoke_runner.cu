@@ -219,7 +219,7 @@ void run() {
     size_t dyn = grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>();
     if (grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>() > dyn) dyn = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
     if (grid::ENERGY_DYNAMIC_SHARED_MEM_BYTES<T>() > dyn) dyn = grid::ENERGY_DYNAMIC_SHARED_MEM_BYTES<T>();
-    if (grid::ID_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>() > dyn) dyn = grid::ID_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>();
+    if (grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>() > dyn) dyn = grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(centroidal_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)dyn);
     cudaFuncSetAttribute(cost_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)dyn);
 

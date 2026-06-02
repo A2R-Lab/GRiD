@@ -22,7 +22,7 @@
 
 template <typename T, int TEST_ITERS>
 __host__ void measure_id_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
-    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("ID", N, ID_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("ID", N, INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("ID", N,
         [&]{ grid::inverse_dynamics<T,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
@@ -38,7 +38,7 @@ __host__ void measure_minv_batch(int N, cudaStream_t *streams, grid::robotModel<
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_fd_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
-    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("FD", N, FD_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("FD", N, FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("FD", N,
         [&]{ grid::forward_dynamics<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
@@ -62,7 +62,7 @@ __host__ void measure_crba_batch(int N, cudaStream_t *streams, grid::robotModel<
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_id_du_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
-    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("ID_DU", N, ID_DU_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("ID_DU", N, INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("ID_DU", N,
         [&]{ grid::inverse_dynamics_gradient<T,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
@@ -70,7 +70,7 @@ __host__ void measure_id_du_batch(int N, cudaStream_t *streams, grid::robotModel
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_fd_du_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
-    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("FD_DU", N, FD_DU_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("FD_DU", N, FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("FD_DU", N,
         [&]{ grid::forward_dynamics_gradient<T,false>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
@@ -78,7 +78,7 @@ __host__ void measure_fd_du_batch(int N, cudaStream_t *streams, grid::robotModel
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_ee_pose_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
-    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("EE_POSE", N, EE_POS_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("EE_POSE", N, END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("EE_POSE", N,
         [&]{ grid::end_effector_pose<T>(d,m,N,dim3(N,1,1),dimms,streams); },
@@ -86,7 +86,7 @@ __host__ void measure_ee_pose_batch(int N, cudaStream_t *streams, grid::robotMod
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_ee_pose_gradient_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
-    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("EE_POSE_GRADIENT", N, DEE_POS_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("EE_POSE_GRADIENT", N, END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("EE_POSE_GRADIENT", N,
         [&]{ grid::end_effector_pose_gradient<T>(d,m,N,dim3(N,1,1),dimms,streams); },
@@ -94,7 +94,7 @@ __host__ void measure_ee_pose_gradient_batch(int N, cudaStream_t *streams, grid:
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_ee_pose_hessian_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
-    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("EE_POSE_HESSIAN", N, D2EE_POS_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("EE_POSE_HESSIAN", N, END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("EE_POSE_HESSIAN", N,
         [&]{ grid::end_effector_pose_hessian<T>(d,m,N,dim3(N,1,1),dimms,streams); },

@@ -15,7 +15,7 @@
 // ---------------------------------------------------------------------------
 template <typename T, int TEST_ITERS>
 __host__ void measure_id_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
-    GRID_SKIP_IF_KERNEL_TOO_BIG("ID", ID_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_IF_KERNEL_TOO_BIG("ID", INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES);
     grid::inverse_dynamics_single_timing<T,false,true>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 template <typename T, int TEST_ITERS>
@@ -25,7 +25,7 @@ __host__ void measure_minv_single(cudaStream_t *streams, grid::robotModel<T> *d_
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_fd_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
-    GRID_SKIP_IF_KERNEL_TOO_BIG("FD", FD_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_IF_KERNEL_TOO_BIG("FD", FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES);
     grid::forward_dynamics_single_timing<T>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 template <typename T, int TEST_ITERS>
@@ -40,27 +40,27 @@ __host__ void measure_crba_single(cudaStream_t *streams, grid::robotModel<T> *d_
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_id_du_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
-    GRID_SKIP_IF_KERNEL_TOO_BIG("ID_DU", ID_DU_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_IF_KERNEL_TOO_BIG("ID_DU", INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES);
     grid::inverse_dynamics_gradient_single_timing<T,false,true>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_fd_du_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
-    GRID_SKIP_IF_KERNEL_TOO_BIG("FD_DU", FD_DU_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_IF_KERNEL_TOO_BIG("FD_DU", FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES);
     grid::forward_dynamics_gradient_single_timing<T,false>(hd_data,d_robotModel,GRAVITY,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_ee_pose_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
-    GRID_SKIP_IF_KERNEL_TOO_BIG("EE_POSE", EE_POS_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_IF_KERNEL_TOO_BIG("EE_POSE", END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES);
     grid::end_effector_pose_single_timing<T>(hd_data,d_robotModel,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_ee_pose_gradient_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
-    GRID_SKIP_IF_KERNEL_TOO_BIG("EE_POSE_GRADIENT", DEE_POS_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_IF_KERNEL_TOO_BIG("EE_POSE_GRADIENT", END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES);
     grid::end_effector_pose_gradient_single_timing<T>(hd_data,d_robotModel,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 template <typename T, int TEST_ITERS>
 __host__ void measure_ee_pose_hessian_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
-    GRID_SKIP_IF_KERNEL_TOO_BIG("EE_POSE_HESSIAN", D2EE_POS_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_IF_KERNEL_TOO_BIG("EE_POSE_HESSIAN", END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES);
     grid::end_effector_pose_hessian_single_timing<T>(hd_data,d_robotModel,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 #if GRID_HAS_IDSVA_SO_BODY_FRAME

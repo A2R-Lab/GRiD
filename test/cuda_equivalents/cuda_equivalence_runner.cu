@@ -312,32 +312,32 @@ void run() {
     }
 
     grid_runner_set_smem_or_skip(floating_inverse_dynamics_runner<T>,
-        "inverse_dynamics", grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>());
+        "inverse_dynamics", grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>());
     grid_runner_set_smem_or_skip(grid::minv_kernel<T>,
         "minv", grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>());
     grid_runner_set_smem_or_skip(floating_forward_dynamics_runner<T>,
-        "forward_dynamics", grid::FD_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>());
+        "forward_dynamics", grid::FORWARD_DYNAMICS_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>());
     grid_runner_set_smem_or_skip(grid::aba_kernel<T>,
         "aba", grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>());
     grid_runner_set_smem_or_skip(grid::crba_kernel<T>,
         "crba", grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T>());
     grid_runner_set_smem_or_skip(grid::end_effector_pose_kernel<T>,
-        "end_effector_pose", grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>());
+        "end_effector_pose", grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>());
     // ee-pose grad/hessian SMEM registration: gate on SKIP_EEPOSE so floating
     // mimic (id_du/fd_du emitted, ee derivatives not) skips only the ee kernels.
 #if !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
     if (floating_algorithm_requested("end_effector_pose_gradient")) {
         grid_runner_set_smem_or_skip(grid::end_effector_pose_gradient_kernel<T>,
-            "end_effector_pose_gradient", grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>());
+            "end_effector_pose_gradient", grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>());
     }
     if (floating_algorithm_requested("end_effector_pose_hessian")) {
         grid_runner_set_smem_or_skip(grid::end_effector_pose_hessian_kernel<T>,
-            "end_effector_pose_hessian", grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>());
+            "end_effector_pose_hessian", grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T>());
     }
 #endif  // !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
 
     if (floating_algorithm_requested("inverse_dynamics")) {
-        floating_inverse_dynamics_runner<T><<<1, g_num_threads, grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        floating_inverse_dynamics_runner<T><<<1, g_num_threads, grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_vec, d_q, d_qd, d_zero, d_robot_model, gravity, /*d_f_ext=*/nullptr
         );
         gpuErrchk(cudaPeekAtLastError());
@@ -357,7 +357,7 @@ void run() {
     }
 
     if (floating_algorithm_requested("forward_dynamics")) {
-        floating_forward_dynamics_runner<T><<<1, g_num_threads, grid::FD_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>()>>>(
+        floating_forward_dynamics_runner<T><<<1, g_num_threads, grid::FORWARD_DYNAMICS_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>()>>>(
             d_vec, d_q, d_qd, d_u, d_robot_model, gravity, hd_data->d_workspace, /*d_f_ext=*/nullptr
         );
         gpuErrchk(cudaPeekAtLastError());
@@ -400,7 +400,7 @@ void run() {
     }
 
     if (floating_algorithm_requested("end_effector_pose")) {
-        grid::end_effector_pose_kernel<T><<<1, g_num_threads, grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::end_effector_pose_kernel<T><<<1, g_num_threads, grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_ee,
             d_q,
             grid::NUM_JOINTS,
@@ -422,7 +422,7 @@ void run() {
     // so non-mimic floating (both 0) still compiles the ee blocks as before.
 #if !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
     if (floating_algorithm_requested("end_effector_pose_gradient")) {
-        grid::end_effector_pose_gradient_kernel<T><<<1, g_num_threads, grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::end_effector_pose_gradient_kernel<T><<<1, g_num_threads, grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_dee,
             hd_data->d_workspace,
             d_q,
@@ -442,7 +442,7 @@ void run() {
                 0, hd_data->d_workspace, grid::GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()
             ));
         }
-        grid::end_effector_pose_hessian_kernel<T><<<1, g_num_threads, grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::end_effector_pose_hessian_kernel<T><<<1, g_num_threads, grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_d2ee,
             d_dee,
             hd_data->d_workspace,
@@ -463,7 +463,7 @@ void run() {
 
     if (floating_algorithm_requested("inverse_dynamics_gradient_q") ||
         floating_algorithm_requested("inverse_dynamics_gradient_qd")) {
-        grid::inverse_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::ID_DU_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::inverse_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_grad,
             hd_data->d_workspace,
             d_q_qd,
@@ -487,7 +487,7 @@ void run() {
 
     if (floating_algorithm_requested("forward_dynamics_gradient_q") ||
         floating_algorithm_requested("forward_dynamics_gradient_qd")) {
-        grid::forward_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::FD_DU_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::forward_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_grad,
             hd_data->d_workspace,
             d_q_qd_u,
@@ -515,7 +515,7 @@ void run() {
     // used nullptr (byte-identical to no-fext). d_f_ext_active was populated from
     // stdin earlier in this block.
     if (g_use_fext) {
-        floating_inverse_dynamics_runner<T><<<1, g_num_threads, grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        floating_inverse_dynamics_runner<T><<<1, g_num_threads, grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_vec, d_q, d_qd, d_zero, d_robot_model, gravity, d_f_ext_active
         );
         gpuErrchk(cudaPeekAtLastError());
@@ -523,7 +523,7 @@ void run() {
         gpuErrchk(cudaMemcpy(h_vec.data(), d_vec, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
         print_vector("inverse_dynamics_fext", h_vec.data(), grid::NUM_VEL);
 
-        floating_forward_dynamics_runner<T><<<1, g_num_threads, grid::FD_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>()>>>(
+        floating_forward_dynamics_runner<T><<<1, g_num_threads, grid::FORWARD_DYNAMICS_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>()>>>(
             d_vec, d_q, d_qd, d_u, d_robot_model, gravity, hd_data->d_workspace, d_f_ext_active
         );
         gpuErrchk(cudaPeekAtLastError());
@@ -541,7 +541,7 @@ void run() {
         print_vector("aba_fext", h_vec.data(), grid::NUM_VEL);
 
 #if !GRID_RUNNER_SKIP_GRADIENTS
-        grid::inverse_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::ID_DU_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::inverse_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_grad, hd_data->d_workspace, d_q_qd, grid::NUM_JOINTS + grid::NUM_VEL,
             d_f_ext_active, d_robot_model, gravity, 1
         );
@@ -552,7 +552,7 @@ void run() {
         print_matrix_col_major("inverse_dynamics_gradient_qd_fext",
             &h_grad[grid::NUM_VEL * grid::NUM_VEL], grid::NUM_VEL, grid::NUM_VEL);
 
-        grid::forward_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::FD_DU_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::forward_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_grad, hd_data->d_workspace, d_q_qd_u, grid::NUM_JOINTS + 2 * grid::NUM_VEL,
             d_f_ext_active, d_robot_model, gravity, 1
         );

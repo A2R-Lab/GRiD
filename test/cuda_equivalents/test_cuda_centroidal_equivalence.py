@@ -130,7 +130,7 @@ def _mimic_robot_modes():
     #
     # h1_2:fixed is the BIG mimic (NB=NJ=51 > NV=NPOS=39) and is the regression guard for
     # a real emitter bug this test EXPOSED: the device wrapper lays out s_vaf at 18*NB=918
-    # floats, but the HOST arena macro ID_BIAS_DYNAMIC_SHARED_MEM_BYTES (GRiDCodeGenerator.py
+    # floats, but the HOST arena macro INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES (GRiDCodeGenerator.py
     # `id_bias_t_count`) used to budget only 18*NV=702, so the wrapper overflowed the
     # dynamic-smem arena by 18*(NB-NV) floats → illegal __shared__ write (fr3 NB-NV=1
     # survived on slack; h1_2 NB-NV=12 crashed). FIXED: the macro now sizes s_vaf by

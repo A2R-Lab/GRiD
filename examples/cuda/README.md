@@ -68,13 +68,16 @@ exact name** — for `inverse_dynamics` the emitted names are:
 
 | macro | used by |
 |-------|---------|
-| `grid::ID_DYNAMIC_SHARED_MEM_BYTES<T>()` | the generated `_kernel` / `_host` launchers |
-| `grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()` | the `_device` auto-scratch wrapper |
+| `grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>()` | the generated `_kernel` / `_host` launchers |
+| `grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()` | the `_device` auto-scratch wrapper |
 
-> Note: there is **no** `INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES` symbol — the
-> emitter abbreviates `inverse_dynamics` to the `ID_` prefix. Always confirm the
-> real macro by grepping the header you generated; abbreviations vary per
-> algorithm (`MINV_`, `FD_`, `ABA_`, `CRBA_`, `ID_DU_`, …).
+> Note: the macro prefix matches the algorithm's verbose function name — the
+> `inverse_dynamics` kernels really are reserved with
+> `INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES`. Most algorithms follow the same
+> rule (`FORWARD_DYNAMICS_`, `INVERSE_DYNAMICS_GRADIENT_`,
+> `END_EFFECTOR_POSE_`, …); a handful keep their established proper names
+> (`MINV_`, `ABA_`, `CRBA_`, `IDSVA_SO_`, …). When in doubt, grep the header you
+> generated for `_DYNAMIC_SHARED_MEM_BYTES`.
 
 ### 3. Write the kernel — two surfaces, pick one
 
@@ -88,7 +91,7 @@ grid::inverse_dynamics_device<T>(
     s_c, s_q, s_qd, s_qdd, d_robotModel, /*d_f_ext=*/nullptr, gravity);
 ```
 
-Launch reserves `grid::ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()`.
+Launch reserves `grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()`.
 
 **`grid::inverse_dynamics_inner<T>(...)` (full control).** No scratch management —
 *you* place every buffer (so you can share `s_XImats` with other fused algorithm

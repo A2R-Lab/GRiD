@@ -115,7 +115,7 @@ void run() {
     const int nthreads = grid::MAX_PERF_LEVEL_THREADS;
     // generalized_gravity / nonlinear_effects compose the RNEA id-bias arena via
     // the auto-allocating extern __shared__ wrapper; size to the ID_BIAS macro.
-    size_t dyn = grid::ID_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>();
+    size_t dyn = grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(centroidal_bias_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)dyn);
 
     centroidal_bias_kernel<T><<<1, nthreads, dyn>>>(g_q, g_qd, d_robotModel, gravity, o_grav, o_nle);

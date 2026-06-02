@@ -93,7 +93,7 @@ int run() {
     config[1] = static_cast<T>(grid::NUM_VEL);
     config[2] = static_cast<T>(grid::NUM_BODIES);
     config[3] = static_cast<T>(grid::NUM_JOINTS);
-    config[4] = static_cast<T>(grid::FD_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>());
+    config[4] = static_cast<T>(grid::FORWARD_DYNAMICS_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>());
 
     print_flat("fpg_config", config, 1, 5);
     print_flat("forward_dynamics_parameter_gradient", h_out, out_rows, out_cols);

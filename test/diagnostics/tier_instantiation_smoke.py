@@ -140,19 +140,19 @@ def compile_all_tiers(grid_cuh: Path, emitted: list[str], build_dir: Path) -> di
                   "FDSVA_SO_INNER_WORKSPACE_BYTES<global> must hold scratch");
 
     // fd_du_device, id_du_device, idsva_so_device: whole s_temp arena
-    static_assert(grid::FD_DU_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_SHARED>() >
-                  grid::FD_DU_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
-                  "FD_DU_DEVICE_INLINE_SMEM_BYTES LITE must drop below PERF");
-    static_assert(grid::FD_DU_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_SHARED>() == 0,
-                  "FD_DU_DEVICE_INLINE_WORKSPACE_BYTES PERF must be zero");
-    static_assert(grid::FD_DU_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
-                  "FD_DU_DEVICE_INLINE_WORKSPACE_BYTES LITE must hold scratch");
+    static_assert(grid::FORWARD_DYNAMICS_GRADIENT_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_SHARED>() >
+                  grid::FORWARD_DYNAMICS_GRADIENT_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
+                  "FORWARD_DYNAMICS_GRADIENT_DEVICE_INLINE_SMEM_BYTES LITE must drop below PERF");
+    static_assert(grid::FORWARD_DYNAMICS_GRADIENT_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_SHARED>() == 0,
+                  "FORWARD_DYNAMICS_GRADIENT_DEVICE_INLINE_WORKSPACE_BYTES PERF must be zero");
+    static_assert(grid::FORWARD_DYNAMICS_GRADIENT_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
+                  "FORWARD_DYNAMICS_GRADIENT_DEVICE_INLINE_WORKSPACE_BYTES LITE must hold scratch");
 
-    static_assert(grid::ID_DU_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_SHARED>() >
-                  grid::ID_DU_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
-                  "ID_DU_DEVICE_INLINE_SMEM_BYTES LITE must drop below PERF");
-    static_assert(grid::ID_DU_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
-                  "ID_DU_DEVICE_INLINE_WORKSPACE_BYTES LITE must hold scratch");
+    static_assert(grid::INVERSE_DYNAMICS_GRADIENT_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_SHARED>() >
+                  grid::INVERSE_DYNAMICS_GRADIENT_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
+                  "INVERSE_DYNAMICS_GRADIENT_DEVICE_INLINE_SMEM_BYTES LITE must drop below PERF");
+    static_assert(grid::INVERSE_DYNAMICS_GRADIENT_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
+                  "INVERSE_DYNAMICS_GRADIENT_DEVICE_INLINE_WORKSPACE_BYTES LITE must hold scratch");
 
     static_assert(grid::IDSVA_SO_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_SHARED>() >
                   grid::IDSVA_SO_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
@@ -167,11 +167,11 @@ def compile_all_tiers(grid_cuh: Path, emitted: list[str], build_dir: Path) -> di
     // The SMEM invariant is therefore "LITE never EXCEEDS SHARED" (>=), not a
     // strict drop. (A strict '>' here was a latent bug — it failed on every
     // robot whose d2ee SMEM is tier-independent, i.e. all of iiwa14/go2/h1_2.)
-    static_assert(grid::D2EE_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_SHARED>() >=
-                  grid::D2EE_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
-                  "D2EE_DEVICE_INLINE_SMEM_BYTES LITE must not exceed SHARED");
-    static_assert(grid::D2EE_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
-                  "D2EE_DEVICE_INLINE_WORKSPACE_BYTES LITE must hold d2eeTemp");
+    static_assert(grid::END_EFFECTOR_POSE_HESSIAN_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_SHARED>() >=
+                  grid::END_EFFECTOR_POSE_HESSIAN_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
+                  "END_EFFECTOR_POSE_HESSIAN_DEVICE_INLINE_SMEM_BYTES LITE must not exceed SHARED");
+    static_assert(grid::END_EFFECTOR_POSE_HESSIAN_DEVICE_INLINE_WORKSPACE_BYTES<T, grid::TIER_LITE>() > 0,
+                  "END_EFFECTOR_POSE_HESSIAN_DEVICE_INLINE_WORKSPACE_BYTES LITE must hold d2eeTemp");
 """
     src = build_dir / "force_inst.cu"
     src.write_text(

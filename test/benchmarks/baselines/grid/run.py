@@ -261,7 +261,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::inverse_dynamics_compute_only<float,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "INVERSE_DYNAMICS",
         "gate": None,
-        "shared_mem_skip": "ID_DYNAMIC_SHARED_MEM_BYTES",
+        "shared_mem_skip": "INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES",
     },
     "minv": {
         "single_call":        "grid::minv_single_timing<float,true>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -277,7 +277,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::forward_dynamics_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "FORWARD_DYNAMICS",
         "gate": None,
-        "shared_mem_skip": "FD_DYNAMIC_SHARED_MEM_BYTES",
+        "shared_mem_skip": "FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES",
     },
     "aba": {
         "single_call":        "grid::aba_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -301,7 +301,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::inverse_dynamics_gradient_compute_only<float,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "INVERSE_DYNAMICS_GRADIENT",
         "gate": None,
-        "shared_mem_skip": "ID_DU_DYNAMIC_SHARED_MEM_BYTES",
+        "shared_mem_skip": "INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
     },
     "forward_dynamics_gradient": {
         "single_call":        "grid::forward_dynamics_gradient_single_timing<float,false>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -309,7 +309,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::forward_dynamics_gradient_compute_only<float,false>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "FORWARD_DYNAMICS_GRADIENT",
         "gate": None,
-        "shared_mem_skip": "FD_DU_DYNAMIC_SHARED_MEM_BYTES",
+        "shared_mem_skip": "FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
     },
     # f_ext gradients (A1). Host wrappers write into gridData's d_dtau_dfext /
     # d_dqdd_dfext / d_did_du_dfext buffers (allocated in gen_init_gridData), so
@@ -357,7 +357,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::forward_dynamics_parameter_gradient_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "FORWARD_DYNAMICS_PARAMETER_GRADIENT",
         "gate": None,
-        "shared_mem_skip": "FD_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
+        "shared_mem_skip": "FORWARD_DYNAMICS_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
     },
     "end_effector_pose": {
         "single_call":        "grid::end_effector_pose_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -365,7 +365,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::end_effector_pose_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
         "batch_label": "END_EFFECTOR_POSE",
         "gate": None,
-        "shared_mem_skip": "EE_POS_DYNAMIC_SHARED_MEM_BYTES",
+        "shared_mem_skip": "END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES",
     },
     "end_effector_pose_gradient": {
         "single_call":        "grid::end_effector_pose_gradient_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -373,7 +373,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::end_effector_pose_gradient_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
         "batch_label": "END_EFFECTOR_POSE_GRADIENT",
         "gate": None,
-        "shared_mem_skip": "DEE_POS_DYNAMIC_SHARED_MEM_BYTES",
+        "shared_mem_skip": "END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
     },
     "frame_jacobian": {
         "single_call":        "grid::frame_jacobian_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -405,7 +405,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::end_effector_pose_hessian_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
         "batch_label": "END_EFFECTOR_POSE_HESSIAN",
         "gate": None,
-        "shared_mem_skip": "D2EE_POS_DYNAMIC_SHARED_MEM_BYTES",
+        "shared_mem_skip": "END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES",
     },
     "idsva_so": {
         "single_call":        "grid::idsva_so_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -444,7 +444,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
     #   - generalized_gravity / nonlinear_effects: RNEA-bias wrappers, take the
     #     gravity arg; signature mirrors `id` + gravity. Emitted whenever `id`
     #     is generated (always, under codegen_profile='all'). Shared smem macro
-    #     is ID_BIAS_DYNAMIC_SHARED_MEM_BYTES for BOTH.
+    #     is INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES for BOTH.
     #     See GRiDCodeGenerator/algorithms/_centroidal.py:gen_id_bias_host.
     #   - com: kinematics-domain, NO gravity / NO qd. ccrba: NO gravity (uses qd).
     #     energy: takes the gravity arg (uses qd). Output sizes: com=3+3*NUM_VEL,
@@ -461,7 +461,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::generalized_gravity_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "GENERALIZED_GRAVITY",
         "gate": None,
-        "shared_mem_skip": "ID_BIAS_DYNAMIC_SHARED_MEM_BYTES",
+        "shared_mem_skip": "INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES",
     },
     "nonlinear_effects": {
         "single_call":        "grid::nonlinear_effects_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -469,7 +469,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::nonlinear_effects_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "NONLINEAR_EFFECTS",
         "gate": None,
-        "shared_mem_skip": "ID_BIAS_DYNAMIC_SHARED_MEM_BYTES",
+        "shared_mem_skip": "INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES",
     },
     "energy": {
         "single_call":        "grid::energy_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
