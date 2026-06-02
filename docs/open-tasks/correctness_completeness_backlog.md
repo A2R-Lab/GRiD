@@ -198,6 +198,12 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
     Emitters + every consumer (tests, benchmarks, `examples/cuda/*`, `wrapper_template.cu`, docs) updated; regen
     byte-identical except the renamed identifiers; examples + regressor/fd_param/centroidal equivalence +
     python_wrappers smoke all green.
+  - ✅ **A5b-macro-feg (DONE)** — the `f_ext_gradient` launch-macro family the first A5b-macro pass missed:
+    `F_EXT_GRAD_*`→`F_EXT_GRADIENT_*` (the `*_DYNAMIC_SHARED_MEM_BYTES`, `_DQ_DYNAMIC_SHARED_MEM_BYTES`, and the
+    `_DQDD_IN_SMEM` tier bool), so `f_ext_gradient`'s whole macro family is now internally uniform and matches its
+    (kept-proper) verbose function name. Emitters (`_f_ext_gradient.py`, `GRiDCodeGenerator.py`) + consumers
+    (`run.py` `shared_mem_skip` keys, `cuda_f_ext_gradient_runner.cu`, `algo_registry` desc) updated; regen header
+    verified — macro defs + all device/kernel/host call-sites consistent, zero `F_EXT_GRAD_` residuals.
   - ⬜ **A5b-residual (DEFERRED)** — internal-only, tangled naming left as-is: (a) `GRiDCodeGenerator/_test.py`
     still has `rnea`/`rnea_grad`/`fd_grad` method names (dev script); (b) the spill-decision flags
     `GRID_ID_DU_*`/`GRID_FD_DU_*`/`GRID_D2EE_*`/`GRID_EE_GRAD_*` (`_USES_*`, `_SHARED_TIER*`,
