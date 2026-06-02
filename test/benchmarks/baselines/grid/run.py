@@ -1286,7 +1286,13 @@ def run_timing(binaries: tuple[Path | None, Path | None], base: str) -> str:
 #     "sweep_us": {threads: us, ...},
 # }
 # ---------------------------------------------------------------------------
-DEFAULT_AUTOTUNE_THREAD_GRID: tuple[int, ...] = (32, 64, 96, 128, 192, 256, 384, 512)
+# Narrowed from {32,64,96,128,192,256,384,512}: sweep data
+# (results/perf_sweep_20260601_014157) shows winners cluster in 128-320 with
+# almost none below 96 or above 384, so we drop the rarely-winning 32/64/512
+# probes. The one-level refinement around each winner (_refine_grid_for_winner)
+# still probes the immediate neighbors, so genuine edge-case optima are not
+# missed. Override with --autotune-thread-grid.
+DEFAULT_AUTOTUNE_THREAD_GRID: tuple[int, ...] = (96, 128, 192, 256, 320, 384)
 DEFAULT_AUTOTUNE_N: int = 256            # batch size on which we tune (matches default bench)
 AUTOTUNE_TIERS: tuple[str, ...] = ("shared", "lite", "minimal")
 
@@ -1682,7 +1688,7 @@ def main() -> None:
     parser.add_argument("--autotune-threads", action="store_true",
                         help="After the standard timing run, do a JOINT (tier × thread-count) "
                              "autotune: for each tier (shared/lite/minimal) sweep a small grid of "
-                             "per-block thread counts (default: 32,64,96,128,192,256,384,512 + "
+                             "per-block thread counts (default: 96,128,192,256,320,384 + "
                              "one-level refinement, clipped per tier to its launch_bounds cap) and "
                              "pick the global min-µs/sample winner (tier, threads) per algo. The "
                              "per-tier binaries are reused from the content-keyed binary cache (no "
@@ -1694,7 +1700,7 @@ def main() -> None:
                              "timeGRiD_common.h::grid_timing_dimms.")
     parser.add_argument("--autotune-thread-grid", type=str, default=None,
                         help="Comma-separated thread counts to sweep when --autotune-threads is "
-                             "set. Default: '32,64,96,128,192,256,384,512'. Useful for narrowing "
+                             "set. Default: '96,128,192,256,320,384'. Useful for narrowing "
                              "the sweep on slow robots (e.g. '128,256,384' for a quick re-tune).")
     parser.add_argument("--autotune-N", type=int, default=DEFAULT_AUTOTUNE_N,
                         help=f"Batch size to autotune on (default: {DEFAULT_AUTOTUNE_N}). The "

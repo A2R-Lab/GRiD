@@ -616,11 +616,16 @@ def main() -> None:
                         help="Resource tiers to sweep for the GRiD columns. Default: "
                              "['shared'] (legacy single-tier behavior; 'perf' is a "
                              "deprecated alias for 'shared'). Pass "
-                             "'--tiers shared lite minimal' for full Phase 4 sweep — each "
-                             "GRiD column gets one full run per tier with results "
+                             "'--tiers shared lite minimal' for full Phase 4 sweep. WITHOUT "
+                             "--autotune-threads each GRiD column gets one full run per tier, "
                              "tagged grid_glass / grid_glass_tier_lite / grid_glass_tier_minimal "
-                             "in the merged JSON. Non-GRiD columns (pinocchio/mjx/frax) "
-                             "are tier-agnostic and run only once.")
+                             "in the merged JSON. WITH --autotune-threads the measure phase "
+                             "COLLAPSES to a SINGLE glass run per (robot, base): that one run "
+                             "already builds every tier binary and autotunes across all tiers, "
+                             "and the report sources its per-tier columns from the run's "
+                             "'algo_picks' sweep (so --tiers only affects the non-autotune "
+                             "path here). Non-GRiD columns (pinocchio/mjx/frax) are tier-agnostic "
+                             "and run only once.")
     parser.add_argument("--report", type=Path,
                         default=THIS_DIR / "benchmark_multi_version.md",
                         help="Markdown report output path")
@@ -634,7 +639,7 @@ def main() -> None:
                         help="Forward --autotune-threads to the GRiD glass column. For each "
                              "(robot, base, algo) tuple, do the JOINT (tier × thread-count) "
                              "autotune: sweep a per-tier-cap-clipped thread grid (default: "
-                             "32,64,96,128,192,256,384,512 + one-level refinement) on each per-tier "
+                             "96,128,192,256,320,384 + one-level refinement) on each per-tier "
                              "batch binary (shared/lite/minimal, reused from the binary cache) and "
                              "pick the global min-µs/sample winner (tier, threads). The picks land "
                              "in the per-column JSON under 'algo_picks[algo]' (schema 2) = "
@@ -642,7 +647,7 @@ def main() -> None:
                              "'sweep':{tier:{threads:us}},'sweep_us':{threads:us}}. Opt-in; default OFF.")
     parser.add_argument("--autotune-thread-grid", type=str, default=None,
                         help="Override the autotune thread grid (comma-separated). "
-                             "Default: '32,64,96,128,192,256,384,512'.")
+                             "Default: '96,128,192,256,320,384'.")
     parser.add_argument("--autotune-N", type=int, default=None,
                         help="Batch size to autotune on (default: 256). The winner is the thread "
                              "count that minimizes batch_<N>_compute_only µs/sample.")
@@ -734,10 +739,21 @@ def main() -> None:
                         batch_iters=args.batch_iters,
                     )
                 else:
-                    # GRiD columns: one run per tier (perf is the default; multi-tier
-                    # sweep gives lite/minimal too). Each tier's binary cache is keyed
-                    # separately by the -DGRID_DEFAULT_RESOURCE_TIER flag.
-                    for tier in args.tiers:
+                    # GRiD columns. Two regimes:
+                    #  * autotune ON (glass): a SINGLE run already builds every tier
+                    #    binary and autotunes ACROSS all tiers, emitting per-algo
+                    #    `algo_picks` whose `sweep` carries every tier's best-thread
+                    #    times + the global `tier_optimal` winner. So we measure ONCE
+                    #    per (robot, base) — running per-tier here would re-do that
+                    #    full all-tier autotune N times for N tiers (pure redundancy;
+                    #    the outputs differ only by measurement noise). The report
+                    #    sources its per-tier columns from `algo_picks[...]['sweep']`.
+                    #  * autotune OFF: per-tier runs are legitimate (each tier's
+                    #    binary cache is keyed by -DGRID_DEFAULT_RESOURCE_TIER and
+                    #    produces a distinct grid_glass[_tier_*] timing block).
+                    do_autotune = (args.autotune_threads and column == "glass")
+                    measure_tiers = [None] if do_autotune else args.tiers
+                    for tier in measure_tiers:
                         p = run_grid_column(
                             column, robot, base,
                             output_dir=args.output_dir, worktree_path=args.worktree_path,
@@ -749,9 +765,7 @@ def main() -> None:
                             split_compile=args.split_compile,
                             ofast_compile=args.ofast_compile,
                             tier=tier,
-                            # --autotune-threads applies only to the glass column;
-                            # pre_glass predates the env-var override in timeGRiD_common.h.
-                            autotune_threads=(args.autotune_threads and column == "glass"),
+                            autotune_threads=do_autotune,
                             autotune_thread_grid=args.autotune_thread_grid,
                             autotune_N=args.autotune_N,
                         )

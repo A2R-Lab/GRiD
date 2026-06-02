@@ -118,6 +118,26 @@ def _entry_best(picks: Optional[dict], algo: str) -> str:
     return f"{_fmt(us)} ({tier}@{threads})"
 
 
+def _entry_tier_from_picks(picks: Optional[dict], algo: str, tier: str) -> Optional[str]:
+    """Render the best-thread autotune µs for `algo` at `tier` from the collapsed
+    autotune `algo_picks` (schema 2). `picks[algo]['sweep'][tier]` is {threads: us}
+    at the autotune target metric (N=256 compute-only by default); the per-tier
+    column value is its min over threads. Returns None when the tier wasn't swept
+    (the report then falls back / shows `—`)."""
+    if not picks:
+        return None
+    info = picks.get(algo)
+    if not info:
+        return None
+    by_threads = (info.get("sweep") or {}).get(tier)
+    if not by_threads:
+        return None
+    vals = [v for v in by_threads.values() if v is not None]
+    if not vals:
+        return None
+    return _fmt(min(vals))
+
+
 def _speedup(grid_entry: Optional[dict], pin_entry: Optional[dict], n: int) -> str:
     if grid_entry is None or pin_entry is None:
         return "—"
@@ -212,10 +232,29 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
             fx_gpu = (base_dict.get("frax_gpu") or base_dict.get("frax") or {}).get(algo)
             picks = base_dict.get("algo_picks")  # autotune (tier×threads) winners
 
+            # Per-tier (glass_lite / glass_min) column source. With --autotune-threads
+            # a SINGLE collapsed run carries every tier's best-thread time inside
+            # `algo_picks[algo]['sweep']` (at the N=256 compute-only target), so the
+            # legacy separate grid_glass_tier_lite/_tier_minimal JSON keys no longer
+            # exist. Source the tier columns from the sweep when picks are present;
+            # otherwise (autotune OFF) fall back to the per-tier timing blocks.
+            #   - shared tier ("glass" column): always the full grid_glass block.
+            #   - lite/minimal: sweep-min if autotuned, else the per-tier entry.
+            # The sweep only holds the N=256 target metric, so for the single-call
+            # and N=16 sub-tables the lite/minimal columns show `—` under autotune
+            # (no per-tier single/N16 timings were measured in the collapsed run).
             if metric == "single":
+                lite_autotuned = _entry_tier_from_picks(picks, algo, "lite")
+                min_autotuned  = _entry_tier_from_picks(picks, algo, "minimal")
+                # The collapsed-autotune run still measures the shared-tier grid_glass
+                # block in full (single/N16/N256), so the `glass` column stays real at
+                # every metric. Only lite/minimal lack non-N256 timings under autotune
+                # (the sweep holds the N=256 target only) → blank them when tuned.
+                gl_lite_cell = "—" if lite_autotuned is not None else _entry_single(gl_lite)
+                gl_min_cell  = "—" if min_autotuned  is not None else _entry_single(gl_min)
                 vals = [
                     _entry_single(pg),
-                    _entry_single(gl), _entry_single(gl_lite), _entry_single(gl_min),
+                    _entry_single(gl), gl_lite_cell, gl_min_cell,
                     # grid_best is tuned on the N=256 compute-only path only.
                     "—",
                     _entry_single(pi) + _codegen_flag(pi),
@@ -225,11 +264,19 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
                 ratio_gl_over_pg = _ratio(gl, pg, "compute_only", "compute_only", 256)
             else:
                 n = 16 if metric == "n16" else 256
+                lite_autotuned = _entry_tier_from_picks(picks, algo, "lite") if n == 256 else None
+                min_autotuned  = _entry_tier_from_picks(picks, algo, "minimal") if n == 256 else None
+                # N=256: prefer the autotune sweep-min per tier; else the per-tier
+                # timing block. N=16: sweep has no N=16 data → per-tier block only.
+                gl_lite_cell = (lite_autotuned if lite_autotuned is not None
+                                else _entry_batch(gl_lite, n, "compute_only"))
+                gl_min_cell  = (min_autotuned if min_autotuned is not None
+                                else _entry_batch(gl_min, n, "compute_only"))
                 vals = [
                     _entry_batch(pg, n, "compute_only"),
                     _entry_batch(gl, n, "compute_only"),
-                    _entry_batch(gl_lite, n, "compute_only"),
-                    _entry_batch(gl_min, n, "compute_only"),
+                    gl_lite_cell,
+                    gl_min_cell,
                     # grid_best winner is from the N=256 autotune; show only there.
                     _entry_best(picks, algo) if n == 256 else "—",
                     _entry_batch(pi, n),
@@ -283,10 +330,13 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
         "(formerly 'PERF'; max smem, lowest spill — full inner scratch in shared memory).",
         "- **glass_lite**: GRiD HEAD at the LITE tier — partial spill of cold/large "
         "buffers to L2-pinned d_workspace; trades some throughput for ~50% smem "
-        "headroom so more blocks fit per SM. `—` if the algorithm has a single tier.",
+        "headroom so more blocks fit per SM. `—` if the algorithm has a single tier. "
+        "Under `--autotune-threads` this is the best-thread N=256 time from the "
+        "collapsed autotune sweep (a single run autotunes all tiers); `—` in the "
+        "single-call / N=16 sub-tables (the sweep tunes only the N=256 path).",
         "- **glass_min**: GRiD HEAD at the MINIMAL tier — most aggressive spill so "
         "the kernel fits on lower-spec GPUs / leaves smem free for the caller. `—` "
-        "if the algorithm has a single tier.",
+        "if the algorithm has a single tier. Same autotune sourcing as glass_lite.",
         "- **grid_best**: the autotuned global winner over (tier × thread-count) at "
         "**batch N=256 compute-only**, formatted `µs (tier@threads)`. Populated only "
         "when the sweep ran with `--autotune-threads`; `—` otherwise and in the "
