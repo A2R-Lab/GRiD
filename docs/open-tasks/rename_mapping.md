@@ -42,7 +42,7 @@ literature-standard algorithm name vs a fully-descriptive name).
 | `idsva_so` → `idsva_so` | **`inverse_dynamics_hessian`** ⚠️ | IDSVA-SO is the literature name; descriptive = "inverse_dynamics_hessian"/"..._second_order". Keep `idsva_so` or go descriptive? |
 | `idsva_so_body_frame` → `idsva_so_body_frame_host` | **`<idsva_so>_body_frame`** ✅ | drop `_host`; frame suffix follows whatever we pick for idsva_so |
 | `idsva_so_world_frame` → `idsva_so_world_frame_host` | **`<idsva_so>_world_frame`** ✅ | drop `_host`; ALSO make it a first-class algorithm_list key (today flag-gated only) |
-| `fdsva_so` → `fdsva_so` | **`forward_dynamics_hessian`** ⚠️ | same call as idsva_so: keep `fdsva_so` or descriptive? Also reorder `fdsva_so_kernel` args (`d_workspace` → 2nd) |
+| `fdsva_so` → `fdsva_so` | **`forward_dynamics_hessian`** ⚠️ | same call as idsva_so: keep `fdsva_so` or descriptive? ✅ R3 done: `fdsva_so_kernel` args reordered (`d_workspace` → 2nd) — kernel-internal only, host/Python surface unchanged |
 | `f_ext_grad`(token)/`f_ext_gradient` | **`f_ext_gradient`** ⚠️ | fix the truncated token. `f_ext` vs spelled-out `external_force`? `f_ext` is standard notation |
 | `f_ext_gradient_dq` | **`f_ext_gradient_dq`** ✅ | (kernel-only today; decide if it needs a `_device`) |
 | `regressor` → `inverse_dynamics_regressor` | **`inverse_dynamics_regressor`** ✅ | move output `d_Y` into gridData (drop caller-owned buffer) |
