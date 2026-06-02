@@ -472,8 +472,8 @@ buffers:
    template <typename T, int TIER = TIER_SHARED>
    constexpr size_t FDSVA_SO_INNER_WORKSPACE_BYTES();      // bytes for d_workspace at TIER
 
-   // Same pattern: FD_DU_DEVICE_INLINE_*, ID_DU_DEVICE_INLINE_*,
-   //               D2EE_DEVICE_INLINE_*, IDSVA_SO_DEVICE_INLINE_*
+   // Same pattern: FORWARD_DYNAMICS_GRADIENT_DEVICE_INLINE_*, INVERSE_DYNAMICS_GRADIENT_DEVICE_INLINE_*,
+   //               END_EFFECTOR_POSE_HESSIAN_DEVICE_INLINE_*, IDSVA_SO_DEVICE_INLINE_*
 
 At ``TIER_SHARED`` the SMEM_BYTES value matches current behavior
 (the temp is in shared); at ``TIER_LITE``/``TIER_MINIMAL`` the
@@ -714,7 +714,7 @@ you want to opt out, compile with ``-DGRID_CUDA_ENABLE_L2_PERSISTING=0``.
   to L2-pinned workspace and writes ``s_deePos`` directly into global
   output; MINIMAL also pushes ``s_dXmatsHom`` (16*n T) to workspace.
   ``end_effector_pose_gradient_kernel`` now takes ``unsigned char *d_workspace``
-  as its new 2nd argument. ``DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T, TIER>()``
+  as its new 2nd argument. ``END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, TIER>()``
   is tier-aware. The workspace section reuses the SO offset (END_EFFECTOR_POSE_GRADIENT
   and SO algos don't run concurrently). Per-(robot) picks:
 
@@ -775,7 +775,7 @@ Status (commits ``da831dd`` + ``0795442``):
   ``cuda_target_shared_mem_bytes`` (PERF, 98 KB), ``cuda_target_lite_shared_mem_bytes``
   (LITE, 48 KB), and "always max spill" (MINIMAL) targets.
 * ``MINV_DYNAMIC_SHARED_MEM_BYTES<T, TIER>`` and
-  ``FD_DYNAMIC_SHARED_MEM_BYTES<T, TIER>`` are now tier-aware constexprs
+  ``FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T, TIER>`` are now tier-aware constexprs
   reporting per-tier smem footprints (default ``TIER = TIER_SHARED`` preserves
   every existing single-arg call site).
 * Verified via nvcc compile of h1_2_fixed at all 3 tiers:

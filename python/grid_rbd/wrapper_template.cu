@@ -918,7 +918,7 @@ extern "C" int grid_plant_ee_pos_cost(
     // The kernel internally calls ee-pose (value), ee-pose-gradient, and uses
     // the hessian-free GN J^T W J. The dynamic smem must cover the largest of
     // the device fns it invokes (pose-gradient dominates pose).
-    size_t smem = grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>();
+    size_t smem = grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim((unsigned)batch, 1, 1);
     grid_plant::ee_pos_cost_kernel<T, 0><<<grid_dim, g_thread_dimms, smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
@@ -1006,7 +1006,7 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_impl(
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::inverse_dynamics_kernel<T><<<
         g_block_dimms, g_thread_dimms,
-        grid::ID_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
             g_data->d_c, g_data->d_q_qd_u, stride_q_qd,
             g_data->d_f_ext, g_robot, /*gravity=*/gravity, batch);
@@ -1118,7 +1118,7 @@ static ffi::Error grid_rbd_jax_forward_dynamics_impl(
     constexpr int stride_q_qd_u = 3 * grid::NUM_JOINTS;
     grid::forward_dynamics_kernel<T><<<
         g_block_dimms, g_thread_dimms,
-        grid::FD_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        grid::FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
             g_data->d_qdd, g_data->d_workspace,
             g_data->d_q_qd_u, stride_q_qd_u,
@@ -1260,7 +1260,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_impl(
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
     grid::end_effector_pose_kernel<T><<<
         g_block_dimms, g_thread_dimms,
-        grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
             g_data->d_eePos, g_data->d_q_qd_u, stride_q,
             g_robot, batch);
@@ -1306,7 +1306,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_gradient_impl(
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
     grid::end_effector_pose_gradient_kernel<T><<<
         g_block_dimms, g_thread_dimms,
-        grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
             g_data->d_deePos, g_data->d_workspace, g_data->d_q_qd_u, stride_q,
             g_robot, batch);
@@ -1350,7 +1350,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_hessian_impl(
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
     grid::end_effector_pose_hessian_kernel<T><<<
         g_block_dimms, g_thread_dimms,
-        grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
             g_data->d_d2eePos, g_data->d_deePos, g_data->d_workspace,
             g_data->d_q_qd_u, stride_q, g_robot, batch);
@@ -1399,7 +1399,7 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_gradient_impl(
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::inverse_dynamics_gradient_kernel<T><<<
         g_block_dimms, g_thread_dimms,
-        grid::ID_DU_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
             g_data->d_dc_du, g_data->d_workspace,
             g_data->d_q_qd_u, stride_q_qd,
@@ -1453,7 +1453,7 @@ static ffi::Error grid_rbd_jax_forward_dynamics_gradient_impl(
     constexpr int stride_q_qd_u = 3 * grid::NUM_JOINTS;
     grid::forward_dynamics_gradient_kernel<T><<<
         g_block_dimms, g_thread_dimms,
-        grid::FD_DU_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
             g_data->d_df_du, g_data->d_workspace,
             g_data->d_q_qd_u, stride_q_qd_u,
@@ -1813,7 +1813,7 @@ torch::Tensor torch_inverse_dynamics(torch::Tensor q, torch::Tensor qd, double g
     grid_torch_f_ext_apply(stream, batch, f_ext);
     auto out = grid_torch_empty(batch, nj, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::inverse_dynamics_kernel<T><<<g_block_dimms, g_thread_dimms, grid::ID_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::inverse_dynamics_kernel<T><<<g_block_dimms, g_thread_dimms, grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_c, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_c, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     grid_torch_f_ext_reset(stream, batch, f_ext);
@@ -1846,7 +1846,7 @@ torch::Tensor torch_forward_dynamics(torch::Tensor q, torch::Tensor qd, torch::T
     grid_torch_f_ext_apply(stream, batch, f_ext);
     auto out = grid_torch_empty(batch, nj, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::forward_dynamics_kernel<T><<<g_block_dimms, g_thread_dimms, grid::FD_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::forward_dynamics_kernel<T><<<g_block_dimms, g_thread_dimms, grid::FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_qdd, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_qdd, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     grid_torch_f_ext_reset(stream, batch, f_ext);
@@ -1895,7 +1895,7 @@ torch::Tensor torch_end_effector_pose(torch::Tensor q) {
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, 6 * nee, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::end_effector_pose_kernel<T><<<g_block_dimms, g_thread_dimms, grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::end_effector_pose_kernel<T><<<g_block_dimms, g_thread_dimms, grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_eePos, g_data->d_q_qd_u, stride, g_robot, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_eePos, batch * 6 * nee * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
@@ -1910,7 +1910,7 @@ torch::Tensor torch_end_effector_pose_gradient(torch::Tensor q) {
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, 6 * nee * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::end_effector_pose_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::end_effector_pose_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_deePos, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_deePos, batch * 6 * nee * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
@@ -1925,7 +1925,7 @@ torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q) {
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, 6 * nee * nv * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::end_effector_pose_hessian_kernel<T><<<g_block_dimms, g_thread_dimms, grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::end_effector_pose_hessian_kernel<T><<<g_block_dimms, g_thread_dimms, grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_d2eePos, g_data->d_deePos, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_d2eePos, batch * 6 * nee * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
@@ -1942,7 +1942,7 @@ torch::Tensor torch_inverse_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
     grid_torch_f_ext_apply(stream, batch, f_ext);
     auto out = grid_torch_empty(batch, nj * 2 * nj, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::inverse_dynamics_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::ID_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::inverse_dynamics_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_dc_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_dc_du, batch * nj * 2 * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     grid_torch_f_ext_reset(stream, batch, f_ext);
@@ -1960,7 +1960,7 @@ torch::Tensor torch_forward_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
     grid_torch_f_ext_apply(stream, batch, f_ext);
     auto out = grid_torch_empty(batch, nj * 2 * nj, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::forward_dynamics_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::FD_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::forward_dynamics_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_df_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_df_du, batch * nj * 2 * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     grid_torch_f_ext_reset(stream, batch, f_ext);

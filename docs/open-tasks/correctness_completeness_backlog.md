@@ -118,9 +118,9 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
   `_host` surface; `README.md` (the step-by-step walkthrough) + `wrapper_types.md` (the
   `_inner`→`_device`→`_kernel`→`_host`→batch layering + when to use each). nvcc-compiles on sm_120 and is
   validated end-to-end (`build_and_validate.sh` + `validate.py`/`validate_so.py`): ID worst rel err 2.7e-7,
-  idsva_so worst 2.7e-6 (float32) vs `RBDReference`. NOTE: the emitted smem macro is `ID_DYNAMIC_SHARED_MEM_BYTES`
-  / `ID_DEVICE_DYNAMIC_SHARED_MEM_BYTES` (NOT `INVERSE_DYNAMICS_*` — the emitter abbreviates to `ID_`).
-  Generated headers stay build artifacts (gitignored).
+  idsva_so worst 2.7e-6 (float32) vs `RBDReference`. The emitted smem macros now match the verbose function
+  names: `INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES` / `INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES`
+  (macro-rename A5b done — see below). Generated headers stay build artifacts (gitignored).
 
 ## 4. COMPLETENESS — missing features
 - ⬜ **F1 — `plant_step_hessian`** (true analytic 2nd-order plant/integrator Hessian) is absent; needs an
@@ -185,11 +185,25 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
   archived): `d2_codegen_mimic_plan.md` ("scoping doc, NOT yet implemented" + T3-tracked),
   `a3_…audit` (referenced by `_crba.py` code as the refactor plan), `idsva_so_inner_refactor_notes`
   (cited as source-of-truth by live Sphinx concept pages + CUDA-equivalence tests; names fixed in place).
-- ⬜ **A5 — internal identifiers the rename MISSED** (public API + docs are consistent; these are internal):
-  (a) `GRiDCodeGenerator/_test.py` still has `rnea`/`rnea_grad`/`fd_grad` method names (dev script);
-  (b) emitted constants `ID_DU_DEVICE_INLINE_*` / `FD_DU_DEVICE_INLINE_*` / `D2EE_DEVICE_INLINE_*` and the
-  `*_spill_tier_3way` attr prefixes (`ID_DU`/`FD_DU`/`D2EE`) use old short forms. Verbosify for full unity
-  (low priority; (b) changes emitted output + consumers — do with the structural pass).
+- 🟡 **A5 — internal identifiers the rename MISSED** (public API + docs are consistent; these are internal):
+  - ✅ **A5b-macro (DONE)** — the user-facing emitted macros now match the verbose function names:
+    `ID_*`→`INVERSE_DYNAMICS_*`, `FD_*`→`FORWARD_DYNAMICS_*`, `ID_DU_*`→`INVERSE_DYNAMICS_GRADIENT_*`,
+    `FD_DU_*`→`FORWARD_DYNAMICS_GRADIENT_*`, `EE_POS_*`→`END_EFFECTOR_POSE_*`,
+    `DEE_POS_*`→`END_EFFECTOR_POSE_GRADIENT_*`, `D2EE_*`/`D2EE_POS_*`→`END_EFFECTOR_POSE_HESSIAN_*`,
+    `ID_BIAS_*`→`INVERSE_DYNAMICS_BIAS_*`, `FD_PARAMETER_GRADIENT_*`→`FORWARD_DYNAMICS_PARAMETER_GRADIENT_*`
+    (across the `*_DYNAMIC_SHARED_MEM_{BYTES,COUNT}`, `*_DEVICE_DYNAMIC_SHARED_MEM_BYTES`, `*_DEVICE_INLINE*`
+    families). Kept proper names: `ABA_`/`CRBA_`/`CCRBA_`/`MINV_`/`IDSVA_SO_*`/`FDSVA_SO_`/`COM_`/`ENERGY_`/etc.
+    Emitters + every consumer (tests, benchmarks, `examples/cuda/*`, `wrapper_template.cu`, docs) updated; regen
+    byte-identical except the renamed identifiers; examples + regressor/fd_param/centroidal equivalence +
+    python_wrappers smoke all green.
+  - ⬜ **A5b-residual (DEFERRED)** — internal-only, tangled naming left as-is: (a) `GRiDCodeGenerator/_test.py`
+    still has `rnea`/`rnea_grad`/`fd_grad` method names (dev script); (b) the spill-decision flags
+    `GRID_ID_DU_*`/`GRID_FD_DU_*`/`GRID_D2EE_*`/`GRID_EE_GRAD_*` (`_USES_*`, `_SHARED_TIER*`,
+    `_WORKSPACE_*_OFFSET_BYTES`) + the `*_INNER_{SMEM,WORKSPACE}_BYTES`/`*_F_IN_SMEM`/`*_TEMP_IN_SMEM` tier
+    bools + `*_spill_tier_3way` attrs still use old short segments. NOT done because each short segment spans a
+    LARGER macro family beyond the `_USES_` flags (renaming only `_USES_` would split `GRID_ID_DU_*`/`GRID_D2EE_*`
+    internally), and the `test_cuda_codegen_layout.py` / `test_cuda_executable_equivalence.py` assertions track
+    them — verbosify the whole internal family in one structural pass.
   `perf_cleanup_overnight.md` does not exist under `docs/` (only a stale mention in a bench-result file).
 - ⬜ **A6 — RBDReference test suite is PATHOLOGICALLY SLOW (infra).** The 1026-test suite runs >2h even at
   `-n 12` (serial was killed at 2h); a long tail of a few big-robot pinocchio comparisons (likely h1_2/g1
