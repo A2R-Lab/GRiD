@@ -43,6 +43,12 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
 - ⬜ **V4 / C7 — `integrator_with_gradient` no standalone numpy test**; **FK-batched** has no equivalence
   diff vs `end_effector_pose` (binding coverage ≠ correctness).
 - ⬜ **V5 — widen d2ee + SO tests to big/floating robots** once B1/B2 land.
+- ⬜ **V6 — kinematics thread-count-invariance matrix** (user-requested, before the sweep): the single-block
+  kinematics kernels (`end_effector_pose`, `ee_pose_gradient`, `frame_jacobian`) must give identical results
+  at ANY thread count — test single-thread (1) and warp-sized (32) explicitly, plus a sweep of thread counts
+  {1,2,16,32,64,128,256} × batch sizes {1,16,256}, asserting equivalence vs the numpy/pin reference at every
+  cell. Catches reduction/sync bugs that only surface at extreme thread counts. Any divergence = a new
+  backlog bug to fix BEFORE the sweep.
 
 ## 3. COMPLETENESS — missing surfaces
 - ⬜ **S1 — `frame_jacobian` / `frame_jacobian_dot` / `osc_inertia` are DEVICE-ONLY.** Add
