@@ -55,6 +55,12 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_centroidal_smoke_runner.cu")
 
+# Mimic-SAFE runner: drives ONLY generalized_gravity / nonlinear_effects (the two
+# centroidal primitives codegen emits for mimic robots). The full runner above
+# also drives com/ccrba/energy + plant com_cost/momentum_cost, which are non-mimic
+# only, so it cannot link against a mimic robot's header. See its module docstring.
+MIMIC_RUNNER_SOURCE = Path(__file__).with_name("cuda_centroidal_mimic_smoke_runner.cu")
+
 
 # ---- deterministic cost setup (MUST match cuda_centroidal_smoke_runner.cu) ----
 def _comW():           return np.array([5.0 + r for r in range(3)], dtype=np.float64)
@@ -111,6 +117,143 @@ def _compile_runner(build_dir):
             f"Command: {' '.join(cmd)}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     return executable, cmd
+
+
+# ============================================================================
+# Mimic-safe centroidal path (generalized_gravity / nonlinear_effects only).
+# ============================================================================
+def _mimic_robot_modes():
+    # fr3:fixed is the canonical small MIMIC robot (NB=NJ=9 > NV=NPOS=8): it exercises
+    # the _centroidal.py device-wrapper s_vaf=18*NB NB-sizing on a fixed base (the bias
+    # inner writes s_vaf body-indexed by RAW body id; under-sizing by NV overflows into
+    # the next arena region). iiwa14:fixed is a NON-mimic CONTROL (NB==NV) so a pass on
+    # both proves the mimic path specifically.
+    #
+    # h1_2:fixed is the BIG mimic (NB=NJ=51 > NV=NPOS=39) and is the regression guard for
+    # a real emitter bug this test EXPOSED: the device wrapper lays out s_vaf at 18*NB=918
+    # floats, but the HOST arena macro ID_BIAS_DYNAMIC_SHARED_MEM_BYTES (GRiDCodeGenerator.py
+    # `id_bias_t_count`) used to budget only 18*NV=702, so the wrapper overflowed the
+    # dynamic-smem arena by 18*(NB-NV) floats → illegal __shared__ write (fr3 NB-NV=1
+    # survived on slack; h1_2 NB-NV=12 crashed). FIXED: the macro now sizes s_vaf by
+    # 18*NB for mimic (mirroring the device-wrapper fix; non-mimic byte-identical). h1_2:fixed
+    # is kept in the default list so a regression re-trips here.
+    # Override the whole list with GRID_CUDA_CENTROIDAL_MIMIC_ROBOTS.
+    raw = os.environ.get("GRID_CUDA_CENTROIDAL_MIMIC_ROBOTS",
+                         "fr3:fixed,h1_2:fixed,iiwa14:fixed")
+    out = []
+    for tok in raw.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        rid, _, mode = tok.partition(":")
+        out.append((rid.strip(), (mode.strip() or "fixed")))
+    return out
+
+
+# Restricted algorithm list: `id` alone makes gen_centroidal_quickwins emit the two
+# RNEA bias wrappers (generalized_gravity / nonlinear_effects) and SKIP com/ccrba/
+# energy (kin-domain, mimic-refused) AND skip the grid_plant com_cost/momentum_cost
+# (gen_grid_plant: centroidal_ok requires ee_pose + non-mimic). So the resulting
+# header defines ONLY the mimic-supported centroidal symbols this runner references
+# — it links for mimic AND non-mimic robots alike.
+_MIMIC_SAFE_ALGORITHMS = ["id"]
+
+
+def _generate_mimic_header(project_model, build_dir):
+    header = build_dir / "grid.cuh"
+    codegen = GRiDCodeGenerator(project_model.robot, FILE_NAMESPACE="grid")
+    with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
+        codegen.gen_all_code(algorithm_list=list(_MIMIC_SAFE_ALGORITHMS),
+                             output_path=str(header))
+    return header
+
+
+def _compile_mimic_runner(build_dir):
+    nvcc = shutil.which("nvcc")
+    if nvcc is None:
+        pytest.skip("nvcc not found; install CUDA Toolkit to run CUDA tests.")
+    runner_copy = build_dir / MIMIC_RUNNER_SOURCE.name
+    shutil.copyfile(MIMIC_RUNNER_SOURCE, runner_copy)
+    arch = _detect_cuda_arch()
+    executable = build_dir / "cuda_centroidal_mimic_smoke_runner.exe"
+    glass_inc = Path(__file__).resolve().parents[2] / "GLASS" / "include"
+    cmd = [
+        nvcc, "-std=c++17", "-O0",
+        "-gencode", f"arch=compute_{arch},code=sm_{arch}",
+        f"-I{glass_inc}", "-o", str(executable), str(runner_copy),
+    ]
+    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    if result.returncode != 0:
+        pytest.fail(
+            "CUDA centroidal mimic smoke runner compilation failed.\n"
+            f"Command: {' '.join(cmd)}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    return executable, cmd
+
+
+def _robot_has_mimic(project_model) -> bool:
+    return any(
+        getattr(j, "is_mimic", False)
+        for j in project_model.robot.get_joints_ordered_by_id()
+    )
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+@pytest.mark.parametrize(("robot_id", "base_mode"), _mimic_robot_modes(),
+                         ids=lambda v: v if isinstance(v, str) else None)
+def test_cuda_centroidal_mimic_safe_matches_reference(tmp_path, robot_id, base_mode):
+    """Mimic-safe centroidal CUDA equivalence: generalized_gravity / nonlinear_effects.
+
+    Drives ONLY the two mimic-supported centroidal id-bias device fns against the
+    numpy/pin RBDReference oracle, via a restricted (`id`-only) codegen header so a
+    MIMIC robot (fr3:fixed, h1_2:fixed) compiles. iiwa14:fixed is the non-mimic
+    control. A PASS on the mimic robot is the runtime confirmation that the
+    _centroidal.py s_vaf=18*NB NB-sizing path runs without buffer overflow/corruption.
+    """
+    spec = _robot_spec(robot_id, base_mode)
+    try:
+        resolved = resolve_robot_spec(spec)
+    except RuntimeError as exc:
+        pytest.skip(f"Could not resolve manifest {spec.robot_id}: {exc}")
+    project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
+    build_dir = tmp_path / f"{robot_id}_{base_mode}_centroidal_mimic"
+    build_dir.mkdir()
+    _generate_mimic_header(project_model, build_dir)
+    executable, cmd = _compile_mimic_runner(build_dir)
+
+    ref = project_model.reference
+    nv = project_model.nv
+    samples = _build_cuda_samples(project_model, random_count=3, include_corner_samples=True)
+    has_mimic = _robot_has_mimic(project_model)
+
+    rtol, atol = 2e-3, 2e-3
+
+    def close(actual, expected, msg):
+        expected = np.asarray(expected, dtype=np.float64)
+        scale = float(np.max(np.abs(expected))) if expected.size else 0.0
+        np.testing.assert_allclose(
+            np.asarray(actual, dtype=np.float64), expected,
+            rtol=rtol, atol=max(atol, rtol * scale), err_msg=msg,
+        )
+
+    for sample in samples:
+        q, qd = np.asarray(sample.q, np.float64), np.asarray(sample.qd, np.float64)
+        m_total, _ = ref._total_mass_and_com(q)
+        if not (np.isfinite(m_total) and m_total != 0.0):
+            continue
+        out = _run(executable, cmd, q, qd)
+        mtag = "mimic" if has_mimic else "non-mimic"
+        tag = f"{robot_id}-{base_mode}[{mtag}] @ {sample.name}"
+
+        close(out["gen_gravity"].reshape(-1), ref.generalized_gravity(q),
+              f"{tag} generalized_gravity")
+        close(out["nonlinear"].reshape(-1), ref.nonlinear_effects(q, qd),
+              f"{tag} nonlinear_effects")
+        assert nv == out["gen_gravity"].reshape(-1).shape[0], (
+            f"{tag} gen_gravity width {out['gen_gravity'].reshape(-1).shape[0]} != nv {nv}"
+        )
 
 
 def _stdin(q, qd):

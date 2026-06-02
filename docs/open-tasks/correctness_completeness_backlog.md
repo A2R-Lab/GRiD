@@ -39,9 +39,13 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
   lives in `[0, nv)`, leaving `[nv, nq)` UNINITIALIZED on floating-base (nq>nv) → stale shared mem (go2
   `s_grad[18]`). Fixed in `_plant.py` to zero the full `[nv, nx)` tail (byte-identical fixed-base; matches the
   GN-hessian `[0,nv)` convention). `momentum_cost_gradient` was already correct. Both cells green. *(committed)*
-- ⬜ **V2 / C4 — centroidal CUDA breadth + mimic.** `generalized_gravity`/`nonlinear_effects` support
-  mimic but are never CUDA-checked on a mimic robot → need the **mimic-safe centroidal runner** (also
-  the runtime check the `s_vaf` NB-fix still lacks). `com`/`ccrba`/`energy` are non-mimic-only (structural).
+- ✅ **V2 / C4 + D — mimic-safe centroidal CUDA runner added** (`cuda_centroidal_mimic_smoke_runner.cu` +
+  test, codegens `algorithm_list=["id"]` so only generalized_gravity/nonlinear_effects emit; non-mimic runner
+  untouched). fr3-fixed (mimic, NB=9>NV=8) + iiwa14-fixed control PASS ~5e-7 — runtime confirms the device
+  `s_vaf=18*NB` fix. EXPOSED + FIXED a second mimic-overflow bug: the HOST arena macro `id_bias_t_count`
+  (`GRiDCodeGenerator.py:662`) still sized `s_vaf` by `18*n` (NV) while the device wrapper uses `18*NB` →
+  h1_2-fixed (NB=51>NV=39) crashed with an illegal shared write (under-budget by ~99 floats). Fixed to
+  `18*nb_vaf` (NB for mimic; byte-identical non-mimic). Pending h1_2 validation → then commit. *(committing)*
 - 🔵 **V3 / C5 — integrator CUDA breadth to g1/h1_2 + PERF/LITE tier sweep** (committed `6aaad70`). Test infra
   done: 5 robots × 2 base × 2 tiers = 20 cells; floating-mimic runs value-only (B3-refused gradient); mimic
   `s_vaf=18*NB` sizing confirmed. VALIDATED subset green (g1-fixed SHARED+LITE, h1_2-fixed-LITE mimic spill —
