@@ -65,11 +65,21 @@ def _comma_separated_env(name: str, default: str) -> tuple[str, ...]:
 
 
 def _robot_ids() -> tuple[str, ...]:
-    # fr3 is the mimic case (fixed + floating): its integrator gradient COMPOSES
-    # the mimic-reduced FD gradient and assembles dAB in reduced NV space. The
-    # mimic path needs s_vaf sized 18*NB (NB>NV for fr3 fixed) so the composed
-    # FD-grad inner's body-indexed writes don't overflow into s_Minv/s_qdd.
-    return _comma_separated_env("GRID_CUDA_INTEGRATOR_ROBOTS", "iiwa14,go2,fr3")
+    # SMALL robots iiwa14/go2 fit at PERF; fr3 is the small MIMIC case (fixed +
+    # floating): its integrator gradient COMPOSES the mimic-reduced FD gradient and
+    # assembles dAB in reduced NV space. The mimic path needs s_vaf sized 18*NB
+    # (NB>NV for fr3 fixed) so the composed FD-grad inner's body-indexed writes
+    # don't overflow into s_Minv/s_qdd.
+    #
+    # BIG robots g1/h1_2 exercise the resource-tier SPILL paths (the integrator
+    # gradient's FD-grad inner s_temp / s_D_qdd_stage band routes to d_workspace /
+    # d_temp_spill under TIER_LITE/MINIMAL). g1 is non-mimic (NB==NV); h1_2 is the
+    # BIG MIMIC case (NB=51>NV=39 fixed, NB=52>NV=45 floating) — its per-body
+    # s_vaf/scratch MUST size by NB, not NV, or the composed FD-grad inner overflows
+    # (the recurring mimic-overflow bug class). h1_2-floating's multi-stage RK
+    # gradient is a KNOWN codegen-refused case (B3 backlog), so for that one cell we
+    # validate the value-only integrator path (see _is_value_only_cell).
+    return _comma_separated_env("GRID_CUDA_INTEGRATOR_ROBOTS", "iiwa14,go2,fr3,g1,h1_2")
 
 
 def _dts() -> tuple[float, ...]:
@@ -89,7 +99,16 @@ def _samples(project_model):
     return _build_cuda_samples(project_model, random_count=3, include_corner_samples=True)
 
 
-def _generate_header(project_model, build_dir: Path) -> Path:
+# Value-only integrator algorithm list (no integrator_gradient): used for the
+# floating-base MIMIC cell (h1_2-floating) whose multi-stage RK gradient is
+# codegen-refused (B3 backlog). The value integrator only needs id/minv/fd; with
+# integrator_gradient ABSENT, codegen defines GRID_HAS_INTEGRATOR_GRADIENT=0 and
+# the runner's #if-guarded gradient block is dropped — so the same runner compiles
+# and exercises only the value (x_kp1) path.
+_VALUE_ONLY_ALGORITHMS = ["id", "minv", "fd", "integrator"]
+
+
+def _generate_header(project_model, build_dir: Path, value_only: bool = False) -> Path:
     header = build_dir / "grid.cuh"
     codegen = GRiDCodeGenerator(
         project_model.robot,
@@ -97,15 +116,17 @@ def _generate_header(project_model, build_dir: Path) -> Path:
         NEED_PRINT_MAT=False,
         FILE_NAMESPACE="grid",
     )
+    kwargs = (
+        dict(algorithm_list=list(_VALUE_ONLY_ALGORITHMS))
+        if value_only
+        else dict(codegen_profile="integrators")
+    )
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        codegen.gen_all_code(
-            codegen_profile="integrators",
-            output_path=str(header),
-        )
+        codegen.gen_all_code(output_path=str(header), **kwargs)
     return header
 
 
-def _compile_runner(build_dir: Path):
+def _compile_runner(build_dir: Path, tier: str | None = None):
     nvcc = shutil.which("nvcc")
     if nvcc is None:
         pytest.skip("nvcc was not found; install CUDA Toolkit to run CUDA tests.")
@@ -123,12 +144,15 @@ def _compile_runner(build_dir: Path):
         "-o", str(executable),
         str(runner_copy),
     ]
-    # Optional tier override so the suite can exercise the LITE/MINIMAL spill path
-    # (s_D_qdd_stage -> d_workspace) for the integrator gradient. The math is
-    # tier-independent, so a tier sweep must still match the reference.
-    tier = os.environ.get("GRID_CUDA_INTEGRATOR_TIER")
-    if tier:
-        if tier not in ("TIER_SHARED", "TIER_PERF", "TIER_LITE", "TIER_MINIMAL"):
+    # Tier override so the suite exercises the LITE/MINIMAL SPILL path (the
+    # integrator gradient's FD-grad inner s_temp / s_D_qdd_stage band routes to
+    # d_workspace / d_temp_spill) in addition to PERF. The math is tier-independent,
+    # so a tier sweep must still match the reference. The default `tier` arg comes
+    # from the parametrized `tier` fixture (TIER_SHARED + TIER_LITE); the legacy
+    # GRID_CUDA_INTEGRATOR_TIER env still overrides it for ad-hoc single-tier runs.
+    tier = os.environ.get("GRID_CUDA_INTEGRATOR_TIER", tier)
+    if tier and tier != "TIER_SHARED":
+        if tier not in ("TIER_PERF", "TIER_LITE", "TIER_MINIMAL"):
             pytest.fail("GRID_CUDA_INTEGRATOR_TIER must be TIER_SHARED (a.k.a. legacy TIER_PERF), TIER_LITE, or TIER_MINIMAL.")
         cmd.insert(-1, f"-DGRID_DEFAULT_RESOURCE_TIER={tier}")
     result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
@@ -142,11 +166,11 @@ def _compile_runner(build_dir: Path):
     return executable, cmd
 
 
-def _build_case(project_model, tmp_path, label):
+def _build_case(project_model, tmp_path, label, tier=None, value_only=False):
     build_dir = tmp_path / label
     build_dir.mkdir()
-    _generate_header(project_model, build_dir)
-    return _compile_runner(build_dir)
+    _generate_header(project_model, build_dir, value_only=value_only)
+    return _compile_runner(build_dir, tier=tier)
 
 
 def _sample_stdin_with_dt(sample, dt: float) -> str:
@@ -178,20 +202,39 @@ def _base_modes() -> tuple[str, ...]:
     return _comma_separated_env("GRID_CUDA_INTEGRATOR_BASE_MODES", "fixed,floating")
 
 
+def _tiers() -> tuple[str, ...]:
+    """Resource tiers to compile+run each cell at. Defaults to PERF (TIER_SHARED)
+    AND a spilled tier (TIER_LITE) so the big-robot SPILL path (FD-grad inner
+    s_temp / s_D_qdd_stage -> d_workspace / d_temp_spill) is exercised, not just
+    the all-in-smem PERF arena. Override with GRID_CUDA_INTEGRATOR_TIERS."""
+    return _comma_separated_env("GRID_CUDA_INTEGRATOR_TIERS", "TIER_SHARED,TIER_LITE")
+
+
+def _robot_has_mimic(project_model) -> bool:
+    return any(
+        getattr(j, "is_mimic", False)
+        for j in project_model.robot.get_joints_ordered_by_id()
+    )
+
+
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
+@pytest.mark.parametrize("tier", _tiers())
 @pytest.mark.parametrize("base_mode", _base_modes())
 @pytest.mark.parametrize(
     "robot_id",
     _robot_ids(),
     ids=lambda robot_id: f"{robot_id}-integrator",
 )
-def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode):
+def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode, tier):
     """CUDA integrator kernels must match the Python reference composed via FD + Minv.
 
     Both fixed- and floating-base exercise value + gradient + both-at-once for
-    all 5 integrators (Euler / SI-Euler / Midpoint / RK3 / RK4).
+    all 5 integrators (Euler / SI-Euler / Midpoint / RK3 / RK4), at PERF
+    (TIER_SHARED) AND at a spilled tier (TIER_LITE) so the big-robot (g1/h1_2)
+    resource-tier SPILL path (FD-grad inner s_temp / s_D_qdd_stage band -> global
+    d_workspace / d_temp_spill) is covered, not just the all-in-smem PERF arena.
     """
     spec = _robot_spec(robot_id, base_mode)
     try:
@@ -202,24 +245,23 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
             f"before executing CUDA equivalence tests. Resolution error: {exc}"
         )
     project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
-    # Floating-base mimic robots (e.g. fr3-floating): the integrator GRADIENT is
-    # still refused by codegen. The fixed-base mimic integrator gradient is fully
-    # supported and exact (all 5 integrators); the floating single-stage gradient
-    # is correct too, but the floating MULTI-stage (Midpoint/RK3/RK4) gradient is
-    # wrong for mimic only and is deferred — so the `integrators` profile refuses
-    # to emit the floating-mimic gradient rather than ship a silently-wrong RK
-    # value path. Skip here (the gradient header cannot be generated).
-    has_mimic = any(
-        getattr(j, "is_mimic", False)
-        for j in project_model.robot.get_joints_ordered_by_id()
+    # Floating-base mimic robots (fr3-floating, h1_2-floating): the integrator
+    # GRADIENT is still refused by codegen. The fixed-base mimic integrator gradient
+    # is fully supported and exact (all 5 integrators); the floating single-stage
+    # gradient is correct too, but the floating MULTI-stage (Midpoint/RK3/RK4)
+    # gradient is wrong for mimic only and is deferred (B3 backlog) — so the
+    # `integrators` profile refuses to emit the floating-mimic gradient rather than
+    # ship a silently-wrong RK value path. We do NOT skip the whole cell: instead we
+    # codegen the VALUE-ONLY header (algorithm_list w/o integrator_gradient, so
+    # GRID_HAS_INTEGRATOR_GRADIENT=0 and the runner drops its #if-guarded gradient
+    # block) and validate the value (x_kp1) path for all 5 integrators. Only the
+    # refused gradient cells are skipped.
+    has_mimic = _robot_has_mimic(project_model)
+    value_only = has_mimic and base_mode == "floating"
+    label = f"{robot_id}_{base_mode}_{tier}_cuda_integrator"
+    executable, compile_cmd = _build_case(
+        project_model, tmp_path, label, tier=tier, value_only=value_only
     )
-    if has_mimic and base_mode == "floating":
-        pytest.skip(
-            f"{robot_id}-floating is a mimic robot; the floating-base mimic integrator "
-            "gradient (multi-stage RK) is deferred and codegen refuses it. Fixed-base "
-            "mimic integrator gradients are validated separately."
-        )
-    executable, compile_cmd = _build_case(project_model, tmp_path, f"{robot_id}_{base_mode}_cuda_integrator")
     samples = _samples(project_model)
     dts = _dts()
     nv = project_model.nv
@@ -228,9 +270,11 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode)
     rtol = 5e-4
     atol = 5e-4
 
-    # All five integrator gradients are emitted for both fixed- and floating-base.
+    # Gradient kernels are emitted (and thus comparable) only when the header was
+    # NOT generated value-only. For the floating-mimic value-only cell the gradient
+    # block is absent from the binary, so we assert the value path alone.
     def _gradient_emitted(integrator_type: str) -> bool:
-        return True
+        return not value_only
 
     # Sweep block thread counts (one warp + multi-warp + a session-random count)
     # to catch thread-count-dependent races; the kernel is compiled once and the
