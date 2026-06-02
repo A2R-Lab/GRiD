@@ -9,7 +9,7 @@
 //
 // All three are q-only (f_ext enters RNEA additively & linearly), so the runner
 // reads ONLY q on stdin (NUM_JOINTS values, project layout). The A.3 block is
-// emitted for fixed-base robots only; it is printed iff GRID_HAS_F_EXT_GRAD_DQ.
+// emitted for fixed-base robots only; it is printed iff GRID_HAS_F_EXT_GRADIENT_DQ.
 //
 // Output: BEGIN/END framed, column-major print (row + rows*col), matching the
 // other cuda_equivalents runners so test_cuda_executable_equivalence._parse_runner_output
@@ -26,7 +26,7 @@
 #ifndef GRID_CUDA_FLOATING_BASE
 #define GRID_CUDA_FLOATING_BASE 0
 #endif
-#define GRID_HAS_F_EXT_GRAD_DQ 1
+#define GRID_HAS_F_EXT_GRADIENT_DQ 1
 
 template <typename T>
 void read_vector(T *dst, int count) {
@@ -83,7 +83,7 @@ void run() {
     print_matrix_col_major("f_ext_gradient_dtau_dfext", hd_data->h_dtau_dfext, nv, 6 * nb);
     print_matrix_col_major("f_ext_gradient_dqdd_dfext", hd_data->h_dqdd_dfext, nv, 6 * nb);
 
-#if GRID_HAS_F_EXT_GRAD_DQ
+#if GRID_HAS_F_EXT_GRADIENT_DQ
     // A.3: -dJ^T/dq, size nv x 6NB x nv. Printed as a (nv*6NB) x nv matrix with
     // the q-coordinate as the column (matches the kernel layout
     // [ (row v_j) + nv*(6NB col) + nv*6NB*qi ]).

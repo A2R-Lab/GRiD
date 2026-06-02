@@ -323,7 +323,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::f_ext_gradient_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
         "batch_label": "F_EXT_GRADIENT",
         "gate": None,
-        "shared_mem_skip": "F_EXT_GRAD_DYNAMIC_SHARED_MEM_BYTES",
+        "shared_mem_skip": "F_EXT_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
     },
     "f_ext_gradient_dq": {
         "single_call":        "grid::f_ext_gradient_dq_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -331,7 +331,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::f_ext_gradient_dq_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
         "batch_label": "F_EXT_GRADIENT_DQ",
         "gate": None,
-        "shared_mem_skip": "F_EXT_GRAD_DQ_DYNAMIC_SHARED_MEM_BYTES",
+        "shared_mem_skip": "F_EXT_GRADIENT_DQ_DYNAMIC_SHARED_MEM_BYTES",
     },
     # Joint-torque regressor (A1). The grid:: symbol AND registry key are now both
     # `inverse_dynamics_regressor`; R2: its output buffer `d_Y` is now part of
