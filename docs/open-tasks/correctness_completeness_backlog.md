@@ -34,8 +34,11 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
 ## 2. CORRECTNESS — verification gaps (untested code that could hide bugs)
 - ✅ **C2 — `fd_parameter_gradient` numpy** now tested vs −M⁻¹Y pin oracle (ref was correct). *(committed)*
 - ✅ **idsva_so floating-mimic** verified correct vs pin (world-frame), gate enabled. *(C6, committing)*
-- ⬜ **V1 / C3 — `com_cost`/`momentum_cost` have NO CUDA equivalence test** (plant smoke runner never
-  calls them). numpy+FD tests exist; the device kernels are CUDA-unverified.
+- ✅ **V1 / C3 — `com_cost`/`momentum_cost` CUDA equivalence test added** (iiwa14-fixed + go2-floating);
+  EXPOSED + FIXED a real emitter bug: `com_cost_gradient` zeroed `[nq, nq+nv)` but the meaningful gradient
+  lives in `[0, nv)`, leaving `[nv, nq)` UNINITIALIZED on floating-base (nq>nv) → stale shared mem (go2
+  `s_grad[18]`). Fixed in `_plant.py` to zero the full `[nv, nx)` tail (byte-identical fixed-base; matches the
+  GN-hessian `[0,nv)` convention). `momentum_cost_gradient` was already correct. Both cells green. *(committed)*
 - ⬜ **V2 / C4 — centroidal CUDA breadth + mimic.** `generalized_gravity`/`nonlinear_effects` support
   mimic but are never CUDA-checked on a mimic robot → need the **mimic-safe centroidal runner** (also
   the runtime check the `s_vaf` NB-fix still lacks). `com`/`ccrba`/`energy` are non-mimic-only (structural).

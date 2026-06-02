@@ -30,6 +30,12 @@
 //   plant_x_kp1                  1 x (NUM_POS + NUM_VEL)
 //   integrator_x_kp1            1 x (NUM_POS + NUM_VEL)
 //   ee_pos                       1 x 3             (the EE position p(q), for the Python FD oracle)
+//   com_cost_value               1 x 1             (grid_plant::com_cost; non-mimic only)
+//   com_cost_grad                1 x NX            (q-block = J_com^T W r; qd-block zero)
+//   com_cost_hess                NX x NX           (top-left NV x NV q-block = J_com^T W J_com)
+//   momentum_cost_value          1 x 1             (grid_plant::momentum_cost; non-mimic only)
+//   momentum_cost_grad           1 x NX            (qd-block = A^T W r; q-block zero)
+//   momentum_cost_hess           NX x NX           (bottom-right NV x NV qd-block = A^T W A)
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -85,6 +91,11 @@ template <typename T> __host__ __device__ T Qw_val(int i)     { return static_ca
 template <typename T> __host__ __device__ T u_des_val(int i)  { return static_cast<T>(-0.05) * i; }
 template <typename T> __host__ __device__ T Rw_val(int i)     { return static_cast<T>(2.0) + static_cast<T>(0.1) * i; }
 template <typename T> __host__ __device__ T Ww_val(int r)     { return static_cast<T>(10.0) + r; }
+// Centroidal CoM-cost setup (3 axes) and momentum-cost setup (6 components).
+template <typename T> __host__ __device__ T com_pdes_val(int r) { return static_cast<T>(0.2) + static_cast<T>(0.1) * r; }
+template <typename T> __host__ __device__ T com_W_val(int r)    { return static_cast<T>(3.0) + static_cast<T>(0.5) * r; }
+template <typename T> __host__ __device__ T mom_hdes_val(int r) { return static_cast<T>(-0.3) + static_cast<T>(0.15) * r; }
+template <typename T> __host__ __device__ T mom_W_val(int r)    { return static_cast<T>(2.0) + static_cast<T>(0.25) * r; }
 
 // A single-block kernel: fill the deterministic setup, then call every primitive.
 template <typename T>
@@ -244,6 +255,54 @@ __global__ void plant_step_kernel(const T *g_q, const T *g_qd, const T *g_u, T d
     __syncthreads();
 }
 
+// ---- centroidal plant costs: com_cost / momentum_cost ----
+// These compose grid::com_device / grid::ccrba_device, which use an `extern
+// __shared__` dynamic arena (COM/CCRBA_DYNAMIC_SHARED_MEM_BYTES). The launch
+// must size dynamic smem to max(COM, CCRBA) and raise the opt-in attribute.
+// Emitted NON-MIMIC ONLY (see _plant.py gen path); validated on iiwa14:fixed /
+// go2:floating only.
+template <typename T>
+__global__ void plant_centroidal_kernel(const T *g_q, const T *g_qd,
+                                        const grid::robotModel<T> *d_robotModel,
+                                        T *o_com_val, T *o_com_grad, T *o_com_hess,
+                                        T *o_mom_val, T *o_mom_grad, T *o_mom_hess) {
+    __shared__ T s_q[NQ], s_qd[NV];
+    __shared__ T s_com[3 + 3 * NV];        // grid::com_device output [p_com(3); J_com(3 x NV)]
+    __shared__ T s_ccrba[6 * NV + 6];      // grid::ccrba_device output [A(6 x NV); h(6)]
+    __shared__ T s_pdes[3], s_cW[3];       // CoM desired + per-axis weight
+    __shared__ T s_hdes[6], s_mW[6];       // momentum desired + per-component weight
+    __shared__ T s_out[1];
+    __shared__ T s_grad[NX], s_hess[NX * NX];
+
+    const int tid = threadIdx.x + threadIdx.y * blockDim.x;
+    const int nth = blockDim.x * blockDim.y;
+    for (int i = tid; i < NQ; i += nth) s_q[i] = g_q[i];
+    for (int i = tid; i < NV; i += nth) s_qd[i] = g_qd[i];
+    for (int r = tid; r < 3; r += nth) { s_pdes[r] = com_pdes_val<T>(r); s_cW[r] = com_W_val<T>(r); }
+    for (int r = tid; r < 6; r += nth) { s_hdes[r] = mom_hdes_val<T>(r); s_mW[r] = mom_W_val<T>(r); }
+    __syncthreads();
+
+    // ---- CoM-tracking cost (value + grad over x=[q;qd] + GN hess) ----
+    grid_plant::com_cost<T>(s_out, s_q, s_pdes, s_cW, s_com, d_robotModel);
+    __syncthreads(); if (tid == 0) o_com_val[0] = s_out[0]; __syncthreads();
+    grid_plant::com_cost_gradient<T, false>(s_grad, s_q, s_pdes, s_cW, s_com, d_robotModel);
+    grid_plant::com_cost_hessian<T, false>(s_hess, s_q, s_cW, s_com, d_robotModel);
+    __syncthreads();
+    for (int i = tid; i < NX; i += nth) o_com_grad[i] = s_grad[i];
+    for (int i = tid; i < NX * NX; i += nth) o_com_hess[i] = s_hess[i];
+    __syncthreads();
+
+    // ---- centroidal-momentum-tracking cost (value + grad + GN hess) ----
+    grid_plant::momentum_cost<T>(s_out, s_q, s_qd, s_hdes, s_mW, s_ccrba, d_robotModel);
+    __syncthreads(); if (tid == 0) o_mom_val[0] = s_out[0]; __syncthreads();
+    grid_plant::momentum_cost_gradient<T, false>(s_grad, s_q, s_qd, s_hdes, s_mW, s_ccrba, d_robotModel);
+    grid_plant::momentum_cost_hessian<T, false>(s_hess, s_q, s_qd, s_mW, s_ccrba, d_robotModel);
+    __syncthreads();
+    for (int i = tid; i < NX; i += nth) o_mom_grad[i] = s_grad[i];
+    for (int i = tid; i < NX * NX; i += nth) o_mom_hess[i] = s_hess[i];
+    __syncthreads();
+}
+
 template <typename T>
 T *dmalloc(int count) { T *p; cudaMalloc(&p, count * sizeof(T)); return p; }
 template <typename T>
@@ -284,6 +343,8 @@ void run() {
     T *o_cbv = dmalloc<T>(1), *o_cbg = dmalloc<T>(NU);
     T *o_pdab = dmalloc<T>(2 * NV * 3 * NV), *o_idab = dmalloc<T>(2 * NV * 3 * NV);
     T *o_pxk = dmalloc<T>(NX), *o_ixk = dmalloc<T>(NX), *o_eepos = dmalloc<T>(3);
+    T *o_comv = dmalloc<T>(1), *o_comg = dmalloc<T>(NX), *o_comh = dmalloc<T>(NX * NX);
+    T *o_momv = dmalloc<T>(1), *o_momg = dmalloc<T>(NX), *o_momh = dmalloc<T>(NX * NX);
 
     const int nthreads = grid::MAX_PERF_LEVEL_THREADS;
     // The grid_plant primitives that compose an auto-allocating grid:: _device
@@ -295,8 +356,13 @@ void run() {
     size_t plant_dyn = grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>();
     if (grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>() > plant_dyn) plant_dyn = grid::EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>();
     size_t step_dyn = grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>();
+    // com_cost composes grid::com_device, momentum_cost composes grid::ccrba_device;
+    // both use an extern __shared__ dynamic arena, so size to the max of the two.
+    size_t cent_dyn = grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>();
+    if (grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>() > cent_dyn) cent_dyn = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(plant_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)plant_dyn);
     cudaFuncSetAttribute(plant_step_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)step_dyn);
+    cudaFuncSetAttribute(plant_centroidal_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)cent_dyn);
 
     plant_kernel<T><<<1, nthreads, plant_dyn>>>(g_q, g_qd, g_u, dt, d_robotModel, gravity,
         o_sv, o_sg, o_sh, o_iv, o_ig, o_ih, o_ev, o_eg, o_eh,
@@ -307,21 +373,44 @@ void run() {
     // (from grid.cuh) does cudaPeekAtLastError() + cudaDeviceSynchronize() + abort.
     gpuErrchkKernel();
 
-    plant_step_kernel<T><<<1, nthreads, step_dyn>>>(g_q, g_qd, g_u, dt, d_robotModel, gravity, o_pxk, o_pdab);
+    // The centroidal cost kernel (com_cost / momentum_cost) is independent of the
+    // plant_step / integrator pass-through path, so drive it first — that way a
+    // robot whose plant_step_kernel static scratch overflows the device smem cap
+    // (e.g. go2:floating, where the big integrator-gradient static buffers exceed
+    // the 48 KB default) still produces valid centroidal output.
+    plant_centroidal_kernel<T><<<1, nthreads, cent_dyn>>>(g_q, g_qd, d_robotModel,
+        o_comv, o_comg, o_comh, o_momv, o_momg, o_momh);
     gpuErrchkKernel();
 
-    // grid:: integrator pass-through oracle, via the host wrappers.
-    const int input_count = NQ + 2 * NV;
-    std::vector<T> packed(input_count);
-    for (int i = 0; i < NQ; ++i) packed[i] = h_q[i];
-    for (int i = 0; i < NV; ++i) { packed[NQ + i] = h_qd[i]; packed[NQ + NV + i] = h_u[i]; }
-    const dim3 bd(1, 1, 1), td(nthreads, 1, 1);
-    std::memcpy(hd_data->h_q_qd_u, packed.data(), input_count * sizeof(T));
-    grid::integrator<T, grid::IntegratorType::EULER>(hd_data, d_robotModel, gravity, dt, 1, bd, td, streams);
-    print_vector("integrator_x_kp1", hd_data->h_x_kp1, NX);
-    std::memcpy(hd_data->h_q_qd_u, packed.data(), input_count * sizeof(T));
-    grid::integrator_gradient<T, grid::IntegratorType::EULER>(hd_data, d_robotModel, gravity, dt, 1, bd, td, streams);
-    print_matrix_col_major("integrator_dAB", hd_data->h_dAB, 2 * NV, 3 * NV);
+    // plant_step_kernel inlines the integrator-gradient with a FIXED-SIZE caller
+    // scratch pool (s_temp[4096]). That inner needs FD_DU_MAX_SHARED_MEM_COUNT
+    // floats of temp; on big floating-base robots (e.g. go2: 12040 > 4096) the
+    // pool overflows -> out-of-bounds. The plant_step / integrator pass-through is
+    // only meaningful / sized for robots where it fits (iiwa14:fixed = 2535), so
+    // SKIP it (printing a parseable sentinel) rather than corrupting memory. The
+    // centroidal validation above is independent and unaffected.
+    constexpr int PLANT_STEP_TEMP_FLOATS = 4096;  // == s_temp[4096] in plant_step_kernel
+    const bool plant_step_fits = (grid::FD_DU_MAX_SHARED_MEM_COUNT <= PLANT_STEP_TEMP_FLOATS);
+
+    if (plant_step_fits) {
+        plant_step_kernel<T><<<1, nthreads, step_dyn>>>(g_q, g_qd, g_u, dt, d_robotModel, gravity, o_pxk, o_pdab);
+        gpuErrchkKernel();
+
+        // grid:: integrator pass-through oracle, via the host wrappers.
+        const int input_count = NQ + 2 * NV;
+        std::vector<T> packed(input_count);
+        for (int i = 0; i < NQ; ++i) packed[i] = h_q[i];
+        for (int i = 0; i < NV; ++i) { packed[NQ + i] = h_qd[i]; packed[NQ + NV + i] = h_u[i]; }
+        const dim3 bd(1, 1, 1), td(nthreads, 1, 1);
+        std::memcpy(hd_data->h_q_qd_u, packed.data(), input_count * sizeof(T));
+        grid::integrator<T, grid::IntegratorType::EULER>(hd_data, d_robotModel, gravity, dt, 1, bd, td, streams);
+        print_vector("integrator_x_kp1", hd_data->h_x_kp1, NX);
+        std::memcpy(hd_data->h_q_qd_u, packed.data(), input_count * sizeof(T));
+        grid::integrator_gradient<T, grid::IntegratorType::EULER>(hd_data, d_robotModel, gravity, dt, 1, bd, td, streams);
+        print_matrix_col_major("integrator_dAB", hd_data->h_dAB, 2 * NV, 3 * NV);
+    } else {
+        std::cout << "BEGIN plant_step_skipped 1 1\n1\nEND plant_step_skipped\n";
+    }
 
     // print everything
     dcopy_out("state_cost_value", o_sv, 1, 1);
@@ -340,9 +429,17 @@ void run() {
     dcopy_out("vel_barrier_grad", o_vbg, 1, NX);
     dcopy_out("ctrl_barrier_value", o_cbv, 1, 1);
     dcopy_out("ctrl_barrier_grad", o_cbg, 1, NU);
-    dcopy_out("plant_dAB", o_pdab, 2 * NV, 3 * NV);
-    dcopy_out("plant_x_kp1", o_pxk, 1, NX);
+    if (plant_step_fits) {
+        dcopy_out("plant_dAB", o_pdab, 2 * NV, 3 * NV);
+        dcopy_out("plant_x_kp1", o_pxk, 1, NX);
+    }
     dcopy_out("ee_pos", o_eepos, 1, 3);
+    dcopy_out("com_cost_value", o_comv, 1, 1);
+    dcopy_out("com_cost_grad", o_comg, 1, NX);
+    dcopy_out("com_cost_hess", o_comh, NX, NX);
+    dcopy_out("momentum_cost_value", o_momv, 1, 1);
+    dcopy_out("momentum_cost_grad", o_momg, 1, NX);
+    dcopy_out("momentum_cost_hess", o_momh, NX, NX);
 
     grid::close_grid<T>(streams, d_robotModel, hd_data);
 }

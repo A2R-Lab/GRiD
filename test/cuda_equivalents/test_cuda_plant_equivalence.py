@@ -59,6 +59,12 @@ def _Qw(nx):     return np.array([1.0 + 0.5 * i for i in range(nx)], dtype=np.fl
 def _u_des(nu):  return np.array([-0.05 * i for i in range(nu)], dtype=np.float64)
 def _Rw(nu):     return np.array([2.0 + 0.1 * i for i in range(nu)], dtype=np.float64)
 def _Ww():       return np.array([10.0 + r for r in range(3)], dtype=np.float64)
+# Centroidal CoM-cost setup (3 axes) and momentum-cost setup (6 components),
+# mirroring com_pdes_val/com_W_val/mom_hdes_val/mom_W_val in the runner exactly.
+def _com_pdes(): return np.array([0.2 + 0.1 * r for r in range(3)], dtype=np.float64)
+def _com_W():    return np.array([3.0 + 0.5 * r for r in range(3)], dtype=np.float64)
+def _mom_hdes(): return np.array([-0.3 + 0.15 * r for r in range(6)], dtype=np.float64)
+def _mom_W():    return np.array([2.0 + 0.25 * r for r in range(6)], dtype=np.float64)
 
 
 def _comma_env(name, default):
@@ -68,6 +74,22 @@ def _comma_env(name, default):
 
 def _robot_ids():
     return _comma_env("GRID_CUDA_PLANT_ROBOTS", "iiwa14")
+
+
+# (robot_id, base_mode) cells for the centroidal (com/momentum) plant-cost check.
+# com_cost/momentum_cost are emitted NON-MIMIC ONLY (see GRiDCodeGenerator/
+# algorithms/_plant.py ~line 907), so validate on non-mimic robots only:
+# iiwa14:fixed (cheap fixed-base) and go2:floating (floating-base, non-mimic).
+def _centroidal_cells():
+    raw = os.environ.get("GRID_CUDA_PLANT_CENTROIDAL_CELLS", "iiwa14:fixed,go2:floating")
+    cells = []
+    for tok in raw.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        robot_id, _, base = tok.partition(":")
+        cells.append((robot_id, base or "fixed"))
+    return cells
 
 
 def _robot_spec(robot_id, base_mode):
@@ -254,3 +276,84 @@ def test_cuda_plant_matches_reference(tmp_path, robot_id):
         close(out["plant_dAB"].reshape(2 * nv, 3 * nv, order="F"),
               out["integrator_dAB"].reshape(2 * nv, 3 * nv, order="F"),
               f"{tag} plant_step_gradient == grid::integrator_gradient (dAB pass-through)")
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+@pytest.mark.parametrize(
+    "robot_id,base_mode", _centroidal_cells(),
+    ids=lambda v: str(v),
+)
+def test_cuda_plant_centroidal_costs_match_reference(tmp_path, robot_id, base_mode):
+    """CUDA `grid_plant::com_cost` / `momentum_cost` vs the RBDReference oracle.
+
+    These centroidal plant costs compose grid::com_device / grid::ccrba_device
+    and are emitted NON-MIMIC ONLY, so we validate on iiwa14:fixed and
+    go2:floating. The runner drives the device cost kernels (value + gradient +
+    GN hessian) with a DETERMINISTIC p_des/h_des/W setup (mirrored here); the
+    oracle is the numpy `RBDReference` plant reference (`reference.com_cost` /
+    `reference.momentum_cost`), the same path the numpy plant suite uses.
+    """
+    spec = _robot_spec(robot_id, base_mode)
+    try:
+        resolved = resolve_robot_spec(spec)
+    except RuntimeError as exc:
+        pytest.skip(f"Could not resolve manifest {spec.robot_id}: {exc}")
+    project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
+    ref = project_model.reference
+    build_dir = tmp_path / f"{robot_id}_{base_mode}_plant_centroidal"
+    build_dir.mkdir()
+    _generate_header(project_model, build_dir)
+    executable, cmd = _compile_runner(build_dir)
+
+    nq, nv = project_model.nq, project_model.nv
+    nx = nq + nv
+    samples = _build_cuda_samples(project_model, random_count=3, include_corner_samples=True)
+
+    rtol, atol = 2e-3, 2e-3
+
+    def close(actual, expected, msg):
+        expected = np.asarray(expected, dtype=np.float64)
+        scale = float(np.max(np.abs(expected))) if expected.size else 0.0
+        np.testing.assert_allclose(
+            np.asarray(actual, dtype=np.float64), expected,
+            rtol=rtol, atol=max(atol, rtol * scale), err_msg=msg,
+        )
+
+    p_des = _com_pdes(); cW = _com_W()
+    h_des = _mom_hdes(); mW = _mom_W()
+
+    for sample in samples:
+        q, qd = np.asarray(sample.q, np.float64), np.asarray(sample.qd, np.float64)
+        u = np.asarray(sample.qdd, np.float64)
+        tag = f"{robot_id}:{base_mode} @ {sample.name}"
+
+        # Degenerate / zero-inertia models (M_total==0) give NaN CoM/CMM; skip
+        # those samples (same guard the numpy plant + energy/centroidal suites
+        # use). iiwa14/go2 are physical, so this never triggers for them.
+        m_total, _com_chk = ref._total_mass_and_com(q)
+        if not (np.isfinite(m_total) and m_total != 0.0):
+            continue
+
+        out = _run(executable, cmd, q, qd, u, _DT)
+
+        # ---------- CoM-tracking cost (value + grad_x + GN hess_x) ----------
+        com_val, com_grad, com_hess = ref.com_cost(q, p_des, cW)
+        close(out["com_cost_value"].reshape(-1)[0], com_val, f"{tag} com value")
+        close(out["com_cost_grad"].reshape(-1), com_grad, f"{tag} com grad (J_com^T W r; qd-block zero)")
+        # qd-block of the CoM-cost gradient must be EXACTLY zero.
+        assert np.all(np.asarray(out["com_cost_grad"]).reshape(-1)[nv:] == 0.0), \
+            f"{tag} com grad qd-block not exactly zero"
+        close(out["com_cost_hess"].reshape(nx, nx, order="F"), com_hess,
+              f"{tag} com GN hess (J_com^T W J_com; top-left q-block)")
+
+        # ---------- centroidal-momentum-tracking cost (value + grad_x + GN hess_x) ----------
+        mom_val, mom_grad, mom_hess = ref.momentum_cost(q, qd, h_des, mW)
+        close(out["momentum_cost_value"].reshape(-1)[0], mom_val, f"{tag} momentum value")
+        close(out["momentum_cost_grad"].reshape(-1), mom_grad, f"{tag} momentum grad (A^T W r; q-block zero)")
+        # q-block of the momentum-cost gradient must be EXACTLY zero (GN drop).
+        assert np.all(np.asarray(out["momentum_cost_grad"]).reshape(-1)[:nq] == 0.0), \
+            f"{tag} momentum grad q-block not exactly zero"
+        close(out["momentum_cost_hess"].reshape(nx, nx, order="F"), mom_hess,
+              f"{tag} momentum GN hess (A^T W A; bottom-right qd-block)")
