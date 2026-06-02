@@ -2,8 +2,8 @@
 """Compile and run the printGRiD CUDA executable to display generated kernel outputs.
 
 Usage:
-    python examples/print_grid.py PATH_TO_URDF [-n NAMESPACE] [-d] [-f]
-    python examples/print_grid.py           # if grid.cuh already exists
+    python examples/codegen/print_grid.py PATH_TO_URDF [-n NAMESPACE] [-d] [-f]
+    python examples/codegen/print_grid.py           # if grid.cuh already exists
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def detect_cuda_arch() -> str:
 def main():
     inputs = parseInputs(NO_ARG_OPTION=True)
     arch = detect_cuda_arch()
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
 
     with tempfile.TemporaryDirectory(prefix="grid_print_") as tmpdir:
         build_dir = Path(tmpdir)

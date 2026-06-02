@@ -4,7 +4,7 @@
 Requires: pip install robot_descriptions  (included in dev dependencies)
 
 Run:
-    python examples/quickstart_go2_floating.py --output /tmp/grid_go2.cuh
+    python examples/codegen/generate_go2_floating.py --output /tmp/grid_go2.cuh
 
 Generates a floating-base dynamics header by default.
 """

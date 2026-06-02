@@ -26,17 +26,17 @@ Generate CUDA code for your robot:
 grid-generate path/to/robot.urdf [-t EE_JOINT_NAME] [-n NAMESPACE] [-f]
 
 # Or via a hardcoded zero-config example:
-python examples/quickstart_iiwa14.py       # iiwa14 fixed base
-python examples/quickstart_go2_floating.py # Go2 floating base
+python examples/codegen/generate_iiwa14.py       # iiwa14 fixed base
+python examples/codegen/generate_go2_floating.py # Go2 floating base
 ```
 
 Validate and debug:
 ```shell
 # Print CPU reference values for all algorithms:
-python examples/print_reference_values.py path/to/robot.urdf
+python examples/codegen/print_reference_values.py path/to/robot.urdf
 
 # Compile and run the CUDA print kernel (requires nvcc):
-python examples/print_grid.py path/to/robot.urdf
+python examples/codegen/print_grid.py path/to/robot.urdf
 ```
 
 Write your own CUDA kernel against the generated header:
@@ -52,8 +52,8 @@ bash examples/cuda/build_and_validate.sh   # generate → nvcc → run → valid
 
 ## Usage
 + `grid-generate PATH_TO_URDF` — generate `grid.cuh`; add `-d` for full debug mode, `-f` for floating base, `-t JOINT_NAME` to target a specific end-effector joint
-+ `python examples/print_reference_values.py PATH_TO_URDF` — print CPU reference values for all algorithms to validate CUDA output
-+ `python examples/print_grid.py PATH_TO_URDF` — compile and run the CUDA print kernel against the generated header
++ `python examples/codegen/print_reference_values.py PATH_TO_URDF` — print CPU reference values for all algorithms to validate CUDA output
++ `python examples/codegen/print_grid.py PATH_TO_URDF` — compile and run the CUDA print kernel against the generated header
 
 ## Floating-Base Conventions
 Floating-base parsing and the Python reference path now accept a public

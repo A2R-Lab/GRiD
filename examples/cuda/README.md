@@ -5,6 +5,11 @@ high-level `grid_rbd` Python wrapper hides that CUDA; this directory shows how t
 call it yourself — the thing you do when you fuse GRiD dynamics into your own
 MPC/RL/controls kernel.
 
+> **Prefer a notebook?** [`../notebooks/07_inline_cuda.ipynb`](../notebooks/07_inline_cuda.ipynb)
+> is the tutorial version of this directory: it generates `grid.cuh`, writes a
+> small kernel, compiles it with `nvcc` inline, and validates vs `RBDReference`,
+> all in one *Run All*. This directory is the fuller, scripted walkthrough.
+
 The flagship walkthrough uses `inverse_dynamics` (the RNEA — the simplest
 algorithm) on the fixed-base KUKA **iiwa14** (7 DoF). Everything here compiles and
 runs on an RTX 5090 (`sm_120`) and is numerically validated against the

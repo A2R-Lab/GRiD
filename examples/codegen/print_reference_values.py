@@ -4,7 +4,7 @@
 Useful for debugging and validating GRiD CUDA output against ground truth.
 
 Usage:
-    python examples/print_reference_values.py PATH_TO_URDF [-t FIXED_TARGET_NAMES] [-n NAMESPACE] [-d] [-f]
+    python examples/codegen/print_reference_values.py PATH_TO_URDF [-t FIXED_TARGET_NAMES] [-n NAMESPACE] [-d] [-f]
 """
 from __future__ import annotations
 

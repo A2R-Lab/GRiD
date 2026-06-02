@@ -501,12 +501,12 @@ These print CPU reference values + CUDA kernel outputs for manual eyeball check
 .venv/bin/grid-generate /path/to/iiwa14.urdf -f   # floating
 
 # Compile + run CUDA kernels:
-.venv/bin/python examples/print_grid.py <urdf>    # fixed
-.venv/bin/python examples/print_grid.py <urdf> -f # floating
+.venv/bin/python examples/codegen/print_grid.py <urdf>    # fixed
+.venv/bin/python examples/codegen/print_grid.py <urdf> -f # floating
 
 # Print CPU reference (RBDReference, Pinocchio-grounded):
-.venv/bin/python examples/print_reference_values.py <urdf>    # fixed
-.venv/bin/python examples/print_reference_values.py <urdf> -f # floating
+.venv/bin/python examples/codegen/print_reference_values.py <urdf>    # fixed
+.venv/bin/python examples/codegen/print_reference_values.py <urdf> -f # floating
 ```
 
 URDF paths via `robot_descriptions` (auto-cached):

@@ -4,7 +4,7 @@
 Requires: pip install robot_descriptions  (included in dev dependencies)
 
 Run:
-    python examples/quickstart_iiwa14.py --output /tmp/grid_iiwa14.cuh
+    python examples/codegen/generate_iiwa14.py --output /tmp/grid_iiwa14.cuh
 
 Generates grid.cuh in the current directory unless --output is provided.
 """
@@ -46,7 +46,7 @@ def main():
     print()
     print("Next steps:")
     print("  1. Compile a CUDA program against the generated header")
-    print("  2. Use examples/print_grid.py to compile and run the built-in print kernel")
+    print("  2. Use examples/codegen/print_grid.py to compile and run the built-in print kernel")
     print("  3. Use test/cuda_equivalents/run_staged_cuda_checks.py for CUDA equivalence")
 
 
