@@ -56,7 +56,14 @@ def _world_frame_robot_ids() -> tuple[str, ...]:
     # ancestor walk in per-column INTERNAL coordinates (the floating root's 6 DoF + the
     # finger mimic's shared slot) into a 4*n_int^3 slab, then alpha-folds to the reduced
     # 4*NV^3 output (mirrors RBDReference.idsva_so_world_frame's has_mimic path).
-    return _comma_separated_env("GRID_CUDA_IDSVA_SO_WORLD_FRAME_ROBOTS", "iiwa14,go2,g1,fr3")
+    # g1/h1_2 are the big floating humanoids (spill-tier world-frame SO exercise).
+    # h1_2-floating is the heaviest compile in the repo (~26min), so it is run only
+    # in the pre-sweep gate (V5: ADDED-but-DEFERRED); g1-floating likewise deferred.
+    # fr3 is the floating MIMIC sentinel validated through the world-frame path (NOT
+    # the B4-broken body-frame inner). Override with the env var to subset.
+    return _comma_separated_env(
+        "GRID_CUDA_IDSVA_SO_WORLD_FRAME_ROBOTS", "iiwa14,go2,g1,h1_2,fr3"
+    )
 
 
 def _world_frame_target_shared_bytes() -> int:

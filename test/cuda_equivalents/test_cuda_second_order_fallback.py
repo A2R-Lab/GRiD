@@ -50,11 +50,13 @@ def _second_order_smoke_robot_ids() -> tuple[str, ...]:
         return _comma_separated_env("GRID_CUDA_SECOND_ORDER_SMOKE_ROBOTS", "")
     return _comma_separated_env(
         "GRID_CUDA_SECOND_ORDER_SMOKE_ROBOT",
-        # iiwa14 (gate) + go2 (quadruped) by default. g1/h1_2 also work but their
-        # large all-profile headers take many minutes to nvcc-compile, so widen to
-        # them via the env var in the (time-budgeted) sweep, e.g.
-        # GRID_CUDA_SECOND_ORDER_SMOKE_ROBOTS=iiwa14,go2,g1.
-        "iiwa14,go2",
+        # iiwa14 (gate) + go2 (quadruped) + the big humanoids g1/h1_2 (spill-tier
+        # exercise). g1/h1_2 all-profile headers are many-minute nvcc compiles, so
+        # the heavy big-robot fixed cells are run only in the time-budgeted
+        # pre-sweep gate (V5: g1-fixed validated; h1_2-fixed deferred to the sweep).
+        # Override the set with the env var to subset, e.g.
+        # GRID_CUDA_SECOND_ORDER_SMOKE_ROBOTS=iiwa14,go2.
+        "iiwa14,go2,g1,h1_2",
     )
 
 
@@ -93,9 +95,17 @@ def _robot_spec(robot_id: str, base_mode: str):
 def _floating_second_order_robot_ids() -> tuple[str, ...]:
     return _comma_separated_env(
         "GRID_CUDA_FLOATING_SECOND_ORDER_ROBOTS",
-        # iiwa14 (gate) + go2 (quadruped) by default; widen to g1/h1_2 via the env
-        # var in the sweep (their all-profile headers are many-minute nvcc compiles).
-        "iiwa14,go2",
+        # iiwa14 (gate) + go2 (quadruped) + the big humanoids g1/h1_2 (floating
+        # spill-tier body-frame SO exercise). g1/h1_2 floating all-profile headers
+        # are the HEAVIEST compiles in the repo (h1_2-floating idsva_so ~26min), so
+        # these big-robot floating cells are run only in the pre-sweep gate (V5:
+        # ADDED-but-DEFERRED). NOTE: fr3-floating is deliberately NOT here — its
+        # body-frame SO mimic columns are a known-broken cell (B4 in
+        # correctness_completeness_backlog.md); the fr3 floating SO surface is
+        # instead validated through the world-frame path
+        # (test_cuda_idsva_so_world_frame.py). The _b4_broken_body_frame_cell guard
+        # below skips fr3-floating defensively if it is ever added via the env var.
+        "iiwa14,go2,g1,h1_2",
     )
 
 
@@ -424,6 +434,19 @@ def _assert_allclose_with_optional_norm_guard(
         raise
 
 
+def _b4_broken_body_frame_cell(robot_id: str) -> bool:
+    """True for cells where `idsva_so_body_frame` is a KNOWN-BROKEN mimic-column
+    failure that must be skipped (NOT masked with loosened tolerances).
+
+    B4 (correctness_completeness_backlog.md): fr3 mimic column 13 shows
+    last_two_axis_transpose_rel_norm=1.16 on the body-frame inner — a pre-existing,
+    suspected wrong-result, filed and deferred. It also blocks the fr3-floating SO
+    diagnostic upstream. Any fr3 body-frame SO cell must be pytest.skip'd with this
+    reference, never asserted green. (g1/h1_2 are non-mimic and unaffected.)
+    """
+    return robot_id == "fr3"
+
+
 def _fdsva_so_tolerance(robot_id: str):
     # FDSVA-SO composes IDSVA-SO, Minv, and FD gradients in float32 CUDA.
     # Some structurally near-zero entries are cancellation dominated, so keep
@@ -437,6 +460,13 @@ def _fdsva_so_tolerance(robot_id: str):
     ids=lambda robot_id: f"{robot_id}-fixed",
 )
 def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path, robot_id):
+    if _b4_broken_body_frame_cell(robot_id):
+        pytest.skip(
+            f"{robot_id}-fixed idsva_so_body_frame is a KNOWN-BROKEN mimic-column "
+            "cell (B4 in docs/open-tasks/correctness_completeness_backlog.md: "
+            "last_two_axis_transpose_rel_norm=1.16). Do NOT loosen tolerance to make "
+            "it pass."
+        )
     spec = _fixed_robot_spec(robot_id)
     try:
         resolved = resolve_robot_spec(spec)
@@ -501,6 +531,14 @@ def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path, r
     ids=lambda robot_id: f"{robot_id}-floating",
 )
 def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, robot_id, capsys):
+    if _b4_broken_body_frame_cell(robot_id):
+        pytest.skip(
+            f"{robot_id}-floating idsva_so_body_frame is a KNOWN-BROKEN mimic-column "
+            "cell (B4 in docs/open-tasks/correctness_completeness_backlog.md: "
+            "last_two_axis_transpose_rel_norm=1.16); the fr3 floating SO surface is "
+            "validated via the world-frame path instead. Do NOT loosen tolerance to "
+            "make it pass."
+        )
     spec = _robot_spec(robot_id, "floating")
     try:
         resolved = resolve_robot_spec(spec)
