@@ -66,6 +66,20 @@ PERF harness records a **bogus-fast timing** the autotune argmin then wrongly pi
   fits registers) so they're safer; un-annotated opt-in kernels are the risk.
 - See `f2_audit_findings.md` §A for the runners still missing this check.
 
+### 1d. Cross-cutting convention flips miss non-uniform encodings (sign/unit changes)
+Flipping a convention (R5: gravity `+9.81` → `-9.81`) by grepping ONE pattern (`*gravity`) negated
+every multiply-form but MISSED the vector-assignment forms — `a_world[5] = gravity`,
+`gravity_vec[]={...,gravity}`, `S_agrav[5] = -gravity` (3 idsva_so sites + the fixed-base aba
+`gravity_vec`). Same physical constant, different syntax.
+- **Lesson:** for any sign/unit/convention flip, enumerate EVERY encoding form: `*x`, `= x`,
+  `vec[i]=x`, `{...,x}`, and existing `= -x` (which may need to become `= +x`, not a double-flip).
+  Grep `\bx\b` broadly, reason per-site, never sed.
+- **Validate fixed AND floating AND mimic.** The missed aba site was FIXED-base-only (floating used a
+  different code path), so a floating-only validation shipped the bug. A green floating run is NOT
+  evidence the fixed path is correct — different branches. (Mirror of §0/§5.)
+- A pattern-based sub-agent reliably misses the non-uniform forms; reconcile its diff by grepping ALL
+  forms yourself before trusting it — and never trust an agent that returns without a validation result.
+
 ---
 
 ## 2. Debugging methodology (what actually localizes a bug fast)
@@ -98,6 +112,12 @@ PERF harness records a **bogus-fast timing** the autotune argmin then wrongly pi
 - **Underscore-prefixed names are skipped by `from x import *`.** A shared helper
   (`_emit_fb_bfs_level_indexing`) caused an ImportError until explicitly exported. If you add a
   `_`-prefixed function others import, add it to `__all__` or import it explicitly.
+- **Removing an input alias needs EVERY caller form found first.** Dropping the short-form
+  `algorithm_list` aliases (`id`→`inverse_dynamics`) broke callers a token-pattern grep missed:
+  list literals `["id"]`, comma-strings `"id,minv,..."`, dash-forms `"fd-gradient"`, and module-level
+  vars (`_MIMIC_SAFE_ALGORITHMS`) — each surfaced as a separate `ValueError` only when that one test
+  ran (whack-a-mole). Find them definitively with `grep -rn "algorithm_list\s*="` (catches list AND
+  string) and by codegen-ing EVERY distinct value, not by grepping for a token.
 
 ---
 
