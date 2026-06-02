@@ -80,7 +80,7 @@ def main() -> None:
         else:
             print(f"  {name:30s} {out.shape}  first row [:5]: {out.reshape(B, -1)[0, :5]}")
 
-    show("rnea(q, qd)",                       handle.rnea(q, qd))
+    show("inverse_dynamics(q, qd)",                       handle.inverse_dynamics(q, qd))
     show("minv(q)",                           handle.minv(q))
     show("forward_dynamics(q, qd, u)",        handle.forward_dynamics(q, qd, u))
     show("aba(q, qd, u)",                     handle.aba(q, qd, u))
@@ -88,15 +88,15 @@ def main() -> None:
     show("end_effector_pose(q)",              handle.end_effector_pose(q))
     show("end_effector_pose_gradient(q)",     handle.end_effector_pose_gradient(q))
     show("end_effector_pose_hessian(q)",      handle.end_effector_pose_hessian(q))
-    show("rnea_grad(q, qd)",                  handle.rnea_grad(q, qd))
-    show("forward_dynamics_grad(q, qd, u)",   handle.forward_dynamics_grad(q, qd, u))
+    show("inverse_dynamics_gradient(q, qd)",                  handle.inverse_dynamics_gradient(q, qd))
+    show("forward_dynamics_gradient(q, qd, u)",   handle.forward_dynamics_gradient(q, qd, u))
     show("idsva_so(q, qd)",                   handle.idsva_so(q, qd))
     show("fdsva_so(q, qd, u)",                handle.fdsva_so(q, qd, u))
 
     # ─── 3. Demonstrate the fast path ────────────────────────────────────
     print("\nHot-path timing (median of 100 calls on the registered handle):")
     for name, call in [
-        ("rnea",             lambda: handle.rnea(q, qd)),
+        ("inverse_dynamics",             lambda: handle.inverse_dynamics(q, qd)),
         ("forward_dynamics", lambda: handle.forward_dynamics(q, qd, u)),
         ("crba",             lambda: handle.crba(q)),
     ]:

@@ -141,7 +141,7 @@ static inline void reset_f_ext(const T* f_ext, int batch) {
 
 // RNEA: c = M(q)·qdd + h(q,qd) − g(q)  (with qdd defaulting to 0 if null)
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
-extern "C" int grid_rbd_rnea(
+extern "C" int grid_rbd_inverse_dynamics(
     const T* q, const T* qd, const T* qdd_opt,
     T* c_out,
     int batch, T gravity, const T* f_ext)
@@ -359,8 +359,8 @@ extern "C" int grid_rbd_end_effector_pose_gradient(
 // ∂c/∂(q, qd): output shape (batch, NJ, 2*NJ) — concatenated [dc_dq | dc_dqd].
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
 // f_ext enters RNEA additively (affine), so dc/d(q,qd) is unchanged for a
-// CONSTANT f_ext; this just keeps the bias consistent with grid_rbd_rnea.
-extern "C" int grid_rbd_rnea_grad(
+// CONSTANT f_ext; this just keeps the bias consistent with grid_rbd_inverse_dynamics.
+extern "C" int grid_rbd_inverse_dynamics_gradient(
     const T* q, const T* qd, const T* qdd_opt,
     T* dc_du_out,
     int batch, T gravity, const T* f_ext)
@@ -389,7 +389,7 @@ extern "C" int grid_rbd_rnea_grad(
 
 // ∂qdd/∂(q, qd): output shape (batch, NJ, 2*NJ).
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
-extern "C" int grid_rbd_forward_dynamics_grad(
+extern "C" int grid_rbd_forward_dynamics_gradient(
     const T* q, const T* qd, const T* u,
     T* df_du_out,
     int batch, T gravity, const T* f_ext)
@@ -815,8 +815,8 @@ extern "C" int grid_plant_ee_pos_cost(
 #include "xla/ffi/api/ffi.h"
 namespace ffi = xla::ffi;
 
-// rnea(q, qd) → c   — fully device-resident path.
-static ffi::Error grid_rbd_jax_rnea_impl(
+// inverse_dynamics(q, qd) → c   — fully device-resident path.
+static ffi::Error grid_rbd_jax_inverse_dynamics_impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> q,         // shape (B, NJ), device-resident
     ffi::Buffer<ffi::F32> qd,        // shape (B, NJ), device-resident
@@ -828,16 +828,16 @@ static ffi::Error grid_rbd_jax_rnea_impl(
     }}
     auto q_shape = q.dimensions();
     if (q_shape.size() != 2) {
-        return ffi::Error::InvalidArgument("rnea: q must be 2D (B, NJ)");
+        return ffi::Error::InvalidArgument("inverse_dynamics: q must be 2D (B, NJ)");
     }
     int batch = (int)q_shape[0];
     int nj    = (int)q_shape[1];
     if (nj != grid::NUM_JOINTS) {
-        return ffi::Error::InvalidArgument("rnea: last dim != NUM_JOINTS");
+        return ffi::Error::InvalidArgument("inverse_dynamics: last dim != NUM_JOINTS");
     }
     if (batch > kMaxBatch) {
         return ffi::Error::InvalidArgument(
-            "rnea: batch exceeds compiled-in max_batch_size; recompile with a larger value");
+            "inverse_dynamics: batch exceeds compiled-in max_batch_size; recompile with a larger value");
     }
 
     // D→D repack: interleave q and qd into the singleton's d_q_qd_u
@@ -873,8 +873,8 @@ static ffi::Error grid_rbd_jax_rnea_impl(
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
-    grid_rbd_jax_rnea,
-    grid_rbd_jax_rnea_impl,
+    grid_rbd_jax_inverse_dynamics,
+    grid_rbd_jax_inverse_dynamics_impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::Buffer<ffi::F32>>()  // q
@@ -1225,10 +1225,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 
-// rnea_grad(q, qd) → dc_du  flat (B, 2*NJ*NJ)
+// inverse_dynamics_gradient(q, qd) → dc_du  flat (B, 2*NJ*NJ)
 // Python reshapes/transposes to (B, NJ, 2*NJ) [dc_dq | dc_dqd].
 // USE_QDD_FLAG=false for now; qdd defaults to 0 in-kernel.
-static ffi::Error grid_rbd_jax_rnea_grad_impl(
+static ffi::Error grid_rbd_jax_inverse_dynamics_gradient_impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> q,
     ffi::Buffer<ffi::F32> qd,
@@ -1236,10 +1236,10 @@ static ffi::Error grid_rbd_jax_rnea_grad_impl(
     float gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
-    GRID_RBD_FFI_VALIDATE_2D(q, "rnea_grad: q", grid::NUM_JOINTS);
+    GRID_RBD_FFI_VALIDATE_2D(q, "inverse_dynamics_gradient: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj    = grid::NUM_JOINTS;
-    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("rnea_grad: batch > max_batch");
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("inverse_dynamics_gradient: batch > max_batch");
 
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -1266,8 +1266,8 @@ static ffi::Error grid_rbd_jax_rnea_grad_impl(
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
-    grid_rbd_jax_rnea_grad,
-    grid_rbd_jax_rnea_grad_impl,
+    grid_rbd_jax_inverse_dynamics_gradient,
+    grid_rbd_jax_inverse_dynamics_gradient_impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
@@ -1276,9 +1276,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 
-// forward_dynamics_grad(q, qd, u) → df_du  flat (B, 2*NJ*NJ)
+// forward_dynamics_gradient(q, qd, u) → df_du  flat (B, 2*NJ*NJ)
 // Python reshapes/transposes to (B, NJ, 2*NJ).
-static ffi::Error grid_rbd_jax_forward_dynamics_grad_impl(
+static ffi::Error grid_rbd_jax_forward_dynamics_gradient_impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> q,
     ffi::Buffer<ffi::F32> qd,
@@ -1287,10 +1287,10 @@ static ffi::Error grid_rbd_jax_forward_dynamics_grad_impl(
     float gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
-    GRID_RBD_FFI_VALIDATE_2D(q, "forward_dynamics_grad: q", grid::NUM_JOINTS);
+    GRID_RBD_FFI_VALIDATE_2D(q, "forward_dynamics_gradient: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj    = grid::NUM_JOINTS;
-    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("forward_dynamics_grad: batch > max_batch");
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("forward_dynamics_gradient: batch > max_batch");
 
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -1320,8 +1320,8 @@ static ffi::Error grid_rbd_jax_forward_dynamics_grad_impl(
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
-    grid_rbd_jax_forward_dynamics_grad,
-    grid_rbd_jax_forward_dynamics_grad_impl,
+    grid_rbd_jax_forward_dynamics_gradient,
+    grid_rbd_jax_forward_dynamics_gradient_impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
@@ -1656,11 +1656,11 @@ static inline void grid_torch_f_ext_reset(cudaStream_t stream, int batch,
 
 // ── forward ops ──
 
-torch::Tensor torch_rnea(torch::Tensor q, torch::Tensor qd, double gravity,
+torch::Tensor torch_inverse_dynamics(torch::Tensor q, torch::Tensor qd, double gravity,
                          c10::optional<torch::Tensor> f_ext) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
-    grid_torch_check(q, "rnea: q", nj); grid_torch_check(qd, "rnea: qd", nj);
+    grid_torch_check(q, "inverse_dynamics: q", nj); grid_torch_check(qd, "inverse_dynamics: qd", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
@@ -1785,11 +1785,11 @@ torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q) {
     return out;
 }
 
-torch::Tensor torch_rnea_grad(torch::Tensor q, torch::Tensor qd, double gravity,
+torch::Tensor torch_inverse_dynamics_gradient(torch::Tensor q, torch::Tensor qd, double gravity,
                               c10::optional<torch::Tensor> f_ext) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
-    grid_torch_check(q, "rnea_grad: q", nj); grid_torch_check(qd, "rnea_grad: qd", nj);
+    grid_torch_check(q, "inverse_dynamics_gradient: q", nj); grid_torch_check(qd, "inverse_dynamics_gradient: qd", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
@@ -1803,7 +1803,7 @@ torch::Tensor torch_rnea_grad(torch::Tensor q, torch::Tensor qd, double gravity,
     return out;
 }
 
-torch::Tensor torch_forward_dynamics_grad(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity,
+torch::Tensor torch_forward_dynamics_gradient(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity,
                                           c10::optional<torch::Tensor> f_ext) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
@@ -1921,7 +1921,7 @@ torch::Tensor torch_integrator_gradient(torch::Tensor q, torch::Tensor qd, torch
 #define GRID_RBD_TORCH_LIBRARY_IMPL(ns, k, m) TORCH_LIBRARY_IMPL(ns, k, m)
 
 GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
-    m.def("rnea(Tensor q, Tensor qd, float gravity, Tensor? f_ext=None) -> Tensor");
+    m.def("inverse_dynamics(Tensor q, Tensor qd, float gravity, Tensor? f_ext=None) -> Tensor");
     m.def("minv(Tensor q) -> Tensor");
     m.def("forward_dynamics(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
     m.def("aba(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
@@ -1929,8 +1929,8 @@ GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
     m.def("end_effector_pose(Tensor q) -> Tensor");
     m.def("end_effector_pose_gradient(Tensor q) -> Tensor");
     m.def("end_effector_pose_hessian(Tensor q) -> Tensor");
-    m.def("rnea_grad(Tensor q, Tensor qd, float gravity, Tensor? f_ext=None) -> Tensor");
-    m.def("forward_dynamics_grad(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
+    m.def("inverse_dynamics_gradient(Tensor q, Tensor qd, float gravity, Tensor? f_ext=None) -> Tensor");
+    m.def("forward_dynamics_gradient(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
     m.def("idsva_so(Tensor q, Tensor qd, float gravity) -> Tensor");
     m.def("fdsva_so(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
     m.def("integrator(Tensor q, Tensor qd, Tensor u, float dt, int it, float gravity) -> Tensor");
@@ -1938,7 +1938,7 @@ GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
 }
 
 GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
-    m.impl("rnea", torch_rnea);
+    m.impl("inverse_dynamics", torch_inverse_dynamics);
     m.impl("minv", torch_minv);
     m.impl("forward_dynamics", torch_forward_dynamics);
     m.impl("aba", torch_aba);
@@ -1946,8 +1946,8 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
     m.impl("end_effector_pose", torch_end_effector_pose);
     m.impl("end_effector_pose_gradient", torch_end_effector_pose_gradient);
     m.impl("end_effector_pose_hessian", torch_end_effector_pose_hessian);
-    m.impl("rnea_grad", torch_rnea_grad);
-    m.impl("forward_dynamics_grad", torch_forward_dynamics_grad);
+    m.impl("inverse_dynamics_gradient", torch_inverse_dynamics_gradient);
+    m.impl("forward_dynamics_gradient", torch_forward_dynamics_gradient);
     m.impl("idsva_so", torch_idsva_so);
     m.impl("fdsva_so", torch_fdsva_so);
     m.impl("integrator", torch_integrator);

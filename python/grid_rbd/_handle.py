@@ -14,7 +14,7 @@ Gravity convention
 This wrapper follows GRiD's internal convention: `gravity` is the
 **magnitude** (positive, default 9.81). The downward direction is
 applied inside the kernel. If you're cross-checking against
-``RBDReference.rnea(..., GRAVITY=-9.81)``, pass ``gravity=9.81`` here
+``RBDReference.inverse_dynamics(..., GRAVITY=-9.81)``, pass ``gravity=9.81`` here
 for matching results.
 """
 from __future__ import annotations
@@ -164,7 +164,7 @@ class RobotHandle:
             )
         return fe
 
-    def rnea(self, q, qd, qdd=None, *, gravity: float = 9.81, f_ext=None):
+    def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = 9.81, f_ext=None):
         """Inverse dynamics (RNEA). Returns the bias term c = M·qdd_zero + h − g.
 
         Currently `qdd` is accepted for API stability but ignored (the
@@ -174,14 +174,14 @@ class RobotHandle:
         ``f_ext`` (optional): per-body external forces, shape
         ``(B, 6*num_bodies)``, body-major, each ``[angular; linear]`` in the
         body's local frame (subtracted from the per-body force, matching
-        ``RBDReference.rnea(..., f_ext=...)``). Default None ⇒ no external force.
+        ``RBDReference.inverse_dynamics(..., f_ext=...)``). Default None ⇒ no external force.
         """
         q  = np.ascontiguousarray(q,  dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         qdd_arr = None
         if qdd is not None:
             qdd_arr = np.ascontiguousarray(qdd, dtype=np.float32)
-        return self._runner.rnea(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
+        return self._runner.inverse_dynamics(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
 
     def minv(self, q):
         """Direct mass-matrix inverse Minv(q). Returns shape (B, NJ, NJ).
@@ -203,7 +203,7 @@ class RobotHandle:
         """Forward dynamics qdd = M⁻¹·(τ − c). Returns shape (B, NJ).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``,
-        body-major, ``[angular; linear]`` local-frame (see :py:meth:`rnea`)."""
+        body-major, ``[angular; linear]`` local-frame (see :py:meth:`inverse_dynamics`)."""
         q  = np.ascontiguousarray(q,  dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         u  = np.ascontiguousarray(u,  dtype=np.float32)
@@ -215,7 +215,7 @@ class RobotHandle:
         same output but a different implementation.
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``,
-        body-major, ``[angular; linear]`` local-frame (see :py:meth:`rnea`)."""
+        body-major, ``[angular; linear]`` local-frame (see :py:meth:`inverse_dynamics`)."""
         q  = np.ascontiguousarray(q,  dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         u  = np.ascontiguousarray(u,  dtype=np.float32)
@@ -265,19 +265,19 @@ class RobotHandle:
         NV = self.num_vel
         return raw.reshape(B, NEE, NV, 6).transpose(0, 1, 3, 2).reshape(B, 6 * NEE, NV)
 
-    def rnea_grad(self, q, qd, qdd=None, *, gravity: float = 9.81, f_ext=None):
+    def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = 9.81, f_ext=None):
         """∂c/∂(q, qd). Returns shape (B, NJ, 2*NJ) — concatenated
         [dc_dq | dc_dqd]. Slice with `[..., :NJ]` / `[..., NJ:]`.
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``.
         f_ext enters RNEA affinely, so for a CONSTANT f_ext the Jacobian
-        ∂c/∂(q,qd) is unchanged; the kwarg is for consistency with rnea()."""
+        ∂c/∂(q,qd) is unchanged; the kwarg is for consistency with inverse_dynamics()."""
         q  = np.ascontiguousarray(q,  dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         qdd_arr = None
         if qdd is not None:
             qdd_arr = np.ascontiguousarray(qdd, dtype=np.float32)
-        raw = self._runner.rnea_grad(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
+        raw = self._runner.inverse_dynamics_gradient(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
         # GRiD's h_dc_du = [dc_dq (NJ×NJ col-major), dc_dqd (NJ×NJ col-major)]
         # per timestep, total 2*NJ² floats. Reshape to (B, 2, NJ, NJ) col-major,
         # transpose each block, hstack to match RBDReference's (NJ, 2*NJ).
@@ -286,7 +286,7 @@ class RobotHandle:
         blocks = raw.reshape(B, 2, NJ, NJ).transpose(0, 1, 3, 2)  # row-major now
         return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
-    def forward_dynamics_grad(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
+    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
         """∂qdd/∂(q, qd). Returns shape (B, NJ, 2*NJ).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
@@ -294,7 +294,7 @@ class RobotHandle:
         q  = np.ascontiguousarray(q,  dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         u  = np.ascontiguousarray(u,  dtype=np.float32)
-        raw = self._runner.forward_dynamics_grad(q, qd, u, gravity, self._prep_f_ext(f_ext))
+        raw = self._runner.forward_dynamics_gradient(q, qd, u, gravity, self._prep_f_ext(f_ext))
         # Same layout as h_dc_du: [df_dq, df_dqd] col-major blocks.
         B = raw.shape[0]
         NJ = self.num_joints

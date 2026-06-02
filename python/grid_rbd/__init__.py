@@ -111,7 +111,7 @@ def register_robot(
     Returns
     -------
     RobotHandle
-        Ready for forward_dynamics / rnea / minv / etc.
+        Ready for forward_dynamics / inverse_dynamics / minv / etc.
     """
     if backend not in ("numpy", "jax", "torch"):
         raise ValueError(f"backend must be 'numpy', 'jax', or 'torch'; got {backend!r}")

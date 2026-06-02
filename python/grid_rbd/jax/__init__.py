@@ -13,16 +13,16 @@ Usage:
 
     @jax.jit
     def step(q, qd):
-        return handle.rnea(q, qd)
+        return handle.inverse_dynamics(q, qd)
 
 The underlying ``.so`` is shared with the plain ``grid_rbd.register_robot``
 cache — registering the same name from both APIs uses the same compiled
 library and doesn't trigger a recompile.
 
 v0.3 surface (parity with the plain ``RobotHandle``):
-  ``rnea``, ``minv``, ``forward_dynamics``, ``aba``, ``crba``,
+  ``inverse_dynamics``, ``minv``, ``forward_dynamics``, ``aba``, ``crba``,
   ``end_effector_pose``, ``end_effector_pose_gradient``,
-  ``end_effector_pose_hessian``, ``rnea_grad``, ``forward_dynamics_grad``,
+  ``end_effector_pose_hessian``, ``inverse_dynamics_gradient``, ``forward_dynamics_gradient``,
   ``idsva_so``, ``fdsva_so``. All run device-resident on JAX-supplied
   streams.
 """
@@ -140,7 +140,7 @@ class JaxRobotHandle:
 
     # ─── algorithm methods ───────────────────────────────────────────────
 
-    def rnea(self, q, qd, *, gravity: float = 9.81):
+    def inverse_dynamics(self, q, qd, *, gravity: float = 9.81):
         """Inverse dynamics: c = M(q)·qdd_zero + h(q,qd) − g(q).
 
         ``q``, ``qd``: jax.Array shape (B, NJ), dtype float32.
@@ -150,8 +150,8 @@ class JaxRobotHandle:
         import jax.numpy as jnp
         import numpy as np
         target = _register_method_target(
-            self._so_path, self._cache_key, "rnea", "grid_rbd_jax_rnea")
-        (q, qd), B = self._prep_2d("rnea", q, qd)
+            self._so_path, self._cache_key, "inverse_dynamics", "grid_rbd_jax_inverse_dynamics")
+        (q, qd), B = self._prep_2d("inverse_dynamics", q, qd)
         out_type = jax.ShapeDtypeStruct(q.shape, jnp.float32)
         return jax.ffi.ffi_call(target, out_type)(q, qd, gravity=np.float32(gravity))
 
@@ -258,7 +258,7 @@ class JaxRobotHandle:
         out_type = jax.ShapeDtypeStruct((B, 6 * nee, nv, nv), jnp.float32)
         return jax.ffi.ffi_call(target, out_type)(q)
 
-    def rnea_grad(self, q, qd, *, gravity: float = 9.81):
+    def inverse_dynamics_gradient(self, q, qd, *, gravity: float = 9.81):
         """∂c/∂(q, qd) — concatenated [dc_dq | dc_dqd]. Returns (B, NJ, 2*NJ).
 
         Matches the plain wrapper layout: GRiD writes (2, NJ, NJ) column-major
@@ -269,23 +269,23 @@ class JaxRobotHandle:
         import numpy as np
         target = _register_method_target(
             self._so_path, self._cache_key,
-            "rnea_grad", "grid_rbd_jax_rnea_grad")
-        (q, qd), B = self._prep_2d("rnea_grad", q, qd)
+            "inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient")
+        (q, qd), B = self._prep_2d("inverse_dynamics_gradient", q, qd)
         nj = self.num_joints
         out_type = jax.ShapeDtypeStruct((B, 2 * nj * nj), jnp.float32)
         raw = jax.ffi.ffi_call(target, out_type)(q, qd, gravity=np.float32(gravity))
         blocks = raw.reshape(B, 2, nj, nj).transpose(0, 1, 3, 2)
         return jnp.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
-    def forward_dynamics_grad(self, q, qd, u, *, gravity: float = 9.81):
+    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = 9.81):
         """∂qdd/∂(q, qd) — concatenated [df_dq | df_dqd]. Returns (B, NJ, 2*NJ)."""
         import jax
         import jax.numpy as jnp
         import numpy as np
         target = _register_method_target(
             self._so_path, self._cache_key,
-            "forward_dynamics_grad", "grid_rbd_jax_forward_dynamics_grad")
-        (q, qd, u), B = self._prep_2d("forward_dynamics_grad", q, qd, u)
+            "forward_dynamics_gradient", "grid_rbd_jax_forward_dynamics_gradient")
+        (q, qd, u), B = self._prep_2d("forward_dynamics_gradient", q, qd, u)
         nj = self.num_joints
         out_type = jax.ShapeDtypeStruct((B, 2 * nj * nj), jnp.float32)
         raw = jax.ffi.ffi_call(target, out_type)(q, qd, u, gravity=np.float32(gravity))

@@ -3,7 +3,7 @@
 Mirrors the standard grid_rbd API but returns a :py:class:`TorchRobotHandle`
 whose methods are autograd-aware torch ops returning ``torch.Tensor`` and
 running on the current torch CUDA stream. The four differentiable algorithms
-(rnea / forward_dynamics / aba / integrator) carry analytic backward passes
+(inverse_dynamics / forward_dynamics / aba / integrator) carry analytic backward passes
 that reuse the existing ``*_gradient`` kernels; the rest are forward-only ops.
 
 Usage:
@@ -74,10 +74,10 @@ def _load_ops(so_path: Path, cache_key: str) -> str:
         # torch.ops.<ns> is created lazily, so its mere existence proves nothing;
         # probe for a concrete op to confirm the TORCH_LIBRARY block registered.
         try:
-            getattr(getattr(torch.ops, ns), "rnea")
+            getattr(getattr(torch.ops, ns), "inverse_dynamics")
         except AttributeError as e:
             raise RuntimeError(
-                f"torch op {ns}.rnea not found in {so_path}; was the .so compiled "
+                f"torch op {ns}.inverse_dynamics not found in {so_path}; was the .so compiled "
                 f"with GRID_RBD_WITH_TORCH (torch installed at register time)? "
                 f"Re-register with force_rebuild=True."
             ) from e
@@ -98,13 +98,13 @@ def _make_autograd(ns):
 
     ops = getattr(torch.ops, ns)
 
-    class RneaFn(torch.autograd.Function):
+    class InverseDynamicsFn(torch.autograd.Function):
         @staticmethod
         def forward(ctx, q, qd, gravity, f_ext):
             ctx.save_for_backward(q, qd)
             ctx.gravity = gravity
             ctx.f_ext = f_ext
-            return ops.rnea(q, qd, gravity, f_ext)
+            return ops.inverse_dynamics(q, qd, gravity, f_ext)
 
         @staticmethod
         def backward(ctx, grad_c):
@@ -112,7 +112,7 @@ def _make_autograd(ns):
             nj = q.shape[1]
             # f_ext is affine in RNEA → ∂c/∂(q,qd) is unchanged by a constant
             # f_ext; we pass it through for bias consistency only.
-            raw = ops.rnea_grad(q, qd, ctx.gravity, ctx.f_ext)  # (B, 2*NJ*NJ) col-major
+            raw = ops.inverse_dynamics_gradient(q, qd, ctx.gravity, ctx.f_ext)  # (B, 2*NJ*NJ) col-major
             B = raw.shape[0]
             blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)  # row-major (B,2,NJ,NJ)
             dc_dq, dc_dqd = blocks[:, 0], blocks[:, 1]  # (B, NJ, NJ): rows=out, cols=in
@@ -137,7 +137,7 @@ def _make_autograd(ns):
             def backward(ctx, grad_qdd):
                 q, qd, u = ctx.saved_tensors
                 nj = q.shape[1]
-                raw = ops.forward_dynamics_grad(q, qd, u, ctx.gravity, ctx.f_ext)
+                raw = ops.forward_dynamics_gradient(q, qd, u, ctx.gravity, ctx.f_ext)
                 B = raw.shape[0]
                 blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
                 df_dq, df_dqd = blocks[:, 0], blocks[:, 1]
@@ -178,7 +178,7 @@ def _make_autograd(ns):
             grad_u = vjp[:, 2 * nv:3 * nv]
             return grad_q, grad_qd, grad_u, None, None, None
 
-    return {"rnea": RneaFn, "fd": FDFn, "aba": AbaFn, "integrator": IntegratorFn}
+    return {"inverse_dynamics": InverseDynamicsFn, "fd": FDFn, "aba": AbaFn, "integrator": IntegratorFn}
 
 
 # ─── CUDA-Graphs callable ───────────────────────────────────────────────────
@@ -229,7 +229,7 @@ class GraphCallable:
 
 class TorchRobotHandle:
     """Torch-flavored wrapper. Methods return ``torch.Tensor`` (autograd-aware
-    for rnea / forward_dynamics / aba / integrator)."""
+    for inverse_dynamics / forward_dynamics / aba / integrator)."""
 
     def __init__(self, base: RobotHandle, cache_key: str, so_path: str):
         self._base = base
@@ -258,27 +258,27 @@ class TorchRobotHandle:
 
     # ─── differentiable algorithms ───────────────────────────────────────
 
-    def rnea(self, q, qd, *, gravity: float = 9.81, f_ext=None):
+    def inverse_dynamics(self, q, qd, *, gravity: float = 9.81, f_ext=None):
         """Inverse dynamics c (B, NJ). Autograd-aware wrt (q, qd).
 
         ``f_ext`` (optional): per-body external forces, a CUDA float32 tensor
         ``(B, 6*num_bodies)``, body-major, each ``[angular; linear]`` in the
         body's local frame (subtracted from the per-body force; matches the
-        numpy handle and ``RBDReference.rnea(..., f_ext=...)``)."""
-        return self._fns["rnea"].apply(q, qd, float(gravity), f_ext)
+        numpy handle and ``RBDReference.inverse_dynamics(..., f_ext=...)``)."""
+        return self._fns["inverse_dynamics"].apply(q, qd, float(gravity), f_ext)
 
     def forward_dynamics(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
         """qdd = M⁻¹(τ − c) (B, NJ). Autograd-aware wrt (q, qd, u).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``
-        CUDA float32 (see :py:meth:`rnea`)."""
+        CUDA float32 (see :py:meth:`inverse_dynamics`)."""
         return self._fns["fd"].apply(q, qd, u, float(gravity), f_ext)
 
     def aba(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
         """qdd via ABA (B, NJ). Autograd-aware wrt (q, qd, u).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``
-        CUDA float32 (see :py:meth:`rnea`)."""
+        CUDA float32 (see :py:meth:`inverse_dynamics`)."""
         return self._fns["aba"].apply(q, qd, u, float(gravity), f_ext)
 
     def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = 9.81):
@@ -317,24 +317,24 @@ class TorchRobotHandle:
         nee, nv = self.num_ees, self.num_vel
         return self._ops.end_effector_pose_hessian(q).reshape(-1, 6 * nee, nv, nv)
 
-    def rnea_grad(self, q, qd, *, gravity: float = 9.81, f_ext=None):
+    def inverse_dynamics_gradient(self, q, qd, *, gravity: float = 9.81, f_ext=None):
         """∂c/∂(q,qd) (B, NJ, 2*NJ) = [dc_dq | dc_dqd].
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
         affine in f_ext so a constant f_ext leaves this Jacobian unchanged."""
         nj = self.num_joints
-        raw = self._ops.rnea_grad(q, qd, float(gravity), f_ext)
+        raw = self._ops.inverse_dynamics_gradient(q, qd, float(gravity), f_ext)
         B = raw.shape[0]
         blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
         return _concat_blocks(blocks)
 
-    def forward_dynamics_grad(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
+    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
         """∂qdd/∂(q,qd) (B, NJ, 2*NJ).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
         affine in f_ext so a constant f_ext leaves this Jacobian unchanged."""
         nj = self.num_joints
-        raw = self._ops.forward_dynamics_grad(q, qd, u, float(gravity), f_ext)
+        raw = self._ops.forward_dynamics_gradient(q, qd, u, float(gravity), f_ext)
         B = raw.shape[0]
         blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
         return _concat_blocks(blocks)

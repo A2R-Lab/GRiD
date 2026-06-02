@@ -8,7 +8,7 @@
 //
 //   int grid_rbd_init();
 //   int grid_rbd_num_joints();
-//   int grid_rbd_rnea(const float* q, const float* qd, const float* qdd_opt,
+//   int grid_rbd_inverse_dynamics(const float* q, const float* qd, const float* qdd_opt,
 //                     float* c_out, int batch, float gravity,
 //                     const float* f_ext_opt);  // f_ext_opt may be nullptr
 //   ... etc ...
@@ -42,9 +42,9 @@ namespace py = pybind11;
 extern "C" {
     using fn_int_v_t        = int (*)();
     using fn_int_i_t        = int (*)(int);
-    // q, qd, qdd_opt, out, batch, gravity, f_ext_opt   — rnea, rnea_grad, idsva_so
+    // q, qd, qdd_opt, out, batch, gravity, f_ext_opt   — inverse_dynamics, inverse_dynamics_gradient, idsva_so
     //   f_ext_opt: (batch, 6*NUM_BODIES) local-frame body wrenches, or null
-    using fn_rnea_t         = int (*)(const float*, const float*, const float*,
+    using fn_dyn_t         = int (*)(const float*, const float*, const float*,
                                       float*, int, float, const float*);
     // q, out, batch
     using fn_minv_t         = int (*)(const float*, float*, int);
@@ -53,7 +53,7 @@ extern "C" {
     using fn_fd_t           = int (*)(const float*, const float*, const float*,
                                       float*, int, float, const float*);
     // q, qd, qdd_opt, out, batch, gravity   — idsva_so (no f_ext; 2nd-order surface)
-    using fn_rnea_no_fext_t = int (*)(const float*, const float*, const float*,
+    using fn_dyn_no_fext_t = int (*)(const float*, const float*, const float*,
                                       float*, int, float);
     // q, qd, u, out, batch, gravity   — fdsva_so (no f_ext; second-order surface)
     using fn_fd_no_fext_t   = int (*)(const float*, const float*, const float*,
@@ -64,7 +64,7 @@ extern "C" {
     using fn_ee_t           = int (*)(const float*, float*, int);
     // q, pose7_out, batch, use_warp    — fk_batched (pos+quat, one block/warp per sample)
     using fn_fk_batched_t   = int (*)(const float*, float*, int, int);
-    // q, qd, qdd_opt, out, batch, gravity   — idsva_so (same as rnea)
+    // q, qd, qdd_opt, out, batch, gravity   — idsva_so (same as inverse_dynamics)
     // q, qd, u, out, batch, gravity         — fdsva_so (same as fd)
     // q, qd, u, out, batch, dt, it          — integrator, integrator_gradient
     //   (dt is the runtime timestep; it selects the IntegratorType; gravity is
@@ -114,18 +114,18 @@ public:
         fn_close_            = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_close"));
 
         // Algorithm symbols — required for v1 surface.
-        fn_rnea_             = reinterpret_cast<fn_rnea_t>(require_sym("grid_rbd_rnea"));
+        fn_inverse_dynamics_             = reinterpret_cast<fn_dyn_t>(require_sym("grid_rbd_inverse_dynamics"));
         fn_minv_             = reinterpret_cast<fn_minv_t>(require_sym("grid_rbd_minv"));
         fn_fd_               = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_forward_dynamics"));
         fn_aba_              = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_aba"));
         fn_crba_             = reinterpret_cast<fn_crba_t>(require_sym("grid_rbd_crba"));
         fn_ee_pose_          = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose"));
         fn_ee_pose_grad_     = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose_gradient"));
-        fn_rnea_grad_        = reinterpret_cast<fn_rnea_t>(require_sym("grid_rbd_rnea_grad"));
-        fn_fd_grad_          = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_forward_dynamics_grad"));
+        fn_inverse_dynamics_gradient_        = reinterpret_cast<fn_dyn_t>(require_sym("grid_rbd_inverse_dynamics_gradient"));
+        fn_fd_grad_          = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_forward_dynamics_gradient"));
         // Phase-C extension: hessian + SO. Required for v0.1+ .so files.
         fn_ee_pose_hessian_  = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose_hessian"));
-        fn_idsva_so_         = reinterpret_cast<fn_rnea_no_fext_t>(require_sym("grid_rbd_idsva_so"));
+        fn_idsva_so_         = reinterpret_cast<fn_dyn_no_fext_t>(require_sym("grid_rbd_idsva_so"));
         fn_fdsva_so_         = reinterpret_cast<fn_fd_no_fext_t>  (require_sym("grid_rbd_fdsva_so"));
         fn_integrator_       = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator"));
         fn_integrator_grad_  = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator_gradient"));
@@ -191,13 +191,13 @@ public:
         }
     }
 
-    // ─── rnea ────────────────────────────────────────────────────────────────
+    // ─── inverse_dynamics ────────────────────────────────────────────────────────────────
     //
     // q, qd:  (batch, num_joints) float32, C-contiguous
     // qdd:    optional (batch, num_joints) — currently ignored
     //         (USE_QDD_FLAG=false in wrapper); future v2 will plumb through.
     // returns c: (batch, num_joints) float32
-    py::array_t<float> rnea(
+    py::array_t<float> inverse_dynamics(
         py::array_t<float, py::array::c_style | py::array::forcecast> q,
         py::array_t<float, py::array::c_style | py::array::forcecast> qd,
         py::object qdd_opt,
@@ -216,10 +216,10 @@ public:
         const float* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
 
         py::array_t<float> out({batch, num_joints_});
-        int rc = fn_rnea_(q.data(), qd.data(), qdd_ptr,
+        int rc = fn_inverse_dynamics_(q.data(), qd.data(), qdd_ptr,
                           out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) {
-            throw std::runtime_error("grid_rbd_rnea failed: rc=" + std::to_string(rc));
+            throw std::runtime_error("grid_rbd_inverse_dynamics failed: rc=" + std::to_string(rc));
         }
         return out;
     }
@@ -374,8 +374,8 @@ public:
         return out;
     }
 
-    // ─── rnea_grad / forward_dynamics_grad ───────────────────────────────────
-    py::array_t<float> rnea_grad(
+    // ─── inverse_dynamics_gradient / forward_dynamics_gradient ───────────────────────────────────
+    py::array_t<float> inverse_dynamics_gradient(
         py::array_t<float, py::array::c_style | py::array::forcecast> q,
         py::array_t<float, py::array::c_style | py::array::forcecast> qd,
         py::object qdd_opt,
@@ -393,13 +393,13 @@ public:
         py::array_t<float, py::array::c_style | py::array::forcecast> fe_hold;
         const float* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<float> out({batch, num_joints_, 2 * num_joints_});
-        int rc = fn_rnea_grad_(q.data(), qd.data(), qdd_ptr,
+        int rc = fn_inverse_dynamics_gradient_(q.data(), qd.data(), qdd_ptr,
                                out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc != 0) throw std::runtime_error("grid_rbd_rnea_grad failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_gradient failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    py::array_t<float> forward_dynamics_grad(
+    py::array_t<float> forward_dynamics_gradient(
         py::array_t<float, py::array::c_style | py::array::forcecast> q,
         py::array_t<float, py::array::c_style | py::array::forcecast> qd,
         py::array_t<float, py::array::c_style | py::array::forcecast> u,
@@ -413,7 +413,7 @@ public:
         py::array_t<float> out({batch, num_joints_, 2 * num_joints_});
         int rc = fn_fd_grad_(q.data(), qd.data(), u.data(),
                              out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_grad failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_gradient failed: rc=" + std::to_string(rc));
         return out;
     }
 
@@ -737,18 +737,18 @@ private:
     fn_int_i_t fn_set_threads_per_block_  = nullptr;
     fn_int_v_t fn_init_       = nullptr;
     fn_int_v_t fn_close_      = nullptr;
-    fn_rnea_t  fn_rnea_           = nullptr;
+    fn_dyn_t  fn_inverse_dynamics_           = nullptr;
     fn_minv_t  fn_minv_           = nullptr;
     fn_fd_t    fn_fd_             = nullptr;
     fn_fd_t    fn_aba_            = nullptr;
     fn_crba_t  fn_crba_           = nullptr;
     fn_ee_t    fn_ee_pose_        = nullptr;
     fn_ee_t    fn_ee_pose_grad_   = nullptr;
-    fn_rnea_t  fn_rnea_grad_      = nullptr;
+    fn_dyn_t  fn_inverse_dynamics_gradient_      = nullptr;
     fn_fd_t    fn_fd_grad_        = nullptr;
     fn_ee_t    fn_ee_pose_hessian_ = nullptr;
     fn_fk_batched_t fn_fk_batched_ = nullptr;
-    fn_rnea_no_fext_t fn_idsva_so_ = nullptr;
+    fn_dyn_no_fext_t fn_idsva_so_ = nullptr;
     fn_fd_no_fext_t   fn_fdsva_so_ = nullptr;
     fn_integrator_t fn_integrator_      = nullptr;
     fn_integrator_t fn_integrator_grad_ = nullptr;
@@ -793,7 +793,7 @@ PYBIND11_MODULE(_core, m) {
             "Override the per-block thread count. Default is max_perf_level_threads. "
             "Smaller block sizes work (SIMT helpers use block-stride loops) but may be slower; "
             "larger sizes are valid up to the per-block max (1024 on current GPUs).")
-        .def("rnea", &Runner::rnea,
+        .def("inverse_dynamics", &Runner::inverse_dynamics,
              py::arg("q"), py::arg("qd"),
              py::arg("qdd") = py::none(),
              py::arg("gravity") = 9.81f,
@@ -816,11 +816,11 @@ PYBIND11_MODULE(_core, m) {
              py::arg("q"), py::arg("use_warp") = false)
         .def("end_effector_pose_gradient", &Runner::end_effector_pose_gradient,
              py::arg("q"))
-        .def("rnea_grad", &Runner::rnea_grad,
+        .def("inverse_dynamics_gradient", &Runner::inverse_dynamics_gradient,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("gravity") = 9.81f,
              py::arg("f_ext") = py::none())
-        .def("forward_dynamics_grad", &Runner::forward_dynamics_grad,
+        .def("forward_dynamics_gradient", &Runner::forward_dynamics_gradient,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("gravity") = 9.81f,
              py::arg("f_ext") = py::none())
