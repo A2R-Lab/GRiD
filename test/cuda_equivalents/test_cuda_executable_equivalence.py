@@ -135,15 +135,33 @@ MIMIC_SUPPORTED_ALGORITHMS = {
 
 
 # Gradient algorithms that are in MIMIC_SUPPORTED_ALGORITHMS (so FIXED-base mimic
-# compares them) but are NOT yet emitted for FLOATING-base mimic robots. B1 landed
+# compares them) but are NOT yet trustworthy for FLOATING-base mimic robots. B1 landed
 # floating-base mimic id_du/fd_du; B2-ee FLOATING (2026-05-31) landed the floating
 # mimic ee pose grad/hessian (the floating root's 6 INDEPENDENT velocity slots
 # decompose into singleton single-column fills, orthogonal to the 1-DoF mimic alpha
-# fold — nothing ee remains refused). B2-SO landed FIXED-base mimic second-order,
-# but FLOATING-base mimic idsva_so/fdsva_so stay refused (their floating root needs
-# a per-root-DoF 6-DoF subspace fold, not the scalar v-slot/alpha fold).
+# fold — nothing ee remains refused).
+#
+# SECOND ORDER (C6 desync resolved 2026-06-01): the codegen has EMITTED floating-base
+# mimic second-order (idsva_so via the WORLD-frame inner + fdsva_so) since the
+# B2-SO-FLOATING ungate — the GRiDCodeGenerator `_MIMIC_GRADIENT_ALGORITHMS` gate only
+# refuses integrator_gradient/integrator_with_gradient for floating-base. This set was
+# the stale half of that desync (it listed SO as "not emitted" / never requested SO for
+# floating-mimic). Verified on fr3-floating vs the pin_so_ext oracle:
+#   * idsva_so (world-frame): CORRECT (rel ~5e-7) — un-refused; exercised by
+#     test_cuda_idsva_so_world_frame.py (fr3 is its floating-mimic sentinel).
+#   * fdsva_so: a REAL floating-base bug the desync was hiding — the daba_dqdq (q-q)
+#     block is wrong (rel ~6e-2 on fr3-floating AND ~4.4e-2 on go2-floating NON-mimic,
+#     so it is a floating-base fdsva bug, NOT mimic-specific). Root-caused to the fused
+#     fdsva_so_device floating path (_fdsva_so.py:325-329 / fdsva_so_contract): the
+#     idsva inputs (di2_dq, dM_dq) and s_df_dq are individually correct and the contract
+#     formula is correct (numpy emulation of the exact kernel math → pin to ~6e-7), so
+#     the in-kernel scratch the contract consumes is corrupted on the floating path
+#     (the inline FD-gradient runs before the world inner and shares s_temp; fixed-base
+#     applies gen_idsva_so_body_frame_public_dvdq_layout_repair after its inner, floating
+#     applies no repair). fdsva_so stays refused for floating-mimic until fixed.
 MIMIC_FLOATING_UNSUPPORTED_GRADIENTS = {
-    "idsva_so_body_frame",
+    # idsva_so_body_frame removed: floating-mimic SO (world-frame) is emitted AND
+    # correct vs pin (see test_cuda_idsva_so_world_frame.py). Only fdsva_so stays.
     "fdsva_so",
 }
 
@@ -173,6 +191,14 @@ MIMIC_CODEGEN_ALGORITHM_LIST_FIXED = MIMIC_CODEGEN_ALGORITHM_LIST + [
 # Floating-base mimic supports the ID/FD gradients (B1) AND the ee pose
 # grad/hessian (B2-ee FLOATING, 2026-05-31: the floating root decomposes into 6
 # singleton velocity-slot fills, orthogonal to the 1-DoF mimic alpha fold).
+#
+# SECOND ORDER: floating-base mimic idsva_so (world-frame) is ALSO emitted and
+# correct (C6 desync resolved 2026-06-01, verified vs pin_so_ext on fr3-floating),
+# but it is intentionally NOT added to this list. The executable-equivalence suite's
+# _expected_output does not compare second-order tensors and FLOATING_CUDA_ALGORITHMS
+# does not request them, so emitting SO here would only add nvcc compile time with no
+# comparison. Floating-mimic SO correctness is exercised by the DEDICATED oracle test
+# test_cuda_idsva_so_world_frame.py (fr3 is its floating-mimic sentinel robot).
 MIMIC_CODEGEN_ALGORITHM_LIST_FLOATING = MIMIC_CODEGEN_ALGORITHM_LIST + [
     "id_du", "fd_du", "ee_pose_gradient", "ee_pose_hessian",
 ]

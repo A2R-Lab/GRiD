@@ -89,13 +89,21 @@ compared on the CUDA side.
 |---|---|---|---|---|---|---|
 | idsva_so (dispatcher) | (dispatches to body/world; both tested below) | — | — | EXE compares body (fixed) | — | — |
 | idsva_so_body_frame | test_second_order_pinocchio_equivalence.py | M (fixed+float) | pin_so_ext | EXE (fixed mimic, B2-SO) + smoke fallback (test_cuda_second_order_fallback.py) | EXE: all 9 fixed incl. fr3+h1_2; smoke default **iiwa14** | **YES (fr3+h1_2 fixed via EXE)** |
-| idsva_so_world_frame | test_second_order_pinocchio_equivalence.py | M (fixed+float) | pin_so_ext | smoke (test_cuda_idsva_so_world_frame.py) | **iiwa14-floating only** (env-widenable) | NO |
-| fdsva_so | test_second_order_pinocchio_equivalence.py | M (fixed+float) | pin_so_ext compose | EXE (fixed mimic, B2-SO) + smoke fallback | EXE all 9 fixed incl. mimic; smoke default iiwa14 | **YES (fr3+h1_2 fixed via EXE)** |
+| idsva_so_world_frame | test_second_order_pinocchio_equivalence.py | M (fixed+float) | pin_so_ext | smoke (test_cuda_idsva_so_world_frame.py) | default **iiwa14,go2,g1,fr3**-floating (env-widenable); **fr3 = floating-MIMIC sentinel, PASSES** | **YES (fr3 floating via world-frame smoke)** |
+| fdsva_so | test_second_order_pinocchio_equivalence.py | M (fixed+float) | pin_so_ext compose | EXE (fixed mimic, B2-SO) + smoke fallback | EXE all 9 fixed incl. mimic; smoke default iiwa14 | **YES (fr3+h1_2 FIXED via EXE); FLOATING BROKEN (see C6b)** |
 
-> NOTE: floating-base mimic `idsva_so_body_frame`/`fdsva_so` are *intentionally*
-> refused on the CUDA side (`MIMIC_FLOATING_UNSUPPORTED_GRADIENTS`) — needs a per-root-DoF
-> 6-DoF subspace fold. The Python layer DOES cover floating mimic SO (manifest-parametrized),
-> so that is a CUDA-only gap, tracked, not a silent hole.
+> NOTE (C6 desync resolved 2026-06-01): floating-base mimic SECOND ORDER is *emitted*
+> (codegen ungated; idsva_so dispatches to the WORLD-frame inner on floating). Verified
+> vs pin_so_ext on fr3-floating (+ go2-floating non-mimic control):
+> - **idsva_so (world-frame): CORRECT** (rel ~5e-7). NO LONGER refused; `idsva_so_body_frame`
+>   removed from `MIMIC_FLOATING_UNSUPPORTED_GRADIENTS`. Covered by
+>   `test_cuda_idsva_so_world_frame.py` (fr3 is its floating-mimic sentinel, default-run).
+> - **fdsva_so: REAL floating-base bug (C6b)** the stale gate was hiding — `daba_dqdq` block
+>   wrong, rel ~6e-2 fr3-floating AND ~4.4e-2 go2-floating NON-mimic (so a floating-base bug,
+>   not mimic-specific; fixed-base PASSES). Root cause lead: `_fdsva_so.py:325-329` — fixed runs
+>   `gen_idsva_so_body_frame_public_dvdq_layout_repair` after its inner, floating (world inner)
+>   applies none, and the inline FD-gradient shares `s_temp` with the world inner before the
+>   contract. `fdsva_so` stays in `MIMIC_FLOATING_UNSUPPORTED_GRADIENTS` until fixed.
 
 ### Centroidal / Energy / CoM
 | key | Python test | Py robots | oracle | CUDA test | CUDA robots | MIMIC-CUDA |
@@ -169,9 +177,13 @@ on CUDA never sees a quadruped/humanoid/mimic. Python regressor twin is full-man
 **G6 (LOW-MED) — `frame_jacobian` CUDA missing big/mimic; `f_ext_gradient` CUDA no mimic.**
 Smoke lists omit humanoids and mimic robots.
 
-**G7 (LOW) — floating-base mimic SO is CUDA-refused by design (`MIMIC_FLOATING_UNSUPPORTED_GRADIENTS`).**
-Not a hole (Python covers it), but it is the one place where the CUDA surface is
-narrower than Python; should be closed when the 6-DoF subspace fold lands (tracked).
+**G7 (REVISED 2026-06-01) — floating-base mimic SO: idsva_so now CUDA-CORRECT, fdsva_so BROKEN (C6b).**
+The C6 desync was investigated. Floating-mimic `idsva_so` (world-frame) is emitted AND verified
+correct vs pin_so_ext (fr3-floating rel ~5e-7) — removed from `MIMIC_FLOATING_UNSUPPORTED_GRADIENTS`,
+covered by `test_cuda_idsva_so_world_frame.py` (fr3 default-run). `fdsva_so` is a REAL floating-base
+bug (not mimic-specific — go2-floating non-mimic fails too): `daba_dqdq` block wrong (rel ~6e-2),
+in-kernel scratch corrupted on the fused floating path (`_fdsva_so.py:325-329`, no layout-repair on the
+world-inner branch + inline FD-gradient/s_temp sharing). Stays refused for floating-mimic until fixed.
 
 **G8 (LOW) — `idsva_so` dispatcher key has no direct test** — only its two targets
 (body/world) are tested. The dispatch *selection* logic (body-for-fixed,

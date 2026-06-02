@@ -59,8 +59,21 @@ Registry-key ≠ emitted host-symbol almost everywhere:
   are never CUDA-checked on a mimic robot (= the backlog-D mimic-safe runner; the existing centroidal
   runner is non-mimic-only because it drives com_cost/momentum_cost).
 - **C5 (MED):** integrator family CUDA tested only on small robots (iiwa14,go2,fr3) — no g1/h1_2 spill paths.
-- **C6 (MED):** floating-mimic SO is now EMITTED (codegen ungated) but the CUDA exe test still lists it in
-  `MIMIC_FLOATING_UNSUPPORTED_GRADIENTS` and never requests it → emitted-but-CUDA-untested desync.
+- **C6 (RESOLVED 2026-06-01):** floating-mimic SO desync investigated. Codegen emits floating-mimic
+  `idsva_so` (WORLD-frame inner) + `fdsva_so`; the stale CUDA exe test gate (`MIMIC_FLOATING_UNSUPPORTED_GRADIENTS`)
+  listed both as unsupported. Verified vs the pin_so_ext oracle on fr3-floating (+ go2-floating non-mimic control):
+  - **idsva_so (world-frame): CORRECT** (rel ~5e-7). Removed from the gate; already exercised by
+    `test_cuda_idsva_so_world_frame.py` (fr3 is its floating-mimic sentinel — confirmed passing).
+  - **fdsva_so: REAL floating-base bug** the desync was hiding. Its `daba_dqdq` (q-q) block is wrong
+    (rel ~6e-2 fr3-floating, ~4.4e-2 go2-floating NON-mimic → floating-base bug, NOT mimic-specific;
+    fixed-base fr3 fdsva PASSES). Root-caused: idsva inputs (di2_dq, dM_dq) + s_df_dq are each correct
+    and the contract formula is correct (numpy emulation of the exact kernel math → pin to ~6e-7), so the
+    in-kernel scratch the contract consumes is corrupted on the fused floating path. The structural lead:
+    `_fdsva_so.py:325-329` — fixed-base runs `gen_idsva_so_body_frame_public_dvdq_layout_repair()` after its
+    idsva inner; floating-base (world inner) applies NO repair, and the inline FD-gradient runs before the
+    world inner sharing `s_temp`. `fdsva_so` stays refused for floating-mimic (and is broken for ALL
+    floating-base) until that fused-path scratch/repair is fixed. NEW open item: **C6b — floating-base
+    fdsva_so daba_dqdq bug (all floating robots).**
 - **C7 (LOW):** `integrator_with_gradient` no standalone numpy test (covered transitively). FK-batched
   (`ee_pose_fk_batched`) has no equivalence diff vs `end_effector_pose` (binding coverage ≠ correctness).
 
