@@ -141,29 +141,28 @@ MIMIC_SUPPORTED_ALGORITHMS = {
 # decompose into singleton single-column fills, orthogonal to the 1-DoF mimic alpha
 # fold — nothing ee remains refused).
 #
-# SECOND ORDER (C6 desync resolved 2026-06-01): the codegen has EMITTED floating-base
-# mimic second-order (idsva_so via the WORLD-frame inner + fdsva_so) since the
-# B2-SO-FLOATING ungate — the GRiDCodeGenerator `_MIMIC_GRADIENT_ALGORITHMS` gate only
-# refuses integrator_gradient/integrator_with_gradient for floating-base. This set was
-# the stale half of that desync (it listed SO as "not emitted" / never requested SO for
-# floating-mimic). Verified on fr3-floating vs the pin_so_ext oracle:
-#   * idsva_so (world-frame): CORRECT (rel ~5e-7) — un-refused; exercised by
+# SECOND ORDER (C6 desync resolved 2026-06-01; C6b fdsva bug FIXED 2026-06-01): the
+# codegen EMITS floating-base mimic second-order (idsva_so via the WORLD-frame inner +
+# fdsva_so) since the B2-SO-FLOATING ungate — the GRiDCodeGenerator `_MIMIC_GRADIENT_
+# ALGORITHMS` gate only refuses integrator_gradient/integrator_with_gradient for
+# floating-base. Both SO surfaces are now correct on floating base:
+#   * idsva_so (world-frame): CORRECT (rel ~5e-7) — exercised by
 #     test_cuda_idsva_so_world_frame.py (fr3 is its floating-mimic sentinel).
-#   * fdsva_so: a REAL floating-base bug the desync was hiding — the daba_dqdq (q-q)
-#     block is wrong (rel ~6e-2 on fr3-floating AND ~4.4e-2 on go2-floating NON-mimic,
-#     so it is a floating-base fdsva bug, NOT mimic-specific). Root-caused to the fused
-#     fdsva_so_device floating path (_fdsva_so.py:325-329 / fdsva_so_contract): the
-#     idsva inputs (di2_dq, dM_dq) and s_df_dq are individually correct and the contract
-#     formula is correct (numpy emulation of the exact kernel math → pin to ~6e-7), so
-#     the in-kernel scratch the contract consumes is corrupted on the floating path
-#     (the inline FD-gradient runs before the world inner and shares s_temp; fixed-base
-#     applies gen_idsva_so_body_frame_public_dvdq_layout_repair after its inner, floating
-#     applies no repair). fdsva_so stays refused for floating-mimic until fixed.
-MIMIC_FLOATING_UNSUPPORTED_GRADIENTS = {
-    # idsva_so_body_frame removed: floating-mimic SO (world-frame) is emitted AND
-    # correct vs pin (see test_cuda_idsva_so_world_frame.py). Only fdsva_so stays.
-    "fdsva_so",
-}
+#   * fdsva_so: the daba_dqdq (q-q) floating bug (rel ~6e-2 fr3-floating / ~4.4e-2
+#     go2-floating NON-mimic) is FIXED. Root cause was a jk-transpose in the
+#     fdsva_so_contract daba_dqdq assembly: the final -Minv reduction reads inner_dq
+#     jk-transposed, which is a no-op for the (symmetric) dM_dq*da_dq part but DROPS the
+#     genuine jk-asymmetry of d2tau_dqdq carried by the 6-DoF FLOATING ROOT q-q columns
+#     (1-DoF fixed-base joints are jk-symmetric, so fixed-base was correct & is unchanged).
+#     Fixed in _fdsva_so.py gen_fdsva_so_contract by adding d2tau_dqdq jk-transposed on
+#     the floating branch only (fixed-base byte-identical). Verified vs pin_so_ext:
+#     go2-floating now passes the strict floating SO diagnostic (norm_rel ~1e-6, was
+#     4.4e-2); fr3-floating daba_dqdq norm_rel 6e-2 -> ~6e-3 (residual is float32
+#     amplification through the ill-conditioned mimic reduced Minv, cond ~1.5e4 — NOT a
+#     structural error: the double-precision emulation of the exact fixed kernel math
+#     matches pin to ~3e-16). fdsva_so is no longer refused; floating-mimic fdsva
+#     correctness is exercised by test_floating_second_order_diagnostic (env-gated).
+MIMIC_FLOATING_UNSUPPORTED_GRADIENTS = set()
 
 
 def _robot_has_mimic_joints(project_model) -> bool:

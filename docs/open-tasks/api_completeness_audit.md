@@ -64,16 +64,32 @@ Registry-key ≠ emitted host-symbol almost everywhere:
   listed both as unsupported. Verified vs the pin_so_ext oracle on fr3-floating (+ go2-floating non-mimic control):
   - **idsva_so (world-frame): CORRECT** (rel ~5e-7). Removed from the gate; already exercised by
     `test_cuda_idsva_so_world_frame.py` (fr3 is its floating-mimic sentinel — confirmed passing).
-  - **fdsva_so: REAL floating-base bug** the desync was hiding. Its `daba_dqdq` (q-q) block is wrong
+  - **fdsva_so: REAL floating-base bug** the desync was hiding. Its `daba_dqdq` (q-q) block was wrong
     (rel ~6e-2 fr3-floating, ~4.4e-2 go2-floating NON-mimic → floating-base bug, NOT mimic-specific;
-    fixed-base fr3 fdsva PASSES). Root-caused: idsva inputs (di2_dq, dM_dq) + s_df_dq are each correct
-    and the contract formula is correct (numpy emulation of the exact kernel math → pin to ~6e-7), so the
-    in-kernel scratch the contract consumes is corrupted on the fused floating path. The structural lead:
-    `_fdsva_so.py:325-329` — fixed-base runs `gen_idsva_so_body_frame_public_dvdq_layout_repair()` after its
-    idsva inner; floating-base (world inner) applies NO repair, and the inline FD-gradient runs before the
-    world inner sharing `s_temp`. `fdsva_so` stays refused for floating-mimic (and is broken for ALL
-    floating-base) until that fused-path scratch/repair is fixed. NEW open item: **C6b — floating-base
-    fdsva_so daba_dqdq bug (all floating robots).**
+    fixed-base fr3 fdsva PASSES).
+- **C6b (RESOLVED 2026-06-01):** floating-base `fdsva_so` `daba_dqdq` bug FIXED. The structural lead in the
+  C6 writeup (missing dvdq layout-repair / shared `s_temp`) was a RED HERRING — empirical isolation showed the
+  fused world-frame idsva inner (di2_dq, dM_dq) and the fd-gradient (s_df_dq) are each correct to float32, and
+  s_qdd / s_temp / s_XImats are all clean on the floating path. The real cause is a **jk-transpose in
+  `gen_fdsva_so_contract`'s `daba_dqdq` assembly**: the final `-Minv` reduction reads `inner_dq` jk-transposed
+  (`inner_dq[j + k*n]` ⇒ `[L,k,j]`). For the `dM_dq*da_dq` part this is a no-op (it is jk-symmetric), but it
+  DROPS the genuine jk-asymmetry of `d2tau_dqdq` carried by the **6-DoF floating root's q-q columns** (1-DoF
+  fixed-base joints are jk-symmetric, so fixed-base was always correct). FIX: on the floating branch ONLY, add
+  the `d2tau_dqdq` term jk-transposed (`d2tau_dqdq[i*nn + k*n + j]`) in the loop-2 inner_dq accumulate. Fixed-base
+  emission is BYTE-IDENTICAL (verified iiwa14 + fr3). Validated vs pin_so_ext: **go2-floating (non-mimic control)
+  now passes the strict floating SO diagnostic** (`daba_dqdq` norm_rel ~1e-6, was 4.4e-2); fr3-floating (mimic)
+  `daba_dqdq` 6e-2 → ~6e-3 — the residual is float32 amplification through the ill-conditioned mimic reduced Minv
+  (cond ~1.5e4), NOT a structural error (the double-precision emulation of the exact fixed kernel math matches pin
+  to ~3e-16). Fix in `GRiDCodeGenerator/algorithms/_fdsva_so.py` `gen_fdsva_so_contract`. Gate updated:
+  `fdsva_so` removed from `MIMIC_FLOATING_UNSUPPORTED_GRADIENTS` (now empty). Floating-mimic fdsva correctness is
+  exercised by `test_floating_second_order_diagnostic` (env-gated `GRID_CUDA_FLOATING_SECOND_ORDER_ENABLE_FDSVA=1`).
+  REMAINING (float32 conditioning, not this bug): the env-gated floating fdsva diagnostic's strict
+  `_fdsva_so_tolerance` (norm_rtol=2e-4, max_abs=3e-2) is FIXED-base-tuned and slightly tight for float32
+  floating-base — iiwa14-floating norm_rel 1.1e-4 (passes norm) but max_abs ~0.047 (> 0.03) and fr3-floating
+  norm_rel ~6e-3; both need a per-robot floating conditioning bucket (the established h1_2/g1/go2 pattern), left
+  to whoever owns the tolerance policy. fr3-floating's diagnostic is also blocked upstream by a SEPARATE
+  pre-existing `idsva_so_body_frame` mimic-column (col 13 / `last_two_axis_transpose`) failure, independent of
+  this fix.
 - **C7 (LOW):** `integrator_with_gradient` no standalone numpy test (covered transitively). FK-batched
   (`ee_pose_fk_batched`) has no equivalence diff vs `end_effector_pose` (binding coverage ≠ correctness).
 

@@ -5,14 +5,23 @@ fully tested}, single-block kept, no back-compat. Status: ✅ done · 🔵 in pr
 Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
 
 ## 1. CORRECTNESS — known wrong results (must-fix bugs)
-- ⬜ **B1 / C1 — `ee_pose_hessian` orientation-hessian is WRONG** (both CUDA codegen AND numpy analytic
-  share the derivation). The test dodges it by scoping pin-parity to {iiwa14, fr3}. Fix the orientation
-  block in both surfaces, then widen the test. *(d2ee — agent ran out, redo solo.)*
-- ⬜ **B2 / C6b — `fdsva_so` floating-base `daba_dqdq` block is WRONG on ALL floating robots** (not
-  mimic-specific; go2-floating non-mimic shows it; fixed-base passes). Root-caused to the fused floating
-  scratch path: `_fdsva_so.py:325-329` — floating (world-inner) branch applies NO `dvdq_layout_repair`,
-  and the inline FD-gradient runs before the world inner sharing `s_temp`. `fdsva_so` stays refused for
-  floating-mimic until fixed.
+- ✅ **B1 / C1 — `ee_pose_hessian` orientation-hessian** — STALE backlog item: already fixed by the prior
+  chain-composition `d²/dv²` rewrite on BOTH surfaces. Verified empirically (2026-06-01): analytic-vs-FD
+  ~1e-11; the residual vs pin (~1e-5) is pinocchio's own `getJointKinematicHessian` FD floor (FD-vs-pin ==
+  analytic-vs-pin), NOT a GRiD error. Numpy test already at full-fleet scope (63 pass incl. 18 hessian-vs-pin
+  fixed+floating); CUDA confirmed fresh (non-cached) on iiwa14-fixed + go2-floating. Only stale docstrings
+  corrected.
+- ✅ **B2 / C6b — `fdsva_so` floating-base `daba_dqdq` block** FIXED 2026-06-01. The scratch/repair lead was a
+  RED HERRING; the real bug was a **jk-transpose in `gen_fdsva_so_contract`'s daba_dqdq assembly** — the final
+  `-Minv` reduction reads `inner_dq` jk-transposed, harmless for the symmetric `dM_dq*da_dq` term but DROPPING the
+  jk-asymmetry of `d2tau_dqdq` on the 6-DoF floating root q-q columns (1-DoF fixed joints are jk-symmetric, so
+  fixed-base was always correct). Fix: floating branch only adds `d2tau_dqdq` jk-transposed; fixed-base
+  BYTE-IDENTICAL (iiwa14+fr3 verified). go2-floating (non-mimic control) now passes the strict floating SO
+  diagnostic (norm_rel ~1e-6, was 4.4e-2); double-precision emulation matches pin to ~3e-16. Gate cleared
+  (`MIMIC_FLOATING_UNSUPPORTED_GRADIENTS` now empty). NOTE: fr3-floating mimic fdsva residual ~6e-3 is float32
+  amplification through the ill-conditioned reduced Minv (NOT this bug) → needs a per-robot floating conditioning
+  bucket in `_fdsva_so_tolerance` (deferred, tolerance-policy owner); fr3 diagnostic also blocked upstream by a
+  separate pre-existing `idsva_so_body_frame` mimic-column failure. See C6b in `api_completeness_audit.md`.
 - ⬜ **B3 — floating-mimic `integrator_gradient`/`integrator_with_gradient` multi-stage RK bug** (stage
   projection at floating∩multistage∩mimic). numpy ref is correct; CUDA refused. The only remaining true
   mimic refusal.
