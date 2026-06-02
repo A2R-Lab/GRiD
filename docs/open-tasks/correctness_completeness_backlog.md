@@ -25,6 +25,11 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
 - ⬜ **B3 — floating-mimic `integrator_gradient`/`integrator_with_gradient` multi-stage RK bug** (stage
   projection at floating∩multistage∩mimic). numpy ref is correct; CUDA refused. The only remaining true
   mimic refusal.
+- ⬜ **B4 — suspected `idsva_so_body_frame` fr3 mimic-column bug** (surfaced by B2, INDEPENDENT of it):
+  fr3 mimic column 13 shows `last_two_axis_transpose_rel_norm=1.16` (huge) — fails identically with B2's fix
+  stashed, so pre-existing and not fdsva-related. Investigate the body-frame inner's last-two-axis transpose
+  on mimic columns. Lower priority than B3 (body-frame SO on a mimic robot is a narrow path), but a real
+  suspected wrong-result. Also blocks the fr3-floating SO diagnostic upstream. *(also noted in C6b audit.)*
 
 ## 2. CORRECTNESS — verification gaps (untested code that could hide bugs)
 - ✅ **C2 — `fd_parameter_gradient` numpy** now tested vs −M⁻¹Y pin oracle (ref was correct). *(committed)*
