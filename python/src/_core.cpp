@@ -81,15 +81,25 @@ extern "C" {
     // plant_step: (x, u, x_kp1, batch, gravity, dt, it)
     using fn_plant_step_t   = int (*)(const float*, const float*, float*,
                                       int, float, float, int);
-    // ee_pos_cost: (q, p_des, W, out, grad, hess, batch)
+    // ee_pos_cost / com_cost: (q, [p/h]_des, W, out, grad, hess, batch)
     using fn_plant_ee_t     = int (*)(const float*, const float*, const float*,
                                       float*, float*, float*, int);
+    // momentum_cost: (q, qd, h_des, W, out, grad, hess, batch)
+    using fn_plant_mom_t    = int (*)(const float*, const float*, const float*, const float*,
+                                      float*, float*, float*, int);
+    // plant_step_gradient: (x, u, dAB, batch, gravity, dt, it)
+    using fn_plant_step_grad_t = int (*)(const float*, const float*, float*,
+                                         int, float, float, int);
 
     // ─── centroidal / energy / general-frame kinematics (F2) ─────────────────
-    // com / frame_jacobian / osc_inertia: (q, out, batch)
+    // com / osc_inertia: (q, out, batch)
     using fn_q_out_t        = int (*)(const float*, float*, int);
-    // ccrba / frame_jacobian_dot: (q, qd, out, batch)
+    // ccrba: (q, qd, out, batch)
     using fn_q_qd_out_t     = int (*)(const float*, const float*, float*, int);
+    // frame_jacobian: (q, out, batch, target_jid, reference_frame)
+    using fn_frame_jac_t    = int (*)(const float*, float*, int, int, int);
+    // frame_jacobian_dot: (q, qd, out, batch, target_jid, reference_frame)
+    using fn_frame_jac_dot_t = int (*)(const float*, const float*, float*, int, int, int);
     // energy / nonlinear_effects: (q, qd, out, batch, gravity)
     using fn_q_qd_out_grav_t = int (*)(const float*, const float*, float*, int, float);
     // generalized_gravity: (q, out, batch, gravity)
@@ -150,6 +160,9 @@ public:
         fn_plant_tor_barrier_ = reinterpret_cast<fn_plant_barrier_t>(opt_sym("grid_plant_joint_torque_barrier"));
         fn_plant_step_       = reinterpret_cast<fn_plant_step_t>(opt_sym("grid_plant_step"));
         fn_plant_ee_cost_    = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_plant_ee_pos_cost"));
+        fn_plant_com_cost_   = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_plant_com_cost"));
+        fn_plant_mom_cost_   = reinterpret_cast<fn_plant_mom_t>(opt_sym("grid_plant_momentum_cost"));
+        fn_plant_step_grad_  = reinterpret_cast<fn_plant_step_grad_t>(opt_sym("grid_plant_step_gradient"));
 
         // G2 batched FK (pos+quat) — OPTIONAL: only present in newer .so files
         // (and only non-null for fixed-base/non-mimic robots).
@@ -164,8 +177,8 @@ public:
         fn_energy_             = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_energy"));
         fn_generalized_gravity_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_generalized_gravity"));
         fn_nonlinear_effects_  = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_nonlinear_effects"));
-        fn_frame_jacobian_     = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_frame_jacobian"));
-        fn_frame_jacobian_dot_ = reinterpret_cast<fn_q_qd_out_t>(opt_sym("grid_rbd_frame_jacobian_dot"));
+        fn_frame_jacobian_     = reinterpret_cast<fn_frame_jac_t>(opt_sym("grid_rbd_frame_jacobian"));
+        fn_frame_jacobian_dot_ = reinterpret_cast<fn_frame_jac_dot_t>(opt_sym("grid_rbd_frame_jacobian_dot"));
         fn_osc_inertia_        = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_osc_inertia"));
 
         // Cache constants (avoid the indirect-function-call cost on every read).
@@ -674,6 +687,78 @@ public:
         return {out, grad, hess};
     }
 
+    // com_cost: q (batch, NQ), p_des (batch, 3), W (batch, 3)
+    // -> (value (batch,), grad_x (batch, NX), hess_x (batch, NX, NX)). CoM-tracking.
+    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    com_cost(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        py::array_t<float, py::array::c_style | py::array::forcecast> p_des,
+        py::array_t<float, py::array::c_style | py::array::forcecast> W)
+    {
+        require_plant((void*)fn_plant_com_cost_, "com_cost");
+        int nx = num_joints_ + num_vel_;
+        if (q.ndim() != 2 || q.shape(1) != num_joints_)
+            throw std::invalid_argument("com_cost: q must be (batch, " + std::to_string(num_joints_) + ")");
+        int batch = (int)q.shape(0);
+        if (batch > max_batch_) throw std::invalid_argument("com_cost: batch > max_batch");
+        check_array_2d(p_des, batch, 3, "p_des");
+        check_array_2d(W, batch, 3, "W");
+        py::array_t<float> out({batch});
+        py::array_t<float> grad({batch, nx});
+        py::array_t<float> hess({batch, nx, nx});
+        int rc = fn_plant_com_cost_(q.data(), p_des.data(), W.data(),
+                                    out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("com_cost failed: rc=" + std::to_string(rc));
+        return {out, grad, hess};
+    }
+
+    // momentum_cost: q (batch, NQ), qd (batch, NV), h_des (batch, 6), W (batch, 6)
+    // -> (value (batch,), grad_x (batch, NX), hess_x (batch, NX, NX)). Centroidal-momentum tracking.
+    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    momentum_cost(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+        py::array_t<float, py::array::c_style | py::array::forcecast> h_des,
+        py::array_t<float, py::array::c_style | py::array::forcecast> W)
+    {
+        require_plant((void*)fn_plant_mom_cost_, "momentum_cost");
+        int nx = num_joints_ + num_vel_;
+        if (q.ndim() != 2 || q.shape(1) != num_joints_)
+            throw std::invalid_argument("momentum_cost: q must be (batch, " + std::to_string(num_joints_) + ")");
+        int batch = (int)q.shape(0);
+        if (batch > max_batch_) throw std::invalid_argument("momentum_cost: batch > max_batch");
+        check_array_2d(qd, batch, num_vel_, "qd");
+        check_array_2d(h_des, batch, 6, "h_des");
+        check_array_2d(W, batch, 6, "W");
+        py::array_t<float> out({batch});
+        py::array_t<float> grad({batch, nx});
+        py::array_t<float> hess({batch, nx, nx});
+        int rc = fn_plant_mom_cost_(q.data(), qd.data(), h_des.data(), W.data(),
+                                    out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("momentum_cost failed: rc=" + std::to_string(rc));
+        return {out, grad, hess};
+    }
+
+    // plant_step_gradient: x (batch, NX), u (batch, NV) -> dAB (batch, 2*NV, 3*NV).
+    py::array_t<float> plant_step_gradient(
+        py::array_t<float, py::array::c_style | py::array::forcecast> x,
+        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+        float dt, int it, float gravity)
+    {
+        require_plant((void*)fn_plant_step_grad_, "plant_step_gradient");
+        int nx = num_joints_ + num_vel_;
+        int nv = num_vel_;
+        if (x.ndim() != 2 || x.shape(1) != nx)
+            throw std::invalid_argument("plant_step_gradient: x must be (batch, " + std::to_string(nx) + ")");
+        int batch = (int)x.shape(0);
+        if (batch > max_batch_) throw std::invalid_argument("plant_step_gradient: batch > max_batch");
+        check_array_2d(u, batch, nv, "u");
+        py::array_t<float> out({batch, 2 * nv, 3 * nv});
+        int rc = fn_plant_step_grad_(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
+        if (rc != 0) throw std::runtime_error("plant_step_gradient failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     // ─── centroidal / energy / general-frame kinematics (F2) ─────────────────
     //
     // Each takes q (or q,qd) of shape (batch, NUM_JOINTS) and returns the flat
@@ -760,26 +845,31 @@ public:
     // frame_jacobian(q) -> (batch, 6*NUM_VEL): leaf-EE frame Jacobian (col-major,
     // [linear;angular], LOCAL_WORLD_ALIGNED). Opt-in codegen: rc=3 if absent.
     py::array_t<float> frame_jacobian(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q)
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        int target_jid, int reference_frame)
     {
         if (!fn_frame_jacobian_) throw std::runtime_error("frame_jacobian not available in this .so (frame_jacobian family not generated; re-register with force_rebuild=True)");
         int batch = check_q(q, "frame_jacobian");
         py::array_t<float> out({batch, 6 * num_vel_});
-        int rc = fn_frame_jacobian_(q.data(), out.mutable_data(), batch);
+        // target_jid < 0 / reference_frame < 0 => the C ABI uses the codegen
+        // leaf-EE / LWA defaults baked into the host wrapper.
+        int rc = fn_frame_jacobian_(q.data(), out.mutable_data(), batch, target_jid, reference_frame);
         if (rc == 3) throw std::runtime_error("frame_jacobian not generated for this robot .so");
         if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    // frame_jacobian_dot(q, qd) -> (batch, 6*NUM_VEL). Opt-in codegen: rc=3 if absent.
+    // frame_jacobian_dot(q, qd, target_jid, reference_frame) -> (batch, 6*NUM_VEL).
+    // Opt-in codegen: rc=3 if absent.
     py::array_t<float> frame_jacobian_dot(
         py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd)
+        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+        int target_jid, int reference_frame)
     {
         if (!fn_frame_jacobian_dot_) throw std::runtime_error("frame_jacobian_dot not available in this .so (frame_jacobian family not generated; re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<float> out({batch, 6 * num_vel_});
-        int rc = fn_frame_jacobian_dot_(q.data(), qd.data(), out.mutable_data(), batch);
+        int rc = fn_frame_jacobian_dot_(q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
         if (rc == 3) throw std::runtime_error("frame_jacobian_dot not generated for this robot .so");
         if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_dot failed: rc=" + std::to_string(rc));
         return out;
@@ -908,14 +998,17 @@ private:
     fn_plant_barrier_t fn_plant_tor_barrier_ = nullptr;
     fn_plant_step_t    fn_plant_step_        = nullptr;
     fn_plant_ee_t      fn_plant_ee_cost_     = nullptr;
+    fn_plant_ee_t      fn_plant_com_cost_    = nullptr;
+    fn_plant_mom_t     fn_plant_mom_cost_    = nullptr;
+    fn_plant_step_grad_t fn_plant_step_grad_ = nullptr;
     // F2 centroidal / energy / general-frame kinematics (optional symbols)
     fn_q_out_t         fn_com_                 = nullptr;
     fn_q_qd_out_t      fn_ccrba_               = nullptr;
     fn_q_qd_out_grav_t fn_energy_              = nullptr;
     fn_q_out_grav_t    fn_generalized_gravity_ = nullptr;
     fn_q_qd_out_grav_t fn_nonlinear_effects_   = nullptr;
-    fn_q_out_t         fn_frame_jacobian_      = nullptr;
-    fn_q_qd_out_t      fn_frame_jacobian_dot_  = nullptr;
+    fn_frame_jac_t     fn_frame_jacobian_      = nullptr;
+    fn_frame_jac_dot_t fn_frame_jacobian_dot_  = nullptr;
     fn_q_out_t         fn_osc_inertia_         = nullptr;
 
     int num_joints_ = 0;
@@ -1011,8 +1104,15 @@ PYBIND11_MODULE(_core, m) {
         .def("plant_step", &Runner::plant_step,
              py::arg("x"), py::arg("u"), py::arg("dt"),
              py::arg("it") = 0, py::arg("gravity") = -9.81f)
+        .def("plant_step_gradient", &Runner::plant_step_gradient,
+             py::arg("x"), py::arg("u"), py::arg("dt"),
+             py::arg("it") = 0, py::arg("gravity") = -9.81f)
         .def("ee_pos_cost", &Runner::ee_pos_cost,
              py::arg("q"), py::arg("p_des"), py::arg("W"))
+        .def("com_cost", &Runner::com_cost,
+             py::arg("q"), py::arg("p_des"), py::arg("W"))
+        .def("momentum_cost", &Runner::momentum_cost,
+             py::arg("q"), py::arg("qd"), py::arg("h_des"), py::arg("W"))
         // ─── centroidal / energy / general-frame kinematics (F2) ───────────
         .def("com", &Runner::com, py::arg("q"))
         .def("ccrba", &Runner::ccrba, py::arg("q"), py::arg("qd"))
@@ -1022,8 +1122,10 @@ PYBIND11_MODULE(_core, m) {
              py::arg("q"), py::arg("gravity") = -9.81f)
         .def("nonlinear_effects", &Runner::nonlinear_effects,
              py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
-        .def("frame_jacobian", &Runner::frame_jacobian, py::arg("q"))
+        .def("frame_jacobian", &Runner::frame_jacobian,
+             py::arg("q"), py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
         .def("frame_jacobian_dot", &Runner::frame_jacobian_dot,
-             py::arg("q"), py::arg("qd"))
+             py::arg("q"), py::arg("qd"),
+             py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
         .def("osc_inertia", &Runner::osc_inertia, py::arg("q"));
 }

@@ -178,6 +178,31 @@ def test_frame_jacobian(robot):
         assert _max_err(J[i], ref.frame_jacobian(q.astype(np.float64), fn)) < _TOL
 
 
+def test_frame_jacobian_nondefault_frame(robot):
+    """Part B: a RUNTIME non-leaf target_jid + non-LWA reference_frame. Picks a
+    mid-chain joint (not the baked leaf-EE) and the WORLD reference frame, and
+    checks the GPU surface matches the RBDReference for that exact frame."""
+    handle, ref, s = robot
+    robot_obj = ref.robot
+    leaf_id = robot_obj.get_leaf_nodes()[0]
+    # A non-leaf ancestor of the leaf (so the chain has DOFs); fall back to leaf
+    # if the chain is trivial.
+    ancestors = sorted(robot_obj.get_ancestors_by_id(leaf_id))
+    target_id = ancestors[len(ancestors) // 2] if ancestors else leaf_id
+    target_name = robot_obj.get_joint_by_id(target_id).get_name()
+    NV = handle.num_vel
+    for rf_name, rf_code in (("WORLD", 1), ("LOCAL", 0)):
+        J = handle.frame_jacobian(s["q"], target_jid=target_id, reference_frame=rf_code)
+        assert J.shape == (_B, 6, NV)
+        for i, q in enumerate(s["q"]):
+            ref_J = ref.frame_jacobian(q.astype(np.float64), target_name, rf_name)
+            assert _max_err(J[i], ref_J) < _TOL, f"{rf_name} target={target_id}"
+    # And confirm the string reference_frame form works identically.
+    J_str = handle.frame_jacobian(s["q"], target_jid=target_id, reference_frame="WORLD")
+    J_int = handle.frame_jacobian(s["q"], target_jid=target_id, reference_frame=1)
+    assert _max_err(J_str, J_int) == 0.0
+
+
 def test_frame_jacobian_dot(robot):
     handle, ref, s = robot
     fn = _leaf_frame_name(ref)

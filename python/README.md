@@ -61,17 +61,15 @@ energy / frame mixins:
 | `energy(q, qd, gravity=-9.81)` | `(B, 3)` = `[KE, PE, KE+PE]` | 1e-4 |
 | `generalized_gravity(q, gravity=-9.81)` | `(B, NV)` | 1e-5 |
 | `nonlinear_effects(q, qd, gravity=-9.81)` | `(B, NV)` | 1e-5 |
-| `frame_jacobian(q)` | `(B, 6, NV)` `[lin; ang]` | 1e-5 |
-| `frame_jacobian_dot(q, qd)` | `(B, 6, NV)` | 1e-3 |
+| `frame_jacobian(q, target_jid=None, reference_frame=None)` | `(B, 6, NV)` `[lin; ang]` | 1e-5 |
+| `frame_jacobian_dot(q, qd, target_jid=None, reference_frame=None)` | `(B, 6, NV)` | 1e-3 |
 | `osc_inertia(q)` | `(B, 6, 6)` task inertia Λ | 1e-3 |
 
-`frame_jacobian` / `frame_jacobian_dot` / `osc_inertia` target a frame baked at
-codegen time (the leaf end-effector joint, `LOCAL_WORLD_ALIGNED` reference
-frame); a runtime frame / `reference_frame` kwarg is not yet exposed on the GPU
-surface. The `*_cost` forms (`com_cost`, `momentum_cost`) and
-`plant_step_gradient` are not bound — the codegen emits their per-timestep
-`__device__` functions but no launchable `grid_plant::*_kernel` wrapper, which
-the C-ABI binding requires (see the F2 backlog note).
+`frame_jacobian` / `frame_jacobian_dot` take the target frame at RUNTIME:
+`target_jid` selects the frame's joint id (default: the leaf end-effector joint)
+and `reference_frame` is `LOCAL` (0) / `WORLD` (1) / `LOCAL_WORLD_ALIGNED` (2,
+the default) — passed as the string or the int. `osc_inertia` still targets the
+codegen-baked leaf-EE / LWA frame.
 
 ## JAX FFI (`grid_rbd[jax]`)
 
@@ -136,10 +134,13 @@ barriers return `(value, grad, hess_diag)`:
 | `quadratic_state_cost(x, x_des, Q)` | `value (B,)`, `grad (B, NX)`, `hess (B, NX, NX)` |
 | `quadratic_input_cost(u, u_des, R)` | `value (B,)`, `grad (B, NV)`, `hess (B, NV, NV)` |
 | `ee_pos_cost(q, p_des, W)` | `value (B,)`, `grad (B, NX)`, GN `hess (B, NX, NX)` |
+| `com_cost(q, p_des, W)` | `value (B,)`, `grad (B, NX)`, GN `hess (B, NX, NX)` (CoM tracking) |
+| `momentum_cost(q, qd, h_des, W)` | `value (B,)`, `grad (B, NX)`, GN `hess (B, NX, NX)` (centroidal-momentum tracking) |
 | `joint_position_barrier(var, lower, upper, mu)` | `value (B,)`, `grad (B, NP)`, `hess_diag (B, NP)` |
 | `joint_velocity_barrier(var, lower, upper, mu)` | as above over `NV` |
 | `joint_torque_barrier(var, lower, upper, mu)` | as above over `NV` |
 | `plant_step(x, u, dt, integrator_type="euler")` | `(B, NX)` next state |
+| `plant_step_gradient(x, u, dt, integrator_type="euler")` | `(B, 2*NV, 3*NV)` `[A\|B]` = `d x_{k+1}/d(x,u)` |
 
 ## External forces (`f_ext`)
 

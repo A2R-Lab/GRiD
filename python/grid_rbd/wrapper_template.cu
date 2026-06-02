@@ -18,6 +18,7 @@
 
 #include "grid.cuh"
 #include <cuda_runtime.h>
+#include <algorithm>
 #include <cstring>
 
 using T = float;
@@ -509,14 +510,14 @@ extern "C" int grid_rbd_fdsva_so(
 //   energy              : 3              ([KE, PE, KE+PE])
 //   generalized_gravity : NUM_VEL       (g(q) = RNEA(q,0,0))
 //   nonlinear_effects   : NUM_VEL       (c(q,qd) = RNEA(q,qd,0))
-//   frame_jacobian      : 6*NUM_VEL     (6 x NV col-major, [linear;angular], leaf-EE / LWA frame)
+//   frame_jacobian      : 6*NUM_VEL     (6 x NV col-major, [linear;angular], target frame)
 //   frame_jacobian_dot  : 6*NUM_VEL     (time-derivative of frame_jacobian along qd)
 //   osc_inertia         : 36            (6x6 task inertia Lambda = (J Minv J^T)^-1)
 //
-// target frame for frame_jacobian / frame_jacobian_dot / osc_inertia is baked
-// at codegen time (the leaf-EE joint, LOCAL_WORLD_ALIGNED reference frame) — it
-// is NOT a runtime parameter of the host/kernel surface, so these methods do
-// not take a frame kwarg here.
+// frame_jacobian / frame_jacobian_dot take the target frame at RUNTIME:
+// (int target_jid, int reference_frame) trail the C-ABI signature; pass -1 for
+// either to fall back to the codegen leaf-EE / LOCAL_WORLD_ALIGNED default baked
+// into the host wrapper. osc_inertia still bakes its frame at codegen time.
 
 // com uses the COMPRESSED input layout (h_q / d_q, stride NUM_JOINTS), unlike
 // the other surfaces which read the [q,qd,u]-interleaved h_q_qd_u.
@@ -587,36 +588,47 @@ extern "C" int grid_rbd_nonlinear_effects(const T* q, const T* qd, T* out, int b
 // frame_jacobian(q) -> 6 x NUM_VEL geometric Jacobian (col-major, [linear;angular])
 // at the leaf-EE frame, LOCAL_WORLD_ALIGNED. Gated on GRID_HAS_FRAME_JACOBIAN
 // (the frame_jacobian family is opt-in codegen; only present when requested).
-extern "C" int grid_rbd_frame_jacobian(const T* q, T* out, int batch) {
+extern "C" int grid_rbd_frame_jacobian(const T* q, T* out, int batch,
+                                       int target_jid, int reference_frame) {
 #ifdef GRID_HAS_FRAME_JACOBIAN
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
-    grid::frame_jacobian<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    // target_jid < 0 / reference_frame < 0 => use the host's leaf-EE / LWA defaults.
+    if (target_jid < 0 || reference_frame < 0)
+        grid::frame_jacobian<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    else
+        grid::frame_jacobian<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams,
+                                target_jid, reference_frame);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_frame_jacobian, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
 #else
-    (void)q; (void)out; (void)batch;
+    (void)q; (void)out; (void)batch; (void)target_jid; (void)reference_frame;
     return 3;  // frame_jacobian not generated for this .so
 #endif
 }
 
 // frame_jacobian_dot(q, qd) -> d/dt of the leaf-EE frame Jacobian along v=qd,
 // 6 x NUM_VEL (col-major, [linear;angular]). Gated on GRID_HAS_FRAME_JACOBIAN.
-extern "C" int grid_rbd_frame_jacobian_dot(const T* q, const T* qd, T* out, int batch) {
+extern "C" int grid_rbd_frame_jacobian_dot(const T* q, const T* qd, T* out, int batch,
+                                           int target_jid, int reference_frame) {
 #ifdef GRID_HAS_FRAME_JACOBIAN
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::frame_jacobian_dot<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    if (target_jid < 0 || reference_frame < 0)
+        grid::frame_jacobian_dot<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    else
+        grid::frame_jacobian_dot<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams,
+                                    target_jid, reference_frame);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_frame_jacobian_dot, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
 #else
-    (void)q; (void)qd; (void)out; (void)batch;
+    (void)q; (void)qd; (void)out; (void)batch; (void)target_jid; (void)reference_frame;
     return 3;
 #endif
 }
@@ -736,12 +748,12 @@ namespace {
 struct PlantBuffers {
     // generic packed in/out (large enough for the biggest per-call need)
     T* d_in_a   = nullptr;   // var / x / u / q
-    T* d_in_b   = nullptr;   // des / lower / p_des
-    T* d_in_c   = nullptr;   // weight / upper
+    T* d_in_b   = nullptr;   // des / lower / p_des / qd / h_des
+    T* d_in_c   = nullptr;   // weight / upper / W
     T* d_out    = nullptr;   // scalar cost (1 per timestep)
-    T* d_grad   = nullptr;   // gradient
+    T* d_grad   = nullptr;   // gradient / dAB ([A|B], 2*NV*3*NV)
     T* d_hess   = nullptr;   // dense hessian / hess-diagonal
-    T* d_eePos  = nullptr;   // ee-pose scratch
+    T* d_eePos  = nullptr;   // ee-pose / com / ccrba scratch (reused per call)
     T* d_deePos = nullptr;   // ee-jacobian scratch
     bool allocated = false;
 };
@@ -754,17 +766,27 @@ static int plant_alloc() {
     const int nee = grid::NUM_EES;
     const size_t B = (size_t)kMaxBatch;
     // size every buffer for the worst-case per-timestep footprint across calls.
-    const size_t vec = (size_t)nx;                  // >= nv, >= nq, >= 3
-    const size_t mat = (size_t)nx * (size_t)nx;     // dense hessian
+    // >= nv, >= nq, >= 3; floored at 12 so momentum_cost can pack h_des(6)+W(6)
+    // contiguously into a single d_in_c buffer even on a small (<12-DOF) robot.
+    const size_t vec = std::max((size_t)nx, (size_t)12);
+    // dense hessian (nx*nx) OR the plant_step_gradient dAB block (2*nv*3*nv =
+    // 6*nv*nv). On a fixed base nx=2nv so nx*nx=4nv^2 < 6nv^2 — size by the max.
+    const size_t mat = std::max((size_t)nx * (size_t)nx,
+                                (size_t)(2 * nv) * (size_t)(3 * nv));
+    // d_grad doubles as the plant_step x_kp1 (nx) reuse AND must NOT be confused
+    // with the gradient size; the cost grads are <= nx, so vec covers it.
+    // d_eePos is reused as the com (3+3*nv) / ccrba (6*nv+6) device scratch.
+    const size_t kin_scratch = std::max((size_t)(6 * nee),
+                                std::max((size_t)(3 + 3 * nv), (size_t)(6 * nv + 6)));
     auto ok = [](cudaError_t e){ return e == cudaSuccess; };
     bool good = true;
     good &= ok(cudaMalloc(&g_plant.d_in_a,  B * vec * sizeof(T)));
     good &= ok(cudaMalloc(&g_plant.d_in_b,  B * vec * sizeof(T)));
     good &= ok(cudaMalloc(&g_plant.d_in_c,  B * vec * sizeof(T)));
     good &= ok(cudaMalloc(&g_plant.d_out,   B * sizeof(T)));
-    good &= ok(cudaMalloc(&g_plant.d_grad,  B * vec * sizeof(T)));
+    good &= ok(cudaMalloc(&g_plant.d_grad,  B * mat * sizeof(T)));
     good &= ok(cudaMalloc(&g_plant.d_hess,  B * mat * sizeof(T)));
-    good &= ok(cudaMalloc(&g_plant.d_eePos, B * (size_t)(6 * nee) * sizeof(T)));
+    good &= ok(cudaMalloc(&g_plant.d_eePos, B * kin_scratch * sizeof(T)));
     good &= ok(cudaMalloc(&g_plant.d_deePos, B * (size_t)(6 * nv * nee) * sizeof(T)));
     if (!good) return 1;
     g_plant.allocated = true;
@@ -932,6 +954,108 @@ extern "C" int grid_plant_ee_pos_cost(
     return 0;
 }
 #endif  // GRID_PLANT_HAS_EE_COST
+
+#ifdef GRID_PLANT_HAS_COM_COST
+// com_cost: value + grad over x=[q;qd] + GN hess_x, CoM-tracking. q (batch, NQ);
+// p_des (batch, 3); W (batch, 3); out (batch); grad (batch, NX); hess (batch, NX*NX).
+// Gated on GRID_PLANT_HAS_COM_COST (com + ccrba generated, non-mimic).
+extern "C" int grid_plant_com_cost(
+    const T* q, const T* p_des, const T* W,
+    T* out, T* grad, T* hess, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    if (plant_alloc()) return 4;
+    const int nq = grid::NUM_POS;
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    cudaMemcpy(g_plant.d_in_a, q,     batch * nq * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_b, p_des, batch * 3  * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_c, W,     batch * 3  * sizeof(T), cudaMemcpyHostToDevice);
+    size_t smem = grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>();
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::com_cost_kernel<T><<<grid_dim, g_thread_dimms, smem, g_streams[0]>>>(
+        g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+        g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
+        g_plant.d_eePos /*reused as com (3+3*NV) scratch*/, g_robot, batch);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(grad, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(hess, g_plant.d_hess, batch * nx * nx * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_PLANT_HAS_COM_COST
+
+#ifdef GRID_PLANT_HAS_MOMENTUM_COST
+// momentum_cost: value + grad over x=[q;qd] + GN hess_x, centroidal-momentum
+// tracking. q (batch, NQ); qd (batch, NV); h_des (batch, 6); W (batch, 6);
+// out (batch); grad (batch, NX); hess (batch, NX*NX).
+// Gated on GRID_PLANT_HAS_MOMENTUM_COST (com + ccrba generated, non-mimic).
+extern "C" int grid_plant_momentum_cost(
+    const T* q, const T* qd, const T* h_des, const T* W,
+    T* out, T* grad, T* hess, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    if (plant_alloc()) return 4;
+    const int nq = grid::NUM_POS;
+    const int nv = grid::NUM_VEL;
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    // q -> d_in_a, qd -> d_in_b. h_des(6) and W(6) are packed into the two halves
+    // of d_in_c (floored to hold >= 12 per timestep in plant_alloc): h_des in the
+    // first batch*6 floats, W in the next batch*6 (each read as [k*6 + r]).
+    cudaMemcpy(g_plant.d_in_a, q,     batch * nq * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_b, qd,    batch * nv * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_c,                 h_des, batch * 6 * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_c + (size_t)batch * 6, W, batch * 6 * sizeof(T), cudaMemcpyHostToDevice);
+    size_t smem = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::momentum_cost_kernel<T><<<grid_dim, g_thread_dimms, smem, g_streams[0]>>>(
+        g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+        g_plant.d_in_a, g_plant.d_in_b,
+        g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6,
+        g_plant.d_eePos /*reused as ccrba (6*NV+6) scratch*/, g_robot, batch);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(grad, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(hess, g_plant.d_hess, batch * nx * nx * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_PLANT_HAS_MOMENTUM_COST
+
+#ifdef GRID_PLANT_HAS_STEP_GRADIENT
+// plant_step_gradient: [A|B] = d x_{k+1}/d(x,u) = integrator_gradient([q;qd], u).
+// x (batch, NX); u (batch, NV); dAB (batch, 2*NV*3*NV, column-major). The kernel
+// owns the FULL FD-grad scratch arena in shared memory (PERF/full-smem), so the
+// binding only stages x/u and reads dAB. Gated on GRID_PLANT_HAS_STEP_GRADIENT
+// (integrator_gradient generated). IT via the same int code.
+template <grid::IntegratorType IT>
+static void launch_plant_step_gradient(int batch, T gravity, T dt) {
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    const int nv = grid::NUM_VEL;
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::plant_step_gradient_kernel<T, IT><<<grid_dim, g_thread_dimms,
+        grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), g_streams[0]>>>(
+            g_plant.d_grad /*reuse as d_dAB, size 2*NV*3*NV*/, g_plant.d_in_a, g_plant.d_in_b,
+            nx, nv, g_robot, gravity, dt, batch);
+}
+
+extern "C" int grid_plant_step_gradient(
+    const T* x, const T* u, T* dAB, int batch, float gravity, float dt, int it) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    if (plant_alloc()) return 4;
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    const int nv = grid::NUM_VEL;
+    const int dab = 2 * nv * 3 * nv;
+    cudaMemcpy(g_plant.d_in_a, x, batch * nx * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_b, u, batch * nv * sizeof(T), cudaMemcpyHostToDevice);
+    GRID_RBD_IT_DISPATCH(it, launch_plant_step_gradient, batch, (T)gravity, (T)dt);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(dAB, g_plant.d_grad, batch * dab * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_PLANT_HAS_STEP_GRADIENT
 
 
 // ────────────────────────────────────────────────────────────────────────────

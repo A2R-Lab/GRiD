@@ -125,22 +125,24 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
 ## 4. COMPLETENESS — missing features
 - ⬜ **F1 — `plant_step_hessian`** (true analytic 2nd-order plant/integrator Hessian) is absent; needs an
   analytic 2nd-order integrator (`_plant.py:82-87 TODO`). **#1 customer ask** (PDDP `compute_fxx`, GATO).
-- 🟡 **F2 — bindings (8 of 11 bound; 3 blocked on codegen).** Bound `frame_jacobian`, `frame_jacobian_dot`,
+- ✅ **F2 — bindings (FULLY bound).** Bound `frame_jacobian`, `frame_jacobian_dot`,
   `osc_inertia`, `com`, `ccrba`, `energy`, `generalized_gravity`, `nonlinear_effects` through the full C-ABI
   + `_core` Runner + numpy `RobotHandle` stack (`python/grid_rbd/wrapper_template.cu`, `python/src/_core.cpp`,
-  `python/grid_rbd/_handle.py`). `_compile.py` now requests the opt-in `frame_jacobian` family in
-  `gen_all_code` (the codegen emits `#define GRID_HAS_FRAME_JACOBIAN`, which gates the wrapper's
-  frame_jacobian C-ABI symbols; com/ccrba/energy/gg/nle ride the default `all` profile). Validated vs
-  `RBDReference` on iiwa14 + go2 (fixed) in `test/python_wrappers/test_centroidal_energy_frame.py`. NOT bound:
-  `com_cost`, `momentum_cost`, `plant_step_gradient` — the codegen (`_plant.py gen_plant_kernels`) emits only
-  their per-timestep `__device__` fns, NOT the launchable `grid_plant::*_kernel<<<>>>` wrappers the C-ABI
-  binding requires (and no `GRID_PLANT_HAS_*` define). Binding these needs codegen work: add
-  `gen_com_cost_kernel`/`gen_momentum_cost_kernel`/`gen_plant_step_gradient_kernel` (+ HAS defines) mirroring
-  `gen_ee_pos_cost_kernel`/`gen_plant_step_kernel`. Also fixed a pre-existing build-blocker: the JAX/torch
-  `fdsva_so` FFI handlers in `wrapper_template.cu` passed `fdsva_so_kernel` args in the wrong order
-  (`d_df2,d_q_qd_u,stride,d_workspace,…` vs the header's `d_df2,d_workspace,d_q_qd_u,stride,d_idsva_so,…`),
-  which broke every jax+torch `.so` compile; corrected to match the header. JAX/torch backends not extended
-  for the 8 new methods (numpy-handle only, mirroring the plant surface).
+  `python/grid_rbd/_handle.py`). `_compile.py` requests the opt-in `frame_jacobian` family in
+  `gen_all_code` (the codegen emits `#define GRID_HAS_FRAME_JACOBIAN`; com/ccrba/energy/gg/nle ride the
+  default `all` profile). **F2 follow-ups landed:** (1) the 3 previously-blocked cost/grad fns
+  `com_cost` / `momentum_cost` / `plant_step_gradient` are now BOUND — added launchable
+  `gen_com_cost_kernel` / `gen_momentum_cost_kernel` / `gen_plant_step_gradient_kernel` (`_plant.py`) +
+  `#define GRID_PLANT_HAS_{COM_COST,MOMENTUM_COST,STEP_GRADIENT}`, wired through the C-ABI + Runner + handle.
+  `plant_step_gradient_kernel` mirrors `integrator_gradient_kernel`'s full-smem (PERF) scratch arena and is a
+  pass-through to `grid::integrator_gradient_device` (s_dAB byte-identical to `integrator_gradient`).
+  (2) `frame_jacobian` / `frame_jacobian_dot` now take RUNTIME `target_jid` + `reference_frame` (the inner
+  already supported them; plumbed through the kernel + host signatures with leaf-EE / LWA defaults, the
+  kernel-attr manifest casts, the C-ABI `int target_jid,int reference_frame` (-1 ⇒ default), and a
+  `handle.frame_jacobian(q, target_jid=…, reference_frame=…)` kwarg). Validated vs `RBDReference` on
+  iiwa14 + go2 in `test/python_wrappers/{test_iiwa14_plant_smoke,test_centroidal_energy_frame}.py`
+  (incl. a non-leaf target + non-LWA frame). `osc_inertia` still targets the codegen-baked leaf-EE / LWA
+  frame. JAX/torch backends not extended for the new methods (numpy-handle only, mirroring the plant surface).
 
 ## 5. READABILITY — clean-break rename + uniformity (scheme LOCKED: rename_mapping.md)
 - ⬜ **R1 — verbose rename** (id→inverse_dynamics, etc.; keep aba/crba/ccrba/minv/idsva_so/fdsva_so;

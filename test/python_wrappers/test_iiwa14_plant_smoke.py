@@ -110,6 +110,43 @@ def test_plant_step(handle, ref, samples):
         assert _rel(out[b], r) < _TOL
 
 
+def test_plant_step_gradient(handle, ref, samples):
+    x, u, B = samples["x"], samples["u"], samples["B"]
+    NQ, NV = handle.num_joints, handle.num_vel
+    dt = 0.01
+    dAB = handle.plant_step_gradient(x, u, dt, integrator_type="euler")
+    assert dAB.shape == (B, 2 * NV, 3 * NV)
+    for b in range(B):
+        r = ref.plant_step_gradient(x[b, :NQ], x[b, NQ:], u[b], dt, integrator_type="euler")
+        assert _rel(dAB[b], r) < _TOL
+
+
+def test_com_cost(handle, ref, samples):
+    q, B = samples["q"], samples["B"]
+    rng = np.random.default_rng(4)
+    p_des = rng.standard_normal((B, 3)).astype(np.float32)
+    W = (np.abs(rng.standard_normal((B, 3))) + 0.5).astype(np.float32)
+    val, grad, hess = handle.com_cost(q, p_des, W)
+    for b in range(B):
+        rv, rg, rh = ref.com_cost(q[b], p_des[b], W[b])
+        assert abs(val[b] - rv) < _TOL
+        assert _rel(grad[b], rg) < _TOL
+        assert _rel(hess[b], rh) < _TOL
+
+
+def test_momentum_cost(handle, ref, samples):
+    q, qd, B = samples["q"], samples["qd"], samples["B"]
+    rng = np.random.default_rng(5)
+    h_des = rng.standard_normal((B, 6)).astype(np.float32)
+    W = (np.abs(rng.standard_normal((B, 6))) + 0.5).astype(np.float32)
+    val, grad, hess = handle.momentum_cost(q, qd, h_des, W)
+    for b in range(B):
+        rv, rg, rh = ref.momentum_cost(q[b], qd[b], h_des[b], W[b])
+        assert abs(val[b] - rv) < _TOL
+        assert _rel(grad[b], rg) < _TOL
+        assert _rel(hess[b], rh) < _TOL
+
+
 def test_ee_pos_cost(handle, ref, samples):
     q, B = samples["q"], samples["B"]
     rng = np.random.default_rng(3)

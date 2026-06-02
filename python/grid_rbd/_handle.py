@@ -44,6 +44,32 @@ def _integrator_code(integrator_type: str) -> int:
         )
 
 
+# Pinocchio reference-frame ordering (matches RBDReference / the CUDA enum):
+# LOCAL=0, WORLD=1, LOCAL_WORLD_ALIGNED=2.
+_REFERENCE_FRAME_CODES = {"local": 0, "world": 1, "local_world_aligned": 2}
+
+
+def _frame_args(target_jid, reference_frame):
+    """Normalize the frame_jacobian[_dot] runtime frame kwargs to the C ABI's
+    (int target_jid, int reference_frame), where -1 means "use the codegen
+    leaf-EE / LWA default baked into the host wrapper". ``reference_frame`` may
+    be an int (0/1/2) or one of LOCAL / WORLD / LOCAL_WORLD_ALIGNED."""
+    tj = -1 if target_jid is None else int(target_jid)
+    if reference_frame is None:
+        rf = -1
+    elif isinstance(reference_frame, str):
+        key = reference_frame.lower()
+        if key not in _REFERENCE_FRAME_CODES:
+            raise ValueError(
+                f"unknown reference_frame {reference_frame!r}; expected one of "
+                "LOCAL / WORLD / LOCAL_WORLD_ALIGNED (or 0/1/2)"
+            )
+        rf = _REFERENCE_FRAME_CODES[key]
+    else:
+        rf = int(reference_frame)
+    return tj, rf
+
+
 class RobotHandle:
     """Opaque handle to a compiled per-robot GRiD library.
 
@@ -444,6 +470,52 @@ class RobotHandle:
         it = _integrator_code(integrator_type)
         return self._runner.plant_step(x, u, float(dt), it, float(gravity))
 
+    def plant_step_gradient(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+        """[A | B] = d x_{k+1}/d(x,u) = the integrator-gradient s_dAB surface.
+
+        x is (B, NUM_POS + NUM_VEL); u is (B, NUM_VEL). Returns (B, 2*NV, 3*NV)
+        with column blocks [d/dq | d/dqd | d/du] in tangent space. Pass-through
+        to grid::integrator_gradient (the value is byte-identical to
+        :py:meth:`integrator_gradient`). Matches ``RBDReference.plant_step_gradient``
+        (= ``integrator_gradient``). ``integrator_type`` is one of euler /
+        semi_implicit_euler / midpoint / rk3 / rk4.
+        """
+        x = np.ascontiguousarray(x, dtype=np.float32)
+        u = np.ascontiguousarray(u, dtype=np.float32)
+        it = _integrator_code(integrator_type)
+        raw = self._runner.plant_step_gradient(x, u, float(dt), it, float(gravity))
+        # raw is filled with the (2*NV x 3*NV) column-major dAB; recover row-major.
+        B = raw.shape[0]
+        NV = self.num_vel
+        return raw.reshape(B, 3 * NV, 2 * NV).transpose(0, 2, 1)
+
+    def com_cost(self, q, p_des, W):
+        """Center-of-mass tracking cost over the 3 CoM axes.
+
+        q is (B, NUM_POS); p_des / W are (B, 3). Returns:
+          value (B,), grad_x (B, NX) = [J_com^T (W·r); 0], GN hess_x (B, NX, NX)
+          with the top-left NV×NV q-block = J_com^T diag(W) J_com.
+        Matches ``RBDReference.com_cost(q, p_des, W)``.
+        """
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        p_des = np.ascontiguousarray(p_des, dtype=np.float32)
+        W = np.ascontiguousarray(W, dtype=np.float32)
+        return self._runner.com_cost(q, p_des, W)
+
+    def momentum_cost(self, q, qd, h_des, W):
+        """Centroidal-momentum tracking cost over the 6 momentum components.
+
+        q is (B, NUM_POS); qd is (B, NUM_VEL); h_des / W are (B, 6). Returns:
+          value (B,), grad_x (B, NX) = [0; A^T (W·r)], GN hess_x (B, NX, NX)
+          with the bottom-right NV×NV qd-block = A^T diag(W) A.
+        Matches ``RBDReference.momentum_cost(q, qd, h_des, W)``.
+        """
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        h_des = np.ascontiguousarray(h_des, dtype=np.float32)
+        W = np.ascontiguousarray(W, dtype=np.float32)
+        return self._runner.momentum_cost(q, qd, h_des, W)
+
     # ─── centroidal / energy / general-frame kinematics (F2) ─────────────────
     #
     # Convenience compositions over the grid:: kinematics/dynamics surface,
@@ -508,29 +580,36 @@ class RobotHandle:
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         return self._runner.nonlinear_effects(q, qd, float(gravity))
 
-    def frame_jacobian(self, q):
-        """Geometric Jacobian (6 x NV, ``[linear; angular]``) of the leaf
-        end-effector frame in the ``LOCAL_WORLD_ALIGNED`` reference frame.
-        Returns ``(B, 6, NV)``. Matches ``RBDReference.frame_jacobian(q)``
-        (default ``frame_name`` = leaf, ``reference_frame='LOCAL_WORLD_ALIGNED'``).
+    def frame_jacobian(self, q, *, target_jid=None, reference_frame=None):
+        """Geometric Jacobian (6 x NV, ``[linear; angular]``) of a frame.
+        Returns ``(B, 6, NV)``. Matches ``RBDReference.frame_jacobian(q,
+        frame_name, reference_frame)``.
 
-        The target frame + reference frame are baked at codegen time (the GPU
-        host/kernel surface does not take them as runtime arguments), so this
-        method does not expose a frame kwarg.
+        ``target_jid`` selects the frame's joint id (default: the leaf
+        end-effector joint baked at codegen time). ``reference_frame`` is
+        ``'LOCAL'`` (0), ``'WORLD'`` (1), or ``'LOCAL_WORLD_ALIGNED'`` (2, the
+        default), or the equivalent int. Both are now RUNTIME parameters of the
+        GPU surface.
         """
         q = np.ascontiguousarray(q, dtype=np.float32)
-        raw = self._runner.frame_jacobian(q)  # (B, 6*NV) col-major: J[r + 6*c]
+        tj, rf = _frame_args(target_jid, reference_frame)
+        raw = self._runner.frame_jacobian(q, tj, rf)  # (B, 6*NV) col-major: J[r + 6*c]
         B = raw.shape[0]
         NV = self.num_vel
         return raw.reshape(B, NV, 6).transpose(0, 2, 1)
 
-    def frame_jacobian_dot(self, q, qd):
+    def frame_jacobian_dot(self, q, qd, *, target_jid=None, reference_frame=None):
         """Time derivative Jdot of :py:meth:`frame_jacobian` along v = qd
-        (6 x NV, ``[linear; angular]``, leaf-EE / LWA frame). Returns
-        ``(B, 6, NV)``. Matches ``RBDReference.frame_jacobian_dot(q, qd)``."""
+        (6 x NV, ``[linear; angular]``). Returns ``(B, 6, NV)``. Matches
+        ``RBDReference.frame_jacobian_dot(q, qd, frame_name, reference_frame)``.
+
+        ``target_jid`` / ``reference_frame`` are RUNTIME parameters (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
+        """
         q = np.ascontiguousarray(q, dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
-        raw = self._runner.frame_jacobian_dot(q, qd)  # (B, 6*NV) col-major
+        tj, rf = _frame_args(target_jid, reference_frame)
+        raw = self._runner.frame_jacobian_dot(q, qd, tj, rf)  # (B, 6*NV) col-major
         B = raw.shape[0]
         NV = self.num_vel
         return raw.reshape(B, NV, 6).transpose(0, 2, 1)
