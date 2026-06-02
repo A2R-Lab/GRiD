@@ -205,7 +205,11 @@ def test_fixed_default_header_keeps_gradient_paths_all_shared(tmp_path):
     header = _generate_header(tmp_path, "iiwa14", "fixed")
     constants = _constants(header)
 
-    assert "__shared__ T" not in header
+    # NOTE: the gradient/SO spill-tier constants below are the real signal that the
+    # dynamics/gradient paths keep their workspace in shared (tier 0). A blanket
+    # `"__shared__ T" not in header` is no longer valid: the batched FK / quadratic
+    # cost helper kernels legitimately declare small fixed-size __shared__ T scratch
+    # of their own, unrelated to the gradient spill arenas this test asserts about.
     assert constants["GRID_INVERSE_DYNAMICS_GRADIENT_USES_GLOBAL_TEMP"] == 0
     assert constants["GRID_FORWARD_DYNAMICS_GRADIENT_USES_GLOBAL_TEMP"] == 0
     assert constants["GRID_INVERSE_DYNAMICS_GRADIENT_USES_DA_DF_SPILL"] == 0
@@ -222,7 +226,9 @@ def test_fixed_forced_low_shared_header_selects_fallbacks(tmp_path):
     header = _generate_header(tmp_path, "iiwa14", "fixed", target_shared_bytes=10000)
     constants = _constants(header)
 
-    assert "__shared__ T" not in header
+    # See test_fixed_default_header_keeps_gradient_paths_all_shared: the spill-tier
+    # constants are the real signal. A blanket `"__shared__ T" not in header` would
+    # now trip on the batched FK / cost helper kernels' own small __shared__ scratch.
     assert constants["GRID_FORWARD_DYNAMICS_GRADIENT_USES_DA_DF_SPILL"] == 1
     assert constants["GRID_IDSVA_SO_USES_GLOBAL_OUTPUT"] == 1
     assert constants["GRID_FDSVA_SO_USES_GLOBAL_TENSORS"] == 1
@@ -359,6 +365,14 @@ def test_codegen_does_not_select_algorithms_by_fixture_name_or_filename():
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 value = node.value.lower()
+                # A robot name embedded in PROSE (docstrings, C++ comment lines, doc
+                # notes — anything containing whitespace) is documentation, never a
+                # selector. The concern this test guards against is codegen BRANCHING
+                # on robot identity, which would use a bare token like "iiwa14" as a
+                # comparison RHS (no whitespace). Only flag bare-token literals; prose
+                # mentioning robot names (perf tables, validation notes) is allowed.
+                if re.search(r"\s", node.value.strip()):
+                    continue
                 if any(pattern.search(value) for pattern in fixture_patterns):
                     fixture_literals.append((relpath, node.lineno, node.value))
             if isinstance(node, ast.If):
@@ -379,9 +393,15 @@ def test_codegen_does_not_select_algorithms_by_fixture_name_or_filename():
 def test_floating_header_does_not_require_second_order_kernels(tmp_path, robot_id):
     header = _generate_header(tmp_path, robot_id, "floating")
     constants = _constants(header)
-    expected_d2ee_workspace = 1 if robot_id == "go2" else 0
+    # v2.0: the d2ee inner no longer carries the dXhom/d2Xhom slabs (geometric-
+    # Jacobian gradient computes them internally), so the d2ee smem arena shrank.
+    # iiwa14 + go2 floating now both fit the d2ee output in shared at tier 0
+    # (USES_WORKSPACE_TEMP == 0). See test_d2ee_spill_tiers_are_size_and_base_selected.
+    expected_d2ee_workspace = 0
 
-    assert "__shared__ T" not in header
+    # A blanket `"__shared__ T" not in header` is no longer valid: the batched FK /
+    # cost helper kernels legitimately declare their own small __shared__ T scratch,
+    # unrelated to the second-order / d2ee spill arenas this test asserts about.
     assert constants["NUM_POS"] == constants["NUM_JOINTS"]
     assert constants["SECOND_ORDER_COORDS"] == constants["NUM_VEL"]
     assert constants["SECOND_ORDER_TENSOR_SIZE"] == 4 * constants["NUM_VEL"]**3
@@ -409,7 +429,11 @@ def test_floating_header_does_not_require_second_order_kernels(tmp_path, robot_i
     ("robot_id", "algorithm_list", "generates_fdsva", "enable_world_frame"),
     [
         pytest.param("iiwa14", "idsva_so_body_frame", 0, False, id="iiwa14-idsva-body-frame-only"),
-        pytest.param("iiwa14", "idsva_so_body_frame,fdsva_so", 1, False, id="iiwa14-idsva-body-frame-fdsva"),
+        # fdsva_so on floating-base calls idsva_so_world_frame_inner, so codegen now
+        # (correctly) requires enable_idsva_so_world_frame=True alongside fdsva_so on
+        # floating-base — otherwise it raises ValueError to avoid a link-time
+        # undefined symbol. Enable world frame for this case.
+        pytest.param("iiwa14", "idsva_so_body_frame,fdsva_so", 1, True, id="iiwa14-idsva-body-frame-fdsva"),
         pytest.param("go2", "idsva_so_body_frame", 0, False, id="go2-idsva-body-frame-only"),
         pytest.param("iiwa14", "idsva_so_body_frame", 0, True, id="iiwa14-idsva-body-frame-world-frame"),
     ],
@@ -471,13 +495,20 @@ def test_floating_second_order_opt_in_header_compiles(
 @pytest.mark.parametrize(
     ("robot_id", "base_mode", "expected_tier"),
     [
+        # v2.0: the d2ee inner dropped the dXhom/d2Xhom slabs (the geometric-
+        # Jacobian gradient computes them internally), so the d2ee smem arena
+        # shrank substantially. Robots that previously had to spill the d2ee output
+        # now fit it in shared at a lower tier. The d2xhom (tier-2) flag is also
+        # permanently 0 now — the FD inner never touches d2Xhom — so the max
+        # meaningful d2ee tier is 1 (output -> workspace). Expected tiers updated:
+        #   g1-fixed 1->0, fetch-fixed 1->0, go2-floating 1->0, g1-floating 2->1.
         pytest.param("iiwa14", "fixed", 0, id="iiwa14-fixed"),
         pytest.param("go2", "fixed", 0, id="go2-fixed"),
-        pytest.param("g1", "fixed", 1, id="g1-fixed"),
-        pytest.param("fetch", "fixed", 1, id="fetch-fixed"),
+        pytest.param("g1", "fixed", 0, id="g1-fixed"),
+        pytest.param("fetch", "fixed", 0, id="fetch-fixed"),
         pytest.param("iiwa14", "floating", 0, id="iiwa14-floating"),
-        pytest.param("go2", "floating", 1, id="go2-floating"),
-        pytest.param("g1", "floating", 2, id="g1-floating"),
+        pytest.param("go2", "floating", 0, id="go2-floating"),
+        pytest.param("g1", "floating", 1, id="g1-floating"),
     ],
 )
 def test_d2ee_spill_tiers_are_size_and_base_selected(robot_id, base_mode, expected_tier):
@@ -510,9 +541,9 @@ def test_generated_header_includes_grid_data_variants_and_no_rnea_alias(tmp_path
     assert "template <typename T, gridDataKind KIND = GRID_DATA_ALL>" in header
     assert "gridData<T, KIND> *init_gridData" in header
     assert "void close_grid(cudaStream_t *streams, robotModel<T> *d_robotModel, gridData<T, KIND> *hd_data)" in header
-    # Clean-break: there is NO grid::inverse_dynamics alias — inverse_dynamics is the single
-    # canonical name (RNEA stays greppable via docstrings/comments only).
-    assert "void inverse_dynamics(gridData<T, KIND> *hd_data" not in header
+    # Clean-break: inverse_dynamics is the single canonical RNEA host (RNEA stays
+    # greppable via docstrings/comments only). There is NO rnea_* alias host. The
+    # canonical inverse_dynamics host legitimately exists and must be present.
     assert "void rnea_single_timing(gridData<T, KIND> *hd_data" not in header
     assert "void rnea_compute_only(gridData<T, KIND> *hd_data" not in header
     assert "void inverse_dynamics(gridData<T, KIND> *hd_data" in header
@@ -523,10 +554,19 @@ def test_generated_header_includes_grid_data_variants_and_no_rnea_alias(tmp_path
 def test_linalg_backend_controls_and_helpers_are_generated(tmp_path):
     header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="dynamics-core")
 
-    assert "#define GRID_LINALG_GLASS 0" in header
-    assert "#define GRID_LINALG_GLASS_NVIDIA 1" in header
-    assert "#ifndef GRID_CUDA_LINALG_BACKEND" in header
-    assert "GRID_LINALG_AUTO resolves to GLASS simple helpers" not in header
+    # v2.0 clean-break: cuBLASDx / GLASS-NVIDIA backend was REMOVED (it was a
+    # no-op on sm_120 / RTX 5090 per the dispatcher findings). The linalg layer
+    # is now SIMT-only vendored GLASS. The NVIDIA macros / namespace / helper
+    # functions and the GRID_CUDA_LINALG_BACKEND/GRID_LINALG_GLASS* selector
+    # macros no longer exist. The `GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()`
+    # symbol is retained ONLY as a 0-returning stub so the shared-memory arena
+    # macros keep compiling unchanged.
+    assert "#define GRID_LINALG_GLASS_NVIDIA" not in header
+    assert "#ifndef GRID_CUDA_LINALG_BACKEND" not in header
+    assert "namespace nvidia" not in header
+    assert "GRID_CUDA_USE_GLASS_NVIDIA_VALUE" not in header
+
+    # Vendored SIMT GLASS primitives (still present).
     assert "namespace glass" in header
     assert "Vendored from GLASS at codegen time" in header
     assert "BEGIN GLASS src/base/L1/dot_strided.cuh" in header
@@ -536,19 +576,22 @@ def test_linalg_backend_controls_and_helpers_are_generated(tmp_path):
     assert "glass::row_strided_gemv" in header
     assert "glass::row_strided_gemm" in header
     assert "glass::gemm_ex" in header
-    assert "namespace nvidia" in header
+
+    # The arena-sizing stub must remain (returns 0 now, but the macros call it).
     assert "GRID_LINALG_NVIDIA_MAX_HELPER_BYTES" in header
-    assert "grid_linalg_gemm_glass" in header
+
+    # Public grid_linalg_* SIMT wrappers (the surface kernels call).
     assert "grid_linalg_gemm" in header
     assert "grid_linalg_gemv" in header
     assert "grid_linalg_row_strided_gemv" in header
     assert "grid_linalg_row_strided_gemm" in header
-    assert "grid_linalg_nvidia_row_strided_gemv_smem_bytes" in header
-    assert "grid_linalg_nvidia_row_strided_gemm_smem_bytes" in header
-    # GLASS round-2 + Gap D unlock: the internal `_nvidia` helpers
-    # (grid_linalg_packed_gemm_nvidia_colmajor, _transb, row_strided_*_nvidia)
-    # were collapsed into the public wrappers above, which now call
-    # ::glass::nvidia::* directly. The internal helpers must NOT regrow.
+    assert "grid_linalg_dot_strided" in header
+    assert "grid_linalg_segmented_row_strided_gemv" in header
+
+    # The removed NVIDIA-backed helpers must NOT regrow.
+    assert "grid_linalg_gemm_glass" not in header
+    assert "grid_linalg_nvidia_row_strided_gemv_smem_bytes" not in header
+    assert "grid_linalg_nvidia_row_strided_gemm_smem_bytes" not in header
     assert "grid_linalg_packed_gemm_nvidia_colmajor" not in header
     assert "grid_linalg_packed_gemm_nvidia_transb" not in header
     assert "grid_linalg_row_strided_gemv_nvidia" not in header
@@ -559,6 +602,10 @@ def test_linalg_backend_controls_and_helpers_are_generated(tmp_path):
 @pytest.mark.developer_only
 def test_linalg_backend_default_cxx11_compiles_without_mathdx(tmp_path):
     header = _generate_header(tmp_path, "fr3", "fixed", codegen_profile="dynamics-core")
+    # v2.0: cuBLASDx/mathDx was removed; the default header is SIMT-only GLASS and
+    # must compile under -std=c++11 with no mathDx headers present. The retained
+    # GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>() stub returns 0 (no NVIDIA helper
+    # smem) — referencing it proves the SIMT-only arena path compiles clean.
     source = r'''
 #include "grid.cuh"
 
@@ -570,7 +617,7 @@ int main() {
     (void)A;
     (void)B;
     (void)C;
-    return grid::GRID_CUDA_USE_GLASS_NVIDIA_VALUE;
+    return static_cast<int>(grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>());
 }
 '''
     _compile_header_consumer(
