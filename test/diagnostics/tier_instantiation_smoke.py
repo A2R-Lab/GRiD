@@ -73,7 +73,7 @@ r = p.parse("{urdf}", floating_base={floating})
 cg = GRiDCodeGenerator(r, 0, FILE_NAMESPACE="grid")
 if cg.robot_has_mimic_joints():
     cg.gen_all_code(output_path="{out_path}",
-                    algorithm_list=["id", "minv", "fd", "aba", "crba", "integrator"])
+                    algorithm_list=["inverse_dynamics", "minv", "forward_dynamics", "aba", "crba", "integrator"])
 else:
     cg.gen_all_code(output_path="{out_path}")
 """

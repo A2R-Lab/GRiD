@@ -43,7 +43,7 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 # the second-order algorithm must be in the codegen list for the helper to be
 # meaningful (the helper is emitted regardless, but listing it keeps this test
 # honest about WHY the helper exists).
-_MIMIC_SO_ALGORITHM_LIST = ["id", "crba", "idsva_so_body_frame", "fdsva_so"]
+_MIMIC_SO_ALGORITHM_LIST = ["inverse_dynamics", "crba", "idsva_so_body_frame", "fdsva_so"]
 
 _MATMUL_DEF_RE = re.compile(
     r"void matmul\(int index[^\n]*\)\s*\{(?P<body>.*?)\n\s*\}", re.S

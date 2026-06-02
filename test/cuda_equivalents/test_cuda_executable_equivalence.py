@@ -175,15 +175,15 @@ def _robot_has_mimic_joints(project_model) -> bool:
 # not folded yet — deferred to T3-finisher — and the old silent-zero stub was
 # removed). gen_all_code("all") therefore raises NotImplementedError for them,
 # so we codegen only the non-gradient surface this suite actually compares for
-# mimic robots (MIMIC_SUPPORTED_ALGORITHMS): id / crba / ee_pose / minv /
-# forward_dynamics / aba. As each mimic-gradient phase lands (T3-finisher),
+# mimic robots (MIMIC_SUPPORTED_ALGORITHMS): inverse_dynamics / crba /
+# end_effector_pose / minv / forward_dynamics / aba. As each mimic-gradient phase lands,
 # extend both this list and MIMIC_SUPPORTED_ALGORITHMS together.
-MIMIC_CODEGEN_ALGORITHM_LIST = ["id", "crba", "ee_pose", "minv", "fd", "aba"]
+MIMIC_CODEGEN_ALGORITHM_LIST = ["inverse_dynamics", "crba", "end_effector_pose", "minv", "forward_dynamics", "aba"]
 # Fixed-base mimic additionally supports the ID/FD gradients (T3-finisher P3) and
 # the ee pose gradient/hessian (B2-ee P4). Floating-base mimic gradients are still
 # refused, so floating uses the base list.
 MIMIC_CODEGEN_ALGORITHM_LIST_FIXED = MIMIC_CODEGEN_ALGORITHM_LIST + [
-    "id_du", "fd_du", "ee_pose_gradient", "ee_pose_hessian",
+    "inverse_dynamics_gradient", "forward_dynamics_gradient", "end_effector_pose_gradient", "end_effector_pose_hessian",
     # B2-SO: fixed-base mimic second-order (idsva_so body frame + fdsva_so).
     "idsva_so_body_frame", "fdsva_so",
 ]
@@ -199,7 +199,7 @@ MIMIC_CODEGEN_ALGORITHM_LIST_FIXED = MIMIC_CODEGEN_ALGORITHM_LIST + [
 # comparison. Floating-mimic SO correctness is exercised by the DEDICATED oracle test
 # test_cuda_idsva_so_world_frame.py (fr3 is its floating-mimic sentinel robot).
 MIMIC_CODEGEN_ALGORITHM_LIST_FLOATING = MIMIC_CODEGEN_ALGORITHM_LIST + [
-    "id_du", "fd_du", "ee_pose_gradient", "ee_pose_hessian",
+    "inverse_dynamics_gradient", "forward_dynamics_gradient", "end_effector_pose_gradient", "end_effector_pose_hessian",
 ]
 # Algorithms with a KNOWN, TRACKED correctness bug: their mismatches vs the
 # independent oracle are reported as expected/known failures (not silent masks,

@@ -105,7 +105,7 @@ def _samples(project_model):
 # integrator_gradient ABSENT, codegen defines GRID_HAS_INTEGRATOR_GRADIENT=0 and
 # the runner's #if-guarded gradient block is dropped — so the same runner compiles
 # and exercises only the value (x_kp1) path.
-_VALUE_ONLY_ALGORITHMS = ["id", "minv", "fd", "integrator"]
+_VALUE_ONLY_ALGORITHMS = ["inverse_dynamics", "minv", "forward_dynamics", "integrator"]
 
 
 def _generate_header(project_model, build_dir: Path, value_only: bool = False) -> Path:
