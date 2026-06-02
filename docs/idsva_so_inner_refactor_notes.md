@@ -50,13 +50,13 @@ dominant cost), instead of the caller aliasing pointers.
 
 This is not an SO-specific pattern — every algorithm's inner should own its
 scratch placement. Conformance audit (2026-05-29; refreshed after the
-id_du/fd_du/integrator_gradient `_device`-orchestrator landing):
+inverse_dynamics_gradient/forward_dynamics_gradient/integrator_gradient `_device`-orchestrator landing):
 
 | Inner | Placement template | Status |
 |-------|--------------------|--------|
 | `aba_inner` | `TEMP_IN_SMEM` (whole arena) + `COLD_IN_SMEM` (surgical cold sub-band) | conforms |
 | `forward_dynamics_inner` | `MINV_F_IN_SMEM` (F region) | conforms (surgical-F) |
-| `direct_minv_inner` | `F_IN_SMEM` (F region) | conforms (surgical-F) |
+| `minv_inner` | `F_IN_SMEM` (F region) | conforms (surgical-F) |
 | `integrator_inner` | `MINV_F_IN_SMEM` | conforms |
 | `fdsva_so_contract` | `SCRATCH_IN_SMEM` (4·NV³) | conforms |
 | `fdsva_so_device` (orchestrator) | `SCRATCH_IN_SMEM × FD_GRAD_USE_SPILL × CONTRACT_IN_SMEM` | conforms (canonical 3-lever pattern) |
@@ -64,9 +64,9 @@ id_du/fd_du/integrator_gradient `_device`-orchestrator landing):
 | `end_effector_pose_gradient_inner` | `TEMP_IN_SMEM` | conforms |
 | `idsva_so_body_frame_inner` | `SCRATCH_IN_SMEM × BC_IN_SMEM` (whole-arena + surgical BC; mutually exclusive per the body tier table) | conforms |
 | `idsva_so_world_frame_inner` | `SCRATCH_IN_SMEM × COLD_IN_SMEM` (whole-arena + surgical cold trio Xdown/v_w/a_w; mutually exclusive) | conforms |
-| `inverse_dynamics_gradient_device` (id_du) | `SCRATCH_IN_SMEM` (whole-arena via the `_device` orchestrator) | conforms |
-| `forward_dynamics_gradient_device` (fd_du) | `SCRATCH_IN_SMEM` (whole-arena via the `_device` orchestrator) | conforms |
-| `integrator_gradient_device` | per-tier rung (Dqdd / dAB / id_du level) via `_device` orchestrator | conforms |
+| `inverse_dynamics_gradient_device` | `SCRATCH_IN_SMEM` (whole-arena via the `_device` orchestrator) | conforms |
+| `forward_dynamics_gradient_device` | `SCRATCH_IN_SMEM` (whole-arena via the `_device` orchestrator) | conforms |
+| `integrator_gradient_device` | per-tier rung (Dqdd / dAB / inverse_dynamics_gradient level) via `_device` orchestrator | conforms |
 
 Every emitted kernel now passes its per-tier placement flag through to the
 inner / `_device` and lets `if constexpr (!FLAG) { s_temp = d_workspace; ... }` at
@@ -90,7 +90,7 @@ Even once the inner owns its arena, the kernel still calls
 `load_update_X*mats_helpers(..., s_temp)` *outside* the inner, and that helper
 dereferences `s_temp` for its sincos scratch (`2*num_pos` floats). When the inner
 arena is spilled and the smem `s_temp` slot is `nullptr`, the helper segfaults
-(this was the 2026-05-24 null-`s_temp` crash in `aba` + `ee_pose_gradient`). Two
+(this was the 2026-05-24 null-`s_temp` crash in `aba` + `end_effector_pose_gradient`). Two
 acceptable resolutions, pick one and apply uniformly: (a) the kernel repoints
 `s_temp` at the spilled workspace before the helper call (current fix), or
 (b) always reserve the tiny `2*num_pos` helper scratch in smem regardless of
@@ -217,13 +217,13 @@ LITE perf matters. (Production floating path is world frame; fixed is body.)
 ### 2026-05-28 — orchestrator training-wheels drop
 
 The auto-allocating ``_device`` training-wheels wrapper that previously sat
-alongside ``_full_inner`` for all 4 orchestrators (fdsva_so / id_du / fd_du /
-integrator_gradient) has been dropped — the equivalence runner's only consumers
+alongside ``_full_inner`` for all 4 orchestrators (fdsva_so / inverse_dynamics_gradient /
+forward_dynamics_gradient / integrator_gradient) has been dropped — the equivalence runner's only consumers
 (`floating_inverse_dynamics_gradient_runner` and `floating_forward_dynamics_gradient_runner`)
-were dead code (the actual floating id_du/fd_du tests use the regular kernel) and
+were dead code (the actual floating inverse_dynamics_gradient/forward_dynamics_gradient tests use the regular kernel) and
 were removed too. After the rename + drop the orchestrators are a clean 3 layers:
-``_host`` / ``_kernel`` / ``_device``. Simple algorithms (id, minv, fd, aba, crba,
-ee_pose*, integrator, idsva_so_*) still ship their auto-allocating ``_device``
+``_host`` / ``_kernel`` / ``_device``. Simple algorithms (inverse_dynamics, minv, forward_dynamics, aba, crba,
+end_effector_pose*, integrator, idsva_so_*) still ship their auto-allocating ``_device``
 because the equivalence runner's simple-algo test kernels still call them; a
 future cleanup can collapse those too.
 
@@ -482,7 +482,7 @@ and collide on output cells. Fix mirrors `RBDReference.idsva_so_world_frame`'s
   `R[i, true(i)] = alpha_i`.
 * **The per-root-DoF fold is EMERGENT, not separate.** The floating root's 6
   columns get 6 DISTINCT internal slots that fold identity (alpha=1) to reduced
-  slots 0..5. So the "per-root-DoF loop" the B1 id_du needs is automatically
+  slots 0..5. So the "per-root-DoF loop" the B1 inverse_dynamics_gradient needs is automatically
   achieved by the per-column internal slotting — no special 6-DoF root code.
 * Arena (`gen_idsva_so_world_frame_temp_mem_size`) grows by `4*n_int^3` + the
   n_int-vs-NV band delta for mimic only.
@@ -495,7 +495,7 @@ iiwa14/go2/g1 floating + iiwa14/go2 fixed; fr3-fixed differs only in the
 
 **fdsva_so floating-mimic:** composes the (now-correct) world inner, so it needed
 no fdsva edit. It DID surface a pre-existing dependency bug: the mimic Minv path
-(`_direct_minv.py`) forward-declares + calls `crba_inner<T,true>` but
+(`_minv.py`) forward-declares + calls `crba_inner<T,true>` but
 `_normalize_codegen_algorithms` didn't pull in `crba` for `minv` on mimic robots
 (non-mimic Minv never touches crba), so fdsva_so floating-mimic hit `nvlink:
 unresolved extern crba_inner`. Fixed with a 1-line additive dep:

@@ -133,10 +133,16 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
 - ⬜ **A2 — planar/spherical joint codegen UNVERIFIED.** URDFParser advertises `planar`/`spherical`
   (errors.py) but NO robot in `robot_assets/` exercises them → that parser+codegen path is untested. Add a
   planar + a spherical test URDF (or confirm + document the support level), else demote the advertised support.
-- ⬜ **A3 — user-facing docs were STALE post-rename** (old names across `docs/source/**` + submodule
-  `RBDReference/README.md` + a `rnea.rst` page; gravity docs said +9.81). Docs-update agent in flight.
-- ⬜ **A4 — stale completed planning docs** in `docs/` (d2_codegen_mimic_plan, idsva_so_inner_refactor_notes,
-  python_wrappers_plan, a3_…audit, perf_cleanup_overnight) → archive to `docs/open-tasks/archive/`.
+- ✅ **A3 — user-facing docs were STALE post-rename** (old names across `docs/source/**` + submodule
+  `RBDReference/README.md` + a `rnea.rst` page; gravity docs said +9.81). DONE: verbose names + signed
+  gravity applied across Sphinx + READMEs; `rnea.rst` → `inverse_dynamics.rst` (toctree fixed); sphinx
+  builds clean.
+- ✅ **A4 — stale completed planning docs** → archive to `docs/open-tasks/archive/`. DONE for the one
+  confirmed-historical doc (`python_wrappers_plan.md`, "v0.3 SHIPPED, historical"). KEPT LIVE (not
+  archived): `d2_codegen_mimic_plan.md` ("scoping doc, NOT yet implemented" + T3-tracked),
+  `a3_…audit` (referenced by `_crba.py` code as the refactor plan), `idsva_so_inner_refactor_notes`
+  (cited as source-of-truth by live Sphinx concept pages + CUDA-equivalence tests; names fixed in place).
+  `perf_cleanup_overnight.md` does not exist under `docs/` (only a stale mention in a bench-result file).
 - (Non-gaps confirmed: `integrator_with_gradient` covered via the integrator+gradient pairing (C7);
   `plant_step_hessian` absence == F1, already tracked.)
 

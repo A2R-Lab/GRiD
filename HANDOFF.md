@@ -442,7 +442,7 @@ re-verified):**
 - Per-tier smem allocator can also drop the dxhom-shared logic (the spilling-to-
   workspace path for dxhom is never taken on the gradient path).
 - Documentation: add the d/dv convention note + the geometric-Jacobian explanation
-  in `docs/source/user_guide/concepts/`, and a section in `docs/python_wrappers_plan.md`.
+  in `docs/source/user_guide/concepts/`, and a section in `docs/open-tasks/archive/python_wrappers_plan.md`.
 
 ### ee_pose_hessian d/dv (RBDReference + pinocchio_backend ONLY) — 2026-05-28
 
@@ -1553,7 +1553,7 @@ Recent closures are summarized in OPEN ITEMS above; per-merge detail is in `git 
 ### Reference docs (kept separate, linked from here)
 - `docs/source/user_guide/concepts/resource_tier_system.rst` — tier/spill architecture.
 - `docs/idsva_so_inner_refactor_notes.md` — deferred inner de-alias design.
-- `docs/python_wrappers_plan.md` — grid-rbd bindings (historical plan; v0.3 shipped).
+- `docs/open-tasks/archive/python_wrappers_plan.md` — grid-rbd bindings (historical plan; v0.3 shipped; archived).
 - `test/benchmarks/overnight_tier_sweep.md` — partial sweep results (pre-fix run).
 - `RBDReference/tests/PINOCCHIO_ALIGNMENT_BACKLOG.md` — Pinocchio alignment.
 
