@@ -140,7 +140,7 @@ class JaxRobotHandle:
 
     # ─── algorithm methods ───────────────────────────────────────────────
 
-    def inverse_dynamics(self, q, qd, *, gravity: float = 9.81):
+    def inverse_dynamics(self, q, qd, *, gravity: float = -9.81):
         """Inverse dynamics: c = M(q)·qdd_zero + h(q,qd) − g(q).
 
         ``q``, ``qd``: jax.Array shape (B, NJ), dtype float32.
@@ -174,7 +174,7 @@ class JaxRobotHandle:
         eye = jnp.eye(nj, dtype=m.dtype)
         return m + jnp.swapaxes(m, -1, -2) - m * eye
 
-    def forward_dynamics(self, q, qd, u, *, gravity: float = 9.81):
+    def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81):
         """qdd = forward_dynamics(q, qd, u). Returns (B, NJ)."""
         import jax
         import jax.numpy as jnp
@@ -186,7 +186,7 @@ class JaxRobotHandle:
         out_type = jax.ShapeDtypeStruct(q.shape, jnp.float32)
         return jax.ffi.ffi_call(target, out_type)(q, qd, u, gravity=np.float32(gravity))
 
-    def aba(self, q, qd, u, *, gravity: float = 9.81):
+    def aba(self, q, qd, u, *, gravity: float = -9.81):
         """qdd = aba(q, qd, u) via the articulated body algorithm. Returns (B, NJ)."""
         import jax
         import jax.numpy as jnp
@@ -197,7 +197,7 @@ class JaxRobotHandle:
         out_type = jax.ShapeDtypeStruct(q.shape, jnp.float32)
         return jax.ffi.ffi_call(target, out_type)(q, qd, u, gravity=np.float32(gravity))
 
-    def crba(self, q, *, gravity: float = 9.81):
+    def crba(self, q, *, gravity: float = -9.81):
         """Mass matrix M(q) via composite rigid body algorithm. Returns (B, NJ, NJ)."""
         import jax
         import jax.numpy as jnp
@@ -258,7 +258,7 @@ class JaxRobotHandle:
         out_type = jax.ShapeDtypeStruct((B, 6 * nee, nv, nv), jnp.float32)
         return jax.ffi.ffi_call(target, out_type)(q)
 
-    def inverse_dynamics_gradient(self, q, qd, *, gravity: float = 9.81):
+    def inverse_dynamics_gradient(self, q, qd, *, gravity: float = -9.81):
         """∂c/∂(q, qd) — concatenated [dc_dq | dc_dqd]. Returns (B, NJ, 2*NJ).
 
         Matches the plain wrapper layout: GRiD writes (2, NJ, NJ) column-major
@@ -277,7 +277,7 @@ class JaxRobotHandle:
         blocks = raw.reshape(B, 2, nj, nj).transpose(0, 1, 3, 2)
         return jnp.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
-    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = 9.81):
+    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81):
         """∂qdd/∂(q, qd) — concatenated [df_dq | df_dqd]. Returns (B, NJ, 2*NJ)."""
         import jax
         import jax.numpy as jnp
@@ -292,7 +292,7 @@ class JaxRobotHandle:
         blocks = raw.reshape(B, 2, nj, nj).transpose(0, 1, 3, 2)
         return jnp.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
-    def idsva_so(self, q, qd, *, gravity: float = 9.81):
+    def idsva_so(self, q, qd, *, gravity: float = -9.81):
         """Second-order inverse dynamics.
 
         Returns a tuple of 4 jax.Arrays each shape (B, NV, NV, NV):
@@ -314,7 +314,7 @@ class JaxRobotHandle:
             for i in range(4)
         )
 
-    def fdsva_so(self, q, qd, u, *, gravity: float = 9.81):
+    def fdsva_so(self, q, qd, u, *, gravity: float = -9.81):
         """Second-order forward dynamics.
 
         Returns a tuple of 4 jax.Arrays each shape (B, NV, NV, NV). Uses
@@ -336,11 +336,11 @@ class JaxRobotHandle:
             for i in range(4)
         )
 
-    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = 9.81):
+    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
         """One integration step. Returns (B, NUM_POS + NUM_VEL).
 
         ``dt`` and the integrator type are passed as FFI attributes (runtime
-        scalars); gravity is the standard 9.81 constant.
+        scalars); gravity is the signed gravitational acceleration (default -9.81).
         """
         import numpy as np
         import jax
@@ -354,7 +354,7 @@ class JaxRobotHandle:
             q, qd, u, dt=np.float32(dt), it=np.int64(_integrator_code(integrator_type)),
             gravity=np.float32(gravity))
 
-    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = 9.81):
+    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
         """Gradient of the integrator step. Returns (B, 2*NV, 3*NV) — column
         blocks [d/dq | d/dqd | d/du] in tangent space."""
         import numpy as np

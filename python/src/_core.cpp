@@ -68,7 +68,7 @@ extern "C" {
     // q, qd, u, out, batch, gravity         — fdsva_so (same as fd)
     // q, qd, u, out, batch, dt, it          — integrator, integrator_gradient
     //   (dt is the runtime timestep; it selects the IntegratorType; gravity is
-    //    the standard 9.81 constant baked in the wrapper)
+    //    the signed gravitational acceleration (default -9.81) baked in the wrapper)
     using fn_integrator_t   = int (*)(const float*, const float*, const float*,
                                       float*, int, float, float, int);
     // grid_plant C ABI (G1 binding layer)
@@ -478,7 +478,7 @@ public:
     }
 
     // integrator(q, qd, u, dt, it) -> x_kp1 (batch, NUM_POS + NUM_VEL).
-    // gravity is the standard 9.81 constant (baked in the wrapper).
+    // gravity is the signed gravitational acceleration (default -9.81) (baked in the wrapper).
     py::array_t<float> integrator(
         py::array_t<float, py::array::c_style | py::array::forcecast> q,
         py::array_t<float, py::array::c_style | py::array::forcecast> qd,
@@ -796,20 +796,20 @@ PYBIND11_MODULE(_core, m) {
         .def("inverse_dynamics", &Runner::inverse_dynamics,
              py::arg("q"), py::arg("qd"),
              py::arg("qdd") = py::none(),
-             py::arg("gravity") = 9.81f,
+             py::arg("gravity") = -9.81f,
              py::arg("f_ext") = py::none())
         .def("minv", &Runner::minv,
              py::arg("q"))
         .def("forward_dynamics", &Runner::forward_dynamics,
              py::arg("q"), py::arg("qd"), py::arg("u"),
-             py::arg("gravity") = 9.81f,
+             py::arg("gravity") = -9.81f,
              py::arg("f_ext") = py::none())
         .def("aba", &Runner::aba,
              py::arg("q"), py::arg("qd"), py::arg("u"),
-             py::arg("gravity") = 9.81f,
+             py::arg("gravity") = -9.81f,
              py::arg("f_ext") = py::none())
         .def("crba", &Runner::crba,
-             py::arg("q"), py::arg("gravity") = 9.81f)
+             py::arg("q"), py::arg("gravity") = -9.81f)
         .def("end_effector_pose", &Runner::end_effector_pose,
              py::arg("q"))
         .def("fk_batched", &Runner::fk_batched,
@@ -818,28 +818,28 @@ PYBIND11_MODULE(_core, m) {
              py::arg("q"))
         .def("inverse_dynamics_gradient", &Runner::inverse_dynamics_gradient,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
-             py::arg("gravity") = 9.81f,
+             py::arg("gravity") = -9.81f,
              py::arg("f_ext") = py::none())
         .def("forward_dynamics_gradient", &Runner::forward_dynamics_gradient,
              py::arg("q"), py::arg("qd"), py::arg("u"),
-             py::arg("gravity") = 9.81f,
+             py::arg("gravity") = -9.81f,
              py::arg("f_ext") = py::none())
         .def("end_effector_pose_hessian", &Runner::end_effector_pose_hessian,
              py::arg("q"))
         .def("idsva_so", &Runner::idsva_so,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("second_order_tensor_size"),
-             py::arg("gravity") = 9.81f)
+             py::arg("gravity") = -9.81f)
         .def("fdsva_so", &Runner::fdsva_so,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("second_order_tensor_size"),
-             py::arg("gravity") = 9.81f)
+             py::arg("gravity") = -9.81f)
         .def("integrator", &Runner::integrator,
              py::arg("q"), py::arg("qd"), py::arg("u"),
-             py::arg("dt"), py::arg("it") = 0, py::arg("gravity") = 9.81f)
+             py::arg("dt"), py::arg("it") = 0, py::arg("gravity") = -9.81f)
         .def("integrator_gradient", &Runner::integrator_gradient,
              py::arg("q"), py::arg("qd"), py::arg("u"),
-             py::arg("dt"), py::arg("it") = 0, py::arg("gravity") = 9.81f)
+             py::arg("dt"), py::arg("it") = 0, py::arg("gravity") = -9.81f)
         // ─── grid_plant surface (G1) ──────────────────────────────────────
         .def("quadratic_state_cost", &Runner::quadratic_state_cost,
              py::arg("x"), py::arg("x_des"), py::arg("Q"))
@@ -853,7 +853,7 @@ PYBIND11_MODULE(_core, m) {
              py::arg("var"), py::arg("lower"), py::arg("upper"), py::arg("mu"))
         .def("plant_step", &Runner::plant_step,
              py::arg("x"), py::arg("u"), py::arg("dt"),
-             py::arg("it") = 0, py::arg("gravity") = 9.81f)
+             py::arg("it") = 0, py::arg("gravity") = -9.81f)
         .def("ee_pos_cost", &Runner::ee_pos_cost,
              py::arg("q"), py::arg("p_des"), py::arg("W"));
 }

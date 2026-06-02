@@ -11,11 +11,10 @@ exposed — batch=1 covers it with negligible overhead.
 
 Gravity convention
 ------------------
-This wrapper follows GRiD's internal convention: `gravity` is the
-**magnitude** (positive, default 9.81). The downward direction is
-applied inside the kernel. If you're cross-checking against
-``RBDReference.inverse_dynamics(..., GRAVITY=-9.81)``, pass ``gravity=9.81`` here
-for matching results.
+`gravity` is the **signed** gravitational acceleration along world +z, default
+``-9.81`` (standard downward gravity) — the same convention as pinocchio and
+``RBDReference`` (``GRAVITY=-9.81``). Pass the same value to both for matching
+results; the default already matches.
 """
 from __future__ import annotations
 
@@ -164,7 +163,7 @@ class RobotHandle:
             )
         return fe
 
-    def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = 9.81, f_ext=None):
+    def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
         """Inverse dynamics (RNEA). Returns the bias term c = M·qdd_zero + h − g.
 
         Currently `qdd` is accepted for API stability but ignored (the
@@ -199,7 +198,7 @@ class RobotHandle:
         m_full[:, diag_idx, diag_idx] -= np.diagonal(m, axis1=-2, axis2=-1)
         return m_full
 
-    def forward_dynamics(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
+    def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
         """Forward dynamics qdd = M⁻¹·(τ − c). Returns shape (B, NJ).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``,
@@ -209,7 +208,7 @@ class RobotHandle:
         u  = np.ascontiguousarray(u,  dtype=np.float32)
         return self._runner.forward_dynamics(q, qd, u, gravity, self._prep_f_ext(f_ext))
 
-    def aba(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
+    def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
         """Recursive forward dynamics via Articulated Body Algorithm.
         Returns shape (B, NJ). Alternative to forward_dynamics() with the
         same output but a different implementation.
@@ -221,7 +220,7 @@ class RobotHandle:
         u  = np.ascontiguousarray(u,  dtype=np.float32)
         return self._runner.aba(q, qd, u, gravity, self._prep_f_ext(f_ext))
 
-    def crba(self, q, *, gravity: float = 9.81):
+    def crba(self, q, *, gravity: float = -9.81):
         """Joint-space mass matrix M(q) via Composite Rigid Body Algorithm.
         Returns shape (B, NJ, NJ). Pass `gravity` only because the host
         wrapper takes it; the result doesn't depend on gravity."""
@@ -265,7 +264,7 @@ class RobotHandle:
         NV = self.num_vel
         return raw.reshape(B, NEE, NV, 6).transpose(0, 1, 3, 2).reshape(B, 6 * NEE, NV)
 
-    def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = 9.81, f_ext=None):
+    def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
         """∂c/∂(q, qd). Returns shape (B, NJ, 2*NJ) — concatenated
         [dc_dq | dc_dqd]. Slice with `[..., :NJ]` / `[..., NJ:]`.
 
@@ -286,7 +285,7 @@ class RobotHandle:
         blocks = raw.reshape(B, 2, NJ, NJ).transpose(0, 1, 3, 2)  # row-major now
         return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
-    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
+    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
         """∂qdd/∂(q, qd). Returns shape (B, NJ, 2*NJ).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
@@ -308,7 +307,7 @@ class RobotHandle:
         q = np.ascontiguousarray(q, dtype=np.float32)
         return self._runner.end_effector_pose_hessian(q)
 
-    def idsva_so(self, q, qd, qdd=None, *, gravity: float = 9.81):
+    def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81):
         """Second-order inverse dynamics. Returns a tuple of 4 tensors:
         (d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq), each shape (B, NV, NV, NV).
 
@@ -327,7 +326,7 @@ class RobotHandle:
         B = flat.shape[0]
         return tuple(flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4))
 
-    def fdsva_so(self, q, qd, u, *, gravity: float = 9.81):
+    def fdsva_so(self, q, qd, u, *, gravity: float = -9.81):
         """Second-order forward dynamics. Returns shape (B, 4*NV^3) as a flat
         view of the four output tensors; slice [..., i*NV^3:(i+1)*NV^3] for
         each component."""
@@ -339,11 +338,11 @@ class RobotHandle:
         B = flat.shape[0]
         return tuple(flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4))
 
-    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = 9.81):
+    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
         """One integration step x_{k+1} = integrator(x_k, u, dt).
 
         Returns shape (B, NUM_POS + NUM_VEL) — concatenated [q_new, v_new].
-        `dt` is the runtime timestep; gravity is the standard 9.81 constant.
+        `dt` is the runtime timestep; gravity is the signed gravitational acceleration (default -9.81).
         `integrator_type` is one of euler / semi_implicit_euler / midpoint /
         rk3 / rk4."""
         q  = np.ascontiguousarray(q,  dtype=np.float32)
@@ -352,11 +351,11 @@ class RobotHandle:
         it = _integrator_code(integrator_type)
         return self._runner.integrator(q, qd, u, float(dt), it, gravity=float(gravity))
 
-    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = 9.81):
+    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
         """Gradient of the integrator step. Returns shape (B, 2*NV, 3*NV) —
         column blocks [d/dq | d/dqd | d/du] in tangent space.
 
-        `dt` is the runtime timestep; gravity is the standard 9.81 constant."""
+        `dt` is the runtime timestep; gravity is the signed gravitational acceleration (default -9.81)."""
         q  = np.ascontiguousarray(q,  dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         u  = np.ascontiguousarray(u,  dtype=np.float32)
@@ -433,7 +432,7 @@ class RobotHandle:
         upper = np.ascontiguousarray(upper, dtype=np.float32)
         return getattr(self._runner, method)(var, lower, upper, float(mu))
 
-    def plant_step(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = 9.81):
+    def plant_step(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
         """x_{k+1} = integrator(x_k, u_k, dt). Thin wrapper over grid::integrator.
 
         x is (B, NUM_POS + NUM_VEL); u is (B, NUM_VEL). Returns (B, NX).

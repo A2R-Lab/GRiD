@@ -498,7 +498,7 @@ extern "C" int grid_rbd_fdsva_so(
 // Time integrator (value + gradient)
 // ────────────────────────────────────────────────────────────────────────────
 //
-// dt is a runtime float; gravity is the standard constant (9.81). The
+// dt is a runtime float; gravity is the signed gravitational acceleration (default -9.81). The
 // integrator type is selected at call time via an int code (0=EULER,
 // 1=SEMI_IMPLICIT_EULER, 2=MIDPOINT, 3=RK3, 4=RK4) dispatched onto the
 // compile-time `IntegratorType IT` template. x_kp1 is size (NUM_POS + NUM_VEL)

@@ -258,7 +258,7 @@ class TorchRobotHandle:
 
     # ─── differentiable algorithms ───────────────────────────────────────
 
-    def inverse_dynamics(self, q, qd, *, gravity: float = 9.81, f_ext=None):
+    def inverse_dynamics(self, q, qd, *, gravity: float = -9.81, f_ext=None):
         """Inverse dynamics c (B, NJ). Autograd-aware wrt (q, qd).
 
         ``f_ext`` (optional): per-body external forces, a CUDA float32 tensor
@@ -267,21 +267,21 @@ class TorchRobotHandle:
         numpy handle and ``RBDReference.inverse_dynamics(..., f_ext=...)``)."""
         return self._fns["inverse_dynamics"].apply(q, qd, float(gravity), f_ext)
 
-    def forward_dynamics(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
+    def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
         """qdd = M⁻¹(τ − c) (B, NJ). Autograd-aware wrt (q, qd, u).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``
         CUDA float32 (see :py:meth:`inverse_dynamics`)."""
         return self._fns["fd"].apply(q, qd, u, float(gravity), f_ext)
 
-    def aba(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
+    def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
         """qdd via ABA (B, NJ). Autograd-aware wrt (q, qd, u).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``
         CUDA float32 (see :py:meth:`inverse_dynamics`)."""
         return self._fns["aba"].apply(q, qd, u, float(gravity), f_ext)
 
-    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = 9.81):
+    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
         """x_{k+1} (B, NP+NV). Autograd-aware wrt (q, qd, u)."""
         it = _integrator_code(integrator_type)
         return self._fns["integrator"].apply(q, qd, u, float(dt), it, float(gravity))
@@ -296,7 +296,7 @@ class TorchRobotHandle:
         eye = torch.eye(nj, dtype=m.dtype, device=m.device)
         return m + m.transpose(1, 2) - m * eye
 
-    def crba(self, q, *, gravity: float = 9.81):
+    def crba(self, q, *, gravity: float = -9.81):
         """Mass matrix M(q) (B, NJ, NJ)."""
         nj = self.num_joints
         return self._ops.crba(q, float(gravity)).reshape(-1, nj, nj)
@@ -317,7 +317,7 @@ class TorchRobotHandle:
         nee, nv = self.num_ees, self.num_vel
         return self._ops.end_effector_pose_hessian(q).reshape(-1, 6 * nee, nv, nv)
 
-    def inverse_dynamics_gradient(self, q, qd, *, gravity: float = 9.81, f_ext=None):
+    def inverse_dynamics_gradient(self, q, qd, *, gravity: float = -9.81, f_ext=None):
         """∂c/∂(q,qd) (B, NJ, 2*NJ) = [dc_dq | dc_dqd].
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
@@ -328,7 +328,7 @@ class TorchRobotHandle:
         blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
         return _concat_blocks(blocks)
 
-    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = 9.81, f_ext=None):
+    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
         """∂qdd/∂(q,qd) (B, NJ, 2*NJ).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
@@ -339,21 +339,21 @@ class TorchRobotHandle:
         blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
         return _concat_blocks(blocks)
 
-    def idsva_so(self, q, qd, *, gravity: float = 9.81):
+    def idsva_so(self, q, qd, *, gravity: float = -9.81):
         """Second-order ID: 4 tensors each (B, NV, NV, NV)."""
         nv = self.num_vel
         flat = self._ops.idsva_so(q, qd, float(gravity))
         B = flat.shape[0]
         return tuple(flat[:, i*nv**3:(i+1)*nv**3].reshape(B, nv, nv, nv) for i in range(4))
 
-    def fdsva_so(self, q, qd, u, *, gravity: float = 9.81):
+    def fdsva_so(self, q, qd, u, *, gravity: float = -9.81):
         """Second-order FD: 4 tensors each (B, NV, NV, NV)."""
         nv = self.num_vel
         flat = self._ops.fdsva_so(q, qd, u, float(gravity))
         B = flat.shape[0]
         return tuple(flat[:, i*nv**3:(i+1)*nv**3].reshape(B, nv, nv, nv) for i in range(4))
 
-    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = 9.81):
+    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
         """dAB (B, 2*NV, 3*NV) = [d/dq | d/dqd | d/du] tangent."""
         nv = self.num_vel
         it = _integrator_code(integrator_type)
