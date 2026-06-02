@@ -137,7 +137,7 @@ def generate_header(
             "codegen_hash": codegen_hash,
             "robot": robot,
             "base": base,
-            "profile": "all",
+            "profile": "all+frame_jacobian",
             "homogenous": True,
             "no_licm_barrier": no_licm_barrier_env,
             "idsva_so_world_frame": True,
@@ -168,11 +168,16 @@ def generate_header(
     with contextlib.redirect_stdout(io.StringIO()):
         codegen.gen_all_code(
             include_homogenous_transforms=True,
-            # fixed_target_name omitted: passing it with codegen_profile='all' triggers a
+            # fixed_target_name omitted: passing it with the 'all' set triggers a
             # generator bug where kinematics_only() references an _hessian_{name} variant
             # that isn't generated. EE pose timing is unaffected by this omission.
             output_path=str(header_path),
-            codegen_profile="all",
+            # S1: the opt-in frame_jacobian family (frame_jacobian / _dot / osc_inertia)
+            # is NOT in the default 'all' profile (so the default header stays
+            # byte-identical), but the bench DOES want to time it. Request the 'all'
+            # set PLUS the three opt-in keys via algorithm_list (which supersedes
+            # codegen_profile) so their kernels emit and the PER_ALGO_SPECS rows fire.
+            algorithm_list=["all", "frame_jacobian", "frame_jacobian_dot", "osc_inertia"],
             enable_idsva_so_world_frame=True,
             enable_floating_second_order=True,
         )
@@ -369,6 +374,14 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_label": "END_EFFECTOR_POSE_GRADIENT",
         "gate": None,
         "shared_mem_skip": "DEE_POS_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "frame_jacobian": {
+        "single_call":        "grid::frame_jacobian_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::frame_jacobian<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::frame_jacobian_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "FRAME_JACOBIAN",
+        "gate": "GRID_HAS_FRAME_JACOBIAN",
+        "shared_mem_skip": "FRAME_JACOBIAN_DYNAMIC_SHARED_MEM_BYTES",
     },
     "end_effector_pose_hessian": {
         "single_call":        "grid::end_effector_pose_hessian_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",

@@ -90,9 +90,19 @@ Detail/evidence: `api_completeness_audit.md`, `rename_mapping.md`.
   backlog bug to fix BEFORE the sweep.
 
 ## 3. COMPLETENESS — missing surfaces
-- ⬜ **S1 — `frame_jacobian` / `frame_jacobian_dot` / `osc_inertia` are DEVICE-ONLY.** Add
+- 🔄 **S1 — `frame_jacobian` / `frame_jacobian_dot` / `osc_inertia` were DEVICE-ONLY.** Add
   kernel + 3-mode host + batch wrappers + gridData output buffers → benchmarkable + bindable. Prereq for
   the HJCD "parallelize frame_jacobian" perf ask.
+  **`frame_jacobian` DONE:** `frame_jacobian_kernel` (+`_single_timing`) + 3-mode host
+  (`frame_jacobian`/`_single_timing`/`_compute_only`) + `gridData` `d_/h_frame_jacobian` (6×NV) buffers;
+  registered in `KERNEL_ATTR_MANIFEST` + bench `PER_ALGO_SPECS` (gate `GRID_HAS_FRAME_JACOBIAN`); host
+  surface validated vs the numpy oracle (`test_cuda_frame_jacobian_host.py`, iiwa14-fixed rel err ~1.8e-7,
+  go2-floating ~7.5e-8). The launchable surface bakes a fixed target (leaf-EE joint) + `LOCAL_WORLD_ALIGNED`
+  frame; `frame_jacobian_device` stays the arbitrary-target/-frame entry point. Also fixed a latent
+  `_plant.py` bug: `com_cost`/`momentum_cost` were emitted whenever `end_effector_pose` was present
+  (referencing undefined `grid::com_device`/`ccrba_device`) — now gated on `com`+`ccrba` keys. `d_/h_osc_inertia`
+  (6×6) + `d_/h_frame_jacobian_dot` (6×NV) gridData buffers landed alongside. **TODO:** `frame_jacobian_dot`
+  + `osc_inertia` kernel/host surfaces.
 - ⬜ **S2 — uniform `_inner` missing** for `fd_du` (reuses id_du band), `f_ext_gradient_dq` (kernel-only),
   `integrator_gradient` (uses `_multistage`).
 

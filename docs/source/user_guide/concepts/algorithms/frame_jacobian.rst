@@ -70,7 +70,7 @@ The Python reference is ``RBDReference.frame_jacobian`` /
 CUDA codegen lives in
 `GRiDCodeGenerator/algorithms/_frame_jacobian.py
 <https://github.com/A2R-Lab/GRiDCodeGenerator>`__. It is an
-**opt-in, additive** family: the kernels are only emitted when the
+**opt-in, additive** family: the surfaces are only emitted when the
 ``frame_jacobian`` key is explicitly selected (it pulls in the
 ``end_effector_pose`` world-transform machinery), so existing profiles' headers
 are byte-identical. The CUDA path emits the geometric Jacobian
@@ -78,13 +78,25 @@ are byte-identical. The CUDA path emits the geometric Jacobian
 ``frame_jacobian_device``, the Jacobian time-variation :math:`\dot J`
 via ``frame_jacobian_dot_device`` (opt-in ``frame_jacobian_dot`` key),
 and the OSC inertia :math:`\Lambda` via ``osc_inertia_device`` (opt-in
-``osc_inertia`` key). All three are validated on-device against the numpy
-reference across the three reference frames. The :math:`\Lambda` kernel
-currently takes a precomputed :math:`M^{-1}` as input (the smoke runner
-feeds it from ``minv_device``); folding ``minv_inner`` into
-``osc_inertia_device`` so it composes :math:`M^{-1}` on-device is a
-follow-up. Mimic-joint robots are not yet supported on the CUDA
-frame-Jacobian path.
+``osc_inertia`` key). The :math:`\Lambda` device is **self-contained**: it
+composes :math:`M^{-1}` on-device via ``minv_inner`` (no external
+:math:`M^{-1}` feed). Mimic-joint robots ARE supported (the geometric-Jacobian
+column fold is alpha-weighted onto the shared velocity slot; :math:`\Lambda`
+routes the mimic :math:`M^{-1}` through ``crba_inner``).
+
+**Full launchable surface (S1).** ``frame_jacobian`` now has the same surface
+set as the other benchmarkable kinematics algorithms: a batched ``__global__``
+``frame_jacobian_kernel`` (plus a ``_single_timing`` variant) and a 3-mode
+``__host__`` launcher ``frame_jacobian`` / ``frame_jacobian_single_timing`` /
+``frame_jacobian_compute_only`` that reads/writes the ``gridData`` output buffer
+``hd_data->d_frame_jacobian`` (6 × NUM_VEL, copied back into
+``h_frame_jacobian``). The launchable surface bakes a fixed frame target (the
+leaf-EE joint) and the ``LOCAL_WORLD_ALIGNED`` reference frame (mirroring the
+fixed-target ``end_effector_pose`` pattern); use ``frame_jacobian_device``
+directly for an arbitrary ``target_jid`` / ``reference_frame`` at runtime. The
+host surface is validated end-to-end against the numpy oracle in
+``test/cuda_equivalents/test_cuda_frame_jacobian_host.py`` (the device functions
+are covered by ``test_cuda_frame_jacobian.py``).
 
 See Also
 --------
