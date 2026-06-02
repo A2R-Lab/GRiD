@@ -34,7 +34,7 @@ KERNELS = [
     "crba_kernel",
     "end_effector_pose_kernel",
     "end_effector_pose_gradient_kernel",
-    "end_effector_pose_gradient_hessian_kernel",
+    "end_effector_pose_hessian_kernel",
     "idsva_so_body_frame_kernel",
     "idsva_so_world_frame_kernel",
     "fdsva_so_kernel",
@@ -271,7 +271,7 @@ def main():
             continue
         print(f"  All {len(emitted) * 3} (kernel, tier) instantiations compile.")
         # Brief register summary only for the divergence-prone kernels.
-        watch = ("fdsva_so_kernel", "end_effector_pose_gradient_hessian_kernel",
+        watch = ("fdsva_so_kernel", "end_effector_pose_hessian_kernel",
                  "inverse_dynamics_gradient_kernel", "forward_dynamics_gradient_kernel")
         for k in emitted:
             if k not in watch:

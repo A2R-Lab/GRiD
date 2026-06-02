@@ -331,7 +331,7 @@ void run() {
             "end_effector_pose_gradient", grid::DEE_POS_DYNAMIC_SHARED_MEM_BYTES<T>());
     }
     if (floating_algorithm_requested("end_effector_pose_hessian")) {
-        grid_runner_set_smem_or_skip(grid::end_effector_pose_gradient_hessian_kernel<T>,
+        grid_runner_set_smem_or_skip(grid::end_effector_pose_hessian_kernel<T>,
             "end_effector_pose_hessian", grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>());
     }
 #endif  // !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
@@ -442,7 +442,7 @@ void run() {
                 0, hd_data->d_workspace, grid::GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()
             ));
         }
-        grid::end_effector_pose_gradient_hessian_kernel<T><<<1, g_num_threads, grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
+        grid::end_effector_pose_hessian_kernel<T><<<1, g_num_threads, grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_d2ee,
             d_dee,
             hd_data->d_workspace,
@@ -694,7 +694,7 @@ void run() {
         6 * grid::NUM_VEL * grid::NUM_EES
     );
 
-    grid::end_effector_pose_gradient_hessian<T>(
+    grid::end_effector_pose_hessian<T>(
         hd_data, d_robot_model, 1, block_dimms, thread_dimms, streams
     );
     gpuErrchk(cudaPeekAtLastError());

@@ -97,8 +97,8 @@ __host__ void measure_ee_pose_hessian_batch(int N, cudaStream_t *streams, grid::
     GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("EE_POSE_HESSIAN", N, D2EE_POS_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
     measure_batch_pair<TEST_ITERS>("EE_POSE_HESSIAN", N,
-        [&]{ grid::end_effector_pose_gradient_hessian<T>(d,m,N,dim3(N,1,1),dimms,streams); },
-        [&]{ grid::end_effector_pose_gradient_hessian_compute_only<T>(d,m,N,dim3(N,1,1),dimms); });
+        [&]{ grid::end_effector_pose_hessian<T>(d,m,N,dim3(N,1,1),dimms,streams); },
+        [&]{ grid::end_effector_pose_hessian_compute_only<T>(d,m,N,dim3(N,1,1),dimms); });
 }
 #if GRID_HAS_IDSVA_SO_BODY_FRAME
 template <typename T, int TEST_ITERS>

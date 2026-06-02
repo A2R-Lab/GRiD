@@ -83,7 +83,7 @@ void test(){
     }
 
     printf("d2eePos\n");
-    grid::end_effector_pose_gradient_hessian<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
+    grid::end_effector_pose_hessian<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
     for(int ee=0; ee < grid::NUM_EES; ee++){
         printf("deePos[%d]\n",ee);
         printMat<T,6,grid::NUM_VEL>(&hd_data->h_deePos[ee*6*grid::NUM_VEL],6);

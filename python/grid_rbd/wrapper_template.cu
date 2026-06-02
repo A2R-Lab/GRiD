@@ -415,7 +415,7 @@ extern "C" int grid_rbd_forward_dynamics_grad(
 }
 
 // End-effector pose Hessian: 6×NUM_EES×NV×NV per timestep (d^2/dv^2 tangent).
-// Calls grid::end_effector_pose_gradient_hessian which fills BOTH d2eePos AND
+// Calls grid::end_effector_pose_hessian which fills BOTH d2eePos AND
 // deePos; we only copy d2eePos out. If the caller wants both they should
 // call end_effector_pose_gradient separately (the kernels are fast enough
 // that doing the work twice is fine for a small convenience).
@@ -431,7 +431,7 @@ extern "C" int grid_rbd_end_effector_pose_hessian(
     const int nv = grid::NUM_VEL;
     pack_q_qd_u(q, q, nullptr, batch, nj);
 
-    grid::end_effector_pose_gradient_hessian<T, /*USE_COMPRESSED_MEM=*/false>(
+    grid::end_effector_pose_hessian<T, /*USE_COMPRESSED_MEM=*/false>(
         g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -1202,7 +1202,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_hessian_impl(
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
 
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
-    grid::end_effector_pose_gradient_hessian_kernel<T><<<
+    grid::end_effector_pose_hessian_kernel<T><<<
         g_block_dimms, g_thread_dimms,
         grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
@@ -1779,7 +1779,7 @@ torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q) {
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, 6 * nee * nv * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::end_effector_pose_gradient_hessian_kernel<T><<<g_block_dimms, g_thread_dimms, grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::end_effector_pose_hessian_kernel<T><<<g_block_dimms, g_thread_dimms, grid::D2EE_POS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_d2eePos, g_data->d_deePos, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_d2eePos, batch * 6 * nee * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;

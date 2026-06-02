@@ -68,9 +68,9 @@ _PIN_SINGLE_LABELS: dict[str, str] = {
     "crba direct":              "crba",
     "id_du direct":             "id_du",
     "fd_du direct":             "fd_du",
-    "ee_pose direct":           "ee_pose",
-    "ee_pose_gradient direct":  "ee_pose_gradient",
-    "ee_pose_hessian direct":   "ee_pose_hessian",
+    "end_effector_pose direct":           "end_effector_pose",
+    "end_effector_pose_gradient direct":  "end_effector_pose_gradient",
+    "end_effector_pose_hessian direct":   "end_effector_pose_hessian",
     "idsva_so_body_frame direct":          "idsva_so_body_frame",
     "fdsva_so direct":                     "fdsva_so",
 }
@@ -91,9 +91,9 @@ _PIN_BATCH_LABELS: dict[str, str] = {
     "crba direct":              "crba",
     "id_du direct":             "id_du",
     "fd_du direct":             "fd_du",
-    "ee_pose direct":           "ee_pose",
-    "ee_pose_gradient direct":  "ee_pose_gradient",
-    "ee_pose_hessian direct":   "ee_pose_hessian",
+    "end_effector_pose direct":           "end_effector_pose",
+    "end_effector_pose_gradient direct":  "end_effector_pose_gradient",
+    "end_effector_pose_hessian direct":   "end_effector_pose_hessian",
     "idsva_so_body_frame direct":          "idsva_so_body_frame",
     "fdsva_so direct":                     "fdsva_so",
 }
@@ -318,8 +318,9 @@ def build_metadata(include_gpu: bool = True, include_pinocchio: bool = False) ->
 # Result merging
 # ---------------------------------------------------------------------------
 
-ALL_ALGOS = ["id", "minv", "fd", "aba", "crba", "id_du", "fd_du",
-             "ee_pose", "ee_pose_gradient", "ee_pose_hessian",
+ALL_ALGOS = ["inverse_dynamics", "minv", "forward_dynamics", "aba", "crba",
+             "inverse_dynamics_gradient", "forward_dynamics_gradient",
+             "end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
              "idsva_so_body_frame", "idsva_so_world_frame", "fdsva_so"]
 
 

@@ -58,7 +58,7 @@ KERNEL_LABELS = {
     "crba_kernel":                              "CRBA",
     "end_effector_pose_kernel":                 "EE_POSE",
     "end_effector_pose_gradient_kernel":        "EE_POSE_GRAD",
-    "end_effector_pose_gradient_hessian_kernel": "EE_POSE_HESS",
+    "end_effector_pose_hessian_kernel": "EE_POSE_HESS",
     "inverse_dynamics_gradient_kernel":         "ID_DU",
     "forward_dynamics_gradient_kernel":         "FD_DU",
     "idsva_so_body_frame_kernel":               "IDSVA_SO_B",

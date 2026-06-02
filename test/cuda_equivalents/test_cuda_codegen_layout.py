@@ -391,7 +391,7 @@ def test_floating_header_does_not_require_second_order_kernels(tmp_path, robot_i
     assert "!GRID_GENERATES_FDSVA_SO" in header
     assert "void end_effector_pose(gridData<T, KIND> *hd_data" in header
     assert "void end_effector_pose_gradient(gridData<T, KIND> *hd_data" in header
-    assert "void end_effector_pose_gradient_hessian(gridData<T, KIND> *hd_data" in header
+    assert "void end_effector_pose_hessian(gridData<T, KIND> *hd_data" in header
     assert "void kinematics_only(gridData<T, KIND> *hd_data" in header
     assert "void aba(gridData<T, KIND> *hd_data" in header
     assert "void crba(gridData<T, KIND> *hd_data" in header
@@ -477,10 +477,10 @@ def test_floating_second_order_opt_in_header_compiles(
 )
 def test_d2ee_spill_tiers_are_size_and_base_selected(robot_id, base_mode, expected_tier):
     codegen = _codegen_for_robot(robot_id, base_mode)
-    codegen.generated_algorithms = {"ee_pose", "ee_pose_gradient", "ee_pose_hessian"}
+    codegen.generated_algorithms = {"end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian"}
     codegen.generate_id_du = False
     codegen.generate_fd_du = False
-    codegen.generate_ee_pose_hessian = True
+    codegen.generate_end_effector_pose_hessian = True
     codegen.generate_idsva_so_body_frame = False
     codegen.generate_fdsva_so = False
     codegen.include_fixed_kinematic_targets = False
@@ -682,7 +682,7 @@ int main() {
         data, model, 1, blocks, threads, streams);
     grid::end_effector_pose_gradient<T, false, grid::GRID_DATA_KINEMATICS>(
         data, model, 1, blocks, threads, streams);
-    grid::end_effector_pose_gradient_hessian<T, false, grid::GRID_DATA_KINEMATICS>(
+    grid::end_effector_pose_hessian<T, false, grid::GRID_DATA_KINEMATICS>(
         data, model, 1, blocks, threads, streams);
     grid::kinematics_only<T, grid::GRID_DATA_KINEMATICS>(
         data, model, 1, blocks, threads, streams);
@@ -711,7 +711,7 @@ int main() {
         data, model, 1, blocks, threads, streams);
     grid::end_effector_pose_gradient<T, false, grid::GRID_DATA_KINEMATICS>(
         data, model, 1, blocks, threads, streams);
-    grid::end_effector_pose_gradient_hessian<T, false, grid::GRID_DATA_KINEMATICS>(
+    grid::end_effector_pose_hessian<T, false, grid::GRID_DATA_KINEMATICS>(
         data, model, 1, blocks, threads, streams);
     grid::kinematics_only<T, grid::GRID_DATA_KINEMATICS>(
         data, model, 1, blocks, threads, streams);

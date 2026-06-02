@@ -61,7 +61,7 @@ __host__ void measure_ee_pose_gradient_single(cudaStream_t *streams, grid::robot
 template <typename T, int TEST_ITERS>
 __host__ void measure_ee_pose_hessian_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
     GRID_SKIP_IF_KERNEL_TOO_BIG("EE_POSE_HESSIAN", D2EE_POS_DYNAMIC_SHARED_MEM_BYTES);
-    grid::end_effector_pose_gradient_hessian_single_timing<T>(hd_data,d_robotModel,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
+    grid::end_effector_pose_hessian_single_timing<T>(hd_data,d_robotModel,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 #if GRID_HAS_IDSVA_SO_BODY_FRAME
 template <typename T, int TEST_ITERS>
