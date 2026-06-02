@@ -250,11 +250,11 @@ TIMING_SOURCE_COMMON = THIS_DIR / "timeGRiD_common.h"
 # timeGRiD_single.cu and timeGRiD_batch.cu). Do NOT freelance template-arg
 # patterns here — keep them in lockstep.
 PER_ALGO_SPECS: dict[str, dict] = {
-    "id": {
+    "inverse_dynamics": {
         "single_call":        "grid::inverse_dynamics_single_timing<float,false,true>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
         "batch_with_mem":     "grid::inverse_dynamics<float,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
         "batch_compute_only": "grid::inverse_dynamics_compute_only<float,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
-        "batch_label": "ID",
+        "batch_label": "INVERSE_DYNAMICS",
         "gate": None,
         "shared_mem_skip": "ID_DYNAMIC_SHARED_MEM_BYTES",
     },
@@ -266,11 +266,11 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "gate": None,
         "shared_mem_skip": "MINV_DYNAMIC_SHARED_MEM_BYTES",
     },
-    "fd": {
+    "forward_dynamics": {
         "single_call":        "grid::forward_dynamics_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
         "batch_with_mem":     "grid::forward_dynamics<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
         "batch_compute_only": "grid::forward_dynamics_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
-        "batch_label": "FD",
+        "batch_label": "FORWARD_DYNAMICS",
         "gate": None,
         "shared_mem_skip": "FD_DYNAMIC_SHARED_MEM_BYTES",
     },
@@ -290,19 +290,19 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "gate": None,
         "shared_mem_skip": "CRBA_DYNAMIC_SHARED_MEM_BYTES",
     },
-    "id_du": {
+    "inverse_dynamics_gradient": {
         "single_call":        "grid::inverse_dynamics_gradient_single_timing<float,false,true>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
         "batch_with_mem":     "grid::inverse_dynamics_gradient<float,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
         "batch_compute_only": "grid::inverse_dynamics_gradient_compute_only<float,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
-        "batch_label": "ID_DU",
+        "batch_label": "INVERSE_DYNAMICS_GRADIENT",
         "gate": None,
         "shared_mem_skip": "ID_DU_DYNAMIC_SHARED_MEM_BYTES",
     },
-    "fd_du": {
+    "forward_dynamics_gradient": {
         "single_call":        "grid::forward_dynamics_gradient_single_timing<float,false>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
         "batch_with_mem":     "grid::forward_dynamics_gradient<float,false>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
         "batch_compute_only": "grid::forward_dynamics_gradient_compute_only<float,false>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
-        "batch_label": "FD_DU",
+        "batch_label": "FORWARD_DYNAMICS_GRADIENT",
         "gate": None,
         "shared_mem_skip": "FD_DU_DYNAMIC_SHARED_MEM_BYTES",
     },

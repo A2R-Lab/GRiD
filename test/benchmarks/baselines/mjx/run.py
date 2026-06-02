@@ -27,7 +27,7 @@ from test.benchmarks.timing_parser import (  # noqa: E402
 # ---------------------------------------------------------------------------
 # MJX-available algorithms (others will be null after fill_nulls)
 # ---------------------------------------------------------------------------
-MJX_ALGOS = ["id", "fd", "ee_pose", "id_du"]
+MJX_ALGOS = ["inverse_dynamics", "forward_dynamics", "end_effector_pose", "inverse_dynamics_gradient"]
 
 # Canonical EE body names per robot in MuJoCo MJCF from robot_descriptions
 DEFAULT_EE_FRAMES: dict[str, str] = {

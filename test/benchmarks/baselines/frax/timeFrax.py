@@ -171,16 +171,16 @@ def main() -> None:
     try:
         _jit_and_warmup(_id_jit, (q_single, qd_single, qdd_single))
         t = _time_device(_id_jit, q_single, qd_single, qdd_single)
-        print(f"Single Call ID {np.median(t):.4f}us")
+        print(f"Single Call INVERSE_DYNAMICS {np.median(t):.4f}us")
     except Exception as e:
-        print(f"# Single Call ID skipped: {e}", file=sys.stderr)
+        print(f"# Single Call INVERSE_DYNAMICS skipped: {e}", file=sys.stderr)
 
     try:
         _jit_and_warmup(_fd_jit, (q_single, qd_single, tau_single))
         t = _time_device(_fd_jit, q_single, qd_single, tau_single)
-        print(f"Single Call FD {np.median(t):.4f}us")
+        print(f"Single Call FORWARD_DYNAMICS {np.median(t):.4f}us")
     except Exception as e:
-        print(f"# Single Call FD skipped: {e}", file=sys.stderr)
+        print(f"# Single Call FORWARD_DYNAMICS skipped: {e}", file=sys.stderr)
 
     try:
         _jit_and_warmup(_crba_jit, (q_single,))
@@ -239,9 +239,9 @@ def main() -> None:
         _jit_and_warmup(lambda qs: _batch_minv_fn(jnp.array(qs)), sample_np_q)
 
         for label, _fn, make_args in [
-            ("ID",   lambda qs, vs, ds: _batch_id_fn(jnp.array(qs), jnp.array(vs), jnp.array(ds)),
+            ("INVERSE_DYNAMICS",   lambda qs, vs, ds: _batch_id_fn(jnp.array(qs), jnp.array(vs), jnp.array(ds)),
                 _make_np_batch),
-            ("FD",   lambda qs, vs, ts: _batch_fd_fn(jnp.array(qs), jnp.array(vs), jnp.array(ts)),
+            ("FORWARD_DYNAMICS",   lambda qs, vs, ts: _batch_fd_fn(jnp.array(qs), jnp.array(vs), jnp.array(ts)),
                 _make_np_batch),
             ("CRBA", lambda qs: _batch_crba_fn(jnp.array(qs)), _make_np_q),
             ("MINV", lambda qs: _batch_minv_fn(jnp.array(qs)), _make_np_q),
@@ -254,8 +254,8 @@ def main() -> None:
 
         # COMPUTE ONLY: args already on device
         for label, _fn, args in [
-            ("ID",   _batch_id_fn,   (q_batch, qd_batch, qdd_batch)),
-            ("FD",   _batch_fd_fn,   (q_batch, qd_batch, tau_batch)),
+            ("INVERSE_DYNAMICS",   _batch_id_fn,   (q_batch, qd_batch, qdd_batch)),
+            ("FORWARD_DYNAMICS",   _batch_fd_fn,   (q_batch, qd_batch, tau_batch)),
             ("CRBA", _batch_crba_fn, (q_batch,)),
             ("MINV", _batch_minv_fn, (q_batch,)),
         ]:

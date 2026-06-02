@@ -193,26 +193,26 @@ def main() -> None:
         _id_jit = jax.jit(lambda d: mjx.inverse(mx, d))
         _jit_and_warmup(_id_jit, (dx_single,))
         t = _time_device(_id_jit, dx_single)
-        print(f"Single Call ID {np.median(t):.4f}us")
+        print(f"Single Call INVERSE_DYNAMICS {np.median(t):.4f}us")
     except Exception as e:
-        print(f"# Single Call ID skipped: {e}", file=sys.stderr)
+        print(f"# Single Call INVERSE_DYNAMICS skipped: {e}", file=sys.stderr)
 
     # FD (forward dynamics)
     try:
         _jit_and_warmup(_fd_jit, (dx_single,))
         t = _time_device(_fd_jit, dx_single)
-        print(f"Single Call FD {np.median(t):.4f}us")
+        print(f"Single Call FORWARD_DYNAMICS {np.median(t):.4f}us")
     except Exception as e:
-        print(f"# Single Call FD skipped: {e}", file=sys.stderr)
+        print(f"# Single Call FORWARD_DYNAMICS skipped: {e}", file=sys.stderr)
 
     # EE_POSE (kinematics)
     try:
         _ee_jit = jax.jit(lambda d: mjx.kinematics(mx, d))
         _jit_and_warmup(_ee_jit, (dx_single,))
         t = _time_device(_ee_jit, dx_single)
-        print(f"Single Call EEPOS {np.median(t):.4f}us")
+        print(f"Single Call END_EFFECTOR_POSE {np.median(t):.4f}us")
     except Exception as e:
-        print(f"# Single Call EEPOS skipped: {e}", file=sys.stderr)
+        print(f"# Single Call END_EFFECTOR_POSE skipped: {e}", file=sys.stderr)
 
     # ID_DU (Jacobian of inverse dynamics w.r.t. q, v, a)
     try:
@@ -227,9 +227,9 @@ def main() -> None:
 
         _jit_and_warmup(_id_du_jit, (dx_single,))
         t = _time_device(_id_du_jit, dx_single, n_iters=max(1, TEST_ITERS // 10))
-        print(f"Single Call ID_DU {np.median(t):.4f}us")
+        print(f"Single Call INVERSE_DYNAMICS_GRADIENT {np.median(t):.4f}us")
     except Exception as e:
-        print(f"# Single Call ID_DU skipped: {e}", file=sys.stderr)
+        print(f"# Single Call INVERSE_DYNAMICS_GRADIENT skipped: {e}", file=sys.stderr)
 
     # ------------------------------------------------------------------
     # Batch timing via vmap
@@ -268,7 +268,7 @@ def main() -> None:
 
         n_batch_iters = max(10, TEST_ITERS // 5)
 
-        for label, _fn in [("ID", _batch_id_fn), ("FD", _batch_fd_fn), ("EE_POSE", _batch_ee_fn)]:
+        for label, _fn in [("INVERSE_DYNAMICS", _batch_id_fn), ("FORWARD_DYNAMICS", _batch_fd_fn), ("END_EFFECTOR_POSE", _batch_ee_fn)]:
             # WITH MEMORY
             try:
                 wm = _time_with_mem(
@@ -315,9 +315,9 @@ def main() -> None:
                 _batch_id_du_fn, dx_batch,
                 n_iters=max(1, TEST_ITERS // 20),
             )
-            _print_stats("ID_DU COMPUTE ONLY", N, co)
+            _print_stats("INVERSE_DYNAMICS_GRADIENT COMPUTE ONLY", N, co)
         except Exception as e:
-            print(f"# [N:{N}] ID_DU COMPUTE ONLY skipped: {e}", file=sys.stderr)
+            print(f"# [N:{N}] INVERSE_DYNAMICS_GRADIENT COMPUTE ONLY skipped: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

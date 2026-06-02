@@ -31,7 +31,7 @@ from test.benchmarks.timing_parser import (  # noqa: E402
 # ---------------------------------------------------------------------------
 # Frax-available algorithms (others will be null after fill_nulls)
 # ---------------------------------------------------------------------------
-FRAX_ALGOS = ["id", "fd", "crba", "minv"]
+FRAX_ALGOS = ["inverse_dynamics", "forward_dynamics", "crba", "minv"]
 
 # Frax loads from URDFs (not MJCF). Reuse the same robot_descriptions modules
 # that GRiD + Pinocchio use; same URDF_PATH attribute.

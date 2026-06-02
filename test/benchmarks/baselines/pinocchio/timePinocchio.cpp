@@ -877,31 +877,31 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             // Print algorithm metadata once before single-call timing
             printf("=== BEGIN PINOCCHIO METADATA ===\n");
 #ifdef HAVE_CPPADCG
-            printf("ID codegen: true\n");
+            printf("INVERSE_DYNAMICS codegen: true\n");
             printf("Minv codegen: true\n");
             printf("ABA codegen: true\n");
-            printf("FD codegen: true\n");
+            printf("FORWARD_DYNAMICS codegen: true\n");
             printf("CRBA codegen: true\n");
-            printf("ID_DU codegen: true\n");
-            printf("FD_DU codegen: true\n");
+            printf("INVERSE_DYNAMICS_GRADIENT codegen: true\n");
+            printf("FORWARD_DYNAMICS_GRADIENT codegen: true\n");
 #else
-            printf("ID codegen: false\n");
+            printf("INVERSE_DYNAMICS codegen: false\n");
             printf("Minv codegen: false\n");
             printf("ABA codegen: false\n");
-            printf("FD codegen: false\n");
+            printf("FORWARD_DYNAMICS codegen: false\n");
             printf("CRBA codegen: false\n");
-            printf("ID_DU codegen: false\n");
-            printf("FD_DU codegen: false\n");
-            printf("ID direct: true\n");
+            printf("INVERSE_DYNAMICS_GRADIENT codegen: false\n");
+            printf("FORWARD_DYNAMICS_GRADIENT codegen: false\n");
+            printf("INVERSE_DYNAMICS direct: true\n");
             printf("Minv direct: true\n");
             printf("ABA direct: true\n");
-            printf("FD direct: false\n");
+            printf("FORWARD_DYNAMICS direct: false\n");
             printf("CRBA direct: true\n");
-            printf("ID_DU direct: true\n");
-            printf("FD_DU direct: true\n");
+            printf("INVERSE_DYNAMICS_GRADIENT direct: true\n");
+            printf("FORWARD_DYNAMICS_GRADIENT direct: true\n");
 #endif
-            printf("EE_POSE codegen: false\n");
-            printf("EE_POSE_GRADIENT codegen: false\n");
+            printf("END_EFFECTOR_POSE codegen: false\n");
+            printf("END_EFFECTOR_POSE_GRADIENT codegen: false\n");
             printf("IDSVA_SO codegen: false\n");
             printf("FDSVA_SO codegen: null\n");
             printf("=== END PINOCCHIO METADATA ===\n");
@@ -911,13 +911,13 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             Eigen::MatrixXd J_single = Eigen::MatrixXd::Zero(6, model.nv);
 
 #ifdef HAVE_CPPADCG
-            if(is_algo_active(enabled_algo, "id")){
+            if(is_algo_active(enabled_algo, "inverse_dynamics")){
                 clock_gettime(CLOCK_MONOTONIC,&start);
                 for(int i = 0; i < TEST_ITERS; i++){
                     rnea_code_gen.evalFunction(qs[0],qds[0],qdds[0]);
                 }
                 clock_gettime(CLOCK_MONOTONIC,&end);
-                printf("ID codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+                printf("INVERSE_DYNAMICS codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
 
             if(is_algo_active(enabled_algo, "minv")){
@@ -938,7 +938,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("ABA codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
 
-            if(is_algo_active(enabled_algo, "fd")){
+            if(is_algo_active(enabled_algo, "forward_dynamics")){
                 clock_gettime(CLOCK_MONOTONIC,&start);
                 for(int i = 0; i < TEST_ITERS; i++){
                     minv_code_gen.evalFunction(qs[0]);
@@ -949,7 +949,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                     qdds[0].noalias() = minv*(us[0] - rnea_code_gen.getRes());
                 }
                 clock_gettime(CLOCK_MONOTONIC,&end);
-                printf("FD codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+                printf("FORWARD_DYNAMICS codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
 
             if(is_algo_active(enabled_algo, "crba")){
@@ -961,16 +961,16 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("CRBA codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
 
-            if(is_algo_active(enabled_algo, "id_du")){
+            if(is_algo_active(enabled_algo, "inverse_dynamics_gradient")){
                 clock_gettime(CLOCK_MONOTONIC,&start);
                 for(int i = 0; i < TEST_ITERS; i++){
                     rnea_derivatives_code_gen.evalFunction(qs[0],qds[0],qdds[0]);
                 }
                 clock_gettime(CLOCK_MONOTONIC,&end);
-                printf("ID_DU codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+                printf("INVERSE_DYNAMICS_GRADIENT codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
 
-            if(is_algo_active(enabled_algo, "fd_du")){
+            if(is_algo_active(enabled_algo, "forward_dynamics_gradient")){
                 clock_gettime(CLOCK_MONOTONIC,&start);
                 for(int i = 0; i < TEST_ITERS; i++){
                     minv_code_gen.evalFunction(qs[0]);
@@ -984,25 +984,25 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                     dqdd_dvs[0].noalias() = -minv*rnea_derivatives_code_gen.getDtauDv();
                 }
                 clock_gettime(CLOCK_MONOTONIC,&end);
-                printf("FD_DU codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+                printf("FORWARD_DYNAMICS_GRADIENT codegen %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
 #else
             // cppadcg not available — codegen variants null; run direct library instead
-            printf("ID codegen null\n");
+            printf("INVERSE_DYNAMICS codegen null\n");
             printf("Minv codegen null\n");
             printf("ABA codegen null\n");
-            printf("FD codegen null\n");
+            printf("FORWARD_DYNAMICS codegen null\n");
             printf("CRBA codegen null\n");
-            printf("ID_DU codegen null\n");
-            printf("FD_DU codegen null\n");
+            printf("INVERSE_DYNAMICS_GRADIENT codegen null\n");
+            printf("FORWARD_DYNAMICS_GRADIENT codegen null\n");
 
-            if(is_algo_active(enabled_algo, "id")){
+            if(is_algo_active(enabled_algo, "inverse_dynamics")){
                 clock_gettime(CLOCK_MONOTONIC,&start);
                 for(int i = 0; i < TEST_ITERS; i++){
                     pinocchio::rnea(model, datas[0], qs[0].template cast<double>(), qds[0].template cast<double>(), qdds[0].template cast<double>());
                 }
                 clock_gettime(CLOCK_MONOTONIC,&end);
-                printf("ID direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+                printf("INVERSE_DYNAMICS direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
 
             if(is_algo_active(enabled_algo, "minv")){
@@ -1025,8 +1025,8 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("ABA direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
 
-            if(is_algo_active(enabled_algo, "fd")){
-                printf("FD direct null\n");
+            if(is_algo_active(enabled_algo, "forward_dynamics")){
+                printf("FORWARD_DYNAMICS direct null\n");
             }
 
             if(is_algo_active(enabled_algo, "crba")){
@@ -1038,7 +1038,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("CRBA direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
 
-            if(is_algo_active(enabled_algo, "id_du")){
+            if(is_algo_active(enabled_algo, "inverse_dynamics_gradient")){
                 Eigen::MatrixXd dtau_dq_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
                 Eigen::MatrixXd dtau_dv_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
                 Eigen::MatrixXd dtau_da_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
@@ -1049,10 +1049,10 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                         dtau_dq_s, dtau_dv_s, dtau_da_s);
                 }
                 clock_gettime(CLOCK_MONOTONIC,&end);
-                printf("ID_DU direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+                printf("INVERSE_DYNAMICS_GRADIENT direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
 
-            if(is_algo_active(enabled_algo, "fd_du")){
+            if(is_algo_active(enabled_algo, "forward_dynamics_gradient")){
                 Eigen::MatrixXd ddq_dq_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
                 Eigen::MatrixXd ddq_dv_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
                 Eigen::MatrixXd ddq_dtau_s = Eigen::MatrixXd::Zero(model.nv, model.nv);
@@ -1063,29 +1063,29 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                         ddq_dq_s, ddq_dv_s, ddq_dtau_s);
                 }
                 clock_gettime(CLOCK_MONOTONIC,&end);
-                printf("FD_DU direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+                printf("FORWARD_DYNAMICS_GRADIENT direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
 #endif // HAVE_CPPADCG
 
-            if(have_frame && is_algo_active(enabled_algo, "ee_pose")){
+            if(have_frame && is_algo_active(enabled_algo, "end_effector_pose")){
                 clock_gettime(CLOCK_MONOTONIC,&start);
                 for(int i = 0; i < TEST_ITERS; i++){
                     pinocchio::forwardKinematics(model, datas[0], qs[0].template cast<double>());
                     pinocchio::updateFramePlacements(model, datas[0]);
                 }
                 clock_gettime(CLOCK_MONOTONIC,&end);
-                printf("EE_POSE direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+                printf("END_EFFECTOR_POSE direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
-            if(have_frame && is_algo_active(enabled_algo, "ee_pose_gradient")){
+            if(have_frame && is_algo_active(enabled_algo, "end_effector_pose_gradient")){
                 clock_gettime(CLOCK_MONOTONIC,&start);
                 for(int i = 0; i < TEST_ITERS; i++){
                     pinocchio::computeJointJacobians(model, datas[0], qs[0].template cast<double>());
                     pinocchio::getFrameJacobian(model, datas[0], frame_id, pinocchio::LOCAL, J_single);
                 }
                 clock_gettime(CLOCK_MONOTONIC,&end);
-                printf("EE_POSE_GRADIENT direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+                printf("END_EFFECTOR_POSE_GRADIENT direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
-            if(have_frame && is_algo_active(enabled_algo, "ee_pose_hessian")){
+            if(have_frame && is_algo_active(enabled_algo, "end_effector_pose_hessian")){
                 pinocchio::JointIndex joint_id = model.frames[frame_id].parent;
                 Eigen::Tensor<double, 3> H_single(6, model.nv, model.nv);
                 clock_gettime(CLOCK_MONOTONIC,&start);
@@ -1097,7 +1097,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                         pinocchio::LOCAL_WORLD_ALIGNED, H_single);
                 }
                 clock_gettime(CLOCK_MONOTONIC,&end);
-                printf("EE_POSE_HESSIAN direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
+                printf("END_EFFECTOR_POSE_HESSIAN direct %fus\n",time_delta_us_timespec(start,end)/static_cast<double>(TEST_ITERS));
             }
 
             if(is_algo_active(enabled_algo, "idsva_so_body_frame")){
@@ -1131,7 +1131,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             std::vector<double> times = {};
 
 #ifdef HAVE_CPPADCG
-            if(is_algo_active(enabled_algo, "id")){
+            if(is_algo_active(enabled_algo, "inverse_dynamics")){
                 for(int iter = 0; iter < TEST_ITERS; iter++){
                     clock_gettime(CLOCK_MONOTONIC,&start);
                     inverseDynamicsThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(rnea_code_gen_arr,
@@ -1166,7 +1166,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("----------------------------------------\n");
             }
 
-            if(is_algo_active(enabled_algo, "fd")){
+            if(is_algo_active(enabled_algo, "forward_dynamics")){
                 for(int iter = 0; iter < TEST_ITERS; iter++){
                     clock_gettime(CLOCK_MONOTONIC,&start);
                     forwardDynamicsThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(minv_code_gen_arr,rnea_code_gen_arr,
@@ -1189,7 +1189,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("----------------------------------------\n");
             }
 
-            if(is_algo_active(enabled_algo, "id_du")){
+            if(is_algo_active(enabled_algo, "inverse_dynamics_gradient")){
                 for(int iter = 0; iter < TEST_ITERS; iter++){
                     clock_gettime(CLOCK_MONOTONIC,&start);
                     inverseDynamicsGradientThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(rnea_derivatives_code_gen_arr,
@@ -1201,7 +1201,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("----------------------------------------\n");
             }
 
-            if(is_algo_active(enabled_algo, "fd_du")){
+            if(is_algo_active(enabled_algo, "forward_dynamics_gradient")){
                 for(int iter = 0; iter < TEST_ITERS; iter++){
                     clock_gettime(CLOCK_MONOTONIC,&start);
                     forwardDynamicsGradientThreaded_codegen<T,NUM_THREADS,NUM_TIME_STEPS>(rnea_derivatives_code_gen_arr,
@@ -1216,7 +1216,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
             }
 #endif // HAVE_CPPADCG
 
-            if(is_algo_active(enabled_algo, "id")){
+            if(is_algo_active(enabled_algo, "inverse_dynamics")){
                 for(int iter = 0; iter < TEST_ITERS; iter++){
                     clock_gettime(CLOCK_MONOTONIC,&start);
                     idDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, qdds, &threads);
@@ -1260,7 +1260,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("----------------------------------------\n");
             }
 
-            if(is_algo_active(enabled_algo, "id_du")){
+            if(is_algo_active(enabled_algo, "inverse_dynamics_gradient")){
                 for(int iter = 0; iter < TEST_ITERS; iter++){
                     clock_gettime(CLOCK_MONOTONIC,&start);
                     idDuDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, qdds, &threads);
@@ -1271,7 +1271,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("----------------------------------------\n");
             }
 
-            if(is_algo_active(enabled_algo, "fd_du")){
+            if(is_algo_active(enabled_algo, "forward_dynamics_gradient")){
                 for(int iter = 0; iter < TEST_ITERS; iter++){
                     clock_gettime(CLOCK_MONOTONIC,&start);
                     fdDuDirectThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, qs, qds, us, &threads);
@@ -1282,7 +1282,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("----------------------------------------\n");
             }
 
-            if(have_frame && is_algo_active(enabled_algo, "ee_pose")){
+            if(have_frame && is_algo_active(enabled_algo, "end_effector_pose")){
                 for(int iter = 0; iter < TEST_ITERS; iter++){
                     clock_gettime(CLOCK_MONOTONIC,&start);
                     eePoseThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, frame_id, qs, &threads);
@@ -1292,7 +1292,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("[N:%d]: EE_POSE direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
                 printf("----------------------------------------\n");
             }
-            if(have_frame && is_algo_active(enabled_algo, "ee_pose_gradient")){
+            if(have_frame && is_algo_active(enabled_algo, "end_effector_pose_gradient")){
                 for(int iter = 0; iter < TEST_ITERS; iter++){
                     clock_gettime(CLOCK_MONOTONIC,&start);
                     eePoseGradientThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, frame_id, qs, &threads);
@@ -1302,7 +1302,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                 printf("[N:%d]: EE_POSE_GRADIENT direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
                 printf("----------------------------------------\n");
             }
-            if(have_frame && is_algo_active(enabled_algo, "ee_pose_hessian")){
+            if(have_frame && is_algo_active(enabled_algo, "end_effector_pose_hessian")){
                 for(int iter = 0; iter < TEST_ITERS; iter++){
                     clock_gettime(CLOCK_MONOTONIC,&start);
                     eePoseHessianThreaded<T,NUM_THREADS,NUM_TIME_STEPS>(&model, datas, frame_id, qs, qds, &threads);
