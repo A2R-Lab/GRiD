@@ -10,14 +10,17 @@ outputs against the RBDReference + pinocchio oracle:
   dqdd_dfext      =  M^{-1} J^T   (nv x 6*NB)            [A.2]  -- exact
   did_du_dfext_dq = -dJ^T/dq      (nv x 6*NB x nv)       [A.3]  -- ANALYTIC
                                   (RBDReference.f_ext_jacobian_transpose_dq,
-                                  closed form) on fixed base; FD on floating
+                                  closed form) on BOTH fixed and floating base
 
 All three are q-only (f_ext enters RNEA additively & linearly), so the runner
-reads only q. The A.3 block (-dJ^T/dq) is now emitted for BOTH base modes: fixed
-base perturbs each q coordinate by a scalar q[i] += h; floating base perturbs the
-root (jid 0) along its 6-DoF twist via the on-device SE(3) Lie-group retract
-grid_integrate_floating_q (revolute joints keep the scalar add), exactly mirroring
-the numpy + pinocchio oracle's self.integrate(q, dv) FD.
+reads only q. The A.3 block (-dJ^T/dq) is emitted for BOTH base modes: the EMITTED
+CUDA kernel central-finite-differences -J^T on-device (fixed base perturbs each q
+coordinate by a scalar q[i] += h; floating base perturbs the root (jid 0) along
+its 6-DoF twist via the on-device SE(3) Lie-group retract grid_integrate_floating_q,
+revolute joints keep the scalar add). The numpy RBDReference oracle it is compared
+against is now the ANALYTIC closed form for both base modes (the floating root's 6
+motion-subspace columns slot into the same Featherstone -crm(S)X pushdown), and the
+pinocchio cross-check stays self.integrate(q, dv) FD-of-exact.
 
 Gated iiwa14 (fixed, all three) plus go2 / g1 (floating, all three).
 """
@@ -148,9 +151,10 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
     outputs = _parse_runner_output(_run(exe, row(q) + "\n"))
 
     # oracle (project RBDReference + pinocchio). First-order pair is exact; the
-    # A.3 -dJ^T/dq block is the ANALYTIC closed form on the project side for fixed
-    # base (RBDReference.f_ext_jacobian_transpose_dq) and FD on floating, while the
-    # pinocchio cross-check stays FD-of-exact.
+    # A.3 -dJ^T/dq block is the ANALYTIC closed form on the project side for BOTH
+    # fixed and floating base (RBDReference.f_ext_jacobian_transpose_dq), while the
+    # pinocchio cross-check stays FD-of-exact. (The emitted CUDA kernel FD's
+    # on-device for both modes; it is checked against the analytic numpy oracle.)
     a_dtau, a_dqdd, a_djt = proj.f_ext_gradient(q)
     if has_mimic:
         e_dtau = e_dqdd = e_djt = None
@@ -189,7 +193,8 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
     _check("dtau_dfext", _cuda("f_ext_gradient_dtau_dfext"), a_dtau, e_dtau, "f_ext_grad")
     _check("dqdd_dfext", _cuda("f_ext_gradient_dqdd_dfext"), a_dqdd, e_dqdd, "f_ext_grad")
 
-    # A.3 -dJ^T/dq (both base modes). The runner prints it as a (nv*6NB) x nv
+    # A.3 -dJ^T/dq (both base modes; analytic numpy oracle, on-device-FD CUDA).
+    # The runner prints it as a (nv*6NB) x nv
     # matrix with the q-coordinate as the column and the flattened -J^T (row
     # v_j + nv*col, column-major) as the row; rebuild to the oracle's
     # (nv, 6NB, nv) = [v_j, col, qi] layout before comparing.
