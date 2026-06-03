@@ -211,7 +211,7 @@ class RobotHandle:
     def minv(self, q):
         """Direct mass-matrix inverse Minv(q). Returns shape (B, NJ, NJ).
 
-        GRiD's `direct_minv` kernel writes only the lower triangle (upper
+        GRiD's `minv` kernel writes only the lower triangle (upper
         zero); we symmetrize on the host before returning so the matrix
         matches `RBDReference.minv(..., output_dense=True)`. The
         symmetrization is a single numpy op per call — negligible cost.
