@@ -1,0 +1,9 @@
+# Local working/session/results docs — kept on disk for reference, NOT tracked for
+# users. Tracked reference docs (Sphinx source/, agent_debugging_guide.md, analytic
+# derivations, READMEs, joint_types_plan.md, f2_audit_findings.md, sweep-on-5090.md)
+# are intentionally NOT listed here.
+open-tasks/
+customer-reviews/
+HANDOFF_ARCHIVE.md
+a3_core_dynamics_floating_loss_audit.md
+d2_codegen_mimic_plan.md

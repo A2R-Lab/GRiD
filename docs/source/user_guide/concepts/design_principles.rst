@@ -212,4 +212,3 @@ Go deeper
   L2 pinning, the placement-parameter table, and the per-robot tier→level map.
 * ``docs/idsva_so_inner_refactor_notes.md`` — the inner-owns-placement standard,
   the project-wide conformance audit, and the deferred surgical de-alias work.
-* ``HANDOFF.md`` — the live backlog / current todo list.
