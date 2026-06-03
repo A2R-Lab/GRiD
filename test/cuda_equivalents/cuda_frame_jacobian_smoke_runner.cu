@@ -52,6 +52,12 @@ void print_matrix_col_major(const std::string &name, const T *data, int rows, in
 constexpr int NQ = grid::NUM_POS;
 constexpr int NV = grid::NUM_VEL;
 
+// Optional block thread count, set from argv[1] in main(). 0 => use the robot's
+// MAX_PERF_LEVEL_THREADS (the default the existing frame_jacobian test relies on
+// when it passes no thread-count argument). The V6 invariance test passes an
+// explicit low/power-of-two count here.
+int g_num_threads = 0;
+
 // J kernel: emit J for the three reference frames.
 template <typename T>
 __global__ void frame_jac_kernel(const T *g_q, const int target_jid,
@@ -184,7 +190,16 @@ void run() {
     T *o_ll = dmalloc<T>(36), *o_lw = dmalloc<T>(36), *o_lx = dmalloc<T>(36);
 #endif
 
-    const int nthreads = grid::MAX_PERF_LEVEL_THREADS;
+    // Block thread count for the J / Jdot kernels. Defaults to the robot's
+    // MAX_PERF_LEVEL_THREADS but is overridable via g_num_threads (argv[1]) so
+    // the thread-count-invariance test (V6) can sweep {1,2,16,32,64,128,256}.
+    // Single-block kernels are block-stride loops, so ANY count that fits must
+    // produce identical results; a low-count divergence is a missing
+    // __syncthreads, not a test artifact.
+    int nthreads = g_num_threads;
+    if (nthreads <= 0 || nthreads > grid::MAX_PERF_LEVEL_THREADS) {
+        nthreads = grid::MAX_PERF_LEVEL_THREADS;
+    }
 
     size_t dyn_j = grid::FRAME_JACOBIAN_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(frame_jac_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)dyn_j);
@@ -245,7 +260,14 @@ void run() {
     grid::close_grid<T>(streams, d_robotModel, hd_data);
 }
 
-int main() {
+int main(int argc, char **argv) {
+    // Optional argv[1] = block thread count (V6 thread-count-invariance sweep).
+    // Omitting it (the existing frame_jacobian test) leaves g_num_threads=0 ->
+    // run() falls back to MAX_PERF_LEVEL_THREADS, byte-identical to before.
+    if (argc > 1) {
+        int requested = std::atoi(argv[1]);
+        g_num_threads = requested > 0 ? requested : 0;
+    }
     run<float>();
     return 0;
 }
