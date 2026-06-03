@@ -1,5 +1,7 @@
 /***
-nvcc -std=c++11 -o printGRiD.exe printGRiD.cu -gencode arch=compute_86,code=sm_86
+Built + run by examples/codegen/print_grid.py (which auto-detects the GPU arch):
+  nvcc -std=c++11 -o printGRiD.exe printGRiD.cu -gencode arch=compute_<ARCH>,code=sm_<ARCH>
+(<ARCH> e.g. 120 for sm_120). Dumps every generated kernel's output for a given grid.cuh.
 ***/
 
 #include <random>
@@ -15,7 +17,7 @@ T getRand(){return static_cast<T>(randDist(randEng));}
 template <typename T>
 __host__
 void test(){
-    T gravity = static_cast<T>(9.81);
+    T gravity = static_cast<T>(-9.81);  // signed gravitational accel (matches RBDReference/codegen convention)
     dim3 dimms(grid::MAX_PERF_LEVEL_THREADS,1,1);
     cudaStream_t *streams = grid::init_grid<T>();
     grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();

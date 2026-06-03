@@ -47,7 +47,6 @@ def detect_cuda_arch() -> str:
 def main():
     inputs = parseInputs(NO_ARG_OPTION=True)
     arch = detect_cuda_arch()
-    repo_root = Path(__file__).resolve().parents[2]
 
     with tempfile.TemporaryDirectory(prefix="grid_print_") as tmpdir:
         build_dir = Path(tmpdir)
@@ -78,7 +77,7 @@ def main():
                 sys.exit(1)
             shutil.copyfile(grid_header, build_header)
 
-        shutil.copyfile(repo_root / "printGRiD.cu", build_dir / "printGRiD.cu")
+        shutil.copyfile(Path(__file__).resolve().parent / "printGRiD.cu", build_dir / "printGRiD.cu")
 
         print("-----------------")
         print("Compiling printGRiD")
