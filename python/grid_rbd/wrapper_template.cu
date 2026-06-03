@@ -1831,6 +1831,365 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
 );
 
+
+// ────────────────────────────────────────────────────────────────────────────
+// JAX FFI: grid_plant surface (cost / barrier / plant-step)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Mirrors the numpy grid_plant_* C-ABI (above) but device-resident on the JAX
+// stream: stage the FFI input buffers D→D into the shared g_plant scratch
+// (d_in_a/b/c), launch the SAME grid_plant::*_kernel the host wrapper uses, and
+// copy the g_plant outputs (d_out/d_grad/d_hess) D→D into JAX's result buffers.
+// The cost/barrier ops return (value, grad, hess[/hess_diag]) as 3 result
+// buffers; plant_step / plant_step_gradient return a single buffer. Gated on the
+// same GRID_PLANT_HAS_* defines as the C-ABI so a per-robot .so exports only the
+// handlers whose kernels were emitted. Python-side reshapes mirror _handle.py.
+
+// quadratic_{state,input}_cost(var, des, w) → (value, grad, hess).
+// var/des/w are (B, N); value (B,1); grad (B, N); hess (B, N*N). STATE picks N.
+template <bool STATE>
+static ffi::Error grid_rbd_jax_plant_quadratic_cost_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> var, ffi::Buffer<ffi::F32> des, ffi::Buffer<ffi::F32> w,
+    ffi::ResultBuffer<ffi::F32> out, ffi::ResultBuffer<ffi::F32> grad,
+    ffi::ResultBuffer<ffi::F32> hess)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");
+    const int N = STATE ? (grid::NUM_POS + grid::NUM_VEL) : grid::NUM_VEL;
+    auto dims = var.dimensions();
+    if (dims.size() != 2 || (int)dims[1] != N)
+        return ffi::Error::InvalidArgument("quadratic_cost: var must be 2D (B, N)");
+    int batch = (int)dims[0];
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("quadratic_cost: batch > max_batch");
+    cudaMemcpyAsync(g_plant.d_in_a, var.typed_data(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, des.typed_data(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c, w.typed_data(),   (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    if (STATE) {
+        grid_plant::quadratic_state_cost_kernel<T><<<grid_dim, g_thread_dimms, 0, stream>>>(
+            g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+            g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, batch);
+    } else {
+        grid_plant::quadratic_input_cost_kernel<T><<<grid_dim, g_thread_dimms, 0, stream>>>(
+            g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+            g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, batch);
+    }
+    cudaMemcpyAsync(out->typed_data(),  g_plant.d_out,  (size_t)batch * sizeof(T),         cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(grad->typed_data(), g_plant.d_grad, (size_t)batch * N * sizeof(T),     cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(hess->typed_data(), g_plant.d_hess, (size_t)batch * N * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+static ffi::Error grid_rbd_jax_plant_quadratic_state_cost_impl(
+    cudaStream_t stream, ffi::Buffer<ffi::F32> var, ffi::Buffer<ffi::F32> des,
+    ffi::Buffer<ffi::F32> w, ffi::ResultBuffer<ffi::F32> out,
+    ffi::ResultBuffer<ffi::F32> grad, ffi::ResultBuffer<ffi::F32> hess) {
+    return grid_rbd_jax_plant_quadratic_cost_impl<true>(stream, var, des, w, out, grad, hess);
+}
+static ffi::Error grid_rbd_jax_plant_quadratic_input_cost_impl(
+    cudaStream_t stream, ffi::Buffer<ffi::F32> var, ffi::Buffer<ffi::F32> des,
+    ffi::Buffer<ffi::F32> w, ffi::ResultBuffer<ffi::F32> out,
+    ffi::ResultBuffer<ffi::F32> grad, ffi::ResultBuffer<ffi::F32> hess) {
+    return grid_rbd_jax_plant_quadratic_cost_impl<false>(stream, var, des, w, out, grad, hess);
+}
+
+#define GRID_RBD_JAX_PLANT_COST_BIND(name, impl)                                  \
+    XLA_FFI_DEFINE_HANDLER_SYMBOL(name, impl,                                      \
+        ffi::Ffi::Bind()                                                          \
+            .Ctx<ffi::PlatformStream<cudaStream_t>>()                            \
+            .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>() \
+            .Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>())
+
+GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_quadratic_state_cost,
+                             grid_rbd_jax_plant_quadratic_state_cost_impl);
+GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_quadratic_input_cost,
+                             grid_rbd_jax_plant_quadratic_input_cost_impl);
+
+// joint_{position,velocity,torque}_barrier(var, lower, upper; mu)
+// → (value (B,1), grad (B,N), hess_diag (B,N)). POSITION uses NUM_POS else NUM_VEL.
+template <int WHICH>  // 0=position, 1=velocity, 2=torque
+static ffi::Error grid_rbd_jax_plant_barrier_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> var, ffi::Buffer<ffi::F32> lower, ffi::Buffer<ffi::F32> upper,
+    ffi::ResultBuffer<ffi::F32> out, ffi::ResultBuffer<ffi::F32> grad,
+    ffi::ResultBuffer<ffi::F32> hess_diag, float mu)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");
+    const int N = (WHICH == 0) ? grid::NUM_POS : grid::NUM_VEL;
+    auto dims = var.dimensions();
+    if (dims.size() != 2 || (int)dims[1] != N)
+        return ffi::Error::InvalidArgument("barrier: var must be 2D (B, N)");
+    int batch = (int)dims[0];
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("barrier: batch > max_batch");
+    cudaMemcpyAsync(g_plant.d_in_a, var.typed_data(),   (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, lower.typed_data(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c, upper.typed_data(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    if (WHICH == 0)
+        grid_plant::joint_position_barrier_kernel<T><<<grid_dim, g_thread_dimms, 0, stream>>>(
+            g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+            g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch);
+    else if (WHICH == 1)
+        grid_plant::joint_velocity_barrier_kernel<T><<<grid_dim, g_thread_dimms, 0, stream>>>(
+            g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+            g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch);
+    else
+        grid_plant::joint_torque_barrier_kernel<T><<<grid_dim, g_thread_dimms, 0, stream>>>(
+            g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+            g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch);
+    cudaMemcpyAsync(out->typed_data(),       g_plant.d_out,  (size_t)batch * sizeof(T),     cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(grad->typed_data(),      g_plant.d_grad, (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(hess_diag->typed_data(), g_plant.d_hess, (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+static ffi::Error grid_rbd_jax_plant_joint_position_barrier_impl(
+    cudaStream_t s, ffi::Buffer<ffi::F32> v, ffi::Buffer<ffi::F32> lo, ffi::Buffer<ffi::F32> hi,
+    ffi::ResultBuffer<ffi::F32> o, ffi::ResultBuffer<ffi::F32> g, ffi::ResultBuffer<ffi::F32> h, float mu) {
+    return grid_rbd_jax_plant_barrier_impl<0>(s, v, lo, hi, o, g, h, mu);
+}
+static ffi::Error grid_rbd_jax_plant_joint_velocity_barrier_impl(
+    cudaStream_t s, ffi::Buffer<ffi::F32> v, ffi::Buffer<ffi::F32> lo, ffi::Buffer<ffi::F32> hi,
+    ffi::ResultBuffer<ffi::F32> o, ffi::ResultBuffer<ffi::F32> g, ffi::ResultBuffer<ffi::F32> h, float mu) {
+    return grid_rbd_jax_plant_barrier_impl<1>(s, v, lo, hi, o, g, h, mu);
+}
+static ffi::Error grid_rbd_jax_plant_joint_torque_barrier_impl(
+    cudaStream_t s, ffi::Buffer<ffi::F32> v, ffi::Buffer<ffi::F32> lo, ffi::Buffer<ffi::F32> hi,
+    ffi::ResultBuffer<ffi::F32> o, ffi::ResultBuffer<ffi::F32> g, ffi::ResultBuffer<ffi::F32> h, float mu) {
+    return grid_rbd_jax_plant_barrier_impl<2>(s, v, lo, hi, o, g, h, mu);
+}
+
+#define GRID_RBD_JAX_PLANT_BARRIER_BIND(name, impl)                               \
+    XLA_FFI_DEFINE_HANDLER_SYMBOL(name, impl,                                      \
+        ffi::Ffi::Bind()                                                          \
+            .Ctx<ffi::PlatformStream<cudaStream_t>>()                            \
+            .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>() \
+            .Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>() \
+            .Attr<float>("mu"))
+
+GRID_RBD_JAX_PLANT_BARRIER_BIND(grid_rbd_jax_plant_joint_position_barrier,
+                                grid_rbd_jax_plant_joint_position_barrier_impl);
+GRID_RBD_JAX_PLANT_BARRIER_BIND(grid_rbd_jax_plant_joint_velocity_barrier,
+                                grid_rbd_jax_plant_joint_velocity_barrier_impl);
+GRID_RBD_JAX_PLANT_BARRIER_BIND(grid_rbd_jax_plant_joint_torque_barrier,
+                                grid_rbd_jax_plant_joint_torque_barrier_impl);
+
+#ifdef GRID_PLANT_HAS_STEP
+// plant_step(x, u; dt, it) → x_kp1  (B, NX). Reuses g_plant.d_grad as x_kp1
+// (size NX), matching the C-ABI launch_plant_step.
+template <grid::IntegratorType IT>
+static void launch_plant_step_jax(cudaStream_t stream, int batch, float gravity, float dt) {
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::plant_step_kernel<T, IT><<<grid_dim, g_thread_dimms,
+        grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+            g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
+            nx, grid::NUM_VEL, g_robot, (T)gravity, (T)dt, batch);
+}
+
+static ffi::Error grid_rbd_jax_plant_step_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> x, ffi::Buffer<ffi::F32> u,
+    ffi::ResultBuffer<ffi::F32> x_kp1,
+    float dt, int64_t it, float gravity)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    const int nv = grid::NUM_VEL;
+    auto dims = x.dimensions();
+    if (dims.size() != 2 || (int)dims[1] != nx)
+        return ffi::Error::InvalidArgument("plant_step: x must be 2D (B, NX)");
+    int batch = (int)dims[0];
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("plant_step: batch > max_batch");
+    cudaMemcpyAsync(g_plant.d_in_a, x.typed_data(), (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, u.typed_data(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    GRID_RBD_IT_DISPATCH_FFI((int)it, launch_plant_step_jax, stream, batch, gravity, dt);
+    cudaMemcpyAsync(x_kp1->typed_data(), g_plant.d_grad, (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_plant_step,
+    grid_rbd_jax_plant_step_impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+        .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
+);
+#endif  // GRID_PLANT_HAS_STEP
+
+#ifdef GRID_PLANT_HAS_STEP_GRADIENT
+// plant_step_gradient(x, u; dt, it) → dAB  (B, 2*NV*3*NV col-major). Reuses
+// g_plant.d_grad as the dAB output (size 2*NV*3*NV), matching the C-ABI.
+template <grid::IntegratorType IT>
+static void launch_plant_step_gradient_jax(cudaStream_t stream, int batch, float gravity, float dt) {
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    const int nv = grid::NUM_VEL;
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::plant_step_gradient_kernel<T, IT><<<grid_dim, g_thread_dimms,
+        grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+            g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
+            nx, nv, g_robot, (T)gravity, (T)dt, batch);
+}
+
+static ffi::Error grid_rbd_jax_plant_step_gradient_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> x, ffi::Buffer<ffi::F32> u,
+    ffi::ResultBuffer<ffi::F32> dAB,
+    float dt, int64_t it, float gravity)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    const int nv = grid::NUM_VEL;
+    const int dab = 2 * nv * 3 * nv;
+    auto dims = x.dimensions();
+    if (dims.size() != 2 || (int)dims[1] != nx)
+        return ffi::Error::InvalidArgument("plant_step_gradient: x must be 2D (B, NX)");
+    int batch = (int)dims[0];
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("plant_step_gradient: batch > max_batch");
+    cudaMemcpyAsync(g_plant.d_in_a, x.typed_data(), (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, u.typed_data(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    GRID_RBD_IT_DISPATCH_FFI((int)it, launch_plant_step_gradient_jax, stream, batch, gravity, dt);
+    cudaMemcpyAsync(dAB->typed_data(), g_plant.d_grad, (size_t)batch * dab * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_plant_step_gradient,
+    grid_rbd_jax_plant_step_gradient_impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+        .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
+);
+#endif  // GRID_PLANT_HAS_STEP_GRADIENT
+
+#ifdef GRID_PLANT_HAS_EE_COST
+// ee_pos_cost(q, p_des, W) → (value (B,1), grad (B,NX), hess (B,NX*NX)).
+static ffi::Error grid_rbd_jax_plant_ee_pos_cost_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q, ffi::Buffer<ffi::F32> p_des, ffi::Buffer<ffi::F32> W,
+    ffi::ResultBuffer<ffi::F32> out, ffi::ResultBuffer<ffi::F32> grad,
+    ffi::ResultBuffer<ffi::F32> hess)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");
+    const int nq = grid::NUM_POS;
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    auto dims = q.dimensions();
+    if (dims.size() != 2 || (int)dims[1] != nq)
+        return ffi::Error::InvalidArgument("ee_pos_cost: q must be 2D (B, NQ)");
+    int batch = (int)dims[0];
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("ee_pos_cost: batch > max_batch");
+    cudaMemcpyAsync(g_plant.d_in_a, q.typed_data(),     (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, p_des.typed_data(), (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c, W.typed_data(),     (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    size_t smem = grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::ee_pos_cost_kernel<T, 0><<<grid_dim, g_thread_dimms, smem, stream>>>(
+        g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+        g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
+        g_plant.d_eePos, g_plant.d_deePos, g_robot, batch);
+    cudaMemcpyAsync(out->typed_data(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(grad->typed_data(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(hess->typed_data(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_ee_pos_cost,
+                             grid_rbd_jax_plant_ee_pos_cost_impl);
+#endif  // GRID_PLANT_HAS_EE_COST
+
+#ifdef GRID_PLANT_HAS_COM_COST
+// com_cost(q, p_des, W) → (value (B,1), grad (B,NX), hess (B,NX*NX)).
+static ffi::Error grid_rbd_jax_plant_com_cost_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q, ffi::Buffer<ffi::F32> p_des, ffi::Buffer<ffi::F32> W,
+    ffi::ResultBuffer<ffi::F32> out, ffi::ResultBuffer<ffi::F32> grad,
+    ffi::ResultBuffer<ffi::F32> hess)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");
+    const int nq = grid::NUM_POS;
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    auto dims = q.dimensions();
+    if (dims.size() != 2 || (int)dims[1] != nq)
+        return ffi::Error::InvalidArgument("com_cost: q must be 2D (B, NQ)");
+    int batch = (int)dims[0];
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("com_cost: batch > max_batch");
+    cudaMemcpyAsync(g_plant.d_in_a, q.typed_data(),     (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, p_des.typed_data(), (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c, W.typed_data(),     (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    size_t smem = grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>();
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::com_cost_kernel<T><<<grid_dim, g_thread_dimms, smem, stream>>>(
+        g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+        g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
+        g_plant.d_eePos, g_robot, batch);
+    cudaMemcpyAsync(out->typed_data(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(grad->typed_data(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(hess->typed_data(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_com_cost,
+                             grid_rbd_jax_plant_com_cost_impl);
+#endif  // GRID_PLANT_HAS_COM_COST
+
+#ifdef GRID_PLANT_HAS_MOMENTUM_COST
+// momentum_cost(q, qd, h_des, W) → (value (B,1), grad (B,NX), hess (B,NX*NX)).
+// h_des(6) and W(6) are packed into the two halves of d_in_c, matching the C-ABI.
+static ffi::Error grid_rbd_jax_plant_momentum_cost_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q, ffi::Buffer<ffi::F32> qd,
+    ffi::Buffer<ffi::F32> h_des, ffi::Buffer<ffi::F32> W,
+    ffi::ResultBuffer<ffi::F32> out, ffi::ResultBuffer<ffi::F32> grad,
+    ffi::ResultBuffer<ffi::F32> hess)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");
+    const int nq = grid::NUM_POS;
+    const int nv = grid::NUM_VEL;
+    const int nx = nq + nv;
+    auto dims = q.dimensions();
+    if (dims.size() != 2 || (int)dims[1] != nq)
+        return ffi::Error::InvalidArgument("momentum_cost: q must be 2D (B, NQ)");
+    int batch = (int)dims[0];
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("momentum_cost: batch > max_batch");
+    cudaMemcpyAsync(g_plant.d_in_a, q.typed_data(),  (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, qd.typed_data(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c,                  h_des.typed_data(), (size_t)batch * 6 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c + (size_t)batch * 6, W.typed_data(),  (size_t)batch * 6 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    size_t smem = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::momentum_cost_kernel<T><<<grid_dim, g_thread_dimms, smem, stream>>>(
+        g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+        g_plant.d_in_a, g_plant.d_in_b,
+        g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6,
+        g_plant.d_eePos, g_robot, batch);
+    cudaMemcpyAsync(out->typed_data(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(grad->typed_data(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(hess->typed_data(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_plant_momentum_cost,
+    grid_rbd_jax_plant_momentum_cost_impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>()
+);
+#endif  // GRID_PLANT_HAS_MOMENTUM_COST
+
 #endif  // GRID_RBD_WITH_JAX
 
 
@@ -2181,6 +2540,249 @@ torch::Tensor torch_integrator_gradient(torch::Tensor q, torch::Tensor qd, torch
     return out;
 }
 
+// ── grid_plant surface (cost / barrier / plant-step) ──
+//
+// Mirror the JAX FFI plant handlers: stage the input tensors D→D into the shared
+// g_plant scratch, launch the SAME grid_plant::*_kernel, copy the g_plant outputs
+// D→D into freshly-allocated output tensors on the same stream. The cost/barrier
+// ops return a (value, grad, hess[/hess_diag]) tuple of tensors; plant_step /
+// plant_step_gradient return a single tensor. Reshapes to the _handle.py
+// conventions are done Python-side. Gated on the same GRID_PLANT_HAS_* defines.
+
+static inline void grid_torch_plant_init() {
+    grid_torch_init_or_throw();
+    TORCH_CHECK(plant_alloc() == 0, "plant_alloc failed");
+}
+
+// q/qd-style check for a (B, N) plant input with an arbitrary last dim.
+static inline void grid_torch_check_n(const torch::Tensor& t, const char* name, int n) {
+    TORCH_CHECK(t.is_cuda(), name, ": must be a CUDA tensor");
+    TORCH_CHECK(t.is_contiguous(), name, ": must be contiguous");
+    TORCH_CHECK(t.scalar_type() == torch::kFloat32, name, ": must be float32");
+    TORCH_CHECK(t.dim() == 2, name, ": must be 2D (B, ", n, ")");
+    TORCH_CHECK(t.size(1) == n, name, ": last dim != ", n);
+}
+
+// quadratic cost (state or input). var/des/w are (B, N). Returns (value, grad, hess).
+// STATE=true selects the state kernel (N = NX) else the input kernel (N = NV).
+// Non-template (runtime bool) so the torch::Tensor .data_ptr<float>() member-
+// template calls parse unambiguously under nvcc's host pass.
+static std::vector<torch::Tensor> torch_plant_quadratic_cost(
+    torch::Tensor var, torch::Tensor des, torch::Tensor w, bool state) {
+    grid_torch_plant_init();
+    const int N = state ? (grid::NUM_POS + grid::NUM_VEL) : grid::NUM_VEL;
+    grid_torch_check_n(var, "quadratic_cost: var", N);
+    grid_torch_check_n(des, "quadratic_cost: des", N);
+    grid_torch_check_n(w,   "quadratic_cost: w",   N);
+    int batch = grid_torch_batch(var);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    cudaMemcpyAsync(g_plant.d_in_a, var.data_ptr<float>(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, des.data_ptr<float>(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c, w.data_ptr<float>(),   (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    auto out  = grid_torch_empty(batch, 1, var);
+    auto grad = grid_torch_empty(batch, N, var);
+    auto hess = grid_torch_empty(batch, N * N, var);
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    if (state)
+        grid_plant::quadratic_state_cost_kernel<T><<<grid_dim, g_thread_dimms, 0, stream>>>(
+            g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, batch);
+    else
+        grid_plant::quadratic_input_cost_kernel<T><<<grid_dim, g_thread_dimms, 0, stream>>>(
+            g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),         cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(grad.data_ptr<float>(), g_plant.d_grad, (size_t)batch * N * sizeof(T),     cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(hess.data_ptr<float>(), g_plant.d_hess, (size_t)batch * N * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return {out, grad, hess};
+}
+
+std::vector<torch::Tensor> torch_quadratic_state_cost(torch::Tensor x, torch::Tensor x_des, torch::Tensor Q) {
+    return torch_plant_quadratic_cost(x, x_des, Q, true);
+}
+std::vector<torch::Tensor> torch_quadratic_input_cost(torch::Tensor u, torch::Tensor u_des, torch::Tensor R) {
+    return torch_plant_quadratic_cost(u, u_des, R, false);
+}
+
+// barrier (position/velocity/torque). var/lower/upper are (B, N). Returns
+// (value, grad, hess_diag). which: 0=position (N=NUM_POS), 1=velocity, 2=torque.
+static std::vector<torch::Tensor> torch_plant_barrier(
+    torch::Tensor var, torch::Tensor lower, torch::Tensor upper, double mu, int which) {
+    grid_torch_plant_init();
+    const int N = (which == 0) ? grid::NUM_POS : grid::NUM_VEL;
+    grid_torch_check_n(var,   "barrier: var",   N);
+    grid_torch_check_n(lower, "barrier: lower", N);
+    grid_torch_check_n(upper, "barrier: upper", N);
+    int batch = grid_torch_batch(var);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    cudaMemcpyAsync(g_plant.d_in_a, var.data_ptr<float>(),   (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, lower.data_ptr<float>(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c, upper.data_ptr<float>(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    auto out  = grid_torch_empty(batch, 1, var);
+    auto grad = grid_torch_empty(batch, N, var);
+    auto hdiag = grid_torch_empty(batch, N, var);
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    if (which == 0)
+        grid_plant::joint_position_barrier_kernel<T><<<grid_dim, g_thread_dimms, 0, stream>>>(
+            g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch);
+    else if (which == 1)
+        grid_plant::joint_velocity_barrier_kernel<T><<<grid_dim, g_thread_dimms, 0, stream>>>(
+            g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch);
+    else
+        grid_plant::joint_torque_barrier_kernel<T><<<grid_dim, g_thread_dimms, 0, stream>>>(
+            g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(),   g_plant.d_out,  (size_t)batch * sizeof(T),     cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(grad.data_ptr<float>(),  g_plant.d_grad, (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(hdiag.data_ptr<float>(), g_plant.d_hess, (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return {out, grad, hdiag};
+}
+
+std::vector<torch::Tensor> torch_joint_position_barrier(torch::Tensor v, torch::Tensor lo, torch::Tensor hi, double mu) {
+    return torch_plant_barrier(v, lo, hi, mu, 0);
+}
+std::vector<torch::Tensor> torch_joint_velocity_barrier(torch::Tensor v, torch::Tensor lo, torch::Tensor hi, double mu) {
+    return torch_plant_barrier(v, lo, hi, mu, 1);
+}
+std::vector<torch::Tensor> torch_joint_torque_barrier(torch::Tensor v, torch::Tensor lo, torch::Tensor hi, double mu) {
+    return torch_plant_barrier(v, lo, hi, mu, 2);
+}
+
+#ifdef GRID_PLANT_HAS_STEP
+template <grid::IntegratorType IT>
+static void torch_launch_plant_step(cudaStream_t stream, int batch, double gravity, double dt) {
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::plant_step_kernel<T, IT><<<grid_dim, g_thread_dimms,
+        grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+            g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
+            nx, grid::NUM_VEL, g_robot, (T)gravity, (T)dt, batch);
+}
+
+torch::Tensor torch_plant_step(torch::Tensor x, torch::Tensor u, double dt, int64_t it, double gravity) {
+    grid_torch_plant_init();
+    const int nx = grid::NUM_POS + grid::NUM_VEL, nv = grid::NUM_VEL;
+    grid_torch_check_n(x, "plant_step: x", nx);
+    grid_torch_check_n(u, "plant_step: u", nv);
+    int batch = grid_torch_batch(x);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    cudaMemcpyAsync(g_plant.d_in_a, x.data_ptr<float>(), (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, u.data_ptr<float>(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    auto out = grid_torch_empty(batch, nx, x);
+    GRID_RBD_IT_DISPATCH_TORCH((int)it, torch_launch_plant_step, stream, batch, gravity, dt);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+#endif  // GRID_PLANT_HAS_STEP
+
+#ifdef GRID_PLANT_HAS_STEP_GRADIENT
+template <grid::IntegratorType IT>
+static void torch_launch_plant_step_gradient(cudaStream_t stream, int batch, double gravity, double dt) {
+    const int nx = grid::NUM_POS + grid::NUM_VEL, nv = grid::NUM_VEL;
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::plant_step_gradient_kernel<T, IT><<<grid_dim, g_thread_dimms,
+        grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+            g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
+            nx, nv, g_robot, (T)gravity, (T)dt, batch);
+}
+
+torch::Tensor torch_plant_step_gradient(torch::Tensor x, torch::Tensor u, double dt, int64_t it, double gravity) {
+    grid_torch_plant_init();
+    const int nx = grid::NUM_POS + grid::NUM_VEL, nv = grid::NUM_VEL;
+    const int dab = 2 * nv * 3 * nv;
+    grid_torch_check_n(x, "plant_step_gradient: x", nx);
+    grid_torch_check_n(u, "plant_step_gradient: u", nv);
+    int batch = grid_torch_batch(x);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    cudaMemcpyAsync(g_plant.d_in_a, x.data_ptr<float>(), (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, u.data_ptr<float>(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    auto out = grid_torch_empty(batch, dab, x);
+    GRID_RBD_IT_DISPATCH_TORCH((int)it, torch_launch_plant_step_gradient, stream, batch, gravity, dt);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_plant.d_grad, (size_t)batch * dab * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+#endif  // GRID_PLANT_HAS_STEP_GRADIENT
+
+#ifdef GRID_PLANT_HAS_EE_COST
+std::vector<torch::Tensor> torch_ee_pos_cost(torch::Tensor q, torch::Tensor p_des, torch::Tensor W) {
+    grid_torch_plant_init();
+    const int nq = grid::NUM_POS, nx = grid::NUM_POS + grid::NUM_VEL;
+    grid_torch_check_n(q, "ee_pos_cost: q", nq);
+    grid_torch_check_n(p_des, "ee_pos_cost: p_des", 3);
+    grid_torch_check_n(W, "ee_pos_cost: W", 3);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    cudaMemcpyAsync(g_plant.d_in_a, q.data_ptr<float>(),     (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, p_des.data_ptr<float>(), (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c, W.data_ptr<float>(),     (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    auto out  = grid_torch_empty(batch, 1, q);
+    auto grad = grid_torch_empty(batch, nx, q);
+    auto hess = grid_torch_empty(batch, nx * nx, q);
+    size_t smem = grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::ee_pos_cost_kernel<T, 0><<<grid_dim, g_thread_dimms, smem, stream>>>(
+        g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
+        g_plant.d_eePos, g_plant.d_deePos, g_robot, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(grad.data_ptr<float>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(hess.data_ptr<float>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return {out, grad, hess};
+}
+#endif  // GRID_PLANT_HAS_EE_COST
+
+#ifdef GRID_PLANT_HAS_COM_COST
+std::vector<torch::Tensor> torch_com_cost(torch::Tensor q, torch::Tensor p_des, torch::Tensor W) {
+    grid_torch_plant_init();
+    const int nq = grid::NUM_POS, nx = grid::NUM_POS + grid::NUM_VEL;
+    grid_torch_check_n(q, "com_cost: q", nq);
+    grid_torch_check_n(p_des, "com_cost: p_des", 3);
+    grid_torch_check_n(W, "com_cost: W", 3);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    cudaMemcpyAsync(g_plant.d_in_a, q.data_ptr<float>(),     (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, p_des.data_ptr<float>(), (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c, W.data_ptr<float>(),     (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    auto out  = grid_torch_empty(batch, 1, q);
+    auto grad = grid_torch_empty(batch, nx, q);
+    auto hess = grid_torch_empty(batch, nx * nx, q);
+    size_t smem = grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>();
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::com_cost_kernel<T><<<grid_dim, g_thread_dimms, smem, stream>>>(
+        g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
+        g_plant.d_eePos, g_robot, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(grad.data_ptr<float>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(hess.data_ptr<float>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return {out, grad, hess};
+}
+#endif  // GRID_PLANT_HAS_COM_COST
+
+#ifdef GRID_PLANT_HAS_MOMENTUM_COST
+std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Tensor qd, torch::Tensor h_des, torch::Tensor W) {
+    grid_torch_plant_init();
+    const int nq = grid::NUM_POS, nv = grid::NUM_VEL, nx = nq + nv;
+    grid_torch_check_n(q, "momentum_cost: q", nq);
+    grid_torch_check_n(qd, "momentum_cost: qd", nv);
+    grid_torch_check_n(h_des, "momentum_cost: h_des", 6);
+    grid_torch_check_n(W, "momentum_cost: W", 6);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    cudaMemcpyAsync(g_plant.d_in_a, q.data_ptr<float>(),  (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, qd.data_ptr<float>(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c,                  h_des.data_ptr<float>(), (size_t)batch * 6 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c + (size_t)batch * 6, W.data_ptr<float>(),  (size_t)batch * 6 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    auto out  = grid_torch_empty(batch, 1, q);
+    auto grad = grid_torch_empty(batch, nx, q);
+    auto hess = grid_torch_empty(batch, nx * nx, q);
+    size_t smem = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::momentum_cost_kernel<T><<<grid_dim, g_thread_dimms, smem, stream>>>(
+        g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b,
+        g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6, g_plant.d_eePos, g_robot, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(grad.data_ptr<float>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(hess.data_ptr<float>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return {out, grad, hess};
+}
+#endif  // GRID_PLANT_HAS_MOMENTUM_COST
+
 }  // namespace
 
 // The op library name is keyed by the cache_key so two robots don't collide.
@@ -2214,6 +2816,27 @@ GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
     m.def("fdsva_so(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
     m.def("integrator(Tensor q, Tensor qd, Tensor u, float dt, int it, float gravity) -> Tensor");
     m.def("integrator_gradient(Tensor q, Tensor qd, Tensor u, float dt, int it, float gravity) -> Tensor");
+    // grid_plant surface (cost / barrier always emitted; the rest are gated).
+    m.def("quadratic_state_cost(Tensor x, Tensor x_des, Tensor Q) -> Tensor[]");
+    m.def("quadratic_input_cost(Tensor u, Tensor u_des, Tensor R) -> Tensor[]");
+    m.def("joint_position_barrier(Tensor var, Tensor lower, Tensor upper, float mu) -> Tensor[]");
+    m.def("joint_velocity_barrier(Tensor var, Tensor lower, Tensor upper, float mu) -> Tensor[]");
+    m.def("joint_torque_barrier(Tensor var, Tensor lower, Tensor upper, float mu) -> Tensor[]");
+#ifdef GRID_PLANT_HAS_STEP
+    m.def("plant_step(Tensor x, Tensor u, float dt, int it, float gravity) -> Tensor");
+#endif
+#ifdef GRID_PLANT_HAS_STEP_GRADIENT
+    m.def("plant_step_gradient(Tensor x, Tensor u, float dt, int it, float gravity) -> Tensor");
+#endif
+#ifdef GRID_PLANT_HAS_EE_COST
+    m.def("ee_pos_cost(Tensor q, Tensor p_des, Tensor W) -> Tensor[]");
+#endif
+#ifdef GRID_PLANT_HAS_COM_COST
+    m.def("com_cost(Tensor q, Tensor p_des, Tensor W) -> Tensor[]");
+#endif
+#ifdef GRID_PLANT_HAS_MOMENTUM_COST
+    m.def("momentum_cost(Tensor q, Tensor qd, Tensor h_des, Tensor W) -> Tensor[]");
+#endif
 }
 
 GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
@@ -2231,6 +2854,26 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
     m.impl("fdsva_so", torch_fdsva_so);
     m.impl("integrator", torch_integrator);
     m.impl("integrator_gradient", torch_integrator_gradient);
+    m.impl("quadratic_state_cost", torch_quadratic_state_cost);
+    m.impl("quadratic_input_cost", torch_quadratic_input_cost);
+    m.impl("joint_position_barrier", torch_joint_position_barrier);
+    m.impl("joint_velocity_barrier", torch_joint_velocity_barrier);
+    m.impl("joint_torque_barrier", torch_joint_torque_barrier);
+#ifdef GRID_PLANT_HAS_STEP
+    m.impl("plant_step", torch_plant_step);
+#endif
+#ifdef GRID_PLANT_HAS_STEP_GRADIENT
+    m.impl("plant_step_gradient", torch_plant_step_gradient);
+#endif
+#ifdef GRID_PLANT_HAS_EE_COST
+    m.impl("ee_pos_cost", torch_ee_pos_cost);
+#endif
+#ifdef GRID_PLANT_HAS_COM_COST
+    m.impl("com_cost", torch_com_cost);
+#endif
+#ifdef GRID_PLANT_HAS_MOMENTUM_COST
+    m.impl("momentum_cost", torch_momentum_cost);
+#endif
 }
 
 #endif  // GRID_RBD_WITH_TORCH

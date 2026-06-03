@@ -6,6 +6,14 @@ running on the current torch CUDA stream. The four differentiable algorithms
 (inverse_dynamics / forward_dynamics / aba / integrator) carry analytic backward passes
 that reuse the existing ``*_gradient`` kernels; the rest are forward-only ops.
 
+The grid_plant cost / barrier / plant-step surface is also exposed
+(``plant_step``, ``plant_step_gradient``, ``quadratic_state_cost``,
+``quadratic_input_cost``, ``ee_pos_cost``, ``joint_position_barrier``,
+``joint_velocity_barrier``, ``joint_torque_barrier``, ``com_cost``,
+``momentum_cost``) as forward-only ops matching the numpy handle's shapes; the
+ops needing a gated kernel (plant_step[_gradient], ee/com/momentum cost) are
+registered only when the per-robot ``.so`` was built with that kernel.
+
 Usage:
 
     import grid_rbd
@@ -367,6 +375,77 @@ class TorchRobotHandle:
         raw = self._ops.integrator_gradient(q, qd, u, float(dt), it, float(gravity))
         B = raw.shape[0]
         return raw.reshape(B, 3 * nv, 2 * nv).transpose(1, 2)
+
+    # ─── grid_plant surface (cost / barrier / plant-step) ────────────────────
+    #
+    # Mirror the numpy RobotHandle plant methods (shapes / fields / gravity /
+    # integrator_type). Cost methods return (value, grad, hess); barriers return
+    # (value, grad, hess_diag). value is squeezed to (B,) to match numpy.
+
+    def quadratic_state_cost(self, x, x_des, Q):
+        """1/2 sum_i Q_i (x_i - x_des_i)^2 over x=[q;qd]. Returns
+        (value (B,), grad (B, NX), hess=diag(Q) (B, NX, NX))."""
+        nx = self.num_joints + self.num_vel
+        out, grad, hess = self._ops.quadratic_state_cost(x, x_des, Q)
+        return out[:, 0], grad, hess.reshape(-1, nx, nx)
+
+    def quadratic_input_cost(self, u, u_des, R):
+        """1/2 sum_i R_i (u_i - u_des_i)^2 over u (NV). Returns
+        (value (B,), grad (B, NV), hess=diag(R) (B, NV, NV))."""
+        nv = self.num_vel
+        out, grad, hess = self._ops.quadratic_input_cost(u, u_des, R)
+        return out[:, 0], grad, hess.reshape(-1, nv, nv)
+
+    def joint_position_barrier(self, var, lower, upper, mu):
+        """Log-barrier over NUM_POS positions. Returns
+        (value (B,), grad (B, NUM_POS), hess_diag (B, NUM_POS))."""
+        out, grad, hdiag = self._ops.joint_position_barrier(var, lower, upper, float(mu))
+        return out[:, 0], grad, hdiag
+
+    def joint_velocity_barrier(self, var, lower, upper, mu):
+        """Log-barrier over NUM_VEL velocities. See joint_position_barrier."""
+        out, grad, hdiag = self._ops.joint_velocity_barrier(var, lower, upper, float(mu))
+        return out[:, 0], grad, hdiag
+
+    def joint_torque_barrier(self, var, lower, upper, mu):
+        """Log-barrier over NUM_VEL torques. See joint_position_barrier."""
+        out, grad, hdiag = self._ops.joint_torque_barrier(var, lower, upper, float(mu))
+        return out[:, 0], grad, hdiag
+
+    def plant_step(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+        """x_{k+1} = integrator(x_k, u_k, dt). x (B, NX); u (B, NV). Returns (B, NX)."""
+        it = _integrator_code(integrator_type)
+        return self._ops.plant_step(x, u, float(dt), it, float(gravity))
+
+    def plant_step_gradient(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+        """[A|B] = d x_{k+1}/d(x,u). x (B, NX); u (B, NV). Returns (B, 2*NV, 3*NV)
+        with column blocks [d/dq | d/dqd | d/du] (tangent space)."""
+        nv = self.num_vel
+        it = _integrator_code(integrator_type)
+        raw = self._ops.plant_step_gradient(x, u, float(dt), it, float(gravity))
+        B = raw.shape[0]
+        return raw.reshape(B, 3 * nv, 2 * nv).transpose(1, 2)
+
+    def ee_pos_cost(self, q, p_des, W):
+        """End-effector position cost (EE 0). q (B, NQ); p_des/W (B, 3). Returns
+        (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX))."""
+        nx = self.num_joints + self.num_vel
+        out, grad, hess = self._ops.ee_pos_cost(q, p_des, W)
+        return out[:, 0], grad, hess.reshape(-1, nx, nx)
+
+    def com_cost(self, q, p_des, W):
+        """Center-of-mass tracking cost. q (B, NQ); p_des/W (B, 3). Returns
+        (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX))."""
+        nx = self.num_joints + self.num_vel
+        out, grad, hess = self._ops.com_cost(q, p_des, W)
+        return out[:, 0], grad, hess.reshape(-1, nx, nx)
+
+    def momentum_cost(self, q, qd, h_des, W):
+        """Centroidal-momentum tracking cost. q (B, NQ); qd (B, NV); h_des/W (B, 6).
+        Returns (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX))."""
+        nx = self.num_joints + self.num_vel
+        out, grad, hess = self._ops.momentum_cost(q, qd, h_des, W)
+        return out[:, 0], grad, hess.reshape(-1, nx, nx)
 
     # ─── CUDA-Graphs capture ─────────────────────────────────────────────
 

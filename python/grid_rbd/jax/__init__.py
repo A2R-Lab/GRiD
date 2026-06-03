@@ -19,12 +19,18 @@ The underlying ``.so`` is shared with the plain ``grid_rbd.register_robot``
 cache — registering the same name from both APIs uses the same compiled
 library and doesn't trigger a recompile.
 
-v0.3 surface (parity with the plain ``RobotHandle``):
+Surface (parity with the plain ``RobotHandle``):
   ``inverse_dynamics``, ``minv``, ``forward_dynamics``, ``aba``, ``crba``,
   ``end_effector_pose``, ``end_effector_pose_gradient``,
   ``end_effector_pose_hessian``, ``inverse_dynamics_gradient``, ``forward_dynamics_gradient``,
-  ``idsva_so``, ``fdsva_so``. All run device-resident on JAX-supplied
-  streams.
+  ``idsva_so``, ``fdsva_so``, plus the grid_plant cost / barrier / plant-step
+  surface (``plant_step``, ``plant_step_gradient``, ``quadratic_state_cost``,
+  ``quadratic_input_cost``, ``ee_pos_cost``, ``joint_position_barrier``,
+  ``joint_velocity_barrier``, ``joint_torque_barrier``, ``com_cost``,
+  ``momentum_cost``). All run device-resident on JAX-supplied streams. The
+  cost/barrier/step ops that require a gated kernel (plant_step[_gradient],
+  ee/com/momentum cost) are only available when the per-robot ``.so`` was built
+  with that kernel (raises a clear "symbol missing" error otherwise).
 """
 from __future__ import annotations
 
@@ -377,6 +383,169 @@ class JaxRobotHandle:
             gravity=np.float32(gravity))
         # h_dAB is (2*NV x 3*NV) column-major per timestep; recover row-major.
         return flat.reshape(B, 3 * nv, 2 * nv).transpose(0, 2, 1)
+
+    # ─── grid_plant surface (cost / barrier / plant-step) ────────────────────
+    #
+    # Mirror the numpy RobotHandle plant methods exactly (shapes / fields /
+    # gravity / integrator_type). Cost methods return (value, grad, hess);
+    # barriers return (value, grad, hess_diag). value is squeezed to (B,) to
+    # match the numpy surface.
+
+    def _prep_plant(self, name, **arrays):
+        """Cast to float32 jax arrays, enforce 2D + same batch + max_batch.
+        Unlike _prep_2d this allows arbitrary last dims (the plant inputs are
+        not all (B, NJ))."""
+        import jax.numpy as jnp
+        cast = {k: jnp.asarray(v, dtype=jnp.float32) for k, v in arrays.items()}
+        first = next(iter(cast.values()))
+        if first.ndim != 2:
+            raise ValueError(f"{name}: inputs must be 2D (B, N)")
+        B = first.shape[0]
+        for k, a in cast.items():
+            if a.ndim != 2 or a.shape[0] != B:
+                raise ValueError(f"{name}: {k} must be 2D with batch={B}; got {a.shape}")
+        if B > self.max_batch:
+            raise ValueError(f"{name}: batch={B} > max_batch={self.max_batch}")
+        return cast, B
+
+    def _cost_out_types(self, B, n_grad, n_hess):
+        import jax
+        import jax.numpy as jnp
+        return (
+            jax.ShapeDtypeStruct((B, 1), jnp.float32),
+            jax.ShapeDtypeStruct((B, n_grad), jnp.float32),
+            jax.ShapeDtypeStruct((B, n_hess), jnp.float32),
+        )
+
+    def quadratic_state_cost(self, x, x_des, Q):
+        """1/2 sum_i Q_i (x_i - x_des_i)^2 over x=[q;qd]. Returns
+        (value (B,), grad (B, NX), hess=diag(Q) (B, NX, NX))."""
+        import jax
+        target = _register_method_target(
+            self._so_path, self._cache_key,
+            "plant_quadratic_state_cost", "grid_rbd_jax_plant_quadratic_state_cost")
+        cast, B = self._prep_plant("quadratic_state_cost", x=x, x_des=x_des, Q=Q)
+        nx = self.num_joints + self.num_vel
+        out, grad, hess = jax.ffi.ffi_call(target, self._cost_out_types(B, nx, nx * nx))(
+            cast["x"], cast["x_des"], cast["Q"])
+        return out[:, 0], grad, hess.reshape(B, nx, nx)
+
+    def quadratic_input_cost(self, u, u_des, R):
+        """1/2 sum_i R_i (u_i - u_des_i)^2 over u (NV). Returns
+        (value (B,), grad (B, NV), hess=diag(R) (B, NV, NV))."""
+        import jax
+        target = _register_method_target(
+            self._so_path, self._cache_key,
+            "plant_quadratic_input_cost", "grid_rbd_jax_plant_quadratic_input_cost")
+        cast, B = self._prep_plant("quadratic_input_cost", u=u, u_des=u_des, R=R)
+        nv = self.num_vel
+        out, grad, hess = jax.ffi.ffi_call(target, self._cost_out_types(B, nv, nv * nv))(
+            cast["u"], cast["u_des"], cast["R"])
+        return out[:, 0], grad, hess.reshape(B, nv, nv)
+
+    def _barrier(self, name, symbol, var, lower, upper, mu, n):
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        target = _register_method_target(self._so_path, self._cache_key, name, symbol)
+        cast, B = self._prep_plant(name, var=var, lower=lower, upper=upper)
+        out_types = (
+            jax.ShapeDtypeStruct((B, 1), jnp.float32),
+            jax.ShapeDtypeStruct((B, n), jnp.float32),
+            jax.ShapeDtypeStruct((B, n), jnp.float32),
+        )
+        out, grad, hdiag = jax.ffi.ffi_call(target, out_types)(
+            cast["var"], cast["lower"], cast["upper"], mu=np.float32(mu))
+        return out[:, 0], grad, hdiag
+
+    def joint_position_barrier(self, var, lower, upper, mu):
+        """Log-barrier over NUM_POS positions. Returns
+        (value (B,), grad (B, NUM_POS), hess_diag (B, NUM_POS))."""
+        return self._barrier("plant_joint_position_barrier",
+                             "grid_rbd_jax_plant_joint_position_barrier",
+                             var, lower, upper, mu, self.num_joints)
+
+    def joint_velocity_barrier(self, var, lower, upper, mu):
+        """Log-barrier over NUM_VEL velocities. See joint_position_barrier."""
+        return self._barrier("plant_joint_velocity_barrier",
+                             "grid_rbd_jax_plant_joint_velocity_barrier",
+                             var, lower, upper, mu, self.num_vel)
+
+    def joint_torque_barrier(self, var, lower, upper, mu):
+        """Log-barrier over NUM_VEL torques. See joint_position_barrier."""
+        return self._barrier("plant_joint_torque_barrier",
+                             "grid_rbd_jax_plant_joint_torque_barrier",
+                             var, lower, upper, mu, self.num_vel)
+
+    def plant_step(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+        """x_{k+1} = integrator(x_k, u_k, dt). x (B, NX); u (B, NV). Returns (B, NX)."""
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from .._handle import _integrator_code
+        target = _register_method_target(
+            self._so_path, self._cache_key, "plant_step", "grid_rbd_jax_plant_step")
+        cast, B = self._prep_plant("plant_step", x=x, u=u)
+        nx = self.num_joints + self.num_vel
+        out_type = jax.ShapeDtypeStruct((B, nx), jnp.float32)
+        return jax.ffi.ffi_call(target, out_type)(
+            cast["x"], cast["u"], dt=np.float32(dt),
+            it=np.int64(_integrator_code(integrator_type)), gravity=np.float32(gravity))
+
+    def plant_step_gradient(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+        """[A|B] = d x_{k+1}/d(x,u). x (B, NX); u (B, NV). Returns (B, 2*NV, 3*NV)
+        with column blocks [d/dq | d/dqd | d/du] (tangent space)."""
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from .._handle import _integrator_code
+        target = _register_method_target(
+            self._so_path, self._cache_key,
+            "plant_step_gradient", "grid_rbd_jax_plant_step_gradient")
+        cast, B = self._prep_plant("plant_step_gradient", x=x, u=u)
+        nv = self.num_vel
+        out_type = jax.ShapeDtypeStruct((B, 2 * nv * 3 * nv), jnp.float32)
+        flat = jax.ffi.ffi_call(target, out_type)(
+            cast["x"], cast["u"], dt=np.float32(dt),
+            it=np.int64(_integrator_code(integrator_type)), gravity=np.float32(gravity))
+        # (2*NV x 3*NV) column-major per timestep; recover row-major.
+        return flat.reshape(B, 3 * nv, 2 * nv).transpose(0, 2, 1)
+
+    def ee_pos_cost(self, q, p_des, W):
+        """End-effector position cost (EE 0). q (B, NQ); p_des/W (B, 3). Returns
+        (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX))."""
+        import jax
+        target = _register_method_target(
+            self._so_path, self._cache_key, "plant_ee_pos_cost", "grid_rbd_jax_plant_ee_pos_cost")
+        cast, B = self._prep_plant("ee_pos_cost", q=q, p_des=p_des, W=W)
+        nx = self.num_joints + self.num_vel
+        out, grad, hess = jax.ffi.ffi_call(target, self._cost_out_types(B, nx, nx * nx))(
+            cast["q"], cast["p_des"], cast["W"])
+        return out[:, 0], grad, hess.reshape(B, nx, nx)
+
+    def com_cost(self, q, p_des, W):
+        """Center-of-mass tracking cost. q (B, NQ); p_des/W (B, 3). Returns
+        (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX))."""
+        import jax
+        target = _register_method_target(
+            self._so_path, self._cache_key, "plant_com_cost", "grid_rbd_jax_plant_com_cost")
+        cast, B = self._prep_plant("com_cost", q=q, p_des=p_des, W=W)
+        nx = self.num_joints + self.num_vel
+        out, grad, hess = jax.ffi.ffi_call(target, self._cost_out_types(B, nx, nx * nx))(
+            cast["q"], cast["p_des"], cast["W"])
+        return out[:, 0], grad, hess.reshape(B, nx, nx)
+
+    def momentum_cost(self, q, qd, h_des, W):
+        """Centroidal-momentum tracking cost. q (B, NQ); qd (B, NV); h_des/W (B, 6).
+        Returns (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX))."""
+        import jax
+        target = _register_method_target(
+            self._so_path, self._cache_key, "plant_momentum_cost", "grid_rbd_jax_plant_momentum_cost")
+        cast, B = self._prep_plant("momentum_cost", q=q, qd=qd, h_des=h_des, W=W)
+        nx = self.num_joints + self.num_vel
+        out, grad, hess = jax.ffi.ffi_call(target, self._cost_out_types(B, nx, nx * nx))(
+            cast["q"], cast["qd"], cast["h_des"], cast["W"])
+        return out[:, 0], grad, hess.reshape(B, nx, nx)
 
 
 # ─── public API ─────────────────────────────────────────────────────────────
