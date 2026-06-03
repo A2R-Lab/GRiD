@@ -19,7 +19,7 @@ smoke tests (`pytest --nbval-lax examples/notebooks/`).
 | 03 | [`03_plant_control`](03_plant_control.ipynb) | The control surface: `plant_step`, quadratic state/input costs, end-effector cost, joint-limit log-barriers. |
 | 04 | [`04_kinematics`](04_kinematics.ipynb) | FK (`end_effector_pose` / `fk_batched`), `end_effector_pose_gradient` / `_hessian`, geometric `frame_jacobian` / `_dot` with **runtime** frame + target selection, `com` / `ccrba` / `osc_inertia`. |
 | 05 | [`05_gradients_secondorder`](05_gradients_secondorder.ipynb) | Analytic dynamics derivatives: `inverse_dynamics_gradient`, `forward_dynamics_gradient` (first order) and `idsva_so` / `fdsva_so` (second order), each vs finite-difference. |
-| 06 | [`06_jax_backend`](06_jax_backend.ipynb) | The **JAX** backend (`grid_rbd.jax`): `jax.jit` over dynamics, the native batch axis (vmap-equivalent), GRiD's analytic gradient kernels jitted + FD-validated, `idsva_so` vs the numpy handle. Needs `pip install -e "python/[jax]"`. |
+| 06 | [`06_jax_backend`](06_jax_backend.ipynb) | The **JAX** backend (`grid_rbd.jax`): `jax.jit` over dynamics, the native batch axis (vmap-equivalent), GRiD's analytic gradient kernels jitted + FD-validated, `idsva_so` vs the numpy handle. Needs `pip install -e "bindings/[jax]"`. |
 | 07 | [`07_inline_cuda`](07_inline_cuda.ipynb) | **Inline CUDA**: generate `grid.cuh`, write a kernel that calls `grid::inverse_dynamics_device`, compile with `nvcc` in-notebook, run, and validate vs `RBDReference`. The tutorial version of [`../cuda/`](../cuda/). |
 
 There are also CUDA-level examples (write-your-own-kernel walkthroughs) under
@@ -35,9 +35,9 @@ checkout):
 
 ```bash
 # from the repo root
-pip install -e python/                 # numpy backend
-pip install -e "python/[jax]"          # + JAX FFI bridge
-pip install -e "python/[torch]"        # + torch autograd bridge (notebook 02)
+pip install -e bindings/                 # numpy backend
+pip install -e "bindings/[jax]"          # + JAX FFI bridge
+pip install -e "bindings/[torch]"        # + torch autograd bridge (notebook 02)
 pip install -r requirements-dev.txt     # nbval, for running the notebooks as tests
 ```
 
@@ -47,7 +47,7 @@ pip install -r requirements-dev.txt     # nbval, for running the notebooks as te
 > ```bash
 > python -c "import grid_rbd, inspect; print(inspect.getfile(grid_rbd))"
 > ```
-> Re-run `pip install -e python/` from the checkout you want if it points
+> Re-run `pip install -e bindings/` from the checkout you want if it points
 > elsewhere.
 
 ## Running

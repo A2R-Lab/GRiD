@@ -405,10 +405,10 @@ reference but is no longer the active plan.
      - `GRiDCodeGenerator.py:1157,1161` (gridData allocator).
      - `test/cuda_equivalents/cuda_equivalence_runner.cu` (h_d2ee/d_d2ee sizing,
        memcpy, print_vector). 5+ sites.
-     - `python/grid_rbd/wrapper_template.cu` (C extern + JAX FFI memcpy + buffer
+     - `bindings/grid_rbd/wrapper_template.cu` (C extern + JAX FFI memcpy + buffer
        validation; the d2ee handler around line 875+).
-     - `python/src/_core.cpp` (`py::array_t<float> out({batch, 6*nees, nv, nv})`).
-     - `python/grid_rbd/_handle.py` + `python/grid_rbd/jax/__init__.py`
+     - `bindings/src/_core.cpp` (`py::array_t<float> out({batch, 6*nees, nv, nv})`).
+     - `bindings/grid_rbd/_handle.py` + `bindings/grid_rbd/jax/__init__.py`
        (d2ee reshape: use `num_vel` instead of `num_joints`).
      - `printGRiD.cu` (`printMat<T,NUM_VEL,NUM_VEL>` for d2eePos block, offset
        calculation uses NUM_VEL).
@@ -1503,7 +1503,7 @@ fix (immediate) from the full mimic-gradient implementation (after consolidation
   - **B+C architecture consolidation:** device-`_device`-wrapper collapse +
     table-driven tier-dispatch dedup (`docs/open-tasks/bc_cleanup_plan.md` items 1–2).
     Byte-identical validation. New G2 algos emit against the deduped base.
-  - **Bindings track (parallel, `python/grid_rbd/` — independent of codegen core):**
+  - **Bindings track (parallel, `bindings/grid_rbd/` — independent of codegen core):**
     D.3 PyTorch in-memory compile + autograd + CUDA-Graphs + notebook UX
     (`d3_pytorch_cudagraphs_plan.md`) AND the `grid_plant` Python/handle surface
     (CUDA-only today). + reference-oracle numpy layer finishing (merges at back).

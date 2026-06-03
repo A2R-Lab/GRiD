@@ -200,13 +200,13 @@ work serial to "save" SM occupancy. Justify every serial block.
   correctness-only and safe to run concurrent; the PERF sweep must run ISOLATED (no other GPU/CPU,
   it skews timing).
 - **The editable `grid_rbd` install can point at a STALE sibling worktree.** `.venv` is under main
-  but `pip install -e python` may have last run from another worktree (e.g. `GRiD-H-roadmap`), so a
+  but `pip install -e bindings` may have last run from another worktree (e.g. `GRiD-H-roadmap`), so a
   bare `import grid_rbd` silently loads OLD bindings — `AttributeError: 'RobotHandle' has no
   attribute 'inverse_dynamics_gradient'` for a method that exists in main. pytest under the repo tree
   passes (repo-relative `sys.path`) while a notebook/example fails. Confirm with
   `python -c "import grid_rbd, inspect; print(inspect.getfile(grid_rbd))"`; the editable `.pth`
-  merely *appends*, so `sys.path.insert(0, '<main>/python')` (or `PYTHONPATH`) reliably overrides it
-  for validation. The real fix is `pip install -e python` from the intended tree. (Sibling of the
+  merely *appends*, so `sys.path.insert(0, '<main>/bindings')` (or `PYTHONPATH`) reliably overrides it
+  for validation. The real fix is `pip install -e bindings` from the intended tree. (Sibling of the
   §0/B5 stale-compiled-binary class: always verify you imported the tree you think you did.)
 
 ---

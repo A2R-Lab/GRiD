@@ -27,11 +27,11 @@ or grid_rbd wrapper yet — backlog S1). Adding a wrapper is out of scope; it is
 reported as blocked, not built.
 
 Editable-install / clone note: mirrors test_fk_batched.py. To exercise THIS clone,
-build _core in-place and run with PYTHONPATH=<clone>/python prepended so this clone's
+build _core in-place and run with PYTHONPATH=<clone>/bindings prepended so this clone's
 grid_rbd (and its GRiDCodeGenerator + wrapper_template.cu) win import resolution.
 
 Run with:
-    PYTHONPATH=$PWD/python pytest test/python_wrappers/test_kinematics_thread_batch_matrix.py -v
+    PYTHONPATH=$PWD/bindings pytest test/python_wrappers/test_kinematics_thread_batch_matrix.py -v
 
 B5 (RESOLVED): grid_rbd FLOATING-base end_effector_pose_gradient now returns the
 d/dv TANGENT Jacobian (NV columns; pinocchio convention) through a correctly-sized,
@@ -56,14 +56,14 @@ import pytest
 
 
 # Repo root is parent of test/. Insert FIRST so this clone's submodules
-# (URDFParser / RBDReference / GRiDCodeGenerator) and python/ package win.
+# (URDFParser / RBDReference / GRiDCodeGenerator) and bindings/ package win.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-for _p in (str(_REPO_ROOT / "python"), str(_REPO_ROOT)):
+for _p in (str(_REPO_ROOT / "bindings"), str(_REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
 
-_grid_rbd = pytest.importorskip("grid_rbd", reason="grid-rbd not installed (build python/ _core)")
+_grid_rbd = pytest.importorskip("grid_rbd", reason="grid-rbd not installed (build bindings/ _core)")
 
 if shutil.which("nvcc") is None:
     pytest.skip("nvcc not on PATH; grid-rbd register_robot requires it", allow_module_level=True)
@@ -73,7 +73,7 @@ _GRID_RBD_DIR = Path(_grid_rbd.__file__).resolve().parent
 if _REPO_ROOT not in _GRID_RBD_DIR.parents:
     pytest.skip(
         f"grid_rbd resolved to {_GRID_RBD_DIR} (not this clone under {_REPO_ROOT}); "
-        "set PYTHONPATH=<clone>/python and build _core in-place",
+        "set PYTHONPATH=<clone>/bindings and build _core in-place",
         allow_module_level=True,
     )
 

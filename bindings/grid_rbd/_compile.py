@@ -53,13 +53,13 @@ def find_nvcc() -> str:
 def repo_root() -> Path | None:
     """Locate the GRiD repo this package was installed from.
 
-    For development installs (`pip install -e python/`), the parent of the
+    For development installs (`pip install -e bindings/`), the parent of the
     package's parent IS the repo root. For sdist installs once we publish to
     PyPI, the repo isn't present and we ship the codegen submodules with the
     sdist; the path resolution is different. For now, only the editable path
     is implemented.
     """
-    # python/grid_rbd/_compile.py  →  repo_root = .../python/..
+    # bindings/grid_rbd/_compile.py  →  repo_root = .../bindings/..
     pkg = Path(__file__).resolve().parent
     candidate = pkg.parent.parent
     if (candidate / "GRiDCodeGenerator").exists() and (candidate / "URDFParser").exists():

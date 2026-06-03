@@ -10,10 +10,10 @@ Demonstrates the register-then-run UX:
        arrays. Every method is batched on axis 0.
 
 Run with:
-    python python/examples/quickstart_iiwa14.py
+    python bindings/examples/quickstart_iiwa14.py
 
 Requires:
-    pip install -e python/   # in your virtualenv
+    pip install -e bindings/   # in your virtualenv
     nvcc on PATH             # CUDA Toolkit installed
     An iiwa14 URDF           # see _URDF below; or pass --urdf <path>
 """

@@ -133,9 +133,11 @@ for the rationale and concrete signatures.
 
 ## Python API (`grid-rbd`)
 
-For Python users the `grid-rbd` package (in [`python/`](python/)) wraps
+For Python users the `grid-rbd` package (in [`bindings/`](bindings/)) wraps
 the per-robot codegen behind a register-then-run UX with `numpy`, `jax`,
-and `torch` backends:
+and `torch` backends. Install it editable from a checkout with
+`pip install -e bindings/` (`base_install.sh` sets up the codegen venv;
+the bindings are an opt-in editable install on top of it):
 
 ```python
 import grid_rbd
@@ -150,7 +152,7 @@ qdd.sum().backward()                      # gradients flow to q, qd, u
 The `torch` backend exposes autograd-aware `inverse_dynamics` / `forward_dynamics` /
 `aba` / `integrator` (analytic backward passes) plus CUDA-Graphs capture,
 and the handle also surfaces the `grid_plant` cost/barrier methods. See
-[`python/README.md`](python/README.md) and the
+[`bindings/README.md`](bindings/README.md) and the
 [Python wrappers docs](docs/source/user_guide/tutorials/python_wrappers.rst).
 
 ## Citing GRiD

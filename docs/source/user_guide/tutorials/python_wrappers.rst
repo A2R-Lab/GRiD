@@ -20,7 +20,7 @@ Install (editable, from a GRiD checkout)
 .. code-block:: shell
 
    cd path/to/GRiD
-   pip install -e python/
+   pip install -e bindings/
 
 This builds a small pybind11 extension (``grid_rbd._core``) at install
 time. ``nvcc`` is **not** required for the install — only for

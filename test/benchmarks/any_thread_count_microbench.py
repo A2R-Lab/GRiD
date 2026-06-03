@@ -64,7 +64,7 @@ def _check_preconditions():
     try:
         import grid_rbd  # noqa: F401
     except ImportError:
-        print("FATAL: grid_rbd not importable; run `pip install -e python/`.", file=sys.stderr)
+        print("FATAL: grid_rbd not importable; run `pip install -e bindings/`.", file=sys.stderr)
         sys.exit(1)
 
 

@@ -174,14 +174,14 @@ the second sub-rip (any-thread-count) drops it.
 Wrapper layer (Python + JAX)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* :file:`python/grid_rbd/_compile.py` — remove libmathdx / MATHDX_ROOT
+* :file:`bindings/grid_rbd/_compile.py` — remove libmathdx / MATHDX_ROOT
   discovery, drop the ``-DGRID_CUDA_LINALG_BACKEND`` ``nvcc`` flag, drop
   the ``-rdc=true`` requirement (cuBLASDx is the only reason for it).
-* :file:`python/grid_rbd/wrapper_template.cu` — replace the hardcoded
+* :file:`bindings/grid_rbd/wrapper_template.cu` — replace the hardcoded
   ``g_thread_dimms = dim3(MAX_PERF_LEVEL_THREADS, 1, 1)`` with either a
   caller-provided ``threads_per_block`` parameter (preferred) or a
   named alias preserving current behavior.
-* :file:`python/grid_rbd/__init__.py`, :file:`python/grid_rbd/jax/__init__.py` —
+* :file:`bindings/grid_rbd/__init__.py`, :file:`bindings/grid_rbd/jax/__init__.py` —
   surface the simplification if exposed in the public API (currently
   hidden; no change expected).
 
@@ -222,7 +222,7 @@ Documentation
   :file:`docs/source/user_guide/tutorials/cuda_validation.rst`,
   :file:`docs/source/user_guide/tutorials/python_wrappers.rst` —
   remove ``glass_nvidia`` mentions; update install line.
-* :file:`README.md`, :file:`python/README.md` — sweep.
+* :file:`README.md`, :file:`bindings/README.md` — sweep.
 * Any local hardware-specific sweep-results notes — historical, leave
   intact; add a pointer to this design doc.
 
@@ -231,8 +231,8 @@ Install / build system
 
 * :file:`base_install.sh`, :file:`developer_install.sh` — drop libmathdx
   setup steps if present.
-* :file:`pyproject.toml`, :file:`python/pyproject.toml`,
-  :file:`python/setup.py` — drop cuBLASDx-related extras if any.
+* :file:`pyproject.toml`, :file:`bindings/pyproject.toml`,
+  :file:`bindings/setup.py` — drop cuBLASDx-related extras if any.
 * GitHub Actions / CI — drop ``--mathdx-root`` or
   ``GRID_CUDA_LINALG_BACKEND`` from any workflow.
 

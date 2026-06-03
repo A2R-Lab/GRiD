@@ -161,7 +161,7 @@ the `RobotHandle` algorithm methods is on the roadmap.
 
 ```bash
 cd path/to/GRiD
-pip install -e python/
+pip install -e bindings/
 ```
 
 A PyPI release will follow once the surface is feature-complete.

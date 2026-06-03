@@ -786,7 +786,7 @@ Status (commits ``da831dd`` + ``0795442``):
 
 * External call sites updated to pass ``d_workspace``:
 
-  - ``python/grid_rbd/wrapper_template.cu`` (Python FFI surface)
+  - ``bindings/grid_rbd/wrapper_template.cu`` (Python FFI surface)
   - ``test/cuda_equivalents/cuda_equivalence_runner.cu`` (CUDA equivalence harness)
 
 * Composition: FDSVA_SO's device + kernel paths internally compose Minv
