@@ -60,7 +60,7 @@ ROBOTS = ("iiwa14", "go2", "g1", "h1_2")
 BASES  = ("fixed", "floating")
 # Columns the sweep knows how to run. cuBLASDx (glass_nvidia) was removed in
 # v2.0 — the 2026-05-18 sweep + per-host autotune showed it loses to SIMT at
-# every GEMM shape GRiD calls (notably 4×4×4 in eepose_gradient_hessian, where
+# every GEMM shape GRiD calls (notably 4×4×4 in end_effector_pose_hessian, where
 # SIMT wins by 2.6×). The historical data is preserved at the
 # `archive/last-cublasdx` git tag; see
 # docs/source/user_guide/concepts/cublasdx_removal_design.rst.

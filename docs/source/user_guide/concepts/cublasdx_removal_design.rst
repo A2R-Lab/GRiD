@@ -41,7 +41,7 @@ The 2026-05-18 sweep with per-host-autotuned cuBLASDx (run via
 * Across **every** algorithm × robot × base in the iiwa14 / go2 / g1
   bench (24 cells total), ``glass_nv/glass = 0.98–1.01×``. Tuned
   cuBLASDx delivers no net benefit on GRiD's call mix.
-* On the 4×4×4 batched GEMM inside ``end_effector_pose_gradient_hessian``,
+* On the 4×4×4 batched GEMM inside ``end_effector_pose_hessian``,
   SIMT wins **by 2.6×** (see comment at
   ``test/benchmarks/run_multi_version.py:50``). cuBLASDx tile setup
   cost dominates at small shapes.
