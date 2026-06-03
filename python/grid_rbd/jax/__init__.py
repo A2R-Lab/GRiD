@@ -127,13 +127,28 @@ class JaxRobotHandle:
     # ─── small helpers ───────────────────────────────────────────────────
 
     def _prep_2d(self, name: str, *arrays):
-        """Cast to float32 jax arrays, validate (B, NJ), enforce same batch."""
+        """Cast to float32 jax arrays, validate (B, NJ), enforce same batch.
+
+        Also accepts the per-sample ``(NJ,)`` (1D) shape so the ops compose
+        with ``jax.vmap``: under a vmap the mapped slice is 1D, and the FFI
+        calls carry ``vmap_method="broadcast_all"`` which re-adds the mapped
+        axis and dispatches a single native (B, NJ) kernel. For 1D inputs we
+        return ``B = None`` (the batch only materializes inside the vmap).
+        """
         import jax.numpy as jnp
         cast = [jnp.asarray(a, dtype=jnp.float32) for a in arrays]
         for i, a in enumerate(cast):
-            if a.ndim != 2 or a.shape[1] != self.num_joints:
+            if a.ndim not in (1, 2) or a.shape[-1] != self.num_joints:
                 raise ValueError(
-                    f"{name}: arg{i} must be (B, {self.num_joints}); got {a.shape}")
+                    f"{name}: arg{i} must be (B, {self.num_joints}) or "
+                    f"({self.num_joints},) under vmap; got {a.shape}")
+        ndim0 = cast[0].ndim
+        for i, a in enumerate(cast[1:], start=1):
+            if a.ndim != ndim0:
+                raise ValueError(
+                    f"{name}: arg{i} ndim={a.ndim} != arg0 ndim={ndim0}")
+        if ndim0 == 1:
+            return cast, None  # per-sample (vmap) — batch handled by broadcast_all
         B = cast[0].shape[0]
         for i, a in enumerate(cast[1:], start=1):
             if a.shape[0] != B:
@@ -144,6 +159,132 @@ class JaxRobotHandle:
                 f"{name}: batch={B} > max_batch={self.max_batch}")
         return cast, B
 
+    @staticmethod
+    def _out(lead_from, *trailing):
+        """Build a ShapeDtypeStruct whose leading dims mirror ``lead_from``
+        (the prepped input) and whose trailing dims are ``trailing``.
+
+        For a normal ``(B, NJ)`` input the leading dim is ``(B,)``; under a
+        ``jax.vmap`` the prepped slice is ``(NJ,)`` so the leading dim is
+        empty — ``vmap_method="broadcast_all"`` re-adds the mapped axis.
+        """
+        import jax
+        import jax.numpy as jnp
+        lead = lead_from.shape[:-1]  # drop the NJ axis
+        return jax.ShapeDtypeStruct(lead + tuple(trailing), jnp.float32)
+
+    # ─── differentiable-op registry (lazy, per-handle) ───────────────────
+    #
+    # GRiD emits ANALYTIC gradients, so there is no autodiff tape — the VJP of
+    # a forward op is a matvec of the cotangent with the analytic Jacobian
+    # (itself an FFI call). We wrap the core forwards with ``jax.custom_vjp``
+    # whose ``bwd`` contracts the cotangent with the matching analytic-gradient
+    # FFI op. ``vmap_method="broadcast_all"`` on every ffi_call makes the same
+    # ops compose with ``jax.vmap`` (a no-op for direct (B,NJ) calls; under a
+    # vmap it re-adds the mapped axis and dispatches one native batched call).
+    #
+    # ``gravity`` is a static (non-differentiated) scalar attribute, declared
+    # ``nondiff_argnums=(0,)`` so it is threaded through as a plain Python
+    # float (never a JAX tracer) and baked into the FFI attribute. The bwd
+    # therefore returns no cotangent for it.
+    def _differentiable(self):
+        d = getattr(self, "_diff_cache", None)
+        if d is not None:
+            return d
+        import functools
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        nj, nv, nee = self.num_joints, self.num_vel, self.num_ees
+
+        def _t(method, symbol):
+            return _register_method_target(self._so_path, self._cache_key, method, symbol)
+
+        VM = "broadcast_all"
+
+        # ── forward_dynamics: qdd = f(q,qd,u);  ∂qdd/∂q,∂qdd/∂qd via the
+        #    analytic gradient FFI, ∂qdd/∂u = M⁻¹. ───────────────────────────
+        @functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
+        def fd(gravity, q, qd, u):
+            t = _t("forward_dynamics", "grid_rbd_jax_forward_dynamics")
+            return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
+                q, qd, u, gravity=np.float32(gravity))
+
+        def fd_fwd(gravity, q, qd, u):
+            return fd(gravity, q, qd, u), (q, qd, u)
+
+        def fd_bwd(gravity, res, ct):
+            q, qd, u = res
+            tg = _t("forward_dynamics_gradient", "grid_rbd_jax_forward_dynamics_gradient")
+            tm = _t("minv", "grid_rbd_jax_minv")
+            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nj * nj), vmap_method=VM)(
+                q, qd, u, gravity=np.float32(gravity))
+            # GRiD writes (2, NJ, NJ) column-major; transpose to row-major (out, in).
+            blocks = flat.reshape(q.shape[:-1] + (2, nj, nj)).swapaxes(-2, -1)
+            df_dq, df_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
+            mflat = jax.ffi.ffi_call(tm, self._out(q, nj * nj), vmap_method=VM)(
+                q, gravity=np.float32(gravity))
+            m = mflat.reshape(q.shape[:-1] + (nj, nj))
+            eye = jnp.eye(nj, dtype=m.dtype)
+            minv = m + jnp.swapaxes(m, -1, -2) - m * eye  # ∂qdd/∂u
+            gq = jnp.einsum('...o,...oi->...i', ct, df_dq)
+            gqd = jnp.einsum('...o,...oi->...i', ct, df_dqd)
+            gu = jnp.einsum('...o,...oi->...i', ct, minv)
+            return (gq, gqd, gu)
+
+        fd.defvjp(fd_fwd, fd_bwd)
+
+        # ── inverse_dynamics (bias): c = h(q,qd) − g(q);  ∂c/∂(q,qd) via the
+        #    analytic gradient FFI. ──────────────────────────────────────────
+        @functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
+        def idyn(gravity, q, qd):
+            t = _t("inverse_dynamics", "grid_rbd_jax_inverse_dynamics")
+            return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
+                q, qd, gravity=np.float32(gravity))
+
+        def id_fwd(gravity, q, qd):
+            return idyn(gravity, q, qd), (q, qd)
+
+        def id_bwd(gravity, res, ct):
+            q, qd = res
+            tg = _t("inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient")
+            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nj * nj), vmap_method=VM)(
+                q, qd, gravity=np.float32(gravity))
+            blocks = flat.reshape(q.shape[:-1] + (2, nj, nj)).swapaxes(-2, -1)
+            dc_dq, dc_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
+            gq = jnp.einsum('...o,...oi->...i', ct, dc_dq)
+            gqd = jnp.einsum('...o,...oi->...i', ct, dc_dqd)
+            return (gq, gqd)
+
+        idyn.defvjp(id_fwd, id_bwd)
+
+        # ── end_effector_pose: pose(q) (6*NEE);  ∂pose/∂q via the EE-pose
+        #    gradient FFI (TANGENT-space Jacobian, pinocchio convention). ─────
+        @jax.custom_vjp
+        def eepose(q):
+            t = _t("end_effector_pose", "grid_rbd_jax_end_effector_pose")
+            return jax.ffi.ffi_call(t, self._out(q, 6 * nee), vmap_method=VM)(q)
+
+        def ee_fwd(q):
+            return eepose(q), (q,)
+
+        def ee_bwd(res, ct):
+            (q,) = res
+            tg = _t("end_effector_pose_gradient", "grid_rbd_jax_end_effector_pose_gradient")
+            raw = jax.ffi.ffi_call(tg, self._out(q, 6 * nee * nv), vmap_method=VM)(q)
+            # mirror the public reshape: (NEE, NV, 6) → (6*NEE, NV) row-major.
+            J = (raw.reshape(q.shape[:-1] + (nee, nv, 6))
+                    .swapaxes(-2, -1)
+                    .reshape(q.shape[:-1] + (6 * nee, nv)))
+            gq = jnp.einsum('...o,...oi->...i', ct, J)  # cols index NV(=NJ fixed-base)
+            return (gq,)
+
+        eepose.defvjp(ee_fwd, ee_bwd)
+
+        d = {"forward_dynamics": fd, "inverse_dynamics": idyn, "end_effector_pose": eepose}
+        self._diff_cache = d
+        return d
+
     # ─── algorithm methods ───────────────────────────────────────────────
 
     def inverse_dynamics(self, q, qd, *, gravity: float = -9.81):
@@ -151,15 +292,13 @@ class JaxRobotHandle:
 
         ``q``, ``qd``: jax.Array shape (B, NJ), dtype float32.
         Returns shape (B, NJ).
+
+        Differentiable (``jax.grad`` / ``jax.jacobian`` / ``jax.vjp`` w.r.t.
+        ``q``, ``qd``) via GRiD's analytic ``inverse_dynamics_gradient``, and
+        ``jax.vmap``-able over the leading batch axis.
         """
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        target = _register_method_target(
-            self._so_path, self._cache_key, "inverse_dynamics", "grid_rbd_jax_inverse_dynamics")
         (q, qd), B = self._prep_2d("inverse_dynamics", q, qd)
-        out_type = jax.ShapeDtypeStruct(q.shape, jnp.float32)
-        return jax.ffi.ffi_call(target, out_type)(q, qd, gravity=np.float32(gravity))
+        return self._differentiable()["inverse_dynamics"](gravity, q, qd)
 
     def minv(self, q):
         """Direct mass-matrix inverse Minv(q). Returns (B, NJ, NJ).
@@ -174,23 +313,22 @@ class JaxRobotHandle:
             self._so_path, self._cache_key, "minv", "grid_rbd_jax_minv")
         (q,), B = self._prep_2d("minv", q)
         nj = self.num_joints
-        out_type = jax.ShapeDtypeStruct((B, nj, nj), jnp.float32)
-        m = jax.ffi.ffi_call(target, out_type)(q)
+        flat = jax.ffi.ffi_call(target, self._out(q, nj * nj), vmap_method="broadcast_all")(q)
+        m = flat.reshape(q.shape[:-1] + (nj, nj))
         # Kernel fills the lower triangle; symmetrize as M + Mᵀ − diag(M).
         eye = jnp.eye(nj, dtype=m.dtype)
         return m + jnp.swapaxes(m, -1, -2) - m * eye
 
     def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81):
-        """qdd = forward_dynamics(q, qd, u). Returns (B, NJ)."""
-        import jax
-        import jax.numpy as jnp
-        import numpy as np
-        target = _register_method_target(
-            self._so_path, self._cache_key,
-            "forward_dynamics", "grid_rbd_jax_forward_dynamics")
+        """qdd = forward_dynamics(q, qd, u). Returns (B, NJ).
+
+        Differentiable (``jax.grad`` / ``jax.jacobian`` / ``jax.vjp`` w.r.t.
+        ``q``, ``qd``, ``u``) via GRiD's analytic ``forward_dynamics_gradient``
+        (for ∂qdd/∂q, ∂qdd/∂qd) and ``minv`` (∂qdd/∂u = M⁻¹), and
+        ``jax.vmap``-able over the leading batch axis.
+        """
         (q, qd, u), B = self._prep_2d("forward_dynamics", q, qd, u)
-        out_type = jax.ShapeDtypeStruct(q.shape, jnp.float32)
-        return jax.ffi.ffi_call(target, out_type)(q, qd, u, gravity=np.float32(gravity))
+        return self._differentiable()["forward_dynamics"](gravity, q, qd, u)
 
     def aba(self, q, qd, u, *, gravity: float = -9.81):
         """qdd = aba(q, qd, u) via the articulated body algorithm. Returns (B, NJ)."""
@@ -200,8 +338,9 @@ class JaxRobotHandle:
         target = _register_method_target(
             self._so_path, self._cache_key, "aba", "grid_rbd_jax_aba")
         (q, qd, u), B = self._prep_2d("aba", q, qd, u)
-        out_type = jax.ShapeDtypeStruct(q.shape, jnp.float32)
-        return jax.ffi.ffi_call(target, out_type)(q, qd, u, gravity=np.float32(gravity))
+        out_type = self._out(q, self.num_joints)
+        return jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+            q, qd, u, gravity=np.float32(gravity))
 
     def crba(self, q, *, gravity: float = -9.81):
         """Mass matrix M(q) via composite rigid body algorithm. Returns (B, NJ, NJ)."""
@@ -212,19 +351,19 @@ class JaxRobotHandle:
             self._so_path, self._cache_key, "crba", "grid_rbd_jax_crba")
         (q,), B = self._prep_2d("crba", q)
         nj = self.num_joints
-        out_type = jax.ShapeDtypeStruct((B, nj, nj), jnp.float32)
-        return jax.ffi.ffi_call(target, out_type)(q, gravity=np.float32(gravity))
+        flat = jax.ffi.ffi_call(target, self._out(q, nj * nj), vmap_method="broadcast_all")(
+            q, gravity=np.float32(gravity))
+        return flat.reshape(q.shape[:-1] + (nj, nj))
 
     def end_effector_pose(self, q):
-        """End-effector pose [xyz, rpy] per EE. Returns (B, 6*NUM_EES)."""
-        import jax
-        import jax.numpy as jnp
-        target = _register_method_target(
-            self._so_path, self._cache_key,
-            "end_effector_pose", "grid_rbd_jax_end_effector_pose")
+        """End-effector pose [xyz, rpy] per EE. Returns (B, 6*NUM_EES).
+
+        Differentiable (``jax.grad`` / ``jax.jacobian`` / ``jax.vjp`` w.r.t.
+        ``q``) via GRiD's analytic ``end_effector_pose_gradient`` (tangent-space
+        Jacobian), and ``jax.vmap``-able over the leading batch axis.
+        """
         (q,), B = self._prep_2d("end_effector_pose", q)
-        out_type = jax.ShapeDtypeStruct((B, 6 * self.num_ees), jnp.float32)
-        return jax.ffi.ffi_call(target, out_type)(q)
+        return self._differentiable()["end_effector_pose"](q)
 
     def end_effector_pose_gradient(self, q):
         """End-effector pose Jacobian d/dv (TANGENT space, pinocchio convention).
@@ -245,9 +384,12 @@ class JaxRobotHandle:
         (q,), B = self._prep_2d("end_effector_pose_gradient", q)
         nee = self.num_ees
         nv = self.num_vel
-        out_type = jax.ShapeDtypeStruct((B, 6 * nee * nv), jnp.float32)
-        raw = jax.ffi.ffi_call(target, out_type)(q)
-        return raw.reshape(B, nee, nv, 6).transpose(0, 1, 3, 2).reshape(B, 6 * nee, nv)
+        out_type = self._out(q, 6 * nee * nv)
+        raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(q)
+        lead = q.shape[:-1]
+        return (raw.reshape(lead + (nee, nv, 6))
+                   .swapaxes(-2, -1)
+                   .reshape(lead + (6 * nee, nv)))
 
     def end_effector_pose_hessian(self, q):
         """End-effector pose Hessian d^2(pose)/dv^2 (tangent space, pinocchio convention).
@@ -261,8 +403,9 @@ class JaxRobotHandle:
         (q,), B = self._prep_2d("end_effector_pose_hessian", q)
         nee = self.num_ees
         nv = self.num_vel
-        out_type = jax.ShapeDtypeStruct((B, 6 * nee, nv, nv), jnp.float32)
-        return jax.ffi.ffi_call(target, out_type)(q)
+        out_type = self._out(q, 6 * nee * nv * nv)
+        flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(q)
+        return flat.reshape(q.shape[:-1] + (6 * nee, nv, nv))
 
     def inverse_dynamics_gradient(self, q, qd, *, gravity: float = -9.81):
         """∂c/∂(q, qd) — concatenated [dc_dq | dc_dqd]. Returns (B, NJ, 2*NJ).
@@ -278,10 +421,11 @@ class JaxRobotHandle:
             "inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient")
         (q, qd), B = self._prep_2d("inverse_dynamics_gradient", q, qd)
         nj = self.num_joints
-        out_type = jax.ShapeDtypeStruct((B, 2 * nj * nj), jnp.float32)
-        raw = jax.ffi.ffi_call(target, out_type)(q, qd, gravity=np.float32(gravity))
-        blocks = raw.reshape(B, 2, nj, nj).transpose(0, 1, 3, 2)
-        return jnp.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
+        out_type = self._out(q, 2 * nj * nj)
+        raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+            q, qd, gravity=np.float32(gravity))
+        blocks = raw.reshape(q.shape[:-1] + (2, nj, nj)).swapaxes(-2, -1)
+        return jnp.concatenate([blocks[..., 0, :, :], blocks[..., 1, :, :]], axis=-1)
 
     def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81):
         """∂qdd/∂(q, qd) — concatenated [df_dq | df_dqd]. Returns (B, NJ, 2*NJ)."""
@@ -293,10 +437,11 @@ class JaxRobotHandle:
             "forward_dynamics_gradient", "grid_rbd_jax_forward_dynamics_gradient")
         (q, qd, u), B = self._prep_2d("forward_dynamics_gradient", q, qd, u)
         nj = self.num_joints
-        out_type = jax.ShapeDtypeStruct((B, 2 * nj * nj), jnp.float32)
-        raw = jax.ffi.ffi_call(target, out_type)(q, qd, u, gravity=np.float32(gravity))
-        blocks = raw.reshape(B, 2, nj, nj).transpose(0, 1, 3, 2)
-        return jnp.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
+        out_type = self._out(q, 2 * nj * nj)
+        raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+            q, qd, u, gravity=np.float32(gravity))
+        blocks = raw.reshape(q.shape[:-1] + (2, nj, nj)).swapaxes(-2, -1)
+        return jnp.concatenate([blocks[..., 0, :, :], blocks[..., 1, :, :]], axis=-1)
 
     def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81):
         """Second-order inverse dynamics at joint acceleration ``qdd``.
@@ -318,10 +463,12 @@ class JaxRobotHandle:
             qdd = jnp.zeros_like(jnp.asarray(q, dtype=jnp.float32))
         (q, qd, qdd), B = self._prep_2d("idsva_so", q, qd, qdd)
         nv = self.num_vel
-        out_type = jax.ShapeDtypeStruct((B, 4 * nv ** 3), jnp.float32)
-        flat = jax.ffi.ffi_call(target, out_type)(q, qd, qdd, gravity=np.float32(gravity))
+        out_type = self._out(q, 4 * nv ** 3)
+        flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+            q, qd, qdd, gravity=np.float32(gravity))
+        lead = q.shape[:-1]
         return tuple(
-            flat[:, i * nv ** 3:(i + 1) * nv ** 3].reshape(B, nv, nv, nv)
+            flat[..., i * nv ** 3:(i + 1) * nv ** 3].reshape(lead + (nv, nv, nv))
             for i in range(4)
         )
 
@@ -340,10 +487,12 @@ class JaxRobotHandle:
             "fdsva_so", "grid_rbd_jax_fdsva_so")
         (q, qd, u), B = self._prep_2d("fdsva_so", q, qd, u)
         nv = self.num_vel
-        out_type = jax.ShapeDtypeStruct((B, 4 * nv ** 3), jnp.float32)
-        flat = jax.ffi.ffi_call(target, out_type)(q, qd, u, gravity=np.float32(gravity))
+        out_type = self._out(q, 4 * nv ** 3)
+        flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+            q, qd, u, gravity=np.float32(gravity))
+        lead = q.shape[:-1]
         return tuple(
-            flat[:, i * nv ** 3:(i + 1) * nv ** 3].reshape(B, nv, nv, nv)
+            flat[..., i * nv ** 3:(i + 1) * nv ** 3].reshape(lead + (nv, nv, nv))
             for i in range(4)
         )
 
