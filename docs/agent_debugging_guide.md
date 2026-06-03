@@ -66,7 +66,7 @@ PERF harness records a **bogus-fast timing** the autotune argmin then wrongly pi
   Clamp launches to `cudaFuncGetAttributes().maxThreadsPerBlock` (the register cap, which can be
   BELOW the `__launch_bounds__` thread cap). The benchmarked kernels carry launch_bounds (compiler
   fits registers) so they're safer; un-annotated opt-in kernels are the risk.
-- See `f2_audit_findings.md` §A for the runners still missing this check.
+- Audit any opt-in runners that still omit this error check and add it.
 
 ### 1d. Cross-cutting convention flips miss non-uniform encodings (sign/unit changes)
 Flipping a convention (R5: gravity `+9.81` → `-9.81`) by grepping ONE pattern (`*gravity`) negated
@@ -234,5 +234,4 @@ work serial to "save" SM occupancy. Justify every serial block.
 
 ---
 
-*Linked from HANDOFF.md. Companion: `docs/open-tasks/f2_audit_findings.md` (open systemic-bug
-worklist), `docs/idsva_so_inner_refactor_notes.md` (SO internals + resume hints).*
+*Linked from HANDOFF.md. Companion: `docs/idsva_so_inner_refactor_notes.md` (SO internals + resume hints).*

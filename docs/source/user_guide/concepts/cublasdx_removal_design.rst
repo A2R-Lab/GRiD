@@ -223,8 +223,8 @@ Documentation
   :file:`docs/source/user_guide/tutorials/python_wrappers.rst` —
   remove ``glass_nvidia`` mentions; update install line.
 * :file:`README.md`, :file:`python/README.md` — sweep.
-* :file:`docs/sweep-on-5090.md` — historical, leave intact; add a
-  pointer to this design doc.
+* Any local hardware-specific sweep-results notes — historical, leave
+  intact; add a pointer to this design doc.
 
 Install / build system
 ~~~~~~~~~~~~~~~~~~~~~~~

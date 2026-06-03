@@ -144,9 +144,11 @@ See also
 * `test/benchmarks/README.md
   <https://github.com/A2R-Lab/GRiD/blob/main/test/benchmarks/README.md>`_
   — full bench-harness reference (Pinocchio / MJX / Frax setup, etc.).
-* `docs/sweep-on-5090.md
-  <https://github.com/A2R-Lab/GRiD/blob/main/docs/sweep-on-5090.md>`_
-  — canonical sweep on sm_120 + interpretation notes.
+* To run a full sweep yourself, use the harness under
+  `test/benchmarks/
+  <https://github.com/A2R-Lab/GRiD/tree/main/test/benchmarks>`_;
+  results are written under ``test/benchmarks/results/`` locally
+  (hardware-specific, e.g. sm_120).
 * :doc:`cuda_support_status` — currently exercised CUDA paths.
 * :doc:`../concepts/algorithms/idsva` and :doc:`../concepts/algorithms/fdsva_so`
   — algorithm details.
