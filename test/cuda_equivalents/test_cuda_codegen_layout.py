@@ -237,20 +237,22 @@ def test_fixed_forced_low_shared_header_selects_fallbacks(tmp_path):
     assert "grid_end_l2_persisting" in header
 
 
-# The G0 footgun guard now refuses exactly ONE remaining mimic gradient:
-# floating-base mimic INTEGRATOR gradients (B3 — multi-stage RK stage-projection,
-# deferred). Everything else that was once refused is now SUPPORTED + emits:
-# fixed-base mimic id_du/fd_du + ee grad/hessian (P3/P4) and floating-base mimic
-# id_du/fd_du (B1) + second-order idsva_so/fdsva_so (B2/B4).
+# There are NO remaining refused mimic gradients: the last one — floating-base
+# mimic INTEGRATOR gradients — is now SUPPORTED + emits (B3, reduced-tangent-space
+# stage projection, Euler..RK4 validated conditioning-scoped). Everything once
+# refused now emits: fixed-base mimic id_du/fd_du + ee grad/hessian (P3/P4),
+# floating-base mimic id_du/fd_du (B1), second-order idsva_so/fdsva_so (B2/B4),
+# and floating-base mimic integrator gradients (B3).
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 @pytest.mark.parametrize("base,profile", [("floating", "integrators"), ("floating", "all")])
-def test_mimic_integrator_gradient_codegen_refused_not_zeroed(tmp_path, base, profile):
-    """G0 footgun guard for the ONE remaining unsupported mimic gradient
-    (floating-base mimic integrator gradients, B3): codegen must RAISE a clear
-    NotImplementedError — NOT silently emit zeroed output."""
-    with pytest.raises(NotImplementedError, match="mimic gradients not yet supported"):
-        _generate_header(tmp_path, "fr3", base, codegen_profile=profile)
+def test_mimic_integrator_gradient_codegen_now_emits(tmp_path, base, profile):
+    """The previously-refused floating-base mimic integrator gradient is SUPPORTED
+    now (B3): codegen must EMIT it, not raise — and must NOT silently zero it (the
+    integrator gradient equivalence is validated separately in
+    test_cuda_integrator_equivalence.py)."""
+    header = _generate_header(tmp_path, "fr3", base, codegen_profile=profile)
+    assert "Generated algorithms:" in header
 
 
 @pytest.mark.cuda_equivalence
