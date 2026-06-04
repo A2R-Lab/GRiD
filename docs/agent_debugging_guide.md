@@ -186,6 +186,21 @@ work serial to "save" SM occupancy. Justify every serial block.
   absolute residual at a static sample where the float64 ref cancels to ~0). Gate via the per-robot
   tolerance bucket, NEVER loosen a global tolerance. Confirm it's conditioning (high-energy samples
   agree to ~1e-6 RELATIVE) not a structural bug (which is O(magnitude)).
+- **The RBDReference numpy oracle can be PATHOLOGICALLY SLOW for big mimic robots — it looks like a
+  hang, not a bug.** `crba`/`minv`/`fd` rebuild a fresh `sympy.lambdify` of each joint's transform
+  PER BODY PER CALL (`URDFParser.Joint.get_transformation_matrix_function`), and `fd_grad_at`
+  finite-differences the whole chain ~2·nv × {euler,midpoint,rk3,rk4} × samples — so h1_2 triggered
+  ~1e4–1e5 lambdify builds and the reference took >25 min (SIGABRT'd mid-`lambdify`). FIX: memoize the
+  pure lambdify getters (per-instance `_lambdify_cache`; the mimic multiplier is applied to numeric q
+  BEFORE the call, so the lambda is constant) → 25 min → **0.16 s**, value-identical. Lesson: a
+  "hanging" big-robot equivalence test is often the slow PYTHON oracle, not the CUDA side — `faulthandler`
+  the stack first (see §7). RBDReference already had the pattern (`_spatial_xmat_*_func_cache`); finish
+  it (backlog PS3) and watch for the SAME trap in any per-call pure-sympy rebuild.
+- **Pinocchio 3.9 HAS native mimic** (`JointModelMimic`/`buildReducedModel`). Today's mimic cross-check
+  uses the reduce-the-full-result trick (`expand_q_for_mimic` + `reduce_matrix_for_mimic`, M_red=GᵀMG):
+  valid for M/τ/linear quantities, but **NOT for M⁻¹ or gradients/2nd-order** (reduction and inversion
+  don't commute: M_red⁻¹ ≠ Gᵀ M_full⁻¹ G) — those fall back to RBDReference. To use pin as a full mimic
+  oracle, build pin's NATIVE reduced model so it computes in reduced space directly (backlog PS4).
 
 ---
 
@@ -208,6 +223,35 @@ work serial to "save" SM occupancy. Justify every serial block.
   merely *appends*, so `sys.path.insert(0, '<main>/bindings')` (or `PYTHONPATH`) reliably overrides it
   for validation. The real fix is `pip install -e bindings` from the intended tree. (Sibling of the
   §0/B5 stale-compiled-binary class: always verify you imported the tree you think you did.)
+- **A bare detached `pytest -n6` over the CUDA-equiv suite HANGS and NEVER notifies completion.** The
+  xdist controller wedges (`Sl`, 0 %CPU) after its workers drain on a slow big-robot compile; workers
+  vanish, no progress, no summary. Seen ≥2×. NOT OOM. `pytest-timeout`/`pytest-forked` are NOT
+  installed. FIX: run validation as **sequential coreutils-`timeout`-bounded chunks**, verbose
+  (`for cell: timeout <s> pytest -k $cell -n3 -v -rfE`): no long-lived controller to wedge, a hang is
+  force-killed and the loop continues, `-v` captures each PASS incrementally even if a later chunk
+  times out (EXIT 124 = timeout, NOT a failure — grep `FAILED` to confirm 0 real fails).
+- **Distinguish "slow compile" from "hung" by process inspection, not the dot count.** Slow =
+  `cicc`/`ptxas` at 99 %CPU (R) + staggered `nvcc` ages (youngest started recently) + load avg ≈ workers;
+  the xdist controller being `Sl 0%` is NORMAL (it idles while workers compile). HUNG = zero
+  `nvcc`/`cicc`/`ptxas`, GPU 0 %, controller `Sl 0%`, **log mtime frozen for many minutes**, workers gone.
+- **`faulthandler` pinpoints WHERE a process is stuck.** Run `timeout --signal=ABRT <s> python -X
+  faulthandler -m pytest ...`; on timeout the SIGABRT dumps the live Python stack — instantly tells you
+  codegen-loop vs `subprocess.wait`(nvcc) vs the slow numpy reference (§6) vs `cudaDeviceSynchronize`.
+  This is how the "h1_2 hang" was traced to sympy, not CUDA.
+- **Big-robot (g1/h1_2) second-order kernels compile 20–40 min EACH** (`idsva_so`/`fdsva_so`/
+  `ee_hessian`); a per-robot gate/sweep chunk of ~30 such cells at -n4 will EXIT 124 on a 60 min budget.
+  Budget big-robot chunks generously, or isolate the slow 2nd-order algos into their own long-budget chunk.
+  **It is COMPILATION, not code-generation, that is slow** — Python codegen emits the full `grid.cuh` in
+  ~20 s (fast `ccode` string-printing); the 20–40 min is one `cicc` process (nvcc's NVVM/LLVM optimizer)
+  at 99.9 %CPU, SINGLE-THREADED, on the enormous single-block fully-unrolled kernel (cicc's reg-alloc/
+  sched/LICM scale superlinearly with function size; ptxas is a smaller tail). So: a "stuck" big-robot
+  build = check `cicc` age (a single 60+ min cicc is the pathological threshold; 30–40 min is normal).
+  For DEV iteration on big robots, trade compile-time via the sweep's `--split-compile` /
+  `--ofast-compile {min,mid,max}` / `--ptxas-opt-level` knobs; a MEASURING sweep wants full opt.
+- **Header cache key does NOT hash codegen source** (only schema/robot/nq/nv/urdf) → a comment-only or
+  internal codegen change is cache-invisible. `rm -rf .pytest_cache/grid_cuda` to force a fresh emit when
+  you NEED to test new codegen; conversely, a proven comment-only change reuses the cache validly (the
+  compiled binary is identical) — no wipe needed.
 
 ---
 
@@ -231,6 +275,29 @@ work serial to "save" SM occupancy. Justify every serial block.
   README(s), examples/notebooks, and do the cleanup (names/tokens/dead code/comments). After a rename/
   convention change, grep docs/READMEs/submodule-READMEs for the OLD names/values too — code-only greps
   miss them. Keep it consistent + clean + COMPACT.
+- **Internal renames: prove safety with a before/after HEADER BYTE-DIFF.** Regen the same robots
+  pre- and post-rename and diff the emitted `grid.cuh`. If every delta is a `//`-comment line, the
+  emitted CUDA is functionally IDENTICAL (compiled-identical) → no equivalence re-run needed for those
+  cells. Classify each token: **Tier-1** pure-Python identifiers (byte-identical output) / **Tier-2**
+  abbreviations inside emitted COMMENT strings (`gen_add_func_doc`) (equiv-safe, comment-only diff) /
+  **Tier-3** emitted SYMBOLS — struct fields/buffers (`d_eePos`, `d_did_du_dfext`), printf labels —
+  which are the C-ABI surface referenced by bindings (`wrapper_template.cu`/`_handle.py`) + `printGRiD.cu`
+  + example notebooks; renaming those is high-blast-radius and MUST be a single lockstep change across
+  emit+bindings+printGRiD+examples with full re-validation (NEVER piecemeal). Before a blind substring
+  replace, SENTINEL-PROTECT the Tier-3 emitted symbols so the rename can't corrupt the ABI.
+- **`pkill -f '<pattern>'` can self-terminate the job** if `<pattern>` appears in your OWN command line
+  (the script that runs the pkill). It silently kills the wrapper before the real work runs (empty log,
+  exit 1). Kill by explicit PID (from `ps -C python`/`ps -o pid`), or use `TaskStop` for harness tasks —
+  never a pattern that matches yourself.
+- **Parallel doc/rename agents race on code STATE.** A docs agent that reads the codegen attr names
+  *before* a sibling rename-agent commits will "correctly" leave a doc referencing the OLD names — which
+  the rename then makes stale. After any parallel batch where one agent renames symbols another agent
+  documents, the orchestrator must reconcile the docs against the post-rename state.
+- **An agent that dies before committing still leaves its work in the shared tree.** Verify the diff and
+  RE-RUN its validation yourself (don't trust its claimed numbers), then commit sole-committer,
+  path-scoped. Background agents/jobs survive `/compact`; but a SILENT hang (e.g. wedged xdist, §7) never
+  notifies — put a watchdog on every long job (poll for a done-marker / process-death / a timeout, and
+  re-snapshot).
 
 ---
 
