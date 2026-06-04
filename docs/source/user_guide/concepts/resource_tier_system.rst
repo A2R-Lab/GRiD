@@ -578,8 +578,9 @@ above were the final pieces):
     fitting ``cuda_target_lite_shared_mem_bytes`` (~48 KB), clamped to
     ``≥`` PERF; MINIMAL is always the most-spill index.
   - Five algos now populate ``self.<algo>_spill_tier_3way`` plus
-    ``self.<algo>_t_count_per_tier`` (3-tuple of arena t_counts): ID_DU,
-    FD_DU, D2EE, FDSVA_SO, IDSVA_SO_BODY_FRAME.
+    ``self.<algo>_t_count_per_tier`` (3-tuple of arena t_counts):
+    ``inverse_dynamics_gradient``, ``forward_dynamics_gradient``,
+    ``end_effector_pose_hessian``, ``fdsva_so``, ``idsva_so_body_frame``.
   - **No emit-path change yet** — existing single-body emission uses
     the PERF pick (= today's behavior). The picks are available for
     introspection by tests + future per-tier emit work.
