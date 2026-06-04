@@ -60,7 +60,7 @@ extern "C" {
                                       float*, int, float);
     // q, out, batch, gravity          — crba
     using fn_crba_t         = int (*)(const float*, float*, int, float);
-    // q, out, batch                   — ee_pose, ee_pose_gradient, ee_pose_hessian
+    // q, out, batch                   — end_effector_pose, end_effector_pose_gradient, end_effector_pose_hessian
     using fn_ee_t           = int (*)(const float*, float*, int);
     // q, pose7_out, batch, use_warp    — fk_batched (pos+quat, one block/warp per sample)
     using fn_fk_batched_t   = int (*)(const float*, float*, int, int);

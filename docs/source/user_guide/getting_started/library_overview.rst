@@ -73,12 +73,14 @@ include:
   ``_inner`` surface takes a ``RESOURCE_TIER`` template parameter defaulting to
   ``TIER_SHARED`` (a deprecated ``TIER_PERF = TIER_SHARED`` alias is kept). See
   :doc:`../concepts/resource_tier_system`.
-* **Mimic joints:** non-gradient algorithms support mimic robots, and most
-  gradient codegen now folds correctly to the reduced coordinates — ``inverse_dynamics_gradient`` /
-  ``forward_dynamics_gradient`` (both bases), ``end_effector_pose_gradient`` /
-  ``end_effector_pose_hessian`` (both bases),
-  and fixed-base second-order (``idsva_so`` / ``fdsva_so``). The remaining
-  selections (integrator gradients and ``f_ext`` gradients on either base, plus
-  floating-base second-order) still raise a clear ``NotImplementedError`` rather
-  than emitting silently-zeroed gradients (the rest is on the roadmap).
+* **Mimic joints:** non-gradient algorithms support mimic robots, and **every**
+  gradient codegen now folds correctly to the reduced coordinates on both bases —
+  ``inverse_dynamics_gradient`` / ``forward_dynamics_gradient``,
+  ``end_effector_pose_gradient`` / ``end_effector_pose_hessian``, the second-order
+  ``idsva_so`` / ``fdsva_so``, the external-force gradients (``f_ext_gradient``),
+  and the integrator gradients. No mimic gradient raises ``NotImplementedError``
+  anymore. The one remaining mimic gap is the centroidal kinematics family
+  (``com`` / ``ccrba`` / ``energy``), whose per-body Jacobian fold is not yet
+  mimic-reduced, so those keys are skipped for mimic robots and remain on the
+  roadmap.
 

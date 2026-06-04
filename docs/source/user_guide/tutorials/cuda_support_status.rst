@@ -95,16 +95,17 @@ Known Caveats
   baselines. Tiers are now named ``TIER_SHARED`` (default) / ``TIER_LITE`` /
   ``TIER_MINIMAL``; ``TIER_PERF`` remains as a deprecated alias of
   ``TIER_SHARED``. See :doc:`../concepts/resource_tier_system`.
-* Robots with **mimic joints**: non-gradient algorithms are supported, and most
-  gradients now emit a correct mimic-reduced result — ``inverse_dynamics_gradient`` /
-  ``forward_dynamics_gradient`` (both bases), ``end_effector_pose_gradient`` /
-  ``end_effector_pose_hessian`` (both bases), and fixed-base
-  second-order (``idsva_so`` / ``fdsva_so``). The still-unsupported selections
-  (integrator gradients and ``f_ext`` gradients on either base, and floating-base
-  second-order) raise a clear ``NotImplementedError`` rather than emitting
-  silently-zeroed gradients (the rest of the mimic-gradient fold is on the
-  roadmap).
-* External-force **gradients** are wired for non-mimic robots: ``f_ext_gradient``
+* Robots with **mimic joints**: non-gradient algorithms are supported, and
+  **every** gradient now emits a correct mimic-reduced result on both bases —
+  ``inverse_dynamics_gradient`` / ``forward_dynamics_gradient``,
+  ``end_effector_pose_gradient`` / ``end_effector_pose_hessian``, the second-order
+  ``idsva_so`` / ``fdsva_so``, the external-force gradients (``f_ext_gradient``),
+  and the integrator gradients. No mimic gradient raises ``NotImplementedError``
+  anymore. The one remaining mimic gap is the centroidal kinematics family
+  (``com`` / ``ccrba`` / ``energy``), whose per-body Jacobian fold is not yet
+  mimic-reduced, so those keys are skipped for mimic robots and remain on the
+  roadmap.
+* External-force **gradients**: ``f_ext_gradient``
   (∂τ/∂f_ext = −Jᵀ, ∂q̈/∂f_ext = M⁻¹Jᵀ) and the fixed-base ``f_ext_gradient_dq``
-  (−∂Jᵀ/∂q), both with CUDA equivalence tests. On mimic robots they still raise
-  ``NotImplementedError`` (the mimic-reduced f_ext-gradient fold is on the roadmap).
+  (−∂Jᵀ/∂q), both with CUDA equivalence tests, and both now fold correctly to the
+  reduced coordinates on mimic robots as well.

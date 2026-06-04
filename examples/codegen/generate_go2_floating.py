@@ -35,7 +35,7 @@ def main():
             "kinematics-derivatives",
             "all",
         ],
-        help="Generated code profile. Use kinematics-derivatives or all for floating eepose gradients/Hessians.",
+        help="Generated code profile. Use kinematics-derivatives or all for floating end-effector-pose gradients/Hessians.",
     )
     args = parser_args.parse_args()
     output_path = Path(args.output)
@@ -59,7 +59,7 @@ def main():
     print()
     print("Next steps:")
     print("  1. Compile a CUDA program against the generated header")
-    print("  2. Use --profile kinematics-derivatives to include floating eepose derivatives")
+    print("  2. Use --profile kinematics-derivatives to include floating end-effector-pose derivatives")
     print("  3. Use test/benchmarks/baselines/grid/run.py for benchmark slices")
 
 

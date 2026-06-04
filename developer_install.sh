@@ -29,11 +29,12 @@ fi
 "${VENV_DIR}/bin/python" -m pip install -r "${SCRIPT_DIR}/requirements-dev.txt"
 "${VENV_DIR}/bin/python" -m pip install -r "${SCRIPT_DIR}/docs/requirements.txt"
 
-# Optional: install CppADCodeGen so Pinocchio's code-generated algos (FD,
-# FD_DU, IDSVA_SO, FDSVA_SO) populate in the multi-version benchmark. Without
-# it, the Pinocchio harness still works for direct algos (ID, ABA, CRBA,
-# ee_pose, ee_pose_gradient, ID_DU) and the benchmark renders the codegen
-# cells as `—`. Skip with `SKIP_CPPADCG_INSTALL=1`.
+# Optional: install CppADCodeGen so Pinocchio's code-generated algos
+# (forward_dynamics, forward_dynamics_gradient, idsva_so, fdsva_so) populate in
+# the multi-version benchmark. Without it, the Pinocchio harness still works for
+# direct algos (inverse_dynamics, aba, crba, end_effector_pose,
+# end_effector_pose_gradient, inverse_dynamics_gradient) and the benchmark
+# renders the codegen cells as `—`. Skip with `SKIP_CPPADCG_INSTALL=1`.
 #
 # CppADCodeGen is header-only but not in apt; we clone + cmake-install to
 # /usr/local. Its parent (CppAD) IS available via apt as `libcppad-dev`.
