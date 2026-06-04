@@ -118,6 +118,8 @@ class JaxRobotHandle:
     @property
     def num_ees(self) -> int:     return self._base.num_ees
     @property
+    def num_bodies(self) -> int:  return self._base.num_bodies
+    @property
     def floating_base(self) -> bool: return self._base.floating_base
     @property
     def max_batch(self) -> int:   return self._base.max_batch
@@ -281,7 +283,92 @@ class JaxRobotHandle:
 
         eepose.defvjp(ee_fwd, ee_bwd)
 
-        d = {"forward_dynamics": fd, "inverse_dynamics": idyn, "end_effector_pose": eepose}
+        nb = self._base.num_bodies
+        npar = 10 * nb  # 10 standard inertial params per link
+
+        # ── inverse_dynamics w.r.t. inertial params pi (sysID): the forward op
+        #    is the bias c = ID(q,qd,qdd=0), which is AFFINE in pi with Jacobian
+        #    the joint-torque regressor Y(q,qd,qdd=0). pi enters as a
+        #    differentiable input whose VALUE the forward pass ignores (the .so
+        #    carries the baked-in inertia); its cotangent is Yᵀ·ct. This is the
+        #    linearization around the compiled model — exactly the outer-loop
+        #    sysID gradient. q/qd cotangents still flow via id_gradient. ───────
+        @functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
+        def idyn_pi(gravity, q, qd, params):
+            # forward output is independent of `params` value (baked-in inertia);
+            # multiply-add by 0 keeps `params` in the trace for custom_vjp.
+            del params
+            t = _t("inverse_dynamics", "grid_rbd_jax_inverse_dynamics")
+            return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
+                q, qd, gravity=np.float32(gravity))
+
+        def id_pi_fwd(gravity, q, qd, params):
+            return idyn_pi(gravity, q, qd, params), (q, qd)
+
+        def id_pi_bwd(gravity, res, ct):
+            q, qd = res
+            # q/qd cotangents (analytic id_gradient).
+            tg = _t("inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient")
+            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nj * nj), vmap_method=VM)(
+                q, qd, gravity=np.float32(gravity))
+            blocks = flat.reshape(q.shape[:-1] + (2, nj, nj)).swapaxes(-2, -1)
+            dc_dq, dc_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
+            gq = jnp.einsum('...o,...oi->...i', ct, dc_dq)
+            gqd = jnp.einsum('...o,...oi->...i', ct, dc_dqd)
+            # pi cotangent: ct · Y, Y = ∂c/∂pi (NV x 10*NB) at qdd=0.
+            tr = _t("inverse_dynamics_regressor", "grid_rbd_jax_inverse_dynamics_regressor")
+            qdd0 = jnp.zeros_like(q)
+            Yflat = jax.ffi.ffi_call(tr, self._out(q, nj * npar), vmap_method=VM)(
+                q, qd, qdd0, gravity=np.float32(gravity))
+            Y = Yflat.reshape(q.shape[:-1] + (nj, npar))  # row-major (NV, 10NB)
+            gpi = jnp.einsum('...o,...op->...p', ct, Y)
+            return (gq, gqd, gpi)
+
+        idyn_pi.defvjp(id_pi_fwd, id_pi_bwd)
+
+        # ── forward_dynamics w.r.t. inertial params pi: qdd = FD(q,qd,u);
+        #    ∂qdd/∂pi = -Minv · Y(q,qd,qdd_actual) (the analytic
+        #    forward_dynamics_parameter_gradient kernel). q/qd/u cotangents flow
+        #    exactly as the plain fd VJP. ───────────────────────────────────────
+        @functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
+        def fd_pi(gravity, q, qd, u, params):
+            del params
+            t = _t("forward_dynamics", "grid_rbd_jax_forward_dynamics")
+            return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
+                q, qd, u, gravity=np.float32(gravity))
+
+        def fd_pi_fwd(gravity, q, qd, u, params):
+            return fd_pi(gravity, q, qd, u, params), (q, qd, u)
+
+        def fd_pi_bwd(gravity, res, ct):
+            q, qd, u = res
+            tg = _t("forward_dynamics_gradient", "grid_rbd_jax_forward_dynamics_gradient")
+            tm = _t("minv", "grid_rbd_jax_minv")
+            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nj * nj), vmap_method=VM)(
+                q, qd, u, gravity=np.float32(gravity))
+            blocks = flat.reshape(q.shape[:-1] + (2, nj, nj)).swapaxes(-2, -1)
+            df_dq, df_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
+            mflat = jax.ffi.ffi_call(tm, self._out(q, nj * nj), vmap_method=VM)(
+                q, gravity=np.float32(gravity))
+            m = mflat.reshape(q.shape[:-1] + (nj, nj))
+            eye = jnp.eye(nj, dtype=m.dtype)
+            minv = m + jnp.swapaxes(m, -1, -2) - m * eye
+            gq = jnp.einsum('...o,...oi->...i', ct, df_dq)
+            gqd = jnp.einsum('...o,...oi->...i', ct, df_dqd)
+            gu = jnp.einsum('...o,...oi->...i', ct, minv)
+            # pi cotangent: ct · (∂qdd/∂pi), ∂qdd/∂pi = -Minv·Y (NV x 10*NB).
+            tp = _t("forward_dynamics_parameter_gradient",
+                    "grid_rbd_jax_forward_dynamics_parameter_gradient")
+            Gflat = jax.ffi.ffi_call(tp, self._out(q, nj * npar), vmap_method=VM)(
+                q, qd, u, gravity=np.float32(gravity))
+            G = Gflat.reshape(q.shape[:-1] + (nj, npar))  # row-major (NV, 10NB)
+            gpi = jnp.einsum('...o,...op->...p', ct, G)
+            return (gq, gqd, gu, gpi)
+
+        fd_pi.defvjp(fd_pi_fwd, fd_pi_bwd)
+
+        d = {"forward_dynamics": fd, "inverse_dynamics": idyn, "end_effector_pose": eepose,
+             "inverse_dynamics_wrt_params": idyn_pi, "forward_dynamics_wrt_params": fd_pi}
         self._diff_cache = d
         return d
 
@@ -329,6 +416,78 @@ class JaxRobotHandle:
         """
         (q, qd, u), B = self._prep_2d("forward_dynamics", q, qd, u)
         return self._differentiable()["forward_dynamics"](gravity, q, qd, u)
+
+    def inverse_dynamics_wrt_params(self, q, qd, params, *, gravity: float = -9.81):
+        """Inverse-dynamics bias c = ID(q, qd, qdd=0), differentiable w.r.t. the
+        per-link inertial parameters ``params`` (π) as well as ``q``/``qd``.
+
+        ``params``: (B, 10*NUM_BODIES) — per-link [m, m*c(3), I_O(6)] in the
+        parser's origin-frame basis (same as ``RBDReference._regressor`` and the
+        ``inverse_dynamics_regressor`` Y). The FORWARD value is independent of
+        ``params`` (the compiled ``.so`` carries the baked-in inertia); the op
+        exists so ``jax.grad``/``jax.vjp`` can flow the analytic
+        ``∂c/∂π = Y(q,qd,qdd=0)`` (regressor) to ``params``. This is the
+        linearization of the bias around the compiled model — the outer-loop
+        system-ID gradient. ``q``/``qd`` gradients are unchanged.
+
+        Returns (B, NJ). ``jax.vmap``-able over the leading batch axis.
+        """
+        (q, qd), B = self._prep_2d("inverse_dynamics_wrt_params", q, qd)
+        import jax.numpy as jnp
+        params = jnp.asarray(params, dtype=jnp.float32)
+        return self._differentiable()["inverse_dynamics_wrt_params"](gravity, q, qd, params)
+
+    def forward_dynamics_wrt_params(self, q, qd, u, params, *, gravity: float = -9.81):
+        """Forward dynamics qdd = FD(q, qd, u), differentiable w.r.t. the per-link
+        inertial parameters ``params`` (π) as well as ``q``/``qd``/``u``.
+
+        ``params``: (B, 10*NUM_BODIES) — see :meth:`inverse_dynamics_wrt_params`.
+        The forward value is independent of ``params`` (baked-in inertia); the
+        VJP flows the analytic ``∂qdd/∂π = -M⁻¹·Y`` (the
+        ``forward_dynamics_parameter_gradient`` kernel) to ``params``.
+        ``q``/``qd``/``u`` gradients are unchanged.
+
+        Returns (B, NJ). ``jax.vmap``-able over the leading batch axis.
+        """
+        (q, qd, u), B = self._prep_2d("forward_dynamics_wrt_params", q, qd, u)
+        import jax.numpy as jnp
+        params = jnp.asarray(params, dtype=jnp.float32)
+        return self._differentiable()["forward_dynamics_wrt_params"](gravity, q, qd, u, params)
+
+    def inverse_dynamics_regressor(self, q, qd, qdd=None, *, gravity: float = -9.81):
+        """Joint-torque regressor Y with τ = Y·π (∂τ/∂π). Returns
+        (B, NJ, 10*NUM_BODIES). ``qdd=None`` ⇒ zeros (the bias regressor used by
+        :meth:`inverse_dynamics_wrt_params`). Row-major (NV, 10*NB) per sample;
+        the per-link basis is [m, m*c(3), I_O(6)]."""
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        target = _register_method_target(
+            self._so_path, self._cache_key,
+            "inverse_dynamics_regressor", "grid_rbd_jax_inverse_dynamics_regressor")
+        if qdd is None:
+            qdd = jnp.zeros_like(jnp.asarray(q, dtype=jnp.float32))
+        (q, qd, qdd), B = self._prep_2d("inverse_dynamics_regressor", q, qd, qdd)
+        nj, npar = self.num_joints, 10 * self.num_bodies
+        flat = jax.ffi.ffi_call(target, self._out(q, nj * npar), vmap_method="broadcast_all")(
+            q, qd, qdd, gravity=np.float32(gravity))
+        return flat.reshape(q.shape[:-1] + (nj, npar))
+
+    def forward_dynamics_parameter_gradient(self, q, qd, u, *, gravity: float = -9.81):
+        """FD inertial-parameter gradient ∂qdd/∂π = -M⁻¹·Y. Returns
+        (B, NJ, 10*NUM_BODIES), row-major (NV, 10*NB) per sample."""
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        target = _register_method_target(
+            self._so_path, self._cache_key,
+            "forward_dynamics_parameter_gradient",
+            "grid_rbd_jax_forward_dynamics_parameter_gradient")
+        (q, qd, u), B = self._prep_2d("forward_dynamics_parameter_gradient", q, qd, u)
+        nj, npar = self.num_joints, 10 * self.num_bodies
+        flat = jax.ffi.ffi_call(target, self._out(q, nj * npar), vmap_method="broadcast_all")(
+            q, qd, u, gravity=np.float32(gravity))
+        return flat.reshape(q.shape[:-1] + (nj, npar))
 
     def aba(self, q, qd, u, *, gravity: float = -9.81):
         """qdd = aba(q, qd, u) via the articulated body algorithm. Returns (B, NJ)."""

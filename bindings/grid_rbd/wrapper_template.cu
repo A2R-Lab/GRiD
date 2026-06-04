@@ -1719,6 +1719,129 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 
+// ────────────────────────────────────────────────────────────────────────────
+// Inertial-parameter regressor surface (PS2a — sysID autodiff)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Both outputs are row-major (NV x 10*NUM_BODIES) per timestep, where the
+// per-link 10-parameter basis is pi_i = [m, m*c(3), I_O(6)] (the parser's
+// origin-frame inertia; matches RBDReference._regressor). These back the
+// inertial-parameter VJP: tau = Y . pi so dtau/dpi = Y, and
+// dqdd/dpi = -Minv . Y. The Python custom_vjp contracts a cotangent ct (NV)
+// with these (NV x 10NB) Jacobians to produce the pi-cotangent (10NB).
+
+// inverse_dynamics_regressor(q, qd, qdd) → Y  flat (B, NV*10*NUM_BODIES).
+// qdd is passed explicitly (the bias regressor used by inverse_dynamics's VJP
+// passes zeros). The regressor kernel reads q|qd|qdd from d_q_qd_u (stride
+// Q_QD_U_STRIDE), the qdd occupying the u-slot — mirroring idsva_so.
+static ffi::Error grid_rbd_jax_inverse_dynamics_regressor_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q,
+    ffi::Buffer<ffi::F32> qd,
+    ffi::Buffer<ffi::F32> qdd,
+    ffi::ResultBuffer<ffi::F32> Y_out,
+    float gravity)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    GRID_RBD_FFI_VALIDATE_2D(q, "inverse_dynamics_regressor: q", grid::NUM_JOINTS);
+    int batch = (int)q.dimensions()[0];
+    int nj    = grid::NUM_JOINTS;
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("inverse_dynamics_regressor: batch > max_batch");
+
+    const size_t row_bytes = nj * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],    dst_pitch,
+                      q.typed_data(),          row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj],   dst_pitch,
+                      qd.typed_data(),         row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj], dst_pitch,
+                      qdd.typed_data(),        row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+
+    constexpr int stride_q_qd_qdd = 3 * grid::NUM_JOINTS;
+    const int out_size = grid::NUM_VEL * 10 * grid::NUM_BODIES;
+    grid::inverse_dynamics_regressor_kernel<T><<<
+        g_block_dimms, g_thread_dimms,
+        grid::INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        stream>>>(
+            g_data->d_Y, g_data->d_q_qd_u, stride_q_qd_qdd,
+            g_robot, /*gravity=*/gravity, batch);
+
+    cudaMemcpyAsync(Y_out->typed_data(), g_data->d_Y,
+                    (size_t)batch * out_size * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_inverse_dynamics_regressor,
+    grid_rbd_jax_inverse_dynamics_regressor_impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+        .Attr<float>("gravity")
+);
+
+
+// forward_dynamics_parameter_gradient(q, qd, u) → dqdd/dpi = -Minv . Y
+// flat (B, NV*10*NUM_BODIES). Internally runs FD at (q,qd,u) and the regressor
+// at the resulting qdd, then applies -Minv (mirrors RBDReference). The kernel
+// takes d_workspace (the s_Y regressor scratch spills there at LITE/MINIMAL).
+static ffi::Error grid_rbd_jax_forward_dynamics_parameter_gradient_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q,
+    ffi::Buffer<ffi::F32> qd,
+    ffi::Buffer<ffi::F32> u,
+    ffi::ResultBuffer<ffi::F32> dqdd_dpi_out,
+    float gravity)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    GRID_RBD_FFI_VALIDATE_2D(q, "forward_dynamics_parameter_gradient: q", grid::NUM_JOINTS);
+    int batch = (int)q.dimensions()[0];
+    int nj    = grid::NUM_JOINTS;
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("forward_dynamics_parameter_gradient: batch > max_batch");
+
+    const size_t row_bytes = nj * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],    dst_pitch,
+                      q.typed_data(),          row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj],   dst_pitch,
+                      qd.typed_data(),         row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj], dst_pitch,
+                      u.typed_data(),          row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+
+    constexpr int stride_q_qd_u = 3 * grid::NUM_JOINTS;
+    const int out_size = grid::NUM_VEL * 10 * grid::NUM_BODIES;
+    grid::forward_dynamics_parameter_gradient_kernel<T><<<
+        g_block_dimms, g_thread_dimms,
+        grid::FORWARD_DYNAMICS_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        stream>>>(
+            g_data->d_dqdd_dpi, g_data->d_workspace, g_data->d_q_qd_u, stride_q_qd_u,
+            g_robot, /*gravity=*/gravity, batch);
+
+    cudaMemcpyAsync(dqdd_dpi_out->typed_data(), g_data->d_dqdd_dpi,
+                    (size_t)batch * out_size * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_forward_dynamics_parameter_gradient,
+    grid_rbd_jax_forward_dynamics_parameter_gradient_impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+        .Attr<float>("gravity")
+);
+
+
 // Integrator. dt + it are FFI attributes (runtime scalars; gravity is the
 // standard constant). q/qd/u are packed D→D like aba; the integrator kernels
 // are launched directly on the JAX stream.
