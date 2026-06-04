@@ -196,11 +196,17 @@ work serial to "save" SM occupancy. Justify every serial block.
   "hanging" big-robot equivalence test is often the slow PYTHON oracle, not the CUDA side — `faulthandler`
   the stack first (see §7). RBDReference already had the pattern (`_spatial_xmat_*_func_cache`); finish
   it (backlog PS3) and watch for the SAME trap in any per-call pure-sympy rebuild.
-- **Pinocchio 3.9 HAS native mimic** (`JointModelMimic`/`buildReducedModel`). Today's mimic cross-check
-  uses the reduce-the-full-result trick (`expand_q_for_mimic` + `reduce_matrix_for_mimic`, M_red=GᵀMG):
-  valid for M/τ/linear quantities, but **NOT for M⁻¹ or gradients/2nd-order** (reduction and inversion
-  don't commute: M_red⁻¹ ≠ Gᵀ M_full⁻¹ G) — those fall back to RBDReference. To use pin as a full mimic
-  oracle, build pin's NATIVE reduced model so it computes in reduced space directly (backlog PS4).
+- **Mimic reduction commutes — the fold IS exact (corrected via PS4).** URDF `<mimic>` is ALWAYS linear
+  (`q_m = mult·q_t + offset`), so the coupling Jacobian **G is CONSTANT**. Therefore reduction commutes with
+  BOTH inversion and differentiation: the existing fold path computes `minv = inv(GᵀMG)` (the correct reduced
+  inverse, NOT `Gᵀ M_full⁻¹ G`) and the reduced GRADIENTS are likewise exact (validated to ~1e-13 vs both a
+  native-reduced-RNEA finite-difference and the numpy oracle on fr3). So the earlier "reduction⊥inversion don't
+  commute" worry was WRONG for linear mimic. **Pinocchio 3.9 native mimic** (`pin.transformJointIntoMimic` —
+  NOT `buildReducedModel`, which *locks* DoF instead of coupling) gives an INDEPENDENT reduced-space oracle,
+  but pin 3.9 only supports `crba`/`rnea`/`generalizedGravity` on a mimic model — `computeMinverse`/`aba`/
+  `compute{RNEA,ABA}Derivatives` RAISE "does not support Joint Mimic". So native mimic = a clean independent
+  oracle for **crba/minv only**; gradients/2nd-order stay on the (provably-exact) fold. (RBDReference
+  `pinocchio_backend.py` now routes mimic minv/crba through the native model; PS4 commit `c9883da`.)
 
 ---
 
