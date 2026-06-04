@@ -88,7 +88,7 @@ void run() {
     // the q-coordinate as the column (matches the kernel layout
     // [ (row v_j) + nv*(6NB col) + nv*6NB*qi ]).
     grid::f_ext_gradient_dq<T>(hd_data, d_robotModel, 1, block_dimms, thread_dimms, streams);
-    print_matrix_col_major("f_ext_gradient_did_du_dfext_dq", hd_data->h_did_du_dfext, out_each, nv);
+    print_matrix_col_major("f_ext_gradient_did_du_dfext_dq", hd_data->h_f_ext_gradient_dq, out_each, nv);
 #else
     (void) out_each;
 #endif

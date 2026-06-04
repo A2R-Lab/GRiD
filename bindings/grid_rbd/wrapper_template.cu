@@ -282,7 +282,7 @@ extern "C" int grid_rbd_end_effector_pose(
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
 
-    std::memcpy(ee_out, g_data->h_eePos, batch * 6 * grid::NUM_EES * sizeof(T));
+    std::memcpy(ee_out, g_data->h_end_effector_pose, batch * 6 * grid::NUM_EES * sizeof(T));
     return 0;
 }
 
@@ -352,7 +352,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient(
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
 
-    std::memcpy(dee_out, g_data->h_deePos,
+    std::memcpy(dee_out, g_data->h_end_effector_pose_gradient,
                 batch * 6 * grid::NUM_EES * nv * sizeof(T));
     return 0;
 }
@@ -416,8 +416,8 @@ extern "C" int grid_rbd_forward_dynamics_gradient(
 }
 
 // End-effector pose Hessian: 6×NUM_EES×NV×NV per timestep (d^2/dv^2 tangent).
-// Calls grid::end_effector_pose_hessian which fills BOTH d2eePos AND
-// deePos; we only copy d2eePos out. If the caller wants both they should
+// Calls grid::end_effector_pose_hessian which fills BOTH end_effector_pose_hessian AND
+// end_effector_pose_gradient; we only copy end_effector_pose_hessian out. If the caller wants both they should
 // call end_effector_pose_gradient separately (the kernels are fast enough
 // that doing the work twice is fine for a small convenience).
 extern "C" int grid_rbd_end_effector_pose_hessian(
@@ -438,7 +438,7 @@ extern "C" int grid_rbd_end_effector_pose_hessian(
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
 
-    std::memcpy(d2ee_out, g_data->h_d2eePos,
+    std::memcpy(d2ee_out, g_data->h_end_effector_pose_hessian,
                 batch * 6 * grid::NUM_EES * nv * nv * sizeof(T));
     return 0;
 }
@@ -751,8 +751,8 @@ struct PlantBuffers {
     T* d_out    = nullptr;   // scalar cost (1 per timestep)
     T* d_grad   = nullptr;   // gradient / dAB ([A|B], 2*NV*3*NV)
     T* d_hess   = nullptr;   // dense hessian / hess-diagonal
-    T* d_eePos  = nullptr;   // ee-pose / com / ccrba scratch (reused per call)
-    T* d_deePos = nullptr;   // ee-jacobian scratch
+    T* d_end_effector_pose  = nullptr;   // ee-pose / com / ccrba scratch (reused per call)
+    T* d_end_effector_pose_gradient = nullptr;   // ee-jacobian scratch
     bool allocated = false;
 };
 static PlantBuffers g_plant;
@@ -773,7 +773,7 @@ static int plant_alloc() {
                                 (size_t)(2 * nv) * (size_t)(3 * nv));
     // d_grad doubles as the plant_step x_kp1 (nx) reuse AND must NOT be confused
     // with the gradient size; the cost grads are <= nx, so vec covers it.
-    // d_eePos is reused as the com (3+3*nv) / ccrba (6*nv+6) device scratch.
+    // d_end_effector_pose is reused as the com (3+3*nv) / ccrba (6*nv+6) device scratch.
     const size_t kin_scratch = std::max((size_t)(6 * nee),
                                 std::max((size_t)(3 + 3 * nv), (size_t)(6 * nv + 6)));
     auto ok = [](cudaError_t e){ return e == cudaSuccess; };
@@ -784,8 +784,8 @@ static int plant_alloc() {
     good &= ok(cudaMalloc(&g_plant.d_out,   B * sizeof(T)));
     good &= ok(cudaMalloc(&g_plant.d_grad,  B * mat * sizeof(T)));
     good &= ok(cudaMalloc(&g_plant.d_hess,  B * mat * sizeof(T)));
-    good &= ok(cudaMalloc(&g_plant.d_eePos, B * kin_scratch * sizeof(T)));
-    good &= ok(cudaMalloc(&g_plant.d_deePos, B * (size_t)(6 * nv * nee) * sizeof(T)));
+    good &= ok(cudaMalloc(&g_plant.d_end_effector_pose, B * kin_scratch * sizeof(T)));
+    good &= ok(cudaMalloc(&g_plant.d_end_effector_pose_gradient, B * (size_t)(6 * nv * nee) * sizeof(T)));
     if (!good) return 1;
     g_plant.allocated = true;
     return 0;
@@ -943,7 +943,7 @@ extern "C" int grid_plant_ee_pos_cost(
     grid_plant::ee_pos_cost_kernel<T, 0><<<grid_dim, g_thread_dimms, smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
-        g_plant.d_eePos, g_plant.d_deePos, g_robot, batch);
+        g_plant.d_end_effector_pose, g_plant.d_end_effector_pose_gradient, g_robot, batch);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
@@ -973,7 +973,7 @@ extern "C" int grid_plant_com_cost(
     grid_plant::com_cost_kernel<T><<<grid_dim, g_thread_dimms, smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
-        g_plant.d_eePos /*reused as com (3+3*NV) scratch*/, g_robot, batch);
+        g_plant.d_end_effector_pose /*reused as com (3+3*NV) scratch*/, g_robot, batch);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
@@ -1010,7 +1010,7 @@ extern "C" int grid_plant_momentum_cost(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b,
         g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6,
-        g_plant.d_eePos /*reused as ccrba (6*NV+6) scratch*/, g_robot, batch);
+        g_plant.d_end_effector_pose /*reused as ccrba (6*NV+6) scratch*/, g_robot, batch);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
@@ -1361,7 +1361,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 
-// end_effector_pose(q) → eePos  flat (B, 6*NUM_EES)
+// end_effector_pose(q) → end_effector_pose  flat (B, 6*NUM_EES)
 static ffi::Error grid_rbd_jax_end_effector_pose_impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> q,
@@ -1384,10 +1384,10 @@ static ffi::Error grid_rbd_jax_end_effector_pose_impl(
         g_block_dimms, g_thread_dimms,
         grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
-            g_data->d_eePos, g_data->d_q_qd_u, stride_q,
+            g_data->d_end_effector_pose, g_data->d_q_qd_u, stride_q,
             g_robot, batch);
 
-    cudaMemcpyAsync(ee_out->typed_data(), g_data->d_eePos,
+    cudaMemcpyAsync(ee_out->typed_data(), g_data->d_end_effector_pose,
                     batch * 6 * grid::NUM_EES * sizeof(T),
                     cudaMemcpyDeviceToDevice, stream);
     return ffi::Error::Success();
@@ -1403,7 +1403,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 
-// end_effector_pose_gradient(q) → deePos d/dv flat (B, 6*NUM_EES*NV).
+// end_effector_pose_gradient(q) → end_effector_pose_gradient d/dv flat (B, 6*NUM_EES*NV).
 // Output convention: d/dv tangent (pinocchio); floating-base shape uses NV
 // (= 6 + n_joints) NOT NJ. Python side reshapes/transposes to the
 // (B, 6*NUM_EES, NV) row-major convention (see _handle.py).
@@ -1430,10 +1430,10 @@ static ffi::Error grid_rbd_jax_end_effector_pose_gradient_impl(
         g_block_dimms, g_thread_dimms,
         grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
-            g_data->d_deePos, g_data->d_workspace, g_data->d_q_qd_u, stride_q,
+            g_data->d_end_effector_pose_gradient, g_data->d_workspace, g_data->d_q_qd_u, stride_q,
             g_robot, batch);
 
-    cudaMemcpyAsync(dee_out->typed_data(), g_data->d_deePos,
+    cudaMemcpyAsync(dee_out->typed_data(), g_data->d_end_effector_pose_gradient,
                     batch * 6 * grid::NUM_EES * nv * sizeof(T),
                     cudaMemcpyDeviceToDevice, stream);
     return ffi::Error::Success();
@@ -1449,8 +1449,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 
-// end_effector_pose_hessian(q) → d2eePos  flat (B, 6*NUM_EES*NV*NV)
-// The kernel also writes d_deePos as a byproduct; we only return d2.
+// end_effector_pose_hessian(q) → end_effector_pose_hessian  flat (B, 6*NUM_EES*NV*NV)
+// The kernel also writes d_end_effector_pose_gradient as a byproduct; we only return d2.
 static ffi::Error grid_rbd_jax_end_effector_pose_hessian_impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> q,
@@ -1474,10 +1474,10 @@ static ffi::Error grid_rbd_jax_end_effector_pose_hessian_impl(
         g_block_dimms, g_thread_dimms,
         grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
-            g_data->d_d2eePos, g_data->d_deePos, g_data->d_workspace,
+            g_data->d_end_effector_pose_hessian, g_data->d_end_effector_pose_gradient, g_data->d_workspace,
             g_data->d_q_qd_u, stride_q, g_robot, batch);
 
-    cudaMemcpyAsync(d2ee_out->typed_data(), g_data->d_d2eePos,
+    cudaMemcpyAsync(d2ee_out->typed_data(), g_data->d_end_effector_pose_hessian,
                     batch * 6 * grid::NUM_EES * nv * nv * sizeof(T),
                     cudaMemcpyDeviceToDevice, stream);
     return ffi::Error::Success();
@@ -2095,7 +2095,7 @@ static ffi::Error grid_rbd_jax_plant_ee_pos_cost_impl(
     grid_plant::ee_pos_cost_kernel<T, 0><<<grid_dim, g_thread_dimms, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
-        g_plant.d_eePos, g_plant.d_deePos, g_robot, batch);
+        g_plant.d_end_effector_pose, g_plant.d_end_effector_pose_gradient, g_robot, batch);
     cudaMemcpyAsync(out->typed_data(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(grad->typed_data(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(hess->typed_data(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -2131,7 +2131,7 @@ static ffi::Error grid_rbd_jax_plant_com_cost_impl(
     grid_plant::com_cost_kernel<T><<<grid_dim, g_thread_dimms, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
-        g_plant.d_eePos, g_robot, batch);
+        g_plant.d_end_effector_pose, g_robot, batch);
     cudaMemcpyAsync(out->typed_data(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(grad->typed_data(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(hess->typed_data(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -2172,7 +2172,7 @@ static ffi::Error grid_rbd_jax_plant_momentum_cost_impl(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b,
         g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6,
-        g_plant.d_eePos, g_robot, batch);
+        g_plant.d_end_effector_pose, g_robot, batch);
     cudaMemcpyAsync(out->typed_data(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(grad->typed_data(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(hess->typed_data(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -2384,8 +2384,8 @@ torch::Tensor torch_end_effector_pose(torch::Tensor q) {
     auto out = grid_torch_empty(batch, 6 * nee, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::end_effector_pose_kernel<T><<<g_block_dimms, g_thread_dimms, grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
-        g_data->d_eePos, g_data->d_q_qd_u, stride, g_robot, batch);
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_eePos, batch * 6 * nee * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+        g_data->d_end_effector_pose, g_data->d_q_qd_u, stride, g_robot, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_end_effector_pose, batch * 6 * nee * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 
@@ -2399,8 +2399,8 @@ torch::Tensor torch_end_effector_pose_gradient(torch::Tensor q) {
     auto out = grid_torch_empty(batch, 6 * nee * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::end_effector_pose_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
-        g_data->d_deePos, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_deePos, batch * 6 * nee * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+        g_data->d_end_effector_pose_gradient, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_end_effector_pose_gradient, batch * 6 * nee * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 
@@ -2414,8 +2414,8 @@ torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q) {
     auto out = grid_torch_empty(batch, 6 * nee * nv * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::end_effector_pose_hessian_kernel<T><<<g_block_dimms, g_thread_dimms, grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
-        g_data->d_d2eePos, g_data->d_deePos, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_d2eePos, batch * 6 * nee * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+        g_data->d_end_effector_pose_hessian, g_data->d_end_effector_pose_gradient, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_end_effector_pose_hessian, batch * 6 * nee * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 
@@ -2719,7 +2719,7 @@ std::vector<torch::Tensor> torch_ee_pos_cost(torch::Tensor q, torch::Tensor p_de
     dim3 grid_dim((unsigned)batch, 1, 1);
     grid_plant::ee_pos_cost_kernel<T, 0><<<grid_dim, g_thread_dimms, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
-        g_plant.d_eePos, g_plant.d_deePos, g_robot, batch);
+        g_plant.d_end_effector_pose, g_plant.d_end_effector_pose_gradient, g_robot, batch);
     cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(grad.data_ptr<float>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(hess.data_ptr<float>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -2746,7 +2746,7 @@ std::vector<torch::Tensor> torch_com_cost(torch::Tensor q, torch::Tensor p_des, 
     dim3 grid_dim((unsigned)batch, 1, 1);
     grid_plant::com_cost_kernel<T><<<grid_dim, g_thread_dimms, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
-        g_plant.d_eePos, g_robot, batch);
+        g_plant.d_end_effector_pose, g_robot, batch);
     cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(grad.data_ptr<float>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(hess.data_ptr<float>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -2775,7 +2775,7 @@ std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Tensor qd
     dim3 grid_dim((unsigned)batch, 1, 1);
     grid_plant::momentum_cost_kernel<T><<<grid_dim, g_thread_dimms, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b,
-        g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6, g_plant.d_eePos, g_robot, batch);
+        g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6, g_plant.d_end_effector_pose, g_robot, batch);
     cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(grad.data_ptr<float>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(hess.data_ptr<float>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);

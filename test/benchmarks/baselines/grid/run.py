@@ -312,7 +312,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "shared_mem_skip": "FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
     },
     # f_ext gradients (A1). Host wrappers write into gridData's d_dtau_dfext /
-    # d_dqdd_dfext / d_did_du_dfext buffers (allocated in gen_init_gridData), so
+    # d_dqdd_dfext / d_f_ext_gradient_dq buffers (allocated in gen_init_gridData), so
     # the call convention matches the standard (hd_data, d_robotModel, N, ...)
     # shape — no gravity arg (RNEA bias is folded into the kernel) and no extra
     # caller buffer. See GRiDCodeGenerator/algorithms/_f_ext_gradient.py:

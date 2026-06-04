@@ -64,21 +64,21 @@ def main():
 
     if not FLOATING_BASE:
         ee_pos = reference.end_effector_pose(q)
-        print("eepos\n", ee_pos)
+        print("end_effector_pose\n", ee_pos)
 
         if FIXED_TARGET_NAMES != "":
             ee_pos2 = reference.end_effector_pose(q, ee_joint_names=FIXED_TARGET_NAMES)
-            print("eepos-" + FIXED_TARGET_NAMES + "\n", ee_pos2)
+            print("end_effector_pose-" + FIXED_TARGET_NAMES + "\n", ee_pos2)
 
         dee_pos = reference.end_effector_pose_gradient(q)
-        print("deepos\n", dee_pos)
+        print("end_effector_pose_gradient\n", dee_pos)
 
         if FIXED_TARGET_NAMES != "":
             dee_pos2 = reference.end_effector_pose_gradient(q, ee_joint_names=FIXED_TARGET_NAMES)
-            print("deepos-" + FIXED_TARGET_NAMES + "\n", dee_pos2)
+            print("end_effector_pose_gradient-" + FIXED_TARGET_NAMES + "\n", dee_pos2)
 
         d2ee_pos = reference.end_effector_pose_hessian(q)
-        print("d2eepos\n", d2ee_pos)
+        print("end_effector_pose_hessian\n", d2ee_pos)
 
     # Second-order inverse dynamics — auto-dispatched (body-frame for
     # fixed-base, world-frame for floating-base). Both variants are

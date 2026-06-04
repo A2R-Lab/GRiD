@@ -280,7 +280,7 @@ class RobotHandle:
         spatial Jacobian (omega; v) base block, not the older non-standard
         quaternion-derivative columns. Fixed-base shape unchanged (NV == NJ).
 
-        GRiD's `h_deePos` is stored column-major as (6, NUM_EES*NV) per
+        GRiD's `h_end_effector_pose_gradient` is stored column-major as (6, NUM_EES*NV) per
         timestep; we re-orient to (6*NUM_EES, NV) per timestep.
         """
         q = np.ascontiguousarray(q, dtype=np.float32)

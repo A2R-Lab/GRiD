@@ -69,30 +69,30 @@ void test(){
     printf("df_dqd\n");
     printMat<T,grid::NUM_JOINTS,grid::NUM_JOINTS>(&hd_data->h_df_du[grid::NUM_JOINTS*grid::NUM_JOINTS],grid::NUM_JOINTS);
 
-    printf("eePos\n");
+    printf("end_effector_pose\n");
     grid::end_effector_pose<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
-    printMat<T,1,6*grid::NUM_EES>(hd_data->h_eePos,1);
+    printMat<T,1,6*grid::NUM_EES>(hd_data->h_end_effector_pose,1);
 
-    // printf("eePos - for panda_grasptarget_hand\n");
+    // printf("end_effector_pose - for panda_grasptarget_hand\n");
     // grid::end_effector_pose_panda_grasptarget_hand<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
-    // printMat<T,1,6*grid::NUM_EES>(hd_data->h_eePos,1);
+    // printMat<T,1,6*grid::NUM_EES>(hd_data->h_end_effector_pose,1);
 
-    printf("deePos (d/dv tangent, pinocchio convention; 6 x NUM_VEL per ee)\n");
+    printf("end_effector_pose_gradient (d/dv tangent, pinocchio convention; 6 x NUM_VEL per ee)\n");
     grid::end_effector_pose_gradient<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
     for(int ee=0; ee < grid::NUM_EES; ee++){
-        printf("deePos[%d]\n",ee);
-        printMat<T,6,grid::NUM_VEL>(&hd_data->h_deePos[ee*6*grid::NUM_VEL],6);
+        printf("end_effector_pose_gradient[%d]\n",ee);
+        printMat<T,6,grid::NUM_VEL>(&hd_data->h_end_effector_pose_gradient[ee*6*grid::NUM_VEL],6);
     }
 
-    printf("d2eePos\n");
+    printf("end_effector_pose_hessian\n");
     grid::end_effector_pose_hessian<T,false>(hd_data,d_robotModel,1,dim3(1,1,1),dimms,streams);
     for(int ee=0; ee < grid::NUM_EES; ee++){
-        printf("deePos[%d]\n",ee);
-        printMat<T,6,grid::NUM_VEL>(&hd_data->h_deePos[ee*6*grid::NUM_VEL],6);
-        printf("d2eePos[%d]\n",ee);
+        printf("end_effector_pose_gradient[%d]\n",ee);
+        printMat<T,6,grid::NUM_VEL>(&hd_data->h_end_effector_pose_gradient[ee*6*grid::NUM_VEL],6);
+        printf("end_effector_pose_hessian[%d]\n",ee);
         for (int i=0; i < 6; i++){
             int offset = ee*6*grid::NUM_VEL*grid::NUM_VEL + i*grid::NUM_VEL*grid::NUM_VEL;
-            printf("[%d]\n",i); printMat<T,grid::NUM_VEL,grid::NUM_VEL>(&hd_data->h_d2eePos[offset],grid::NUM_VEL);
+            printf("[%d]\n",i); printMat<T,grid::NUM_VEL,grid::NUM_VEL>(&hd_data->h_end_effector_pose_hessian[offset],grid::NUM_VEL);
         }
     }
     grid::close_grid<T>(streams,d_robotModel,hd_data);

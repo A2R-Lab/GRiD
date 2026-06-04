@@ -682,7 +682,7 @@ void run() {
         hd_data, d_robot_model, 1, block_dimms, thread_dimms, streams
     );
     gpuErrchk(cudaPeekAtLastError());
-    print_vector("end_effector_pose", hd_data->h_eePos, 6 * grid::NUM_EES);
+    print_vector("end_effector_pose", hd_data->h_end_effector_pose, 6 * grid::NUM_EES);
 
 #if !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
     grid::end_effector_pose_gradient<T>(
@@ -690,7 +690,7 @@ void run() {
     );
     gpuErrchk(cudaPeekAtLastError());
     print_vector(
-        "end_effector_pose_gradient", hd_data->h_deePos,
+        "end_effector_pose_gradient", hd_data->h_end_effector_pose_gradient,
         6 * grid::NUM_VEL * grid::NUM_EES
     );
 
@@ -699,7 +699,7 @@ void run() {
     );
     gpuErrchk(cudaPeekAtLastError());
     print_vector(
-        "end_effector_pose_hessian", hd_data->h_d2eePos,
+        "end_effector_pose_hessian", hd_data->h_end_effector_pose_hessian,
         6 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_EES
     );
 #endif
