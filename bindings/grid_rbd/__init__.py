@@ -210,12 +210,79 @@ def list_registered(cache_dir: str | Path | None = None) -> list[dict[str, Any]]
     return _list_registered(cache_dir)
 
 
+def precompile(
+    name: str,
+    urdf_path: str | None = None,
+    *,
+    urdf_string: str | None = None,
+    tiers: Iterable[dict[str, Any]] | None = None,
+    floating_base: bool = False,
+    ee_joint_names: list[str] | tuple[str, ...] | None = None,
+    max_batch_size: int = 256,
+    backends: Iterable[str] = ("numpy",),
+    cache_dir: str | Path | None = None,
+    cuda_arch: int | None = None,
+) -> list[dict[str, Any]]:
+    """Ahead-of-time: build + populate the persistent cache for a robot so every
+    later ``register_robot`` / ``get_robot`` / ``jax.jit`` is an instant cache hit.
+
+    Each entry in ``tiers`` is a dict of codegen-affecting overrides applied on
+    top of the defaults (``floating_base`` / ``ee_joint_names`` /
+    ``max_batch_size``) — e.g. ``tiers=[{}, {"floating_base": True}]`` prebuilds
+    both the fixed- and floating-base ``.so``. ``tiers=None`` builds the single
+    default tier. Each requested ``backend`` ("numpy"/"jax"/"torch") warms that
+    surface's artifacts on the same cached ``.so``.
+
+    This is a thin, idempotent driver over :py:func:`register_robot`: a tier
+    already in the cache is a no-op (no nvcc); a missing tier compiles once and
+    populates the cache. Returns the manifest entry for each (tier, backend)
+    built, in order. Build offline once, ship/keep the cache dir, and every
+    later run starts in well under a second.
+    """
+    if tiers is None:
+        tiers = [{}]
+    else:
+        tiers = list(tiers)
+    backends = list(backends)
+    if not backends:
+        raise ValueError("backends must name at least one of 'numpy'/'jax'/'torch'")
+
+    results: list[dict[str, Any]] = []
+    cd = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
+    for i, tier in enumerate(tiers):
+        opts = {
+            "floating_base": floating_base,
+            "ee_joint_names": ee_joint_names,
+            "max_batch_size": max_batch_size,
+            **dict(tier),
+        }
+        # Distinct manifest name per tier so multiple tiers under one logical
+        # robot don't clobber each other's name binding. Single-tier keeps the
+        # plain name so a follow-up get_robot(name) just works.
+        tier_name = name if len(tiers) == 1 else f"{name}__tier{i}"
+        for backend in backends:
+            register_robot(
+                name=tier_name,
+                urdf_path=urdf_path,
+                urdf_string=urdf_string,
+                backend=backend,
+                cache_dir=cache_dir,
+                force_rebuild=False,
+                cuda_arch=cuda_arch,
+                **opts,
+            )
+            entry = manifest_lookup(cd, tier_name)
+            results.append({"name": tier_name, "backend": backend, **(entry or {})})
+    return results
+
+
 __all__ = [
     "RobotHandle",
     "RobotNotRegisteredError",
     "register_robot",
     "get_robot",
     "list_registered",
+    "precompile",
     "default_cache_dir",
     "__version__",
 ]

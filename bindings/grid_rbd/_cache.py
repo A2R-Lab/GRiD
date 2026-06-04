@@ -96,6 +96,24 @@ def _torch_abi_tag() -> str:
         return ""
 
 
+def _jax_ffi_tag() -> str:
+    """JAX-FFI availability + version tag, mixed into the cache key.
+
+    `compile_so` emits the JAX FFI handler block (and links jax's FFI headers)
+    only when jax is importable at compile time. Whether those `grid_rbd_jax_*`
+    symbols exist therefore changes with jax's presence/version, so it must be
+    part of the key: a .so built with NO jax installed lacks the FFI symbols,
+    and a later jax-enabled session must NOT reuse it (the FFI dlsym would fail
+    with a confusing 'symbol missing' error). Empty when jax is absent so a
+    no-jax build doesn't carry a jax tag (mirrors `_torch_abi_tag`)."""
+    try:
+        import jax
+        from jax import ffi as _jax_ffi  # noqa: F401  (probe FFI availability)
+        return f"jaxffi={jax.__version__}"
+    except Exception:
+        return ""
+
+
 def canonical_options(options: dict[str, Any]) -> str:
     """Canonical JSON serialization of compile options for hashing.
 
@@ -119,6 +137,10 @@ def compute_cache_key(urdf_bytes: bytes, options: dict[str, Any], cuda_arch: int
     # incompatible torch version (the TORCH_LIBRARY symbols bake in the ABI).
     # Empty string when torch is absent → no effect on no-torch builds.
     h.update(f"{_torch_abi_tag()}".encode())
+    # Mix in the JAX-FFI tag so a .so built without jax (no FFI symbols) isn't
+    # reused by a later jax-enabled session, and a jax-version bump that changes
+    # the FFI ABI re-keys. Empty when jax is absent → no effect on no-jax builds.
+    h.update(f"{_jax_ffi_tag()}".encode())
     return h.hexdigest()
 
 
