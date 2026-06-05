@@ -222,6 +222,21 @@ work serial to "save" SM occupancy. Justify every serial block.
   special point: at `v_dt=0` the leading-order SE(3) expansions give exact block structure — `∂J_r^SE3/∂v` has
   `-½[e_k]_x` in the top-right (ρ-dir) and the two diagonal blocks (φ-dir); `∂Ad(exp(-v))/∂v` is the same with
   factor `-1`. Those pin the signs and the ½-vs-1 factor with zero dependence on pin or on our own FD.
+- **The pinocchio adapter returns VIEWS into reused `self.data` buffers.** Any FD loop that calls
+  `forward_dynamics_gradient` / `integrator_gradient` / similar repeatedly MUST `np.array(..., copy=True)` each
+  result — successive calls alias the same `pin.Data` storage and silently overwrite your stencil's earlier
+  evaluations. The tell: a derivative that comes out *constant across genuinely-different configurations* (a
+  phantom "connection term" ≈ a fixed value like 9.81 was chased for several iterations before this was the cause).
+- **A finite-difference "Hessian" of a vector-valued gradient is NOT (a,b)-symmetric on a Lie group.** For a
+  free-flyer, `dIntegrate(ARG0)` (the q-side Jacobian) is q-INDEPENDENT, so the q-perturbation row of
+  `∂(plant gradient)/∂z` is exactly 0 while the qd-perturbation row carries the whole cross term. Fill the
+  second-order tensor **un-symmetrized** (do NOT average `H[o,a,b]` with `H[o,b,a]`); the FD-of-pin ground truth
+  is itself asymmetric. (Only the genuinely-symmetric fixed-base case lets you get away with symmetrizing.)
+- **Mind the axis order when an assembly helper and its consumer disagree.** `_d2qdd_tangent` returns
+  `[out, column, perturb]` (b before a); `plant_step_hessian` needs `[out, perturb, column]` → `transpose(0,2,1)`.
+  Invisible on a fixed base (D2qdd is a true Hessian → (a,b)-symmetric, transpose is a no-op) but **load-bearing**
+  on the floating q-q block, which is genuinely asymmetric. When the symmetric case hides a transpose bug, the
+  asymmetric (floating / off-diagonal) case is where it bites — test there.
 
 ---
 
