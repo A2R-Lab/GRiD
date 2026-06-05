@@ -255,6 +255,20 @@ work serial to "save" SM occupancy. Justify every serial block.
   scatters into it; no smem staging) and size the device fn's `s_temp` to the actual inner-pool need,
   not a round over-allocation. (The *generated* kernel stages its output in DYNAMIC smem under the
   ~99 KB cap, which is fine for small robots; big robots need the global workspace band — deferred.)
+- **The plant smoke runner's `plant_step_kernel` / `plant_kernel` use big STATIC `__shared__` arrays
+  (`s_dAB`, `s_D_qdd_stage`, `s_XImats`, `s_temp[4096]`…) and DO NOT compile for big robots** — g1
+  (nv=29) overflows the 48 KB static cap (`ptxas: plant_step_kernel uses too much shared data
+  0xe1d0`). This is pre-existing and independent of any one algorithm: `GRID_CUDA_PLANT_ROBOTS=g1`
+  fails at *compile* on the sibling kernel before the kernel-under-test even builds. So **validate
+  big-robot plant surfaces (e.g. `plant_step_hessian`) via the BINDINGS** (`grid_rbd`, a separate TU
+  whose kernels are all dynamic-smem + `cudaFuncSetAttribute`), not the cuda_equivalents smoke runner.
+  Making the smoke runner's plant kernels dynamic-smem (mirroring the hessian kernel, which already is)
+  is the proper infra fix to unblock big-robot plant smoke — a separate, bounded task.
+- **Force a spill tier on a SMALL robot to validate the spill *code path* without a big-robot compile.**
+  `GRID_CUDA_TARGET_SHARED_MEM_BYTES=10000` makes `select_shared_tier_3way` pick the deep-spill tier
+  even for iiwa14, so the equivalence test exercises the exact `d_workspace`-band / pool-aliasing kernel
+  body (the one g1 would use) in a ~3-min iiwa14 compile instead of a ~17-min g1 build. Pair it with a
+  codegen-only header regen of the big robot to confirm its per-tier smem macro fits the ~99 KB cap.
 - **Plant kernels are NOT in `KERNEL_ATTR_MANIFEST`, so they get no automatic `cudaFuncSetAttribute`.**
   `init_grid_kernel_attrs` raises `MaxDynamicSharedMemorySize` only for the manifest's kernels; the
   plant kernels (`plant_step_gradient_kernel`, `plant_step_hessian_kernel`) aren't listed, so when a

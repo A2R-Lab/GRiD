@@ -255,40 +255,15 @@ __global__ void plant_step_kernel(const T *g_q, const T *g_qd, const T *g_u, T d
     __syncthreads();
 }
 
-// ---- plant_step_hessian (s_d2AB) pass-through ----
-// Drives grid_plant::plant_step_hessian (the true 2nd-order integrator
-// sensitivity, composing grid::integrator_hessian_device -> fdsva_so_device) in
-// a single-block kernel with SHARED-tier (all-smem) caller scratch, writing the
-// (2*NV x 3*NV x 3*NV) row-major Hessian to global. Fixed-base, EULER / SI-EULER.
-#ifdef GRID_PLANT_HAS_STEP_HESSIAN
-template <typename T, grid::IntegratorType IT>
-__global__ void plant_step_hessian_smoke_kernel(const T *g_q, const T *g_qd, const T *g_u, T dt,
-                                                const grid::robotModel<T> *d_robotModel, T gravity,
-                                                T *o_d2AB) {
-    __shared__ T s_x[NX], s_u[NU];
-    // fdsva_so in/out scratch (caller-placed; mirrors the fdsva_so kernel). The
-    // (2nv x 3nv x 3nv) Hessian is written DIRECTLY to the global output (the
-    // device fn just scatters into the s_d2AB pointer) so the big output band
-    // never lands in the 48 KB static-smem budget.
-    __shared__ T s_df2[4 * NV * NV * NV], s_idsva_so[4 * NV * NV * NV];
-    __shared__ T s_Minv[NV * NV], s_df_du[2 * NV * NV], s_qdd[NV];
-    __shared__ T s_XImats[grid::DYNAMICS_XI_T_COUNT];
-    __shared__ T s_temp[4096];  // >= the SHARED-tier fdsva_so inner pool (iiwa14: 3744)
-
-    const int tid = threadIdx.x + threadIdx.y * blockDim.x;
-    const int nth = blockDim.x * blockDim.y;
-    for (int i = tid; i < NX; i += nth) s_x[i] = (i < NQ) ? g_q[i] : g_qd[i - NQ];
-    for (int i = tid; i < NU; i += nth) s_u[i] = g_u[i];
-    __syncthreads();
-
-    grid_plant::plant_step_hessian<T, IT, true, false, true>(
-        o_d2AB, s_x, s_u, s_df2, s_idsva_so, s_Minv, s_df_du, s_qdd,
-        s_XImats, /*s_topology_helpers*/ nullptr,
-        s_temp, /*d_workspace*/ nullptr, /*d_fd_grad_spill*/ nullptr, /*s_fdsva_temp*/ nullptr,
-        d_robotModel, gravity, dt);
-    __syncthreads();
-}
-#endif
+// ---- plant_step_hessian (s_d2AB) ----
+// Drives the GENERATED grid_plant::plant_step_hessian_kernel (the true 2nd-order
+// integrator sensitivity, composing grid::integrator_hessian_device ->
+// fdsva_so_device) with a DYNAMIC-smem arena + the tier-spill d_workspace, so big
+// fixed-base robots (g1/h1_2) whose SHARED-tier arena overflows the smem cap fall
+// back to the spilled tier (d2AB output + fdsva tensors + pool -> d_workspace).
+// The kernel handles all staging/scatter itself; this runner only supplies the
+// dynamic smem byte count + the workspace allocation (mirrors the binding launch).
+// Fixed-base, EULER / SI-EULER. Output is row-major (2*NV x 3*NV x 3*NV).
 
 // ---- centroidal plant costs: com_cost / momentum_cost ----
 // These compose grid::com_device / grid::ccrba_device, which use an `extern
@@ -422,13 +397,35 @@ void run() {
     gpuErrchkKernel();
 
 #ifdef GRID_PLANT_HAS_STEP_HESSIAN
-    // plant_step_hessian (s_d2AB), EULER + SI-EULER. SHARED-tier all-smem scratch.
-    plant_step_hessian_smoke_kernel<T, grid::IntegratorType::EULER><<<1, nthreads>>>(
-        g_q, g_qd, g_u, dt, d_robotModel, gravity, o_h2_eu);
-    gpuErrchkKernel();
-    plant_step_hessian_smoke_kernel<T, grid::IntegratorType::SEMI_IMPLICIT_EULER><<<1, nthreads>>>(
-        g_q, g_qd, g_u, dt, d_robotModel, gravity, o_h2_si);
-    gpuErrchkKernel();
+    // plant_step_hessian (s_d2AB), EULER + SI-EULER, via the generated tier-aware
+    // kernel. Pack x=[q;qd] contiguous (the kernel reads d_x[k*stride_x+ind]); u is
+    // already contiguous. Size dynamic smem to the (tier-selected) macro + raise the
+    // opt-in attribute; allocate the per-block spill workspace when any tier spills.
+    {
+        T *g_x = dmalloc<T>(NX);
+        std::vector<T> h_x(NX);
+        for (int i = 0; i < NQ; ++i) h_x[i] = h_q[i];
+        for (int i = 0; i < NV; ++i) h_x[NQ + i] = h_qd[i];
+        cudaMemcpy(g_x, h_x.data(), NX * sizeof(T), cudaMemcpyHostToDevice);
+
+        const size_t h2_smem = grid_plant::INTEGRATOR_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T>();
+        unsigned char *g_h2_ws = nullptr;
+        if (grid_plant::GRID_PLANT_HESSIAN_USES_WORKSPACE_ANY_TIER) {
+            cudaMalloc(&g_h2_ws, grid_plant::PLANT_HESSIAN_WORKSPACE_BYTES_PER_TIMESTEP<T>());
+        }
+        cudaFuncSetAttribute(grid_plant::plant_step_hessian_kernel<T, grid::IntegratorType::EULER>,
+                             cudaFuncAttributeMaxDynamicSharedMemorySize, (int)h2_smem);
+        cudaFuncSetAttribute(grid_plant::plant_step_hessian_kernel<T, grid::IntegratorType::SEMI_IMPLICIT_EULER>,
+                             cudaFuncAttributeMaxDynamicSharedMemorySize, (int)h2_smem);
+        grid_plant::plant_step_hessian_kernel<T, grid::IntegratorType::EULER><<<1, nthreads, h2_smem>>>(
+            o_h2_eu, g_h2_ws, g_x, g_u, NX, NU, d_robotModel, gravity, dt, 1);
+        gpuErrchkKernel();
+        grid_plant::plant_step_hessian_kernel<T, grid::IntegratorType::SEMI_IMPLICIT_EULER><<<1, nthreads, h2_smem>>>(
+            o_h2_si, g_h2_ws, g_x, g_u, NX, NU, d_robotModel, gravity, dt, 1);
+        gpuErrchkKernel();
+        if (g_h2_ws) cudaFree(g_h2_ws);
+        cudaFree(g_x);
+    }
 #endif
 
     // plant_step_kernel inlines the integrator-gradient with a FIXED-SIZE caller

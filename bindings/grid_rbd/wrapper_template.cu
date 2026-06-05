@@ -763,6 +763,9 @@ struct PlantBuffers {
     T* d_hess   = nullptr;   // dense hessian / hess-diagonal
     T* d_d2AB   = nullptr;   // plant_step_hessian s_d2AB (2*NV*3*NV*3*NV) — too
                              // big to share d_grad, so lazily allocated below.
+    unsigned char* d_d2AB_workspace = nullptr;  // plant_step_hessian spill band
+                             // (per-timestep s_d2AB + fdsva tensors + pool) for
+                             // big robots whose arena overflows the smem cap.
     T* d_end_effector_pose  = nullptr;   // ee-pose / com / ccrba scratch (reused per call)
     T* d_end_effector_pose_gradient = nullptr;   // ee-jacobian scratch
     bool allocated = false;
@@ -1081,12 +1084,17 @@ template <grid::IntegratorType IT>
 static void launch_plant_step_hessian(int batch, T gravity, T dt) {
     const int nx = grid::NUM_POS + grid::NUM_VEL;
     const int nv = grid::NUM_VEL;
+    // Tier-aware: at TIER_SHARED the whole arena (s_d2AB output + fdsva scratch)
+    // is in smem and d_workspace is nullptr; at LITE/MINIMAL the cold/large bands
+    // spill to the per-timestep d_d2AB_workspace. The kernel template's
+    // RESOURCE_TIER defaults to GRID_DEFAULT_RESOURCE_TIER (set by codegen from the
+    // smem target), so the smem macro + the kernel use the same tier.
     const size_t smem = grid_plant::INTEGRATOR_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(grid_plant::plant_step_hessian_kernel<T, IT>,
                          cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
     dim3 grid_dim((unsigned)batch, 1, 1);
     grid_plant::plant_step_hessian_kernel<T, IT><<<grid_dim, g_thread_dimms, smem, g_streams[0]>>>(
-        g_plant.d_d2AB, g_plant.d_in_a, g_plant.d_in_b, nx, nv, g_robot, gravity, dt, batch);
+        g_plant.d_d2AB, g_plant.d_d2AB_workspace, g_plant.d_in_a, g_plant.d_in_b, nx, nv, g_robot, gravity, dt, batch);
 }
 
 extern "C" int grid_plant_step_hessian(
@@ -1102,6 +1110,14 @@ extern "C" int grid_plant_step_hessian(
     // (6*NV^2), so it gets its own lazily-allocated band (allocated on first use).
     if (g_plant.d_d2AB == nullptr) {
         if (cudaMalloc(&g_plant.d_d2AB, (size_t)kMaxBatch * d2ab * sizeof(T)) != cudaSuccess)
+            return 4;
+    }
+    // Spill workspace: only allocated when some tier spills (big robots). One
+    // per-timestep slot per block (k indexes the block). On TIER_SHARED the macro
+    // is 0 and the kernel never touches d_workspace (passed but unused).
+    if (grid_plant::GRID_PLANT_HESSIAN_USES_WORKSPACE_ANY_TIER && g_plant.d_d2AB_workspace == nullptr) {
+        const size_t ws = grid_plant::PLANT_HESSIAN_WORKSPACE_BYTES_PER_TIMESTEP<T>();
+        if (cudaMalloc(&g_plant.d_d2AB_workspace, (size_t)kMaxBatch * ws) != cudaSuccess)
             return 4;
     }
     cudaMemcpy(g_plant.d_in_a, x, batch * nx * sizeof(T), cudaMemcpyHostToDevice);
