@@ -493,6 +493,32 @@ class RobotHandle:
         NV = self.num_vel
         return raw.reshape(B, 3 * NV, 2 * NV).transpose(0, 2, 1)
 
+    def plant_step_hessian(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+        """Second-order sensitivity of the integrator step x_{k+1} = [q; v].
+
+        x is (B, NUM_POS + NUM_VEL); u is (B, NUM_VEL). Returns the s_d2AB
+        surface of shape (B, 2*NV, 3*NV, 3*NV):
+
+            H[b, o, a, b'] = d^2 x_{k+1}[o] / dz[a] dz[b'],  z = [dq; dqd; du]
+
+        with output rows split as [position-tangent (NV); velocity (NV)].
+        Matches ``RBDReference.plant_step_hessian``. Pass-through to
+        grid::integrator_hessian_device (composes fdsva_so + dt-scaled assembly).
+
+        Scope (first landing): euler / semi_implicit_euler on a FIXED base.
+        Floating-base and multi-stage RK are deferred (the C-ABI returns rc=3 /
+        raises for any other ``integrator_type``).
+        """
+        x = np.ascontiguousarray(x, dtype=np.float32)
+        u = np.ascontiguousarray(u, dtype=np.float32)
+        it = _integrator_code(integrator_type)
+        raw = self._runner.plant_step_hessian(x, u, float(dt), it, float(gravity))
+        # raw is row-major (2*NV, 3*NV*3*NV) per timestep — reshape the trailing
+        # 9*NV^2 into (3*NV, 3*NV) (C-order, no transpose: H is already row-major).
+        B = raw.shape[0]
+        NV = self.num_vel
+        return raw.reshape(B, 2 * NV, 3 * NV, 3 * NV)
+
     def com_cost(self, q, p_des, W):
         """Center-of-mass tracking cost over the 3 CoM axes.
 

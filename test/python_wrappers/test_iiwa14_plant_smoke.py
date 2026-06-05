@@ -121,6 +121,28 @@ def test_plant_step_gradient(handle, ref, samples):
         assert _rel(dAB[b], r) < _TOL
 
 
+@pytest.mark.parametrize("integrator_type", ["euler", "semi_implicit_euler"])
+def test_plant_step_hessian(handle, ref, samples, integrator_type):
+    # F1: the s_d2AB surface (2nd-order sensitivity of the integrator step).
+    # The Hessian is mostly structural zeros, so a |ref|+eps relative metric
+    # blows up on float32 roundoff at the zero cells; compare with a
+    # magnitude-relative atol (atol scaled by the array's max magnitude) plus a
+    # small rtol — the correct tolerance model for a sparse 2nd-order tensor.
+    x, u, B = samples["x"], samples["u"], samples["B"]
+    NQ, NV = handle.num_joints, handle.num_vel
+    dt = 0.01
+    H = handle.plant_step_hessian(x, u, dt, integrator_type=integrator_type)
+    assert H.shape == (B, 2 * NV, 3 * NV, 3 * NV)
+    for b in range(B):
+        r = ref.plant_step_hessian(x[b, :NQ], x[b, NQ:], u[b], dt,
+                                   integrator_type=integrator_type)
+        a = np.asarray(H[b], np.float64)
+        rr = np.asarray(r, np.float64)
+        scale = max(float(np.abs(rr).max()), 1e-6)
+        # rtol/atol bucket: float32 2nd-order, magnitude-relative atol.
+        np.testing.assert_allclose(a, rr, rtol=2e-3, atol=2e-3 * scale)
+
+
 def test_com_cost(handle, ref, samples):
     q, B = samples["q"], samples["B"]
     rng = np.random.default_rng(4)

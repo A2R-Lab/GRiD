@@ -90,6 +90,10 @@ extern "C" {
     // plant_step_gradient: (x, u, dAB, batch, gravity, dt, it)
     using fn_plant_step_grad_t = int (*)(const float*, const float*, float*,
                                          int, float, float, int);
+    // plant_step_hessian: (x, u, d2AB, batch, gravity, dt, it) — same ABI shape
+    // as the gradient, just a bigger output band.
+    using fn_plant_step_hess_t = int (*)(const float*, const float*, float*,
+                                         int, float, float, int);
 
     // ─── centroidal / energy / general-frame kinematics (F2) ─────────────────
     // com / osc_inertia: (q, out, batch)
@@ -163,6 +167,7 @@ public:
         fn_plant_com_cost_   = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_plant_com_cost"));
         fn_plant_mom_cost_   = reinterpret_cast<fn_plant_mom_t>(opt_sym("grid_plant_momentum_cost"));
         fn_plant_step_grad_  = reinterpret_cast<fn_plant_step_grad_t>(opt_sym("grid_plant_step_gradient"));
+        fn_plant_step_hess_  = reinterpret_cast<fn_plant_step_hess_t>(opt_sym("grid_plant_step_hessian"));
 
         // G2 batched FK (pos+quat) — OPTIONAL: only present in newer .so files
         // (and only non-null for fixed-base/non-mimic robots).
@@ -759,6 +764,29 @@ public:
         return out;
     }
 
+    // plant_step_hessian: x (batch, NX), u (batch, NV) -> d2AB (batch, 2*NV, 3*NV*3*NV).
+    // The C-ABI fills a row-major (2*NV x 3*NV x 3*NV) Hessian per timestep; this
+    // surface returns it as (batch, 2*NV, 3*NV*3*NV) and the Python handle reshapes
+    // the trailing 9*NV^2 into (3*NV, 3*NV). Only EULER / SI-EULER (rc=3 otherwise).
+    py::array_t<float> plant_step_hessian(
+        py::array_t<float, py::array::c_style | py::array::forcecast> x,
+        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+        float dt, int it, float gravity)
+    {
+        require_plant((void*)fn_plant_step_hess_, "plant_step_hessian");
+        int nx = num_joints_ + num_vel_;
+        int nv = num_vel_;
+        if (x.ndim() != 2 || x.shape(1) != nx)
+            throw std::invalid_argument("plant_step_hessian: x must be (batch, " + std::to_string(nx) + ")");
+        int batch = (int)x.shape(0);
+        if (batch > max_batch_) throw std::invalid_argument("plant_step_hessian: batch > max_batch");
+        check_array_2d(u, batch, nv, "u");
+        py::array_t<float> out({batch, 2 * nv, 3 * nv * 3 * nv});
+        int rc = fn_plant_step_hess_(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
+        if (rc != 0) throw std::runtime_error("plant_step_hessian failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     // ─── centroidal / energy / general-frame kinematics (F2) ─────────────────
     //
     // Each takes q (or q,qd) of shape (batch, NUM_JOINTS) and returns the flat
@@ -1001,6 +1029,7 @@ private:
     fn_plant_ee_t      fn_plant_com_cost_    = nullptr;
     fn_plant_mom_t     fn_plant_mom_cost_    = nullptr;
     fn_plant_step_grad_t fn_plant_step_grad_ = nullptr;
+    fn_plant_step_hess_t fn_plant_step_hess_ = nullptr;
     // F2 centroidal / energy / general-frame kinematics (optional symbols)
     fn_q_out_t         fn_com_                 = nullptr;
     fn_q_qd_out_t      fn_ccrba_               = nullptr;
@@ -1105,6 +1134,9 @@ PYBIND11_MODULE(_core, m) {
              py::arg("x"), py::arg("u"), py::arg("dt"),
              py::arg("it") = 0, py::arg("gravity") = -9.81f)
         .def("plant_step_gradient", &Runner::plant_step_gradient,
+             py::arg("x"), py::arg("u"), py::arg("dt"),
+             py::arg("it") = 0, py::arg("gravity") = -9.81f)
+        .def("plant_step_hessian", &Runner::plant_step_hessian,
              py::arg("x"), py::arg("u"), py::arg("dt"),
              py::arg("it") = 0, py::arg("gravity") = -9.81f)
         .def("ee_pos_cost", &Runner::ee_pos_cost,

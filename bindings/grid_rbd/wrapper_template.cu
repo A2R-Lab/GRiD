@@ -682,6 +682,16 @@ static void launch_integrator_grad_host(int batch, T gravity, T dt) {
         default: return 3;                                                       \
     }
 
+// plant_step_hessian only supports EULER / SI-EULER (the composed device fn
+// static_asserts MIDPOINT/RK out — instantiating those cases would fail to
+// COMPILE, so this dispatch never names them). Other IT codes return rc=3.
+#define GRID_RBD_IT_DISPATCH_HESSIAN(it_code, FN, ...)                           \
+    switch (it_code) {                                                           \
+        case 0: FN<grid::IntegratorType::EULER>(__VA_ARGS__); break;             \
+        case 1: FN<grid::IntegratorType::SEMI_IMPLICIT_EULER>(__VA_ARGS__); break;\
+        default: return 3;                                                       \
+    }
+
 // integrator(q, qd, u, dt, it) → x_kp1  (size NUM_POS + NUM_VEL per timestep)
 extern "C" int grid_rbd_integrator(
     const T* q, const T* qd, const T* u,
@@ -751,6 +761,8 @@ struct PlantBuffers {
     T* d_out    = nullptr;   // scalar cost (1 per timestep)
     T* d_grad   = nullptr;   // gradient / dAB ([A|B], 2*NV*3*NV)
     T* d_hess   = nullptr;   // dense hessian / hess-diagonal
+    T* d_d2AB   = nullptr;   // plant_step_hessian s_d2AB (2*NV*3*NV*3*NV) — too
+                             // big to share d_grad, so lazily allocated below.
     T* d_end_effector_pose  = nullptr;   // ee-pose / com / ccrba scratch (reused per call)
     T* d_end_effector_pose_gradient = nullptr;   // ee-jacobian scratch
     bool allocated = false;
@@ -1054,6 +1066,53 @@ extern "C" int grid_plant_step_gradient(
     return 0;
 }
 #endif  // GRID_PLANT_HAS_STEP_GRADIENT
+
+#ifdef GRID_PLANT_HAS_STEP_HESSIAN
+// plant_step_hessian: s_d2AB = d^2 x_{k+1}/d z^2, z=[q;qd;u] (the 2nd-order
+// sensitivity of the integrator step). x (batch, NX); u (batch, NV); d2AB
+// (batch, 2*NV*3*NV*3*NV, row-major H[o*nz*nz + a*nz + b], nz=3*NV). Like
+// plant_step_gradient the kernel owns the FULL fdsva_so scratch arena in shared
+// memory (SHARED/PERF tier), so the binding only stages x/u and reads d2AB. The
+// arena (s_d2AB output band + fdsva_so scratch) exceeds the 48 KB static smem
+// default, so we raise the per-kernel cap via cudaFuncSetAttribute before the
+// launch. Gated on GRID_PLANT_HAS_STEP_HESSIAN (integrator_hessian generated);
+// only EULER / SI-EULER (the composed device fn static_asserts the rest out).
+template <grid::IntegratorType IT>
+static void launch_plant_step_hessian(int batch, T gravity, T dt) {
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    const int nv = grid::NUM_VEL;
+    const size_t smem = grid_plant::INTEGRATOR_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T>();
+    cudaFuncSetAttribute(grid_plant::plant_step_hessian_kernel<T, IT>,
+                         cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::plant_step_hessian_kernel<T, IT><<<grid_dim, g_thread_dimms, smem, g_streams[0]>>>(
+        g_plant.d_d2AB, g_plant.d_in_a, g_plant.d_in_b, nx, nv, g_robot, gravity, dt, batch);
+}
+
+extern "C" int grid_plant_step_hessian(
+    const T* x, const T* u, T* d2AB, int batch, float gravity, float dt, int it) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    if (plant_alloc()) return 4;
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    const int nv = grid::NUM_VEL;
+    const int nz = 3 * nv;
+    const size_t d2ab = (size_t)(2 * nv) * (size_t)nz * (size_t)nz;
+    // d_d2AB (18*NV^3 per timestep) is far larger than d_grad's worst-case
+    // (6*NV^2), so it gets its own lazily-allocated band (allocated on first use).
+    if (g_plant.d_d2AB == nullptr) {
+        if (cudaMalloc(&g_plant.d_d2AB, (size_t)kMaxBatch * d2ab * sizeof(T)) != cudaSuccess)
+            return 4;
+    }
+    cudaMemcpy(g_plant.d_in_a, x, batch * nx * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_b, u, batch * nv * sizeof(T), cudaMemcpyHostToDevice);
+    GRID_RBD_IT_DISPATCH_HESSIAN(it, launch_plant_step_hessian, batch, (T)gravity, (T)dt);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(d2AB, g_plant.d_d2AB, batch * d2ab * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_PLANT_HAS_STEP_HESSIAN
 
 
 // ────────────────────────────────────────────────────────────────────────────

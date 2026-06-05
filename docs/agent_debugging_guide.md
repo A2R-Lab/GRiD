@@ -240,6 +240,19 @@ work serial to "save" SM occupancy. Justify every serial block.
   scatters into it; no smem staging) and size the device fn's `s_temp` to the actual inner-pool need,
   not a round over-allocation. (The *generated* kernel stages its output in DYNAMIC smem under the
   ~99 KB cap, which is fine for small robots; big robots need the global workspace band — deferred.)
+- **Plant kernels are NOT in `KERNEL_ATTR_MANIFEST`, so they get no automatic `cudaFuncSetAttribute`.**
+  `init_grid_kernel_attrs` raises `MaxDynamicSharedMemorySize` only for the manifest's kernels; the
+  plant kernels (`plant_step_gradient_kernel`, `plant_step_hessian_kernel`) aren't listed, so when a
+  plant kernel's dynamic-smem arena exceeds the 48 KB default (the hessian's 18·nv³ `s_d2AB` band pushes
+  iiwa14 to ~53 KB) the **binding launcher must call `cudaFuncSetAttribute(kernel<T,IT>, MaxDynamicSharedMemorySize, bytes)`
+  itself per template instantiation**, or the launch fails with `cudaErrorInvalidValue` (the C-ABI rc=100+e).
+  The gradient launcher dodges this only because its arena fits 48 KB. To size the launch, emit a
+  `*_DYNAMIC_SHARED_MEM_BYTES<T>()` helper next to the kernel whose `t_count` mirrors the kernel arena
+  exactly (extra_t_buffers + XI_size + inner pool); a wrong count silently under/over-allocates.
+- **Binding a kernel templated on an enum some of whose values `static_assert` out: the C-ABI dispatch
+  switch must NOT name the unsupported cases.** Even an unreached `case FN<RK4>(...)` *instantiates* the
+  template and trips the device `static_assert` at compile time. Use a restricted dispatch macro
+  (e.g. `GRID_RBD_IT_DISPATCH_HESSIAN` lists only EULER/SI-EULER) and return rc=3 for the rest.
 - `run_parallel.sh` auto-sizes xdist by free RAM (~5 GB/compile). Equivalence tests are
   correctness-only and safe to run concurrent; the PERF sweep must run ISOLATED (no other GPU/CPU,
   it skews timing).
