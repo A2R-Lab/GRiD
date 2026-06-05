@@ -232,6 +232,14 @@ work serial to "save" SM occupancy. Justify every serial block.
 - The CUDA equivalence harness has graceful-skip idioms: `GRID_SKIP_IF_KERNEL_TOO_BIG` (smem cap)
   prints a parseable `SKIPPED` line the parser nulls. The timing parser overwrites with the LAST
   numeric `Single Call X` line and ignores non-numeric ones.
+- **Static `__shared__` in a smoke-runner kernel is capped at 48 KB (0xC000) even on sm_120** — a
+  `ptxas error: uses too much shared data` at COMPILE time, distinct from the launch-time *dynamic*
+  smem opt-in cap (~99–101 KB). A large output band staged in static smem (e.g. a 2nv×3nv×3nv plant
+  Hessian = 6174 floats ≈ 24 KB for nv=7, *plus* the fdsva_so scratch) blows past it. Fix in the
+  smoke runner: pass the **global output pointer straight in as the device fn's output arg** (the fold
+  scatters into it; no smem staging) and size the device fn's `s_temp` to the actual inner-pool need,
+  not a round over-allocation. (The *generated* kernel stages its output in DYNAMIC smem under the
+  ~99 KB cap, which is fine for small robots; big robots need the global workspace band — deferred.)
 - `run_parallel.sh` auto-sizes xdist by free RAM (~5 GB/compile). Equivalence tests are
   correctness-only and safe to run concurrent; the PERF sweep must run ISOLATED (no other GPU/CPU,
   it skews timing).

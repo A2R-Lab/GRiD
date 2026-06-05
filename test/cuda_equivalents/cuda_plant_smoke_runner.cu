@@ -255,6 +255,41 @@ __global__ void plant_step_kernel(const T *g_q, const T *g_qd, const T *g_u, T d
     __syncthreads();
 }
 
+// ---- plant_step_hessian (s_d2AB) pass-through ----
+// Drives grid_plant::plant_step_hessian (the true 2nd-order integrator
+// sensitivity, composing grid::integrator_hessian_device -> fdsva_so_device) in
+// a single-block kernel with SHARED-tier (all-smem) caller scratch, writing the
+// (2*NV x 3*NV x 3*NV) row-major Hessian to global. Fixed-base, EULER / SI-EULER.
+#ifdef GRID_PLANT_HAS_STEP_HESSIAN
+template <typename T, grid::IntegratorType IT>
+__global__ void plant_step_hessian_smoke_kernel(const T *g_q, const T *g_qd, const T *g_u, T dt,
+                                                const grid::robotModel<T> *d_robotModel, T gravity,
+                                                T *o_d2AB) {
+    __shared__ T s_x[NX], s_u[NU];
+    // fdsva_so in/out scratch (caller-placed; mirrors the fdsva_so kernel). The
+    // (2nv x 3nv x 3nv) Hessian is written DIRECTLY to the global output (the
+    // device fn just scatters into the s_d2AB pointer) so the big output band
+    // never lands in the 48 KB static-smem budget.
+    __shared__ T s_df2[4 * NV * NV * NV], s_idsva_so[4 * NV * NV * NV];
+    __shared__ T s_Minv[NV * NV], s_df_du[2 * NV * NV], s_qdd[NV];
+    __shared__ T s_XImats[grid::DYNAMICS_XI_T_COUNT];
+    __shared__ T s_temp[4096];  // >= the SHARED-tier fdsva_so inner pool (iiwa14: 3744)
+
+    const int tid = threadIdx.x + threadIdx.y * blockDim.x;
+    const int nth = blockDim.x * blockDim.y;
+    for (int i = tid; i < NX; i += nth) s_x[i] = (i < NQ) ? g_q[i] : g_qd[i - NQ];
+    for (int i = tid; i < NU; i += nth) s_u[i] = g_u[i];
+    __syncthreads();
+
+    grid_plant::plant_step_hessian<T, IT, true, false, true>(
+        o_d2AB, s_x, s_u, s_df2, s_idsva_so, s_Minv, s_df_du, s_qdd,
+        s_XImats, /*s_topology_helpers*/ nullptr,
+        s_temp, /*d_workspace*/ nullptr, /*d_fd_grad_spill*/ nullptr, /*s_fdsva_temp*/ nullptr,
+        d_robotModel, gravity, dt);
+    __syncthreads();
+}
+#endif
+
 // ---- centroidal plant costs: com_cost / momentum_cost ----
 // These compose grid::com_device / grid::ccrba_device, which use an `extern
 // __shared__` dynamic arena (COM/CCRBA_DYNAMIC_SHARED_MEM_BYTES). The launch
@@ -345,6 +380,10 @@ void run() {
     T *o_pxk = dmalloc<T>(NX), *o_ixk = dmalloc<T>(NX), *o_eepos = dmalloc<T>(3);
     T *o_comv = dmalloc<T>(1), *o_comg = dmalloc<T>(NX), *o_comh = dmalloc<T>(NX * NX);
     T *o_momv = dmalloc<T>(1), *o_momg = dmalloc<T>(NX), *o_momh = dmalloc<T>(NX * NX);
+#ifdef GRID_PLANT_HAS_STEP_HESSIAN
+    const int D2AB_CNT = 2 * NV * (3 * NV) * (3 * NV);
+    T *o_h2_eu = dmalloc<T>(D2AB_CNT), *o_h2_si = dmalloc<T>(D2AB_CNT);
+#endif
 
     const int nthreads = grid::MAX_PERF_LEVEL_THREADS;
     // The grid_plant primitives that compose an auto-allocating grid:: _device
@@ -381,6 +420,16 @@ void run() {
     plant_centroidal_kernel<T><<<1, nthreads, cent_dyn>>>(g_q, g_qd, d_robotModel,
         o_comv, o_comg, o_comh, o_momv, o_momg, o_momh);
     gpuErrchkKernel();
+
+#ifdef GRID_PLANT_HAS_STEP_HESSIAN
+    // plant_step_hessian (s_d2AB), EULER + SI-EULER. SHARED-tier all-smem scratch.
+    plant_step_hessian_smoke_kernel<T, grid::IntegratorType::EULER><<<1, nthreads>>>(
+        g_q, g_qd, g_u, dt, d_robotModel, gravity, o_h2_eu);
+    gpuErrchkKernel();
+    plant_step_hessian_smoke_kernel<T, grid::IntegratorType::SEMI_IMPLICIT_EULER><<<1, nthreads>>>(
+        g_q, g_qd, g_u, dt, d_robotModel, gravity, o_h2_si);
+    gpuErrchkKernel();
+#endif
 
     // plant_step_kernel inlines the integrator-gradient with a FIXED-SIZE caller
     // scratch pool (s_temp[4096]). That inner needs FD_DU_MAX_SHARED_MEM_COUNT
@@ -440,6 +489,11 @@ void run() {
     dcopy_out("momentum_cost_value", o_momv, 1, 1);
     dcopy_out("momentum_cost_grad", o_momg, 1, NX);
     dcopy_out("momentum_cost_hess", o_momh, NX, NX);
+#ifdef GRID_PLANT_HAS_STEP_HESSIAN
+    // Row-major flat (1 x D2AB_CNT); reshaped to (2*NV, 3*NV, 3*NV) C-order in Python.
+    dcopy_out("plant_d2AB_euler", o_h2_eu, 1, D2AB_CNT);
+    dcopy_out("plant_d2AB_si_euler", o_h2_si, 1, D2AB_CNT);
+#endif
 
     grid::close_grid<T>(streams, d_robotModel, hd_data);
 }

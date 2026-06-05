@@ -281,6 +281,68 @@ def test_cuda_plant_matches_reference(tmp_path, robot_id):
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
+@pytest.mark.parametrize("robot_id", _robot_ids(), ids=lambda r: f"{r}-plant-hessian")
+def test_cuda_plant_step_hessian_matches_reference(tmp_path, robot_id):
+    """CUDA `grid_plant::plant_step_hessian` (s_d2AB) vs the RBDReference oracle.
+
+    The Hessian H[o,a,b] = d^2 x_{k+1}[o] / dz[a] dz[b] composes
+    grid::integrator_hessian_device -> fdsva_so_device, dt-scaled per integrator
+    (EULER / SI-EULER), fixed-base. The numpy oracle is
+    `RBDReference.plant_step_hessian` (the same method the FD-sanity suite
+    validates). Per-robot float32 bucket; high-energy samples agree to ~1e-6
+    relative, the per-robot atol absorbs static-sample conditioning (never loosen
+    a global tolerance).
+    """
+    base_mode = "fixed"
+    spec = _robot_spec(robot_id, base_mode)
+    try:
+        resolved = resolve_robot_spec(spec)
+    except RuntimeError as exc:
+        pytest.skip(f"Could not resolve manifest {spec.robot_id}: {exc}")
+    project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
+    ref = project_model.reference
+    build_dir = tmp_path / f"{robot_id}_plant_hessian"
+    build_dir.mkdir()
+    _generate_header(project_model, build_dir)
+    executable, cmd = _compile_runner(build_dir)
+
+    nv = project_model.nv
+    nz = 3 * nv
+    samples = _build_cuda_samples(project_model, random_count=3, include_corner_samples=True)
+
+    # Per-robot float32 bucket. The Hessian carries dt^2 (~1e-4) scaling and the
+    # M^{-1}-coupled fdsva_so blocks; iiwa14 is well-conditioned so a tight bucket
+    # holds. Conditioning-driven static-sample residuals are absorbed by the
+    # magnitude-relative atol (rtol * max|expected|), not a global loosen.
+    rtol, atol = 2e-3, 2e-3
+
+    def close(actual, expected, msg):
+        expected = np.asarray(expected, dtype=np.float64)
+        scale = float(np.max(np.abs(expected))) if expected.size else 0.0
+        np.testing.assert_allclose(
+            np.asarray(actual, dtype=np.float64), expected,
+            rtol=rtol, atol=max(atol, rtol * scale), err_msg=msg,
+        )
+
+    integ_blocks = {"euler": "plant_d2AB_euler", "semi_implicit_euler": "plant_d2AB_si_euler"}
+
+    for sample in samples:
+        q, qd = np.asarray(sample.q, np.float64), np.asarray(sample.qd, np.float64)
+        u = np.asarray(sample.qdd, np.float64)
+        out = _run(executable, cmd, q, qd, u, _DT)
+        for integrator_type, block in integ_blocks.items():
+            tag = f"{robot_id} {integrator_type} @ {sample.name}"
+            H_ref = np.asarray(ref.plant_step_hessian(q, qd, u, _DT, integrator_type=integrator_type),
+                               dtype=np.float64)
+            assert H_ref.shape == (2 * nv, nz, nz)
+            # Runner prints a row-major flat 1 x (2nv*nz*nz) vector -> C-order reshape.
+            H_cuda = np.asarray(out[block]).reshape(2 * nv, nz, nz)
+            close(H_cuda, H_ref, f"{tag} plant_step_hessian vs RBDReference oracle")
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
 @pytest.mark.parametrize(
     "robot_id,base_mode", _centroidal_cells(),
     ids=lambda v: str(v),
