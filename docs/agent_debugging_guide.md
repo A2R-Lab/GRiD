@@ -207,6 +207,21 @@ work serial to "save" SM occupancy. Justify every serial block.
   `compute{RNEA,ABA}Derivatives` RAISE "does not support Joint Mimic". So native mimic = a clean independent
   oracle for **crba/minv only**; gradients/2nd-order stay on the (provably-exact) fold. (RBDReference
   `pinocchio_backend.py` now routes mimic minv/crba through the native model; PS4 commit `c9883da`.)
+- **FD-of-Jacobian oracles near the Lie-group identity: a *bigger* step is better, not smaller.** When you
+  finite-difference a Lie-group derivative (`d2Integrate` = ∂/∂v of `dIntegrate`) and validate at `v_dt→0`,
+  a "precise" tiny step (`h=1e-6`) is WORSE: the perturbed increments land in the ill-conditioned small-angle
+  regime of the *exact* closed forms (`(1-cos θ)/θ²`, `(θ-sin θ)/θ³`, the SE(3) Q-block — same cancellation the
+  `_se3_Q_block` `θ<1e-4` Taylor guard exists for), so `1-cos(1e-6)≈5e-13` carries ~1e-4 relative error and the
+  derivative is wrong at the 5th digit. A **4th-order central stencil** (`(8(f(h)-f(-h)) - (f(2h)-f(-2h)))/(12h)`)
+  with `h≈1e-3` (≈ `eps**(1/5)`, the roundoff/truncation optimum) clears the cliff AND minimizes error → ~1e-8.
+  Rule: pick the FD step to dodge the conditioning cliff of the function you're differencing, not to be
+  "small." (RBDReference `d2Integrate`, default `fd_step=1e-3`.)
+- **Anchor an FD oracle with a closed form somewhere, or the test is tautological.** `d2Integrate`(FD-of-our-
+  `dIntegrate`) vs `pin.d2Integrate`(FD-of-`pin.dIntegrate`) only re-confirms `dIntegrate≈pin.dIntegrate` (already
+  known) — it can't catch a conceptually-wrong second-order object. Add an independent closed-form anchor at a
+  special point: at `v_dt=0` the leading-order SE(3) expansions give exact block structure — `∂J_r^SE3/∂v` has
+  `-½[e_k]_x` in the top-right (ρ-dir) and the two diagonal blocks (φ-dir); `∂Ad(exp(-v))/∂v` is the same with
+  factor `-1`. Those pin the signs and the ½-vs-1 factor with zero dependence on pin or on our own FD.
 
 ---
 
