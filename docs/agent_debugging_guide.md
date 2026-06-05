@@ -153,6 +153,22 @@ work serial to "save" SM occupancy. Justify every serial block.
   f_ext_gradient and frame_jacobian mimic. When you need a mimic-reduced gradient fold, start there.
 - **Dedup byte-identically.** Two near-identical emitters (timed/untimed, Xdown fixed/floating) →
   one helper parameterized on the differing token. Prove byte-identical generated output.
+- **Mixed-precision device sub-blocks: do a tiny FD in `double` inside a float32 kernel to match a
+  float64 oracle.** The floating `plant_step_hessian` needs `d2Integrate` = FD of the 6×6 SE(3)
+  `dIntegrate` blocks. A float32 FD there is too noisy to hit the equivalence bucket, but the blocks
+  are tiny (6×6×6), so compute the FD by calling the `T`-templated helper as `grid_dIntegrate_*_block<double>`
+  (h=1e-3, 4th-order), then cast the result to `T`. The float32 kernel then matches the float64 oracle
+  to ~1e-6 while paying double only on a negligible sub-computation.
+- **Reuse the freed inner pool for follow-on scratch (inner-owns-placement).** After a composed
+  `*_device` call returns and you `__syncthreads()`, its `s_temp` pool is dead — a follow-on stage can
+  carve small block-shared scratch from its front (`s_se3 = SCRATCH_IN_SMEM ? s_temp : d_workspace`),
+  with NO new smem allocation. It works whether the pool is in smem or routed to `d_workspace` (the
+  spilled tier). Just floor the kernel's pool sizing at `max(inner_pool, new_scratch)`.
+- **Gate a new emit path with a numpy mirror BEFORE the nvcc loop.** A floating-header `-O0` compile is
+  ~5 min; mirroring the exact CUDA index arithmetic (block lookups, transposes, the t1/t2/t3 contractions)
+  in numpy and diffing vs the oracle catches index/transpose/sign bugs in *seconds*. Only spend the
+  compile once the mirror is 0-error. (Caught the velocity-row `(a,b)` transpose + the un-symmetrized
+  Euler position fill before any GPU build.)
 
 ---
 

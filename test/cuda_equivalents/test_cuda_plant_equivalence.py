@@ -278,22 +278,43 @@ def test_cuda_plant_matches_reference(tmp_path, robot_id):
               f"{tag} plant_step_gradient == grid::integrator_gradient (dAB pass-through)")
 
 
+# (robot_id, base_mode) cells for the plant_step_hessian (s_d2AB) check. Fixed-base
+# is the cheap default gate; go2:floating exercises the SE(3) retract Hessian path
+# (the F1 floating emit). Override with GRID_CUDA_PLANT_HESSIAN_CELLS.
+def _hessian_cells():
+    raw = os.environ.get("GRID_CUDA_PLANT_HESSIAN_CELLS", None)
+    if raw is None:
+        # default: each robot in _robot_ids() fixed, plus go2 floating.
+        return [(r, "fixed") for r in _robot_ids()] + [("go2", "floating")]
+    cells = []
+    for tok in raw.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        robot_id, _, base = tok.partition(":")
+        cells.append((robot_id, base or "fixed"))
+    return cells
+
+
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
-@pytest.mark.parametrize("robot_id", _robot_ids(), ids=lambda r: f"{r}-plant-hessian")
-def test_cuda_plant_step_hessian_matches_reference(tmp_path, robot_id):
+@pytest.mark.parametrize(
+    "robot_id,base_mode", _hessian_cells(),
+    ids=lambda v: f"{v}",
+)
+def test_cuda_plant_step_hessian_matches_reference(tmp_path, robot_id, base_mode):
     """CUDA `grid_plant::plant_step_hessian` (s_d2AB) vs the RBDReference oracle.
 
     The Hessian H[o,a,b] = d^2 x_{k+1}[o] / dz[a] dz[b] composes
-    grid::integrator_hessian_device -> fdsva_so_device, dt-scaled per integrator
-    (EULER / SI-EULER), fixed-base. The numpy oracle is
-    `RBDReference.plant_step_hessian` (the same method the FD-sanity suite
-    validates). Per-robot float32 bucket; high-energy samples agree to ~1e-6
-    relative, the per-robot atol absorbs static-sample conditioning (never loosen
-    a global tolerance).
+    grid::integrator_hessian_device -> fdsva_so_device per integrator (EULER /
+    SI-EULER). Fixed-base is the dt-scaled fdsva_so assembly; floating-base adds
+    the SE(3) retract second derivative (position rows) and transposes the
+    velocity-row D2qdd axes. The numpy oracle is `RBDReference.plant_step_hessian`
+    (the same method the FD-sanity suite validates). Per-(robot,base) float32
+    bucket; the per-cell atol absorbs static-sample conditioning (never loosen a
+    global tolerance).
     """
-    base_mode = "fixed"
     spec = _robot_spec(robot_id, base_mode)
     try:
         resolved = resolve_robot_spec(spec)
@@ -301,7 +322,7 @@ def test_cuda_plant_step_hessian_matches_reference(tmp_path, robot_id):
         pytest.skip(f"Could not resolve manifest {spec.robot_id}: {exc}")
     project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
     ref = project_model.reference
-    build_dir = tmp_path / f"{robot_id}_plant_hessian"
+    build_dir = tmp_path / f"{robot_id}_{base_mode}_plant_hessian"
     build_dir.mkdir()
     _generate_header(project_model, build_dir)
     executable, cmd = _compile_runner(build_dir)
@@ -317,12 +338,17 @@ def test_cuda_plant_step_hessian_matches_reference(tmp_path, robot_id):
     # Big robots (g1/h1_2) run the SPILLED tier (s_d2AB + fdsva scratch -> global
     # workspace) and have a much larger |M^{-1}| dynamic range, so the float32
     # round-off floor is higher — give them their own (still magnitude-relative)
-    # bucket. NEVER loosen a global tolerance; this is a per-robot bucket.
+    # bucket. go2:floating adds the SE(3) retract second derivative (double-precision
+    # FD of the dIntegrate blocks) on top of the spilled fdsva_so path; it sits at
+    # ~1e-3 relative (the double FD keeps the float32 kernel matching the float64
+    # oracle), so it gets the same 2e-3 default. NEVER loosen a global tolerance;
+    # these are per-(robot,base) buckets.
     _hessian_buckets = {
-        "g1":   (5e-3, 5e-3),
-        "h1_2": (1e-2, 1e-2),
+        ("g1", "fixed"):      (5e-3, 5e-3),
+        ("h1_2", "fixed"):    (1e-2, 1e-2),
+        ("go2", "floating"):  (2e-3, 2e-3),
     }
-    rtol, atol = _hessian_buckets.get(robot_id, (2e-3, 2e-3))
+    rtol, atol = _hessian_buckets.get((robot_id, base_mode), (2e-3, 2e-3))
 
     def close(actual, expected, msg):
         expected = np.asarray(expected, dtype=np.float64)
@@ -339,7 +365,7 @@ def test_cuda_plant_step_hessian_matches_reference(tmp_path, robot_id):
         u = np.asarray(sample.qdd, np.float64)
         out = _run(executable, cmd, q, qd, u, _DT)
         for integrator_type, block in integ_blocks.items():
-            tag = f"{robot_id} {integrator_type} @ {sample.name}"
+            tag = f"{robot_id}:{base_mode} {integrator_type} @ {sample.name}"
             H_ref = np.asarray(ref.plant_step_hessian(q, qd, u, _DT, integrator_type=integrator_type),
                                dtype=np.float64)
             assert H_ref.shape == (2 * nv, nz, nz)
