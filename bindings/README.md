@@ -73,7 +73,8 @@ codegen-baked leaf-EE / LWA frame.
 
 ## JAX FFI (`grid_rbd[jax]`)
 
-`pip install grid-rbd[jax]` enables the JAX-side bridge, which shares
+The `[jax]` extra (see the [install matrix](#install-editable-from-a-grid-checkout))
+enables the JAX-side bridge, which shares
 the same per-robot `.so` cache. All methods are exposed via
 `jax.ffi.ffi_call` and run device-resident on JAX-supplied CUDA streams
 — no host round-trip — so they slot directly into `jax.jit` graphs:
@@ -91,7 +92,8 @@ Full parity with the plain wrapper as of v0.3.
 
 ## PyTorch backend (`backend="torch"`)
 
-`register_robot(..., backend="torch")` returns a `TorchRobotHandle`
+The `[torch]` extra (see the [install matrix](#install-editable-from-a-grid-checkout))
+enables the torch backend. `register_robot(..., backend="torch")` returns a `TorchRobotHandle`
 whose methods return `torch.Tensor`. The four differentiable algorithms
 (`inverse_dynamics` / `forward_dynamics` / `aba` / `integrator`) are autograd-aware,
 with analytic backward passes that reuse the existing `*_gradient`
@@ -159,9 +161,65 @@ the `RobotHandle` algorithm methods is on the roadmap.
 
 ## Install (editable, from a GRiD checkout)
 
+The base install is deliberately minimal (numpy + platformdirs); each backend
+is an opt-in extra. Pick the row for the wrapper surface you want:
+
 ```bash
 cd path/to/GRiD
-pip install -e bindings/
+pip install -e "bindings/"          # base: numpy handle only
+pip install -e "bindings/[jax]"     # + JAX FFI surface (grid_rbd.jax)
+pip install -e "bindings/[torch]"   # + torch backend (backend="torch")
+pip install -e "bindings/[all]"     # jax + torch (both backends)
+pip install -e "bindings/[dev]"     # + pytest (run the bindings' tests)
 ```
 
+| Extra | Pulls in | Unlocks |
+|---|---|---|
+| *(base)* | numpy, platformdirs | numpy handle (`register_robot(..., backend="numpy")`) + `grid_plant` |
+| `[jax]` | + jax | JAX FFI surface — `import grid_rbd.jax` (device-resident, `jax.jit`-able) |
+| `[torch]` | + torch | torch backend — `register_robot(..., backend="torch")`, autograd + CUDA-Graphs |
+| `[all]` | jax + torch | both backend surfaces (recursive self-extra; no dev/bench weight) |
+| `[dev]` | + pytest | run the bindings' own test suite |
+
+Notes:
+
+* **`nvcc` is needed at `register_robot()` / `precompile()` time, not at
+  `pip install` time** — pip only stages Python deps; the per-robot `.so` is
+  built (and cached) on first use.
+* **The GPU wheels are the user's choice**, mirroring `jax` vs `jax[cuda]`: we
+  pin only the minimum API version, never a CUDA-variant. For `[torch]` you must
+  install a torch **CUDA wheel matching the GPU arch** (e.g. a **cu128** build
+  for sm_120 / RTX 5090 — a cu124 wheel maxes at sm_90 and cannot launch on
+  sm_120). For `[jax]`, install `jax[cuda12]` for your platform.
+* The heavy comparator/oracle stack (Pinocchio / mjx / frax / bard) is **not**
+  in any extra here — that's a developer concern carried by the repo-root
+  `requirements-dev.txt` / `developer_install.sh`.
+
 A PyPI release will follow once the surface is feature-complete.
+
+### Precompile (AOT cache-warming)
+
+`register_robot()` compiles the per-robot `.so` on first use; subsequent runs
+are instant cache hits. To do that build offline — e.g. in a Docker image build
+or CI step, so production never pays the one-time nvcc cost — call
+`grid_rbd.precompile()`:
+
+```python
+import grid_rbd
+
+# Build + cache one or more tiers ahead of time. Each tier dict overrides the
+# codegen-affecting options; warm whichever backend surfaces you ship.
+grid_rbd.precompile(
+    name="iiwa14",
+    urdf_path="iiwa.urdf",
+    tiers=[{}, {"floating_base": True}],   # fixed- and floating-base .so
+    backends=("numpy", "jax", "torch"),
+    max_batch_size=256,
+)
+```
+
+A tier already in the cache is a no-op (no nvcc); a missing tier compiles once.
+Build the cache offline, ship/keep the cache dir, and every later
+`register_robot` / `get_robot` / `jax.jit` starts in well under a second. On a
+successful build the `build.log` path is reported too (not just on failure), so
+you can inspect nvcc/ptxas output for warnings.

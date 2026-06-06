@@ -18,9 +18,24 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Backend extras mirror the jax-vs-jax[cuda] pattern: the user picks the GPU
+# wheel (jax[cuda] / a torch cu1xx build) matching their arch; we only pin the
+# minimum API version. No upper cap — an over-tight cap just blocks users.
 jax = [
-    "jax>=0.4.40,<0.5",
+    "jax>=0.4.40",
 ]
+torch = [
+    "torch>=2.1",
+]
+# Both backend surfaces in one shot (recursive self-extras). NO dev/benchmark
+# weight here, and NO cuRobo — cuRobo installs last via the bench channel.
+all = [
+    "grid-rbd[jax]",
+    "grid-rbd[torch]",
+]
+# The bindings' own test deps only. The heavy comparator/oracle stack
+# (pinocchio/mjx/frax/bard) lives in the repo-root requirements-dev.txt /
+# developer_install.sh — a separate channel, deliberately not pulled in here.
 dev = [
     "pytest>=7.0",
 ]
