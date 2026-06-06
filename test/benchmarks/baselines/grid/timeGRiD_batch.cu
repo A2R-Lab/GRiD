@@ -191,7 +191,12 @@ __host__ void run_batch_at(bool floating_base, int N, cudaStream_t *streams, gri
     measure_idsva_so_batch<T,TEST_ITERS>(N, streams, m, d);
 #endif
 #if GRID_HAS_IDSVA_SO_BODY_FRAME
-    measure_idsva_so_body_frame_batch<T,TEST_ITERS>(N, streams, m, d);
+    // body_frame is the PRODUCTION second-order path only for fixed-base robots.
+    // For floating-base the dispatcher routes SO -> world_frame, so the body_frame
+    // kernel is non-production there and must NOT pollute the W/L tally; gate it off.
+    if (!floating_base) {
+        measure_idsva_so_body_frame_batch<T,TEST_ITERS>(N, streams, m, d);
+    }
 #endif
 #if GRID_HAS_IDSVA_SO_WORLD_FRAME
     measure_idsva_so_world_frame_batch<T,TEST_ITERS>(N, streams, m, d);
