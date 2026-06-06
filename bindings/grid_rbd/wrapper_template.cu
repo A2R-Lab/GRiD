@@ -546,7 +546,10 @@ static inline void pack_q(const T* q, int batch, int num_joints) {
 }
 
 // com(q) -> [p_com(3); J_com(3 x NV)] per timestep, total 3 + 3*NUM_VEL floats.
+// Gated on GRID_HAS_COM: com/ccrba/energy are NOT emitted for mimic robots (the
+// per-body Jacobian fold isn't mimic-reduced), so this returns rc=3 there.
 extern "C" int grid_rbd_com(const T* q, T* out, int batch) {
+#ifdef GRID_HAS_COM
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q(q, batch, grid::NUM_JOINTS);
@@ -555,10 +558,16 @@ extern "C" int grid_rbd_com(const T* q, T* out, int batch) {
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_com, (size_t)batch * (3 + 3 * grid::NUM_VEL) * sizeof(T));
     return 0;
+#else
+    (void)q; (void)out; (void)batch;
+    return 3;  // com not generated for this robot (mimic)
+#endif
 }
 
 // ccrba(q, qd) -> [A(6 x NV); h(6)] per timestep, total 6*NUM_VEL + 6 floats.
+// Gated on GRID_HAS_CCRBA (same mimic caveat as com); returns rc=3 otherwise.
 extern "C" int grid_rbd_ccrba(const T* q, const T* qd, T* out, int batch) {
+#ifdef GRID_HAS_CCRBA
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
@@ -567,10 +576,16 @@ extern "C" int grid_rbd_ccrba(const T* q, const T* qd, T* out, int batch) {
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_ccrba, (size_t)batch * (6 * grid::NUM_VEL + 6) * sizeof(T));
     return 0;
+#else
+    (void)q; (void)qd; (void)out; (void)batch;
+    return 3;  // ccrba not generated for this robot (mimic)
+#endif
 }
 
 // energy(q, qd) -> [KE, PE, KE+PE] per timestep, total 3 floats. Takes gravity.
+// Gated on GRID_HAS_ENERGY (same mimic caveat as com); returns rc=3 otherwise.
 extern "C" int grid_rbd_energy(const T* q, const T* qd, T* out, int batch, T gravity) {
+#ifdef GRID_HAS_ENERGY
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
@@ -579,6 +594,10 @@ extern "C" int grid_rbd_energy(const T* q, const T* qd, T* out, int batch, T gra
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_energy, (size_t)batch * 3 * sizeof(T));
     return 0;
+#else
+    (void)q; (void)qd; (void)out; (void)batch;
+    return 3;  // energy not generated for this robot (mimic)
+#endif
 }
 
 // generalized_gravity(q) -> g(q) = RNEA(q,0,0) per timestep, NUM_VEL floats. Takes gravity.
@@ -603,6 +622,88 @@ extern "C" int grid_rbd_nonlinear_effects(const T* q, const T* qd, T* out, int b
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
+}
+
+// coriolis_matrix(q, qd) -> nv x nv Coriolis matrix C(q,qd), row-major
+// (C[row*nv + col]). Always emitted with the "all" profile (mimic-safe:
+// alpha-folded column assembly), so it is bound UNGATED like com/ccrba.
+extern "C" int grid_rbd_coriolis_matrix(const T* q, const T* qd, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::coriolis_matrix<T>(g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_coriolis, (size_t)batch * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+
+// kinetic_energy_regressor(q, qd) -> length 10*NUM_BODIES regressor y_KE
+// (KE = y_KE . pi). Always emitted with the "all" profile (mimic-safe), ungated.
+extern "C" int grid_rbd_kinetic_energy_regressor(const T* q, const T* qd, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::kinetic_energy_regressor<T>(g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_ke_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
+    return 0;
+}
+
+// potential_energy_regressor(q) -> length 10*NUM_BODIES regressor y_PE
+// (PE = y_PE . pi). Always emitted with the "all" profile (mimic-safe), ungated.
+// Reads the COMPRESSED input layout (h_q / d_q) like com.
+extern "C" int grid_rbd_potential_energy_regressor(const T* q, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q(q, batch, grid::NUM_JOINTS);
+    grid::potential_energy_regressor<T>(g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_pe_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
+    return 0;
+}
+
+// dccrba(q) -> 6*NUM_VEL*NUM_VEL dCCRBA tensor dA/dq (per timestep, as the kernel
+// writes it). Reads the COMPRESSED input layout (h_q / d_q). Gated on
+// GRID_HAS_DCCRBA: dccrba is NOT emitted for mimic robots (per-body Jacobian fold
+// isn't mimic-reduced), so this returns rc=3 there. For big floating robots whose
+// kernel arena overflows the smem cap the host wrapper's
+// grid_check_dynamic_shared_memory_bytes raises a clear rc!=0 at launch.
+extern "C" int grid_rbd_dccrba(const T* q, T* out, int batch) {
+#ifdef GRID_HAS_DCCRBA
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q(q, batch, grid::NUM_JOINTS);
+    grid::dccrba<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_dccrba, (size_t)batch * 6 * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)out; (void)batch;
+    return 3;  // dccrba not generated for this robot (mimic)
+#endif
+}
+
+// cmm_time_variation(q, qd) -> 6*NUM_VEL centroidal-momentum-matrix time
+// variation Adot (per timestep). Gated on GRID_HAS_CMM_TIME_VARIATION (same
+// mimic caveat as dccrba); returns rc=3 when not generated.
+extern "C" int grid_rbd_cmm_time_variation(const T* q, const T* qd, T* out, int batch) {
+#ifdef GRID_HAS_CMM_TIME_VARIATION
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::cmm_time_variation<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_cmm_time_variation, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)qd; (void)out; (void)batch;
+    return 3;  // cmm_time_variation not generated for this robot (mimic)
+#endif
 }
 
 // frame_jacobian(q) -> 6 x NUM_VEL geometric Jacobian (col-major, [linear;angular])

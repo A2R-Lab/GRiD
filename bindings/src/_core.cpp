@@ -186,6 +186,17 @@ public:
         fn_frame_jacobian_dot_ = reinterpret_cast<fn_frame_jac_dot_t>(opt_sym("grid_rbd_frame_jacobian_dot"));
         fn_osc_inertia_        = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_osc_inertia"));
 
+        // PS5 value ops — OPTIONAL: present in newer .so files.
+        // coriolis_matrix / kinetic_energy_regressor / potential_energy_regressor
+        // are always emitted with the "all" profile (mimic-safe). dccrba /
+        // cmm_time_variation are skipped for mimic robots (the per-body Jacobian
+        // fold isn't mimic-reduced), so their C-ABI symbol returns rc=3 there.
+        fn_coriolis_matrix_    = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_coriolis_matrix"));
+        fn_kinetic_energy_regressor_   = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_kinetic_energy_regressor"));
+        fn_potential_energy_regressor_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_potential_energy_regressor"));
+        fn_dccrba_             = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_dccrba"));
+        fn_cmm_time_variation_ = reinterpret_cast<fn_q_qd_out_t>(opt_sym("grid_rbd_cmm_time_variation"));
+
         // Cache constants (avoid the indirect-function-call cost on every read).
         num_joints_ = fn_num_joints_();
         num_vel_    = fn_num_vel_();
@@ -812,6 +823,9 @@ public:
         int batch = check_q(q, "com");
         py::array_t<float> out({batch, 3 + 3 * num_vel_});
         int rc = fn_com_(q.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error(
+            "com not available for this robot: it is not generated for mimic "
+            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
         if (rc != 0) throw std::runtime_error("grid_rbd_com failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -825,6 +839,9 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<float> out({batch, 6 * num_vel_ + 6});
         int rc = fn_ccrba_(q.data(), qd.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error(
+            "ccrba not available for this robot: it is not generated for mimic "
+            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
         if (rc != 0) throw std::runtime_error("grid_rbd_ccrba failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -839,6 +856,9 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<float> out({batch, 3});
         int rc = fn_energy_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc == 3) throw std::runtime_error(
+            "energy not available for this robot: it is not generated for mimic "
+            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
         if (rc != 0) throw std::runtime_error("grid_rbd_energy failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -914,6 +934,84 @@ public:
         int rc = fn_osc_inertia_(q.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error("osc_inertia not generated for this robot .so");
         if (rc != 0) throw std::runtime_error("grid_rbd_osc_inertia failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // ─── PS5 value ops (coriolis / energy regressors / dccrba / cmm) ──────────
+
+    // coriolis_matrix(q, qd, gravity) -> (batch, NUM_VEL*NUM_VEL) row-major C(q,qd).
+    py::array_t<float> coriolis_matrix(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+        float gravity)
+    {
+        if (!fn_coriolis_matrix_) throw std::runtime_error("coriolis_matrix not available in this .so (re-register with force_rebuild=True)");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<float> out({batch, num_vel_ * num_vel_});
+        int rc = fn_coriolis_matrix_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_coriolis_matrix failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // kinetic_energy_regressor(q, qd, gravity) -> (batch, 10*NUM_BODIES) y_KE.
+    py::array_t<float> kinetic_energy_regressor(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+        float gravity)
+    {
+        if (!fn_kinetic_energy_regressor_) throw std::runtime_error("kinetic_energy_regressor not available in this .so (re-register with force_rebuild=True)");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<float> out({batch, 10 * num_bodies_});
+        int rc = fn_kinetic_energy_regressor_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_kinetic_energy_regressor failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // potential_energy_regressor(q, gravity) -> (batch, 10*NUM_BODIES) y_PE.
+    py::array_t<float> potential_energy_regressor(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        float gravity)
+    {
+        if (!fn_potential_energy_regressor_) throw std::runtime_error("potential_energy_regressor not available in this .so (re-register with force_rebuild=True)");
+        int batch = check_q(q, "potential_energy_regressor");
+        py::array_t<float> out({batch, 10 * num_bodies_});
+        int rc = fn_potential_energy_regressor_(q.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_potential_energy_regressor failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // dccrba(q) -> (batch, 6*NUM_VEL*NUM_VEL) dA/dq tensor. Not emitted for mimic
+    // robots (rc=3): the per-body Jacobian fold isn't mimic-reduced.
+    py::array_t<float> dccrba(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q)
+    {
+        if (!fn_dccrba_) throw std::runtime_error(
+            "dccrba not available in this .so (re-register with force_rebuild=True)");
+        int batch = check_q(q, "dccrba");
+        py::array_t<float> out({batch, 6 * num_vel_ * num_vel_});
+        int rc = fn_dccrba_(q.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error(
+            "dccrba not available for this robot: it is not generated for mimic "
+            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
+        if (rc != 0) throw std::runtime_error("grid_rbd_dccrba failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // cmm_time_variation(q, qd) -> (batch, 6*NUM_VEL) Adot. Not emitted for mimic
+    // robots (rc=3), same caveat as dccrba.
+    py::array_t<float> cmm_time_variation(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        py::array_t<float, py::array::c_style | py::array::forcecast> qd)
+    {
+        if (!fn_cmm_time_variation_) throw std::runtime_error(
+            "cmm_time_variation not available in this .so (re-register with force_rebuild=True)");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<float> out({batch, 6 * num_vel_});
+        int rc = fn_cmm_time_variation_(q.data(), qd.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error(
+            "cmm_time_variation not available for this robot: it is not generated "
+            "for mimic robots (the per-body Jacobian fold is not yet mimic-reduced)");
+        if (rc != 0) throw std::runtime_error("grid_rbd_cmm_time_variation failed: rc=" + std::to_string(rc));
         return out;
     }
 
@@ -1039,6 +1137,12 @@ private:
     fn_frame_jac_t     fn_frame_jacobian_      = nullptr;
     fn_frame_jac_dot_t fn_frame_jacobian_dot_  = nullptr;
     fn_q_out_t         fn_osc_inertia_         = nullptr;
+    // PS5 value ops (optional symbols)
+    fn_q_qd_out_grav_t fn_coriolis_matrix_            = nullptr;
+    fn_q_qd_out_grav_t fn_kinetic_energy_regressor_   = nullptr;
+    fn_q_out_grav_t    fn_potential_energy_regressor_ = nullptr;
+    fn_q_out_t         fn_dccrba_                      = nullptr;
+    fn_q_qd_out_t      fn_cmm_time_variation_          = nullptr;
 
     int num_joints_ = 0;
     int num_vel_    = 0;
@@ -1159,5 +1263,14 @@ PYBIND11_MODULE(_core, m) {
         .def("frame_jacobian_dot", &Runner::frame_jacobian_dot,
              py::arg("q"), py::arg("qd"),
              py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
-        .def("osc_inertia", &Runner::osc_inertia, py::arg("q"));
+        .def("osc_inertia", &Runner::osc_inertia, py::arg("q"))
+        .def("coriolis_matrix", &Runner::coriolis_matrix,
+             py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
+        .def("kinetic_energy_regressor", &Runner::kinetic_energy_regressor,
+             py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
+        .def("potential_energy_regressor", &Runner::potential_energy_regressor,
+             py::arg("q"), py::arg("gravity") = -9.81f)
+        .def("dccrba", &Runner::dccrba, py::arg("q"))
+        .def("cmm_time_variation", &Runner::cmm_time_variation,
+             py::arg("q"), py::arg("qd"));
 }

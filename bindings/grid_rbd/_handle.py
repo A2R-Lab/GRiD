@@ -125,8 +125,10 @@ class RobotHandle:
         gradients   inverse_dynamics_gradient · forward_dynamics_gradient
         2nd-order   idsva_so → SecondOrderID · fdsva_so → SecondOrderFD
         kinematics  end_effector_pose[_gradient|_hessian] · fk_batched ·
-                    frame_jacobian[_dot] · com · ccrba · osc_inertia
-        energy      energy
+                    frame_jacobian[_dot] · com · ccrba · osc_inertia ·
+                    dccrba · cmm_time_variation
+        energy      energy · coriolis_matrix ·
+                    kinetic_energy_regressor · potential_energy_regressor
         integration integrator[_gradient]
         plant/cost  plant_step[_gradient|_hessian] · quadratic_state_cost ·
                     quadratic_input_cost · ee_pos_cost · com_cost ·
@@ -692,6 +694,68 @@ class RobotHandle:
         q = np.ascontiguousarray(q, dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         return self._runner.nonlinear_effects(q, qd, float(gravity))
+
+    def coriolis_matrix(self, q, qd, *, gravity: float = -9.81):
+        """Coriolis matrix C(q,qd). Returns ``(B, NV, NV)`` row-major, with
+        ``C·qd + g(q) = nonlinear_effects(q, qd)``. Matches
+        ``RBDReference.coriolis_matrix(q, qd)`` (gravity is unused by C; the
+        kwarg mirrors the host wrapper signature)."""
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        raw = self._runner.coriolis_matrix(q, qd, float(gravity))  # (B, NV*NV) row-major
+        B = raw.shape[0]
+        NV = self.num_vel
+        return self._cast_out(raw.reshape(B, NV, NV))
+
+    def kinetic_energy_regressor(self, q, qd, *, gravity: float = -9.81):
+        """Kinetic-energy regressor y_KE, length ``10*num_bodies``, with
+        ``KE = y_KE · π`` (π = stacked per-link inertial parameters, body-major,
+        10 params/body). Returns ``(B, 10*num_bodies)``. Matches
+        ``RBDReference.kinetic_energy_regressor(q, qd)`` (gravity unused)."""
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        return self._cast_out(self._runner.kinetic_energy_regressor(q, qd, float(gravity)))
+
+    def potential_energy_regressor(self, q, *, gravity: float = -9.81):
+        """Potential-energy regressor y_PE, length ``10*num_bodies``, with
+        ``PE = y_PE · π``. Returns ``(B, 10*num_bodies)``. Matches
+        ``RBDReference.potential_energy_regressor(q, GRAVITY=gravity)`` (PE uses
+        ``gravity``; only the mass + first-moment columns are nonzero)."""
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        return self._cast_out(self._runner.potential_energy_regressor(q, float(gravity)))
+
+    def dccrba(self, q):
+        """dCCRBA tensor ∂A/∂q, shape ``(B, 6, NV, NV)`` indexed
+        ``[:, :, k, i] = ∂A[:, k]/∂q_i`` (Pinocchio centroidal convention,
+        ``[linear; angular]`` at the CoM, world-aligned). Matches
+        ``RBDReference.dccrba(q)`` (which returns ``(6, NV, NV)`` per sample).
+
+        Not available for mimic robots, nor when the kernel's centroidal pool
+        exceeds the shared-memory cap (big floating robots) — a clear
+        ``RuntimeError`` is raised in those cases rather than returning garbage.
+        """
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        raw = self._runner.dccrba(q)  # (B, 6*NV*NV) flat, dA[row + 6*k + 6*NV*m]
+        B = raw.shape[0]
+        NV = self.num_vel
+        # flat layout dA[row + 6*k + 6*NV*m] -> (B, m, k, row) then -> (B, row, k, m).
+        return self._cast_out(raw.reshape(B, NV, NV, 6).transpose(0, 3, 2, 1))
+
+    def cmm_time_variation(self, q, qd):
+        """Centroidal-momentum-matrix time variation Ȧ = dA(q(t))/dt, shape
+        ``(B, 6, NV)`` (Pinocchio convention, ``[linear; angular]`` at the CoM,
+        world-aligned) = ``Σ_i (∂A/∂q_i)·qd_i``. Matches
+        ``RBDReference.cmm_time_variation(q, qd)``.
+
+        Not available for mimic robots / oversized centroidal pools (see
+        :py:meth:`dccrba`); raises a clear ``RuntimeError`` there.
+        """
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        raw = self._runner.cmm_time_variation(q, qd)  # (B, 6*NV) col-major A[r + 6*c]
+        B = raw.shape[0]
+        NV = self.num_vel
+        return self._cast_out(raw.reshape(B, NV, 6).transpose(0, 2, 1))
 
     def frame_jacobian(self, q, *, target_jid=None, reference_frame=None):
         """Geometric Jacobian (6 x NV, ``[linear; angular]``) of a frame.
