@@ -129,6 +129,37 @@ every multiply-form but MISSED the vector-assignment forms — `a_world[5] = gra
 are. So prefer MORE parallelism (more threads/blocks) even for single-block accuracy; don't leave
 work serial to "save" SM occupancy. Justify every serial block.
 
+**The three structural parallelism levers — AUDIT every algorithm against all three (canonical doc:
+`docs/source/user_guide/concepts/parallelism_patterns.rst`; status table: `docs/open-tasks/parallelism_audit.md`).
+A serial block with no P1/P2/P3 justification is a bug to file, not a style choice:**
+- **P1 — Depth/BFS-level batching of tree recursions.** Bodies at the same tree DEPTH are independent;
+  emit the recursion as a serial loop over LEVELS (O(depth)) and fan all bodies in a level across
+  threads (one sync/level), parent←children via atomicAdd/segmented reduce. Turns O(NB) serial steps
+  into O(depth) — big on branched humanoids (depth≪NB), neutral on chains (never hurts). Templates:
+  `_aba.py` forward (`segmented_row_strided_gemv`), floating `_crba.py` backward (per-level fan + atomicAdd).
+  Cue: any `for jid in range(...)` emitting a per-body 6×6 + block sync.
+- **P2 — Parallel independent columns** (gradients/Jacobians/Hessians have independent columns/(j,k) cells):
+  compute the recursion ONCE, then fan per-column/per-cell work across threads (e.g. 2·n² for an n×n grad
+  pair). Templates: id_du per-element fan, d2ee per-cell, idsva_so per-column. Cue: an outer `for col`/`for (j,k)`
+  wrapping otherwise-independent algebra.
+- **P3 — Loop-invariant hoist → store temps → batch-parallel after.** Work inside a serial recursion that
+  does NOT depend on the loop's serial carry: stash its per-iteration inputs during the walk, then do it as
+  ONE parallel pass AFTER. Differs from P1 (which keeps work in the recursion) — P3 removes loop-independent
+  work entirely. Costs a (cold, write-once) scratch band → interacts with the spill tiers (keep in smem when
+  it fits, spill to d_workspace when not). Cue: a sub-expr inside the body-walk whose inputs are all
+  per-iteration-local and whose output is consumed after the walk.
+- **P4 — Offline memory layout: sparse compaction + coalesced distribution + topology-helper indirection.**
+  GRiD is a code GENERATOR that knows the robot's topology + matrix sparsity OFFLINE — spend that to make
+  online reads cheap: (a) **compact** to only structurally-nonzero entries (fewer bytes → higher tier fits;
+  don't loop/store over known zeros); (b) **lay out** data (SoA/stride/padding) offline so the thread→data
+  map reads CONTIGUOUS aligned addresses per warp — an uncoalesced strided access can erase a P1/P2 fan-out
+  win, so lay per-level bodies / per-column data contiguous to the access order; (c) **bake topology-helper
+  arrays** (`parent[]`, BFS-level/branch offsets, sparsity offsets, column/support maps) into the robotModel
+  so the kernel does cheap coalesced array LOOKUPS, not branchy per-thread index math (these helpers are also
+  what make P1/P2 expressible without divergence). P4 keeps the MEMORY path up with P1–P3's shortened compute
+  path. Cue: dense passes over known zeros; per-thread index arithmetic that could be a baked lookup; strided
+  warp reads; data interleaved against access order.
+
 - **Parallelize independent COLUMNS in gradients/hessians.** d2ee (per-slot Step-2 + per-cell
   Step-5b), id_du branched-fixed (per-output-element fan, 2·NJ → 2·n² threads), idsva_so world
   forward-sweep. Keep the recursion (body-walk) serial with a per-body `__syncthreads`; fan the
