@@ -15,8 +15,11 @@ Thread-invariance: each case swept over {1, 2, 16, 32, 256} threads; the float64
 oracle (not a serial-fp32 accumulation) is the invariance reference (atomicAdd
 reassociation is benign — compare against the oracle, not bit-identity).
 
-Robots: iiwa14 (fixed, first slice), go2/g1 (floating). Mimic (fr3/h1_2) is GATED
-OFF in codegen (centroidal Jacobian not yet mimic-reduced) so it is not listed.
+Robots: iiwa14 (fixed, first slice), go2/g1 (floating), and the MIMIC robots
+fr3:fixed / h1_2:fixed (NB>NV). Mimic is now SUPPORTED: centroidal_inner's Jw and
+the per-unit phi here are alpha-folded (dc_unit_alpha), mirroring the mimic-aware
+RBDReference oracle. The oracle is authoritative for mimic (pin omits mimic
+bodies, so skip the pin cross-check; the CUDA-vs-RBDReference diff stands).
 """
 
 import contextlib
@@ -44,13 +47,26 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_dccrba_smoke_runner.cu")
 
-# (robot_id, base_mode). iiwa14 first (first green slice), then floating go2/g1.
-# Mimic robots are codegen-gated-off (see module docstring) -> not tested here.
-_CASES = [
-    ("iiwa14", "fixed"),
-    ("go2", "floating"),
-    ("g1", "floating"),
-]
+# (robot_id, base_mode). iiwa14 first (first green slice), then floating go2/g1,
+# then the MIMIC robots fr3:fixed (small) / h1_2:fixed (big, NB=51>NV=39) — now
+# alpha-folded + de-gated (see module docstring). Override with
+# GRID_CUDA_DCCRBA_ROBOTS="iiwa14:fixed,fr3:fixed".
+def _cases():
+    raw = os.environ.get(
+        "GRID_CUDA_DCCRBA_ROBOTS",
+        "iiwa14:fixed,go2:floating,g1:floating,fr3:fixed,h1_2:fixed",
+    )
+    out = []
+    for tok in raw.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        rid, _, mode = tok.partition(":")
+        out.append((rid.strip(), (mode.strip() or "fixed")))
+    return out
+
+
+_CASES = _cases()
 
 _THREAD_COUNTS = (1, 2, 16, 32, 256)
 

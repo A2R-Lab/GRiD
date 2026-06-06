@@ -80,8 +80,9 @@ include:
   ``end_effector_pose_gradient`` / ``end_effector_pose_hessian``, the second-order
   ``idsva_so`` / ``fdsva_so``, the external-force gradients (``f_ext_gradient``),
   and the integrator gradients. No mimic gradient raises ``NotImplementedError``
-  anymore. The one remaining mimic gap is the centroidal kinematics family
-  (``com`` / ``ccrba`` / ``energy``), whose per-body Jacobian fold is not yet
-  mimic-reduced, so those keys are skipped for mimic robots and remain on the
-  roadmap.
+  anymore. The centroidal kinematics family (``com`` / ``ccrba`` / ``energy``)
+  and the centroidal derivatives (``dccrba`` / ``cmm_time_variation``) are now
+  mimic-reduced too: the per-body world Jacobian and per-unit motion columns
+  carry the mimic multiplier (α), validated against the mimic-aware
+  RBDReference oracle on fixed-base mimic robots.
 

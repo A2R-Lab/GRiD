@@ -150,13 +150,15 @@ def _mimic_robot_modes():
 
 
 # Restricted algorithm list: request the two RNEA bias wrappers by their OWN keys
-# (R6) — generalized_gravity / nonlinear_effects auto-pull `inverse_dynamics` as
-# their dep — and SKIP com/ccrba/energy (kin-domain, not requested + mimic-refused)
-# AND skip the grid_plant com_cost/momentum_cost (gen_grid_plant: centroidal_ok
-# requires ee_pose + non-mimic). So the resulting header defines ONLY the mimic-
-# supported centroidal symbols this runner references — it links for mimic AND
-# non-mimic robots alike.
-_MIMIC_SAFE_ALGORITHMS = ["generalized_gravity", "nonlinear_effects"]
+# (R6) — generalized_gravity / nonlinear_effects auto-pull `inverse_dynamics` —
+# PLUS com / ccrba / energy (the kinematics-domain centroidal device fns, now
+# ALPHA-FOLDED + de-gated for mimic robots). We deliberately do NOT request the
+# grid_plant com_cost/momentum_cost (gen_grid_plant: centroidal_ok requires
+# non-mimic), so the resulting header defines ONLY the mimic-supported centroidal
+# DEVICE symbols this runner references — it links for mimic AND non-mimic robots.
+_MIMIC_SAFE_ALGORITHMS = [
+    "generalized_gravity", "nonlinear_effects", "com", "ccrba", "energy",
+]
 
 
 def _generate_mimic_header(project_model, build_dir):
@@ -254,6 +256,24 @@ def test_cuda_centroidal_mimic_safe_matches_reference(tmp_path, robot_id, base_m
         assert nv == out["gen_gravity"].reshape(-1).shape[0], (
             f"{tag} gen_gravity width {out['gen_gravity'].reshape(-1).shape[0]} != nv {nv}"
         )
+
+        # com / ccrba / energy — the alpha-folded (de-gated for mimic) device fns.
+        p_com = np.asarray(ref.com(q), dtype=np.float64).reshape(-1)
+        Jcom = np.asarray(ref.jacobian_com(q), dtype=np.float64)        # 3 x nv
+        close(out["com"].reshape(-1), p_com, f"{tag} com")
+        close(out["jcom"].reshape(3, nv, order="F"), Jcom, f"{tag} jacobian_com")
+
+        A_ref, h_ref = ref.ccrba(q, qd)
+        A_ref = np.asarray(A_ref, dtype=np.float64)                     # 6 x nv
+        h_ref = np.asarray(h_ref, dtype=np.float64).reshape(-1)
+        close(out["ccrba_A"].reshape(6, nv, order="F"), A_ref, f"{tag} ccrba A")
+        close(out["ccrba_h"].reshape(-1), h_ref, f"{tag} ccrba h")
+
+        ke = ref.kinetic_energy(q, qd)
+        pe = ref.potential_energy(q)
+        me = ref.mechanical_energy(q, qd)
+        close(out["energy"].reshape(-1), np.array([ke, pe, me]),
+              f"{tag} energy [KE, PE, mechanical]")
 
 
 def _stdin(q, qd):
