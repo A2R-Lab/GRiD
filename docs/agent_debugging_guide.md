@@ -172,6 +172,27 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   on the loaded URDF), so its fixed-base ABA routes through the compose path `qdd=Minv·(τ−rnea)` (= CRBA/Minv),
   NOT the ABA backward recursion. Check `robot_has_mimic_joints()` for the EXACT URDF the sweep loads; don't
   trust in-code "all non-mimic" comments (`baselines/grid/run.py:455` is wrong for h1_2).
+- **CAVEAT 2 (P2 column-fan, 2026-06-06): fanning a thread-0-serial assembly over threads can REGRESS when the
+  serial body materializes large baked `const T[]` job-tables — REVERTED frame_jacobian #3.** Audit item #3
+  (`_frame_jacobian.py` Step 3+4, the "adds parallelism where there was NONE / Effort M, risk Low, upside High"
+  target) was implemented exactly per spec (P2 column fan + P4 per-target `[start,len)` support map, eepose Step-3b
+  template for the mimic v-slot fold), passed full equivalence (iiwa14-fixed, g1-floating, fr3-fixed J/Jdot;
+  h1_2-fixed J/Jdot too — the lone h1_2 Lambda-WORLD fail is a PRE-EXISTING osc_inertia float32-inverse flake,
+  byte-identical on clean HEAD) AND thread-invariance (6/6, threads 1/2/16/32/256). But A/B at N=256 was a **mixed
+  net loss → reverted**: g1-floating (nv=36, deep chains) **1.29× FASTER** (1189→922 us), but **iiwa14-fixed
+  (nv=7) up to 7× SLOWER (7→53 us)** — and the slowdown SCALES WITH THREAD COUNT (t=8 ≈parity 8.6 vs 8.1 us;
+  t=64 1.6×; t=352 7×) while the serial baseline is FLAT (~7 us at every thread count, since only thread 0 works).
+  Root cause: Step 3 bakes `const int fj_jj[njobs]` + `const T fj_ang[3·njobs]`/`fj_lin[3·njobs]` (+`fj_off_*`) as
+  FUNCTION-LOCAL arrays. In the serial version one thread instantiates them; the parallel `for(job_idx)` makes ALL
+  block threads instantiate them (nvcc spills the big ones to local memory) → local-mem traffic ∝ thread count
+  swamps the fan-out gain except where the serial column-walk is genuinely long (big floating). The autotuner picks
+  high thread counts for kinematics, so production hits the slow side. **Lesson:** a thread-0-serial block isn't
+  automatically a free parallelization target — if its body declares big baked `const[]` tables (P4 "bake into
+  const arrays" pattern), parallelizing multiplies that materialization cost across the block. Either hoist the
+  tables to `__shared__`/`__constant__` (one materialization, all threads read), or cap the parallel loop's active
+  lanes, or just leave tiny-fan-out assemblies serial. A/B at MULTIPLE thread counts (not just MAX) — a
+  thread-count-SCALING regression is the tell. (#3 stays open in the audit with this caveat; the win is real only
+  for big floating robots and would need the const-table-hoist redesign to not regress the common small case.)
 - **GLASS is VENDORED (inlined) into every generated `grid.cuh` at codegen time — a GLASS change does NOT reach
   GRiD's emit until you also do the GRiD-side plumbing.** Mechanism (`GRiDCodeGenerator/helpers/_lin_alg_helpers.py`):
   `gen_grid_linalg_backend_helpers` reads each file in the curated list `_GLASS_BASE_FILES` *fresh from the GLASS
@@ -229,6 +250,41 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   in numpy and diffing vs the oracle catches index/transpose/sign bugs in *seconds*. Only spend the
   compile once the mirror is 0-error. (Caught the velocity-row `(a,b)` transpose + the un-symmetrized
   Euler position fill before any GPU build.)
+- **An `if(loop_var==k){…}` ladder over many cells with IDENTICAL arithmetic = a P4 baked-table win
+  (compile-time + code-size, byte-identical numerics).** When a per-cell parallel body differs ONLY in a
+  handful of integer offsets (not its op SHAPE), the legacy "inline the body once per cell behind
+  `if(d2m_cell==k)`" emits O(n_cells) copies → the nvcc compile-time / Python-codegen / header-size
+  blow-up. Replace with a baked `static const int tab[6*n] = {…}` of per-cell offsets and ONE shared body
+  that reads `&tab[6*loop_var]` (pattern templates: `_inverse_dynamics.py` seg-offset tables,
+  `_f_ext_gradient.py feg_*`). Keep cells whose op SHAPE varies per cell (axis literals, variable-length
+  sums — e.g. eepose same-joint rev/pris and mimic block-pair) in the residual ladder; index the table
+  cells `[0,n_cross)` first, the shape-varying cells `[n_cross,n_cells)` after, so the launch geometry /
+  total cell count / values are unchanged. Numerics are byte-identical (same scalar ops, offsets just
+  sourced from the table instead of being compile-time constants) — the win is purely emit-shape.
+  **Measured (2026-06-06, eepose `ee_pose_hessian` Step-5b, the documented h1_2/big-floating gap):** the
+  win SCALES with cell count and is huge on the gap target. h1_2-floating (2600 cells, 1780 cross):
+  Python codegen 1607s→412s (−74%), generated header 16.8MB→8.9MB (−47%), `*_inner` region
+  254.9k→96.6k lines, nvcc(`-O3`, sm_120, single-kernel TU) 73.4s→21.3s (−71%), obj 5.48MB→2.27MB
+  (−59%). Smaller robots scale down (iiwa14-fixed 49 cells: nvcc 1.3s→1.0s). Equivalence stayed green at
+  identical tolerances on iiwa14-fixed, go2-floating, AND h1_2-fixed (mimic — proves the table coexists
+  with the residual mimic-block-pair ladder). NB the table is `static const` declared inside the parallel
+  `for` loop body but BEFORE the `if(loop_var<n_cross)` guard — fine (compiler hoists to one static
+  instance; threads with `loop_var>=n_cross` skip the body so no OOB on `&tab[6*loop_var]`).
+- **PERF TIMING — measure in ISOLATION; concurrently-measured verdicts are PROVISIONAL (2026-06-07).**
+  Correctness (equivalence + thread-invariance) runs in per-test `tmp_path` dirs + a content-hashed
+  header cache → contention changes how LONG a run takes, not pass/fail, so **parallelize correctness
+  freely**. TIMING is the opposite: several agents timing on the SAME GPU contend for SMs / memory
+  bandwidth / host-CPU-during-compile → µs numbers inflate and destabilize. So **decouple the two**:
+  implementation agents do codegen + equivalence + thread-invariance and DEFER timing; **serialize ALL
+  A/B timing into one isolated pass** (GPU quiet, one measurement at a time) that commits-win / reverts-
+  no-win off clean numbers. Treat any win/no-win verdict measured under concurrency as PROVISIONAL until
+  re-timed isolated — the 4 reverts above (CRBA, ABA, #3, #10) + the "hand-rolled `dot_prod` < GLASS"
+  claim were concurrent-measured, so the META-finding (don't parallelize cheap serial work) is robust
+  across 4 mechanisms but the individual MAGNITUDES (incl. CAVEAT/CAVEAT 2's 1.29×/7×) await isolated
+  re-timing. **A/B at PRODUCTION thread counts** (autotuner-picked, HIGH) not th=1 — a th=1-only or
+  isolated-microbench measure falsely greenlit #3 and #10 (both won only at th=1). And **never use a
+  long serial float32 accumulation as a thread-invariance oracle** — it amplifies the benign tree-sum
+  reassociation into a false FAIL; use the float64-oracle equivalence harness + a single-call checksum.
 
 ---
 
@@ -238,6 +294,9 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   ONE collision zone is `GRiDCodeGenerator.py`'s **`_MIMIC_GRADIENT_ALGORITHMS`** set (every mimic
   ungate touches it). Hand-reconcile to the **UNION** of removals.
 - **`set()` not `{}`** for an empty refusal set — `{}` is a dict and `dict |= set` raises.
+- **API 529 / an agent that dies MID-process** leaves UNVALIDATED partial edits in its file. PRESERVE
+  the diff (`/tmp`), REVERT the file to clean, and re-dispatch when the API is stable — never build the
+  next step on a half-applied edit.
 - **Bring new parent-level test files by COPYING from the clone**, then bump submodule pointers
   yourself — do NOT merge the clone's parent commit (its submodule pointers reference the clone's
   local SHAs).
