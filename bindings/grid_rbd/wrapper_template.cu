@@ -2687,6 +2687,50 @@ torch::Tensor torch_fdsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor u,
     return out;
 }
 
+// ── inertial-parameter (sysID) regressor + FD parameter gradient ──
+// Mirror the JAX grid_rbd_jax_inverse_dynamics_regressor /
+// grid_rbd_jax_forward_dynamics_parameter_gradient handlers: same kernels, same
+// d_Y / d_dqdd_dpi / d_workspace scratch, same (B, NV*10*NUM_BODIES) row-major
+// output. These back the torch inertial-parameter VJP (tau = Y . pi so
+// dtau/dpi = Y, dqdd/dpi = -Minv . Y).
+
+torch::Tensor torch_inverse_dynamics_regressor(torch::Tensor q, torch::Tensor qd, torch::Tensor qdd, double gravity) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS;
+    grid_torch_check(q, "inverse_dynamics_regressor: q", nj);
+    grid_torch_check(qd, "inverse_dynamics_regressor: qd", nj);
+    grid_torch_check(qdd, "inverse_dynamics_regressor: qdd", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    // qdd occupies the u-slot (read as the acceleration; mirrors the JAX handler).
+    grid_torch_pack(stream, batch, nj, &q, &qd, &qdd);
+    const int out_size = grid::NUM_VEL * 10 * grid::NUM_BODIES;
+    auto out = grid_torch_empty(batch, out_size, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::inverse_dynamics_regressor_kernel<T><<<g_block_dimms, g_thread_dimms, grid::INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_Y, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_Y, (size_t)batch * out_size * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
+torch::Tensor torch_forward_dynamics_parameter_gradient(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS;
+    grid_torch_check(q, "forward_dynamics_parameter_gradient: q", nj);
+    grid_torch_check(qd, "forward_dynamics_parameter_gradient: qd", nj);
+    grid_torch_check(u, "forward_dynamics_parameter_gradient: u", nj);
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, &qd, &u);
+    const int out_size = grid::NUM_VEL * 10 * grid::NUM_BODIES;
+    auto out = grid_torch_empty(batch, out_size, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::forward_dynamics_parameter_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::FORWARD_DYNAMICS_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_dqdd_dpi, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_dqdd_dpi, (size_t)batch * out_size * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+
 // torch-local integrator-type dispatch (self-contained; the JAX variant lives
 // inside the JAX #ifdef and its default branch returns ffi::Error).
 #define GRID_RBD_IT_DISPATCH_TORCH(it_code, FN, ...)                              \
@@ -3012,6 +3056,8 @@ GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
     m.def("forward_dynamics_gradient(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
     m.def("idsva_so(Tensor q, Tensor qd, Tensor qdd, float gravity) -> Tensor");
     m.def("fdsva_so(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
+    m.def("inverse_dynamics_regressor(Tensor q, Tensor qd, Tensor qdd, float gravity) -> Tensor");
+    m.def("forward_dynamics_parameter_gradient(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
     m.def("integrator(Tensor q, Tensor qd, Tensor u, float dt, int it, float gravity) -> Tensor");
     m.def("integrator_gradient(Tensor q, Tensor qd, Tensor u, float dt, int it, float gravity) -> Tensor");
     // grid_plant surface (cost / barrier always emitted; the rest are gated).
@@ -3050,6 +3096,8 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
     m.impl("forward_dynamics_gradient", torch_forward_dynamics_gradient);
     m.impl("idsva_so", torch_idsva_so);
     m.impl("fdsva_so", torch_fdsva_so);
+    m.impl("inverse_dynamics_regressor", torch_inverse_dynamics_regressor);
+    m.impl("forward_dynamics_parameter_gradient", torch_forward_dynamics_parameter_gradient);
     m.impl("integrator", torch_integrator);
     m.impl("integrator_gradient", torch_integrator_gradient);
     m.impl("quadratic_state_cost", torch_quadratic_state_cost);

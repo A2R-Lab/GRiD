@@ -2,9 +2,11 @@
 
 Mirrors the standard grid_rbd API but returns a :py:class:`TorchRobotHandle`
 whose methods are autograd-aware torch ops returning ``torch.Tensor`` and
-running on the current torch CUDA stream. The four differentiable algorithms
-(inverse_dynamics / forward_dynamics / aba / integrator) carry analytic backward passes
-that reuse the existing ``*_gradient`` kernels; the rest are forward-only ops.
+running on the current torch CUDA stream. The differentiable algorithms
+(inverse_dynamics / forward_dynamics / aba / integrator, plus the inertial-param
+sysID ops inverse_dynamics_wrt_params / forward_dynamics_wrt_params) carry
+analytic backward passes that reuse the existing ``*_gradient`` / regressor
+kernels; the rest are forward-only ops.
 
 The grid_plant cost / barrier / plant-step surface is also exposed
 (``plant_step``, ``plant_step_gradient``, ``quadratic_state_cost``,
@@ -163,6 +165,67 @@ def _make_autograd(ns):
     FDFn = _make_fd_like(lambda q, qd, u, g, fe: ops.forward_dynamics(q, qd, u, g, fe))
     AbaFn = _make_fd_like(lambda q, qd, u, g, fe: ops.aba(q, qd, u, g, fe))
 
+    # ── inertial-parameter (sysID) VJPs ──
+    # The forward op is independent of the `params` (π) VALUE (the compiled .so
+    # carries the baked-in inertia); π exists so autograd can flow the analytic
+    # ∂(·)/∂π to it — the linearization of the bias / qdd around the compiled
+    # model (mirrors the JAX idyn_pi / fd_pi custom_vjp). q/qd[/u] cotangents
+    # flow exactly as the plain id / fd VJPs above.
+
+    class IDWrtParamsFn(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, q, qd, params, gravity, f_ext):
+            # forward value ignores `params`; baked-in inertia → c = ID(q, qd).
+            ctx.save_for_backward(q, qd)
+            ctx.gravity = gravity
+            ctx.f_ext = f_ext
+            return ops.inverse_dynamics(q, qd, gravity, f_ext)
+
+        @staticmethod
+        def backward(ctx, grad_c):
+            q, qd = ctx.saved_tensors
+            nj = q.shape[1]
+            raw = ops.inverse_dynamics_gradient(q, qd, ctx.gravity, ctx.f_ext)
+            B = raw.shape[0]
+            blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
+            dc_dq, dc_dqd = blocks[:, 0], blocks[:, 1]
+            gc = grad_c.unsqueeze(1)
+            grad_q = torch.bmm(gc, dc_dq).squeeze(1)
+            grad_qd = torch.bmm(gc, dc_dqd).squeeze(1)
+            # π cotangent: grad_c · Y, Y = ∂c/∂π (NV x 10*NB) at qdd=0.
+            qdd0 = torch.zeros_like(q)
+            Y = ops.inverse_dynamics_regressor(q, qd, qdd0, ctx.gravity).reshape(B, nj, -1)
+            grad_pi = torch.bmm(gc, Y).squeeze(1)
+            return grad_q, grad_qd, grad_pi, None, None
+
+    class FDWrtParamsFn(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, q, qd, u, params, gravity, f_ext):
+            ctx.save_for_backward(q, qd, u)
+            ctx.gravity = gravity
+            ctx.f_ext = f_ext
+            return ops.forward_dynamics(q, qd, u, gravity, f_ext)
+
+        @staticmethod
+        def backward(ctx, grad_qdd):
+            q, qd, u = ctx.saved_tensors
+            nj = q.shape[1]
+            raw = ops.forward_dynamics_gradient(q, qd, u, ctx.gravity, ctx.f_ext)
+            B = raw.shape[0]
+            blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
+            df_dq, df_dqd = blocks[:, 0], blocks[:, 1]
+            m = ops.minv(q).reshape(B, nj, nj)
+            eye = torch.eye(nj, dtype=m.dtype, device=m.device)
+            minv = m + m.transpose(1, 2) - m * eye
+            g = grad_qdd.unsqueeze(1)
+            grad_q = torch.bmm(g, df_dq).squeeze(1)
+            grad_qd = torch.bmm(g, df_dqd).squeeze(1)
+            grad_u = torch.bmm(g, minv).squeeze(1)
+            # π cotangent: grad_qdd · (∂qdd/∂π), ∂qdd/∂π = -Minv·Y (NV x 10*NB).
+            G = ops.forward_dynamics_parameter_gradient(q, qd, u, ctx.gravity).reshape(B, nj, -1)
+            grad_pi = torch.bmm(g, G).squeeze(1)
+            return grad_q, grad_qd, grad_u, grad_pi, None, None
+
     class IntegratorFn(torch.autograd.Function):
         @staticmethod
         def forward(ctx, q, qd, u, dt, it, gravity):
@@ -186,7 +249,8 @@ def _make_autograd(ns):
             grad_u = vjp[:, 2 * nv:3 * nv]
             return grad_q, grad_qd, grad_u, None, None, None
 
-    return {"inverse_dynamics": InverseDynamicsFn, "fd": FDFn, "aba": AbaFn, "integrator": IntegratorFn}
+    return {"inverse_dynamics": InverseDynamicsFn, "fd": FDFn, "aba": AbaFn,
+            "integrator": IntegratorFn, "id_wrt_params": IDWrtParamsFn, "fd_wrt_params": FDWrtParamsFn}
 
 
 # ─── CUDA-Graphs callable ───────────────────────────────────────────────────
@@ -289,6 +353,32 @@ class TorchRobotHandle:
         CUDA float32 (see :py:meth:`inverse_dynamics`)."""
         return self._fns["aba"].apply(q, qd, u, float(gravity), f_ext)
 
+    def inverse_dynamics_wrt_params(self, q, qd, params, *, gravity: float = -9.81, f_ext=None):
+        """Inverse-dynamics bias c = ID(q, qd, qdd=0) (B, NJ), differentiable wrt
+        the per-link inertial parameters ``params`` (π) AND ``q``/``qd``.
+
+        ``params``: (B, 10*num_bodies) — per-link [m, m*c(3), I_O(6)] in the
+        parser's origin-frame basis (same as ``inverse_dynamics_regressor`` Y and
+        ``RBDReference._regressor``). The FORWARD value is independent of
+        ``params`` (the compiled ``.so`` carries the baked-in inertia); the op
+        exists so ``torch.autograd`` flows the analytic ``∂c/∂π = Y(q,qd,qdd=0)``
+        (regressor) to ``params`` — the outer-loop system-ID gradient.
+        ``q``/``qd`` gradients are unchanged. Mirrors the JAX
+        ``inverse_dynamics_wrt_params`` custom_vjp."""
+        return self._fns["id_wrt_params"].apply(q, qd, params, float(gravity), f_ext)
+
+    def forward_dynamics_wrt_params(self, q, qd, u, params, *, gravity: float = -9.81, f_ext=None):
+        """Forward dynamics qdd = FD(q, qd, u) (B, NJ), differentiable wrt the
+        per-link inertial parameters ``params`` (π) AND ``q``/``qd``/``u``.
+
+        ``params``: (B, 10*num_bodies) — see :py:meth:`inverse_dynamics_wrt_params`.
+        The forward value is independent of ``params`` (baked-in inertia); the VJP
+        flows the analytic ``∂qdd/∂π = -M⁻¹·Y`` (the
+        ``forward_dynamics_parameter_gradient`` kernel) to ``params``.
+        ``q``/``qd``/``u`` gradients are unchanged. Mirrors the JAX
+        ``forward_dynamics_wrt_params`` custom_vjp."""
+        return self._fns["fd_wrt_params"].apply(q, qd, u, params, float(gravity), f_ext)
+
     def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
         """x_{k+1} (B, NP+NV). Autograd-aware wrt (q, qd, u)."""
         it = _integrator_code(integrator_type)
@@ -346,6 +436,24 @@ class TorchRobotHandle:
         B = raw.shape[0]
         blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
         return _concat_blocks(blocks)
+
+    def inverse_dynamics_regressor(self, q, qd, qdd=None, *, gravity: float = -9.81):
+        """Joint-torque regressor Y with τ = Y·π (∂τ/∂π). Returns
+        (B, NJ, 10*num_bodies), row-major (NV, 10*NB) per sample. ``qdd=None`` ⇒
+        zeros (the bias regressor used by :py:meth:`inverse_dynamics_wrt_params`).
+        Per-link basis [m, m*c(3), I_O(6)]."""
+        import torch
+        nj, npar = self.num_joints, 10 * self.num_bodies
+        if qdd is None:
+            q = torch.as_tensor(q)
+            qdd = torch.zeros_like(q)
+        return self._ops.inverse_dynamics_regressor(q, qd, qdd, float(gravity)).reshape(-1, nj, npar)
+
+    def forward_dynamics_parameter_gradient(self, q, qd, u, *, gravity: float = -9.81):
+        """FD inertial-parameter gradient ∂qdd/∂π = -M⁻¹·Y. Returns
+        (B, NJ, 10*num_bodies), row-major (NV, 10*NB) per sample."""
+        nj, npar = self.num_joints, 10 * self.num_bodies
+        return self._ops.forward_dynamics_parameter_gradient(q, qd, u, float(gravity)).reshape(-1, nj, npar)
 
     def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81):
         """Second-order ID at joint acceleration ``qdd``: 4 tensors each (B, NV, NV, NV).

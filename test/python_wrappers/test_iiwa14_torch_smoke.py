@@ -111,6 +111,34 @@ def test_idsva_so_parity(th, nh, samples):
         assert _rel(tso[i].cpu().numpy(), nso[i]) < _TOL
 
 
+# ─── (1b) inertial-parameter (sysID) ops: forward parity vs the JAX surface ──
+# The numpy RobotHandle doesn't expose the regressor / param-gradient family;
+# the JAX surface is the task's named algorithmic reference, so we cross-check
+# the torch regressor + FD-parameter-gradient forward values against it.
+
+
+@pytest.fixture(scope="module")
+def jh():
+    jax = pytest.importorskip("jax", reason="jax not installed")
+    import grid_rbd.jax as gj
+    return gj.get_robot("iiwa14_torch_smoke")
+
+
+def test_param_op_forward_parity_vs_jax(th, jh, samples):
+    import jax.numpy as jnp
+    qn, qdn, un = samples["qn"], samples["qdn"], samples["un"]
+    q, qd, u = _t(qn), _t(qdn), _t(un)
+    # regressor Y = ∂c/∂π at qdd=0  (B, NJ, 10*NB)
+    Yt = th.inverse_dynamics_regressor(q, qd).cpu().numpy()
+    Yj = np.asarray(jh.inverse_dynamics_regressor(jnp.asarray(qn), jnp.asarray(qdn)))
+    assert _rel(Yt, Yj) < _TOL, f"regressor: {_rel(Yt, Yj):.3e}"
+    # FD parameter gradient G = ∂qdd/∂π = -M⁻¹·Y  (B, NJ, 10*NB)
+    Gt = th.forward_dynamics_parameter_gradient(q, qd, u).cpu().numpy()
+    Gj = np.asarray(jh.forward_dynamics_parameter_gradient(
+        jnp.asarray(qn), jnp.asarray(qdn), jnp.asarray(un)))
+    assert _rel(Gt, Gj) < _TOL, f"fd_param_grad: {_rel(Gt, Gj):.3e}"
+
+
 # ─── (2) autograd: analytic backward vs central-difference VJP ──────────────
 
 
@@ -163,6 +191,80 @@ def test_autograd_integrator(th, samples):
     err = _fd_vjp_err(lambda a, c, d: th.integrator(a, c, d, 0.01),
                       [samples["qn"][:b], samples["qdn"][:b], samples["un"][:b]])
     assert err < _GTOL, f"integrator VJP err {err:.3e}"
+
+
+# ─── (2b) inertial-parameter (sysID) VJP: torch autograd vs JAX custom_vjp ──
+# Analytic-vs-analytic: torch's π-gradient (and q/qd[/u] gradients) from the
+# wrt_params ops must match the JAX custom_vjp surface for the SAME scalar loss
+# (cotangent), and equal the closed-form contraction grad·Y / grad·G.
+
+
+def test_autograd_inverse_dynamics_wrt_params(th, jh, samples):
+    import jax
+    import jax.numpy as jnp
+    b = 2
+    qn, qdn = samples["qn"][:b], samples["qdn"][:b]
+    NB = th.num_bodies
+    rng = np.random.default_rng(7)
+    pi_n = rng.standard_normal((b, 10 * NB)).astype(np.float32)
+    cot = rng.standard_normal((b, th.num_joints)).astype(np.float32)  # shared cotangent
+
+    # torch: scalar loss = <cot, c(q,qd;π)>; backprop to (q, qd, π).
+    q = _t(qn).requires_grad_(True)
+    qd = _t(qdn).requires_grad_(True)
+    pi = _t(pi_n).requires_grad_(True)
+    c = th.inverse_dynamics_wrt_params(q, qd, pi)
+    (c * _t(cot)).sum().backward()
+    gq_t, gqd_t, gpi_t = (x.grad.cpu().numpy() for x in (q, qd, pi))
+
+    # closed form: gpi = cot · Y, with Y the torch regressor at qdd=0.
+    Y = th.inverse_dynamics_regressor(_t(qn), _t(qdn)).cpu().numpy()
+    gpi_cf = np.einsum("bo,bop->bp", cot, Y)
+    assert _rel(gpi_t, gpi_cf) < _TOL, f"id π-grad vs closed-form: {_rel(gpi_t, gpi_cf):.3e}"
+
+    # JAX custom_vjp reference for (q, qd, π).
+    def loss(qj, qdj, pij):
+        out = jh.inverse_dynamics_wrt_params(qj, qdj, pij)
+        return jnp.sum(out * jnp.asarray(cot))
+    gq_j, gqd_j, gpi_j = jax.grad(loss, argnums=(0, 1, 2))(
+        jnp.asarray(qn), jnp.asarray(qdn), jnp.asarray(pi_n))
+    assert _rel(gq_t, np.asarray(gq_j)) < _TOL, f"id grad_q vs jax: {_rel(gq_t, np.asarray(gq_j)):.3e}"
+    assert _rel(gqd_t, np.asarray(gqd_j)) < _TOL, f"id grad_qd vs jax: {_rel(gqd_t, np.asarray(gqd_j)):.3e}"
+    assert _rel(gpi_t, np.asarray(gpi_j)) < _TOL, f"id grad_π vs jax: {_rel(gpi_t, np.asarray(gpi_j)):.3e}"
+
+
+def test_autograd_forward_dynamics_wrt_params(th, jh, samples):
+    import jax
+    import jax.numpy as jnp
+    b = 2
+    qn, qdn, un = samples["qn"][:b], samples["qdn"][:b], samples["un"][:b]
+    NB = th.num_bodies
+    rng = np.random.default_rng(11)
+    pi_n = rng.standard_normal((b, 10 * NB)).astype(np.float32)
+    cot = rng.standard_normal((b, th.num_joints)).astype(np.float32)
+
+    q = _t(qn).requires_grad_(True)
+    qd = _t(qdn).requires_grad_(True)
+    u = _t(un).requires_grad_(True)
+    pi = _t(pi_n).requires_grad_(True)
+    qdd = th.forward_dynamics_wrt_params(q, qd, u, pi)
+    (qdd * _t(cot)).sum().backward()
+    gq_t, gqd_t, gu_t, gpi_t = (x.grad.cpu().numpy() for x in (q, qd, u, pi))
+
+    # closed form: gpi = cot · G, G = ∂qdd/∂π = -M⁻¹·Y.
+    G = th.forward_dynamics_parameter_gradient(_t(qn), _t(qdn), _t(un)).cpu().numpy()
+    gpi_cf = np.einsum("bo,bop->bp", cot, G)
+    assert _rel(gpi_t, gpi_cf) < _TOL, f"fd π-grad vs closed-form: {_rel(gpi_t, gpi_cf):.3e}"
+
+    def loss(qj, qdj, uj, pij):
+        out = jh.forward_dynamics_wrt_params(qj, qdj, uj, pij)
+        return jnp.sum(out * jnp.asarray(cot))
+    gq_j, gqd_j, gu_j, gpi_j = jax.grad(loss, argnums=(0, 1, 2, 3))(
+        jnp.asarray(qn), jnp.asarray(qdn), jnp.asarray(un), jnp.asarray(pi_n))
+    assert _rel(gq_t, np.asarray(gq_j)) < _TOL, f"fd grad_q vs jax: {_rel(gq_t, np.asarray(gq_j)):.3e}"
+    assert _rel(gqd_t, np.asarray(gqd_j)) < _TOL, f"fd grad_qd vs jax: {_rel(gqd_t, np.asarray(gqd_j)):.3e}"
+    assert _rel(gu_t, np.asarray(gu_j)) < _TOL, f"fd grad_u vs jax: {_rel(gu_t, np.asarray(gu_j)):.3e}"
+    assert _rel(gpi_t, np.asarray(gpi_j)) < _TOL, f"fd grad_π vs jax: {_rel(gpi_t, np.asarray(gpi_j)):.3e}"
 
 
 # ─── (3) CUDA-Graphs capture/replay ─────────────────────────────────────────
