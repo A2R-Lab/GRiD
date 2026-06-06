@@ -172,6 +172,22 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   on the loaded URDF), so its fixed-base ABA routes through the compose path `qdd=Minv·(τ−rnea)` (= CRBA/Minv),
   NOT the ABA backward recursion. Check `robot_has_mimic_joints()` for the EXACT URDF the sweep loads; don't
   trust in-code "all non-mimic" comments (`baselines/grid/run.py:455` is wrong for h1_2).
+- **GLASS is VENDORED (inlined) into every generated `grid.cuh` at codegen time — a GLASS change does NOT reach
+  GRiD's emit until you also do the GRiD-side plumbing.** Mechanism (`GRiDCodeGenerator/helpers/_lin_alg_helpers.py`):
+  `gen_grid_linalg_backend_helpers` reads each file in the curated list `_GLASS_BASE_FILES` *fresh from the GLASS
+  submodule* and inlines it into the header (`// BEGIN/END GLASS ...`), pinning the GLASS commit in a comment.
+  GRiD code never `#include`s GLASS — it's embedded, so the generated header is self-contained. Three consequences
+  any GLASS-touching agent MUST handle: **(1)** the vendoring is automatic *on regen*, so editing an
+  already-listed file (e.g. `src/base/L2/gemv_segmented.cuh`) reaches GRiD on the next `gen_all_code` — but
+  **(2)** a NEW GLASS file is invisible to GRiD until you add it to `_GLASS_BASE_FILES` (so keep additions inside
+  an already-vendored file when you can); and **(3)** GRiD calls GLASS ONLY through the `grid_linalg_*` wrappers
+  in the same file (e.g. `grid_linalg_gemm → glass::gemm`) — a new GLASS *capability/flag* (e.g. the L2
+  `TRANSPOSE`/`ATOMIC_Y` flags) is present-but-uncallable until you EXTEND the wrapper to pass it. So "land a GLASS
+  feature for GRiD" = GLASS change + (file in `_GLASS_BASE_FILES`) + wrapper exposing it + regen to verify it
+  vendored. The committed example headers (`./grid.cuh`, `examples/cuda/grid.cuh`) are stale snapshots — regen them
+  if they must track GLASS. (Caller compat: don't reorder GLASS template params *before* a param a `grid_linalg_*`
+  wrapper or emitter passes positionally; GRiD callers pass `<T,M,N,ROW_STRIDE,FUSE>` and no `IDX_T`, so appending
+  flags before `IDX_T` was safe — verify this when generalizing a vendored signature.)
 
 - **Parallelize independent COLUMNS in gradients/hessians.** d2ee (per-slot Step-2 + per-cell
   Step-5b), id_du branched-fixed (per-output-element fan, 2·NJ → 2·n² threads), idsva_so world
