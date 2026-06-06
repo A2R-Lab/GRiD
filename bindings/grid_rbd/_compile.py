@@ -19,12 +19,19 @@ import contextlib
 import importlib.resources
 import io
 import json
+import logging
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+
+# Package logger. Quiet by default (no handler) — the host app opts in via
+# logging.basicConfig() / its own handler. We use INFO for the compile notice
+# so first-run register_robot() latency isn't mistaken for a hang.
+_log = logging.getLogger("grid_rbd")
 
 
 _NVCC_DEFAULT_FLAGS = [
@@ -258,6 +265,11 @@ def compile_so(
         cmd.extend(extra_flags)
 
     log_path = out_so.with_suffix(".build.log")
+    # First-run compile can take seconds–minutes (single-block fully-unrolled
+    # kernels are cicc-bound). Emit a one-line notice so the wait isn't read as
+    # a hang, and point at the live build log.
+    _log.info("grid_rbd: compiling %s for %s (first run; nvcc, may take "
+              "seconds–minutes) — log: %s", out_so.name, arch, log_path)
     with log_path.open("w") as log:
         log.write("$ " + " ".join(cmd) + "\n\n")
         log.flush()
@@ -267,6 +279,7 @@ def compile_so(
             f"nvcc failed (exit {result.returncode}). Build log:\n"
             + log_path.read_text()
         )
+    _log.info("grid_rbd: built %s (build log: %s)", out_so.name, log_path)
 
 
 def generate_and_compile(

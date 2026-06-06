@@ -105,6 +105,27 @@ def test_inverse_dynamics(handle, ref, samples):
         assert _max_err(grid[i], c_ref) < _TOL
 
 
+def test_inverse_dynamics_honors_qdd(handle, ref, samples):
+    """Regression: inverse_dynamics must USE qdd (the binding once hardcoded
+    USE_QDD_FLAG=false and silently dropped it). Assert (a) the full RNEA torque
+    matches RBDReference at a nonzero qdd, (b) qdd=None == qdd=zeros (no stale
+    device buffer), (c) a nonzero qdd actually shifts τ away from the bias."""
+    q, qd = samples["q"], samples["qd"]
+    qdd = samples["u"]  # reuse as a nonzero acceleration
+    tau = handle.inverse_dynamics(q, qd, qdd)
+    for i, (qi, qdi, ai) in enumerate(zip(q, qd, qdd)):
+        tau_ref, *_ = ref.inverse_dynamics(qi.astype(np.float64), qdi.astype(np.float64),
+                                           ai.astype(np.float64), GRAVITY=-9.81)
+        assert _max_err(tau[i], tau_ref) < _TOL, f"RNEA τ mismatch at sample {i}"
+    # qdd=None must equal qdd=zeros (and match the bias), even right after a
+    # nonzero-qdd call (no stale buffer reuse).
+    bias_none = handle.inverse_dynamics(q, qd, None)
+    bias_zero = handle.inverse_dynamics(q, qd, np.zeros_like(q))
+    assert _max_err(bias_none, bias_zero) < 1e-6
+    # nonzero qdd genuinely changes τ vs the bias.
+    assert _max_err(tau, bias_none) > 1e-2, "inverse_dynamics ignored qdd"
+
+
 def test_minv(handle, ref, samples):
     grid = handle.minv(samples["q"])
     for i, q in enumerate(samples["q"]):

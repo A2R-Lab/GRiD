@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Any
 
 import grid_rbd as _grid_rbd
-from grid_rbd._handle import RobotHandle, _integrator_code
+from grid_rbd._handle import RobotHandle, SecondOrderID, SecondOrderFD, _integrator_code
 
 
 # ─── op-library registry (process-global, idempotent) ───────────────────────
@@ -61,6 +61,24 @@ _LOADED: dict[str, str] = {}
 _LOCK = threading.Lock()
 
 
+def _require_torch():
+    """Import + return the ``torch`` module, or raise a clear, actionable error.
+
+    Routed through the surface entry points (register_robot / get_robot /
+    _load_ops) so a missing optional dep gives install guidance instead of a
+    bare ``ModuleNotFoundError`` from deep inside a method."""
+    try:
+        import torch
+    except ImportError as e:
+        raise ImportError(
+            "grid_rbd.torch requires PyTorch, which isn't installed. Install "
+            "the optional extra:  pip install -e 'grid-rbd[torch]'  (or "
+            "`pip install torch`; on an RTX 5090 / sm_120 you need a cu128+ "
+            "build). The numpy and jax backends do not need torch."
+        ) from e
+    return torch
+
+
 def _torch_op_namespace(cache_key: str) -> str:
     """Mirror _compile.generate_and_compile's torch_op_key = 'k' + key[:12]."""
     return f"grid_rbd_torch_k{cache_key[:12]}"
@@ -68,7 +86,7 @@ def _torch_op_namespace(cache_key: str) -> str:
 
 def _load_ops(so_path: Path, cache_key: str) -> str:
     """Load the .so's torch ops (once per cache_key); return the op namespace."""
-    import torch
+    torch = _require_torch()
     ns = _torch_op_namespace(cache_key)
     with _LOCK:
         if _LOADED.get(cache_key):
@@ -109,19 +127,26 @@ def _make_autograd(ns):
     ops = getattr(torch.ops, ns)
 
     class InverseDynamicsFn(torch.autograd.Function):
+        # forward args mirror the op schema order (q, qd, gravity, qdd, f_ext);
+        # qdd/gravity/f_ext are non-differentiated (backward returns None for them).
         @staticmethod
-        def forward(ctx, q, qd, gravity, f_ext):
+        def forward(ctx, q, qd, gravity, qdd, f_ext):
             ctx.save_for_backward(q, qd)
             ctx.gravity = gravity
+            ctx.qdd = qdd
             ctx.f_ext = f_ext
-            return ops.inverse_dynamics(q, qd, gravity, f_ext)
+            return ops.inverse_dynamics(q, qd, gravity, qdd, f_ext)
 
         @staticmethod
         def backward(ctx, grad_c):
             q, qd = ctx.saved_tensors
             nj = q.shape[1]
             # f_ext is affine in RNEA → ∂c/∂(q,qd) is unchanged by a constant
-            # f_ext; we pass it through for bias consistency only.
+            # f_ext; we pass it through for bias consistency only. qdd shifts the
+            # value (M·qdd) but ∂/∂(q,qd) at fixed qdd is the qdd=0 gradient plus
+            # the M·qdd term — handled inside inverse_dynamics_gradient when qdd
+            # is plumbed (numpy path); the torch grad op currently takes no qdd,
+            # so we report the qdd=0 Jacobian here (matches the prior behaviour).
             raw = ops.inverse_dynamics_gradient(q, qd, ctx.gravity, ctx.f_ext)  # (B, 2*NJ*NJ) col-major
             B = raw.shape[0]
             blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)  # row-major (B,2,NJ,NJ)
@@ -130,7 +155,8 @@ def _make_autograd(ns):
             gc = grad_c.unsqueeze(1)
             grad_q = torch.bmm(gc, dc_dq).squeeze(1)
             grad_qd = torch.bmm(gc, dc_dqd).squeeze(1)
-            return grad_q, grad_qd, None, None
+            # grads for (q, qd, gravity, qdd, f_ext)
+            return grad_q, grad_qd, None, None, None
 
     def _make_fd_like(fwd_op):
         # forward_dynamics & aba share the qdd output and the fd-grad backward
@@ -179,7 +205,7 @@ def _make_autograd(ns):
             ctx.save_for_backward(q, qd)
             ctx.gravity = gravity
             ctx.f_ext = f_ext
-            return ops.inverse_dynamics(q, qd, gravity, f_ext)
+            return ops.inverse_dynamics(q, qd, gravity, None, f_ext)
 
         @staticmethod
         def backward(ctx, grad_c):
@@ -330,14 +356,19 @@ class TorchRobotHandle:
 
     # ─── differentiable algorithms ───────────────────────────────────────
 
-    def inverse_dynamics(self, q, qd, *, gravity: float = -9.81, f_ext=None):
-        """Inverse dynamics c (B, NJ). Autograd-aware wrt (q, qd).
+    def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
+        """Inverse dynamics (RNEA) τ = M·qdd + h − g (B, NJ). Autograd-aware wrt (q, qd).
+
+        ``qdd`` (optional): joint acceleration, CUDA float32 ``(B, NJ)``. With
+        ``qdd=None`` (default) returns the bias c = h − g; a nonzero ``qdd`` adds
+        the M·qdd inertial term (USE_QDD overload). The autograd backward reports
+        the qdd=0 Jacobian (q/qd grad of the bias); qdd itself is not differentiated.
 
         ``f_ext`` (optional): per-body external forces, a CUDA float32 tensor
         ``(B, 6*num_bodies)``, body-major, each ``[angular; linear]`` in the
         body's local frame (subtracted from the per-body force; matches the
         numpy handle and ``RBDReference.inverse_dynamics(..., f_ext=...)``)."""
-        return self._fns["inverse_dynamics"].apply(q, qd, float(gravity), f_ext)
+        return self._fns["inverse_dynamics"].apply(q, qd, float(gravity), qdd, f_ext)
 
     def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
         """qdd = M⁻¹(τ − c) (B, NJ). Autograd-aware wrt (q, qd, u).
@@ -456,7 +487,9 @@ class TorchRobotHandle:
         return self._ops.forward_dynamics_parameter_gradient(q, qd, u, float(gravity)).reshape(-1, nj, npar)
 
     def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81):
-        """Second-order ID at joint acceleration ``qdd``: 4 tensors each (B, NV, NV, NV).
+        """Second-order ID at joint acceleration ``qdd``. Returns a
+        :class:`grid_rbd.SecondOrderID` NamedTuple of 4 tensors each
+        (B, NV, NV, NV) (a plain tuple — positional unpacking / indexing work).
 
         ``qdd=None`` ⇒ zero acceleration (explicit zeros are passed so the
         result never depends on a stale device buffer from a prior call)."""
@@ -467,14 +500,15 @@ class TorchRobotHandle:
             qdd = torch.zeros_like(q)
         flat = self._ops.idsva_so(q, qd, qdd, float(gravity))
         B = flat.shape[0]
-        return tuple(flat[:, i*nv**3:(i+1)*nv**3].reshape(B, nv, nv, nv) for i in range(4))
+        return SecondOrderID(*(flat[:, i*nv**3:(i+1)*nv**3].reshape(B, nv, nv, nv) for i in range(4)))
 
     def fdsva_so(self, q, qd, u, *, gravity: float = -9.81):
-        """Second-order FD: 4 tensors each (B, NV, NV, NV)."""
+        """Second-order FD. Returns a :class:`grid_rbd.SecondOrderFD` NamedTuple
+        of 4 tensors each (B, NV, NV, NV) (a plain tuple, positional-compatible)."""
         nv = self.num_vel
         flat = self._ops.fdsva_so(q, qd, u, float(gravity))
         B = flat.shape[0]
-        return tuple(flat[:, i*nv**3:(i+1)*nv**3].reshape(B, nv, nv, nv) for i in range(4))
+        return SecondOrderFD(*(flat[:, i*nv**3:(i+1)*nv**3].reshape(B, nv, nv, nv) for i in range(4)))
 
     def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
         """dAB (B, 2*NV, 3*NV) = [d/dq | d/dqd | d/du] tangent."""
@@ -483,6 +517,12 @@ class TorchRobotHandle:
         raw = self._ops.integrator_gradient(q, qd, u, float(dt), it, float(gravity))
         B = raw.shape[0]
         return raw.reshape(B, 3 * nv, 2 * nv).transpose(1, 2)
+
+    # ─── field-standard short aliases ────────────────────────────────────────
+    # `rnea`/`fd` are the names roboticists reach for (pinocchio / frax / bard);
+    # bind them to the long-named methods (aba / crba / minv already match).
+    rnea = inverse_dynamics
+    fd = forward_dynamics
 
     # ─── grid_plant surface (cost / barrier / plant-step) ────────────────────
     #
@@ -597,6 +637,7 @@ def register_robot(
 ) -> TorchRobotHandle:
     """Register a robot for the torch backend (same cache as the plain/JAX
     surfaces). Returns a :py:class:`TorchRobotHandle`."""
+    _require_torch()  # fail early with install guidance if torch is missing
     base = _grid_rbd.register_robot(
         name=name, urdf_path=urdf_path, urdf_string=urdf_string,
         floating_base=floating_base, ee_joint_names=ee_joint_names,
@@ -609,6 +650,7 @@ def register_robot(
 
 def get_robot(name: str, cache_dir: str | Path | None = None) -> TorchRobotHandle:
     """Look up a previously-registered robot (same cache as grid_rbd.get_robot)."""
+    _require_torch()  # fail early with install guidance if torch is missing
     base = _grid_rbd.get_robot(name, cache_dir=cache_dir)
     cache_key, so_path = _lookup(name, cache_dir)
     return TorchRobotHandle(base, cache_key, so_path)

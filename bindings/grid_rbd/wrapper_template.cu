@@ -142,6 +142,12 @@ static inline void reset_f_ext(const T* f_ext, int batch) {
 
 // RNEA: c = M(q)·qdd + h(q,qd) − g(q)  (with qdd defaulting to 0 if null)
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
+//
+// qdd wiring: the generated grid::inverse_dynamics<T, USE_QDD_FLAG> HOST wrapper
+// reads the joint acceleration from the SEPARATE gridData buffer hd_data->d_qdd
+// (NOT the u-slot of d_q_qd_u) and, when USE_QDD_FLAG=true, copies h_qdd→d_qdd
+// itself. So we fill g_data->h_qdd from the caller's qdd and instantiate the
+// USE_QDD_FLAG=true overload; a null qdd keeps the (faster) qdd=0 overload.
 extern "C" int grid_rbd_inverse_dynamics(
     const T* q, const T* qd, const T* qdd_opt,
     T* c_out,
@@ -150,17 +156,19 @@ extern "C" int grid_rbd_inverse_dynamics(
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;  // caller should chunk
 
-    // For now, USE_QDD_FLAG=false; qdd defaults to 0 in the kernel. To support
-    // user-provided qdd we'd need USE_QDD_FLAG=true and the qdd buffer pushed
-    // separately. Document this in the Python layer.
-    (void)qdd_opt;
-
     const int nj = grid::NUM_JOINTS;
     pack_q_qd_u(q, qd, nullptr, batch, nj);
     if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
-    grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false>(
-        g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    if (qdd_opt) {
+        // Host wrapper copies h_qdd→d_qdd (NUM_JOINTS per timestep, contiguous).
+        std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
+        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false>(
+            g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    } else {
+        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false>(
+            g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    }
 
     cudaError_t e = cudaDeviceSynchronize();
     reset_f_ext(f_ext, batch);
@@ -368,16 +376,27 @@ extern "C" int grid_rbd_inverse_dynamics_gradient(
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
-    (void)qdd_opt;  // USE_QDD_FLAG=false currently; future v2
 
     const int nj = grid::NUM_JOINTS;
     pack_q_qd_u(q, qd, nullptr, batch, nj);
     if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
-    grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/false,
-                                       /*USE_COMPRESSED_MEM=*/false>(
-        g_data, g_robot, gravity, batch,
-        g_block_dimms, g_thread_dimms, g_streams);
+    // qdd dependence: ∂c/∂(q,qd) DOES depend on qdd (via the M·qdd term's
+    // derivatives). Same separate-d_qdd convention as grid_rbd_inverse_dynamics:
+    // the host wrapper copies h_qdd→d_qdd when USE_QDD_FLAG=true. Null qdd keeps
+    // the qdd=0 overload.
+    if (qdd_opt) {
+        std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
+        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true,
+                                           /*USE_COMPRESSED_MEM=*/false>(
+            g_data, g_robot, gravity, batch,
+            g_block_dimms, g_thread_dimms, g_streams);
+    } else {
+        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/false,
+                                           /*USE_COMPRESSED_MEM=*/false>(
+            g_data, g_robot, gravity, batch,
+            g_block_dimms, g_thread_dimms, g_streams);
+    }
 
     cudaError_t e = cudaDeviceSynchronize();
     reset_f_ext(f_ext, batch);
@@ -1158,11 +1177,19 @@ extern "C" int grid_plant_step_hessian(
 #include "xla/ffi/api/ffi.h"
 namespace ffi = xla::ffi;
 
-// inverse_dynamics(q, qd) → c   — fully device-resident path.
+// inverse_dynamics(q, qd, qdd, f_ext) → c   — fully device-resident path.
+//
+// qdd and f_ext are ALWAYS passed as explicit device buffers from the Python
+// surface (JAX FFI has no optional-buffer support, so the wrapper passes zeros
+// when the caller omits them — mirroring idsva_so). qdd flows through the
+// separate d_qdd buffer + the USE_QDD overload of the kernel (signature
+// (d_c, d_q_qd, stride, d_qdd, d_f_ext, ...)); f_ext is copied D→D into d_f_ext.
 static ffi::Error grid_rbd_jax_inverse_dynamics_impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> q,         // shape (B, NJ), device-resident
     ffi::Buffer<ffi::F32> qd,        // shape (B, NJ), device-resident
+    ffi::Buffer<ffi::F32> qdd,       // shape (B, NJ), device-resident
+    ffi::Buffer<ffi::F32> f_ext,     // shape (B, 6*NUM_BODIES), device-resident
     ffi::ResultBuffer<ffi::F32> c,   // shape (B, NJ), device-resident
     float gravity)
 {
@@ -1195,17 +1222,24 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj],      dst_pitch,
                       qd.typed_data(),           row_bytes,
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    // qdd → the separate d_qdd buffer (NJ-contiguous per timestep), consumed
+    // by the USE_QDD overload of inverse_dynamics_kernel.
+    cudaMemcpyAsync(g_data->d_qdd, qdd.typed_data(),
+                    (size_t)batch * nj * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
+    // f_ext → d_f_ext (the Python surface passes a zero buffer when omitted).
+    cudaMemcpyAsync(g_data->d_f_ext, f_ext.typed_data(),
+                    (size_t)batch * 6 * grid::NUM_BODIES * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
 
-    // Launch kernel directly on JAX's stream (skip the host wrapper's
-    // implicit H→D + own-stream dance). RNEA uses USE_QDD_FLAG=false; the
-    // kernel name embeds that via overload resolution on the d_q_qd
-    // signature without a qdd input.
+    // Launch the qdd overload directly on JAX's stream (the qdd kernel reads
+    // the acceleration from d_qdd; signature adds d_qdd after stride).
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::inverse_dynamics_kernel<T><<<
         g_block_dimms, g_thread_dimms,
         grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
-            g_data->d_c, g_data->d_q_qd_u, stride_q_qd,
+            g_data->d_c, g_data->d_q_qd_u, stride_q_qd, g_data->d_qdd,
             g_data->d_f_ext, g_robot, /*gravity=*/gravity, batch);
 
     // D→D copy the result into JAX's output buffer on the same stream.
@@ -1222,6 +1256,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::Buffer<ffi::F32>>()  // q
         .Arg<ffi::Buffer<ffi::F32>>()  // qd
+        .Arg<ffi::Buffer<ffi::F32>>()  // qdd
+        .Arg<ffi::Buffer<ffi::F32>>()  // f_ext
         .Ret<ffi::Buffer<ffi::F32>>()  // c
         .Attr<float>("gravity")
 );
@@ -1285,12 +1321,13 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 
-// forward_dynamics(q, qd, u) → qdd
+// forward_dynamics(q, qd, u, f_ext) → qdd  (f_ext always passed; zeros if omitted)
 static ffi::Error grid_rbd_jax_forward_dynamics_impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> q,
     ffi::Buffer<ffi::F32> qd,
     ffi::Buffer<ffi::F32> u,
+    ffi::Buffer<ffi::F32> f_ext,
     ffi::ResultBuffer<ffi::F32> qdd_out,
     float gravity)
 {
@@ -1311,6 +1348,9 @@ static ffi::Error grid_rbd_jax_forward_dynamics_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj],   dst_pitch,
                       u.typed_data(),            row_bytes,
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_data->d_f_ext, f_ext.typed_data(),
+                    (size_t)batch * 6 * grid::NUM_BODIES * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
 
     constexpr int stride_q_qd_u = 3 * grid::NUM_JOINTS;
     grid::forward_dynamics_kernel<T><<<
@@ -1333,17 +1373,19 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<ffi::F32>>()  // f_ext
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("gravity")
 );
 
 
-// aba(q, qd, u) → qdd  — same kernel signature shape as forward_dynamics
+// aba(q, qd, u, f_ext) → qdd  — same kernel signature shape as forward_dynamics
 static ffi::Error grid_rbd_jax_aba_impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> q,
     ffi::Buffer<ffi::F32> qd,
     ffi::Buffer<ffi::F32> u,
+    ffi::Buffer<ffi::F32> f_ext,
     ffi::ResultBuffer<ffi::F32> qdd_out,
     float gravity)
 {
@@ -1364,6 +1406,9 @@ static ffi::Error grid_rbd_jax_aba_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj],   dst_pitch,
                       u.typed_data(),            row_bytes,
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_data->d_f_ext, f_ext.typed_data(),
+                    (size_t)batch * 6 * grid::NUM_BODIES * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
 
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::aba_kernel<T><<<
@@ -1386,6 +1431,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<ffi::F32>>()  // f_ext
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("gravity")
 );
@@ -2488,7 +2534,12 @@ static inline void grid_torch_f_ext_reset(cudaStream_t stream, int batch,
 
 // ── forward ops ──
 
+// qdd wiring (torch): when a qdd tensor is provided, copy it D→D into the
+// separate d_qdd buffer and launch the USE_QDD overload of the kernel (which
+// reads the acceleration from d_qdd; signature adds d_qdd after stride). A null
+// qdd keeps the (faster) qdd=0 overload. Mirrors the numpy / JAX ID paths.
 torch::Tensor torch_inverse_dynamics(torch::Tensor q, torch::Tensor qd, double gravity,
+                         c10::optional<torch::Tensor> qdd,
                          c10::optional<torch::Tensor> f_ext) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
@@ -2499,8 +2550,17 @@ torch::Tensor torch_inverse_dynamics(torch::Tensor q, torch::Tensor qd, double g
     grid_torch_f_ext_apply(stream, batch, f_ext);
     auto out = grid_torch_empty(batch, nj, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::inverse_dynamics_kernel<T><<<g_block_dimms, g_thread_dimms, grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
-        g_data->d_c, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
+    if (qdd.has_value()) {
+        const torch::Tensor& a = qdd.value();
+        grid_torch_check(a, "inverse_dynamics: qdd", nj);
+        cudaMemcpyAsync(g_data->d_qdd, a.data_ptr<float>(),
+                        (size_t)batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+        grid::inverse_dynamics_kernel<T><<<g_block_dimms, g_thread_dimms, grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+            g_data->d_c, g_data->d_q_qd_u, stride, g_data->d_qdd, g_data->d_f_ext, g_robot, (T)gravity, batch);
+    } else {
+        grid::inverse_dynamics_kernel<T><<<g_block_dimms, g_thread_dimms, grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+            g_data->d_c, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
+    }
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_c, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
@@ -3044,7 +3104,7 @@ std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Tensor qd
 #define GRID_RBD_TORCH_LIBRARY_IMPL(ns, k, m) TORCH_LIBRARY_IMPL(ns, k, m)
 
 GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
-    m.def("inverse_dynamics(Tensor q, Tensor qd, float gravity, Tensor? f_ext=None) -> Tensor");
+    m.def("inverse_dynamics(Tensor q, Tensor qd, float gravity, Tensor? qdd=None, Tensor? f_ext=None) -> Tensor");
     m.def("minv(Tensor q) -> Tensor");
     m.def("forward_dynamics(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
     m.def("aba(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");

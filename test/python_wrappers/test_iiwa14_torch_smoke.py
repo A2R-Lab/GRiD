@@ -111,6 +111,18 @@ def test_idsva_so_parity(th, nh, samples):
         assert _rel(tso[i].cpu().numpy(), nso[i]) < _TOL
 
 
+def test_inverse_dynamics_honors_qdd(th, nh, samples):
+    """torch inverse_dynamics must USE qdd: full RNEA τ at a nonzero qdd matches
+    the numpy handle; qdd=None == bias; nonzero qdd shifts τ."""
+    qn, qdn, an = samples["qn"], samples["qdn"], samples["un"]
+    q, qd, a = _t(qn), _t(qdn), _t(an)
+    tau = th.inverse_dynamics(q, qd, a).cpu().numpy()
+    assert _rel(tau, nh.inverse_dynamics(qn, qdn, an)) < _TOL, "torch RNEA(qdd) != numpy"
+    bias = th.inverse_dynamics(q, qd, None).cpu().numpy()
+    assert _rel(bias, nh.inverse_dynamics(qn, qdn)) < _TOL
+    assert float(np.max(np.abs(tau - bias))) > 1e-2, "torch inverse_dynamics ignored qdd"
+
+
 # ─── (1b) inertial-parameter (sysID) ops: forward parity vs the JAX surface ──
 # The numpy RobotHandle doesn't expose the regressor / param-gradient family;
 # the JAX surface is the task's named algorithmic reference, so we cross-check

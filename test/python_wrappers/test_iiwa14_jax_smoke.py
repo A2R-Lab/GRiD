@@ -112,6 +112,54 @@ def test_inverse_dynamics_jit_matches_eager(jax_handle, samples):
     assert np.max(np.abs(c_jit - c_eager)) < 1e-6  # should be bitwise identical
 
 
+def test_inverse_dynamics_honors_qdd(jax_handle, plain_handle, samples):
+    """JAX inverse_dynamics must USE qdd and stay numerically equal to the numpy
+    handle's full-RNEA τ at a nonzero qdd; qdd=None == bias; qdd shifts τ."""
+    q, qd, qdd = samples["q"], samples["qd"], samples["u"]
+    tau_jax   = np.asarray(jax_handle.inverse_dynamics(q, qd, qdd))
+    tau_plain = plain_handle.inverse_dynamics(q, qd, qdd)
+    assert np.max(np.abs(tau_jax - tau_plain)) < _TOL, "jax RNEA(qdd) != numpy"
+    bias = np.asarray(jax_handle.inverse_dynamics(q, qd, None))
+    bias_plain = plain_handle.inverse_dynamics(q, qd)
+    assert np.max(np.abs(bias - bias_plain)) < _TOL
+    assert np.max(np.abs(tau_jax - bias)) > 1e-2, "jax inverse_dynamics ignored qdd"
+
+
+def test_inverse_dynamics_honors_qdd_under_jit(jax_handle, plain_handle, samples):
+    """qdd flows through jax.jit too."""
+    import jax
+    q, qd, qdd = samples["q"], samples["qd"], samples["u"]
+    f = jax.jit(lambda q, qd, a: jax_handle.inverse_dynamics(q, qd, a))
+    tau = np.asarray(f(q, qd, qdd))
+    assert np.max(np.abs(tau - plain_handle.inverse_dynamics(q, qd, qdd))) < _TOL
+
+
+def test_jax_f_ext_parity_vs_numpy(jax_handle, plain_handle, samples):
+    """JAX f_ext parity (F8): jax inverse_dynamics/forward_dynamics/aba with an
+    explicit f_ext must match the numpy handle (the established f_ext oracle),
+    and f_ext=None must equal the no-f_ext path."""
+    q, qd, u = samples["q"], samples["qd"], samples["u"]
+    NB = jax_handle.num_bodies
+    rng = np.random.default_rng(11)
+    f_ext = (0.2 * rng.standard_normal((q.shape[0], 6 * NB))).astype(np.float32)
+    for name, jax_out, np_out in [
+        ("inverse_dynamics",
+         jax_handle.inverse_dynamics(q, qd, f_ext=f_ext),
+         plain_handle.inverse_dynamics(q, qd, f_ext=f_ext)),
+        ("forward_dynamics",
+         jax_handle.forward_dynamics(q, qd, u, f_ext=f_ext),
+         plain_handle.forward_dynamics(q, qd, u, f_ext=f_ext)),
+        ("aba",
+         jax_handle.aba(q, qd, u, f_ext=f_ext),
+         plain_handle.aba(q, qd, u, f_ext=f_ext)),
+    ]:
+        assert np.max(np.abs(np.asarray(jax_out) - np_out)) < _TOL, f"jax f_ext {name} != numpy"
+    # f_ext=None == no external force (byte-identical path).
+    a = np.asarray(jax_handle.forward_dynamics(q, qd, u, f_ext=None))
+    b = np.asarray(jax_handle.forward_dynamics(q, qd, u))
+    assert np.max(np.abs(a - b)) < 1e-6
+
+
 def test_inverse_dynamics_accepts_numpy_input(jax_handle, samples):
     """JAX accepts CPU numpy arrays and moves them to GPU transparently;
     the FFI handler sees device-resident buffers either way."""

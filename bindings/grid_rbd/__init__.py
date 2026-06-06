@@ -31,7 +31,7 @@ from ._cache import (
     store_dir,
 )
 from ._compile import generate_and_compile
-from ._handle import RobotHandle
+from ._handle import RobotHandle, SecondOrderID, SecondOrderFD
 
 
 __version__ = "0.4.0"
@@ -63,6 +63,7 @@ def register_robot(
     force_rebuild: bool = False,
     cuda_arch: int | None = None,
     backend: str = "numpy",
+    allow_fp64: bool = False,
 ) -> RobotHandle:
     """Register a robot for fast subsequent calls.
 
@@ -70,6 +71,13 @@ def register_robot(
     it under cache_dir (default ~/.cache/grid-rbd/). Idempotent: if a cache
     entry matching (urdf, options, grid_rbd version, cuda_arch) already
     exists, the existing .so is reused — no recompile.
+
+    Precision: **all backends compute in float32 only** (no ``dtype=`` knob;
+    a true fp64 tier is a future codegen item). For the numpy backend you may
+    pass ``allow_fp64=True`` for an fp64-in / fp64-out *convenience* cast on the
+    returned handle — compute still runs in fp32 and results are upcast, so the
+    single-precision accuracy caveat applies. ``allow_fp64`` is ignored for the
+    jax/torch backends (they are strictly fp32).
 
     Parameters
     ----------
@@ -182,7 +190,7 @@ def register_robot(
         meta = json.loads((entry_dir / "meta.json").read_text())
 
     manifest_register(cache_dir, name, cache_key, meta)
-    return RobotHandle(name, str(so_path), meta)
+    return RobotHandle(name, str(so_path), meta, allow_fp64=allow_fp64)
 
 
 def get_robot(name: str, cache_dir: str | Path | None = None) -> RobotHandle:
@@ -278,6 +286,8 @@ def precompile(
 
 __all__ = [
     "RobotHandle",
+    "SecondOrderID",
+    "SecondOrderFD",
     "RobotNotRegisteredError",
     "register_robot",
     "get_robot",

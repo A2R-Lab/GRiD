@@ -42,7 +42,7 @@ from typing import Any
 import numpy as np
 
 import grid_rbd as _grid_rbd
-from grid_rbd._handle import RobotHandle
+from grid_rbd._handle import RobotHandle, SecondOrderID, SecondOrderFD
 
 
 # ─── handler registry ───────────────────────────────────────────────────────
@@ -52,6 +52,24 @@ from grid_rbd._handle import RobotHandle
 # target table), so we only need to do it once per (cache_key, method).
 _REGISTERED: dict[tuple[str, str], bool] = {}
 _LOCK = threading.Lock()
+
+
+def _require_jax():
+    """Import + return the ``jax`` module, or raise a clear, actionable error.
+
+    Routed through the surface entry points (register_robot /
+    _register_method_target) so a missing optional dep gives install guidance
+    instead of a bare ``ModuleNotFoundError`` from deep inside a method."""
+    try:
+        import jax
+    except ImportError as e:
+        raise ImportError(
+            "grid_rbd.jax requires JAX, which isn't installed. Install the "
+            "optional extra:  pip install -e 'grid-rbd[jax]'  (or "
+            "`pip install jax[cuda12]`). The numpy and torch backends do not "
+            "need JAX."
+        ) from e
+    return jax
 
 
 def _ffi_target_name(cache_key: str, method: str) -> str:
@@ -68,7 +86,7 @@ def _register_method_target(
     symbol: str,
 ) -> str:
     """Register one FFI target with JAX, returning the target name."""
-    import jax
+    jax = _require_jax()
     target_name = _ffi_target_name(cache_key, method)
     with _LOCK:
         if _REGISTERED.get((cache_key, method)):
@@ -207,13 +225,13 @@ class JaxRobotHandle:
         # ── forward_dynamics: qdd = f(q,qd,u);  ∂qdd/∂q,∂qdd/∂qd via the
         #    analytic gradient FFI, ∂qdd/∂u = M⁻¹. ───────────────────────────
         @functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
-        def fd(gravity, q, qd, u):
+        def fd(gravity, q, qd, u, f_ext):
             t = _t("forward_dynamics", "grid_rbd_jax_forward_dynamics")
             return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
-                q, qd, u, gravity=np.float32(gravity))
+                q, qd, u, f_ext, gravity=np.float32(gravity))
 
-        def fd_fwd(gravity, q, qd, u):
-            return fd(gravity, q, qd, u), (q, qd, u)
+        def fd_fwd(gravity, q, qd, u, f_ext):
+            return fd(gravity, q, qd, u, f_ext), (q, qd, u)
 
         def fd_bwd(gravity, res, ct):
             q, qd, u = res
@@ -232,20 +250,25 @@ class JaxRobotHandle:
             gq = jnp.einsum('...o,...oi->...i', ct, df_dq)
             gqd = jnp.einsum('...o,...oi->...i', ct, df_dqd)
             gu = jnp.einsum('...o,...oi->...i', ct, minv)
-            return (gq, gqd, gu)
+            # cotangents for (q, qd, u, f_ext); f_ext is non-diff.
+            return (gq, gqd, gu, None)
 
         fd.defvjp(fd_fwd, fd_bwd)
 
-        # ── inverse_dynamics (bias): c = h(q,qd) − g(q);  ∂c/∂(q,qd) via the
-        #    analytic gradient FFI. ──────────────────────────────────────────
+        # ── inverse_dynamics (RNEA): τ = M·qdd + h(q,qd) − g(q);  ∂τ/∂(q,qd) via
+        #    the analytic gradient FFI. qdd and f_ext are non-differentiated
+        #    explicit buffers (the FFI has no optional-buffer support, so the
+        #    public method passes zeros when omitted — mirroring idsva_so). The
+        #    q/qd VJP uses the qdd=0 gradient (the analytic grad FFI takes no qdd
+        #    yet); qdd/f_ext receive no cotangent. ────────────────────────────
         @functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
-        def idyn(gravity, q, qd):
+        def idyn(gravity, q, qd, qdd, f_ext):
             t = _t("inverse_dynamics", "grid_rbd_jax_inverse_dynamics")
             return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
-                q, qd, gravity=np.float32(gravity))
+                q, qd, qdd, f_ext, gravity=np.float32(gravity))
 
-        def id_fwd(gravity, q, qd):
-            return idyn(gravity, q, qd), (q, qd)
+        def id_fwd(gravity, q, qd, qdd, f_ext):
+            return idyn(gravity, q, qd, qdd, f_ext), (q, qd)
 
         def id_bwd(gravity, res, ct):
             q, qd = res
@@ -256,7 +279,8 @@ class JaxRobotHandle:
             dc_dq, dc_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
             gq = jnp.einsum('...o,...oi->...i', ct, dc_dq)
             gqd = jnp.einsum('...o,...oi->...i', ct, dc_dqd)
-            return (gq, gqd)
+            # cotangents for (q, qd, qdd, f_ext); qdd/f_ext are non-diff.
+            return (gq, gqd, None, None)
 
         idyn.defvjp(id_fwd, id_bwd)
 
@@ -299,8 +323,12 @@ class JaxRobotHandle:
             # multiply-add by 0 keeps `params` in the trace for custom_vjp.
             del params
             t = _t("inverse_dynamics", "grid_rbd_jax_inverse_dynamics")
+            # ID FFI now takes explicit qdd + f_ext buffers; sysID is the bias
+            # (qdd=0) with no external force → pass zeros for both.
+            z = jnp.zeros_like(q)
+            zfe = jnp.zeros(q.shape[:-1] + (6 * nb,), dtype=q.dtype)
             return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
-                q, qd, gravity=np.float32(gravity))
+                q, qd, z, zfe, gravity=np.float32(gravity))
 
         def id_pi_fwd(gravity, q, qd, params):
             return idyn_pi(gravity, q, qd, params), (q, qd)
@@ -334,8 +362,11 @@ class JaxRobotHandle:
         def fd_pi(gravity, q, qd, u, params):
             del params
             t = _t("forward_dynamics", "grid_rbd_jax_forward_dynamics")
+            # FD FFI now takes an explicit f_ext buffer; sysID has no external
+            # force → pass zeros.
+            zfe = jnp.zeros(q.shape[:-1] + (6 * nb,), dtype=q.dtype)
             return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
-                q, qd, u, gravity=np.float32(gravity))
+                q, qd, u, zfe, gravity=np.float32(gravity))
 
         def fd_pi_fwd(gravity, q, qd, u, params):
             return fd_pi(gravity, q, qd, u, params), (q, qd, u)
@@ -374,18 +405,44 @@ class JaxRobotHandle:
 
     # ─── algorithm methods ───────────────────────────────────────────────
 
-    def inverse_dynamics(self, q, qd, *, gravity: float = -9.81):
-        """Inverse dynamics: c = M(q)·qdd_zero + h(q,qd) − g(q).
+    def _f_ext_or_zeros(self, like, f_ext):
+        """Materialize an f_ext buffer (B/…, 6*NUM_BODIES) — JAX FFI has no
+        optional-buffer support, so an absent f_ext is passed as explicit zeros
+        (the no-f_ext path is then byte-identical). ``like`` is a prepped (…, NJ)
+        input whose leading dims + dtype the buffer mirrors."""
+        import jax.numpy as jnp
+        n = 6 * self.num_bodies
+        if f_ext is None:
+            return jnp.zeros(like.shape[:-1] + (n,), dtype=like.dtype)
+        fe = jnp.asarray(f_ext, dtype=jnp.float32)
+        if fe.shape[-1] != n:
+            raise ValueError(f"f_ext last dim must be 6*num_bodies = {n}; got {fe.shape}")
+        return fe
 
-        ``q``, ``qd``: jax.Array shape (B, NJ), dtype float32.
-        Returns shape (B, NJ).
+    def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
+        """Inverse dynamics (RNEA): τ = M(q)·qdd + h(q,qd) − g(q).
+
+        ``q``, ``qd``: jax.Array shape (B, NJ), dtype float32. With ``qdd=None``
+        (default) returns the bias c = h − g; pass a nonzero ``qdd`` for the full
+        RNEA torque (the acceleration is plumbed through). Returns shape (B, NJ).
+
+        ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)`` (see
+        the numpy handle); JAX has no optional buffers, so ``None`` is passed as
+        explicit zeros internally.
 
         Differentiable (``jax.grad`` / ``jax.jacobian`` / ``jax.vjp`` w.r.t.
-        ``q``, ``qd``) via GRiD's analytic ``inverse_dynamics_gradient``, and
+        ``q``, ``qd``) via GRiD's analytic ``inverse_dynamics_gradient`` (the
+        backward uses the qdd=0 Jacobian; qdd/f_ext are not differentiated), and
         ``jax.vmap``-able over the leading batch axis.
         """
-        (q, qd), B = self._prep_2d("inverse_dynamics", q, qd)
-        return self._differentiable()["inverse_dynamics"](gravity, q, qd)
+        import jax.numpy as jnp
+        if qdd is None:
+            (q, qd), B = self._prep_2d("inverse_dynamics", q, qd)
+            qdd_b = jnp.zeros_like(q)
+        else:
+            (q, qd, qdd_b), B = self._prep_2d("inverse_dynamics", q, qd, qdd)
+        fe = self._f_ext_or_zeros(q, f_ext)
+        return self._differentiable()["inverse_dynamics"](gravity, q, qd, qdd_b, fe)
 
     def minv(self, q):
         """Direct mass-matrix inverse Minv(q). Returns (B, NJ, NJ).
@@ -406,16 +463,20 @@ class JaxRobotHandle:
         eye = jnp.eye(nj, dtype=m.dtype)
         return m + jnp.swapaxes(m, -1, -2) - m * eye
 
-    def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81):
+    def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
         """qdd = forward_dynamics(q, qd, u). Returns (B, NJ).
+
+        ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)`` (see
+        the numpy handle); ``None`` is passed as explicit zeros internally.
 
         Differentiable (``jax.grad`` / ``jax.jacobian`` / ``jax.vjp`` w.r.t.
         ``q``, ``qd``, ``u``) via GRiD's analytic ``forward_dynamics_gradient``
         (for ∂qdd/∂q, ∂qdd/∂qd) and ``minv`` (∂qdd/∂u = M⁻¹), and
-        ``jax.vmap``-able over the leading batch axis.
+        ``jax.vmap``-able over the leading batch axis. ``f_ext`` is not differentiated.
         """
         (q, qd, u), B = self._prep_2d("forward_dynamics", q, qd, u)
-        return self._differentiable()["forward_dynamics"](gravity, q, qd, u)
+        fe = self._f_ext_or_zeros(q, f_ext)
+        return self._differentiable()["forward_dynamics"](gravity, q, qd, u, fe)
 
     def inverse_dynamics_wrt_params(self, q, qd, params, *, gravity: float = -9.81):
         """Inverse-dynamics bias c = ID(q, qd, qdd=0), differentiable w.r.t. the
@@ -489,17 +550,21 @@ class JaxRobotHandle:
             q, qd, u, gravity=np.float32(gravity))
         return flat.reshape(q.shape[:-1] + (nj, npar))
 
-    def aba(self, q, qd, u, *, gravity: float = -9.81):
-        """qdd = aba(q, qd, u) via the articulated body algorithm. Returns (B, NJ)."""
+    def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
+        """qdd = aba(q, qd, u) via the articulated body algorithm. Returns (B, NJ).
+
+        ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)`` (see
+        the numpy handle); ``None`` is passed as explicit zeros internally."""
         import jax
         import jax.numpy as jnp
         import numpy as np
         target = _register_method_target(
             self._so_path, self._cache_key, "aba", "grid_rbd_jax_aba")
         (q, qd, u), B = self._prep_2d("aba", q, qd, u)
+        fe = self._f_ext_or_zeros(q, f_ext)
         out_type = self._out(q, self.num_joints)
         return jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
-            q, qd, u, gravity=np.float32(gravity))
+            q, qd, u, fe, gravity=np.float32(gravity))
 
     def crba(self, q, *, gravity: float = -9.81):
         """Mass matrix M(q) via composite rigid body algorithm. Returns (B, NJ, NJ)."""
@@ -605,9 +670,10 @@ class JaxRobotHandle:
     def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81):
         """Second-order inverse dynamics at joint acceleration ``qdd``.
 
-        Returns a tuple of 4 jax.Arrays each shape (B, NV, NV, NV):
-        (d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq). Uses the codegen-time
-        dispatcher (body-frame for fixed-base, world-frame for floating-base).
+        Returns a :class:`grid_rbd.SecondOrderID` NamedTuple of 4 jax.Arrays
+        each shape (B, NV, NV, NV): (d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq).
+        (A plain tuple — positional unpacking / indexing still work.) Uses the
+        codegen-time dispatcher (body-frame fixed-base, world-frame floating-base).
 
         ``qdd=None`` ⇒ zero acceleration (explicit zeros are passed so the
         result never depends on a stale device buffer from a prior call).
@@ -626,17 +692,18 @@ class JaxRobotHandle:
         flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
             q, qd, qdd, gravity=np.float32(gravity))
         lead = q.shape[:-1]
-        return tuple(
+        return SecondOrderID(*(
             flat[..., i * nv ** 3:(i + 1) * nv ** 3].reshape(lead + (nv, nv, nv))
             for i in range(4)
-        )
+        ))
 
     def fdsva_so(self, q, qd, u, *, gravity: float = -9.81):
         """Second-order forward dynamics.
 
-        Returns a tuple of 4 jax.Arrays each shape (B, NV, NV, NV). Uses
-        the same scratch buffer (``d_idsva_so``) as ``idsva_so``, so the
-        two methods cannot run concurrently on the same handle.
+        Returns a :class:`grid_rbd.SecondOrderFD` NamedTuple of 4 jax.Arrays
+        each shape (B, NV, NV, NV) (a plain tuple, so positional unpacking /
+        indexing still work). Uses the same scratch buffer (``d_idsva_so``) as
+        ``idsva_so``, so the two methods cannot run concurrently on the same handle.
         """
         import jax
         import jax.numpy as jnp
@@ -650,10 +717,10 @@ class JaxRobotHandle:
         flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
             q, qd, u, gravity=np.float32(gravity))
         lead = q.shape[:-1]
-        return tuple(
+        return SecondOrderFD(*(
             flat[..., i * nv ** 3:(i + 1) * nv ** 3].reshape(lead + (nv, nv, nv))
             for i in range(4)
-        )
+        ))
 
     def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
         """One integration step. Returns (B, NUM_POS + NUM_VEL).
@@ -691,6 +758,12 @@ class JaxRobotHandle:
             gravity=np.float32(gravity))
         # h_dAB is (2*NV x 3*NV) column-major per timestep; recover row-major.
         return flat.reshape(B, 3 * nv, 2 * nv).transpose(0, 2, 1)
+
+    # ─── field-standard short aliases ────────────────────────────────────────
+    # `rnea`/`fd` are the names roboticists reach for (pinocchio / frax / bard);
+    # bind them to the long-named methods (aba / crba / minv already match).
+    rnea = inverse_dynamics
+    fd = forward_dynamics
 
     # ─── grid_plant surface (cost / barrier / plant-step) ────────────────────
     #
@@ -880,6 +953,7 @@ def register_robot(
 
     Returns a :py:class:`JaxRobotHandle`.
     """
+    _require_jax()  # fail early with install guidance if jax is missing
     base = _grid_rbd.register_robot(
         name=name,
         urdf_path=urdf_path,
@@ -910,6 +984,7 @@ def get_robot(
 ) -> JaxRobotHandle:
     """Look up a previously-registered robot. Same cache as
     :py:func:`grid_rbd.get_robot`."""
+    _require_jax()  # fail early with install guidance if jax is missing
     base = _grid_rbd.get_robot(name, cache_dir=cache_dir)
     from grid_rbd._cache import default_cache_dir, manifest_lookup, store_dir
     cd = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()

@@ -18,9 +18,41 @@ results; the default already matches.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
+
+
+# ─── structured second-order return types (shared across numpy/jax/torch) ─────
+#
+# idsva_so / fdsva_so return four rank-3 tensors each shape (B, NV, NV, NV).
+# A NamedTuple gives them names while staying a plain tuple — positional
+# unpacking (`a, b, c, d = h.idsva_so(...)`) and indexing still work, so this
+# is backward-compatible. The component names match RBDReference's
+# ``idsva_so_*`` return order (d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq).
+
+
+class SecondOrderID(NamedTuple):
+    """Second-order inverse-dynamics tensors, each shape ``(B, NV, NV, NV)``.
+
+    Matches ``RBDReference.idsva_so_body_frame`` / ``idsva_so_world_frame``:
+    ``(d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq)``.
+    """
+    d2tau_dq: Any
+    d2tau_dqd: Any
+    d2tau_cross: Any
+    dM_dq: Any
+
+
+class SecondOrderFD(NamedTuple):
+    """Second-order forward-dynamics tensors, each shape ``(B, NV, NV, NV)``:
+    ``(d2qdd_dq, d2qdd_dqd, d2qdd_cross, d2qdd_du)`` (the FD analogue of
+    :class:`SecondOrderID`; consult ``RBDReference.fdsva_so`` for the exact
+    Singh/Wensing tensor semantics)."""
+    d2qdd_dq: Any
+    d2qdd_dqd: Any
+    d2qdd_cross: Any
+    d2qdd_du: Any
 
 
 # Integrator-type name -> the int code the C ABI dispatches onto IntegratorType.
@@ -76,14 +108,44 @@ class RobotHandle:
     Created by `grid_rbd.register_robot(...)` and `grid_rbd.get_robot(...)`.
     Don't construct directly; the constructor wires up the pybind11 Runner
     plus the metadata loaded from the cache's meta.json.
+
+    Precision: **float32 only.** Every method casts its inputs to ``float32``
+    and computes in single precision (there is no ``dtype=`` knob; a true fp64
+    tier is a future codegen item). For an fp64-in / fp64-out convenience on
+    this numpy handle — compute still runs in fp32, results are upcast back —
+    pass ``allow_fp64=True`` at construction (or set
+    ``handle.allow_fp64 = True``); it is **off by default** and carries the
+    obvious single-precision accuracy caveat. The jax/torch handles are
+    strictly fp32.
+
+    Method index (all take/return ``(B, …)`` arrays, batch axis first)::
+
+        dynamics    inverse_dynamics (rnea) · forward_dynamics (fd) · aba ·
+                    crba · minv · generalized_gravity · nonlinear_effects
+        gradients   inverse_dynamics_gradient · forward_dynamics_gradient
+        2nd-order   idsva_so → SecondOrderID · fdsva_so → SecondOrderFD
+        kinematics  end_effector_pose[_gradient|_hessian] · fk_batched ·
+                    frame_jacobian[_dot] · com · ccrba · osc_inertia
+        energy      energy
+        integration integrator[_gradient]
+        plant/cost  plant_step[_gradient|_hessian] · quadratic_state_cost ·
+                    quadratic_input_cost · ee_pos_cost · com_cost ·
+                    momentum_cost · joint_{position,velocity,torque}_barrier
+
+    Short aliases: ``rnea`` → :py:meth:`inverse_dynamics`,
+    ``fd`` → :py:meth:`forward_dynamics` (``aba`` / ``crba`` / ``minv`` already
+    use their field-standard names).
     """
 
-    def __init__(self, name: str, so_path: str, meta: dict[str, Any]) -> None:
+    def __init__(self, name: str, so_path: str, meta: dict[str, Any],
+                 *, allow_fp64: bool = False) -> None:
         from . import _core  # pybind11 extension; built at pip install time
 
         self._name = name
         self._meta = dict(meta)
         self._runner = _core.Runner(so_path)
+        # fp64-in / fp64-out convenience (compute stays fp32). Off by default.
+        self.allow_fp64 = bool(allow_fp64)
 
         # Sanity-check that the .so's reported constants match meta.json.
         # A mismatch implies the cache is corrupted.
@@ -189,12 +251,23 @@ class RobotHandle:
             )
         return fe
 
-    def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
-        """Inverse dynamics (RNEA). Returns the bias term c = M·qdd_zero + h − g.
+    def _cast_out(self, *arrays):
+        """fp64-out convenience: upcast results to float64 when ``allow_fp64``
+        is set (compute already ran in fp32; this is a pure host-side cast with
+        the obvious precision caveat). A no-op otherwise. Returns a single array
+        for one input, else a tuple — mirroring the wrapped method's return."""
+        if not self.allow_fp64:
+            return arrays[0] if len(arrays) == 1 else arrays
+        out = tuple(np.asarray(a, dtype=np.float64) for a in arrays)
+        return out[0] if len(out) == 1 else out
 
-        Currently `qdd` is accepted for API stability but ignored (the
-        underlying wrapper uses USE_QDD_FLAG=false). Future v2 will plumb
-        through user-provided qdd.
+    def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
+        """Inverse dynamics (RNEA): τ = M(q)·qdd + h(q,qd) − g(q). Returns ``(B, NJ)``.
+
+        With ``qdd=None`` (default) this is the **bias** c = h(q,qd) − g(q)
+        (= ``RBDReference.inverse_dynamics(q, qd, qdd=0)``). Pass a nonzero
+        ``qdd`` to get the full RNEA torque including the inertial term M·qdd
+        — the acceleration is now plumbed through (USE_QDD_FLAG=true).
 
         ``f_ext`` (optional): per-body external forces, shape
         ``(B, 6*num_bodies)``, body-major, each ``[angular; linear]`` in the
@@ -206,7 +279,8 @@ class RobotHandle:
         qdd_arr = None
         if qdd is not None:
             qdd_arr = np.ascontiguousarray(qdd, dtype=np.float32)
-        return self._runner.inverse_dynamics(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
+        c = self._runner.inverse_dynamics(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
+        return self._cast_out(c)
 
     def minv(self, q):
         """Direct mass-matrix inverse Minv(q). Returns shape (B, NJ, NJ).
@@ -222,7 +296,7 @@ class RobotHandle:
         m_full = m + m.swapaxes(-1, -2)
         diag_idx = np.arange(m.shape[-1])
         m_full[:, diag_idx, diag_idx] -= np.diagonal(m, axis1=-2, axis2=-1)
-        return m_full
+        return self._cast_out(m_full)
 
     def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
         """Forward dynamics qdd = M⁻¹·(τ − c). Returns shape (B, NJ).
@@ -232,7 +306,7 @@ class RobotHandle:
         q  = np.ascontiguousarray(q,  dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         u  = np.ascontiguousarray(u,  dtype=np.float32)
-        return self._runner.forward_dynamics(q, qd, u, gravity, self._prep_f_ext(f_ext))
+        return self._cast_out(self._runner.forward_dynamics(q, qd, u, gravity, self._prep_f_ext(f_ext)))
 
     def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
         """Recursive forward dynamics via Articulated Body Algorithm.
@@ -244,14 +318,14 @@ class RobotHandle:
         q  = np.ascontiguousarray(q,  dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         u  = np.ascontiguousarray(u,  dtype=np.float32)
-        return self._runner.aba(q, qd, u, gravity, self._prep_f_ext(f_ext))
+        return self._cast_out(self._runner.aba(q, qd, u, gravity, self._prep_f_ext(f_ext)))
 
     def crba(self, q, *, gravity: float = -9.81):
         """Joint-space mass matrix M(q) via Composite Rigid Body Algorithm.
         Returns shape (B, NJ, NJ). Pass `gravity` only because the host
         wrapper takes it; the result doesn't depend on gravity."""
         q = np.ascontiguousarray(q, dtype=np.float32)
-        return self._runner.crba(q, gravity)
+        return self._cast_out(self._runner.crba(q, gravity))
 
     def end_effector_pose(self, q):
         """End-effector pose [xyz, rpy] per EE. Returns shape (B, 6*NUM_EES).
@@ -291,8 +365,13 @@ class RobotHandle:
         return raw.reshape(B, NEE, NV, 6).transpose(0, 1, 3, 2).reshape(B, 6 * NEE, NV)
 
     def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
-        """∂c/∂(q, qd). Returns shape (B, NJ, 2*NJ) — concatenated
+        """∂τ/∂(q, qd). Returns shape (B, NJ, 2*NJ) — concatenated
         [dc_dq | dc_dqd]. Slice with `[..., :NJ]` / `[..., NJ:]`.
+
+        ``qdd`` (optional): joint acceleration. The gradient depends on it
+        (through the M·qdd term); ``qdd=None`` (default) ⇒ the bias gradient at
+        qdd=0. Now plumbed through (USE_QDD_FLAG=true) matching
+        :py:meth:`inverse_dynamics`.
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``.
         f_ext enters RNEA affinely, so for a CONSTANT f_ext the Jacobian
@@ -334,8 +413,10 @@ class RobotHandle:
         return self._runner.end_effector_pose_hessian(q)
 
     def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81):
-        """Second-order inverse dynamics. Returns a tuple of 4 tensors:
-        (d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq), each shape (B, NV, NV, NV).
+        """Second-order inverse dynamics. Returns a :class:`SecondOrderID`
+        NamedTuple ``(d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq)``, each tensor
+        shape ``(B, NV, NV, NV)``. (NamedTuple is a plain tuple — positional
+        unpacking and indexing still work.)
 
         Uses the codegen-time dispatcher: body-frame for fixed-base,
         world-frame for floating-base.
@@ -354,19 +435,21 @@ class RobotHandle:
         # without further reshape — callers wanting tensor-axis semantics
         # should consult RBDReference's idsva_so docs.
         B = flat.shape[0]
-        return tuple(flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4))
+        blocks = [flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4)]
+        return SecondOrderID(*self._cast_out(*blocks))
 
     def fdsva_so(self, q, qd, u, *, gravity: float = -9.81):
-        """Second-order forward dynamics. Returns shape (B, 4*NV^3) as a flat
-        view of the four output tensors; slice [..., i*NV^3:(i+1)*NV^3] for
-        each component."""
+        """Second-order forward dynamics. Returns a :class:`SecondOrderFD`
+        NamedTuple of 4 tensors each shape ``(B, NV, NV, NV)`` (a plain tuple,
+        so positional unpacking / indexing still work)."""
         q  = np.ascontiguousarray(q,  dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)
         u  = np.ascontiguousarray(u,  dtype=np.float32)
         NV = self.num_vel
         flat = self._runner.fdsva_so(q, qd, u, 4 * NV ** 3, gravity)
         B = flat.shape[0]
-        return tuple(flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4))
+        blocks = [flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4)]
+        return SecondOrderFD(*self._cast_out(*blocks))
 
     def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
         """One integration step x_{k+1} = integrator(x_k, u, dt).
@@ -651,6 +734,12 @@ class RobotHandle:
         q = np.ascontiguousarray(q, dtype=np.float32)
         raw = self._runner.osc_inertia(q)  # (B, 36) row/col-major (symmetric)
         return raw.reshape(raw.shape[0], 6, 6)
+
+    # ─── field-standard short aliases ────────────────────────────────────────
+    # `rnea`/`fd` are the names roboticists (pinocchio / frax / bard) reach for;
+    # bind them to the long-named methods (aba / crba / minv already match).
+    rnea = inverse_dynamics
+    fd = forward_dynamics
 
     # ─── lifecycle ───────────────────────────────────────────────────────────
 
