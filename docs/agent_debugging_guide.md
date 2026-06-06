@@ -313,6 +313,17 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   Invisible on a fixed base (D2qdd is a true Hessian → (a,b)-symmetric, transpose is a no-op) but **load-bearing**
   on the floating q-q block, which is genuinely asymmetric. When the symmetric case hides a transpose bug, the
   asymmetric (floating / off-diagonal) case is where it bites — test there.
+- **Floating-base world-position trap: reuse the CoM/FK path, don't re-derive R,p from the spatial 6×6.**
+  Reconstructing a body's world position by inverting the *spatial* `get_Xmat_Func_by_id` transform gave a wrong
+  (≈2× on one term) floating-base potential energy. For any quantity that must match a CoM/PE oracle (PE
+  regressor, etc.), share the **homogeneous, mimic-aware `_world_transforms`** the CoM path already uses rather
+  than rebuilding (R,p) from the spatial transform.
+- **rpy pose-gradient gimbal lock is a recurring MULTI-TARGET hazard.** A test that sweeps ALL leaf EEs over ALL
+  samples (vs one curated leaf) WILL eventually hit pitch=±π/2 and blow up the `[xyz;rpy]` Jacobian's `E⁻¹` on
+  BOTH the analytic oracle and pin-FD. Guard with a pitch-band skip; the pose position + rotation matrix stay
+  valid and should still be checked. (Codegen should prefer a quaternion / rotation-matrix pose output, or
+  document the rpy limitation.) Also: `pin.dccrba(model,data,q,v)` is the exact analytic `Adot` oracle (= ∂A/∂t,
+  NOT the ∂A/∂q tensor — they differ; ∂A/∂q contracts to Adot over the DOF axis and to dh_dq over the column axis).
 
 ---
 
