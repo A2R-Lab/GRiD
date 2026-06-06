@@ -55,6 +55,22 @@ ROBOT_DESCRIPTION_MODULE: dict[str, str] = {
 }
 
 
+def robot_is_mimic(urdf_path: str) -> bool:
+    """True if the URDF the sweep actually loads has any ``<mimic>`` joint.
+
+    Data-driven mimic detection on the EXACT cached URDF (`get_urdf_path` →
+    ~/.cache/robot_descriptions/...), parsed the same way the header generator
+    parses it. Used to drop codegen-skipped families (com/ccrba/energy) for
+    mimic robots — h1_2 IS mimic (12 <mimic> finger joints), iiwa14/go2/g1 are
+    not. Mirrors GRiDCodeGenerator.helpers.robot_has_mimic_joints, which keys on
+    the same per-joint `is_mimic` flag.
+    """
+    capture = io.StringIO()
+    with contextlib.redirect_stdout(capture):
+        robot_obj, _ = strict_parse_robot(urdf_path, floating_base=False)
+    return any(getattr(j, "is_mimic", False) for j in robot_obj.joints)
+
+
 def get_urdf_path(robot: str) -> str:
     mod_name = ROBOT_DESCRIPTION_MODULE.get(robot)
     if mod_name is None:
@@ -451,10 +467,15 @@ PER_ALGO_SPECS: dict[str, dict] = {
     #     ccrba=6*NUM_VEL+6, energy=3.  See _centroidal.py:_gen_kin_centroidal_host.
     # NOTE: com/ccrba/energy are SKIPPED at codegen for MIMIC robots (their
     # per-body Jacobian fold is not mimic-reduced) — for a mimic robot these
-    # grid:: symbols are absent and the TU would fail to compile. The current
-    # sweep robots (iiwa14/go2/g1/h1_2) are all non-mimic, so no gate is needed
-    # here; there is no GRID_HAS_* preprocessor macro emitted for these families
-    # to gate on. (generalized_gravity / nonlinear_effects are always emitted.)
+    # grid:: symbols are absent and the TU would fail to compile. There is no
+    # GRID_HAS_* preprocessor macro emitted for these families to #if-gate on,
+    # so the bench DROPS them in Python for mimic robots (MIMIC_UNSUPPORTED_ALGOS,
+    # filtered by _algo_keys_in_registry_order via the data-driven has_mimic flag
+    # from robot_is_mimic()). Mimic status of the sweep robots (checked on the
+    # exact loaded URDF): iiwa14=NO, go2=NO, g1=NO, h1_2=YES (12 <mimic> finger
+    # joints) — i.e. h1_2 IS mimic, so for h1_2 these three rows are skipped.
+    # (generalized_gravity / nonlinear_effects always emit — they reuse the
+    # mimic-aware RNEA inner — and are never dropped.)
     "generalized_gravity": {
         "single_call":        "grid::generalized_gravity_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
         "batch_with_mem":     "grid::generalized_gravity<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
@@ -526,11 +547,62 @@ PER_ALGO_SPECS: dict[str, dict] = {
 }
 
 
-def _algo_keys_in_registry_order() -> list[str]:
-    """Return algo keys in ALGO_REGISTRY order, filtered to those in PER_ALGO_SPECS."""
+# Algos whose generated kernel is a NON-PRODUCTION reference path under a given
+# base, and must NOT be benchmarked there (timing them reports fake losses).
+#
+#   idsva_so_body_frame @ floating:
+#     The floating-base body-frame SO kernel compiles
+#     `gen_idsva_so_body_frame_floating_reference_inner` — explicitly documented
+#     in GRiDCodeGenerator/algorithms/_idsva_so.py (~:1170) as NOT emitted in
+#     production: the dispatcher routes ALL floating-base SO to the WORLD frame,
+#     so this body-frame floating branch is unreachable/dispatch-dead and is
+#     ~single-threaded. Benchmarking it produced the spurious g1/iiwa/go2
+#     "10–36× behind pinocchio" floating-SO losses (docs/open-tasks/
+#     perf_behind_pin_analysis.md, Cluster A — MEASUREMENT ARTIFACT).
+#     The PRODUCTION floating SO is still timed by the `idsva_so` dispatcher
+#     (→ world-frame) and the `idsva_so_world_frame` rows, which remain in the
+#     sweep — so dropping this row loses no production coverage.
+NON_PRODUCTION_ALGOS_BY_BASE: dict[str, frozenset[str]] = {
+    "floating": frozenset({"idsva_so_body_frame"}),
+    "fixed": frozenset(),
+}
+
+# Algos the codegen SKIPS for mimic robots, so their grid:: symbols are absent
+# and the matching bench TU would fail to compile/link. com/ccrba/energy are the
+# kinematics-domain centroidal quick-wins whose per-body Jacobian fold is not yet
+# mimic-reduced (see GRiDCodeGenerator/GRiDCodeGenerator.py gen_centroidal_quickwins
+# ~:2070: "com/ccrba/energy skipped: mimic robots' per-body Jacobian fold is not
+# yet mimic-reduced"). generalized_gravity / nonlinear_effects DO emit for mimic
+# robots (they reuse the mimic-aware RNEA inner) and so stay. There is no
+# GRID_HAS_* preprocessor macro for these families to #if-gate on, so the bench
+# must drop them in Python — data-driven on robot_has_mimic_joints(), NOT on a
+# hardcoded robot-name assumption (h1_2 IS mimic; the prior comment was wrong).
+MIMIC_UNSUPPORTED_ALGOS: frozenset[str] = frozenset({"com", "ccrba", "energy"})
+
+
+def _algo_keys_in_registry_order(floating_base: bool | None = None,
+                                 has_mimic: bool | None = None) -> list[str]:
+    """Return algo keys in ALGO_REGISTRY order, filtered to those in PER_ALGO_SPECS.
+
+    When `floating_base` is given, also drop any algo whose generated kernel is a
+    non-production reference path for that base (see NON_PRODUCTION_ALGOS_BY_BASE)
+    so the competitive sweep never times dispatch-dead code. When `has_mimic` is
+    True, drop algos the codegen omits for mimic robots (MIMIC_UNSUPPORTED_ALGOS)
+    whose grid:: symbols would otherwise be absent and break the build. Both
+    default to None (keep everything) — used by callers that only need the full
+    key universe (e.g. cache-key bookkeeping that hashes per base/robot).
+    """
+    drop: frozenset[str] = frozenset()
+    if floating_base is not None:
+        drop |= NON_PRODUCTION_ALGOS_BY_BASE["floating" if floating_base else "fixed"]
+    if has_mimic:
+        drop |= MIMIC_UNSUPPORTED_ALGOS
+
     keys: list[str] = []
     missing: list[str] = []
     for entry in ALGO_REGISTRY:
+        if entry.key in drop:
+            continue
         if entry.key in PER_ALGO_SPECS:
             keys.append(entry.key)
         else:
@@ -627,9 +699,10 @@ def _per_algo_batch_tu_source(algo_key: str) -> str:
     )
 
 
-def _per_algo_single_main_source() -> str:
+def _per_algo_single_main_source(floating_base: bool | None = None,
+                                 has_mimic: bool | None = None) -> str:
     """Dispatcher TU for the single-call binary."""
-    keys = _algo_keys_in_registry_order()
+    keys = _algo_keys_in_registry_order(floating_base, has_mimic)
     decls: list[str] = []
     calls: list[str] = []
     for k in keys:
@@ -670,9 +743,10 @@ def _per_algo_single_main_source() -> str:
     )
 
 
-def _per_algo_batch_main_source() -> str:
+def _per_algo_batch_main_source(floating_base: bool | None = None,
+                                has_mimic: bool | None = None) -> str:
     """Dispatcher TU for the batch binary."""
-    keys = _algo_keys_in_registry_order()
+    keys = _algo_keys_in_registry_order(floating_base, has_mimic)
     decls: list[str] = []
     calls: list[str] = []
     for k in keys:
@@ -732,14 +806,21 @@ def _write_if_changed(path: Path, content: str) -> None:
     path.write_text(content)
 
 
-def generate_per_algo_sources(build_dir: Path) -> tuple[list[tuple[str, Path]], list[tuple[str, Path]], Path, Path]:
+def generate_per_algo_sources(build_dir: Path, floating_base: bool | None = None,
+                              has_mimic: bool | None = None) -> tuple[list[tuple[str, Path]], list[tuple[str, Path]], Path, Path]:
     """Write per-algo TUs + dispatcher mains into `build_dir`.
 
     Returns:
         (single_tus, batch_tus, single_main, batch_main)
     where each *_tus list is [(algo_key, source_path), ...] in registry order.
+
+    `floating_base` filters out non-production reference kernels for the base
+    (e.g. the dispatch-dead floating body-frame SO) so they are never compiled
+    or timed; see NON_PRODUCTION_ALGOS_BY_BASE. `has_mimic` drops algos the
+    codegen omits for mimic robots (MIMIC_UNSUPPORTED_ALGOS) so the TU set never
+    references absent grid:: symbols.
     """
-    keys = _algo_keys_in_registry_order()
+    keys = _algo_keys_in_registry_order(floating_base, has_mimic)
     single_tus: list[tuple[str, Path]] = []
     batch_tus: list[tuple[str, Path]] = []
     for k in keys:
@@ -751,8 +832,8 @@ def generate_per_algo_sources(build_dir: Path) -> tuple[list[tuple[str, Path]], 
         batch_tus.append((k, b_path))
     single_main = build_dir / "timeGRiD_single_main.cu"
     batch_main  = build_dir / "timeGRiD_batch_main.cu"
-    _write_if_changed(single_main, _per_algo_single_main_source())
-    _write_if_changed(batch_main,  _per_algo_batch_main_source())
+    _write_if_changed(single_main, _per_algo_single_main_source(floating_base, has_mimic))
+    _write_if_changed(batch_main,  _per_algo_batch_main_source(floating_base, has_mimic))
     return single_tus, batch_tus, single_main, batch_main
 
 
@@ -990,6 +1071,8 @@ def compile_binaries(
     per_algo_tus: bool = True,
     compile_workers: int | None = None,
     tier: str | None = None,
+    floating_base: bool | None = None,
+    has_mimic: bool | None = None,
 ) -> tuple[Path, Path]:
     """Compile the single-call binary (with -rdc=true) and the batch binary
     (without -rdc=true) against the generated header. Returns
@@ -1015,11 +1098,16 @@ def compile_binaries(
     # Bust the binary cache whenever PER_ALGO_SPECS, the registry order, or
     # the generator templates change — any of which can alter the bytes of
     # the per-algo .cu files we emit.
+    # Base/mimic-aware: the active algo set (and the dispatcher mains derived from
+    # it) depend on floating_base (drops the dispatch-dead floating body-frame SO
+    # reference) and has_mimic (drops com/ccrba/energy, absent for mimic robots).
+    # Hash the filtered set so each (base, mimic) variant gets a distinct binary
+    # cache key even if their headers ever collided.
     per_algo_specs_hash = _hash_bytes(
         json.dumps({
-            "specs": {k: PER_ALGO_SPECS[k] for k in _algo_keys_in_registry_order()},
-            "single_main_src": _per_algo_single_main_source(),
-            "batch_main_src":  _per_algo_batch_main_source(),
+            "specs": {k: PER_ALGO_SPECS[k] for k in _algo_keys_in_registry_order(floating_base, has_mimic)},
+            "single_main_src": _per_algo_single_main_source(floating_base, has_mimic),
+            "batch_main_src":  _per_algo_batch_main_source(floating_base, has_mimic),
             "per_algo_single_template_v": 1,  # bump if template body changes
             "per_algo_batch_template_v":  1,
         }, sort_keys=True).encode()
@@ -1128,7 +1216,7 @@ def compile_binaries(
     if per_algo_tus:
         # Per-algo TU split (P6-7b). Each algo gets its own small TU; one
         # dispatcher main per kind. nvcc compiles all in parallel.
-        single_tu_pairs, batch_tu_pairs, single_main, batch_main = generate_per_algo_sources(build_dir)
+        single_tu_pairs, batch_tu_pairs, single_main, batch_main = generate_per_algo_sources(build_dir, floating_base, has_mimic)
         # Workers: don't oversubscribe. nvcc forks cicc + ptxas + cudafe1
         # subprocesses already, so 0.75x CPU count is the sweet spot we've
         # seen empirically.
@@ -2019,7 +2107,12 @@ def main() -> None:
 
     arch = detect_cuda_arch()
     urdf_path = get_urdf_path(args.robot)
-    print(f"[grid] {args.robot} {args.base} — URDF: {urdf_path}")
+    # Data-driven mimic detection on the exact URDF the sweep loads (NOT a
+    # hardcoded robot-name assumption). Drives dropping codegen-skipped families
+    # (com/ccrba/energy) for mimic robots so the bench never references absent
+    # grid:: symbols. h1_2 IS mimic; iiwa14/go2/g1 are not.
+    has_mimic = robot_is_mimic(urdf_path)
+    print(f"[grid] {args.robot} {args.base} — URDF: {urdf_path} (mimic={has_mimic})")
 
     try:
         header_path = generate_header(urdf_path, args.robot, args.base, ee_frame, build_dir, args.no_recompile)
@@ -2043,6 +2136,8 @@ def main() -> None:
             per_algo_tus=args.per_algo_tus,
             compile_workers=args.compile_workers,
             tier=args.tier,
+            floating_base=(args.base == "floating"),
+            has_mimic=has_mimic,
         )
     except Exception as e:
         print(f"  [grid] ERROR compiling binaries: {e}", file=sys.stderr)
@@ -2097,6 +2192,8 @@ def main() -> None:
             ptxas_opt_level=args.ptxas_opt_level, split_compile=args.split_compile,
             ofast_compile=args.ofast_compile, per_algo_tus=args.per_algo_tus,
             compile_workers=args.compile_workers,
+            floating_base=(args.base == "floating"),
+            has_mimic=has_mimic,
         )
 
         # Modes to run: 'both' → batch then single.
