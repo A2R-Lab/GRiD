@@ -172,6 +172,21 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   on the loaded URDF), so its fixed-base ABA routes through the compose path `qdd=Minv·(τ−rnea)` (= CRBA/Minv),
   NOT the ABA backward recursion. Check `robot_has_mimic_joints()` for the EXACT URDF the sweep loads; don't
   trust in-code "all non-mimic" comments (`baselines/grid/run.py:455` is wrong for h1_2).
+  - **UPDATE (2026-06-06, ISOLATED micro-bench — the premise above FLIPS in isolation):** a clean standalone
+    micro-bench (`/tmp/perf_microbench/`) of the GEMV-replacement tradeoff — GLASS-serial-per-body `gemv` vs a
+    `dot_prod`-batched level fan — at PRODUCTION thread counts (32–352) shows **`dot_prod`-batched WINS from level
+    width L≥4 (1.3× at L=4 up to ~11–13× at L=32); GLASS-serial only ties at L=2.** Reason: GLASS's intra-op
+    parallelism on a single 6×6 is only **6 lanes wide**, so the **serial-over-bodies loop is the real cost**, not
+    the inner reduction; removing the per-body sync barely moved variant A (compute/serialization-bound, not
+    sync-bound). So the "GLASS intra-op parallelism beats a shorter sync chain for modest widths" premise is FALSE
+    in isolation. **BUT this does NOT by itself greenlight #2/#6** — the full-kernel ABA/CRBA reverts almost
+    certainly regressed on **occupancy/register pressure** (the exact mechanism that sank #3 frame_jacobian: a
+    local parallel fan raised whole-kernel register use → spill → regression at high thread counts), and the
+    h1_2/CRBA reverts were partly MIS-TARGETED (h1_2 mimic routes through the serial mimic fold, not the GLASS
+    per-jid path). **Net: #2 (RNEA-backward, compounds across fd/fd_du/idsva_so/fdsva_so) + #6 (minv-backward)
+    RE-OPEN as MEASURE-FIRST FULL-KERNEL experiments** — gate on a full-kernel A/B at N=256 + production threads
+    watching occupancy/spill, and use `segmented_row_strided_gemv<TRANSPOSE,ATOMIC_Y>` (already in GLASS). The
+    micro-bench can't rule out the occupancy regression — only the full-kernel A/B can.
 - **CAVEAT 2 (P2 column-fan, 2026-06-06): fanning a thread-0-serial assembly over threads can REGRESS when the
   serial body materializes large baked `const T[]` job-tables — REVERTED frame_jacobian #3.** Audit item #3
   (`_frame_jacobian.py` Step 3+4, the "adds parallelism where there was NONE / Effort M, risk Low, upside High"
@@ -281,7 +296,13 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   re-timed isolated — the 4 reverts above (CRBA, ABA, #3, #10) + the "hand-rolled `dot_prod` < GLASS"
   claim were concurrent-measured, so the META-finding (don't parallelize cheap serial work) is robust
   across 4 mechanisms but the individual MAGNITUDES (incl. CAVEAT/CAVEAT 2's 1.29×/7×) await isolated
-  re-timing. **A/B at PRODUCTION thread counts** (autotuner-picked, HIGH) not th=1 — a th=1-only or
+  re-timing. **(SETTLED for the `dot_prod`<GLASS claim, 2026-06-06: an isolated micro-bench FLIPPED it —
+  `dot_prod`-batched wins the GEMV tradeoff from L≥4; the full-kernel reverts were occupancy/register +
+  h1_2-mimic mis-targeting, not the inner-reduction tradeoff. #2/#6 re-open as measure-first full-kernel.
+  See the §4 P1-CAVEAT UPDATE.)** The standing META-finding still holds for genuinely-cheap serial work
+  (tiny folds with zero sync cost); the nuance is that a SERIAL-OVER-MANY-BODIES loop calling a narrow
+  (6-lane) GLASS op is NOT "cheap serial work" — it's under-parallelized, and batching it can win IF the
+  whole-kernel occupancy survives. **A/B at PRODUCTION thread counts** (autotuner-picked, HIGH) not th=1 — a th=1-only or
   isolated-microbench measure falsely greenlit #3 and #10 (both won only at th=1). And **never use a
   long serial float32 accumulation as a thread-invariance oracle** — it amplifies the benign tree-sum
   reassociation into a false FAIL; use the float64-oracle equivalence harness + a single-call checksum.
