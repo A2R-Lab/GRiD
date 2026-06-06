@@ -53,6 +53,22 @@ critical path; on a chain (depth == NB) it is neutral, so P1 never hurts.
 grouping the codegen already computes for the forward/segmented paths and reuse
 it for the backward pass.
 
+.. warning::
+
+   **P1 is not automatically a win — A/B-time it, and PRESERVE the GLASS ops.**
+   The serial per-body loop already calls *tuned* GLASS ``gemm``/``gemv`` that
+   parallelize each 6×6's inner reduction across threads. Replacing them with a
+   hand-rolled per-output-element ``dot_prod`` (a serial 6-element reduction per
+   thread) to "level-batch" trades GLASS's intra-op parallelism for a shorter
+   sync chain — and for the *modest level widths* of most branched robots that
+   **loses** (measured: ABA on g1 ~2 % slower, reverted). The right P1 keeps the
+   GLASS ops and interleaves them across a level *without* per-op block syncs (a
+   harder rewrite that may still not beat serial-GLASS for narrow levels). Always
+   A/B time at N=256 and revert a regression. And **verify the benchmarked robot
+   actually compiles the path you're optimizing** — e.g. mimic robots (h1_2)
+   route fixed-base ABA through the ``Minv·(τ−rnea)`` compose path, not the ABA
+   backward recursion, so that cost is really CRBA/Minv.
+
 ----
 
 P2 — Parallel independent columns (gradients / Jacobians / Hessians)

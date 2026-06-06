@@ -159,6 +159,19 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   what make P1/P2 expressible without divergence). P4 keeps the MEMORY path up with P1–P3's shortened compute
   path. Cue: dense passes over known zeros; per-thread index arithmetic that could be a baked lookup; strided
   warp reads; data interleaved against access order.
+- **CAVEAT (learned the hard way, 2026-06-06): P1 level-batching is NOT automatically a win — A/B-TIME it, and
+  PRESERVE the GLASS ops.** A serial per-body backward loop already calls tuned GLASS `gemm`/`gemv` that
+  parallelize each 6×6's inner reduction across threads. If you "level-batch" by replacing those with hand-rolled
+  per-output-element `dot_prod` (a serial 6-elem reduction per thread), you TRADE GLASS's intra-op parallelism
+  for a shorter sync chain — and for *modest level widths* (most branched robots) that LOSES (measured ABA g1
+  ~2% SLOWER → reverted). Sync-count reduction only helps when per-op thread-utilization isn't already the
+  bottleneck. Correct P1: keep the GLASS ops and batch by interleaving them across a level WITHOUT per-op block
+  syncs (harder; may still not beat serial-GLASS for narrow levels) — and ALWAYS A/B time at N=256 before
+  keeping the refactor (per perf-cleanup discipline: revert a regression). Also: **verify the benchmarked robot
+  actually COMPILES the path you're optimizing** — h1_2 is MIMIC (12 mimic joints, `robot_has_mimic_joints()==True`
+  on the loaded URDF), so its fixed-base ABA routes through the compose path `qdd=Minv·(τ−rnea)` (= CRBA/Minv),
+  NOT the ABA backward recursion. Check `robot_has_mimic_joints()` for the EXACT URDF the sweep loads; don't
+  trust in-code "all non-mimic" comments (`baselines/grid/run.py:455` is wrong for h1_2).
 
 - **Parallelize independent COLUMNS in gradients/hessians.** d2ee (per-slot Step-2 + per-cell
   Step-5b), id_du branched-fixed (per-output-element fan, 2·NJ → 2·n² threads), idsva_so world
