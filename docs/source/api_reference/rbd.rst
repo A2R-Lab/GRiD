@@ -74,14 +74,14 @@ testing of downstream GPU, FPGA, and accelerator implementations.
 Testing Algorithms on URDFs
 ---------------------------
 
-Run the following in terminal from forked repo here at base of the GRiD
-working directory in the floating base branch. Run any URDF tests by
-replacing the desired urdf with the terminal scripts below.
+Run the following in terminal from the base of the GRiD working
+directory. Run any URDF tests by replacing the desired urdf in the
+terminal scripts below.
 
-iiwa14.urdf testing ``python printReferenceValues.py iiwa.urdf -f``
+iiwa14.urdf testing ``python examples/codegen/print_reference_values.py iiwa.urdf -f``
 
-This runs the print printReferenceValues.py script located
-https://github.com/A2R-Lab/GRiD/blob/floating-base/printReferenceValues.py.
+This runs the ``examples/codegen/print_reference_values.py`` script
+(`source <https://github.com/A2R-Lab/GRiD/blob/main/examples/codegen/print_reference_values.py>`__).
 This will output values for ``RNEA``, ``Minv``, ``CRBA``, ``RNEA_grad``,
 and more.
 

@@ -12,7 +12,7 @@ or ``"torch"`` (a ``TorchRobotHandle``) — and a ``urdf_string=`` argument
 to register from inline URDF text instead of a file on disk. All three
 backends share the same content-addressed ``.so`` cache.
 
-Source: ``python/`` in the GRiD repo.
+Source: ``bindings/`` in the GRiD repo.
 
 Install (editable, from a GRiD checkout)
 ----------------------------------------
@@ -53,7 +53,7 @@ Register-then-run UX
    M   = handle.crba(q)                      # shape (64, NJ, NJ)
 
 A complete walkthrough exercising every bound method is at
-``python/examples/quickstart_iiwa14.py``.
+``bindings/examples/quickstart_iiwa14.py``.
 
 Method surface
 --------------
@@ -249,6 +249,10 @@ All take/return 2D arrays with axis 0 = batch; cost methods return
      - ``value (B,)``, ``grad (B, NV)``, ``hess (B, NV, NV)``
    * - ``ee_pos_cost(q, p_des, W)``
      - ``value (B,)``, ``grad (B, NX)``, Gauss-Newton ``hess (B, NX, NX)``
+   * - ``com_cost(q, p_des, W)``
+     - ``value (B,)``, ``grad (B, NX)``, Gauss-Newton ``hess (B, NX, NX)`` (CoM tracking)
+   * - ``momentum_cost(q, qd, h_des, W)``
+     - ``value (B,)``, ``grad (B, NX)``, Gauss-Newton ``hess (B, NX, NX)`` (centroidal-momentum tracking)
    * - ``joint_position_barrier(var, lower, upper, mu)``
      - ``value (B,)``, ``grad (B, NP)``, ``hess_diag (B, NP)``
    * - ``joint_velocity_barrier(var, lower, upper, mu)``
@@ -257,6 +261,11 @@ All take/return 2D arrays with axis 0 = batch; cost methods return
      - as above over ``NV``
    * - ``plant_step(x, u, dt, integrator_type="euler")``
      - ``(B, NX)`` next state
+   * - ``plant_step_gradient(x, u, dt, integrator_type="euler")``
+     - ``(B, 2*NV, 3*NV)`` ``[A|B]`` = ``d x_{k+1}/d(x,u)``
+   * - ``plant_step_hessian(x, u, dt, integrator_type="euler")``
+     - ``(B, 2*NV, 3*NV, 3*NV)`` second-order sensitivity ``d²x_{k+1}/d(x,u)²``
+       (fixed-base euler/semi-implicit-euler; floating + RK deferred)
 
 External forces (``f_ext``)
 ---------------------------

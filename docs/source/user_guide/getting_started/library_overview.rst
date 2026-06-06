@@ -33,7 +33,7 @@ Pinocchio:
 * Energy / forces (``_energy.py``): ``generalized_gravity``, ``nonlinear_effects``, ``kinetic_energy``, ``potential_energy``, ``mechanical_energy``, ``coriolis_matrix``
 * Centroidal (``_centroidal.py``): ``com``, ``jacobian_com``, ``ccrba``, ``centroidal_momentum``
 * Regressor (``_regressor.py``): ``inverse_dynamics_regressor``
-* Plant / costs / barriers (``_plant.py``): ``plant_step``, ``quadratic_state_cost``, ``quadratic_input_cost``, ``ee_pos_cost``, and the joint position/velocity/torque log-barriers — the reference for the generated ``grid_plant`` CUDA layer
+* Plant / costs / barriers (``_plant.py``): ``plant_step`` (+ ``plant_step_gradient`` / ``plant_step_hessian``), ``quadratic_state_cost``, ``quadratic_input_cost``, ``ee_pos_cost``, ``com_cost``, ``momentum_cost``, and the joint position/velocity/torque log-barriers — the reference for the generated ``grid_plant`` CUDA layer
 
 Each of these functions and more included within the file call upon getters from URDFParser which initializes a convenient ``robotObj``.
 Here is a list of relevant and helpful getters which can also be viewed from the function glossary for ``URDFParser``:
@@ -66,8 +66,9 @@ include:
   the per-body force; passing ``nullptr`` (the default) reproduces the
   no-force path byte-for-byte.
 * **``grid_plant`` layer:** a sibling ``namespace grid_plant { ... }`` emitted
-  after the ``grid`` namespace, providing ``plant_step`` (+ gradient),
-  quadratic state/input costs, an end-effector position cost (Gauss-Newton
+  after the ``grid`` namespace, providing ``plant_step`` (+ gradient and the
+  F1 fixed-base ``plant_step_hessian``), quadratic state/input costs,
+  end-effector-position / CoM / centroidal-momentum costs (Gauss-Newton
   Hessian), and joint position/velocity/torque log-barriers.
 * **Resource tiers:** every emitted kernel and inline-CUDA ``_device`` /
   ``_inner`` surface takes a ``RESOURCE_TIER`` template parameter defaulting to

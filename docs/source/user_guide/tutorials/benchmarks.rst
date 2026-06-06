@@ -2,8 +2,10 @@ Benchmarks
 ==========
 
 GRiD ships a benchmark harness that compares GRiD against CPU and GPU
-baselines (Pinocchio, MJX, Frax) and against historical GRiD reference
-points. The harness lives under
+baselines (Pinocchio, MJX, Frax, BARD) and against historical GRiD
+reference points. BARD (PyTorch) is timed on both torch CPU and CUDA, so
+it contributes ``bard_cpu`` / ``bard_gpu`` columns to the report. The
+harness lives under
 `test/benchmarks/ <https://github.com/A2R-Lab/GRiD/tree/main/test/benchmarks>`_.
 
 Quick start
@@ -143,7 +145,7 @@ See also
 
 * `test/benchmarks/README.md
   <https://github.com/A2R-Lab/GRiD/blob/main/test/benchmarks/README.md>`_
-  — full bench-harness reference (Pinocchio / MJX / Frax setup, etc.).
+  — full bench-harness reference (Pinocchio / MJX / Frax / BARD setup, etc.).
 * To run a full sweep yourself, use the harness under
   `test/benchmarks/
   <https://github.com/A2R-Lab/GRiD/tree/main/test/benchmarks>`_;
