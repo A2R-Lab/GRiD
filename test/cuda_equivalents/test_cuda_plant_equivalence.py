@@ -76,6 +76,36 @@ def _robot_ids():
     return _comma_env("GRID_CUDA_PLANT_ROBOTS", "iiwa14")
 
 
+# (robot_id, base_mode) cells for the MAIN plant-primitive equivalence
+# (quadratic costs / ee_pos cost / barriers / plant pass-through).
+# Default is iiwa14-fixed only. Broader cells (go2:floating, fr3:fixed-mimic, big
+# robots) are NOT in the default because the current static-smem smoke runner is
+# not robust to them — TWO independent infra limits, both pre-existing, neither a
+# plant correctness bug (filed as a follow-up: make the runner gate its centroidal
+# calls + go dynamic-smem):
+#   1. The runner UNCONDITIONALLY calls `grid_plant::momentum_cost_hessian` (and the
+#      other centroidal/com plant costs), which is emitted ONLY when ccrba/centroidal
+#      is — i.e. NOT for mimic robots (fr3: ccrba mimic-gated off) and not for the
+#      go2-floating config → `namespace grid_plant has no member momentum_cost_hessian`
+#      at compile. The runner must gate those calls (e.g. a GRID_HAS_* macro) to widen.
+#   2. The sibling `plant_kernel`/`plant_step_kernel` use big STATIC `__shared__` and
+#      overflow the 48 KB static cap for nv~29 (g1/h1_2) — guide §7; the honest
+#      big-robot plant path is the BINDINGS (dynamic-smem + cudaFuncSetAttribute TU).
+# Override with GRID_CUDA_PLANT_CELLS once the runner is widened.
+def _plant_cells():
+    raw = os.environ.get("GRID_CUDA_PLANT_CELLS", None)
+    if raw is None:
+        return [("iiwa14", "fixed")]
+    cells = []
+    for tok in raw.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        robot_id, _, base = tok.partition(":")
+        cells.append((robot_id, base or "fixed"))
+    return cells
+
+
 # (robot_id, base_mode) cells for the centroidal (com/momentum) plant-cost check.
 # com_cost/momentum_cost are emitted NON-MIMIC ONLY (see GRiDCodeGenerator/
 # algorithms/_plant.py ~line 907), so validate on non-mimic robots only:
@@ -154,16 +184,18 @@ def _ee_jacobian_and_pos(project_model, q):
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
-@pytest.mark.parametrize("robot_id", _robot_ids(), ids=lambda r: f"{r}-plant")
-def test_cuda_plant_matches_reference(tmp_path, robot_id):
-    base_mode = "fixed"
+@pytest.mark.parametrize(
+    "robot_id,base_mode", _plant_cells(),
+    ids=lambda v: str(v),
+)
+def test_cuda_plant_matches_reference(tmp_path, robot_id, base_mode):
     spec = _robot_spec(robot_id, base_mode)
     try:
         resolved = resolve_robot_spec(spec)
     except RuntimeError as exc:
         pytest.skip(f"Could not resolve manifest {spec.robot_id}: {exc}")
     project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
-    build_dir = tmp_path / f"{robot_id}_plant"
+    build_dir = tmp_path / f"{robot_id}_{base_mode}_plant"
     build_dir.mkdir()
     _generate_header(project_model, build_dir)
     executable, cmd = _compile_runner(build_dir)
@@ -187,7 +219,7 @@ def test_cuda_plant_matches_reference(tmp_path, robot_id):
         u = np.asarray(sample.qdd, np.float64)
         out = _run(executable, cmd, q, qd, u, _DT)
         x = np.concatenate([q, qd])
-        tag = f"{robot_id} @ {sample.name}"
+        tag = f"{robot_id}:{base_mode} @ {sample.name}"
 
         # ---------- quadratic state cost ----------
         Qw, x_des = _Qw(nx), _x_des(nx)
@@ -209,31 +241,41 @@ def test_cuda_plant_matches_reference(tmp_path, robot_id):
         rp = p  # p_des = 0
         # value / grad / hess analytic recompute
         ee_val = 0.5 * np.sum(W * rp * rp)
-        grad_q = J.T @ (W * rp)
-        grad_x = np.concatenate([grad_q, np.zeros(nv)])
+        grad_q = J.T @ (W * rp)            # velocity-tangent gradient (nv entries)
         H_q = J.T @ np.diag(W) @ J
         H_x = np.zeros((nx, nx)); H_x[:nv, :nv] = H_q
         # the runner prints p(q) it actually used — sanity-check it matches the double oracle
         close(out["ee_pos"].reshape(-1), p, f"{tag} ee_pos vs double Python pose")
         close(out["ee_cost_value"].reshape(-1)[0], ee_val, f"{tag} ee value")
-        close(out["ee_cost_grad"].reshape(-1), grad_x, f"{tag} ee grad (J^T W r; qd-block zero)")
-        # qd-block must be EXACTLY zero
-        assert np.all(np.asarray(out["ee_cost_grad"]).reshape(-1)[nv:] == 0.0), f"{tag} ee grad qd-block not exactly zero"
+        # The CUDA grad is laid out over x = [q(NQ); qd(NV)] but the EE-position
+        # term is a function of the velocity-tangent Jacobian (NV columns), so the
+        # leading NV entries hold J^T W r and the qd-block [NQ, NX) is exactly zero.
+        # For a floating base (NQ != NV) entries [NV, NQ) are a representation gap
+        # (uninitialized in the kernel) and are NOT checked.
+        ee_grad = np.asarray(out["ee_cost_grad"]).reshape(-1)
+        close(ee_grad[:nv], grad_q, f"{tag} ee grad (J^T W r; velocity-tangent block)")
+        # qd-block [NQ, NX) must be EXACTLY zero
+        assert np.all(ee_grad[nq:nx] == 0.0), f"{tag} ee grad qd-block not exactly zero"
         close(out["ee_cost_hess"].reshape(nx, nx, order="F"), H_x, f"{tag} ee GN hess (J^T W J)")
 
         # ---------- FD check (in DOUBLE) of the ee cost gradient via the Python pose ----------
         # central difference of the double-precision ee cost value over each q DOF.
-        h = 1e-6
-        fd = np.zeros(nv)
-        for j in range(nv):
-            qp, qm = q.copy(), q.copy()
-            qp[j] += h; qm[j] -= h
-            pp, _ = _ee_jacobian_and_pos(project_model, qp)
-            pm, _ = _ee_jacobian_and_pos(project_model, qm)
-            vp = 0.5 * np.sum(W * pp * pp)
-            vm = 0.5 * np.sum(W * pm * pm)
-            fd[j] = (vp - vm) / (2 * h)
-        close(grad_q, fd, f"{tag} ee grad vs double central-difference FD")
+        # Only valid where q is Euclidean (NQ == NV): a raw-q perturbation on a
+        # floating base would step off the configuration manifold (quaternion) and
+        # would not match the velocity-tangent Jacobian, so skip the FD there (the
+        # analytic J^T W r check above already pins the tangent gradient).
+        if nq == nv:
+            h = 1e-6
+            fd = np.zeros(nv)
+            for j in range(nv):
+                qp, qm = q.copy(), q.copy()
+                qp[j] += h; qm[j] -= h
+                pp, _ = _ee_jacobian_and_pos(project_model, qp)
+                pm, _ = _ee_jacobian_and_pos(project_model, qm)
+                vp = 0.5 * np.sum(W * pp * pp)
+                vm = 0.5 * np.sum(W * pm * pm)
+                fd[j] = (vp - vm) / (2 * h)
+            close(grad_q, fd, f"{tag} ee grad vs double central-difference FD")
 
         # ---------- barriers (deterministic interior bounds; DOF 0 position unbounded) ----------
         def barrier_terms(vals, los, his):

@@ -45,20 +45,22 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_equivalence_runner.cu")
 
-# The continuous-joint robot. gen3-fixed: NQ==NV (raw scalar angle), 4
-# continuous + 3 revolute joints; the only robot in the manifest that exercises
-# the continuous-joint codegen path.
+# The continuous-joint robot. gen3: 4 continuous + 3 revolute joints; the only
+# robot in the manifest that exercises the continuous-joint codegen path. The
+# fixed-base case has NQ==NV (raw scalar angle); the floating-base case prepends
+# the 7-dim free-flyer (translation + quaternion) to the same joint chain and so
+# exercises the wraparound-safe continuous path on top of the floating root.
 _ROBOT_ID = "gen3"
 
 
-def _gen3_fixed_spec():
-    for case in iter_robot_cases(MANIFEST_PATH, base_mode="fixed"):
+def _gen3_spec(base_mode):
+    for case in iter_robot_cases(MANIFEST_PATH, base_mode=base_mode):
         if case["spec"].robot_id == _ROBOT_ID:
             return case["spec"]
     return None
 
 
-GEN3_SPEC = _gen3_fixed_spec()
+GEN3_SPEC = _gen3_spec("fixed")
 
 pytestmark = pytest.mark.skipif(
     GEN3_SPEC is None,
@@ -76,18 +78,30 @@ def _continuous_joint_index_q(robot):
 
 def _wrapped_angle_states(project_model, n_trials=4):
     """States with the continuous-joint coordinates pushed many full turns past
-    [-pi, pi] -- exactly the comparator guard the Python twin uses."""
+    [-pi, pi] -- exactly the comparator guard the Python twin uses.
+
+    Base-aware: for a floating base the q-vector is [translation(3); quat(4,
+    xyzw); joints], so we seed a *normalized* quaternion (an off-manifold quat
+    would make the reference invalid) and push the continuous-joint coordinates
+    -- which live in the joint segment -- past +-pi. The continuous-joint
+    q-indices come from get_joint_index_q, which already accounts for the
+    floating-root offset, so the same wrap loop works for both bases.
+    """
     robot = project_model.robot
     cont_iq = _continuous_joint_index_q(robot)
     assert cont_iq, "gen3 should expose continuous joints"
     rng = np.random.default_rng(11)
-    nv = project_model.nv
+    nq, nv = project_model.nq, project_model.nv
+    floating = project_model.base_mode == "floating"
     states = []
     for _ in range(n_trials):
-        base = rng.uniform(-1.0, 1.0, size=nv)
-        q = base.copy()
+        q = rng.uniform(-1.0, 1.0, size=nq)
+        if floating:
+            q[0:3] = rng.uniform(-0.35, 0.35, size=3)          # translation
+            quat = rng.uniform(-1.0, 1.0, size=4)
+            q[3:7] = quat / np.linalg.norm(quat)               # normalized xyzw
         for iq in cont_iq:
-            q[iq] = base[iq] + 2.0 * np.pi * rng.integers(-3, 4)
+            q[iq] = q[iq] + 2.0 * np.pi * rng.integers(-3, 4)
         qd = rng.uniform(-0.8, 0.8, size=nv)
         states.append((q.astype(np.float64), qd.astype(np.float64)))
     return states
@@ -113,7 +127,7 @@ def _generate_header(project_model, build_dir):
     return header
 
 
-def _compile_runner(build_dir):
+def _compile_runner(build_dir, floating=False):
     nvcc = shutil.which("nvcc") or "/usr/local/cuda/bin/nvcc"
     if not Path(nvcc).exists():
         pytest.skip("nvcc not found; install CUDA Toolkit to run CUDA equivalence tests.")
@@ -123,10 +137,12 @@ def _compile_runner(build_dir):
     exe = build_dir / "cuda_continuous_joint_runner.exe"
     cmd = [
         nvcc, "-std=c++11", "-O0",
-        "-DGRID_CUDA_FLOATING_BASE=0",
-        # gen3-fixed exercises id / crba / ee_pose only; skip the gradient and
+        f"-DGRID_CUDA_FLOATING_BASE={1 if floating else 0}",
+        # gen3 exercises id / crba / ee_pose only; skip the gradient and
         # ee-pose-gradient runner sections so we don't need the heavy gradient /
-        # second-order kernels in the (lean) header.
+        # second-order kernels in the (lean) header. (SKIP_GRADIENTS also defaults
+        # SKIP_EEPOSE_GRADIENTS, so the floating runner block drops its
+        # id_du/fd_du/ee-derivative launches too.)
         "-DGRID_RUNNER_SKIP_GRADIENTS=1",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
@@ -173,10 +189,20 @@ def _ee_pose_reference(project_model, q):
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
-def test_cuda_continuous_joint_matches_reference_at_wrapped_angles(tmp_path):
+@pytest.mark.parametrize("base_mode", ["fixed", "floating"], ids=lambda b: f"gen3-{b}")
+def test_cuda_continuous_joint_matches_reference_at_wrapped_angles(tmp_path, base_mode):
     """CUDA id / crba / ee_pose for gen3 must match the RBDReference numpy
-    reference even when the continuous-joint angles are wrapped many turns."""
-    spec = GEN3_SPEC
+    reference even when the continuous-joint angles are wrapped many turns.
+
+    Both bases are covered: gen3-fixed (NQ==NV raw scalar angle) and gen3-floating
+    (the same continuous chain on top of the 7-dim free-flyer root, NQ==NV+1). The
+    floating cell exercises the wraparound-safe continuous path through the
+    floating-base code path -- the numpy reference already covers gen3-floating, so
+    this closes the matching CUDA gap.
+    """
+    spec = _gen3_spec(base_mode)
+    if spec is None:
+        pytest.skip(f"gen3-{base_mode} not in manifest")
     try:
         resolved = resolve_robot_spec(spec)
     except RuntimeError as exc:
@@ -184,18 +210,23 @@ def test_cuda_continuous_joint_matches_reference_at_wrapped_angles(tmp_path):
             f"Could not resolve manifest {spec.robot_id}. Run ./developer_install.sh "
             f"before executing CUDA equivalence tests. Resolution error: {exc}"
         )
-    project_model = build_project_adapter(spec, resolved, base_mode="fixed")
-    nv = project_model.nv
-    # Raw-scalar-angle representation: continuous joints do not expand q.
-    assert project_model.nq == nv, "gen3-fixed should have NQ == NV"
+    project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
+    nq, nv = project_model.nq, project_model.nv
+    if base_mode == "fixed":
+        # Raw-scalar-angle representation: continuous joints do not expand q.
+        assert nq == nv, "gen3-fixed should have NQ == NV"
+    else:
+        # Floating root adds the 7-dim free-flyer config but only 6 velocity DoF.
+        assert nq == nv + 1, "gen3-floating should have NQ == NV + 1"
 
-    exe = _compile_runner_and_header(project_model, tmp_path)
+    floating = base_mode == "floating"
+    exe = _compile_runner_and_header(project_model, tmp_path, floating=floating)
 
     zeros = np.zeros(nv, dtype=np.float64)
     failures = []
     for trial, (q, qd) in enumerate(_wrapped_angle_states(project_model)):
         out = _run(exe, q, qd, zeros)
-        tag = f"gen3 wrapped-angle trial {trial}"
+        tag = f"gen3-{base_mode} wrapped-angle trial {trial}"
 
         # ---- inverse_dynamics (qdd=0 -> gravity + coriolis); runner and the
         # adapter inverse_dynamics both use -9.81 (unified convention). The adapter
@@ -218,9 +249,9 @@ def test_cuda_continuous_joint_matches_reference_at_wrapped_angles(tmp_path):
     assert not failures, "continuous-joint CUDA equivalence failures:\n" + "\n".join(failures)
 
 
-def _compile_runner_and_header(project_model, tmp_path):
+def _compile_runner_and_header(project_model, tmp_path, floating=False):
     _generate_header(project_model, tmp_path)
-    return _compile_runner(tmp_path)
+    return _compile_runner(tmp_path, floating=floating)
 
 
 def _check(failures, label, cuda, ref):
