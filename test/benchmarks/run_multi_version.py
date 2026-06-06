@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a multi-version GRiD benchmark sweep against Pinocchio, MJX, and Frax.
+"""Run a multi-version GRiD benchmark sweep against Pinocchio, MJX, Frax, and BARD.
 
 Columns produced (per robot/base):
   - grid_pre_glass:    GRiD at git ref d2c0d18 (last commit before the GLASS v2 work).
@@ -9,6 +9,9 @@ Columns produced (per robot/base):
   - mjx:               MuJoCo MJX GPU reference (JAX). Requires mujoco-mjx + jax[cuda12].
   - frax:              Frax GPU reference (JAX, https://github.com/danielpmorton/frax).
                        Covers id/fd/crba/minv. Requires frax + jax[cuda12].
+  - bard:              BARD reference (PyTorch, https://github.com/YueWang996/bard-pytorch-dynamics).
+                       Covers id/fd/crba. Timed on torch CPU + CUDA (bard_cpu/bard_gpu).
+                       Requires the `bard` package (pip install --no-deps git+...).
 
 Usage (single robot, fastest):
     python test/benchmarks/run_multi_version.py --robots iiwa14 --bases fixed
@@ -64,8 +67,8 @@ BASES  = ("fixed", "floating")
 # SIMT wins by 2.6×). The historical data is preserved at the
 # `archive/last-cublasdx` git tag; see
 # docs/source/user_guide/concepts/cublasdx_removal_design.rst.
-COLUMNS = ("pre_glass", "glass", "pinocchio", "mjx", "frax")
-DEFAULT_COLUMNS = ("pre_glass", "glass", "pinocchio", "mjx", "frax")
+COLUMNS = ("pre_glass", "glass", "pinocchio", "mjx", "frax", "bard")
+DEFAULT_COLUMNS = ("pre_glass", "glass", "pinocchio", "mjx", "frax", "bard")
 
 # Maps the column identifier to the baseline key used in the merged JSON
 # (so generate_report.py / generate_multi_version_report.py can find them).
@@ -75,6 +78,7 @@ COLUMN_TO_BASELINE_KEY = {
     "pinocchio":    "pinocchio",
     "mjx":          "mjx",
     "frax":         "frax",
+    "bard":         "bard",
 }
 
 EE_FRAMES_GRID = {
@@ -144,6 +148,15 @@ def _check_column_deps(column: str, worktree_path: Path) -> tuple[bool, str]:
         ).returncode
         if rc != 0:
             return False, "frax+jax not installed (`pip install frax 'jax[cuda12]'`)"
+        return True, ""
+    if column == "bard":
+        rc = subprocess.run(
+            [sys.executable, "-c", "import bard, torch"],
+            capture_output=True,
+        ).returncode
+        if rc != 0:
+            return False, ("bard+torch not installed (`pip install --no-deps "
+                           "git+https://github.com/YueWang996/bard-pytorch-dynamics.git`)")
         return True, ""
     return False, f"unknown column '{column}'"
 
@@ -388,6 +401,25 @@ def run_frax_column(robot: str, base: str, *,
     return output
 
 
+def run_bard_column(robot: str, base: str, *,
+                    output_dir: Path,
+                    batch_iters: int | None = None) -> Path | None:
+    output = output_dir / f"{robot}_{base}_bard.json"
+    cmd = [
+        sys.executable,
+        str(REPO_ROOT / "test" / "benchmarks" / "baselines" / "bard" / "run.py"),
+        "--robot", robot, "--base", base, "--output", str(output),
+    ]
+    if batch_iters is not None:
+        cmd += ["--test-iters", str(batch_iters)]
+    print(f"[{ts()}] [bard] {robot} {base} → {output.name}")
+    result = subprocess.run(cmd, capture_output=False, text=True)
+    if result.returncode != 0 or not output.exists():
+        print(f"  [bard] FAILED for {robot}/{base}", file=sys.stderr)
+        return None
+    return output
+
+
 def _rename_grid_key(json_path: Path, new_key: str) -> None:
     """Rewrite a grid run.py JSON output so the baseline key is `new_key` instead of 'grid'."""
     data = json.loads(json_path.read_text())
@@ -549,7 +581,7 @@ def _build_grid_binaries(grid_columns, robots, bases, tiers, *, build_jobs,
 # ---------------------------------------------------------------------------
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Multi-version GRiD benchmark sweep (pre-glass + glass vs pinocchio + mjx + frax)",
+        description="Multi-version GRiD benchmark sweep (pre-glass + glass vs pinocchio + mjx + frax + bard)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -560,7 +592,7 @@ def main() -> None:
                              "(useful when floating compile hangs and you want fixed data first). "
                              "Equivalent to --bases fixed; overrides --bases if both are set.")
     parser.add_argument("--columns", nargs="+", default=list(DEFAULT_COLUMNS), choices=list(COLUMNS),
-                        help="Subset of columns to run (default: all five)")
+                        help="Subset of columns to run (default: all six)")
     parser.add_argument("--skip", nargs="+", default=[], metavar="ROBOT_BASE",
                         help="Exclude specific robot/base combinations, e.g. "
                              "'--skip iiwa14_floating g1_fixed'. Useful when one "
@@ -735,6 +767,11 @@ def main() -> None:
                     )
                 elif column == "frax":
                     p = run_frax_column(
+                        robot, base, output_dir=args.output_dir,
+                        batch_iters=args.batch_iters,
+                    )
+                elif column == "bard":
+                    p = run_bard_column(
                         robot, base, output_dir=args.output_dir,
                         batch_iters=args.batch_iters,
                     )

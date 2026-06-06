@@ -193,7 +193,8 @@ def _robot_rows(results: dict, algo: str, section_robots: list[str]) -> list[str
 # ---------------------------------------------------------------------------
 
 MULTI_VERSION_KEYS = ("grid_pre_glass", "grid_glass",
-                      "pinocchio", "mjx", "frax_cpu", "frax_gpu")
+                      "pinocchio", "mjx", "frax_cpu", "frax_gpu",
+                      "bard_cpu", "bard_gpu")
 
 
 def _ratio(num_entry: Optional[dict], den_entry: Optional[dict],
@@ -214,7 +215,7 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
                                    section_robots: list[str],
                                    metric: str) -> list[str]:
     """metric ∈ {"single", "n16", "n256"}. Returns rows for one algo across robots
-    showing only that metric, for all 6 columns."""
+    showing only that metric, for all backend columns."""
     rows = []
     for robot in section_robots:
         for base in BASES:
@@ -230,6 +231,10 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
             # default), leaving frax_cpu as `—`.
             fx_cpu = (base_dict.get("frax_cpu") or {}).get(algo)
             fx_gpu = (base_dict.get("frax_gpu") or base_dict.get("frax") or {}).get(algo)
+            # BARD columns: split into CPU + GPU like Frax (PyTorch CPU + CUDA).
+            # Back-compat: legacy JSONs with a bare "bard" key populate bard_gpu.
+            bd_cpu = (base_dict.get("bard_cpu") or {}).get(algo)
+            bd_gpu = (base_dict.get("bard_gpu") or base_dict.get("bard") or {}).get(algo)
             picks = base_dict.get("algo_picks")  # autotune (tier×threads) winners
 
             # Per-tier (glass_lite / glass_min) column source. With --autotune-threads
@@ -260,6 +265,7 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
                     _entry_single(pi) + _codegen_flag(pi),
                     _entry_single(mx),
                     _entry_single(fx_cpu), _entry_single(fx_gpu),
+                    _entry_single(bd_cpu), _entry_single(bd_gpu),
                 ]
                 ratio_gl_over_pg = _ratio(gl, pg, "compute_only", "compute_only", 256)
             else:
@@ -283,6 +289,8 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
                     _entry_batch(mx, n, "compute_only"),
                     _entry_batch(fx_cpu, n, "compute_only"),
                     _entry_batch(fx_gpu, n, "compute_only"),
+                    _entry_batch(bd_cpu, n, "compute_only"),
+                    _entry_batch(bd_gpu, n, "compute_only"),
                 ]
                 ratio_gl_over_pg = _ratio(gl, pg, "compute_only", "compute_only", n)
 
@@ -347,6 +355,10 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
         "- **frax_cpu / frax_gpu**: Frax (JAX) reference (https://github.com/danielpmorton/frax) "
         "timed separately on JAX's CPU and CUDA backends — Frax advertises both as fast. "
         "Subset of algos only (id / fd / crba / minv); others render `—`.",
+        "- **bard_cpu / bard_gpu**: BARD (PyTorch) reference "
+        "(https://github.com/YueWang996/bard-pytorch-dynamics) timed separately on torch's "
+        "CPU and CUDA backends. Subset of algos only (id / fd / crba); others render `—`. "
+        "BARD times the full update_kinematics + algo pipeline per state.",
         "- **glass/pre**: N=256 compute-only ratio. **> 1.00× = HEAD is faster**; "
         "**< 1.00× = HEAD regressed**.",
         "",
@@ -366,7 +378,7 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
             lines += [f"### {display}", ""]
 
             # Three sub-tables per algorithm: single | N=16 | N=256. Each is the
-            # same 6-column layout (pre_glass / glass / pin / mjx / frax_cpu / frax_gpu)
+            # same backend-column layout (pre_glass / glass / pin / mjx / frax / bard)
             # plus the glass/pre ratio computed at that batch size.
             metric_header = {
                 "single": "single-call",
@@ -375,11 +387,11 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
             }
             col_header = (
                 "| Robot | Base | pre_glass | glass | glass_lite | glass_min | grid_best "
-                "| pin | mjx | frax_cpu | frax_gpu | glass/pre |"
+                "| pin | mjx | frax_cpu | frax_gpu | bard_cpu | bard_gpu | glass/pre |"
             )
             col_align = (
                 "|-------|------|:---------:|:-----:|:----------:|:---------:|:--------:"
-                "|:---:|:---:|:--------:|:--------:|:---------:|"
+                "|:---:|:---:|:--------:|:--------:|:--------:|:--------:|:---------:|"
             )
             for metric in ("single", "n16", "n256"):
                 lines += [f"**{metric_header[metric]}**", ""]
