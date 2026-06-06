@@ -799,6 +799,92 @@ class RobotHandle:
         raw = self._runner.osc_inertia(q)  # (B, 36) row/col-major (symmetric)
         return raw.reshape(raw.shape[0], 6, 6)
 
+    # ─── runtime arbitrary multi-EE pose / pose-gradient (target + offset) ─────
+
+    def _resolve_ee_jids(self, ee_joint_names):
+        """Resolve ee_joint_names -> joint ids, mirroring
+        RBDReference.select_end_effector_joints: ``None`` => all leaf joints; a
+        str / list of names => their joint ids (from the cached joint_names map)."""
+        names = self._meta.get("joint_names")
+        if ee_joint_names is None:
+            jids = self._meta.get("leaf_jids")
+            if jids is None:
+                raise RuntimeError(
+                    "this .so predates the runtime-target API (no leaf_jids in "
+                    "meta.json); re-register with force_rebuild=True")
+            return list(jids)
+        if names is None:
+            raise RuntimeError(
+                "this .so predates the runtime-target API (no joint_names in "
+                "meta.json); re-register with force_rebuild=True")
+        if isinstance(ee_joint_names, str):
+            ee_joint_names = [ee_joint_names]
+        jids = []
+        for name in ee_joint_names:
+            try:
+                jids.append(names.index(name))
+            except ValueError:
+                raise ValueError(f"Could not find joint named: {name}")
+        return jids
+
+    @staticmethod
+    def _normalize_ee_offsets(ee_offsets, num_ees):
+        """Normalize ee_offsets to a list of length-3 [x,y,z] (one per EE).
+        ``None`` => zero offset (frame origin); a single offset is applied to all
+        EEs (matches the oracle's first-offset broadcast). Accepts [x,y,z] or
+        homogeneous [x,y,z,1]."""
+        if ee_offsets is None:
+            return [np.zeros(3, dtype=np.float32)] * num_ees
+        offs = [np.asarray(o, dtype=np.float32).reshape(-1)[:3] for o in ee_offsets]
+        if len(offs) == 1:
+            offs = offs * num_ees
+        if len(offs) != num_ees:
+            raise ValueError(
+                f"ee_offsets length {len(offs)} != number of EEs {num_ees}")
+        return offs
+
+    def end_effector_pose_runtime(self, q, ee_joint_names=None, ee_offsets=None):
+        """Runtime-target end-effector pose ``[xyz; rpy]`` at an offset point.
+
+        Mirrors ``RBDReference.end_effector_pose(q, ee_joint_names, ee_offsets)``:
+        ``ee_joint_names`` (None => all leaf joints, or a str / list of joint
+        names) selects the EE frames, ``ee_offsets`` (None => frame origin, or one
+        ``[x,y,z]`` / ``[x,y,z,1]`` per EE) shifts the measurement point. The
+        single-target GPU kernel is looped over the resolved jid list and the
+        results stacked.
+
+        Returns ``(B, NUM_EE, 6)`` where each row is ``[x, y, z, roll, pitch, yaw]``.
+        """
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        jids = self._resolve_ee_jids(ee_joint_names)
+        offsets = self._normalize_ee_offsets(ee_offsets, len(jids))
+        per_ee = []
+        for jid, off in zip(jids, offsets):
+            raw = self._runner.end_effector_pose_runtime(
+                q, int(jid), np.ascontiguousarray(off, dtype=np.float32))  # (B, 6)
+            per_ee.append(raw)
+        return self._cast_out(np.stack(per_ee, axis=1))  # (B, NUM_EE, 6)
+
+    def end_effector_pose_gradient_runtime(self, q, ee_joint_names=None, ee_offsets=None):
+        """Runtime-target end-effector pose gradient ``d[xyz; rpy]/dv`` (6 x NV)
+        at an offset point. Same ``ee_joint_names`` / ``ee_offsets`` semantics as
+        :py:meth:`end_effector_pose_runtime`; mirrors
+        ``RBDReference.end_effector_pose_gradient(q, ee_joint_names, ee_offsets)``.
+
+        Returns ``(B, NUM_EE, 6, NV)``.
+        """
+        q = np.ascontiguousarray(q, dtype=np.float32)
+        NV = self.num_vel
+        jids = self._resolve_ee_jids(ee_joint_names)
+        offsets = self._normalize_ee_offsets(ee_offsets, len(jids))
+        per_ee = []
+        for jid, off in zip(jids, offsets):
+            raw = self._runner.end_effector_pose_gradient_runtime(
+                q, int(jid), np.ascontiguousarray(off, dtype=np.float32))  # (B, 6*NV) col-major
+            B = raw.shape[0]
+            per_ee.append(raw.reshape(B, NV, 6).transpose(0, 2, 1))  # (B, 6, NV)
+        return self._cast_out(np.stack(per_ee, axis=1))  # (B, NUM_EE, 6, NV)
+
     # ─── field-standard short aliases ────────────────────────────────────────
     # `rnea`/`fd` are the names roboticists (pinocchio / frax / bard) reach for;
     # bind them to the long-named methods (aba / crba / minv already match).

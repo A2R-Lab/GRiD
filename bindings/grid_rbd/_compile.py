@@ -137,6 +137,8 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
             fixed_target_name=fixed_target_name,
             algorithm_list=["all", "frame_jacobian",
                             "frame_jacobian_dot", "osc_inertia",
+                            "end_effector_pose_runtime",
+                            "end_effector_pose_gradient_runtime",
                             "integrator_hessian"],
             enable_floating_second_order=True,
             enable_idsva_so_world_frame=options.get("floating_base", False),
@@ -149,11 +151,20 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
 
     # Capture per-robot constants so the Python side doesn't have to dlopen
     # the .so just to read NUM_JOINTS / NUM_VEL / NUM_EES.
+    # joint_names (index == joint id) + leaf_jids let the handle's runtime-target
+    # list API resolve ee_joint_names -> jids (mirrors RBDReference
+    # select_end_effector_joints) without a robot model on the Python side.
+    joint_names = []
+    for jid in range(robot.get_num_joints()):
+        joint = robot.get_joint_by_id(jid)
+        joint_names.append(joint.get_name() if joint is not None else "")
     return {
         "num_joints": robot.get_num_pos(),
         "num_vel": robot.get_num_vel(),
         "num_ees": robot.get_total_leaf_nodes(),
         "floating_base": bool(robot.floating_base),
+        "joint_names": joint_names,
+        "leaf_jids": [int(j) for j in robot.get_leaf_nodes()],
     }
 
 

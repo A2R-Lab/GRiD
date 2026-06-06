@@ -769,6 +769,59 @@ extern "C" int grid_rbd_osc_inertia(const T* q, T* out, int batch) {
 #endif
 }
 
+// end_effector_pose_runtime(q) -> 6-vector [xyz; rpy] of target_jid at a runtime
+// offset point in the target frame. target_jid<0 => leaf-EE default; offset may
+// be nullptr (=> frame origin {0,0,0}). Gated on GRID_HAS_END_EFFECTOR_POSE_RUNTIME
+// (opt-in codegen). Single-target like frame_jacobian; the Python list API loops it.
+extern "C" int grid_rbd_end_effector_pose_runtime(const T* q, T* out, int batch,
+                                                  int target_jid, const T* offset) {
+#ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd/u unused
+    // stage the runtime offset (frame origin when offset==nullptr).
+    T off[3] = {static_cast<T>(0), static_cast<T>(0), static_cast<T>(0)};
+    if (offset) { off[0]=offset[0]; off[1]=offset[1]; off[2]=offset[2]; }
+    if (cudaMemcpy(g_data->d_eepose_runtime_offset, off, 3*sizeof(T),
+                   cudaMemcpyHostToDevice) != cudaSuccess) return 101;
+    grid::end_effector_pose_runtime<T>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms,
+                                       g_streams, target_jid);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_eePose, (size_t)batch * 6 * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)out; (void)batch; (void)target_jid; (void)offset;
+    return 3;
+#endif
+}
+
+// end_effector_pose_gradient_runtime(q) -> 6 x NUM_VEL = d[xyz; rpy]/dv of
+// target_jid at a runtime offset point (col-major). Same target/offset conventions
+// as grid_rbd_end_effector_pose_runtime. Gated on
+// GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME.
+extern "C" int grid_rbd_end_effector_pose_gradient_runtime(const T* q, T* out, int batch,
+                                                           int target_jid, const T* offset) {
+#ifdef GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd/u unused
+    T off[3] = {static_cast<T>(0), static_cast<T>(0), static_cast<T>(0)};
+    if (offset) { off[0]=offset[0]; off[1]=offset[1]; off[2]=offset[2]; }
+    if (cudaMemcpy(g_data->d_eepose_runtime_offset, off, 3*sizeof(T),
+                   cudaMemcpyHostToDevice) != cudaSuccess) return 101;
+    grid::end_effector_pose_gradient_runtime<T>(g_data, g_robot, batch, g_block_dimms,
+                                                g_thread_dimms, g_streams, target_jid);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_eePoseGrad, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)out; (void)batch; (void)target_jid; (void)offset;
+    return 3;
+#endif
+}
+
 
 // ────────────────────────────────────────────────────────────────────────────
 // Time integrator (value + gradient)

@@ -104,6 +104,8 @@ extern "C" {
     using fn_frame_jac_t    = int (*)(const float*, float*, int, int, int);
     // frame_jacobian_dot: (q, qd, out, batch, target_jid, reference_frame)
     using fn_frame_jac_dot_t = int (*)(const float*, const float*, float*, int, int, int);
+    // end_effector_pose_runtime[_gradient]: (q, out, batch, target_jid, offset[3])
+    using fn_ee_runtime_t   = int (*)(const float*, float*, int, int, const float*);
     // energy / nonlinear_effects: (q, qd, out, batch, gravity)
     using fn_q_qd_out_grav_t = int (*)(const float*, const float*, float*, int, float);
     // generalized_gravity: (q, out, batch, gravity)
@@ -185,6 +187,8 @@ public:
         fn_frame_jacobian_     = reinterpret_cast<fn_frame_jac_t>(opt_sym("grid_rbd_frame_jacobian"));
         fn_frame_jacobian_dot_ = reinterpret_cast<fn_frame_jac_dot_t>(opt_sym("grid_rbd_frame_jacobian_dot"));
         fn_osc_inertia_        = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_osc_inertia"));
+        fn_ee_pose_runtime_      = reinterpret_cast<fn_ee_runtime_t>(opt_sym("grid_rbd_end_effector_pose_runtime"));
+        fn_ee_pose_grad_runtime_ = reinterpret_cast<fn_ee_runtime_t>(opt_sym("grid_rbd_end_effector_pose_gradient_runtime"));
 
         // PS5 value ops — OPTIONAL: present in newer .so files.
         // coriolis_matrix / kinetic_energy_regressor / potential_energy_regressor
@@ -937,6 +941,47 @@ public:
         return out;
     }
 
+    // end_effector_pose_runtime(q, target_jid, offset) -> (batch, 6) = [xyz; rpy]
+    // of target_jid at a runtime offset point. target_jid<0 => leaf-EE default;
+    // offset is a length-3 array or empty (=> frame origin). Single-target; the
+    // Python list API loops it over a jid list. Opt-in codegen: rc=3 if absent.
+    py::array_t<float> end_effector_pose_runtime(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        int target_jid,
+        py::array_t<float, py::array::c_style | py::array::forcecast> offset)
+    {
+        if (!fn_ee_pose_runtime_) throw std::runtime_error("end_effector_pose_runtime not available in this .so (re-register with force_rebuild=True)");
+        int batch = check_q(q, "end_effector_pose_runtime");
+        const float* off_ptr = nullptr;
+        if (offset.size() == 3) off_ptr = offset.data();
+        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_runtime: offset must be length-3 or empty");
+        py::array_t<float> out({batch, 6});
+        int rc = fn_ee_pose_runtime_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
+        if (rc == 3) throw std::runtime_error("end_effector_pose_runtime not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_runtime failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // end_effector_pose_gradient_runtime(q, target_jid, offset) -> (batch, 6*NUM_VEL)
+    // col-major d[xyz; rpy]/dv of target_jid at a runtime offset point. Same
+    // conventions as end_effector_pose_runtime. Opt-in codegen: rc=3 if absent.
+    py::array_t<float> end_effector_pose_gradient_runtime(
+        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+        int target_jid,
+        py::array_t<float, py::array::c_style | py::array::forcecast> offset)
+    {
+        if (!fn_ee_pose_grad_runtime_) throw std::runtime_error("end_effector_pose_gradient_runtime not available in this .so (re-register with force_rebuild=True)");
+        int batch = check_q(q, "end_effector_pose_gradient_runtime");
+        const float* off_ptr = nullptr;
+        if (offset.size() == 3) off_ptr = offset.data();
+        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_gradient_runtime: offset must be length-3 or empty");
+        py::array_t<float> out({batch, 6 * num_vel_});
+        int rc = fn_ee_pose_grad_runtime_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
+        if (rc == 3) throw std::runtime_error("end_effector_pose_gradient_runtime not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient_runtime failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     // ─── PS5 value ops (coriolis / energy regressors / dccrba / cmm) ──────────
 
     // coriolis_matrix(q, qd, gravity) -> (batch, NUM_VEL*NUM_VEL) row-major C(q,qd).
@@ -1137,6 +1182,8 @@ private:
     fn_frame_jac_t     fn_frame_jacobian_      = nullptr;
     fn_frame_jac_dot_t fn_frame_jacobian_dot_  = nullptr;
     fn_q_out_t         fn_osc_inertia_         = nullptr;
+    fn_ee_runtime_t    fn_ee_pose_runtime_      = nullptr;
+    fn_ee_runtime_t    fn_ee_pose_grad_runtime_ = nullptr;
     // PS5 value ops (optional symbols)
     fn_q_qd_out_grav_t fn_coriolis_matrix_            = nullptr;
     fn_q_qd_out_grav_t fn_kinetic_energy_regressor_   = nullptr;
@@ -1264,6 +1311,12 @@ PYBIND11_MODULE(_core, m) {
              py::arg("q"), py::arg("qd"),
              py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
         .def("osc_inertia", &Runner::osc_inertia, py::arg("q"))
+        .def("end_effector_pose_runtime", &Runner::end_effector_pose_runtime,
+             py::arg("q"), py::arg("target_jid") = -1,
+             py::arg("offset") = py::array_t<float>())
+        .def("end_effector_pose_gradient_runtime", &Runner::end_effector_pose_gradient_runtime,
+             py::arg("q"), py::arg("target_jid") = -1,
+             py::arg("offset") = py::array_t<float>())
         .def("coriolis_matrix", &Runner::coriolis_matrix,
              py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
         .def("kinetic_energy_regressor", &Runner::kinetic_energy_regressor,
