@@ -118,11 +118,12 @@ def _plant_cells():
 
 
 # (robot_id, base_mode) cells for the centroidal (com/momentum) plant-cost check.
-# com_cost/momentum_cost are emitted NON-MIMIC ONLY (see GRiDCodeGenerator/
-# algorithms/_plant.py ~line 907), so validate on non-mimic robots only:
-# iiwa14:fixed (cheap fixed-base) and go2:floating (floating-base, non-mimic).
+# com_cost/momentum_cost emit whenever grid::com_device + grid::ccrba_device are
+# present (de-gate #3: the cost emit rides the already-mimic-correct NV-sized
+# com/ccrba output, so MIMIC robots are now covered too). Defaults exercise:
+# iiwa14:fixed (cheap fixed-base), go2:floating (floating-base), fr3:fixed (mimic).
 def _centroidal_cells():
-    raw = os.environ.get("GRID_CUDA_PLANT_CENTROIDAL_CELLS", "iiwa14:fixed,go2:floating")
+    raw = os.environ.get("GRID_CUDA_PLANT_CENTROIDAL_CELLS", "iiwa14:fixed,go2:floating,fr3:fixed")
     cells = []
     for tok in raw.split(","):
         tok = tok.strip()

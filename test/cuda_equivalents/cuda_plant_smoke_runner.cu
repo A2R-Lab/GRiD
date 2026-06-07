@@ -371,7 +371,12 @@ void run() {
     T *o_h2_eu = dmalloc<T>(D2AB_CNT), *o_h2_si = dmalloc<T>(D2AB_CNT);
 #endif
 
-    const int nthreads = grid::MAX_PERF_LEVEL_THREADS;
+    // Thread count is env-overridable (GRID_CUDA_PLANT_THREADS) so robots whose
+    // plant_kernel exceeds this GPU's per-block register budget at the default
+    // MAX_PERF_LEVEL_THREADS (e.g. fr3) can still be validated at a lower count.
+    const char *_nt_s = std::getenv("GRID_CUDA_PLANT_THREADS");
+    const int _nt_env = _nt_s ? std::atoi(_nt_s) : 0;
+    const int nthreads = (_nt_env > 0) ? _nt_env : grid::MAX_PERF_LEVEL_THREADS;
     // The grid_plant primitives that compose an auto-allocating grid:: _device
     // wrapper (ee_pos_cost -> end_effector_pose[_gradient]_device;
     // plant_step -> integrator_device) need that device's dynamic-shared arena
