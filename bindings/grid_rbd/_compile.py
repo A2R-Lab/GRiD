@@ -106,6 +106,13 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     codegen_dtype = "double" if options.get("dtype") == "float64" else "float"
     cg = GRiDCodeGenerator(robot, debug_mode, FILE_NAMESPACE=file_namespace, dtype=codegen_dtype)
 
+    # D.4 / Phase 5: runtime-mutable inertia table. options["runtime_inertia"]
+    # (default absent/False) gates the codegen `runtime_inertia` flag (emits the
+    # d_inertia_params table + on-device 6x6 rebuild + grid::set_inertia_params
+    # host mutator). Default-off keeps the baked header byte-identical, so it is
+    # injected into `options` (and thus the cache key) ONLY when True.
+    runtime_inertia = bool(options.get("runtime_inertia", False))
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Plumb ee_joint_names → fixed_target_name. The codegen expects a single
@@ -148,6 +155,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
                             "integrator_hessian"],
             enable_floating_second_order=True,
             enable_idsva_so_world_frame=options.get("floating_base", False),
+            runtime_inertia=runtime_inertia,
         )
 
     if not out_path.exists():
@@ -164,7 +172,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     for jid in range(robot.get_num_joints()):
         joint = robot.get_joint_by_id(jid)
         joint_names.append(joint.get_name() if joint is not None else "")
-    return {
+    meta = {
         "num_joints": robot.get_num_pos(),
         "num_vel": robot.get_num_vel(),
         "num_ees": robot.get_total_leaf_nodes(),
@@ -172,6 +180,17 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         "joint_names": joint_names,
         "leaf_jids": [int(j) for j in robot.get_leaf_nodes()],
     }
+    # D.4 / Phase 5: when the mutable-inertia table is generated, persist the
+    # BAKED 10-param-per-body table so the handle can expose it (fetch-then-mutate
+    # via set_inertia_params). Layout mirrors gen_init_inertia_params /
+    # init_inertia_params EXACTLY: bodies 1..N (the base body 0 is dropped, like
+    # the I-region's Imats[1:]), each a length-10 [m, h(3)=m*c, I_O(6)] vector in
+    # the frozen regressor basis. Flat row-major: pi[0..N-1] -> 10*N floats.
+    if runtime_inertia:
+        params = robot.get_inertia_params_ordered_by_id()[1:]  # drop base body
+        meta["runtime_inertia"] = True
+        meta["inertia_params"] = [[float(v) for v in pi] for pi in params]
+    return meta
 
 
 def copy_wrapper_template(target_dir: Path) -> Path:
@@ -223,6 +242,7 @@ def compile_so(
     enable_torch: bool = True,
     torch_op_key: str | None = None,
     t_double: bool = False,
+    runtime_inertia: bool = False,
 ) -> None:
     """Invoke nvcc to build wrapper.cu → robot.so.
 
@@ -255,6 +275,12 @@ def compile_so(
         cmd.append("-DGRID_WRAPPER_T_DOUBLE")
         enable_jax_ffi = False
         enable_torch = False
+
+    # D.4 / Phase 5: runtime-mutable inertia. The grid.cuh must have been
+    # generated with runtime_inertia=True (so grid::set_inertia_params exists);
+    # this -D gates the wrapper's grid_rbd_set_inertia_params C-ABI symbol on it.
+    if runtime_inertia:
+        cmd.append("-DGRID_RBD_RUNTIME_INERTIA")
 
     # JAX FFI handlers: optionally enabled. When jax is available, point
     # nvcc at its FFI include dir and define GRID_RBD_WITH_JAX so the
@@ -343,7 +369,8 @@ def generate_and_compile(
     t_double = options.get("dtype") == "float64"
     compile_so(wrapper_cu, so_path, cuda_arch=cuda_arch,
                max_batch=max_batch, glass_root=glass_root,
-               torch_op_key=torch_op_key, t_double=t_double)
+               torch_op_key=torch_op_key, t_double=t_double,
+               runtime_inertia=bool(options.get("runtime_inertia", False)))
 
     # Persist meta.json
     meta["cuda_arch"] = cuda_arch

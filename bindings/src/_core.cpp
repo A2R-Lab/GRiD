@@ -90,6 +90,7 @@ struct CAbi {
     using fn_ee_runtime_t   = int (*)(const CT*, CT*, int, int, const CT*);
     using fn_q_qd_out_grav_t = int (*)(const CT*, const CT*, CT*, int, CT);
     using fn_q_out_grav_t   = int (*)(const CT*, CT*, int, CT);
+    using fn_set_inertia_t  = int (*)(const CT*);   // grid_rbd_set_inertia_params
 };
 
 
@@ -123,6 +124,7 @@ class RunnerT {
     using fn_ee_runtime_t = typename CAbi<CT>::fn_ee_runtime_t;
     using fn_q_qd_out_grav_t = typename CAbi<CT>::fn_q_qd_out_grav_t;
     using fn_q_out_grav_t = typename CAbi<CT>::fn_q_out_grav_t;
+    using fn_set_inertia_t = typename CAbi<CT>::fn_set_inertia_t;
     // Per-dtype numpy array alias: an input is force-cast to CT, outputs are CT.
     using arr_t = py::array_t<CT, py::array::c_style | py::array::forcecast>;
 public:
@@ -209,6 +211,11 @@ public:
         fn_potential_energy_regressor_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_potential_energy_regressor"));
         fn_dccrba_             = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_dccrba"));
         fn_cmm_time_variation_ = reinterpret_cast<fn_q_qd_out_t>(opt_sym("grid_rbd_cmm_time_variation"));
+
+        // D.4 / Phase 5 runtime-mutable inertia — OPTIONAL: present only in a .so
+        // built with runtime_inertia=True (compiled with -DGRID_RBD_RUNTIME_INERTIA).
+        // set_inertia_params() raises a clear error if this symbol is null.
+        fn_set_inertia_params_ = reinterpret_cast<fn_set_inertia_t>(opt_sym("grid_rbd_set_inertia_params"));
 
         // Cache constants (avoid the indirect-function-call cost on every read).
         num_joints_ = fn_num_joints_();
@@ -1069,6 +1076,29 @@ public:
         return out;
     }
 
+    // set_inertia_params(params) — D.4 / Phase 5 runtime-mutable inertia.
+    // params is a flat (10*num_joints,) array, body-indexed bodies 1..N, each a
+    // length-10 [m, h(3), I_O(6)] vector. Copies it into the device d_inertia_params
+    // table; all subsequent kernel calls rebuild the per-link spatial inertia from
+    // it (no recompile). Only available on a .so built with runtime_inertia=True.
+    void set_inertia_params(arr_t params) {
+        if (!fn_set_inertia_params_) throw std::runtime_error(
+            "set_inertia_params not available in this .so: register the robot with "
+            "runtime_inertia=True (and force_rebuild=True) to enable the mutable "
+            "inertia table.");
+        const int want = 10 * num_joints_;
+        if (params.ndim() != 1 || (int)params.shape(0) != want) {
+            throw std::runtime_error(
+                "set_inertia_params: params must be a flat (" + std::to_string(want) +
+                ",) array = 10 * num_joints (bodies 1..N, [m, h(3), I_O(6)] each); got "
+                "ndim=" + std::to_string(params.ndim()) +
+                ", size=" + std::to_string(params.size()));
+        }
+        int rc = fn_set_inertia_params_(params.data());
+        if (rc != 0) throw std::runtime_error(
+            "grid_rbd_set_inertia_params failed: rc=" + std::to_string(rc));
+    }
+
 private:
     void* require_sym(const char* name) {
         dlerror();  // clear errors
@@ -1199,6 +1229,7 @@ private:
     fn_q_out_grav_t    fn_potential_energy_regressor_ = nullptr;
     fn_q_out_t         fn_dccrba_                      = nullptr;
     fn_q_qd_out_t      fn_cmm_time_variation_          = nullptr;
+    fn_set_inertia_t   fn_set_inertia_params_          = nullptr;
 
     int num_joints_ = 0;
     int num_vel_    = 0;
@@ -1337,7 +1368,13 @@ static void register_runner(py::module_& m, const char* cls_name) {
              py::arg("q"), py::arg("gravity") = -9.81f)
         .def("dccrba", &R::dccrba, py::arg("q"))
         .def("cmm_time_variation", &R::cmm_time_variation,
-             py::arg("q"), py::arg("qd"));
+             py::arg("q"), py::arg("qd"))
+        .def("set_inertia_params", &R::set_inertia_params,
+             py::arg("params"),
+             "Update the device-resident mutable inertia table (D.4 / Phase 5). "
+             "params is a flat (10*num_joints,) array, bodies 1..N, each a length-10 "
+             "[m, h(3), I_O(6)] vector. Only available on a .so built with "
+             "runtime_inertia=True; raises otherwise.");
 }
 
 

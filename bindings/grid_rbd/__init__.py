@@ -65,6 +65,7 @@ def register_robot(
     backend: str = "numpy",
     allow_fp64: bool = False,
     dtype: str = "float32",
+    runtime_inertia: bool = False,
 ) -> RobotHandle:
     """Register a robot for fast subsequent calls.
 
@@ -124,6 +125,17 @@ def register_robot(
     cuda_arch : int | None, optional
         Compute capability as int (e.g. 120 for sm_120). Default detects
         via nvidia-smi.
+    runtime_inertia : bool, optional
+        Build the robot with a runtime-mutable inertia table (D.4 / Phase 5,
+        numpy backend only). Default False ⇒ the per-link spatial inertia is
+        baked into the .so (byte-identical to a plain build, same cache key).
+        When True, the codegen emits a ``d_inertia_params`` table + on-device
+        6x6 rebuild + a host mutator, and the handle gains
+        :py:meth:`RobotHandle.set_inertia_params` (mutate inertia at runtime, no
+        recompile) and :py:attr:`RobotHandle.inertia_params` (the baked values to
+        fetch-then-mutate). Re-keys the cache (the runtime-inertia .so coexists
+        with the baked one). With the baked values it reproduces the baked
+        result; mutate to do sysID / domain randomization / payload changes.
 
     Returns
     -------
@@ -138,6 +150,11 @@ def register_robot(
         raise ValueError(
             f"dtype='float64' is only supported for the numpy backend; the "
             f"{backend!r} backend is strictly fp32 (Phase 8). Use backend='numpy'.")
+    if runtime_inertia and backend != "numpy":
+        raise ValueError(
+            f"runtime_inertia=True is only supported for the numpy backend; the "
+            f"{backend!r} backend does not yet thread the mutable inertia table. "
+            f"Use backend='numpy'.")
     if backend == "jax":
         from . import jax as _jax_backend
         return _jax_backend.register_robot(
@@ -187,6 +204,11 @@ def register_robot(
     # fp32 register_robot is byte-identical to pre-Phase-8 and reuses its .so.
     if dtype == "float64":
         code_options["dtype"] = "float64"
+    # D.4 / Phase 5: runtime-mutable inertia. Only inject the flag (and thus re-key
+    # the cache) when True, so a default register_robot is byte-identical to before
+    # and reuses its existing fp32 .so. A runtime_inertia .so lands in its own entry.
+    if runtime_inertia:
+        code_options["runtime_inertia"] = True
     cache_key = compute_cache_key(urdf_bytes, code_options, cuda_arch)
     entry_dir = store_dir(cache_dir, cache_key)
     so_path = entry_dir / "robot.so"

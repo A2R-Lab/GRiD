@@ -206,6 +206,64 @@ class RobotHandle:
     def floating_base(self) -> bool:
         return bool(self._meta.get("floating_base", False))
 
+    # ─── runtime-mutable inertia (D.4 / Phase 5) ─────────────────────────────
+
+    @property
+    def runtime_inertia(self) -> bool:
+        """True if this robot was registered with ``runtime_inertia=True`` (the
+        .so carries a mutable inertia table + :py:meth:`set_inertia_params`)."""
+        return bool(self._meta.get("runtime_inertia", False))
+
+    @property
+    def inertia_params(self):
+        """The BAKED 10-param-per-body inertia table, shape ``(num_joints, 10)``.
+
+        Each row is ``[m, hx, hy, hz, Ixx, Ixy, Ixz, Iyy, Iyz, Izz]`` (mass,
+        first moment ``h = m*c``, then the 6 upper-triangle entries of the
+        link's inertia about its frame origin) in the frozen GRiD/URDF regressor
+        basis — body-indexed, bodies 1..N (the base body is dropped, mirroring
+        the device table layout). Fetch this, mutate it, and pass it to
+        :py:meth:`set_inertia_params`. Only available on a ``runtime_inertia``
+        build (raises otherwise; the values aren't persisted for a baked .so).
+        """
+        params = self._meta.get("inertia_params")
+        if params is None:
+            raise RuntimeError(
+                "inertia_params is only available on a robot registered with "
+                "runtime_inertia=True. Re-register with "
+                "register_robot(..., runtime_inertia=True, force_rebuild=True).")
+        return np.asarray(params, dtype=self._dt)
+
+    def set_inertia_params(self, params) -> None:
+        """Update the device-resident inertia table at runtime (no recompile).
+
+        ``params`` is the 10-param-per-body table — either flat
+        ``(10*num_joints,)`` or ``(num_joints, 10)`` — in the same layout /
+        basis as :py:attr:`inertia_params` (bodies 1..N, each ``[m, h(3),
+        I_O(6)]``). All subsequent algorithm calls (inverse_dynamics, crba, …)
+        reconstruct the per-link spatial inertia from the updated table. The
+        sysID / domain-randomization / payload entry point.
+
+        Only valid on a robot registered with ``runtime_inertia=True``; raises a
+        clear error otherwise. Passing the baked :py:attr:`inertia_params` back
+        reproduces the baked result.
+        """
+        if not self.runtime_inertia:
+            raise RuntimeError(
+                "set_inertia_params requires a robot registered with "
+                "runtime_inertia=True. Re-register with "
+                "register_robot(..., runtime_inertia=True, force_rebuild=True).")
+        nj = self.num_joints
+        arr = np.ascontiguousarray(params, dtype=self._dt)
+        if arr.shape == (nj, 10):
+            arr = arr.reshape(-1)
+        elif arr.shape != (10 * nj,):
+            raise ValueError(
+                f"params must be ({nj}, 10) or ({10 * nj},) = 10*num_joints "
+                f"(bodies 1..N, [m, h(3), I_O(6)] each); got shape {arr.shape}.")
+        arr = np.ascontiguousarray(arr, dtype=self._dt)
+        self._runner.set_inertia_params(arr)
+
     @property
     def max_batch(self) -> int:
         return self._runner.max_batch
