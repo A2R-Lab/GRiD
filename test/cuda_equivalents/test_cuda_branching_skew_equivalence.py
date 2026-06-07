@@ -1,7 +1,8 @@
-"""End-to-end CUDA verification of BRANCHING-skew aba / minv / crba.
+"""End-to-end CUDA verification of BRANCHING-skew inverse_dynamics / aba / minv / crba.
 
-joint-1b ported aba/minv to Tier-B (dense 6-vector S) for skew robots but their
-Tier-B branches asserted a single joint per BFS level (serial), so a skew robot
+joint-1b ported aba/minv/inverse_dynamics to Tier-B (dense 6-vector S) for skew
+robots but their Tier-B branches asserted a single joint per BFS level (serial),
+so a skew robot
 with a BRANCHING topology (2+ joints sharing a parent / at the same BFS level)
 hit a codegen AssertionError. That restriction is now lifted: the Tier-B dense-S
 emit loops over every joint in the level (each with its own dense S), mirroring
@@ -60,7 +61,7 @@ def _generate_header(robot, build_dir):
         codegen.gen_all_code(
             include_homogenous_transforms=True,
             output_path=str(header),
-            algorithm_list="aba,minv,crba",
+            algorithm_list="inverse_dynamics,aba,minv,crba",
         )
     return header
 
@@ -92,10 +93,10 @@ def _compile_runner(build_dir):
     return exe
 
 
-def _run(exe, q, qd, u):
+def _run(exe, q, qd, u, qdd):
     def row(v):
         return " ".join(f"{x:.9g}" for x in np.asarray(v, dtype=np.float32))
-    stdin = "\n".join([row(q), row(qd), row(u)]) + "\n"
+    stdin = "\n".join([row(q), row(qd), row(u), row(qdd)]) + "\n"
     result = subprocess.run(
         [str(exe)], input=stdin, cwd=exe.parent, capture_output=True, text=True
     )
@@ -143,8 +144,16 @@ def test_cuda_skew_aba_minv_matches_reference(tmp_path, fixture):
         q = rng.uniform(-0.5, 0.5, n)
         qd = rng.uniform(-0.8, 0.8, n)
         tau = rng.uniform(-0.5, 0.5, n)
-        out = _run(exe, q, qd, tau)
+        qdd = rng.uniform(-0.6, 0.6, n)
+        out = _run(exe, q, qd, tau, qdd)
         tag = f"{fixture} trial {trial}"
+
+        # inverse_dynamics: tau = ID(q, qd, qdd) -- exercises the lifted Tier-B
+        # forward (S*qd/S*qdd) + mxS branches on the branching topology.
+        cuda_id = np.asarray(out["inverse_dynamics"], dtype=np.float64).reshape(-1)
+        ref_id = np.asarray(
+            ref.inverse_dynamics(q, qd, qdd)[0], dtype=np.float64).reshape(-1)
+        _check(failures, f"{tag} inverse_dynamics", cuda_id, ref_id)
 
         # aba: qdd = ABA(q, qd, tau)
         cuda_aba = np.asarray(out["aba"], dtype=np.float64).reshape(-1)

@@ -1,11 +1,12 @@
-// Minimal fixed-base runner for the BRANCHING-skew fixture: exercises ONLY the
-// aba / minv / crba host wrappers (the surfaces whose Tier-B dense-S emit had
-// the single-joint-per-BFS-level restriction lifted in _aba.py / _minv.py).
+// Minimal fixed-base runner for the BRANCHING-skew fixture: exercises the
+// inverse_dynamics / aba / minv / crba host wrappers (the surfaces whose Tier-B
+// dense-S emit had the single-joint-per-BFS-level restriction lifted in
+// _inverse_dynamics.py / _aba.py / _minv.py).
 //
-// It deliberately avoids inverse_dynamics / forward_dynamics so the header can
-// be generated as algorithm_list="aba,minv,crba" without pulling in algorithms
-// whose Tier-B branching support lands separately. Reads q / qd / u from stdin
-// (one whitespace row each) and prints BEGIN/END blocks parsed by the test.
+// Reads q / qd / u / qdd from stdin (one whitespace row each) and prints
+// BEGIN/END blocks parsed by the test. inverse_dynamics is driven with a
+// non-zero qdd (USE_QDD_FLAG=true) so the Tier-B forward S*qdd + mxS branches
+// are exercised on the branching topology.
 #include <cstdio>
 #include <cstdlib>
 #include <iomanip>
@@ -58,17 +59,24 @@ void run() {
     read_vector(hd_data->h_q, grid::NUM_JOINTS);
     read_vector(&hd_data->h_q_qd[grid::NUM_JOINTS], grid::NUM_JOINTS);
     read_vector(&hd_data->h_q_qd_u[2 * grid::NUM_JOINTS], grid::NUM_JOINTS);
+    read_vector(hd_data->h_qdd, grid::NUM_JOINTS);
 
     for (int i = 0; i < grid::NUM_JOINTS; ++i) {
         hd_data->h_q_qd[i] = hd_data->h_q[i];
         hd_data->h_q_qd_u[i] = hd_data->h_q[i];
         hd_data->h_q_qd_u[i + grid::NUM_JOINTS] = hd_data->h_q_qd[i + grid::NUM_JOINTS];
-        hd_data->h_qdd[i] = static_cast<T>(0);
     }
 
     print_vector("input_q", hd_data->h_q, grid::NUM_JOINTS);
     print_vector("input_qd", &hd_data->h_q_qd[grid::NUM_JOINTS], grid::NUM_JOINTS);
     print_vector("input_u", &hd_data->h_q_qd_u[2 * grid::NUM_JOINTS], grid::NUM_JOINTS);
+    print_vector("input_qdd", hd_data->h_qdd, grid::NUM_JOINTS);
+
+    // inverse_dynamics: tau = ID(q, qd, qdd) with USE_QDD_FLAG=true so the
+    // Tier-B forward (S*qdd) + mxS branches run on the branching topology.
+    grid::inverse_dynamics<T, true>(hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams);
+    gpuErrchk(cudaPeekAtLastError());
+    print_vector("inverse_dynamics", hd_data->h_c, grid::NUM_JOINTS);
 
     grid::minv<T, true>(hd_data, d_robot_model, 1, block_dimms, thread_dimms, streams);
     gpuErrchk(cudaPeekAtLastError());
