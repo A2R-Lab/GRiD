@@ -143,11 +143,10 @@ def _make_autograd(ns):
             nj = q.shape[1]
             # f_ext is affine in RNEA → ∂c/∂(q,qd) is unchanged by a constant
             # f_ext; we pass it through for bias consistency only. qdd shifts the
-            # value (M·qdd) but ∂/∂(q,qd) at fixed qdd is the qdd=0 gradient plus
-            # the M·qdd term — handled inside inverse_dynamics_gradient when qdd
-            # is plumbed (numpy path); the torch grad op currently takes no qdd,
-            # so we report the qdd=0 Jacobian here (matches the prior behaviour).
-            raw = ops.inverse_dynamics_gradient(q, qd, ctx.gravity, ctx.f_ext)  # (B, 2*NJ*NJ) col-major
+            # value (M·qdd); ∂/∂(q,qd) at fixed qdd is the bias gradient plus
+            # ∂(M·qdd)/∂q — included by threading the saved ctx.qdd into the grad
+            # op (USE_QDD overload). A None/zero qdd reduces to the bias Jacobian.
+            raw = ops.inverse_dynamics_gradient(q, qd, ctx.gravity, ctx.qdd, ctx.f_ext)  # (B, 2*NJ*NJ) col-major
             B = raw.shape[0]
             blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)  # row-major (B,2,NJ,NJ)
             dc_dq, dc_dqd = blocks[:, 0], blocks[:, 1]  # (B, NJ, NJ): rows=out, cols=in
@@ -211,7 +210,8 @@ def _make_autograd(ns):
         def backward(ctx, grad_c):
             q, qd = ctx.saved_tensors
             nj = q.shape[1]
-            raw = ops.inverse_dynamics_gradient(q, qd, ctx.gravity, ctx.f_ext)
+            # sysID is the bias gradient (qdd=0) → pass None for the qdd slot.
+            raw = ops.inverse_dynamics_gradient(q, qd, ctx.gravity, None, ctx.f_ext)
             B = raw.shape[0]
             blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
             dc_dq, dc_dqd = blocks[:, 0], blocks[:, 1]
@@ -361,8 +361,9 @@ class TorchRobotHandle:
 
         ``qdd`` (optional): joint acceleration, CUDA float32 ``(B, NJ)``. With
         ``qdd=None`` (default) returns the bias c = h − g; a nonzero ``qdd`` adds
-        the M·qdd inertial term (USE_QDD overload). The autograd backward reports
-        the qdd=0 Jacobian (q/qd grad of the bias); qdd itself is not differentiated.
+        the M·qdd inertial term (USE_QDD overload). The autograd backward threads
+        the saved qdd through, so the q/qd Jacobian includes ∂(M·qdd)/∂q for a
+        nonzero-qdd call; qdd itself is not differentiated.
 
         ``f_ext`` (optional): per-body external forces, a CUDA float32 tensor
         ``(B, 6*num_bodies)``, body-major, each ``[angular; linear]`` in the
@@ -446,13 +447,17 @@ class TorchRobotHandle:
         nee, nv = self.num_ees, self.num_vel
         return self._ops.end_effector_pose_hessian(q).reshape(-1, 6 * nee, nv, nv)
 
-    def inverse_dynamics_gradient(self, q, qd, *, gravity: float = -9.81, f_ext=None):
+    def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
         """∂c/∂(q,qd) (B, NJ, 2*NJ) = [dc_dq | dc_dqd].
+
+        ``qdd`` (optional): joint acceleration ``(B, NJ)``. With ``qdd=None``
+        (default) this is the bias gradient ∂(h−g)/∂(q,qd); a nonzero ``qdd``
+        adds ∂(M·qdd)/∂q (USE_QDD overload).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
         affine in f_ext so a constant f_ext leaves this Jacobian unchanged."""
         nj = self.num_joints
-        raw = self._ops.inverse_dynamics_gradient(q, qd, float(gravity), f_ext)
+        raw = self._ops.inverse_dynamics_gradient(q, qd, float(gravity), qdd, f_ext)
         B = raw.shape[0]
         blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
         return _concat_blocks(blocks)

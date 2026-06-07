@@ -259,8 +259,10 @@ class JaxRobotHandle:
         #    the analytic gradient FFI. qdd and f_ext are non-differentiated
         #    explicit buffers (the FFI has no optional-buffer support, so the
         #    public method passes zeros when omitted — mirroring idsva_so). The
-        #    q/qd VJP uses the qdd=0 gradient (the analytic grad FFI takes no qdd
-        #    yet); qdd/f_ext receive no cotangent. ────────────────────────────
+        #    qdd VALUE is threaded into the analytic grad FFI (which now takes an
+        #    explicit qdd buffer), so the q/qd VJP includes ∂(M·qdd)/∂q for a
+        #    nonzero-qdd call (a zero qdd reduces to the bias gradient).
+        #    qdd/f_ext receive no cotangent. ────────────────────────────────────
         @functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
         def idyn(gravity, q, qd, qdd, f_ext):
             t = _t("inverse_dynamics", "grid_rbd_jax_inverse_dynamics")
@@ -268,13 +270,13 @@ class JaxRobotHandle:
                 q, qd, qdd, f_ext, gravity=np.float32(gravity))
 
         def id_fwd(gravity, q, qd, qdd, f_ext):
-            return idyn(gravity, q, qd, qdd, f_ext), (q, qd)
+            return idyn(gravity, q, qd, qdd, f_ext), (q, qd, qdd)
 
         def id_bwd(gravity, res, ct):
-            q, qd = res
+            q, qd, qdd = res
             tg = _t("inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient")
             flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nj * nj), vmap_method=VM)(
-                q, qd, gravity=np.float32(gravity))
+                q, qd, qdd, gravity=np.float32(gravity))
             blocks = flat.reshape(q.shape[:-1] + (2, nj, nj)).swapaxes(-2, -1)
             dc_dq, dc_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
             gq = jnp.einsum('...o,...oi->...i', ct, dc_dq)
@@ -335,10 +337,12 @@ class JaxRobotHandle:
 
         def id_pi_bwd(gravity, res, ct):
             q, qd = res
-            # q/qd cotangents (analytic id_gradient).
+            # q/qd cotangents (analytic id_gradient). sysID is the bias (qdd=0);
+            # the grad FFI now takes an explicit qdd buffer → pass zeros.
             tg = _t("inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient")
+            zq = jnp.zeros_like(q)
             flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nj * nj), vmap_method=VM)(
-                q, qd, gravity=np.float32(gravity))
+                q, qd, zq, gravity=np.float32(gravity))
             blocks = flat.reshape(q.shape[:-1] + (2, nj, nj)).swapaxes(-2, -1)
             dc_dq, dc_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
             gq = jnp.einsum('...o,...oi->...i', ct, dc_dq)
@@ -432,7 +436,8 @@ class JaxRobotHandle:
 
         Differentiable (``jax.grad`` / ``jax.jacobian`` / ``jax.vjp`` w.r.t.
         ``q``, ``qd``) via GRiD's analytic ``inverse_dynamics_gradient`` (the
-        backward uses the qdd=0 Jacobian; qdd/f_ext are not differentiated), and
+        backward threads the actual ``qdd`` through, so the Jacobian includes
+        ∂(M·qdd)/∂q for a nonzero-qdd call; qdd/f_ext are not differentiated), and
         ``jax.vmap``-able over the leading batch axis.
         """
         import jax.numpy as jnp
@@ -631,11 +636,15 @@ class JaxRobotHandle:
         flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(q)
         return flat.reshape(q.shape[:-1] + (6 * nee, nv, nv))
 
-    def inverse_dynamics_gradient(self, q, qd, *, gravity: float = -9.81):
+    def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81):
         """∂c/∂(q, qd) — concatenated [dc_dq | dc_dqd]. Returns (B, NJ, 2*NJ).
 
         Matches the plain wrapper layout: GRiD writes (2, NJ, NJ) column-major
         blocks; we reshape/transpose/concat to row-major (NJ, 2*NJ).
+
+        ``qdd=None`` (default) ⇒ the bias gradient ∂(h−g)/∂(q,qd); pass a nonzero
+        ``qdd`` to include ∂(M·qdd)/∂q. JAX has no optional buffers, so ``None``
+        is passed as explicit zeros internally (byte-identical to the bias path).
         """
         import jax
         import jax.numpy as jnp
@@ -643,11 +652,15 @@ class JaxRobotHandle:
         target = _register_method_target(
             self._so_path, self._cache_key,
             "inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient")
-        (q, qd), B = self._prep_2d("inverse_dynamics_gradient", q, qd)
+        if qdd is None:
+            (q, qd), B = self._prep_2d("inverse_dynamics_gradient", q, qd)
+            qdd_b = jnp.zeros_like(q)
+        else:
+            (q, qd, qdd_b), B = self._prep_2d("inverse_dynamics_gradient", q, qd, qdd)
         nj = self.num_joints
         out_type = self._out(q, 2 * nj * nj)
         raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
-            q, qd, gravity=np.float32(gravity))
+            q, qd, qdd_b, gravity=np.float32(gravity))
         blocks = raw.reshape(q.shape[:-1] + (2, nj, nj)).swapaxes(-2, -1)
         return jnp.concatenate([blocks[..., 0, :, :], blocks[..., 1, :, :]], axis=-1)
 

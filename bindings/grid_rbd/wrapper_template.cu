@@ -1768,13 +1768,21 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 
-// inverse_dynamics_gradient(q, qd) → dc_du  flat (B, 2*NJ*NJ)
+// inverse_dynamics_gradient(q, qd, qdd) → dc_du  flat (B, 2*NJ*NJ)
 // Python reshapes/transposes to (B, NJ, 2*NJ) [dc_dq | dc_dqd].
-// USE_QDD_FLAG=false for now; qdd defaults to 0 in-kernel.
+//
+// qdd is ALWAYS passed as an explicit device buffer from the Python surface
+// (JAX FFI has no optional-buffer support, so the wrapper passes zeros when the
+// caller omits it — mirroring the VALUE inverse_dynamics FFI). ∂c/∂(q,qd)
+// depends on qdd via the M·qdd term's derivatives, so qdd flows through the
+// separate d_qdd buffer + the USE_QDD overload of the gradient kernel
+// (signature adds d_qdd after stride). A zero qdd is byte-identical to the old
+// no-qdd behaviour.
 static ffi::Error grid_rbd_jax_inverse_dynamics_gradient_impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> q,
     ffi::Buffer<ffi::F32> qd,
+    ffi::Buffer<ffi::F32> qdd,
     ffi::ResultBuffer<ffi::F32> dc_du_out,
     float gravity)
 {
@@ -1792,6 +1800,11 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_gradient_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch,
                       qd.typed_data(),       row_bytes,
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    // qdd → the separate d_qdd buffer (NJ-contiguous per timestep), consumed by
+    // the USE_QDD overload of inverse_dynamics_gradient_kernel.
+    cudaMemcpyAsync(g_data->d_qdd, qdd.typed_data(),
+                    (size_t)batch * nj * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
 
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::inverse_dynamics_gradient_kernel<T><<<
@@ -1799,7 +1812,7 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_gradient_impl(
         grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
             g_data->d_dc_du, g_data->d_workspace,
-            g_data->d_q_qd_u, stride_q_qd,
+            g_data->d_q_qd_u, stride_q_qd, g_data->d_qdd,
             g_data->d_f_ext, g_robot, /*gravity=*/gravity, batch);
 
     cudaMemcpyAsync(dc_du_out->typed_data(), g_data->d_dc_du,
@@ -1813,7 +1826,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_inverse_dynamics_gradient_impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<ffi::F32>>()  // q
+        .Arg<ffi::Buffer<ffi::F32>>()  // qd
+        .Arg<ffi::Buffer<ffi::F32>>()  // qdd
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("gravity")
 );
@@ -2831,7 +2846,14 @@ torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q) {
     return out;
 }
 
+// qdd wiring (torch grad): ∂c/∂(q,qd) depends on qdd via the M·qdd term's
+// derivatives. When a qdd tensor is provided, copy it D→D into d_qdd and launch
+// the USE_QDD overload of the gradient kernel (signature adds d_qdd after
+// stride). A null qdd keeps the (faster) qdd=0 overload — byte-identical to the
+// prior behaviour. Mirrors the numpy / JAX ID-gradient paths and the order of
+// the VALUE torch_inverse_dynamics op (q, qd, gravity, qdd, f_ext).
 torch::Tensor torch_inverse_dynamics_gradient(torch::Tensor q, torch::Tensor qd, double gravity,
+                              c10::optional<torch::Tensor> qdd,
                               c10::optional<torch::Tensor> f_ext) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
@@ -2842,8 +2864,17 @@ torch::Tensor torch_inverse_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
     grid_torch_f_ext_apply(stream, batch, f_ext);
     auto out = grid_torch_empty(batch, nj * 2 * nj, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::inverse_dynamics_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
-        g_data->d_dc_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
+    if (qdd.has_value()) {
+        const torch::Tensor& a = qdd.value();
+        grid_torch_check(a, "inverse_dynamics_gradient: qdd", nj);
+        cudaMemcpyAsync(g_data->d_qdd, a.data_ptr<float>(),
+                        (size_t)batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+        grid::inverse_dynamics_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+            g_data->d_dc_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_qdd, g_data->d_f_ext, g_robot, (T)gravity, batch);
+    } else {
+        grid::inverse_dynamics_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+            g_data->d_dc_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
+    }
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_dc_du, batch * nj * 2 * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
@@ -3266,7 +3297,7 @@ GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
     m.def("end_effector_pose(Tensor q) -> Tensor");
     m.def("end_effector_pose_gradient(Tensor q) -> Tensor");
     m.def("end_effector_pose_hessian(Tensor q) -> Tensor");
-    m.def("inverse_dynamics_gradient(Tensor q, Tensor qd, float gravity, Tensor? f_ext=None) -> Tensor");
+    m.def("inverse_dynamics_gradient(Tensor q, Tensor qd, float gravity, Tensor? qdd=None, Tensor? f_ext=None) -> Tensor");
     m.def("forward_dynamics_gradient(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
     m.def("idsva_so(Tensor q, Tensor qd, Tensor qdd, float gravity) -> Tensor");
     m.def("fdsva_so(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
