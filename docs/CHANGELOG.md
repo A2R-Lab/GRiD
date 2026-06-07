@@ -5,6 +5,41 @@ changes since the GLASS rollout for our own historical reference.
 
 ## Unreleased — v2.0 — cuBLASDx removal + resource-tier system
 
+### 2026-06-07 — new value ops, de-gating, runtime params, joint types
+
+- **New algorithms (codegen + CUDA-validated):** Coriolis matrix
+  `C(q,q̇)`; kinetic + potential energy regressors; `dccrba` (∂A/∂q
+  tensor) + `cmm_time_variation` (Ȧ); runtime arbitrary multi-EE
+  (`end_effector_pose_runtime` + `_gradient`, with runtime target joint
+  id + per-target offset).
+- **New analytic oracle:** `RBDReference.dccrba` is now the analytic
+  ∂A/∂q tensor (replacing the prior finite-difference oracle).
+- **De-gating (per-robot gating essentially eliminated):** the
+  centroidal family (`com` / `ccrba` / `energy` / `dccrba` /
+  `cmm_time_variation`) now runs on **mimic** robots, and
+  `dccrba`/`cmm_time_variation` now run on **big floating-base** robots
+  (`g1` / `h1_2`-floating) via sweep-pool spill.
+- **Bindings:** `qdd` wired through `inverse_dynamics` (numpy/jax/torch)
+  + qdd-aware autograd gradient (returns the correct ∂τ/∂(q,q̇)
+  including ∂(M·q̈)/∂q); `rnea`/`fd` aliases; `SecondOrderID` /
+  `SecondOrderFD` NamedTuples; JAX `f_ext` parity; fp64-in/out
+  convenience cast (`allow_fp64=`, compute stays fp32); compile-progress
+  logging + import-guards. The five new value ops
+  (`coriolis_matrix`, `kinetic_energy_regressor`,
+  `potential_energy_regressor`, `dccrba`, `cmm_time_variation`) are
+  exposed on the numpy `RobotHandle`.
+- **Runtime-mutable inertia (flag-gated):** an opt-in `d_inertia_params`
+  table + `set_inertia_params` device entry for sysID /
+  domain-randomization with no recompile; the baked default path is
+  byte-identical.
+- **Joint types (stage 1):** an arbitrary/skew `<axis>` (non-cardinal)
+  is supported via a dense 6-vector motion subspace `S`, for
+  `inverse_dynamics` and `crba` only so far (cardinal axes
+  byte-identical; helical / planar / spherical and the other algorithms
+  are later stages).
+- **Perf:** the RNEA-backward (#2) and #6 experiments measured neutral
+  (Amdahl) and were reverted/dropped — no user-facing change.
+
 ### 2026-05-31 — frame Jacobian / OSC, mimic gradients, SO parallelization
 
 - General-frame geometric Jacobian (`LOCAL`/`WORLD`/`LOCAL_WORLD_ALIGNED`) added: numpy reference `frame_jacobian` + `frame_jacobian_dot` (J̇) + `osc_inertia` (Λ=(J·M⁻¹·Jᵀ)⁻¹), validated vs pinocchio `getFrameJacobian`/`getJointJacobian`/`computeJointJacobiansTimeVariation` across all three frames on iiwa14 + go2.

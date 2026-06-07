@@ -46,7 +46,15 @@ at float32 precision:
 | `fdsva_so(q, qd, u, gravity=-9.81)` | tuple of 4 × `(B, NV, NV, NV)` | 1e-4 |
 
 `register_robot` accepts `ee_joint_names=[...]` to pin specific
-end-effector frames (default: all leaf links).
+end-effector frames (default: all leaf links), and `allow_fp64=True` for an
+fp64-in/fp64-out convenience cast (compute stays fp32).
+
+`inverse_dynamics` (alias `rnea`) and `forward_dynamics` (alias `fd`) take an
+optional `qdd=`: for `inverse_dynamics`, `qdd=None` ⇒ the bias `c = h − g` and a
+nonzero `qdd` adds the `M·qdd` term. The torch/JAX gradient is qdd-aware (it
+returns the correct ∂τ/∂(q,q̇) including the ∂(M·q̈)/∂q term, not the qdd=0
+Jacobian). The second-order tuples are returned as `SecondOrderID` /
+`SecondOrderFD` NamedTuples (plain positional tuples with named fields).
 
 ### Centroidal / energy / general-frame kinematics
 
@@ -61,9 +69,22 @@ energy / frame mixins:
 | `energy(q, qd, gravity=-9.81)` | `(B, 3)` = `[KE, PE, KE+PE]` | 1e-4 |
 | `generalized_gravity(q, gravity=-9.81)` | `(B, NV)` | 1e-5 |
 | `nonlinear_effects(q, qd, gravity=-9.81)` | `(B, NV)` | 1e-5 |
+| `coriolis_matrix(q, qd)` | `(B, NV, NV)` `C(q,q̇)` (`C·q̇ + g = nle`) | 1e-4 |
+| `kinetic_energy_regressor(q, qd)` | `(B, 10*NB)` `y_KE` (`KE = y_KE·π`) | 1e-4 |
+| `potential_energy_regressor(q, gravity=-9.81)` | `(B, 10*NB)` `y_PE` (`PE = y_PE·π`) | 1e-4 |
+| `dccrba(q)` | `(B, 6, NV, NV)` ∂A/∂q tensor | 1e-4 |
+| `cmm_time_variation(q, qd)` | `(B, 6, NV)` Ȧ | 1e-4 |
 | `frame_jacobian(q, target_jid=None, reference_frame=None)` | `(B, 6, NV)` `[lin; ang]` | 1e-5 |
 | `frame_jacobian_dot(q, qd, target_jid=None, reference_frame=None)` | `(B, 6, NV)` | 1e-3 |
 | `osc_inertia(q)` | `(B, 6, 6)` task inertia Λ | 1e-3 |
+| `end_effector_pose_runtime(q, ee_joint_names=None, ee_offsets=None)` | `(B, 6*NUM_EES)` | 1e-5 |
+| `end_effector_pose_gradient_runtime(q, ee_joint_names=None, ee_offsets=None)` | `(B, 6*NUM_EES, NV)` | 1e-5 |
+
+`dccrba` / `cmm_time_variation` run on mimic robots and on big floating-base
+robots (sweep-pool spill); they raise a clear `RuntimeError` only on the rare
+oversized-centroidal-pool case. `end_effector_pose_runtime` /
+`..._gradient_runtime` take the target joint(s) + per-target offset at RUNTIME,
+so one compiled robot serves any leaf/target frame.
 
 `frame_jacobian` / `frame_jacobian_dot` take the target frame at RUNTIME:
 `target_jid` selects the frame's joint id (default: the leaf end-effector joint)
@@ -88,7 +109,11 @@ def step(q, qd, u):
     return handle.forward_dynamics(q, qd, u)
 ```
 
-Full parity with the plain wrapper as of v0.3.
+The core dynamics / kinematics / SO methods are bound via FFI, with
+autograd-aware `inverse_dynamics` / `forward_dynamics` (qdd-aware),
+`end_effector_pose`, `f_ext` parity, and the inertial-parameter (π) regressor
+VJP path. The newer value ops (`coriolis_matrix`, the energy regressors,
+`dccrba` / `cmm_time_variation`) are on the numpy handle only so far.
 
 ## PyTorch backend (`backend="torch"`)
 
@@ -149,8 +174,10 @@ barriers return `(value, grad, hess_diag)`:
 Per-body external forces are an opt-in feature of the underlying CUDA
 codegen and the `RBDReference` oracle (body-local frame, subtracted from
 the per-body force; an empty/`None` value reproduces the no-force path).
-The CUDA host wrappers carry the `d_f_ext` argument; an `f_ext=` kwarg on
-the `RobotHandle` algorithm methods is on the roadmap.
+An `f_ext=` kwarg (shape `(B, 6*num_bodies)`, body-major) is exposed on the
+`RobotHandle` algorithm methods that support it — `inverse_dynamics` /
+`forward_dynamics` / `aba` and the inverse-/forward-dynamics gradients — on
+both the numpy and JAX surfaces.
 
 ## Requirements
 

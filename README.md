@@ -97,7 +97,7 @@ for shared-memory target overrides, L2 controls, and the recommended
 ptxas/register-pressure analysis workflow for tuning a specific robot/GPU.
 
 ## Current Support
-GRiD currently fully supports any robot model consisting of revolute, prismatic, and fixed joints that does not have closed kinematic loops.
+GRiD currently fully supports any robot model consisting of revolute, prismatic, and fixed joints that does not have closed kinematic loops. Arbitrary/skew joint axes (a non-cardinal `<axis>`) are also supported via a dense 6-vector motion subspace — currently for `inverse_dynamics` and `crba` only (cardinal-axis robots stay byte-identical; other algorithms and the helical/planar/spherical joint types are later stages).
 
 GRiD currently implements the following rigid body dynamics algorithms:
 + Inverse Dynamics via the Recursive Newton Euler Algorithm (RNEA) from [Featherstone](https://link.springer.com/book/10.1007/978-1-4899-7560-7)
@@ -114,12 +114,17 @@ GRiD currently implements the following rigid body dynamics algorithms:
 + Optional per-body **external forces** (`f_ext`), threaded through RNEA, forward dynamics, ABA, and the inverse-/forward-dynamics gradients. Opt-in (a `nullptr`/empty default reproduces the no-force path exactly), supplied in the body-local frame (`6*NUM_BODIES`, body-major) and subtracted from the per-body force.
 + **External-force gradients**: `∂tau/∂f_ext = -Jᵀ` and `∂q̈/∂f_ext = M⁻¹Jᵀ`, plus the fixed-base `∂(inverse_dynamics_gradient)/∂f_ext = -∂Jᵀ/∂q`
 + A trajectory-optimization-oriented **`grid_plant` layer** (emitted as a sibling `grid_plant` namespace): a `plant_step` integrator wrapper, quadratic state/input costs, an end-effector position cost (with Gauss-Newton Hessian), and joint position/velocity/torque log-barriers.
++ The **Coriolis matrix** `C(q,q̇)` (with `C·q̇ + g(q) = nonlinear_effects`)
++ **Inertial-parameter energy regressors**: kinetic `y_KE` and potential `y_PE` (each length `10·NB`, with `KE = y_KE·π` and `PE = y_PE·π`)
++ The **centroidal derivatives**: `dccrba` (the ∂A/∂q tensor, 6×NV×NV) and `cmm_time_variation` (the centroidal-momentum-matrix time variation Ȧ)
++ **Runtime arbitrary multi-EE pose / pose-gradient** (`end_effector_pose_runtime` + `_gradient`): the end-effector target joint id and a per-target offset become runtime arguments instead of codegen-baked, so one compiled robot serves any leaf/target frame.
++ **Runtime-mutable inertial parameters** (flag-gated): a `set_inertia_params` device entry mutates an on-device parameter table (sysID / domain randomization) with no recompile; the baked default path is byte-identical.
 
-`RBDReference` additionally provides numpy reference oracles — validated against [Pinocchio](https://github.com/stack-of-tasks/pinocchio) — for generalized gravity, nonlinear effects, kinetic/potential/mechanical energy, the Coriolis matrix, the centroidal quantities (CoM, CoM Jacobian, CCRBA, centroidal momentum), the inverse-dynamics regressor (`inverse_dynamics_regressor`), the general-frame Jacobian / J̇ / OSC inertia described above, and the plant/cost/barrier layer above.
+`RBDReference` additionally provides numpy reference oracles — validated against [Pinocchio](https://github.com/stack-of-tasks/pinocchio) — for generalized gravity, nonlinear effects, kinetic/potential/mechanical energy, the Coriolis matrix, the centroidal quantities (CoM, CoM Jacobian, CCRBA, centroidal momentum) and their derivatives (the analytic `dccrba` ∂A/∂q tensor — replacing the prior finite-difference oracle — and `cmm_time_variation` Ȧ), the inverse-dynamics and kinetic/potential-energy regressors, the general-frame Jacobian / J̇ / OSC inertia described above, and the plant/cost/barrier layer above.
 
 **Dual-surface equivalence.** Every algorithm exists on two surfaces that are tested for numerical agreement: the `RBDReference` numpy implementation (the oracle, checked against Pinocchio) and the generated CUDA C++ kernels (checked against that same numpy reference). This keeps the GPU codegen honest against an independent, Pinocchio-validated baseline.
 
-**Mimic-joint support:** non-gradient algorithms (RNEA, forward dynamics, ABA, CRBA, …) work for robots with mimic joints, and every **gradient** now emits a correct mimic-reduced result on **both** the fixed and floating base: `inverse_dynamics_gradient`/`forward_dynamics_gradient`, `end_effector_pose_gradient`/`end_effector_pose_hessian`, the second-order `idsva_so`/`fdsva_so`, the external-force gradients (`f_ext_gradient`), and the integrator gradients. No mimic gradient raises `NotImplementedError` anymore. The one remaining mimic gap is the centroidal kinematics family — `com`, `ccrba`, and `energy` — whose per-body Jacobian fold is not yet mimic-reduced, so those keys are skipped (with an explanatory emitted comment) for robots with mimic joints; they remain on the roadmap.
+**Mimic-joint support:** per-robot gating is now essentially eliminated. Non-gradient algorithms (RNEA, forward dynamics, ABA, CRBA, …) work for robots with mimic joints, and every **gradient** emits a correct mimic-reduced result on **both** the fixed and floating base: `inverse_dynamics_gradient`/`forward_dynamics_gradient`, `end_effector_pose_gradient`/`end_effector_pose_hessian`, the second-order `idsva_so`/`fdsva_so`, the external-force gradients (`f_ext_gradient`), and the integrator gradients. The centroidal family — `com`, `ccrba`, `energy`, and the centroidal derivatives `dccrba`/`cmm_time_variation` — now also runs on mimic robots (the per-body Jacobian and per-unit motion columns carry the mimic multiplier α, validated against the mimic-aware reference). `dccrba`/`cmm_time_variation` additionally run on big floating-base robots (e.g. `g1`/`h1_2`-floating) via the sweep-pool spill path. No algorithm raises `NotImplementedError` for mimic robots anymore.
 
 Additional algorithms and features are in development. If you have a particular algorithm or feature in mind please let us know by posting a GitHub issue. We'd also love your collaboration in implementing the Python reference implementation of any algorithm you'd like implemented!
 
@@ -162,7 +167,13 @@ qdd.sum().backward()                      # gradients flow to q, qd, u
 
 The `torch` backend exposes autograd-aware `inverse_dynamics` / `forward_dynamics` /
 `aba` / `integrator` (analytic backward passes) plus CUDA-Graphs capture,
-and the handle also surfaces the `grid_plant` cost/barrier methods. See
+and the handle also surfaces the `grid_plant` cost/barrier methods. `inverse_dynamics`
+(alias `rnea`) / `forward_dynamics` (alias `fd`) take an optional `qdd=` (the
+autograd gradient is qdd-aware, returning the correct ∂τ/∂(q,q̇) including the
+∂(M·q̈)/∂q term), and the numpy surface adds the new value ops `coriolis_matrix`,
+`kinetic_energy_regressor`, `potential_energy_regressor`, `dccrba`, and
+`cmm_time_variation`. Pass `allow_fp64=True` at `register_robot` for an
+fp64-in/fp64-out convenience cast (compute stays fp32). See
 [`bindings/README.md`](bindings/README.md) and the
 [Python wrappers docs](docs/source/user_guide/tutorials/python_wrappers.rst).
 

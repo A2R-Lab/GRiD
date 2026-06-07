@@ -30,8 +30,8 @@ It currently supports the following algorithmic functions which can be viewed fr
 In addition, the mixins provide numpy reference oracles validated against
 Pinocchio:
 
-* Energy / forces (``_energy.py``): ``generalized_gravity``, ``nonlinear_effects``, ``kinetic_energy``, ``potential_energy``, ``mechanical_energy``, ``coriolis_matrix``
-* Centroidal (``_centroidal.py``): ``com``, ``jacobian_com``, ``ccrba``, ``centroidal_momentum``
+* Energy / forces (``_energy.py``): ``generalized_gravity``, ``nonlinear_effects``, ``kinetic_energy``, ``potential_energy``, ``mechanical_energy``, ``coriolis_matrix``, ``kinetic_energy_regressor``, ``potential_energy_regressor``
+* Centroidal (``_centroidal.py``): ``com``, ``jacobian_com``, ``ccrba``, ``centroidal_momentum``, ``dccrba`` (analytic ∂A/∂q tensor — replaces the prior finite-difference oracle), ``cmm_time_variation`` (Ȧ)
 * Regressor (``_regressor.py``): ``inverse_dynamics_regressor``
 * Plant / costs / barriers (``_plant.py``): ``plant_step`` (+ ``plant_step_gradient`` / ``plant_step_hessian``), ``quadratic_state_cost``, ``quadratic_input_cost``, ``ee_pos_cost``, ``com_cost``, ``momentum_cost``, and the joint position/velocity/torque log-barriers — the reference for the generated ``grid_plant`` CUDA layer
 
@@ -84,5 +84,25 @@ include:
   and the centroidal derivatives (``dccrba`` / ``cmm_time_variation``) are now
   mimic-reduced too: the per-body world Jacobian and per-unit motion columns
   carry the mimic multiplier (α), validated against the mimic-aware
-  RBDReference oracle on fixed-base mimic robots.
+  RBDReference oracle on fixed-base mimic robots. ``dccrba`` /
+  ``cmm_time_variation`` additionally emit on big floating-base robots
+  (e.g. ``g1`` / ``h1_2``-floating) via the sweep-pool spill path, so
+  per-robot gating of the centroidal family is now essentially eliminated.
+* **Coriolis matrix + energy regressors:** ``coriolis_matrix`` ``C(q,q̇)``
+  (with ``C·q̇ + g = nonlinear_effects``) and the kinetic / potential
+  inertial-parameter energy regressors (each length ``10·NB``), all
+  CUDA-validated against the RBDReference oracle.
+* **Runtime arbitrary multi-EE:** ``end_effector_pose_runtime`` and
+  ``end_effector_pose_gradient_runtime`` take the target joint id and a
+  per-target offset as RUNTIME arguments (rather than codegen-baked), so one
+  compiled robot serves any leaf/target frame.
+* **Runtime-mutable inertial parameters (flag-gated):** an opt-in
+  ``d_inertia_params`` table plus a ``set_inertia_params`` device entry let
+  sysID / domain-randomization mutate the per-link inertial parameters with no
+  recompile; the baked default path is byte-identical.
+* **Joint types (stage 1):** an arbitrary/skew ``<axis>`` (non-cardinal) is
+  supported via a dense 6-vector motion subspace ``S`` — currently for
+  ``inverse_dynamics`` and ``crba`` only (cardinal-axis robots stay
+  byte-identical). Other algorithms and the helical / planar / spherical joint
+  types are later stages.
 

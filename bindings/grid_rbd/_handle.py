@@ -730,9 +730,10 @@ class RobotHandle:
         ``[linear; angular]`` at the CoM, world-aligned). Matches
         ``RBDReference.dccrba(q)`` (which returns ``(6, NV, NV)`` per sample).
 
-        Not available for mimic robots, nor when the kernel's centroidal pool
-        exceeds the shared-memory cap (big floating robots) — a clear
-        ``RuntimeError`` is raised in those cases rather than returning garbage.
+        Runs on all robots — including mimic and big floating-base (the
+        centroidal sweep pool spills to global memory at the spilled tiers). A
+        clear ``RuntimeError`` is raised only in the rare case where even the
+        most-spilled tier's centroidal pool exceeds this GPU's shared-memory cap.
         """
         q = np.ascontiguousarray(q, dtype=np.float32)
         raw = self._runner.dccrba(q)  # (B, 6*NV*NV) flat, dA[row + 6*k + 6*NV*m]
@@ -747,8 +748,9 @@ class RobotHandle:
         world-aligned) = ``Σ_i (∂A/∂q_i)·qd_i``. Matches
         ``RBDReference.cmm_time_variation(q, qd)``.
 
-        Not available for mimic robots / oversized centroidal pools (see
-        :py:meth:`dccrba`); raises a clear ``RuntimeError`` there.
+        Runs on all robots (mimic + big floating-base via centroidal-pool spill);
+        raises a clear ``RuntimeError`` only on the rare oversized-pool case (see
+        :py:meth:`dccrba`).
         """
         q = np.ascontiguousarray(q, dtype=np.float32)
         qd = np.ascontiguousarray(qd, dtype=np.float32)

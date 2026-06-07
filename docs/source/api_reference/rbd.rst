@@ -67,6 +67,31 @@ only in reference frame. Either is correct on either base type; the
 dispatch is purely a performance optimization (see
 :doc:`../user_guide/concepts/algorithms/idsva`).
 
+**Energy / centroidal / regressors**
+
+* Generalized gravity / nonlinear effects: ``rbd.generalized_gravity(q)``,
+  ``rbd.nonlinear_effects(q, qd)``
+* Kinetic / potential / mechanical energy: ``rbd.kinetic_energy(q, qd)``,
+  ``rbd.potential_energy(q)``, ``rbd.mechanical_energy(...)``
+* Coriolis matrix: ``C = rbd.coriolis_matrix(q, qd)`` (with
+  ``C·q̇ + g = nonlinear_effects``)
+* CoM + CoM Jacobian: ``(p_com, J_com) = rbd.com(q)``, ``rbd.jacobian_com(q)``
+* CCRBA / centroidal momentum: ``(A, h) = rbd.ccrba(q, qd)``,
+  ``rbd.centroidal_momentum(q, qd)``
+* dCCRBA (∂A/∂q tensor): ``dA = rbd.dccrba(q)`` (analytic; replaces the prior
+  finite-difference oracle), and CMM time variation
+  ``Adot = rbd.cmm_time_variation(q, qd)``
+* Regressors: ``rbd.inverse_dynamics_regressor(q, qd, qdd=None)`` (``τ = Y·π``),
+  ``rbd.kinetic_energy_regressor(q, qd)`` /
+  ``rbd.potential_energy_regressor(q)`` (``E = y·π``)
+* General-frame geometric Jacobian / J̇ / OSC inertia:
+  ``rbd.frame_jacobian(q, frame_name, reference_frame)``,
+  ``rbd.frame_jacobian_dot(q, qd, ...)``, ``rbd.osc_inertia(q)``
+* Plant / cost / barrier reference (oracle for the CUDA ``grid_plant`` layer):
+  ``rbd.plant_step(...)`` (+ gradient / hessian), quadratic state/input costs,
+  ``ee_pos_cost`` / ``com_cost`` / ``momentum_cost``, and the joint
+  position/velocity/torque log-barriers.
+
 We also include functions that break these algorithms down into their
 different passes and by their output types (dq vs dqd) to enable easier
 testing of downstream GPU, FPGA, and accelerator implementations.

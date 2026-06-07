@@ -73,13 +73,14 @@ pass the same value to both for cross-validation.
      - Notes
    * - ``inverse_dynamics(q, qd, qdd=None)``
      - ``(B, NJ)``
-     - Inverse dynamics bias (RNEA).
+     - Inverse dynamics bias (RNEA); alias ``rnea``. ``qdd=None`` ⇒ bias
+       ``c = h − g``; a nonzero ``qdd`` adds the ``M·qdd`` term.
    * - ``minv(q)``
      - ``(B, NJ, NJ)``
      - Direct mass-matrix inverse.
    * - ``forward_dynamics(q, qd, u)``
      - ``(B, NJ)``
-     - ``M⁻¹·(τ − c)``.
+     - ``M⁻¹·(τ − c)``; alias ``fd``.
    * - ``aba(q, qd, u)``
      - ``(B, NJ)``
      - Articulated body algorithm FD.
@@ -109,6 +110,33 @@ pass the same value to both for cross-validation.
    * - ``fdsva_so(q, qd, u)``
      - tuple of 4 ``(B, NV, NV, NV)``
      - Second-order FD.
+   * - ``com(q)`` / ``ccrba(q, qd)`` / ``energy(q, qd)``
+     - varies
+     - Centroidal kinematics (CoM + CoM Jacobian; CMM ``A`` + momentum ``h``;
+       KE/PE/mechanical energy).
+   * - ``coriolis_matrix(q, qd)``
+     - ``(B, NV, NV)``
+     - Coriolis matrix ``C(q,q̇)`` (``C·q̇ + g = nonlinear_effects``).
+   * - ``kinetic_energy_regressor(q, qd)`` / ``potential_energy_regressor(q)``
+     - ``(B, 10*NB)``
+     - Inertial-parameter energy regressors (``E = y·π``).
+   * - ``dccrba(q)``
+     - ``(B, 6, NV, NV)``
+     - ∂A/∂q tensor (centroidal-momentum-matrix derivative).
+   * - ``cmm_time_variation(q, qd)``
+     - ``(B, 6, NV)``
+     - Ȧ = ``Σ_i (∂A/∂q_i)·q̇_i``.
+   * - ``frame_jacobian(q)`` / ``frame_jacobian_dot(q, qd)`` / ``osc_inertia(q)``
+     - ``(B, 6, NV)`` / ``(B, 6, NV)`` / ``(B, 6, 6)``
+     - General-frame J / J̇ (runtime ``target_jid`` + ``reference_frame``) and
+       operational-space inertia Λ.
+   * - ``end_effector_pose_runtime(q, ee_joint_names=None, ee_offsets=None)``
+     - ``(B, 6*NUM_EES)``
+     - Runtime arbitrary multi-EE pose (runtime target joints + per-target
+       offset); ``end_effector_pose_gradient_runtime`` returns its Jacobian.
+
+The numeric methods also accept ``allow_fp64=True`` at ``register_robot`` for
+an fp64-in/fp64-out convenience cast (compute stays fp32).
 
 Validation against ``RBDReference`` lives at
 ``test/python_wrappers/test_iiwa14_smoke.py`` (16 tests, all numerical
@@ -179,10 +207,13 @@ running on JAX-supplied CUDA streams. Inputs may be numpy or
 ``jax.Array`` — JAX moves data to device transparently before the
 handler runs, and outputs stay device-resident.
 
-v0.3 JAX surface (parity with the plain ``RobotHandle``): all 12
-methods listed in the table above are bound via FFI and JIT-compatible.
-The SO methods (``idsva_so``, ``fdsva_so``) follow the plain wrapper's
-tuple-of-four convention.
+JAX surface: the core dynamics / kinematics / SO methods are bound via
+FFI and JIT-compatible (the SO methods ``idsva_so`` / ``fdsva_so`` follow
+the plain wrapper's tuple-of-four convention), with autograd-aware
+``inverse_dynamics`` / ``forward_dynamics`` (qdd-aware), ``end_effector_pose``,
+``f_ext`` parity, and the inertial-parameter (π) regressor VJP path. The newer
+value ops (``coriolis_matrix``, the energy regressors, ``dccrba`` /
+``cmm_time_variation``) are currently exposed on the numpy ``RobotHandle`` only.
 
 PyTorch backend (``backend="torch"``)
 -------------------------------------
@@ -265,7 +296,7 @@ All take/return 2D arrays with axis 0 = batch; cost methods return
      - ``(B, 2*NV, 3*NV)`` ``[A|B]`` = ``d x_{k+1}/d(x,u)``
    * - ``plant_step_hessian(x, u, dt, integrator_type="euler")``
      - ``(B, 2*NV, 3*NV, 3*NV)`` second-order sensitivity ``d²x_{k+1}/d(x,u)²``
-       (fixed-base euler/semi-implicit-euler; floating + RK deferred)
+       (fixed- and floating-base, euler/semi-implicit-euler; RK deferred)
 
 External forces (``f_ext``)
 ---------------------------

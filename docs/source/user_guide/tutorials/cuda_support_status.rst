@@ -27,6 +27,17 @@ Fixed-base CUDA coverage includes the core dynamics and kinematics paths:
 * The ``grid_plant`` layer (``plant_step``, quadratic state/input costs,
   end-effector position cost, and joint position/velocity/torque
   log-barriers), emitted as a sibling ``grid_plant`` namespace.
+* The centroidal family and its derivatives: ``com``, ``ccrba``, ``energy``,
+  ``dccrba`` (∂A/∂q tensor), and ``cmm_time_variation`` (Ȧ).
+* The ``coriolis_matrix`` ``C(q,q̇)`` and the kinetic / potential
+  inertial-parameter energy regressors.
+* Runtime arbitrary multi-EE: ``end_effector_pose_runtime`` and
+  ``end_effector_pose_gradient_runtime`` (runtime target joint id + per-target
+  offset).
+* Optional runtime-mutable inertial parameters (flag-gated ``d_inertia_params``
+  + ``set_inertia_params``; the baked default is byte-identical).
+* Arbitrary/skew joint ``<axis>`` (dense 6-vector ``S``) for
+  ``inverse_dynamics`` and ``crba`` (stage 1; cardinal axes byte-identical).
 
 Second-order fixed-base diagnostics are still developer-only. The current
 green zero-sample set includes ``iiwa14``, ``go2``, ``gen3``, ``fr3``, and
@@ -47,6 +58,10 @@ Floating-base CUDA coverage includes:
   formulation avoids the body-frame gravity shim and the floating chain
   is deep enough that the body-frame subtree-broadcast no longer
   amortizes.
+* The centroidal family ``com`` / ``ccrba`` / ``energy`` and the centroidal
+  derivatives ``dccrba`` / ``cmm_time_variation``. The two derivatives also
+  emit on big floating-base robots (e.g. ``g1`` / ``h1_2``-floating) via the
+  sweep-pool spill path, so their prior big-floating gap is eliminated.
 
 Floating end-effector Hessian generation uses target-aware spill tiers when
 needed:

@@ -35,3 +35,10 @@ Here's a quick overview of the main algorithms:
 * **FDSVA-SO**: Second-order Forward Dynamics, layered on top of IDSVA-SO
   with a four-tier shared-memory selector for large floating-base
   robots.
+* **Centroidal & energy**: CoM (+ Jacobian), CCRBA (:math:`A`, :math:`h`),
+  the centroidal derivatives ``dccrba`` (:math:`\partial A/\partial q`) and
+  ``cmm_time_variation`` (:math:`\dot A`), the Coriolis matrix
+  :math:`C(q,\dot q)`, and the kinetic / potential energy and their
+  inertial-parameter regressors. These run on mimic robots, and the
+  centroidal derivatives also run on big floating-base robots via the
+  sweep-pool spill path.
