@@ -187,6 +187,21 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
     RE-OPEN as MEASURE-FIRST FULL-KERNEL experiments** — gate on a full-kernel A/B at N=256 + production threads
     watching occupancy/spill, and use `segmented_row_strided_gemv<TRANSPOSE,ATOMIC_Y>` (already in GLASS). The
     micro-bench can't rule out the occupancy regression — only the full-kernel A/B can.
+  - **RESOLVED (2026-06-06, full-kernel A/B measured): #2 is NEUTRAL → reverted; #6 not pursued.** Implemented
+    #2 (RNEA-backward → segmented per-level GEMV), fully correctness-validated across ALL composing algos
+    (id/fd/fd_du/aba/crba/idsva_so/fdsva_so/centroidal/regressor, fixed+floating+mimic, thread-invariant),
+    then isolated A/B at N=256 + autotuned production threads on iiwa14-fixed (canary) AND go2-floating (the
+    level-width-4 "win region"): **B/A = 0.99–1.01 on EVERY algo** — no regression (occupancy fear didn't
+    materialize; the descriptors are cheap `static const int[]`), but **NO WIN either**, including the direct
+    RNEA path (inverse_dynamics B/A=0.99). **The isolated micro-bench win is real but does NOT translate
+    because the RNEA backward is a tiny FRACTION of the full kernels** (fdsva_so is 800µs on go2; its backward
+    pass is single-digit %). Classic Amdahl. **#6 (minv-backward) inherits the same structure (the backward
+    is a small fraction of the minv kernel) → not pursued** (predictable neutral; not worth the hours).
+    **THE LESSON: a micro-bench win on a kernel STAGE only moves the needle if that stage is a meaningful
+    fraction of the full-kernel runtime. Always (a) measure the FULL kernel, and (b) weight the isolated win
+    by the stage's fraction of total before investing.** The #2 diff is preserved at
+    `/tmp/perf_wip/rnea_backward_2.diff` and the GLASS wrapper TRANSPOSE/ATOMIC_Y extension it added is reverted
+    too (unused → bloat); reapply both if a future use makes the backward a larger fraction.
 - **CAVEAT 2 (P2 column-fan, 2026-06-06): fanning a thread-0-serial assembly over threads can REGRESS when the
   serial body materializes large baked `const T[]` job-tables — REVERTED frame_jacobian #3.** Audit item #3
   (`_frame_jacobian.py` Step 3+4, the "adds parallelism where there was NONE / Effort M, risk Low, upside High"
