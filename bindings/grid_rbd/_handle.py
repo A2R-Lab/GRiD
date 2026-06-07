@@ -109,14 +109,15 @@ class RobotHandle:
     Don't construct directly; the constructor wires up the pybind11 Runner
     plus the metadata loaded from the cache's meta.json.
 
-    Precision: **float32 only.** Every method casts its inputs to ``float32``
-    and computes in single precision (there is no ``dtype=`` knob; a true fp64
-    tier is a future codegen item). For an fp64-in / fp64-out convenience on
-    this numpy handle — compute still runs in fp32, results are upcast back —
-    pass ``allow_fp64=True`` at construction (or set
-    ``handle.allow_fp64 = True``); it is **off by default** and carries the
-    obvious single-precision accuracy caveat. The jax/torch handles are
-    strictly fp32.
+    Precision: float32 by default — methods cast inputs to ``float32`` and
+    compute in single precision. A **true fp64 tier** (Phase 8) is available by
+    registering with ``dtype="float64"``: the handle then drives a double-
+    precision .so (``_core.RunnerF64``), casts inputs to ``float64``, and returns
+    ``float64`` arrays computed end-to-end in double precision (``handle.dtype ==
+    "float64"``). The legacy ``allow_fp64=True`` is only an fp32-compute upcast
+    convenience (compute in fp32, cast i/o to fp64, single-precision accuracy
+    caveat); it is off by default and ignored for a true-fp64 handle. The
+    jax/torch handles are strictly fp32.
 
     Method index (all take/return ``(B, …)`` arrays, batch axis first)::
 
@@ -145,9 +146,21 @@ class RobotHandle:
 
         self._name = name
         self._meta = dict(meta)
-        self._runner = _core.Runner(so_path)
+        # fp64 (Phase 8): a .so built with dtype="float64" has a double-precision
+        # C ABI; it must be driven through RunnerF64 (which declares its buffers
+        # + fn-pointers as double) and fed/returned float64 numpy arrays. fp32
+        # (default / pre-Phase-8 meta lacking a dtype field) uses Runner. _dt is
+        # the host-side numpy element dtype every method casts inputs to.
+        self._dtype = str(meta.get("dtype", "float32"))
+        if self._dtype == "float64":
+            self._dt = np.float64
+            self._runner = _core.RunnerF64(so_path)
+        else:
+            self._dt = np.float32
+            self._runner = _core.Runner(so_path)
         # fp64-in / fp64-out convenience (compute stays fp32). Off by default.
-        self.allow_fp64 = bool(allow_fp64)
+        # Ignored for a true-fp64 build (outputs are already float64).
+        self.allow_fp64 = bool(allow_fp64) and self._dtype != "float64"
 
         # Sanity-check that the .so's reported constants match meta.json.
         # A mismatch implies the cache is corrupted.
@@ -181,6 +194,13 @@ class RobotHandle:
     @property
     def num_ees(self) -> int:
         return self._runner.num_ees
+
+    @property
+    def dtype(self) -> str:
+        """Compute precision of this handle's .so: ``"float32"`` (default) or
+        ``"float64"`` (Phase 8 true fp64 tier). Inputs are cast to / outputs are
+        returned in this numpy dtype."""
+        return self._dtype
 
     @property
     def floating_base(self) -> bool:
@@ -243,7 +263,7 @@ class RobotHandle:
         """
         if f_ext is None:
             return None
-        fe = np.ascontiguousarray(f_ext, dtype=np.float32)
+        fe = np.ascontiguousarray(f_ext, dtype=self._dt)
         nb = self.num_bodies
         if fe.ndim != 2 or fe.shape[1] != 6 * nb:
             raise ValueError(
@@ -276,11 +296,11 @@ class RobotHandle:
         body's local frame (subtracted from the per-body force, matching
         ``RBDReference.inverse_dynamics(..., f_ext=...)``). Default None ⇒ no external force.
         """
-        q  = np.ascontiguousarray(q,  dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        q  = np.ascontiguousarray(q,  dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
         qdd_arr = None
         if qdd is not None:
-            qdd_arr = np.ascontiguousarray(qdd, dtype=np.float32)
+            qdd_arr = np.ascontiguousarray(qdd, dtype=self._dt)
         c = self._runner.inverse_dynamics(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
         return self._cast_out(c)
 
@@ -292,7 +312,7 @@ class RobotHandle:
         matches `RBDReference.minv(..., output_dense=True)`. The
         symmetrization is a single numpy op per call — negligible cost.
         """
-        q = np.ascontiguousarray(q, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
         m = self._runner.minv(q)
         # Symmetrize: M = L + L^T - diag(L)  where L is the lower triangle.
         m_full = m + m.swapaxes(-1, -2)
@@ -305,9 +325,9 @@ class RobotHandle:
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``,
         body-major, ``[angular; linear]`` local-frame (see :py:meth:`inverse_dynamics`)."""
-        q  = np.ascontiguousarray(q,  dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
-        u  = np.ascontiguousarray(u,  dtype=np.float32)
+        q  = np.ascontiguousarray(q,  dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
+        u  = np.ascontiguousarray(u,  dtype=self._dt)
         return self._cast_out(self._runner.forward_dynamics(q, qd, u, gravity, self._prep_f_ext(f_ext)))
 
     def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
@@ -317,22 +337,22 @@ class RobotHandle:
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``,
         body-major, ``[angular; linear]`` local-frame (see :py:meth:`inverse_dynamics`)."""
-        q  = np.ascontiguousarray(q,  dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
-        u  = np.ascontiguousarray(u,  dtype=np.float32)
+        q  = np.ascontiguousarray(q,  dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
+        u  = np.ascontiguousarray(u,  dtype=self._dt)
         return self._cast_out(self._runner.aba(q, qd, u, gravity, self._prep_f_ext(f_ext)))
 
     def crba(self, q, *, gravity: float = -9.81):
         """Joint-space mass matrix M(q) via Composite Rigid Body Algorithm.
         Returns shape (B, NJ, NJ). Pass `gravity` only because the host
         wrapper takes it; the result doesn't depend on gravity."""
-        q = np.ascontiguousarray(q, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
         return self._cast_out(self._runner.crba(q, gravity))
 
     def end_effector_pose(self, q):
         """End-effector pose [xyz, rpy] per EE. Returns shape (B, 6*NUM_EES).
         For multi-EE robots, reshape to (B, NUM_EES, 6) at the caller side."""
-        q = np.ascontiguousarray(q, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.end_effector_pose(q)
 
     def fk_batched(self, q, *, use_warp: bool = False):
@@ -346,7 +366,7 @@ class RobotHandle:
         `use_warp=True` runs the warp-cooperative per-sample inner; both
         variants return identical poses. Only available for fixed-base,
         non-mimic robots (raises otherwise)."""
-        q = np.ascontiguousarray(q, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.fk_batched(q, use_warp)
 
     def end_effector_pose_gradient(self, q):
@@ -359,7 +379,7 @@ class RobotHandle:
         GRiD's `h_end_effector_pose_gradient` is stored column-major as (6, NUM_EES*NV) per
         timestep; we re-orient to (6*NUM_EES, NV) per timestep.
         """
-        q = np.ascontiguousarray(q, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
         raw = self._runner.end_effector_pose_gradient(q)
         B = raw.shape[0]
         NEE = self.num_ees
@@ -378,11 +398,11 @@ class RobotHandle:
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``.
         f_ext enters RNEA affinely, so for a CONSTANT f_ext the Jacobian
         ∂c/∂(q,qd) is unchanged; the kwarg is for consistency with inverse_dynamics()."""
-        q  = np.ascontiguousarray(q,  dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        q  = np.ascontiguousarray(q,  dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
         qdd_arr = None
         if qdd is not None:
-            qdd_arr = np.ascontiguousarray(qdd, dtype=np.float32)
+            qdd_arr = np.ascontiguousarray(qdd, dtype=self._dt)
         raw = self._runner.inverse_dynamics_gradient(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
         # GRiD's h_dc_du = [dc_dq (NJ×NJ col-major), dc_dqd (NJ×NJ col-major)]
         # per timestep, total 2*NJ² floats. Reshape to (B, 2, NJ, NJ) col-major,
@@ -397,9 +417,9 @@ class RobotHandle:
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
         affine in f_ext so a constant f_ext leaves this Jacobian unchanged."""
-        q  = np.ascontiguousarray(q,  dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
-        u  = np.ascontiguousarray(u,  dtype=np.float32)
+        q  = np.ascontiguousarray(q,  dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
+        u  = np.ascontiguousarray(u,  dtype=self._dt)
         raw = self._runner.forward_dynamics_gradient(q, qd, u, gravity, self._prep_f_ext(f_ext))
         # Same layout as h_dc_du: [df_dq, df_dqd] col-major blocks.
         B = raw.shape[0]
@@ -411,7 +431,7 @@ class RobotHandle:
         """End-effector pose Hessian ∂²(pose)/∂v² (tangent-space, pinocchio convention).
         Returns shape (B, 6*NUM_EES, NV, NV). For fixed-base NV == NJ; for
         floating-base the (NV, NV) block indexes spatial twist components."""
-        q = np.ascontiguousarray(q, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.end_effector_pose_hessian(q)
 
     def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81):
@@ -423,13 +443,13 @@ class RobotHandle:
         Uses the codegen-time dispatcher: body-frame for fixed-base,
         world-frame for floating-base.
         """
-        q  = np.ascontiguousarray(q,  dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        q  = np.ascontiguousarray(q,  dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
         # qdd is packed into the device acceleration slot; pass explicit zeros for
         # the default (qdd=None ⇒ zero acceleration) so the result never depends on
         # a stale device buffer from a previous call.
         qdd_in = qdd if qdd is not None else np.zeros_like(q)
-        qdd_arr = np.ascontiguousarray(qdd_in, dtype=np.float32)
+        qdd_arr = np.ascontiguousarray(qdd_in, dtype=self._dt)
         NV = self.num_vel
         flat = self._runner.idsva_so(q, qd, qdd_arr, 4 * NV ** 3, gravity)
         # Slice the 4 NV^3 blocks. Each block is stored as raw column/row
@@ -444,9 +464,9 @@ class RobotHandle:
         """Second-order forward dynamics. Returns a :class:`SecondOrderFD`
         NamedTuple of 4 tensors each shape ``(B, NV, NV, NV)`` (a plain tuple,
         so positional unpacking / indexing still work)."""
-        q  = np.ascontiguousarray(q,  dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
-        u  = np.ascontiguousarray(u,  dtype=np.float32)
+        q  = np.ascontiguousarray(q,  dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
+        u  = np.ascontiguousarray(u,  dtype=self._dt)
         NV = self.num_vel
         flat = self._runner.fdsva_so(q, qd, u, 4 * NV ** 3, gravity)
         B = flat.shape[0]
@@ -460,9 +480,9 @@ class RobotHandle:
         `dt` is the runtime timestep; gravity is the signed gravitational acceleration (default -9.81).
         `integrator_type` is one of euler / semi_implicit_euler / midpoint /
         rk3 / rk4."""
-        q  = np.ascontiguousarray(q,  dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
-        u  = np.ascontiguousarray(u,  dtype=np.float32)
+        q  = np.ascontiguousarray(q,  dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
+        u  = np.ascontiguousarray(u,  dtype=self._dt)
         it = _integrator_code(integrator_type)
         return self._runner.integrator(q, qd, u, float(dt), it, gravity=float(gravity))
 
@@ -471,9 +491,9 @@ class RobotHandle:
         column blocks [d/dq | d/dqd | d/du] in tangent space.
 
         `dt` is the runtime timestep; gravity is the signed gravitational acceleration (default -9.81)."""
-        q  = np.ascontiguousarray(q,  dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
-        u  = np.ascontiguousarray(u,  dtype=np.float32)
+        q  = np.ascontiguousarray(q,  dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
+        u  = np.ascontiguousarray(u,  dtype=self._dt)
         it = _integrator_code(integrator_type)
         raw = self._runner.integrator_gradient(q, qd, u, float(dt), it, gravity=float(gravity))
         # h_dAB is (2*NV x 3*NV) column-major per timestep; recover row-major.
@@ -494,9 +514,9 @@ class RobotHandle:
         x / x_des / Q are (B, NUM_POS + NUM_VEL). Returns:
           value (B,), grad (B, NX), hess = diag(Q) (B, NX, NX).
         """
-        x = np.ascontiguousarray(x, dtype=np.float32)
-        x_des = np.ascontiguousarray(x_des, dtype=np.float32)
-        Q = np.ascontiguousarray(Q, dtype=np.float32)
+        x = np.ascontiguousarray(x, dtype=self._dt)
+        x_des = np.ascontiguousarray(x_des, dtype=self._dt)
+        Q = np.ascontiguousarray(Q, dtype=self._dt)
         return self._runner.quadratic_state_cost(x, x_des, Q)
 
     def quadratic_input_cost(self, u, u_des, R):
@@ -505,9 +525,9 @@ class RobotHandle:
         u / u_des / R are (B, NUM_VEL). Returns:
           value (B,), grad (B, NV), hess = diag(R) (B, NV, NV).
         """
-        u = np.ascontiguousarray(u, dtype=np.float32)
-        u_des = np.ascontiguousarray(u_des, dtype=np.float32)
-        R = np.ascontiguousarray(R, dtype=np.float32)
+        u = np.ascontiguousarray(u, dtype=self._dt)
+        u_des = np.ascontiguousarray(u_des, dtype=self._dt)
+        R = np.ascontiguousarray(R, dtype=self._dt)
         return self._runner.quadratic_input_cost(u, u_des, R)
 
     def ee_pos_cost(self, q, p_des, W):
@@ -520,9 +540,9 @@ class RobotHandle:
         GN hessian J_p^T W J_p is symmetric the row/col-major distinction is
         immaterial.
         """
-        q = np.ascontiguousarray(q, dtype=np.float32)
-        p_des = np.ascontiguousarray(p_des, dtype=np.float32)
-        W = np.ascontiguousarray(W, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        p_des = np.ascontiguousarray(p_des, dtype=self._dt)
+        W = np.ascontiguousarray(W, dtype=self._dt)
         return self._runner.ee_pos_cost(q, p_des, W)
 
     def joint_position_barrier(self, var, lower, upper, mu):
@@ -542,9 +562,9 @@ class RobotHandle:
         return self._barrier("joint_torque_barrier", var, lower, upper, mu)
 
     def _barrier(self, method, var, lower, upper, mu):
-        var = np.ascontiguousarray(var, dtype=np.float32)
-        lower = np.ascontiguousarray(lower, dtype=np.float32)
-        upper = np.ascontiguousarray(upper, dtype=np.float32)
+        var = np.ascontiguousarray(var, dtype=self._dt)
+        lower = np.ascontiguousarray(lower, dtype=self._dt)
+        upper = np.ascontiguousarray(upper, dtype=self._dt)
         return getattr(self._runner, method)(var, lower, upper, float(mu))
 
     def plant_step(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
@@ -554,8 +574,8 @@ class RobotHandle:
         `integrator_type` is one of euler / semi_implicit_euler / midpoint /
         rk3 / rk4 (same codes as :py:meth:`integrator`).
         """
-        x = np.ascontiguousarray(x, dtype=np.float32)
-        u = np.ascontiguousarray(u, dtype=np.float32)
+        x = np.ascontiguousarray(x, dtype=self._dt)
+        u = np.ascontiguousarray(u, dtype=self._dt)
         it = _integrator_code(integrator_type)
         return self._runner.plant_step(x, u, float(dt), it, float(gravity))
 
@@ -569,8 +589,8 @@ class RobotHandle:
         (= ``integrator_gradient``). ``integrator_type`` is one of euler /
         semi_implicit_euler / midpoint / rk3 / rk4.
         """
-        x = np.ascontiguousarray(x, dtype=np.float32)
-        u = np.ascontiguousarray(u, dtype=np.float32)
+        x = np.ascontiguousarray(x, dtype=self._dt)
+        u = np.ascontiguousarray(u, dtype=self._dt)
         it = _integrator_code(integrator_type)
         raw = self._runner.plant_step_gradient(x, u, float(dt), it, float(gravity))
         # raw is filled with the (2*NV x 3*NV) column-major dAB; recover row-major.
@@ -594,8 +614,8 @@ class RobotHandle:
         Floating-base and multi-stage RK are deferred (the C-ABI returns rc=3 /
         raises for any other ``integrator_type``).
         """
-        x = np.ascontiguousarray(x, dtype=np.float32)
-        u = np.ascontiguousarray(u, dtype=np.float32)
+        x = np.ascontiguousarray(x, dtype=self._dt)
+        u = np.ascontiguousarray(u, dtype=self._dt)
         it = _integrator_code(integrator_type)
         raw = self._runner.plant_step_hessian(x, u, float(dt), it, float(gravity))
         # raw is row-major (2*NV, 3*NV*3*NV) per timestep — reshape the trailing
@@ -612,9 +632,9 @@ class RobotHandle:
           with the top-left NV×NV q-block = J_com^T diag(W) J_com.
         Matches ``RBDReference.com_cost(q, p_des, W)``.
         """
-        q = np.ascontiguousarray(q, dtype=np.float32)
-        p_des = np.ascontiguousarray(p_des, dtype=np.float32)
-        W = np.ascontiguousarray(W, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        p_des = np.ascontiguousarray(p_des, dtype=self._dt)
+        W = np.ascontiguousarray(W, dtype=self._dt)
         return self._runner.com_cost(q, p_des, W)
 
     def momentum_cost(self, q, qd, h_des, W):
@@ -625,10 +645,10 @@ class RobotHandle:
           with the bottom-right NV×NV qd-block = A^T diag(W) A.
         Matches ``RBDReference.momentum_cost(q, qd, h_des, W)``.
         """
-        q = np.ascontiguousarray(q, dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
-        h_des = np.ascontiguousarray(h_des, dtype=np.float32)
-        W = np.ascontiguousarray(W, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
+        h_des = np.ascontiguousarray(h_des, dtype=self._dt)
+        W = np.ascontiguousarray(W, dtype=self._dt)
         return self._runner.momentum_cost(q, qd, h_des, W)
 
     # ─── centroidal / energy / general-frame kinematics (F2) ─────────────────
@@ -647,7 +667,7 @@ class RobotHandle:
         is ``(B, 3, NV)`` = ``d(p_com)/dv``. Matches ``RBDReference.com(q)``
         (= ``p_com``) and ``RBDReference.jacobian_com(q)`` (= ``J_com``).
         """
-        q = np.ascontiguousarray(q, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
         raw = self._runner.com(q)  # (B, 3 + 3*NV): [p_com(3); J_com(3 x NV col-major)]
         B = raw.shape[0]
         NV = self.num_vel
@@ -663,8 +683,8 @@ class RobotHandle:
         in the Pinocchio convention (``[linear; angular]`` at the CoM, world
         aligned). Matches ``RBDReference.ccrba(q, qd)``.
         """
-        q = np.ascontiguousarray(q, dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
         raw = self._runner.ccrba(q, qd)  # (B, 6*NV + 6): [A(6 x NV col-major); h(6)]
         B = raw.shape[0]
         NV = self.num_vel
@@ -677,22 +697,22 @@ class RobotHandle:
         ``[KE, PE, KE+PE]``. Matches ``RBDReference.kinetic_energy`` /
         ``potential_energy`` / ``mechanical_energy`` (PE uses ``gravity``).
         """
-        q = np.ascontiguousarray(q, dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
         return self._runner.energy(q, qd, float(gravity))
 
     def generalized_gravity(self, q, *, gravity: float = -9.81):
         """Generalized gravity torque g(q) = RNEA(q, 0, 0). Returns ``(B, NV)``.
         Matches ``RBDReference.generalized_gravity(q, GRAVITY=gravity)``."""
-        q = np.ascontiguousarray(q, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.generalized_gravity(q, float(gravity))
 
     def nonlinear_effects(self, q, qd, *, gravity: float = -9.81):
         """Nonlinear (bias) effects c(q,qd) = RNEA(q, qd, 0) = C(q,qd)·qd + g(q).
         Returns ``(B, NV)``. Matches ``RBDReference.nonlinear_effects(q, qd,
         GRAVITY=gravity)``."""
-        q = np.ascontiguousarray(q, dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
         return self._runner.nonlinear_effects(q, qd, float(gravity))
 
     def coriolis_matrix(self, q, qd, *, gravity: float = -9.81):
@@ -700,8 +720,8 @@ class RobotHandle:
         ``C·qd + g(q) = nonlinear_effects(q, qd)``. Matches
         ``RBDReference.coriolis_matrix(q, qd)`` (gravity is unused by C; the
         kwarg mirrors the host wrapper signature)."""
-        q = np.ascontiguousarray(q, dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
         raw = self._runner.coriolis_matrix(q, qd, float(gravity))  # (B, NV*NV) row-major
         B = raw.shape[0]
         NV = self.num_vel
@@ -712,8 +732,8 @@ class RobotHandle:
         ``KE = y_KE · π`` (π = stacked per-link inertial parameters, body-major,
         10 params/body). Returns ``(B, 10*num_bodies)``. Matches
         ``RBDReference.kinetic_energy_regressor(q, qd)`` (gravity unused)."""
-        q = np.ascontiguousarray(q, dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
         return self._cast_out(self._runner.kinetic_energy_regressor(q, qd, float(gravity)))
 
     def potential_energy_regressor(self, q, *, gravity: float = -9.81):
@@ -721,7 +741,7 @@ class RobotHandle:
         ``PE = y_PE · π``. Returns ``(B, 10*num_bodies)``. Matches
         ``RBDReference.potential_energy_regressor(q, GRAVITY=gravity)`` (PE uses
         ``gravity``; only the mass + first-moment columns are nonzero)."""
-        q = np.ascontiguousarray(q, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
         return self._cast_out(self._runner.potential_energy_regressor(q, float(gravity)))
 
     def dccrba(self, q):
@@ -735,7 +755,7 @@ class RobotHandle:
         clear ``RuntimeError`` is raised only in the rare case where even the
         most-spilled tier's centroidal pool exceeds this GPU's shared-memory cap.
         """
-        q = np.ascontiguousarray(q, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
         raw = self._runner.dccrba(q)  # (B, 6*NV*NV) flat, dA[row + 6*k + 6*NV*m]
         B = raw.shape[0]
         NV = self.num_vel
@@ -752,8 +772,8 @@ class RobotHandle:
         raises a clear ``RuntimeError`` only on the rare oversized-pool case (see
         :py:meth:`dccrba`).
         """
-        q = np.ascontiguousarray(q, dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
         raw = self._runner.cmm_time_variation(q, qd)  # (B, 6*NV) col-major A[r + 6*c]
         B = raw.shape[0]
         NV = self.num_vel
@@ -770,7 +790,7 @@ class RobotHandle:
         default), or the equivalent int. Both are now RUNTIME parameters of the
         GPU surface.
         """
-        q = np.ascontiguousarray(q, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
         tj, rf = _frame_args(target_jid, reference_frame)
         raw = self._runner.frame_jacobian(q, tj, rf)  # (B, 6*NV) col-major: J[r + 6*c]
         B = raw.shape[0]
@@ -785,8 +805,8 @@ class RobotHandle:
         ``target_jid`` / ``reference_frame`` are RUNTIME parameters (default:
         leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
         """
-        q = np.ascontiguousarray(q, dtype=np.float32)
-        qd = np.ascontiguousarray(qd, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
         tj, rf = _frame_args(target_jid, reference_frame)
         raw = self._runner.frame_jacobian_dot(q, qd, tj, rf)  # (B, 6*NV) col-major
         B = raw.shape[0]
@@ -797,7 +817,7 @@ class RobotHandle:
         """Operational-space (task) inertia Lambda = (J·M⁻¹·Jᵀ)⁻¹ (6 x 6) for
         the leaf-EE frame (LWA). Returns ``(B, 6, 6)``. Matches
         ``RBDReference.osc_inertia(q)``."""
-        q = np.ascontiguousarray(q, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
         raw = self._runner.osc_inertia(q)  # (B, 36) row/col-major (symmetric)
         return raw.reshape(raw.shape[0], 6, 6)
 
@@ -836,8 +856,8 @@ class RobotHandle:
         EEs (matches the oracle's first-offset broadcast). Accepts [x,y,z] or
         homogeneous [x,y,z,1]."""
         if ee_offsets is None:
-            return [np.zeros(3, dtype=np.float32)] * num_ees
-        offs = [np.asarray(o, dtype=np.float32).reshape(-1)[:3] for o in ee_offsets]
+            return [np.zeros(3, dtype=self._dt)] * num_ees
+        offs = [np.asarray(o, dtype=self._dt).reshape(-1)[:3] for o in ee_offsets]
         if len(offs) == 1:
             offs = offs * num_ees
         if len(offs) != num_ees:
@@ -857,13 +877,13 @@ class RobotHandle:
 
         Returns ``(B, NUM_EE, 6)`` where each row is ``[x, y, z, roll, pitch, yaw]``.
         """
-        q = np.ascontiguousarray(q, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
         jids = self._resolve_ee_jids(ee_joint_names)
         offsets = self._normalize_ee_offsets(ee_offsets, len(jids))
         per_ee = []
         for jid, off in zip(jids, offsets):
             raw = self._runner.end_effector_pose_runtime(
-                q, int(jid), np.ascontiguousarray(off, dtype=np.float32))  # (B, 6)
+                q, int(jid), np.ascontiguousarray(off, dtype=self._dt))  # (B, 6)
             per_ee.append(raw)
         return self._cast_out(np.stack(per_ee, axis=1))  # (B, NUM_EE, 6)
 
@@ -875,14 +895,14 @@ class RobotHandle:
 
         Returns ``(B, NUM_EE, 6, NV)``.
         """
-        q = np.ascontiguousarray(q, dtype=np.float32)
+        q = np.ascontiguousarray(q, dtype=self._dt)
         NV = self.num_vel
         jids = self._resolve_ee_jids(ee_joint_names)
         offsets = self._normalize_ee_offsets(ee_offsets, len(jids))
         per_ee = []
         for jid, off in zip(jids, offsets):
             raw = self._runner.end_effector_pose_gradient_runtime(
-                q, int(jid), np.ascontiguousarray(off, dtype=np.float32))  # (B, 6*NV) col-major
+                q, int(jid), np.ascontiguousarray(off, dtype=self._dt))  # (B, 6*NV) col-major
             B = raw.shape[0]
             per_ee.append(raw.reshape(B, NV, 6).transpose(0, 2, 1))  # (B, 6, NV)
         return self._cast_out(np.stack(per_ee, axis=1))  # (B, NUM_EE, 6, NV)

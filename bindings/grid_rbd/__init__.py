@@ -64,6 +64,7 @@ def register_robot(
     cuda_arch: int | None = None,
     backend: str = "numpy",
     allow_fp64: bool = False,
+    dtype: str = "float32",
 ) -> RobotHandle:
     """Register a robot for fast subsequent calls.
 
@@ -72,12 +73,20 @@ def register_robot(
     entry matching (urdf, options, grid_rbd version, cuda_arch) already
     exists, the existing .so is reused — no recompile.
 
-    Precision: **all backends compute in float32 only** (no ``dtype=`` knob;
-    a true fp64 tier is a future codegen item). For the numpy backend you may
-    pass ``allow_fp64=True`` for an fp64-in / fp64-out *convenience* cast on the
-    returned handle — compute still runs in fp32 and results are upcast, so the
-    single-precision accuracy caveat applies. ``allow_fp64`` is ignored for the
-    jax/torch backends (they are strictly fp32).
+    Precision (Phase 8): the numpy backend supports a true fp64 compute tier via
+    ``dtype="float64"`` — it builds a SEPARATE .so (``-DGRID_WRAPPER_T_DOUBLE`` +
+    the matching codegen knob that re-derives the shared-mem spill tiers at 2×
+    bytes) and the handle takes/returns float64 numpy arrays computed end-to-end
+    in double precision. fp32 (``dtype="float32"``, default) is unchanged and
+    byte-identical. The fp32 and fp64 .so coexist in the cache (dtype is in the
+    cache key). NOTE: fp64 doubles every arena's smem footprint, lowering
+    occupancy; some big-robot second-order kernels that already max-spill at fp32
+    may not fit the device opt-in cap at fp64 — those kernels are left
+    unregistered and raise a clear runtime error when called (no new gating).
+    The jax/torch backends are strictly fp32 (``dtype="float64"`` is rejected for
+    them). ``allow_fp64`` is the LEGACY fp32-compute upcast convenience (compute
+    in fp32, cast i/o to fp64); prefer ``dtype="float64"`` for real double
+    precision. ``allow_fp64`` is ignored when ``dtype="float64"``.
 
     Parameters
     ----------
@@ -123,6 +132,12 @@ def register_robot(
     """
     if backend not in ("numpy", "jax", "torch"):
         raise ValueError(f"backend must be 'numpy', 'jax', or 'torch'; got {backend!r}")
+    if dtype not in ("float32", "float64"):
+        raise ValueError(f"dtype must be 'float32' or 'float64'; got {dtype!r}")
+    if dtype == "float64" and backend != "numpy":
+        raise ValueError(
+            f"dtype='float64' is only supported for the numpy backend; the "
+            f"{backend!r} backend is strictly fp32 (Phase 8). Use backend='numpy'.")
     if backend == "jax":
         from . import jax as _jax_backend
         return _jax_backend.register_robot(
@@ -167,6 +182,11 @@ def register_robot(
         "max_batch": int(max_batch_size),
         "ee_joint_names": list(ee_joint_names) if ee_joint_names else [],
     }
+    # fp64 (Phase 8): only inject dtype into the cache key for the fp64 build so
+    # existing fp32 cache entries (keyed without a dtype field) stay valid — an
+    # fp32 register_robot is byte-identical to pre-Phase-8 and reuses its .so.
+    if dtype == "float64":
+        code_options["dtype"] = "float64"
     cache_key = compute_cache_key(urdf_bytes, code_options, cuda_arch)
     entry_dir = store_dir(cache_dir, cache_key)
     so_path = entry_dir / "robot.so"

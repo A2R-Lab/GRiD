@@ -98,7 +98,13 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
 
     file_namespace = options.get("file_namespace", "grid")
     debug_mode = options.get("debug_mode", 0)
-    cg = GRiDCodeGenerator(robot, debug_mode, FILE_NAMESPACE=file_namespace)
+    # fp64 (Phase 8): options["dtype"] in {"float32","float64"} selects the
+    # compute precision. dtype="float64" flips the codegen shared-mem T-size to 8
+    # so the spill-tier picks re-derive at the true fp64 footprint. Default
+    # float32 -> codegen dtype "float" -> byte-identical fp32 path. The dtype is
+    # in `options` so it re-keys the cache (fp32 vs fp64 .so coexist).
+    codegen_dtype = "double" if options.get("dtype") == "float64" else "float"
+    cg = GRiDCodeGenerator(robot, debug_mode, FILE_NAMESPACE=file_namespace, dtype=codegen_dtype)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -216,6 +222,7 @@ def compile_so(
     enable_jax_ffi: bool = True,
     enable_torch: bool = True,
     torch_op_key: str | None = None,
+    t_double: bool = False,
 ) -> None:
     """Invoke nvcc to build wrapper.cu → robot.so.
 
@@ -238,6 +245,16 @@ def compile_so(
     ]
     if glass_root:
         cmd.extend([f"-I{glass_root}", f"-I{glass_root / 'src'}"])
+
+    # fp64 (Phase 8): flip the wrapper's `using T` to double. The grid.cuh must
+    # have been generated with the matching dtype="double" codegen knob (so its
+    # spill tiers are sized for sizeof(double)). JAX/torch FFI blocks are
+    # suppressed in the wrapper for fp64 (#if !GRID_WRAPPER_T_DOUBLE), so we also
+    # skip their -D flags below to avoid pulling their includes pointlessly.
+    if t_double:
+        cmd.append("-DGRID_WRAPPER_T_DOUBLE")
+        enable_jax_ffi = False
+        enable_torch = False
 
     # JAX FFI handlers: optionally enabled. When jax is available, point
     # nvcc at its FFI include dir and define GRID_RBD_WITH_JAX so the
@@ -323,13 +340,17 @@ def generate_and_compile(
     # name) so two robots registered in one process don't collide on op names.
     # Prefix with 'k' to guarantee a valid C identifier (hex may start 0-9).
     torch_op_key = "k" + target_dir.name[:12]
+    t_double = options.get("dtype") == "float64"
     compile_so(wrapper_cu, so_path, cuda_arch=cuda_arch,
                max_batch=max_batch, glass_root=glass_root,
-               torch_op_key=torch_op_key)
+               torch_op_key=torch_op_key, t_double=t_double)
 
     # Persist meta.json
     meta["cuda_arch"] = cuda_arch
     meta["max_batch"] = max_batch
+    # fp64 (Phase 8): record the element dtype so the handle/Runner picks the
+    # matching numpy buffer type (RunnerF64 for float64) without dlopening.
+    meta["dtype"] = "float64" if t_double else "float32"
     (target_dir / "meta.json").write_text(json.dumps(meta, indent=2))
 
     return meta

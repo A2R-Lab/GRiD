@@ -778,6 +778,15 @@ int main(int argc, char **argv) {
     if (g_num_threads <= 0 || g_num_threads > grid::MAX_PERF_LEVEL_THREADS) {
         g_num_threads = grid::MAX_PERF_LEVEL_THREADS;
     }
-    run<float>();
+    // fp64 (Phase 8): GRID_EQUIV_T=double runs the double-precision path against
+    // a float64 oracle (tight tol). The runner is already template<typename T>;
+    // the matching grid.cuh must be generated with the dtype="double" codegen
+    // knob so its spill tiers are sized for sizeof(double). Default = float.
+    const char *equiv_t = std::getenv("GRID_EQUIV_T");
+    if (equiv_t != nullptr && std::string(equiv_t) == "double") {
+        run<double>();
+    } else {
+        run<float>();
+    }
     return 0;
 }

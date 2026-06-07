@@ -21,7 +21,16 @@
 #include <algorithm>
 #include <cstring>
 
+// fp64 (Phase 8): the buffer/compute element type. Default float (byte-identical
+// fp32 ABI). A .so built with -DGRID_WRAPPER_T_DOUBLE uses double — same symbol
+// names, doubled smem footprint, re-derived spill tiers (see the matching codegen
+// knob GRiDCodeGenerator(dtype="double")). The dtype is a property of WHICH .so
+// you dlopen; the Runner (Runner vs RunnerF64) must match.
+#ifdef GRID_WRAPPER_T_DOUBLE
+using T = double;
+#else
 using T = float;
+#endif
 
 // Compile-time max batch size (overridable via -DGRID_RBD_MAX_BATCH=N).
 #ifndef GRID_RBD_MAX_BATCH
@@ -1326,7 +1335,10 @@ extern "C" int grid_plant_step_hessian(
 // involvement, no implicit serialization with non-JAX streams. JAX's
 // scheduler owns the work.
 
-#ifdef GRID_RBD_WITH_JAX
+// fp64 (Phase 8): JAX/torch surfaces are fp32-only by design (their handlers
+// use ffi::F32 / float32 tensors). Suppress the whole block in an fp64 .so so
+// it never ABI-mismatches T=double. fp64 is a numpy-handle / inline-CUDA feature.
+#if defined(GRID_RBD_WITH_JAX) && !defined(GRID_WRAPPER_T_DOUBLE)
 
 #include "xla/ffi/api/ffi.h"
 namespace ffi = xla::ffi;
@@ -2627,7 +2639,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 // Registered under a per-robot op namespace keyed by the cache_key
 // (-DGRID_RBD_TORCH_KEY=<hex>) so two robots in one process don't collide.
 
-#ifdef GRID_RBD_WITH_TORCH
+// fp64: torch surface is fp32-only too (see the JAX note above) — suppress in an fp64 .so.
+#if defined(GRID_RBD_WITH_TORCH) && !defined(GRID_WRAPPER_T_DOUBLE)
 
 // Use the Python-free C++ frontend (torch/library.h) rather than
 // torch/extension.h, which pulls in <Python.h>. We register ops via the

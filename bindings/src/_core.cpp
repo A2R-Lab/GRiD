@@ -8,9 +8,9 @@
 //
 //   int grid_rbd_init();
 //   int grid_rbd_num_joints();
-//   int grid_rbd_inverse_dynamics(const float* q, const float* qd, const float* qdd_opt,
+//   int grid_rbd_inverse_dynamics(const CT* q, const CT* qd, const CT* qdd_opt,
 //                     float* c_out, int batch, float gravity,
-//                     const float* f_ext_opt);  // f_ext_opt may be nullptr
+//                     const CT* f_ext_opt);  // f_ext_opt may be nullptr
 //   ... etc ...
 //
 // The Runner constructor dlopens the .so and resolves every symbol it
@@ -38,86 +38,95 @@ namespace py = pybind11;
 
 
 // ─── C ABI function signatures (must match wrapper_template.cu) ──────────────
-
-extern "C" {
+//
+// fp64 (Phase 8): the per-robot .so's `extern "C"` symbols take `const CT*` /
+// `CT*` where CT == float (default) or CT == double (a .so built with
+// -DGRID_WRAPPER_T_DOUBLE). dlsym carries no type, so the Runner must declare
+// its function-pointer typedefs AND its numpy buffers in the SAME element type
+// as the .so it dlopen'd. We therefore template the whole signature set + Runner
+// on the buffer C-type CT and register one pybind class per dtype (Runner =
+// float, RunnerF64 = double). The float path is unchanged.
+// NOTE on scalar arg types: in wrapper_template.cu `gravity` and `dt` are `T`
+// (so they become double in an fp64 .so) but `mu` is ALWAYS `float`. The
+// function-pointer signatures below must match EXACTLY (a by-value scalar
+// passed at the wrong width corrupts the ABI), so gravity/dt use CT and mu
+// stays float.
+template <class CT>
+struct CAbi {
     using fn_int_v_t        = int (*)();
     using fn_int_i_t        = int (*)(int);
-    // q, qd, qdd_opt, out, batch, gravity, f_ext_opt   — inverse_dynamics, inverse_dynamics_gradient, idsva_so
-    //   f_ext_opt: (batch, 6*NUM_BODIES) local-frame body wrenches, or null
-    using fn_dyn_t         = int (*)(const float*, const float*, const float*,
-                                      float*, int, float, const float*);
-    // q, out, batch
-    using fn_minv_t         = int (*)(const float*, float*, int);
-    // q, qd, u, out, batch, gravity, f_ext_opt   — fd, aba, fd_grad
-    //   f_ext_opt: (batch, 6*NUM_BODIES) local-frame body wrenches, or null
-    using fn_fd_t           = int (*)(const float*, const float*, const float*,
-                                      float*, int, float, const float*);
-    // q, qd, qdd_opt, out, batch, gravity   — idsva_so (no f_ext; 2nd-order surface)
-    using fn_dyn_no_fext_t = int (*)(const float*, const float*, const float*,
-                                      float*, int, float);
-    // q, qd, u, out, batch, gravity   — fdsva_so (no f_ext; second-order surface)
-    using fn_fd_no_fext_t   = int (*)(const float*, const float*, const float*,
-                                      float*, int, float);
-    // q, out, batch, gravity          — crba
-    using fn_crba_t         = int (*)(const float*, float*, int, float);
-    // q, out, batch                   — end_effector_pose, end_effector_pose_gradient, end_effector_pose_hessian
-    using fn_ee_t           = int (*)(const float*, float*, int);
-    // q, pose7_out, batch, use_warp    — fk_batched (pos+quat, one block/warp per sample)
-    using fn_fk_batched_t   = int (*)(const float*, float*, int, int);
-    // q, qd, qdd_opt, out, batch, gravity   — idsva_so (same as inverse_dynamics)
-    // q, qd, u, out, batch, gravity         — fdsva_so (same as fd)
-    // q, qd, u, out, batch, dt, it          — integrator, integrator_gradient
-    //   (dt is the runtime timestep; it selects the IntegratorType; gravity is
-    //    the signed gravitational acceleration (default -9.81) baked in the wrapper)
-    using fn_integrator_t   = int (*)(const float*, const float*, const float*,
-                                      float*, int, float, float, int);
-    // grid_plant C ABI (G1 binding layer)
-    // quadratic cost: (var, des, w, out, grad, hess, batch)
-    using fn_plant_cost_t   = int (*)(const float*, const float*, const float*,
-                                      float*, float*, float*, int);
-    // barrier: (var, lower, upper, mu, out, grad, hess_diag, batch)
-    using fn_plant_barrier_t = int (*)(const float*, const float*, const float*, float,
-                                       float*, float*, float*, int);
-    // plant_step: (x, u, x_kp1, batch, gravity, dt, it)
-    using fn_plant_step_t   = int (*)(const float*, const float*, float*,
-                                      int, float, float, int);
-    // ee_pos_cost / com_cost: (q, [p/h]_des, W, out, grad, hess, batch)
-    using fn_plant_ee_t     = int (*)(const float*, const float*, const float*,
-                                      float*, float*, float*, int);
-    // momentum_cost: (q, qd, h_des, W, out, grad, hess, batch)
-    using fn_plant_mom_t    = int (*)(const float*, const float*, const float*, const float*,
-                                      float*, float*, float*, int);
-    // plant_step_gradient: (x, u, dAB, batch, gravity, dt, it)
-    using fn_plant_step_grad_t = int (*)(const float*, const float*, float*,
-                                         int, float, float, int);
-    // plant_step_hessian: (x, u, d2AB, batch, gravity, dt, it) — same ABI shape
-    // as the gradient, just a bigger output band.
-    using fn_plant_step_hess_t = int (*)(const float*, const float*, float*,
-                                         int, float, float, int);
-
-    // ─── centroidal / energy / general-frame kinematics (F2) ─────────────────
-    // com / osc_inertia: (q, out, batch)
-    using fn_q_out_t        = int (*)(const float*, float*, int);
-    // ccrba: (q, qd, out, batch)
-    using fn_q_qd_out_t     = int (*)(const float*, const float*, float*, int);
-    // frame_jacobian: (q, out, batch, target_jid, reference_frame)
-    using fn_frame_jac_t    = int (*)(const float*, float*, int, int, int);
-    // frame_jacobian_dot: (q, qd, out, batch, target_jid, reference_frame)
-    using fn_frame_jac_dot_t = int (*)(const float*, const float*, float*, int, int, int);
-    // end_effector_pose_runtime[_gradient]: (q, out, batch, target_jid, offset[3])
-    using fn_ee_runtime_t   = int (*)(const float*, float*, int, int, const float*);
-    // energy / nonlinear_effects: (q, qd, out, batch, gravity)
-    using fn_q_qd_out_grav_t = int (*)(const float*, const float*, float*, int, float);
-    // generalized_gravity: (q, out, batch, gravity)
-    using fn_q_out_grav_t   = int (*)(const float*, float*, int, float);
-}
+    using fn_dyn_t         = int (*)(const CT*, const CT*, const CT*,
+                                      CT*, int, CT, const CT*);
+    using fn_minv_t         = int (*)(const CT*, CT*, int);
+    using fn_fd_t           = int (*)(const CT*, const CT*, const CT*,
+                                      CT*, int, CT, const CT*);
+    using fn_dyn_no_fext_t = int (*)(const CT*, const CT*, const CT*,
+                                      CT*, int, CT);
+    using fn_fd_no_fext_t   = int (*)(const CT*, const CT*, const CT*,
+                                      CT*, int, CT);
+    using fn_crba_t         = int (*)(const CT*, CT*, int, CT);
+    using fn_ee_t           = int (*)(const CT*, CT*, int);
+    using fn_fk_batched_t   = int (*)(const CT*, CT*, int, int);
+    using fn_integrator_t   = int (*)(const CT*, const CT*, const CT*,
+                                      CT*, int, CT, CT, int);
+    using fn_plant_cost_t   = int (*)(const CT*, const CT*, const CT*,
+                                      CT*, CT*, CT*, int);
+    using fn_plant_barrier_t = int (*)(const CT*, const CT*, const CT*, float,
+                                       CT*, CT*, CT*, int);
+    using fn_plant_step_t   = int (*)(const CT*, const CT*, CT*,
+                                      int, CT, CT, int);
+    using fn_plant_ee_t     = int (*)(const CT*, const CT*, const CT*,
+                                      CT*, CT*, CT*, int);
+    using fn_plant_mom_t    = int (*)(const CT*, const CT*, const CT*, const CT*,
+                                      CT*, CT*, CT*, int);
+    using fn_plant_step_grad_t = int (*)(const CT*, const CT*, CT*,
+                                         int, CT, CT, int);
+    using fn_plant_step_hess_t = int (*)(const CT*, const CT*, CT*,
+                                         int, CT, CT, int);
+    using fn_q_out_t        = int (*)(const CT*, CT*, int);
+    using fn_q_qd_out_t     = int (*)(const CT*, const CT*, CT*, int);
+    using fn_frame_jac_t    = int (*)(const CT*, CT*, int, int, int);
+    using fn_frame_jac_dot_t = int (*)(const CT*, const CT*, CT*, int, int, int);
+    using fn_ee_runtime_t   = int (*)(const CT*, CT*, int, int, const CT*);
+    using fn_q_qd_out_grav_t = int (*)(const CT*, const CT*, CT*, int, CT);
+    using fn_q_out_grav_t   = int (*)(const CT*, CT*, int, CT);
+};
 
 
 // ─── Runner ──────────────────────────────────────────────────────────────────
 
-class Runner {
+template <class CT>
+class RunnerT {
+    // C-ABI function-pointer typedefs (parameterized on the buffer dtype CT).
+    using fn_int_v_t = typename CAbi<CT>::fn_int_v_t;
+    using fn_int_i_t = typename CAbi<CT>::fn_int_i_t;
+    using fn_dyn_t = typename CAbi<CT>::fn_dyn_t;
+    using fn_minv_t = typename CAbi<CT>::fn_minv_t;
+    using fn_fd_t = typename CAbi<CT>::fn_fd_t;
+    using fn_dyn_no_fext_t = typename CAbi<CT>::fn_dyn_no_fext_t;
+    using fn_fd_no_fext_t = typename CAbi<CT>::fn_fd_no_fext_t;
+    using fn_crba_t = typename CAbi<CT>::fn_crba_t;
+    using fn_ee_t = typename CAbi<CT>::fn_ee_t;
+    using fn_fk_batched_t = typename CAbi<CT>::fn_fk_batched_t;
+    using fn_integrator_t = typename CAbi<CT>::fn_integrator_t;
+    using fn_plant_cost_t = typename CAbi<CT>::fn_plant_cost_t;
+    using fn_plant_barrier_t = typename CAbi<CT>::fn_plant_barrier_t;
+    using fn_plant_step_t = typename CAbi<CT>::fn_plant_step_t;
+    using fn_plant_ee_t = typename CAbi<CT>::fn_plant_ee_t;
+    using fn_plant_mom_t = typename CAbi<CT>::fn_plant_mom_t;
+    using fn_plant_step_grad_t = typename CAbi<CT>::fn_plant_step_grad_t;
+    using fn_plant_step_hess_t = typename CAbi<CT>::fn_plant_step_hess_t;
+    using fn_q_out_t = typename CAbi<CT>::fn_q_out_t;
+    using fn_q_qd_out_t = typename CAbi<CT>::fn_q_qd_out_t;
+    using fn_frame_jac_t = typename CAbi<CT>::fn_frame_jac_t;
+    using fn_frame_jac_dot_t = typename CAbi<CT>::fn_frame_jac_dot_t;
+    using fn_ee_runtime_t = typename CAbi<CT>::fn_ee_runtime_t;
+    using fn_q_qd_out_grav_t = typename CAbi<CT>::fn_q_qd_out_grav_t;
+    using fn_q_out_grav_t = typename CAbi<CT>::fn_q_out_grav_t;
+    // Per-dtype numpy array alias: an input is force-cast to CT, outputs are CT.
+    using arr_t = py::array_t<CT, py::array::c_style | py::array::forcecast>;
 public:
-    explicit Runner(const std::string& so_path) {
+    explicit RunnerT(const std::string& so_path) {
         handle_ = dlopen(so_path.c_str(), RTLD_NOW | RTLD_LOCAL);
         if (!handle_) {
             throw std::runtime_error(
@@ -216,7 +225,7 @@ public:
         }
     }
 
-    ~Runner() {
+    ~RunnerT() {
         if (handle_) {
             if (fn_close_) fn_close_();
             dlclose(handle_);
@@ -253,25 +262,25 @@ public:
     // qdd:    optional (batch, num_joints) — currently ignored
     //         (USE_QDD_FLAG=false in wrapper); future v2 will plumb through.
     // returns c: (batch, num_joints) float32
-    py::array_t<float> inverse_dynamics(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+    py::array_t<CT> inverse_dynamics(
+        arr_t q,
+        arr_t qd,
         py::object qdd_opt,
         float gravity,
         py::object f_ext_opt)
     {
         int batch = check_inputs_2d(q, qd, /*last_dim=*/num_joints_);
-        const float* qdd_ptr = nullptr;
+        const CT* qdd_ptr = nullptr;
         if (!qdd_opt.is_none()) {
             auto qdd = qdd_opt.cast<
-                py::array_t<float, py::array::c_style | py::array::forcecast>>();
+                arr_t>();
             check_array_2d(qdd, batch, num_joints_, "qdd");
             qdd_ptr = qdd.data();
         }
-        py::array_t<float, py::array::c_style | py::array::forcecast> fe_hold;
-        const float* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
 
-        py::array_t<float> out({batch, num_joints_});
+        py::array_t<CT> out({batch, num_joints_});
         int rc = fn_inverse_dynamics_(q.data(), qd.data(), qdd_ptr,
                           out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) {
@@ -281,8 +290,8 @@ public:
     }
 
     // ─── minv ────────────────────────────────────────────────────────────────
-    py::array_t<float> minv(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q)
+    py::array_t<CT> minv(
+        arr_t q)
     {
         int batch = q.ndim() == 2 ? q.shape(0) : 0;
         if (q.ndim() != 2 || q.shape(1) != num_joints_) {
@@ -293,7 +302,7 @@ public:
             throw std::invalid_argument(
                 "minv: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
         }
-        py::array_t<float> out({batch, num_joints_, num_joints_});
+        py::array_t<CT> out({batch, num_joints_, num_joints_});
         int rc = fn_minv_(q.data(), out.mutable_data(), batch);
         if (rc != 0) {
             throw std::runtime_error("grid_rbd_minv failed: rc=" + std::to_string(rc));
@@ -302,19 +311,19 @@ public:
     }
 
     // ─── forward_dynamics ────────────────────────────────────────────────────
-    py::array_t<float> forward_dynamics(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
-        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+    py::array_t<CT> forward_dynamics(
+        arr_t q,
+        arr_t qd,
+        arr_t u,
         float gravity,
         py::object f_ext_opt)
     {
         int batch = check_inputs_2d(q, qd, /*last_dim=*/num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
-        py::array_t<float, py::array::c_style | py::array::forcecast> fe_hold;
-        const float* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
 
-        py::array_t<float> out({batch, num_joints_});
+        py::array_t<CT> out({batch, num_joints_});
         int rc = fn_fd_(q.data(), qd.data(), u.data(),
                         out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) {
@@ -324,18 +333,18 @@ public:
     }
 
     // ─── aba ─────────────────────────────────────────────────────────────────
-    py::array_t<float> aba(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
-        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+    py::array_t<CT> aba(
+        arr_t q,
+        arr_t qd,
+        arr_t u,
         float gravity,
         py::object f_ext_opt)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
-        py::array_t<float, py::array::c_style | py::array::forcecast> fe_hold;
-        const float* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<float> out({batch, num_joints_});
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_joints_});
         int rc = fn_aba_(q.data(), qd.data(), u.data(),
                          out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error("grid_rbd_aba failed: rc=" + std::to_string(rc));
@@ -343,8 +352,8 @@ public:
     }
 
     // ─── crba ────────────────────────────────────────────────────────────────
-    py::array_t<float> crba(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+    py::array_t<CT> crba(
+        arr_t q,
         float gravity)
     {
         if (q.ndim() != 2 || q.shape(1) != num_joints_) {
@@ -356,15 +365,15 @@ public:
             throw std::invalid_argument(
                 "crba: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
         }
-        py::array_t<float> out({batch, num_joints_, num_joints_});
+        py::array_t<CT> out({batch, num_joints_, num_joints_});
         int rc = fn_crba_(q.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error("grid_rbd_crba failed: rc=" + std::to_string(rc));
         return out;
     }
 
     // ─── end_effector_pose ───────────────────────────────────────────────────
-    py::array_t<float> end_effector_pose(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q)
+    py::array_t<CT> end_effector_pose(
+        arr_t q)
     {
         if (q.ndim() != 2 || q.shape(1) != num_joints_) {
             throw std::invalid_argument(
@@ -375,7 +384,7 @@ public:
             throw std::invalid_argument(
                 "end_effector_pose: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
         }
-        py::array_t<float> out({batch, 6 * num_ees_});
+        py::array_t<CT> out({batch, 6 * num_ees_});
         int rc = fn_ee_pose_(q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose failed: rc=" + std::to_string(rc));
         return out;
@@ -385,8 +394,8 @@ public:
     // Input  q:     (batch, NUM_POS)
     // Output pose7: (batch, 7) = [tx,ty,tz, qw,qx,qy,qz]
     // use_warp selects the warp-cooperative per-sample inner.
-    py::array_t<float> fk_batched(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+    py::array_t<CT> fk_batched(
+        arr_t q,
         bool use_warp)
     {
         if (!fn_fk_batched_) {
@@ -403,7 +412,7 @@ public:
             throw std::invalid_argument(
                 "fk_batched: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
         }
-        py::array_t<float> out({batch, 7});
+        py::array_t<CT> out({batch, 7});
         int rc = fn_fk_batched_(q.data(), out.mutable_data(), batch, use_warp ? 1 : 0);
         if (rc == 3) throw std::runtime_error(
             "fk_batched: not supported for this robot (floating-base / mimic)");
@@ -411,8 +420,8 @@ public:
         return out;
     }
 
-    py::array_t<float> end_effector_pose_gradient(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q)
+    py::array_t<CT> end_effector_pose_gradient(
+        arr_t q)
     {
         if (q.ndim() != 2 || q.shape(1) != num_joints_) {
             throw std::invalid_argument(
@@ -424,49 +433,49 @@ public:
                 "end_effector_pose_gradient: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
         }
         // d/dv tangent (pinocchio convention): (batch, 6*NUM_EES, NV)
-        py::array_t<float> out({batch, 6 * num_ees_, num_vel_});
+        py::array_t<CT> out({batch, 6 * num_ees_, num_vel_});
         int rc = fn_ee_pose_grad_(q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient failed: rc=" + std::to_string(rc));
         return out;
     }
 
     // ─── inverse_dynamics_gradient / forward_dynamics_gradient ───────────────────────────────────
-    py::array_t<float> inverse_dynamics_gradient(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+    py::array_t<CT> inverse_dynamics_gradient(
+        arr_t q,
+        arr_t qd,
         py::object qdd_opt,
         float gravity,
         py::object f_ext_opt)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
-        const float* qdd_ptr = nullptr;
+        const CT* qdd_ptr = nullptr;
         if (!qdd_opt.is_none()) {
             auto qdd = qdd_opt.cast<
-                py::array_t<float, py::array::c_style | py::array::forcecast>>();
+                arr_t>();
             check_array_2d(qdd, batch, num_joints_, "qdd");
             qdd_ptr = qdd.data();
         }
-        py::array_t<float, py::array::c_style | py::array::forcecast> fe_hold;
-        const float* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<float> out({batch, num_joints_, 2 * num_joints_});
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_joints_, 2 * num_joints_});
         int rc = fn_inverse_dynamics_gradient_(q.data(), qd.data(), qdd_ptr,
                                out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_gradient failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    py::array_t<float> forward_dynamics_gradient(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
-        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+    py::array_t<CT> forward_dynamics_gradient(
+        arr_t q,
+        arr_t qd,
+        arr_t u,
         float gravity,
         py::object f_ext_opt)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
-        py::array_t<float, py::array::c_style | py::array::forcecast> fe_hold;
-        const float* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<float> out({batch, num_joints_, 2 * num_joints_});
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_joints_, 2 * num_joints_});
         int rc = fn_fd_grad_(q.data(), qd.data(), u.data(),
                              out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_gradient failed: rc=" + std::to_string(rc));
@@ -474,8 +483,8 @@ public:
     }
 
     // ─── end_effector_pose_hessian ───────────────────────────────────────────
-    py::array_t<float> end_effector_pose_hessian(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q)
+    py::array_t<CT> end_effector_pose_hessian(
+        arr_t q)
     {
         if (q.ndim() != 2 || q.shape(1) != num_joints_) {
             throw std::invalid_argument(
@@ -486,7 +495,7 @@ public:
             throw std::invalid_argument(
                 "end_effector_pose_hessian: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
         }
-        py::array_t<float> out({batch, 6 * num_ees_, num_vel_, num_vel_});
+        py::array_t<CT> out({batch, 6 * num_ees_, num_vel_, num_vel_});
         int rc = fn_ee_pose_hessian_(q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_hessian failed: rc=" + std::to_string(rc));
         return out;
@@ -495,38 +504,38 @@ public:
     // ─── idsva_so / fdsva_so (raw second-order tensor surface) ───────────────
     // Returns shape (B, SECOND_ORDER_TENSOR_SIZE) — flat, 4 * NV^3 floats per
     // timestep. The Python side slices into the four NV^3 tensors.
-    py::array_t<float> idsva_so(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+    py::array_t<CT> idsva_so(
+        arr_t q,
+        arr_t qd,
         py::object qdd_opt,
         int second_order_tensor_size,
         float gravity)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
-        const float* qdd_ptr = nullptr;
+        const CT* qdd_ptr = nullptr;
         if (!qdd_opt.is_none()) {
             auto qdd = qdd_opt.cast<
-                py::array_t<float, py::array::c_style | py::array::forcecast>>();
+                arr_t>();
             check_array_2d(qdd, batch, num_joints_, "qdd");
             qdd_ptr = qdd.data();
         }
-        py::array_t<float> out({batch, second_order_tensor_size});
+        py::array_t<CT> out({batch, second_order_tensor_size});
         int rc = fn_idsva_so_(q.data(), qd.data(), qdd_ptr,
                               out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error("grid_rbd_idsva_so failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    py::array_t<float> fdsva_so(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
-        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+    py::array_t<CT> fdsva_so(
+        arr_t q,
+        arr_t qd,
+        arr_t u,
         int second_order_tensor_size,
         float gravity)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
-        py::array_t<float> out({batch, second_order_tensor_size});
+        py::array_t<CT> out({batch, second_order_tensor_size});
         int rc = fn_fdsva_so_(q.data(), qd.data(), u.data(),
                               out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error("grid_rbd_fdsva_so failed: rc=" + std::to_string(rc));
@@ -535,15 +544,15 @@ public:
 
     // integrator(q, qd, u, dt, it) -> x_kp1 (batch, NUM_POS + NUM_VEL).
     // gravity is the signed gravitational acceleration (default -9.81) (baked in the wrapper).
-    py::array_t<float> integrator(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
-        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+    py::array_t<CT> integrator(
+        arr_t q,
+        arr_t qd,
+        arr_t u,
         float dt, int it, float gravity)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
-        py::array_t<float> out({batch, num_joints_ + num_vel_});
+        py::array_t<CT> out({batch, num_joints_ + num_vel_});
         int rc = fn_integrator_(q.data(), qd.data(), u.data(),
                                 out.mutable_data(), batch, gravity, dt, it);
         if (rc != 0) throw std::runtime_error("grid_rbd_integrator failed: rc=" + std::to_string(rc));
@@ -552,15 +561,15 @@ public:
 
     // integrator_gradient(q, qd, u, dt, it) -> flat dAB (batch, 2*NV*3*NV),
     // column-major per timestep ([d/dq | d/dqd | d/du]); reshaped Python-side.
-    py::array_t<float> integrator_gradient(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
-        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+    py::array_t<CT> integrator_gradient(
+        arr_t q,
+        arr_t qd,
+        arr_t u,
         float dt, int it, float gravity)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
-        py::array_t<float> out({batch, 2 * num_vel_ * 3 * num_vel_});
+        py::array_t<CT> out({batch, 2 * num_vel_ * 3 * num_vel_});
         int rc = fn_integrator_grad_(q.data(), qd.data(), u.data(),
                                      out.mutable_data(), batch, gravity, dt, it);
         if (rc != 0) throw std::runtime_error("grid_rbd_integrator_gradient failed: rc=" + std::to_string(rc));
@@ -581,11 +590,11 @@ public:
     }
 
     // quadratic cost (state or input). var/des/w are (batch, N).
-    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
     plant_quadratic_cost(fn_plant_cost_t fn, const char* name,
-        py::array_t<float, py::array::c_style | py::array::forcecast> var,
-        py::array_t<float, py::array::c_style | py::array::forcecast> des,
-        py::array_t<float, py::array::c_style | py::array::forcecast> w,
+        arr_t var,
+        arr_t des,
+        arr_t w,
         int N)
     {
         require_plant((void*)fn, name);
@@ -595,35 +604,35 @@ public:
         if (batch > max_batch_) throw std::invalid_argument(std::string(name) + ": batch > max_batch");
         check_array_2d(des, batch, N, "des");
         check_array_2d(w, batch, N, "weight");
-        py::array_t<float> out({batch});
-        py::array_t<float> grad({batch, N});
-        py::array_t<float> hess({batch, N, N});
+        py::array_t<CT> out({batch});
+        py::array_t<CT> grad({batch, N});
+        py::array_t<CT> hess({batch, N, N});
         int rc = fn(var.data(), des.data(), w.data(),
                     out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(std::string(name) + " failed: rc=" + std::to_string(rc));
         return {out, grad, hess};
     }
 
-    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
     quadratic_state_cost(
-        py::array_t<float, py::array::c_style | py::array::forcecast> x,
-        py::array_t<float, py::array::c_style | py::array::forcecast> x_des,
-        py::array_t<float, py::array::c_style | py::array::forcecast> Q)
+        arr_t x,
+        arr_t x_des,
+        arr_t Q)
     { return plant_quadratic_cost(fn_plant_state_cost_, "quadratic_state_cost", x, x_des, Q, num_joints_ + num_vel_); }
 
-    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
     quadratic_input_cost(
-        py::array_t<float, py::array::c_style | py::array::forcecast> u,
-        py::array_t<float, py::array::c_style | py::array::forcecast> u_des,
-        py::array_t<float, py::array::c_style | py::array::forcecast> R)
+        arr_t u,
+        arr_t u_des,
+        arr_t R)
     { return plant_quadratic_cost(fn_plant_input_cost_, "quadratic_input_cost", u, u_des, R, num_vel_); }
 
     // barrier (position/velocity/torque). var/lower/upper are (batch, N).
-    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
     plant_barrier(fn_plant_barrier_t fn, const char* name,
-        py::array_t<float, py::array::c_style | py::array::forcecast> var,
-        py::array_t<float, py::array::c_style | py::array::forcecast> lower,
-        py::array_t<float, py::array::c_style | py::array::forcecast> upper,
+        arr_t var,
+        arr_t lower,
+        arr_t upper,
         float mu, int N)
     {
         require_plant((void*)fn, name);
@@ -633,40 +642,40 @@ public:
         if (batch > max_batch_) throw std::invalid_argument(std::string(name) + ": batch > max_batch");
         check_array_2d(lower, batch, N, "lower");
         check_array_2d(upper, batch, N, "upper");
-        py::array_t<float> out({batch});
-        py::array_t<float> grad({batch, N});
-        py::array_t<float> hess_diag({batch, N});
+        py::array_t<CT> out({batch});
+        py::array_t<CT> grad({batch, N});
+        py::array_t<CT> hess_diag({batch, N});
         int rc = fn(var.data(), lower.data(), upper.data(), mu,
                     out.mutable_data(), grad.mutable_data(), hess_diag.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(std::string(name) + " failed: rc=" + std::to_string(rc));
         return {out, grad, hess_diag};
     }
 
-    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
     joint_position_barrier(
-        py::array_t<float, py::array::c_style | py::array::forcecast> var,
-        py::array_t<float, py::array::c_style | py::array::forcecast> lower,
-        py::array_t<float, py::array::c_style | py::array::forcecast> upper, float mu)
+        arr_t var,
+        arr_t lower,
+        arr_t upper, float mu)
     { return plant_barrier(fn_plant_pos_barrier_, "joint_position_barrier", var, lower, upper, mu, num_joints_); }
 
-    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
     joint_velocity_barrier(
-        py::array_t<float, py::array::c_style | py::array::forcecast> var,
-        py::array_t<float, py::array::c_style | py::array::forcecast> lower,
-        py::array_t<float, py::array::c_style | py::array::forcecast> upper, float mu)
+        arr_t var,
+        arr_t lower,
+        arr_t upper, float mu)
     { return plant_barrier(fn_plant_vel_barrier_, "joint_velocity_barrier", var, lower, upper, mu, num_vel_); }
 
-    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
     joint_torque_barrier(
-        py::array_t<float, py::array::c_style | py::array::forcecast> var,
-        py::array_t<float, py::array::c_style | py::array::forcecast> lower,
-        py::array_t<float, py::array::c_style | py::array::forcecast> upper, float mu)
+        arr_t var,
+        arr_t lower,
+        arr_t upper, float mu)
     { return plant_barrier(fn_plant_tor_barrier_, "joint_torque_barrier", var, lower, upper, mu, num_vel_); }
 
     // plant_step: x (batch, NX), u (batch, NV) -> x_kp1 (batch, NX).
-    py::array_t<float> plant_step(
-        py::array_t<float, py::array::c_style | py::array::forcecast> x,
-        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+    py::array_t<CT> plant_step(
+        arr_t x,
+        arr_t u,
         float dt, int it, float gravity)
     {
         require_plant((void*)fn_plant_step_, "plant_step");
@@ -676,7 +685,7 @@ public:
         int batch = (int)x.shape(0);
         if (batch > max_batch_) throw std::invalid_argument("plant_step: batch > max_batch");
         check_array_2d(u, batch, num_vel_, "u");
-        py::array_t<float> out({batch, nx});
+        py::array_t<CT> out({batch, nx});
         int rc = fn_plant_step_(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
         if (rc != 0) throw std::runtime_error("plant_step failed: rc=" + std::to_string(rc));
         return out;
@@ -684,11 +693,11 @@ public:
 
     // ee_pos_cost: q (batch, NQ), p_des (batch, 3), W (batch, 3)
     // -> (value (batch,), grad_x (batch, NX), hess_x (batch, NX, NX)).
-    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
     ee_pos_cost(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> p_des,
-        py::array_t<float, py::array::c_style | py::array::forcecast> W)
+        arr_t q,
+        arr_t p_des,
+        arr_t W)
     {
         require_plant((void*)fn_plant_ee_cost_, "ee_pos_cost");
         int nx = num_joints_ + num_vel_;
@@ -698,9 +707,9 @@ public:
         if (batch > max_batch_) throw std::invalid_argument("ee_pos_cost: batch > max_batch");
         check_array_2d(p_des, batch, 3, "p_des");
         check_array_2d(W, batch, 3, "W");
-        py::array_t<float> out({batch});
-        py::array_t<float> grad({batch, nx});
-        py::array_t<float> hess({batch, nx, nx});
+        py::array_t<CT> out({batch});
+        py::array_t<CT> grad({batch, nx});
+        py::array_t<CT> hess({batch, nx, nx});
         int rc = fn_plant_ee_cost_(q.data(), p_des.data(), W.data(),
                                    out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error("ee_pos_cost failed: rc=" + std::to_string(rc));
@@ -709,11 +718,11 @@ public:
 
     // com_cost: q (batch, NQ), p_des (batch, 3), W (batch, 3)
     // -> (value (batch,), grad_x (batch, NX), hess_x (batch, NX, NX)). CoM-tracking.
-    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
     com_cost(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> p_des,
-        py::array_t<float, py::array::c_style | py::array::forcecast> W)
+        arr_t q,
+        arr_t p_des,
+        arr_t W)
     {
         require_plant((void*)fn_plant_com_cost_, "com_cost");
         int nx = num_joints_ + num_vel_;
@@ -723,9 +732,9 @@ public:
         if (batch > max_batch_) throw std::invalid_argument("com_cost: batch > max_batch");
         check_array_2d(p_des, batch, 3, "p_des");
         check_array_2d(W, batch, 3, "W");
-        py::array_t<float> out({batch});
-        py::array_t<float> grad({batch, nx});
-        py::array_t<float> hess({batch, nx, nx});
+        py::array_t<CT> out({batch});
+        py::array_t<CT> grad({batch, nx});
+        py::array_t<CT> hess({batch, nx, nx});
         int rc = fn_plant_com_cost_(q.data(), p_des.data(), W.data(),
                                     out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error("com_cost failed: rc=" + std::to_string(rc));
@@ -734,12 +743,12 @@ public:
 
     // momentum_cost: q (batch, NQ), qd (batch, NV), h_des (batch, 6), W (batch, 6)
     // -> (value (batch,), grad_x (batch, NX), hess_x (batch, NX, NX)). Centroidal-momentum tracking.
-    std::tuple<py::array_t<float>, py::array_t<float>, py::array_t<float>>
+    std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
     momentum_cost(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
-        py::array_t<float, py::array::c_style | py::array::forcecast> h_des,
-        py::array_t<float, py::array::c_style | py::array::forcecast> W)
+        arr_t q,
+        arr_t qd,
+        arr_t h_des,
+        arr_t W)
     {
         require_plant((void*)fn_plant_mom_cost_, "momentum_cost");
         int nx = num_joints_ + num_vel_;
@@ -750,9 +759,9 @@ public:
         check_array_2d(qd, batch, num_vel_, "qd");
         check_array_2d(h_des, batch, 6, "h_des");
         check_array_2d(W, batch, 6, "W");
-        py::array_t<float> out({batch});
-        py::array_t<float> grad({batch, nx});
-        py::array_t<float> hess({batch, nx, nx});
+        py::array_t<CT> out({batch});
+        py::array_t<CT> grad({batch, nx});
+        py::array_t<CT> hess({batch, nx, nx});
         int rc = fn_plant_mom_cost_(q.data(), qd.data(), h_des.data(), W.data(),
                                     out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error("momentum_cost failed: rc=" + std::to_string(rc));
@@ -760,9 +769,9 @@ public:
     }
 
     // plant_step_gradient: x (batch, NX), u (batch, NV) -> dAB (batch, 2*NV, 3*NV).
-    py::array_t<float> plant_step_gradient(
-        py::array_t<float, py::array::c_style | py::array::forcecast> x,
-        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+    py::array_t<CT> plant_step_gradient(
+        arr_t x,
+        arr_t u,
         float dt, int it, float gravity)
     {
         require_plant((void*)fn_plant_step_grad_, "plant_step_gradient");
@@ -773,7 +782,7 @@ public:
         int batch = (int)x.shape(0);
         if (batch > max_batch_) throw std::invalid_argument("plant_step_gradient: batch > max_batch");
         check_array_2d(u, batch, nv, "u");
-        py::array_t<float> out({batch, 2 * nv, 3 * nv});
+        py::array_t<CT> out({batch, 2 * nv, 3 * nv});
         int rc = fn_plant_step_grad_(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
         if (rc != 0) throw std::runtime_error("plant_step_gradient failed: rc=" + std::to_string(rc));
         return out;
@@ -783,9 +792,9 @@ public:
     // The C-ABI fills a row-major (2*NV x 3*NV x 3*NV) Hessian per timestep; this
     // surface returns it as (batch, 2*NV, 3*NV*3*NV) and the Python handle reshapes
     // the trailing 9*NV^2 into (3*NV, 3*NV). Only EULER / SI-EULER (rc=3 otherwise).
-    py::array_t<float> plant_step_hessian(
-        py::array_t<float, py::array::c_style | py::array::forcecast> x,
-        py::array_t<float, py::array::c_style | py::array::forcecast> u,
+    py::array_t<CT> plant_step_hessian(
+        arr_t x,
+        arr_t u,
         float dt, int it, float gravity)
     {
         require_plant((void*)fn_plant_step_hess_, "plant_step_hessian");
@@ -796,7 +805,7 @@ public:
         int batch = (int)x.shape(0);
         if (batch > max_batch_) throw std::invalid_argument("plant_step_hessian: batch > max_batch");
         check_array_2d(u, batch, nv, "u");
-        py::array_t<float> out({batch, 2 * nv, 3 * nv * 3 * nv});
+        py::array_t<CT> out({batch, 2 * nv, 3 * nv * 3 * nv});
         int rc = fn_plant_step_hess_(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
         if (rc != 0) throw std::runtime_error("plant_step_hessian failed: rc=" + std::to_string(rc));
         return out;
@@ -809,7 +818,7 @@ public:
     // frame_jacobian family is opt-in codegen; its C-ABI symbol returns rc=3 if
     // the family wasn't generated for this robot's .so.
 
-    int check_q(const py::array_t<float>& q, const char* name) const {
+    int check_q(const py::array_t<CT>& q, const char* name) const {
         if (q.ndim() != 2 || q.shape(1) != num_joints_)
             throw std::invalid_argument(
                 std::string(name) + ": q must be (batch, " + std::to_string(num_joints_) + ")");
@@ -820,12 +829,12 @@ public:
     }
 
     // com(q) -> (batch, 3 + 3*NUM_VEL): [p_com(3); J_com(3 x NV, col-major)].
-    py::array_t<float> com(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q)
+    py::array_t<CT> com(
+        arr_t q)
     {
         if (!fn_com_) throw std::runtime_error("com not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "com");
-        py::array_t<float> out({batch, 3 + 3 * num_vel_});
+        py::array_t<CT> out({batch, 3 + 3 * num_vel_});
         int rc = fn_com_(q.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error(
             "com not available for this robot: it is not generated for mimic "
@@ -835,13 +844,13 @@ public:
     }
 
     // ccrba(q, qd) -> (batch, 6*NUM_VEL + 6): [A(6 x NV, col-major); h(6)].
-    py::array_t<float> ccrba(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd)
+    py::array_t<CT> ccrba(
+        arr_t q,
+        arr_t qd)
     {
         if (!fn_ccrba_) throw std::runtime_error("ccrba not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<float> out({batch, 6 * num_vel_ + 6});
+        py::array_t<CT> out({batch, 6 * num_vel_ + 6});
         int rc = fn_ccrba_(q.data(), qd.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error(
             "ccrba not available for this robot: it is not generated for mimic "
@@ -851,14 +860,14 @@ public:
     }
 
     // energy(q, qd, gravity) -> (batch, 3): [KE, PE, KE+PE].
-    py::array_t<float> energy(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+    py::array_t<CT> energy(
+        arr_t q,
+        arr_t qd,
         float gravity)
     {
         if (!fn_energy_) throw std::runtime_error("energy not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<float> out({batch, 3});
+        py::array_t<CT> out({batch, 3});
         int rc = fn_energy_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
         if (rc == 3) throw std::runtime_error(
             "energy not available for this robot: it is not generated for mimic "
@@ -868,27 +877,27 @@ public:
     }
 
     // generalized_gravity(q, gravity) -> (batch, NUM_VEL): g(q) = RNEA(q,0,0).
-    py::array_t<float> generalized_gravity(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+    py::array_t<CT> generalized_gravity(
+        arr_t q,
         float gravity)
     {
         if (!fn_generalized_gravity_) throw std::runtime_error("generalized_gravity not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "generalized_gravity");
-        py::array_t<float> out({batch, num_vel_});
+        py::array_t<CT> out({batch, num_vel_});
         int rc = fn_generalized_gravity_(q.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error("grid_rbd_generalized_gravity failed: rc=" + std::to_string(rc));
         return out;
     }
 
     // nonlinear_effects(q, qd, gravity) -> (batch, NUM_VEL): c(q,qd) = RNEA(q,qd,0).
-    py::array_t<float> nonlinear_effects(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+    py::array_t<CT> nonlinear_effects(
+        arr_t q,
+        arr_t qd,
         float gravity)
     {
         if (!fn_nonlinear_effects_) throw std::runtime_error("nonlinear_effects not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<float> out({batch, num_vel_});
+        py::array_t<CT> out({batch, num_vel_});
         int rc = fn_nonlinear_effects_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error("grid_rbd_nonlinear_effects failed: rc=" + std::to_string(rc));
         return out;
@@ -896,13 +905,13 @@ public:
 
     // frame_jacobian(q) -> (batch, 6*NUM_VEL): leaf-EE frame Jacobian (col-major,
     // [linear;angular], LOCAL_WORLD_ALIGNED). Opt-in codegen: rc=3 if absent.
-    py::array_t<float> frame_jacobian(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+    py::array_t<CT> frame_jacobian(
+        arr_t q,
         int target_jid, int reference_frame)
     {
         if (!fn_frame_jacobian_) throw std::runtime_error("frame_jacobian not available in this .so (frame_jacobian family not generated; re-register with force_rebuild=True)");
         int batch = check_q(q, "frame_jacobian");
-        py::array_t<float> out({batch, 6 * num_vel_});
+        py::array_t<CT> out({batch, 6 * num_vel_});
         // target_jid < 0 / reference_frame < 0 => the C ABI uses the codegen
         // leaf-EE / LWA defaults baked into the host wrapper.
         int rc = fn_frame_jacobian_(q.data(), out.mutable_data(), batch, target_jid, reference_frame);
@@ -913,14 +922,14 @@ public:
 
     // frame_jacobian_dot(q, qd, target_jid, reference_frame) -> (batch, 6*NUM_VEL).
     // Opt-in codegen: rc=3 if absent.
-    py::array_t<float> frame_jacobian_dot(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+    py::array_t<CT> frame_jacobian_dot(
+        arr_t q,
+        arr_t qd,
         int target_jid, int reference_frame)
     {
         if (!fn_frame_jacobian_dot_) throw std::runtime_error("frame_jacobian_dot not available in this .so (frame_jacobian family not generated; re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<float> out({batch, 6 * num_vel_});
+        py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_frame_jacobian_dot_(q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
         if (rc == 3) throw std::runtime_error("frame_jacobian_dot not generated for this robot .so");
         if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_dot failed: rc=" + std::to_string(rc));
@@ -929,12 +938,12 @@ public:
 
     // osc_inertia(q) -> (batch, 36): 6x6 task inertia Lambda = (J Minv J^T)^-1
     // at the leaf-EE frame (LWA). Opt-in codegen: rc=3 if absent.
-    py::array_t<float> osc_inertia(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q)
+    py::array_t<CT> osc_inertia(
+        arr_t q)
     {
         if (!fn_osc_inertia_) throw std::runtime_error("osc_inertia not available in this .so (frame_jacobian family not generated; re-register with force_rebuild=True)");
         int batch = check_q(q, "osc_inertia");
-        py::array_t<float> out({batch, 36});
+        py::array_t<CT> out({batch, 36});
         int rc = fn_osc_inertia_(q.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error("osc_inertia not generated for this robot .so");
         if (rc != 0) throw std::runtime_error("grid_rbd_osc_inertia failed: rc=" + std::to_string(rc));
@@ -945,17 +954,17 @@ public:
     // of target_jid at a runtime offset point. target_jid<0 => leaf-EE default;
     // offset is a length-3 array or empty (=> frame origin). Single-target; the
     // Python list API loops it over a jid list. Opt-in codegen: rc=3 if absent.
-    py::array_t<float> end_effector_pose_runtime(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+    py::array_t<CT> end_effector_pose_runtime(
+        arr_t q,
         int target_jid,
-        py::array_t<float, py::array::c_style | py::array::forcecast> offset)
+        arr_t offset)
     {
         if (!fn_ee_pose_runtime_) throw std::runtime_error("end_effector_pose_runtime not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "end_effector_pose_runtime");
-        const float* off_ptr = nullptr;
+        const CT* off_ptr = nullptr;
         if (offset.size() == 3) off_ptr = offset.data();
         else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_runtime: offset must be length-3 or empty");
-        py::array_t<float> out({batch, 6});
+        py::array_t<CT> out({batch, 6});
         int rc = fn_ee_pose_runtime_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
         if (rc == 3) throw std::runtime_error("end_effector_pose_runtime not generated for this robot .so");
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_runtime failed: rc=" + std::to_string(rc));
@@ -965,17 +974,17 @@ public:
     // end_effector_pose_gradient_runtime(q, target_jid, offset) -> (batch, 6*NUM_VEL)
     // col-major d[xyz; rpy]/dv of target_jid at a runtime offset point. Same
     // conventions as end_effector_pose_runtime. Opt-in codegen: rc=3 if absent.
-    py::array_t<float> end_effector_pose_gradient_runtime(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+    py::array_t<CT> end_effector_pose_gradient_runtime(
+        arr_t q,
         int target_jid,
-        py::array_t<float, py::array::c_style | py::array::forcecast> offset)
+        arr_t offset)
     {
         if (!fn_ee_pose_grad_runtime_) throw std::runtime_error("end_effector_pose_gradient_runtime not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "end_effector_pose_gradient_runtime");
-        const float* off_ptr = nullptr;
+        const CT* off_ptr = nullptr;
         if (offset.size() == 3) off_ptr = offset.data();
         else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_gradient_runtime: offset must be length-3 or empty");
-        py::array_t<float> out({batch, 6 * num_vel_});
+        py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_ee_pose_grad_runtime_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
         if (rc == 3) throw std::runtime_error("end_effector_pose_gradient_runtime not generated for this robot .so");
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient_runtime failed: rc=" + std::to_string(rc));
@@ -985,41 +994,41 @@ public:
     // ─── PS5 value ops (coriolis / energy regressors / dccrba / cmm) ──────────
 
     // coriolis_matrix(q, qd, gravity) -> (batch, NUM_VEL*NUM_VEL) row-major C(q,qd).
-    py::array_t<float> coriolis_matrix(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+    py::array_t<CT> coriolis_matrix(
+        arr_t q,
+        arr_t qd,
         float gravity)
     {
         if (!fn_coriolis_matrix_) throw std::runtime_error("coriolis_matrix not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<float> out({batch, num_vel_ * num_vel_});
+        py::array_t<CT> out({batch, num_vel_ * num_vel_});
         int rc = fn_coriolis_matrix_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error("grid_rbd_coriolis_matrix failed: rc=" + std::to_string(rc));
         return out;
     }
 
     // kinetic_energy_regressor(q, qd, gravity) -> (batch, 10*NUM_BODIES) y_KE.
-    py::array_t<float> kinetic_energy_regressor(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd,
+    py::array_t<CT> kinetic_energy_regressor(
+        arr_t q,
+        arr_t qd,
         float gravity)
     {
         if (!fn_kinetic_energy_regressor_) throw std::runtime_error("kinetic_energy_regressor not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<float> out({batch, 10 * num_bodies_});
+        py::array_t<CT> out({batch, 10 * num_bodies_});
         int rc = fn_kinetic_energy_regressor_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error("grid_rbd_kinetic_energy_regressor failed: rc=" + std::to_string(rc));
         return out;
     }
 
     // potential_energy_regressor(q, gravity) -> (batch, 10*NUM_BODIES) y_PE.
-    py::array_t<float> potential_energy_regressor(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
+    py::array_t<CT> potential_energy_regressor(
+        arr_t q,
         float gravity)
     {
         if (!fn_potential_energy_regressor_) throw std::runtime_error("potential_energy_regressor not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "potential_energy_regressor");
-        py::array_t<float> out({batch, 10 * num_bodies_});
+        py::array_t<CT> out({batch, 10 * num_bodies_});
         int rc = fn_potential_energy_regressor_(q.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error("grid_rbd_potential_energy_regressor failed: rc=" + std::to_string(rc));
         return out;
@@ -1027,13 +1036,13 @@ public:
 
     // dccrba(q) -> (batch, 6*NUM_VEL*NUM_VEL) dA/dq tensor. Not emitted for mimic
     // robots (rc=3): the per-body Jacobian fold isn't mimic-reduced.
-    py::array_t<float> dccrba(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q)
+    py::array_t<CT> dccrba(
+        arr_t q)
     {
         if (!fn_dccrba_) throw std::runtime_error(
             "dccrba not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "dccrba");
-        py::array_t<float> out({batch, 6 * num_vel_ * num_vel_});
+        py::array_t<CT> out({batch, 6 * num_vel_ * num_vel_});
         int rc = fn_dccrba_(q.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error(
             "dccrba not available for this robot: it is not generated for mimic "
@@ -1044,14 +1053,14 @@ public:
 
     // cmm_time_variation(q, qd) -> (batch, 6*NUM_VEL) Adot. Not emitted for mimic
     // robots (rc=3), same caveat as dccrba.
-    py::array_t<float> cmm_time_variation(
-        py::array_t<float, py::array::c_style | py::array::forcecast> q,
-        py::array_t<float, py::array::c_style | py::array::forcecast> qd)
+    py::array_t<CT> cmm_time_variation(
+        arr_t q,
+        arr_t qd)
     {
         if (!fn_cmm_time_variation_) throw std::runtime_error(
             "cmm_time_variation not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<float> out({batch, 6 * num_vel_});
+        py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_cmm_time_variation_(q.data(), qd.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error(
             "cmm_time_variation not available for this robot: it is not generated "
@@ -1081,8 +1090,8 @@ private:
         return sym;
     }
 
-    int check_inputs_2d(const py::array_t<float>& q,
-                        const py::array_t<float>& qd, int last_dim) const
+    int check_inputs_2d(const py::array_t<CT>& q,
+                        const py::array_t<CT>& qd, int last_dim) const
     {
         if (q.ndim() != 2 || qd.ndim() != 2) {
             throw std::invalid_argument(
@@ -1102,7 +1111,7 @@ private:
         return batch;
     }
 
-    void check_array_2d(const py::array_t<float>& a, int batch, int last_dim,
+    void check_array_2d(const py::array_t<CT>& a, int batch, int last_dim,
                         const char* name) const
     {
         if (a.ndim() != 2 || a.shape(0) != batch || a.shape(1) != last_dim) {
@@ -1117,8 +1126,8 @@ private:
     // [angular; linear] in each body's LOCAL frame — same layout as the kernel's
     // d_f_ext / RBDReference.apply_external_forces. The caller must keep the
     // py::array alive across the C-ABI call (hold it in a local).
-    const float* f_ext_ptr(py::object f_ext_opt,
-                           py::array_t<float, py::array::c_style | py::array::forcecast>& hold,
+    const CT* f_ext_ptr(py::object f_ext_opt,
+                           arr_t& hold,
                            int batch) const
     {
         if (f_ext_opt.is_none()) return nullptr;
@@ -1129,7 +1138,7 @@ private:
                 "force_rebuild=True.");
         }
         hold = f_ext_opt.cast<
-            py::array_t<float, py::array::c_style | py::array::forcecast>>();
+            arr_t>();
         check_array_2d(hold, batch, 6 * num_bodies_, "f_ext");
         return hold.data();
     }
@@ -1199,131 +1208,144 @@ private:
 };
 
 
-PYBIND11_MODULE(_core, m) {
-    m.doc() = "grid-rbd internal: pybind11 Runner that dlopens a per-robot "
-              "compiled .so and dispatches numpy calls through its C ABI.";
-
-    py::class_<Runner>(m, "Runner")
+// Register a Runner specialization (float -> "Runner", double -> "RunnerF64").
+// Both classes expose the IDENTICAL Python surface; the only difference is the
+// numpy element type of inputs/outputs (float32 vs float64) and the dtype of
+// the per-robot .so each one dlopens (the build flag -DGRID_WRAPPER_T_DOUBLE).
+template <class CT>
+static void register_runner(py::module_& m, const char* cls_name) {
+    using R = RunnerT<CT>;
+    py::class_<R>(m, cls_name)
         .def(py::init<const std::string&>(), py::arg("so_path"),
              "Open the per-robot .so at so_path and resolve its C ABI symbols.")
-        .def_property_readonly("num_joints", &Runner::num_joints)
-        .def_property_readonly("num_vel",    &Runner::num_vel)
-        .def_property_readonly("num_ees",    &Runner::num_ees)
-        .def_property_readonly("num_bodies", &Runner::num_bodies,
+        .def_property_readonly("num_joints", &R::num_joints)
+        .def_property_readonly("num_vel",    &R::num_vel)
+        .def_property_readonly("num_ees",    &R::num_ees)
+        .def_property_readonly("num_bodies", &R::num_bodies,
             "Number of bodies/links (incl. base for floating-base). f_ext is "
             "(batch, 6*num_bodies). 0 if the .so predates the f_ext surface.")
-        .def_property_readonly("max_batch",  &Runner::max_batch)
-        .def_property_readonly("max_perf_level_threads", &Runner::max_perf_level_threads,
+        .def_property_readonly("max_batch",  &R::max_batch)
+        .def_property_readonly("max_perf_level_threads", &R::max_perf_level_threads,
             "Codegen-time thread-count hint (DOF-aware, warp-rounded). "
             "The default block size for kernel launches; not enforced since v2.0.")
-        .def_property_readonly("threads_per_block", &Runner::threads_per_block,
+        .def_property_readonly("threads_per_block", &R::threads_per_block,
             "Current per-block thread count used by kernel launches.")
-        .def("set_threads_per_block", &Runner::set_threads_per_block,
+        .def("set_threads_per_block", &R::set_threads_per_block,
             py::arg("n"),
             "Override the per-block thread count. Default is max_perf_level_threads. "
             "Smaller block sizes work (SIMT helpers use block-stride loops) but may be slower; "
             "larger sizes are valid up to the per-block max (1024 on current GPUs).")
-        .def("inverse_dynamics", &Runner::inverse_dynamics,
+        .def("inverse_dynamics", &R::inverse_dynamics,
              py::arg("q"), py::arg("qd"),
              py::arg("qdd") = py::none(),
              py::arg("gravity") = -9.81f,
              py::arg("f_ext") = py::none())
-        .def("minv", &Runner::minv,
+        .def("minv", &R::minv,
              py::arg("q"))
-        .def("forward_dynamics", &Runner::forward_dynamics,
+        .def("forward_dynamics", &R::forward_dynamics,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("gravity") = -9.81f,
              py::arg("f_ext") = py::none())
-        .def("aba", &Runner::aba,
+        .def("aba", &R::aba,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("gravity") = -9.81f,
              py::arg("f_ext") = py::none())
-        .def("crba", &Runner::crba,
+        .def("crba", &R::crba,
              py::arg("q"), py::arg("gravity") = -9.81f)
-        .def("end_effector_pose", &Runner::end_effector_pose,
+        .def("end_effector_pose", &R::end_effector_pose,
              py::arg("q"))
-        .def("fk_batched", &Runner::fk_batched,
+        .def("fk_batched", &R::fk_batched,
              py::arg("q"), py::arg("use_warp") = false)
-        .def("end_effector_pose_gradient", &Runner::end_effector_pose_gradient,
+        .def("end_effector_pose_gradient", &R::end_effector_pose_gradient,
              py::arg("q"))
-        .def("inverse_dynamics_gradient", &Runner::inverse_dynamics_gradient,
+        .def("inverse_dynamics_gradient", &R::inverse_dynamics_gradient,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("gravity") = -9.81f,
              py::arg("f_ext") = py::none())
-        .def("forward_dynamics_gradient", &Runner::forward_dynamics_gradient,
+        .def("forward_dynamics_gradient", &R::forward_dynamics_gradient,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("gravity") = -9.81f,
              py::arg("f_ext") = py::none())
-        .def("end_effector_pose_hessian", &Runner::end_effector_pose_hessian,
+        .def("end_effector_pose_hessian", &R::end_effector_pose_hessian,
              py::arg("q"))
-        .def("idsva_so", &Runner::idsva_so,
+        .def("idsva_so", &R::idsva_so,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("second_order_tensor_size"),
              py::arg("gravity") = -9.81f)
-        .def("fdsva_so", &Runner::fdsva_so,
+        .def("fdsva_so", &R::fdsva_so,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("second_order_tensor_size"),
              py::arg("gravity") = -9.81f)
-        .def("integrator", &Runner::integrator,
+        .def("integrator", &R::integrator,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("dt"), py::arg("it") = 0, py::arg("gravity") = -9.81f)
-        .def("integrator_gradient", &Runner::integrator_gradient,
+        .def("integrator_gradient", &R::integrator_gradient,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("dt"), py::arg("it") = 0, py::arg("gravity") = -9.81f)
         // ─── grid_plant surface (G1) ──────────────────────────────────────
-        .def("quadratic_state_cost", &Runner::quadratic_state_cost,
+        .def("quadratic_state_cost", &R::quadratic_state_cost,
              py::arg("x"), py::arg("x_des"), py::arg("Q"))
-        .def("quadratic_input_cost", &Runner::quadratic_input_cost,
+        .def("quadratic_input_cost", &R::quadratic_input_cost,
              py::arg("u"), py::arg("u_des"), py::arg("R"))
-        .def("joint_position_barrier", &Runner::joint_position_barrier,
+        .def("joint_position_barrier", &R::joint_position_barrier,
              py::arg("var"), py::arg("lower"), py::arg("upper"), py::arg("mu"))
-        .def("joint_velocity_barrier", &Runner::joint_velocity_barrier,
+        .def("joint_velocity_barrier", &R::joint_velocity_barrier,
              py::arg("var"), py::arg("lower"), py::arg("upper"), py::arg("mu"))
-        .def("joint_torque_barrier", &Runner::joint_torque_barrier,
+        .def("joint_torque_barrier", &R::joint_torque_barrier,
              py::arg("var"), py::arg("lower"), py::arg("upper"), py::arg("mu"))
-        .def("plant_step", &Runner::plant_step,
+        .def("plant_step", &R::plant_step,
              py::arg("x"), py::arg("u"), py::arg("dt"),
              py::arg("it") = 0, py::arg("gravity") = -9.81f)
-        .def("plant_step_gradient", &Runner::plant_step_gradient,
+        .def("plant_step_gradient", &R::plant_step_gradient,
              py::arg("x"), py::arg("u"), py::arg("dt"),
              py::arg("it") = 0, py::arg("gravity") = -9.81f)
-        .def("plant_step_hessian", &Runner::plant_step_hessian,
+        .def("plant_step_hessian", &R::plant_step_hessian,
              py::arg("x"), py::arg("u"), py::arg("dt"),
              py::arg("it") = 0, py::arg("gravity") = -9.81f)
-        .def("ee_pos_cost", &Runner::ee_pos_cost,
+        .def("ee_pos_cost", &R::ee_pos_cost,
              py::arg("q"), py::arg("p_des"), py::arg("W"))
-        .def("com_cost", &Runner::com_cost,
+        .def("com_cost", &R::com_cost,
              py::arg("q"), py::arg("p_des"), py::arg("W"))
-        .def("momentum_cost", &Runner::momentum_cost,
+        .def("momentum_cost", &R::momentum_cost,
              py::arg("q"), py::arg("qd"), py::arg("h_des"), py::arg("W"))
         // ─── centroidal / energy / general-frame kinematics (F2) ───────────
-        .def("com", &Runner::com, py::arg("q"))
-        .def("ccrba", &Runner::ccrba, py::arg("q"), py::arg("qd"))
-        .def("energy", &Runner::energy,
+        .def("com", &R::com, py::arg("q"))
+        .def("ccrba", &R::ccrba, py::arg("q"), py::arg("qd"))
+        .def("energy", &R::energy,
              py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
-        .def("generalized_gravity", &Runner::generalized_gravity,
+        .def("generalized_gravity", &R::generalized_gravity,
              py::arg("q"), py::arg("gravity") = -9.81f)
-        .def("nonlinear_effects", &Runner::nonlinear_effects,
+        .def("nonlinear_effects", &R::nonlinear_effects,
              py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
-        .def("frame_jacobian", &Runner::frame_jacobian,
+        .def("frame_jacobian", &R::frame_jacobian,
              py::arg("q"), py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
-        .def("frame_jacobian_dot", &Runner::frame_jacobian_dot,
+        .def("frame_jacobian_dot", &R::frame_jacobian_dot,
              py::arg("q"), py::arg("qd"),
              py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
-        .def("osc_inertia", &Runner::osc_inertia, py::arg("q"))
-        .def("end_effector_pose_runtime", &Runner::end_effector_pose_runtime,
+        .def("osc_inertia", &R::osc_inertia, py::arg("q"))
+        .def("end_effector_pose_runtime", &R::end_effector_pose_runtime,
              py::arg("q"), py::arg("target_jid") = -1,
              py::arg("offset") = py::array_t<float>())
-        .def("end_effector_pose_gradient_runtime", &Runner::end_effector_pose_gradient_runtime,
+        .def("end_effector_pose_gradient_runtime", &R::end_effector_pose_gradient_runtime,
              py::arg("q"), py::arg("target_jid") = -1,
              py::arg("offset") = py::array_t<float>())
-        .def("coriolis_matrix", &Runner::coriolis_matrix,
+        .def("coriolis_matrix", &R::coriolis_matrix,
              py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
-        .def("kinetic_energy_regressor", &Runner::kinetic_energy_regressor,
+        .def("kinetic_energy_regressor", &R::kinetic_energy_regressor,
              py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
-        .def("potential_energy_regressor", &Runner::potential_energy_regressor,
+        .def("potential_energy_regressor", &R::potential_energy_regressor,
              py::arg("q"), py::arg("gravity") = -9.81f)
-        .def("dccrba", &Runner::dccrba, py::arg("q"))
-        .def("cmm_time_variation", &Runner::cmm_time_variation,
+        .def("dccrba", &R::dccrba, py::arg("q"))
+        .def("cmm_time_variation", &R::cmm_time_variation,
              py::arg("q"), py::arg("qd"));
+}
+
+
+PYBIND11_MODULE(_core, m) {
+    m.doc() = "grid-rbd internal: pybind11 Runner that dlopens a per-robot "
+              "compiled .so and dispatches numpy calls through its C ABI. "
+              "Runner = fp32 buffers; RunnerF64 = fp64 buffers (loads a "
+              ".so built with -DGRID_WRAPPER_T_DOUBLE).";
+    register_runner<float>(m, "Runner");
+    register_runner<double>(m, "RunnerF64");
 }
