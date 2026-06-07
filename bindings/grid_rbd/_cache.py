@@ -66,10 +66,16 @@ def detect_cuda_arch() -> int:
 
 def package_version() -> str:
     """Version of the grid-rbd package; used as a cache-key input so generated
-    code from older versions doesn't get reused after upgrade."""
+    code from older versions doesn't get reused after upgrade.
+
+    Reads the package's own ``__version__`` (deterministic) rather than
+    ``importlib.metadata.version("grid-rbd")``, which is ambiguous when a stale
+    root ``GRiD-RBD`` dist also normalizes to ``grid-rbd`` (it would
+    nondeterministically return 1.0.0 vs 0.1.0 by sys.path order, silently
+    re-keying the compile cache and causing spurious recompiles)."""
     try:
-        from importlib.metadata import version
-        return version("grid-rbd")
+        from . import __version__
+        return __version__
     except Exception:
         return "0.0.0-dev"
 
