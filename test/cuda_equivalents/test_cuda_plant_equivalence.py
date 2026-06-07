@@ -78,24 +78,35 @@ def _robot_ids():
 
 # (robot_id, base_mode) cells for the MAIN plant-primitive equivalence
 # (quadratic costs / ee_pos cost / barriers / plant pass-through).
-# Default is iiwa14-fixed only. Broader cells (go2:floating, fr3:fixed-mimic, big
-# robots) are NOT in the default because the current static-smem smoke runner is
-# not robust to them — TWO independent infra limits, both pre-existing, neither a
-# plant correctness bug (filed as a follow-up: make the runner gate its centroidal
-# calls + go dynamic-smem):
-#   1. The runner UNCONDITIONALLY calls `grid_plant::momentum_cost_hessian` (and the
-#      other centroidal/com plant costs), which is emitted ONLY when ccrba/centroidal
-#      is — i.e. NOT for mimic robots (fr3: ccrba mimic-gated off) and not for the
-#      go2-floating config → `namespace grid_plant has no member momentum_cost_hessian`
-#      at compile. The runner must gate those calls (e.g. a GRID_HAS_* macro) to widen.
-#   2. The sibling `plant_kernel`/`plant_step_kernel` use big STATIC `__shared__` and
-#      overflow the 48 KB static cap for nv~29 (g1/h1_2) — guide §7; the honest
-#      big-robot plant path is the BINDINGS (dynamic-smem + cudaFuncSetAttribute TU).
-# Override with GRID_CUDA_PLANT_CELLS once the runner is widened.
+# Default is iiwa14:fixed + go2:floating + fr3:fixed. The runner now `#if`-gates
+# its centroidal block (com/momentum costs) behind GRID_PLANT_HAS_COM_COST /
+# GRID_PLANT_HAS_MOMENTUM_COST (mirroring the GRID_PLANT_HAS_STEP_HESSIAN gate),
+# so a robot/config that lacks those costs (e.g. fr3 mimic, whose ccrba is gated
+# off → centroidal macros absent) compiles cleanly and emits a `*_skipped`
+# sentinel for the centroidal blocks. The MAIN test below never reads the
+# centroidal blocks, so it passes regardless; the SEPARATE centroidal test skips
+# the cell when the sentinel is present.
+#
+# Two pre-existing infra limits remain (both honest hardware/static-smem limits,
+# neither a plant correctness bug; the harness skips them cleanly rather than
+# emitting a wrong number):
+#   * go2:floating COMPILES and runs the cost/barrier/centroidal checks, but the
+#     plant_step/integrator PASS-THROUGH self-gates off (the fixed-size s_temp[4096]
+#     caller pool overflows: FD_DU_MAX_SHARED_MEM_COUNT 12040 > 4096) → the runner
+#     emits `plant_step_skipped` and the test skips ONLY that pass-through block.
+#   * fr3:fixed COMPILES (the centroidal macro-gate fixed the old mimic
+#     compile-failure), but the `plant_kernel` launch at MAX_PERF_LEVEL_THREADS
+#     exceeds this GPU's per-block REGISTER budget ("too many resources requested
+#     for launch") → the shared runner harness pytest.skips the cell (a hardware
+#     launch limit, same as the executable-equivalence suite; the kernel passes at
+#     lower thread counts). It is left in the default so the skip is visible/tracked.
+# Bigger robots (g1/h1_2, nv~29) additionally overflow the 48 KB static cap in
+# plant_kernel/plant_step_kernel (guide §7); the honest big-robot plant path is the
+# BINDINGS (dynamic-smem + cudaFuncSetAttribute TU). Override with GRID_CUDA_PLANT_CELLS.
 def _plant_cells():
     raw = os.environ.get("GRID_CUDA_PLANT_CELLS", None)
     if raw is None:
-        return [("iiwa14", "fixed")]
+        return [("iiwa14", "fixed"), ("go2", "floating"), ("fr3", "fixed")]
     cells = []
     for tok in raw.split(","):
         tok = tok.strip()
@@ -313,6 +324,16 @@ def test_cuda_plant_matches_reference(tmp_path, robot_id, base_mode):
         close(out["ctrl_barrier_grad"].reshape(-1), bg, f"{tag} ctrl barrier grad")
 
         # ---------- plant pass-through: plant == grid::integrator ----------
+        # The runner self-gates the plant_step/integrator pass-through behind
+        # `plant_step_fits` (the fixed-size s_temp[4096] caller pool overflows for
+        # big floating-base robots, e.g. go2:floating where FD_DU_MAX_SHARED_MEM_COUNT
+        # 12040 > 4096) and emits a `plant_step_skipped` sentinel instead. That is a
+        # pre-existing static-smem infra limit (the honest big-robot plant path is the
+        # bindings' dynamic-smem TU), not a plant correctness bug — so honor the
+        # sentinel and skip ONLY the pass-through checks; the cost/barrier checks above
+        # already validated for this cell.
+        if "plant_step_skipped" in out:
+            continue
         close(out["plant_x_kp1"].reshape(-1), out["integrator_x_kp1"].reshape(-1),
               f"{tag} plant_step == grid::integrator (value pass-through)")
         close(out["plant_dAB"].reshape(2 * nv, 3 * nv, order="F"),
@@ -475,6 +496,14 @@ def test_cuda_plant_centroidal_costs_match_reference(tmp_path, robot_id, base_mo
             continue
 
         out = _run(executable, cmd, q, qd, u, _DT)
+
+        # The runner `#if`-gates the centroidal block behind the com/momentum
+        # macros and emits a `com_cost_skipped` sentinel when they are absent
+        # (e.g. a mimic robot whose ccrba is gated off). Defensive: the default
+        # cells here are non-mimic so this normally never triggers, but honor the
+        # sentinel cleanly if a mimic cell is passed via the override.
+        if "com_cost_skipped" in out:
+            pytest.skip(f"{tag}: centroidal costs not emitted (com/ccrba absent)")
 
         # ---------- CoM-tracking cost (value + grad_x + GN hess_x) ----------
         com_val, com_grad, com_hess = ref.com_cost(q, p_des, cW)
