@@ -104,11 +104,17 @@ extern "C" int grid_rbd_set_threads_per_block(int n) {
 // (a thin cudaMemcpy into the device-resident d_inertia_params table). Without the
 // flag the symbol is absent and the Runner's set_inertia_params raises a clear error.
 //
-// h_params: 10*grid::NUM_JOINTS scalars, body-indexed bodies 1..N (the base body
-// is dropped, mirroring init_inertia_params), each a length-10 [m, h(3)=m*c,
-// I_O(6)] vector in the frozen regressor basis. The device table is shared by all
-// subsequent kernel calls (the I-region of s_XImats is rebuilt from it on the
-// cold XImats load). Returns 0 on success.
+// h_params: 10*grid::NUM_BODIES scalars, body-indexed bodies 1..N (the synthetic
+// world-frame link is dropped, mirroring init_inertia_params / the I-region of
+// d_XImats), each a length-10 [m, h(3)=m*c, I_O(6)] vector in the frozen
+// regressor basis. The device table is shared by all subsequent kernel calls (the
+// I-region of s_XImats is rebuilt from it on the cold XImats load). Returns 0 on
+// success.
+//
+// NB: the table is sized by grid::NUM_BODIES (the inertia-body count), NOT
+// grid::NUM_JOINTS. For a FIXED base these coincide; for a FLOATING base (or a
+// mimic robot) NUM_JOINTS == NUM_POS > NUM_BODIES, so using NUM_JOINTS here would
+// over-report the table size and reject the only correct (NUM_BODIES, 10) table.
 #ifdef GRID_RBD_RUNTIME_INERTIA
 extern "C" int grid_rbd_set_inertia_params(const T* h_params) {
     if (!g_robot) { int rc = grid_rbd_init(); if (rc) return rc; }
@@ -116,7 +122,7 @@ extern "C" int grid_rbd_set_inertia_params(const T* h_params) {
     cudaError_t err = cudaDeviceSynchronize();
     return (err == cudaSuccess) ? 0 : (int)err;
 }
-extern "C" int grid_rbd_inertia_params_size() { return 10 * grid::NUM_JOINTS; }
+extern "C" int grid_rbd_inertia_params_size() { return 10 * grid::NUM_BODIES; }
 #endif
 
 // ─── shared input-packing helper ─────────────────────────────────────────────

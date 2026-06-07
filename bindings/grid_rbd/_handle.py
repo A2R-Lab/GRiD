@@ -216,13 +216,16 @@ class RobotHandle:
 
     @property
     def inertia_params(self):
-        """The BAKED 10-param-per-body inertia table, shape ``(num_joints, 10)``.
+        """The BAKED 10-param-per-body inertia table, shape ``(num_bodies, 10)``.
 
         Each row is ``[m, hx, hy, hz, Ixx, Ixy, Ixz, Iyy, Iyz, Izz]`` (mass,
         first moment ``h = m*c``, then the 6 upper-triangle entries of the
         link's inertia about its frame origin) in the frozen GRiD/URDF regressor
-        basis — body-indexed, bodies 1..N (the base body is dropped, mirroring
-        the device table layout). Fetch this, mutate it, and pass it to
+        basis — body-indexed, bodies 1..N (the synthetic world-frame link is
+        dropped, mirroring the device table layout). For a FIXED base
+        ``num_bodies == num_joints``; for a FLOATING base the floating trunk is
+        row 0 and ``num_bodies < num_joints (== num_pos)``. Fetch this, mutate
+        it, and pass it to
         :py:meth:`set_inertia_params`. Only available on a ``runtime_inertia``
         build (raises otherwise; the values aren't persisted for a baked .so).
         """
@@ -238,11 +241,17 @@ class RobotHandle:
         """Update the device-resident inertia table at runtime (no recompile).
 
         ``params`` is the 10-param-per-body table — either flat
-        ``(10*num_joints,)`` or ``(num_joints, 10)`` — in the same layout /
+        ``(10*num_bodies,)`` or ``(num_bodies, 10)`` — in the same layout /
         basis as :py:attr:`inertia_params` (bodies 1..N, each ``[m, h(3),
         I_O(6)]``). All subsequent algorithm calls (inverse_dynamics, crba, …)
         reconstruct the per-link spatial inertia from the updated table. The
         sysID / domain-randomization / payload entry point.
+
+        The table is body-indexed by ``num_bodies`` (the inertia-body count, ==
+        :py:attr:`inertia_params` rows), NOT ``num_joints``: for a FIXED base
+        they coincide, but for a FLOATING base (or a mimic robot)
+        ``num_joints == num_pos > num_bodies`` and the device table is
+        ``10*num_bodies`` long.
 
         Only valid on a robot registered with ``runtime_inertia=True``; raises a
         clear error otherwise. Passing the baked :py:attr:`inertia_params` back
@@ -253,13 +262,13 @@ class RobotHandle:
                 "set_inertia_params requires a robot registered with "
                 "runtime_inertia=True. Re-register with "
                 "register_robot(..., runtime_inertia=True, force_rebuild=True).")
-        nj = self.num_joints
+        nb = self.num_bodies
         arr = np.ascontiguousarray(params, dtype=self._dt)
-        if arr.shape == (nj, 10):
+        if arr.shape == (nb, 10):
             arr = arr.reshape(-1)
-        elif arr.shape != (10 * nj,):
+        elif arr.shape != (10 * nb,):
             raise ValueError(
-                f"params must be ({nj}, 10) or ({10 * nj},) = 10*num_joints "
+                f"params must be ({nb}, 10) or ({10 * nb},) = 10*num_bodies "
                 f"(bodies 1..N, [m, h(3), I_O(6)] each); got shape {arr.shape}.")
         arr = np.ascontiguousarray(arr, dtype=self._dt)
         self._runner.set_inertia_params(arr)

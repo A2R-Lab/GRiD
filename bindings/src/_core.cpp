@@ -1077,20 +1077,30 @@ public:
     }
 
     // set_inertia_params(params) — D.4 / Phase 5 runtime-mutable inertia.
-    // params is a flat (10*num_joints,) array, body-indexed bodies 1..N, each a
+    // params is a flat (10*num_bodies,) array, body-indexed bodies 1..N, each a
     // length-10 [m, h(3), I_O(6)] vector. Copies it into the device d_inertia_params
     // table; all subsequent kernel calls rebuild the per-link spatial inertia from
     // it (no recompile). Only available on a .so built with runtime_inertia=True.
+    //
+    // The table is sized by NUM_BODIES (the inertia-body count), NOT NUM_JOINTS:
+    // for a FIXED base they coincide, but for a FLOATING base (or a mimic robot)
+    // NUM_JOINTS == NUM_POS > NUM_BODIES, and the device d_inertia_params table is
+    // 10*NUM_BODIES. Validating against 10*NUM_JOINTS used to reject the only
+    // correct (NUM_BODIES,10) table on floating-base robots.
     void set_inertia_params(arr_t params) {
         if (!fn_set_inertia_params_) throw std::runtime_error(
             "set_inertia_params not available in this .so: register the robot with "
             "runtime_inertia=True (and force_rebuild=True) to enable the mutable "
             "inertia table.");
-        const int want = 10 * num_joints_;
+        // num_bodies_ is the device-table body count (grid::NUM_BODIES). It is
+        // resolved from the optional grid_rbd_num_bodies symbol; for any
+        // runtime_inertia .so it is present (that surface postdates num_bodies).
+        const int n_bodies = num_bodies_ > 0 ? num_bodies_ : num_joints_;
+        const int want = 10 * n_bodies;
         if (params.ndim() != 1 || (int)params.shape(0) != want) {
             throw std::runtime_error(
                 "set_inertia_params: params must be a flat (" + std::to_string(want) +
-                ",) array = 10 * num_joints (bodies 1..N, [m, h(3), I_O(6)] each); got "
+                ",) array = 10 * num_bodies (bodies 1..N, [m, h(3), I_O(6)] each); got "
                 "ndim=" + std::to_string(params.ndim()) +
                 ", size=" + std::to_string(params.size()));
         }
