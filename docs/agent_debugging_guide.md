@@ -456,6 +456,19 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   an internal FD round-trip is necessary but NOT sufficient — cross-check the real external tool. MuJoCo's `d/dqpos`
   also holds qvel/qacc FIXED IN MJX FRAME → base-rotation gradient columns pick up Coriolis/inertial/`ω×v`
   couplings. Full derivation + validated oracle: `RBDReference/equivalents/mujoco_convention.{py,md}`.
+- **mjx oracle is COMPLETE (2026-06-08) — mirror it, don't re-derive.** `mujoco_convention.py` now has
+  every floating output transform, each FD/MuJoCo-validated (`tests/test_mujoco_convention.py`, 12 passing).
+  Three recurring shapes cover almost everything: `base_rotate` (covector rows `G·`), `jacobian` (column
+  reframe `J·G⁻¹`), `congruence` (`G·X·Gᵀ`). The `ω×v` trap recurs anywhere a quantity is "evaluated at
+  qacc_mjx=0" or reads qd: `nonlinear_effects` (=`G·ID(q,qd,−ω×v)`, naive covector off by 32.7),
+  `dccrba` dh/dq (needs `+A·_cross_cols(v_lin,−1)`, naive off by 23.6), the hdot/gradient families. The
+  full convention map (formula + class + verified error per function) is `docs/open-tasks/mjx_codegen_fusion_master_plan.md` §2/§0b.
+- **EE-Hessian (and any coordinate-Hessian) validation trap (cost a cycle, 2026-06-08).** GRiD's analytic
+  `end_effector_pose_hessian` is the SYMMETRIC coordinate Hessian (2nd derivative of the scalar value along
+  the retract), NOT `d/dξ[gradient]`. To FD-validate it, use the symmetric 2nd central-difference of the
+  VALUE along the retract — `d/dξ_mjx[gradient_mjx]` carries retract-connection curvature, is non-symmetric
+  (asym≈17 on go2), and a symmetric analytic Hessian can never match it (you'll see ~asym/2 residual and
+  chase a phantom bug). The mjx transform is a double column-reframe + a ½-symmetrized frame correction.
 - **`RBDReference.inverse_dynamics_gradient` floating-root `da_dq` term (FIXED 2026-06-08, f22b391).**
   `inverse_dynamics_gradient_fpass_dq` indexed the BODY axis with a floating-base velocity-DOF index
   (`da_dq[:,c,ii]`, ii∈0..5) — crashed on NB≤6 models and only avoided it on NB≥7 (e.g. go2) because the
