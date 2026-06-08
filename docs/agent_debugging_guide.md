@@ -82,6 +82,33 @@ every multiply-form but MISSED the vector-assignment forms — `a_world[5] = gra
 - A pattern-based sub-agent reliably misses the non-uniform forms; reconcile its diff by grepping ALL
   forms yourself before trusting it — and never trust an agent that returns without a validation result.
 
+### 1e. Per-timestep INPUT buffer slot sized by NV, must be NUM_JOINTS=nq (FLOATING-base stride bug)
+**Found in 6 algorithms in one sweep** (crba, aba, forward_dynamics, fd_gradient, integrator,
+integrator_gradient, idsva_so, fdsva_so, regressor, id_du). The canonical per-timestep input buffer
+gives each field (q, qd, u/tau, qdd) a `NUM_JOINTS`(=`get_num_pos()`=nq)-wide slot: q@0, qd@nq,
+u/tau@2·nq, qdd@3·nq; per-timestep stride `3*NUM_JOINTS`. The binding packs exactly this
+(`pack_q_qd_u`, stride `3*num_joints`). Any field offset / load-count / host-stride / smem-arena term
+built from `get_num_vel()`(nv) — `NUM_POS+nv`, `2*nv+fb`, `Q_QD_U_STRIDE=nq+2nv`, a `nv*nv` host
+DtoH copy of an `nv*nv`-written matrix — is the bug.
+- **Why it hid:** for FIXED base nq==nv so every nv-form coincides with the nq-form → **byte-identical,
+  invisible**. Only FLOATING base (nq>nv: go2 19/18, quaternion root) diverges. AND the CUDA equivalence
+  harness only exercises a SINGLE timestep via the *device function*, so the host/kernel BATCH path
+  (what the binding uses) shipped wrong on floating base undetected. A whole class lurked for ages.
+- **Symptom:** floating-base output wrong; the offset half breaks at **B=1** (qdd/u read from the wrong
+  intra-slot offset), the stride half breaks only at **batch>1** (timestep k≥1 reads `k*(nq+2nv)`
+  instead of `k*3nq`). Fixed-base identical.
+- **Decisive oracle-free catch:** feed an IDENTICAL-input batch (B≥4) → every slot MUST be identical;
+  and batched[b] MUST == standalone(input[b]). Then vs the oracle at **B=1** to catch the offset half
+  (self-consistency alone misses it). Always confirm fixed-base BYTE-IDENTICAL (no-regression).
+- **Distinguish value vs tangent outputs (don't over-flag):** VALUE outputs (qdd, coriolis vector, M,
+  Minv-as-a-matrix on the host path) live in nq-wide slots; TANGENT outputs (gradients dtau/dq, SO
+  tensors nv³, Jacobians 6×nv, regressors nv×params) are genuinely nv-strided and the binding reads
+  them tangent-strided — those nv strides are CORRECT. Only INPUT offsets + intermediate value buffers
+  flip to nq.
+- **Grep:** `get_num_vel()`/`nv`/`NUM_VEL` in per-timestep INPUT offsets, `Q_QD_U_STRIDE`,
+  `NUM_POS + nv`, `2*nv + ` in load-counts/slot-widths/host-strides across `algorithms/*.py` +
+  the `*_DYNAMIC_SHARED_MEM_BYTES` input-slot terms in `GRiDCodeGenerator.py`.
+
 ---
 
 ## 2. Debugging methodology (what actually localizes a bug fast)
