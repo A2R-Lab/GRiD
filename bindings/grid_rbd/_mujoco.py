@@ -127,3 +127,17 @@ def _congruence(M, R, floating):
 
 mass_matrix_pin_to_mjx = _congruence    # M_mjx = G M G^T (G^{-T}=G)
 minv_pin_to_mjx = _congruence           # Minv_mjx = G Minv G^T
+coriolis_matrix_pin_to_mjx = _congruence  # C_mjx = G C G^T (true similarity; C non-symmetric)
+
+
+def jacobian_pin_to_mjx(J, R, floating):
+    """Column reframe J_mjx = J G^{-1} for a batched Jacobian J (B, n_rows, NV):
+    the base-linear COLUMNS 0:3 (the free-flyer linear-velocity dofs) right-multiply
+    by R^T; the output rows are frame-invariant. Covers frame_jacobian / _dot /
+    jacobian_com / the CCRBA matrix A / cmm_time_variation / ee_pose_gradient."""
+    if not floating:
+        return np.asarray(J, dtype=np.float64)
+    J = np.array(J, dtype=np.float64, copy=True)
+    # new base cols: J_mjx[:, :, c] = sum_k J[:, :, k] R[c, k]  (= J_lin @ R^T)
+    J[:, :, _LIN] = np.einsum('brk,bck->brc', J[:, :, _LIN], R)
+    return J

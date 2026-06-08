@@ -104,3 +104,100 @@ def test_native_mjx_crba_matches_host_oracle(go2_floating):
     raw_pin = np.asarray(h.crba(qpos), dtype=np.float64)
     assert np.abs(native[0, :3, :] - raw_pin[0, :3, :]).max() > 1e-2
     assert np.linalg.eigvalsh(native[0]).min() > 0
+
+
+def _rand_state(h, rng, B, with_qd=True, with_u=False):
+    nq, nv = h.num_joints, h.num_vel
+    qpos = rng.standard_normal((B, nq)); qpos[:, 3:7] /= np.linalg.norm(qpos[:, 3:7], axis=1, keepdims=True)
+    qvel = rng.standard_normal((B, nq)); qvel[:, nv:] = 0.0
+    u = rng.standard_normal((B, nq))
+    return qpos, (qvel if with_qd else None), (u if with_u else None)
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+@pytest.mark.parametrize("method", ["forward_dynamics", "aba"])
+def test_native_mjx_accel_out_matches_host_oracle(go2_floating, method):
+    """accel_out class: qdd_mjx[0:3] = R(qdd_pin + omega x v)."""
+    from grid_rbd import _mujoco as bm
+    h = go2_floating
+    assert getattr(h._runner, f"has_{method}_mujoco")
+    rng = np.random.default_rng(2)
+    for B in (1, 4):
+        qpos, qvel, u = _rand_state(h, rng, B, with_qd=True, with_u=True)
+        native = np.asarray(getattr(h, method)(qpos, qvel, u, _convention="mujoco"), dtype=np.float64)
+        q_pin, qd_pin, _, u_pin, R = h._mjx_inputs(qpos, qvel, u=u)
+        pin = np.asarray(getattr(h, method)(q_pin, qd_pin, u_pin), dtype=np.float64)
+        expected = bm.fd_qdd_pin_to_mjx(pin, qd_pin, R, True)
+        assert np.allclose(native, expected, rtol=2e-3, atol=2e-2), \
+            f"{method} mjx != oracle (B={B}): max|d|={np.abs(native-expected).max():.3e}"
+    raw_pin = np.asarray(getattr(h, method)(qpos, qvel, u), dtype=np.float64)
+    assert np.abs(native[0, :3] - raw_pin[0, :3]).max() > 1e-2
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_coriolis_matches_host_oracle(go2_floating):
+    """congruence class with qd input: C_mjx = G C_pin G^T."""
+    from grid_rbd import _mujoco as bm
+    h = go2_floating
+    assert h._runner.has_coriolis_matrix_mujoco
+    rng = np.random.default_rng(3)
+    for B in (1, 4):
+        qpos, qvel, _ = _rand_state(h, rng, B, with_qd=True)
+        native = np.asarray(h.coriolis_matrix(qpos, qvel, _convention="mujoco"), dtype=np.float64)
+        q_pin, qd_pin, _, _, R = h._mjx_inputs(qpos, qvel)
+        pin_C = np.asarray(h.coriolis_matrix(q_pin, qd_pin), dtype=np.float64)
+        expected = bm.coriolis_matrix_pin_to_mjx(pin_C, R, True)
+        assert np.allclose(native, expected, rtol=2e-3, atol=2e-2), \
+            f"coriolis mjx != oracle (B={B}): max|d|={np.abs(native-expected).max():.3e}"
+    raw_pin = np.asarray(h.coriolis_matrix(qpos, qvel), dtype=np.float64)
+    assert np.abs(native[0, :3, :] - raw_pin[0, :3, :]).max() > 1e-2
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_frame_jacobian_matches_host_oracle(go2_floating):
+    """column-reframe class: J_mjx = J_pin G^{-1} (base-linear cols)."""
+    from grid_rbd import _mujoco as bm
+    h = go2_floating
+    assert h._runner.has_frame_jacobian_mujoco and h._runner.has_frame_jacobian_dot_mujoco
+    rng = np.random.default_rng(4)
+    for B in (1, 4):
+        qpos, qvel, _ = _rand_state(h, rng, B, with_qd=True)
+        q_pin, qd_pin, _, _, R = h._mjx_inputs(qpos, qvel)
+        # frame_jacobian (q only)
+        nat_J = np.asarray(h.frame_jacobian(qpos, _convention="mujoco"), dtype=np.float64)
+        exp_J = bm.jacobian_pin_to_mjx(np.asarray(h.frame_jacobian(q_pin), np.float64), R, True)
+        assert np.allclose(nat_J, exp_J, rtol=2e-3, atol=2e-2), \
+            f"frame_jacobian mjx != oracle (B={B}): max|d|={np.abs(nat_J-exp_J).max():.3e}"
+        # frame_jacobian_dot (q, qd)
+        nat_Jd = np.asarray(h.frame_jacobian_dot(qpos, qvel, _convention="mujoco"), dtype=np.float64)
+        exp_Jd = bm.jacobian_pin_to_mjx(np.asarray(h.frame_jacobian_dot(q_pin, qd_pin), np.float64), R, True)
+        assert np.allclose(nat_Jd, exp_Jd, rtol=2e-3, atol=2e-2), \
+            f"frame_jacobian_dot mjx != oracle (B={B}): max|d|={np.abs(nat_Jd-exp_Jd).max():.3e}"
+    # non-triviality: base-linear columns differ from the raw pin Jacobian
+    raw_J = np.asarray(h.frame_jacobian(qpos), dtype=np.float64)
+    assert np.abs(nat_J[0, :, :3] - raw_J[0, :, :3]).max() > 1e-2
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_osc_inertia_invariant_but_quat_reordered(go2_floating):
+    """osc_inertia value is frame-INVARIANT, but the mjx q (wxyz) must be reordered
+    before the kinematics build — the mjx kernel does that. So native(q_mjx) equals
+    pin(q_pin), and BOTH differ from feeding the raw mjx q to the pin kernel."""
+    h = go2_floating
+    assert h._runner.has_osc_inertia_mujoco
+    rng = np.random.default_rng(5)
+    for B in (1, 4):
+        qpos, _, _ = _rand_state(h, rng, B, with_qd=False)
+        q_pin, _, _, _, _ = h._mjx_inputs(qpos)
+        native = np.asarray(h.osc_inertia(qpos, _convention="mujoco"), dtype=np.float64)
+        pin = np.asarray(h.osc_inertia(q_pin), dtype=np.float64)   # invariant -> equal
+        assert np.allclose(native, pin, rtol=2e-3, atol=2e-2), \
+            f"osc_inertia mjx != pin-invariant (B={B}): max|d|={np.abs(native-pin).max():.3e}"
+    # feeding the raw mjx (wxyz) q to the PIN kernel mis-builds the kinematics -> differs,
+    # confirming the quaternion reorder is load-bearing.
+    raw_wrong = np.asarray(h.osc_inertia(qpos), dtype=np.float64)
+    assert np.abs(native[0] - raw_wrong[0]).max() > 1e-3

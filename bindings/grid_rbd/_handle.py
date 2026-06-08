@@ -568,6 +568,15 @@ class RobotHandle:
         body-major, ``[angular; linear]`` local-frame (see :py:meth:`inverse_dynamics`).
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``u`` are
         MuJoCo-convention and the returned ``qdd`` is in the mjx frame."""
+        # mjx: prefer the native kernel (raw mjx in, mjx qdd out — accel_out baked in);
+        # fall back to the validated host path. f_ext isn't reframed by the kernel.
+        if (self._mjx_active(_convention) and f_ext is None
+                and getattr(self._runner, "has_forward_dynamics_mujoco", False)):
+            q  = np.ascontiguousarray(q,  dtype=self._dt)
+            qd = np.ascontiguousarray(qd, dtype=self._dt)
+            u  = np.ascontiguousarray(u,  dtype=self._dt)
+            return self._cast_out(self._runner.forward_dynamics_mujoco(q, qd, u, gravity, None))
+
         R = None; qd_pin = None
         if self._mjx_active(_convention):
             q, qd_pin, _, u, R = self._mjx_inputs(q, qd, u=u); qd = qd_pin
@@ -588,6 +597,13 @@ class RobotHandle:
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``,
         body-major, ``[angular; linear]`` local-frame (see :py:meth:`inverse_dynamics`).
         With ``output_convention="mujoco"`` (floating base) the IO is mjx-convention."""
+        if (self._mjx_active(_convention) and f_ext is None
+                and getattr(self._runner, "has_aba_mujoco", False)):
+            q  = np.ascontiguousarray(q,  dtype=self._dt)
+            qd = np.ascontiguousarray(qd, dtype=self._dt)
+            u  = np.ascontiguousarray(u,  dtype=self._dt)
+            return self._cast_out(self._runner.aba_mujoco(q, qd, u, gravity, None))
+
         R = None; qd_pin = None
         if self._mjx_active(_convention):
             q, qd_pin, _, u, R = self._mjx_inputs(q, qd, u=u); qd = qd_pin
@@ -1014,18 +1030,29 @@ class RobotHandle:
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         return self._runner.nonlinear_effects(q, qd, float(gravity))
 
-    def coriolis_matrix(self, q, qd, *, gravity: float = -9.81):
+    def coriolis_matrix(self, q, qd, *, gravity: float = -9.81, _convention=None):
         """Coriolis matrix C(q,qd). Returns ``(B, NV, NV)`` row-major, with
         ``C·qd + g(q) = nonlinear_effects(q, qd)``. Matches
         ``RBDReference.coriolis_matrix(q, qd)`` (gravity is unused by C; the
-        kwarg mirrors the host wrapper signature)."""
-        self._mjx_guard_unsupported("coriolis_matrix")
+        kwarg mirrors the host wrapper signature).
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention and the returned ``C`` is the mjx-frame Coriolis matrix
+        (congruence ``G C Gᵀ``, computed natively in the kernel)."""
+        NV = self.num_vel
+        if self._mjx_active(_convention):
+            if not getattr(self._runner, "has_coriolis_matrix_mujoco", False):
+                raise NotImplementedError(
+                    "coriolis_matrix(output_convention='mujoco') needs a floating-base "
+                    ".so built with the mjx kernel — re-register with force_rebuild=True.")
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            qd = np.ascontiguousarray(qd, dtype=self._dt)
+            raw = self._runner.coriolis_matrix_mujoco(q, qd, float(gravity))
+            return self._cast_out(raw.reshape(raw.shape[0], NV, NV))
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         raw = self._runner.coriolis_matrix(q, qd, float(gravity))  # (B, NV*NV) row-major
-        B = raw.shape[0]
-        NV = self.num_vel
-        return self._cast_out(raw.reshape(B, NV, NV))
+        return self._cast_out(raw.reshape(raw.shape[0], NV, NV))
 
     def kinetic_energy_regressor(self, q, qd, *, gravity: float = -9.81):
         """Kinetic-energy regressor y_KE, length ``10*num_bodies``, with
@@ -1081,7 +1108,7 @@ class RobotHandle:
         NV = self.num_vel
         return self._cast_out(raw.reshape(B, NV, 6).transpose(0, 2, 1))
 
-    def frame_jacobian(self, q, *, target_jid=None, reference_frame=None):
+    def frame_jacobian(self, q, *, target_jid=None, reference_frame=None, _convention=None):
         """Geometric Jacobian (6 x NV, ``[linear; angular]``) of a frame.
         Returns ``(B, 6, NV)``. Matches ``RBDReference.frame_jacobian(q,
         frame_name, reference_frame)``.
@@ -1091,36 +1118,65 @@ class RobotHandle:
         ``'LOCAL'`` (0), ``'WORLD'`` (1), or ``'LOCAL_WORLD_ALIGNED'`` (2, the
         default), or the equivalent int. Both are now RUNTIME parameters of the
         GPU surface.
-        """
-        self._mjx_guard_unsupported("frame_jacobian")
-        q = np.ascontiguousarray(q, dtype=self._dt)
-        tj, rf = _frame_args(target_jid, reference_frame)
-        raw = self._runner.frame_jacobian(q, tj, rf)  # (B, 6*NV) col-major: J[r + 6*c]
-        B = raw.shape[0]
-        NV = self.num_vel
-        return raw.reshape(B, NV, 6).transpose(0, 2, 1)
 
-    def frame_jacobian_dot(self, q, qd, *, target_jid=None, reference_frame=None):
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
+        and the returned Jacobian is column-reframed ``J G⁻¹`` (mjx frame)."""
+        NV = self.num_vel
+        tj, rf = _frame_args(target_jid, reference_frame)
+        if self._mjx_active(_convention):
+            if not getattr(self._runner, "has_frame_jacobian_mujoco", False):
+                raise NotImplementedError(
+                    "frame_jacobian(output_convention='mujoco') needs a floating-base "
+                    ".so built with the mjx kernel — re-register with force_rebuild=True.")
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            raw = self._runner.frame_jacobian_mujoco(q, tj, rf)
+            return raw.reshape(raw.shape[0], NV, 6).transpose(0, 2, 1)
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        raw = self._runner.frame_jacobian(q, tj, rf)  # (B, 6*NV) col-major: J[r + 6*c]
+        return raw.reshape(raw.shape[0], NV, 6).transpose(0, 2, 1)
+
+    def frame_jacobian_dot(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
         """Time derivative Jdot of :py:meth:`frame_jacobian` along v = qd
         (6 x NV, ``[linear; angular]``). Returns ``(B, 6, NV)``. Matches
         ``RBDReference.frame_jacobian_dot(q, qd, frame_name, reference_frame)``.
 
         ``target_jid`` / ``reference_frame`` are RUNTIME parameters (default:
         leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
-        """
-        self._mjx_guard_unsupported("frame_jacobian_dot")
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention and Jdot is column-reframed (mjx frame)."""
+        NV = self.num_vel
+        tj, rf = _frame_args(target_jid, reference_frame)
+        if self._mjx_active(_convention):
+            if not getattr(self._runner, "has_frame_jacobian_dot_mujoco", False):
+                raise NotImplementedError(
+                    "frame_jacobian_dot(output_convention='mujoco') needs a floating-base "
+                    ".so built with the mjx kernel — re-register with force_rebuild=True.")
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            qd = np.ascontiguousarray(qd, dtype=self._dt)
+            raw = self._runner.frame_jacobian_dot_mujoco(q, qd, tj, rf)
+            return raw.reshape(raw.shape[0], NV, 6).transpose(0, 2, 1)
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
-        tj, rf = _frame_args(target_jid, reference_frame)
         raw = self._runner.frame_jacobian_dot(q, qd, tj, rf)  # (B, 6*NV) col-major
-        B = raw.shape[0]
-        NV = self.num_vel
-        return raw.reshape(B, NV, 6).transpose(0, 2, 1)
+        return raw.reshape(raw.shape[0], NV, 6).transpose(0, 2, 1)
 
-    def osc_inertia(self, q):
+    def osc_inertia(self, q, *, _convention=None):
         """Operational-space (task) inertia Lambda = (J·M⁻¹·Jᵀ)⁻¹ (6 x 6) for
         the leaf-EE frame (LWA). Returns ``(B, 6, 6)``. Matches
-        ``RBDReference.osc_inertia(q)``."""
+        ``RBDReference.osc_inertia(q)``.
+
+        Lambda is frame-INVARIANT, but with ``output_convention="mujoco"`` the
+        MuJoCo ``q`` (wxyz quaternion) must be reordered before the kinematics
+        build — the mjx kernel does that, so mjx ``q`` routes through it."""
+        if self._mjx_active(_convention):
+            if not getattr(self._runner, "has_osc_inertia_mujoco", False):
+                raise NotImplementedError(
+                    "osc_inertia(output_convention='mujoco') needs a floating-base "
+                    ".so built with the mjx kernel — re-register with force_rebuild=True.")
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            raw = self._runner.osc_inertia_mujoco(q)
+            return raw.reshape(raw.shape[0], 6, 6)
         q = np.ascontiguousarray(q, dtype=self._dt)
         raw = self._runner.osc_inertia(q)  # (B, 36) row/col-major (symmetric)
         return raw.reshape(raw.shape[0], 6, 6)

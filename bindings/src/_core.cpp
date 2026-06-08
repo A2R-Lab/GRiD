@@ -161,6 +161,13 @@ public:
         fn_aba_              = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_aba"));
         fn_crba_             = reinterpret_cast<fn_crba_t>(require_sym("grid_rbd_crba"));
         fn_crba_mujoco_      = reinterpret_cast<fn_crba_t>(opt_sym("grid_rbd_crba_mujoco"));  // floating only
+        // floating-base mjx value kernels (optional; present only on a floating .so)
+        fn_fd_mujoco_        = reinterpret_cast<fn_fd_t>(opt_sym("grid_rbd_forward_dynamics_mujoco"));
+        fn_aba_mujoco_       = reinterpret_cast<fn_fd_t>(opt_sym("grid_rbd_aba_mujoco"));
+        fn_coriolis_matrix_mujoco_ = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_coriolis_matrix_mujoco"));
+        fn_frame_jacobian_mujoco_  = reinterpret_cast<fn_frame_jac_t>(opt_sym("grid_rbd_frame_jacobian_mujoco"));
+        fn_frame_jacobian_dot_mujoco_ = reinterpret_cast<fn_frame_jac_dot_t>(opt_sym("grid_rbd_frame_jacobian_dot_mujoco"));
+        fn_osc_inertia_mujoco_     = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_osc_inertia_mujoco"));
         fn_ee_pose_          = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose"));
         fn_ee_pose_grad_     = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose_gradient"));
         fn_inverse_dynamics_gradient_        = reinterpret_cast<fn_dyn_t>(require_sym("grid_rbd_inverse_dynamics_gradient"));
@@ -452,6 +459,92 @@ public:
         py::array_t<CT> out({batch, num_vel_, num_vel_});
         int rc = fn_crba_mujoco_(q.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error("grid_rbd_crba_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // ─── mjx value kernels (floating base only; raw mjx in, mjx-frame out) ─────
+    bool has_forward_dynamics_mujoco() const { return fn_fd_mujoco_ != nullptr; }
+    py::array_t<CT> forward_dynamics_mujoco(
+        arr_t q, arr_t qd, arr_t u, float gravity, py::object f_ext_opt)
+    {
+        if (!fn_fd_mujoco_) throw std::runtime_error(
+            "forward_dynamics_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_joints_});
+        int rc = fn_fd_mujoco_(q.data(), qd.data(), u.data(),
+                               out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_aba_mujoco() const { return fn_aba_mujoco_ != nullptr; }
+    py::array_t<CT> aba_mujoco(
+        arr_t q, arr_t qd, arr_t u, float gravity, py::object f_ext_opt)
+    {
+        if (!fn_aba_mujoco_) throw std::runtime_error(
+            "aba_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_joints_});
+        int rc = fn_aba_mujoco_(q.data(), qd.data(), u.data(),
+                                out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc != 0) throw std::runtime_error("grid_rbd_aba_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_coriolis_matrix_mujoco() const { return fn_coriolis_matrix_mujoco_ != nullptr; }
+    py::array_t<CT> coriolis_matrix_mujoco(arr_t q, arr_t qd, float gravity)
+    {
+        if (!fn_coriolis_matrix_mujoco_) throw std::runtime_error(
+            "coriolis_matrix_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<CT> out({batch, num_vel_ * num_vel_});
+        int rc = fn_coriolis_matrix_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_coriolis_matrix_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_frame_jacobian_mujoco() const { return fn_frame_jacobian_mujoco_ != nullptr; }
+    py::array_t<CT> frame_jacobian_mujoco(arr_t q, int target_jid, int reference_frame)
+    {
+        if (!fn_frame_jacobian_mujoco_) throw std::runtime_error(
+            "frame_jacobian_mujoco unavailable: floating-base .so with frame_jacobian only");
+        int batch = check_q(q, "frame_jacobian_mujoco");
+        py::array_t<CT> out({batch, 6 * num_vel_});
+        int rc = fn_frame_jacobian_mujoco_(q.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc == 3) throw std::runtime_error("frame_jacobian not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_frame_jacobian_dot_mujoco() const { return fn_frame_jacobian_dot_mujoco_ != nullptr; }
+    py::array_t<CT> frame_jacobian_dot_mujoco(arr_t q, arr_t qd, int target_jid, int reference_frame)
+    {
+        if (!fn_frame_jacobian_dot_mujoco_) throw std::runtime_error(
+            "frame_jacobian_dot_mujoco unavailable: floating-base .so with frame_jacobian only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<CT> out({batch, 6 * num_vel_});
+        int rc = fn_frame_jacobian_dot_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc == 3) throw std::runtime_error("frame_jacobian_dot not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_dot_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_osc_inertia_mujoco() const { return fn_osc_inertia_mujoco_ != nullptr; }
+    py::array_t<CT> osc_inertia_mujoco(arr_t q)
+    {
+        if (!fn_osc_inertia_mujoco_) throw std::runtime_error(
+            "osc_inertia_mujoco unavailable: floating-base .so with frame_jacobian only");
+        int batch = check_q(q, "osc_inertia_mujoco");
+        py::array_t<CT> out({batch, 36});
+        int rc = fn_osc_inertia_mujoco_(q.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error("osc_inertia not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_osc_inertia_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
 
@@ -1283,6 +1376,13 @@ private:
     fn_fd_t    fn_aba_            = nullptr;
     fn_crba_t  fn_crba_           = nullptr;
     fn_crba_t  fn_crba_mujoco_    = nullptr;  // floating-base mjx CRBA (optional)
+    // floating-base mjx value kernels (optional symbols; nullptr on fixed base)
+    fn_fd_t    fn_fd_mujoco_      = nullptr;
+    fn_fd_t    fn_aba_mujoco_     = nullptr;
+    fn_q_qd_out_grav_t fn_coriolis_matrix_mujoco_ = nullptr;
+    fn_frame_jac_t     fn_frame_jacobian_mujoco_  = nullptr;
+    fn_frame_jac_dot_t fn_frame_jacobian_dot_mujoco_ = nullptr;
+    fn_q_out_t         fn_osc_inertia_mujoco_     = nullptr;
     fn_ee_t    fn_ee_pose_        = nullptr;
     fn_ee_t    fn_ee_pose_grad_   = nullptr;
     fn_dyn_t  fn_inverse_dynamics_gradient_      = nullptr;
@@ -1388,6 +1488,26 @@ static void register_runner(py::module_& m, const char* cls_name) {
             "(floating-base robots only).")
         .def("crba_mujoco", &R::crba_mujoco,
              py::arg("q"), py::arg("gravity") = -9.81f)
+        // mjx value kernels (floating base only)
+        .def_property_readonly("has_forward_dynamics_mujoco", &R::has_forward_dynamics_mujoco)
+        .def("forward_dynamics_mujoco", &R::forward_dynamics_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("u"),
+             py::arg("gravity") = -9.81f, py::arg("f_ext") = py::none())
+        .def_property_readonly("has_aba_mujoco", &R::has_aba_mujoco)
+        .def("aba_mujoco", &R::aba_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("u"),
+             py::arg("gravity") = -9.81f, py::arg("f_ext") = py::none())
+        .def_property_readonly("has_coriolis_matrix_mujoco", &R::has_coriolis_matrix_mujoco)
+        .def("coriolis_matrix_mujoco", &R::coriolis_matrix_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
+        .def_property_readonly("has_frame_jacobian_mujoco", &R::has_frame_jacobian_mujoco)
+        .def("frame_jacobian_mujoco", &R::frame_jacobian_mujoco,
+             py::arg("q"), py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def_property_readonly("has_frame_jacobian_dot_mujoco", &R::has_frame_jacobian_dot_mujoco)
+        .def("frame_jacobian_dot_mujoco", &R::frame_jacobian_dot_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
+        .def_property_readonly("has_osc_inertia_mujoco", &R::has_osc_inertia_mujoco)
+        .def("osc_inertia_mujoco", &R::osc_inertia_mujoco, py::arg("q"))
         .def("end_effector_pose", &R::end_effector_pose,
              py::arg("q"))
         .def("fk_batched", &R::fk_batched,
