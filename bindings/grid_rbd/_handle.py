@@ -161,6 +161,9 @@ class RobotHandle:
         # fp64-in / fp64-out convenience (compute stays fp32). Off by default.
         # Ignored for a true-fp64 build (outputs are already float64).
         self.allow_fp64 = bool(allow_fp64) and self._dtype != "float64"
+        # Output convention: "pinocchio" (default, native) or "mujoco" (mjx parity).
+        # Only affects FLOATING-base robots; a no-op (byte-identical) on fixed base.
+        self._output_convention = "pinocchio"
 
         # Sanity-check that the .so's reported constants match meta.json.
         # A mismatch implies the cache is corrupted.
@@ -205,6 +208,30 @@ class RobotHandle:
     @property
     def floating_base(self) -> bool:
         return bool(self._meta.get("floating_base", False))
+
+    @property
+    def output_convention(self) -> str:
+        """Output/IO convention: ``"pinocchio"`` (default, GRiD-native — xyzw quat,
+        spatial-local free-joint velocity) or ``"mujoco"`` (mjx parity — wxyz quat,
+        global-linear free-joint velocity). Setting ``"mujoco"`` makes the value
+        methods take and return MuJoCo-convention ``q``/``qd``/``qdd``/``M``/... for
+        a FLOATING base; it is a byte-identical no-op for a fixed base. See
+        ``RBDReference/equivalents/mujoco_convention.md`` for the exact transforms.
+        Currently applies to the VALUE methods (inverse_dynamics, forward_dynamics,
+        aba, crba, minv); gradient/second-order surfaces stay pinocchio-convention."""
+        return self._output_convention
+
+    @output_convention.setter
+    def output_convention(self, value: str) -> None:
+        if value not in ("pinocchio", "mujoco"):
+            raise ValueError(
+                f"output_convention must be 'pinocchio' or 'mujoco', got {value!r}")
+        self._output_convention = value
+
+    def _mjx_active(self) -> bool:
+        """True when mjx-convention transforms should actually run (mujoco flag AND
+        a floating base — fixed base has no free-flyer, so the flag is a no-op)."""
+        return self._output_convention == "mujoco" and self.floating_base
 
     # ─── runtime-mutable inertia (D.4 / Phase 5) ─────────────────────────────
 
@@ -356,6 +383,26 @@ class RobotHandle:
         out = tuple(np.asarray(a, dtype=np.float64) for a in arrays)
         return out[0] if len(out) == 1 else out
 
+    # ─── mjx (MuJoCo) output-convention transforms (floating base only) ──────
+    #
+    # When ``output_convention="mujoco"`` the value methods accept and return
+    # MuJoCo-convention quantities. Inputs are converted mjx->pin before the
+    # kernel, outputs pin->mjx after. The transforms touch only the free-flyer
+    # block (quat reorder + the G=blockdiag(R,I) root basis change + the omega x v
+    # acceleration term); internal joints are untouched. See `_mujoco.py` and
+    # `RBDReference/equivalents/mujoco_convention.md`. Velocity-space inputs are
+    # nq-wide (tangent in the first NV slots), so the slice-based transforms apply
+    # unchanged. Done in float64 then cast back to the handle dtype.
+
+    def _mjx_inputs(self, q, qd=None, qdd=None, u=None):
+        from . import _mujoco
+        q_pin = _mujoco.q_mjx_to_pin(np.asarray(q, dtype=np.float64), True)
+        R = _mujoco.base_rotation(q_pin)
+        qd_pin = None if qd is None else _mujoco.v_mjx_to_pin(np.asarray(qd, np.float64), R, True)
+        qdd_pin = None if qdd is None else _mujoco.accel_mjx_to_pin(np.asarray(qdd, np.float64), qd_pin, R, True)
+        u_pin = None if u is None else _mujoco.force_mjx_to_pin(np.asarray(u, np.float64), R, True)
+        return q_pin, qd_pin, qdd_pin, u_pin, R
+
     def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
         """Inverse dynamics (RNEA): τ = M(q)·qdd + h(q,qd) − g(q). Returns ``(B, NJ)``.
 
@@ -368,13 +415,22 @@ class RobotHandle:
         ``(B, 6*num_bodies)``, body-major, each ``[angular; linear]`` in the
         body's local frame (subtracted from the per-body force, matching
         ``RBDReference.inverse_dynamics(..., f_ext=...)``). Default None ⇒ no external force.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``qdd`` are
+        MuJoCo-convention and the returned ``τ`` is in the mjx frame.
         """
+        R = None
+        if self._mjx_active():
+            q, qd, qdd, _, R = self._mjx_inputs(q, qd, qdd)
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         qdd_arr = None
         if qdd is not None:
             qdd_arr = np.ascontiguousarray(qdd, dtype=self._dt)
         c = self._runner.inverse_dynamics(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
+        if R is not None:
+            from . import _mujoco
+            c = _mujoco.id_tau_pin_to_mjx(np.asarray(c, np.float64), R, True).astype(self._dt)
         return self._cast_out(c)
 
     def minv(self, q):
@@ -387,24 +443,42 @@ class RobotHandle:
         only the lower triangle (upper zero); we symmetrize on the host before
         returning so the matrix matches `RBDReference.minv(..., output_dense=True)`.
         The symmetrization is a single numpy op per call — negligible cost.
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
+        and the returned ``Minv`` is the mjx-frame inverse mass matrix.
         """
+        R = None
+        if self._mjx_active():
+            q, _, _, _, R = self._mjx_inputs(q)
         q = np.ascontiguousarray(q, dtype=self._dt)
         m = self._runner.minv(q)
         # Symmetrize: M = L + L^T - diag(L)  where L is the lower triangle.
         m_full = m + m.swapaxes(-1, -2)
         diag_idx = np.arange(m.shape[-1])
         m_full[:, diag_idx, diag_idx] -= np.diagonal(m, axis1=-2, axis2=-1)
+        if R is not None:
+            from . import _mujoco
+            m_full = _mujoco.minv_pin_to_mjx(np.asarray(m_full, np.float64), R, True).astype(self._dt)
         return self._cast_out(m_full)
 
     def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
         """Forward dynamics qdd = M⁻¹·(τ − c). Returns shape (B, NJ).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``,
-        body-major, ``[angular; linear]`` local-frame (see :py:meth:`inverse_dynamics`)."""
+        body-major, ``[angular; linear]`` local-frame (see :py:meth:`inverse_dynamics`).
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``u`` are
+        MuJoCo-convention and the returned ``qdd`` is in the mjx frame."""
+        R = None; qd_pin = None
+        if self._mjx_active():
+            q, qd_pin, _, u, R = self._mjx_inputs(q, qd, u=u); qd = qd_pin
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
-        return self._cast_out(self._runner.forward_dynamics(q, qd, u, gravity, self._prep_f_ext(f_ext)))
+        acc = self._runner.forward_dynamics(q, qd, u, gravity, self._prep_f_ext(f_ext))
+        if R is not None:
+            from . import _mujoco
+            acc = _mujoco.fd_qdd_pin_to_mjx(np.asarray(acc, np.float64), qd_pin, R, True).astype(self._dt)
+        return self._cast_out(acc)
 
     def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
         """Recursive forward dynamics via Articulated Body Algorithm.
@@ -412,20 +486,38 @@ class RobotHandle:
         same output but a different implementation.
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``,
-        body-major, ``[angular; linear]`` local-frame (see :py:meth:`inverse_dynamics`)."""
+        body-major, ``[angular; linear]`` local-frame (see :py:meth:`inverse_dynamics`).
+        With ``output_convention="mujoco"`` (floating base) the IO is mjx-convention."""
+        R = None; qd_pin = None
+        if self._mjx_active():
+            q, qd_pin, _, u, R = self._mjx_inputs(q, qd, u=u); qd = qd_pin
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
-        return self._cast_out(self._runner.aba(q, qd, u, gravity, self._prep_f_ext(f_ext)))
+        acc = self._runner.aba(q, qd, u, gravity, self._prep_f_ext(f_ext))
+        if R is not None:
+            from . import _mujoco
+            acc = _mujoco.fd_qdd_pin_to_mjx(np.asarray(acc, np.float64), qd_pin, R, True).astype(self._dt)
+        return self._cast_out(acc)
 
     def crba(self, q, *, gravity: float = -9.81):
         """Joint-space mass matrix M(q) via Composite Rigid Body Algorithm.
         Returns shape (B, NV, NV) — the tangent-space (pinocchio-convention)
         mass matrix. FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ
         (the kernel writes NUM_VEL x NUM_VEL). Pass `gravity` only because the
-        host wrapper takes it; the result doesn't depend on gravity."""
+        host wrapper takes it; the result doesn't depend on gravity.
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
+        and the returned ``M`` is the mjx-frame mass matrix."""
+        R = None
+        if self._mjx_active():
+            q, _, _, _, R = self._mjx_inputs(q)
         q = np.ascontiguousarray(q, dtype=self._dt)
-        return self._cast_out(self._runner.crba(q, gravity))
+        M = self._runner.crba(q, gravity)
+        if R is not None:
+            from . import _mujoco
+            M = _mujoco.mass_matrix_pin_to_mjx(np.asarray(M, np.float64), R, True).astype(self._dt)
+        return self._cast_out(M)
 
     def end_effector_pose(self, q):
         """End-effector pose [xyz, rpy] per EE. Returns shape (B, 6*NUM_EES).
