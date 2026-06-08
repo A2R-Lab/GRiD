@@ -57,9 +57,13 @@ int run() {
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 
+    // Canonical per-timestep input layout (matches the binding pack_q_qd_u and the
+    // q_qd_u kernel slots): each field gets a NUM_POS(=nq)-wide slot -> q@0, qd@nq,
+    // qdd@2*nq, stride 3*nq. (Fixed-base nq==nv makes this byte-identical to the old
+    // nv-based qdd@nq+nv; floating nq>nv needs the nq-based 2*NUM_POS offset.)
     read_vector(hd_data->h_q_qd_u, grid::NUM_POS);
     read_vector(&hd_data->h_q_qd_u[grid::NUM_POS], grid::NUM_VEL);
-    read_vector(&hd_data->h_q_qd_u[grid::NUM_POS + grid::NUM_VEL], grid::NUM_VEL);
+    read_vector(&hd_data->h_q_qd_u[2 * grid::NUM_POS], grid::NUM_VEL);
 
     grid::idsva_so_world_frame<T>(
         hd_data, d_robot_model, gravity, 1, block_dimms, thread_dimms, streams

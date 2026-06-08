@@ -554,7 +554,8 @@ def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, rob
                     project_model.nq,
                     project_model.nv,
                     project_model.robot.get_num_bodies(),
-                    project_model.nq + 2 * project_model.nv,
+                    # Q_QD_U_STRIDE: canonical nq-wide-slot layout (q,qd,qdd each nq) => 3*nq.
+                    3 * project_model.nq,
                     4 * project_model.nv**3,
                 ],
                 dtype=np.float64,
