@@ -181,7 +181,9 @@ public:
         fn_ee_pose_mujoco_      = reinterpret_cast<fn_ee_t>(opt_sym("grid_rbd_end_effector_pose_mujoco"));
         fn_ee_pose_grad_mujoco_ = reinterpret_cast<fn_ee_t>(opt_sym("grid_rbd_end_effector_pose_gradient_mujoco"));
         fn_inverse_dynamics_gradient_        = reinterpret_cast<fn_dyn_t>(require_sym("grid_rbd_inverse_dynamics_gradient"));
+        fn_inverse_dynamics_gradient_mujoco_ = reinterpret_cast<fn_dyn_t>(opt_sym("grid_rbd_inverse_dynamics_gradient_mujoco"));  // floating only
         fn_fd_grad_          = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_forward_dynamics_gradient"));
+        fn_fd_grad_mujoco_   = reinterpret_cast<fn_fd_t>  (opt_sym("grid_rbd_forward_dynamics_gradient_mujoco"));  // floating only
         // Phase-C extension: hessian + SO. Required for v0.1+ .so files.
         fn_ee_pose_hessian_  = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose_hessian"));
         fn_idsva_so_         = reinterpret_cast<fn_dyn_no_fext_t>(require_sym("grid_rbd_idsva_so"));
@@ -217,6 +219,7 @@ public:
         fn_ccrba_              = reinterpret_cast<fn_q_qd_out_t>(opt_sym("grid_rbd_ccrba"));
         fn_energy_             = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_energy"));
         fn_generalized_gravity_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_generalized_gravity"));
+        fn_generalized_gravity_mujoco_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_generalized_gravity_mujoco"));  // floating only
         fn_nonlinear_effects_  = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_nonlinear_effects"));
         fn_frame_jacobian_     = reinterpret_cast<fn_frame_jac_t>(opt_sym("grid_rbd_frame_jacobian"));
         fn_frame_jacobian_dot_ = reinterpret_cast<fn_frame_jac_dot_t>(opt_sym("grid_rbd_frame_jacobian_dot"));
@@ -810,6 +813,23 @@ public:
         return out;
     }
 
+    bool has_inverse_dynamics_gradient_mujoco() const { return fn_inverse_dynamics_gradient_mujoco_ != nullptr; }
+    py::array_t<CT> inverse_dynamics_gradient_mujoco(
+        arr_t q, arr_t qd, arr_t qdd, float gravity, py::object f_ext_opt)
+    {
+        if (!fn_inverse_dynamics_gradient_mujoco_) throw std::runtime_error(
+            "inverse_dynamics_gradient_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(qdd, batch, num_joints_, "qdd");
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
+        int rc = fn_inverse_dynamics_gradient_mujoco_(q.data(), qd.data(), qdd.data(),
+                               out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_gradient_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     py::array_t<CT> forward_dynamics_gradient(
         arr_t q,
         arr_t qd,
@@ -827,6 +847,23 @@ public:
         int rc = fn_fd_grad_(q.data(), qd.data(), u.data(),
                              out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_gradient failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_forward_dynamics_gradient_mujoco() const { return fn_fd_grad_mujoco_ != nullptr; }
+    py::array_t<CT> forward_dynamics_gradient_mujoco(
+        arr_t q, arr_t qd, arr_t u, float gravity, py::object f_ext_opt)
+    {
+        if (!fn_fd_grad_mujoco_) throw std::runtime_error(
+            "forward_dynamics_gradient_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
+        int rc = fn_fd_grad_mujoco_(q.data(), qd.data(), u.data(),
+                                    out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_gradient_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
 
@@ -1253,6 +1290,20 @@ public:
         return out;
     }
 
+    bool has_generalized_gravity_mujoco() const { return fn_generalized_gravity_mujoco_ != nullptr; }
+    py::array_t<CT> generalized_gravity_mujoco(
+        arr_t q,
+        float gravity)
+    {
+        if (!fn_generalized_gravity_mujoco_) throw std::runtime_error(
+            "generalized_gravity_mujoco unavailable: floating-base .so only");
+        int batch = check_q(q, "generalized_gravity_mujoco");
+        py::array_t<CT> out({batch, num_vel_});
+        int rc = fn_generalized_gravity_mujoco_(q.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_generalized_gravity_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     // nonlinear_effects(q, qd, gravity) -> (batch, NUM_VEL): c(q,qd) = RNEA(q,qd,0).
     py::array_t<CT> nonlinear_effects(
         arr_t q,
@@ -1591,7 +1642,9 @@ private:
     fn_ee_t    fn_ee_pose_mujoco_      = nullptr;  // floating-base mjx EE pose (optional)
     fn_ee_t    fn_ee_pose_grad_mujoco_ = nullptr;  // floating-base mjx EE-pose grad (optional)
     fn_dyn_t  fn_inverse_dynamics_gradient_      = nullptr;
+    fn_dyn_t  fn_inverse_dynamics_gradient_mujoco_ = nullptr;  // floating mjx (optional)
     fn_fd_t    fn_fd_grad_        = nullptr;
+    fn_fd_t    fn_fd_grad_mujoco_ = nullptr;  // floating mjx (optional)
     fn_ee_t    fn_ee_pose_hessian_ = nullptr;
     fn_fk_batched_t fn_fk_batched_ = nullptr;
     fn_dyn_no_fext_t fn_idsva_so_ = nullptr;
@@ -1616,6 +1669,7 @@ private:
     fn_q_qd_out_t      fn_ccrba_               = nullptr;
     fn_q_qd_out_grav_t fn_energy_              = nullptr;
     fn_q_out_grav_t    fn_generalized_gravity_ = nullptr;
+    fn_q_out_grav_t    fn_generalized_gravity_mujoco_ = nullptr;  // floating mjx (optional)
     fn_q_qd_out_grav_t fn_nonlinear_effects_   = nullptr;
     fn_frame_jac_t     fn_frame_jacobian_      = nullptr;
     fn_frame_jac_dot_t fn_frame_jacobian_dot_  = nullptr;
@@ -1746,10 +1800,18 @@ static void register_runner(py::module_& m, const char* cls_name) {
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("gravity") = -9.81f,
              py::arg("f_ext") = py::none())
+        .def_property_readonly("has_inverse_dynamics_gradient_mujoco", &R::has_inverse_dynamics_gradient_mujoco)
+        .def("inverse_dynamics_gradient_mujoco", &R::inverse_dynamics_gradient_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("qdd"),
+             py::arg("gravity") = -9.81f, py::arg("f_ext") = py::none())
         .def("forward_dynamics_gradient", &R::forward_dynamics_gradient,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("gravity") = -9.81f,
              py::arg("f_ext") = py::none())
+        .def_property_readonly("has_forward_dynamics_gradient_mujoco", &R::has_forward_dynamics_gradient_mujoco)
+        .def("forward_dynamics_gradient_mujoco", &R::forward_dynamics_gradient_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("u"),
+             py::arg("gravity") = -9.81f, py::arg("f_ext") = py::none())
         .def("end_effector_pose_hessian", &R::end_effector_pose_hessian,
              py::arg("q"))
         .def("idsva_so", &R::idsva_so,
@@ -1802,6 +1864,9 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("energy", &R::energy,
              py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
         .def("generalized_gravity", &R::generalized_gravity,
+             py::arg("q"), py::arg("gravity") = -9.81f)
+        .def_property_readonly("has_generalized_gravity_mujoco", &R::has_generalized_gravity_mujoco)
+        .def("generalized_gravity_mujoco", &R::generalized_gravity_mujoco,
              py::arg("q"), py::arg("gravity") = -9.81f)
         .def("nonlinear_effects", &R::nonlinear_effects,
              py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)

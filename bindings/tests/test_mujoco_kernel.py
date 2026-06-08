@@ -429,3 +429,92 @@ def test_native_mjx_integrator_retract(go2_floating):
             f"integrator joints != pin (B={B}): max|d|={np.abs(q_next[:, 7:]-pin_x[:, 7:nq]).max():.3e}"
         # (4) non-triviality: the mjx base position differs from pin's SE(3) base step.
         assert np.abs(q_next[0, :3] - pin_x[0, :3]).max() > 1e-4
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_inverse_dynamics_gradient_matches_oracle(go2_floating):
+    """FULL-GRADIENT class: dc/d(q,qd) mjx = reframe + base-row rotate + ω×v
+    couplings (M from in-kernel crba reuse), validated vs the RBDReference oracle."""
+    from RBDReference.equivalents.mujoco_convention import (
+        id_gradient_pin_to_mjx, FloatingRootLayout)
+    h = go2_floating
+    assert h._runner.has_inverse_dynamics_gradient_mujoco
+    nq, nv = h.num_joints, h.num_vel
+    layout = FloatingRootLayout()
+    rng = np.random.default_rng(7)
+    for B in (1, 4):
+        qpos, qvel, _ = _rand_state(h, rng, B, with_qd=True)
+        qacc = rng.standard_normal((B, nq)); qacc[:, nv:] = 0.0
+        native = np.asarray(h.inverse_dynamics_gradient(qpos, qvel, qacc, _convention="mujoco"),
+                            np.float64)  # (B, NV, 2NV)
+        q_pin, qd_pin, qdd_pin, _, R = h._mjx_inputs(qpos, qvel, qacc)
+        pin_g = np.asarray(h.inverse_dynamics_gradient(q_pin, qd_pin, qdd_pin), np.float64)
+        M = np.asarray(h.crba(q_pin), np.float64)                       # (B, NV, NV)
+        tau = np.asarray(h.inverse_dynamics(q_pin, qd_pin, qdd_pin), np.float64)  # (B, NJ)
+        exp = np.empty_like(native)
+        for b in range(B):
+            dq = pin_g[b, :, :nv]; dqd = pin_g[b, :, nv:]
+            o_dq, o_dqd = id_gradient_pin_to_mjx(
+                dq, dqd, M[b], tau[b, :nv], qd_pin[b, :nv], qdd_pin[b, :nv], R[b], layout)
+            exp[b] = np.concatenate([o_dq, o_dqd], axis=-1)
+        assert np.allclose(native, exp, rtol=5e-3, atol=5e-2), \
+            f"id-grad mjx != oracle (B={B}): max|d|={np.abs(native-exp).max():.3e}"
+    # non-triviality: the mjx gradient differs from feeding raw mjx q to the pin grad.
+    raw = np.asarray(h.inverse_dynamics_gradient(qpos, qvel, qacc), np.float64)
+    assert np.abs(native - raw).max() > 1e-2
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_forward_dynamics_gradient_matches_oracle(go2_floating):
+    """FULL-GRADIENT class: dqdd/d(q,qd) mjx = reframe + base-row rotate + ω×v
+    couplings (qdd computed in-kernel), validated vs the RBDReference oracle."""
+    from RBDReference.equivalents.mujoco_convention import (
+        fd_gradient_pin_to_mjx, FloatingRootLayout)
+    h = go2_floating
+    assert h._runner.has_forward_dynamics_gradient_mujoco
+    nq, nv = h.num_joints, h.num_vel
+    layout = FloatingRootLayout()
+    rng = np.random.default_rng(11)
+    for B in (1, 4):
+        qpos, qvel, u = _rand_state(h, rng, B, with_qd=True, with_u=True)
+        native = np.asarray(h.forward_dynamics_gradient(qpos, qvel, u, _convention="mujoco"),
+                            np.float64)  # (B, NV, 2NV)
+        q_pin, qd_pin, _, u_pin, R = h._mjx_inputs(qpos, qvel, u=u)
+        pin_g = np.asarray(h.forward_dynamics_gradient(q_pin, qd_pin, u_pin), np.float64)
+        Minv = np.asarray(h.minv(q_pin), np.float64)                    # (B, NV, NV)
+        qdd = np.asarray(h.forward_dynamics(q_pin, qd_pin, u_pin), np.float64)  # (B, NJ)
+        exp = np.empty_like(native)
+        for b in range(B):
+            dq = pin_g[b, :, :nv]; dqd = pin_g[b, :, nv:]
+            o_dq, o_dqd = fd_gradient_pin_to_mjx(
+                dq, dqd, Minv[b], qdd[b, :nv], qd_pin[b, :nv], u_pin[b, :nv], R[b], layout)
+            exp[b] = np.concatenate([o_dq, o_dqd], axis=-1)
+        assert np.allclose(native, exp, rtol=5e-3, atol=5e-2), \
+            f"fd-grad mjx != oracle (B={B}): max|d|={np.abs(native-exp).max():.3e}"
+    # non-triviality: the mjx gradient differs from feeding raw mjx q to the pin grad.
+    raw = np.asarray(h.forward_dynamics_gradient(qpos, qvel, u), np.float64)
+    assert np.abs(native - raw).max() > 1e-2
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_generalized_gravity_matches_oracle(go2_floating):
+    """g(q) transforms like a generalized force (tau): the base rows are rotated
+    into the mjx frame; output shape is invariant (B, NV). Validated vs the
+    RBDReference id-force oracle."""
+    from grid_rbd import _mujoco as bm
+    h = go2_floating
+    assert h._runner.has_generalized_gravity_mujoco
+    rng = np.random.default_rng(13)
+    for B in (1, 4):
+        qpos, _, _ = _rand_state(h, rng, B, with_qd=False)
+        native = np.asarray(h.generalized_gravity(qpos, _convention="mujoco"), np.float64)  # (B, NV)
+        q_pin, _, _, _, R = h._mjx_inputs(qpos)
+        g_pin = np.asarray(h.generalized_gravity(q_pin), np.float64)
+        exp = bm.id_tau_pin_to_mjx(g_pin, R, True)  # g transforms like a generalized force
+        assert np.allclose(native, exp, rtol=5e-3, atol=5e-2), \
+            f"gravity mjx != oracle (B={B}): max|d|={np.abs(native-exp).max():.3e}"
+    # non-triviality: the mjx base rows differ from the raw pin gravity.
+    assert np.abs(native[:, :6] - g_pin[:, :6]).max() > 1e-2

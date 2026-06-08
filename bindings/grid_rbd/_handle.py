@@ -733,7 +733,7 @@ class RobotHandle:
         B = raw.shape[0]
         return raw.reshape(B, NEE, NV, 6).transpose(0, 1, 3, 2).reshape(B, 6 * NEE, NV)
 
-    def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
+    def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None, _convention=None):
         """∂τ/∂(q, qd). Returns shape (B, NV, 2*NV) — concatenated
         [dc_dq | dc_dqd], tangent-space (pinocchio) convention. Slice with
         `[..., :NV]` / `[..., NV:]`. FIXED base: NV == NJ (unchanged); FLOATING
@@ -746,8 +746,27 @@ class RobotHandle:
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``.
         f_ext enters RNEA affinely, so for a CONSTANT f_ext the Jacobian
-        ∂c/∂(q,qd) is unchanged; the kwarg is for consistency with inverse_dynamics()."""
-        self._mjx_guard_unsupported("inverse_dynamics_gradient")
+        ∂c/∂(q,qd) is unchanged; the kwarg is for consistency with inverse_dynamics().
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``qdd`` are
+        MuJoCo-convention and the returned gradient is in the mjx frame (the full
+        convention transform — reframe + base-row rotate + ω×v couplings — is baked
+        into the kernel). Requires an explicit ``qdd`` (and no ``f_ext``)."""
+        NV = self.num_vel
+        if (self._mjx_active(_convention) and qdd is not None and f_ext is None
+                and getattr(self._runner, "has_inverse_dynamics_gradient_mujoco", False)):
+            q   = np.ascontiguousarray(q,   dtype=self._dt)
+            qd  = np.ascontiguousarray(qd,  dtype=self._dt)
+            qdd_arr = np.ascontiguousarray(qdd, dtype=self._dt)
+            raw = self._runner.inverse_dynamics_gradient_mujoco(q, qd, qdd_arr, gravity, None)
+            B = raw.shape[0]
+            blocks = raw.reshape(B, 2, NV, NV).transpose(0, 1, 3, 2)
+            return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
+        if self._mjx_active(_convention):
+            raise NotImplementedError(
+                "inverse_dynamics_gradient(output_convention='mujoco') needs an explicit "
+                "qdd, no f_ext, and a floating-base .so built with the mjx kernel "
+                "(re-register with force_rebuild=True).")
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         qdd_arr = None
@@ -763,20 +782,38 @@ class RobotHandle:
         blocks = raw.reshape(B, 2, NV, NV).transpose(0, 1, 3, 2)  # row-major now
         return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
-    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
+    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None):
         """∂qdd/∂(q, qd). Returns shape (B, NV, 2*NV), tangent-space (pinocchio)
         convention. FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ.
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
-        affine in f_ext so a constant f_ext leaves this Jacobian unchanged."""
-        self._mjx_guard_unsupported("forward_dynamics_gradient")
+        affine in f_ext so a constant f_ext leaves this Jacobian unchanged.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``u`` are
+        MuJoCo-convention and the returned gradient is in the mjx frame (the full
+        convention transform — reframe + base-row rotate + ω×v couplings — is baked
+        into the kernel). Requires no ``f_ext``."""
+        NV = self.num_vel
+        if (self._mjx_active(_convention) and f_ext is None
+                and getattr(self._runner, "has_forward_dynamics_gradient_mujoco", False)):
+            q  = np.ascontiguousarray(q,  dtype=self._dt)
+            qd = np.ascontiguousarray(qd, dtype=self._dt)
+            u  = np.ascontiguousarray(u,  dtype=self._dt)
+            raw = self._runner.forward_dynamics_gradient_mujoco(q, qd, u, gravity, None)
+            B = raw.shape[0]
+            blocks = raw.reshape(B, 2, NV, NV).transpose(0, 1, 3, 2)
+            return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
+        if self._mjx_active(_convention):
+            raise NotImplementedError(
+                "forward_dynamics_gradient(output_convention='mujoco') needs no f_ext "
+                "and a floating-base .so built with the mjx kernel "
+                "(re-register with force_rebuild=True).")
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
         raw = self._runner.forward_dynamics_gradient(q, qd, u, gravity, self._prep_f_ext(f_ext))
         # Same layout as dc_du: [df_dq, df_dqd] NV×NV col-major blocks.
         B = raw.shape[0]
-        NV = self.num_vel
         blocks = raw.reshape(B, 2, NV, NV).transpose(0, 1, 3, 2)
         return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
@@ -1110,10 +1147,20 @@ class RobotHandle:
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         return self._runner.energy(q, qd, float(gravity))
 
-    def generalized_gravity(self, q, *, gravity: float = -9.81):
+    def generalized_gravity(self, q, *, gravity: float = -9.81, _convention=None):
         """Generalized gravity torque g(q) = RNEA(q, 0, 0). Returns ``(B, NV)``.
-        Matches ``RBDReference.generalized_gravity(q, GRAVITY=gravity)``."""
-        self._mjx_guard_unsupported("generalized_gravity")
+        Matches ``RBDReference.generalized_gravity(q, GRAVITY=gravity)``.
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
+        and the returned g is in the mjx frame (the base rows are rotated in-kernel).
+        Output shape is invariant ``(B, NV)``."""
+        if self._mjx_active(_convention) and getattr(self._runner, "has_generalized_gravity_mujoco", False):
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            return self._runner.generalized_gravity_mujoco(q, float(gravity))
+        if self._mjx_active(_convention):
+            raise NotImplementedError(
+                "generalized_gravity(output_convention='mujoco') needs a floating-base "
+                ".so built with the mjx kernel (re-register with force_rebuild=True).")
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.generalized_gravity(q, float(gravity))
 

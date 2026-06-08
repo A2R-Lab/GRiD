@@ -668,6 +668,41 @@ extern "C" int grid_rbd_inverse_dynamics_gradient(
     return 0;
 }
 
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention inverse-dynamics gradient (floating base only). q/qd/qdd are
+// MuJoCo-native; the kernel converts inputs mjx->pin on load and applies the full
+// gradient convention transform (reframe + base-row rotate + ω×v couplings, with M
+// from an in-kernel crba reuse) so the returned dc/d(q,qd) is the mjx-frame gradient.
+// REQUIRES qdd (the mjx gradient is the with-qdd surface; a null qdd returns rc=4).
+extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(
+    const T* q, const T* qd, const T* qdd_opt,
+    T* dc_du_out,
+    int batch, T gravity, const T* f_ext)
+{
+    if (!qdd_opt) return 4;  // mjx gradient requires an explicit qdd
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+
+    const int nj = grid::NUM_JOINTS;
+    pack_q_qd_u(q, qd, nullptr, batch, nj);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
+
+    std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
+    grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false,
+                                    /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+
+    cudaError_t e = cudaDeviceSynchronize();
+    reset_f_ext(f_ext, batch);
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    const int nv = grid::NUM_VEL;
+    cudaMemcpy(dc_du_out, g_data->d_dc_du,
+               (size_t)batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
+
 // ∂qdd/∂(q, qd): output shape (batch, NV, 2*NV) (tangent-space; FIXED base
 // NV == NJ, FLOATING base NV < NJ).
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
@@ -699,6 +734,38 @@ extern "C" int grid_rbd_forward_dynamics_gradient(
                (size_t)batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
+
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention forward-dynamics gradient (floating base only). q/qd/u are
+// MuJoCo-native; qdd is computed internally. The kernel converts inputs mjx->pin on
+// load and applies the full gradient convention transform (reframe + base-row rotate
+// + ω×v couplings) so the returned df/d(q,qd) is the mjx-frame gradient.
+extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(
+    const T* q, const T* qd, const T* u,
+    T* df_du_out,
+    int batch, T gravity, const T* f_ext)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+
+    const int nj = grid::NUM_JOINTS;
+    pack_q_qd_u(q, qd, u, batch, nj);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
+
+    grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+                                    /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+
+    cudaError_t e = cudaDeviceSynchronize();
+    reset_f_ext(f_ext, batch);
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    const int nv = grid::NUM_VEL;
+    cudaMemcpy(df_du_out, g_data->d_df_du,
+               (size_t)batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
 
 // End-effector pose Hessian: 6×NUM_EES×NV×NV per timestep (d^2/dv^2 tangent).
 // Calls grid::end_effector_pose_hessian which fills BOTH end_effector_pose_hessian AND
@@ -934,6 +1001,24 @@ extern "C" int grid_rbd_generalized_gravity(const T* q, T* out, int batch, T gra
     std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
 }
+
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention generalized_gravity(q) -> g(q) (floating base only). q is raw
+// mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true) base-rotates
+// the gravity output so the returned g is mjx-frame. Output is NUM_VEL invariant-shaped.
+extern "C" int grid_rbd_generalized_gravity_mujoco(const T* q, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd unused (zeroed internally)
+    grid::generalized_gravity<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+                              /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
 
 // nonlinear_effects(q, qd) -> c(q,qd) = RNEA(q,qd,0) per timestep, NUM_VEL floats. Takes gravity.
 extern "C" int grid_rbd_nonlinear_effects(const T* q, const T* qd, T* out, int batch, T gravity) {
