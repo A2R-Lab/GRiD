@@ -456,10 +456,11 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   an internal FD round-trip is necessary but NOT sufficient — cross-check the real external tool. MuJoCo's `d/dqpos`
   also holds qvel/qacc FIXED IN MJX FRAME → base-rotation gradient columns pick up Coriolis/inertial/`ω×v`
   couplings. Full derivation + validated oracle: `RBDReference/equivalents/mujoco_convention.{py,md}`.
-- **`RBDReference.inverse_dynamics_gradient` crashes on SMALL floating models (NB≤6).**
-  `inverse_dynamics_gradient_fpass_dq` (~line 3163) indexes the BODY axis with a floating-base velocity-DOF index
-  (`da_dq[:,c,ii]`, ii∈0..5) instead of body `ind`. NB≤6 → IndexError; NB≥7 (e.g. go2) silently doesn't crash and
-  validates correctly vs pin/FD, so it's latent. Use a ≥7-body robot for floating gradient work, or fix to index `ind`.
+- **`RBDReference.inverse_dynamics_gradient` floating-root `da_dq` term (FIXED 2026-06-08, f22b391).**
+  `inverse_dynamics_gradient_fpass_dq` indexed the BODY axis with a floating-base velocity-DOF index
+  (`da_dq[:,c,ii]`, ii∈0..5) — crashed on NB≤6 models and only avoided it on NB≥7 (e.g. go2) because the
+  floating root's own `dv_dq` is identically zero so the term was structurally a no-op. Fixed: the floating
+  root contributes nothing to that term (validated byte-identical on go2/other floating robots vs pin).
 
 ---
 
