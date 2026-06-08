@@ -829,18 +829,28 @@ class RobotHandle:
         blocks = [flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4)]
         return SecondOrderFD(*self._cast_out(*blocks))
 
-    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81, _convention=None):
         """One integration step x_{k+1} = integrator(x_k, u, dt).
 
         Returns shape (B, NUM_POS + NUM_VEL) — concatenated [q_new, v_new].
         `dt` is the runtime timestep; gravity is the signed gravitational acceleration (default -9.81).
         `integrator_type` is one of euler / semi_implicit_euler / midpoint /
-        rk3 / rk4."""
-        self._mjx_guard_unsupported("integrator")
+        rk3 / rk4.
+
+        With ``output_convention="mujoco"`` (floating base) the free-joint base
+        position takes a GLOBAL additive step (the MuJoCo retract) rather than
+        pinocchio's SE(3) update; ``q``/``qd`` are MuJoCo-convention and the returned
+        ``q_new`` is in the mjx frame (quaternion wxyz). Baked into the kernel."""
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
         it = _integrator_code(integrator_type)
+        if self._mjx_active(_convention):
+            if not getattr(self._runner, "has_integrator_mujoco", False):
+                raise NotImplementedError(
+                    "integrator(output_convention='mujoco') needs a floating-base .so "
+                    "built with the mjx kernel — re-register with force_rebuild=True.")
+            return self._runner.integrator_mujoco(q, qd, u, float(dt), it, gravity=float(gravity))
         return self._runner.integrator(q, qd, u, float(dt), it, gravity=float(gravity))
 
     def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):

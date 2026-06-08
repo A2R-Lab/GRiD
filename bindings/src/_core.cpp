@@ -187,6 +187,7 @@ public:
         fn_idsva_so_         = reinterpret_cast<fn_dyn_no_fext_t>(require_sym("grid_rbd_idsva_so"));
         fn_fdsva_so_         = reinterpret_cast<fn_fd_no_fext_t>  (require_sym("grid_rbd_fdsva_so"));
         fn_integrator_       = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator"));
+        fn_integrator_mujoco_ = reinterpret_cast<fn_integrator_t>(opt_sym("grid_rbd_integrator_mujoco"));  // floating only
         fn_integrator_grad_  = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator_gradient"));
 
         // grid_plant C ABI (G1) — OPTIONAL: resolve if present (older .so files
@@ -906,6 +907,22 @@ public:
         return out;
     }
 
+    bool has_integrator_mujoco() const { return fn_integrator_mujoco_ != nullptr; }
+    py::array_t<CT> integrator_mujoco(
+        arr_t q, arr_t qd, arr_t u, float dt, int it, float gravity)
+    {
+        if (!fn_integrator_mujoco_) throw std::runtime_error(
+            "integrator_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        py::array_t<CT> out({batch, num_joints_ + num_vel_});
+        int rc = fn_integrator_mujoco_(q.data(), qd.data(), u.data(),
+                                       out.mutable_data(), batch, gravity, dt, it);
+        if (rc == 3) throw std::runtime_error("integrator_mujoco: unsupported integrator_type for this build");
+        if (rc != 0) throw std::runtime_error("grid_rbd_integrator_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     // integrator_gradient(q, qd, u, dt, it) -> flat dAB (batch, 2*NV*3*NV),
     // column-major per timestep ([d/dq | d/dqd | d/du]); reshaped Python-side.
     py::array_t<CT> integrator_gradient(
@@ -1580,6 +1597,7 @@ private:
     fn_dyn_no_fext_t fn_idsva_so_ = nullptr;
     fn_fd_no_fext_t   fn_fdsva_so_ = nullptr;
     fn_integrator_t fn_integrator_      = nullptr;
+    fn_integrator_t fn_integrator_mujoco_ = nullptr;  // floating-base mjx integrator (optional)
     fn_integrator_t fn_integrator_grad_ = nullptr;
     // grid_plant surface (optional symbols)
     fn_plant_cost_t    fn_plant_state_cost_  = nullptr;
@@ -1743,6 +1761,10 @@ static void register_runner(py::module_& m, const char* cls_name) {
              py::arg("second_order_tensor_size"),
              py::arg("gravity") = -9.81f)
         .def("integrator", &R::integrator,
+             py::arg("q"), py::arg("qd"), py::arg("u"),
+             py::arg("dt"), py::arg("it") = 0, py::arg("gravity") = -9.81f)
+        .def_property_readonly("has_integrator_mujoco", &R::has_integrator_mujoco)
+        .def("integrator_mujoco", &R::integrator_mujoco,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("dt"), py::arg("it") = 0, py::arg("gravity") = -9.81f)
         .def("integrator_gradient", &R::integrator_gradient,

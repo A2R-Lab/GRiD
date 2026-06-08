@@ -1285,6 +1285,14 @@ static void launch_integrator_host(int batch, T gravity, T dt) {
     grid::integrator<T, IT>(g_data, g_robot, /*gravity=*/gravity,
                             dt, batch, g_block_dimms, g_thread_dimms, g_streams);
 }
+#ifdef GRID_FLOATING_BASE
+template <grid::IntegratorType IT>
+static void launch_integrator_host_mujoco(int batch, T gravity, T dt) {
+    grid::integrator<T, IT, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, /*gravity=*/gravity,
+        dt, batch, g_block_dimms, g_thread_dimms, g_streams);
+}
+#endif
 template <grid::IntegratorType IT>
 static void launch_integrator_grad_host(int batch, T gravity, T dt) {
     grid::integrator_gradient<T, IT>(g_data, g_robot, /*gravity=*/gravity,
@@ -1331,6 +1339,32 @@ extern "C" int grid_rbd_integrator(
                 batch * (grid::NUM_POS + grid::NUM_VEL) * sizeof(T));
     return 0;
 }
+
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention integrator (floating base only): the free-joint base POSITION
+// takes a GLOBAL additive step (mjx retract) instead of pin's SE(3) V(phi); the
+// base quaternion + joints integrate normally. q/qd raw mjx in (q wxyz, qd global),
+// x_kp1 raw mjx out (q wxyz). Baked into the kernel (MUJOCO_OUTPUT=true).
+extern "C" int grid_rbd_integrator_mujoco(
+    const T* q, const T* qd, const T* u,
+    T* x_kp1_out, int batch, T gravity, T dt, int it)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+
+    const int nj = grid::NUM_JOINTS;
+    pack_q_qd_u(q, qd, u, batch, nj);
+
+    GRID_RBD_IT_DISPATCH(it, launch_integrator_host_mujoco, batch, gravity, dt);
+
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    std::memcpy(x_kp1_out, g_data->h_x_kp1,
+                batch * (grid::NUM_POS + grid::NUM_VEL) * sizeof(T));
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
 
 // integrator_gradient(q, qd, u, dt, it) → dAB  (2*NV x 3*NV per timestep)
 extern "C" int grid_rbd_integrator_gradient(
