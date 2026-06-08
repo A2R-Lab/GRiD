@@ -446,6 +446,20 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   valid and should still be checked. (Codegen should prefer a quaternion / rotation-matrix pose output, or
   document the rpy limitation.) Also: `pin.dccrba(model,data,q,v)` is the exact analytic `Adot` oracle (= ∂A/∂t,
   NOT the ∂A/∂q tensor — they differ; ∂A/∂q contracts to Adot over the DOF axis and to dh_dq over the column axis).
+- **MuJoCo/mjx free-joint convention: ACCELERATION is not a frame rotation (cost us a wrong gradient model).**
+  Converting GRiD↔MuJoCo for a floating base, the velocity is a simple root-block rotation `G=blockdiag(R,I)`
+  (mjx base-linear vel is GLOBAL `ṗ=R·v_local`), BUT acceleration carries an extra `ω×v` term:
+  `a_mjx_lin = R(a_pin_lin + ω×v_local)`. Skipping it matches gravity + the `M·a` inertial term but is O(1) wrong
+  on the **Coriolis** term — invisible to FD-self-consistency (which differentiates your *own* value def), caught
+  ONLY by cross-checking real MuJoCo (`mj_inverse`/`mj_fullM`/`mj_forward`; pip-installable, load a matched
+  hand-MJCF + URDF for the SAME tiny model → machine-precision diff). Lesson: when matching an EXTERNAL convention,
+  an internal FD round-trip is necessary but NOT sufficient — cross-check the real external tool. MuJoCo's `d/dqpos`
+  also holds qvel/qacc FIXED IN MJX FRAME → base-rotation gradient columns pick up Coriolis/inertial/`ω×v`
+  couplings. Full derivation + validated oracle: `RBDReference/equivalents/mujoco_convention.{py,md}`.
+- **`RBDReference.inverse_dynamics_gradient` crashes on SMALL floating models (NB≤6).**
+  `inverse_dynamics_gradient_fpass_dq` (~line 3163) indexes the BODY axis with a floating-base velocity-DOF index
+  (`da_dq[:,c,ii]`, ii∈0..5) instead of body `ind`. NB≤6 → IndexError; NB≥7 (e.g. go2) silently doesn't crash and
+  validates correctly vs pin/FD, so it's latent. Use a ≥7-body robot for floating gradient work, or fix to index `ind`.
 
 ---
 
