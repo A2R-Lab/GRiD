@@ -152,6 +152,10 @@ public:
 
         // Algorithm symbols — required for v1 surface.
         fn_inverse_dynamics_             = reinterpret_cast<fn_dyn_t>(require_sym("grid_rbd_inverse_dynamics"));
+        // MuJoCo output-convention ID kernel: optional symbol — present ONLY in a
+        // floating-base .so (gated on GRID_FLOATING_BASE in the wrapper). nullptr
+        // on fixed-base / older .so, in which case the mjx method raises.
+        fn_inverse_dynamics_mujoco_      = reinterpret_cast<fn_dyn_t>(opt_sym("grid_rbd_inverse_dynamics_mujoco"));
         fn_minv_             = reinterpret_cast<fn_minv_t>(require_sym("grid_rbd_minv"));
         fn_fd_               = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_forward_dynamics"));
         fn_aba_              = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_aba"));
@@ -294,6 +298,41 @@ public:
                           out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) {
             throw std::runtime_error("grid_rbd_inverse_dynamics failed: rc=" + std::to_string(rc));
+        }
+        return out;
+    }
+
+    // ─── inverse_dynamics_mujoco ─────────────────────────────────────────────
+    //
+    // MuJoCo output-convention ID (floating base only). q/qd/qdd are MuJoCo-native
+    // and the returned tau is in the mjx frame — the convention transform is baked
+    // into the kernel (MUJOCO_OUTPUT=true), so NO host pre/post-process is applied.
+    // qdd is REQUIRED (the qdd=0 bias path can't represent mjx; use nonlinear_effects).
+    // Raises if the .so doesn't export the symbol (fixed-base / older build).
+    bool has_inverse_dynamics_mujoco() const { return fn_inverse_dynamics_mujoco_ != nullptr; }
+
+    py::array_t<CT> inverse_dynamics_mujoco(
+        arr_t q,
+        arr_t qd,
+        arr_t qdd,
+        float gravity,
+        py::object f_ext_opt)
+    {
+        if (!fn_inverse_dynamics_mujoco_) {
+            throw std::runtime_error(
+                "inverse_dynamics_mujoco unavailable: this .so has no mjx ID kernel "
+                "(only floating-base robots export grid_rbd_inverse_dynamics_mujoco)");
+        }
+        int batch = check_inputs_2d(q, qd, /*last_dim=*/num_joints_);
+        check_array_2d(qdd, batch, num_joints_, "qdd");
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+
+        py::array_t<CT> out({batch, num_joints_});
+        int rc = fn_inverse_dynamics_mujoco_(q.data(), qd.data(), qdd.data(),
+                          out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc != 0) {
+            throw std::runtime_error("grid_rbd_inverse_dynamics_mujoco failed: rc=" + std::to_string(rc));
         }
         return out;
     }
@@ -1208,6 +1247,7 @@ private:
     fn_int_v_t fn_init_       = nullptr;
     fn_int_v_t fn_close_      = nullptr;
     fn_dyn_t  fn_inverse_dynamics_           = nullptr;
+    fn_dyn_t  fn_inverse_dynamics_mujoco_    = nullptr;  // floating-base mjx ID (optional)
     fn_minv_t  fn_minv_           = nullptr;
     fn_fd_t    fn_fd_             = nullptr;
     fn_fd_t    fn_aba_            = nullptr;
@@ -1291,6 +1331,13 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("inverse_dynamics", &R::inverse_dynamics,
              py::arg("q"), py::arg("qd"),
              py::arg("qdd") = py::none(),
+             py::arg("gravity") = -9.81f,
+             py::arg("f_ext") = py::none())
+        .def_property_readonly("has_inverse_dynamics_mujoco", &R::has_inverse_dynamics_mujoco,
+            "True if this .so exports the native MuJoCo-convention ID kernel "
+            "(floating-base robots only).")
+        .def("inverse_dynamics_mujoco", &R::inverse_dynamics_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("qdd"),
              py::arg("gravity") = -9.81f,
              py::arg("f_ext") = py::none())
         .def("minv", &R::minv,

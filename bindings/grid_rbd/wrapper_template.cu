@@ -216,6 +216,48 @@ extern "C" int grid_rbd_inverse_dynamics(
     return 0;
 }
 
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention inverse dynamics (floating base only). Identical signature to
+// grid_rbd_inverse_dynamics, but q/qd/qdd are MuJoCo-native (quat wxyz, free-joint
+// velocity [v_lin GLOBAL; omega LOCAL]) and the returned tau is in the mjx frame.
+//
+// The mjx output convention is baked into the KERNEL via the compile-time
+// MUJOCO_OUTPUT=true template arg: the kernel converts the inputs mjx->pin on load
+// (quat reorder + base velocity/acceleration reframe) and rotates the base-linear
+// tau rows back to the mjx frame before saving — so NO host-side pre/post-process is
+// needed (this is the fast path that replaces pin-kernel + _mujoco.py rotation).
+//
+// qdd is REQUIRED: the qdd=0 "bias" path cannot represent mjx (mjx qacc=0 implies a
+// nonzero pin acceleration -omega x v — the nonlinear_effects accel-coupling), so a
+// null qdd returns rc=4. Callers wanting the mjx bias use nonlinear_effects instead.
+extern "C" int grid_rbd_inverse_dynamics_mujoco(
+    const T* q, const T* qd, const T* qdd_opt,
+    T* c_out,
+    int batch, T gravity, const T* f_ext)
+{
+    if (!qdd_opt) return 4;  // mjx requires an explicit qdd (see note above)
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+
+    const int nj = grid::NUM_JOINTS;
+    pack_q_qd_u(q, qd, nullptr, batch, nj);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
+
+    // Host wrapper copies h_qdd->d_qdd (NUM_JOINTS per timestep, contiguous).
+    std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
+    grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false,
+                           /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+
+    cudaError_t e = cudaDeviceSynchronize();
+    reset_f_ext(f_ext, batch);
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    std::memcpy(c_out, g_data->h_c, batch * nj * sizeof(T));
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
+
 // Direct mass-matrix inverse: Minv(q)
 extern "C" int grid_rbd_minv(
     const T* q,

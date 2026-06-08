@@ -505,6 +505,20 @@ class RobotHandle:
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``qdd`` are
         MuJoCo-convention and the returned ``τ`` is in the mjx frame.
         """
+        # mjx (MuJoCo output convention): prefer the NATIVE mjx kernel when available.
+        # It bakes the convention transform into the kernel (raw mjx inputs in, mjx
+        # tau out) — no host-side input convert or tau rotation. Requires an explicit
+        # qdd (the qdd=0 bias path is nonlinear_effects) and currently no f_ext (the
+        # kernel input-convert doesn't reframe external wrenches yet); otherwise fall
+        # back to the validated pin-kernel + _mujoco.py post-process path below.
+        if (self._mjx_active(_convention) and qdd is not None and f_ext is None
+                and getattr(self._runner, "has_inverse_dynamics_mujoco", False)):
+            q   = np.ascontiguousarray(q,   dtype=self._dt)
+            qd  = np.ascontiguousarray(qd,  dtype=self._dt)
+            qdd_arr = np.ascontiguousarray(qdd, dtype=self._dt)
+            c = self._runner.inverse_dynamics_mujoco(q, qd, qdd_arr, gravity, None)
+            return self._cast_out(c)
+
         R = None
         if self._mjx_active(_convention):
             q, qd, qdd, _, R = self._mjx_inputs(q, qd, qdd)
