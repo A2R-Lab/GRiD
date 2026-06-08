@@ -233,6 +233,24 @@ class RobotHandle:
         a floating base — fixed base has no free-flyer, so the flag is a no-op)."""
         return self._output_convention == "mujoco" and self.floating_base
 
+    def _mjx_guard_unsupported(self, method: str) -> None:
+        """Interim scaffold (removed as the codegen mjx fusion lands per algorithm):
+        RAISE on a floating-base derivative/second-order method while
+        ``output_convention="mujoco"`` rather than silently returning a PIN-frame
+        result. The value methods (id/fd/aba/crba/minv) already transform correctly;
+        the gradient / Hessian / second-order surfaces do NOT yet, so fail loudly.
+        The mjx transforms for these are validated in
+        ``RBDReference/equivalents/mujoco_convention.py`` and are being baked into the
+        kernels (see docs/open-tasks/mjx_codegen_fusion_master_plan.md)."""
+        if self._mjx_active():
+            raise NotImplementedError(
+                f"{method}() does not yet support output_convention='mujoco' on a "
+                "floating base (it would silently return a pinocchio-frame result). "
+                "Use output_convention='pinocchio' and transform with "
+                "RBDReference.equivalents.mujoco_convention, or wait for the mjx "
+                "codegen fusion. The value methods (inverse_dynamics, forward_dynamics, "
+                "crba, minv, aba) DO support mujoco mode.")
+
     # ─── runtime-mutable inertia (D.4 / Phase 5) ─────────────────────────────
 
     @property
@@ -549,6 +567,7 @@ class RobotHandle:
         GRiD's `h_end_effector_pose_gradient` is stored column-major as (6, NUM_EES*NV) per
         timestep; we re-orient to (6*NUM_EES, NV) per timestep.
         """
+        self._mjx_guard_unsupported("end_effector_pose_gradient")
         q = np.ascontiguousarray(q, dtype=self._dt)
         raw = self._runner.end_effector_pose_gradient(q)
         B = raw.shape[0]
@@ -570,6 +589,7 @@ class RobotHandle:
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``.
         f_ext enters RNEA affinely, so for a CONSTANT f_ext the Jacobian
         ∂c/∂(q,qd) is unchanged; the kwarg is for consistency with inverse_dynamics()."""
+        self._mjx_guard_unsupported("inverse_dynamics_gradient")
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         qdd_arr = None
@@ -591,6 +611,7 @@ class RobotHandle:
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
         affine in f_ext so a constant f_ext leaves this Jacobian unchanged."""
+        self._mjx_guard_unsupported("forward_dynamics_gradient")
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
@@ -605,6 +626,7 @@ class RobotHandle:
         """End-effector pose Hessian ∂²(pose)/∂v² (tangent-space, pinocchio convention).
         Returns shape (B, 6*NUM_EES, NV, NV). For fixed-base NV == NJ; for
         floating-base the (NV, NV) block indexes spatial twist components."""
+        self._mjx_guard_unsupported("end_effector_pose_hessian")
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.end_effector_pose_hessian(q)
 
@@ -617,6 +639,7 @@ class RobotHandle:
         Uses the codegen-time dispatcher: body-frame for fixed-base,
         world-frame for floating-base.
         """
+        self._mjx_guard_unsupported("idsva_so")
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         # qdd is packed into the device acceleration slot; pass explicit zeros for
@@ -638,6 +661,7 @@ class RobotHandle:
         """Second-order forward dynamics. Returns a :class:`SecondOrderFD`
         NamedTuple of 4 tensors each shape ``(B, NV, NV, NV)`` (a plain tuple,
         so positional unpacking / indexing still work)."""
+        self._mjx_guard_unsupported("fdsva_so")
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
@@ -654,6 +678,7 @@ class RobotHandle:
         `dt` is the runtime timestep; gravity is the signed gravitational acceleration (default -9.81).
         `integrator_type` is one of euler / semi_implicit_euler / midpoint /
         rk3 / rk4."""
+        self._mjx_guard_unsupported("integrator")
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
@@ -665,6 +690,7 @@ class RobotHandle:
         column blocks [d/dq | d/dqd | d/du] in tangent space.
 
         `dt` is the runtime timestep; gravity is the signed gravitational acceleration (default -9.81)."""
+        self._mjx_guard_unsupported("integrator_gradient")
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
@@ -688,6 +714,7 @@ class RobotHandle:
         x / x_des / Q are (B, NUM_POS + NUM_VEL). Returns:
           value (B,), grad (B, NX), hess = diag(Q) (B, NX, NX).
         """
+        self._mjx_guard_unsupported("quadratic_state_cost")
         x = np.ascontiguousarray(x, dtype=self._dt)
         x_des = np.ascontiguousarray(x_des, dtype=self._dt)
         Q = np.ascontiguousarray(Q, dtype=self._dt)
@@ -714,6 +741,7 @@ class RobotHandle:
         GN hessian J_p^T W J_p is symmetric the row/col-major distinction is
         immaterial.
         """
+        self._mjx_guard_unsupported("ee_pos_cost")
         q = np.ascontiguousarray(q, dtype=self._dt)
         p_des = np.ascontiguousarray(p_des, dtype=self._dt)
         W = np.ascontiguousarray(W, dtype=self._dt)
@@ -748,6 +776,7 @@ class RobotHandle:
         `integrator_type` is one of euler / semi_implicit_euler / midpoint /
         rk3 / rk4 (same codes as :py:meth:`integrator`).
         """
+        self._mjx_guard_unsupported("plant_step")
         x = np.ascontiguousarray(x, dtype=self._dt)
         u = np.ascontiguousarray(u, dtype=self._dt)
         it = _integrator_code(integrator_type)
@@ -763,6 +792,7 @@ class RobotHandle:
         (= ``integrator_gradient``). ``integrator_type`` is one of euler /
         semi_implicit_euler / midpoint / rk3 / rk4.
         """
+        self._mjx_guard_unsupported("plant_step_gradient")
         x = np.ascontiguousarray(x, dtype=self._dt)
         u = np.ascontiguousarray(u, dtype=self._dt)
         it = _integrator_code(integrator_type)
@@ -788,6 +818,7 @@ class RobotHandle:
         Floating-base and multi-stage RK are deferred (the C-ABI returns rc=3 /
         raises for any other ``integrator_type``).
         """
+        self._mjx_guard_unsupported("plant_step_hessian")
         x = np.ascontiguousarray(x, dtype=self._dt)
         u = np.ascontiguousarray(u, dtype=self._dt)
         it = _integrator_code(integrator_type)
@@ -806,6 +837,7 @@ class RobotHandle:
           with the top-left NV×NV q-block = J_com^T diag(W) J_com.
         Matches ``RBDReference.com_cost(q, p_des, W)``.
         """
+        self._mjx_guard_unsupported("com_cost")
         q = np.ascontiguousarray(q, dtype=self._dt)
         p_des = np.ascontiguousarray(p_des, dtype=self._dt)
         W = np.ascontiguousarray(W, dtype=self._dt)
@@ -819,6 +851,7 @@ class RobotHandle:
           with the bottom-right NV×NV qd-block = A^T diag(W) A.
         Matches ``RBDReference.momentum_cost(q, qd, h_des, W)``.
         """
+        self._mjx_guard_unsupported("momentum_cost")
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         h_des = np.ascontiguousarray(h_des, dtype=self._dt)
@@ -857,6 +890,7 @@ class RobotHandle:
         in the Pinocchio convention (``[linear; angular]`` at the CoM, world
         aligned). Matches ``RBDReference.ccrba(q, qd)``.
         """
+        self._mjx_guard_unsupported("ccrba")
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         raw = self._runner.ccrba(q, qd)  # (B, 6*NV + 6): [A(6 x NV col-major); h(6)]
@@ -878,6 +912,7 @@ class RobotHandle:
     def generalized_gravity(self, q, *, gravity: float = -9.81):
         """Generalized gravity torque g(q) = RNEA(q, 0, 0). Returns ``(B, NV)``.
         Matches ``RBDReference.generalized_gravity(q, GRAVITY=gravity)``."""
+        self._mjx_guard_unsupported("generalized_gravity")
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.generalized_gravity(q, float(gravity))
 
@@ -885,6 +920,7 @@ class RobotHandle:
         """Nonlinear (bias) effects c(q,qd) = RNEA(q, qd, 0) = C(q,qd)·qd + g(q).
         Returns ``(B, NV)``. Matches ``RBDReference.nonlinear_effects(q, qd,
         GRAVITY=gravity)``."""
+        self._mjx_guard_unsupported("nonlinear_effects")
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         return self._runner.nonlinear_effects(q, qd, float(gravity))
@@ -894,6 +930,7 @@ class RobotHandle:
         ``C·qd + g(q) = nonlinear_effects(q, qd)``. Matches
         ``RBDReference.coriolis_matrix(q, qd)`` (gravity is unused by C; the
         kwarg mirrors the host wrapper signature)."""
+        self._mjx_guard_unsupported("coriolis_matrix")
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         raw = self._runner.coriolis_matrix(q, qd, float(gravity))  # (B, NV*NV) row-major
@@ -929,6 +966,7 @@ class RobotHandle:
         clear ``RuntimeError`` is raised only in the rare case where even the
         most-spilled tier's centroidal pool exceeds this GPU's shared-memory cap.
         """
+        self._mjx_guard_unsupported("dccrba")
         q = np.ascontiguousarray(q, dtype=self._dt)
         raw = self._runner.dccrba(q)  # (B, 6*NV*NV) flat, dA[row + 6*k + 6*NV*m]
         B = raw.shape[0]
@@ -946,6 +984,7 @@ class RobotHandle:
         raises a clear ``RuntimeError`` only on the rare oversized-pool case (see
         :py:meth:`dccrba`).
         """
+        self._mjx_guard_unsupported("cmm_time_variation")
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         raw = self._runner.cmm_time_variation(q, qd)  # (B, 6*NV) col-major A[r + 6*c]
@@ -964,6 +1003,7 @@ class RobotHandle:
         default), or the equivalent int. Both are now RUNTIME parameters of the
         GPU surface.
         """
+        self._mjx_guard_unsupported("frame_jacobian")
         q = np.ascontiguousarray(q, dtype=self._dt)
         tj, rf = _frame_args(target_jid, reference_frame)
         raw = self._runner.frame_jacobian(q, tj, rf)  # (B, 6*NV) col-major: J[r + 6*c]
@@ -979,6 +1019,7 @@ class RobotHandle:
         ``target_jid`` / ``reference_frame`` are RUNTIME parameters (default:
         leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
         """
+        self._mjx_guard_unsupported("frame_jacobian_dot")
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         tj, rf = _frame_args(target_jid, reference_frame)
@@ -1069,6 +1110,7 @@ class RobotHandle:
 
         Returns ``(B, NUM_EE, 6, NV)``.
         """
+        self._mjx_guard_unsupported("end_effector_pose_gradient_runtime")
         q = np.ascontiguousarray(q, dtype=self._dt)
         NV = self.num_vel
         jids = self._resolve_ee_jids(ee_joint_names)
