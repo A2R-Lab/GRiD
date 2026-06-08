@@ -160,6 +160,7 @@ public:
         fn_fd_               = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_forward_dynamics"));
         fn_aba_              = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_aba"));
         fn_crba_             = reinterpret_cast<fn_crba_t>(require_sym("grid_rbd_crba"));
+        fn_crba_mujoco_      = reinterpret_cast<fn_crba_t>(opt_sym("grid_rbd_crba_mujoco"));  // floating only
         fn_ee_pose_          = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose"));
         fn_ee_pose_grad_     = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose_gradient"));
         fn_inverse_dynamics_gradient_        = reinterpret_cast<fn_dyn_t>(require_sym("grid_rbd_inverse_dynamics_gradient"));
@@ -422,6 +423,35 @@ public:
         py::array_t<CT> out({batch, num_vel_, num_vel_});
         int rc = fn_crba_(q.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error("grid_rbd_crba failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // ─── crba_mujoco ─────────────────────────────────────────────────────────
+    // MuJoCo-convention mass matrix M_mjx = G M_pin G^T (floating base only). q is
+    // MuJoCo-native; the congruence is baked into the kernel — no host transform.
+    bool has_crba_mujoco() const { return fn_crba_mujoco_ != nullptr; }
+
+    py::array_t<CT> crba_mujoco(
+        arr_t q,
+        float gravity)
+    {
+        if (!fn_crba_mujoco_) {
+            throw std::runtime_error(
+                "crba_mujoco unavailable: this .so has no mjx CRBA kernel "
+                "(only floating-base robots export grid_rbd_crba_mujoco)");
+        }
+        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
+            throw std::invalid_argument(
+                "crba_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
+        }
+        int batch = (int)q.shape(0);
+        if (batch > max_batch_) {
+            throw std::invalid_argument(
+                "crba_mujoco: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
+        }
+        py::array_t<CT> out({batch, num_vel_, num_vel_});
+        int rc = fn_crba_mujoco_(q.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_crba_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
 
@@ -1252,6 +1282,7 @@ private:
     fn_fd_t    fn_fd_             = nullptr;
     fn_fd_t    fn_aba_            = nullptr;
     fn_crba_t  fn_crba_           = nullptr;
+    fn_crba_t  fn_crba_mujoco_    = nullptr;  // floating-base mjx CRBA (optional)
     fn_ee_t    fn_ee_pose_        = nullptr;
     fn_ee_t    fn_ee_pose_grad_   = nullptr;
     fn_dyn_t  fn_inverse_dynamics_gradient_      = nullptr;
@@ -1351,6 +1382,11 @@ static void register_runner(py::module_& m, const char* cls_name) {
              py::arg("gravity") = -9.81f,
              py::arg("f_ext") = py::none())
         .def("crba", &R::crba,
+             py::arg("q"), py::arg("gravity") = -9.81f)
+        .def_property_readonly("has_crba_mujoco", &R::has_crba_mujoco,
+            "True if this .so exports the native MuJoCo-convention CRBA kernel "
+            "(floating-base robots only).")
+        .def("crba_mujoco", &R::crba_mujoco,
              py::arg("q"), py::arg("gravity") = -9.81f)
         .def("end_effector_pose", &R::end_effector_pose,
              py::arg("q"))

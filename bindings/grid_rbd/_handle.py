@@ -609,6 +609,13 @@ class RobotHandle:
 
         With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
         and the returned ``M`` is the mjx-frame mass matrix."""
+        # mjx: prefer the native kernel (raw mjx q in, mjx M out — the G M G^T
+        # congruence is baked into the kernel); fall back to the validated host path.
+        if (self._mjx_active(_convention)
+                and getattr(self._runner, "has_crba_mujoco", False)):
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            return self._cast_out(self._runner.crba_mujoco(q, gravity))
+
         R = None
         if self._mjx_active(_convention):
             q, _, _, _, R = self._mjx_inputs(q)

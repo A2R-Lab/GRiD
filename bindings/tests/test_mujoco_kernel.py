@@ -34,14 +34,20 @@ def _has_cuda() -> bool:
     return shutil.which("nvidia-smi") is not None
 
 
+@pytest.fixture(scope="module")
+def go2_floating():
+    """Register go2-floating ONCE (force_rebuild to exercise freshly-generated
+    codegen, not a stale cache) and share it across the mjx-kernel checks."""
+    from grid_rbd import register_robot
+    return register_robot("go2_mjx_kernel_test", str(_GO2),
+                          floating_base=True, force_rebuild=True)
+
+
 @pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
 @pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
-def test_native_mjx_inverse_dynamics_matches_host_oracle():
-    from grid_rbd import register_robot
+def test_native_mjx_inverse_dynamics_matches_host_oracle(go2_floating):
     from grid_rbd import _mujoco as bm
-
-    h = register_robot("go2_mjx_kernel_test", str(_GO2),
-                       floating_base=True, force_rebuild=True)
+    h = go2_floating
     assert h.floating_base
     # The native mjx ID symbol must be present in a floating-base .so.
     assert h._runner.has_inverse_dynamics_mujoco, \
@@ -68,3 +74,33 @@ def test_native_mjx_inverse_dynamics_matches_host_oracle():
     # else a silently-broken (no-op) transform would pass the oracle check vacuously.
     raw_pin = np.asarray(h.inverse_dynamics(qpos, qvel, qacc), dtype=np.float64)
     assert np.abs(native[0, :3] - raw_pin[0, :3]).max() > 1e-2
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_crba_matches_host_oracle(go2_floating):
+    """CONGRUENCE-class reference: M_mjx = G M_pin G^T baked into the kernel."""
+    from grid_rbd import _mujoco as bm
+    h = go2_floating
+    assert h._runner.has_crba_mujoco, \
+        "floating-base .so is missing grid_rbd_crba_mujoco"
+
+    nq, nv = h.num_joints, h.num_vel
+    rng = np.random.default_rng(1)
+    for B in (1, 4):
+        qpos = rng.standard_normal((B, nq))
+        qpos[:, 3:7] /= np.linalg.norm(qpos[:, 3:7], axis=1, keepdims=True)  # wxyz quat
+
+        native = np.asarray(h.mujoco.crba(qpos), dtype=np.float64)         # (B, nv, nv)
+
+        q_pin, _, _, _, R = h._mjx_inputs(qpos)
+        pin_M = np.asarray(h.crba(q_pin), dtype=np.float64)
+        expected = bm.mass_matrix_pin_to_mjx(pin_M, R, True)
+
+        assert np.allclose(native, expected, rtol=2e-3, atol=2e-2), \
+            f"native mjx CRBA != host oracle (B={B}): max|d|={np.abs(native-expected).max():.3e}"
+
+    # Non-triviality + SPD preservation (the congruence must really act on the base block).
+    raw_pin = np.asarray(h.crba(qpos), dtype=np.float64)
+    assert np.abs(native[0, :3, :] - raw_pin[0, :3, :]).max() > 1e-2
+    assert np.linalg.eigvalsh(native[0]).min() > 0

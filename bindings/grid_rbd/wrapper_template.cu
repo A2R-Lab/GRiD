@@ -368,6 +368,36 @@ extern "C" int grid_rbd_crba(
     return 0;
 }
 
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention mass matrix (floating base only): M_mjx = G M_pin G^T, the
+// congruence baked into the kernel (MUJOCO_OUTPUT=true). q is MuJoCo-native (quat
+// wxyz); the kernel reorders the quaternion and applies the congruence on the base
+// block before saving, so NO host pre/post-process is needed.
+extern "C" int grid_rbd_crba_mujoco(
+    const T* q,
+    T* m_out,
+    int batch, T gravity)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+
+    const int nj = grid::NUM_JOINTS;
+    const int nv = grid::NUM_VEL;
+    pack_q_qd_u(q, q, nullptr, batch, nj);  // qd/u unused
+
+    grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+               /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    cudaMemcpy(m_out, g_data->d_M, (size_t)batch * nv * nv * sizeof(T),
+               cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
+
 // End-effector pose: 6×NUM_EES per timestep (xyz + rpy).
 extern "C" int grid_rbd_end_effector_pose(
     const T* q,
