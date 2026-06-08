@@ -463,6 +463,15 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   qacc_mjx=0" or reads qd: `nonlinear_effects` (=`G·ID(q,qd,−ω×v)`, naive covector off by 32.7),
   `dccrba` dh/dq (needs `+A·_cross_cols(v_lin,−1)`, naive off by 23.6), the hdot/gradient families. The
   full convention map (formula + class + verified error per function) is `docs/open-tasks/mjx_codegen_fusion_master_plan.md` §2/§0b.
+- **Test the HOST-WRAPPER BATCH path, not just the single-timestep device fn (2026-06-08).** The
+  floating nq-vs-nv matrix-buffer stride bug (Minv/M/dc_du/df_du host malloc+copy at nq² while the
+  kernel writes nv²) corrupted only BATCHED floating (`init_gridData<T,B>`, B>1, slot k>0) — silent
+  on fixed base (nq==nv) AND on batch=1. It survived because every CUDA equivalence test drove either
+  the `*_device` functions or kernels with single-timestep buffers it owned, never the gridData `h_*`
+  host-wrapper copy at B>1. New regression guard: `test/cuda_equivalents/test_cuda_batched_host_wrapper.py`
+  (batched `grid::minv`/`grid::crba` host wrappers, every slot vs oracle, floating + fixed control).
+  **Rule:** any new output buffer needs a batch>1 FLOATING host-wrapper equivalence test; a
+  single-timestep or device-fn check cannot see a per-timestep stride bug.
 - **EE-Hessian (and any coordinate-Hessian) validation trap (cost a cycle, 2026-06-08).** GRiD's analytic
   `end_effector_pose_hessian` is the SYMMETRIC coordinate Hessian (2nd derivative of the scalar value along
   the retract), NOT `d/dξ[gradient]`. To FD-validate it, use the symmetric 2nd central-difference of the
