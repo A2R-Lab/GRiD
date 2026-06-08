@@ -66,6 +66,7 @@ def register_robot(
     allow_fp64: bool = False,
     dtype: str = "float32",
     runtime_inertia: bool = False,
+    output_convention: str = "pinocchio",
 ) -> RobotHandle:
     """Register a robot for fast subsequent calls.
 
@@ -136,6 +137,15 @@ def register_robot(
         fetch-then-mutate). Re-keys the cache (the runtime-inertia .so coexists
         with the baked one). With the baked values it reproduces the baked
         result; mutate to do sysID / domain randomization / payload changes.
+    output_convention : str, optional
+        Default IO convention for the returned handle: ``"pinocchio"`` (default,
+        GRiD-native) or ``"mujoco"`` (mjx parity — wxyz quat, global-linear free-joint
+        velocity). A runtime setting (NOT in the cache key — the .so is identical); it
+        is a byte-identical no-op on a fixed base. Currently the VALUE methods
+        (id/fd/aba/crba/minv) honor it; the derivative/second-order surfaces raise in
+        mujoco mode until their codegen fusion lands. Equivalent to setting
+        ``handle.output_convention`` after registration, or using the per-call thread-safe
+        ``handle.mujoco`` view. numpy backend only for now.
 
     Returns
     -------
@@ -144,6 +154,14 @@ def register_robot(
     """
     if backend not in ("numpy", "jax", "torch"):
         raise ValueError(f"backend must be 'numpy', 'jax', or 'torch'; got {backend!r}")
+    if output_convention not in ("pinocchio", "mujoco"):
+        raise ValueError(
+            f"output_convention must be 'pinocchio' or 'mujoco'; got {output_convention!r}")
+    if output_convention == "mujoco" and backend != "numpy":
+        raise ValueError(
+            f"output_convention='mujoco' is currently only supported for the numpy "
+            f"backend; the {backend!r} backend stays pinocchio for now. Use "
+            f"backend='numpy', or transform with grid_rbd.jax/torch + the mjx oracle.")
     if dtype not in ("float32", "float64"):
         raise ValueError(f"dtype must be 'float32' or 'float64'; got {dtype!r}")
     if dtype == "float64" and backend != "numpy":
@@ -232,7 +250,11 @@ def register_robot(
         meta = json.loads((entry_dir / "meta.json").read_text())
 
     manifest_register(cache_dir, name, cache_key, meta)
-    return RobotHandle(name, str(so_path), meta, allow_fp64=allow_fp64)
+    handle = RobotHandle(name, str(so_path), meta, allow_fp64=allow_fp64)
+    # output_convention is a runtime IO setting (no effect on the cached .so), so it
+    # is applied to the handle rather than the cache key. mjx is a no-op on fixed base.
+    handle.output_convention = output_convention
+    return handle
 
 
 def get_robot(name: str, cache_dir: str | Path | None = None) -> RobotHandle:
