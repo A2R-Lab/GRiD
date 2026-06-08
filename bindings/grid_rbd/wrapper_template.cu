@@ -288,6 +288,37 @@ extern "C" int grid_rbd_minv(
     return 0;
 }
 
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention direct mass-matrix inverse (floating base only): the kernel
+// reorders the quaternion and applies the congruence Minv_mjx = G^-T Minv_pin G^-1
+// on the base block (MUJOCO_OUTPUT=true). The native kernel writes a FULL DENSE
+// SYMMETRIC mjx Minv (both triangles), so NO host symmetrize and NO host
+// minv_pin_to_mjx post-process are needed.
+extern "C" int grid_rbd_minv_mujoco(
+    const T* q,
+    T* minv_out,
+    int batch)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+
+    const int nj = grid::NUM_JOINTS;
+    const int nv = grid::NUM_VEL;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, nj);  // qd/u unused by minv
+
+    grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+               /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    cudaMemcpy(minv_out, g_data->d_Minv, (size_t)batch * nv * nv * sizeof(T),
+               cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
+
 // Forward dynamics: qdd = Minv(q)·(τ − c(q,qd))
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
 extern "C" int grid_rbd_forward_dynamics(
@@ -796,6 +827,63 @@ extern "C" int grid_rbd_energy(const T* q, const T* qd, T* out, int batch, T gra
 #endif
 }
 
+#if defined(GRID_HAS_COM) && defined(GRID_FLOATING_BASE)
+// MuJoCo-convention com(q) -> [p_com(3); J_com(3 x NV)] per timestep. p_com is
+// INVARIANT; the J_com columns are reframed by the kernel (MUJOCO_OUTPUT=true): q
+// is MuJoCo-native (quat wxyz) and the kernel reorders the quaternion + applies the
+// column reframe before saving, so NO host pre/post-process is needed.
+extern "C" int grid_rbd_com_mujoco(const T* q, T* out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q(q, batch, grid::NUM_JOINTS);
+    grid::com<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+              /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_com, (size_t)batch * (3 + 3 * grid::NUM_VEL) * sizeof(T));
+    return 0;
+}
+#endif  // GRID_HAS_COM && GRID_FLOATING_BASE
+
+#if defined(GRID_HAS_CCRBA) && defined(GRID_FLOATING_BASE)
+// MuJoCo-convention ccrba(q, qd) -> [A(6 x NV); h(6)] per timestep. The centroidal
+// momentum h is INVARIANT; the A columns are reframed by the kernel
+// (MUJOCO_OUTPUT=true). q/qd raw mjx in (kernel reorders the quaternion + reframes
+// qd), so NO host pre/post-process is needed.
+extern "C" int grid_rbd_ccrba_mujoco(const T* q, const T* qd, T* out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::ccrba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+                /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_ccrba, (size_t)batch * (6 * grid::NUM_VEL + 6) * sizeof(T));
+    return 0;
+}
+#endif  // GRID_HAS_CCRBA && GRID_FLOATING_BASE
+
+#if defined(GRID_HAS_ENERGY) && defined(GRID_FLOATING_BASE)
+// MuJoCo-convention energy(q, qd) -> [KE, PE, KE+PE] per timestep. The energies are
+// frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) just converts the mjx-native
+// inputs (quaternion reorder + qd reframe) so the energy is built correctly. Output
+// is byte-equal to feeding the pin kernel the pin-converted q/qd.
+extern "C" int grid_rbd_energy_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::energy<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+                 /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_energy, (size_t)batch * 3 * sizeof(T));
+    return 0;
+}
+#endif  // GRID_HAS_ENERGY && GRID_FLOATING_BASE
+
 // generalized_gravity(q) -> g(q) = RNEA(q,0,0) per timestep, NUM_VEL floats. Takes gravity.
 extern "C" int grid_rbd_generalized_gravity(const T* q, T* out, int batch, T gravity) {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
@@ -878,6 +966,42 @@ extern "C" int grid_rbd_potential_energy_regressor(const T* q, T* out, int batch
     std::memcpy(out, g_data->h_pe_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
     return 0;
 }
+
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention kinetic_energy_regressor(q, qd) -> length 10*NUM_BODIES y_KE.
+// The regressor is frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts
+// the mjx-native inputs (quaternion reorder + qd reframe). Output is byte-equal to
+// feeding the pin kernel the pin-converted q/qd. (The MUJOCO_OUTPUT instantiation
+// only exists for floating, hence the GRID_FLOATING_BASE gate.)
+extern "C" int grid_rbd_kinetic_energy_regressor_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::kinetic_energy_regressor<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+                                   /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_ke_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
+    return 0;
+}
+
+// MuJoCo-convention potential_energy_regressor(q) -> length 10*NUM_BODIES y_PE.
+// Frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts the mjx-native q
+// (quaternion reorder). Output byte-equal to feeding the pin kernel pin-converted q.
+extern "C" int grid_rbd_potential_energy_regressor_mujoco(const T* q, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q(q, batch, grid::NUM_JOINTS);
+    grid::potential_energy_regressor<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+                                     /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_pe_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
 
 // dccrba(q) -> 6*NUM_VEL*NUM_VEL dCCRBA tensor dA/dq (per timestep, as the kernel
 // writes it). Reads the COMPRESSED input layout (h_q / d_q). Gated on

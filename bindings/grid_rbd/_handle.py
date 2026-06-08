@@ -143,6 +143,26 @@ class _MujocoView:
         """Inverse mass matrix Minv(qpos) in the mjx frame (G Minv G^T)."""
         return self._h.minv(qpos, _convention="mujoco")
 
+    def com(self, qpos):
+        """CoM position (invariant) + CoM Jacobian (reframed) in the mjx frame."""
+        return self._h.com(qpos, _convention="mujoco")
+
+    def ccrba(self, qpos, qvel):
+        """Centroidal momentum matrix (reframed) + momentum h (invariant), mjx frame."""
+        return self._h.ccrba(qpos, qvel, _convention="mujoco")
+
+    def energy(self, qpos, qvel, *, gravity: float = -9.81):
+        """Kinetic / potential / mechanical energy (frame-invariant) from mjx inputs."""
+        return self._h.energy(qpos, qvel, gravity=gravity, _convention="mujoco")
+
+    def kinetic_energy_regressor(self, qpos, qvel, *, gravity: float = -9.81):
+        """Kinetic-energy regressor (frame-invariant) from mjx inputs."""
+        return self._h.kinetic_energy_regressor(qpos, qvel, gravity=gravity, _convention="mujoco")
+
+    def potential_energy_regressor(self, qpos, *, gravity: float = -9.81):
+        """Potential-energy regressor (frame-invariant) from mjx inputs."""
+        return self._h.potential_energy_regressor(qpos, gravity=gravity, _convention="mujoco")
+
     def __repr__(self) -> str:
         return f"<mujoco view of {self._h!r}>"
 
@@ -540,13 +560,20 @@ class RobotHandle:
         ``NV x NV``. For a FIXED base ``NV == NJ`` (== num_pos) so the shape is
         unchanged; for a FLOATING base ``NV = 6 + n_joints < NJ = 7 + n_joints``
         (the +1 is the quaternion offset in q only). GRiD's `minv` kernel writes
-        only the lower triangle (upper zero); we symmetrize on the host before
+        only the upper triangle (lower zero); we symmetrize on the host before
         returning so the matrix matches `RBDReference.minv(..., output_dense=True)`.
         The symmetrization is a single numpy op per call — negligible cost.
 
         With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
         and the returned ``Minv`` is the mjx-frame inverse mass matrix.
         """
+        # mjx: prefer the native kernel (raw mjx q in, full DENSE SYMMETRIC mjx Minv
+        # out — the G^-T Minv G^-1 congruence is baked into the kernel). This path
+        # SKIPS both the host symmetrize and the minv_pin_to_mjx post-process.
+        if self._mjx_active(_convention) and getattr(self._runner, "has_minv_mujoco", False):
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            return self._cast_out(self._runner.minv_mujoco(q))
+
         R = None
         if self._mjx_active(_convention):
             q, _, _, _, R = self._mjx_inputs(q)
@@ -972,44 +999,77 @@ class RobotHandle:
     # LOCAL_WORLD_ALIGNED reference frame); a runtime frame/reference_frame kwarg
     # is not yet supported on the GPU surface (the host/kernel bake the target).
 
-    def com(self, q):
+    def com(self, q, *, _convention=None):
         """Center-of-mass world position p_com (3,) and CoM Jacobian J_com.
 
         Returns ``(p_com, J_com)`` where ``p_com`` is ``(B, 3)`` and ``J_com``
         is ``(B, 3, NV)`` = ``d(p_com)/dv``. Matches ``RBDReference.com(q)``
         (= ``p_com``) and ``RBDReference.jacobian_com(q)`` (= ``J_com``).
-        """
-        q = np.ascontiguousarray(q, dtype=self._dt)
-        raw = self._runner.com(q)  # (B, 3 + 3*NV): [p_com(3); J_com(3 x NV col-major)]
-        B = raw.shape[0]
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention;
+        ``p_com`` is invariant and the ``J_com`` columns are reframed (computed
+        natively in the kernel)."""
         NV = self.num_vel
+        if self._mjx_active(_convention):
+            if not getattr(self._runner, "has_com_mujoco", False):
+                raise NotImplementedError(
+                    "com(output_convention='mujoco') needs a floating-base .so built "
+                    "with the mjx kernel — re-register with force_rebuild=True.")
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            raw = self._runner.com_mujoco(q)
+        else:
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            raw = self._runner.com(q)  # (B, 3 + 3*NV): [p_com(3); J_com(3 x NV col-major)]
+        B = raw.shape[0]
         p_com = raw[:, :3]
         # J_com stored column-major (3 x NV): J[r + 3*c]; recover (B, 3, NV).
         j_com = raw[:, 3:].reshape(B, NV, 3).transpose(0, 2, 1)
-        return p_com, j_com
+        return self._cast_out(p_com), self._cast_out(j_com)
 
-    def ccrba(self, q, qd):
+    def ccrba(self, q, qd, *, _convention=None):
         """Centroidal momentum matrix A (6 x NV) and momentum h = A·qd (6,).
 
         Returns ``(A, h)`` where ``A`` is ``(B, 6, NV)`` and ``h`` is ``(B, 6)``,
         in the Pinocchio convention (``[linear; angular]`` at the CoM, world
         aligned). Matches ``RBDReference.ccrba(q, qd)``.
-        """
-        self._mjx_guard_unsupported("ccrba")
-        q = np.ascontiguousarray(q, dtype=self._dt)
-        qd = np.ascontiguousarray(qd, dtype=self._dt)
-        raw = self._runner.ccrba(q, qd)  # (B, 6*NV + 6): [A(6 x NV col-major); h(6)]
-        B = raw.shape[0]
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention; ``h`` is invariant and the ``A`` columns are reframed
+        (computed natively in the kernel)."""
         NV = self.num_vel
+        if self._mjx_active(_convention):
+            if not getattr(self._runner, "has_ccrba_mujoco", False):
+                raise NotImplementedError(
+                    "ccrba(output_convention='mujoco') needs a floating-base .so built "
+                    "with the mjx kernel — re-register with force_rebuild=True.")
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            qd = np.ascontiguousarray(qd, dtype=self._dt)
+            raw = self._runner.ccrba_mujoco(q, qd)
+        else:
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            qd = np.ascontiguousarray(qd, dtype=self._dt)
+            raw = self._runner.ccrba(q, qd)  # (B, 6*NV + 6): [A(6 x NV col-major); h(6)]
+        B = raw.shape[0]
         A = raw[:, : 6 * NV].reshape(B, NV, 6).transpose(0, 2, 1)
         h = raw[:, 6 * NV:]
-        return A, h
+        return self._cast_out(A), self._cast_out(h)
 
-    def energy(self, q, qd, *, gravity: float = -9.81):
+    def energy(self, q, qd, *, gravity: float = -9.81, _convention=None):
         """Kinetic / potential / mechanical energy. Returns ``(B, 3)`` =
         ``[KE, PE, KE+PE]``. Matches ``RBDReference.kinetic_energy`` /
         ``potential_energy`` / ``mechanical_energy`` (PE uses ``gravity``).
-        """
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention; the energies are frame-INVARIANT, so the native kernel
+        only converts the inputs and the output equals the pin result."""
+        if self._mjx_active(_convention):
+            if not getattr(self._runner, "has_energy_mujoco", False):
+                raise NotImplementedError(
+                    "energy(output_convention='mujoco') needs a floating-base .so built "
+                    "with the mjx kernel — re-register with force_rebuild=True.")
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            qd = np.ascontiguousarray(qd, dtype=self._dt)
+            return self._cast_out(self._runner.energy_mujoco(q, qd, float(gravity)))
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         return self._runner.energy(q, qd, float(gravity))
@@ -1054,20 +1114,45 @@ class RobotHandle:
         raw = self._runner.coriolis_matrix(q, qd, float(gravity))  # (B, NV*NV) row-major
         return self._cast_out(raw.reshape(raw.shape[0], NV, NV))
 
-    def kinetic_energy_regressor(self, q, qd, *, gravity: float = -9.81):
+    def kinetic_energy_regressor(self, q, qd, *, gravity: float = -9.81, _convention=None):
         """Kinetic-energy regressor y_KE, length ``10*num_bodies``, with
         ``KE = y_KE · π`` (π = stacked per-link inertial parameters, body-major,
         10 params/body). Returns ``(B, 10*num_bodies)``. Matches
-        ``RBDReference.kinetic_energy_regressor(q, qd)`` (gravity unused)."""
+        ``RBDReference.kinetic_energy_regressor(q, qd)`` (gravity unused).
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention; the regressor is frame-INVARIANT, so the native kernel
+        only converts the inputs and the output equals the pin result."""
+        if self._mjx_active(_convention):
+            if not getattr(self._runner, "has_kinetic_energy_regressor_mujoco", False):
+                raise NotImplementedError(
+                    "kinetic_energy_regressor(output_convention='mujoco') needs a "
+                    "floating-base .so built with the mjx kernel — re-register with "
+                    "force_rebuild=True.")
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            qd = np.ascontiguousarray(qd, dtype=self._dt)
+            return self._cast_out(self._runner.kinetic_energy_regressor_mujoco(q, qd, float(gravity)))
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         return self._cast_out(self._runner.kinetic_energy_regressor(q, qd, float(gravity)))
 
-    def potential_energy_regressor(self, q, *, gravity: float = -9.81):
+    def potential_energy_regressor(self, q, *, gravity: float = -9.81, _convention=None):
         """Potential-energy regressor y_PE, length ``10*num_bodies``, with
         ``PE = y_PE · π``. Returns ``(B, 10*num_bodies)``. Matches
         ``RBDReference.potential_energy_regressor(q, GRAVITY=gravity)`` (PE uses
-        ``gravity``; only the mass + first-moment columns are nonzero)."""
+        ``gravity``; only the mass + first-moment columns are nonzero).
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention;
+        the regressor is frame-INVARIANT, so the native kernel only converts the
+        input and the output equals the pin result."""
+        if self._mjx_active(_convention):
+            if not getattr(self._runner, "has_potential_energy_regressor_mujoco", False):
+                raise NotImplementedError(
+                    "potential_energy_regressor(output_convention='mujoco') needs a "
+                    "floating-base .so built with the mjx kernel — re-register with "
+                    "force_rebuild=True.")
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            return self._cast_out(self._runner.potential_energy_regressor_mujoco(q, float(gravity)))
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._cast_out(self._runner.potential_energy_regressor(q, float(gravity)))
 

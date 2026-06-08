@@ -168,6 +168,13 @@ public:
         fn_frame_jacobian_mujoco_  = reinterpret_cast<fn_frame_jac_t>(opt_sym("grid_rbd_frame_jacobian_mujoco"));
         fn_frame_jacobian_dot_mujoco_ = reinterpret_cast<fn_frame_jac_dot_t>(opt_sym("grid_rbd_frame_jacobian_dot_mujoco"));
         fn_osc_inertia_mujoco_     = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_osc_inertia_mujoco"));
+        // floating-base mjx value kernels (optional; present only on a floating .so)
+        fn_minv_mujoco_      = reinterpret_cast<fn_minv_t>(opt_sym("grid_rbd_minv_mujoco"));
+        fn_com_mujoco_       = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_com_mujoco"));
+        fn_ccrba_mujoco_     = reinterpret_cast<fn_q_qd_out_t>(opt_sym("grid_rbd_ccrba_mujoco"));
+        fn_energy_mujoco_    = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_energy_mujoco"));
+        fn_kinetic_energy_regressor_mujoco_   = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_kinetic_energy_regressor_mujoco"));
+        fn_potential_energy_regressor_mujoco_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_potential_energy_regressor_mujoco"));
         fn_ee_pose_          = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose"));
         fn_ee_pose_grad_     = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose_gradient"));
         fn_inverse_dynamics_gradient_        = reinterpret_cast<fn_dyn_t>(require_sym("grid_rbd_inverse_dynamics_gradient"));
@@ -545,6 +552,114 @@ public:
         int rc = fn_osc_inertia_mujoco_(q.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error("osc_inertia not generated for this robot .so");
         if (rc != 0) throw std::runtime_error("grid_rbd_osc_inertia_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // ─── minv_mujoco ─────────────────────────────────────────────────────────
+    // MuJoCo-convention direct mass-matrix inverse (floating base only). q is
+    // MuJoCo-native; the kernel reorders the quaternion + applies the congruence
+    // and writes a FULL DENSE SYMMETRIC mjx Minv — no host symmetrize / transform.
+    bool has_minv_mujoco() const { return fn_minv_mujoco_ != nullptr; }
+    py::array_t<CT> minv_mujoco(arr_t q)
+    {
+        if (!fn_minv_mujoco_) throw std::runtime_error(
+            "minv_mujoco unavailable: this .so has no mjx Minv kernel "
+            "(only floating-base robots export grid_rbd_minv_mujoco)");
+        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
+            throw std::invalid_argument(
+                "minv_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
+        }
+        int batch = (int)q.shape(0);
+        if (batch > max_batch_) {
+            throw std::invalid_argument(
+                "minv_mujoco: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
+        }
+        py::array_t<CT> out({batch, num_vel_, num_vel_});
+        int rc = fn_minv_mujoco_(q.data(), out.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("grid_rbd_minv_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // ─── com_mujoco ──────────────────────────────────────────────────────────
+    // MuJoCo-convention com(q) -> (batch, 3 + 3*NV): [p_com(3); J_com(3 x NV)].
+    // p_com is invariant, J_com columns reframed by the kernel; q is mjx-native.
+    bool has_com_mujoco() const { return fn_com_mujoco_ != nullptr; }
+    py::array_t<CT> com_mujoco(arr_t q)
+    {
+        if (!fn_com_mujoco_) throw std::runtime_error(
+            "com_mujoco unavailable: floating-base .so with com only "
+            "(re-register with force_rebuild=True)");
+        int batch = check_q(q, "com_mujoco");
+        py::array_t<CT> out({batch, 3 + 3 * num_vel_});
+        int rc = fn_com_mujoco_(q.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error("com not generated for this robot .so (mimic)");
+        if (rc != 0) throw std::runtime_error("grid_rbd_com_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // ─── ccrba_mujoco ────────────────────────────────────────────────────────
+    // MuJoCo-convention ccrba(q, qd) -> (batch, 6*NV + 6): [A(6 x NV); h(6)].
+    // h is invariant, A columns reframed by the kernel; q/qd are mjx-native.
+    bool has_ccrba_mujoco() const { return fn_ccrba_mujoco_ != nullptr; }
+    py::array_t<CT> ccrba_mujoco(arr_t q, arr_t qd)
+    {
+        if (!fn_ccrba_mujoco_) throw std::runtime_error(
+            "ccrba_mujoco unavailable: floating-base .so with ccrba only "
+            "(re-register with force_rebuild=True)");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<CT> out({batch, 6 * num_vel_ + 6});
+        int rc = fn_ccrba_mujoco_(q.data(), qd.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error("ccrba not generated for this robot .so (mimic)");
+        if (rc != 0) throw std::runtime_error("grid_rbd_ccrba_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // ─── energy_mujoco ───────────────────────────────────────────────────────
+    // MuJoCo-convention energy(q, qd, gravity) -> (batch, 3): [KE, PE, KE+PE].
+    // The energies are frame-invariant; the kernel only converts mjx-native inputs.
+    bool has_energy_mujoco() const { return fn_energy_mujoco_ != nullptr; }
+    py::array_t<CT> energy_mujoco(arr_t q, arr_t qd, float gravity)
+    {
+        if (!fn_energy_mujoco_) throw std::runtime_error(
+            "energy_mujoco unavailable: floating-base .so with energy only "
+            "(re-register with force_rebuild=True)");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<CT> out({batch, 3});
+        int rc = fn_energy_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc == 3) throw std::runtime_error("energy not generated for this robot .so (mimic)");
+        if (rc != 0) throw std::runtime_error("grid_rbd_energy_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // ─── kinetic_energy_regressor_mujoco ─────────────────────────────────────
+    // MuJoCo-convention y_KE -> (batch, 10*NUM_BODIES). Frame-invariant regressor;
+    // the kernel only converts the mjx-native inputs (quat reorder + qd reframe).
+    bool has_kinetic_energy_regressor_mujoco() const { return fn_kinetic_energy_regressor_mujoco_ != nullptr; }
+    py::array_t<CT> kinetic_energy_regressor_mujoco(arr_t q, arr_t qd, float gravity)
+    {
+        if (!fn_kinetic_energy_regressor_mujoco_) throw std::runtime_error(
+            "kinetic_energy_regressor_mujoco unavailable: floating-base .so only "
+            "(re-register with force_rebuild=True)");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<CT> out({batch, 10 * num_bodies_});
+        int rc = fn_kinetic_energy_regressor_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_kinetic_energy_regressor_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // ─── potential_energy_regressor_mujoco ───────────────────────────────────
+    // MuJoCo-convention y_PE -> (batch, 10*NUM_BODIES). Frame-invariant regressor;
+    // the kernel only converts the mjx-native q (quaternion reorder).
+    bool has_potential_energy_regressor_mujoco() const { return fn_potential_energy_regressor_mujoco_ != nullptr; }
+    py::array_t<CT> potential_energy_regressor_mujoco(arr_t q, float gravity)
+    {
+        if (!fn_potential_energy_regressor_mujoco_) throw std::runtime_error(
+            "potential_energy_regressor_mujoco unavailable: floating-base .so only "
+            "(re-register with force_rebuild=True)");
+        int batch = check_q(q, "potential_energy_regressor_mujoco");
+        py::array_t<CT> out({batch, 10 * num_bodies_});
+        int rc = fn_potential_energy_regressor_mujoco_(q.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_potential_energy_regressor_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
 
@@ -1383,6 +1498,12 @@ private:
     fn_frame_jac_t     fn_frame_jacobian_mujoco_  = nullptr;
     fn_frame_jac_dot_t fn_frame_jacobian_dot_mujoco_ = nullptr;
     fn_q_out_t         fn_osc_inertia_mujoco_     = nullptr;
+    fn_minv_t          fn_minv_mujoco_            = nullptr;
+    fn_q_out_t         fn_com_mujoco_             = nullptr;
+    fn_q_qd_out_t      fn_ccrba_mujoco_           = nullptr;
+    fn_q_qd_out_grav_t fn_energy_mujoco_          = nullptr;
+    fn_q_qd_out_grav_t fn_kinetic_energy_regressor_mujoco_   = nullptr;
+    fn_q_out_grav_t    fn_potential_energy_regressor_mujoco_ = nullptr;
     fn_ee_t    fn_ee_pose_        = nullptr;
     fn_ee_t    fn_ee_pose_grad_   = nullptr;
     fn_dyn_t  fn_inverse_dynamics_gradient_      = nullptr;
@@ -1508,6 +1629,23 @@ static void register_runner(py::module_& m, const char* cls_name) {
              py::arg("q"), py::arg("qd"), py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
         .def_property_readonly("has_osc_inertia_mujoco", &R::has_osc_inertia_mujoco)
         .def("osc_inertia_mujoco", &R::osc_inertia_mujoco, py::arg("q"))
+        .def_property_readonly("has_minv_mujoco", &R::has_minv_mujoco,
+            "True if this .so exports the native MuJoCo-convention Minv kernel "
+            "(floating-base robots only).")
+        .def("minv_mujoco", &R::minv_mujoco, py::arg("q"))
+        .def_property_readonly("has_com_mujoco", &R::has_com_mujoco)
+        .def("com_mujoco", &R::com_mujoco, py::arg("q"))
+        .def_property_readonly("has_ccrba_mujoco", &R::has_ccrba_mujoco)
+        .def("ccrba_mujoco", &R::ccrba_mujoco, py::arg("q"), py::arg("qd"))
+        .def_property_readonly("has_energy_mujoco", &R::has_energy_mujoco)
+        .def("energy_mujoco", &R::energy_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
+        .def_property_readonly("has_kinetic_energy_regressor_mujoco", &R::has_kinetic_energy_regressor_mujoco)
+        .def("kinetic_energy_regressor_mujoco", &R::kinetic_energy_regressor_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
+        .def_property_readonly("has_potential_energy_regressor_mujoco", &R::has_potential_energy_regressor_mujoco)
+        .def("potential_energy_regressor_mujoco", &R::potential_energy_regressor_mujoco,
+             py::arg("q"), py::arg("gravity") = -9.81f)
         .def("end_effector_pose", &R::end_effector_pose,
              py::arg("q"))
         .def("fk_batched", &R::fk_batched,
