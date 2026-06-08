@@ -121,10 +121,25 @@ def _load_ops(so_path: Path, cache_key: str) -> str:
 # itself graph-capturable.
 
 
-def _make_autograd(ns):
+def _make_autograd(ns, nv):
     import torch
 
     ops = getattr(torch.ops, ns)
+
+    # nq↔nv bridge for the backward VJPs. The dynamics VALUE outputs (c / qdd)
+    # are nj-wide (so grad_c / grad_qdd are nj-wide), but the analytic Jacobians
+    # / Minv / regressor rows are nv-wide (tangent space). For a FLOATING base
+    # nv < nj: slice the leading nv of the value cotangent (the meaningful
+    # tangent rows; the trailing nj-vs-nv slot is the quaternion-padding of the
+    # nj-wide value buffer) before bmm, and pad the nv-wide input cotangent back
+    # to nj for the nj-wide q/qd/u inputs. FIXED base nv == nj → both no-ops.
+    def _slice_nv(ct, nj, nv):
+        return ct if nv == nj else ct[:, :nv]
+
+    def _pad_nj(g, nj, nv):
+        if nv == nj:
+            return g
+        return torch.nn.functional.pad(g, (0, nj - nv))
 
     class InverseDynamicsFn(torch.autograd.Function):
         # forward args mirror the op schema order (q, qd, gravity, qdd, f_ext);
@@ -135,25 +150,28 @@ def _make_autograd(ns):
             ctx.gravity = gravity
             ctx.qdd = qdd
             ctx.f_ext = f_ext
+            ctx.nv = nv
             return ops.inverse_dynamics(q, qd, gravity, qdd, f_ext)
 
         @staticmethod
         def backward(ctx, grad_c):
             q, qd = ctx.saved_tensors
             nj = q.shape[1]
+            nv = ctx.nv
             # f_ext is affine in RNEA → ∂c/∂(q,qd) is unchanged by a constant
             # f_ext; we pass it through for bias consistency only. qdd shifts the
             # value (M·qdd); ∂/∂(q,qd) at fixed qdd is the bias gradient plus
             # ∂(M·qdd)/∂q — included by threading the saved ctx.qdd into the grad
             # op (USE_QDD overload). A None/zero qdd reduces to the bias Jacobian.
-            raw = ops.inverse_dynamics_gradient(q, qd, ctx.gravity, ctx.qdd, ctx.f_ext)  # (B, 2*NJ*NJ) col-major
+            raw = ops.inverse_dynamics_gradient(q, qd, ctx.gravity, ctx.qdd, ctx.f_ext)  # (B, 2*NV*NV) col-major
             B = raw.shape[0]
-            blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)  # row-major (B,2,NJ,NJ)
-            dc_dq, dc_dqd = blocks[:, 0], blocks[:, 1]  # (B, NJ, NJ): rows=out, cols=in
-            # VJP: grad_in = grad_c · J  →  (B,1,NJ) bmm (B,NJ,NJ) = (B,1,NJ)
-            gc = grad_c.unsqueeze(1)
-            grad_q = torch.bmm(gc, dc_dq).squeeze(1)
-            grad_qd = torch.bmm(gc, dc_dqd).squeeze(1)
+            blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)  # row-major (B,2,NV,NV)
+            dc_dq, dc_dqd = blocks[:, 0], blocks[:, 1]  # (B, NV, NV): rows=out, cols=in
+            # VJP: grad_in = grad_c · J → (B,1,NV) bmm (B,NV,NV) = (B,1,NV); the
+            # torque cotangent is nj-wide so slice leading nv, then pad result to nj.
+            gc = _slice_nv(grad_c, nj, nv).unsqueeze(1)
+            grad_q = _pad_nj(torch.bmm(gc, dc_dq).squeeze(1), nj, nv)
+            grad_qd = _pad_nj(torch.bmm(gc, dc_dqd).squeeze(1), nj, nv)
             # grads for (q, qd, gravity, qdd, f_ext)
             return grad_q, grad_qd, None, None, None
 
@@ -174,16 +192,17 @@ def _make_autograd(ns):
                 nj = q.shape[1]
                 raw = ops.forward_dynamics_gradient(q, qd, u, ctx.gravity, ctx.f_ext)
                 B = raw.shape[0]
-                blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
+                blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)
                 df_dq, df_dqd = blocks[:, 0], blocks[:, 1]
-                # ∂qdd/∂u = M⁻¹ (symmetric); minv writes lower triangle → symmetrize.
-                m = ops.minv(q).reshape(B, nj, nj)
-                eye = torch.eye(nj, dtype=m.dtype, device=m.device)
+                # ∂qdd/∂u = M⁻¹ (symmetric, NV x NV); minv writes lower triangle → symmetrize.
+                m = ops.minv(q).reshape(B, nv, nv)
+                eye = torch.eye(nv, dtype=m.dtype, device=m.device)
                 minv = m + m.transpose(1, 2) - m * eye
-                g = grad_qdd.unsqueeze(1)
-                grad_q = torch.bmm(g, df_dq).squeeze(1)
-                grad_qd = torch.bmm(g, df_dqd).squeeze(1)
-                grad_u = torch.bmm(g, minv).squeeze(1)
+                # qdd cotangent is nj-wide → slice leading nv, bmm, pad back to nj.
+                g = _slice_nv(grad_qdd, nj, nv).unsqueeze(1)
+                grad_q = _pad_nj(torch.bmm(g, df_dq).squeeze(1), nj, nv)
+                grad_qd = _pad_nj(torch.bmm(g, df_dqd).squeeze(1), nj, nv)
+                grad_u = _pad_nj(torch.bmm(g, minv).squeeze(1), nj, nv)
                 return grad_q, grad_qd, grad_u, None, None
         return FDLikeFn
 
@@ -213,14 +232,15 @@ def _make_autograd(ns):
             # sysID is the bias gradient (qdd=0) → pass None for the qdd slot.
             raw = ops.inverse_dynamics_gradient(q, qd, ctx.gravity, None, ctx.f_ext)
             B = raw.shape[0]
-            blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
+            blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)
             dc_dq, dc_dqd = blocks[:, 0], blocks[:, 1]
-            gc = grad_c.unsqueeze(1)
-            grad_q = torch.bmm(gc, dc_dq).squeeze(1)
-            grad_qd = torch.bmm(gc, dc_dqd).squeeze(1)
-            # π cotangent: grad_c · Y, Y = ∂c/∂π (NV x 10*NB) at qdd=0.
+            # torque cotangent nj-wide → slice leading nv, bmm, pad inputs to nj.
+            gc = _slice_nv(grad_c, nj, nv).unsqueeze(1)
+            grad_q = _pad_nj(torch.bmm(gc, dc_dq).squeeze(1), nj, nv)
+            grad_qd = _pad_nj(torch.bmm(gc, dc_dqd).squeeze(1), nj, nv)
+            # π cotangent: gc · Y, Y = ∂c/∂π (NV x 10*NB) at qdd=0 (no input-pad: π is npar-wide).
             qdd0 = torch.zeros_like(q)
-            Y = ops.inverse_dynamics_regressor(q, qd, qdd0, ctx.gravity).reshape(B, nj, -1)
+            Y = ops.inverse_dynamics_regressor(q, qd, qdd0, ctx.gravity).reshape(B, nv, -1)
             grad_pi = torch.bmm(gc, Y).squeeze(1)
             return grad_q, grad_qd, grad_pi, None, None
 
@@ -238,17 +258,18 @@ def _make_autograd(ns):
             nj = q.shape[1]
             raw = ops.forward_dynamics_gradient(q, qd, u, ctx.gravity, ctx.f_ext)
             B = raw.shape[0]
-            blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
+            blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)
             df_dq, df_dqd = blocks[:, 0], blocks[:, 1]
-            m = ops.minv(q).reshape(B, nj, nj)
-            eye = torch.eye(nj, dtype=m.dtype, device=m.device)
+            m = ops.minv(q).reshape(B, nv, nv)
+            eye = torch.eye(nv, dtype=m.dtype, device=m.device)
             minv = m + m.transpose(1, 2) - m * eye
-            g = grad_qdd.unsqueeze(1)
-            grad_q = torch.bmm(g, df_dq).squeeze(1)
-            grad_qd = torch.bmm(g, df_dqd).squeeze(1)
-            grad_u = torch.bmm(g, minv).squeeze(1)
-            # π cotangent: grad_qdd · (∂qdd/∂π), ∂qdd/∂π = -Minv·Y (NV x 10*NB).
-            G = ops.forward_dynamics_parameter_gradient(q, qd, u, ctx.gravity).reshape(B, nj, -1)
+            # qdd cotangent nj-wide → slice leading nv, bmm, pad q/qd/u inputs to nj.
+            g = _slice_nv(grad_qdd, nj, nv).unsqueeze(1)
+            grad_q = _pad_nj(torch.bmm(g, df_dq).squeeze(1), nj, nv)
+            grad_qd = _pad_nj(torch.bmm(g, df_dqd).squeeze(1), nj, nv)
+            grad_u = _pad_nj(torch.bmm(g, minv).squeeze(1), nj, nv)
+            # π cotangent: g · (∂qdd/∂π), ∂qdd/∂π = -Minv·Y (NV x 10*NB); π is npar-wide.
+            G = ops.forward_dynamics_parameter_gradient(q, qd, u, ctx.gravity).reshape(B, nv, -1)
             grad_pi = torch.bmm(g, G).squeeze(1)
             return grad_q, grad_qd, grad_u, grad_pi, None, None
 
@@ -336,7 +357,7 @@ class TorchRobotHandle:
         self._ns = _load_ops(self._so_path, cache_key)
         import torch
         self._ops = getattr(torch.ops, self._ns)
-        self._fns = _make_autograd(self._ns)
+        self._fns = _make_autograd(self._ns, self._base.num_vel)
 
     # ─── metadata (delegated) ────────────────────────────────────────────
     @property
@@ -419,17 +440,21 @@ class TorchRobotHandle:
     # ─── forward-only algorithms (raw kernel ops; reshapes mirror _handle) ──
 
     def minv(self, q):
-        """Minv(q) (B, NJ, NJ), symmetrized (kernel writes lower triangle)."""
+        """Minv(q) (B, NV, NV), symmetrized (kernel writes lower triangle).
+
+        Tangent-space (pinocchio) inverse mass matrix. FIXED base: NV == NJ
+        (shape unchanged); FLOATING base: NV < NJ."""
         import torch
-        nj = self.num_joints
-        m = self._ops.minv(q).reshape(-1, nj, nj)
-        eye = torch.eye(nj, dtype=m.dtype, device=m.device)
+        nv = self.num_vel
+        m = self._ops.minv(q).reshape(-1, nv, nv)
+        eye = torch.eye(nv, dtype=m.dtype, device=m.device)
         return m + m.transpose(1, 2) - m * eye
 
     def crba(self, q, *, gravity: float = -9.81):
-        """Mass matrix M(q) (B, NJ, NJ)."""
-        nj = self.num_joints
-        return self._ops.crba(q, float(gravity)).reshape(-1, nj, nj)
+        """Mass matrix M(q) (B, NV, NV), tangent-space (pinocchio) convention.
+        FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ."""
+        nv = self.num_vel
+        return self._ops.crba(q, float(gravity)).reshape(-1, nv, nv)
 
     def end_effector_pose(self, q):
         """EE pose [xyz, rpy] per EE (B, 6*NUM_EES)."""
@@ -448,7 +473,8 @@ class TorchRobotHandle:
         return self._ops.end_effector_pose_hessian(q).reshape(-1, 6 * nee, nv, nv)
 
     def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
-        """∂c/∂(q,qd) (B, NJ, 2*NJ) = [dc_dq | dc_dqd].
+        """∂c/∂(q,qd) (B, NV, 2*NV) = [dc_dq | dc_dqd], tangent-space (pinocchio)
+        convention. FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ.
 
         ``qdd`` (optional): joint acceleration ``(B, NJ)``. With ``qdd=None``
         (default) this is the bias gradient ∂(h−g)/∂(q,qd); a nonzero ``qdd``
@@ -456,40 +482,41 @@ class TorchRobotHandle:
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
         affine in f_ext so a constant f_ext leaves this Jacobian unchanged."""
-        nj = self.num_joints
+        nv = self.num_vel
         raw = self._ops.inverse_dynamics_gradient(q, qd, float(gravity), qdd, f_ext)
         B = raw.shape[0]
-        blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
+        blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)
         return _concat_blocks(blocks)
 
     def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
-        """∂qdd/∂(q,qd) (B, NJ, 2*NJ).
+        """∂qdd/∂(q,qd) (B, NV, 2*NV), tangent-space (pinocchio) convention.
+        FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ.
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
         affine in f_ext so a constant f_ext leaves this Jacobian unchanged."""
-        nj = self.num_joints
+        nv = self.num_vel
         raw = self._ops.forward_dynamics_gradient(q, qd, u, float(gravity), f_ext)
         B = raw.shape[0]
-        blocks = raw.reshape(B, 2, nj, nj).transpose(2, 3)
+        blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)
         return _concat_blocks(blocks)
 
     def inverse_dynamics_regressor(self, q, qd, qdd=None, *, gravity: float = -9.81):
         """Joint-torque regressor Y with τ = Y·π (∂τ/∂π). Returns
-        (B, NJ, 10*num_bodies), row-major (NV, 10*NB) per sample. ``qdd=None`` ⇒
+        (B, NV, 10*num_bodies), row-major (NV, 10*NB) per sample. ``qdd=None`` ⇒
         zeros (the bias regressor used by :py:meth:`inverse_dynamics_wrt_params`).
         Per-link basis [m, m*c(3), I_O(6)]."""
         import torch
-        nj, npar = self.num_joints, 10 * self.num_bodies
+        nv, npar = self.num_vel, 10 * self.num_bodies
         if qdd is None:
             q = torch.as_tensor(q)
             qdd = torch.zeros_like(q)
-        return self._ops.inverse_dynamics_regressor(q, qd, qdd, float(gravity)).reshape(-1, nj, npar)
+        return self._ops.inverse_dynamics_regressor(q, qd, qdd, float(gravity)).reshape(-1, nv, npar)
 
     def forward_dynamics_parameter_gradient(self, q, qd, u, *, gravity: float = -9.81):
         """FD inertial-parameter gradient ∂qdd/∂π = -M⁻¹·Y. Returns
-        (B, NJ, 10*num_bodies), row-major (NV, 10*NB) per sample."""
-        nj, npar = self.num_joints, 10 * self.num_bodies
-        return self._ops.forward_dynamics_parameter_gradient(q, qd, u, float(gravity)).reshape(-1, nj, npar)
+        (B, NV, 10*num_bodies), row-major (NV, 10*NB) per sample."""
+        nv, npar = self.num_vel, 10 * self.num_bodies
+        return self._ops.forward_dynamics_parameter_gradient(q, qd, u, float(gravity)).reshape(-1, nv, npar)
 
     def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81):
         """Second-order ID at joint acceleration ``qdd``. Returns a

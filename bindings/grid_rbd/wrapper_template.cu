@@ -226,6 +226,7 @@ extern "C" int grid_rbd_minv(
     if (batch > kMaxBatch) return 2;
 
     const int nj = grid::NUM_JOINTS;
+    const int nv = grid::NUM_VEL;
     pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, nj);  // qd/u unused by minv
 
     grid::minv<T, /*USE_COMPRESSED_MEM=*/false>(
@@ -234,7 +235,14 @@ extern "C" int grid_rbd_minv(
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
 
-    std::memcpy(minv_out, g_data->h_Minv, batch * nj * nj * sizeof(T));
+    // The minv kernel writes Minv as nv x nv (NUM_VEL*NUM_VEL = 324 for floating)
+    // per timestep, but the generated grid::minv host wrapper copies d_Minv->h_Minv
+    // with an nj*nj (NUM_JOINTS*NUM_JOINTS) stride, which over-reads each 324-block
+    // and corrupts h_Minv[1:] for batch>1. Copy straight from the (correctly
+    // nv*nv-strided) device buffer instead, sizing the public output nv x nv.
+    // For a FIXED base nv == nj, so this is byte-identical to the old path.
+    cudaMemcpy(minv_out, g_data->d_Minv, (size_t)batch * nv * nv * sizeof(T),
+               cudaMemcpyDeviceToHost);
     return 0;
 }
 
@@ -298,6 +306,7 @@ extern "C" int grid_rbd_crba(
     if (batch > kMaxBatch) return 2;
 
     const int nj = grid::NUM_JOINTS;
+    const int nv = grid::NUM_VEL;
     pack_q_qd_u(q, q, nullptr, batch, nj);  // qd/u unused
 
     grid::crba<T>(g_data, g_robot, gravity, batch,
@@ -306,7 +315,14 @@ extern "C" int grid_rbd_crba(
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
 
-    std::memcpy(m_out, g_data->h_M, batch * nj * nj * sizeof(T));
+    // The crba kernel writes M as nv x nv (NUM_VEL*NUM_VEL = 324 for floating)
+    // per timestep. (The generated grid::crba host wrapper already copies
+    // d_M->h_M at the correct nv*nv stride, but the public copy-out used the
+    // nj*nj stride, over-reading and corrupting m_out[1:] for batch>1.) Copy
+    // straight from the device buffer at nv*nv to be unambiguous and to match
+    // the kernel; FIXED base has nv == nj so this is byte-identical.
+    cudaMemcpy(m_out, g_data->d_M, (size_t)batch * nv * nv * sizeof(T),
+               cudaMemcpyDeviceToHost);
     return 0;
 }
 
@@ -403,7 +419,8 @@ extern "C" int grid_rbd_end_effector_pose_gradient(
     return 0;
 }
 
-// ∂c/∂(q, qd): output shape (batch, NJ, 2*NJ) — concatenated [dc_dq | dc_dqd].
+// ∂c/∂(q, qd): output shape (batch, NV, 2*NV) — concatenated [dc_dq | dc_dqd]
+// (tangent-space; FIXED base NV == NJ, FLOATING base NV < NJ).
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
 // f_ext enters RNEA additively (affine), so dc/d(q,qd) is unchanged for a
 // CONSTANT f_ext; this just keeps the bias consistent with grid_rbd_inverse_dynamics.
@@ -440,12 +457,19 @@ extern "C" int grid_rbd_inverse_dynamics_gradient(
     reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
-    std::memcpy(dc_du_out, g_data->h_dc_du,
-                batch * nj * 2 * nj * sizeof(T));
+    // dc_du is nv x 2nv (2*NUM_VEL*NUM_VEL = 648 for floating) per timestep — the
+    // gradient kernel writes nv-dimensioned rows/cols. The generated host wrapper
+    // copies d_dc_du->h_dc_du at an nj*2nj stride (poisoning h_dc_du[1:] for
+    // batch>1); copy straight from the device buffer at 2*nv*nv. FIXED base:
+    // nv == nj, byte-identical to the old path.
+    const int nv = grid::NUM_VEL;
+    cudaMemcpy(dc_du_out, g_data->d_dc_du,
+               (size_t)batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
 
-// ∂qdd/∂(q, qd): output shape (batch, NJ, 2*NJ).
+// ∂qdd/∂(q, qd): output shape (batch, NV, 2*NV) (tangent-space; FIXED base
+// NV == NJ, FLOATING base NV < NJ).
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
 extern "C" int grid_rbd_forward_dynamics_gradient(
     const T* q, const T* qd, const T* u,
@@ -467,8 +491,12 @@ extern "C" int grid_rbd_forward_dynamics_gradient(
     reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
-    std::memcpy(df_du_out, g_data->h_df_du,
-                batch * nj * 2 * nj * sizeof(T));
+    // df_du is nv x 2nv (2*NUM_VEL*NUM_VEL = 648 for floating) per timestep; same
+    // nq-vs-nv stride bug as inverse_dynamics_gradient. Copy straight from the
+    // (correctly 2*nv*nv-strided) device buffer. FIXED base: nv == nj, unchanged.
+    const int nv = grid::NUM_VEL;
+    cudaMemcpy(df_du_out, g_data->d_df_du,
+               (size_t)batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
 
@@ -1483,6 +1511,7 @@ static ffi::Error grid_rbd_jax_minv_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "minv: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj    = grid::NUM_JOINTS;
+    int nv    = grid::NUM_VEL;
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("minv: batch > max_batch");
 
     const size_t row_bytes = nj * sizeof(T);
@@ -1500,8 +1529,12 @@ static ffi::Error grid_rbd_jax_minv_impl(
             g_data->d_q_qd_u, stride_q_qd_u,
             g_robot, batch);
 
+    // Minv is nv x nv per timestep (tangent-space, pinocchio convention) — the
+    // kernel writes the (correctly nv*nv-strided) d_Minv. Copy straight from the
+    // device buffer at nv*nv (matching the numpy C-ABI minv + the JAX out_shape /
+    // VJP, all unified at nv). FIXED base: nv == nj, byte-identical to the old path.
     cudaMemcpyAsync(minv_out->typed_data(), g_data->d_Minv,
-                    batch * nj * nj * sizeof(T),
+                    batch * nv * nv * sizeof(T),
                     cudaMemcpyDeviceToDevice, stream);
     return ffi::Error::Success();
 }
@@ -1643,6 +1676,7 @@ static ffi::Error grid_rbd_jax_crba_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "crba: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj    = grid::NUM_JOINTS;
+    int nv    = grid::NUM_VEL;
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("crba: batch > max_batch");
 
     const size_t row_bytes = nj * sizeof(T);
@@ -1660,8 +1694,12 @@ static ffi::Error grid_rbd_jax_crba_impl(
             g_data->d_q_qd_u, stride_q_qd,
             g_robot, /*gravity=*/gravity, batch);
 
+    // M is nv x nv per timestep (tangent-space, pinocchio convention) — the kernel
+    // writes the (correctly nv*nv-strided) d_M. Copy straight from the device
+    // buffer at nv*nv (matching the numpy C-ABI crba + the JAX out_shape, unified
+    // at nv). FIXED base: nv == nj, byte-identical to the old path.
     cudaMemcpyAsync(m_out->typed_data(), g_data->d_M,
-                    batch * nj * nj * sizeof(T),
+                    batch * nv * nv * sizeof(T),
                     cudaMemcpyDeviceToDevice, stream);
     return ffi::Error::Success();
 }
@@ -1809,8 +1847,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 
-// inverse_dynamics_gradient(q, qd, qdd) → dc_du  flat (B, 2*NJ*NJ)
-// Python reshapes/transposes to (B, NJ, 2*NJ) [dc_dq | dc_dqd].
+// inverse_dynamics_gradient(q, qd, qdd) → dc_du  flat (B, 2*NV*NV)
+// Python reshapes/transposes to (B, NV, 2*NV) [dc_dq | dc_dqd] (tangent-space;
+// FIXED base NV == NJ, FLOATING base NV < NJ).
 //
 // qdd is ALWAYS passed as an explicit device buffer from the Python surface
 // (JAX FFI has no optional-buffer support, so the wrapper passes zeros when the
@@ -1831,6 +1870,7 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_gradient_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "inverse_dynamics_gradient: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj    = grid::NUM_JOINTS;
+    int nv    = grid::NUM_VEL;
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("inverse_dynamics_gradient: batch > max_batch");
 
     const size_t row_bytes = nj * sizeof(T);
@@ -1856,8 +1896,11 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_gradient_impl(
             g_data->d_q_qd_u, stride_q_qd, g_data->d_qdd,
             g_data->d_f_ext, g_robot, /*gravity=*/gravity, batch);
 
+    // dc_du is nv x 2nv per timestep (tangent-space) — the gradient kernel writes
+    // the (correctly 2*nv*nv-strided) d_dc_du. Copy at 2*nv*nv (matching numpy
+    // C-ABI + the JAX out_shape / VJP, unified at nv). FIXED base: nv == nj.
     cudaMemcpyAsync(dc_du_out->typed_data(), g_data->d_dc_du,
-                    batch * nj * 2 * nj * sizeof(T),
+                    batch * 2 * nv * nv * sizeof(T),
                     cudaMemcpyDeviceToDevice, stream);
     return ffi::Error::Success();
 }
@@ -1875,8 +1918,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 
-// forward_dynamics_gradient(q, qd, u) → df_du  flat (B, 2*NJ*NJ)
-// Python reshapes/transposes to (B, NJ, 2*NJ).
+// forward_dynamics_gradient(q, qd, u) → df_du  flat (B, 2*NV*NV)
+// Python reshapes/transposes to (B, NV, 2*NV) (tangent-space; FIXED base
+// NV == NJ, FLOATING base NV < NJ).
 static ffi::Error grid_rbd_jax_forward_dynamics_gradient_impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> q,
@@ -1889,6 +1933,7 @@ static ffi::Error grid_rbd_jax_forward_dynamics_gradient_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "forward_dynamics_gradient: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj    = grid::NUM_JOINTS;
+    int nv    = grid::NUM_VEL;
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("forward_dynamics_gradient: batch > max_batch");
 
     const size_t row_bytes = nj * sizeof(T);
@@ -1912,8 +1957,11 @@ static ffi::Error grid_rbd_jax_forward_dynamics_gradient_impl(
             g_data->d_q_qd_u, stride_q_qd_u,
             g_data->d_f_ext, g_robot, /*gravity=*/gravity, batch);
 
+    // df_du is nv x 2nv per timestep (tangent-space) — the kernel writes the
+    // (correctly 2*nv*nv-strided) d_df_du. Copy at 2*nv*nv (matching numpy C-ABI +
+    // the JAX out_shape / VJP, unified at nv). FIXED base: nv == nj.
     cudaMemcpyAsync(df_du_out->typed_data(), g_data->d_df_du,
-                    batch * nj * 2 * nj * sizeof(T),
+                    batch * 2 * nv * nv * sizeof(T),
                     cudaMemcpyDeviceToDevice, stream);
     return ffi::Error::Success();
 }
@@ -2780,15 +2828,18 @@ torch::Tensor torch_inverse_dynamics(torch::Tensor q, torch::Tensor qd, double g
 torch::Tensor torch_minv(torch::Tensor q) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
+    const int nv = grid::NUM_VEL;
     grid_torch_check(q, "minv: q", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
-    auto out = grid_torch_empty(batch, nj * nj, q);
+    // Minv is nv x nv (tangent-space); the kernel writes d_Minv nv*nv-strided.
+    // Size the output + copy at nv*nv (unified with numpy/JAX). FIXED base: nv == nj.
+    auto out = grid_torch_empty(batch, nv * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::minv_kernel<T><<<g_block_dimms, g_thread_dimms, grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_Minv, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_Minv, batch * nj * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_Minv, batch * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 
@@ -2831,15 +2882,18 @@ torch::Tensor torch_aba(torch::Tensor q, torch::Tensor qd, torch::Tensor u, doub
 torch::Tensor torch_crba(torch::Tensor q, double gravity) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
+    const int nv = grid::NUM_VEL;
     grid_torch_check(q, "crba: q", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
-    auto out = grid_torch_empty(batch, nj * nj, q);
+    // M is nv x nv (tangent-space); the kernel writes d_M nv*nv-strided. Size the
+    // output + copy at nv*nv (unified with numpy/JAX). FIXED base: nv == nj.
+    auto out = grid_torch_empty(batch, nv * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::crba_kernel<T><<<g_block_dimms, g_thread_dimms, grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_M, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_M, batch * nj * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_M, batch * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 
@@ -2899,12 +2953,15 @@ torch::Tensor torch_inverse_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
                               c10::optional<torch::Tensor> f_ext) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
+    const int nv = grid::NUM_VEL;
     grid_torch_check(q, "inverse_dynamics_gradient: q", nj); grid_torch_check(qd, "inverse_dynamics_gradient: qd", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
     grid_torch_f_ext_apply(stream, batch, f_ext);
-    auto out = grid_torch_empty(batch, nj * 2 * nj, q);
+    // dc_du is nv x 2nv (tangent-space); the kernel writes d_dc_du 2*nv*nv-strided.
+    // Size + copy at 2*nv*nv (unified with numpy/JAX). FIXED base: nv == nj.
+    auto out = grid_torch_empty(batch, 2 * nv * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     if (qdd.has_value()) {
         const torch::Tensor& a = qdd.value();
@@ -2917,7 +2974,7 @@ torch::Tensor torch_inverse_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
         grid::inverse_dynamics_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_dc_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     }
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_dc_du, batch * nj * 2 * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_dc_du, batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
@@ -2926,16 +2983,19 @@ torch::Tensor torch_forward_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
                                           c10::optional<torch::Tensor> f_ext) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
+    const int nv = grid::NUM_VEL;
     grid_torch_check(q, "fd_grad: q", nj); grid_torch_check(qd, "fd_grad: qd", nj); grid_torch_check(u, "fd_grad: u", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, &qd, &u);
     grid_torch_f_ext_apply(stream, batch, f_ext);
-    auto out = grid_torch_empty(batch, nj * 2 * nj, q);
+    // df_du is nv x 2nv (tangent-space); the kernel writes d_df_du 2*nv*nv-strided.
+    // Size + copy at 2*nv*nv (unified with numpy/JAX). FIXED base: nv == nj.
+    auto out = grid_torch_empty(batch, 2 * nv * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::forward_dynamics_gradient_kernel<T><<<g_block_dimms, g_thread_dimms, grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_df_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_df_du, batch * nj * 2 * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_df_du, batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }

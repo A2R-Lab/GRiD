@@ -33,17 +33,45 @@ at float32 precision:
 | Method | Returns | max_err vs RBDReference |
 |---|---|---|
 | `inverse_dynamics(q, qd, qdd=None, gravity=-9.81)` | `(B, NJ)` | 4.9e-6 |
-| `minv(q)` | `(B, NJ, NJ)` | 1.1e-4 |
+| `minv(q)` | `(B, NV, NV)` | 1.1e-4 |
 | `forward_dynamics(q, qd, u, gravity=-9.81)` | `(B, NJ)` | 5.7e-5 |
 | `aba(q, qd, u, gravity=-9.81)` | `(B, NJ)` | 5.7e-5 |
-| `crba(q, gravity=-9.81)` | `(B, NJ, NJ)` | 2.7e-7 |
+| `crba(q, gravity=-9.81)` | `(B, NV, NV)` | 2.7e-7 |
 | `end_effector_pose(q)` | `(B, 6*NUM_EES)` | 1.4e-7 |
-| `end_effector_pose_gradient(q)` | `(B, 6*NUM_EES, NJ)` | 3.1e-7 |
-| `end_effector_pose_hessian(q)` | `(B, 6*NUM_EES, NJ, NJ)` | 3.1e-7 |
-| `inverse_dynamics_gradient(q, qd, qdd=None, gravity=-9.81)` | `(B, NJ, 2*NJ)` | 1.6e-5 |
-| `forward_dynamics_gradient(q, qd, u, gravity=-9.81)` | `(B, NJ, 2*NJ)` | 1.3e-4 |
+| `end_effector_pose_gradient(q)` | `(B, 6*NUM_EES, NV)` | 3.1e-7 |
+| `end_effector_pose_hessian(q)` | `(B, 6*NUM_EES, NV, NV)` | 3.1e-7 |
+| `inverse_dynamics_gradient(q, qd, qdd=None, gravity=-9.81)` | `(B, NV, 2*NV)` | 1.6e-5 |
+| `forward_dynamics_gradient(q, qd, u, gravity=-9.81)` | `(B, NV, 2*NV)` | 1.3e-4 |
 | `idsva_so(q, qd, qdd, gravity=-9.81)` | tuple of 4 × `(B, NV, NV, NV)` | 1e-4 |
 | `fdsva_so(q, qd, u, gravity=-9.81)` | tuple of 4 × `(B, NV, NV, NV)` | 1e-4 |
+
+Shape legend: `NJ = num_joints (== num_pos == nq)`, `NV = num_vel (tangent /
+velocity space)`. Inputs `q`, `qd`, `qdd`, `u` and the value outputs (`c`, `qdd`)
+are `NJ`-wide (GRiD's kernels consume velocity vectors at the nq stride; for a
+floating base the base 6-dof velocity sits in the leading slots with a padded
+quaternion-offset slot). Matrix/Jacobian outputs are tangent-space (pinocchio
+convention) and `NV`-dimensioned. For a **FIXED base `NV == NJ`**, so every shape
+above is identical to the pre-v0.4.1 behaviour.
+
+> **Breaking change (v0.4.1) — floating-base only.** `crba`/`minv` now return
+> `(B, NV, NV)` and `inverse_dynamics_gradient`/`forward_dynamics_gradient` return
+> `(B, NV, 2*NV)` instead of the previous `NJ`-sized shapes. The CUDA kernels have
+> always written these as `NV`-dimensioned (`NUM_VEL*NUM_VEL`); the old binding
+> over-sized the copy-out to `NUM_JOINTS*NUM_JOINTS`, which (a) appended garbage
+> padding rows/cols and (b) **corrupted every matrix after the first for
+> `batch > 1`** via a per-timestep stride mismatch (324 written vs 361 read). The
+> new shapes match `RBDReference` / pinocchio's `nv`-space mass matrix and
+> Jacobians and fix the binding-side `batch > 1` corruption. Fixed-base robots
+> are unaffected (`NV == NJ`). NOTE: the JAX-FFI and torch backends still expose
+> the old `NJ`-sized floating shapes pending a coordinated autodiff-side
+> migration; the numpy `register_robot(...)` handle is the corrected surface.
+>
+> Known separate issue (NOT a binding bug; not fixed here): the floating-base
+> **CRBA kernel** itself returns inconsistent mass matrices for `batch > 1` (an
+> identical-`q` batch yields differing `M` across batch slots). `minv` and the
+> dynamics gradients are correct batched; standalone (`batch == 1`) `crba` matches
+> the reference. This lives in the generated CUDA kernel (codegen), not the
+> binding, and needs a kernel-side fix.
 
 `register_robot` accepts `ee_joint_names=[...]` to pin specific
 end-effector frames (default: all leaf links), and `allow_fp64=True` for an

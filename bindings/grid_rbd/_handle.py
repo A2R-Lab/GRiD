@@ -308,9 +308,15 @@ class RobotHandle:
 
     # ─── algorithms ──────────────────────────────────────────────────────────
     #
-    # All methods take 2D float32 arrays of shape (B, num_joints) for the
-    # inputs. They return either (B, num_joints) or (B, num_joints, num_joints)
-    # depending on the algorithm.
+    # All methods take 2D float32 arrays of shape (B, num_joints) for the q/qd/qdd
+    # /u inputs (GRiD's kernels consume q, qd, qdd and u all at the NUM_JOINTS
+    # (== num_pos == nq) stride — for a floating base the 6-dof base velocity
+    # occupies the first slots and the +1 quaternion offset is a padded slot).
+    # VALUE vector outputs (torque c, qdd) are likewise (B, num_joints).
+    # MATRIX / Jacobian outputs are tangent-space (pinocchio convention) and are
+    # nv-dimensioned: crba/minv -> (B, num_vel, num_vel); the dynamics gradients
+    # -> (B, num_vel, 2*num_vel). For a FIXED base num_vel == num_joints so all
+    # shapes coincide; for a FLOATING base num_vel < num_joints.
 
     @property
     def num_bodies(self) -> int:
@@ -372,12 +378,15 @@ class RobotHandle:
         return self._cast_out(c)
 
     def minv(self, q):
-        """Direct mass-matrix inverse Minv(q). Returns shape (B, NJ, NJ).
+        """Direct mass-matrix inverse Minv(q). Returns shape (B, NV, NV).
 
-        GRiD's `minv` kernel writes only the lower triangle (upper
-        zero); we symmetrize on the host before returning so the matrix
-        matches `RBDReference.minv(..., output_dense=True)`. The
-        symmetrization is a single numpy op per call — negligible cost.
+        Minv is the tangent-space (pinocchio-convention) inverse mass matrix:
+        ``NV x NV``. For a FIXED base ``NV == NJ`` (== num_pos) so the shape is
+        unchanged; for a FLOATING base ``NV = 6 + n_joints < NJ = 7 + n_joints``
+        (the +1 is the quaternion offset in q only). GRiD's `minv` kernel writes
+        only the lower triangle (upper zero); we symmetrize on the host before
+        returning so the matrix matches `RBDReference.minv(..., output_dense=True)`.
+        The symmetrization is a single numpy op per call — negligible cost.
         """
         q = np.ascontiguousarray(q, dtype=self._dt)
         m = self._runner.minv(q)
@@ -411,8 +420,10 @@ class RobotHandle:
 
     def crba(self, q, *, gravity: float = -9.81):
         """Joint-space mass matrix M(q) via Composite Rigid Body Algorithm.
-        Returns shape (B, NJ, NJ). Pass `gravity` only because the host
-        wrapper takes it; the result doesn't depend on gravity."""
+        Returns shape (B, NV, NV) — the tangent-space (pinocchio-convention)
+        mass matrix. FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ
+        (the kernel writes NUM_VEL x NUM_VEL). Pass `gravity` only because the
+        host wrapper takes it; the result doesn't depend on gravity."""
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._cast_out(self._runner.crba(q, gravity))
 
@@ -454,8 +465,10 @@ class RobotHandle:
         return raw.reshape(B, NEE, NV, 6).transpose(0, 1, 3, 2).reshape(B, 6 * NEE, NV)
 
     def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
-        """∂τ/∂(q, qd). Returns shape (B, NJ, 2*NJ) — concatenated
-        [dc_dq | dc_dqd]. Slice with `[..., :NJ]` / `[..., NJ:]`.
+        """∂τ/∂(q, qd). Returns shape (B, NV, 2*NV) — concatenated
+        [dc_dq | dc_dqd], tangent-space (pinocchio) convention. Slice with
+        `[..., :NV]` / `[..., NV:]`. FIXED base: NV == NJ (unchanged); FLOATING
+        base: NV < NJ (the kernel writes nv x 2nv).
 
         ``qdd`` (optional): joint acceleration. The gradient depends on it
         (through the M·qdd term); ``qdd=None`` (default) ⇒ the bias gradient at
@@ -471,16 +484,18 @@ class RobotHandle:
         if qdd is not None:
             qdd_arr = np.ascontiguousarray(qdd, dtype=self._dt)
         raw = self._runner.inverse_dynamics_gradient(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
-        # GRiD's h_dc_du = [dc_dq (NJ×NJ col-major), dc_dqd (NJ×NJ col-major)]
-        # per timestep, total 2*NJ² floats. Reshape to (B, 2, NJ, NJ) col-major,
-        # transpose each block, hstack to match RBDReference's (NJ, 2*NJ).
+        # GRiD's dc_du = [dc_dq (NV×NV col-major), dc_dqd (NV×NV col-major)]
+        # per timestep, total 2*NV² floats. Reshape to (B, 2, NV, NV) col-major,
+        # transpose each block, hstack to match RBDReference's (NV, 2*NV).
+        # FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ.
         B = raw.shape[0]
-        NJ = self.num_joints
-        blocks = raw.reshape(B, 2, NJ, NJ).transpose(0, 1, 3, 2)  # row-major now
+        NV = self.num_vel
+        blocks = raw.reshape(B, 2, NV, NV).transpose(0, 1, 3, 2)  # row-major now
         return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
     def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
-        """∂qdd/∂(q, qd). Returns shape (B, NJ, 2*NJ).
+        """∂qdd/∂(q, qd). Returns shape (B, NV, 2*NV), tangent-space (pinocchio)
+        convention. FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ.
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
         affine in f_ext so a constant f_ext leaves this Jacobian unchanged."""
@@ -488,10 +503,10 @@ class RobotHandle:
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
         raw = self._runner.forward_dynamics_gradient(q, qd, u, gravity, self._prep_f_ext(f_ext))
-        # Same layout as h_dc_du: [df_dq, df_dqd] col-major blocks.
+        # Same layout as dc_du: [df_dq, df_dqd] NV×NV col-major blocks.
         B = raw.shape[0]
-        NJ = self.num_joints
-        blocks = raw.reshape(B, 2, NJ, NJ).transpose(0, 1, 3, 2)
+        NV = self.num_vel
+        blocks = raw.reshape(B, 2, NV, NV).transpose(0, 1, 3, 2)
         return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
     def end_effector_pose_hessian(self, q):

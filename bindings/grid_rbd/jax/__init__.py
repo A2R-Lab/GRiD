@@ -222,6 +222,21 @@ class JaxRobotHandle:
 
         VM = "broadcast_all"
 
+        # nq↔nv bridge for the VJPs. The dynamics VALUE outputs (c / qdd) are
+        # nj-wide (so their cotangents are nj-wide), but the analytic Jacobians
+        # are nv x nv (tangent space). For a FLOATING base nv < nj: take the
+        # leading nv of the value cotangent (the meaningful tangent rows; the
+        # trailing nj-vs-nv slot is the quaternion-padding of the value buffer)
+        # before contracting, and pad the nv-wide input cotangent back to nj for
+        # the nj-wide q/qd/u inputs. FIXED base nv == nj → both are no-ops.
+        def _slice_nv(ct):
+            return ct if nv == nj else ct[..., :nv]
+
+        def _pad_nj(g):
+            if nv == nj:
+                return g
+            return jnp.pad(g, [(0, 0)] * (g.ndim - 1) + [(0, nj - nv)])
+
         # ── forward_dynamics: qdd = f(q,qd,u);  ∂qdd/∂q,∂qdd/∂qd via the
         #    analytic gradient FFI, ∂qdd/∂u = M⁻¹. ───────────────────────────
         @functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
@@ -237,19 +252,25 @@ class JaxRobotHandle:
             q, qd, u = res
             tg = _t("forward_dynamics_gradient", "grid_rbd_jax_forward_dynamics_gradient")
             tm = _t("minv", "grid_rbd_jax_minv")
-            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nj * nj), vmap_method=VM)(
+            # The Jacobian / Minv matrices are nv x nv (tangent space); the qdd
+            # VALUE (and its cotangent ct) stays nj-wide. For a floating base
+            # nv < nj: contract the leading nv of ct (the meaningful tangent rows)
+            # and pad the resulting nv-wide input cotangent back to nj. FIXED base
+            # nv == nj so _slice_nv / _pad_nj are byte-identical no-ops.
+            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
                 q, qd, u, gravity=np.float32(gravity))
-            # GRiD writes (2, NJ, NJ) column-major; transpose to row-major (out, in).
-            blocks = flat.reshape(q.shape[:-1] + (2, nj, nj)).swapaxes(-2, -1)
+            # GRiD writes (2, NV, NV) column-major; transpose to row-major (out, in).
+            blocks = flat.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
             df_dq, df_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
-            mflat = jax.ffi.ffi_call(tm, self._out(q, nj * nj), vmap_method=VM)(
+            mflat = jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(
                 q, gravity=np.float32(gravity))
-            m = mflat.reshape(q.shape[:-1] + (nj, nj))
-            eye = jnp.eye(nj, dtype=m.dtype)
+            m = mflat.reshape(q.shape[:-1] + (nv, nv))
+            eye = jnp.eye(nv, dtype=m.dtype)
             minv = m + jnp.swapaxes(m, -1, -2) - m * eye  # ∂qdd/∂u
-            gq = jnp.einsum('...o,...oi->...i', ct, df_dq)
-            gqd = jnp.einsum('...o,...oi->...i', ct, df_dqd)
-            gu = jnp.einsum('...o,...oi->...i', ct, minv)
+            ctv = _slice_nv(ct)
+            gq = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, df_dq))
+            gqd = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, df_dqd))
+            gu = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, minv))
             # cotangents for (q, qd, u, f_ext); f_ext is non-diff.
             return (gq, gqd, gu, None)
 
@@ -275,12 +296,15 @@ class JaxRobotHandle:
         def id_bwd(gravity, res, ct):
             q, qd, qdd = res
             tg = _t("inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient")
-            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nj * nj), vmap_method=VM)(
+            # Jacobian is nv x 2nv (tangent); the torque VALUE/cotangent is nj-wide
+            # — slice leading nv, contract, pad back to nj (no-op for fixed base).
+            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
                 q, qd, qdd, gravity=np.float32(gravity))
-            blocks = flat.reshape(q.shape[:-1] + (2, nj, nj)).swapaxes(-2, -1)
+            blocks = flat.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
             dc_dq, dc_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
-            gq = jnp.einsum('...o,...oi->...i', ct, dc_dq)
-            gqd = jnp.einsum('...o,...oi->...i', ct, dc_dqd)
+            ctv = _slice_nv(ct)
+            gq = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, dc_dq))
+            gqd = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, dc_dqd))
             # cotangents for (q, qd, qdd, f_ext); qdd/f_ext are non-diff.
             return (gq, gqd, None, None)
 
@@ -304,7 +328,9 @@ class JaxRobotHandle:
             J = (raw.reshape(q.shape[:-1] + (nee, nv, 6))
                     .swapaxes(-2, -1)
                     .reshape(q.shape[:-1] + (6 * nee, nv)))
-            gq = jnp.einsum('...o,...oi->...i', ct, J)  # cols index NV(=NJ fixed-base)
+            # J cols index NV (tangent); the q input is nj-wide → pad the nv-wide
+            # input cotangent back to nj (no-op for fixed base, nv == nj).
+            gq = _pad_nj(jnp.einsum('...o,...oi->...i', ct, J))
             return (gq,)
 
         eepose.defvjp(ee_fwd, ee_bwd)
@@ -341,19 +367,21 @@ class JaxRobotHandle:
             # the grad FFI now takes an explicit qdd buffer → pass zeros.
             tg = _t("inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient")
             zq = jnp.zeros_like(q)
-            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nj * nj), vmap_method=VM)(
+            # Jacobian + regressor rows are nv-wide; the c cotangent is nj-wide.
+            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
                 q, qd, zq, gravity=np.float32(gravity))
-            blocks = flat.reshape(q.shape[:-1] + (2, nj, nj)).swapaxes(-2, -1)
+            blocks = flat.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
             dc_dq, dc_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
-            gq = jnp.einsum('...o,...oi->...i', ct, dc_dq)
-            gqd = jnp.einsum('...o,...oi->...i', ct, dc_dqd)
-            # pi cotangent: ct · Y, Y = ∂c/∂pi (NV x 10*NB) at qdd=0.
+            ctv = _slice_nv(ct)
+            gq = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, dc_dq))
+            gqd = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, dc_dqd))
+            # pi cotangent: ctv · Y, Y = ∂c/∂pi (NV x 10*NB) at qdd=0.
             tr = _t("inverse_dynamics_regressor", "grid_rbd_jax_inverse_dynamics_regressor")
             qdd0 = jnp.zeros_like(q)
-            Yflat = jax.ffi.ffi_call(tr, self._out(q, nj * npar), vmap_method=VM)(
+            Yflat = jax.ffi.ffi_call(tr, self._out(q, nv * npar), vmap_method=VM)(
                 q, qd, qdd0, gravity=np.float32(gravity))
-            Y = Yflat.reshape(q.shape[:-1] + (nj, npar))  # row-major (NV, 10NB)
-            gpi = jnp.einsum('...o,...op->...p', ct, Y)
+            Y = Yflat.reshape(q.shape[:-1] + (nv, npar))  # row-major (NV, 10NB)
+            gpi = jnp.einsum('...o,...op->...p', ctv, Y)
             return (gq, gqd, gpi)
 
         idyn_pi.defvjp(id_pi_fwd, id_pi_bwd)
@@ -379,25 +407,27 @@ class JaxRobotHandle:
             q, qd, u = res
             tg = _t("forward_dynamics_gradient", "grid_rbd_jax_forward_dynamics_gradient")
             tm = _t("minv", "grid_rbd_jax_minv")
-            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nj * nj), vmap_method=VM)(
+            # Jacobian / Minv / param-gradient rows are nv-wide; qdd cotangent nj-wide.
+            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
                 q, qd, u, gravity=np.float32(gravity))
-            blocks = flat.reshape(q.shape[:-1] + (2, nj, nj)).swapaxes(-2, -1)
+            blocks = flat.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
             df_dq, df_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
-            mflat = jax.ffi.ffi_call(tm, self._out(q, nj * nj), vmap_method=VM)(
+            mflat = jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(
                 q, gravity=np.float32(gravity))
-            m = mflat.reshape(q.shape[:-1] + (nj, nj))
-            eye = jnp.eye(nj, dtype=m.dtype)
+            m = mflat.reshape(q.shape[:-1] + (nv, nv))
+            eye = jnp.eye(nv, dtype=m.dtype)
             minv = m + jnp.swapaxes(m, -1, -2) - m * eye
-            gq = jnp.einsum('...o,...oi->...i', ct, df_dq)
-            gqd = jnp.einsum('...o,...oi->...i', ct, df_dqd)
-            gu = jnp.einsum('...o,...oi->...i', ct, minv)
-            # pi cotangent: ct · (∂qdd/∂pi), ∂qdd/∂pi = -Minv·Y (NV x 10*NB).
+            ctv = _slice_nv(ct)
+            gq = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, df_dq))
+            gqd = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, df_dqd))
+            gu = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, minv))
+            # pi cotangent: ctv · (∂qdd/∂pi), ∂qdd/∂pi = -Minv·Y (NV x 10*NB).
             tp = _t("forward_dynamics_parameter_gradient",
                     "grid_rbd_jax_forward_dynamics_parameter_gradient")
-            Gflat = jax.ffi.ffi_call(tp, self._out(q, nj * npar), vmap_method=VM)(
+            Gflat = jax.ffi.ffi_call(tp, self._out(q, nv * npar), vmap_method=VM)(
                 q, qd, u, gravity=np.float32(gravity))
-            G = Gflat.reshape(q.shape[:-1] + (nj, npar))  # row-major (NV, 10NB)
-            gpi = jnp.einsum('...o,...op->...p', ct, G)
+            G = Gflat.reshape(q.shape[:-1] + (nv, npar))  # row-major (NV, 10NB)
+            gpi = jnp.einsum('...o,...op->...p', ctv, G)
             return (gq, gqd, gu, gpi)
 
         fd_pi.defvjp(fd_pi_fwd, fd_pi_bwd)
@@ -450,22 +480,24 @@ class JaxRobotHandle:
         return self._differentiable()["inverse_dynamics"](gravity, q, qd, qdd_b, fe)
 
     def minv(self, q):
-        """Direct mass-matrix inverse Minv(q). Returns (B, NJ, NJ).
+        """Direct mass-matrix inverse Minv(q). Returns (B, NV, NV).
 
-        The kernel writes the lower triangle; we symmetrize inside the JAX
-        graph so callers see a full SPD matrix. (The plain wrapper does the
-        same in numpy.)
+        Minv is the tangent-space (pinocchio-convention) inverse mass matrix:
+        NV x NV. FIXED base: NV == NJ (shape unchanged); FLOATING base: NV < NJ
+        (the kernel writes NUM_VEL*NUM_VEL). The kernel writes the lower triangle;
+        we symmetrize inside the JAX graph so callers see a full SPD matrix. (The
+        plain numpy wrapper does the same.)
         """
         import jax
         import jax.numpy as jnp
         target = _register_method_target(
             self._so_path, self._cache_key, "minv", "grid_rbd_jax_minv")
         (q,), B = self._prep_2d("minv", q)
-        nj = self.num_joints
-        flat = jax.ffi.ffi_call(target, self._out(q, nj * nj), vmap_method="broadcast_all")(q)
-        m = flat.reshape(q.shape[:-1] + (nj, nj))
+        nv = self.num_vel
+        flat = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(q)
+        m = flat.reshape(q.shape[:-1] + (nv, nv))
         # Kernel fills the lower triangle; symmetrize as M + Mᵀ − diag(M).
-        eye = jnp.eye(nj, dtype=m.dtype)
+        eye = jnp.eye(nv, dtype=m.dtype)
         return m + jnp.swapaxes(m, -1, -2) - m * eye
 
     def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
@@ -522,7 +554,7 @@ class JaxRobotHandle:
 
     def inverse_dynamics_regressor(self, q, qd, qdd=None, *, gravity: float = -9.81):
         """Joint-torque regressor Y with τ = Y·π (∂τ/∂π). Returns
-        (B, NJ, 10*NUM_BODIES). ``qdd=None`` ⇒ zeros (the bias regressor used by
+        (B, NV, 10*NUM_BODIES). ``qdd=None`` ⇒ zeros (the bias regressor used by
         :meth:`inverse_dynamics_wrt_params`). Row-major (NV, 10*NB) per sample;
         the per-link basis is [m, m*c(3), I_O(6)]."""
         import jax
@@ -534,14 +566,14 @@ class JaxRobotHandle:
         if qdd is None:
             qdd = jnp.zeros_like(jnp.asarray(q, dtype=jnp.float32))
         (q, qd, qdd), B = self._prep_2d("inverse_dynamics_regressor", q, qd, qdd)
-        nj, npar = self.num_joints, 10 * self.num_bodies
-        flat = jax.ffi.ffi_call(target, self._out(q, nj * npar), vmap_method="broadcast_all")(
+        nv, npar = self.num_vel, 10 * self.num_bodies
+        flat = jax.ffi.ffi_call(target, self._out(q, nv * npar), vmap_method="broadcast_all")(
             q, qd, qdd, gravity=np.float32(gravity))
-        return flat.reshape(q.shape[:-1] + (nj, npar))
+        return flat.reshape(q.shape[:-1] + (nv, npar))
 
     def forward_dynamics_parameter_gradient(self, q, qd, u, *, gravity: float = -9.81):
         """FD inertial-parameter gradient ∂qdd/∂π = -M⁻¹·Y. Returns
-        (B, NJ, 10*NUM_BODIES), row-major (NV, 10*NB) per sample."""
+        (B, NV, 10*NUM_BODIES), row-major (NV, 10*NB) per sample."""
         import jax
         import jax.numpy as jnp
         import numpy as np
@@ -550,10 +582,10 @@ class JaxRobotHandle:
             "forward_dynamics_parameter_gradient",
             "grid_rbd_jax_forward_dynamics_parameter_gradient")
         (q, qd, u), B = self._prep_2d("forward_dynamics_parameter_gradient", q, qd, u)
-        nj, npar = self.num_joints, 10 * self.num_bodies
-        flat = jax.ffi.ffi_call(target, self._out(q, nj * npar), vmap_method="broadcast_all")(
+        nv, npar = self.num_vel, 10 * self.num_bodies
+        flat = jax.ffi.ffi_call(target, self._out(q, nv * npar), vmap_method="broadcast_all")(
             q, qd, u, gravity=np.float32(gravity))
-        return flat.reshape(q.shape[:-1] + (nj, npar))
+        return flat.reshape(q.shape[:-1] + (nv, npar))
 
     def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
         """qdd = aba(q, qd, u) via the articulated body algorithm. Returns (B, NJ).
@@ -572,17 +604,21 @@ class JaxRobotHandle:
             q, qd, u, fe, gravity=np.float32(gravity))
 
     def crba(self, q, *, gravity: float = -9.81):
-        """Mass matrix M(q) via composite rigid body algorithm. Returns (B, NJ, NJ)."""
+        """Mass matrix M(q) via composite rigid body algorithm. Returns (B, NV, NV).
+
+        Tangent-space (pinocchio-convention) mass matrix. FIXED base: NV == NJ
+        (shape unchanged); FLOATING base: NV < NJ (the kernel writes NUM_VEL*NUM_VEL).
+        """
         import jax
         import jax.numpy as jnp
         import numpy as np
         target = _register_method_target(
             self._so_path, self._cache_key, "crba", "grid_rbd_jax_crba")
         (q,), B = self._prep_2d("crba", q)
-        nj = self.num_joints
-        flat = jax.ffi.ffi_call(target, self._out(q, nj * nj), vmap_method="broadcast_all")(
+        nv = self.num_vel
+        flat = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(
             q, gravity=np.float32(gravity))
-        return flat.reshape(q.shape[:-1] + (nj, nj))
+        return flat.reshape(q.shape[:-1] + (nv, nv))
 
     def end_effector_pose(self, q):
         """End-effector pose [xyz, rpy] per EE. Returns (B, 6*NUM_EES).
@@ -637,10 +673,12 @@ class JaxRobotHandle:
         return flat.reshape(q.shape[:-1] + (6 * nee, nv, nv))
 
     def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81):
-        """∂c/∂(q, qd) — concatenated [dc_dq | dc_dqd]. Returns (B, NJ, 2*NJ).
+        """∂c/∂(q, qd) — concatenated [dc_dq | dc_dqd]. Returns (B, NV, 2*NV),
+        tangent-space (pinocchio) convention. FIXED base: NV == NJ (unchanged);
+        FLOATING base: NV < NJ (the kernel writes nv x 2nv).
 
-        Matches the plain wrapper layout: GRiD writes (2, NJ, NJ) column-major
-        blocks; we reshape/transpose/concat to row-major (NJ, 2*NJ).
+        Matches the plain wrapper layout: GRiD writes (2, NV, NV) column-major
+        blocks; we reshape/transpose/concat to row-major (NV, 2*NV).
 
         ``qdd=None`` (default) ⇒ the bias gradient ∂(h−g)/∂(q,qd); pass a nonzero
         ``qdd`` to include ∂(M·qdd)/∂q. JAX has no optional buffers, so ``None``
@@ -657,15 +695,17 @@ class JaxRobotHandle:
             qdd_b = jnp.zeros_like(q)
         else:
             (q, qd, qdd_b), B = self._prep_2d("inverse_dynamics_gradient", q, qd, qdd)
-        nj = self.num_joints
-        out_type = self._out(q, 2 * nj * nj)
+        nv = self.num_vel
+        out_type = self._out(q, 2 * nv * nv)
         raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
             q, qd, qdd_b, gravity=np.float32(gravity))
-        blocks = raw.reshape(q.shape[:-1] + (2, nj, nj)).swapaxes(-2, -1)
+        blocks = raw.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
         return jnp.concatenate([blocks[..., 0, :, :], blocks[..., 1, :, :]], axis=-1)
 
     def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81):
-        """∂qdd/∂(q, qd) — concatenated [df_dq | df_dqd]. Returns (B, NJ, 2*NJ)."""
+        """∂qdd/∂(q, qd) — concatenated [df_dq | df_dqd]. Returns (B, NV, 2*NV),
+        tangent-space (pinocchio) convention. FIXED base: NV == NJ (unchanged);
+        FLOATING base: NV < NJ (the kernel writes nv x 2nv)."""
         import jax
         import jax.numpy as jnp
         import numpy as np
@@ -673,11 +713,11 @@ class JaxRobotHandle:
             self._so_path, self._cache_key,
             "forward_dynamics_gradient", "grid_rbd_jax_forward_dynamics_gradient")
         (q, qd, u), B = self._prep_2d("forward_dynamics_gradient", q, qd, u)
-        nj = self.num_joints
-        out_type = self._out(q, 2 * nj * nj)
+        nv = self.num_vel
+        out_type = self._out(q, 2 * nv * nv)
         raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
             q, qd, u, gravity=np.float32(gravity))
-        blocks = raw.reshape(q.shape[:-1] + (2, nj, nj)).swapaxes(-2, -1)
+        blocks = raw.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
         return jnp.concatenate([blocks[..., 0, :, :], blocks[..., 1, :, :]], axis=-1)
 
     def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81):

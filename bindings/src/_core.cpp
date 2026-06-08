@@ -265,10 +265,12 @@ public:
 
     // ─── inverse_dynamics ────────────────────────────────────────────────────────────────
     //
-    // q, qd:  (batch, num_joints) float32, C-contiguous
-    // qdd:    optional (batch, num_joints) — currently ignored
-    //         (USE_QDD_FLAG=false in wrapper); future v2 will plumb through.
-    // returns c: (batch, num_joints) float32
+    // q, qd, qdd: (batch, num_joints) float32, C-contiguous. GRiD's kernels read
+    //         q, qd AND qdd all at the NUM_JOINTS (== num_pos == nq) stride; for a
+    //         FLOATING base the base 6-dof velocity lives in the leading slots and
+    //         the +1 quaternion offset is a padded slot (so qd/qdd stay nq-wide,
+    //         NOT nv-wide, on this surface).
+    // returns c (generalized force): (batch, num_joints) float32 — likewise nq-wide.
     py::array_t<CT> inverse_dynamics(
         arr_t q,
         arr_t qd,
@@ -309,7 +311,10 @@ public:
             throw std::invalid_argument(
                 "minv: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
         }
-        py::array_t<CT> out({batch, num_joints_, num_joints_});
+        // Minv is nv x nv (tangent-space, pinocchio convention). For a FIXED base
+        // nv == nq == num_joints_; for a FLOATING base nv = num_vel_ < num_joints_
+        // (the kernel writes NUM_VEL*NUM_VEL, not NUM_JOINTS*NUM_JOINTS).
+        py::array_t<CT> out({batch, num_vel_, num_vel_});
         int rc = fn_minv_(q.data(), out.mutable_data(), batch);
         if (rc != 0) {
             throw std::runtime_error("grid_rbd_minv failed: rc=" + std::to_string(rc));
@@ -372,7 +377,10 @@ public:
             throw std::invalid_argument(
                 "crba: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
         }
-        py::array_t<CT> out({batch, num_joints_, num_joints_});
+        // M is nv x nv (tangent-space, pinocchio convention). FIXED base: nv == nq
+        // == num_joints_; FLOATING base: nv = num_vel_ < num_joints_ (the kernel
+        // writes NUM_VEL*NUM_VEL).
+        py::array_t<CT> out({batch, num_vel_, num_vel_});
         int rc = fn_crba_(q.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error("grid_rbd_crba failed: rc=" + std::to_string(rc));
         return out;
@@ -464,7 +472,9 @@ public:
         }
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<CT> out({batch, num_joints_, 2 * num_joints_});
+        // dc/d(q,qd) is nv x 2nv (tangent-space). FIXED base: nv == num_joints_;
+        // FLOATING base: nv = num_vel_ (the kernel writes 2*NUM_VEL*NUM_VEL).
+        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
         int rc = fn_inverse_dynamics_gradient_(q.data(), qd.data(), qdd_ptr,
                                out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_gradient failed: rc=" + std::to_string(rc));
@@ -482,7 +492,9 @@ public:
         check_array_2d(u, batch, num_joints_, "u");
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<CT> out({batch, num_joints_, 2 * num_joints_});
+        // dqdd/d(q,qd) is nv x 2nv (tangent-space). FIXED base: nv == num_joints_;
+        // FLOATING base: nv = num_vel_ (the kernel writes 2*NUM_VEL*NUM_VEL).
+        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
         int rc = fn_fd_grad_(q.data(), qd.data(), u.data(),
                              out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_gradient failed: rc=" + std::to_string(rc));
