@@ -327,3 +327,71 @@ def test_native_mjx_energy_regressor_invariant_but_inputs_converted(go2_floating
             f"{method} mjx != pin-invariant (B={B}): max|d|={np.abs(native-pin).max():.3e}"
     # input convert is load-bearing: raw mjx q (wxyz) into the pin kernel mis-builds.
     assert np.abs(native[0] - raw_wrong[0]).max() > 1e-3
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_cmm_time_variation_matches_host_oracle(go2_floating):
+    """column-reframe class with qd input: Adot_mjx = Adot_pin G^{-1} (base cols)."""
+    from grid_rbd import _mujoco as bm
+    h = go2_floating
+    assert h._runner.has_cmm_time_variation_mujoco, \
+        "floating-base .so is missing grid_rbd_cmm_time_variation_mujoco"
+    rng = np.random.default_rng(11)
+    for B in (1, 4):
+        qpos, qvel, _ = _rand_state(h, rng, B, with_qd=True)
+        q_pin, qd_pin, _, _, R = h._mjx_inputs(qpos, qvel)
+        native = np.asarray(h.cmm_time_variation(qpos, qvel, _convention="mujoco"), np.float64)  # (B,6,NV)
+        pin_Ad = np.asarray(h.cmm_time_variation(q_pin, qd_pin), np.float64)
+        expected = bm.jacobian_pin_to_mjx(pin_Ad, R, True)
+        assert np.allclose(native, expected, rtol=2e-3, atol=2e-2), \
+            f"cmm_time_variation mjx != oracle (B={B}): max|d|={np.abs(native-expected).max():.3e}"
+    # non-triviality: base-linear columns differ from the raw pin frame.
+    raw_Ad = np.asarray(h.cmm_time_variation(qpos, qvel), np.float64)
+    assert np.abs(native[0, :, :3] - raw_Ad[0, :, :3]).max() > 1e-2
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_end_effector_pose_invariant_but_quat_reordered(go2_floating):
+    """end_effector_pose value is frame-INVARIANT, but the mjx q (wxyz) must be
+    reordered before the kinematics build (latent-bug path like osc_inertia). So
+    native(q_mjx) equals pin(q_pin), and BOTH differ from feeding the raw mjx q
+    to the pin kernel."""
+    h = go2_floating
+    assert h._runner.has_end_effector_pose_mujoco, \
+        "floating-base .so is missing grid_rbd_end_effector_pose_mujoco"
+    rng = np.random.default_rng(12)
+    for B in (1, 4):
+        qpos, _, _ = _rand_state(h, rng, B, with_qd=False)
+        q_pin, _, _, _, _ = h._mjx_inputs(qpos)
+        native = np.asarray(h.end_effector_pose(qpos, _convention="mujoco"), np.float64)
+        pin = np.asarray(h.end_effector_pose(q_pin), np.float64)   # invariant -> equal
+        assert np.allclose(native, pin, rtol=2e-3, atol=2e-2), \
+            f"end_effector_pose mjx != pin-invariant (B={B}): max|d|={np.abs(native-pin).max():.3e}"
+    # feeding the raw mjx (wxyz) q to the PIN kernel mis-builds the kinematics -> differs,
+    # confirming the quaternion reorder is load-bearing.
+    raw_wrong = np.asarray(h.end_effector_pose(qpos), np.float64)
+    assert np.abs(native[0] - raw_wrong[0]).max() > 1e-3
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_end_effector_pose_gradient_matches_host_oracle(go2_floating):
+    """column-reframe class: J_pose_mjx = J_pose_pin G^{-1} (base-linear cols)."""
+    from grid_rbd import _mujoco as bm
+    h = go2_floating
+    assert h._runner.has_end_effector_pose_gradient_mujoco, \
+        "floating-base .so is missing grid_rbd_end_effector_pose_gradient_mujoco"
+    rng = np.random.default_rng(13)
+    for B in (1, 4):
+        qpos, _, _ = _rand_state(h, rng, B, with_qd=False)
+        q_pin, _, _, _, R = h._mjx_inputs(qpos)
+        native = np.asarray(h.end_effector_pose_gradient(qpos, _convention="mujoco"), np.float64)  # (B,6*NEE,NV)
+        pin_J = np.asarray(h.end_effector_pose_gradient(q_pin), np.float64)
+        expected = bm.jacobian_pin_to_mjx(pin_J, R, True)
+        assert np.allclose(native, expected, rtol=2e-3, atol=2e-2), \
+            f"ee_pose_gradient mjx != oracle (B={B}): max|d|={np.abs(native-expected).max():.3e}"
+    # non-triviality: base-linear columns differ from the raw pin frame.
+    raw_J = np.asarray(h.end_effector_pose_gradient(qpos), np.float64)
+    assert np.abs(native[0, :, :3] - raw_J[0, :, :3]).max() > 1e-2

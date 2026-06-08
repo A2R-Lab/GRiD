@@ -509,6 +509,25 @@ extern "C" int grid_rbd_end_effector_pose(
     return 0;
 }
 
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention end_effector_pose(q) -> 6*NUM_EES per timestep. The pose is
+// frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts the mjx-native q
+// (quaternion reorder, like osc_inertia). Output byte-equal to feeding the pin
+// kernel the pin-converted q.
+extern "C" int grid_rbd_end_effector_pose_mujoco(const T* q, T* ee_out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
+    grid::end_effector_pose<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+                            /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(ee_out, g_data->h_end_effector_pose, (size_t)batch * 6 * grid::NUM_EES * sizeof(T));
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
+
 // Batched forward kinematics (large-batch, one block/warp per sample):
 //   q layout:     (batch, NUM_POS)            -> q[b*NUM_POS + j]
 //   pose7 layout: (batch, 7) = [tx,ty,tz, qw,qx,qy,qz]
@@ -579,6 +598,26 @@ extern "C" int grid_rbd_end_effector_pose_gradient(
                 batch * 6 * grid::NUM_EES * nv * sizeof(T));
     return 0;
 }
+
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention end_effector_pose Jacobian (q) -> 6*NUM_EES*NUM_VEL per
+// timestep. Column-reframe: q raw mjx in (kernel reorders the quaternion) and the
+// kernel (MUJOCO_OUTPUT=true) reframes the base-linear Jacobian columns before
+// saving (the column reframe acts on the NV axis cols 0:3).
+extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(const T* q, T* dee_out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
+    grid::end_effector_pose_gradient<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+                                     /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(dee_out, g_data->h_end_effector_pose_gradient,
+                (size_t)batch * 6 * grid::NUM_EES * grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
 
 // ∂c/∂(q, qd): output shape (batch, NV, 2*NV) — concatenated [dc_dq | dc_dqd]
 // (tangent-space; FIXED base NV == NJ, FLOATING base NV < NJ).
@@ -1043,6 +1082,24 @@ extern "C" int grid_rbd_cmm_time_variation(const T* q, const T* qd, T* out, int 
     return 3;  // cmm_time_variation not generated for this robot (mimic)
 #endif
 }
+
+#if defined(GRID_HAS_CMM_TIME_VARIATION) && defined(GRID_FLOATING_BASE)
+// MuJoCo-convention cmm_time_variation(q, qd) -> 6*NUM_VEL Adot (per timestep).
+// Column-reframe: q/qd raw mjx in (kernel reorders the quaternion + reframes qd)
+// and the kernel (MUJOCO_OUTPUT=true) reframes the Adot columns before saving.
+extern "C" int grid_rbd_cmm_time_variation_mujoco(const T* q, const T* qd, T* out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::cmm_time_variation<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+                             /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_cmm_time_variation, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_HAS_CMM_TIME_VARIATION && GRID_FLOATING_BASE
 
 // frame_jacobian(q) -> 6 x NUM_VEL geometric Jacobian (col-major, [linear;angular])
 // at the leaf-EE frame, LOCAL_WORLD_ALIGNED. Gated on GRID_HAS_FRAME_JACOBIAN

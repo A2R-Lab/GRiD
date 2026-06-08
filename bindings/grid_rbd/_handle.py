@@ -669,9 +669,22 @@ class RobotHandle:
             M = _mujoco.mass_matrix_pin_to_mjx(np.asarray(M, np.float64), R, True).astype(self._dt)
         return self._cast_out(M)
 
-    def end_effector_pose(self, q):
+    def end_effector_pose(self, q, *, _convention=None):
         """End-effector pose [xyz, rpy] per EE. Returns shape (B, 6*NUM_EES).
-        For multi-EE robots, reshape to (B, NUM_EES, 6) at the caller side."""
+        For multi-EE robots, reshape to (B, NUM_EES, 6) at the caller side.
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is
+        MuJoCo-convention; the pose itself is frame-INVARIANT, but the native
+        kernel routes ``q`` through the mjx quaternion reorder (so the output
+        equals feeding the pin kernel the pin-converted ``q``)."""
+        if self._mjx_active(_convention):
+            if not getattr(self._runner, "has_end_effector_pose_mujoco", False):
+                raise NotImplementedError(
+                    "end_effector_pose(output_convention='mujoco') needs a "
+                    "floating-base .so built with the mjx kernel — re-register with "
+                    "force_rebuild=True.")
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            return self._runner.end_effector_pose_mujoco(q)
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.end_effector_pose(q)
 
@@ -689,7 +702,7 @@ class RobotHandle:
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.fk_batched(q, use_warp)
 
-    def end_effector_pose_gradient(self, q):
+    def end_effector_pose_gradient(self, q, *, _convention=None):
         """End-effector pose Jacobian d/dv (TANGENT, pinocchio convention).
 
         Returns shape (B, 6*NUM_EES, NV). Floating-base produces the
@@ -698,13 +711,26 @@ class RobotHandle:
 
         GRiD's `h_end_effector_pose_gradient` is stored column-major as (6, NUM_EES*NV) per
         timestep; we re-orient to (6*NUM_EES, NV) per timestep.
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is
+        MuJoCo-convention and the returned Jacobian has its base-linear columns
+        reframed into the mjx frame (computed natively in the kernel).
         """
-        self._mjx_guard_unsupported("end_effector_pose_gradient")
+        NEE = self.num_ees
+        NV = self.num_vel
+        if self._mjx_active(_convention):
+            if not getattr(self._runner, "has_end_effector_pose_gradient_mujoco", False):
+                raise NotImplementedError(
+                    "end_effector_pose_gradient(output_convention='mujoco') needs a "
+                    "floating-base .so built with the mjx kernel — re-register with "
+                    "force_rebuild=True.")
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            raw = self._runner.end_effector_pose_gradient_mujoco(q)
+            B = raw.shape[0]
+            return raw.reshape(B, NEE, NV, 6).transpose(0, 1, 3, 2).reshape(B, 6 * NEE, NV)
         q = np.ascontiguousarray(q, dtype=self._dt)
         raw = self._runner.end_effector_pose_gradient(q)
         B = raw.shape[0]
-        NEE = self.num_ees
-        NV = self.num_vel
         return raw.reshape(B, NEE, NV, 6).transpose(0, 1, 3, 2).reshape(B, 6 * NEE, NV)
 
     def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
@@ -1175,7 +1201,7 @@ class RobotHandle:
         # flat layout dA[row + 6*k + 6*NV*m] -> (B, m, k, row) then -> (B, row, k, m).
         return self._cast_out(raw.reshape(B, NV, NV, 6).transpose(0, 3, 2, 1))
 
-    def cmm_time_variation(self, q, qd):
+    def cmm_time_variation(self, q, qd, *, _convention=None):
         """Centroidal-momentum-matrix time variation Ȧ = dA(q(t))/dt, shape
         ``(B, 6, NV)`` (Pinocchio convention, ``[linear; angular]`` at the CoM,
         world-aligned) = ``Σ_i (∂A/∂q_i)·qd_i``. Matches
@@ -1184,13 +1210,26 @@ class RobotHandle:
         Runs on all robots (mimic + big floating-base via centroidal-pool spill);
         raises a clear ``RuntimeError`` only on the rare oversized-pool case (see
         :py:meth:`dccrba`).
-        """
-        self._mjx_guard_unsupported("cmm_time_variation")
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention and the returned Ȧ has its columns reframed into the mjx
+        frame (computed natively in the kernel)."""
+        NV = self.num_vel
+        if self._mjx_active(_convention):
+            if not getattr(self._runner, "has_cmm_time_variation_mujoco", False):
+                raise NotImplementedError(
+                    "cmm_time_variation(output_convention='mujoco') needs a "
+                    "floating-base .so built with the mjx kernel — re-register with "
+                    "force_rebuild=True.")
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            qd = np.ascontiguousarray(qd, dtype=self._dt)
+            raw = self._runner.cmm_time_variation_mujoco(q, qd)  # (B, 6*NV) col-major A[r + 6*c]
+            B = raw.shape[0]
+            return self._cast_out(raw.reshape(B, NV, 6).transpose(0, 2, 1))
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         raw = self._runner.cmm_time_variation(q, qd)  # (B, 6*NV) col-major A[r + 6*c]
         B = raw.shape[0]
-        NV = self.num_vel
         return self._cast_out(raw.reshape(B, NV, 6).transpose(0, 2, 1))
 
     def frame_jacobian(self, q, *, target_jid=None, reference_frame=None, _convention=None):

@@ -177,6 +177,9 @@ public:
         fn_potential_energy_regressor_mujoco_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_potential_energy_regressor_mujoco"));
         fn_ee_pose_          = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose"));
         fn_ee_pose_grad_     = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose_gradient"));
+        // floating-base mjx EE kernels (optional; present only on a floating .so)
+        fn_ee_pose_mujoco_      = reinterpret_cast<fn_ee_t>(opt_sym("grid_rbd_end_effector_pose_mujoco"));
+        fn_ee_pose_grad_mujoco_ = reinterpret_cast<fn_ee_t>(opt_sym("grid_rbd_end_effector_pose_gradient_mujoco"));
         fn_inverse_dynamics_gradient_        = reinterpret_cast<fn_dyn_t>(require_sym("grid_rbd_inverse_dynamics_gradient"));
         fn_fd_grad_          = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_forward_dynamics_gradient"));
         // Phase-C extension: hessian + SO. Required for v0.1+ .so files.
@@ -230,6 +233,8 @@ public:
         fn_potential_energy_regressor_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_potential_energy_regressor"));
         fn_dccrba_             = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_dccrba"));
         fn_cmm_time_variation_ = reinterpret_cast<fn_q_qd_out_t>(opt_sym("grid_rbd_cmm_time_variation"));
+        // floating-base mjx variant (optional; present only on a floating .so)
+        fn_cmm_time_variation_mujoco_ = reinterpret_cast<fn_q_qd_out_t>(opt_sym("grid_rbd_cmm_time_variation_mujoco"));
 
         // D.4 / Phase 5 runtime-mutable inertia — OPTIONAL: present only in a .so
         // built with runtime_inertia=True (compiled with -DGRID_RBD_RUNTIME_INERTIA).
@@ -682,6 +687,29 @@ public:
         return out;
     }
 
+    // MuJoCo-convention end_effector_pose(q) -> (batch, 6*NUM_EES). Pose is
+    // frame-INVARIANT; the native kernel reorders the mjx quaternion (latent-bug
+    // path like osc_inertia). Floating-base only.
+    bool has_end_effector_pose_mujoco() const { return fn_ee_pose_mujoco_ != nullptr; }
+    py::array_t<CT> end_effector_pose_mujoco(arr_t q)
+    {
+        if (!fn_ee_pose_mujoco_) throw std::runtime_error(
+            "end_effector_pose_mujoco unavailable: floating-base .so only");
+        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
+            throw std::invalid_argument(
+                "end_effector_pose_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
+        }
+        int batch = (int)q.shape(0);
+        if (batch > max_batch_) {
+            throw std::invalid_argument(
+                "end_effector_pose_mujoco: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
+        }
+        py::array_t<CT> out({batch, 6 * num_ees_});
+        int rc = fn_ee_pose_mujoco_(q.data(), out.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     // ─── fk_batched (large-batch FK, pos+quat) ───────────────────────────────
     // Input  q:     (batch, NUM_POS)
     // Output pose7: (batch, 7) = [tx,ty,tz, qw,qx,qy,qz]
@@ -728,6 +756,29 @@ public:
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_});
         int rc = fn_ee_pose_grad_(q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // MuJoCo-convention end_effector_pose Jacobian (q) -> (batch, 6*NUM_EES, NV)
+    // in the mjx frame (base-linear column reframe baked into the kernel).
+    // Floating-base only.
+    bool has_end_effector_pose_gradient_mujoco() const { return fn_ee_pose_grad_mujoco_ != nullptr; }
+    py::array_t<CT> end_effector_pose_gradient_mujoco(arr_t q)
+    {
+        if (!fn_ee_pose_grad_mujoco_) throw std::runtime_error(
+            "end_effector_pose_gradient_mujoco unavailable: floating-base .so only");
+        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
+            throw std::invalid_argument(
+                "end_effector_pose_gradient_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
+        }
+        int batch = (int)q.shape(0);
+        if (batch > max_batch_) {
+            throw std::invalid_argument(
+                "end_effector_pose_gradient_mujoco: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
+        }
+        py::array_t<CT> out({batch, 6 * num_ees_, num_vel_});
+        int rc = fn_ee_pose_grad_mujoco_(q.data(), out.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
 
@@ -1365,6 +1416,20 @@ public:
         return out;
     }
 
+    // MuJoCo-convention cmm_time_variation(q, qd) -> (batch, 6*NUM_VEL) Adot in
+    // the mjx frame (column reframe baked into the kernel). Floating-base only.
+    bool has_cmm_time_variation_mujoco() const { return fn_cmm_time_variation_mujoco_ != nullptr; }
+    py::array_t<CT> cmm_time_variation_mujoco(arr_t q, arr_t qd)
+    {
+        if (!fn_cmm_time_variation_mujoco_) throw std::runtime_error(
+            "cmm_time_variation_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<CT> out({batch, 6 * num_vel_});
+        int rc = fn_cmm_time_variation_mujoco_(q.data(), qd.data(), out.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("grid_rbd_cmm_time_variation_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     // set_inertia_params(params) — D.4 / Phase 5 runtime-mutable inertia.
     // params is a flat (10*num_bodies,) array, body-indexed bodies 1..N, each a
     // length-10 [m, h(3), I_O(6)] vector. Copies it into the device d_inertia_params
@@ -1506,6 +1571,8 @@ private:
     fn_q_out_grav_t    fn_potential_energy_regressor_mujoco_ = nullptr;
     fn_ee_t    fn_ee_pose_        = nullptr;
     fn_ee_t    fn_ee_pose_grad_   = nullptr;
+    fn_ee_t    fn_ee_pose_mujoco_      = nullptr;  // floating-base mjx EE pose (optional)
+    fn_ee_t    fn_ee_pose_grad_mujoco_ = nullptr;  // floating-base mjx EE-pose grad (optional)
     fn_dyn_t  fn_inverse_dynamics_gradient_      = nullptr;
     fn_fd_t    fn_fd_grad_        = nullptr;
     fn_ee_t    fn_ee_pose_hessian_ = nullptr;
@@ -1543,6 +1610,7 @@ private:
     fn_q_out_grav_t    fn_potential_energy_regressor_ = nullptr;
     fn_q_out_t         fn_dccrba_                      = nullptr;
     fn_q_qd_out_t      fn_cmm_time_variation_          = nullptr;
+    fn_q_qd_out_t      fn_cmm_time_variation_mujoco_   = nullptr;  // floating-base mjx (optional)
     fn_set_inertia_t   fn_set_inertia_params_          = nullptr;
 
     int num_joints_ = 0;
@@ -1646,6 +1714,10 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def_property_readonly("has_potential_energy_regressor_mujoco", &R::has_potential_energy_regressor_mujoco)
         .def("potential_energy_regressor_mujoco", &R::potential_energy_regressor_mujoco,
              py::arg("q"), py::arg("gravity") = -9.81f)
+        .def_property_readonly("has_end_effector_pose_mujoco", &R::has_end_effector_pose_mujoco)
+        .def("end_effector_pose_mujoco", &R::end_effector_pose_mujoco, py::arg("q"))
+        .def_property_readonly("has_end_effector_pose_gradient_mujoco", &R::has_end_effector_pose_gradient_mujoco)
+        .def("end_effector_pose_gradient_mujoco", &R::end_effector_pose_gradient_mujoco, py::arg("q"))
         .def("end_effector_pose", &R::end_effector_pose,
              py::arg("q"))
         .def("fk_batched", &R::fk_batched,
@@ -1731,6 +1803,9 @@ static void register_runner(py::module_& m, const char* cls_name) {
              py::arg("q"), py::arg("gravity") = -9.81f)
         .def("dccrba", &R::dccrba, py::arg("q"))
         .def("cmm_time_variation", &R::cmm_time_variation,
+             py::arg("q"), py::arg("qd"))
+        .def_property_readonly("has_cmm_time_variation_mujoco", &R::has_cmm_time_variation_mujoco)
+        .def("cmm_time_variation_mujoco", &R::cmm_time_variation_mujoco,
              py::arg("q"), py::arg("qd"))
         .def("set_inertia_params", &R::set_inertia_params,
              py::arg("params"),
