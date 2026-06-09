@@ -190,6 +190,7 @@ public:
         fn_idsva_so_         = reinterpret_cast<fn_dyn_no_fext_t>(require_sym("grid_rbd_idsva_so"));
         fn_idsva_so_mujoco_  = reinterpret_cast<fn_dyn_no_fext_t>(opt_sym("grid_rbd_idsva_so_mujoco"));  // floating only
         fn_fdsva_so_         = reinterpret_cast<fn_fd_no_fext_t>  (require_sym("grid_rbd_fdsva_so"));
+        fn_fdsva_so_mujoco_  = reinterpret_cast<fn_fd_no_fext_t>  (opt_sym("grid_rbd_fdsva_so_mujoco"));  // floating only
         fn_integrator_       = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator"));
         fn_integrator_mujoco_ = reinterpret_cast<fn_integrator_t>(opt_sym("grid_rbd_integrator_mujoco"));  // floating only
         fn_integrator_grad_  = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator_gradient"));
@@ -979,6 +980,26 @@ public:
         int rc = fn_fdsva_so_(q.data(), qd.data(), u.data(),
                               out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error("grid_rbd_fdsva_so failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // MuJoCo-convention fdsva_so -> (B, SECOND_ORDER_TENSOR_SIZE). Floating-base only.
+    bool has_fdsva_so_mujoco() const { return fn_fdsva_so_mujoco_ != nullptr; }
+    py::array_t<CT> fdsva_so_mujoco(
+        arr_t q,
+        arr_t qd,
+        arr_t u,
+        int second_order_tensor_size,
+        float gravity)
+    {
+        if (!fn_fdsva_so_mujoco_) throw std::runtime_error(
+            "fdsva_so_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        py::array_t<CT> out({batch, second_order_tensor_size});
+        int rc = fn_fdsva_so_mujoco_(q.data(), qd.data(), u.data(),
+                                     out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_fdsva_so_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
 
@@ -1802,6 +1823,7 @@ private:
     fn_dyn_no_fext_t fn_idsva_so_ = nullptr;
     fn_dyn_no_fext_t fn_idsva_so_mujoco_ = nullptr;  // floating mjx (optional)
     fn_fd_no_fext_t   fn_fdsva_so_ = nullptr;
+    fn_fd_no_fext_t   fn_fdsva_so_mujoco_ = nullptr;  // floating mjx (optional)
     fn_integrator_t fn_integrator_      = nullptr;
     fn_integrator_t fn_integrator_mujoco_ = nullptr;  // floating-base mjx integrator (optional)
     fn_integrator_t fn_integrator_grad_ = nullptr;
@@ -1984,6 +2006,11 @@ static void register_runner(py::module_& m, const char* cls_name) {
              py::arg("second_order_tensor_size"),
              py::arg("gravity") = -9.81f)
         .def("fdsva_so", &R::fdsva_so,
+             py::arg("q"), py::arg("qd"), py::arg("u"),
+             py::arg("second_order_tensor_size"),
+             py::arg("gravity") = -9.81f)
+        .def_property_readonly("has_fdsva_so_mujoco", &R::has_fdsva_so_mujoco)
+        .def("fdsva_so_mujoco", &R::fdsva_so_mujoco,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("second_order_tensor_size"),
              py::arg("gravity") = -9.81f)

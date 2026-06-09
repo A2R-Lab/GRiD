@@ -638,6 +638,40 @@ def test_native_mjx_idsva_so_matches_oracle(go2_floating):
 
 @pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
 @pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_fdsva_so_matches_oracle(go2_floating):
+    """SECOND-ORDER FD class: all 4 fdsva_so tensors mjx = explicit-analytic SO transform
+    of the first-order fd-grad transform (contravector output-map, dMinv/dq closed form).
+    Validated vs the RBDReference oracle (reuses Minv, qdd, the first-order fd-gradients)."""
+    from RBDReference.equivalents.mujoco_convention import (
+        second_order_fd_pin_to_mjx, FloatingRootLayout)
+    h = go2_floating
+    assert h._runner.has_fdsva_so_mujoco, "floating-base .so is missing grid_rbd_fdsva_so_mujoco"
+    nq, nv = h.num_joints, h.num_vel
+    layout = FloatingRootLayout()
+    rng = np.random.default_rng(43)
+    for B in (1, 2):
+        qpos, qvel, u = _rand_state(h, rng, B, with_qd=True, with_u=True)
+        native = h.fdsva_so(qpos, qvel, u, _convention="mujoco")  # SecondOrderFD 4×(B,NV,NV,NV)
+        q_pin, qd_pin, _, u_pin, R = h._mjx_inputs(qpos, qvel, u=u)
+        pin_so = h.fdsva_so(q_pin, qd_pin, u_pin)
+        pin_g = np.asarray(h.forward_dynamics_gradient(q_pin, qd_pin, u_pin), np.float64)  # (B,NV,2NV)
+        Minv = np.asarray(h.minv(q_pin), np.float64)
+        qdd = np.asarray(h.forward_dynamics(q_pin, qd_pin, u_pin), np.float64)
+        for b in range(B):
+            so_t = tuple(np.asarray(t[b], np.float64) for t in pin_so)
+            exp = second_order_fd_pin_to_mjx(
+                so_t, pin_g[b, :, :nv], pin_g[b, :, nv:], Minv[b], qdd[b, :nv],
+                qd_pin[b, :nv], u_pin[b, :nv], R[b], layout)
+            for ti, name in enumerate(("d2q", "cross", "d2qd", "d2tdq")):
+                nt = np.asarray(native[ti][b], np.float64)
+                assert np.allclose(nt, exp[ti], rtol=1e-2, atol=1e-1), \
+                    f"fdsva_so[{name}] mjx != oracle (B={B},b={b}): max|d|={np.abs(nt-exp[ti]).max():.3e}"
+    raw = h.fdsva_so(qpos, qvel, u)
+    assert np.abs(np.asarray(native[0][0], np.float64) - np.asarray(raw[0][0], np.float64)).max() > 1e-2
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
 def test_native_mjx_forward_dynamics_gradient_matches_oracle(go2_floating):
     """FULL-GRADIENT class: dqdd/d(q,qd) mjx = reframe + base-row rotate + ω×v
     couplings (qdd computed in-kernel), validated vs the RBDReference oracle."""

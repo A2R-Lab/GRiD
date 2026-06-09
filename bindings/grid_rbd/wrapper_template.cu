@@ -908,6 +908,28 @@ extern "C" int grid_rbd_fdsva_so(
     return 0;
 }
 
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention fdsva_so(q, qd, u) -> 4*NV^3 (floating base only). q/qd/u raw mjx
+// (kernel input-converts); the kernel (MUJOCO_OUTPUT=true) transforms all four
+// 2nd-order forward-dynamics tensors to the mjx frame (explicit-analytic SO transform,
+// contravector output-map). Register-heavy; post-launch error check surfaces a silent
+// launch-config failure as rc!=0.
+extern "C" int grid_rbd_fdsva_so_mujoco(const T* q, const T* qd, const T* u, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);
+    grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_df2,
+                batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
+
 
 // ────────────────────────────────────────────────────────────────────────────
 // Centroidal / energy / general-frame kinematics surface (F2 binding layer)

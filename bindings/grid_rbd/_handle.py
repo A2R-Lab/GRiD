@@ -872,16 +872,26 @@ class RobotHandle:
         blocks = [flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4)]
         return SecondOrderID(*self._cast_out(*blocks))
 
-    def fdsva_so(self, q, qd, u, *, gravity: float = -9.81):
+    def fdsva_so(self, q, qd, u, *, gravity: float = -9.81, _convention=None):
         """Second-order forward dynamics. Returns a :class:`SecondOrderFD`
         NamedTuple of 4 tensors each shape ``(B, NV, NV, NV)`` (a plain tuple,
-        so positional unpacking / indexing still work)."""
-        self._mjx_guard_unsupported("fdsva_so")
+        so positional unpacking / indexing still work).
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``u`` are
+        MuJoCo-convention and all four 2nd-order tensors are returned in the mjx frame
+        (explicit-analytic SO transform, contravector output-map, baked in-kernel)."""
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
         NV = self.num_vel
-        flat = self._runner.fdsva_so(q, qd, u, 4 * NV ** 3, gravity)
+        if self._mjx_active(_convention) and getattr(self._runner, "has_fdsva_so_mujoco", False):
+            flat = self._runner.fdsva_so_mujoco(q, qd, u, 4 * NV ** 3, gravity)
+        elif self._mjx_active(_convention):
+            raise NotImplementedError(
+                "fdsva_so(output_convention='mujoco') needs a floating-base .so built with "
+                "the mjx kernel (re-register with force_rebuild=True).")
+        else:
+            flat = self._runner.fdsva_so(q, qd, u, 4 * NV ** 3, gravity)
         B = flat.shape[0]
         blocks = [flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4)]
         return SecondOrderFD(*self._cast_out(*blocks))
