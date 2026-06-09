@@ -1830,6 +1830,99 @@ extern "C" int grid_plant_momentum_cost(
 }
 #endif  // GRID_PLANT_HAS_MOMENTUM_COST
 
+#if defined(GRID_FLOATING_BASE) && defined(GRID_PLANT_HAS_EE_COST)
+// MuJoCo-convention ee_pos_cost (floating base only). q is raw mjx; the kernel
+// (MUJOCO_OUTPUT=true) input-converts q (quaternion reorder) so the world-frame EE
+// value is correct, computes the pin grad/hess, then base-rotates the q-block grad
+// (covector) and congruence-reframes the q-block GN hess before saving. Value invariant.
+extern "C" int grid_rbd_ee_pos_cost_mujoco(
+    const T* q, const T* p_des, const T* W,
+    T* out, T* grad, T* hess, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    if (plant_alloc()) return 4;
+    const int nq = grid::NUM_POS;
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    cudaMemcpy(g_plant.d_in_a, q,     batch * nq * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_b, p_des, batch * 3  * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_c, W,     batch * 3  * sizeof(T), cudaMemcpyHostToDevice);
+    size_t smem = grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::ee_pos_cost_kernel<T, /*EE=*/0, /*MUJOCO_OUTPUT=*/true><<<grid_dim, g_thread_dimms, smem, g_streams[0]>>>(
+        g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+        g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
+        g_plant.d_end_effector_pose, g_plant.d_end_effector_pose_gradient, g_robot, batch);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(grad, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(hess, g_plant.d_hess, batch * nx * nx * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE && GRID_PLANT_HAS_EE_COST
+
+#if defined(GRID_FLOATING_BASE) && defined(GRID_PLANT_HAS_COM_COST)
+// MuJoCo-convention com_cost (floating base only). Same transform as ee_pos_cost
+// (q-block grad covector + GN hess congruence; q input-converted in-kernel).
+extern "C" int grid_rbd_com_cost_mujoco(
+    const T* q, const T* p_des, const T* W,
+    T* out, T* grad, T* hess, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    if (plant_alloc()) return 4;
+    const int nq = grid::NUM_POS;
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    cudaMemcpy(g_plant.d_in_a, q,     batch * nq * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_b, p_des, batch * 3  * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_c, W,     batch * 3  * sizeof(T), cudaMemcpyHostToDevice);
+    size_t smem = grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>();
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::com_cost_kernel<T, /*MUJOCO_OUTPUT=*/true><<<grid_dim, g_thread_dimms, smem, g_streams[0]>>>(
+        g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+        g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
+        g_plant.d_end_effector_pose /*reused as com scratch*/, g_robot, batch);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(grad, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(hess, g_plant.d_hess, batch * nx * nx * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE && GRID_PLANT_HAS_COM_COST
+
+#if defined(GRID_FLOATING_BASE) && defined(GRID_PLANT_HAS_MOMENTUM_COST)
+// MuJoCo-convention momentum_cost (floating base only). The kernel input-converts q
+// AND qd (qd[0:3] = R^T qd[0:3]) so h = A qd is the correct invariant momentum, then
+// reframes the qd-block grad (covector) + GN hess (congruence at offset nq). Value invariant.
+extern "C" int grid_rbd_momentum_cost_mujoco(
+    const T* q, const T* qd, const T* h_des, const T* W,
+    T* out, T* grad, T* hess, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    if (plant_alloc()) return 4;
+    const int nq = grid::NUM_POS;
+    const int nv = grid::NUM_VEL;
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    cudaMemcpy(g_plant.d_in_a, q,     batch * nq * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_b, qd,    batch * nv * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_c,                 h_des, batch * 6 * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_c + (size_t)batch * 6, W, batch * 6 * sizeof(T), cudaMemcpyHostToDevice);
+    size_t smem = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    grid_plant::momentum_cost_kernel<T, /*MUJOCO_OUTPUT=*/true><<<grid_dim, g_thread_dimms, smem, g_streams[0]>>>(
+        g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+        g_plant.d_in_a, g_plant.d_in_b,
+        g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6,
+        g_plant.d_end_effector_pose /*reused as ccrba scratch*/, g_robot, batch);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(grad, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(hess, g_plant.d_hess, batch * nx * nx * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE && GRID_PLANT_HAS_MOMENTUM_COST
+
 #ifdef GRID_PLANT_HAS_STEP_GRADIENT
 // plant_step_gradient: [A|B] = d x_{k+1}/d(x,u) = integrator_gradient([q;qd], u).
 // x (batch, NX); u (batch, NV); dAB (batch, 2*NV*3*NV, column-major). The kernel

@@ -205,6 +205,9 @@ public:
         fn_plant_ee_cost_    = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_plant_ee_pos_cost"));
         fn_plant_com_cost_   = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_plant_com_cost"));
         fn_plant_mom_cost_   = reinterpret_cast<fn_plant_mom_t>(opt_sym("grid_plant_momentum_cost"));
+        fn_plant_ee_cost_mujoco_  = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_rbd_ee_pos_cost_mujoco"));   // floating only
+        fn_plant_com_cost_mujoco_ = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_rbd_com_cost_mujoco"));      // floating only
+        fn_plant_mom_cost_mujoco_ = reinterpret_cast<fn_plant_mom_t>(opt_sym("grid_rbd_momentum_cost_mujoco")); // floating only
         fn_plant_step_grad_  = reinterpret_cast<fn_plant_step_grad_t>(opt_sym("grid_plant_step_gradient"));
         fn_plant_step_hess_  = reinterpret_cast<fn_plant_step_hess_t>(opt_sym("grid_plant_step_hessian"));
 
@@ -1195,6 +1198,67 @@ public:
         return {out, grad, hess};
     }
 
+    // MuJoCo-convention tracking costs (floating base only): value invariant; the
+    // active grad block reframes as a covector (G·) and the GN hess block by
+    // congruence (G·G^T), all baked in-kernel (q/qd input-converted internally).
+    bool has_ee_pos_cost_mujoco() const { return fn_plant_ee_cost_mujoco_ != nullptr; }
+    std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
+    ee_pos_cost_mujoco(arr_t q, arr_t p_des, arr_t W)
+    {
+        require_plant((void*)fn_plant_ee_cost_mujoco_, "ee_pos_cost_mujoco");
+        int nx = num_joints_ + num_vel_;
+        if (q.ndim() != 2 || q.shape(1) != num_joints_)
+            throw std::invalid_argument("ee_pos_cost_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
+        int batch = (int)q.shape(0);
+        if (batch > max_batch_) throw std::invalid_argument("ee_pos_cost_mujoco: batch > max_batch");
+        check_array_2d(p_des, batch, 3, "p_des");
+        check_array_2d(W, batch, 3, "W");
+        py::array_t<CT> out({batch}); py::array_t<CT> grad({batch, nx}); py::array_t<CT> hess({batch, nx, nx});
+        int rc = fn_plant_ee_cost_mujoco_(q.data(), p_des.data(), W.data(),
+                                          out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("ee_pos_cost_mujoco failed: rc=" + std::to_string(rc));
+        return {out, grad, hess};
+    }
+
+    bool has_com_cost_mujoco() const { return fn_plant_com_cost_mujoco_ != nullptr; }
+    std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
+    com_cost_mujoco(arr_t q, arr_t p_des, arr_t W)
+    {
+        require_plant((void*)fn_plant_com_cost_mujoco_, "com_cost_mujoco");
+        int nx = num_joints_ + num_vel_;
+        if (q.ndim() != 2 || q.shape(1) != num_joints_)
+            throw std::invalid_argument("com_cost_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
+        int batch = (int)q.shape(0);
+        if (batch > max_batch_) throw std::invalid_argument("com_cost_mujoco: batch > max_batch");
+        check_array_2d(p_des, batch, 3, "p_des");
+        check_array_2d(W, batch, 3, "W");
+        py::array_t<CT> out({batch}); py::array_t<CT> grad({batch, nx}); py::array_t<CT> hess({batch, nx, nx});
+        int rc = fn_plant_com_cost_mujoco_(q.data(), p_des.data(), W.data(),
+                                           out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("com_cost_mujoco failed: rc=" + std::to_string(rc));
+        return {out, grad, hess};
+    }
+
+    bool has_momentum_cost_mujoco() const { return fn_plant_mom_cost_mujoco_ != nullptr; }
+    std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
+    momentum_cost_mujoco(arr_t q, arr_t qd, arr_t h_des, arr_t W)
+    {
+        require_plant((void*)fn_plant_mom_cost_mujoco_, "momentum_cost_mujoco");
+        int nx = num_joints_ + num_vel_;
+        if (q.ndim() != 2 || q.shape(1) != num_joints_)
+            throw std::invalid_argument("momentum_cost_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
+        int batch = (int)q.shape(0);
+        if (batch > max_batch_) throw std::invalid_argument("momentum_cost_mujoco: batch > max_batch");
+        check_array_2d(qd, batch, num_vel_, "qd");
+        check_array_2d(h_des, batch, 6, "h_des");
+        check_array_2d(W, batch, 6, "W");
+        py::array_t<CT> out({batch}); py::array_t<CT> grad({batch, nx}); py::array_t<CT> hess({batch, nx, nx});
+        int rc = fn_plant_mom_cost_mujoco_(q.data(), qd.data(), h_des.data(), W.data(),
+                                           out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("momentum_cost_mujoco failed: rc=" + std::to_string(rc));
+        return {out, grad, hess};
+    }
+
     // plant_step_gradient: x (batch, NX), u (batch, NV) -> dAB (batch, 2*NV, 3*NV).
     py::array_t<CT> plant_step_gradient(
         arr_t x,
@@ -1724,6 +1788,9 @@ private:
     fn_plant_ee_t      fn_plant_ee_cost_     = nullptr;
     fn_plant_ee_t      fn_plant_com_cost_    = nullptr;
     fn_plant_mom_t     fn_plant_mom_cost_    = nullptr;
+    fn_plant_ee_t      fn_plant_ee_cost_mujoco_  = nullptr;  // floating mjx (optional)
+    fn_plant_ee_t      fn_plant_com_cost_mujoco_ = nullptr;  // floating mjx (optional)
+    fn_plant_mom_t     fn_plant_mom_cost_mujoco_ = nullptr;  // floating mjx (optional)
     fn_plant_step_grad_t fn_plant_step_grad_ = nullptr;
     fn_plant_step_hess_t fn_plant_step_hess_ = nullptr;
     // F2 centroidal / energy / general-frame kinematics (optional symbols)
@@ -1923,6 +1990,15 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("com_cost", &R::com_cost,
              py::arg("q"), py::arg("p_des"), py::arg("W"))
         .def("momentum_cost", &R::momentum_cost,
+             py::arg("q"), py::arg("qd"), py::arg("h_des"), py::arg("W"))
+        .def_property_readonly("has_ee_pos_cost_mujoco", &R::has_ee_pos_cost_mujoco)
+        .def("ee_pos_cost_mujoco", &R::ee_pos_cost_mujoco,
+             py::arg("q"), py::arg("p_des"), py::arg("W"))
+        .def_property_readonly("has_com_cost_mujoco", &R::has_com_cost_mujoco)
+        .def("com_cost_mujoco", &R::com_cost_mujoco,
+             py::arg("q"), py::arg("p_des"), py::arg("W"))
+        .def_property_readonly("has_momentum_cost_mujoco", &R::has_momentum_cost_mujoco)
+        .def("momentum_cost_mujoco", &R::momentum_cost_mujoco,
              py::arg("q"), py::arg("qd"), py::arg("h_des"), py::arg("W"))
         // ─── centroidal / energy / general-frame kinematics (F2) ───────────
         .def("com", &R::com, py::arg("q"))

@@ -947,7 +947,7 @@ class RobotHandle:
         R = np.ascontiguousarray(R, dtype=self._dt)
         return self._runner.quadratic_input_cost(u, u_des, R)
 
-    def ee_pos_cost(self, q, p_des, W):
+    def ee_pos_cost(self, q, p_des, W, *, _convention=None):
         """End-effector position cost over the 3 position axes (EE 0).
 
         q is (B, NUM_POS); p_des / W are (B, 3). Returns:
@@ -956,11 +956,19 @@ class RobotHandle:
         The hessian is returned in the kernel's column-major layout; since the
         GN hessian J_p^T W J_p is symmetric the row/col-major distinction is
         immaterial.
-        """
-        self._mjx_guard_unsupported("ee_pos_cost")
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention;
+        the EE position (and thus the value) is invariant, and the q-block grad/hess are
+        reframed to the mjx tangent (covector / congruence) in-kernel."""
         q = np.ascontiguousarray(q, dtype=self._dt)
         p_des = np.ascontiguousarray(p_des, dtype=self._dt)
         W = np.ascontiguousarray(W, dtype=self._dt)
+        if self._mjx_active(_convention) and getattr(self._runner, "has_ee_pos_cost_mujoco", False):
+            return self._runner.ee_pos_cost_mujoco(q, p_des, W)
+        if self._mjx_active(_convention):
+            raise NotImplementedError(
+                "ee_pos_cost(output_convention='mujoco') needs a floating-base .so built "
+                "with the mjx kernel (re-register with force_rebuild=True).")
         return self._runner.ee_pos_cost(q, p_des, W)
 
     def joint_position_barrier(self, var, lower, upper, mu):
@@ -1045,29 +1053,46 @@ class RobotHandle:
         NV = self.num_vel
         return raw.reshape(B, 2 * NV, 3 * NV, 3 * NV)
 
-    def com_cost(self, q, p_des, W):
+    def com_cost(self, q, p_des, W, *, _convention=None):
         """Center-of-mass tracking cost over the 3 CoM axes.
 
         q is (B, NUM_POS); p_des / W are (B, 3). Returns:
           value (B,), grad_x (B, NX) = [J_com^T (W·r); 0], GN hess_x (B, NX, NX)
           with the top-left NV×NV q-block = J_com^T diag(W) J_com.
         Matches ``RBDReference.com_cost(q, p_des, W)``.
-        """
-        self._mjx_guard_unsupported("com_cost")
+
+        With ``output_convention="mujoco"`` (floating base) the CoM position (and value)
+        is invariant; the q-block grad/hess are reframed to the mjx tangent in-kernel."""
         q = np.ascontiguousarray(q, dtype=self._dt)
         p_des = np.ascontiguousarray(p_des, dtype=self._dt)
         W = np.ascontiguousarray(W, dtype=self._dt)
+        if self._mjx_active(_convention) and getattr(self._runner, "has_com_cost_mujoco", False):
+            return self._runner.com_cost_mujoco(q, p_des, W)
+        if self._mjx_active(_convention):
+            raise NotImplementedError(
+                "com_cost(output_convention='mujoco') needs a floating-base .so built "
+                "with the mjx kernel (re-register with force_rebuild=True).")
         return self._runner.com_cost(q, p_des, W)
 
-    def momentum_cost(self, q, qd, h_des, W):
+    def momentum_cost(self, q, qd, h_des, W, *, _convention=None):
         """Centroidal-momentum tracking cost over the 6 momentum components.
 
         q is (B, NUM_POS); qd is (B, NUM_VEL); h_des / W are (B, 6). Returns:
           value (B,), grad_x (B, NX) = [0; A^T (W·r)], GN hess_x (B, NX, NX)
           with the bottom-right NV×NV qd-block = A^T diag(W) A.
         Matches ``RBDReference.momentum_cost(q, qd, h_des, W)``.
-        """
-        self._mjx_guard_unsupported("momentum_cost")
+
+        With ``output_convention="mujoco"`` (floating base): the mjx KERNEL transform
+        (qd-block covector grad + congruence GN hess, numpy-validated to ~2e-15) is
+        built, but is NOT yet exposed — the underlying floating-base PIN momentum_cost
+        returns zero output on go2 (a pre-existing plant-cost issue: ccrba_device inside
+        the momentum kernel's smem layout; unrelated to the mjx epilogue). Re-enable the
+        dispatch below once that pin path is fixed. See docs/open-tasks/mjx_codegen_fusion_master_plan.md §9g."""
+        if self._mjx_active(_convention):
+            raise NotImplementedError(
+                "momentum_cost(output_convention='mujoco') is built + numpy-validated in the "
+                "kernel but not yet exposed: the floating-base PIN momentum_cost returns zero "
+                "on go2 (pre-existing ccrba-in-plant-kernel issue). Fix the pin path first.")
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         h_des = np.ascontiguousarray(h_des, dtype=self._dt)
