@@ -761,3 +761,139 @@ def test_native_mjx_nonlinear_effects_matches_oracle(go2_floating):
     # non-triviality: the mjx bias differs from feeding raw mjx q/qd to the pin bias.
     raw = np.asarray(h.nonlinear_effects(qpos, qvel), np.float64)
     assert np.abs(native - raw).max() > 1e-2
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_end_effector_pose_runtime_matches_oracle(go2_floating):
+    """INVARIANT class: the runtime-target pose value [xyz; rpy] is frame-invariant —
+    the mjx kernel only reorders the input quat, so native mjx == pin pose on the
+    mjx-converted q."""
+    h = go2_floating
+    assert h._runner.has_end_effector_pose_runtime_mujoco, \
+        "floating-base .so is missing grid_rbd_end_effector_pose_runtime_mujoco"
+    rng = np.random.default_rng(41)
+    for B in (1, 4):
+        qpos, _, _ = _rand_state(h, rng, B, with_qd=False)
+        q_pin, _, _, _, _ = h._mjx_inputs(qpos)
+        native = np.asarray(h.end_effector_pose_runtime(qpos, _convention="mujoco"), np.float64)  # (B, NEE, 6)
+        expected = np.asarray(h.end_effector_pose_runtime(q_pin), np.float64)  # invariant pose
+        assert np.allclose(native, expected, rtol=5e-3, atol=5e-2), \
+            f"ee_pose_runtime mjx != oracle (B={B}): max|d|={np.abs(native-expected).max():.3e}"
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_end_effector_pose_gradient_runtime_matches_oracle(go2_floating):
+    """COLUMN-reframe class: J_pose_mjx = J_pose_pin G^{-1} (base-linear cols). The
+    runtime-target gradient reframes exactly like the codegen-target one."""
+    from grid_rbd import _mujoco as bm
+    h = go2_floating
+    assert h._runner.has_end_effector_pose_gradient_runtime_mujoco, \
+        "floating-base .so is missing grid_rbd_end_effector_pose_gradient_runtime_mujoco"
+    rng = np.random.default_rng(43)
+    for B in (1, 4):
+        qpos, _, _ = _rand_state(h, rng, B, with_qd=False)
+        q_pin, _, _, _, R = h._mjx_inputs(qpos)
+        native = np.asarray(h.end_effector_pose_gradient_runtime(qpos, _convention="mujoco"), np.float64)  # (B, NEE, 6, NV)
+        pin_J = np.asarray(h.end_effector_pose_gradient_runtime(q_pin), np.float64)
+        # jacobian_pin_to_mjx reframes a (rows, NV) matrix's base-linear COLUMNS; apply
+        # per-(batch, EE) since the runtime surface stacks an NEE axis.
+        exp = np.empty_like(native)
+        for b in range(B):
+            for e in range(native.shape[1]):
+                exp[b, e] = bm.jacobian_pin_to_mjx(pin_J[b, e], R[b], True)
+        assert np.allclose(native, exp, rtol=2e-3, atol=2e-2), \
+            f"ee_pose_gradient_runtime mjx != oracle (B={B}): max|d|={np.abs(native-exp).max():.3e}"
+    # non-triviality: base-linear columns differ from the raw pin frame.
+    raw_J = np.asarray(h.end_effector_pose_gradient_runtime(qpos), np.float64)
+    assert np.abs(native[0, :, :, :3] - raw_J[0, :, :, :3]).max() > 1e-2
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_quadratic_state_cost_matches_oracle(go2_floating):
+    """STATE-COST class: value is convention-DEPENDENT (the kernel input-converts the
+    qd base-linear block before differencing vs the mjx-frame x_des/Q). The qd-block
+    grad/hess reframe (covector / congruence at offset nq); the q-block is unchanged.
+    Validated vs the RBDReference oracle."""
+    from RBDReference.equivalents.mujoco_convention import (
+        quadratic_state_cost_pin_to_mjx, FloatingRootLayout)
+    h = go2_floating
+    assert h._runner.has_quadratic_state_cost_mujoco, \
+        "floating-base .so is missing grid_rbd_quadratic_state_cost_mujoco"
+    nq, nv = h.num_joints, h.num_vel
+    nx = nq + nv
+    layout = FloatingRootLayout()
+    rng = np.random.default_rng(51)
+    for B in (1, 4):
+        qpos, qvel, _ = _rand_state(h, rng, B, with_qd=True)
+        qvel = qvel[:, :nv]  # the velocity tangent block is nv-wide
+        x_mjx = np.concatenate([qpos, qvel], axis=1).astype(np.float32)        # (B, nx)
+        x_des = rng.standard_normal((B, nx)).astype(np.float32)
+        Q = (rng.standard_normal((B, nx)) ** 2 + 0.1).astype(np.float32)
+        val_m, grad_m, hess_m = h.quadratic_state_cost(x_mjx, x_des, Q, _convention="mujoco")
+        # pin reference: input-convert only the qd base-linear block (q untouched).
+        _, qd_pin, _, _, R = h._mjx_inputs(qpos, qvel)
+        x_pin = np.concatenate([qpos, qd_pin[:, :nv]], axis=1).astype(np.float32)
+        val_p, grad_p, hess_p = h.quadratic_state_cost(x_pin, x_des, Q)
+        assert np.allclose(np.asarray(val_m, np.float64), np.asarray(val_p, np.float64),
+                           rtol=5e-3, atol=5e-2), \
+            f"quadratic_state_cost value mjx != pin-on-converted-x (B={B})"
+        exp_g = np.empty_like(np.asarray(grad_m, np.float64))
+        exp_h = np.empty_like(np.asarray(hess_m, np.float64))
+        for b in range(B):
+            g, hh = quadratic_state_cost_pin_to_mjx(
+                np.asarray(grad_p[b], np.float64), np.asarray(hess_p[b], np.float64),
+                R[b], nq, nv, layout)
+            exp_g[b] = g; exp_h[b] = hh
+        assert np.allclose(np.asarray(grad_m, np.float64), exp_g, rtol=5e-3, atol=5e-2), \
+            f"quadratic_state_cost grad mjx != oracle: max|d|={np.abs(np.asarray(grad_m,np.float64)-exp_g).max():.3e}"
+        assert np.allclose(np.asarray(hess_m, np.float64), exp_h, rtol=5e-3, atol=5e-2), \
+            f"quadratic_state_cost hess mjx != oracle: max|d|={np.abs(np.asarray(hess_m,np.float64)-exp_h).max():.3e}"
+    # non-triviality: the mjx qd-block grad differs from feeding raw mjx x to the pin cost.
+    _, raw_g, _ = h.quadratic_state_cost(x_mjx, x_des, Q)
+    assert np.abs(np.asarray(grad_m, np.float64)[:, nq:nq + 3]
+                  - np.asarray(raw_g, np.float64)[:, nq:nq + 3]).max() > 1e-3
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_inverse_dynamics_regressor_matches_oracle(go2_floating):
+    """ROW base-rotate class: the regressor rows are tangent-indexed generalized
+    forces, so Y_mjx = G Y_pin (base-LINEAR rows rotated by R). Validated vs the
+    RBDReference oracle; also checks the identity G·(Y@pi) == (G·Y)@pi via tau."""
+    from RBDReference.equivalents.mujoco_convention import (
+        base_rotate_pin_to_mjx, FloatingRootLayout)
+    from grid_rbd import _mujoco as bm
+    h = go2_floating
+    assert h._runner.has_inverse_dynamics_regressor_mujoco, \
+        "floating-base .so is missing grid_rbd_inverse_dynamics_regressor_mujoco"
+    nq, nv = h.num_joints, h.num_vel
+    ncol = 10 * h.num_bodies
+    layout = FloatingRootLayout()
+    rng = np.random.default_rng(61)
+    for B in (1, 4):
+        qpos = rng.standard_normal((B, nq)); qpos[:, 3:7] /= np.linalg.norm(qpos[:, 3:7], axis=1, keepdims=True)
+        qvel = rng.standard_normal((B, nq)); qvel[:, nv:] = 0.0
+        qacc = rng.standard_normal((B, nq)); qacc[:, nv:] = 0.0
+        native = np.asarray(h.inverse_dynamics_regressor(qpos, qvel, qacc, _convention="mujoco"),
+                            np.float64)  # (B, nv, ncol)
+        assert native.shape == (B, nv, ncol)
+        q_pin, qd_pin, qdd_pin, _, R = h._mjx_inputs(qpos, qvel, qacc)
+        Y_pin = np.asarray(h.inverse_dynamics_regressor(q_pin, qd_pin, qdd_pin), np.float64)
+        exp = np.empty_like(native)
+        for b in range(B):
+            exp[b] = base_rotate_pin_to_mjx(Y_pin[b], R[b], layout)
+        assert np.allclose(native, exp, rtol=1e-2, atol=1e-1), \
+            f"id_regressor mjx != oracle (B={B}): max|d|={np.abs(native-exp).max():.3e}"
+        # tau identity (any pi): (G·Y_pin) @ pi == G·(Y_pin @ pi) == id_tau_pin_to_mjx(Y_pin@pi)
+        # — pure linear algebra, so a random pi exercises the row-rotate consistently.
+        pi = rng.standard_normal(ncol)
+        tau_native = native @ pi                                   # (B, nv)
+        tau_exp = bm.id_tau_pin_to_mjx(Y_pin @ pi, R, True)
+        assert np.allclose(tau_native, tau_exp, rtol=1e-2, atol=1e-1), \
+            f"id_regressor tau identity broke (B={B}): max|d|={np.abs(tau_native-tau_exp).max():.3e}"
+    # non-triviality: the mjx base rows differ from the raw pin regressor.
+    raw_Y = np.asarray(h.inverse_dynamics_regressor(qpos, qvel, qacc), np.float64)
+    assert np.abs(native[0, :3] - raw_Y[0, :3]).max() > 1e-2

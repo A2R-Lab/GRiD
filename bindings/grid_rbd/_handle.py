@@ -872,6 +872,33 @@ class RobotHandle:
         blocks = [flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4)]
         return SecondOrderID(*self._cast_out(*blocks))
 
+    def inverse_dynamics_regressor(self, q, qd, qdd=None, *, gravity: float = -9.81, _convention=None):
+        """Inverse-dynamics inertial-parameter regressor ``Y`` with
+        ``tau = Y . pi`` (``pi`` = the stacked 10-param spatial inertia of each link).
+        Returns ``(B, NV, 10*NUM_BODIES)``. Mirrors
+        ``RBDReference.inverse_dynamics_regressor(q, qd, qdd)``.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``qdd`` are
+        MuJoCo-convention and the base-linear ROWS (0:3) of ``Y`` are rotated by ``R``
+        in-kernel (the rows transform like a generalized force, ``Y_mjx = G Y_pin``).
+        """
+        q  = np.ascontiguousarray(q,  dtype=self._dt)
+        qd = np.ascontiguousarray(qd, dtype=self._dt)
+        qdd_in = qdd if qdd is not None else np.zeros_like(q)
+        qdd_arr = np.ascontiguousarray(qdd_in, dtype=self._dt)
+        NV = self.num_vel
+        ncol = 10 * self.num_bodies
+        if self._mjx_active(_convention) and getattr(self._runner, "has_inverse_dynamics_regressor_mujoco", False):
+            flat = self._runner.inverse_dynamics_regressor_mujoco(q, qd, qdd_arr, gravity)
+        elif self._mjx_active(_convention):
+            raise NotImplementedError(
+                "inverse_dynamics_regressor(output_convention='mujoco') needs a floating-base .so built "
+                "with the mjx kernel (re-register with force_rebuild=True).")
+        else:
+            flat = self._runner.inverse_dynamics_regressor(q, qd, qdd_arr, gravity)
+        B = flat.shape[0]
+        return self._cast_out(flat.reshape(B, NV, ncol))  # (B, NV, 10*NUM_BODIES)
+
     def fdsva_so(self, q, qd, u, *, gravity: float = -9.81, _convention=None):
         """Second-order forward dynamics. Returns a :class:`SecondOrderFD`
         NamedTuple of 4 tensors each shape ``(B, NV, NV, NV)`` (a plain tuple,
@@ -943,16 +970,26 @@ class RobotHandle:
     # axis 0 = batch. Cost methods return (value, grad, hess); barriers return
     # (value, grad, hess_diag). Conventions mirror RBDReference/_plant.py.
 
-    def quadratic_state_cost(self, x, x_des, Q):
+    def quadratic_state_cost(self, x, x_des, Q, *, _convention=None):
         """1/2 * sum_i Q_i (x_i - x_des_i)^2 over the full state x = [q; qd].
 
         x / x_des / Q are (B, NUM_POS + NUM_VEL). Returns:
           value (B,), grad (B, NX), hess = diag(Q) (B, NX, NX).
+
+        With ``output_convention="mujoco"`` (floating base) ``x`` is MuJoCo-convention:
+        the kernel input-converts the velocity base-linear block (global->local) before
+        differencing against the mjx-frame ``x_des``/``Q``, so the VALUE is
+        convention-DEPENDENT; the qd-block grad/hess are reframed in-kernel.
         """
-        self._mjx_guard_unsupported("quadratic_state_cost")
         x = np.ascontiguousarray(x, dtype=self._dt)
         x_des = np.ascontiguousarray(x_des, dtype=self._dt)
         Q = np.ascontiguousarray(Q, dtype=self._dt)
+        if self._mjx_active(_convention) and getattr(self._runner, "has_quadratic_state_cost_mujoco", False):
+            return self._runner.quadratic_state_cost_mujoco(x, x_des, Q)
+        if self._mjx_active(_convention):
+            raise NotImplementedError(
+                "quadratic_state_cost(output_convention='mujoco') needs a floating-base .so built "
+                "with the mjx kernel (re-register with force_rebuild=True).")
         return self._runner.quadratic_state_cost(x, x_des, Q)
 
     def quadratic_input_cost(self, u, u_des, R):
@@ -1465,8 +1502,7 @@ class RobotHandle:
                 raise ValueError(f"Could not find joint named: {name}")
         return jids
 
-    @staticmethod
-    def _normalize_ee_offsets(ee_offsets, num_ees):
+    def _normalize_ee_offsets(self, ee_offsets, num_ees):
         """Normalize ee_offsets to a list of length-3 [x,y,z] (one per EE).
         ``None`` => zero offset (frame origin); a single offset is applied to all
         EEs (matches the oracle's first-offset broadcast). Accepts [x,y,z] or
@@ -1481,7 +1517,7 @@ class RobotHandle:
                 f"ee_offsets length {len(offs)} != number of EEs {num_ees}")
         return offs
 
-    def end_effector_pose_runtime(self, q, ee_joint_names=None, ee_offsets=None):
+    def end_effector_pose_runtime(self, q, ee_joint_names=None, ee_offsets=None, *, _convention=None):
         """Runtime-target end-effector pose ``[xyz; rpy]`` at an offset point.
 
         Mirrors ``RBDReference.end_effector_pose(q, ee_joint_names, ee_offsets)``:
@@ -1492,34 +1528,55 @@ class RobotHandle:
         results stacked.
 
         Returns ``(B, NUM_EE, 6)`` where each row is ``[x, y, z, roll, pitch, yaw]``.
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
+        (quat reordered in-kernel); the pose VALUE is frame-invariant.
         """
         q = np.ascontiguousarray(q, dtype=self._dt)
         jids = self._resolve_ee_jids(ee_joint_names)
         offsets = self._normalize_ee_offsets(ee_offsets, len(jids))
+        mjx = self._mjx_active(_convention)
+        if mjx and not getattr(self._runner, "has_end_effector_pose_runtime_mujoco", False):
+            raise NotImplementedError(
+                "end_effector_pose_runtime(output_convention='mujoco') needs a floating-base .so "
+                "built with the mjx kernel (re-register with force_rebuild=True).")
         per_ee = []
         for jid, off in zip(jids, offsets):
-            raw = self._runner.end_effector_pose_runtime(
-                q, int(jid), np.ascontiguousarray(off, dtype=self._dt))  # (B, 6)
+            off_arr = np.ascontiguousarray(off, dtype=self._dt)
+            if mjx:
+                raw = self._runner.end_effector_pose_runtime_mujoco(q, int(jid), off_arr)  # (B, 6)
+            else:
+                raw = self._runner.end_effector_pose_runtime(q, int(jid), off_arr)  # (B, 6)
             per_ee.append(raw)
         return self._cast_out(np.stack(per_ee, axis=1))  # (B, NUM_EE, 6)
 
-    def end_effector_pose_gradient_runtime(self, q, ee_joint_names=None, ee_offsets=None):
+    def end_effector_pose_gradient_runtime(self, q, ee_joint_names=None, ee_offsets=None, *, _convention=None):
         """Runtime-target end-effector pose gradient ``d[xyz; rpy]/dv`` (6 x NV)
         at an offset point. Same ``ee_joint_names`` / ``ee_offsets`` semantics as
         :py:meth:`end_effector_pose_runtime`; mirrors
         ``RBDReference.end_effector_pose_gradient(q, ee_joint_names, ee_offsets)``.
 
         Returns ``(B, NUM_EE, 6, NV)``.
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention;
+        the base-linear columns are reframed by R^T in-kernel (column-reframe class).
         """
-        self._mjx_guard_unsupported("end_effector_pose_gradient_runtime")
         q = np.ascontiguousarray(q, dtype=self._dt)
         NV = self.num_vel
         jids = self._resolve_ee_jids(ee_joint_names)
         offsets = self._normalize_ee_offsets(ee_offsets, len(jids))
+        mjx = self._mjx_active(_convention)
+        if mjx and not getattr(self._runner, "has_end_effector_pose_gradient_runtime_mujoco", False):
+            raise NotImplementedError(
+                "end_effector_pose_gradient_runtime(output_convention='mujoco') needs a floating-base "
+                ".so built with the mjx kernel (re-register with force_rebuild=True).")
         per_ee = []
         for jid, off in zip(jids, offsets):
-            raw = self._runner.end_effector_pose_gradient_runtime(
-                q, int(jid), np.ascontiguousarray(off, dtype=self._dt))  # (B, 6*NV) col-major
+            off_arr = np.ascontiguousarray(off, dtype=self._dt)
+            if mjx:
+                raw = self._runner.end_effector_pose_gradient_runtime_mujoco(q, int(jid), off_arr)  # (B, 6*NV) col-major
+            else:
+                raw = self._runner.end_effector_pose_gradient_runtime(q, int(jid), off_arr)  # (B, 6*NV) col-major
             B = raw.shape[0]
             per_ee.append(raw.reshape(B, NV, 6).transpose(0, 2, 1))  # (B, 6, NV)
         return self._cast_out(np.stack(per_ee, axis=1))  # (B, NUM_EE, 6, NV)

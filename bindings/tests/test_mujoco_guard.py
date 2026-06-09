@@ -23,12 +23,11 @@ from grid_rbd._handle import RobotHandle
 _MUST_GUARD = {
     "inverse_dynamics_gradient", "forward_dynamics_gradient", "idsva_so", "fdsva_so",
     "end_effector_pose_gradient", "end_effector_pose_hessian",
-    "end_effector_pose_gradient_runtime",
     "integrator", "integrator_gradient",
     "plant_step", "plant_step_gradient", "plant_step_hessian",
     "generalized_gravity", "nonlinear_effects", "coriolis_matrix",
     "frame_jacobian", "frame_jacobian_dot", "ccrba", "dccrba", "cmm_time_variation",
-    "quadratic_state_cost", "ee_pos_cost", "com_cost", "momentum_cost",
+    "ee_pos_cost", "com_cost", "momentum_cost",
 }
 # Value methods that MUST NOT be guarded (mjx mode transforms them correctly).
 _MUST_NOT_GUARD = {"inverse_dynamics", "forward_dynamics", "aba", "crba", "minv"}

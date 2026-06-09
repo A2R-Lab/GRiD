@@ -189,6 +189,8 @@ public:
         fn_ee_pose_hessian_mujoco_ = reinterpret_cast<fn_ee_t>(opt_sym("grid_rbd_end_effector_pose_hessian_mujoco"));  // floating only
         fn_idsva_so_         = reinterpret_cast<fn_dyn_no_fext_t>(require_sym("grid_rbd_idsva_so"));
         fn_idsva_so_mujoco_  = reinterpret_cast<fn_dyn_no_fext_t>(opt_sym("grid_rbd_idsva_so_mujoco"));  // floating only
+        fn_id_regressor_        = reinterpret_cast<fn_dyn_no_fext_t>(opt_sym("grid_rbd_inverse_dynamics_regressor"));
+        fn_id_regressor_mujoco_ = reinterpret_cast<fn_dyn_no_fext_t>(opt_sym("grid_rbd_inverse_dynamics_regressor_mujoco"));  // floating only
         fn_fdsva_so_         = reinterpret_cast<fn_fd_no_fext_t>  (require_sym("grid_rbd_fdsva_so"));
         fn_fdsva_so_mujoco_  = reinterpret_cast<fn_fd_no_fext_t>  (opt_sym("grid_rbd_fdsva_so_mujoco"));  // floating only
         fn_integrator_       = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator"));
@@ -210,6 +212,7 @@ public:
         fn_plant_ee_cost_mujoco_  = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_rbd_ee_pos_cost_mujoco"));   // floating only
         fn_plant_com_cost_mujoco_ = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_rbd_com_cost_mujoco"));      // floating only
         fn_plant_mom_cost_mujoco_ = reinterpret_cast<fn_plant_mom_t>(opt_sym("grid_rbd_momentum_cost_mujoco")); // floating only
+        fn_plant_state_cost_mujoco_ = reinterpret_cast<fn_plant_cost_t>(opt_sym("grid_rbd_quadratic_state_cost_mujoco")); // floating only
         fn_plant_step_grad_  = reinterpret_cast<fn_plant_step_grad_t>(opt_sym("grid_plant_step_gradient"));
         fn_plant_step_hess_  = reinterpret_cast<fn_plant_step_hess_t>(opt_sym("grid_plant_step_hessian"));
 
@@ -233,6 +236,8 @@ public:
         fn_osc_inertia_        = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_osc_inertia"));
         fn_ee_pose_runtime_      = reinterpret_cast<fn_ee_runtime_t>(opt_sym("grid_rbd_end_effector_pose_runtime"));
         fn_ee_pose_grad_runtime_ = reinterpret_cast<fn_ee_runtime_t>(opt_sym("grid_rbd_end_effector_pose_gradient_runtime"));
+        fn_ee_pose_runtime_mujoco_      = reinterpret_cast<fn_ee_runtime_t>(opt_sym("grid_rbd_end_effector_pose_runtime_mujoco"));            // floating only
+        fn_ee_pose_grad_runtime_mujoco_ = reinterpret_cast<fn_ee_runtime_t>(opt_sym("grid_rbd_end_effector_pose_gradient_runtime_mujoco")); // floating only
 
         // PS5 value ops — OPTIONAL: present in newer .so files.
         // coriolis_matrix / kinetic_energy_regressor / potential_energy_regressor
@@ -967,6 +972,57 @@ public:
         return out;
     }
 
+    // ─── inverse_dynamics_regressor: Y (NV x 10*NUM_BODIES), tau = Y . pi ─────
+    // Returns shape (B, NV*10*NUM_BODIES) flat, row-major NV x (10*NUM_BODIES) per
+    // timestep. The Python side reshapes into (B, NV, 10*NUM_BODIES).
+    bool has_inverse_dynamics_regressor() const { return fn_id_regressor_ != nullptr; }
+    py::array_t<CT> inverse_dynamics_regressor(
+        arr_t q,
+        arr_t qd,
+        py::object qdd_opt,
+        float gravity)
+    {
+        if (!fn_id_regressor_) throw std::runtime_error(
+            "inverse_dynamics_regressor not available in this .so (re-register with force_rebuild=True)");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_joints_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<CT> out({batch, num_vel_ * 10 * num_bodies_});
+        int rc = fn_id_regressor_(q.data(), qd.data(), qdd_ptr,
+                                  out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_regressor failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // MuJoCo-convention inverse_dynamics_regressor. Floating-base only. The base-linear
+    // ROWS (0:3) rotate by R in-kernel (the rows are tangent-indexed generalized forces).
+    bool has_inverse_dynamics_regressor_mujoco() const { return fn_id_regressor_mujoco_ != nullptr; }
+    py::array_t<CT> inverse_dynamics_regressor_mujoco(
+        arr_t q,
+        arr_t qd,
+        py::object qdd_opt,
+        float gravity)
+    {
+        if (!fn_id_regressor_mujoco_) throw std::runtime_error(
+            "inverse_dynamics_regressor_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_joints_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<CT> out({batch, num_vel_ * 10 * num_bodies_});
+        int rc = fn_id_regressor_mujoco_(q.data(), qd.data(), qdd_ptr,
+                                         out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_regressor_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     py::array_t<CT> fdsva_so(
         arr_t q,
         arr_t qd,
@@ -1103,6 +1159,17 @@ public:
         arr_t u_des,
         arr_t R)
     { return plant_quadratic_cost(fn_plant_input_cost_, "quadratic_input_cost", u, u_des, R, num_vel_); }
+
+    // MuJoCo-convention quadratic_state_cost. Floating-base only. x = [q; qd] is
+    // mjx-native; the kernel input-converts the qd base-linear block and reframes
+    // the qd-block grad/hess. The value is convention-DEPENDENT.
+    bool has_quadratic_state_cost_mujoco() const { return fn_plant_state_cost_mujoco_ != nullptr; }
+    std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
+    quadratic_state_cost_mujoco(
+        arr_t x,
+        arr_t x_des,
+        arr_t Q)
+    { return plant_quadratic_cost(fn_plant_state_cost_mujoco_, "quadratic_state_cost_mujoco", x, x_des, Q, num_joints_ + num_vel_); }
 
     // barrier (position/velocity/torque). var/lower/upper are (batch, N).
     std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
@@ -1560,6 +1627,44 @@ public:
         return out;
     }
 
+    // MuJoCo-convention end_effector_pose_runtime -> (batch, 6). Floating-base only.
+    // Pose value is frame-INVARIANT; only the input quat is reordered in-kernel.
+    bool has_end_effector_pose_runtime_mujoco() const { return fn_ee_pose_runtime_mujoco_ != nullptr; }
+    py::array_t<CT> end_effector_pose_runtime_mujoco(
+        arr_t q, int target_jid, arr_t offset)
+    {
+        if (!fn_ee_pose_runtime_mujoco_) throw std::runtime_error(
+            "end_effector_pose_runtime_mujoco unavailable: floating-base .so only");
+        int batch = check_q(q, "end_effector_pose_runtime_mujoco");
+        const CT* off_ptr = nullptr;
+        if (offset.size() == 3) off_ptr = offset.data();
+        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_runtime_mujoco: offset must be length-3 or empty");
+        py::array_t<CT> out({batch, 6});
+        int rc = fn_ee_pose_runtime_mujoco_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
+        if (rc == 3) throw std::runtime_error("end_effector_pose_runtime_mujoco not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_runtime_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // MuJoCo-convention end_effector_pose_gradient_runtime -> (batch, 6*NUM_VEL)
+    // col-major. Floating-base only; base-linear columns reframe by R^T in-kernel.
+    bool has_end_effector_pose_gradient_runtime_mujoco() const { return fn_ee_pose_grad_runtime_mujoco_ != nullptr; }
+    py::array_t<CT> end_effector_pose_gradient_runtime_mujoco(
+        arr_t q, int target_jid, arr_t offset)
+    {
+        if (!fn_ee_pose_grad_runtime_mujoco_) throw std::runtime_error(
+            "end_effector_pose_gradient_runtime_mujoco unavailable: floating-base .so only");
+        int batch = check_q(q, "end_effector_pose_gradient_runtime_mujoco");
+        const CT* off_ptr = nullptr;
+        if (offset.size() == 3) off_ptr = offset.data();
+        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_gradient_runtime_mujoco: offset must be length-3 or empty");
+        py::array_t<CT> out({batch, 6 * num_vel_});
+        int rc = fn_ee_pose_grad_runtime_mujoco_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
+        if (rc == 3) throw std::runtime_error("end_effector_pose_gradient_runtime_mujoco not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient_runtime_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     // ─── PS5 value ops (coriolis / energy regressors / dccrba / cmm) ──────────
 
     // coriolis_matrix(q, qd, gravity) -> (batch, NUM_VEL*NUM_VEL) row-major C(q,qd).
@@ -1822,6 +1927,8 @@ private:
     fn_fk_batched_t fn_fk_batched_ = nullptr;
     fn_dyn_no_fext_t fn_idsva_so_ = nullptr;
     fn_dyn_no_fext_t fn_idsva_so_mujoco_ = nullptr;  // floating mjx (optional)
+    fn_dyn_no_fext_t fn_id_regressor_ = nullptr;         // (q, qd, qdd) -> Y (optional)
+    fn_dyn_no_fext_t fn_id_regressor_mujoco_ = nullptr;  // floating mjx (optional)
     fn_fd_no_fext_t   fn_fdsva_so_ = nullptr;
     fn_fd_no_fext_t   fn_fdsva_so_mujoco_ = nullptr;  // floating mjx (optional)
     fn_integrator_t fn_integrator_      = nullptr;
@@ -1840,6 +1947,7 @@ private:
     fn_plant_ee_t      fn_plant_ee_cost_mujoco_  = nullptr;  // floating mjx (optional)
     fn_plant_ee_t      fn_plant_com_cost_mujoco_ = nullptr;  // floating mjx (optional)
     fn_plant_mom_t     fn_plant_mom_cost_mujoco_ = nullptr;  // floating mjx (optional)
+    fn_plant_cost_t    fn_plant_state_cost_mujoco_ = nullptr;  // floating mjx (optional)
     fn_plant_step_grad_t fn_plant_step_grad_ = nullptr;
     fn_plant_step_hess_t fn_plant_step_hess_ = nullptr;
     // F2 centroidal / energy / general-frame kinematics (optional symbols)
@@ -1855,6 +1963,8 @@ private:
     fn_q_out_t         fn_osc_inertia_         = nullptr;
     fn_ee_runtime_t    fn_ee_pose_runtime_      = nullptr;
     fn_ee_runtime_t    fn_ee_pose_grad_runtime_ = nullptr;
+    fn_ee_runtime_t    fn_ee_pose_runtime_mujoco_      = nullptr;  // floating mjx (optional)
+    fn_ee_runtime_t    fn_ee_pose_grad_runtime_mujoco_ = nullptr;  // floating mjx (optional)
     // PS5 value ops (optional symbols)
     fn_q_qd_out_grav_t fn_coriolis_matrix_            = nullptr;
     fn_q_qd_out_grav_t fn_kinetic_energy_regressor_   = nullptr;
@@ -2005,6 +2115,14 @@ static void register_runner(py::module_& m, const char* cls_name) {
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("second_order_tensor_size"),
              py::arg("gravity") = -9.81f)
+        .def_property_readonly("has_inverse_dynamics_regressor", &R::has_inverse_dynamics_regressor)
+        .def("inverse_dynamics_regressor", &R::inverse_dynamics_regressor,
+             py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
+             py::arg("gravity") = -9.81f)
+        .def_property_readonly("has_inverse_dynamics_regressor_mujoco", &R::has_inverse_dynamics_regressor_mujoco)
+        .def("inverse_dynamics_regressor_mujoco", &R::inverse_dynamics_regressor_mujoco,
+             py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
+             py::arg("gravity") = -9.81f)
         .def("fdsva_so", &R::fdsva_so,
              py::arg("q"), py::arg("qd"), py::arg("u"),
              py::arg("second_order_tensor_size"),
@@ -2029,6 +2147,9 @@ static void register_runner(py::module_& m, const char* cls_name) {
              py::arg("x"), py::arg("x_des"), py::arg("Q"))
         .def("quadratic_input_cost", &R::quadratic_input_cost,
              py::arg("u"), py::arg("u_des"), py::arg("R"))
+        .def_property_readonly("has_quadratic_state_cost_mujoco", &R::has_quadratic_state_cost_mujoco)
+        .def("quadratic_state_cost_mujoco", &R::quadratic_state_cost_mujoco,
+             py::arg("x"), py::arg("x_des"), py::arg("Q"))
         .def("joint_position_barrier", &R::joint_position_barrier,
              py::arg("var"), py::arg("lower"), py::arg("upper"), py::arg("mu"))
         .def("joint_velocity_barrier", &R::joint_velocity_barrier,
@@ -2084,6 +2205,14 @@ static void register_runner(py::module_& m, const char* cls_name) {
              py::arg("q"), py::arg("target_jid") = -1,
              py::arg("offset") = py::array_t<float>())
         .def("end_effector_pose_gradient_runtime", &R::end_effector_pose_gradient_runtime,
+             py::arg("q"), py::arg("target_jid") = -1,
+             py::arg("offset") = py::array_t<float>())
+        .def_property_readonly("has_end_effector_pose_runtime_mujoco", &R::has_end_effector_pose_runtime_mujoco)
+        .def("end_effector_pose_runtime_mujoco", &R::end_effector_pose_runtime_mujoco,
+             py::arg("q"), py::arg("target_jid") = -1,
+             py::arg("offset") = py::array_t<float>())
+        .def_property_readonly("has_end_effector_pose_gradient_runtime_mujoco", &R::has_end_effector_pose_gradient_runtime_mujoco)
+        .def("end_effector_pose_gradient_runtime_mujoco", &R::end_effector_pose_gradient_runtime_mujoco,
              py::arg("q"), py::arg("target_jid") = -1,
              py::arg("offset") = py::array_t<float>())
         .def("coriolis_matrix", &R::coriolis_matrix,

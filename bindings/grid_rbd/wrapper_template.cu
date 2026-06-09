@@ -884,6 +884,55 @@ extern "C" int grid_rbd_idsva_so_mujoco(const T* q, const T* qd, const T* qdd, T
 }
 #endif  // GRID_FLOATING_BASE
 
+// inverse_dynamics_regressor(q, qd, qdd) -> Y, row-major NV x (10*NUM_BODIES) per
+// timestep. tau = Y . pi (pi = the 10*NUM_BODIES stacked link inertia params), so Y
+// is exactly affine in each link's spatial inertia. The host wrapper reads q|qd|qdd
+// from d_q_qd_u (qdd in the u-slot, like idsva_so) and writes hd_data->h_Y.
+extern "C" int grid_rbd_inverse_dynamics_regressor(
+    const T* q, const T* qd, const T* qdd,
+    T* out, int batch, T gravity)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    const int nj = grid::NUM_JOINTS;
+    pack_q_qd_u(q, qd, qdd, batch, nj);
+    grid::inverse_dynamics_regressor<T>(
+        g_data, g_robot, gravity, batch,
+        g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_Y,
+                (size_t)batch * grid::NUM_VEL * 10 * grid::NUM_BODIES * sizeof(T));
+    return 0;
+}
+
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention inverse_dynamics_regressor (floating base only). q/qd/qdd are raw
+// mjx (kernel input-converts); the regressor ROWS are tangent-indexed generalized
+// forces, so the base-LINEAR rows (0:3) rotate by R (Y_mjx[0:3] = R Y_pin[0:3]) -- the
+// same base-row rotate as id_tau. Baked via the MUJOCO_OUTPUT=true template flag.
+extern "C" int grid_rbd_inverse_dynamics_regressor_mujoco(
+    const T* q, const T* qd, const T* qdd,
+    T* out, int batch, T gravity)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    const int nj = grid::NUM_JOINTS;
+    pack_q_qd_u(q, qd, qdd, batch, nj);
+    grid::inverse_dynamics_regressor<T, /*USE_COMPRESSED_MEM=*/false, grid::GRID_DATA_ALL,
+                                     /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch,
+        g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_Y,
+                (size_t)batch * grid::NUM_VEL * 10 * grid::NUM_BODIES * sizeof(T));
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
+
 // Second-order forward dynamics. Output is 4 * NV^3 per timestep
 // (d2qdd_dq, d2qdd_dqd, d2qdd_dudq — interpretation per Singh/Wensing).
 extern "C" int grid_rbd_fdsva_so(
@@ -1473,6 +1522,62 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime(const T* q, T* out, i
 #endif
 }
 
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention end_effector_pose_runtime (floating base only). The kernel
+// input-converts q (quat reorder) on load; the pose VALUE is frame-INVARIANT (the
+// 6-vector [xyz; rpy] is the same world frame), so this matches the pin pose with
+// the mjx-reordered quaternion. Baked via the MUJOCO_OUTPUT=true host/kernel flag.
+extern "C" int grid_rbd_end_effector_pose_runtime_mujoco(const T* q, T* out, int batch,
+                                                         int target_jid, const T* offset) {
+#ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd/u unused
+    T off[3] = {static_cast<T>(0), static_cast<T>(0), static_cast<T>(0)};
+    if (offset) { off[0]=offset[0]; off[1]=offset[1]; off[2]=offset[2]; }
+    if (cudaMemcpy(g_data->d_eepose_runtime_offset, off, 3*sizeof(T),
+                   cudaMemcpyHostToDevice) != cudaSuccess) return 101;
+    grid::end_effector_pose_runtime<T, /*USE_COMPRESSED_MEM=*/false, grid::GRID_DATA_ALL,
+                                    /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams, target_jid);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_eePose, (size_t)batch * 6 * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)out; (void)batch; (void)target_jid; (void)offset;
+    return 3;
+#endif
+}
+
+// MuJoCo-convention end_effector_pose_gradient_runtime (floating base only). The
+// pose value is invariant, but the gradient is COLUMN-reframed: the base-linear
+// columns reframe by R^T (mjx base-linear velocity is global). Baked via
+// MUJOCO_OUTPUT=true. Output 6 x NUM_VEL col-major, like the pin variant.
+extern "C" int grid_rbd_end_effector_pose_gradient_runtime_mujoco(const T* q, T* out, int batch,
+                                                                  int target_jid, const T* offset) {
+#ifdef GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd/u unused
+    T off[3] = {static_cast<T>(0), static_cast<T>(0), static_cast<T>(0)};
+    if (offset) { off[0]=offset[0]; off[1]=offset[1]; off[2]=offset[2]; }
+    if (cudaMemcpy(g_data->d_eepose_runtime_offset, off, 3*sizeof(T),
+                   cudaMemcpyHostToDevice) != cudaSuccess) return 101;
+    grid::end_effector_pose_gradient_runtime<T, /*USE_COMPRESSED_MEM=*/false, grid::GRID_DATA_ALL,
+                                             /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams, target_jid);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_eePoseGrad, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)out; (void)batch; (void)target_jid; (void)offset;
+    return 3;
+#endif
+}
+#endif  // GRID_FLOATING_BASE
+
 
 // ────────────────────────────────────────────────────────────────────────────
 // Time integrator (value + gradient)
@@ -1706,6 +1811,38 @@ extern "C" int grid_plant_quadratic_input_cost(
     const T* u, const T* u_des, const T* R, T* out, T* grad, T* hess, int batch) {
     return plant_quadratic_cost_impl<false>(u, u_des, R, out, grad, hess, batch);
 }
+
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention quadratic_state_cost (floating base only). x = [q(nq); qd(nv)]
+// is mjx-native; the kernel input-converts the qd base-linear block (global->local)
+// before differencing against the user (mjx-frame) x_des/Q, then reframes the
+// qd-block grad (covector) + hess (congruence). The VALUE is convention-DEPENDENT.
+// Baked via the MUJOCO_OUTPUT=true template flag. quadratic_state_cost is launched
+// at g_thread_dimms and may be register-capped < g_thread_dimms -> clamp + check.
+extern "C" int grid_rbd_quadratic_state_cost_mujoco(
+    const T* x, const T* x_des, const T* Q, T* out, T* grad, T* hess, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    if (plant_alloc()) return 4;
+    const int N = grid::NUM_POS + grid::NUM_VEL;
+    cudaMemcpy(g_plant.d_in_a, x,     batch * N * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_b, x_des, batch * N * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_c, Q,     batch * N * sizeof(T), cudaMemcpyHostToDevice);
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    dim3 thr = grid_clamp_threads_for(grid_plant::quadratic_state_cost_kernel<T, true>, g_thread_dimms);
+    grid_plant::quadratic_state_cost_kernel<T, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr, 0, g_streams[0]>>>(
+        g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
+        g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, batch);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(grad, g_plant.d_grad, batch * N * sizeof(T), cudaMemcpyDeviceToHost);
+    cudaMemcpy(hess, g_plant.d_hess, batch * N * N * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
 
 // joint_{position,velocity,torque}_barrier: value + grad + hess-diagonal.
 // var/lower/upper are (batch, N); out (batch); grad/hess_diag (batch, N).
