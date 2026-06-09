@@ -817,11 +817,22 @@ class RobotHandle:
         blocks = raw.reshape(B, 2, NV, NV).transpose(0, 1, 3, 2)
         return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
-    def end_effector_pose_hessian(self, q):
+    def end_effector_pose_hessian(self, q, *, _convention=None):
         """End-effector pose Hessian ∂²(pose)/∂v² (tangent-space, pinocchio convention).
         Returns shape (B, 6*NUM_EES, NV, NV). For fixed-base NV == NJ; for
-        floating-base the (NV, NV) block indexes spatial twist components."""
-        self._mjx_guard_unsupported("end_effector_pose_hessian")
+        floating-base the (NV, NV) block indexes spatial twist components.
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
+        and the returned Hessian is the symmetric coordinate Hessian along the mjx
+        retract (double column-reframe + symmetrized base-rotation frame term, baked
+        in-kernel)."""
+        if self._mjx_active(_convention) and getattr(self._runner, "has_end_effector_pose_hessian_mujoco", False):
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            return self._runner.end_effector_pose_hessian_mujoco(q)
+        if self._mjx_active(_convention):
+            raise NotImplementedError(
+                "end_effector_pose_hessian(output_convention='mujoco') needs a floating-base "
+                ".so built with the mjx kernel (re-register with force_rebuild=True).")
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.end_effector_pose_hessian(q)
 

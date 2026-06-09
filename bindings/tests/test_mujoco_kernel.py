@@ -399,6 +399,35 @@ def test_native_mjx_end_effector_pose_gradient_matches_host_oracle(go2_floating)
 
 @pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
 @pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_end_effector_pose_hessian_matches_oracle(go2_floating):
+    """HESSIAN class: H_mjx = double col-reframe(H_pin) + ½-symmetrized base-rotation
+    frame term (needs the value pose-gradient). Validated vs the RBDReference oracle."""
+    from RBDReference.equivalents.mujoco_convention import (
+        ee_pose_hessian_pin_to_mjx, FloatingRootLayout)
+    h = go2_floating
+    assert h._runner.has_end_effector_pose_hessian_mujoco, \
+        "floating-base .so is missing grid_rbd_end_effector_pose_hessian_mujoco"
+    layout = FloatingRootLayout()
+    rng = np.random.default_rng(23)
+    for B in (1, 4):
+        qpos, _, _ = _rand_state(h, rng, B, with_qd=False)
+        native = np.asarray(h.end_effector_pose_hessian(qpos, _convention="mujoco"),
+                            np.float64)  # (B, 6*NEE, NV, NV)
+        q_pin, _, _, _, R = h._mjx_inputs(qpos)
+        H_pin = np.asarray(h.end_effector_pose_hessian(q_pin), np.float64)
+        dpose_pin = np.asarray(h.end_effector_pose_gradient(q_pin), np.float64)  # (B, 6*NEE, NV)
+        exp = np.empty_like(native)
+        for b in range(B):
+            exp[b] = ee_pose_hessian_pin_to_mjx(H_pin[b], dpose_pin[b], R[b], layout)
+        assert np.allclose(native, exp, rtol=5e-3, atol=5e-2), \
+            f"ee_pose_hessian mjx != oracle (B={B}): max|d|={np.abs(native-exp).max():.3e}"
+    # non-triviality: the mjx Hessian differs from feeding raw mjx q to the pin Hessian.
+    raw = np.asarray(h.end_effector_pose_hessian(qpos), np.float64)
+    assert np.abs(native - raw).max() > 1e-2
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
 def test_native_mjx_integrator_retract(go2_floating):
     """RETRACT class: the MuJoCo free-joint integrator takes a GLOBAL additive base
     position step (pos += dt*v) instead of pinocchio's SE(3) update; the joints

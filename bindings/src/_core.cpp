@@ -186,6 +186,7 @@ public:
         fn_fd_grad_mujoco_   = reinterpret_cast<fn_fd_t>  (opt_sym("grid_rbd_forward_dynamics_gradient_mujoco"));  // floating only
         // Phase-C extension: hessian + SO. Required for v0.1+ .so files.
         fn_ee_pose_hessian_  = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose_hessian"));
+        fn_ee_pose_hessian_mujoco_ = reinterpret_cast<fn_ee_t>(opt_sym("grid_rbd_end_effector_pose_hessian_mujoco"));  // floating only
         fn_idsva_so_         = reinterpret_cast<fn_dyn_no_fext_t>(require_sym("grid_rbd_idsva_so"));
         fn_fdsva_so_         = reinterpret_cast<fn_fd_no_fext_t>  (require_sym("grid_rbd_fdsva_so"));
         fn_integrator_       = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator"));
@@ -784,6 +785,29 @@ public:
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_});
         int rc = fn_ee_pose_grad_mujoco_(q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // MuJoCo-convention end_effector_pose Hessian (q) -> (batch, 6*NUM_EES, NV, NV).
+    // Double column-reframe + symmetrized base-rotation frame term baked in-kernel.
+    // Floating-base only.
+    bool has_end_effector_pose_hessian_mujoco() const { return fn_ee_pose_hessian_mujoco_ != nullptr; }
+    py::array_t<CT> end_effector_pose_hessian_mujoco(arr_t q)
+    {
+        if (!fn_ee_pose_hessian_mujoco_) throw std::runtime_error(
+            "end_effector_pose_hessian_mujoco unavailable: floating-base .so only");
+        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
+            throw std::invalid_argument(
+                "end_effector_pose_hessian_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
+        }
+        int batch = (int)q.shape(0);
+        if (batch > max_batch_) {
+            throw std::invalid_argument(
+                "end_effector_pose_hessian_mujoco: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
+        }
+        py::array_t<CT> out({batch, 6 * num_ees_, num_vel_, num_vel_});
+        int rc = fn_ee_pose_hessian_mujoco_(q.data(), out.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_hessian_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
 
@@ -1664,6 +1688,7 @@ private:
     fn_fd_t    fn_fd_grad_        = nullptr;
     fn_fd_t    fn_fd_grad_mujoco_ = nullptr;  // floating mjx (optional)
     fn_ee_t    fn_ee_pose_hessian_ = nullptr;
+    fn_ee_t    fn_ee_pose_hessian_mujoco_ = nullptr;  // floating-base mjx EE-pose hessian (optional)
     fn_fk_batched_t fn_fk_batched_ = nullptr;
     fn_dyn_no_fext_t fn_idsva_so_ = nullptr;
     fn_fd_no_fext_t   fn_fdsva_so_ = nullptr;
@@ -1809,6 +1834,8 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("end_effector_pose_mujoco", &R::end_effector_pose_mujoco, py::arg("q"))
         .def_property_readonly("has_end_effector_pose_gradient_mujoco", &R::has_end_effector_pose_gradient_mujoco)
         .def("end_effector_pose_gradient_mujoco", &R::end_effector_pose_gradient_mujoco, py::arg("q"))
+        .def_property_readonly("has_end_effector_pose_hessian_mujoco", &R::has_end_effector_pose_hessian_mujoco)
+        .def("end_effector_pose_hessian_mujoco", &R::end_effector_pose_hessian_mujoco, py::arg("q"))
         .def("end_effector_pose", &R::end_effector_pose,
              py::arg("q"))
         .def("fk_batched", &R::fk_batched,

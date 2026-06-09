@@ -795,6 +795,26 @@ extern "C" int grid_rbd_end_effector_pose_hessian(
     return 0;
 }
 
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention end_effector_pose Hessian (q) -> 6*NUM_EES*NV*NV per timestep.
+// q is raw mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true)
+// double-column-reframes the Hessian (J·G^{-1} on both tangent indices) and adds the
+// symmetrized base-rotation frame term before saving. Output is invariant-shaped.
+extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(const T* q, T* d2ee_out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
+    grid::end_effector_pose_hessian<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+                                    /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(d2ee_out, g_data->h_end_effector_pose_hessian,
+                (size_t)batch * 6 * grid::NUM_EES * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
+
 // Second-order inverse dynamics. Output is the concatenated SO tensor of
 // shape SECOND_ORDER_TENSOR_SIZE = 4 * NV^3 per timestep (four NV^3 blocks:
 // d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq). The Python side slices into the
