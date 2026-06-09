@@ -157,11 +157,12 @@ def register_robot(
     if output_convention not in ("pinocchio", "mujoco"):
         raise ValueError(
             f"output_convention must be 'pinocchio' or 'mujoco'; got {output_convention!r}")
-    if output_convention == "mujoco" and backend != "numpy":
+    if output_convention == "mujoco" and not floating_base:
+        # mjx and pinocchio coincide on a fixed base (no free-flyer); the _mujoco
+        # native symbols are floating-base only, so reject early with a clear message.
         raise ValueError(
-            f"output_convention='mujoco' is currently only supported for the numpy "
-            f"backend; the {backend!r} backend stays pinocchio for now. Use "
-            f"backend='numpy', or transform with grid_rbd.jax/torch + the mjx oracle.")
+            "output_convention='mujoco' requires floating_base=True "
+            "(mjx and pinocchio coincide on a fixed base).")
     if dtype not in ("float32", "float64"):
         raise ValueError(f"dtype must be 'float32' or 'float64'; got {dtype!r}")
     if dtype == "float64" and backend != "numpy":
@@ -178,13 +179,15 @@ def register_robot(
         return _jax_backend.register_robot(
             name, urdf_path, urdf_string=urdf_string, floating_base=floating_base,
             ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
-            cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch)
+            cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
+            output_convention=output_convention)
     if backend == "torch":
         from . import torch as _torch_backend
         return _torch_backend.register_robot(
             name, urdf_path, urdf_string=urdf_string, floating_base=floating_base,
             ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
-            cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch)
+            cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
+            output_convention=output_convention)
 
     cache_dir = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)

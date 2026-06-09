@@ -109,6 +109,43 @@ DtoH copy of an `nv*nv`-written matrix — is the bug.
   `NUM_POS + nv`, `2*nv + ` in load-counts/slot-widths/host-strides across `algorithms/*.py` +
   the `*_DYNAMIC_SHARED_MEM_BYTES` input-slot terms in `GRiDCodeGenerator.py`.
 
+### 1f. New compile-time kernel VARIANT must be registered for `cudaFuncSetAttribute` (mjx >48KB launch fail)
+**Found adding the `MUJOCO_OUTPUT=true` kernel variants (G-cross, 2026-06-09).** Adding a new compile-time
+template instantiation (here `kernel<T, TIER, MUJOCO_OUTPUT=true>`) creates a DISTINCT `__global__` function
+with its OWN attributes. `KERNEL_ATTR_MANIFEST`/`init_grid_kernel_attrs` registered
+`cudaFuncSetAttribute(MaxDynamicSharedMemorySize)` ONLY for the pin (`false`) instantiation. The mjx twins
+whose dynamic smem exceeds the 48 KB device default (fdsva_so, idsva_so-world, integrator*, id-grad on
+humanoids) launched with `cudaErrorInvalidValue` ("invalid argument") while their pin twins succeeded.
+- **Symptom:** `GPUassert: invalid argument` at the kernel-launch line for the mjx variant only; pin works.
+- **Fix:** register the new instantiation too, up to the DEVICE max (`grid_get_max_dynamic_shared_memory_bytes`,
+  ~96 KB on sm_120 — NOT a hardcoded 48 KB). >48 KB is fine once registered.
+- **TRAP:** gate the registration on the ACTUAL emission condition. The mjx kernels are emitted for any
+  `self.robot.floating_base` robot (the template param is added there); they are NOT gated on the
+  `MUJOCO_OUTPUT` constructor arg, which the per-robot `.so` build (`_compile.py`) never sets. Gating the
+  registration on `self.MUJOCO_OUTPUT` silently emitted nothing → no-op fix. Gate on `self.robot.floating_base`.
+
+### 1g. In-kernel mjx OUTPUT-BAND scratch must be spill-aware (aliases spilled buffers → state-dependent garbage)
+**Found in fdsva_so mjx (2026-06-09, still open).** An mjx epilogue that writes a large output band into
+"dead" scratch (`s_temp`) is WRONG on robots where the algorithm SPILLS: `s_temp`==`d_workspace`, and the
+spilled live buffers (`s_df_du`, `s_Minv`) ALSO live in `d_workspace` → the band overlaps them →
+state-dependent garbage (the result depends on the PREVIOUS kernel call's `d_workspace` contents; jax≠torch
+in an interleaved test but deterministic in isolation — the tell-tale signature).
+- **Diagnostic:** run the op 3× in isolation (deterministic? → not uninitialized-per-launch) AND interleaved
+  after a different op (changes? → reads cross-call global state = a spilled-buffer alias).
+- **Rule:** an in-kernel scratch band must be provably DEAD *and* DISJOINT in BOTH the smem and the spilled
+  layouts. A buffer that's disjoint in smem can alias in `d_workspace`. (Reusing `s_idsva_so` made fdsva_so
+  deterministic but still wrong — `s_df_du`/`s_Minv` are likely clobbered before the epilogue reads them, a
+  second liveness bug. Open.) This is the general **mjx-vs-tier-spill** hazard: the spill classifier never saw
+  the mjx epilogue's scratch usage.
+
+### 1h. Templating a wrapper on a flag that only ONE kernel overload carries
+**Found in torch_inverse_dynamics/_gradient (2026-06-09).** A kernel with an optional-input overload set
+(qdd present vs absent) may carry the new template flag (MUJOCO_OUTPUT) on only the qdd-input overload (the
+bias/no-qdd overload is `<T, TIER>`, no MUJOCO). Templating the wrapper `<bool MUJOCO>` and passing
+`<T, TIER, MUJOCO>` to BOTH branches fails to compile the no-qdd branch ("no instance matches"). Route the
+mjx path through the flag-carrying overload — for ID-grad, the bias path zeros `d_qdd` and uses the qdd
+overload (matches the jax handler, which always passes qdd) under `if constexpr(MUJOCO)`.
+
 ---
 
 ## 2. Debugging methodology (what actually localizes a bug fast)

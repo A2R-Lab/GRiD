@@ -121,10 +121,18 @@ def _load_ops(so_path: Path, cache_key: str) -> str:
 # itself graph-capturable.
 
 
-def _make_autograd(ns, nv):
+def _make_autograd(ns, nv, mujoco=False):
     import torch
 
     ops = getattr(torch.ops, ns)
+
+    def _op(name):
+        # In mjx mode every forward/backward op dispatches to its _mujoco
+        # variant (kernel launched with MUJOCO_OUTPUT=true): mjx-convention
+        # forward + mjx-convention analytic Jacobian, so backward stays
+        # self-consistent. mjx is FLOATING-base only (the _mujoco symbols are
+        # #ifdef'd out of fixed .so).
+        return getattr(ops, (name + "_mujoco") if mujoco else name)
 
     # nq↔nv bridge for the backward VJPs. The dynamics VALUE outputs (c / qdd)
     # are nj-wide (so grad_c / grad_qdd are nj-wide), but the analytic Jacobians
@@ -151,7 +159,7 @@ def _make_autograd(ns, nv):
             ctx.qdd = qdd
             ctx.f_ext = f_ext
             ctx.nv = nv
-            return ops.inverse_dynamics(q, qd, gravity, qdd, f_ext)
+            return _op("inverse_dynamics")(q, qd, gravity, qdd, f_ext)
 
         @staticmethod
         def backward(ctx, grad_c):
@@ -163,7 +171,7 @@ def _make_autograd(ns, nv):
             # value (M·qdd); ∂/∂(q,qd) at fixed qdd is the bias gradient plus
             # ∂(M·qdd)/∂q — included by threading the saved ctx.qdd into the grad
             # op (USE_QDD overload). A None/zero qdd reduces to the bias Jacobian.
-            raw = ops.inverse_dynamics_gradient(q, qd, ctx.gravity, ctx.qdd, ctx.f_ext)  # (B, 2*NV*NV) col-major
+            raw = _op("inverse_dynamics_gradient")(q, qd, ctx.gravity, ctx.qdd, ctx.f_ext)  # (B, 2*NV*NV) col-major
             B = raw.shape[0]
             blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)  # row-major (B,2,NV,NV)
             dc_dq, dc_dqd = blocks[:, 0], blocks[:, 1]  # (B, NV, NV): rows=out, cols=in
@@ -190,14 +198,20 @@ def _make_autograd(ns, nv):
             def backward(ctx, grad_qdd):
                 q, qd, u = ctx.saved_tensors
                 nj = q.shape[1]
-                raw = ops.forward_dynamics_gradient(q, qd, u, ctx.gravity, ctx.f_ext)
+                raw = _op("forward_dynamics_gradient")(q, qd, u, ctx.gravity, ctx.f_ext)
                 B = raw.shape[0]
                 blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)
                 df_dq, df_dqd = blocks[:, 0], blocks[:, 1]
-                # ∂qdd/∂u = M⁻¹ (symmetric, NV x NV); minv writes lower triangle → symmetrize.
-                m = ops.minv(q).reshape(B, nv, nv)
-                eye = torch.eye(nv, dtype=m.dtype, device=m.device)
-                minv = m + m.transpose(1, 2) - m * eye
+                # ∂qdd/∂u = M⁻¹ (NV x NV). The pin minv kernel writes only the
+                # lower triangle → symmetrize; the mjx minv_mujoco kernel writes a
+                # FULL DENSE symmetric matrix (the G^-T Minv G^-1 congruence baked
+                # in) so it is used as-is.
+                m = _op("minv")(q).reshape(B, nv, nv)
+                if mujoco:
+                    minv = m
+                else:
+                    eye = torch.eye(nv, dtype=m.dtype, device=m.device)
+                    minv = m + m.transpose(1, 2) - m * eye
                 # qdd cotangent is nj-wide → slice leading nv, bmm, pad back to nj.
                 g = _slice_nv(grad_qdd, nj, nv).unsqueeze(1)
                 grad_q = _pad_nj(torch.bmm(g, df_dq).squeeze(1), nj, nv)
@@ -206,8 +220,8 @@ def _make_autograd(ns, nv):
                 return grad_q, grad_qd, grad_u, None, None
         return FDLikeFn
 
-    FDFn = _make_fd_like(lambda q, qd, u, g, fe: ops.forward_dynamics(q, qd, u, g, fe))
-    AbaFn = _make_fd_like(lambda q, qd, u, g, fe: ops.aba(q, qd, u, g, fe))
+    FDFn = _make_fd_like(lambda q, qd, u, g, fe: _op("forward_dynamics")(q, qd, u, g, fe))
+    AbaFn = _make_fd_like(lambda q, qd, u, g, fe: _op("aba")(q, qd, u, g, fe))
 
     # ── inertial-parameter (sysID) VJPs ──
     # The forward op is independent of the `params` (π) VALUE (the compiled .so
@@ -278,13 +292,13 @@ def _make_autograd(ns, nv):
         def forward(ctx, q, qd, u, dt, it, gravity):
             ctx.save_for_backward(q, qd, u)
             ctx.dt, ctx.it, ctx.gravity = dt, it, gravity
-            return ops.integrator(q, qd, u, dt, it, gravity)
+            return _op("integrator")(q, qd, u, dt, it, gravity)
 
         @staticmethod
         def backward(ctx, grad_x):
             q, qd, u = ctx.saved_tensors
             nv = q.shape[1]
-            raw = ops.integrator_gradient(q, qd, u, ctx.dt, ctx.it, ctx.gravity)
+            raw = _op("integrator_gradient")(q, qd, u, ctx.dt, ctx.it, ctx.gravity)
             B = raw.shape[0]
             # h_dAB is (2*NV x 3*NV) column-major per ts → row-major (B, 2*NV, 3*NV).
             dAB = raw.reshape(B, 3 * nv, 2 * nv).transpose(1, 2)  # (B, 2NV, 3NV)
@@ -296,8 +310,15 @@ def _make_autograd(ns, nv):
             grad_u = vjp[:, 2 * nv:3 * nv]
             return grad_q, grad_qd, grad_u, None, None, None
 
-    return {"inverse_dynamics": InverseDynamicsFn, "fd": FDFn, "aba": AbaFn,
-            "integrator": IntegratorFn, "id_wrt_params": IDWrtParamsFn, "fd_wrt_params": FDWrtParamsFn}
+    fns = {"inverse_dynamics": InverseDynamicsFn, "fd": FDFn, "aba": AbaFn,
+           "integrator": IntegratorFn}
+    if not mujoco:
+        # sysID (inverse/forward_dynamics_wrt_params) has NO _mujoco kernel; omit
+        # in mjx mode so a caller hitting it gets a clean KeyError, not a
+        # missing-symbol crash.
+        fns["id_wrt_params"] = IDWrtParamsFn
+        fns["fd_wrt_params"] = FDWrtParamsFn
+    return fns
 
 
 # ─── CUDA-Graphs callable ───────────────────────────────────────────────────
@@ -343,6 +364,126 @@ class GraphCallable:
         return self.replay()
 
 
+# ─── mjx view ────────────────────────────────────────────────────────────────
+
+
+class _TorchMujocoView:
+    """MuJoCo-native, autograd-aware view over a :class:`TorchRobotHandle`
+    (``handle.mujoco``). Mirrors the jax handle's ``.mujoco`` view: MuJoCo
+    parameter names, the mjx output convention applied PER CALL (forwards an
+    explicit ``_convention="mujoco"``, never mutating the shared default), so it
+    is safe alongside pinocchio-convention calls on the same handle. The
+    differentiable methods (inverse_dynamics/forward_dynamics/aba/integrator)
+    stay autograd-aware (the backward uses the mjx-convention analytic Jacobian)."""
+
+    __slots__ = ("_h",)
+
+    def __init__(self, handle: "TorchRobotHandle") -> None:
+        self._h = handle
+
+    # ── value / dynamics ──────────────────────────────────────────────────
+    def inverse_dynamics(self, qpos, qvel, qacc=None, *, gravity: float = -9.81, f_ext=None):
+        """RNEA in MuJoCo convention: τ = id(qpos, qvel, qacc). Returns mjx-frame τ."""
+        return self._h.inverse_dynamics(qpos, qvel, qacc, gravity=gravity, f_ext=f_ext,
+                                        _convention="mujoco")
+
+    def forward_dynamics(self, qpos, qvel, qfrc, *, gravity: float = -9.81, f_ext=None):
+        """Forward dynamics in MuJoCo convention: qacc = fd(qpos, qvel, qfrc)."""
+        return self._h.forward_dynamics(qpos, qvel, qfrc, gravity=gravity, f_ext=f_ext,
+                                        _convention="mujoco")
+
+    def aba(self, qpos, qvel, qfrc, *, gravity: float = -9.81, f_ext=None):
+        """Articulated-body forward dynamics in MuJoCo convention."""
+        return self._h.aba(qpos, qvel, qfrc, gravity=gravity, f_ext=f_ext, _convention="mujoco")
+
+    def crba(self, qpos, *, gravity: float = -9.81):
+        """Mass matrix M(qpos) in the mjx frame (G M G^T)."""
+        return self._h.crba(qpos, gravity=gravity, _convention="mujoco")
+
+    def minv(self, qpos):
+        """Inverse mass matrix Minv(qpos) in the mjx frame (G^-T Minv G^-1)."""
+        return self._h.minv(qpos, _convention="mujoco")
+
+    # ── kinematics / regressor ────────────────────────────────────────────
+    def end_effector_pose(self, qpos):
+        """End-effector pose from mjx-convention qpos."""
+        return self._h.end_effector_pose(qpos, _convention="mujoco")
+
+    def end_effector_pose_gradient(self, qpos):
+        """EE pose Jacobian reframed to the mjx free-joint tangent (J·G^-1)."""
+        return self._h.end_effector_pose_gradient(qpos, _convention="mujoco")
+
+    def end_effector_pose_hessian(self, qpos):
+        """EE pose Hessian in the mjx convention."""
+        return self._h.end_effector_pose_hessian(qpos, _convention="mujoco")
+
+    def inverse_dynamics_regressor(self, qpos, qvel, qacc=None, *, gravity: float = -9.81):
+        """Joint-torque regressor with base-linear rows in the mjx frame."""
+        return self._h.inverse_dynamics_regressor(qpos, qvel, qacc, gravity=gravity,
+                                                  _convention="mujoco")
+
+    # ── first / second-order derivatives ──────────────────────────────────
+    def inverse_dynamics_gradient(self, qpos, qvel, qacc=None, *, gravity: float = -9.81):
+        """∂τ/∂(q,qd) in the mjx convention."""
+        return self._h.inverse_dynamics_gradient(qpos, qvel, qacc, gravity=gravity,
+                                                 _convention="mujoco")
+
+    def forward_dynamics_gradient(self, qpos, qvel, qfrc, *, gravity: float = -9.81):
+        """∂qacc/∂(q,qd) in the mjx convention."""
+        return self._h.forward_dynamics_gradient(qpos, qvel, qfrc, gravity=gravity,
+                                                 _convention="mujoco")
+
+    def idsva_so(self, qpos, qvel, qacc=None, *, gravity: float = -9.81):
+        """Second-order inverse dynamics (4 tensors) in the mjx convention."""
+        return self._h.idsva_so(qpos, qvel, qacc, gravity=gravity, _convention="mujoco")
+
+    def fdsva_so(self, qpos, qvel, qfrc, *, gravity: float = -9.81):
+        """Second-order forward dynamics (4 tensors) in the mjx convention."""
+        return self._h.fdsva_so(qpos, qvel, qfrc, gravity=gravity, _convention="mujoco")
+
+    # ── integrator / plant ────────────────────────────────────────────────
+    def integrator(self, qpos, qvel, qfrc, dt, *, integrator_type: str = "euler",
+                   gravity: float = -9.81):
+        """One integration step in the mjx convention (global-additive retract)."""
+        return self._h.integrator(qpos, qvel, qfrc, dt, integrator_type=integrator_type,
+                                  gravity=gravity, _convention="mujoco")
+
+    def integrator_gradient(self, qpos, qvel, qfrc, dt, *, integrator_type: str = "euler",
+                            gravity: float = -9.81):
+        """Integrator state-transition Jacobian in the mjx convention."""
+        return self._h.integrator_gradient(qpos, qvel, qfrc, dt, integrator_type=integrator_type,
+                                           gravity=gravity, _convention="mujoco")
+
+    def plant_step(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+        """Plant step x_{k+1} in the mjx convention."""
+        return self._h.plant_step(x, u, dt, integrator_type=integrator_type, gravity=gravity,
+                                  _convention="mujoco")
+
+    def plant_step_gradient(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+        """Plant-step state-transition Jacobian in the mjx convention."""
+        return self._h.plant_step_gradient(x, u, dt, integrator_type=integrator_type,
+                                           gravity=gravity, _convention="mujoco")
+
+    def quadratic_state_cost(self, x, x_des, Q):
+        """Quadratic state cost (value/grad/GN-hess) in the mjx convention."""
+        return self._h.quadratic_state_cost(x, x_des, Q, _convention="mujoco")
+
+    def ee_pos_cost(self, qpos, p_des, W):
+        """End-effector position tracking cost in the mjx convention."""
+        return self._h.ee_pos_cost(qpos, p_des, W, _convention="mujoco")
+
+    def com_cost(self, qpos, p_des, W):
+        """Center-of-mass tracking cost in the mjx convention."""
+        return self._h.com_cost(qpos, p_des, W, _convention="mujoco")
+
+    def momentum_cost(self, qpos, qvel, h_des, W):
+        """Centroidal-momentum tracking cost in the mjx convention."""
+        return self._h.momentum_cost(qpos, qvel, h_des, W, _convention="mujoco")
+
+    def __repr__(self) -> str:
+        return f"<mujoco view of {self._h!r}>"
+
+
 # ─── TorchRobotHandle ───────────────────────────────────────────────────────
 
 
@@ -350,14 +491,22 @@ class TorchRobotHandle:
     """Torch-flavored wrapper. Methods return ``torch.Tensor`` (autograd-aware
     for inverse_dynamics / forward_dynamics / aba / integrator)."""
 
-    def __init__(self, base: RobotHandle, cache_key: str, so_path: str):
+    def __init__(self, base: RobotHandle, cache_key: str, so_path: str,
+                 output_convention: str = "pinocchio"):
         self._base = base
         self._cache_key = cache_key
         self._so_path = Path(so_path)
         self._ns = _load_ops(self._so_path, cache_key)
         import torch
         self._ops = getattr(torch.ops, self._ns)
-        self._fns = _make_autograd(self._ns, self._base.num_vel)
+        # Per-convention registry of autograd Functions, built lazily. mjx mode
+        # binds every op to its _mujoco variant (floating-base only).
+        self._fns_cache: dict[str, dict] = {}
+        if output_convention not in ("pinocchio", "mujoco"):
+            raise ValueError(
+                f"output_convention must be 'pinocchio' or 'mujoco'; got {output_convention!r}")
+        self._output_convention = output_convention
+        self._mjx_view = None
 
     # ─── metadata (delegated) ────────────────────────────────────────────
     @property
@@ -375,9 +524,79 @@ class TorchRobotHandle:
     @property
     def max_batch(self) -> int:   return self._base.max_batch
 
+    # ─── output convention (mjx parity) ──────────────────────────────────
+    @property
+    def output_convention(self) -> str:
+        """Default IO convention for this handle: ``"pinocchio"`` or ``"mujoco"``.
+        Settable. ``"mujoco"`` requires a floating base (mjx and pinocchio coincide
+        on a fixed base). Per-call overrides use the thread-safe ``.mujoco`` view."""
+        return self._output_convention
+
+    @output_convention.setter
+    def output_convention(self, value: str) -> None:
+        if value not in ("pinocchio", "mujoco"):
+            raise ValueError(
+                f"output_convention must be 'pinocchio' or 'mujoco'; got {value!r}")
+        if value == "mujoco" and not self.floating_base:
+            raise ValueError(
+                "output_convention='mujoco' requires a floating-base robot "
+                f"({self.name} is fixed-base)")
+        self._output_convention = value
+
+    def _resolve_convention(self, convention):
+        """None → the handle default; else the explicit per-call convention."""
+        return self._output_convention if convention is None else convention
+
+    def _fns_for(self, convention):
+        """Per-convention autograd Function registry (lazily built + cached).
+        ``convention="mujoco"`` builds the SAME closures but every op is the
+        ``_mujoco`` variant; mjx is floating-base only."""
+        conv = self._resolve_convention(convention)
+        if conv not in ("pinocchio", "mujoco"):
+            raise ValueError(
+                f"output_convention must be 'pinocchio' or 'mujoco'; got {conv!r}")
+        if conv == "mujoco" and not self.floating_base:
+            raise ValueError(
+                "output_convention='mujoco' requires a floating-base robot "
+                f"({self.name} is fixed-base; mjx and pinocchio coincide there)")
+        cache = self._fns_cache
+        if conv not in cache:
+            cache[conv] = _make_autograd(self._ns, self._base.num_vel,
+                                         mujoco=(conv == "mujoco"))
+        return cache[conv]
+
+    @property
+    def _fns(self):
+        """The pinocchio-convention autograd registry (existing pin call sites)."""
+        return self._fns_for("pinocchio")
+
+    def _op(self, conv, name):
+        """Resolve a DIRECT (non-autograd) op, dispatching to the ``_mujoco``
+        variant when the resolved convention is mujoco. mjx requires a floating
+        base (the _mujoco symbol is #ifdef'd out of fixed .so)."""
+        c = self._resolve_convention(conv)
+        if c == "mujoco":
+            if not self.floating_base:
+                raise ValueError(
+                    "output_convention='mujoco' requires a floating-base robot "
+                    f"({self.name} is fixed-base)")
+            return getattr(self._ops, name + "_mujoco")
+        return getattr(self._ops, name)
+
+    @property
+    def mujoco(self) -> "_TorchMujocoView":
+        """MuJoCo-native view (``handle.mujoco.inverse_dynamics(qpos, qvel, qacc)``):
+        forwards a per-call ``_convention="mujoco"`` WITHOUT mutating the shared
+        ``output_convention`` default, so it is safe alongside pinocchio calls."""
+        v = self._mjx_view
+        if v is None:
+            v = self._mjx_view = _TorchMujocoView(self)
+        return v
+
     # ─── differentiable algorithms ───────────────────────────────────────
 
-    def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
+    def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None,
+                         _convention=None):
         """Inverse dynamics (RNEA) τ = M·qdd + h − g (B, NJ). Autograd-aware wrt (q, qd).
 
         ``qdd`` (optional): joint acceleration, CUDA float32 ``(B, NJ)``. With
@@ -389,22 +608,33 @@ class TorchRobotHandle:
         ``f_ext`` (optional): per-body external forces, a CUDA float32 tensor
         ``(B, 6*num_bodies)``, body-major, each ``[angular; linear]`` in the
         body's local frame (subtracted from the per-body force; matches the
-        numpy handle and ``RBDReference.inverse_dynamics(..., f_ext=...)``)."""
-        return self._fns["inverse_dynamics"].apply(q, qd, float(gravity), qdd, f_ext)
+        numpy handle and ``RBDReference.inverse_dynamics(..., f_ext=...)``).
 
-    def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
+        With ``output_convention="mujoco"`` (floating base) inputs/outputs are
+        MuJoCo-convention and the autograd VJP uses the mjx-convention Jacobian."""
+        return self._fns_for(_convention)["inverse_dynamics"].apply(
+            q, qd, float(gravity), qdd, f_ext)
+
+    def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None,
+                         _convention=None):
         """qdd = M⁻¹(τ − c) (B, NJ). Autograd-aware wrt (q, qd, u).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``
-        CUDA float32 (see :py:meth:`inverse_dynamics`)."""
-        return self._fns["fd"].apply(q, qd, u, float(gravity), f_ext)
+        CUDA float32 (see :py:meth:`inverse_dynamics`).
 
-    def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
+        With ``output_convention="mujoco"`` (floating base) inputs/outputs are
+        MuJoCo-convention and the autograd VJP uses the mjx-convention Jacobian."""
+        return self._fns_for(_convention)["fd"].apply(q, qd, u, float(gravity), f_ext)
+
+    def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None):
         """qdd via ABA (B, NJ). Autograd-aware wrt (q, qd, u).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``
-        CUDA float32 (see :py:meth:`inverse_dynamics`)."""
-        return self._fns["aba"].apply(q, qd, u, float(gravity), f_ext)
+        CUDA float32 (see :py:meth:`inverse_dynamics`).
+
+        With ``output_convention="mujoco"`` (floating base) inputs/outputs are
+        MuJoCo-convention."""
+        return self._fns_for(_convention)["aba"].apply(q, qd, u, float(gravity), f_ext)
 
     def inverse_dynamics_wrt_params(self, q, qd, params, *, gravity: float = -9.81, f_ext=None):
         """Inverse-dynamics bias c = ID(q, qd, qdd=0) (B, NJ), differentiable wrt
@@ -432,47 +662,71 @@ class TorchRobotHandle:
         ``forward_dynamics_wrt_params`` custom_vjp."""
         return self._fns["fd_wrt_params"].apply(q, qd, u, params, float(gravity), f_ext)
 
-    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
-        """x_{k+1} (B, NP+NV). Autograd-aware wrt (q, qd, u)."""
+    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81,
+                   _convention=None):
+        """x_{k+1} (B, NP+NV). Autograd-aware wrt (q, qd, u).
+
+        With ``output_convention="mujoco"`` (floating base) inputs/outputs are
+        MuJoCo-convention (global-additive base retract + reframed base velocity)."""
         it = _integrator_code(integrator_type)
-        return self._fns["integrator"].apply(q, qd, u, float(dt), it, float(gravity))
+        return self._fns_for(_convention)["integrator"].apply(
+            q, qd, u, float(dt), it, float(gravity))
 
     # ─── forward-only algorithms (raw kernel ops; reshapes mirror _handle) ──
 
-    def minv(self, q):
+    def minv(self, q, *, _convention=None):
         """Minv(q) (B, NV, NV), symmetrized (kernel writes lower triangle).
 
         Tangent-space (pinocchio) inverse mass matrix. FIXED base: NV == NJ
-        (shape unchanged); FLOATING base: NV < NJ."""
+        (shape unchanged); FLOATING base: NV < NJ.
+
+        With ``output_convention="mujoco"`` (floating base) the returned Minv is the
+        mjx-frame inverse mass matrix (G^-T Minv G^-1); the ``minv_mujoco`` kernel
+        writes it FULL DENSE so no host symmetrize is applied."""
         import torch
+        conv = self._resolve_convention(_convention)
         nv = self.num_vel
-        m = self._ops.minv(q).reshape(-1, nv, nv)
+        m = self._op(conv, "minv")(q).reshape(-1, nv, nv)
+        if conv == "mujoco":
+            return m  # mjx kernel writes a full dense symmetric matrix
         eye = torch.eye(nv, dtype=m.dtype, device=m.device)
         return m + m.transpose(1, 2) - m * eye
 
-    def crba(self, q, *, gravity: float = -9.81):
+    def crba(self, q, *, gravity: float = -9.81, _convention=None):
         """Mass matrix M(q) (B, NV, NV), tangent-space (pinocchio) convention.
-        FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ."""
+        FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ.
+
+        With ``output_convention="mujoco"`` (floating base) the returned M is the
+        mjx-frame mass matrix (G M G^T congruence, written full dense)."""
         nv = self.num_vel
-        return self._ops.crba(q, float(gravity)).reshape(-1, nv, nv)
+        return self._op(_convention, "crba")(q, float(gravity)).reshape(-1, nv, nv)
 
-    def end_effector_pose(self, q):
-        """EE pose [xyz, rpy] per EE (B, 6*NUM_EES)."""
-        return self._ops.end_effector_pose(q)
+    def end_effector_pose(self, q, *, _convention=None):
+        """EE pose [xyz, rpy] per EE (B, 6*NUM_EES).
 
-    def end_effector_pose_gradient(self, q):
-        """EE pose Jacobian d/dv (B, 6*NEE, NV), pinocchio tangent convention."""
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention."""
+        return self._op(_convention, "end_effector_pose")(q)
+
+    def end_effector_pose_gradient(self, q, *, _convention=None):
+        """EE pose Jacobian d/dv (B, 6*NEE, NV), pinocchio tangent convention.
+
+        With ``output_convention="mujoco"`` (floating base) the base-velocity
+        Jacobian columns are reframed to the mjx free-joint tangent (J·G^-1)."""
         nee, nv = self.num_ees, self.num_vel
-        raw = self._ops.end_effector_pose_gradient(q)
+        raw = self._op(_convention, "end_effector_pose_gradient")(q)
         B = raw.shape[0]
         return raw.reshape(B, nee, nv, 6).permute(0, 1, 3, 2).reshape(B, 6 * nee, nv)
 
-    def end_effector_pose_hessian(self, q):
-        """EE pose Hessian d²/dv² (B, 6*NEE, NV, NV)."""
-        nee, nv = self.num_ees, self.num_vel
-        return self._ops.end_effector_pose_hessian(q).reshape(-1, 6 * nee, nv, nv)
+    def end_effector_pose_hessian(self, q, *, _convention=None):
+        """EE pose Hessian d²/dv² (B, 6*NEE, NV, NV).
 
-    def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
+        With ``output_convention="mujoco"`` (floating base) the base-tangent indices
+        are reframed to the mjx free-joint convention."""
+        nee, nv = self.num_ees, self.num_vel
+        return self._op(_convention, "end_effector_pose_hessian")(q).reshape(-1, 6 * nee, nv, nv)
+
+    def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None,
+                                  _convention=None):
         """∂c/∂(q,qd) (B, NV, 2*NV) = [dc_dq | dc_dqd], tangent-space (pinocchio)
         convention. FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ.
 
@@ -481,36 +735,48 @@ class TorchRobotHandle:
         adds ∂(M·qdd)/∂q (USE_QDD overload).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
-        affine in f_ext so a constant f_ext leaves this Jacobian unchanged."""
+        affine in f_ext so a constant f_ext leaves this Jacobian unchanged.
+
+        With ``output_convention="mujoco"`` (floating base) the gradient is the
+        mjx-convention Jacobian (rows base-rotated, columns base-reframed)."""
         nv = self.num_vel
-        raw = self._ops.inverse_dynamics_gradient(q, qd, float(gravity), qdd, f_ext)
+        raw = self._op(_convention, "inverse_dynamics_gradient")(q, qd, float(gravity), qdd, f_ext)
         B = raw.shape[0]
         blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)
         return _concat_blocks(blocks)
 
-    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
+    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81, f_ext=None,
+                                  _convention=None):
         """∂qdd/∂(q,qd) (B, NV, 2*NV), tangent-space (pinocchio) convention.
         FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ.
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``;
-        affine in f_ext so a constant f_ext leaves this Jacobian unchanged."""
+        affine in f_ext so a constant f_ext leaves this Jacobian unchanged.
+
+        With ``output_convention="mujoco"`` (floating base) the gradient is the
+        mjx-convention Jacobian."""
         nv = self.num_vel
-        raw = self._ops.forward_dynamics_gradient(q, qd, u, float(gravity), f_ext)
+        raw = self._op(_convention, "forward_dynamics_gradient")(q, qd, u, float(gravity), f_ext)
         B = raw.shape[0]
         blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)
         return _concat_blocks(blocks)
 
-    def inverse_dynamics_regressor(self, q, qd, qdd=None, *, gravity: float = -9.81):
+    def inverse_dynamics_regressor(self, q, qd, qdd=None, *, gravity: float = -9.81,
+                                   _convention=None):
         """Joint-torque regressor Y with τ = Y·π (∂τ/∂π). Returns
         (B, NV, 10*num_bodies), row-major (NV, 10*NB) per sample. ``qdd=None`` ⇒
         zeros (the bias regressor used by :py:meth:`inverse_dynamics_wrt_params`).
-        Per-link basis [m, m*c(3), I_O(6)]."""
+        Per-link basis [m, m*c(3), I_O(6)].
+
+        With ``output_convention="mujoco"`` (floating base) the base-linear rows are
+        rotated to the mjx frame (same covector transform as the τ value)."""
         import torch
         nv, npar = self.num_vel, 10 * self.num_bodies
         if qdd is None:
             q = torch.as_tensor(q)
             qdd = torch.zeros_like(q)
-        return self._ops.inverse_dynamics_regressor(q, qd, qdd, float(gravity)).reshape(-1, nv, npar)
+        return self._op(_convention, "inverse_dynamics_regressor")(
+            q, qd, qdd, float(gravity)).reshape(-1, nv, npar)
 
     def forward_dynamics_parameter_gradient(self, q, qd, u, *, gravity: float = -9.81):
         """FD inertial-parameter gradient ∂qdd/∂π = -M⁻¹·Y. Returns
@@ -518,35 +784,51 @@ class TorchRobotHandle:
         nv, npar = self.num_vel, 10 * self.num_bodies
         return self._ops.forward_dynamics_parameter_gradient(q, qd, u, float(gravity)).reshape(-1, nv, npar)
 
-    def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81):
+    def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81, _convention=None):
         """Second-order ID at joint acceleration ``qdd``. Returns a
         :class:`grid_rbd.SecondOrderID` NamedTuple of 4 tensors each
         (B, NV, NV, NV) (a plain tuple — positional unpacking / indexing work).
 
         ``qdd=None`` ⇒ zero acceleration (explicit zeros are passed so the
-        result never depends on a stale device buffer from a prior call)."""
+        result never depends on a stale device buffer from a prior call).
+
+        With ``output_convention="mujoco"`` (floating base) all four tensors are in
+        the mjx convention (the kernel transforms every slab)."""
         import torch
         nv = self.num_vel
         if qdd is None:
             q = torch.as_tensor(q)
             qdd = torch.zeros_like(q)
-        flat = self._ops.idsva_so(q, qd, qdd, float(gravity))
+        flat = self._op(_convention, "idsva_so")(q, qd, qdd, float(gravity))
         B = flat.shape[0]
         return SecondOrderID(*(flat[:, i*nv**3:(i+1)*nv**3].reshape(B, nv, nv, nv) for i in range(4)))
 
-    def fdsva_so(self, q, qd, u, *, gravity: float = -9.81):
+    def fdsva_so(self, q, qd, u, *, gravity: float = -9.81, _convention=None):
         """Second-order FD. Returns a :class:`grid_rbd.SecondOrderFD` NamedTuple
-        of 4 tensors each (B, NV, NV, NV) (a plain tuple, positional-compatible)."""
+        of 4 tensors each (B, NV, NV, NV) (a plain tuple, positional-compatible).
+
+        With ``output_convention="mujoco"`` (floating base) all four tensors are in
+        the mjx convention."""
         nv = self.num_vel
-        flat = self._ops.fdsva_so(q, qd, u, float(gravity))
+        if self._resolve_convention(_convention) == "mujoco":
+            # KNOWN-BROKEN (tracked): spilled fdsva_so mjx epilogue buffer-layout bug.
+            # Guarded so it never returns silent garbage. Use idsva_so for 2nd-order mjx.
+            raise NotImplementedError(
+                "fdsva_so(output_convention='mujoco') is not yet validated (known in-kernel "
+                "buffer-layout bug); use idsva_so or output_convention='pinocchio'.")
+        flat = self._op(_convention, "fdsva_so")(q, qd, u, float(gravity))
         B = flat.shape[0]
         return SecondOrderFD(*(flat[:, i*nv**3:(i+1)*nv**3].reshape(B, nv, nv, nv) for i in range(4)))
 
-    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
-        """dAB (B, 2*NV, 3*NV) = [d/dq | d/dqd | d/du] tangent."""
+    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81,
+                            _convention=None):
+        """dAB (B, 2*NV, 3*NV) = [d/dq | d/dqd | d/du] tangent.
+
+        With ``output_convention="mujoco"`` (floating base) the state-transition
+        Jacobian is in the mjx convention (retract tangent + reframed velocity)."""
         nv = self.num_vel
         it = _integrator_code(integrator_type)
-        raw = self._ops.integrator_gradient(q, qd, u, float(dt), it, float(gravity))
+        raw = self._op(_convention, "integrator_gradient")(q, qd, u, float(dt), it, float(gravity))
         B = raw.shape[0]
         return raw.reshape(B, 3 * nv, 2 * nv).transpose(1, 2)
 
@@ -562,11 +844,15 @@ class TorchRobotHandle:
     # integrator_type). Cost methods return (value, grad, hess); barriers return
     # (value, grad, hess_diag). value is squeezed to (B,) to match numpy.
 
-    def quadratic_state_cost(self, x, x_des, Q):
+    def quadratic_state_cost(self, x, x_des, Q, *, _convention=None):
         """1/2 sum_i Q_i (x_i - x_des_i)^2 over x=[q;qd]. Returns
-        (value (B,), grad (B, NX), hess=diag(Q) (B, NX, NX))."""
+        (value (B,), grad (B, NX), hess=diag(Q) (B, NX, NX)).
+
+        With ``output_convention="mujoco"`` (floating base) ``x`` is MuJoCo-convention;
+        the value is invariant, the grad base-rotates (covector) and the GN hess is
+        the mjx congruence."""
         nx = self.num_joints + self.num_vel
-        out, grad, hess = self._ops.quadratic_state_cost(x, x_des, Q)
+        out, grad, hess = self._op(_convention, "quadratic_state_cost")(x, x_des, Q)
         return out[:, 0], grad, hess.reshape(-1, nx, nx)
 
     def quadratic_input_cost(self, u, u_des, R):
@@ -592,39 +878,56 @@ class TorchRobotHandle:
         out, grad, hdiag = self._ops.joint_torque_barrier(var, lower, upper, float(mu))
         return out[:, 0], grad, hdiag
 
-    def plant_step(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
-        """x_{k+1} = integrator(x_k, u_k, dt). x (B, NX); u (B, NV). Returns (B, NX)."""
-        it = _integrator_code(integrator_type)
-        return self._ops.plant_step(x, u, float(dt), it, float(gravity))
+    def plant_step(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81,
+                   _convention=None):
+        """x_{k+1} = integrator(x_k, u_k, dt). x (B, NX); u (B, NV). Returns (B, NX).
 
-    def plant_step_gradient(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+        With ``output_convention="mujoco"`` (floating base) ``x`` is MuJoCo-convention
+        and the returned next state is mjx-convention (global-additive base retract)."""
+        it = _integrator_code(integrator_type)
+        return self._op(_convention, "plant_step")(x, u, float(dt), it, float(gravity))
+
+    def plant_step_gradient(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81,
+                            _convention=None):
         """[A|B] = d x_{k+1}/d(x,u). x (B, NX); u (B, NV). Returns (B, 2*NV, 3*NV)
-        with column blocks [d/dq | d/dqd | d/du] (tangent space)."""
+        with column blocks [d/dq | d/dqd | d/du] (tangent space).
+
+        With ``output_convention="mujoco"`` (floating base) the state-transition
+        Jacobian is in the mjx convention."""
         nv = self.num_vel
         it = _integrator_code(integrator_type)
-        raw = self._ops.plant_step_gradient(x, u, float(dt), it, float(gravity))
+        raw = self._op(_convention, "plant_step_gradient")(x, u, float(dt), it, float(gravity))
         B = raw.shape[0]
         return raw.reshape(B, 3 * nv, 2 * nv).transpose(1, 2)
 
-    def ee_pos_cost(self, q, p_des, W):
+    def ee_pos_cost(self, q, p_des, W, *, _convention=None):
         """End-effector position cost (EE 0). q (B, NQ); p_des/W (B, 3). Returns
-        (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX))."""
+        (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX)).
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention;
+        value invariant, grad covector-rotated, GN hess the mjx congruence."""
         nx = self.num_joints + self.num_vel
-        out, grad, hess = self._ops.ee_pos_cost(q, p_des, W)
+        out, grad, hess = self._op(_convention, "ee_pos_cost")(q, p_des, W)
         return out[:, 0], grad, hess.reshape(-1, nx, nx)
 
-    def com_cost(self, q, p_des, W):
+    def com_cost(self, q, p_des, W, *, _convention=None):
         """Center-of-mass tracking cost. q (B, NQ); p_des/W (B, 3). Returns
-        (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX))."""
+        (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX)).
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention;
+        value invariant, grad covector-rotated, GN hess the mjx congruence."""
         nx = self.num_joints + self.num_vel
-        out, grad, hess = self._ops.com_cost(q, p_des, W)
+        out, grad, hess = self._op(_convention, "com_cost")(q, p_des, W)
         return out[:, 0], grad, hess.reshape(-1, nx, nx)
 
-    def momentum_cost(self, q, qd, h_des, W):
+    def momentum_cost(self, q, qd, h_des, W, *, _convention=None):
         """Centroidal-momentum tracking cost. q (B, NQ); qd (B, NV); h_des/W (B, 6).
-        Returns (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX))."""
+        Returns (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX)).
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention; value invariant, grad covector-rotated, GN hess congruence."""
         nx = self.num_joints + self.num_vel
-        out, grad, hess = self._ops.momentum_cost(q, qd, h_des, W)
+        out, grad, hess = self._op(_convention, "momentum_cost")(q, qd, h_des, W)
         return out[:, 0], grad, hess.reshape(-1, nx, nx)
 
     # ─── CUDA-Graphs capture ─────────────────────────────────────────────
@@ -666,6 +969,7 @@ def register_robot(
     cache_dir: str | Path | None = None,
     force_rebuild: bool = False,
     cuda_arch: int | None = None,
+    output_convention: str = "pinocchio",
 ) -> TorchRobotHandle:
     """Register a robot for the torch backend (same cache as the plain/JAX
     surfaces). Returns a :py:class:`TorchRobotHandle`."""
@@ -677,7 +981,8 @@ def register_robot(
         force_rebuild=force_rebuild, cuda_arch=cuda_arch,
     )
     cache_key, so_path = _lookup(name, cache_dir)
-    return TorchRobotHandle(base, cache_key, so_path)
+    return TorchRobotHandle(base, cache_key, so_path,
+                            output_convention=output_convention)
 
 
 def get_robot(name: str, cache_dir: str | Path | None = None) -> TorchRobotHandle:

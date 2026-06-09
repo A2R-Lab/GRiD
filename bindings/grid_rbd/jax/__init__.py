@@ -110,6 +110,126 @@ def _register_method_target(
     return target_name
 
 
+# ─── mjx view ────────────────────────────────────────────────────────────────
+
+
+class _JaxMujocoView:
+    """MuJoCo-native, differentiable view over a :class:`JaxRobotHandle`
+    (``handle.mujoco``). Mirrors the numpy handle's ``.mujoco`` view: MuJoCo
+    parameter names, the mjx output convention applied PER CALL (forwards an
+    explicit ``_convention="mujoco"``, never mutating the shared default), so it
+    is safe alongside pinocchio-convention calls on the same handle. Each method
+    stays ``jax.grad``/``jax.vmap``-able (the VJP uses the mjx-convention analytic
+    Jacobian). Methods appear here as each one's mjx FFI target lands."""
+
+    __slots__ = ("_h",)
+
+    def __init__(self, handle: "JaxRobotHandle") -> None:
+        self._h = handle
+
+    # ── value / dynamics ──────────────────────────────────────────────────
+    def inverse_dynamics(self, qpos, qvel, qacc=None, *, gravity: float = -9.81, f_ext=None):
+        """RNEA in MuJoCo convention: τ = id(qpos, qvel, qacc). Returns mjx-frame τ."""
+        return self._h.inverse_dynamics(qpos, qvel, qacc, gravity=gravity, f_ext=f_ext,
+                                        _convention="mujoco")
+
+    def forward_dynamics(self, qpos, qvel, qfrc, *, gravity: float = -9.81, f_ext=None):
+        """Forward dynamics in MuJoCo convention: qacc = fd(qpos, qvel, qfrc)."""
+        return self._h.forward_dynamics(qpos, qvel, qfrc, gravity=gravity, f_ext=f_ext,
+                                        _convention="mujoco")
+
+    def aba(self, qpos, qvel, qfrc, *, gravity: float = -9.81, f_ext=None):
+        """Articulated-body forward dynamics in MuJoCo convention."""
+        return self._h.aba(qpos, qvel, qfrc, gravity=gravity, f_ext=f_ext, _convention="mujoco")
+
+    def crba(self, qpos, *, gravity: float = -9.81):
+        """Mass matrix M(qpos) in the mjx frame (G M G^T)."""
+        return self._h.crba(qpos, gravity=gravity, _convention="mujoco")
+
+    def minv(self, qpos):
+        """Inverse mass matrix Minv(qpos) in the mjx frame (G^-T Minv G^-1)."""
+        return self._h.minv(qpos, _convention="mujoco")
+
+    # ── kinematics / regressor ────────────────────────────────────────────
+    def end_effector_pose(self, qpos):
+        """End-effector pose from mjx-convention qpos (differentiable)."""
+        return self._h.end_effector_pose(qpos, _convention="mujoco")
+
+    def end_effector_pose_gradient(self, qpos):
+        """EE pose Jacobian reframed to the mjx free-joint tangent (J·G^-1)."""
+        return self._h.end_effector_pose_gradient(qpos, _convention="mujoco")
+
+    def end_effector_pose_hessian(self, qpos):
+        """EE pose Hessian in the mjx convention."""
+        return self._h.end_effector_pose_hessian(qpos, _convention="mujoco")
+
+    def inverse_dynamics_regressor(self, qpos, qvel, qacc=None, *, gravity: float = -9.81):
+        """Joint-torque regressor with base-linear rows in the mjx frame."""
+        return self._h.inverse_dynamics_regressor(qpos, qvel, qacc, gravity=gravity,
+                                                  _convention="mujoco")
+
+    # ── first / second-order derivatives ──────────────────────────────────
+    def inverse_dynamics_gradient(self, qpos, qvel, qacc=None, *, gravity: float = -9.81):
+        """∂τ/∂(q,qd) in the mjx convention."""
+        return self._h.inverse_dynamics_gradient(qpos, qvel, qacc, gravity=gravity,
+                                                 _convention="mujoco")
+
+    def forward_dynamics_gradient(self, qpos, qvel, qfrc, *, gravity: float = -9.81):
+        """∂qacc/∂(q,qd) in the mjx convention."""
+        return self._h.forward_dynamics_gradient(qpos, qvel, qfrc, gravity=gravity,
+                                                 _convention="mujoco")
+
+    def idsva_so(self, qpos, qvel, qacc=None, *, gravity: float = -9.81):
+        """Second-order inverse dynamics (4 tensors) in the mjx convention."""
+        return self._h.idsva_so(qpos, qvel, qacc, gravity=gravity, _convention="mujoco")
+
+    def fdsva_so(self, qpos, qvel, qfrc, *, gravity: float = -9.81):
+        """Second-order forward dynamics (4 tensors) in the mjx convention."""
+        return self._h.fdsva_so(qpos, qvel, qfrc, gravity=gravity, _convention="mujoco")
+
+    # ── integrator / plant ────────────────────────────────────────────────
+    def integrator(self, qpos, qvel, qfrc, dt, *, integrator_type: str = "euler",
+                   gravity: float = -9.81):
+        """One integration step in the mjx convention (global-additive retract)."""
+        return self._h.integrator(qpos, qvel, qfrc, dt, integrator_type=integrator_type,
+                                  gravity=gravity, _convention="mujoco")
+
+    def integrator_gradient(self, qpos, qvel, qfrc, dt, *, integrator_type: str = "euler",
+                            gravity: float = -9.81):
+        """Integrator state-transition Jacobian in the mjx convention."""
+        return self._h.integrator_gradient(qpos, qvel, qfrc, dt, integrator_type=integrator_type,
+                                           gravity=gravity, _convention="mujoco")
+
+    def plant_step(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+        """Plant step x_{k+1} in the mjx convention."""
+        return self._h.plant_step(x, u, dt, integrator_type=integrator_type, gravity=gravity,
+                                  _convention="mujoco")
+
+    def plant_step_gradient(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+        """Plant-step state-transition Jacobian in the mjx convention."""
+        return self._h.plant_step_gradient(x, u, dt, integrator_type=integrator_type,
+                                           gravity=gravity, _convention="mujoco")
+
+    def quadratic_state_cost(self, x, x_des, Q):
+        """Quadratic state cost (value/grad/GN-hess) in the mjx convention."""
+        return self._h.quadratic_state_cost(x, x_des, Q, _convention="mujoco")
+
+    def ee_pos_cost(self, qpos, p_des, W):
+        """End-effector position tracking cost in the mjx convention."""
+        return self._h.ee_pos_cost(qpos, p_des, W, _convention="mujoco")
+
+    def com_cost(self, qpos, p_des, W):
+        """Center-of-mass tracking cost in the mjx convention."""
+        return self._h.com_cost(qpos, p_des, W, _convention="mujoco")
+
+    def momentum_cost(self, qpos, qvel, h_des, W):
+        """Centroidal-momentum tracking cost in the mjx convention."""
+        return self._h.momentum_cost(qpos, qvel, h_des, W, _convention="mujoco")
+
+    def __repr__(self) -> str:
+        return f"<mujoco view of {self._h!r}>"
+
+
 # ─── JaxRobotHandle ─────────────────────────────────────────────────────────
 
 
@@ -121,10 +241,16 @@ class JaxRobotHandle:
     target registrations.
     """
 
-    def __init__(self, base: RobotHandle, cache_key: str, so_path: str):
+    def __init__(self, base: RobotHandle, cache_key: str, so_path: str,
+                 output_convention: str = "pinocchio"):
         self._base = base
         self._cache_key = cache_key
         self._so_path = Path(so_path)
+        if output_convention not in ("pinocchio", "mujoco"):
+            raise ValueError(
+                f"output_convention must be 'pinocchio' or 'mujoco'; got {output_convention!r}")
+        self._output_convention = output_convention
+        self._mjx_view = None
 
     # ─── metadata (delegated) ────────────────────────────────────────────
     @property
@@ -141,6 +267,51 @@ class JaxRobotHandle:
     def floating_base(self) -> bool: return self._base.floating_base
     @property
     def max_batch(self) -> int:   return self._base.max_batch
+
+    # ─── output convention (mjx parity) ──────────────────────────────────
+    @property
+    def output_convention(self) -> str:
+        """Default IO convention for this handle: ``"pinocchio"`` or ``"mujoco"``.
+        Settable. ``"mujoco"`` requires a floating base (mjx and pinocchio coincide
+        on a fixed base). Per-call overrides use the thread-safe ``.mujoco`` view."""
+        return self._output_convention
+
+    @output_convention.setter
+    def output_convention(self, value: str) -> None:
+        if value not in ("pinocchio", "mujoco"):
+            raise ValueError(
+                f"output_convention must be 'pinocchio' or 'mujoco'; got {value!r}")
+        if value == "mujoco" and not self.floating_base:
+            raise ValueError(
+                "output_convention='mujoco' requires a floating-base robot "
+                f"({self.name} is fixed-base)")
+        self._output_convention = value
+
+    def _resolve_convention(self, convention):
+        """None → the handle default; else the explicit per-call convention."""
+        return self._output_convention if convention is None else convention
+
+    def _mt(self, convention, method, symbol):
+        """Register (and return) the FFI target for a DIRECT (non-custom_vjp) method,
+        dispatching to the ``_mujoco`` variant when the resolved convention is mujoco.
+        mjx requires a floating base (the _mujoco symbol is #ifdef'd out of fixed .so)."""
+        if self._resolve_convention(convention) == "mujoco":
+            if not self.floating_base:
+                raise ValueError(
+                    f"output_convention='mujoco' requires a floating-base robot "
+                    f"({self.name} is fixed-base)")
+            method, symbol = method + "_mujoco", symbol + "_mujoco"
+        return _register_method_target(self._so_path, self._cache_key, method, symbol)
+
+    @property
+    def mujoco(self) -> "_JaxMujocoView":
+        """MuJoCo-native view (``handle.mujoco.inverse_dynamics(qpos, qvel, qacc)``):
+        forwards a per-call ``_convention="mujoco"`` WITHOUT mutating the shared
+        ``output_convention`` default, so it is safe alongside pinocchio calls."""
+        v = self._mjx_view
+        if v is None:
+            v = self._mjx_view = _JaxMujocoView(self)
+        return v
 
     # ─── algorithm methods ───────────────────────────────────────────────
 
@@ -207,10 +378,26 @@ class JaxRobotHandle:
     # ``nondiff_argnums=(0,)`` so it is threaded through as a plain Python
     # float (never a JAX tracer) and baked into the FFI attribute. The bwd
     # therefore returns no cotangent for it.
-    def _differentiable(self):
-        d = getattr(self, "_diff_cache", None)
-        if d is not None:
-            return d
+    def _differentiable(self, convention: str = "pinocchio"):
+        # Per-convention registry of custom_vjp ops. ``convention="mujoco"`` builds
+        # the SAME closures but every FFI target is the ``_mujoco`` variant (kernel
+        # launched with MUJOCO_OUTPUT=true): the forward returns mjx-convention
+        # outputs and the analytic-gradient VJP is the mjx-convention Jacobian, so
+        # jax.grad through an mjx forward stays self-consistent. mjx is FLOATING-base
+        # only (the _mujoco symbols are #ifdef GRID_FLOATING_BASE out of fixed .so).
+        if convention not in ("pinocchio", "mujoco"):
+            raise ValueError(
+                f"output_convention must be 'pinocchio' or 'mujoco'; got {convention!r}")
+        mjx = (convention == "mujoco")
+        if mjx and not self.floating_base:
+            raise ValueError(
+                "output_convention='mujoco' requires a floating-base robot "
+                f"({self.name} is fixed-base; mjx and pinocchio coincide there)")
+        cache = getattr(self, "_diff_cache", None)
+        if cache is None:
+            cache = self._diff_cache = {}
+        if convention in cache:
+            return cache[convention]
         import functools
         import jax
         import jax.numpy as jnp
@@ -218,6 +405,9 @@ class JaxRobotHandle:
         nj, nv, nee = self.num_joints, self.num_vel, self.num_ees
 
         def _t(method, symbol):
+            # In mjx mode dispatch to the _mujoco-suffixed target/symbol.
+            if mjx:
+                method, symbol = method + "_mujoco", symbol + "_mujoco"
             return _register_method_target(self._so_path, self._cache_key, method, symbol)
 
         VM = "broadcast_all"
@@ -265,8 +455,14 @@ class JaxRobotHandle:
             mflat = jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(
                 q, gravity=np.float32(gravity))
             m = mflat.reshape(q.shape[:-1] + (nv, nv))
-            eye = jnp.eye(nv, dtype=m.dtype)
-            minv = m + jnp.swapaxes(m, -1, -2) - m * eye  # ∂qdd/∂u
+            # ∂qdd/∂u = Minv. pin minv writes the lower triangle (symmetrize);
+            # the mjx minv_mujoco kernel writes a FULL DENSE symmetric matrix (the
+            # G^-T Minv G^-1 congruence baked in) so it is used as-is.
+            if mjx:
+                minv = m
+            else:
+                eye = jnp.eye(nv, dtype=m.dtype)
+                minv = m + jnp.swapaxes(m, -1, -2) - m * eye
             ctv = _slice_nv(ct)
             gq = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, df_dq))
             gqd = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, df_dqd))
@@ -434,7 +630,7 @@ class JaxRobotHandle:
 
         d = {"forward_dynamics": fd, "inverse_dynamics": idyn, "end_effector_pose": eepose,
              "inverse_dynamics_wrt_params": idyn_pi, "forward_dynamics_wrt_params": fd_pi}
-        self._diff_cache = d
+        cache[convention] = d
         return d
 
     # ─── algorithm methods ───────────────────────────────────────────────
@@ -453,7 +649,8 @@ class JaxRobotHandle:
             raise ValueError(f"f_ext last dim must be 6*num_bodies = {n}; got {fe.shape}")
         return fe
 
-    def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None):
+    def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None,
+                         _convention=None):
         """Inverse dynamics (RNEA): τ = M(q)·qdd + h(q,qd) − g(q).
 
         ``q``, ``qd``: jax.Array shape (B, NJ), dtype float32. With ``qdd=None``
@@ -477,30 +674,38 @@ class JaxRobotHandle:
         else:
             (q, qd, qdd_b), B = self._prep_2d("inverse_dynamics", q, qd, qdd)
         fe = self._f_ext_or_zeros(q, f_ext)
-        return self._differentiable()["inverse_dynamics"](gravity, q, qd, qdd_b, fe)
+        return self._differentiable(self._resolve_convention(_convention))["inverse_dynamics"](
+            gravity, q, qd, qdd_b, fe)
 
-    def minv(self, q):
+    def minv(self, q, *, _convention=None):
         """Direct mass-matrix inverse Minv(q). Returns (B, NV, NV).
 
         Minv is the tangent-space (pinocchio-convention) inverse mass matrix:
         NV x NV. FIXED base: NV == NJ (shape unchanged); FLOATING base: NV < NJ
-        (the kernel writes NUM_VEL*NUM_VEL). The kernel writes the lower triangle;
-        we symmetrize inside the JAX graph so callers see a full SPD matrix. (The
-        plain numpy wrapper does the same.)
+        (the kernel writes NUM_VEL*NUM_VEL). The pin kernel writes the lower
+        triangle; we symmetrize inside the JAX graph so callers see a full SPD
+        matrix. (The plain numpy wrapper does the same.)
+
+        With ``output_convention="mujoco"`` (floating base) the returned Minv is the
+        mjx-frame inverse mass matrix (G^-T Minv G^-1); the ``minv_mujoco`` kernel
+        writes it FULL DENSE so no host symmetrize is applied.
         """
         import jax
         import jax.numpy as jnp
-        target = _register_method_target(
-            self._so_path, self._cache_key, "minv", "grid_rbd_jax_minv")
+        conv = self._resolve_convention(_convention)
+        target = self._mt(conv, "minv", "grid_rbd_jax_minv")
         (q,), B = self._prep_2d("minv", q)
         nv = self.num_vel
         flat = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(q)
         m = flat.reshape(q.shape[:-1] + (nv, nv))
-        # Kernel fills the lower triangle; symmetrize as M + Mᵀ − diag(M).
+        if conv == "mujoco":
+            return m  # mjx kernel writes a full dense symmetric matrix
+        # pin kernel fills the lower triangle; symmetrize as M + Mᵀ − diag(M).
         eye = jnp.eye(nv, dtype=m.dtype)
         return m + jnp.swapaxes(m, -1, -2) - m * eye
 
-    def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
+    def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None,
+                         _convention=None):
         """qdd = forward_dynamics(q, qd, u). Returns (B, NJ).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)`` (see
@@ -513,7 +718,8 @@ class JaxRobotHandle:
         """
         (q, qd, u), B = self._prep_2d("forward_dynamics", q, qd, u)
         fe = self._f_ext_or_zeros(q, f_ext)
-        return self._differentiable()["forward_dynamics"](gravity, q, qd, u, fe)
+        return self._differentiable(self._resolve_convention(_convention))["forward_dynamics"](
+            gravity, q, qd, u, fe)
 
     def inverse_dynamics_wrt_params(self, q, qd, params, *, gravity: float = -9.81):
         """Inverse-dynamics bias c = ID(q, qd, qdd=0), differentiable w.r.t. the
@@ -552,16 +758,19 @@ class JaxRobotHandle:
         params = jnp.asarray(params, dtype=jnp.float32)
         return self._differentiable()["forward_dynamics_wrt_params"](gravity, q, qd, u, params)
 
-    def inverse_dynamics_regressor(self, q, qd, qdd=None, *, gravity: float = -9.81):
+    def inverse_dynamics_regressor(self, q, qd, qdd=None, *, gravity: float = -9.81,
+                                   _convention=None):
         """Joint-torque regressor Y with τ = Y·π (∂τ/∂π). Returns
         (B, NV, 10*NUM_BODIES). ``qdd=None`` ⇒ zeros (the bias regressor used by
         :meth:`inverse_dynamics_wrt_params`). Row-major (NV, 10*NB) per sample;
-        the per-link basis is [m, m*c(3), I_O(6)]."""
+        the per-link basis is [m, m*c(3), I_O(6)].
+
+        With ``output_convention="mujoco"`` (floating base) the base-linear rows are
+        rotated to the mjx frame (same covector transform as the τ value)."""
         import jax
         import jax.numpy as jnp
         import numpy as np
-        target = _register_method_target(
-            self._so_path, self._cache_key,
+        target = self._mt(_convention,
             "inverse_dynamics_regressor", "grid_rbd_jax_inverse_dynamics_regressor")
         if qdd is None:
             qdd = jnp.zeros_like(jnp.asarray(q, dtype=jnp.float32))
@@ -587,40 +796,43 @@ class JaxRobotHandle:
             q, qd, u, gravity=np.float32(gravity))
         return flat.reshape(q.shape[:-1] + (nv, npar))
 
-    def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None):
+    def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None):
         """qdd = aba(q, qd, u) via the articulated body algorithm. Returns (B, NJ).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)`` (see
-        the numpy handle); ``None`` is passed as explicit zeros internally."""
+        the numpy handle); ``None`` is passed as explicit zeros internally.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``u`` are
+        MuJoCo-convention and the returned ``qdd`` is in the mjx frame."""
         import jax
         import jax.numpy as jnp
         import numpy as np
-        target = _register_method_target(
-            self._so_path, self._cache_key, "aba", "grid_rbd_jax_aba")
+        target = self._mt(_convention, "aba", "grid_rbd_jax_aba")
         (q, qd, u), B = self._prep_2d("aba", q, qd, u)
         fe = self._f_ext_or_zeros(q, f_ext)
         out_type = self._out(q, self.num_joints)
         return jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
             q, qd, u, fe, gravity=np.float32(gravity))
 
-    def crba(self, q, *, gravity: float = -9.81):
+    def crba(self, q, *, gravity: float = -9.81, _convention=None):
         """Mass matrix M(q) via composite rigid body algorithm. Returns (B, NV, NV).
 
         Tangent-space (pinocchio-convention) mass matrix. FIXED base: NV == NJ
         (shape unchanged); FLOATING base: NV < NJ (the kernel writes NUM_VEL*NUM_VEL).
-        """
+
+        With ``output_convention="mujoco"`` (floating base) the returned M is the
+        mjx-frame mass matrix (G M G^T congruence, written full dense)."""
         import jax
         import jax.numpy as jnp
         import numpy as np
-        target = _register_method_target(
-            self._so_path, self._cache_key, "crba", "grid_rbd_jax_crba")
+        target = self._mt(_convention, "crba", "grid_rbd_jax_crba")
         (q,), B = self._prep_2d("crba", q)
         nv = self.num_vel
         flat = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(
             q, gravity=np.float32(gravity))
         return flat.reshape(q.shape[:-1] + (nv, nv))
 
-    def end_effector_pose(self, q):
+    def end_effector_pose(self, q, *, _convention=None):
         """End-effector pose [xyz, rpy] per EE. Returns (B, 6*NUM_EES).
 
         Differentiable (``jax.grad`` / ``jax.jacobian`` / ``jax.vjp`` w.r.t.
@@ -628,9 +840,9 @@ class JaxRobotHandle:
         Jacobian), and ``jax.vmap``-able over the leading batch axis.
         """
         (q,), B = self._prep_2d("end_effector_pose", q)
-        return self._differentiable()["end_effector_pose"](q)
+        return self._differentiable(self._resolve_convention(_convention))["end_effector_pose"](q)
 
-    def end_effector_pose_gradient(self, q):
+    def end_effector_pose_gradient(self, q, *, _convention=None):
         """End-effector pose Jacobian d/dv (TANGENT space, pinocchio convention).
 
         Returns (B, 6*NUM_EES, NV). Floating-base now produces the spatial
@@ -640,11 +852,12 @@ class JaxRobotHandle:
         The kernel writes a column-major (6, NEE*NV) buffer per timestep;
         we mirror the plain wrapper's reshape/transpose to the row-major
         (6*NEE, NV) convention.
-        """
+
+        With ``output_convention="mujoco"`` (floating base) the base-velocity
+        Jacobian columns are reframed to the mjx free-joint tangent (J·G^-1)."""
         import jax
         import jax.numpy as jnp
-        target = _register_method_target(
-            self._so_path, self._cache_key,
+        target = self._mt(_convention,
             "end_effector_pose_gradient", "grid_rbd_jax_end_effector_pose_gradient")
         (q,), B = self._prep_2d("end_effector_pose_gradient", q)
         nee = self.num_ees
@@ -656,14 +869,16 @@ class JaxRobotHandle:
                    .swapaxes(-2, -1)
                    .reshape(lead + (6 * nee, nv)))
 
-    def end_effector_pose_hessian(self, q):
+    def end_effector_pose_hessian(self, q, *, _convention=None):
         """End-effector pose Hessian d^2(pose)/dv^2 (tangent space, pinocchio convention).
         Returns (B, 6*NUM_EES, NV, NV). For fixed-base NV == NJ; for floating-base
-        the (NV, NV) block indexes spatial twist components."""
+        the (NV, NV) block indexes spatial twist components.
+
+        With ``output_convention="mujoco"`` (floating base) the base-tangent indices
+        are reframed to the mjx free-joint convention."""
         import jax
         import jax.numpy as jnp
-        target = _register_method_target(
-            self._so_path, self._cache_key,
+        target = self._mt(_convention,
             "end_effector_pose_hessian", "grid_rbd_jax_end_effector_pose_hessian")
         (q,), B = self._prep_2d("end_effector_pose_hessian", q)
         nee = self.num_ees
@@ -672,7 +887,8 @@ class JaxRobotHandle:
         flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(q)
         return flat.reshape(q.shape[:-1] + (6 * nee, nv, nv))
 
-    def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81):
+    def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81,
+                                  _convention=None):
         """∂c/∂(q, qd) — concatenated [dc_dq | dc_dqd]. Returns (B, NV, 2*NV),
         tangent-space (pinocchio) convention. FIXED base: NV == NJ (unchanged);
         FLOATING base: NV < NJ (the kernel writes nv x 2nv).
@@ -683,12 +899,13 @@ class JaxRobotHandle:
         ``qdd=None`` (default) ⇒ the bias gradient ∂(h−g)/∂(q,qd); pass a nonzero
         ``qdd`` to include ∂(M·qdd)/∂q. JAX has no optional buffers, so ``None``
         is passed as explicit zeros internally (byte-identical to the bias path).
-        """
+
+        With ``output_convention="mujoco"`` (floating base) the gradient is the
+        mjx-convention Jacobian (rows base-rotated, columns base-reframed)."""
         import jax
         import jax.numpy as jnp
         import numpy as np
-        target = _register_method_target(
-            self._so_path, self._cache_key,
+        target = self._mt(_convention,
             "inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient")
         if qdd is None:
             (q, qd), B = self._prep_2d("inverse_dynamics_gradient", q, qd)
@@ -702,15 +919,18 @@ class JaxRobotHandle:
         blocks = raw.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
         return jnp.concatenate([blocks[..., 0, :, :], blocks[..., 1, :, :]], axis=-1)
 
-    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81):
+    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81,
+                                  _convention=None):
         """∂qdd/∂(q, qd) — concatenated [df_dq | df_dqd]. Returns (B, NV, 2*NV),
         tangent-space (pinocchio) convention. FIXED base: NV == NJ (unchanged);
-        FLOATING base: NV < NJ (the kernel writes nv x 2nv)."""
+        FLOATING base: NV < NJ (the kernel writes nv x 2nv).
+
+        With ``output_convention="mujoco"`` (floating base) the gradient is the
+        mjx-convention Jacobian."""
         import jax
         import jax.numpy as jnp
         import numpy as np
-        target = _register_method_target(
-            self._so_path, self._cache_key,
+        target = self._mt(_convention,
             "forward_dynamics_gradient", "grid_rbd_jax_forward_dynamics_gradient")
         (q, qd, u), B = self._prep_2d("forward_dynamics_gradient", q, qd, u)
         nv = self.num_vel
@@ -720,7 +940,7 @@ class JaxRobotHandle:
         blocks = raw.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
         return jnp.concatenate([blocks[..., 0, :, :], blocks[..., 1, :, :]], axis=-1)
 
-    def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81):
+    def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81, _convention=None):
         """Second-order inverse dynamics at joint acceleration ``qdd``.
 
         Returns a :class:`grid_rbd.SecondOrderID` NamedTuple of 4 jax.Arrays
@@ -730,13 +950,14 @@ class JaxRobotHandle:
 
         ``qdd=None`` ⇒ zero acceleration (explicit zeros are passed so the
         result never depends on a stale device buffer from a prior call).
+
+        With ``output_convention="mujoco"`` (floating base) all four tensors are in
+        the mjx convention (the kernel transforms every slab).
         """
         import jax
         import jax.numpy as jnp
         import numpy as np
-        target = _register_method_target(
-            self._so_path, self._cache_key,
-            "idsva_so", "grid_rbd_jax_idsva_so")
+        target = self._mt(_convention, "idsva_so", "grid_rbd_jax_idsva_so")
         if qdd is None:
             qdd = jnp.zeros_like(jnp.asarray(q, dtype=jnp.float32))
         (q, qd, qdd), B = self._prep_2d("idsva_so", q, qd, qdd)
@@ -750,20 +971,28 @@ class JaxRobotHandle:
             for i in range(4)
         ))
 
-    def fdsva_so(self, q, qd, u, *, gravity: float = -9.81):
+    def fdsva_so(self, q, qd, u, *, gravity: float = -9.81, _convention=None):
         """Second-order forward dynamics.
 
         Returns a :class:`grid_rbd.SecondOrderFD` NamedTuple of 4 jax.Arrays
         each shape (B, NV, NV, NV) (a plain tuple, so positional unpacking /
         indexing still work). Uses the same scratch buffer (``d_idsva_so``) as
         ``idsva_so``, so the two methods cannot run concurrently on the same handle.
+
+        With ``output_convention="mujoco"`` (floating base) all four tensors are in
+        the mjx convention.
         """
         import jax
         import jax.numpy as jnp
         import numpy as np
-        target = _register_method_target(
-            self._so_path, self._cache_key,
-            "fdsva_so", "grid_rbd_jax_fdsva_so")
+        if self._resolve_convention(_convention) == "mujoco":
+            # KNOWN-BROKEN (tracked): the spilled fdsva_so mjx epilogue mis-lays its output
+            # band (buffer-liveness bug; transform math itself validates offline). Guarded so
+            # it never returns silent garbage. Use idsva_so for validated 2nd-order mjx.
+            raise NotImplementedError(
+                "fdsva_so(output_convention='mujoco') is not yet validated (known in-kernel "
+                "buffer-layout bug); use idsva_so or output_convention='pinocchio'.")
+        target = self._mt(_convention, "fdsva_so", "grid_rbd_jax_fdsva_so")
         (q, qd, u), B = self._prep_2d("fdsva_so", q, qd, u)
         nv = self.num_vel
         out_type = self._out(q, 4 * nv ** 3)
@@ -775,33 +1004,39 @@ class JaxRobotHandle:
             for i in range(4)
         ))
 
-    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+    def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81,
+                   _convention=None):
         """One integration step. Returns (B, NUM_POS + NUM_VEL).
 
         ``dt`` and the integrator type are passed as FFI attributes (runtime
         scalars); gravity is the signed gravitational acceleration (default -9.81).
+
+        With ``output_convention="mujoco"`` (floating base) inputs/outputs are
+        MuJoCo-convention (global-additive base retract + reframed base velocity).
         """
         import numpy as np
         import jax
         import jax.numpy as jnp
         from .._handle import _integrator_code
-        target = _register_method_target(
-            self._so_path, self._cache_key, "integrator", "grid_rbd_jax_integrator")
+        target = self._mt(_convention, "integrator", "grid_rbd_jax_integrator")
         (q, qd, u), B = self._prep_2d("integrator", q, qd, u)
         out_type = jax.ShapeDtypeStruct((B, self.num_joints + self.num_vel), jnp.float32)
         return jax.ffi.ffi_call(target, out_type)(
             q, qd, u, dt=np.float32(dt), it=np.int64(_integrator_code(integrator_type)),
             gravity=np.float32(gravity))
 
-    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81,
+                            _convention=None):
         """Gradient of the integrator step. Returns (B, 2*NV, 3*NV) — column
-        blocks [d/dq | d/dqd | d/du] in tangent space."""
+        blocks [d/dq | d/dqd | d/du] in tangent space.
+
+        With ``output_convention="mujoco"`` (floating base) the state-transition
+        Jacobian is in the mjx convention (retract tangent + reframed velocity)."""
         import numpy as np
         import jax
         import jax.numpy as jnp
         from .._handle import _integrator_code
-        target = _register_method_target(
-            self._so_path, self._cache_key,
+        target = self._mt(_convention,
             "integrator_gradient", "grid_rbd_jax_integrator_gradient")
         (q, qd, u), B = self._prep_2d("integrator_gradient", q, qd, u)
         nv = self.num_vel
@@ -851,12 +1086,15 @@ class JaxRobotHandle:
             jax.ShapeDtypeStruct((B, n_hess), jnp.float32),
         )
 
-    def quadratic_state_cost(self, x, x_des, Q):
+    def quadratic_state_cost(self, x, x_des, Q, *, _convention=None):
         """1/2 sum_i Q_i (x_i - x_des_i)^2 over x=[q;qd]. Returns
-        (value (B,), grad (B, NX), hess=diag(Q) (B, NX, NX))."""
+        (value (B,), grad (B, NX), hess=diag(Q) (B, NX, NX)).
+
+        With ``output_convention="mujoco"`` (floating base) ``x`` is MuJoCo-convention;
+        the value is invariant, the grad base-rotates (covector) and the GN hess is
+        the mjx congruence."""
         import jax
-        target = _register_method_target(
-            self._so_path, self._cache_key,
+        target = self._mt(_convention,
             "plant_quadratic_state_cost", "grid_rbd_jax_plant_quadratic_state_cost")
         cast, B = self._prep_plant("quadratic_state_cost", x=x, x_des=x_des, Q=Q)
         nx = self.num_joints + self.num_vel
@@ -911,14 +1149,17 @@ class JaxRobotHandle:
                              "grid_rbd_jax_plant_joint_torque_barrier",
                              var, lower, upper, mu, self.num_vel)
 
-    def plant_step(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
-        """x_{k+1} = integrator(x_k, u_k, dt). x (B, NX); u (B, NV). Returns (B, NX)."""
+    def plant_step(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81,
+                   _convention=None):
+        """x_{k+1} = integrator(x_k, u_k, dt). x (B, NX); u (B, NV). Returns (B, NX).
+
+        With ``output_convention="mujoco"`` (floating base) ``x`` is MuJoCo-convention
+        and the returned next state is mjx-convention (global-additive base retract)."""
         import jax
         import jax.numpy as jnp
         import numpy as np
         from .._handle import _integrator_code
-        target = _register_method_target(
-            self._so_path, self._cache_key, "plant_step", "grid_rbd_jax_plant_step")
+        target = self._mt(_convention, "plant_step", "grid_rbd_jax_plant_step")
         cast, B = self._prep_plant("plant_step", x=x, u=u)
         nx = self.num_joints + self.num_vel
         out_type = jax.ShapeDtypeStruct((B, nx), jnp.float32)
@@ -926,15 +1167,18 @@ class JaxRobotHandle:
             cast["x"], cast["u"], dt=np.float32(dt),
             it=np.int64(_integrator_code(integrator_type)), gravity=np.float32(gravity))
 
-    def plant_step_gradient(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+    def plant_step_gradient(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81,
+                            _convention=None):
         """[A|B] = d x_{k+1}/d(x,u). x (B, NX); u (B, NV). Returns (B, 2*NV, 3*NV)
-        with column blocks [d/dq | d/dqd | d/du] (tangent space)."""
+        with column blocks [d/dq | d/dqd | d/du] (tangent space).
+
+        With ``output_convention="mujoco"`` (floating base) the state-transition
+        Jacobian is in the mjx convention."""
         import jax
         import jax.numpy as jnp
         import numpy as np
         from .._handle import _integrator_code
-        target = _register_method_target(
-            self._so_path, self._cache_key,
+        target = self._mt(_convention,
             "plant_step_gradient", "grid_rbd_jax_plant_step_gradient")
         cast, B = self._prep_plant("plant_step_gradient", x=x, u=u)
         nv = self.num_vel
@@ -945,36 +1189,42 @@ class JaxRobotHandle:
         # (2*NV x 3*NV) column-major per timestep; recover row-major.
         return flat.reshape(B, 3 * nv, 2 * nv).transpose(0, 2, 1)
 
-    def ee_pos_cost(self, q, p_des, W):
+    def ee_pos_cost(self, q, p_des, W, *, _convention=None):
         """End-effector position cost (EE 0). q (B, NQ); p_des/W (B, 3). Returns
-        (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX))."""
+        (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX)).
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention;
+        value invariant, grad covector-rotated, GN hess the mjx congruence."""
         import jax
-        target = _register_method_target(
-            self._so_path, self._cache_key, "plant_ee_pos_cost", "grid_rbd_jax_plant_ee_pos_cost")
+        target = self._mt(_convention, "plant_ee_pos_cost", "grid_rbd_jax_plant_ee_pos_cost")
         cast, B = self._prep_plant("ee_pos_cost", q=q, p_des=p_des, W=W)
         nx = self.num_joints + self.num_vel
         out, grad, hess = jax.ffi.ffi_call(target, self._cost_out_types(B, nx, nx * nx))(
             cast["q"], cast["p_des"], cast["W"])
         return out[:, 0], grad, hess.reshape(B, nx, nx)
 
-    def com_cost(self, q, p_des, W):
+    def com_cost(self, q, p_des, W, *, _convention=None):
         """Center-of-mass tracking cost. q (B, NQ); p_des/W (B, 3). Returns
-        (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX))."""
+        (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX)).
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention;
+        value invariant, grad covector-rotated, GN hess the mjx congruence."""
         import jax
-        target = _register_method_target(
-            self._so_path, self._cache_key, "plant_com_cost", "grid_rbd_jax_plant_com_cost")
+        target = self._mt(_convention, "plant_com_cost", "grid_rbd_jax_plant_com_cost")
         cast, B = self._prep_plant("com_cost", q=q, p_des=p_des, W=W)
         nx = self.num_joints + self.num_vel
         out, grad, hess = jax.ffi.ffi_call(target, self._cost_out_types(B, nx, nx * nx))(
             cast["q"], cast["p_des"], cast["W"])
         return out[:, 0], grad, hess.reshape(B, nx, nx)
 
-    def momentum_cost(self, q, qd, h_des, W):
+    def momentum_cost(self, q, qd, h_des, W, *, _convention=None):
         """Centroidal-momentum tracking cost. q (B, NQ); qd (B, NV); h_des/W (B, 6).
-        Returns (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX))."""
+        Returns (value (B,), grad_x (B, NX), GN hess_x (B, NX, NX)).
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention; value invariant, grad covector-rotated, GN hess congruence."""
         import jax
-        target = _register_method_target(
-            self._so_path, self._cache_key, "plant_momentum_cost", "grid_rbd_jax_plant_momentum_cost")
+        target = self._mt(_convention, "plant_momentum_cost", "grid_rbd_jax_plant_momentum_cost")
         cast, B = self._prep_plant("momentum_cost", q=q, qd=qd, h_des=h_des, W=W)
         nx = self.num_joints + self.num_vel
         out, grad, hess = jax.ffi.ffi_call(target, self._cost_out_types(B, nx, nx * nx))(
@@ -996,6 +1246,7 @@ def register_robot(
     cache_dir: str | Path | None = None,
     force_rebuild: bool = False,
     cuda_arch: int | None = None,
+    output_convention: str = "pinocchio",
 ) -> JaxRobotHandle:
     """Register a robot for use with JAX.
 
@@ -1028,7 +1279,8 @@ def register_robot(
             f"register_robot returned but {name!r} isn't in manifest; "
             f"cache may be corrupted")
     so_path = store_dir(cache_dir, entry["cache_key"]) / "robot.so"
-    return JaxRobotHandle(base, entry["cache_key"], str(so_path))
+    return JaxRobotHandle(base, entry["cache_key"], str(so_path),
+                          output_convention=output_convention)
 
 
 def get_robot(
