@@ -1188,6 +1188,24 @@ extern "C" int grid_rbd_dccrba(const T* q, T* out, int batch) {
 #endif
 }
 
+#if defined(GRID_FLOATING_BASE) && defined(GRID_HAS_DCCRBA)
+// MuJoCo-convention dccrba(q) -> 6*NV*NV dA/dq tensor (floating base only). q is raw
+// mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true) double-reframes
+// the qd-column and q-tangent indices by G^{-1} and adds the base-rotation frame term
+// (using the in-kernel CMM value) before saving.
+extern "C" int grid_rbd_dccrba_mujoco(const T* q, T* out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q(q, batch, grid::NUM_JOINTS);
+    grid::dccrba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+                 /*MUJOCO_OUTPUT=*/true>(g_data, g_robot, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_dccrba, (size_t)batch * 6 * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE && GRID_HAS_DCCRBA
+
 // cmm_time_variation(q, qd) -> 6*NUM_VEL centroidal-momentum-matrix time
 // variation Adot (per timestep). Gated on GRID_HAS_CMM_TIME_VARIATION (same
 // mimic caveat as dccrba); returns rc=3 when not generated.

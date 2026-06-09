@@ -428,6 +428,35 @@ def test_native_mjx_end_effector_pose_hessian_matches_oracle(go2_floating):
 
 @pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
 @pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_dccrba_matches_oracle(go2_floating):
+    """TENSOR class: dA/dq mjx = double G^{-1} reframe (qd-col + q-tangent indices) +
+    base-rotation frame term (needs the in-kernel CMM value A). Validated vs the
+    RBDReference oracle. Layout (B, 6, NV, NV) = [row, qd-col, q-tangent]."""
+    from RBDReference.equivalents.mujoco_convention import (
+        dccrba_dA_dq_pin_to_mjx, FloatingRootLayout)
+    h = go2_floating
+    assert h._runner.has_dccrba_mujoco, \
+        "floating-base .so is missing grid_rbd_dccrba_mujoco"
+    layout = FloatingRootLayout()
+    rng = np.random.default_rng(29)
+    for B in (1, 4):
+        qpos, qvel, _ = _rand_state(h, rng, B, with_qd=True)
+        native = np.asarray(h.dccrba(qpos, _convention="mujoco"), np.float64)  # (B,6,NV,NV)
+        q_pin, qd_pin, _, _, R = h._mjx_inputs(qpos, qvel)
+        dA_pin = np.asarray(h.dccrba(q_pin), np.float64)              # (B,6,NV,NV) [i,l,m]
+        A_pin = np.asarray(h.ccrba(q_pin, qd_pin)[0], np.float64)     # (B,6,NV)
+        exp = np.empty_like(native)
+        for b in range(B):
+            exp[b] = dccrba_dA_dq_pin_to_mjx(dA_pin[b], A_pin[b], R[b], layout)
+        assert np.allclose(native, exp, rtol=5e-3, atol=5e-2), \
+            f"dccrba mjx != oracle (B={B}): max|d|={np.abs(native-exp).max():.3e}"
+    # non-triviality: the mjx tensor differs from feeding raw mjx q to the pin tensor.
+    raw = np.asarray(h.dccrba(qpos), np.float64)
+    assert np.abs(native - raw).max() > 1e-2
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
 def test_native_mjx_integrator_retract(go2_floating):
     """RETRACT class: the MuJoCo free-joint integrator takes a GLOBAL additive base
     position step (pos += dt*v) instead of pinocchio's SE(3) update; the joints

@@ -1262,7 +1262,7 @@ class RobotHandle:
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._cast_out(self._runner.potential_energy_regressor(q, float(gravity)))
 
-    def dccrba(self, q):
+    def dccrba(self, q, *, _convention=None):
         """dCCRBA tensor ∂A/∂q, shape ``(B, 6, NV, NV)`` indexed
         ``[:, :, k, i] = ∂A[:, k]/∂q_i`` (Pinocchio centroidal convention,
         ``[linear; angular]`` at the CoM, world-aligned). Matches
@@ -1272,10 +1272,21 @@ class RobotHandle:
         centroidal sweep pool spills to global memory at the spilled tiers). A
         clear ``RuntimeError`` is raised only in the rare case where even the
         most-spilled tier's centroidal pool exceeds this GPU's shared-memory cap.
-        """
-        self._mjx_guard_unsupported("dccrba")
-        q = np.ascontiguousarray(q, dtype=self._dt)
-        raw = self._runner.dccrba(q)  # (B, 6*NV*NV) flat, dA[row + 6*k + 6*NV*m]
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
+        and the returned tensor is the dA/dq of the mjx CMM (double G^{-1} reframe of
+        the qd-column and q-tangent indices + base-rotation frame term, baked
+        in-kernel). Same ``(B, 6, NV, NV)`` layout."""
+        if self._mjx_active(_convention) and getattr(self._runner, "has_dccrba_mujoco", False):
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            raw = self._runner.dccrba_mujoco(q)
+        elif self._mjx_active(_convention):
+            raise NotImplementedError(
+                "dccrba(output_convention='mujoco') needs a floating-base .so built with "
+                "the mjx kernel (re-register with force_rebuild=True).")
+        else:
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            raw = self._runner.dccrba(q)  # (B, 6*NV*NV) flat, dA[row + 6*k + 6*NV*m]
         B = raw.shape[0]
         NV = self.num_vel
         # flat layout dA[row + 6*k + 6*NV*m] -> (B, m, k, row) then -> (B, row, k, m).

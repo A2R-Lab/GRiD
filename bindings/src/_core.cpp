@@ -238,6 +238,7 @@ public:
         fn_kinetic_energy_regressor_   = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_kinetic_energy_regressor"));
         fn_potential_energy_regressor_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_potential_energy_regressor"));
         fn_dccrba_             = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_dccrba"));
+        fn_dccrba_mujoco_      = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_dccrba_mujoco"));  // floating only
         fn_cmm_time_variation_ = reinterpret_cast<fn_q_qd_out_t>(opt_sym("grid_rbd_cmm_time_variation"));
         // floating-base mjx variant (optional; present only on a floating .so)
         fn_cmm_time_variation_mujoco_ = reinterpret_cast<fn_q_qd_out_t>(opt_sym("grid_rbd_cmm_time_variation_mujoco"));
@@ -1508,6 +1509,24 @@ public:
         return out;
     }
 
+    // MuJoCo-convention dccrba(q) -> (batch, 6*NUM_VEL*NUM_VEL) dA/dq tensor. Double
+    // G^{-1} reframe + base-rotation frame term baked in-kernel. Floating-base only
+    // (and non-mimic, like the base dccrba).
+    bool has_dccrba_mujoco() const { return fn_dccrba_mujoco_ != nullptr; }
+    py::array_t<CT> dccrba_mujoco(
+        arr_t q)
+    {
+        if (!fn_dccrba_mujoco_) throw std::runtime_error(
+            "dccrba_mujoco unavailable: floating-base non-mimic .so only");
+        int batch = check_q(q, "dccrba_mujoco");
+        py::array_t<CT> out({batch, 6 * num_vel_ * num_vel_});
+        int rc = fn_dccrba_mujoco_(q.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error(
+            "dccrba_mujoco not available for this robot: not generated for mimic robots");
+        if (rc != 0) throw std::runtime_error("grid_rbd_dccrba_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     // cmm_time_variation(q, qd) -> (batch, 6*NUM_VEL) Adot. Not emitted for mimic
     // robots (rc=3), same caveat as dccrba.
     py::array_t<CT> cmm_time_variation(
@@ -1725,6 +1744,7 @@ private:
     fn_q_qd_out_grav_t fn_kinetic_energy_regressor_   = nullptr;
     fn_q_out_grav_t    fn_potential_energy_regressor_ = nullptr;
     fn_q_out_t         fn_dccrba_                      = nullptr;
+    fn_q_out_t         fn_dccrba_mujoco_               = nullptr;  // floating mjx (optional)
     fn_q_qd_out_t      fn_cmm_time_variation_          = nullptr;
     fn_q_qd_out_t      fn_cmm_time_variation_mujoco_   = nullptr;  // floating-base mjx (optional)
     fn_set_inertia_t   fn_set_inertia_params_          = nullptr;
@@ -1938,6 +1958,8 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("potential_energy_regressor", &R::potential_energy_regressor,
              py::arg("q"), py::arg("gravity") = -9.81f)
         .def("dccrba", &R::dccrba, py::arg("q"))
+        .def_property_readonly("has_dccrba_mujoco", &R::has_dccrba_mujoco)
+        .def("dccrba_mujoco", &R::dccrba_mujoco, py::arg("q"))
         .def("cmm_time_variation", &R::cmm_time_variation,
              py::arg("q"), py::arg("qd"))
         .def_property_readonly("has_cmm_time_variation_mujoco", &R::has_cmm_time_variation_mujoco)
