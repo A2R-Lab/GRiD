@@ -127,6 +127,15 @@ def main() -> None:
     model.geom_contype[:]     = 0
     model.geom_conaffinity[:] = 0
 
+    # Disable the constraint solver too. mjx.forward()/inverse() always invoke
+    # solver.solve(); on jax >= 0.10 the (constraint-less) solver path indexes a
+    # float32 array (mjx/_src/solver.py _update_constraint) which newer jax rejects
+    # ("Indexer must have integer or boolean type ... float32"). With no contacts
+    # and no equality/limit constraints there is nothing to solve, and disabling
+    # the constraint pass is exactly the unconstrained articulated-body dynamics
+    # GRiD computes — so this is both the apples-to-apples comparison and the fix.
+    model.opt.disableflags |= int(mujoco.mjtDisableBit.mjDSBL_CONSTRAINT)
+
     data  = mujoco.MjData(model)
     mx    = mjx.put_model(model)
     dx0   = mjx.put_data(model, data)
