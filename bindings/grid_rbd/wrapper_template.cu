@@ -55,6 +55,25 @@ static dim3 g_block_dimms = dim3(1, 1, 1);
 // via grid_rbd_set_threads_per_block() before issuing any kernel calls.
 static dim3 g_thread_dimms = dim3(grid::MAX_PERF_LEVEL_THREADS, 1, 1);
 
+// Clamp g_thread_dimms.x to a specific kernel's register-limited maxThreadsPerBlock.
+// Register-heavy kernels (e.g. momentum_cost at ~140 regs/thread => max 384) cannot
+// launch at the default MAX_PERF_LEVEL_THREADS (448); without this clamp the launch
+// fails with cudaErrorInvalidConfiguration ("too many resources requested"), which
+// cudaDeviceSynchronize() does NOT report — the kernel silently never runs and the
+// output buffers are left stale. All GRID single-block kernels are thread-count-
+// invariant (block-stride SIMT loops), so launching with fewer threads is correct.
+template <typename KernelPtr>
+static dim3 grid_clamp_threads_for(KernelPtr kernel, dim3 requested) {
+    cudaFuncAttributes attr;
+    if (cudaFuncGetAttributes(&attr, (const void*)kernel) != cudaSuccess) {
+        cudaGetLastError();  // swallow — fall back to the requested dims
+        return requested;
+    }
+    unsigned cap = (attr.maxThreadsPerBlock > 0) ? (unsigned)attr.maxThreadsPerBlock : requested.x;
+    if (requested.x > cap) requested.x = cap;
+    return requested;
+}
+
 // ─── lifecycle ───────────────────────────────────────────────────────────────
 
 extern "C" int grid_rbd_init() {
@@ -1816,11 +1835,15 @@ extern "C" int grid_plant_momentum_cost(
     cudaMemcpy(g_plant.d_in_c + (size_t)batch * 6, W, batch * 6 * sizeof(T), cudaMemcpyHostToDevice);
     size_t smem = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::momentum_cost_kernel<T><<<grid_dim, g_thread_dimms, smem, g_streams[0]>>>(
+    // momentum_cost is register-heavy (~140 regs/thread): clamp to its launch cap.
+    dim3 thr = grid_clamp_threads_for(grid_plant::momentum_cost_kernel<T, false>, g_thread_dimms);
+    grid_plant::momentum_cost_kernel<T><<<grid_dim, thr, smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b,
         g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6,
         g_plant.d_end_effector_pose /*reused as ccrba (6*NV+6) scratch*/, g_robot, batch);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
@@ -1909,11 +1932,15 @@ extern "C" int grid_rbd_momentum_cost_mujoco(
     cudaMemcpy(g_plant.d_in_c + (size_t)batch * 6, W, batch * 6 * sizeof(T), cudaMemcpyHostToDevice);
     size_t smem = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::momentum_cost_kernel<T, /*MUJOCO_OUTPUT=*/true><<<grid_dim, g_thread_dimms, smem, g_streams[0]>>>(
+    // momentum_cost is register-heavy (~140 regs/thread): clamp to its launch cap.
+    dim3 thr = grid_clamp_threads_for(grid_plant::momentum_cost_kernel<T, true>, g_thread_dimms);
+    grid_plant::momentum_cost_kernel<T, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr, smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b,
         g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6,
         g_plant.d_end_effector_pose /*reused as ccrba scratch*/, g_robot, batch);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
@@ -3319,7 +3346,9 @@ static ffi::Error grid_rbd_jax_plant_momentum_cost_impl(
     cudaMemcpyAsync(g_plant.d_in_c + (size_t)batch * 6, W.typed_data(),  (size_t)batch * 6 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     size_t smem = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::momentum_cost_kernel<T><<<grid_dim, g_thread_dimms, smem, stream>>>(
+    // momentum_cost is register-heavy (~140 regs/thread): clamp to its launch cap.
+    dim3 thr = grid_clamp_threads_for(grid_plant::momentum_cost_kernel<T, false>, g_thread_dimms);
+    grid_plant::momentum_cost_kernel<T><<<grid_dim, thr, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b,
         g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6,
@@ -4011,7 +4040,9 @@ std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Tensor qd
     auto hess = grid_torch_empty(batch, nx * nx, q);
     size_t smem = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::momentum_cost_kernel<T><<<grid_dim, g_thread_dimms, smem, stream>>>(
+    // momentum_cost is register-heavy (~140 regs/thread): clamp to its launch cap.
+    dim3 thr = grid_clamp_threads_for(grid_plant::momentum_cost_kernel<T, false>, g_thread_dimms);
+    grid_plant::momentum_cost_kernel<T><<<grid_dim, thr, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b,
         g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6, g_plant.d_end_effector_pose, g_robot, batch);
     cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);

@@ -494,9 +494,6 @@ def test_native_mjx_position_cost_matches_oracle(go2_floating, which):
     assert np.abs(np.asarray(grad_m, np.float64)[:, :6] - np.asarray(raw_g, np.float64)[:, :6]).max() > 1e-3
 
 
-@pytest.mark.skip(reason="floating-base PIN momentum_cost returns zero on go2 (pre-existing "
-                         "ccrba_device-in-plant-kernel issue, not the mjx epilogue); mjx kernel "
-                         "transform is numpy-validated to ~2e-15. Re-enable once the pin path is fixed.")
 @pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
 @pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
 def test_native_mjx_momentum_cost_matches_oracle(go2_floating):

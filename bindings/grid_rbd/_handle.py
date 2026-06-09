@@ -1082,21 +1082,18 @@ class RobotHandle:
           with the bottom-right NV×NV qd-block = A^T diag(W) A.
         Matches ``RBDReference.momentum_cost(q, qd, h_des, W)``.
 
-        With ``output_convention="mujoco"`` (floating base): the mjx KERNEL transform
-        (qd-block covector grad + congruence GN hess, numpy-validated to ~2e-15) is
-        built, but is NOT yet exposed — the underlying floating-base PIN momentum_cost
-        returns zero output on go2 (a pre-existing plant-cost issue: ccrba_device inside
-        the momentum kernel's smem layout; unrelated to the mjx epilogue). Re-enable the
-        dispatch below once that pin path is fixed. See docs/open-tasks/mjx_codegen_fusion_master_plan.md §9g."""
-        if self._mjx_active(_convention):
-            raise NotImplementedError(
-                "momentum_cost(output_convention='mujoco') is built + numpy-validated in the "
-                "kernel but not yet exposed: the floating-base PIN momentum_cost returns zero "
-                "on go2 (pre-existing ccrba-in-plant-kernel issue). Fix the pin path first.")
+        With ``output_convention="mujoco"`` (floating base) the centroidal momentum h
+        (and value) is invariant; the qd-block grad/hess are reframed in-kernel."""
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         h_des = np.ascontiguousarray(h_des, dtype=self._dt)
         W = np.ascontiguousarray(W, dtype=self._dt)
+        if self._mjx_active(_convention) and getattr(self._runner, "has_momentum_cost_mujoco", False):
+            return self._runner.momentum_cost_mujoco(q, qd, h_des, W)
+        if self._mjx_active(_convention):
+            raise NotImplementedError(
+                "momentum_cost(output_convention='mujoco') needs a floating-base .so built "
+                "with the mjx kernel (re-register with force_rebuild=True).")
         return self._runner.momentum_cost(q, qd, h_des, W)
 
     # ─── centroidal / energy / general-frame kinematics (F2) ─────────────────
