@@ -862,6 +862,28 @@ extern "C" int grid_rbd_idsva_so(
     return 0;
 }
 
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention idsva_so(q, qd, qdd) -> 4*NV^3 (floating base only). q/qd/qdd are
+// raw mjx (kernel input-converts); the kernel (MUJOCO_OUTPUT=true) transforms all four
+// 2nd-order tensors to the mjx frame (explicit-analytic SO transform + dM_dq closed
+// form), reusing the id/crba/id-grad inners. The mjx kernel is register-heavy; the
+// post-launch error check surfaces a silent launch-config failure as rc!=0.
+extern "C" int grid_rbd_idsva_so_mujoco(const T* q, const T* qd, const T* qdd, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, qdd, batch, grid::NUM_JOINTS);
+    grid::idsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;  // launch-config failure (e.g. too many registers)
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_idsva_so,
+                batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
+
 // Second-order forward dynamics. Output is 4 * NV^3 per timestep
 // (d2qdd_dq, d2qdd_dqd, d2qdd_dudq — interpretation per Singh/Wensing).
 extern "C" int grid_rbd_fdsva_so(

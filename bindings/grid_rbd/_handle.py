@@ -836,7 +836,7 @@ class RobotHandle:
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.end_effector_pose_hessian(q)
 
-    def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81):
+    def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81, _convention=None):
         """Second-order inverse dynamics. Returns a :class:`SecondOrderID`
         NamedTuple ``(d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq)``, each tensor
         shape ``(B, NV, NV, NV)``. (NamedTuple is a plain tuple — positional
@@ -844,8 +844,10 @@ class RobotHandle:
 
         Uses the codegen-time dispatcher: body-frame for fixed-base,
         world-frame for floating-base.
-        """
-        self._mjx_guard_unsupported("idsva_so")
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd``/``qdd`` are
+        MuJoCo-convention and all four 2nd-order tensors are returned in the mjx frame
+        (the explicit-analytic SO transform + dM_dq closed form, baked in-kernel)."""
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         # qdd is packed into the device acceleration slot; pass explicit zeros for
@@ -854,7 +856,14 @@ class RobotHandle:
         qdd_in = qdd if qdd is not None else np.zeros_like(q)
         qdd_arr = np.ascontiguousarray(qdd_in, dtype=self._dt)
         NV = self.num_vel
-        flat = self._runner.idsva_so(q, qd, qdd_arr, 4 * NV ** 3, gravity)
+        if self._mjx_active(_convention) and getattr(self._runner, "has_idsva_so_mujoco", False):
+            flat = self._runner.idsva_so_mujoco(q, qd, qdd_arr, 4 * NV ** 3, gravity)
+        elif self._mjx_active(_convention):
+            raise NotImplementedError(
+                "idsva_so(output_convention='mujoco') needs a floating-base .so built with "
+                "the mjx kernel (re-register with force_rebuild=True).")
+        else:
+            flat = self._runner.idsva_so(q, qd, qdd_arr, 4 * NV ** 3, gravity)
         # Slice the 4 NV^3 blocks. Each block is stored as raw column/row
         # depending on the kernel; we return them as (B, NV, NV, NV)
         # without further reshape — callers wanting tensor-axis semantics

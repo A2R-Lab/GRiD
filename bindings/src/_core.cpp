@@ -188,6 +188,7 @@ public:
         fn_ee_pose_hessian_  = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose_hessian"));
         fn_ee_pose_hessian_mujoco_ = reinterpret_cast<fn_ee_t>(opt_sym("grid_rbd_end_effector_pose_hessian_mujoco"));  // floating only
         fn_idsva_so_         = reinterpret_cast<fn_dyn_no_fext_t>(require_sym("grid_rbd_idsva_so"));
+        fn_idsva_so_mujoco_  = reinterpret_cast<fn_dyn_no_fext_t>(opt_sym("grid_rbd_idsva_so_mujoco"));  // floating only
         fn_fdsva_so_         = reinterpret_cast<fn_fd_no_fext_t>  (require_sym("grid_rbd_fdsva_so"));
         fn_integrator_       = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator"));
         fn_integrator_mujoco_ = reinterpret_cast<fn_integrator_t>(opt_sym("grid_rbd_integrator_mujoco"));  // floating only
@@ -937,6 +938,31 @@ public:
         int rc = fn_idsva_so_(q.data(), qd.data(), qdd_ptr,
                               out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error("grid_rbd_idsva_so failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // MuJoCo-convention idsva_so -> (B, SECOND_ORDER_TENSOR_SIZE). Floating-base only.
+    bool has_idsva_so_mujoco() const { return fn_idsva_so_mujoco_ != nullptr; }
+    py::array_t<CT> idsva_so_mujoco(
+        arr_t q,
+        arr_t qd,
+        py::object qdd_opt,
+        int second_order_tensor_size,
+        float gravity)
+    {
+        if (!fn_idsva_so_mujoco_) throw std::runtime_error(
+            "idsva_so_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_joints_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<CT> out({batch, second_order_tensor_size});
+        int rc = fn_idsva_so_mujoco_(q.data(), qd.data(), qdd_ptr,
+                                     out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_idsva_so_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
 
@@ -1774,6 +1800,7 @@ private:
     fn_ee_t    fn_ee_pose_hessian_mujoco_ = nullptr;  // floating-base mjx EE-pose hessian (optional)
     fn_fk_batched_t fn_fk_batched_ = nullptr;
     fn_dyn_no_fext_t fn_idsva_so_ = nullptr;
+    fn_dyn_no_fext_t fn_idsva_so_mujoco_ = nullptr;  // floating mjx (optional)
     fn_fd_no_fext_t   fn_fdsva_so_ = nullptr;
     fn_integrator_t fn_integrator_      = nullptr;
     fn_integrator_t fn_integrator_mujoco_ = nullptr;  // floating-base mjx integrator (optional)
@@ -1948,6 +1975,11 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("end_effector_pose_hessian", &R::end_effector_pose_hessian,
              py::arg("q"))
         .def("idsva_so", &R::idsva_so,
+             py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
+             py::arg("second_order_tensor_size"),
+             py::arg("gravity") = -9.81f)
+        .def_property_readonly("has_idsva_so_mujoco", &R::has_idsva_so_mujoco)
+        .def("idsva_so_mujoco", &R::idsva_so_mujoco,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("second_order_tensor_size"),
              py::arg("gravity") = -9.81f)
