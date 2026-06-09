@@ -218,6 +218,7 @@ public:
         fn_plant_step_grad_  = reinterpret_cast<fn_plant_step_grad_t>(opt_sym("grid_plant_step_gradient"));
         fn_plant_step_grad_mujoco_ = reinterpret_cast<fn_plant_step_grad_t>(opt_sym("grid_plant_step_gradient_mujoco"));  // floating only
         fn_plant_step_hess_  = reinterpret_cast<fn_plant_step_hess_t>(opt_sym("grid_plant_step_hessian"));
+        fn_plant_step_hess_mujoco_ = reinterpret_cast<fn_plant_step_hess_t>(opt_sym("grid_plant_step_hessian_mujoco"));  // floating only
 
         // G2 batched FK (pos+quat) — OPTIONAL: only present in newer .so files
         // (and only non-null for fixed-base/non-mimic robots).
@@ -1477,6 +1478,25 @@ public:
         return out;
     }
 
+    // MuJoCo-convention plant_step_hessian -> (batch, 2*NV, 3*NV*3*NV). Floating; EULER/SI.
+    bool has_plant_step_hessian_mujoco() const { return fn_plant_step_hess_mujoco_ != nullptr; }
+    py::array_t<CT> plant_step_hessian_mujoco(arr_t x, arr_t u, float dt, int it, float gravity)
+    {
+        require_plant((void*)fn_plant_step_hess_mujoco_, "plant_step_hessian_mujoco");
+        int nx = num_joints_ + num_vel_;
+        int nv = num_vel_;
+        if (x.ndim() != 2 || x.shape(1) != nx)
+            throw std::invalid_argument("plant_step_hessian_mujoco: x must be (batch, " + std::to_string(nx) + ")");
+        int batch = (int)x.shape(0);
+        if (batch > max_batch_) throw std::invalid_argument("plant_step_hessian_mujoco: batch > max_batch");
+        check_array_2d(u, batch, nv, "u");
+        py::array_t<CT> out({batch, 2 * nv, 3 * nv * 3 * nv});
+        int rc = fn_plant_step_hess_mujoco_(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
+        if (rc == 3) throw std::runtime_error("plant_step_hessian_mujoco: only EULER/SI-EULER supported");
+        if (rc != 0) throw std::runtime_error("plant_step_hessian_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     // ─── centroidal / energy / general-frame kinematics (F2) ─────────────────
     //
     // Each takes q (or q,qd) of shape (batch, NUM_JOINTS) and returns the flat
@@ -2014,6 +2034,7 @@ private:
     fn_plant_step_grad_t fn_plant_step_grad_ = nullptr;
     fn_plant_step_grad_t fn_plant_step_grad_mujoco_ = nullptr;  // floating mjx (optional)
     fn_plant_step_hess_t fn_plant_step_hess_ = nullptr;
+    fn_plant_step_hess_t fn_plant_step_hess_mujoco_ = nullptr;  // floating mjx (optional)
     // F2 centroidal / energy / general-frame kinematics (optional symbols)
     fn_q_out_t         fn_com_                 = nullptr;
     fn_q_qd_out_t      fn_ccrba_               = nullptr;
@@ -2239,6 +2260,10 @@ static void register_runner(py::module_& m, const char* cls_name) {
              py::arg("x"), py::arg("u"), py::arg("dt"),
              py::arg("it") = 0, py::arg("gravity") = -9.81f)
         .def("plant_step_hessian", &R::plant_step_hessian,
+             py::arg("x"), py::arg("u"), py::arg("dt"),
+             py::arg("it") = 0, py::arg("gravity") = -9.81f)
+        .def_property_readonly("has_plant_step_hessian_mujoco", &R::has_plant_step_hessian_mujoco)
+        .def("plant_step_hessian_mujoco", &R::plant_step_hessian_mujoco,
              py::arg("x"), py::arg("u"), py::arg("dt"),
              py::arg("it") = 0, py::arg("gravity") = -9.81f)
         .def("ee_pos_cost", &R::ee_pos_cost,

@@ -2323,6 +2323,52 @@ extern "C" int grid_plant_step_hessian(
     cudaMemcpy(d2AB, g_plant.d_d2AB, batch * d2ab * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
+
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention plant_step_hessian (floating base only). x/u raw mjx; the kernel
+// (MUJOCO_OUTPUT=true) input-converts the stacked state + transforms the 2nd-order
+// state-transition tensor to the mjx tangent (reuses fdsva_so SO tensors + a dedicated
+// mjx workspace band carved from d_workspace). EULER/SI-EULER only. Register/smem-heavy.
+template <grid::IntegratorType IT>
+static void launch_plant_step_hessian_mujoco(int batch, T gravity, T dt) {
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    const int nv = grid::NUM_VEL;
+    const size_t smem = grid_plant::INTEGRATOR_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T>();
+    cudaFuncSetAttribute(grid_plant::plant_step_hessian_kernel<T, IT, grid::GRID_DEFAULT_RESOURCE_TIER, true>,
+                         cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    dim3 thr = grid_clamp_threads_for(
+        grid_plant::plant_step_hessian_kernel<T, IT, grid::GRID_DEFAULT_RESOURCE_TIER, true>, g_thread_dimms);
+    grid_plant::plant_step_hessian_kernel<T, IT, grid::GRID_DEFAULT_RESOURCE_TIER, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr, smem, g_streams[0]>>>(
+        g_plant.d_d2AB, g_plant.d_d2AB_workspace, g_plant.d_in_a, g_plant.d_in_b, nx, nv, g_robot, gravity, dt, batch);
+}
+extern "C" int grid_plant_step_hessian_mujoco(
+    const T* x, const T* u, T* d2AB, int batch, float gravity, float dt, int it) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    if (plant_alloc()) return 4;
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    const int nv = grid::NUM_VEL;
+    const int nz = 3 * nv;
+    const size_t d2ab = (size_t)(2 * nv) * (size_t)nz * (size_t)nz;
+    if (g_plant.d_d2AB == nullptr) {
+        if (cudaMalloc(&g_plant.d_d2AB, (size_t)kMaxBatch * d2ab * sizeof(T)) != cudaSuccess) return 4;
+    }
+    if (grid_plant::GRID_PLANT_HESSIAN_USES_WORKSPACE_ANY_TIER && g_plant.d_d2AB_workspace == nullptr) {
+        const size_t ws = grid_plant::PLANT_HESSIAN_WORKSPACE_BYTES_PER_TIMESTEP<T>();
+        if (cudaMalloc(&g_plant.d_d2AB_workspace, (size_t)kMaxBatch * ws) != cudaSuccess) return 4;
+    }
+    cudaMemcpy(g_plant.d_in_a, x, batch * nx * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_b, u, batch * nv * sizeof(T), cudaMemcpyHostToDevice);
+    GRID_RBD_IT_DISPATCH_HESSIAN(it, launch_plant_step_hessian_mujoco, batch, (T)gravity, (T)dt);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(d2AB, g_plant.d_d2AB, batch * d2ab * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
 #endif  // GRID_PLANT_HAS_STEP_HESSIAN
 
 

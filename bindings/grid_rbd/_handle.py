@@ -1106,7 +1106,7 @@ class RobotHandle:
         NV = self.num_vel
         return raw.reshape(B, 3 * NV, 2 * NV).transpose(0, 2, 1)
 
-    def plant_step_hessian(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+    def plant_step_hessian(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81, _convention=None):
         """Second-order sensitivity of the integrator step x_{k+1} = [q; v].
 
         x is (B, NUM_POS + NUM_VEL); u is (B, NUM_VEL). Returns the s_d2AB
@@ -1122,11 +1122,17 @@ class RobotHandle:
         Floating-base and multi-stage RK are deferred (the C-ABI returns rc=3 /
         raises for any other ``integrator_type``).
         """
-        self._mjx_guard_unsupported("plant_step_hessian")
         x = np.ascontiguousarray(x, dtype=self._dt)
         u = np.ascontiguousarray(u, dtype=self._dt)
         it = _integrator_code(integrator_type)
-        raw = self._runner.plant_step_hessian(x, u, float(dt), it, float(gravity))
+        if self._mjx_active(_convention) and getattr(self._runner, "has_plant_step_hessian_mujoco", False):
+            raw = self._runner.plant_step_hessian_mujoco(x, u, float(dt), it, float(gravity))
+        elif self._mjx_active(_convention):
+            raise NotImplementedError(
+                "plant_step_hessian(output_convention='mujoco') needs a floating-base .so built "
+                "with the mjx kernel (re-register with force_rebuild=True).")
+        else:
+            raw = self._runner.plant_step_hessian(x, u, float(dt), it, float(gravity))
         # raw is row-major (2*NV, 3*NV*3*NV) per timestep — reshape the trailing
         # 9*NV^2 into (3*NV, 3*NV) (C-order, no transpose: H is already row-major).
         B = raw.shape[0]

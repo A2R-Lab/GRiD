@@ -764,6 +764,39 @@ def test_native_mjx_plant_step_gradient_matches_oracle(go2_floating, it_name):
 
 @pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
 @pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+@pytest.mark.parametrize("it_name", ["euler", "si_euler"])
+def test_native_mjx_plant_step_hessian_matches_oracle(go2_floating, it_name):
+    """2nd-ORDER STATE-TRANSITION class (the last derivative surface): d2AB = d2 x_{k+1}/dz2
+    mjx (composes fdsva_so + retract hessian). Validated vs the RBDReference oracle."""
+    from RBDReference.equivalents.mujoco_convention import (
+        integrator_hessian_pin_to_mjx, FloatingRootLayout)
+    h = go2_floating
+    assert h._runner.has_plant_step_hessian_mujoco, "so missing grid_plant_step_hessian_mujoco"
+    nq, nv = h.num_joints, h.num_vel
+    layout = FloatingRootLayout()
+    dt = 0.1
+    rng = np.random.default_rng(57)
+    qpos, qvel, u = _rand_state(h, rng, 1, with_qd=True, with_u=True)
+    x = np.concatenate([qpos, qvel[:, :nv]], axis=1).astype(np.float32)
+    u_nv = u[:, :nv].astype(np.float32)
+    native = np.asarray(h.plant_step_hessian(x, u_nv, dt, integrator_type=it_name,
+                                             _convention="mujoco"), np.float64)  # (1,2NV,3NV,3NV)
+    q_pin, qd_pin, _, u_pin, R = h._mjx_inputs(qpos, qvel, u=u)
+    x_pin = np.concatenate([q_pin, qd_pin[:, :nv]], axis=1).astype(np.float32)
+    u_pin_nv = u_pin[:, :nv].astype(np.float32)
+    pin_d2AB = np.asarray(h.plant_step_hessian(x_pin, u_pin_nv, dt, integrator_type=it_name), np.float64)
+    pin_dAB = np.asarray(h.plant_step_gradient(x_pin, u_pin_nv, dt, integrator_type=it_name), np.float64)
+    qdd = np.asarray(h.forward_dynamics(q_pin, qd_pin, u_pin), np.float64)
+    exp = integrator_hessian_pin_to_mjx(
+        pin_d2AB[0], pin_dAB[0], qdd[0, :nv], qd_pin[0, :nv], u_pin[0, :nv], R[0], dt, it_name, layout)
+    assert np.allclose(native[0], exp, rtol=1e-2, atol=1e-1), \
+        f"plant_step_hessian mjx != oracle ({it_name}): max|d|={np.abs(native[0]-exp).max():.3e}"
+    raw = np.asarray(h.plant_step_hessian(x, u_nv, dt, integrator_type=it_name), np.float64)
+    assert np.abs(native[0] - raw[0]).max() > 1e-3
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
 def test_native_mjx_forward_dynamics_gradient_matches_oracle(go2_floating):
     """FULL-GRADIENT class: dqdd/d(q,qd) mjx = reframe + base-row rotate + ω×v
     couplings (qdd computed in-kernel), validated vs the RBDReference oracle."""
