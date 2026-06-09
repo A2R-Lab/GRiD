@@ -706,6 +706,64 @@ def test_native_mjx_integrator_gradient_matches_oracle(go2_floating, it_name, it
 
 @pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
 @pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_plant_step_retract(go2_floating):
+    """plant_step = integrator over the stacked state x=[q;qd]: mjx base position is a
+    GLOBAL additive step. Validates the defining property + joints-match-pin."""
+    h = go2_floating
+    assert h._runner.has_plant_step_mujoco
+    nq, nv = h.num_joints, h.num_vel
+    dt = 0.1
+    rng = np.random.default_rng(51)
+    for B in (1, 4):
+        qpos, qvel, u = _rand_state(h, rng, B, with_qd=True, with_u=True)
+        x = np.concatenate([qpos, qvel[:, :nv]], axis=1).astype(np.float32)
+        u_nv = u[:, :nv].astype(np.float32)
+        x_next = np.asarray(h.plant_step(x, u_nv, dt, _convention="mujoco"), np.float64)
+        # base position is a global additive step
+        assert np.allclose(x_next[:, :3], qpos[:, :3] + dt * qvel[:, :3], rtol=2e-3, atol=2e-3)
+        # base quaternion stays unit
+        assert np.allclose(np.linalg.norm(x_next[:, 3:7], axis=1), 1.0, atol=1e-4)
+    # non-triviality: mjx base pos differs from the pin SE(3) step
+    pin = np.asarray(h.plant_step(x, u_nv, dt), np.float64)
+    assert np.abs(x_next[0, :3] - pin[0, :3]).max() > 1e-4
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+@pytest.mark.parametrize("it_name", ["euler", "si_euler"])
+def test_native_mjx_plant_step_gradient_matches_oracle(go2_floating, it_name):
+    """plant_step_gradient = integrator_gradient over stacked x; mjx state-transition
+    Jacobian. Validated vs the RBDReference oracle (same surface as integrator_gradient)."""
+    from RBDReference.equivalents.mujoco_convention import (
+        integrator_gradient_pin_to_mjx, FloatingRootLayout)
+    h = go2_floating
+    assert h._runner.has_plant_step_gradient_mujoco
+    nq, nv = h.num_joints, h.num_vel
+    layout = FloatingRootLayout()
+    dt = 0.1
+    rng = np.random.default_rng(53)
+    for B in (1, 2):
+        qpos, qvel, u = _rand_state(h, rng, B, with_qd=True, with_u=True)
+        x = np.concatenate([qpos, qvel[:, :nv]], axis=1).astype(np.float32)
+        u_nv = u[:, :nv].astype(np.float32)
+        native = np.asarray(h.plant_step_gradient(x, u_nv, dt, integrator_type=it_name,
+                                                  _convention="mujoco"), np.float64)
+        q_pin, qd_pin, _, u_pin, R = h._mjx_inputs(qpos, qvel, u=u)
+        x_pin = np.concatenate([q_pin, qd_pin[:, :nv]], axis=1).astype(np.float32)
+        pin_dAB = np.asarray(h.plant_step_gradient(x_pin, u_pin[:, :nv].astype(np.float32), dt,
+                                                   integrator_type=it_name), np.float64)
+        Minv = np.asarray(h.minv(q_pin), np.float64)
+        qdd = np.asarray(h.forward_dynamics(q_pin, qd_pin, u_pin), np.float64)
+        exp = np.empty_like(native)
+        for b in range(B):
+            exp[b] = integrator_gradient_pin_to_mjx(
+                pin_dAB[b], Minv[b], qdd[b, :nv], qd_pin[b, :nv], u_pin[b, :nv], R[b], dt, it_name, layout)
+        assert np.allclose(native, exp, rtol=5e-3, atol=5e-2), \
+            f"plant_step_gradient mjx != oracle ({it_name}): max|d|={np.abs(native-exp).max():.3e}"
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
 def test_native_mjx_forward_dynamics_gradient_matches_oracle(go2_floating):
     """FULL-GRADIENT class: dqdd/d(q,qd) mjx = reframe + base-row rotate + ω×v
     couplings (qdd computed in-kernel), validated vs the RBDReference oracle."""

@@ -1059,20 +1059,28 @@ class RobotHandle:
         upper = np.ascontiguousarray(upper, dtype=self._dt)
         return getattr(self._runner, method)(var, lower, upper, float(mu))
 
-    def plant_step(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+    def plant_step(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81, _convention=None):
         """x_{k+1} = integrator(x_k, u_k, dt). Thin wrapper over grid::integrator.
 
         x is (B, NUM_POS + NUM_VEL); u is (B, NUM_VEL). Returns (B, NX).
         `integrator_type` is one of euler / semi_implicit_euler / midpoint /
         rk3 / rk4 (same codes as :py:meth:`integrator`).
-        """
-        self._mjx_guard_unsupported("plant_step")
+
+        With ``output_convention="mujoco"`` (floating base, EULER/SI-EULER) ``x``/``u``
+        are MuJoCo-convention and the returned next state uses the mjx global-add
+        retract (base position) + reordered quaternion."""
         x = np.ascontiguousarray(x, dtype=self._dt)
         u = np.ascontiguousarray(u, dtype=self._dt)
         it = _integrator_code(integrator_type)
+        if self._mjx_active(_convention) and getattr(self._runner, "has_plant_step_mujoco", False):
+            return self._runner.plant_step_mujoco(x, u, float(dt), it, float(gravity))
+        if self._mjx_active(_convention):
+            raise NotImplementedError(
+                "plant_step(output_convention='mujoco') needs a floating-base .so built "
+                "with the mjx kernel (re-register with force_rebuild=True).")
         return self._runner.plant_step(x, u, float(dt), it, float(gravity))
 
-    def plant_step_gradient(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+    def plant_step_gradient(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81, _convention=None):
         """[A | B] = d x_{k+1}/d(x,u) = the integrator-gradient s_dAB surface.
 
         x is (B, NUM_POS + NUM_VEL); u is (B, NUM_VEL). Returns (B, 2*NV, 3*NV)
@@ -1082,11 +1090,17 @@ class RobotHandle:
         (= ``integrator_gradient``). ``integrator_type`` is one of euler /
         semi_implicit_euler / midpoint / rk3 / rk4.
         """
-        self._mjx_guard_unsupported("plant_step_gradient")
         x = np.ascontiguousarray(x, dtype=self._dt)
         u = np.ascontiguousarray(u, dtype=self._dt)
         it = _integrator_code(integrator_type)
-        raw = self._runner.plant_step_gradient(x, u, float(dt), it, float(gravity))
+        if self._mjx_active(_convention) and getattr(self._runner, "has_plant_step_gradient_mujoco", False):
+            raw = self._runner.plant_step_gradient_mujoco(x, u, float(dt), it, float(gravity))
+        elif self._mjx_active(_convention):
+            raise NotImplementedError(
+                "plant_step_gradient(output_convention='mujoco') needs a floating-base .so built "
+                "with the mjx kernel (re-register with force_rebuild=True).")
+        else:
+            raw = self._runner.plant_step_gradient(x, u, float(dt), it, float(gravity))
         # raw is filled with the (2*NV x 3*NV) column-major dAB; recover row-major.
         B = raw.shape[0]
         NV = self.num_vel

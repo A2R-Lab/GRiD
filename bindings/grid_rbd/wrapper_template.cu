@@ -1961,6 +1961,38 @@ extern "C" int grid_plant_step(
     cudaMemcpy(x_kp1, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
+
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention plant_step (floating base only). x/u raw mjx; the kernel
+// (MUJOCO_OUTPUT=true) input-converts the stacked state + does the global-add retract.
+// EULER/SI-EULER only. Register-heavy -> launch-clamp + post-launch error check.
+template <grid::IntegratorType IT>
+static void launch_plant_step_mujoco(int batch, T gravity, T dt) {
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_kernel<T, IT, true>, g_thread_dimms);
+    grid_plant::plant_step_kernel<T, IT, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr,
+        grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>(), g_streams[0]>>>(
+            g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
+            nx, grid::NUM_VEL, g_robot, gravity, dt, batch);
+}
+extern "C" int grid_plant_step_mujoco(
+    const T* x, const T* u, T* x_kp1, int batch, float gravity, float dt, int it) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    if (plant_alloc()) return 4;
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    cudaMemcpy(g_plant.d_in_a, x, batch * nx * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_b, u, batch * grid::NUM_VEL * sizeof(T), cudaMemcpyHostToDevice);
+    GRID_RBD_IT_DISPATCH_HESSIAN(it, launch_plant_step_mujoco, batch, (T)gravity, (T)dt);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(x_kp1, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
 #endif  // GRID_PLANT_HAS_STEP
 
 #ifdef GRID_PLANT_HAS_EE_COST
@@ -2197,6 +2229,40 @@ extern "C" int grid_plant_step_gradient(
     cudaMemcpy(dAB, g_plant.d_grad, batch * dab * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
+
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention plant_step_gradient (floating base only). x/u raw mjx; the kernel
+// (MUJOCO_OUTPUT=true) input-converts the stacked state + forwards to the mjx
+// integrator_gradient_device (state-transition Jacobian). EULER/SI-EULER only.
+template <grid::IntegratorType IT>
+static void launch_plant_step_gradient_mujoco(int batch, T gravity, T dt) {
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    const int nv = grid::NUM_VEL;
+    dim3 grid_dim((unsigned)batch, 1, 1);
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT, true>, g_thread_dimms);
+    grid_plant::plant_step_gradient_kernel<T, IT, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr,
+        grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), g_streams[0]>>>(
+            g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
+            nx, nv, g_robot, gravity, dt, batch);
+}
+extern "C" int grid_plant_step_gradient_mujoco(
+    const T* x, const T* u, T* dAB, int batch, float gravity, float dt, int it) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    if (plant_alloc()) return 4;
+    const int nx = grid::NUM_POS + grid::NUM_VEL;
+    const int nv = grid::NUM_VEL;
+    cudaMemcpy(g_plant.d_in_a, x, batch * nx * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(g_plant.d_in_b, u, batch * nv * sizeof(T), cudaMemcpyHostToDevice);
+    GRID_RBD_IT_DISPATCH_HESSIAN(it, launch_plant_step_gradient_mujoco, batch, (T)gravity, (T)dt);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(dAB, g_plant.d_grad, batch * (2 * nv * 3 * nv) * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
 #endif  // GRID_PLANT_HAS_STEP_GRADIENT
 
 #ifdef GRID_PLANT_HAS_STEP_HESSIAN
