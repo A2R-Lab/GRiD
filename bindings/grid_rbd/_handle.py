@@ -947,17 +947,27 @@ class RobotHandle:
             return self._runner.integrator_mujoco(q, qd, u, float(dt), it, gravity=float(gravity))
         return self._runner.integrator(q, qd, u, float(dt), it, gravity=float(gravity))
 
-    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
+    def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81, _convention=None):
         """Gradient of the integrator step. Returns shape (B, 2*NV, 3*NV) —
         column blocks [d/dq | d/dqd | d/du] in tangent space.
 
-        `dt` is the runtime timestep; gravity is the signed gravitational acceleration (default -9.81)."""
-        self._mjx_guard_unsupported("integrator_gradient")
+        `dt` is the runtime timestep; gravity is the signed gravitational acceleration (default -9.81).
+
+        With ``output_convention="mujoco"`` (floating base, EULER/SI-EULER) ``q``/``qd``/``u``
+        are MuJoCo-convention and the returned state-transition Jacobian is in the mjx
+        tangent (global-add retract rows + G velocity reframe + input couplings, in-kernel)."""
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
         it = _integrator_code(integrator_type)
-        raw = self._runner.integrator_gradient(q, qd, u, float(dt), it, gravity=float(gravity))
+        if self._mjx_active(_convention) and getattr(self._runner, "has_integrator_gradient_mujoco", False):
+            raw = self._runner.integrator_gradient_mujoco(q, qd, u, float(dt), it, gravity=float(gravity))
+        elif self._mjx_active(_convention):
+            raise NotImplementedError(
+                "integrator_gradient(output_convention='mujoco') needs a floating-base .so built "
+                "with the mjx kernel (re-register with force_rebuild=True).")
+        else:
+            raw = self._runner.integrator_gradient(q, qd, u, float(dt), it, gravity=float(gravity))
         # h_dAB is (2*NV x 3*NV) column-major per timestep; recover row-major.
         B = raw.shape[0]
         NV = self.num_vel

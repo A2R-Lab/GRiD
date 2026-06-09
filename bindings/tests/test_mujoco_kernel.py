@@ -672,6 +672,40 @@ def test_native_mjx_fdsva_so_matches_oracle(go2_floating):
 
 @pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
 @pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+@pytest.mark.parametrize("it_name,it", [("euler", 0), ("si_euler", 1)])
+def test_native_mjx_integrator_gradient_matches_oracle(go2_floating, it_name, it):
+    """STATE-TRANSITION JACOBIAN class: dAB=[A|B]=d x_{k+1}/d[q;qd;u] mjx = global-add
+    retract rows + G velocity reframe + input-conversion column couplings. Validated vs
+    the RBDReference oracle (reuses Minv + qdd + fd-gradient in-kernel)."""
+    from RBDReference.equivalents.mujoco_convention import (
+        integrator_gradient_pin_to_mjx, FloatingRootLayout)
+    h = go2_floating
+    assert h._runner.has_integrator_gradient_mujoco, "so missing grid_rbd_integrator_gradient_mujoco"
+    nv = h.num_vel
+    layout = FloatingRootLayout()
+    dt = 0.1
+    rng = np.random.default_rng(45)
+    for B in (1, 2):
+        qpos, qvel, u = _rand_state(h, rng, B, with_qd=True, with_u=True)
+        native = np.asarray(h.integrator_gradient(qpos, qvel, u, dt, integrator_type=it_name,
+                                                  _convention="mujoco"), np.float64)  # (B,2NV,3NV)
+        q_pin, qd_pin, _, u_pin, R = h._mjx_inputs(qpos, qvel, u=u)
+        pin_dAB = np.asarray(h.integrator_gradient(q_pin, qd_pin, u_pin, dt, integrator_type=it_name), np.float64)
+        Minv = np.asarray(h.minv(q_pin), np.float64)
+        qdd = np.asarray(h.forward_dynamics(q_pin, qd_pin, u_pin), np.float64)
+        exp = np.empty_like(native)
+        for b in range(B):
+            exp[b] = integrator_gradient_pin_to_mjx(
+                pin_dAB[b], Minv[b], qdd[b, :nv], qd_pin[b, :nv], u_pin[b, :nv], R[b], dt, it_name, layout)
+        assert np.allclose(native, exp, rtol=5e-3, atol=5e-2), \
+            f"integrator_gradient mjx != oracle ({it_name}, B={B}): max|d|={np.abs(native-exp).max():.3e}"
+    # non-triviality: mjx differs from feeding raw mjx inputs to the pin gradient.
+    raw = np.asarray(h.integrator_gradient(qpos, qvel, u, dt, integrator_type=it_name), np.float64)
+    assert np.abs(native - raw).max() > 1e-3
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
 def test_native_mjx_forward_dynamics_gradient_matches_oracle(go2_floating):
     """FULL-GRADIENT class: dqdd/d(q,qd) mjx = reframe + base-row rotate + ω×v
     couplings (qdd computed in-kernel), validated vs the RBDReference oracle."""

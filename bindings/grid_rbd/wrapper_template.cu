@@ -1608,6 +1608,14 @@ static void launch_integrator_grad_host(int batch, T gravity, T dt) {
     grid::integrator_gradient<T, IT>(g_data, g_robot, /*gravity=*/gravity,
                                      dt, batch, g_block_dimms, g_thread_dimms, g_streams);
 }
+#ifdef GRID_FLOATING_BASE
+template <grid::IntegratorType IT>
+static void launch_integrator_grad_host_mujoco(int batch, T gravity, T dt) {
+    grid::integrator_gradient<T, IT, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, /*gravity=*/gravity,
+        dt, batch, g_block_dimms, g_thread_dimms, g_streams);
+}
+#endif
 
 #define GRID_RBD_IT_DISPATCH(it_code, FN, ...)                                   \
     switch (it_code) {                                                           \
@@ -1697,6 +1705,31 @@ extern "C" int grid_rbd_integrator_gradient(
                 batch * (2 * nv) * (3 * nv) * sizeof(T));
     return 0;
 }
+
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention integrator_gradient(q, qd, u, dt, it) -> dAB (2NV x 3NV) (floating
+// base only). q/qd/u raw mjx (kernel input-converts); the kernel (MUJOCO_OUTPUT=true)
+// transforms the discrete state-transition Jacobian to the mjx tangent (global-add
+// retract rows + G velocity reframe + input-conversion column couplings). EULER/SI-EULER
+// only (multistage static_asserts out). Register-heavy; post-launch error check.
+extern "C" int grid_rbd_integrator_gradient_mujoco(
+    const T* q, const T* qd, const T* u,
+    T* dAB_out, int batch, T gravity, T dt, int it)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);
+    GRID_RBD_IT_DISPATCH_HESSIAN(it, launch_integrator_grad_host_mujoco, batch, gravity, dt);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    const int nv = grid::NUM_VEL;
+    std::memcpy(dAB_out, g_data->h_dAB,
+                batch * (2 * nv) * (3 * nv) * sizeof(T));
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
 
 
 // ────────────────────────────────────────────────────────────────────────────
