@@ -1032,6 +1032,25 @@ extern "C" int grid_rbd_nonlinear_effects(const T* q, const T* qd, T* out, int b
     return 0;
 }
 
+#ifdef GRID_FLOATING_BASE
+// MuJoCo-convention nonlinear_effects(q, qd) -> c(q,qd) (floating base only). q is
+// raw mjx (kernel reorders the quaternion). The kernel (MUJOCO_OUTPUT=true) injects
+// the accel-couple delta_a (base-linear = -(omega x v_lin)) via a zeroed s_qdd then
+// base-rotates the bias output, so the returned c is the mjx-frame qfrc_bias.
+extern "C" int grid_rbd_nonlinear_effects_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::nonlinear_effects<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+                            /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, g_block_dimms, g_thread_dimms, g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_FLOATING_BASE
+
 // coriolis_matrix(q, qd) -> nv x nv Coriolis matrix C(q,qd), row-major
 // (C[row*nv + col]). Always emitted with the "all" profile (mimic-safe:
 // alpha-folded column assembly), so it is bound UNGATED like com/ccrba.

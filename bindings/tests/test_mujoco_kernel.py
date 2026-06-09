@@ -518,3 +518,41 @@ def test_native_mjx_generalized_gravity_matches_oracle(go2_floating):
             f"gravity mjx != oracle (B={B}): max|d|={np.abs(native-exp).max():.3e}"
     # non-triviality: the mjx base rows differ from the raw pin gravity.
     assert np.abs(native[:, :6] - g_pin[:, :6]).max() > 1e-2
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _GO2.exists(), reason="go2.urdf asset missing")
+def test_native_mjx_nonlinear_effects_matches_oracle(go2_floating):
+    """ACCEL-COUPLE class: mjx qfrc_bias = base-rotate(nle_pin + M·δa), δa carries the
+    floating-root −ω×v on the base-linear block (injected via a zeroed s_qdd in-kernel).
+    Validated vs the RBDReference oracle. Also asserts the floating PIN bias value did
+    NOT regress when the codegen switched it to the qdd-input path: cross-checked vs
+    C(q,qd)·qd + g(q) from the INDEPENDENT coriolis_matrix + generalized_gravity
+    kernels (neither is the bias kernel)."""
+    from RBDReference.equivalents.mujoco_convention import (
+        nonlinear_effects_pin_to_mjx, FloatingRootLayout)
+    h = go2_floating
+    assert h._runner.has_nonlinear_effects_mujoco
+    nv = h.num_vel
+    layout = FloatingRootLayout()
+    rng = np.random.default_rng(17)
+    for B in (1, 4):
+        qpos, qvel, _ = _rand_state(h, rng, B, with_qd=True)
+        native = np.asarray(h.nonlinear_effects(qpos, qvel, _convention="mujoco"), np.float64)  # (B, NV)
+        q_pin, qd_pin, _, _, R = h._mjx_inputs(qpos, qvel)
+        nle_pin = np.asarray(h.nonlinear_effects(q_pin, qd_pin), np.float64)   # (B, NV)
+        M = np.asarray(h.crba(q_pin), np.float64)                             # (B, NV, NV)
+        # PIN-VALUE REGRESSION GUARD: nle_pin == C·qd + g via independent kernels.
+        C = np.asarray(h.coriolis_matrix(q_pin, qd_pin), np.float64)          # (B, NV, NV)
+        g = np.asarray(h.generalized_gravity(q_pin), np.float64)             # (B, NV)
+        cqd_g = np.einsum("bij,bj->bi", C, qd_pin[:, :nv]) + g
+        assert np.allclose(nle_pin, cqd_g, rtol=5e-3, atol=5e-2), \
+            f"floating PIN nle regressed (B={B}): max|d|={np.abs(nle_pin-cqd_g).max():.3e}"
+        exp = np.empty_like(native)
+        for b in range(B):
+            exp[b] = nonlinear_effects_pin_to_mjx(nle_pin[b], M[b], qd_pin[b, :nv], R[b], layout)
+        assert np.allclose(native, exp, rtol=5e-3, atol=5e-2), \
+            f"nle mjx != oracle (B={B}): max|d|={np.abs(native-exp).max():.3e}"
+    # non-triviality: the mjx bias differs from feeding raw mjx q/qd to the pin bias.
+    raw = np.asarray(h.nonlinear_effects(qpos, qvel), np.float64)
+    assert np.abs(native - raw).max() > 1e-2

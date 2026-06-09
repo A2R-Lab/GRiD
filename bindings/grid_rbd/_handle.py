@@ -1164,11 +1164,23 @@ class RobotHandle:
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.generalized_gravity(q, float(gravity))
 
-    def nonlinear_effects(self, q, qd, *, gravity: float = -9.81):
+    def nonlinear_effects(self, q, qd, *, gravity: float = -9.81, _convention=None):
         """Nonlinear (bias) effects c(q,qd) = RNEA(q, qd, 0) = C(q,qd)·qd + g(q).
         Returns ``(B, NV)``. Matches ``RBDReference.nonlinear_effects(q, qd,
-        GRAVITY=gravity)``."""
-        self._mjx_guard_unsupported("nonlinear_effects")
+        GRAVITY=gravity)``.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention and the returned bias matches MuJoCo's ``qfrc_bias`` (the
+        floating-root accel-couple −ω×v is injected and the base rows rotated
+        in-kernel). Output shape is invariant ``(B, NV)``."""
+        if self._mjx_active(_convention) and getattr(self._runner, "has_nonlinear_effects_mujoco", False):
+            q = np.ascontiguousarray(q, dtype=self._dt)
+            qd = np.ascontiguousarray(qd, dtype=self._dt)
+            return self._runner.nonlinear_effects_mujoco(q, qd, float(gravity))
+        if self._mjx_active(_convention):
+            raise NotImplementedError(
+                "nonlinear_effects(output_convention='mujoco') needs a floating-base "
+                ".so built with the mjx kernel (re-register with force_rebuild=True).")
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         return self._runner.nonlinear_effects(q, qd, float(gravity))

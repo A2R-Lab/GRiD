@@ -221,6 +221,7 @@ public:
         fn_generalized_gravity_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_generalized_gravity"));
         fn_generalized_gravity_mujoco_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_generalized_gravity_mujoco"));  // floating only
         fn_nonlinear_effects_  = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_nonlinear_effects"));
+        fn_nonlinear_effects_mujoco_ = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_nonlinear_effects_mujoco"));  // floating only
         fn_frame_jacobian_     = reinterpret_cast<fn_frame_jac_t>(opt_sym("grid_rbd_frame_jacobian"));
         fn_frame_jacobian_dot_ = reinterpret_cast<fn_frame_jac_dot_t>(opt_sym("grid_rbd_frame_jacobian_dot"));
         fn_osc_inertia_        = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_osc_inertia"));
@@ -1318,6 +1319,23 @@ public:
         return out;
     }
 
+    // MuJoCo-convention nonlinear_effects(q, qd, gravity) -> (batch, NUM_VEL): mjx
+    // qfrc_bias. Floating-base .so only (the accel-couple is a floating-root effect).
+    bool has_nonlinear_effects_mujoco() const { return fn_nonlinear_effects_mujoco_ != nullptr; }
+    py::array_t<CT> nonlinear_effects_mujoco(
+        arr_t q,
+        arr_t qd,
+        float gravity)
+    {
+        if (!fn_nonlinear_effects_mujoco_) throw std::runtime_error(
+            "nonlinear_effects_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<CT> out({batch, num_vel_});
+        int rc = fn_nonlinear_effects_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_nonlinear_effects_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     // frame_jacobian(q) -> (batch, 6*NUM_VEL): leaf-EE frame Jacobian (col-major,
     // [linear;angular], LOCAL_WORLD_ALIGNED). Opt-in codegen: rc=3 if absent.
     py::array_t<CT> frame_jacobian(
@@ -1671,6 +1689,7 @@ private:
     fn_q_out_grav_t    fn_generalized_gravity_ = nullptr;
     fn_q_out_grav_t    fn_generalized_gravity_mujoco_ = nullptr;  // floating mjx (optional)
     fn_q_qd_out_grav_t fn_nonlinear_effects_   = nullptr;
+    fn_q_qd_out_grav_t fn_nonlinear_effects_mujoco_ = nullptr;  // floating mjx (optional)
     fn_frame_jac_t     fn_frame_jacobian_      = nullptr;
     fn_frame_jac_dot_t fn_frame_jacobian_dot_  = nullptr;
     fn_q_out_t         fn_osc_inertia_         = nullptr;
@@ -1869,6 +1888,9 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("generalized_gravity_mujoco", &R::generalized_gravity_mujoco,
              py::arg("q"), py::arg("gravity") = -9.81f)
         .def("nonlinear_effects", &R::nonlinear_effects,
+             py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
+        .def_property_readonly("has_nonlinear_effects_mujoco", &R::has_nonlinear_effects_mujoco)
+        .def("nonlinear_effects_mujoco", &R::nonlinear_effects_mujoco,
              py::arg("q"), py::arg("qd"), py::arg("gravity") = -9.81f)
         .def("frame_jacobian", &R::frame_jacobian,
              py::arg("q"), py::arg("target_jid") = -1, py::arg("reference_frame") = -1)
