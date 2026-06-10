@@ -108,6 +108,11 @@ DtoH copy of an `nv*nv`-written matrix — is the bug.
 - **Grep:** `get_num_vel()`/`nv`/`NUM_VEL` in per-timestep INPUT offsets, `Q_QD_U_STRIDE`,
   `NUM_POS + nv`, `2*nv + ` in load-counts/slot-widths/host-strides across `algorithms/*.py` +
   the `*_DYNAMIC_SHARED_MEM_BYTES` input-slot terms in `GRiDCodeGenerator.py`.
+- **Same family in DEBUG_MODE printf loops (2026-06-10):** a `for ind in range(n=NUM_VEL)` debug loop that
+  calls `get_*_by_id(ind)` / indexes per-jid structures (`running_sum_*_per_jid[ind]`) crashes on floating
+  (nv-index isn't a body id → `get_bfs_level_by_id` returns None) — invisible on fixed base. Iterate
+  `range(NUM_JOINTS)` and map vel-col→body-id the way the non-debug emit does. Debug-only, but `debug_mode=True`
+  codegen is how you dump kernel scratch, so it must work on floating too.
 
 ### 1f. New compile-time kernel VARIANT must be registered for `cudaFuncSetAttribute` (mjx >48KB launch fail)
 **Found adding the `MUJOCO_OUTPUT=true` kernel variants (G-cross, 2026-06-09).** Adding a new compile-time
@@ -145,6 +150,17 @@ bias/no-qdd overload is `<T, TIER>`, no MUJOCO). Templating the wrapper `<bool M
 `<T, TIER, MUJOCO>` to BOTH branches fails to compile the no-qdd branch ("no instance matches"). Route the
 mjx path through the flag-carrying overload — for ID-grad, the bias path zeros `d_qdd` and uses the qdd
 overload (matches the jax handler, which always passes qdd) under `if constexpr(MUJOCO)`.
+
+**Sibling (2026-06-10): wrapper gated on the wrong capability macro → mimic/skew robots fail to build.**
+The binding's mjx (`*_mujoco`) C-ABI handlers instantiate `grid::*<...,MUJOCO_OUTPUT=true>`, but codegen EMITS
+those template overloads only for `floating && !mimic && !skew` (the `mjx_inner`/`mjx_device` gates). They were
+`#ifdef GRID_FLOATING_BASE` — defined for ANY floating robot — so a floating+mimic robot (h1_2, 12 mimic joints)
+compiled the wrapper against overloads codegen never emitted → `grid::fdsva_so<T,GRID_DATA_ALL,true>` "no matching
+function." Fix: emit a DEDICATED capability macro whose condition mirrors the codegen emission EXACTLY
+(`GRID_RBD_WITH_MUJOCO`, defined iff `floating && !mimic && !skew`) and gate the wrapper + pybind on it; the
+pybind side already used `opt_sym` (nullptr-tolerant) so only the wrapper's compile-time instantiation was the
+hard failure. RULE: a wrapper that references a conditionally-emitted kernel variant must gate on a macro that
+tracks the EMISSION condition, not a looser proxy (floating ⊋ mjx-capable).
 
 ---
 
