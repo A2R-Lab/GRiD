@@ -66,6 +66,7 @@ def register_robot(
     allow_fp64: bool = False,
     dtype: str = "float32",
     runtime_inertia: bool = False,
+    use_joint_dynamics: bool = False,
     output_convention: str = "pinocchio",
 ) -> RobotHandle:
     """Register a robot for fast subsequent calls.
@@ -137,6 +138,15 @@ def register_robot(
         fetch-then-mutate). Re-keys the cache (the runtime-inertia .so coexists
         with the baked one). With the baked values it reproduces the baked
         result; mutate to do sysID / domain randomization / payload changes.
+    use_joint_dynamics : bool, optional
+        Model joint-local viscous damping + Coulomb friction in the value paths
+        (inverse_dynamics / forward_dynamics / aba): ``tau -= damping*qd +
+        friction*sign(qd)``, per joint, using the damping/friction declared in the
+        URDF. Default False ⇒ the historical no-op build (byte-identical header, same
+        cache key, and consistent with the bare-Pinocchio oracle which ignores
+        damping/friction). When True the bias is emitted ONLY for robots that declare
+        nonzero damping/friction; it re-keys the cache (the damped .so coexists with
+        the baked no-op one). Match against ``RBDReference(..., use_joint_dynamics=True)``.
     output_convention : str, optional
         Default IO convention for the returned handle: ``"pinocchio"`` (default,
         GRiD-native) or ``"mujoco"`` (mjx parity — wxyz quat, global-linear free-joint
@@ -173,6 +183,11 @@ def register_robot(
         raise ValueError(
             f"runtime_inertia=True is only supported for the numpy backend; the "
             f"{backend!r} backend does not yet thread the mutable inertia table. "
+            f"Use backend='numpy'.")
+    if use_joint_dynamics and backend != "numpy":
+        raise ValueError(
+            f"use_joint_dynamics=True is only supported for the numpy backend; the "
+            f"{backend!r} backend does not yet thread the joint-dynamics flag. "
             f"Use backend='numpy'.")
     if backend == "jax":
         from . import jax as _jax_backend
@@ -230,6 +245,12 @@ def register_robot(
     # and reuses its existing fp32 .so. A runtime_inertia .so lands in its own entry.
     if runtime_inertia:
         code_options["runtime_inertia"] = True
+    # Joint dynamics (viscous damping + Coulomb friction). Only inject the flag (and
+    # thus re-key the cache) when True, so a default register_robot is byte-identical
+    # to before and reuses its existing .so. A use_joint_dynamics .so lands in its own
+    # entry — a damped build never collides with the historical no-op build.
+    if use_joint_dynamics:
+        code_options["use_joint_dynamics"] = True
     cache_key = compute_cache_key(urdf_bytes, code_options, cuda_arch)
     entry_dir = store_dir(cache_dir, cache_key)
     so_path = entry_dir / "robot.so"

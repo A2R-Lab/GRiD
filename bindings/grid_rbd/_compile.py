@@ -104,7 +104,18 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # float32 -> codegen dtype "float" -> byte-identical fp32 path. The dtype is
     # in `options` so it re-keys the cache (fp32 vs fp64 .so coexist).
     codegen_dtype = "double" if options.get("dtype") == "float64" else "float"
-    cg = GRiDCodeGenerator(robot, debug_mode, FILE_NAMESPACE=file_namespace, dtype=codegen_dtype)
+
+    # Joint dynamics (viscous damping + Coulomb friction). options["use_joint_dynamics"]
+    # (default absent/False) gates the codegen `USE_JOINT_DYNAMICS` flag, which emits
+    # the joint-local bias `tau -= damping*qd + friction*sign(qd)` in the inverse_dynamics
+    # / forward_dynamics / aba value paths. Emitted ONLY when the flag is on AND the robot
+    # declares nonzero damping/friction; default-off keeps the header byte-identical (and
+    # consistent with the bare-Pinocchio CUDA-equivalence oracle, which ignores
+    # model.damping/friction). Injected into `options` (and thus the cache key) ONLY when
+    # True, so a damped .so never collides with the historical no-op .so.
+    use_joint_dynamics = bool(options.get("use_joint_dynamics", False))
+    cg = GRiDCodeGenerator(robot, debug_mode, FILE_NAMESPACE=file_namespace,
+                           dtype=codegen_dtype, USE_JOINT_DYNAMICS=use_joint_dynamics)
 
     # D.4 / Phase 5: runtime-mutable inertia table. options["runtime_inertia"]
     # (default absent/False) gates the codegen `runtime_inertia` flag (emits the
@@ -213,6 +224,8 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         params = robot.get_inertia_params_ordered_by_id()[1:]  # drop base body
         meta["runtime_inertia"] = True
         meta["inertia_params"] = [[float(v) for v in pi] for pi in params]
+    if use_joint_dynamics:
+        meta["use_joint_dynamics"] = True
     return meta
 
 
