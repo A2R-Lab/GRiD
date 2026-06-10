@@ -33,10 +33,15 @@ all = [
     "grid-rbd[jax]",
     "grid-rbd[torch]",
 ]
-# The bindings' own test deps only. The heavy comparator/oracle stack
-# (pinocchio/mjx/frax/bard) lives in the repo-root requirements-dev.txt /
-# developer_install.sh — a separate channel, deliberately not pulled in here.
+# The bindings' own test deps. pytest + BOTH backend surfaces (via [all]), since
+# the suite under tests/ imports grid_rbd.jax / grid_rbd.torch to exercise the
+# jax↔torch parity + autograd paths. The optional real-MuJoCo cross-check is
+# importorskip-guarded, so `mujoco` stays an optional add-on, not a hard dep.
+# The heavy comparator/oracle stack (pinocchio/mjx/frax/bard) lives in the
+# repo-root requirements-dev.txt / developer_install.sh — a separate channel,
+# deliberately not pulled in here.
 dev = [
+    "grid-rbd[all]",
     "pytest>=7.0",
 ]
 

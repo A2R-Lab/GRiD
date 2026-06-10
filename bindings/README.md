@@ -225,7 +225,7 @@ pip install -e "bindings/"          # base: numpy handle only
 pip install -e "bindings/[jax]"     # + JAX FFI surface (grid_rbd.jax)
 pip install -e "bindings/[torch]"   # + torch backend (backend="torch")
 pip install -e "bindings/[all]"     # jax + torch (both backends)
-pip install -e "bindings/[dev]"     # + pytest (run the bindings' tests)
+pip install -e "bindings/[dev]"     # all backends + pytest (run the bindings' tests)
 ```
 
 | Extra | Pulls in | Unlocks |
@@ -234,7 +234,7 @@ pip install -e "bindings/[dev]"     # + pytest (run the bindings' tests)
 | `[jax]` | + jax | JAX FFI surface — `import grid_rbd.jax` (device-resident, `jax.jit`-able) |
 | `[torch]` | + torch | torch backend — `register_robot(..., backend="torch")`, autograd + CUDA-Graphs |
 | `[all]` | jax + torch | both backend surfaces (recursive self-extra; no dev/bench weight) |
-| `[dev]` | + pytest | run the bindings' own test suite |
+| `[dev]` | jax + torch + pytest | run the bindings' own test suite (which exercises both backends; the real-MuJoCo cross-check is optional/skipped if `mujoco` is absent) |
 
 Notes:
 
