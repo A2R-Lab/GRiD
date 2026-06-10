@@ -72,6 +72,39 @@ def _call(handle_method, key, inp):
     raise KeyError(key)
 
 
+# Thread counts to try per function (the FFI's single global default is the
+# register-clamped min, e.g. 448 for go2, which is PATHOLOGICALLY slow for
+# id_gradient — a hard cliff at 448->449, up to 154x at B=4096). The native
+# benchmark autotunes per kernel; here we mimic that by timing a few counts and
+# taking the best (thread-invariant kernels => byte-identical output). See memory
+# project_grid_jax_ffi_thread_pathology.
+_TUNE_THREADS = [128, 256, 384, 512]
+
+
+def _runner_of(jh):
+    return getattr(jh, "_runner", None) or getattr(getattr(jh, "_base", None), "_runner", None)
+
+
+def _bench_tuned(runner, thunk, reps):
+    """Best (median, threads) over _TUNE_THREADS (+ the FFI default). Mimics the
+    native per-kernel autotune so GRiD is measured at its real best, not the
+    pathological global-min default."""
+    if runner is None:
+        m, _ = _bench_jax(thunk, reps=reps)
+        return m, None
+    cands = sorted(set(_TUNE_THREADS + [int(runner.max_perf_level_threads)]))
+    best_med, best_thr = None, None
+    for thr in cands:
+        try:
+            runner.set_threads_per_block(int(thr))
+        except Exception:
+            continue
+        med, _ = _bench_jax(thunk, reps=reps)
+        if best_med is None or med < best_med:
+            best_med, best_thr = med, runner.threads_per_block
+    return best_med, best_thr
+
+
 def run_grid(robot, batches, reps):
     import grid_rbd.jax as gjax
     urdf = _ASSETS / f"{robot}.urdf"
@@ -79,6 +112,7 @@ def run_grid(robot, batches, reps):
     # is contestant A (forces mjx per-call). Keeps A/B cleanly separated.
     jh = gjax.register_robot(f"{robot}_mjx_sweep", str(urdf), floating_base=True,
                              max_batch_size=max(batches))
+    runner = _runner_of(jh)
     rows = []
     for B in batches:
         inp = _make_inputs(jh, B, None)
@@ -87,13 +121,14 @@ def run_grid(robot, batches, reps):
                 continue
             a_fn = _call(getattr(jh.mujoco, mname), key, inp)   # A: mjx
             b_fn = _call(getattr(jh, mname), key, inp)          # B: pin
-            a_med, a_min = _bench_jax(a_fn, reps=reps)
-            b_med, b_min = _bench_jax(b_fn, reps=reps)
+            # thread-tuned (each contestant at its best thread count, fair vs jitted MJX)
+            a_med, a_thr = _bench_tuned(runner, a_fn, reps)
+            b_med, b_thr = _bench_tuned(runner, b_fn, reps)
             rows.append(dict(robot=robot, fn=label, batch=B,
-                             A_grid_mjx_ms=a_med, A_min=a_min,
-                             B_grid_pin_ms=b_med, B_min=b_min,
+                             A_grid_mjx_ms=a_med, A_threads=a_thr,
+                             B_grid_pin_ms=b_med, B_threads=b_thr,
                              mjx_epilogue_overhead_pct=100.0 * (a_med - b_med) / b_med if b_med else None))
-            print(f"  [{robot:4} {label:26} B={B:5}] A(mjx)={a_med:8.4f}ms  B(pin)={b_med:8.4f}ms  "
+            print(f"  [{robot:4} {label:26} B={B:5}] A(mjx)={a_med:8.4f}ms(@{a_thr})  B(pin)={b_med:8.4f}ms(@{b_thr})  "
                   f"epilogue +{rows[-1]['mjx_epilogue_overhead_pct']:.1f}%")
     return rows
 
