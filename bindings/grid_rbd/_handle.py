@@ -199,6 +199,12 @@ class RobotHandle:
         plant/cost  plant_step[_gradient|_hessian] · quadratic_state_cost ·
                     quadratic_input_cost · ee_pos_cost · com_cost ·
                     momentum_cost · joint_{position,velocity,torque}_barrier
+        sysID/param inverse_dynamics_regressor · inertia_params ·
+                    set_inertia_params (runtime-mutable inertia, no recompile)
+        runtime-EE  end_effector_pose_runtime[_gradient] (arbitrary target joints)
+
+    ``handle.mujoco`` is the MuJoCo-convention view of the differentiable methods
+    (mjx free-joint frame, applied per-call; safe alongside pinocchio-convention calls).
 
     Short aliases: ``rnea`` → :py:meth:`inverse_dynamics`,
     ``fd`` → :py:meth:`forward_dynamics` (``aba`` / ``crba`` / ``minv`` already
