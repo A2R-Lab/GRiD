@@ -31,6 +31,11 @@ FUNCS = [
     ("inverse_dynamics_gradient", "inverse_dynamics_gradient", "id"),
 ]
 
+# When set (via --funcs), only these labels are timed on A/B/C. None = all.
+FUNC_FILTER = None
+def _active(label):
+    return FUNC_FILTER is None or label in FUNC_FILTER
+
 
 def _bench_jax(fn, *args, reps, warmup=5):
     """Median wall-clock (ms) of fn(*args), block_until_ready each rep. fn returns jax array(s)."""
@@ -78,6 +83,8 @@ def run_grid(robot, batches, reps):
     for B in batches:
         inp = _make_inputs(jh, B, None)
         for label, mname, key in FUNCS:
+            if not _active(label):
+                continue
             a_fn = _call(getattr(jh.mujoco, mname), key, inp)   # A: mjx
             b_fn = _call(getattr(jh, mname), key, inp)          # B: pin
             a_med, a_min = _bench_jax(a_fn, reps=reps)
@@ -175,6 +182,8 @@ def run_mjx_native_batched(robot, batches, reps):
             ("end_effector_pose",         lambda: ee_fn(q)),
             ("inverse_dynamics_gradient", lambda: idg_fn(q, v, a)),
         ]:
+            if not _active(label):
+                continue
             try:
                 med, mn = _bench_jax(thunk, reps=reps)
                 cells[label] = med
@@ -193,8 +202,13 @@ def main():
     ap.add_argument("--batches", nargs="+", type=int, default=[1, 16, 64, 256, 1024, 4096])
     ap.add_argument("--reps", type=int, default=50)
     ap.add_argument("--skip-mjx", action="store_true", help="skip contestant C (MJX native)")
+    ap.add_argument("--funcs", nargs="+", default=None,
+                    help="subset of function labels to time (e.g. inverse_dynamics_gradient). Default: all 4.")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
+    if args.funcs:
+        global FUNC_FILTER
+        FUNC_FILTER = set(args.funcs)
 
     all_rows = []
     for robot in args.robots:
