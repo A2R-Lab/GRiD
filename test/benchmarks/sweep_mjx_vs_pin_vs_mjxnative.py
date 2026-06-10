@@ -78,7 +78,7 @@ def _call(handle_method, key, inp):
 # benchmark autotunes per kernel; here we mimic that by timing a few counts and
 # taking the best (thread-invariant kernels => byte-identical output). See memory
 # project_grid_jax_ffi_thread_pathology.
-_TUNE_THREADS = [128, 256, 384, 512]
+_TUNE_THREADS = [256, 512, 640, 768, 1024]
 
 
 def _runner_of(jh):
@@ -97,9 +97,9 @@ def _bench_tuned(runner, thunk, reps):
     for thr in cands:
         try:
             runner.set_threads_per_block(int(thr))
+            med, _ = _bench_jax(thunk, reps=reps)
         except Exception:
-            continue
-        med, _ = _bench_jax(thunk, reps=reps)
+            continue  # thread count rejected (e.g. > kernel launch bounds) — skip
         if best_med is None or med < best_med:
             best_med, best_thr = med, runner.threads_per_block
     return best_med, best_thr
