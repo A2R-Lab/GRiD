@@ -523,6 +523,49 @@ class TorchRobotHandle:
     def floating_base(self) -> bool: return self._base.floating_base
     @property
     def max_batch(self) -> int:   return self._base.max_batch
+    @property
+    def dtype(self) -> str:
+        """Compute precision of the underlying .so (``"float32"`` / ``"float64"``).
+        The torch surface is strictly fp32; this mirrors the base handle's report."""
+        return self._base.dtype
+
+    # ─── runtime-mutable inertia (D.4 / sysID) ───────────────────────────
+    @property
+    def runtime_inertia(self) -> bool:
+        """True if this robot was registered with ``runtime_inertia=True`` (the
+        .so carries a mutable inertia table + :py:meth:`set_inertia_params`)."""
+        return self._base.runtime_inertia
+
+    @property
+    def inertia_params(self):
+        """The BAKED 10-param-per-body inertia table, shape ``(num_bodies, 10)``
+        (``[m, h(3), I_O(6)]`` per body). Fetch, mutate, and pass to
+        :py:meth:`set_inertia_params`. Only on a ``runtime_inertia`` build."""
+        return self._base.inertia_params
+
+    def set_inertia_params(self, params) -> None:
+        """Update the device-resident inertia table at runtime (no recompile).
+        ``params`` is the ``(num_bodies, 10)`` (or flat ``10*num_bodies``) table in
+        the same basis as :py:attr:`inertia_params`. Only valid on a robot
+        registered with ``runtime_inertia=True``."""
+        self._base.set_inertia_params(params)
+
+    # ─── kernel launch configuration ─────────────────────────────────────
+    @property
+    def max_perf_level_threads(self) -> int:
+        """Codegen-time thread-count hint (DOF-aware, warp-rounded); the default
+        per-block thread count for kernel launches."""
+        return self._base.max_perf_level_threads
+
+    @property
+    def threads_per_block(self) -> int:
+        """Current per-block thread count used by kernel launches."""
+        return self._base.threads_per_block
+
+    def set_threads_per_block(self, n: int) -> None:
+        """Override the per-block thread count for all subsequent kernel launches
+        issued through the underlying .so. Default: :py:attr:`max_perf_level_threads`."""
+        self._base.set_threads_per_block(n)
 
     # ─── output convention (mjx parity) ──────────────────────────────────
     @property
@@ -943,6 +986,19 @@ class TorchRobotHandle:
         """
         op = getattr(self, method)
         return GraphCallable(op, example_inputs, kwargs)
+
+    # ─── lifecycle ───────────────────────────────────────────────────────────
+
+    def close(self) -> None:
+        """Release the underlying .so handle (delegates to the base RobotHandle).
+        Idempotent. The process-global torch op-library registration is unaffected."""
+        self._base.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
 
     def __repr__(self) -> str:
         return (f"TorchRobotHandle(name={self.name!r}, num_joints={self.num_joints}, "
