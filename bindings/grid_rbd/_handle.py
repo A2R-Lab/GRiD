@@ -376,6 +376,27 @@ class RobotHandle:
         return bool(self._meta.get("runtime_inertia", False))
 
     @property
+    def joint_pos_limits(self):
+        """Per-joint position limits ``[lower, upper]`` (index == joint id), from
+        the URDF ``<limit lower= upper=>``. ``None`` for a joint with no position
+        limit (fixed / continuous / floating / unspecified); an unbounded side is
+        ``None``. Metadata only — not enforced by any kernel. Returns ``None`` on
+        a .so registered before limits were persisted (re-register to populate)."""
+        return self._meta.get("joint_pos_limits")
+
+    @property
+    def joint_vel_limits(self):
+        """Per-joint velocity limits (index == joint id) from the URDF
+        ``<limit velocity=>``; ``None`` where unspecified. Metadata only."""
+        return self._meta.get("joint_vel_limits")
+
+    @property
+    def joint_effort_limits(self):
+        """Per-joint effort (torque) limits (index == joint id) from the URDF
+        ``<limit effort=>``; ``None`` where unspecified. Metadata only."""
+        return self._meta.get("joint_effort_limits")
+
+    @property
     def inertia_params(self):
         """The BAKED 10-param-per-body inertia table, shape ``(num_bodies, 10)``.
 

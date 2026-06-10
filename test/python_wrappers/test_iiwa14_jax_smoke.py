@@ -471,6 +471,19 @@ def test_ptier1_com_ccrba_tuple_matches_plain(jax_handle, plain_handle, samples)
             assert np.max(np.abs(a - b)) < _TOL, f"{name}[{i}]: {np.max(np.abs(a - b)):.3e}"
 
 
+def test_joint_limits_metadata(plain_handle):
+    """URDF <limit> velocity/effort + position limits surface on the handle
+    (metadata; iiwa14 has velocity 1.48 rad/s and effort 320 Nm on joint 0)."""
+    nj = plain_handle.num_joints
+    assert len(plain_handle.joint_pos_limits) == nj
+    assert len(plain_handle.joint_vel_limits) == nj
+    assert len(plain_handle.joint_effort_limits) == nj
+    assert plain_handle.joint_effort_limits[0] == 320.0
+    assert abs(plain_handle.joint_vel_limits[0] - 1.4835298641951802) < 1e-9
+    lo, hi = plain_handle.joint_pos_limits[0]
+    assert lo < 0 < hi
+
+
 def test_ptier1_runtime_ee_matches_plain(jax_handle, plain_handle, samples):
     """Runtime-target multi-EE pose + gradient on the jax surface must match the
     numpy oracle — default (all leaves) and an explicit name list with offsets."""

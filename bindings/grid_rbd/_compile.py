@@ -168,10 +168,30 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # joint_names (index == joint id) + leaf_jids let the handle's runtime-target
     # list API resolve ee_joint_names -> jids (mirrors RBDReference
     # select_end_effector_joints) without a robot model on the Python side.
+    import math
+
+    def _jsafe(v):
+        # ±inf is not valid JSON; serialize unbounded / unspecified limits as null.
+        if v is None:
+            return None
+        try:
+            return None if math.isinf(float(v)) else float(v)
+        except (TypeError, ValueError):
+            return None
+
     joint_names = []
+    # per-joint limits (index == jid), surfaced on the handle as metadata only
+    # (not consumed by any kernel). pos = [lower, upper], vel/effort = scalar.
+    joint_pos_limits = []
+    joint_vel_limits = []
+    joint_effort_limits = []
     for jid in range(robot.get_num_joints()):
         joint = robot.get_joint_by_id(jid)
         joint_names.append(joint.get_name() if joint is not None else "")
+        lim = robot.get_joint_limits_by_id(jid) or []
+        joint_pos_limits.append([_jsafe(lim[0]), _jsafe(lim[1])] if len(lim) == 2 else None)
+        joint_vel_limits.append(_jsafe(robot.get_velocity_limit_by_id(jid)))
+        joint_effort_limits.append(_jsafe(robot.get_effort_limit_by_id(jid)))
     meta = {
         "num_joints": robot.get_num_pos(),
         "num_vel": robot.get_num_vel(),
@@ -179,6 +199,9 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         "floating_base": bool(robot.floating_base),
         "joint_names": joint_names,
         "leaf_jids": [int(j) for j in robot.get_leaf_nodes()],
+        "joint_pos_limits": joint_pos_limits,
+        "joint_vel_limits": joint_vel_limits,
+        "joint_effort_limits": joint_effort_limits,
     }
     # D.4 / Phase 5: when the mutable-inertia table is generated, persist the
     # BAKED 10-param-per-body table so the handle can expose it (fetch-then-mutate
