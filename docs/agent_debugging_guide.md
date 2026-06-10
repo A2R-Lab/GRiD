@@ -642,6 +642,8 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   to see what's actually emitted; (c) grep the validating smoke-runner/test for the robot. A wrapper comment
   that says "NOT emitted for mimic / returns rc=3" is describing the `#else` branch, NOT proof the `#ifdef`
   is off — confirm which branch a real mimic robot takes. When you find a stale comment, FIX IT in the same pass.
+  Also: grep for the WRAPPING MACRO, not just the literal API — "smoke runners miss `cudaGetLastError`" was a false
+  positive; every runner checks launches via the `gpuErrchkKernel()` macro (count `gpuErrchk` ≥ `<<<`, not `cudaGetLastError`).
 - **A sharp deferral beats a wrong value path.** When a fix can't be made bit-exact, REVERT and
   document a precise resume hint (which tensor/cell/stride, what was ruled out) rather than ship
   silently-wrong numbers. Several "deferred" items came back and landed fast because the prior
