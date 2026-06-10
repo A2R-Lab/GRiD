@@ -21,6 +21,10 @@ library and doesn't trigger a recompile.
 
 Surface (parity with the plain ``RobotHandle``):
   ``inverse_dynamics``, ``minv``, ``forward_dynamics``, ``aba``, ``crba``,
+  ``generalized_gravity``, ``nonlinear_effects``, ``energy``, ``com``, ``ccrba``,
+  ``dccrba``, ``cmm_time_variation``, ``coriolis_matrix``,
+  ``kinetic_energy_regressor``, ``potential_energy_regressor``,
+  ``frame_jacobian``, ``frame_jacobian_dot``, ``osc_inertia``,
   ``end_effector_pose``, ``end_effector_pose_gradient``,
   ``end_effector_pose_hessian``, ``inverse_dynamics_gradient``, ``forward_dynamics_gradient``,
   ``idsva_so``, ``fdsva_so``, plus the grid_plant cost / barrier / plant-step
@@ -875,6 +879,221 @@ class JaxRobotHandle:
         flat = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(
             q, gravity=np.float32(gravity))
         return flat.reshape(q.shape[:-1] + (nv, nv))
+
+    # ─── centroidal / energy / kinematics value methods (numpy-handle parity) ──
+    #
+    # Mirror the numpy RobotHandle's centroidal / energy / regressor / frame
+    # methods exactly (same FFI symbols `grid_rbd_jax_<method>`, same
+    # gravity/int attrs, same output reshape). Forward-only (no custom_vjp),
+    # matching the numpy surface. The reshapes are copied VERBATIM from
+    # `_handle.py` (the oracle) with the leading batch dim taken from
+    # ``q.shape[:-1]`` so they also compose under ``jax.vmap``.
+
+    def generalized_gravity(self, q, *, gravity: float = -9.81, _convention=None):
+        """Generalized gravity torque g(q) = RNEA(q, 0, 0). Returns (B, NV).
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
+        and the returned g is in the mjx frame (base rows rotated in-kernel)."""
+        import jax
+        import numpy as np
+        target = self._mt(_convention, "generalized_gravity", "grid_rbd_jax_generalized_gravity")
+        (q,), B = self._prep_2d("generalized_gravity", q)
+        nv = self.num_vel
+        return jax.ffi.ffi_call(target, self._out(q, nv), vmap_method="broadcast_all")(
+            q, gravity=np.float32(gravity))
+
+    def nonlinear_effects(self, q, qd, *, gravity: float = -9.81, _convention=None):
+        """Nonlinear (bias) effects c(q,qd) = RNEA(q, qd, 0). Returns (B, NV).
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention and the returned bias matches MuJoCo's ``qfrc_bias``."""
+        import jax
+        import numpy as np
+        target = self._mt(_convention, "nonlinear_effects", "grid_rbd_jax_nonlinear_effects")
+        (q, qd), B = self._prep_2d("nonlinear_effects", q, qd)
+        nv = self.num_vel
+        return jax.ffi.ffi_call(target, self._out(q, nv), vmap_method="broadcast_all")(
+            q, qd, gravity=np.float32(gravity))
+
+    def energy(self, q, qd, *, gravity: float = -9.81, _convention=None):
+        """Kinetic / potential / mechanical energy. Returns (B, 3) = [KE, PE, KE+PE].
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention; the energies are frame-INVARIANT (inputs converted in-kernel)."""
+        import jax
+        import numpy as np
+        target = self._mt(_convention, "energy", "grid_rbd_jax_energy")
+        (q, qd), B = self._prep_2d("energy", q, qd)
+        return jax.ffi.ffi_call(target, self._out(q, 3), vmap_method="broadcast_all")(
+            q, qd, gravity=np.float32(gravity))
+
+    def com(self, q, *, _convention=None):
+        """Center-of-mass world position p_com and CoM Jacobian J_com.
+
+        Returns ``(p_com, J_com)`` where ``p_com`` is ``(B, 3)`` and ``J_com``
+        is ``(B, 3, NV)`` = ``d(p_com)/dv``. The FFI returns one flat ``(B, 3 + 3*NV)``
+        buffer ``[p_com(3); J_com(3 x NV col-major)]`` (split mirrors the numpy handle).
+
+        With ``output_convention="mujoco"`` (floating base) ``p_com`` is invariant
+        and the ``J_com`` columns are reframed (computed in-kernel)."""
+        import jax
+        target = self._mt(_convention, "com", "grid_rbd_jax_com")
+        (q,), B = self._prep_2d("com", q)
+        nv = self.num_vel
+        raw = jax.ffi.ffi_call(target, self._out(q, 3 + 3 * nv), vmap_method="broadcast_all")(q)
+        lead = q.shape[:-1]
+        p_com = raw[..., :3]
+        # J_com stored column-major (3 x NV): J[r + 3*c]; recover (..., 3, NV).
+        j_com = raw[..., 3:].reshape(lead + (nv, 3)).swapaxes(-2, -1)
+        return p_com, j_com
+
+    def ccrba(self, q, qd, *, _convention=None):
+        """Centroidal momentum matrix A (6 x NV) and momentum h = A·qd (6,).
+
+        Returns ``(A, h)`` where ``A`` is ``(B, 6, NV)`` and ``h`` is ``(B, 6)``.
+        The FFI returns one flat ``(B, 6*NV + 6)`` buffer ``[A(6 x NV col-major); h(6)]``.
+
+        With ``output_convention="mujoco"`` (floating base) ``h`` is invariant and
+        the ``A`` columns are reframed (computed in-kernel)."""
+        import jax
+        target = self._mt(_convention, "ccrba", "grid_rbd_jax_ccrba")
+        (q, qd), B = self._prep_2d("ccrba", q, qd)
+        nv = self.num_vel
+        raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv + 6), vmap_method="broadcast_all")(q, qd)
+        lead = q.shape[:-1]
+        A = raw[..., : 6 * nv].reshape(lead + (nv, 6)).swapaxes(-2, -1)
+        h = raw[..., 6 * nv:]
+        return A, h
+
+    def dccrba(self, q, *, _convention=None):
+        """dCCRBA tensor ∂A/∂q, shape ``(B, 6, NV, NV)`` indexed
+        ``[:, :, k, i] = ∂A[:, k]/∂q_i`` (Pinocchio centroidal convention).
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
+        and the returned tensor is the dA/dq of the mjx CMM (same layout)."""
+        import jax
+        target = self._mt(_convention, "dccrba", "grid_rbd_jax_dccrba")
+        (q,), B = self._prep_2d("dccrba", q)
+        nv = self.num_vel
+        raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv * nv), vmap_method="broadcast_all")(q)
+        lead = q.shape[:-1]
+        # flat layout dA[row + 6*k + 6*NV*m] -> (..., m, k, row) then -> (..., row, k, m).
+        return raw.reshape(lead + (nv, nv, 6)).swapaxes(-3, -1)
+
+    def cmm_time_variation(self, q, qd, *, _convention=None):
+        """Centroidal-momentum-matrix time variation Ȧ = dA(q(t))/dt, shape
+        ``(B, 6, NV)`` = ``Σ_i (∂A/∂q_i)·qd_i``.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention and Ȧ has its columns reframed (computed in-kernel)."""
+        import jax
+        target = self._mt(_convention, "cmm_time_variation", "grid_rbd_jax_cmm_time_variation")
+        (q, qd), B = self._prep_2d("cmm_time_variation", q, qd)
+        nv = self.num_vel
+        raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(q, qd)
+        # (B, 6*NV) col-major A[r + 6*c] -> (..., NV, 6) -> (..., 6, NV).
+        return raw.reshape(q.shape[:-1] + (nv, 6)).swapaxes(-2, -1)
+
+    def coriolis_matrix(self, q, qd, *, gravity: float = -9.81, _convention=None):
+        """Coriolis matrix C(q,qd). Returns ``(B, NV, NV)`` row-major, with
+        ``C·qd + g(q) = nonlinear_effects(q, qd)`` (gravity unused by C; the
+        kwarg mirrors the host wrapper signature).
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention and the returned ``C`` is the mjx-frame Coriolis matrix."""
+        import jax
+        import numpy as np
+        target = self._mt(_convention, "coriolis_matrix", "grid_rbd_jax_coriolis_matrix")
+        (q, qd), B = self._prep_2d("coriolis_matrix", q, qd)
+        nv = self.num_vel
+        raw = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(
+            q, qd, gravity=np.float32(gravity))
+        return raw.reshape(q.shape[:-1] + (nv, nv))  # row-major
+
+    def kinetic_energy_regressor(self, q, qd, *, gravity: float = -9.81, _convention=None):
+        """Kinetic-energy regressor y_KE, length ``10*num_bodies``, with
+        ``KE = y_KE · π``. Returns ``(B, 10*num_bodies)`` (gravity unused).
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention; the regressor is frame-INVARIANT (inputs converted in-kernel)."""
+        import jax
+        import numpy as np
+        target = self._mt(_convention,
+            "kinetic_energy_regressor", "grid_rbd_jax_kinetic_energy_regressor")
+        (q, qd), B = self._prep_2d("kinetic_energy_regressor", q, qd)
+        npar = 10 * self.num_bodies
+        return jax.ffi.ffi_call(target, self._out(q, npar), vmap_method="broadcast_all")(
+            q, qd, gravity=np.float32(gravity))
+
+    def potential_energy_regressor(self, q, *, gravity: float = -9.81, _convention=None):
+        """Potential-energy regressor y_PE, length ``10*num_bodies``, with
+        ``PE = y_PE · π`` (PE uses ``gravity``). Returns ``(B, 10*num_bodies)``.
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention;
+        the regressor is frame-INVARIANT (input converted in-kernel)."""
+        import jax
+        import numpy as np
+        target = self._mt(_convention,
+            "potential_energy_regressor", "grid_rbd_jax_potential_energy_regressor")
+        (q,), B = self._prep_2d("potential_energy_regressor", q)
+        npar = 10 * self.num_bodies
+        return jax.ffi.ffi_call(target, self._out(q, npar), vmap_method="broadcast_all")(
+            q, gravity=np.float32(gravity))
+
+    def frame_jacobian(self, q, *, target_jid=None, reference_frame=None, _convention=None):
+        """Geometric Jacobian (6 x NV, ``[linear; angular]``) of a frame.
+        Returns ``(B, 6, NV)``.
+
+        ``target_jid`` selects the frame's joint id (default: the leaf
+        end-effector joint baked at codegen time). ``reference_frame`` is
+        ``'LOCAL'`` (0), ``'WORLD'`` (1), or ``'LOCAL_WORLD_ALIGNED'`` (2, the
+        default), or the equivalent int — passed as int64 FFI attrs.
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
+        and the returned Jacobian is column-reframed ``J G⁻¹`` (mjx frame)."""
+        import jax
+        import numpy as np
+        from .._handle import _resolve_frame_args
+        target = self._mt(_convention, "frame_jacobian", "grid_rbd_jax_frame_jacobian")
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        (q,), B = self._prep_2d("frame_jacobian", q)
+        nv = self.num_vel
+        raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(
+            q, target_jid=np.int64(tj), reference_frame=np.int64(rf))
+        # (B, 6*NV) col-major J[r + 6*c] -> (..., NV, 6) -> (..., 6, NV).
+        return raw.reshape(q.shape[:-1] + (nv, 6)).swapaxes(-2, -1)
+
+    def frame_jacobian_dot(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
+        """Time derivative Jdot of :py:meth:`frame_jacobian` along v = qd
+        (6 x NV, ``[linear; angular]``). Returns ``(B, 6, NV)``.
+
+        ``target_jid`` / ``reference_frame`` are runtime int64 FFI attrs (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention and Jdot is column-reframed (mjx frame)."""
+        import jax
+        import numpy as np
+        from .._handle import _resolve_frame_args
+        target = self._mt(_convention, "frame_jacobian_dot", "grid_rbd_jax_frame_jacobian_dot")
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        (q, qd), B = self._prep_2d("frame_jacobian_dot", q, qd)
+        nv = self.num_vel
+        raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(
+            q, qd, target_jid=np.int64(tj), reference_frame=np.int64(rf))
+        return raw.reshape(q.shape[:-1] + (nv, 6)).swapaxes(-2, -1)
+
+    def osc_inertia(self, q, *, _convention=None):
+        """Operational-space (task) inertia Lambda = (J·M⁻¹·Jᵀ)⁻¹ (6 x 6) for
+        the leaf-EE frame (LWA). Returns ``(B, 6, 6)``.
+
+        With ``output_convention="mujoco"`` the MuJoCo ``q`` is reordered before the
+        kinematics build (Lambda is otherwise frame-INVARIANT)."""
+        import jax
+        target = self._mt(_convention, "osc_inertia", "grid_rbd_jax_osc_inertia")
+        (q,), B = self._prep_2d("osc_inertia", q)
+        raw = jax.ffi.ffi_call(target, self._out(q, 36), vmap_method="broadcast_all")(q)
+        return raw.reshape(q.shape[:-1] + (6, 6))
 
     def end_effector_pose(self, q, *, _convention=None):
         """End-effector pose [xyz, rpy] per EE. Returns (B, 6*NUM_EES).

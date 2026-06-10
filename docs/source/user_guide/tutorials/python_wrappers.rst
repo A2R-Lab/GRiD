@@ -211,9 +211,12 @@ JAX surface: the core dynamics / kinematics / SO methods are bound via
 FFI and JIT-compatible (the SO methods ``idsva_so`` / ``fdsva_so`` follow
 the plain wrapper's tuple-of-four convention), with autograd-aware
 ``inverse_dynamics`` / ``forward_dynamics`` (qdd-aware), ``end_effector_pose``,
-``f_ext`` parity, and the inertial-parameter (π) regressor VJP path. The newer
-value ops (``coriolis_matrix``, the energy regressors, ``dccrba`` /
-``cmm_time_variation``) are currently exposed on the numpy ``RobotHandle`` only.
+``f_ext`` parity, and the inertial-parameter (π) regressor VJP path. The
+centroidal / kinematics value ops (``generalized_gravity``,
+``nonlinear_effects``, ``energy``, ``com``, ``ccrba``, ``dccrba``,
+``cmm_time_variation``, ``coriolis_matrix``, ``frame_jacobian`` /
+``frame_jacobian_dot``, ``osc_inertia``, and the KE/PE regressors) are now
+exposed on the jax and torch surfaces too (forward-only, no autograd).
 
 PyTorch backend (``backend="torch"``)
 -------------------------------------

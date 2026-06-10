@@ -102,6 +102,28 @@ def _frame_args(target_jid, reference_frame):
     return tj, rf
 
 
+def _resolve_frame_args(meta, target_jid, reference_frame):
+    """Like :func:`_frame_args` but resolves the ``-1`` "use default" sentinels
+    to concrete values for the jax/torch DIRECT-kernel FFI path.
+
+    The numpy C-ABI goes through the ``grid::frame_jacobian`` host launcher,
+    which resolves ``target_jid<0`` -> leaf-EE (codegen ``get_leaf_nodes()[0]``)
+    and ``reference_frame<0`` -> ``LOCAL_WORLD_ALIGNED`` (2) before the launch.
+    The FFI/torch handlers launch the kernel directly and do NOT resolve, so the
+    Python wrapper must substitute the same defaults the launcher bakes in."""
+    tj, rf = _frame_args(target_jid, reference_frame)
+    if tj < 0:
+        leaf = meta.get("leaf_jids")
+        if not leaf:
+            raise RuntimeError(
+                "this .so predates the runtime-target API (no leaf_jids in "
+                "meta.json); re-register with force_rebuild=True")
+        tj = int(leaf[0])  # mirrors codegen default_tjid = get_leaf_nodes()[0]
+    if rf < 0:
+        rf = 2  # LOCAL_WORLD_ALIGNED default
+    return tj, rf
+
+
 class _MujocoView:
     """MuJoCo-native view over a :class:`RobotHandle` (``handle.mujoco``).
 

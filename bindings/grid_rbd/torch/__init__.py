@@ -8,6 +8,13 @@ sysID ops inverse_dynamics_wrt_params / forward_dynamics_wrt_params) carry
 analytic backward passes that reuse the existing ``*_gradient`` / regressor
 kernels; the rest are forward-only ops.
 
+The forward-only centroidal / energy / kinematics surface mirrors the numpy
+handle: ``generalized_gravity``, ``nonlinear_effects``, ``energy``, ``com``,
+``ccrba``, ``dccrba``, ``cmm_time_variation``, ``coriolis_matrix``,
+``kinetic_energy_regressor``, ``potential_energy_regressor``, ``frame_jacobian``,
+``frame_jacobian_dot``, ``osc_inertia`` (the gated ones raise an actionable
+"not generated for this robot" error when their kernel is absent from the .so).
+
 The grid_plant cost / barrier / plant-step surface is also exposed
 (``plant_step``, ``plant_step_gradient``, ``quadratic_state_cost``,
 ``quadratic_input_cost``, ``ee_pos_cost``, ``joint_position_barrier``,
@@ -626,6 +633,20 @@ class TorchRobotHandle:
             return getattr(self._ops, name + "_mujoco")
         return getattr(self._ops, name)
 
+    def _gated_op(self, conv, name):
+        """Like :py:meth:`_op` but for the GATED centroidal / kinematics methods
+        (com / ccrba / energy / dccrba / cmm_time_variation / frame_jacobian[_dot]
+        / osc_inertia): if the op isn't in the .so (the kernel wasn't generated
+        for this robot) re-raise the bare ``AttributeError`` with an actionable
+        message mirroring the numpy handle."""
+        try:
+            return self._op(conv, name)
+        except AttributeError as e:
+            raise AttributeError(
+                f"{name} not generated for this robot .so; re-register with "
+                f"force_rebuild=True (and ensure the kernel is enabled in codegen)."
+            ) from e
+
     @property
     def mujoco(self) -> "_TorchMujocoView":
         """MuJoCo-native view (``handle.mujoco.inverse_dynamics(qpos, qvel, qacc)``):
@@ -743,6 +764,164 @@ class TorchRobotHandle:
         mjx-frame mass matrix (G M G^T congruence, written full dense)."""
         nv = self.num_vel
         return self._op(_convention, "crba")(q, float(gravity)).reshape(-1, nv, nv)
+
+    # ─── centroidal / energy / kinematics value methods (numpy-handle parity) ──
+    #
+    # Mirror the numpy RobotHandle's centroidal / energy / regressor / frame
+    # methods exactly (same torch op names, same gravity/int args, same output
+    # reshape copied VERBATIM from `_handle.py`). Forward-only (no autograd).
+    # The GATED ops (com / ccrba / energy / dccrba / cmm_time_variation /
+    # frame_jacobian[_dot] / osc_inertia) route through `_gated_op` for an
+    # actionable "not generated for this robot" message; the always-emitted ones
+    # (generalized_gravity / nonlinear_effects / coriolis_matrix / *_regressor)
+    # use `_op`.
+
+    def generalized_gravity(self, q, *, gravity: float = -9.81, _convention=None):
+        """Generalized gravity torque g(q) = RNEA(q, 0, 0). Returns (B, NV).
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
+        and the returned g is in the mjx frame (base rows rotated in-kernel)."""
+        return self._op(_convention, "generalized_gravity")(q, float(gravity))
+
+    def nonlinear_effects(self, q, qd, *, gravity: float = -9.81, _convention=None):
+        """Nonlinear (bias) effects c(q,qd) = RNEA(q, qd, 0). Returns (B, NV).
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention and the returned bias matches MuJoCo's ``qfrc_bias``."""
+        return self._op(_convention, "nonlinear_effects")(q, qd, float(gravity))
+
+    def energy(self, q, qd, *, gravity: float = -9.81, _convention=None):
+        """Kinetic / potential / mechanical energy. Returns (B, 3) = [KE, PE, KE+PE].
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention; the energies are frame-INVARIANT (inputs converted in-kernel)."""
+        return self._gated_op(_convention, "energy")(q, qd, float(gravity))
+
+    def com(self, q, *, _convention=None):
+        """Center-of-mass world position p_com and CoM Jacobian J_com.
+
+        Returns ``(p_com, J_com)`` where ``p_com`` is ``(B, 3)`` and ``J_com`` is
+        ``(B, 3, NV)``. The op returns one flat ``(B, 3 + 3*NV)`` buffer
+        ``[p_com(3); J_com(3 x NV col-major)]`` (split mirrors the numpy handle).
+
+        With ``output_convention="mujoco"`` (floating base) ``p_com`` is invariant
+        and the ``J_com`` columns are reframed (computed in-kernel)."""
+        nv = self.num_vel
+        raw = self._gated_op(_convention, "com")(q)
+        B = raw.shape[0]
+        p_com = raw[:, :3]
+        # J_com stored column-major (3 x NV): J[r + 3*c]; recover (B, 3, NV).
+        j_com = raw[:, 3:].reshape(B, nv, 3).permute(0, 2, 1)
+        return p_com, j_com
+
+    def ccrba(self, q, qd, *, _convention=None):
+        """Centroidal momentum matrix A (6 x NV) and momentum h = A·qd (6,).
+
+        Returns ``(A, h)`` where ``A`` is ``(B, 6, NV)`` and ``h`` is ``(B, 6)``.
+        The op returns one flat ``(B, 6*NV + 6)`` buffer ``[A(6 x NV col-major); h(6)]``.
+
+        With ``output_convention="mujoco"`` (floating base) ``h`` is invariant and
+        the ``A`` columns are reframed (computed in-kernel)."""
+        nv = self.num_vel
+        raw = self._gated_op(_convention, "ccrba")(q, qd)
+        B = raw.shape[0]
+        A = raw[:, : 6 * nv].reshape(B, nv, 6).permute(0, 2, 1)
+        h = raw[:, 6 * nv:]
+        return A, h
+
+    def dccrba(self, q, *, _convention=None):
+        """dCCRBA tensor ∂A/∂q, shape ``(B, 6, NV, NV)`` indexed
+        ``[:, :, k, i] = ∂A[:, k]/∂q_i`` (Pinocchio centroidal convention).
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
+        and the returned tensor is the dA/dq of the mjx CMM (same layout)."""
+        nv = self.num_vel
+        raw = self._gated_op(_convention, "dccrba")(q)
+        B = raw.shape[0]
+        # flat layout dA[row + 6*k + 6*NV*m] -> (B, m, k, row) then -> (B, row, k, m).
+        return raw.reshape(B, nv, nv, 6).permute(0, 3, 2, 1)
+
+    def cmm_time_variation(self, q, qd, *, _convention=None):
+        """Centroidal-momentum-matrix time variation Ȧ = dA(q(t))/dt, shape
+        ``(B, 6, NV)`` = ``Σ_i (∂A/∂q_i)·qd_i``.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention and Ȧ has its columns reframed (computed in-kernel)."""
+        nv = self.num_vel
+        raw = self._gated_op(_convention, "cmm_time_variation")(q, qd)
+        B = raw.shape[0]
+        # (B, 6*NV) col-major A[r + 6*c] -> (B, NV, 6) -> (B, 6, NV).
+        return raw.reshape(B, nv, 6).permute(0, 2, 1)
+
+    def coriolis_matrix(self, q, qd, *, gravity: float = -9.81, _convention=None):
+        """Coriolis matrix C(q,qd). Returns ``(B, NV, NV)`` row-major, with
+        ``C·qd + g(q) = nonlinear_effects(q, qd)`` (gravity unused by C; the
+        kwarg mirrors the host wrapper signature).
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention and the returned ``C`` is the mjx-frame Coriolis matrix."""
+        nv = self.num_vel
+        raw = self._op(_convention, "coriolis_matrix")(q, qd, float(gravity))
+        return raw.reshape(-1, nv, nv)  # row-major
+
+    def kinetic_energy_regressor(self, q, qd, *, gravity: float = -9.81, _convention=None):
+        """Kinetic-energy regressor y_KE, length ``10*num_bodies``, with
+        ``KE = y_KE · π``. Returns ``(B, 10*num_bodies)`` (gravity unused).
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention; the regressor is frame-INVARIANT (inputs converted in-kernel)."""
+        return self._op(_convention, "kinetic_energy_regressor")(q, qd, float(gravity))
+
+    def potential_energy_regressor(self, q, *, gravity: float = -9.81, _convention=None):
+        """Potential-energy regressor y_PE, length ``10*num_bodies``, with
+        ``PE = y_PE · π`` (PE uses ``gravity``). Returns ``(B, 10*num_bodies)``.
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention;
+        the regressor is frame-INVARIANT (input converted in-kernel)."""
+        return self._op(_convention, "potential_energy_regressor")(q, float(gravity))
+
+    def frame_jacobian(self, q, *, target_jid=None, reference_frame=None, _convention=None):
+        """Geometric Jacobian (6 x NV, ``[linear; angular]``) of a frame.
+        Returns ``(B, 6, NV)``.
+
+        ``target_jid`` selects the frame's joint id (default: the leaf
+        end-effector joint baked at codegen time). ``reference_frame`` is
+        ``'LOCAL'`` (0), ``'WORLD'`` (1), or ``'LOCAL_WORLD_ALIGNED'`` (2, the
+        default), or the equivalent int — passed as int op args.
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
+        and the returned Jacobian is column-reframed ``J G⁻¹`` (mjx frame)."""
+        from .._handle import _resolve_frame_args
+        nv = self.num_vel
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        raw = self._gated_op(_convention, "frame_jacobian")(q, int(tj), int(rf))
+        B = raw.shape[0]
+        # (B, 6*NV) col-major J[r + 6*c] -> (B, NV, 6) -> (B, 6, NV).
+        return raw.reshape(B, nv, 6).permute(0, 2, 1)
+
+    def frame_jacobian_dot(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
+        """Time derivative Jdot of :py:meth:`frame_jacobian` along v = qd
+        (6 x NV, ``[linear; angular]``). Returns ``(B, 6, NV)``.
+
+        ``target_jid`` / ``reference_frame`` are runtime int op args (default:
+        leaf-EE joint / ``LOCAL_WORLD_ALIGNED``); see :py:meth:`frame_jacobian`.
+
+        With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
+        MuJoCo-convention and Jdot is column-reframed (mjx frame)."""
+        from .._handle import _resolve_frame_args
+        nv = self.num_vel
+        tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
+        raw = self._gated_op(_convention, "frame_jacobian_dot")(q, qd, int(tj), int(rf))
+        B = raw.shape[0]
+        return raw.reshape(B, nv, 6).permute(0, 2, 1)
+
+    def osc_inertia(self, q, *, _convention=None):
+        """Operational-space (task) inertia Lambda = (J·M⁻¹·Jᵀ)⁻¹ (6 x 6) for
+        the leaf-EE frame (LWA). Returns ``(B, 6, 6)``.
+
+        With ``output_convention="mujoco"`` the MuJoCo ``q`` is reordered before the
+        kinematics build (Lambda is otherwise frame-INVARIANT)."""
+        return self._gated_op(_convention, "osc_inertia")(q).reshape(-1, 6, 6)
 
     def end_effector_pose(self, q, *, _convention=None):
         """EE pose [xyz, rpy] per EE (B, 6*NUM_EES).
