@@ -1011,8 +1011,10 @@ static inline void pack_q(const T* q, int batch, int num_joints) {
 }
 
 // com(q) -> [p_com(3); J_com(3 x NV)] per timestep, total 3 + 3*NUM_VEL floats.
-// Gated on GRID_HAS_COM: com/ccrba/energy are NOT emitted for mimic robots (the
-// per-body Jacobian fold isn't mimic-reduced), so this returns rc=3 there.
+// Gated on GRID_HAS_COM: com/ccrba/energy ARE emitted for mimic robots (the
+// centroidal_inner Jacobian fold is alpha-reduced; validated on fr3/h1_2 by
+// cuda_centroidal_mimic_smoke_runner.cu). rc=3 only when a reduced codegen
+// profile didn't generate com for this robot.
 extern "C" int grid_rbd_com(const T* q, T* out, int batch) {
 #ifdef GRID_HAS_COM
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
@@ -1025,12 +1027,13 @@ extern "C" int grid_rbd_com(const T* q, T* out, int batch) {
     return 0;
 #else
     (void)q; (void)out; (void)batch;
-    return 3;  // com not generated for this robot (mimic)
+    return 3;  // com not generated for this robot (reduced codegen profile)
 #endif
 }
 
 // ccrba(q, qd) -> [A(6 x NV); h(6)] per timestep, total 6*NUM_VEL + 6 floats.
-// Gated on GRID_HAS_CCRBA (same mimic caveat as com); returns rc=3 otherwise.
+// Gated on GRID_HAS_CCRBA (emitted for mimic too, alpha-folded); rc=3 only when a
+// reduced codegen profile didn't generate ccrba for this robot.
 extern "C" int grid_rbd_ccrba(const T* q, const T* qd, T* out, int batch) {
 #ifdef GRID_HAS_CCRBA
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
@@ -1043,12 +1046,13 @@ extern "C" int grid_rbd_ccrba(const T* q, const T* qd, T* out, int batch) {
     return 0;
 #else
     (void)q; (void)qd; (void)out; (void)batch;
-    return 3;  // ccrba not generated for this robot (mimic)
+    return 3;  // ccrba not generated for this robot (reduced codegen profile)
 #endif
 }
 
 // energy(q, qd) -> [KE, PE, KE+PE] per timestep, total 3 floats. Takes gravity.
-// Gated on GRID_HAS_ENERGY (same mimic caveat as com); returns rc=3 otherwise.
+// Gated on GRID_HAS_ENERGY (emitted for mimic too, alpha-folded); rc=3 only when a
+// reduced codegen profile didn't generate energy for this robot.
 extern "C" int grid_rbd_energy(const T* q, const T* qd, T* out, int batch, T gravity) {
 #ifdef GRID_HAS_ENERGY
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
@@ -1061,7 +1065,7 @@ extern "C" int grid_rbd_energy(const T* q, const T* qd, T* out, int batch, T gra
     return 0;
 #else
     (void)q; (void)qd; (void)out; (void)batch;
-    return 3;  // energy not generated for this robot (mimic)
+    return 3;  // energy not generated for this robot (reduced codegen profile)
 #endif
 }
 
@@ -1280,10 +1284,11 @@ extern "C" int grid_rbd_potential_energy_regressor_mujoco(const T* q, T* out, in
 
 // dccrba(q) -> 6*NUM_VEL*NUM_VEL dCCRBA tensor dA/dq (per timestep, as the kernel
 // writes it). Reads the COMPRESSED input layout (h_q / d_q). Gated on
-// GRID_HAS_DCCRBA: dccrba is NOT emitted for mimic robots (per-body Jacobian fold
-// isn't mimic-reduced), so this returns rc=3 there. For big floating robots whose
-// kernel arena overflows the smem cap the host wrapper's
-// grid_check_dynamic_shared_memory_bytes raises a clear rc!=0 at launch.
+// GRID_HAS_DCCRBA: dccrba IS emitted for mimic robots (alpha-folded; validated on
+// fr3/h1_2 by test_cuda_dccrba.py), so rc=3 only when a reduced codegen profile
+// didn't generate dccrba. For big floating robots whose kernel arena overflows the
+// smem cap the host wrapper's grid_check_dynamic_shared_memory_bytes raises a clear
+// rc!=0 at launch (the big-floating spill ladder de-gated g1/h1_2; commit c4b3900).
 extern "C" int grid_rbd_dccrba(const T* q, T* out, int batch) {
 #ifdef GRID_HAS_DCCRBA
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
@@ -1296,7 +1301,7 @@ extern "C" int grid_rbd_dccrba(const T* q, T* out, int batch) {
     return 0;
 #else
     (void)q; (void)out; (void)batch;
-    return 3;  // dccrba not generated for this robot (mimic)
+    return 3;  // dccrba not generated for this robot (reduced codegen profile)
 #endif
 }
 
@@ -1319,8 +1324,8 @@ extern "C" int grid_rbd_dccrba_mujoco(const T* q, T* out, int batch) {
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_DCCRBA
 
 // cmm_time_variation(q, qd) -> 6*NUM_VEL centroidal-momentum-matrix time
-// variation Adot (per timestep). Gated on GRID_HAS_CMM_TIME_VARIATION (same
-// mimic caveat as dccrba); returns rc=3 when not generated.
+// variation Adot (per timestep). Gated on GRID_HAS_CMM_TIME_VARIATION (emitted for
+// mimic too, alpha-folded); returns rc=3 only when a reduced profile didn't generate it.
 extern "C" int grid_rbd_cmm_time_variation(const T* q, const T* qd, T* out, int batch) {
 #ifdef GRID_HAS_CMM_TIME_VARIATION
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
