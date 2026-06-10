@@ -330,7 +330,8 @@ def test_floating_runtime_equals_baked(go2_rt):
     go2_rt.set_inertia_params(go2_rt.inertia_params)
     M2 = go2_rt.crba(q)
     assert _max_rel_err(M1, M2) < 1e-5, "baked set_inertia_params is not idempotent"
-    assert M1.shape == (q.shape[0], go2_rt.num_joints, go2_rt.num_joints)
+    # mass matrix M is NUM_VEL x NUM_VEL (a floating base has num_vel < num_joints==num_pos)
+    assert M1.shape == (q.shape[0], go2_rt.num_vel, go2_rt.num_vel)
 
 
 def test_floating_mutated_table_shifts_output_and_recovers(go2_rt):
@@ -381,3 +382,38 @@ def test_floating_trunk_row0_index_mapping(go2_rt):
 def RBDReference_unmutated(urdf_path, floating_base):
     from RBDReference import RBDReference
     return RBDReference(_parse(urdf_path, floating_base))
+
+
+# ─── §5.2 gate: runtime .so (baked values) == plain baked .so, bit-for-bit ────
+
+
+@pytest.fixture(scope="module")
+def iiwa_baked():
+    # the plain baked .so (runtime_inertia=False) — the oracle for the §5.2
+    # output-parity gate; currently the only registration without runtime_inertia.
+    return _grid_rbd.register_robot(
+        name="iiwa14_baked_inertia_pytest", urdf_path=str(_IIWA),
+        floating_base=False, runtime_inertia=False, max_batch_size=8)
+
+
+def test_runtime_equals_baked_so(iiwa_rt, iiwa_baked):
+    """A runtime_inertia=True .so, fed its ORIGINAL baked params, must reproduce
+    the plain baked .so to fp tolerance — the rebuild is a pure scatter of the
+    same I_O numbers (phase5 §5.2). Oracle = the baked .so itself (NOT
+    RBDReference): this isolates the runtime MECHANISM, not the physics."""
+    iiwa_rt.set_inertia_params(iiwa_rt.inertia_params)  # original baked values
+    rng = np.random.default_rng(1)
+    NJ = iiwa_rt.num_joints
+    B = 4
+    q = rng.standard_normal((B, NJ)).astype(np.float32)
+    qd = rng.standard_normal((B, NJ)).astype(np.float32)
+    u = rng.standard_normal((B, NJ)).astype(np.float32)
+    checks = {
+        "inverse_dynamics": (iiwa_rt.inverse_dynamics(q, qd), iiwa_baked.inverse_dynamics(q, qd)),
+        "crba": (iiwa_rt.crba(q), iiwa_baked.crba(q)),
+        "minv": (iiwa_rt.minv(q), iiwa_baked.minv(q)),
+        "forward_dynamics": (iiwa_rt.forward_dynamics(q, qd, u), iiwa_baked.forward_dynamics(q, qd, u)),
+    }
+    for name, (rt, baked) in checks.items():
+        err = float(np.max(np.abs(np.asarray(rt) - np.asarray(baked))))
+        assert err < 1e-6, f"{name}: runtime .so != baked .so by {err:.2e}"
