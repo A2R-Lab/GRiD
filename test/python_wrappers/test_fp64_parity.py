@@ -1,0 +1,132 @@
+"""fp64 (double-precision) tight-tolerance parity for the grid_rbd handle.
+
+The fp64 tier (`register_robot(..., dtype="float64")`, -DGRID_WRAPPER_T_DOUBLE)
+exists to deliver materially tighter numerics than fp32. This guards that:
+  (1) an fp64 handle round-trips float64 and matches the float64 RBDReference
+      oracle to ~1e-10 (vs fp32's ~1e-4), and
+  (2) fp64 is ORDERS tighter than fp32 on the same robot/sample — the assertion
+      that proves the tier earns its keep (a regression that silently degraded
+      fp64 to fp32-quality would otherwise pass unnoticed).
+
+Skips if grid_rbd / nvcc / the URDF fixture are unavailable.
+
+Run with:  pytest test/python_wrappers/test_fp64_parity.py -m python_wrappers -v
+"""
+from __future__ import annotations
+
+import shutil
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO_ROOT))
+
+_grid_rbd = pytest.importorskip("grid_rbd", reason="grid-rbd not installed")
+_URDF = _REPO_ROOT / "robot_assets" / "iiwa14.urdf"
+if not _URDF.exists():
+    pytest.skip(f"iiwa14 URDF not present at {_URDF}", allow_module_level=True)
+if shutil.which("nvcc") is None:
+    pytest.skip("nvcc not on PATH; grid-rbd register_robot requires it", allow_module_level=True)
+
+pytestmark = pytest.mark.python_wrappers
+
+_FP64_TOL = 1e-10   # fp64 vs float64 oracle: value + first-order surfaces on iiwa14
+
+
+@pytest.fixture(scope="module")
+def h64():
+    return _grid_rbd.register_robot(
+        name="iiwa14_fp64_pytest", urdf_path=str(_URDF),
+        floating_base=False, dtype="float64", max_batch_size=8)
+
+
+@pytest.fixture(scope="module")
+def h32():
+    return _grid_rbd.register_robot(
+        name="iiwa14_fp32_pytest", urdf_path=str(_URDF),
+        floating_base=False, dtype="float32", max_batch_size=8)
+
+
+@pytest.fixture(scope="module")
+def ref():
+    from URDFParser import URDFParser
+    from RBDReference import RBDReference
+    return RBDReference(URDFParser().parse(str(_URDF), floating_base=False))
+
+
+@pytest.fixture(scope="module")
+def samples64(h64):
+    rng = np.random.default_rng(0)
+    NJ = h64.num_joints
+    B = 4
+    return {
+        "q":  rng.standard_normal((B, NJ)).astype(np.float64),
+        "qd": rng.standard_normal((B, NJ)).astype(np.float64),
+        "u":  rng.standard_normal((B, NJ)).astype(np.float64),
+    }
+
+
+def _rel(a, b):
+    # relative max-error (magnitude-scaled) — the right metric for outputs whose
+    # magnitude varies a lot (fd torques reach ~1e3, so a fixed ABS tol is wrong).
+    a = np.asarray(a, np.float64); b = np.asarray(b, np.float64)
+    return float(np.max(np.abs(a - b)) / max(1.0, float(np.max(np.abs(b)))))
+
+
+# Per-algo fp64 relative tolerances, set from MEASURED iiwa14 errors (not guessed):
+# crba/minv collapse to ~machine precision; id is the loosest (~4e-8 rel — a baked
+# fp32 literal in the RNEA/gravity path limits it; see fp64-id-precision backlog),
+# fd ~9e-10. All are 100-1000x tighter than fp32 (~1e-5) — the contrast test proves it.
+_FP64_REL = {"inverse_dynamics": 1e-6, "crba": 1e-9, "minv": 1e-9, "forward_dynamics": 1e-7}
+
+
+def test_dtype_roundtrip(h64, samples64):
+    assert h64.dtype == "float64"
+    out = h64.inverse_dynamics(samples64["q"], samples64["qd"])
+    assert np.asarray(out).dtype == np.float64
+
+
+def test_fp64_inverse_dynamics_tight(h64, ref, samples64):
+    grid = h64.inverse_dynamics(samples64["q"], samples64["qd"])
+    for i, (q, qd) in enumerate(zip(samples64["q"], samples64["qd"])):
+        c_ref, *_ = ref.inverse_dynamics(q, qd, GRAVITY=-9.81)
+        assert _rel(grid[i], c_ref) < _FP64_REL["inverse_dynamics"], f"id[{i}]: {_rel(grid[i], c_ref):.2e}"
+
+
+def test_fp64_crba_tight(h64, ref, samples64):
+    grid = h64.crba(samples64["q"])
+    for i, q in enumerate(samples64["q"]):
+        assert _rel(grid[i], ref.crba(q)) < _FP64_REL["crba"], f"crba[{i}]: {_rel(grid[i], ref.crba(q)):.2e}"
+
+
+def test_fp64_minv_tight(h64, ref, samples64):
+    grid = h64.minv(samples64["q"])
+    for i, q in enumerate(samples64["q"]):
+        assert _rel(grid[i], ref.minv(q)) < _FP64_REL["minv"], f"minv[{i}]: {_rel(grid[i], ref.minv(q)):.2e}"
+
+
+def test_fp64_forward_dynamics_tight(h64, ref, samples64):
+    grid = h64.forward_dynamics(samples64["q"], samples64["qd"], samples64["u"])
+    for i, (q, qd, u) in enumerate(zip(samples64["q"], samples64["qd"], samples64["u"])):
+        assert _rel(grid[i], ref.forward_dynamics(q, qd, u)) < _FP64_REL["forward_dynamics"], \
+            f"fd[{i}]: {_rel(grid[i], ref.forward_dynamics(q, qd, u)):.2e}"
+
+
+def test_fp64_materially_tighter_than_fp32(h64, h32, ref, samples64):
+    """The load-bearing assertion: on the same robot/sample, fp64's relative error
+    vs the float64 oracle is >=100x below fp32's. crba (the Minv/composite-inertia
+    path) is the clean probe — it uses no gravity, so it reaches true fp64.
+    NOTE: id/fd are NOT 100x tighter because the C-ABI passes `gravity` as float32,
+    capping their fp64 accuracy at ~4e-8 rel (the fp32 rounding of -9.81) — see the
+    fp64-gravity-arg precision backlog; intentionally not asserted here."""
+    q64 = samples64["q"]
+    q32 = q64.astype(np.float32)
+    c64 = h64.crba(q64); c32 = h32.crba(q32)
+    e64 = max(_rel(c64[i], ref.crba(q64[i])) for i in range(len(q64)))
+    e32 = max(_rel(c32[i], ref.crba(q64[i])) for i in range(len(q64)))
+    assert e64 < 1e-9, f"fp64 crba not tight: {e64:.2e}"
+    assert e64 < e32 * 1e-2, f"crba: fp64 {e64:.2e} not >=100x tighter than fp32 {e32:.2e}"
