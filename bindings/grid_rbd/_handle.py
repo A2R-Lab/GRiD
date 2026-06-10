@@ -911,16 +911,15 @@ class RobotHandle:
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
         NV = self.num_vel
-        if self._mjx_active(_convention):
-            # KNOWN-BROKEN (tracked): the fdsva_so mjx epilogue produces incorrect 2nd-order
-            # tensors on robots where fdsva_so spills (a buffer-liveness/layout bug in the
-            # in-kernel mjx output band — NOT the transform math, which validates <1e-13
-            # offline). Guarded so it never returns silent garbage. All other mjx surfaces
-            # (incl. idsva_so) are validated. See docs/open-tasks/mjx_codegen_fusion_master_plan.md.
+        if self._mjx_active(_convention) and getattr(self._runner, "has_fdsva_so_mujoco", False):
+            # The fdsva_so mjx epilogue recomputes Minv / qdd / dqdd_du FRESH into a
+            # disjoint d_mjx_scratch band (mirrors idsva_so) so it never reads the
+            # possibly-spilled in-flight buffers — the §1g/§1h liveness bug is fixed.
+            flat = self._runner.fdsva_so_mujoco(q, qd, u, 4 * NV ** 3, gravity)
+        elif self._mjx_active(_convention):
             raise NotImplementedError(
-                "fdsva_so(output_convention='mujoco') is not yet validated (a known in-kernel "
-                "buffer-layout bug in the spilled fdsva_so mjx epilogue); use idsva_so for "
-                "validated 2nd-order mjx, or output_convention='pinocchio'. Tracked for a fix.")
+                "fdsva_so(output_convention='mujoco') needs a floating-base .so built with "
+                "the mjx kernel (re-register with force_rebuild=True).")
         else:
             flat = self._runner.fdsva_so(q, qd, u, 4 * NV ** 3, gravity)
         B = flat.shape[0]

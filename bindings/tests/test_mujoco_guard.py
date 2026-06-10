@@ -21,7 +21,9 @@ from grid_rbd._handle import RobotHandle
 #  the regressors, the joint barriers — are NOT here: mjx mode is already correct for
 #  them, so guarding would wrongly block valid calls.)
 _MUST_GUARD = {
-    "inverse_dynamics_gradient", "forward_dynamics_gradient", "idsva_so", "fdsva_so",
+    "inverse_dynamics_gradient", "forward_dynamics_gradient", "idsva_so",
+    # fdsva_so mjx fusion LANDED (epilogue recomputes Minv/qdd/dqdd_du fresh into a
+    # disjoint d_mjx_scratch band — the §1g/§1h liveness bug is fixed) -> de-guarded.
     "end_effector_pose_gradient", "end_effector_pose_hessian",
     "integrator", "integrator_gradient",
     "plant_step", "plant_step_gradient", "plant_step_hessian",

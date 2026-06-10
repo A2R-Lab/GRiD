@@ -1029,13 +1029,9 @@ class JaxRobotHandle:
         import jax
         import jax.numpy as jnp
         import numpy as np
-        if self._resolve_convention(_convention) == "mujoco":
-            # KNOWN-BROKEN (tracked): the spilled fdsva_so mjx epilogue mis-lays its output
-            # band (buffer-liveness bug; transform math itself validates offline). Guarded so
-            # it never returns silent garbage. Use idsva_so for validated 2nd-order mjx.
-            raise NotImplementedError(
-                "fdsva_so(output_convention='mujoco') is not yet validated (known in-kernel "
-                "buffer-layout bug); use idsva_so or output_convention='pinocchio'.")
+        # mjx fdsva_so LANDED: _mt routes to grid_rbd_jax_fdsva_so_mujoco (the
+        # MUJOCO_OUTPUT=true kernel; epilogue recomputes Minv/qdd/dqdd_du fresh into a
+        # disjoint scratch band — the §1g/§1h liveness bug is fixed).
         target = self._mt(_convention, "fdsva_so", "grid_rbd_jax_fdsva_so")
         (q, qd, u), B = self._prep_2d("fdsva_so", q, qd, u)
         nv = self.num_vel

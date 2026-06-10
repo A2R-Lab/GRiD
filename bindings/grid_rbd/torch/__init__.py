@@ -853,12 +853,9 @@ class TorchRobotHandle:
         With ``output_convention="mujoco"`` (floating base) all four tensors are in
         the mjx convention."""
         nv = self.num_vel
-        if self._resolve_convention(_convention) == "mujoco":
-            # KNOWN-BROKEN (tracked): spilled fdsva_so mjx epilogue buffer-layout bug.
-            # Guarded so it never returns silent garbage. Use idsva_so for 2nd-order mjx.
-            raise NotImplementedError(
-                "fdsva_so(output_convention='mujoco') is not yet validated (known in-kernel "
-                "buffer-layout bug); use idsva_so or output_convention='pinocchio'.")
+        # mjx fdsva_so LANDED: _op routes to fdsva_so_mujoco (MUJOCO_OUTPUT=true kernel;
+        # epilogue recomputes Minv/qdd/dqdd_du fresh into a disjoint scratch band — the
+        # §1g/§1h liveness bug is fixed).
         flat = self._op(_convention, "fdsva_so")(q, qd, u, float(gravity))
         B = flat.shape[0]
         return SecondOrderFD(*(flat[:, i*nv**3:(i+1)*nv**3].reshape(B, nv, nv, nv) for i in range(4)))
