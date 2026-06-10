@@ -153,8 +153,9 @@ public:
         // Algorithm symbols — required for v1 surface.
         fn_inverse_dynamics_             = reinterpret_cast<fn_dyn_t>(require_sym("grid_rbd_inverse_dynamics"));
         // MuJoCo output-convention ID kernel: optional symbol — present ONLY in a
-        // floating-base .so (gated on GRID_FLOATING_BASE in the wrapper). nullptr
-        // on fixed-base / older .so, in which case the mjx method raises.
+        // mjx-capable .so (floating, non-mimic, non-skew; gated on GRID_RBD_WITH_MUJOCO
+        // in the wrapper). nullptr on fixed-base / mimic / older .so, in which case
+        // the mjx method raises.
         fn_inverse_dynamics_mujoco_      = reinterpret_cast<fn_dyn_t>(opt_sym("grid_rbd_inverse_dynamics_mujoco"));
         fn_minv_             = reinterpret_cast<fn_minv_t>(require_sym("grid_rbd_minv"));
         fn_fd_               = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_forward_dynamics"));

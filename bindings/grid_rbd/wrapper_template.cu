@@ -235,7 +235,7 @@ extern "C" int grid_rbd_inverse_dynamics(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention inverse dynamics (floating base only). Identical signature to
 // grid_rbd_inverse_dynamics, but q/qd/qdd are MuJoCo-native (quat wxyz, free-joint
 // velocity [v_lin GLOBAL; omega LOCAL]) and the returned tau is in the mjx frame.
@@ -275,7 +275,7 @@ extern "C" int grid_rbd_inverse_dynamics_mujoco(
     std::memcpy(c_out, g_data->h_c, batch * nj * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // Direct mass-matrix inverse: Minv(q)
 extern "C" int grid_rbd_minv(
@@ -307,7 +307,7 @@ extern "C" int grid_rbd_minv(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention direct mass-matrix inverse (floating base only): the kernel
 // reorders the quaternion and applies the congruence Minv_mjx = G^-T Minv_pin G^-1
 // on the base block (MUJOCO_OUTPUT=true). The native kernel writes a FULL DENSE
@@ -336,7 +336,7 @@ extern "C" int grid_rbd_minv_mujoco(
                cudaMemcpyDeviceToHost);
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // Forward dynamics: qdd = Minv(q)·(τ − c(q,qd))
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
@@ -363,7 +363,7 @@ extern "C" int grid_rbd_forward_dynamics(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention forward dynamics (floating base only). q/qd/u are MuJoCo-native;
 // the kernel converts inputs mjx->pin on load and maps the output acceleration
 // qdd[0:3] = R(qdd_pin + omega x v) back to the mjx frame (MUJOCO_OUTPUT=true) — no
@@ -391,7 +391,7 @@ extern "C" int grid_rbd_forward_dynamics_mujoco(
     std::memcpy(qdd_out, g_data->h_qdd, batch * nj * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // Articulated body algorithm: qdd = aba(q, qd, u)
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
@@ -418,7 +418,7 @@ extern "C" int grid_rbd_aba(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention ABA (floating base only). Same accel_out convention as
 // forward_dynamics: q/qd/u raw mjx in, mjx-frame qdd out (MUJOCO_OUTPUT=true). f_ext
 // not reframed -> the _handle dispatch only uses this path when f_ext is null.
@@ -444,7 +444,7 @@ extern "C" int grid_rbd_aba_mujoco(
     std::memcpy(qdd_out, g_data->h_qdd, batch * nj * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // Composite rigid body algorithm: M = crba(q)
 extern "C" int grid_rbd_crba(
@@ -476,7 +476,7 @@ extern "C" int grid_rbd_crba(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention mass matrix (floating base only): M_mjx = G M_pin G^T, the
 // congruence baked into the kernel (MUJOCO_OUTPUT=true). q is MuJoCo-native (quat
 // wxyz); the kernel reorders the quaternion and applies the congruence on the base
@@ -504,7 +504,7 @@ extern "C" int grid_rbd_crba_mujoco(
                cudaMemcpyDeviceToHost);
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // End-effector pose: 6×NUM_EES per timestep (xyz + rpy).
 extern "C" int grid_rbd_end_effector_pose(
@@ -528,7 +528,7 @@ extern "C" int grid_rbd_end_effector_pose(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention end_effector_pose(q) -> 6*NUM_EES per timestep. The pose is
 // frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts the mjx-native q
 // (quaternion reorder, like osc_inertia). Output byte-equal to feeding the pin
@@ -545,7 +545,7 @@ extern "C" int grid_rbd_end_effector_pose_mujoco(const T* q, T* ee_out, int batc
     std::memcpy(ee_out, g_data->h_end_effector_pose, (size_t)batch * 6 * grid::NUM_EES * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // Batched forward kinematics (large-batch, one block/warp per sample):
 //   q layout:     (batch, NUM_POS)            -> q[b*NUM_POS + j]
@@ -618,7 +618,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention end_effector_pose Jacobian (q) -> 6*NUM_EES*NUM_VEL per
 // timestep. Column-reframe: q raw mjx in (kernel reorders the quaternion) and the
 // kernel (MUJOCO_OUTPUT=true) reframes the base-linear Jacobian columns before
@@ -636,7 +636,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(const T* q, T* dee_out
                 (size_t)batch * 6 * grid::NUM_EES * grid::NUM_VEL * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // ∂c/∂(q, qd): output shape (batch, NV, 2*NV) — concatenated [dc_dq | dc_dqd]
 // (tangent-space; FIXED base NV == NJ, FLOATING base NV < NJ).
@@ -687,7 +687,7 @@ extern "C" int grid_rbd_inverse_dynamics_gradient(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention inverse-dynamics gradient (floating base only). q/qd/qdd are
 // MuJoCo-native; the kernel converts inputs mjx->pin on load and applies the full
 // gradient convention transform (reframe + base-row rotate + ω×v couplings, with M
@@ -720,7 +720,7 @@ extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(
                (size_t)batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // ∂qdd/∂(q, qd): output shape (batch, NV, 2*NV) (tangent-space; FIXED base
 // NV == NJ, FLOATING base NV < NJ).
@@ -754,7 +754,7 @@ extern "C" int grid_rbd_forward_dynamics_gradient(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention forward-dynamics gradient (floating base only). q/qd/u are
 // MuJoCo-native; qdd is computed internally. The kernel converts inputs mjx->pin on
 // load and applies the full gradient convention transform (reframe + base-row rotate
@@ -784,7 +784,7 @@ extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(
                (size_t)batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // End-effector pose Hessian: 6×NUM_EES×NV×NV per timestep (d^2/dv^2 tangent).
 // Calls grid::end_effector_pose_hessian which fills BOTH end_effector_pose_hessian AND
@@ -814,7 +814,7 @@ extern "C" int grid_rbd_end_effector_pose_hessian(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention end_effector_pose Hessian (q) -> 6*NUM_EES*NV*NV per timestep.
 // q is raw mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true)
 // double-column-reframes the Hessian (J·G^{-1} on both tangent indices) and adds the
@@ -832,7 +832,7 @@ extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(const T* q, T* d2ee_out
                 (size_t)batch * 6 * grid::NUM_EES * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // Second-order inverse dynamics. Output is the concatenated SO tensor of
 // shape SECOND_ORDER_TENSOR_SIZE = 4 * NV^3 per timestep (four NV^3 blocks:
@@ -862,7 +862,7 @@ extern "C" int grid_rbd_idsva_so(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention idsva_so(q, qd, qdd) -> 4*NV^3 (floating base only). q/qd/qdd are
 // raw mjx (kernel input-converts); the kernel (MUJOCO_OUTPUT=true) transforms all four
 // 2nd-order tensors to the mjx frame (explicit-analytic SO transform + dM_dq closed
@@ -882,7 +882,7 @@ extern "C" int grid_rbd_idsva_so_mujoco(const T* q, const T* qd, const T* qdd, T
                 batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // inverse_dynamics_regressor(q, qd, qdd) -> Y, row-major NV x (10*NUM_BODIES) per
 // timestep. tau = Y . pi (pi = the 10*NUM_BODIES stacked link inertia params), so Y
@@ -906,7 +906,7 @@ extern "C" int grid_rbd_inverse_dynamics_regressor(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention inverse_dynamics_regressor (floating base only). q/qd/qdd are raw
 // mjx (kernel input-converts); the regressor ROWS are tangent-indexed generalized
 // forces, so the base-LINEAR rows (0:3) rotate by R (Y_mjx[0:3] = R Y_pin[0:3]) -- the
@@ -931,7 +931,7 @@ extern "C" int grid_rbd_inverse_dynamics_regressor_mujoco(
                 (size_t)batch * grid::NUM_VEL * 10 * grid::NUM_BODIES * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // Second-order forward dynamics. Output is 4 * NV^3 per timestep
 // (d2qdd_dq, d2qdd_dqd, d2qdd_dudq — interpretation per Singh/Wensing).
@@ -957,7 +957,7 @@ extern "C" int grid_rbd_fdsva_so(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention fdsva_so(q, qd, u) -> 4*NV^3 (floating base only). q/qd/u raw mjx
 // (kernel input-converts); the kernel (MUJOCO_OUTPUT=true) transforms all four
 // 2nd-order forward-dynamics tensors to the mjx frame (explicit-analytic SO transform,
@@ -977,7 +977,7 @@ extern "C" int grid_rbd_fdsva_so_mujoco(const T* q, const T* qd, const T* u, T* 
                 batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1065,7 +1065,7 @@ extern "C" int grid_rbd_energy(const T* q, const T* qd, T* out, int batch, T gra
 #endif
 }
 
-#if defined(GRID_HAS_COM) && defined(GRID_FLOATING_BASE)
+#if defined(GRID_HAS_COM) && defined(GRID_RBD_WITH_MUJOCO)
 // MuJoCo-convention com(q) -> [p_com(3); J_com(3 x NV)] per timestep. p_com is
 // INVARIANT; the J_com columns are reframed by the kernel (MUJOCO_OUTPUT=true): q
 // is MuJoCo-native (quat wxyz) and the kernel reorders the quaternion + applies the
@@ -1082,9 +1082,9 @@ extern "C" int grid_rbd_com_mujoco(const T* q, T* out, int batch) {
     std::memcpy(out, g_data->h_com, (size_t)batch * (3 + 3 * grid::NUM_VEL) * sizeof(T));
     return 0;
 }
-#endif  // GRID_HAS_COM && GRID_FLOATING_BASE
+#endif  // GRID_HAS_COM && GRID_RBD_WITH_MUJOCO
 
-#if defined(GRID_HAS_CCRBA) && defined(GRID_FLOATING_BASE)
+#if defined(GRID_HAS_CCRBA) && defined(GRID_RBD_WITH_MUJOCO)
 // MuJoCo-convention ccrba(q, qd) -> [A(6 x NV); h(6)] per timestep. The centroidal
 // momentum h is INVARIANT; the A columns are reframed by the kernel
 // (MUJOCO_OUTPUT=true). q/qd raw mjx in (kernel reorders the quaternion + reframes
@@ -1101,9 +1101,9 @@ extern "C" int grid_rbd_ccrba_mujoco(const T* q, const T* qd, T* out, int batch)
     std::memcpy(out, g_data->h_ccrba, (size_t)batch * (6 * grid::NUM_VEL + 6) * sizeof(T));
     return 0;
 }
-#endif  // GRID_HAS_CCRBA && GRID_FLOATING_BASE
+#endif  // GRID_HAS_CCRBA && GRID_RBD_WITH_MUJOCO
 
-#if defined(GRID_HAS_ENERGY) && defined(GRID_FLOATING_BASE)
+#if defined(GRID_HAS_ENERGY) && defined(GRID_RBD_WITH_MUJOCO)
 // MuJoCo-convention energy(q, qd) -> [KE, PE, KE+PE] per timestep. The energies are
 // frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) just converts the mjx-native
 // inputs (quaternion reorder + qd reframe) so the energy is built correctly. Output
@@ -1120,7 +1120,7 @@ extern "C" int grid_rbd_energy_mujoco(const T* q, const T* qd, T* out, int batch
     std::memcpy(out, g_data->h_energy, (size_t)batch * 3 * sizeof(T));
     return 0;
 }
-#endif  // GRID_HAS_ENERGY && GRID_FLOATING_BASE
+#endif  // GRID_HAS_ENERGY && GRID_RBD_WITH_MUJOCO
 
 // generalized_gravity(q) -> g(q) = RNEA(q,0,0) per timestep, NUM_VEL floats. Takes gravity.
 extern "C" int grid_rbd_generalized_gravity(const T* q, T* out, int batch, T gravity) {
@@ -1134,7 +1134,7 @@ extern "C" int grid_rbd_generalized_gravity(const T* q, T* out, int batch, T gra
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention generalized_gravity(q) -> g(q) (floating base only). q is raw
 // mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true) base-rotates
 // the gravity output so the returned g is mjx-frame. Output is NUM_VEL invariant-shaped.
@@ -1150,7 +1150,7 @@ extern "C" int grid_rbd_generalized_gravity_mujoco(const T* q, T* out, int batch
     std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // nonlinear_effects(q, qd) -> c(q,qd) = RNEA(q,qd,0) per timestep, NUM_VEL floats. Takes gravity.
 extern "C" int grid_rbd_nonlinear_effects(const T* q, const T* qd, T* out, int batch, T gravity) {
@@ -1164,7 +1164,7 @@ extern "C" int grid_rbd_nonlinear_effects(const T* q, const T* qd, T* out, int b
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention nonlinear_effects(q, qd) -> c(q,qd) (floating base only). q is
 // raw mjx (kernel reorders the quaternion). The kernel (MUJOCO_OUTPUT=true) injects
 // the accel-couple delta_a (base-linear = -(omega x v_lin)) via a zeroed s_qdd then
@@ -1181,7 +1181,7 @@ extern "C" int grid_rbd_nonlinear_effects_mujoco(const T* q, const T* qd, T* out
     std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // coriolis_matrix(q, qd) -> nv x nv Coriolis matrix C(q,qd), row-major
 // (C[row*nv + col]). Always emitted with the "all" profile (mimic-safe:
@@ -1197,7 +1197,7 @@ extern "C" int grid_rbd_coriolis_matrix(const T* q, const T* qd, T* out, int bat
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention Coriolis matrix (floating base only): C_mjx = G C_pin G^T, a
 // congruence baked into the kernel (MUJOCO_OUTPUT=true). q/qd raw mjx in (kernel
 // reorders the quaternion + reframes qd), mjx-frame C out (nv x nv row-major).
@@ -1213,7 +1213,7 @@ extern "C" int grid_rbd_coriolis_matrix_mujoco(const T* q, const T* qd, T* out, 
     std::memcpy(out, g_data->h_coriolis, (size_t)batch * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // kinetic_energy_regressor(q, qd) -> length 10*NUM_BODIES regressor y_KE
 // (KE = y_KE . pi). Always emitted with the "all" profile (mimic-safe), ungated.
@@ -1242,12 +1242,12 @@ extern "C" int grid_rbd_potential_energy_regressor(const T* q, T* out, int batch
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention kinetic_energy_regressor(q, qd) -> length 10*NUM_BODIES y_KE.
 // The regressor is frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts
 // the mjx-native inputs (quaternion reorder + qd reframe). Output is byte-equal to
 // feeding the pin kernel the pin-converted q/qd. (The MUJOCO_OUTPUT instantiation
-// only exists for floating, hence the GRID_FLOATING_BASE gate.)
+// only exists for floating, hence the GRID_RBD_WITH_MUJOCO gate.)
 extern "C" int grid_rbd_kinetic_energy_regressor_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
@@ -1276,7 +1276,7 @@ extern "C" int grid_rbd_potential_energy_regressor_mujoco(const T* q, T* out, in
     std::memcpy(out, g_data->h_pe_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // dccrba(q) -> 6*NUM_VEL*NUM_VEL dCCRBA tensor dA/dq (per timestep, as the kernel
 // writes it). Reads the COMPRESSED input layout (h_q / d_q). Gated on
@@ -1300,7 +1300,7 @@ extern "C" int grid_rbd_dccrba(const T* q, T* out, int batch) {
 #endif
 }
 
-#if defined(GRID_FLOATING_BASE) && defined(GRID_HAS_DCCRBA)
+#if defined(GRID_RBD_WITH_MUJOCO) && defined(GRID_HAS_DCCRBA)
 // MuJoCo-convention dccrba(q) -> 6*NV*NV dA/dq tensor (floating base only). q is raw
 // mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true) double-reframes
 // the qd-column and q-tangent indices by G^{-1} and adds the base-rotation frame term
@@ -1316,7 +1316,7 @@ extern "C" int grid_rbd_dccrba_mujoco(const T* q, T* out, int batch) {
     std::memcpy(out, g_data->h_dccrba, (size_t)batch * 6 * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE && GRID_HAS_DCCRBA
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_DCCRBA
 
 // cmm_time_variation(q, qd) -> 6*NUM_VEL centroidal-momentum-matrix time
 // variation Adot (per timestep). Gated on GRID_HAS_CMM_TIME_VARIATION (same
@@ -1337,7 +1337,7 @@ extern "C" int grid_rbd_cmm_time_variation(const T* q, const T* qd, T* out, int 
 #endif
 }
 
-#if defined(GRID_HAS_CMM_TIME_VARIATION) && defined(GRID_FLOATING_BASE)
+#if defined(GRID_HAS_CMM_TIME_VARIATION) && defined(GRID_RBD_WITH_MUJOCO)
 // MuJoCo-convention cmm_time_variation(q, qd) -> 6*NUM_VEL Adot (per timestep).
 // Column-reframe: q/qd raw mjx in (kernel reorders the quaternion + reframes qd)
 // and the kernel (MUJOCO_OUTPUT=true) reframes the Adot columns before saving.
@@ -1353,7 +1353,7 @@ extern "C" int grid_rbd_cmm_time_variation_mujoco(const T* q, const T* qd, T* ou
     std::memcpy(out, g_data->h_cmm_time_variation, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
 }
-#endif  // GRID_HAS_CMM_TIME_VARIATION && GRID_FLOATING_BASE
+#endif  // GRID_HAS_CMM_TIME_VARIATION && GRID_RBD_WITH_MUJOCO
 
 // frame_jacobian(q) -> 6 x NUM_VEL geometric Jacobian (col-major, [linear;angular])
 // at the leaf-EE frame, LOCAL_WORLD_ALIGNED. Gated on GRID_HAS_FRAME_JACOBIAN
@@ -1418,7 +1418,7 @@ extern "C" int grid_rbd_osc_inertia(const T* q, T* out, int batch) {
 #endif
 }
 
-#if defined(GRID_HAS_FRAME_JACOBIAN) && defined(GRID_FLOATING_BASE)
+#if defined(GRID_HAS_FRAME_JACOBIAN) && defined(GRID_RBD_WITH_MUJOCO)
 // MuJoCo-convention frame_jacobian family (floating base only). The geometric
 // Jacobian / its time-derivative are column-reframed J_mjx = J_pin G^{-1} in the
 // kernel (MUJOCO_OUTPUT=true). osc_inertia's value Lambda is frame-INVARIANT, but
@@ -1467,7 +1467,7 @@ extern "C" int grid_rbd_osc_inertia_mujoco(const T* q, T* out, int batch) {
     std::memcpy(out, g_data->h_osc_inertia, (size_t)batch * 36 * sizeof(T));
     return 0;
 }
-#endif  // GRID_HAS_FRAME_JACOBIAN && GRID_FLOATING_BASE
+#endif  // GRID_HAS_FRAME_JACOBIAN && GRID_RBD_WITH_MUJOCO
 
 // end_effector_pose_runtime(q) -> 6-vector [xyz; rpy] of target_jid at a runtime
 // offset point in the target frame. target_jid<0 => leaf-EE default; offset may
@@ -1522,7 +1522,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime(const T* q, T* out, i
 #endif
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention end_effector_pose_runtime (floating base only). The kernel
 // input-converts q (quat reorder) on load; the pose VALUE is frame-INVARIANT (the
 // 6-vector [xyz; rpy] is the same world frame), so this matches the pin pose with
@@ -1576,7 +1576,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime_mujoco(const T* q, T*
     return 3;
 #endif
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1595,7 +1595,7 @@ static void launch_integrator_host(int batch, T gravity, T dt) {
     grid::integrator<T, IT>(g_data, g_robot, /*gravity=*/gravity,
                             dt, batch, g_block_dimms, g_thread_dimms, g_streams);
 }
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 template <grid::IntegratorType IT>
 static void launch_integrator_host_mujoco(int batch, T gravity, T dt) {
     grid::integrator<T, IT, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
@@ -1608,7 +1608,7 @@ static void launch_integrator_grad_host(int batch, T gravity, T dt) {
     grid::integrator_gradient<T, IT>(g_data, g_robot, /*gravity=*/gravity,
                                      dt, batch, g_block_dimms, g_thread_dimms, g_streams);
 }
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 template <grid::IntegratorType IT>
 static void launch_integrator_grad_host_mujoco(int batch, T gravity, T dt) {
     grid::integrator_gradient<T, IT, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
@@ -1658,7 +1658,7 @@ extern "C" int grid_rbd_integrator(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention integrator (floating base only): the free-joint base POSITION
 // takes a GLOBAL additive step (mjx retract) instead of pin's SE(3) V(phi); the
 // base quaternion + joints integrate normally. q/qd raw mjx in (q wxyz, qd global),
@@ -1682,7 +1682,7 @@ extern "C" int grid_rbd_integrator_mujoco(
                 batch * (grid::NUM_POS + grid::NUM_VEL) * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // integrator_gradient(q, qd, u, dt, it) → dAB  (2*NV x 3*NV per timestep)
 extern "C" int grid_rbd_integrator_gradient(
@@ -1706,7 +1706,7 @@ extern "C" int grid_rbd_integrator_gradient(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention integrator_gradient(q, qd, u, dt, it) -> dAB (2NV x 3NV) (floating
 // base only). q/qd/u raw mjx (kernel input-converts); the kernel (MUJOCO_OUTPUT=true)
 // transforms the discrete state-transition Jacobian to the mjx tangent (global-add
@@ -1729,7 +1729,7 @@ extern "C" int grid_rbd_integrator_gradient_mujoco(
                 batch * (2 * nv) * (3 * nv) * sizeof(T));
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1845,7 +1845,7 @@ extern "C" int grid_plant_quadratic_input_cost(
     return plant_quadratic_cost_impl<false>(u, u_des, R, out, grad, hess, batch);
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention quadratic_state_cost (floating base only). x = [q(nq); qd(nv)]
 // is mjx-native; the kernel input-converts the qd base-linear block (global->local)
 // before differencing against the user (mjx-frame) x_des/Q, then reframes the
@@ -1875,7 +1875,7 @@ extern "C" int grid_rbd_quadratic_state_cost_mujoco(
     cudaMemcpy(hess, g_plant.d_hess, batch * N * N * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // joint_{position,velocity,torque}_barrier: value + grad + hess-diagonal.
 // var/lower/upper are (batch, N); out (batch); grad/hess_diag (batch, N).
@@ -1962,7 +1962,7 @@ extern "C" int grid_plant_step(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention plant_step (floating base only). x/u raw mjx; the kernel
 // (MUJOCO_OUTPUT=true) input-converts the stacked state + does the global-add retract.
 // EULER/SI-EULER only. Register-heavy -> launch-clamp + post-launch error check.
@@ -1992,7 +1992,7 @@ extern "C" int grid_plant_step_mujoco(
     cudaMemcpy(x_kp1, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_STEP
 
 #ifdef GRID_PLANT_HAS_EE_COST
@@ -2099,7 +2099,7 @@ extern "C" int grid_plant_momentum_cost(
 }
 #endif  // GRID_PLANT_HAS_MOMENTUM_COST
 
-#if defined(GRID_FLOATING_BASE) && defined(GRID_PLANT_HAS_EE_COST)
+#if defined(GRID_RBD_WITH_MUJOCO) && defined(GRID_PLANT_HAS_EE_COST)
 // MuJoCo-convention ee_pos_cost (floating base only). q is raw mjx; the kernel
 // (MUJOCO_OUTPUT=true) input-converts q (quaternion reorder) so the world-frame EE
 // value is correct, computes the pin grad/hess, then base-rotates the q-block grad
@@ -2128,9 +2128,9 @@ extern "C" int grid_rbd_ee_pos_cost_mujoco(
     cudaMemcpy(hess, g_plant.d_hess, batch * nx * nx * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
-#endif  // GRID_FLOATING_BASE && GRID_PLANT_HAS_EE_COST
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_PLANT_HAS_EE_COST
 
-#if defined(GRID_FLOATING_BASE) && defined(GRID_PLANT_HAS_COM_COST)
+#if defined(GRID_RBD_WITH_MUJOCO) && defined(GRID_PLANT_HAS_COM_COST)
 // MuJoCo-convention com_cost (floating base only). Same transform as ee_pos_cost
 // (q-block grad covector + GN hess congruence; q input-converted in-kernel).
 extern "C" int grid_rbd_com_cost_mujoco(
@@ -2157,9 +2157,9 @@ extern "C" int grid_rbd_com_cost_mujoco(
     cudaMemcpy(hess, g_plant.d_hess, batch * nx * nx * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
-#endif  // GRID_FLOATING_BASE && GRID_PLANT_HAS_COM_COST
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_PLANT_HAS_COM_COST
 
-#if defined(GRID_FLOATING_BASE) && defined(GRID_PLANT_HAS_MOMENTUM_COST)
+#if defined(GRID_RBD_WITH_MUJOCO) && defined(GRID_PLANT_HAS_MOMENTUM_COST)
 // MuJoCo-convention momentum_cost (floating base only). The kernel input-converts q
 // AND qd (qd[0:3] = R^T qd[0:3]) so h = A qd is the correct invariant momentum, then
 // reframes the qd-block grad (covector) + GN hess (congruence at offset nq). Value invariant.
@@ -2194,7 +2194,7 @@ extern "C" int grid_rbd_momentum_cost_mujoco(
     cudaMemcpy(hess, g_plant.d_hess, batch * nx * nx * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
-#endif  // GRID_FLOATING_BASE && GRID_PLANT_HAS_MOMENTUM_COST
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_PLANT_HAS_MOMENTUM_COST
 
 #ifdef GRID_PLANT_HAS_STEP_GRADIENT
 // plant_step_gradient: [A|B] = d x_{k+1}/d(x,u) = integrator_gradient([q;qd], u).
@@ -2230,7 +2230,7 @@ extern "C" int grid_plant_step_gradient(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention plant_step_gradient (floating base only). x/u raw mjx; the kernel
 // (MUJOCO_OUTPUT=true) input-converts the stacked state + forwards to the mjx
 // integrator_gradient_device (state-transition Jacobian). EULER/SI-EULER only.
@@ -2262,7 +2262,7 @@ extern "C" int grid_plant_step_gradient_mujoco(
     cudaMemcpy(dAB, g_plant.d_grad, batch * (2 * nv * 3 * nv) * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_STEP_GRADIENT
 
 #ifdef GRID_PLANT_HAS_STEP_HESSIAN
@@ -2324,7 +2324,7 @@ extern "C" int grid_plant_step_hessian(
     return 0;
 }
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention plant_step_hessian (floating base only). x/u raw mjx; the kernel
 // (MUJOCO_OUTPUT=true) input-converts the stacked state + transforms the 2nd-order
 // state-transition tensor to the mjx tangent (reuses fdsva_so SO tensors + a dedicated
@@ -2368,7 +2368,7 @@ extern "C" int grid_plant_step_hessian_mujoco(
     cudaMemcpy(d2AB, g_plant.d_d2AB, batch * d2ab * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
 }
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_STEP_HESSIAN
 
 
@@ -2493,7 +2493,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention inverse_dynamics (floating only): identical plumbing, kernel
 // launched with MUJOCO_OUTPUT=true. Registered under a separate target name so the
 // python jax surface dispatches on output_convention="mujoco".
@@ -2509,7 +2509,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()  // c
         .Attr<float>("gravity")
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // Shared helper: validate (B, NJ) and return batch size, or error.
 // Kept inline so each handler stays self-contained for grep-ability.
@@ -2575,7 +2575,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
 );
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention minv (floating only): identical plumbing, kernel launched with MUJOCO_OUTPUT=true.
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_minv_mujoco,
@@ -2585,7 +2585,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::F32>>()
         .Ret<ffi::Buffer<ffi::F32>>()
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // forward_dynamics(q, qd, u, f_ext) → qdd  (f_ext always passed; zeros if omitted)
@@ -2646,7 +2646,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention forward_dynamics (floating only): identical plumbing, kernel launched with MUJOCO_OUTPUT=true.
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_forward_dynamics_mujoco,
@@ -2658,7 +2658,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("gravity")
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // aba(q, qd, u, f_ext) → qdd  — same kernel signature shape as forward_dynamics
@@ -2719,7 +2719,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention aba (floating only): identical plumbing, kernel launched with MUJOCO_OUTPUT=true.
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_aba_mujoco,
@@ -2731,7 +2731,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("gravity")
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // crba(q) → M  (kernel writes the full mass matrix; no symmetrize needed)
@@ -2784,7 +2784,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention crba (floating only): identical plumbing, kernel launched with MUJOCO_OUTPUT=true.
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_crba_mujoco,
@@ -2795,7 +2795,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("gravity")
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // end_effector_pose(q) → end_effector_pose  flat (B, 6*NUM_EES)
@@ -2840,7 +2840,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
 );
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention end_effector_pose (floating only): identical plumbing, kernel launched with MUJOCO_OUTPUT=true.
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_end_effector_pose_mujoco,
@@ -2850,7 +2850,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::F32>>()
         .Ret<ffi::Buffer<ffi::F32>>()
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // end_effector_pose_gradient(q) → end_effector_pose_gradient d/dv flat (B, 6*NUM_EES*NV).
@@ -2899,7 +2899,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
 );
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention end_effector_pose_gradient (floating only): identical plumbing, kernel launched with MUJOCO_OUTPUT=true.
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_end_effector_pose_gradient_mujoco,
@@ -2909,7 +2909,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::F32>>()
         .Ret<ffi::Buffer<ffi::F32>>()
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // end_effector_pose_hessian(q) → end_effector_pose_hessian  flat (B, 6*NUM_EES*NV*NV)
@@ -2956,7 +2956,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
 );
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention end_effector_pose_hessian (floating only): identical plumbing, kernel launched with MUJOCO_OUTPUT=true.
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_end_effector_pose_hessian_mujoco,
@@ -2966,7 +2966,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::F32>>()
         .Ret<ffi::Buffer<ffi::F32>>()
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // inverse_dynamics_gradient(q, qd, qdd) → dc_du  flat (B, 2*NV*NV)
@@ -3040,7 +3040,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention inverse_dynamics_gradient (floating only): identical plumbing, kernel launched with MUJOCO_OUTPUT=true.
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_inverse_dynamics_gradient_mujoco,
@@ -3053,7 +3053,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("gravity")
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // forward_dynamics_gradient(q, qd, u) → df_du  flat (B, 2*NV*NV)
@@ -3115,7 +3115,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention forward_dynamics_gradient (floating only): identical plumbing, kernel launched with MUJOCO_OUTPUT=true.
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_forward_dynamics_gradient_mujoco,
@@ -3126,7 +3126,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("gravity")
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // idsva_so(q, qd, qdd) → packed (B, SECOND_ORDER_TENSOR_SIZE)
@@ -3167,7 +3167,7 @@ static ffi::Error grid_rbd_jax_idsva_so_impl(
     // Compile-time frame dispatch: floating-base .so call the world-frame kernel
     // (which carries the MUJOCO_OUTPUT flag); fixed-base .so call the body-frame
     // kernel (pinocchio-only — mjx is floating-base-only, asserted in the #else).
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
     grid::idsva_so_world_frame_kernel<T, grid::GRID_DEFAULT_RESOURCE_TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
         g_block_dimms, g_thread_dimms,
         grid::IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES<T>(),
@@ -3202,7 +3202,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention idsva_so (floating only): world-frame kernel launched with MUJOCO_OUTPUT=true.
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_idsva_so_mujoco,
@@ -3213,7 +3213,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("gravity")
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // fdsva_so(q, qd, u) → packed (B, SECOND_ORDER_TENSOR_SIZE)
@@ -3274,7 +3274,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention fdsva_so (floating only): identical plumbing, kernel launched with MUJOCO_OUTPUT=true.
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_fdsva_so_mujoco,
@@ -3285,7 +3285,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("gravity")
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -3355,7 +3355,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention inverse_dynamics_regressor (floating only): identical plumbing, kernel launched with MUJOCO_OUTPUT=true.
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_inverse_dynamics_regressor_mujoco,
@@ -3366,7 +3366,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("gravity")
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // forward_dynamics_parameter_gradient(q, qd, u) → dqdd/dpi = -Minv . Y
@@ -3529,7 +3529,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
 );
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention integrator (floating only): identical plumbing, kernel launched with MUJOCO_OUTPUT=true.
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_integrator_mujoco,
@@ -3540,7 +3540,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // integrator_gradient(q, qd, u; dt, it) → dAB  (B, 2*NV, 3*NV)
 template <bool MUJOCO>
@@ -3581,7 +3581,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
 );
 
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention integrator_gradient (floating only): identical plumbing, kernel launched with MUJOCO_OUTPUT=true.
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_integrator_gradient_mujoco,
@@ -3592,7 +3592,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -3669,7 +3669,7 @@ GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_quadratic_state_cost,
                              grid_rbd_jax_plant_quadratic_state_cost_impl);
 GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_quadratic_input_cost,
                              grid_rbd_jax_plant_quadratic_input_cost_impl);
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention state cost (floating only): value invariant, grad covector-rotated,
 // GN hess congruence (MUJOCO_OUTPUT=true). Input cost has no mjx variant (frame-invariant).
 static ffi::Error grid_rbd_jax_plant_quadratic_state_cost_mujoco_impl(
@@ -3680,7 +3680,7 @@ static ffi::Error grid_rbd_jax_plant_quadratic_state_cost_mujoco_impl(
 }
 GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_quadratic_state_cost_mujoco,
                              grid_rbd_jax_plant_quadratic_state_cost_mujoco_impl);
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 
 // joint_{position,velocity,torque}_barrier(var, lower, upper; mu)
 // → (value (B,1), grad (B,N), hess_diag (B,N)). POSITION uses NUM_POS else NUM_VEL.
@@ -3798,7 +3798,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
 );
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_plant_step_mujoco,
     grid_rbd_jax_plant_step_impl<true>,
@@ -3808,7 +3808,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_STEP
 
 #ifdef GRID_PLANT_HAS_STEP_GRADIENT
@@ -3864,7 +3864,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
 );
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_plant_step_gradient_mujoco,
     grid_rbd_jax_plant_step_gradient_impl<true>,
@@ -3874,7 +3874,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_STEP_GRADIENT
 
 #ifdef GRID_PLANT_HAS_EE_COST
@@ -3913,10 +3913,10 @@ static ffi::Error grid_rbd_jax_plant_ee_pos_cost_impl(
 
 GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_ee_pos_cost,
                              grid_rbd_jax_plant_ee_pos_cost_impl<false>);
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_ee_pos_cost_mujoco,
                              grid_rbd_jax_plant_ee_pos_cost_impl<true>);
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_EE_COST
 
 #ifdef GRID_PLANT_HAS_COM_COST
@@ -3955,10 +3955,10 @@ static ffi::Error grid_rbd_jax_plant_com_cost_impl(
 
 GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_com_cost,
                              grid_rbd_jax_plant_com_cost_impl<false>);
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_com_cost_mujoco,
                              grid_rbd_jax_plant_com_cost_impl<true>);
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_COM_COST
 
 #ifdef GRID_PLANT_HAS_MOMENTUM_COST
@@ -4011,7 +4011,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
         .Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>()
 );
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_plant_momentum_cost_mujoco,
     grid_rbd_jax_plant_momentum_cost_impl<true>,
@@ -4021,7 +4021,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
         .Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>()
 );
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_MOMENTUM_COST
 
 #endif  // GRID_RBD_WITH_JAX
@@ -4374,7 +4374,7 @@ torch::Tensor torch_idsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor qd
     // Compile-time frame dispatch (mirrors the JAX handler): floating-base .so call
     // the world-frame kernel (which carries MUJOCO_OUTPUT); fixed-base .so call the
     // body-frame kernel (pinocchio-only — mjx is floating-base-only).
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
     grid::idsva_so_world_frame_kernel<T, grid::GRID_DEFAULT_RESOURCE_TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<g_block_dimms, g_thread_dimms, grid::IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_idsva_so, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
 #else
@@ -4840,7 +4840,7 @@ GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
 #ifdef GRID_PLANT_HAS_MOMENTUM_COST
     m.def("momentum_cost(Tensor q, Tensor qd, Tensor h_des, Tensor W) -> Tensor[]");
 #endif
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
     // MuJoCo-convention ops (floating only): same schema, name suffixed _mujoco; the
     // CUDA impl launches the kernel with MUJOCO_OUTPUT=true.
     m.def("inverse_dynamics_mujoco(Tensor q, Tensor qd, float gravity, Tensor? qdd=None, Tensor? f_ext=None) -> Tensor");
@@ -4874,7 +4874,7 @@ GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
 #ifdef GRID_PLANT_HAS_MOMENTUM_COST
     m.def("momentum_cost_mujoco(Tensor q, Tensor qd, Tensor h_des, Tensor W) -> Tensor[]");
 #endif
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 }
 
 GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
@@ -4914,7 +4914,7 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
 #ifdef GRID_PLANT_HAS_MOMENTUM_COST
     m.impl("momentum_cost", torch_momentum_cost<false>);
 #endif
-#ifdef GRID_FLOATING_BASE
+#ifdef GRID_RBD_WITH_MUJOCO
     // MuJoCo-convention impls (floating only): same op functions instantiated with
     // MUJOCO=true so the kernel launches with MUJOCO_OUTPUT=true.
     m.impl("inverse_dynamics_mujoco", torch_inverse_dynamics<true>);
@@ -4948,7 +4948,7 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
 #ifdef GRID_PLANT_HAS_MOMENTUM_COST
     m.impl("momentum_cost_mujoco", torch_momentum_cost<true>);
 #endif
-#endif  // GRID_FLOATING_BASE
+#endif  // GRID_RBD_WITH_MUJOCO
 }
 
 #endif  // GRID_RBD_WITH_TORCH
