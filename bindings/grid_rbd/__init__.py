@@ -260,10 +260,14 @@ def register_robot(
     return handle
 
 
-def get_robot(name: str, cache_dir: str | Path | None = None) -> RobotHandle:
+def get_robot(name: str, cache_dir: str | Path | None = None, *,
+              output_convention: str = "pinocchio") -> RobotHandle:
     """Look up a previously-registered robot by name.
 
     Raises RobotNotRegisteredError if `name` isn't in the manifest.
+    ``output_convention`` ('pinocchio' or 'mujoco') is a runtime IO setting
+    mirroring :py:func:`register_robot`; it can also be set later via
+    ``handle.output_convention``.
     """
     cache_dir = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     entry = manifest_lookup(cache_dir, name)
@@ -276,7 +280,9 @@ def get_robot(name: str, cache_dir: str | Path | None = None) -> RobotHandle:
             f"Manifest entry for {name!r} points at {so_path}, but the file "
             f"is missing. Cache is corrupted; re-register with force_rebuild=True."
         )
-    return RobotHandle(name, str(so_path), entry)
+    handle = RobotHandle(name, str(so_path), entry)
+    handle.output_convention = output_convention
+    return handle
 
 
 def list_registered(cache_dir: str | Path | None = None) -> list[dict[str, Any]]:

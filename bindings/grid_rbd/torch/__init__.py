@@ -985,12 +985,16 @@ def register_robot(
                             output_convention=output_convention)
 
 
-def get_robot(name: str, cache_dir: str | Path | None = None) -> TorchRobotHandle:
-    """Look up a previously-registered robot (same cache as grid_rbd.get_robot)."""
+def get_robot(name: str, cache_dir: str | Path | None = None, *,
+              output_convention: str = "pinocchio") -> TorchRobotHandle:
+    """Look up a previously-registered robot (same cache as grid_rbd.get_robot).
+    ``output_convention`` ('pinocchio' or 'mujoco') mirrors register_robot and
+    can also be set later via the handle's ``output_convention`` property."""
     _require_torch()  # fail early with install guidance if torch is missing
     base = _grid_rbd.get_robot(name, cache_dir=cache_dir)
     cache_key, so_path = _lookup(name, cache_dir)
-    return TorchRobotHandle(base, cache_key, so_path)
+    return TorchRobotHandle(base, cache_key, so_path,
+                            output_convention=output_convention)
 
 
 def _lookup(name, cache_dir):

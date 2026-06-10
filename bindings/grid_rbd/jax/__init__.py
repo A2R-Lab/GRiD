@@ -1286,16 +1286,21 @@ def register_robot(
 def get_robot(
     name: str,
     cache_dir: str | Path | None = None,
+    *,
+    output_convention: str = "pinocchio",
 ) -> JaxRobotHandle:
     """Look up a previously-registered robot. Same cache as
-    :py:func:`grid_rbd.get_robot`."""
+    :py:func:`grid_rbd.get_robot`. ``output_convention`` ('pinocchio' or
+    'mujoco') mirrors :py:func:`register_robot` and can also be set later
+    via the handle's ``output_convention`` property."""
     _require_jax()  # fail early with install guidance if jax is missing
     base = _grid_rbd.get_robot(name, cache_dir=cache_dir)
     from grid_rbd._cache import default_cache_dir, manifest_lookup, store_dir
     cd = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     entry = manifest_lookup(cd, name)
     so_path = store_dir(cd, entry["cache_key"]) / "robot.so"
-    return JaxRobotHandle(base, entry["cache_key"], str(so_path))
+    return JaxRobotHandle(base, entry["cache_key"], str(so_path),
+                          output_convention=output_convention)
 
 
 __all__ = ["JaxRobotHandle", "register_robot", "get_robot"]
