@@ -430,6 +430,47 @@ def test_all_methods_jit(jax_handle, samples):
         assert np.all(np.isfinite(np.asarray(x)))
 
 
+# ─── P-tier1: centroidal / kinematics family parity (jax vs numpy oracle) ─────
+
+# (method name, args-from-samples) for the value ops that return a single array.
+_PTIER1_ARRAY = [
+    ("generalized_gravity",        ("q",)),
+    ("nonlinear_effects",          ("q", "qd")),
+    ("coriolis_matrix",            ("q", "qd")),
+    ("kinetic_energy_regressor",   ("q", "qd")),
+    ("potential_energy_regressor", ("q",)),
+    ("energy",                     ("q", "qd")),
+    ("cmm_time_variation",         ("q", "qd")),
+    ("dccrba",                     ("q",)),
+    ("frame_jacobian",             ("q",)),
+    ("frame_jacobian_dot",         ("q", "qd")),
+    ("osc_inertia",                ("q",)),
+]
+
+
+@pytest.mark.parametrize("method,argnames", _PTIER1_ARRAY, ids=[m for m, _ in _PTIER1_ARRAY])
+def test_ptier1_array_matches_plain(jax_handle, plain_handle, samples, method, argnames):
+    """Each centroidal/kinematics value op on the jax surface must match the
+    plain numpy handle (the pinocchio-validated oracle) — same .so, same kernel."""
+    args = [samples[a] for a in argnames]
+    out_jax   = np.asarray(getattr(jax_handle, method)(*args))
+    out_plain = np.asarray(getattr(plain_handle, method)(*args))
+    assert out_jax.shape == out_plain.shape, f"{method}: {out_jax.shape} vs {out_plain.shape}"
+    assert np.max(np.abs(out_jax - out_plain)) < _TOL, f"{method}: {np.max(np.abs(out_jax - out_plain)):.3e}"
+
+
+def test_ptier1_com_ccrba_tuple_matches_plain(jax_handle, plain_handle, samples):
+    """com / ccrba return (a, b) tuples — both elements must match the oracle."""
+    q, qd = samples["q"], samples["qd"]
+    for name, args in (("com", (q,)), ("ccrba", (q, qd))):
+        jx = getattr(jax_handle, name)(*args)
+        pl = getattr(plain_handle, name)(*args)
+        for i, (a, b) in enumerate(zip(jx, pl)):
+            a, b = np.asarray(a), np.asarray(b)
+            assert a.shape == b.shape, f"{name}[{i}]: {a.shape} vs {b.shape}"
+            assert np.max(np.abs(a - b)) < _TOL, f"{name}[{i}]: {np.max(np.abs(a - b)):.3e}"
+
+
 def test_register_idempotent(jax_handle):
     """Re-registering under the same name reuses the cached .so."""
     import time

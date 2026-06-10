@@ -306,3 +306,44 @@ def test_capture_over_max_batch_raises(th):
     big = _t(np.zeros((th.max_batch + 1, NJ), np.float32))
     with pytest.raises(Exception):
         th.forward_dynamics(big, big, big)
+
+
+# ─── P-tier1: centroidal / kinematics family parity (torch vs numpy oracle) ───
+
+_PTIER1_ARRAY = [
+    ("generalized_gravity",        ("qn",)),
+    ("nonlinear_effects",          ("qn", "qdn")),
+    ("coriolis_matrix",            ("qn", "qdn")),
+    ("kinetic_energy_regressor",   ("qn", "qdn")),
+    ("potential_energy_regressor", ("qn",)),
+    ("energy",                     ("qn", "qdn")),
+    ("cmm_time_variation",         ("qn", "qdn")),
+    ("dccrba",                     ("qn",)),
+    ("frame_jacobian",             ("qn",)),
+    ("frame_jacobian_dot",         ("qn", "qdn")),
+    ("osc_inertia",                ("qn",)),
+]
+
+
+@pytest.mark.parametrize("method,argnames", _PTIER1_ARRAY, ids=[m for m, _ in _PTIER1_ARRAY])
+def test_ptier1_array_matches_numpy(th, nh, samples, method, argnames):
+    """Each centroidal/kinematics value op on the torch surface must match the
+    plain numpy handle (pinocchio-validated oracle) — same .so, same kernel."""
+    nargs = [samples[a] for a in argnames]
+    targs = [_t(samples[a]) for a in argnames]
+    out_torch = getattr(th, method)(*targs).detach().cpu().numpy()
+    out_numpy = np.asarray(getattr(nh, method)(*nargs))
+    assert out_torch.shape == out_numpy.shape, f"{method}: {out_torch.shape} vs {out_numpy.shape}"
+    assert _rel(out_torch, out_numpy) < _TOL, f"{method}: rel {_rel(out_torch, out_numpy):.3e}"
+
+
+def test_ptier1_com_ccrba_tuple_matches_numpy(th, nh, samples):
+    """com / ccrba return (a, b) tuples — both elements must match the oracle."""
+    qn, qdn = samples["qn"], samples["qdn"]
+    for name, nargs, targs in (("com", (qn,), (_t(qn),)), ("ccrba", (qn, qdn), (_t(qn), _t(qdn)))):
+        tt = getattr(th, name)(*targs)
+        nn = getattr(nh, name)(*nargs)
+        for i, (a, b) in enumerate(zip(tt, nn)):
+            a = a.detach().cpu().numpy(); b = np.asarray(b)
+            assert a.shape == b.shape, f"{name}[{i}]: {a.shape} vs {b.shape}"
+            assert _rel(a, b) < _TOL, f"{name}[{i}]: rel {_rel(a, b):.3e}"

@@ -162,6 +162,25 @@ pybind side already used `opt_sym` (nullptr-tolerant) so only the wrapper's comp
 hard failure. RULE: a wrapper that references a conditionally-emitted kernel variant must gate on a macro that
 tracks the EMISSION condition, not a looser proxy (floating ⊋ mjx-capable).
 
+### 1i. Non-uniform kernel SIGNATURES break the whole fixed-base binding build (and torch's optional-dep masks it in CI)
+**Found during P-tier1 (2026-06-10).** The §1f-1h fixes had codegen DROP the `bool MUJOCO_OUTPUT` template
+param from kernels for non-mjx robots (`if mjx_kernel: <T,TIER,MUJOCO> else: <T,TIER>`), so fixed/mimic/skew
+robots emitted a 2-param `*_kernel`, while the wrapper unconditionally launches `*_kernel<T,TIER,MUJOCO>`
+(3 args). Result: EVERY fixed-base / floating+mimic binding build fails to compile (`inverse_dynamics_kernel`,
+then `momentum_cost_kernel`, then `plant_step_kernel`, … — a CHAIN, since nvcc stops after a few errors). It
+went unnoticed because the binding build only compiles the torch op block when torch is installed, and CI
+**skips torch** (optional dep) — so `test_iiwa14_torch_smoke` / even `_jax_smoke` for a FIXED robot never
+exercised this path. Detection: build the bindings for a FIXED-base robot in a torch-installed env.
+**Fix = UNIFORMITY, not a per-call workaround:** make the codegen emit the SAME kernel template signature for
+every robot class (`template <typename T, int RESOURCE_TIER = ..., bool MUJOCO_OUTPUT = false>` always — the
+plant cost/step kernels likewise; integrator kernels carry `IntegratorType IT` too). Keep the mjx BODY
+(`if constexpr(MUJOCO_OUTPUT){...}`) gated on `mjx_kernel` so non-mjx robots emit NO mjx body (it would
+reference floating-only constructs) — only the SIGNATURE is unconditional. The `false` instantiation is
+byte-identical PTX (unused defaulted param, mjx body absent), so the pinocchio path is preserved and floating
+non-mimic codegen is unchanged (it already took the 3-param branch). RULE: a kernel the wrapper calls with N
+template args must emit N params on ALL robot classes — prefer making the DEFINITION uniform over branching
+every call site. (Validated bit-exact on iiwa14-fixed + go2-floating + fr3-mimic, jax+torch.)
+
 ---
 
 ## 2. Debugging methodology (what actually localizes a bug fast)
