@@ -12,7 +12,8 @@ The forward-only centroidal / energy / kinematics surface mirrors the numpy
 handle: ``generalized_gravity``, ``nonlinear_effects``, ``energy``, ``com``,
 ``ccrba``, ``dccrba``, ``cmm_time_variation``, ``coriolis_matrix``,
 ``kinetic_energy_regressor``, ``potential_energy_regressor``, ``frame_jacobian``,
-``frame_jacobian_dot``, ``osc_inertia`` (the gated ones raise an actionable
+``frame_jacobian_dot``, ``osc_inertia``, ``end_effector_pose_runtime``,
+``end_effector_pose_gradient_runtime`` (the gated ones raise an actionable
 "not generated for this robot" error when their kernel is absent from the .so).
 
 The grid_plant cost / barrier / plant-step surface is also exposed
@@ -946,6 +947,57 @@ class TorchRobotHandle:
         are reframed to the mjx free-joint convention."""
         nee, nv = self.num_ees, self.num_vel
         return self._op(_convention, "end_effector_pose_hessian")(q).reshape(-1, 6 * nee, nv, nv)
+
+    def end_effector_pose_runtime(self, q, ee_joint_names=None, ee_offsets=None,
+                                  *, _convention=None):
+        """Runtime-target multi-EE pose ``[xyz; rpy]`` at an offset point.
+
+        Mirrors :py:meth:`grid_rbd.RobotHandle.end_effector_pose_runtime`:
+        ``ee_joint_names`` (None => all leaf joints, or a str / list of joint
+        names) selects the EE frames; ``ee_offsets`` (None => frame origin, or one
+        ``[x,y,z]`` / ``[x,y,z,1]`` per EE) shifts the measurement point. The
+        single-target op is looped over the resolved jid list and stacked.
+
+        Returns ``(B, NUM_EE, 6)``. Forward-only (no autograd).
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention;
+        the world pose VALUE is frame-invariant."""
+        import torch
+        jids = self._base._resolve_ee_jids(ee_joint_names)
+        offsets = self._base._normalize_ee_offsets(ee_offsets, len(jids))
+        op = self._gated_op(_convention, "end_effector_pose_runtime")
+        per_ee = []
+        for jid, off in zip(jids, offsets):
+            off_t = torch.as_tensor(off, dtype=q.dtype, device=q.device).reshape(-1)[:3].contiguous()
+            per_ee.append(op(q, int(jid), off_t))  # (B, 6)
+        return torch.stack(per_ee, dim=1)  # (B, NUM_EE, 6)
+
+    def end_effector_pose_gradient_runtime(self, q, ee_joint_names=None, ee_offsets=None,
+                                           *, _convention=None):
+        """Runtime-target multi-EE pose gradient ``d[xyz; rpy]/dv`` (6 x NV) at an
+        offset point. Same ``ee_joint_names`` / ``ee_offsets`` semantics as
+        :py:meth:`end_effector_pose_runtime`; mirrors
+        :py:meth:`grid_rbd.RobotHandle.end_effector_pose_gradient_runtime`.
+
+        The kernel writes column-major ``(B, 6*NV)`` per target; we reshape
+        ``(B, NV, 6)`` then transpose to ``(B, 6, NV)`` and stack.
+
+        Returns ``(B, NUM_EE, 6, NV)``. Forward-only (no autograd).
+
+        With ``output_convention="mujoco"`` (floating base) the base-linear columns
+        are reframed by R^T in-kernel (column-reframe class)."""
+        import torch
+        nv = self.num_vel
+        jids = self._base._resolve_ee_jids(ee_joint_names)
+        offsets = self._base._normalize_ee_offsets(ee_offsets, len(jids))
+        op = self._gated_op(_convention, "end_effector_pose_gradient_runtime")
+        per_ee = []
+        for jid, off in zip(jids, offsets):
+            off_t = torch.as_tensor(off, dtype=q.dtype, device=q.device).reshape(-1)[:3].contiguous()
+            raw = op(q, int(jid), off_t)  # (B, 6*NV) col-major
+            B = raw.shape[0]
+            per_ee.append(raw.reshape(B, nv, 6).permute(0, 2, 1))  # (B, 6, NV)
+        return torch.stack(per_ee, dim=1)  # (B, NUM_EE, 6, NV)
 
     def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None,
                                   _convention=None):

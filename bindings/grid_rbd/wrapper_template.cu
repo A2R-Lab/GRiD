@@ -2917,6 +2917,145 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 #endif  // GRID_RBD_WITH_MUJOCO
 
 
+// ─── runtime-target multi-EE pose / pose-gradient (single-target FFI) ─────────
+// These mirror the numpy C-ABI grid_rbd_end_effector_pose_runtime: a SINGLE target
+// jid + a SINGLE 3-vector offset per call. The Python wrapper resolves names→jids
+// and loops/stacks the EE list (matches _handle.py). The runtime offset is passed
+// as three .Attr<float> (offx/offy/offz) and staged into the shared device buffer
+// g_data->d_eepose_runtime_offset via cudaMemcpyAsync on the stream — attrs (not a
+// Buffer input) so jax/vmap never tries to batch the single 3-vector. The kernel's
+// d_offset is then that contiguous 3-T device pointer. target_jid is an int64 attr
+// (already an absolute jid; the Python layer resolves names→jids, so no -1 default).
+#ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
+// end_effector_pose_runtime(q) → (B, 6) [xyz; rpy] of target_jid at offset point.
+template <bool MUJOCO>
+static ffi::Error grid_rbd_jax_end_effector_pose_runtime_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q,
+    ffi::ResultBuffer<ffi::F32> ee_out,
+    int64_t target_jid, float offx, float offy, float offz)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose_runtime: q", grid::NUM_JOINTS);
+    int batch = (int)q.dimensions()[0];
+    int nj = grid::NUM_JOINTS;
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("end_effector_pose_runtime: batch > max_batch");
+
+    const size_t row_bytes = nj * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch,
+                      q.typed_data(),       row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+
+    // stage the runtime offset (3 contiguous T) into the shared device buffer.
+    T off[3] = {static_cast<T>(offx), static_cast<T>(offy), static_cast<T>(offz)};
+    cudaMemcpyAsync(g_data->d_eepose_runtime_offset, off, 3 * sizeof(T),
+                    cudaMemcpyHostToDevice, stream);
+
+    constexpr int stride_q = 3 * grid::NUM_JOINTS;
+    grid::end_effector_pose_runtime_kernel<T, grid::GRID_DEFAULT_RESOURCE_TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
+        g_block_dimms, g_thread_dimms,
+        grid::END_EFFECTOR_POSE_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        stream>>>(
+            g_data->d_eePose, g_data->d_q_qd_u, stride_q,
+            (int)target_jid, g_data->d_eepose_runtime_offset, g_robot, batch);
+
+    cudaMemcpyAsync(ee_out->typed_data(), g_data->d_eePose,
+                    batch * 6 * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_end_effector_pose_runtime,
+    grid_rbd_jax_end_effector_pose_runtime_impl<false>,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+        .Attr<int64_t>("target_jid")
+        .Attr<float>("offx").Attr<float>("offy").Attr<float>("offz")
+);
+#ifdef GRID_RBD_WITH_MUJOCO
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_end_effector_pose_runtime_mujoco,
+    grid_rbd_jax_end_effector_pose_runtime_impl<true>,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+        .Attr<int64_t>("target_jid")
+        .Attr<float>("offx").Attr<float>("offy").Attr<float>("offz")
+);
+#endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_END_EFFECTOR_POSE_RUNTIME
+
+
+#ifdef GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
+// end_effector_pose_gradient_runtime(q) → (B, 6*NV) col-major d[xyz; rpy]/dv of
+// target_jid at the offset point. Python reshapes (B,NV,6)→transpose→(B,6,NV).
+template <bool MUJOCO>
+static ffi::Error grid_rbd_jax_end_effector_pose_gradient_runtime_impl(
+    cudaStream_t stream,
+    ffi::Buffer<ffi::F32> q,
+    ffi::ResultBuffer<ffi::F32> dee_out,
+    int64_t target_jid, float offx, float offy, float offz)
+{
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
+    GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose_gradient_runtime: q", grid::NUM_JOINTS);
+    int batch = (int)q.dimensions()[0];
+    int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("end_effector_pose_gradient_runtime: batch > max_batch");
+
+    const size_t row_bytes = nj * sizeof(T);
+    const size_t dst_pitch = 3 * nj * sizeof(T);
+    cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch,
+                      q.typed_data(),       row_bytes,
+                      row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+
+    T off[3] = {static_cast<T>(offx), static_cast<T>(offy), static_cast<T>(offz)};
+    cudaMemcpyAsync(g_data->d_eepose_runtime_offset, off, 3 * sizeof(T),
+                    cudaMemcpyHostToDevice, stream);
+
+    constexpr int stride_q = 3 * grid::NUM_JOINTS;
+    grid::end_effector_pose_gradient_runtime_kernel<T, grid::GRID_DEFAULT_RESOURCE_TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
+        g_block_dimms, g_thread_dimms,
+        grid::END_EFFECTOR_POSE_GRADIENT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>(),
+        stream>>>(
+            g_data->d_eePoseGrad, g_data->d_q_qd_u, stride_q,
+            (int)target_jid, g_data->d_eepose_runtime_offset, g_robot, batch);
+
+    cudaMemcpyAsync(dee_out->typed_data(), g_data->d_eePoseGrad,
+                    batch * 6 * nv * sizeof(T),
+                    cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_end_effector_pose_gradient_runtime,
+    grid_rbd_jax_end_effector_pose_gradient_runtime_impl<false>,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+        .Attr<int64_t>("target_jid")
+        .Attr<float>("offx").Attr<float>("offy").Attr<float>("offz")
+);
+#ifdef GRID_RBD_WITH_MUJOCO
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    grid_rbd_jax_end_effector_pose_gradient_runtime_mujoco,
+    grid_rbd_jax_end_effector_pose_gradient_runtime_impl<true>,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+        .Attr<int64_t>("target_jid")
+        .Attr<float>("offx").Attr<float>("offy").Attr<float>("offz")
+);
+#endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
+
+
 // end_effector_pose_hessian(q) → end_effector_pose_hessian  flat (B, 6*NUM_EES*NV*NV)
 // The kernel also writes d_end_effector_pose_gradient as a byproduct; we only return d2.
 template <bool MUJOCO>
@@ -4943,6 +5082,54 @@ torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q) {
     return out;
 }
 
+// ─── runtime-target multi-EE pose / pose-gradient (single-target torch ops) ──
+// SINGLE target jid + a SINGLE 3-vector offset per call (the Python wrapper loops
+// the resolved jid list + stacks, mirroring _handle.py). The offset is a 3-element
+// CUDA float Tensor; its data_ptr is ALREADY a contiguous device pointer to 3 T, so
+// it is handed straight to the kernel's d_offset (no host staging). target_jid is an
+// absolute jid (the Python layer resolves names→jids). Gated like the C-ABI wrappers.
+#ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
+template <bool MUJOCO>
+torch::Tensor torch_end_effector_pose_runtime(torch::Tensor q, int64_t target_jid, torch::Tensor offset) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS;
+    grid_torch_check(q, "end_effector_pose_runtime: q", nj);
+    TORCH_CHECK(offset.is_cuda() && offset.numel() == 3,
+                "end_effector_pose_runtime: offset must be a 3-element CUDA tensor");
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
+    auto off = offset.to(torch::kFloat32).contiguous();
+    auto out = grid_torch_empty(batch, 6, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::end_effector_pose_runtime_kernel<T, grid::GRID_DEFAULT_RESOURCE_TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<g_block_dimms, g_thread_dimms, grid::END_EFFECTOR_POSE_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_eePose, g_data->d_q_qd_u, stride, (int)target_jid, off.data_ptr<float>(), g_robot, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_eePose, batch * 6 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+#endif  // GRID_HAS_END_EFFECTOR_POSE_RUNTIME
+
+#ifdef GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
+template <bool MUJOCO>
+torch::Tensor torch_end_effector_pose_gradient_runtime(torch::Tensor q, int64_t target_jid, torch::Tensor offset) {
+    grid_torch_init_or_throw();
+    const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    grid_torch_check(q, "end_effector_pose_gradient_runtime: q", nj);
+    TORCH_CHECK(offset.is_cuda() && offset.numel() == 3,
+                "end_effector_pose_gradient_runtime: offset must be a 3-element CUDA tensor");
+    int batch = grid_torch_batch(q);
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+    grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
+    auto off = offset.to(torch::kFloat32).contiguous();
+    auto out = grid_torch_empty(batch, 6 * nv, q);
+    constexpr int stride = 3 * grid::NUM_JOINTS;
+    grid::end_effector_pose_gradient_runtime_kernel<T, grid::GRID_DEFAULT_RESOURCE_TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<g_block_dimms, g_thread_dimms, grid::END_EFFECTOR_POSE_GRADIENT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        g_data->d_eePoseGrad, g_data->d_q_qd_u, stride, (int)target_jid, off.data_ptr<float>(), g_robot, batch);
+    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_eePoseGrad, batch * 6 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    return out;
+}
+#endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
+
 // qdd wiring (torch grad): ∂c/∂(q,qd) depends on qdd via the M·qdd term's
 // derivatives. When a qdd tensor is provided, copy it D→D into d_qdd and launch
 // the USE_QDD overload of the gradient kernel (signature adds d_qdd after
@@ -5722,6 +5909,10 @@ GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
     m.def("frame_jacobian(Tensor q, int target_jid, int reference_frame) -> Tensor");
     m.def("frame_jacobian_dot(Tensor q, Tensor qd, int target_jid, int reference_frame) -> Tensor");
     m.def("osc_inertia(Tensor q) -> Tensor");
+    // runtime-target multi-EE pose/gradient (single target jid + 3-vec offset; the
+    // Python layer loops the resolved jid list + stacks). Gated schemas always def'd.
+    m.def("end_effector_pose_runtime(Tensor q, int target_jid, Tensor offset) -> Tensor");
+    m.def("end_effector_pose_gradient_runtime(Tensor q, int target_jid, Tensor offset) -> Tensor");
     // grid_plant surface (cost / barrier always emitted; the rest are gated).
     m.def("quadratic_state_cost(Tensor x, Tensor x_des, Tensor Q) -> Tensor[]");
     m.def("quadratic_input_cost(Tensor u, Tensor u_des, Tensor R) -> Tensor[]");
@@ -5775,6 +5966,8 @@ GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
     m.def("frame_jacobian_mujoco(Tensor q, int target_jid, int reference_frame) -> Tensor");
     m.def("frame_jacobian_dot_mujoco(Tensor q, Tensor qd, int target_jid, int reference_frame) -> Tensor");
     m.def("osc_inertia_mujoco(Tensor q) -> Tensor");
+    m.def("end_effector_pose_runtime_mujoco(Tensor q, int target_jid, Tensor offset) -> Tensor");
+    m.def("end_effector_pose_gradient_runtime_mujoco(Tensor q, int target_jid, Tensor offset) -> Tensor");
     m.def("quadratic_state_cost_mujoco(Tensor x, Tensor x_des, Tensor Q) -> Tensor[]");
 #ifdef GRID_PLANT_HAS_STEP
     m.def("plant_step_mujoco(Tensor x, Tensor u, float dt, int it, float gravity) -> Tensor");
@@ -5837,6 +6030,12 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
     m.impl("frame_jacobian", torch_frame_jacobian<false>);
     m.impl("frame_jacobian_dot", torch_frame_jacobian_dot<false>);
     m.impl("osc_inertia", torch_osc_inertia<false>);
+#endif
+#ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
+    m.impl("end_effector_pose_runtime", torch_end_effector_pose_runtime<false>);
+#endif
+#ifdef GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
+    m.impl("end_effector_pose_gradient_runtime", torch_end_effector_pose_gradient_runtime<false>);
 #endif
     m.impl("quadratic_state_cost", torch_quadratic_state_cost<false>);
     m.impl("quadratic_input_cost", torch_quadratic_input_cost);
@@ -5901,6 +6100,12 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
     m.impl("frame_jacobian_mujoco", torch_frame_jacobian<true>);
     m.impl("frame_jacobian_dot_mujoco", torch_frame_jacobian_dot<true>);
     m.impl("osc_inertia_mujoco", torch_osc_inertia<true>);
+#endif
+#ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
+    m.impl("end_effector_pose_runtime_mujoco", torch_end_effector_pose_runtime<true>);
+#endif
+#ifdef GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
+    m.impl("end_effector_pose_gradient_runtime_mujoco", torch_end_effector_pose_gradient_runtime<true>);
 #endif
     m.impl("quadratic_state_cost_mujoco", torch_quadratic_state_cost<true>);
 #ifdef GRID_PLANT_HAS_STEP

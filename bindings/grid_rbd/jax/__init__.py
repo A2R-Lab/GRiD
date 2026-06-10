@@ -26,7 +26,9 @@ Surface (parity with the plain ``RobotHandle``):
   ``kinetic_energy_regressor``, ``potential_energy_regressor``,
   ``frame_jacobian``, ``frame_jacobian_dot``, ``osc_inertia``,
   ``end_effector_pose``, ``end_effector_pose_gradient``,
-  ``end_effector_pose_hessian``, ``inverse_dynamics_gradient``, ``forward_dynamics_gradient``,
+  ``end_effector_pose_hessian``, ``end_effector_pose_runtime``,
+  ``end_effector_pose_gradient_runtime``,
+  ``inverse_dynamics_gradient``, ``forward_dynamics_gradient``,
   ``idsva_so``, ``fdsva_so``, plus the grid_plant cost / barrier / plant-step
   surface (``plant_step``, ``plant_step_gradient``, ``quadratic_state_cost``,
   ``quadratic_input_cost``, ``ee_pos_cost``, ``joint_position_barrier``,
@@ -1149,6 +1151,73 @@ class JaxRobotHandle:
         out_type = self._out(q, 6 * nee * nv * nv)
         flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(q)
         return flat.reshape(q.shape[:-1] + (6 * nee, nv, nv))
+
+    def end_effector_pose_runtime(self, q, ee_joint_names=None, ee_offsets=None,
+                                  *, _convention=None):
+        """Runtime-target multi-EE pose ``[xyz; rpy]`` at an offset point.
+
+        Mirrors :py:meth:`grid_rbd.RobotHandle.end_effector_pose_runtime`:
+        ``ee_joint_names`` (None => all leaf joints, or a str / list of joint
+        names) selects the EE frames; ``ee_offsets`` (None => frame origin, or one
+        ``[x,y,z]`` / ``[x,y,z,1]`` per EE) shifts the measurement point. The
+        single-target FFI op is looped over the resolved jid list (``target_jid``
+        + ``off{x,y,z}`` are static FFI attrs) and stacked.
+
+        Returns ``(..., NUM_EE, 6)``. Forward-only (no autograd).
+
+        With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention;
+        the world pose VALUE is frame-invariant."""
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        target = self._mt(_convention,
+            "end_effector_pose_runtime", "grid_rbd_jax_end_effector_pose_runtime")
+        jids = self._base._resolve_ee_jids(ee_joint_names)
+        offsets = self._base._normalize_ee_offsets(ee_offsets, len(jids))
+        (q,), B = self._prep_2d("end_effector_pose_runtime", q)
+        out_type = self._out(q, 6)
+        per_ee = []
+        for jid, off in zip(jids, offsets):
+            off = np.asarray(off, dtype=np.float32).reshape(-1)
+            raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+                q, target_jid=np.int64(int(jid)),
+                offx=np.float32(off[0]), offy=np.float32(off[1]), offz=np.float32(off[2]))
+            per_ee.append(raw)  # (..., 6)
+        return jnp.stack(per_ee, axis=-2)  # (..., NUM_EE, 6)
+
+    def end_effector_pose_gradient_runtime(self, q, ee_joint_names=None, ee_offsets=None,
+                                           *, _convention=None):
+        """Runtime-target multi-EE pose gradient ``d[xyz; rpy]/dv`` (6 x NV) at an
+        offset point. Same ``ee_joint_names`` / ``ee_offsets`` semantics as
+        :py:meth:`end_effector_pose_runtime`; mirrors
+        :py:meth:`grid_rbd.RobotHandle.end_effector_pose_gradient_runtime`.
+
+        The kernel writes a column-major ``(B, 6*NV)`` per target; we reshape
+        ``(..., NV, 6)`` then transpose to ``(..., 6, NV)`` and stack.
+
+        Returns ``(..., NUM_EE, 6, NV)``. Forward-only (no autograd).
+
+        With ``output_convention="mujoco"`` (floating base) the base-linear columns
+        are reframed by R^T in-kernel (column-reframe class)."""
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        target = self._mt(_convention, "end_effector_pose_gradient_runtime",
+            "grid_rbd_jax_end_effector_pose_gradient_runtime")
+        jids = self._base._resolve_ee_jids(ee_joint_names)
+        offsets = self._base._normalize_ee_offsets(ee_offsets, len(jids))
+        (q,), B = self._prep_2d("end_effector_pose_gradient_runtime", q)
+        nv = self.num_vel
+        out_type = self._out(q, 6 * nv)
+        per_ee = []
+        for jid, off in zip(jids, offsets):
+            off = np.asarray(off, dtype=np.float32).reshape(-1)
+            raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+                q, target_jid=np.int64(int(jid)),
+                offx=np.float32(off[0]), offy=np.float32(off[1]), offz=np.float32(off[2]))
+            # (..., 6*NV) col-major -> (..., NV, 6) -> (..., 6, NV)
+            per_ee.append(raw.reshape(q.shape[:-1] + (nv, 6)).swapaxes(-2, -1))
+        return jnp.stack(per_ee, axis=-3)  # (..., NUM_EE, 6, NV)
 
     def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81,
                                   _convention=None):

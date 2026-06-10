@@ -347,3 +347,24 @@ def test_ptier1_com_ccrba_tuple_matches_numpy(th, nh, samples):
             a = a.detach().cpu().numpy(); b = np.asarray(b)
             assert a.shape == b.shape, f"{name}[{i}]: {a.shape} vs {b.shape}"
             assert _rel(a, b) < _TOL, f"{name}[{i}]: rel {_rel(a, b):.3e}"
+
+
+def test_ptier1_runtime_ee_matches_numpy(th, nh, samples):
+    """Runtime-target multi-EE pose + gradient on the torch surface must match the
+    numpy oracle — default (all leaves) and an explicit name list with offsets."""
+    qn = samples["qn"]; q = _t(qn)
+    a = th.end_effector_pose_runtime(q).detach().cpu().numpy()
+    b = np.asarray(nh.end_effector_pose_runtime(qn))
+    assert a.shape == b.shape, f"pose default: {a.shape} vs {b.shape}"
+    assert _rel(a, b) < _TOL
+    names = nh._meta["joint_names"]
+    targets = [names[3], names[6]]
+    offs = [[0.01, 0.02, 0.03], [0.0, -0.05, 0.1]]
+    a2 = th.end_effector_pose_runtime(q, ee_joint_names=targets, ee_offsets=offs).detach().cpu().numpy()
+    b2 = np.asarray(nh.end_effector_pose_runtime(qn, ee_joint_names=targets, ee_offsets=offs))
+    assert a2.shape == b2.shape and a2.shape[-2] == 2, f"pose explicit: {a2.shape}"
+    assert _rel(a2, b2) < _TOL
+    ga = th.end_effector_pose_gradient_runtime(q, ee_joint_names=targets, ee_offsets=offs).detach().cpu().numpy()
+    gb = np.asarray(nh.end_effector_pose_gradient_runtime(qn, ee_joint_names=targets, ee_offsets=offs))
+    assert ga.shape == gb.shape, f"grad: {ga.shape} vs {gb.shape}"
+    assert _rel(ga, gb) < _TOL

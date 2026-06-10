@@ -471,6 +471,30 @@ def test_ptier1_com_ccrba_tuple_matches_plain(jax_handle, plain_handle, samples)
             assert np.max(np.abs(a - b)) < _TOL, f"{name}[{i}]: {np.max(np.abs(a - b)):.3e}"
 
 
+def test_ptier1_runtime_ee_matches_plain(jax_handle, plain_handle, samples):
+    """Runtime-target multi-EE pose + gradient on the jax surface must match the
+    numpy oracle — default (all leaves) and an explicit name list with offsets."""
+    q = samples["q"]
+    # default: all leaf EEs, frame origin
+    a = np.asarray(jax_handle.end_effector_pose_runtime(q))
+    b = np.asarray(plain_handle.end_effector_pose_runtime(q))
+    assert a.shape == b.shape, f"pose default: {a.shape} vs {b.shape}"
+    assert np.max(np.abs(a - b)) < _TOL
+    # explicit multi-target list + per-EE offsets
+    names = plain_handle._meta["joint_names"]
+    targets = [names[3], names[6]]
+    offs = [[0.01, 0.02, 0.03], [0.0, -0.05, 0.1]]
+    a2 = np.asarray(jax_handle.end_effector_pose_runtime(q, ee_joint_names=targets, ee_offsets=offs))
+    b2 = np.asarray(plain_handle.end_effector_pose_runtime(q, ee_joint_names=targets, ee_offsets=offs))
+    assert a2.shape == b2.shape and a2.shape[-2] == 2, f"pose explicit: {a2.shape}"
+    assert np.max(np.abs(a2 - b2)) < _TOL
+    # gradient, same targets/offsets
+    ga = np.asarray(jax_handle.end_effector_pose_gradient_runtime(q, ee_joint_names=targets, ee_offsets=offs))
+    gb = np.asarray(plain_handle.end_effector_pose_gradient_runtime(q, ee_joint_names=targets, ee_offsets=offs))
+    assert ga.shape == gb.shape, f"grad: {ga.shape} vs {gb.shape}"
+    assert np.max(np.abs(ga - gb)) < _TOL
+
+
 def test_register_idempotent(jax_handle):
     """Re-registering under the same name reuses the cached .so."""
     import time
