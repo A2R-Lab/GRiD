@@ -630,6 +630,18 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
 - **The backlog drifts — verify "is this still open?" before dispatching.** This session found 5
   "open" items already done (C1-float, C3, mxS-ndim warning, mimic regressor-Y, FD param-grad). A
   cheap grep/check beats an agent redoing landed work.
+- **Gate/overflow/"not-emitted" claims in WRAPPER COMMENTS and dated MEMORIES go stale as ladders/folds
+  land — re-derive from code before trusting them.** The 2026-06-10 audit re-flagged ~6 items that were
+  already resolved: "h1_2 integrator/idsva_so OOB" (the per-tier spill ladder now fits — verify by reading
+  `*_t_count_per_tier` × `cuda_shared_mem_type_size_bytes` vs the 98KB cap, no nvcc needed); "mimic centroidal
+  NOT emitted" (it IS — verify by calling `_normalize_codegen_algorithms("all")` and checking the algo set for
+  a mimic robot like fr3/h1_2, + the validating runner); "prismatic `theta` undeclared" (the substitution was
+  already in `_eepose_gradient_hessian.py`); "eePos/deePos rename pending" (grep finds only the clean current
+  name). CHEAP CHECKS THAT SETTLE IT WITHOUT A BUILD: (a) instantiate `GRiDCodeGenerator(robot)` +
+  `gen_add_constants_helpers()` and print per-tier arena bytes vs cap; (b) `_normalize_codegen_algorithms`
+  to see what's actually emitted; (c) grep the validating smoke-runner/test for the robot. A wrapper comment
+  that says "NOT emitted for mimic / returns rc=3" is describing the `#else` branch, NOT proof the `#ifdef`
+  is off — confirm which branch a real mimic robot takes. When you find a stale comment, FIX IT in the same pass.
 - **A sharp deferral beats a wrong value path.** When a fix can't be made bit-exact, REVERT and
   document a precise resume hint (which tensor/cell/stride, what was ruled out) rather than ship
   silently-wrong numbers. Several "deferred" items came back and landed fast because the prior
