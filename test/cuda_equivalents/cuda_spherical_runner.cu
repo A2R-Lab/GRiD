@@ -103,6 +103,57 @@ __global__ void spherical_crba_device_runner(
     }
 }
 
+// (1c) Device-function runner for minv. s_q is NQ(=nq)-wide, s_Minv is NV x NV
+// (column-major, SYMMETRIC_UPPER storage from the inv(CRBA) Tier-C path).
+template <typename T>
+__global__ void spherical_minv_device_runner(
+    T *d_Minv, const T *d_q, const grid::robotModel<T> *d_robot_model
+) {
+    __shared__ T s_q[grid::NUM_JOINTS];      // NUM_JOINTS == nq for this codegen
+    __shared__ T s_Minv[grid::NUM_VEL * grid::NUM_VEL];
+    for (int ind = threadIdx.x + threadIdx.y * blockDim.x;
+         ind < grid::NUM_JOINTS; ind += blockDim.x * blockDim.y) {
+        s_q[ind] = d_q[ind];
+    }
+    __syncthreads();
+    grid::minv_device<T>(s_Minv, s_q, d_robot_model);
+    __syncthreads();
+    for (int ind = threadIdx.x + threadIdx.y * blockDim.x;
+         ind < grid::NUM_VEL * grid::NUM_VEL; ind += blockDim.x * blockDim.y) {
+        d_Minv[ind] = s_Minv[ind];
+    }
+}
+
+// (1d) Device-function runner for forward_dynamics. s_q is NQ-wide; s_qd / s_u /
+// s_qdd are NV-wide. qdd = inv(CRBA(q)) * (u - c).
+template <typename T>
+__global__ void spherical_fd_device_runner(
+    T *d_qdd, const T *d_q, const T *d_qd, const T *d_u,
+    const grid::robotModel<T> *d_robot_model, const T gravity
+) {
+    __shared__ T s_q[grid::NUM_JOINTS];      // NUM_JOINTS == nq for this codegen
+    __shared__ T s_qd[grid::NUM_VEL];
+    __shared__ T s_u[grid::NUM_VEL];
+    __shared__ T s_qdd[grid::NUM_VEL];
+    for (int ind = threadIdx.x + threadIdx.y * blockDim.x;
+         ind < grid::NUM_JOINTS; ind += blockDim.x * blockDim.y) {
+        s_q[ind] = d_q[ind];
+    }
+    for (int ind = threadIdx.x + threadIdx.y * blockDim.x;
+         ind < grid::NUM_VEL; ind += blockDim.x * blockDim.y) {
+        s_qd[ind] = d_qd[ind];
+        s_u[ind] = d_u[ind];
+    }
+    __syncthreads();
+    grid::forward_dynamics_device<T>(s_qdd, s_q, s_qd, s_u, d_robot_model,
+                                     /*d_f_ext=*/nullptr, gravity);
+    __syncthreads();
+    for (int ind = threadIdx.x + threadIdx.y * blockDim.x;
+         ind < grid::NUM_VEL; ind += blockDim.x * blockDim.y) {
+        d_qdd[ind] = s_qdd[ind];
+    }
+}
+
 template <typename T>
 void run() {
     const T gravity = static_cast<T>(-9.81);
@@ -110,23 +161,29 @@ void run() {
     cudaStream_t *streams = grid::init_grid<T>();
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
 
-    // ----- read inputs (q is nq-wide, qd is nv-wide) -----
+    // ----- read inputs (q is nq-wide, qd / u are nv-wide) -----
     std::vector<T> h_q(grid::NUM_JOINTS);   // nq
     std::vector<T> h_qd(grid::NUM_VEL);     // nv
+    std::vector<T> h_u(grid::NUM_VEL);      // nv  (joint torques, for forward_dynamics)
     read_vector(h_q.data(), grid::NUM_JOINTS);
     read_vector(h_qd.data(), grid::NUM_VEL);
+    read_vector(h_u.data(), grid::NUM_VEL);
     print_vector("input_q", h_q.data(), grid::NUM_JOINTS);
     print_vector("input_qd", h_qd.data(), grid::NUM_VEL);
+    print_vector("input_u", h_u.data(), grid::NUM_VEL);
 
     // ----- (1) device-function path -----
     T *d_q;
     T *d_qd;
+    T *d_u;
     T *d_out;
     gpuErrchk(cudaMalloc((void **)&d_q, grid::NUM_JOINTS * sizeof(T)));
     gpuErrchk(cudaMalloc((void **)&d_qd, grid::NUM_VEL * sizeof(T)));
+    gpuErrchk(cudaMalloc((void **)&d_u, grid::NUM_VEL * sizeof(T)));
     gpuErrchk(cudaMalloc((void **)&d_out, grid::NUM_VEL * sizeof(T)));
     gpuErrchk(cudaMemcpy(d_q, h_q.data(), grid::NUM_JOINTS * sizeof(T), cudaMemcpyHostToDevice));
     gpuErrchk(cudaMemcpy(d_qd, h_qd.data(), grid::NUM_VEL * sizeof(T), cudaMemcpyHostToDevice));
+    gpuErrchk(cudaMemcpy(d_u, h_u.data(), grid::NUM_VEL * sizeof(T), cudaMemcpyHostToDevice));
 
     std::vector<T> h_out(grid::NUM_VEL);
     const size_t dev_smem = grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>();
@@ -151,6 +208,7 @@ void run() {
         for (int i = 0; i < nq; ++i) {
             hd_data->h_q_qd_u[k * 3 * nq + i] = h_q[i];                 // q slot [0, nq)
             hd_data->h_q_qd[k * 2 * nq + i] = h_q[i];
+            hd_data->h_q[k * nq + i] = h_q[i];   // nq-wide compressed-q pack (minv<T,true>)
         }
         // qd slot [nq, 2nq): first nv carry qd, the (nq-nv) tail is padding (0).
         for (int i = 0; i < nq; ++i) {
@@ -158,9 +216,11 @@ void run() {
             hd_data->h_q_qd_u[k * 3 * nq + nq + i] = qd_i;
             hd_data->h_q_qd[k * 2 * nq + nq + i] = qd_i;
         }
-        // u slot [2nq, 3nq): unused by inverse_dynamics (qdd=0 path), zero it.
+        // u slot [2nq, 3nq): first nv carry torques (forward_dynamics), tail padding.
+        // inverse_dynamics ignores u (qdd=0 path), so this is harmless for that cell.
         for (int i = 0; i < nq; ++i) {
-            hd_data->h_q_qd_u[k * 3 * nq + 2 * nq + i] = static_cast<T>(0);
+            hd_data->h_q_qd_u[k * 3 * nq + 2 * nq + i] =
+                (i < nv) ? h_u[i] : static_cast<T>(0);
         }
     }
     const dim3 block_dimms(1, 1, 1);
@@ -210,9 +270,65 @@ void run() {
         print_vector("crba_batch_" + std::to_string(k), blk.data(), nv * nv);
     }
 
+    // ----- (5) minv device-function path: NV x NV Minv = inv(CRBA(q)) -----
+    // Tier-C spherical Minv routes through crba_inner + invert_matrix (the
+    // mimic-style inv(M) path), since the ABA-recursion minv does not generalize
+    // to a 3-DoF ball joint. The device wrapper packs IA/U/.../F + invert scratch,
+    // so over-allocate (mirrors the crba_device pad above) to keep it robust.
+    T *d_Minv;
+    gpuErrchk(cudaMalloc((void **)&d_Minv, nv * nv * sizeof(T)));
+    std::vector<T> h_Minv_dev(nv * nv);
+    const size_t minv_smem = grid::grid_shared_arena_bytes<T>(
+        72 * grid::NUM_BODIES + 6 * nv * nv + 512, grid::TOPOLOGY_HELPERS_COUNT,
+        grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>());
+    gpuErrchk(cudaFuncSetAttribute(spherical_minv_device_runner<T>,
+                                   cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                   static_cast<int>(minv_smem)));
+    spherical_minv_device_runner<T><<<1, g_num_threads, minv_smem>>>(d_Minv, d_q, d_robot_model);
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
+    gpuErrchk(cudaMemcpy(h_Minv_dev.data(), d_Minv, nv * nv * sizeof(T), cudaMemcpyDeviceToHost));
+    print_vector("minv", h_Minv_dev.data(), nv * nv);
+
+    // ----- (6) minv host batch wrapper (USE_COMPRESSED_MEM: nq-wide h_q pack) ---
+    grid::minv<T, true>(hd_data, d_robot_model, B, block_dimms, thread_dimms, streams);
+    gpuErrchk(cudaPeekAtLastError());
+    for (int k = 0; k < B; ++k) {
+        std::vector<T> blk(nv * nv);
+        for (int i = 0; i < nv * nv; ++i) blk[i] = hd_data->h_Minv[k * nv * nv + i];
+        print_vector("minv_batch_" + std::to_string(k), blk.data(), nv * nv);
+    }
+
+    // ----- (7) forward_dynamics device-function path: qdd (NV-wide) -----
+    T *d_qdd;
+    gpuErrchk(cudaMalloc((void **)&d_qdd, grid::NUM_VEL * sizeof(T)));
+    std::vector<T> h_qdd_dev(nv);
+    const size_t fd_smem = grid::FORWARD_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>();
+    gpuErrchk(cudaFuncSetAttribute(spherical_fd_device_runner<T>,
+                                   cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                   static_cast<int>(fd_smem)));
+    spherical_fd_device_runner<T><<<1, g_num_threads, fd_smem>>>(d_qdd, d_q, d_qd, d_u, d_robot_model, gravity);
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
+    gpuErrchk(cudaMemcpy(h_qdd_dev.data(), d_qdd, nv * sizeof(T), cudaMemcpyDeviceToHost));
+    print_vector("forward_dynamics", h_qdd_dev.data(), nv);
+
+    // ----- (8) forward_dynamics host batch wrapper over B IDENTICAL timesteps ---
+    // Output qdd slot is NUM_JOINTS(=nq)-wide per timestep; first nv carry accel.
+    grid::forward_dynamics<T>(hd_data, d_robot_model, gravity, B, block_dimms, thread_dimms, streams);
+    gpuErrchk(cudaPeekAtLastError());
+    for (int k = 0; k < B; ++k) {
+        std::vector<T> row(nv);
+        for (int i = 0; i < nv; ++i) row[i] = hd_data->h_qdd[k * nq + i];
+        print_vector("forward_dynamics_batch_" + std::to_string(k), row.data(), nv);
+    }
+
+    gpuErrchk(cudaFree(d_Minv));
+    gpuErrchk(cudaFree(d_qdd));
     gpuErrchk(cudaFree(d_M));
     gpuErrchk(cudaFree(d_q));
     gpuErrchk(cudaFree(d_qd));
+    gpuErrchk(cudaFree(d_u));
     gpuErrchk(cudaFree(d_out));
     grid::close_grid<T>(streams, d_robot_model, hd_data);
 }
