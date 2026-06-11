@@ -723,6 +723,22 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   path-scoped. Background agents/jobs survive `/compact`; but a SILENT hang (e.g. wedged xdist, §7) never
   notifies — put a watchdog on every long job (poll for a done-marker / process-death / a timeout, and
   re-snapshot).
+- **Keep the ON-DISK todo / backlog current as work lands — not just the ephemeral in-session list (USER
+  PREFERENCE).** The harness TodoWrite list is per-session and disappears at `/compact`; the durable state
+  lives in `docs/open-tasks/session_progress_*.md` (live commit log) + the authoritative forward backlog
+  (`backlog_*_post_features.md`) + the `feedback_*`/`project_*` memories + `MEMORY.md` pointers. Update
+  these AS each slice commits (mark done, append the commit SHA, move/refresh outstanding items, supersede
+  stale lists) so a fresh context can resume losslessly. When a doc goes stale (an item it lists is now
+  done), fix it IN THE SAME PASS and add a "SUPERSEDED -> <new doc>" header rather than leaving two
+  conflicting lists. Treat the on-disk todo/backlog as a first-class deliverable of every work session.
+- **GPU sharing: PARALLEL for correctness, SERIAL only for performance timing (USER PREFERENCE; see §7).**
+  Equivalence / Gate-A / thread-invariance / batch builds are correctness checks — fan them out
+  concurrently (file-isolated agents, each doing its own Gate-A + equivalence), sized to cores + free RAM
+  (an nvcc compile peaks ~5 GB). The ONLY thing that must run one-at-a-time on a quiet GPU is PERFORMANCE
+  TIMING (single-call us sweeps, tier sweeps, A/B) — contention skews the numbers. So the default shape of
+  a feature run is: many concurrent correctness agents (scope -> verify -> merge), then a quarantined
+  isolated perf-timing phase at the end. "No concurrent heavy GPU builds" applies to TIMING, never to
+  correctness. [[feedback_parallel_equivalence_testing]] [[feedback_safe_dev_and_timing_methodology]]
 
 ---
 
