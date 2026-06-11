@@ -73,7 +73,8 @@ def _generate_header(robot, build_dir):
             include_homogenous_transforms=True,
             output_path=str(header),
             algorithm_list=["inverse_dynamics", "crba", "minv", "forward_dynamics",
-                            "inverse_dynamics_gradient", "forward_dynamics_gradient"],
+                            "inverse_dynamics_gradient", "forward_dynamics_gradient",
+                            "aba"],
         )
     return header
 
@@ -250,6 +251,35 @@ def test_cuda_spherical_inverse_dynamics_matches_reference(tmp_path, fixture):
                 failures.append(
                     f"{tag} fd batch[{k}] vs device: max|d|={np.max(np.abs(row - cuda_qdd)):.3e}")
 
+        # --- standalone aba: DIRECT 3x3-D recursion qdd vs ref.aba AND vs cuda FD ---
+        # NOTE the oracle ref.aba SHORT-CIRCUITS to the Minv-compose path on a
+        # spherical robot (the scalar ABA recursion cannot do a 3-DoF ball joint),
+        # so it validates the qdd VALUE, not the 3x3-D recursion STRUCTURE. The
+        # device-vs-forward_dynamics cross-check therefore matters: it confirms the
+        # standalone DIRECT-recursion CUDA aba agrees with the (independently-
+        # validated) Minv-compose CUDA forward_dynamics on the same input.
+        cuda_aba = np.asarray(out["aba"], dtype=np.float64).reshape(-1)
+        if cuda_aba.shape != ref_qdd.shape:
+            failures.append(f"{tag} aba device: shape {cuda_aba.shape} != {ref_qdd.shape}")
+        else:
+            if not np.allclose(cuda_aba, ref_qdd, atol=1e-4, rtol=1e-4):
+                failures.append(
+                    f"{tag} aba device vs ref: max|d|={np.max(np.abs(cuda_aba - ref_qdd)):.3e}\n"
+                    f"  cuda={cuda_aba}\n  ref ={ref_qdd}")
+            # cross-check: standalone aba == compose-path forward_dynamics.
+            if not np.allclose(cuda_aba, cuda_qdd, atol=1e-4, rtol=1e-4):
+                failures.append(
+                    f"{tag} aba device vs cuda forward_dynamics: "
+                    f"max|d|={np.max(np.abs(cuda_aba - cuda_qdd)):.3e}")
+        for k in range(4):
+            row = np.asarray(out[f"aba_batch_{k}"], dtype=np.float64).reshape(-1)
+            if not np.allclose(row, ref_qdd, atol=1e-4, rtol=1e-4):
+                failures.append(
+                    f"{tag} aba batch[{k}] vs ref: max|d|={np.max(np.abs(row - ref_qdd)):.3e}")
+            if not np.allclose(row, cuda_aba, atol=1e-5, rtol=1e-5):
+                failures.append(
+                    f"{tag} aba batch[{k}] vs device: max|d|={np.max(np.abs(row - cuda_aba)):.3e}")
+
     assert not failures, "spherical CUDA equivalence failures:\n" + "\n".join(failures)
 
 
@@ -274,6 +304,7 @@ def test_cuda_spherical_thread_invariant(tmp_path, fixture):
     base_M = np.asarray(base_out["crba"], dtype=np.float64)
     base_Minv = np.asarray(base_out["minv"], dtype=np.float64)
     base_qdd = np.asarray(base_out["forward_dynamics"], dtype=np.float64)
+    base_aba = np.asarray(base_out["aba"], dtype=np.float64)
     base_idg = np.asarray(base_out["inverse_dynamics_gradient"], dtype=np.float64)
     base_fdg = np.asarray(base_out["forward_dynamics_gradient"], dtype=np.float64)
     failures = []
@@ -283,6 +314,7 @@ def test_cuda_spherical_thread_invariant(tmp_path, fixture):
         ("crba", base_M, "crba_batch_"),
         ("minv", base_Minv, "minv_batch_"),
         ("forward_dynamics", base_qdd, "forward_dynamics_batch_"),
+        ("aba", base_aba, "aba_batch_"),
         ("inverse_dynamics_gradient", base_idg, "inverse_dynamics_gradient_batch_"),
         ("forward_dynamics_gradient", base_fdg, "forward_dynamics_gradient_batch_"),
     ]

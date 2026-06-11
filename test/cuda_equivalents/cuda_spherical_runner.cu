@@ -155,6 +155,38 @@ __global__ void spherical_fd_device_runner(
     }
 }
 
+// (1e) Device-function runner for the STANDALONE aba. s_q is NQ-wide; s_qd /
+// s_tau / s_qdd are NV-wide. Direct 3x3-D ABA recursion (NOT the Minv-compose
+// forward_dynamics path), so it must independently match ref.aba AND the cuda
+// forward_dynamics value.
+template <typename T>
+__global__ void spherical_aba_device_runner(
+    T *d_qdd, const T *d_q, const T *d_qd, const T *d_tau,
+    const grid::robotModel<T> *d_robot_model, const T gravity
+) {
+    __shared__ T s_q[grid::NUM_JOINTS];      // NUM_JOINTS == nq for this codegen
+    __shared__ T s_qd[grid::NUM_VEL];
+    __shared__ T s_tau[grid::NUM_VEL];
+    __shared__ T s_qdd[grid::NUM_VEL];
+    for (int ind = threadIdx.x + threadIdx.y * blockDim.x;
+         ind < grid::NUM_JOINTS; ind += blockDim.x * blockDim.y) {
+        s_q[ind] = d_q[ind];
+    }
+    for (int ind = threadIdx.x + threadIdx.y * blockDim.x;
+         ind < grid::NUM_VEL; ind += blockDim.x * blockDim.y) {
+        s_qd[ind] = d_qd[ind];
+        s_tau[ind] = d_tau[ind];
+    }
+    __syncthreads();
+    grid::aba_device<T>(s_qdd, s_q, s_qd, s_tau, d_robot_model,
+                        /*d_f_ext=*/nullptr, gravity);
+    __syncthreads();
+    for (int ind = threadIdx.x + threadIdx.y * blockDim.x;
+         ind < grid::NUM_VEL; ind += blockDim.x * blockDim.y) {
+        d_qdd[ind] = s_qdd[ind];
+    }
+}
+
 template <typename T>
 void run() {
     const T gravity = static_cast<T>(-9.81);
@@ -324,6 +356,40 @@ void run() {
         print_vector("forward_dynamics_batch_" + std::to_string(k), row.data(), nv);
     }
 
+    // ----- (8b) standalone aba device-function path: qdd (NV-wide) -----
+    // The Tier-C spherical standalone ABA does the DIRECT 3x3-D recursion (NOT
+    // the Minv-compose forward_dynamics path), so it independently validates the
+    // 3x3 matrix-inverse U/D/Ia/pa/qdd machinery. The aba_device packs s_va(12*n)
+    // + the inner recursion band; over-allocate generously (mirrors crba/minv
+    // device pads) since there is no dedicated ABA_DEVICE_*_BYTES helper.
+    T *d_qdd_aba;
+    gpuErrchk(cudaMalloc((void **)&d_qdd_aba, grid::NUM_VEL * sizeof(T)));
+    std::vector<T> h_qdd_aba_dev(nv);
+    const size_t aba_smem = grid::grid_shared_arena_bytes<T>(
+        12 * grid::NUM_BODIES + grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>() / sizeof(T) + 512,
+        grid::TOPOLOGY_HELPERS_COUNT, grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>());
+    gpuErrchk(cudaFuncSetAttribute(spherical_aba_device_runner<T>,
+                                   cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                   static_cast<int>(aba_smem)));
+    spherical_aba_device_runner<T><<<1, g_num_threads, aba_smem>>>(d_qdd_aba, d_q, d_qd, d_u, d_robot_model, gravity);
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
+    gpuErrchk(cudaMemcpy(h_qdd_aba_dev.data(), d_qdd_aba, nv * sizeof(T), cudaMemcpyDeviceToHost));
+    print_vector("aba", h_qdd_aba_dev.data(), nv);
+
+    // ----- (8c) aba host batch wrapper over B IDENTICAL timesteps -----
+    // Reuses the canonical 3*nq h_q_qd_u pack (q@[0,nq), qd@[nq,2nq), tau@[2nq,3nq))
+    // filled above. Output qdd slot is NUM_JOINTS(=nq)-wide per timestep; first nv
+    // carry accel. Every batch row must match the device single-call result (§1e).
+    grid::aba<T, grid::GRID_DATA_ALL>(
+        hd_data, d_robot_model, gravity, B, block_dimms, thread_dimms, streams);
+    gpuErrchk(cudaPeekAtLastError());
+    for (int k = 0; k < B; ++k) {
+        std::vector<T> row(nv);
+        for (int i = 0; i < nv; ++i) row[i] = hd_data->h_qdd[k * nq + i];
+        print_vector("aba_batch_" + std::to_string(k), row.data(), nv);
+    }
+
     // ----- (9) inverse_dynamics_gradient: dc_du = [dc_dq | dc_dqd], 2*NV*NV -----
     // The Tier-C spherical id-gradient routes through the DENSE serial reduced-
     // space inner (a mid-chain 3-DoF ball joint owns a 3-wide v-block, which the
@@ -466,6 +532,7 @@ void run() {
     gpuErrchk(cudaFree(d_q_qd_idg));
     gpuErrchk(cudaFree(d_qdd_idg));
     gpuErrchk(cudaFree(d_Minv));
+    gpuErrchk(cudaFree(d_qdd_aba));
     gpuErrchk(cudaFree(d_qdd));
     gpuErrchk(cudaFree(d_M));
     gpuErrchk(cudaFree(d_q));
