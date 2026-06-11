@@ -526,6 +526,29 @@ void run() {
         print_vector("forward_dynamics_gradient_batch_" + std::to_string(k), blk.data(), fdg_len);
     }
 
+    // ----- (11) fdsva_so: 2nd-order forward-dynamics derivs, 4*NV^3 -----
+    // s_df2 packs four NV x NV x NV tensors (row-major [(i*NV+j)*NV+k]) in order
+    //   [daba_dqdq | daba_dvdq | daba_dvdv | daba_dtdq]
+    // (the 2nd derivatives of qdd wrt q,q / qd,q / qd,qd / tau,q). The contract is
+    // pure nv-tangent (nv^3 tensors, nv x nv Minv) -- dimension-agnostic, NO per-body
+    // S iteration, NO nq arithmetic -- so spherical needs no algorithm-specific code;
+    // it only routes the composed idsva_so inner through the WORLD frame (the body-
+    // frame single-DoF S contractions are wrong for a 3-DoF ball joint). The host
+    // wrapper fdsva_so<T> consumes the canonical 3*nq h_q_qd_u pack (q@[0,nq),
+    // qd@[nq,2nq), u@[2nq,3nq)) already filled above and writes NV-agnostic 500-wide
+    // h_df2 rows; the first 4*nv^3 entries carry the meaningful tensors. Every batch
+    // row must match the RBDReference oracle AND row 0 (the §1e nq-stride check).
+    const int so_len = 4 * nv * nv * nv;
+    grid::fdsva_so<T>(
+        hd_data, d_robot_model, gravity, B, block_dimms, thread_dimms, streams);
+    gpuErrchk(cudaPeekAtLastError());
+    for (int k = 0; k < B; ++k) {
+        std::vector<T> blk(so_len);
+        for (int i = 0; i < so_len; ++i)
+            blk[i] = hd_data->h_df2[k * grid::SECOND_ORDER_TENSOR_SIZE + i];
+        print_vector("fdsva_so_batch_" + std::to_string(k), blk.data(), so_len);
+    }
+
     gpuErrchk(cudaFree(d_df_du));
     gpuErrchk(cudaFree(d_q_qd_u_fdg));
     gpuErrchk(cudaFree(d_dc_du));

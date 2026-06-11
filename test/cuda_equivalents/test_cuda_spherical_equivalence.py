@@ -74,7 +74,7 @@ def _generate_header(robot, build_dir):
             output_path=str(header),
             algorithm_list=["inverse_dynamics", "crba", "minv", "forward_dynamics",
                             "inverse_dynamics_gradient", "forward_dynamics_gradient",
-                            "aba"],
+                            "aba", "fdsva_so"],
         )
     return header
 
@@ -307,8 +307,12 @@ def test_cuda_spherical_thread_invariant(tmp_path, fixture):
     base_aba = np.asarray(base_out["aba"], dtype=np.float64)
     base_idg = np.asarray(base_out["inverse_dynamics_gradient"], dtype=np.float64)
     base_fdg = np.asarray(base_out["forward_dynamics_gradient"], dtype=np.float64)
+    # fdsva_so has no device single-call surface in the runner (the host wrapper is
+    # the canonical §1e path); use its batch row 0 as the invariance baseline.
+    base_so = np.asarray(base_out["fdsva_so_batch_0"], dtype=np.float64)
     failures = []
-    # (algo output key, device baseline, batch key prefix) tuples to sweep.
+    # (algo output key, device baseline, batch key prefix) tuples to sweep. For
+    # fdsva_so the "device single-call" baseline IS its own batch row 0.
     cells = [
         ("inverse_dynamics", base, "inverse_dynamics_batch_"),
         ("crba", base_M, "crba_batch_"),
@@ -317,6 +321,7 @@ def test_cuda_spherical_thread_invariant(tmp_path, fixture):
         ("aba", base_aba, "aba_batch_"),
         ("inverse_dynamics_gradient", base_idg, "inverse_dynamics_gradient_batch_"),
         ("forward_dynamics_gradient", base_fdg, "forward_dynamics_gradient_batch_"),
+        ("fdsva_so_batch_0", base_so, "fdsva_so_batch_"),
     ]
     for threads in (1, 32, 256):
         out = _run(exe, q, qd, u, threads=threads)
@@ -531,3 +536,137 @@ def test_cuda_spherical_forward_dynamics_gradient_matches_reference(tmp_path, fi
                     f"{tag} batch[{k}] vs device: max|d|={np.max(np.abs(blk - dev)):.3e}")
 
     assert not failures, "spherical fd-gradient equivalence failures:\n" + "\n".join(failures)
+
+
+# Per-(fixture, precision) tolerance buckets for the fdsva_so cell. fdsva_so is the
+# 2nd derivative of GRiD's OWN forward_dynamics surface (-Minv contractions over the
+# idsva_so tensors + the dM_dq*fd_grad cross terms); the CUDA kernel and the numpy
+# oracle do the SAME einsum chain in a different fma/accumulation order. fp64 is
+# near machine-exact; fp32 carries the SO accumulation round-off, amplified by the
+# |Minv| conditioning of the final -Minv reduction (mixed_spherical_arm has larger-
+# magnitude entries). NEVER loosen a global tolerance — bucket per cell (§6).
+_FDSVA_SO_TOL = {
+    ("spherical_arm.urdf", "float"): dict(atol=2e-3, rtol=2e-3),
+    ("mixed_spherical_arm.urdf", "float"): dict(atol=2e-3, rtol=2e-3),
+    ("spherical_arm.urdf", "double"): dict(atol=1e-7, rtol=1e-8),
+    ("mixed_spherical_arm.urdf", "double"): dict(atol=1e-7, rtol=1e-8),
+}
+
+# daba_dvdv (qd-qd block) for a MID-CHAIN ball joint is validated against a
+# forward_dynamics VALUE finite-difference rather than ref.fdsva_so. The numpy
+# ref.idsva_so's d2tau_dqd carries a spurious cross term inside the mid-chain ball
+# velocity sub-block (robust ~0.5-1.2 abs across seeds; see the RBDReference
+# test_spherical_fdsva_so_matches_value_finite_difference note). The CUDA world-
+# frame idsva_so inner computes it CORRECTLY: the CUDA daba_dvdv matches the
+# value-FD to ~7e-5 (FD floor) at BOTH fp32 and fp64, while ref.fdsva_so disagrees
+# with the value-FD by ~1.0. So for daba_dvdv the value-FD is the ground-truth
+# oracle (CUDA is right, the numpy oracle is the one to fix in idsva_so). The
+# root-ball fixture's ref.fdsva_so dvdv IS value-FD-correct, so it uses ref there.
+_FDSVA_SO_VALUE_FD_TOL = {
+    "float": dict(atol=3e-3, rtol=0),
+    "double": dict(atol=3e-3, rtol=0),  # FD truncation floor (~7e-5) dominates
+}
+
+
+def _fdsva_so_value_fd_dvdv(ref, q, qd, u, nv, h=1e-5):
+    """Central 4-point finite difference of forward_dynamics wrt (qd_j, qd_k):
+    daba_dvdv[i,j,k] = d^2 qdd_i / dqd_j dqd_k. The qd-qd block touches no manifold
+    (pure flat velocity), so the value-FD is the exact ground truth."""
+    def fwd(qq, vv):
+        return np.asarray(ref.forward_dynamics(qq.copy(), vv.copy(), u.copy()),
+                          dtype=np.float64).reshape(-1)
+    fd = np.zeros((nv, nv, nv))
+    for j in range(nv):
+        for k in range(nv):
+            def g(sj, sk):
+                v = qd.copy(); v[j] += sj * h; v[k] += sk * h
+                return fwd(q, v)
+            fd[:, j, k] = (g(1, 1) - g(1, -1) - g(-1, 1) + g(-1, -1)) / (4 * h * h)
+    return fd
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+@pytest.mark.parametrize("dtype", ["float", "double"])
+@pytest.mark.parametrize("fixture", ["spherical_arm.urdf", "mixed_spherical_arm.urdf"])
+def test_cuda_spherical_fdsva_so_matches_reference(tmp_path, fixture, dtype):
+    """CUDA spherical fdsva_so (4*NV^3 = [daba_dqdq | daba_dvdq | daba_dvdv |
+    daba_dtdq], each NV x NV x NV row-major) must match its ground-truth oracle on
+    the host batch wrapper, at fp32 and fp64, and be batch self-consistent (§1e).
+
+    fdsva_so's contract is PURE nv-tangent (nv^3 tensors, nv x nv Minv) -- dimension-
+    agnostic, no per-body S iteration, no nq arithmetic -- so spherical needs zero
+    algorithm-specific code; it only routes the composed idsva_so inner through the
+    WORLD frame (the body-frame single-DoF S contractions are wrong for a 3-DoF ball
+    joint, exactly as idsva_so does for spherical). ref.fdsva_so runs end-to-end on a
+    ball joint via the committed minv widening (its internal minv = inv(CRBA)).
+    mixed_spherical_arm (revolute -> ball -> revolute) is the decisive §1e case.
+
+    ORACLE PER BLOCK: daba_dqdq / daba_dvdq / daba_dtdq are validated vs
+    ref.fdsva_so. daba_dvdv is validated vs a forward_dynamics VALUE finite
+    difference: ref.idsva_so's numpy d2tau_dqd is defective for a MID-CHAIN ball's
+    velocity sub-block (so ref.fdsva_so dvdv is wrong there by ~1.0), but the CUDA
+    world-frame idsva_so inner computes it correctly (matches the value-FD to the FD
+    floor). The CUDA value is the correct one; the numpy idsva_so dvdv is the bug.
+    """
+    robot = _parse(fixture)
+    assert robot is not None
+    ref = RBDReference(robot)
+    nv = robot.get_num_vel()
+    tol = _FDSVA_SO_TOL[(fixture, dtype)]
+    vfd_tol = _FDSVA_SO_VALUE_FD_TOL[dtype]
+    nv3 = nv * nv * nv
+
+    exe = _compile_runner(tmp_path) if _generate_header(robot, tmp_path) else None
+
+    rng = np.random.default_rng(31)
+    failures = []
+    for trial in range(4):
+        q = _random_q(robot, fixture, rng)
+        qd = rng.uniform(-0.8, 0.8, nv)
+        u = rng.uniform(-0.5, 0.5, nv)   # runner reads this slot as the input torque u
+        out = _run(exe, q, qd, u, dtype=dtype)
+        tag = f"{fixture} [{dtype}] trial {trial}"
+
+        # ref.fdsva_so for the dqdq / dvdq / dtdq blocks (it is correct for those).
+        daba_dqdq, daba_dvdq, daba_dvdv, daba_dtdq = ref.fdsva_so(
+            q.copy(), qd.copy(), u.copy(), GRAVITY=-9.81)
+        ref_blocks = [np.asarray(t, dtype=np.float64) for t in
+                      (daba_dqdq, daba_dvdq, daba_dvdv, daba_dtdq)]
+        names = ["daba_dqdq", "daba_dvdq", "daba_dvdv", "daba_dtdq"]
+        # daba_dvdv ground-truth = forward_dynamics value-FD (CUDA is correct here).
+        vfd_dvdv = _fdsva_so_value_fd_dvdv(ref, q, qd, u, nv)
+
+        def _oracle(b):
+            return (vfd_dvdv, vfd_tol) if b == 2 else (ref_blocks[b], tol)
+
+        # Row 0 is the canonical result; rows 1..3 are batch self-consistency.
+        dev_full = np.asarray(out["fdsva_so_batch_0"], dtype=np.float64).reshape(-1)
+        if dev_full.size != 4 * nv3:
+            failures.append(f"{tag} device: size {dev_full.size} != {4*nv3}")
+            continue
+        # Each nv^3 block is stored row-major [(i*nv+j)*nv+k] -> C-order reshape.
+        for b in range(4):
+            oracle_t, oracle_tol = _oracle(b)
+            dev_t = dev_full[b * nv3:(b + 1) * nv3].reshape(nv, nv, nv)
+            if not np.allclose(dev_t, oracle_t, **oracle_tol):
+                failures.append(
+                    f"{tag} {names[b]}: max|d|={np.max(np.abs(dev_t - oracle_t)):.3e}")
+
+        # Host batch wrapper: every timestep row == oracle AND == row 0 (§1e).
+        for k in range(4):
+            blk = np.asarray(out[f"fdsva_so_batch_{k}"], dtype=np.float64).reshape(-1)
+            for b in range(4):
+                oracle_t, oracle_tol = _oracle(b)
+                blk_t = blk[b * nv3:(b + 1) * nv3].reshape(nv, nv, nv)
+                if not np.allclose(blk_t, oracle_t, **oracle_tol):
+                    failures.append(
+                        f"{tag} batch[{k}] {names[b]} vs oracle: "
+                        f"max|d|={np.max(np.abs(blk_t - oracle_t)):.3e}")
+            if not np.allclose(blk, dev_full, atol=1e-9 if dtype == "double" else 1e-5,
+                               rtol=1e-9 if dtype == "double" else 1e-5):
+                failures.append(
+                    f"{tag} batch[{k}] vs row0: max|d|={np.max(np.abs(blk - dev_full)):.3e}")
+
+    assert not failures, "spherical fdsva_so equivalence failures:\n" + "\n".join(failures)
