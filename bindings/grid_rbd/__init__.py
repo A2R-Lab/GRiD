@@ -68,6 +68,7 @@ def register_robot(
     runtime_inertia: bool = False,
     use_joint_dynamics: bool = False,
     output_convention: str = "pinocchio",
+    algorithm_list: list[str] | tuple[str, ...] | str | None = None,
 ) -> RobotHandle:
     """Register a robot for fast subsequent calls.
 
@@ -147,6 +148,26 @@ def register_robot(
         damping/friction). When True the bias is emitted ONLY for robots that declare
         nonzero damping/friction; it re-keys the cache (the damped .so coexists with
         the baked no-op one). Match against ``RBDReference(..., use_joint_dynamics=True)``.
+    algorithm_list : list[str] | str | None, optional
+        Build only a SUBSET of algorithms into the per-robot ``.so`` instead of the
+        full default profile. Default ``None`` ⇒ the historical full build (every
+        method available; byte-identical header, same cache key, reuses the existing
+        ``.so``). When set (e.g. ``["inverse_dynamics", "forward_dynamics"]``), only
+        the named algorithms — plus their transitive dependencies, which
+        GRiDCodeGenerator expands automatically (e.g. ``forward_dynamics_gradient``
+        pulls in ``minv`` / ``inverse_dynamics`` / ``inverse_dynamics_gradient``) —
+        are codegen'd and compiled. This cuts nvcc wall
+        time, peak RAM, and ``.so`` size dramatically for big robots with heavy
+        second-order kernels (e.g. ``fdsva_so`` on a mid-chain spherical robot is
+        20+ min / 7 GB). Methods that were NOT built raise a clear runtime error
+        naming the algorithm to add and rebuild — not a segfault. Re-keys the cache
+        (a subset ``.so`` coexists with the full build). Recognized names mirror the
+        codegen keys: ``inverse_dynamics``, ``minv``, ``forward_dynamics``, ``aba``,
+        ``crba``, ``inverse_dynamics_gradient``, ``forward_dynamics_gradient``,
+        ``idsva_so_body_frame``, ``fdsva_so``, ``end_effector_pose``[``_gradient``/
+        ``_hessian``], ``integrator``, ``integrator_gradient``, plus curated profile
+        sets like ``"dynamics-core"``. numpy backend only — a subset ``.so`` omits
+        the JAX/torch FFI surfaces (those are the full-profile fp32 path).
     output_convention : str, optional
         Default IO convention for the returned handle: ``"pinocchio"`` (default,
         GRiD-native) or ``"mujoco"`` (mjx parity — wxyz quat, global-linear free-joint
@@ -189,6 +210,14 @@ def register_robot(
             f"use_joint_dynamics=True is only supported for the numpy backend; the "
             f"{backend!r} backend does not yet thread the joint-dynamics flag. "
             f"Use backend='numpy'.")
+    if algorithm_list is not None and backend != "numpy":
+        # A subset .so omits the JAX/torch FFI surfaces (their core handlers call
+        # grid::*_kernel directly and are not per-algo gated). The subset feature is
+        # a numpy-backend compile-cost win; reject it for jax/torch with a clear msg.
+        raise ValueError(
+            f"algorithm_list (subset build) is only supported for the numpy backend; "
+            f"the {backend!r} backend builds the full profile (its FFI surfaces bind "
+            f"the complete algorithm set). Use backend='numpy'.")
     if backend == "jax":
         from . import jax as _jax_backend
         return _jax_backend.register_robot(
@@ -251,6 +280,20 @@ def register_robot(
     # entry — a damped build never collides with the historical no-op build.
     if use_joint_dynamics:
         code_options["use_joint_dynamics"] = True
+    # Subset-build: only inject the algorithm_list into the cache key (and thus
+    # re-key the cache) when the caller requests a non-default subset, so a default
+    # register_robot is byte-identical to before and reuses its existing full .so.
+    # A subset .so lands in its own entry, keyed by the (normalized) requested set.
+    # Normalize to a canonical list-of-strings so equivalent spellings (comma string
+    # vs list, ordering) dedupe to the same cache entry.
+    if algorithm_list is not None:
+        if isinstance(algorithm_list, str):
+            algos = [a.strip() for a in algorithm_list.replace(";", ",").split(",") if a.strip()]
+        else:
+            algos = [str(a).strip() for a in algorithm_list if str(a).strip()]
+        if not algos:
+            raise ValueError("algorithm_list must name at least one algorithm or profile")
+        code_options["algorithm_list"] = sorted(set(algos))
     cache_key = compute_cache_key(urdf_bytes, code_options, cuda_arch)
     entry_dir = store_dir(cache_dir, cache_key)
     so_path = entry_dir / "robot.so"

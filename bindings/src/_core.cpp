@@ -342,6 +342,9 @@ public:
         py::array_t<CT> out({batch, num_joints_});
         int rc = fn_inverse_dynamics_(q.data(), qd.data(), qdd_ptr,
                           out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc == 3) throw std::runtime_error(
+            "inverse_dynamics not built into this robot .so — add 'inverse_dynamics' "
+            "to algorithm_list in register_robot() and rebuild");
         if (rc != 0) {
             throw std::runtime_error("grid_rbd_inverse_dynamics failed: rc=" + std::to_string(rc));
         }
@@ -401,6 +404,9 @@ public:
         // (the kernel writes NUM_VEL*NUM_VEL, not NUM_JOINTS*NUM_JOINTS).
         py::array_t<CT> out({batch, num_vel_, num_vel_});
         int rc = fn_minv_(q.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error(
+            "minv not built into this robot .so — add 'minv' to algorithm_list "
+            "in register_robot() and rebuild");
         if (rc != 0) {
             throw std::runtime_error("grid_rbd_minv failed: rc=" + std::to_string(rc));
         }
@@ -423,6 +429,9 @@ public:
         py::array_t<CT> out({batch, num_joints_});
         int rc = fn_fd_(q.data(), qd.data(), u.data(),
                         out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc == 3) throw std::runtime_error(
+            "forward_dynamics not built into this robot .so — add 'forward_dynamics' "
+            "to algorithm_list in register_robot() and rebuild");
         if (rc != 0) {
             throw std::runtime_error("grid_rbd_forward_dynamics failed: rc=" + std::to_string(rc));
         }
@@ -444,6 +453,9 @@ public:
         py::array_t<CT> out({batch, num_joints_});
         int rc = fn_aba_(q.data(), qd.data(), u.data(),
                          out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc == 3) throw std::runtime_error(
+            "aba not built into this robot .so — add 'aba' to algorithm_list "
+            "in register_robot() and rebuild");
         if (rc != 0) throw std::runtime_error("grid_rbd_aba failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -467,6 +479,9 @@ public:
         // writes NUM_VEL*NUM_VEL).
         py::array_t<CT> out({batch, num_vel_, num_vel_});
         int rc = fn_crba_(q.data(), out.mutable_data(), batch, gravity);
+        if (rc == 3) throw std::runtime_error(
+            "crba not built into this robot .so — add 'crba' to algorithm_list "
+            "in register_robot() and rebuild");
         if (rc != 0) throw std::runtime_error("grid_rbd_crba failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -709,6 +724,9 @@ public:
         }
         py::array_t<CT> out({batch, 6 * num_ees_});
         int rc = fn_ee_pose_(q.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error(
+            "end_effector_pose not built into this robot .so — add 'end_effector_pose' "
+            "to algorithm_list in register_robot() and rebuild");
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -781,6 +799,9 @@ public:
         // d/dv tangent (pinocchio convention): (batch, 6*NUM_EES, NV)
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_});
         int rc = fn_ee_pose_grad_(q.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error(
+            "end_effector_pose_gradient not built into this robot .so — add "
+            "'end_effector_pose_gradient' to algorithm_list in register_robot() and rebuild");
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -854,6 +875,9 @@ public:
         py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
         int rc = fn_inverse_dynamics_gradient_(q.data(), qd.data(), qdd_ptr,
                                out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc == 3) throw std::runtime_error(
+            "inverse_dynamics_gradient not built into this robot .so — add "
+            "'inverse_dynamics_gradient' to algorithm_list in register_robot() and rebuild");
         if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_gradient failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -891,6 +915,9 @@ public:
         py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
         int rc = fn_fd_grad_(q.data(), qd.data(), u.data(),
                              out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc == 3) throw std::runtime_error(
+            "forward_dynamics_gradient not built into this robot .so — add "
+            "'forward_dynamics_gradient' to algorithm_list in register_robot() and rebuild");
         if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_gradient failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -927,6 +954,9 @@ public:
         }
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_, num_vel_});
         int rc = fn_ee_pose_hessian_(q.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error(
+            "end_effector_pose_hessian not built into this robot .so — add "
+            "'end_effector_pose_hessian' to algorithm_list in register_robot() and rebuild");
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_hessian failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -952,6 +982,9 @@ public:
         py::array_t<CT> out({batch, second_order_tensor_size});
         int rc = fn_idsva_so_(q.data(), qd.data(), qdd_ptr,
                               out.mutable_data(), batch, gravity);
+        if (rc == 3) throw std::runtime_error(
+            "idsva_so not built into this robot .so — add 'idsva_so_body_frame' "
+            "to algorithm_list in register_robot() and rebuild");
         if (rc != 0) throw std::runtime_error("grid_rbd_idsva_so failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -1003,6 +1036,9 @@ public:
         py::array_t<CT> out({batch, num_vel_ * 10 * num_bodies_});
         int rc = fn_id_regressor_(q.data(), qd.data(), qdd_ptr,
                                   out.mutable_data(), batch, gravity);
+        if (rc == 3) throw std::runtime_error(
+            "inverse_dynamics_regressor not built into this robot .so — add "
+            "'inverse_dynamics_regressor' to algorithm_list in register_robot() and rebuild");
         if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_regressor failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -1044,6 +1080,9 @@ public:
         py::array_t<CT> out({batch, second_order_tensor_size});
         int rc = fn_fdsva_so_(q.data(), qd.data(), u.data(),
                               out.mutable_data(), batch, gravity);
+        if (rc == 3) throw std::runtime_error(
+            "fdsva_so not built into this robot .so — add 'fdsva_so' "
+            "to algorithm_list in register_robot() and rebuild");
         if (rc != 0) throw std::runtime_error("grid_rbd_fdsva_so failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -1081,6 +1120,12 @@ public:
         py::array_t<CT> out({batch, num_joints_ + num_vel_});
         int rc = fn_integrator_(q.data(), qd.data(), u.data(),
                                 out.mutable_data(), batch, gravity, dt, it);
+        // rc=3 here = integrator not built into this .so (subset profile). The
+        // Python surface validates integrator_type into a 0-4 code before this
+        // call, so the dispatch-default rc=3 (unknown it) is unreachable.
+        if (rc == 3) throw std::runtime_error(
+            "integrator not built into this robot .so — add 'integrator' "
+            "to algorithm_list in register_robot() and rebuild");
         if (rc != 0) throw std::runtime_error("grid_rbd_integrator failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -1114,6 +1159,9 @@ public:
         py::array_t<CT> out({batch, 2 * num_vel_ * 3 * num_vel_});
         int rc = fn_integrator_grad_(q.data(), qd.data(), u.data(),
                                      out.mutable_data(), batch, gravity, dt, it);
+        if (rc == 3) throw std::runtime_error(
+            "integrator_gradient not built into this robot .so — add 'integrator_gradient' "
+            "to algorithm_list in register_robot() and rebuild");
         if (rc != 0) throw std::runtime_error("grid_rbd_integrator_gradient failed: rc=" + std::to_string(rc));
         return out;
     }

@@ -155,15 +155,28 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # RK out; the kernel is simply not emitted for a floating base). mimic robots
     # refuse gradient algos inside gen_all_code; that refusal is unchanged (the
     # opt-in frame family is non-gradient, so this addition is mimic-safe).
+    # Subset-build: by DEFAULT request the full "all" profile PLUS the opt-in
+    # extras the grid_rbd surface binds (this is the byte-identical historical
+    # list). When the caller threads a non-default `algorithm_list` through
+    # `options` (register_robot(algorithm_list=...)), request exactly that set
+    # instead — GRiDCodeGenerator._normalize_codegen_algorithms expands its
+    # transitive deps, and the wrapper's per-algo GRID_HAS_* macros (emitted to 0
+    # for the un-requested cores) ship clean rc=3 stubs for them. The default
+    # (None) path keeps the SAME list, so a default register_robot is
+    # byte-identical and reuses its existing .so (mirrors the inject-only-when-set
+    # discipline of use_joint_dynamics / runtime_inertia / dtype).
+    _DEFAULT_ALGORITHM_LIST = ["all", "frame_jacobian",
+                               "frame_jacobian_dot", "osc_inertia",
+                               "end_effector_pose_runtime",
+                               "end_effector_pose_gradient_runtime",
+                               "integrator_hessian"]
+    requested_algos = options.get("algorithm_list")
+    algorithm_list = list(requested_algos) if requested_algos else _DEFAULT_ALGORITHM_LIST
     with contextlib.redirect_stdout(io.StringIO()):
         cg.gen_all_code(
             output_path=str(out_path),
             fixed_target_name=fixed_target_name,
-            algorithm_list=["all", "frame_jacobian",
-                            "frame_jacobian_dot", "osc_inertia",
-                            "end_effector_pose_runtime",
-                            "end_effector_pose_gradient_runtime",
-                            "integrator_hessian"],
+            algorithm_list=algorithm_list,
             enable_floating_second_order=True,
             enable_idsva_so_world_frame=options.get("floating_base", False),
             runtime_inertia=runtime_inertia,
@@ -403,9 +416,18 @@ def generate_and_compile(
     # Prefix with 'k' to guarantee a valid C identifier (hex may start 0-9).
     torch_op_key = "k" + target_dir.name[:12]
     t_double = options.get("dtype") == "float64"
+    # Subset-build: the JAX / torch FFI handler blocks call grid::*_kernel for the
+    # CORE algos directly and are NOT per-algo gated, so a reduced-profile header
+    # (missing some core kernel) would fail to compile them. Those surfaces are the
+    # full-profile fp32 path; the subset feature is a numpy-backend big-robot
+    # compile-cost win. So when a non-default `algorithm_list` is requested, suppress
+    # JAX/torch FFI for that .so (the numpy C-ABI is the subset surface). The DEFAULT
+    # (no algorithm_list) build is unchanged — JAX/torch stay enabled, byte-identical.
+    is_subset = bool(options.get("algorithm_list"))
     compile_so(wrapper_cu, so_path, cuda_arch=cuda_arch,
                max_batch=max_batch, glass_root=glass_root,
                torch_op_key=torch_op_key, t_double=t_double,
+               enable_jax_ffi=not is_subset, enable_torch=not is_subset,
                runtime_inertia=bool(options.get("runtime_inertia", False)))
 
     # Persist meta.json
