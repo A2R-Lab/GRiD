@@ -9,7 +9,7 @@
 //   int grid_rbd_init();
 //   int grid_rbd_num_joints();
 //   int grid_rbd_inverse_dynamics(const CT* q, const CT* qd, const CT* qdd_opt,
-//                     float* c_out, int batch, float gravity,
+//                     CT* c_out, int batch, CT gravity,
 //                     const CT* f_ext_opt);  // f_ext_opt may be nullptr
 //   ... etc ...
 //
@@ -50,7 +50,11 @@ namespace py = pybind11;
 // (so they become double in an fp64 .so) but `mu` is ALWAYS `float`. The
 // function-pointer signatures below must match EXACTLY (a by-value scalar
 // passed at the wrong width corrupts the ABI), so gravity/dt use CT and mu
-// stays float.
+// stays float. The pybind11 METHOD parameters that receive these from Python
+// must ALSO be CT (not float): a Python float is a C double, so declaring the
+// param `float` would round -9.81 to fp32 BEFORE the (double) ABI call and cap
+// an fp64 .so's id/fd accuracy at ~4e-8 (the fp32 path is byte-identical either
+// way since CT==float there). So gravity/dt params are CT; mu stays float.
 template <class CT>
 struct CAbi {
     using fn_int_v_t        = int (*)();
@@ -321,7 +325,7 @@ public:
         arr_t q,
         arr_t qd,
         py::object qdd_opt,
-        float gravity,
+        CT gravity,
         py::object f_ext_opt)
     {
         int batch = check_inputs_2d(q, qd, /*last_dim=*/num_joints_);
@@ -357,7 +361,7 @@ public:
         arr_t q,
         arr_t qd,
         arr_t qdd,
-        float gravity,
+        CT gravity,
         py::object f_ext_opt)
     {
         if (!fn_inverse_dynamics_mujoco_) {
@@ -408,7 +412,7 @@ public:
         arr_t q,
         arr_t qd,
         arr_t u,
-        float gravity,
+        CT gravity,
         py::object f_ext_opt)
     {
         int batch = check_inputs_2d(q, qd, /*last_dim=*/num_joints_);
@@ -430,7 +434,7 @@ public:
         arr_t q,
         arr_t qd,
         arr_t u,
-        float gravity,
+        CT gravity,
         py::object f_ext_opt)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
@@ -447,7 +451,7 @@ public:
     // ─── crba ────────────────────────────────────────────────────────────────
     py::array_t<CT> crba(
         arr_t q,
-        float gravity)
+        CT gravity)
     {
         if (q.ndim() != 2 || q.shape(1) != num_joints_) {
             throw std::invalid_argument(
@@ -474,7 +478,7 @@ public:
 
     py::array_t<CT> crba_mujoco(
         arr_t q,
-        float gravity)
+        CT gravity)
     {
         if (!fn_crba_mujoco_) {
             throw std::runtime_error(
@@ -499,7 +503,7 @@ public:
     // ─── mjx value kernels (floating base only; raw mjx in, mjx-frame out) ─────
     bool has_forward_dynamics_mujoco() const { return fn_fd_mujoco_ != nullptr; }
     py::array_t<CT> forward_dynamics_mujoco(
-        arr_t q, arr_t qd, arr_t u, float gravity, py::object f_ext_opt)
+        arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
     {
         if (!fn_fd_mujoco_) throw std::runtime_error(
             "forward_dynamics_mujoco unavailable: floating-base .so only");
@@ -516,7 +520,7 @@ public:
 
     bool has_aba_mujoco() const { return fn_aba_mujoco_ != nullptr; }
     py::array_t<CT> aba_mujoco(
-        arr_t q, arr_t qd, arr_t u, float gravity, py::object f_ext_opt)
+        arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
     {
         if (!fn_aba_mujoco_) throw std::runtime_error(
             "aba_mujoco unavailable: floating-base .so only");
@@ -532,7 +536,7 @@ public:
     }
 
     bool has_coriolis_matrix_mujoco() const { return fn_coriolis_matrix_mujoco_ != nullptr; }
-    py::array_t<CT> coriolis_matrix_mujoco(arr_t q, arr_t qd, float gravity)
+    py::array_t<CT> coriolis_matrix_mujoco(arr_t q, arr_t qd, CT gravity)
     {
         if (!fn_coriolis_matrix_mujoco_) throw std::runtime_error(
             "coriolis_matrix_mujoco unavailable: floating-base .so only");
@@ -645,7 +649,7 @@ public:
     // MuJoCo-convention energy(q, qd, gravity) -> (batch, 3): [KE, PE, KE+PE].
     // The energies are frame-invariant; the kernel only converts mjx-native inputs.
     bool has_energy_mujoco() const { return fn_energy_mujoco_ != nullptr; }
-    py::array_t<CT> energy_mujoco(arr_t q, arr_t qd, float gravity)
+    py::array_t<CT> energy_mujoco(arr_t q, arr_t qd, CT gravity)
     {
         if (!fn_energy_mujoco_) throw std::runtime_error(
             "energy_mujoco unavailable: floating-base .so with energy only "
@@ -662,7 +666,7 @@ public:
     // MuJoCo-convention y_KE -> (batch, 10*NUM_BODIES). Frame-invariant regressor;
     // the kernel only converts the mjx-native inputs (quat reorder + qd reframe).
     bool has_kinetic_energy_regressor_mujoco() const { return fn_kinetic_energy_regressor_mujoco_ != nullptr; }
-    py::array_t<CT> kinetic_energy_regressor_mujoco(arr_t q, arr_t qd, float gravity)
+    py::array_t<CT> kinetic_energy_regressor_mujoco(arr_t q, arr_t qd, CT gravity)
     {
         if (!fn_kinetic_energy_regressor_mujoco_) throw std::runtime_error(
             "kinetic_energy_regressor_mujoco unavailable: floating-base .so only "
@@ -678,7 +682,7 @@ public:
     // MuJoCo-convention y_PE -> (batch, 10*NUM_BODIES). Frame-invariant regressor;
     // the kernel only converts the mjx-native q (quaternion reorder).
     bool has_potential_energy_regressor_mujoco() const { return fn_potential_energy_regressor_mujoco_ != nullptr; }
-    py::array_t<CT> potential_energy_regressor_mujoco(arr_t q, float gravity)
+    py::array_t<CT> potential_energy_regressor_mujoco(arr_t q, CT gravity)
     {
         if (!fn_potential_energy_regressor_mujoco_) throw std::runtime_error(
             "potential_energy_regressor_mujoco unavailable: floating-base .so only "
@@ -832,7 +836,7 @@ public:
         arr_t q,
         arr_t qd,
         py::object qdd_opt,
-        float gravity,
+        CT gravity,
         py::object f_ext_opt)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
@@ -856,7 +860,7 @@ public:
 
     bool has_inverse_dynamics_gradient_mujoco() const { return fn_inverse_dynamics_gradient_mujoco_ != nullptr; }
     py::array_t<CT> inverse_dynamics_gradient_mujoco(
-        arr_t q, arr_t qd, arr_t qdd, float gravity, py::object f_ext_opt)
+        arr_t q, arr_t qd, arr_t qdd, CT gravity, py::object f_ext_opt)
     {
         if (!fn_inverse_dynamics_gradient_mujoco_) throw std::runtime_error(
             "inverse_dynamics_gradient_mujoco unavailable: floating-base .so only");
@@ -875,7 +879,7 @@ public:
         arr_t q,
         arr_t qd,
         arr_t u,
-        float gravity,
+        CT gravity,
         py::object f_ext_opt)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
@@ -893,7 +897,7 @@ public:
 
     bool has_forward_dynamics_gradient_mujoco() const { return fn_fd_grad_mujoco_ != nullptr; }
     py::array_t<CT> forward_dynamics_gradient_mujoco(
-        arr_t q, arr_t qd, arr_t u, float gravity, py::object f_ext_opt)
+        arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
     {
         if (!fn_fd_grad_mujoco_) throw std::runtime_error(
             "forward_dynamics_gradient_mujoco unavailable: floating-base .so only");
@@ -935,7 +939,7 @@ public:
         arr_t qd,
         py::object qdd_opt,
         int second_order_tensor_size,
-        float gravity)
+        CT gravity)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         const CT* qdd_ptr = nullptr;
@@ -959,7 +963,7 @@ public:
         arr_t qd,
         py::object qdd_opt,
         int second_order_tensor_size,
-        float gravity)
+        CT gravity)
     {
         if (!fn_idsva_so_mujoco_) throw std::runtime_error(
             "idsva_so_mujoco unavailable: floating-base .so only");
@@ -985,7 +989,7 @@ public:
         arr_t q,
         arr_t qd,
         py::object qdd_opt,
-        float gravity)
+        CT gravity)
     {
         if (!fn_id_regressor_) throw std::runtime_error(
             "inverse_dynamics_regressor not available in this .so (re-register with force_rebuild=True)");
@@ -1010,7 +1014,7 @@ public:
         arr_t q,
         arr_t qd,
         py::object qdd_opt,
-        float gravity)
+        CT gravity)
     {
         if (!fn_id_regressor_mujoco_) throw std::runtime_error(
             "inverse_dynamics_regressor_mujoco unavailable: floating-base .so only");
@@ -1033,7 +1037,7 @@ public:
         arr_t qd,
         arr_t u,
         int second_order_tensor_size,
-        float gravity)
+        CT gravity)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
@@ -1051,7 +1055,7 @@ public:
         arr_t qd,
         arr_t u,
         int second_order_tensor_size,
-        float gravity)
+        CT gravity)
     {
         if (!fn_fdsva_so_mujoco_) throw std::runtime_error(
             "fdsva_so_mujoco unavailable: floating-base .so only");
@@ -1070,7 +1074,7 @@ public:
         arr_t q,
         arr_t qd,
         arr_t u,
-        float dt, int it, float gravity)
+        CT dt, int it, CT gravity)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
@@ -1083,7 +1087,7 @@ public:
 
     bool has_integrator_mujoco() const { return fn_integrator_mujoco_ != nullptr; }
     py::array_t<CT> integrator_mujoco(
-        arr_t q, arr_t qd, arr_t u, float dt, int it, float gravity)
+        arr_t q, arr_t qd, arr_t u, CT dt, int it, CT gravity)
     {
         if (!fn_integrator_mujoco_) throw std::runtime_error(
             "integrator_mujoco unavailable: floating-base .so only");
@@ -1103,7 +1107,7 @@ public:
         arr_t q,
         arr_t qd,
         arr_t u,
-        float dt, int it, float gravity)
+        CT dt, int it, CT gravity)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
@@ -1121,7 +1125,7 @@ public:
         arr_t q,
         arr_t qd,
         arr_t u,
-        float dt, int it, float gravity)
+        CT dt, int it, CT gravity)
     {
         if (!fn_integrator_grad_mujoco_) throw std::runtime_error(
             "integrator_gradient_mujoco unavailable: floating-base .so only");
@@ -1246,7 +1250,7 @@ public:
     py::array_t<CT> plant_step(
         arr_t x,
         arr_t u,
-        float dt, int it, float gravity)
+        CT dt, int it, CT gravity)
     {
         require_plant((void*)fn_plant_step_, "plant_step");
         int nx = num_joints_ + num_vel_;
@@ -1263,7 +1267,7 @@ public:
 
     // MuJoCo-convention plant_step -> (batch, NX). Floating-base only; EULER/SI-EULER.
     bool has_plant_step_mujoco() const { return fn_plant_step_mujoco_ != nullptr; }
-    py::array_t<CT> plant_step_mujoco(arr_t x, arr_t u, float dt, int it, float gravity)
+    py::array_t<CT> plant_step_mujoco(arr_t x, arr_t u, CT dt, int it, CT gravity)
     {
         require_plant((void*)fn_plant_step_mujoco_, "plant_step_mujoco");
         int nx = num_joints_ + num_vel_;
@@ -1421,7 +1425,7 @@ public:
     py::array_t<CT> plant_step_gradient(
         arr_t x,
         arr_t u,
-        float dt, int it, float gravity)
+        CT dt, int it, CT gravity)
     {
         require_plant((void*)fn_plant_step_grad_, "plant_step_gradient");
         int nx = num_joints_ + num_vel_;
@@ -1439,7 +1443,7 @@ public:
 
     // MuJoCo-convention plant_step_gradient -> (batch, 2*NV, 3*NV). Floating; EULER/SI.
     bool has_plant_step_gradient_mujoco() const { return fn_plant_step_grad_mujoco_ != nullptr; }
-    py::array_t<CT> plant_step_gradient_mujoco(arr_t x, arr_t u, float dt, int it, float gravity)
+    py::array_t<CT> plant_step_gradient_mujoco(arr_t x, arr_t u, CT dt, int it, CT gravity)
     {
         require_plant((void*)fn_plant_step_grad_mujoco_, "plant_step_gradient_mujoco");
         int nx = num_joints_ + num_vel_;
@@ -1463,7 +1467,7 @@ public:
     py::array_t<CT> plant_step_hessian(
         arr_t x,
         arr_t u,
-        float dt, int it, float gravity)
+        CT dt, int it, CT gravity)
     {
         require_plant((void*)fn_plant_step_hess_, "plant_step_hessian");
         int nx = num_joints_ + num_vel_;
@@ -1481,7 +1485,7 @@ public:
 
     // MuJoCo-convention plant_step_hessian -> (batch, 2*NV, 3*NV*3*NV). Floating; EULER/SI.
     bool has_plant_step_hessian_mujoco() const { return fn_plant_step_hess_mujoco_ != nullptr; }
-    py::array_t<CT> plant_step_hessian_mujoco(arr_t x, arr_t u, float dt, int it, float gravity)
+    py::array_t<CT> plant_step_hessian_mujoco(arr_t x, arr_t u, CT dt, int it, CT gravity)
     {
         require_plant((void*)fn_plant_step_hess_mujoco_, "plant_step_hessian_mujoco");
         int nx = num_joints_ + num_vel_;
@@ -1550,7 +1554,7 @@ public:
     py::array_t<CT> energy(
         arr_t q,
         arr_t qd,
-        float gravity)
+        CT gravity)
     {
         if (!fn_energy_) throw std::runtime_error("energy not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
@@ -1566,7 +1570,7 @@ public:
     // generalized_gravity(q, gravity) -> (batch, NUM_VEL): g(q) = RNEA(q,0,0).
     py::array_t<CT> generalized_gravity(
         arr_t q,
-        float gravity)
+        CT gravity)
     {
         if (!fn_generalized_gravity_) throw std::runtime_error("generalized_gravity not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "generalized_gravity");
@@ -1579,7 +1583,7 @@ public:
     bool has_generalized_gravity_mujoco() const { return fn_generalized_gravity_mujoco_ != nullptr; }
     py::array_t<CT> generalized_gravity_mujoco(
         arr_t q,
-        float gravity)
+        CT gravity)
     {
         if (!fn_generalized_gravity_mujoco_) throw std::runtime_error(
             "generalized_gravity_mujoco unavailable: floating-base .so only");
@@ -1594,7 +1598,7 @@ public:
     py::array_t<CT> nonlinear_effects(
         arr_t q,
         arr_t qd,
-        float gravity)
+        CT gravity)
     {
         if (!fn_nonlinear_effects_) throw std::runtime_error("nonlinear_effects not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
@@ -1610,7 +1614,7 @@ public:
     py::array_t<CT> nonlinear_effects_mujoco(
         arr_t q,
         arr_t qd,
-        float gravity)
+        CT gravity)
     {
         if (!fn_nonlinear_effects_mujoco_) throw std::runtime_error(
             "nonlinear_effects_mujoco unavailable: floating-base .so only");
@@ -1753,7 +1757,7 @@ public:
     py::array_t<CT> coriolis_matrix(
         arr_t q,
         arr_t qd,
-        float gravity)
+        CT gravity)
     {
         if (!fn_coriolis_matrix_) throw std::runtime_error("coriolis_matrix not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
@@ -1767,7 +1771,7 @@ public:
     py::array_t<CT> kinetic_energy_regressor(
         arr_t q,
         arr_t qd,
-        float gravity)
+        CT gravity)
     {
         if (!fn_kinetic_energy_regressor_) throw std::runtime_error("kinetic_energy_regressor not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
@@ -1780,7 +1784,7 @@ public:
     // potential_energy_regressor(q, gravity) -> (batch, 10*NUM_BODIES) y_PE.
     py::array_t<CT> potential_energy_regressor(
         arr_t q,
-        float gravity)
+        CT gravity)
     {
         if (!fn_potential_energy_regressor_) throw std::runtime_error("potential_energy_regressor not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "potential_energy_regressor");
