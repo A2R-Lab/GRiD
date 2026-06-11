@@ -416,18 +416,20 @@ def generate_and_compile(
     # Prefix with 'k' to guarantee a valid C identifier (hex may start 0-9).
     torch_op_key = "k" + target_dir.name[:12]
     t_double = options.get("dtype") == "float64"
-    # Subset-build: the JAX / torch FFI handler blocks call grid::*_kernel for the
-    # CORE algos directly and are NOT per-algo gated, so a reduced-profile header
-    # (missing some core kernel) would fail to compile them. Those surfaces are the
-    # full-profile fp32 path; the subset feature is a numpy-backend big-robot
-    # compile-cost win. So when a non-default `algorithm_list` is requested, suppress
-    # JAX/torch FFI for that .so (the numpy C-ABI is the subset surface). The DEFAULT
-    # (no algorithm_list) build is unchanged — JAX/torch stay enabled, byte-identical.
-    is_subset = bool(options.get("algorithm_list"))
+    # Subset-build: the JAX / torch FFI handler blocks are now per-CORE-algo gated
+    # (each `grid::*_kernel`-calling handler + its def/impl sits inside
+    # `#if GRID_HAS_<ALGO>`), mirroring the numpy C-ABI bodies. So a reduced-profile
+    # header (missing some core kernel) compiles cleanly — the un-requested cores
+    # drop out of the jax/torch surface, and the Python wrapper maps the resulting
+    # missing-symbol AttributeError to the same clean "not built — add to
+    # algorithm_list" subset error the numpy rc=3 path raises. JAX/torch are
+    # therefore enabled by DEP AVAILABILITY only (compile_so adds the -D flags iff
+    # the include dir / build flags are present), NOT by whether a subset was
+    # requested. The fp32-only path is unchanged (t_double still disables both).
     compile_so(wrapper_cu, so_path, cuda_arch=cuda_arch,
                max_batch=max_batch, glass_root=glass_root,
                torch_op_key=torch_op_key, t_double=t_double,
-               enable_jax_ffi=not is_subset, enable_torch=not is_subset,
+               enable_jax_ffi=True, enable_torch=True,
                runtime_inertia=bool(options.get("runtime_inertia", False)))
 
     # Persist meta.json

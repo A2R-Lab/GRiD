@@ -92,6 +92,34 @@ def _torch_op_namespace(cache_key: str) -> str:
     return f"grid_rbd_torch_k{cache_key[:12]}"
 
 
+# A torch op that is ALWAYS registered when the torch surface compiles (an ungated
+# plant cost op — not behind any per-algo `#if GRID_HAS_*`). Used to tell a
+# SUBSET-omitted CORE algo (this present, the requested op absent) apart from a
+# never-built op, so the clean "not built — add to algorithm_list" error only fires
+# for a genuine subset gap.
+_TORCH_SURFACE_SENTINEL = "quadratic_input_cost"
+
+
+def _resolve_core_op(ops, name: str):
+    """Resolve a CORE torch op (id/fd/minv/.../regressor/integrator/...), mapping a
+    missing op to the clean subset error the numpy rc=3 path raises. A core op is
+    absent only on a SUBSET build (algorithm_list) that omitted it — distinguished
+    from a whole-surface-missing .so via the always-present sentinel op."""
+    try:
+        return getattr(ops, name)
+    except AttributeError as e:
+        # mjx-suffixed names that resolve through here strip the suffix for the msg.
+        base = name[:-len("_mujoco")] if name.endswith("_mujoco") else name
+        if hasattr(ops, _TORCH_SURFACE_SENTINEL):
+            raise RuntimeError(
+                f"{base!r} not built into this robot .so — add {base!r} to "
+                f"algorithm_list in register_robot() and rebuild (force_rebuild=True). "
+                f"The torch op surface is present but this algorithm was excluded by "
+                f"the subset build."
+            ) from e
+        raise
+
+
 def _load_ops(so_path: Path, cache_key: str) -> str:
     """Load the .so's torch ops (once per cache_key); return the op namespace."""
     torch = _require_torch()
@@ -108,13 +136,16 @@ def _load_ops(so_path: Path, cache_key: str) -> str:
             raise RuntimeError(f"failed to dlopen {so_path}: {e}") from e
         torch.ops.load_library(str(so_path))
         # torch.ops.<ns> is created lazily, so its mere existence proves nothing;
-        # probe for a concrete op to confirm the TORCH_LIBRARY block registered.
+        # probe for the ALWAYS-PRESENT sentinel op (an ungated plant cost op) to
+        # confirm the TORCH_LIBRARY block registered. Probing a core op (e.g.
+        # inverse_dynamics) would FALSELY fail a SUBSET .so that omits that core,
+        # so use the sentinel which every torch surface emits.
         try:
-            getattr(getattr(torch.ops, ns), "inverse_dynamics")
+            getattr(getattr(torch.ops, ns), _TORCH_SURFACE_SENTINEL)
         except AttributeError as e:
             raise RuntimeError(
-                f"torch op {ns}.inverse_dynamics not found in {so_path}; was the .so compiled "
-                f"with GRID_RBD_WITH_TORCH (torch installed at register time)? "
+                f"torch op {ns}.{_TORCH_SURFACE_SENTINEL} not found in {so_path}; was the .so "
+                f"compiled with GRID_RBD_WITH_TORCH (torch installed at register time)? "
                 f"Re-register with force_rebuild=True."
             ) from e
         _LOADED[cache_key] = ns
@@ -139,8 +170,10 @@ def _make_autograd(ns, nv, mujoco=False):
         # variant (kernel launched with MUJOCO_OUTPUT=true): mjx-convention
         # forward + mjx-convention analytic Jacobian, so backward stays
         # self-consistent. mjx is FLOATING-base only (the _mujoco symbols are
-        # #ifdef'd out of fixed .so).
-        return getattr(ops, (name + "_mujoco") if mujoco else name)
+        # #ifdef'd out of fixed .so). A CORE op absent on a SUBSET build maps to
+        # the clean "not built — add to algorithm_list" error (not a bare
+        # AttributeError) via _resolve_core_op.
+        return _resolve_core_op(ops, (name + "_mujoco") if mujoco else name)
 
     # nq↔nv bridge for the backward VJPs. The dynamics VALUE outputs (c / qdd)
     # are nj-wide (so grad_c / grad_qdd are nj-wide), but the analytic Jacobians
@@ -622,26 +655,36 @@ class TorchRobotHandle:
         return self._fns_for("pinocchio")
 
     def _op(self, conv, name):
-        """Resolve a DIRECT (non-autograd) op, dispatching to the ``_mujoco``
+        """Resolve a DIRECT (non-autograd) CORE op, dispatching to the ``_mujoco``
         variant when the resolved convention is mujoco. mjx requires a floating
-        base (the _mujoco symbol is #ifdef'd out of fixed .so)."""
+        base (the _mujoco symbol is #ifdef'd out of fixed .so). A core op missing
+        on a SUBSET build maps to the clean "not built — add to algorithm_list"
+        error (via _resolve_core_op)."""
         c = self._resolve_convention(conv)
         if c == "mujoco":
             if not self.floating_base:
                 raise ValueError(
                     "output_convention='mujoco' requires a floating-base robot "
                     f"({self.name} is fixed-base)")
-            return getattr(self._ops, name + "_mujoco")
-        return getattr(self._ops, name)
+            return _resolve_core_op(self._ops, name + "_mujoco")
+        return _resolve_core_op(self._ops, name)
 
     def _gated_op(self, conv, name):
         """Like :py:meth:`_op` but for the GATED centroidal / kinematics methods
         (com / ccrba / energy / dccrba / cmm_time_variation / frame_jacobian[_dot]
         / osc_inertia): if the op isn't in the .so (the kernel wasn't generated
-        for this robot) re-raise the bare ``AttributeError`` with an actionable
-        message mirroring the numpy handle."""
+        for this robot) re-raise with an actionable message mirroring the numpy
+        handle. These are #ifdef-gated (emitted-when-present), distinct from the
+        core subset gating, so resolve the raw op directly and keep the dedicated
+        'not generated' message."""
+        c = self._resolve_convention(conv)
+        if c == "mujoco" and not self.floating_base:
+            raise ValueError(
+                "output_convention='mujoco' requires a floating-base robot "
+                f"({self.name} is fixed-base)")
+        resolved = (name + "_mujoco") if c == "mujoco" else name
         try:
-            return self._op(conv, name)
+            return getattr(self._ops, resolved)
         except AttributeError as e:
             raise AttributeError(
                 f"{name} not generated for this robot .so; re-register with "
@@ -1254,15 +1297,22 @@ def register_robot(
     force_rebuild: bool = False,
     cuda_arch: int | None = None,
     output_convention: str = "pinocchio",
+    algorithm_list: list[str] | str | None = None,
 ) -> TorchRobotHandle:
     """Register a robot for the torch backend (same cache as the plain/JAX
-    surfaces). Returns a :py:class:`TorchRobotHandle`."""
+    surfaces). Returns a :py:class:`TorchRobotHandle`.
+
+    ``algorithm_list`` (subset build) is supported: only the requested cores + their
+    transitive deps are compiled into the torch op surface; calling a method that
+    was excluded raises a clean "not built into this robot .so — add to
+    algorithm_list and rebuild" error. ``None`` ⇒ the full default profile."""
     _require_torch()  # fail early with install guidance if torch is missing
     base = _grid_rbd.register_robot(
         name=name, urdf_path=urdf_path, urdf_string=urdf_string,
         floating_base=floating_base, ee_joint_names=ee_joint_names,
         max_batch_size=max_batch_size, cache_dir=cache_dir,
         force_rebuild=force_rebuild, cuda_arch=cuda_arch,
+        algorithm_list=algorithm_list,
     )
     cache_key, so_path = _lookup(name, cache_dir)
     return TorchRobotHandle(base, cache_key, so_path,

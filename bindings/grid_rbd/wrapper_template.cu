@@ -2519,6 +2519,7 @@ extern "C" int grid_plant_step_hessian_mujoco(
 #include "xla/ffi/api/ffi.h"
 namespace ffi = xla::ffi;
 
+#if GRID_HAS_INVERSE_DYNAMICS
 // inverse_dynamics(q, qd, qdd, f_ext) → c   — fully device-resident path.
 //
 // qdd and f_ext are ALWAYS passed as explicit device buffers from the Python
@@ -2627,6 +2628,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_INVERSE_DYNAMICS
 
 // Shared helper: validate (B, NJ) and return batch size, or error.
 // Kept inline so each handler stays self-contained for grep-ability.
@@ -2644,6 +2646,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     } while (0)
 
 
+#if GRID_HAS_MINV
 // minv(q) → Minv  (kernel writes lower triangle only; symmetrize Python-side)
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_minv_impl(
@@ -2703,8 +2706,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_MINV
 
 
+#if GRID_HAS_FORWARD_DYNAMICS
 // forward_dynamics(q, qd, u, f_ext) → qdd  (f_ext always passed; zeros if omitted)
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_forward_dynamics_impl(
@@ -2776,8 +2781,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_FORWARD_DYNAMICS
 
 
+#if GRID_HAS_ABA
 // aba(q, qd, u, f_ext) → qdd  — same kernel signature shape as forward_dynamics
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_aba_impl(
@@ -2849,8 +2856,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_ABA
 
 
+#if GRID_HAS_CRBA
 // crba(q) → M  (kernel writes the full mass matrix; no symmetrize needed)
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_crba_impl(
@@ -2913,8 +2922,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_CRBA
 
 
+#if GRID_HAS_END_EFFECTOR_POSE
 // end_effector_pose(q) → end_effector_pose  flat (B, 6*NUM_EES)
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_end_effector_pose_impl(
@@ -2968,8 +2979,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_END_EFFECTOR_POSE
 
 
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
 // end_effector_pose_gradient(q) → end_effector_pose_gradient d/dv flat (B, 6*NUM_EES*NV).
 // Output convention: d/dv tangent (pinocchio); floating-base shape uses NV
 // (= 6 + n_joints) NOT NJ. Python side reshapes/transposes to the
@@ -3027,6 +3040,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT
 
 
 // ─── runtime-target multi-EE pose / pose-gradient (single-target FFI) ─────────
@@ -3168,6 +3182,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 #endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
 
 
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
 // end_effector_pose_hessian(q) → end_effector_pose_hessian  flat (B, 6*NUM_EES*NV*NV)
 // The kernel also writes d_end_effector_pose_gradient as a byproduct; we only return d2.
 template <bool MUJOCO>
@@ -3223,8 +3238,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_END_EFFECTOR_POSE_HESSIAN
 
 
+#if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
 // inverse_dynamics_gradient(q, qd, qdd) → dc_du  flat (B, 2*NV*NV)
 // Python reshapes/transposes to (B, NV, 2*NV) [dc_dq | dc_dqd] (tangent-space;
 // FIXED base NV == NJ, FLOATING base NV < NJ).
@@ -3310,8 +3327,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_INVERSE_DYNAMICS_GRADIENT
 
 
+#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
 // forward_dynamics_gradient(q, qd, u) → df_du  flat (B, 2*NV*NV)
 // Python reshapes/transposes to (B, NV, 2*NV) (tangent-space; FIXED base
 // NV == NJ, FLOATING base NV < NJ).
@@ -3383,8 +3402,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_FORWARD_DYNAMICS_GRADIENT
 
 
+#if GRID_HAS_IDSVA_SO
 // idsva_so(q, qd, qdd) → packed (B, SECOND_ORDER_TENSOR_SIZE)
 // The codegen-time dispatcher picks body- vs world-frame; we dispatch here at
 // compile time using the GRID_GENERATES_* macros so a per-robot .so calls
@@ -3470,8 +3491,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_IDSVA_SO
 
 
+#if GRID_HAS_FDSVA_SO
 // fdsva_so(q, qd, u) → packed (B, SECOND_ORDER_TENSOR_SIZE)
 // Uses d_idsva_so as scratch — must not run concurrently with idsva_so.
 template <bool MUJOCO>
@@ -3542,6 +3565,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_FDSVA_SO
 
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -3555,6 +3579,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 // dqdd/dpi = -Minv . Y. The Python custom_vjp contracts a cotangent ct (NV)
 // with these (NV x 10NB) Jacobians to produce the pi-cotangent (10NB).
 
+#if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
 // inverse_dynamics_regressor(q, qd, qdd) → Y  flat (B, NV*10*NUM_BODIES).
 // qdd is passed explicitly (the bias regressor used by inverse_dynamics's VJP
 // passes zeros). The regressor kernel reads q|qd|qdd from d_q_qd_u (stride
@@ -3623,8 +3648,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
 
 
+#if GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
 // forward_dynamics_parameter_gradient(q, qd, u) → dqdd/dpi = -Minv . Y
 // flat (B, NV*10*NUM_BODIES). Internally runs FD at (q,qd,u) and the regressor
 // at the resulting qdd, then applies -Minv (mirrors RBDReference). The kernel
@@ -3679,11 +3706,13 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<float>("gravity")
 );
+#endif  // GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
 
 
 // Integrator. dt + it are FFI attributes (runtime scalars; gravity is the
 // standard constant). q/qd/u are packed D→D like aba; the integrator kernels
 // are launched directly on the JAX stream.
+#if GRID_HAS_INTEGRATOR
 template <grid::IntegratorType IT, bool MUJOCO>
 static void launch_integrator_kernel_jax(cudaStream_t stream, int batch, float dt, float gravity) {
     constexpr int stride = 3 * grid::NUM_JOINTS;
@@ -3693,6 +3722,8 @@ static void launch_integrator_kernel_jax(cudaStream_t stream, int batch, float d
             g_data->d_x_kp1, g_data->d_workspace, g_data->d_q_qd_u, stride,
             g_robot, /*gravity=*/static_cast<T>(gravity), static_cast<T>(dt), batch);
 }
+#endif  // GRID_HAS_INTEGRATOR
+#if GRID_HAS_INTEGRATOR_GRADIENT
 template <grid::IntegratorType IT, bool MUJOCO>
 static void launch_integrator_grad_kernel_jax(cudaStream_t stream, int batch, float dt, float gravity) {
     constexpr int stride = 3 * grid::NUM_JOINTS;
@@ -3702,6 +3733,7 @@ static void launch_integrator_grad_kernel_jax(cudaStream_t stream, int batch, fl
             g_data->d_dAB, g_data->d_workspace, g_data->d_q_qd_u, stride,
             g_robot, /*gravity=*/static_cast<T>(gravity), static_cast<T>(dt), batch);
 }
+#endif  // GRID_HAS_INTEGRATOR_GRADIENT
 
 #define GRID_RBD_IT_DISPATCH_FFI(it_code, FN, ...)                                 \
     switch (it_code) {                                                             \
@@ -3752,6 +3784,7 @@ static void grid_rbd_jax_pack_qqdu(cudaStream_t stream, int batch, int nj,
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
 }
 
+#if GRID_HAS_INTEGRATOR
 // integrator(q, qd, u; dt, it) → x_kp1  (B, NUM_POS + NUM_VEL)
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_integrator_impl(
@@ -3797,7 +3830,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_INTEGRATOR
 
+#if GRID_HAS_INTEGRATOR_GRADIENT
 // integrator_gradient(q, qd, u; dt, it) → dAB  (B, 2*NV, 3*NV)
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_integrator_gradient_impl(
@@ -3849,6 +3884,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_INTEGRATOR_GRADIENT
 
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -4303,6 +4339,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 // algorithm kernel (coriolis/cmm/dccrba/com/ccrba/energy/... all enumerated
 // there). The crba/idsva_so handlers rely on the same warmup; these do too.
 
+#if GRID_HAS_GENERALIZED_GRAVITY
 // generalized_gravity(q) → g(q), NV  [d_workspace, gravity]
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_generalized_gravity_impl(
@@ -4348,8 +4385,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_GENERALIZED_GRAVITY
 
 
+#if GRID_HAS_NONLINEAR_EFFECTS
 // nonlinear_effects(q, qd) → c(q,qd), NV  [d_workspace, gravity]
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_nonlinear_effects_impl(
@@ -4396,8 +4435,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_NONLINEAR_EFFECTS
 
 
+#if GRID_HAS_CORIOLIS_MATRIX
 // coriolis_matrix(q, qd) → C(q,qd), NV*NV row-major  [d_workspace, gravity]
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_coriolis_matrix_impl(
@@ -4444,8 +4485,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_CORIOLIS_MATRIX
 
 
+#if GRID_HAS_KINETIC_ENERGY_REGRESSOR
 // kinetic_energy_regressor(q, qd) → y_KE, 10*NUM_BODIES  [gravity, no workspace]
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_kinetic_energy_regressor_impl(
@@ -4492,8 +4535,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_KINETIC_ENERGY_REGRESSOR
 
 
+#if GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
 // potential_energy_regressor(q) → y_PE, 10*NUM_BODIES  [gravity, no workspace]
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_potential_energy_regressor_impl(
@@ -4538,6 +4583,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
 
 
 // ─── Wave 2: gated value ops (energy/com/ccrba/cmm/dccrba) ───────────────────
@@ -5033,6 +5079,7 @@ static inline void grid_torch_f_ext_reset(cudaStream_t stream, int batch,
 // separate d_qdd buffer and launch the USE_QDD overload of the kernel (which
 // reads the acceleration from d_qdd; signature adds d_qdd after stride). A null
 // qdd keeps the (faster) qdd=0 overload. Mirrors the numpy / JAX ID paths.
+#if GRID_HAS_INVERSE_DYNAMICS
 template <bool MUJOCO>
 torch::Tensor torch_inverse_dynamics(torch::Tensor q, torch::Tensor qd, double gravity,
                          c10::optional<torch::Tensor> qdd,
@@ -5069,7 +5116,9 @@ torch::Tensor torch_inverse_dynamics(torch::Tensor q, torch::Tensor qd, double g
     grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
+#endif  // GRID_HAS_INVERSE_DYNAMICS
 
+#if GRID_HAS_MINV
 template <bool MUJOCO>
 torch::Tensor torch_minv(torch::Tensor q) {
     grid_torch_init_or_throw();
@@ -5088,7 +5137,9 @@ torch::Tensor torch_minv(torch::Tensor q) {
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_Minv, batch * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_MINV
 
+#if GRID_HAS_FORWARD_DYNAMICS
 template <bool MUJOCO>
 torch::Tensor torch_forward_dynamics(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity,
                                      c10::optional<torch::Tensor> f_ext) {
@@ -5107,7 +5158,9 @@ torch::Tensor torch_forward_dynamics(torch::Tensor q, torch::Tensor qd, torch::T
     grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
+#endif  // GRID_HAS_FORWARD_DYNAMICS
 
+#if GRID_HAS_ABA
 template <bool MUJOCO>
 torch::Tensor torch_aba(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity,
                         c10::optional<torch::Tensor> f_ext) {
@@ -5126,7 +5179,9 @@ torch::Tensor torch_aba(torch::Tensor q, torch::Tensor qd, torch::Tensor u, doub
     grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
+#endif  // GRID_HAS_ABA
 
+#if GRID_HAS_CRBA
 template <bool MUJOCO>
 torch::Tensor torch_crba(torch::Tensor q, double gravity) {
     grid_torch_init_or_throw();
@@ -5145,7 +5200,9 @@ torch::Tensor torch_crba(torch::Tensor q, double gravity) {
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_M, batch * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_CRBA
 
+#if GRID_HAS_END_EFFECTOR_POSE
 template <bool MUJOCO>
 torch::Tensor torch_end_effector_pose(torch::Tensor q) {
     grid_torch_init_or_throw();
@@ -5161,7 +5218,9 @@ torch::Tensor torch_end_effector_pose(torch::Tensor q) {
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_end_effector_pose, batch * 6 * nee * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_END_EFFECTOR_POSE
 
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
 template <bool MUJOCO>
 torch::Tensor torch_end_effector_pose_gradient(torch::Tensor q) {
     grid_torch_init_or_throw();
@@ -5177,7 +5236,9 @@ torch::Tensor torch_end_effector_pose_gradient(torch::Tensor q) {
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_end_effector_pose_gradient, batch * 6 * nee * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT
 
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
 template <bool MUJOCO>
 torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q) {
     grid_torch_init_or_throw();
@@ -5193,6 +5254,7 @@ torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q) {
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_end_effector_pose_hessian, batch * 6 * nee * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_END_EFFECTOR_POSE_HESSIAN
 
 // ─── runtime-target multi-EE pose / pose-gradient (single-target torch ops) ──
 // SINGLE target jid + a SINGLE 3-vector offset per call (the Python wrapper loops
@@ -5248,6 +5310,7 @@ torch::Tensor torch_end_effector_pose_gradient_runtime(torch::Tensor q, int64_t 
 // stride). A null qdd keeps the (faster) qdd=0 overload — byte-identical to the
 // prior behaviour. Mirrors the numpy / JAX ID-gradient paths and the order of
 // the VALUE torch_inverse_dynamics op (q, qd, gravity, qdd, f_ext).
+#if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
 template <bool MUJOCO>
 torch::Tensor torch_inverse_dynamics_gradient(torch::Tensor q, torch::Tensor qd, double gravity,
                               c10::optional<torch::Tensor> qdd,
@@ -5286,7 +5349,9 @@ torch::Tensor torch_inverse_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
     grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
+#endif  // GRID_HAS_INVERSE_DYNAMICS_GRADIENT
 
+#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
 template <bool MUJOCO>
 torch::Tensor torch_forward_dynamics_gradient(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity,
                                           c10::optional<torch::Tensor> f_ext) {
@@ -5308,7 +5373,9 @@ torch::Tensor torch_forward_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
     grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
+#endif  // GRID_HAS_FORWARD_DYNAMICS_GRADIENT
 
+#if GRID_HAS_IDSVA_SO
 template <bool MUJOCO>
 torch::Tensor torch_idsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor qdd, double gravity) {
     grid_torch_init_or_throw();
@@ -5337,7 +5404,9 @@ torch::Tensor torch_idsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor qd
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_idsva_so, batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_IDSVA_SO
 
+#if GRID_HAS_FDSVA_SO
 template <bool MUJOCO>
 torch::Tensor torch_fdsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity) {
     grid_torch_init_or_throw();
@@ -5353,6 +5422,7 @@ torch::Tensor torch_fdsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor u,
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_df2, batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_FDSVA_SO
 
 // ── inertial-parameter (sysID) regressor + FD parameter gradient ──
 // Mirror the JAX grid_rbd_jax_inverse_dynamics_regressor /
@@ -5361,6 +5431,7 @@ torch::Tensor torch_fdsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor u,
 // output. These back the torch inertial-parameter VJP (tau = Y . pi so
 // dtau/dpi = Y, dqdd/dpi = -Minv . Y).
 
+#if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
 template <bool MUJOCO>
 torch::Tensor torch_inverse_dynamics_regressor(torch::Tensor q, torch::Tensor qd, torch::Tensor qdd, double gravity) {
     grid_torch_init_or_throw();
@@ -5380,7 +5451,9 @@ torch::Tensor torch_inverse_dynamics_regressor(torch::Tensor q, torch::Tensor qd
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_Y, (size_t)batch * out_size * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
 
+#if GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
 torch::Tensor torch_forward_dynamics_parameter_gradient(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double gravity) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
@@ -5398,6 +5471,7 @@ torch::Tensor torch_forward_dynamics_parameter_gradient(torch::Tensor q, torch::
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_dqdd_dpi, (size_t)batch * out_size * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
 
 // torch-local integrator-type dispatch (self-contained; the JAX variant lives
 // inside the JAX #ifdef and its default branch returns ffi::Error).
@@ -5431,19 +5505,24 @@ torch::Tensor torch_forward_dynamics_parameter_gradient(torch::Tensor q, torch::
             "mujoco integrator/plant-step gradient supports only euler / semi-implicit-euler"); \
     }
 
+#if GRID_HAS_INTEGRATOR
 template <grid::IntegratorType IT, bool MUJOCO>
 static void torch_launch_integrator(cudaStream_t stream, int batch, double dt, double gravity) {
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::integrator_kernel<T, IT, grid::GRID_DEFAULT_RESOURCE_TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<g_block_dimms, g_thread_dimms, grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_x_kp1, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, (T)dt, batch);
 }
+#endif  // GRID_HAS_INTEGRATOR
+#if GRID_HAS_INTEGRATOR_GRADIENT
 template <grid::IntegratorType IT, bool MUJOCO>
 static void torch_launch_integrator_grad(cudaStream_t stream, int batch, double dt, double gravity) {
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::integrator_gradient_kernel<T, IT, grid::GRID_DEFAULT_RESOURCE_TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<g_block_dimms, g_thread_dimms, grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_dAB, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, (T)dt, batch);
 }
+#endif  // GRID_HAS_INTEGRATOR_GRADIENT
 
+#if GRID_HAS_INTEGRATOR
 template <bool MUJOCO>
 torch::Tensor torch_integrator(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double dt, int64_t it, double gravity) {
     grid_torch_init_or_throw();
@@ -5457,7 +5536,9 @@ torch::Tensor torch_integrator(torch::Tensor q, torch::Tensor qd, torch::Tensor 
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_x_kp1, batch * (grid::NUM_POS + grid::NUM_VEL) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_INTEGRATOR
 
+#if GRID_HAS_INTEGRATOR_GRADIENT
 template <bool MUJOCO>
 torch::Tensor torch_integrator_gradient(torch::Tensor q, torch::Tensor qd, torch::Tensor u, double dt, int64_t it, double gravity) {
     grid_torch_init_or_throw();
@@ -5476,6 +5557,7 @@ torch::Tensor torch_integrator_gradient(torch::Tensor q, torch::Tensor qd, torch
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_dAB, batch * (2 * nv) * (3 * nv) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_INTEGRATOR_GRADIENT
 
 // ── grid_plant surface (cost / barrier / plant-step) ──
 //
@@ -5745,6 +5827,7 @@ std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Tensor qd
 // d_workspace passed ONLY where the contract row says YES; gravity only where YES.
 // R2 smem opt-in: covered by grid_rbd_init → init_grid_kernel_attrs (see jax note).
 
+#if GRID_HAS_GENERALIZED_GRAVITY
 template <bool MUJOCO>
 torch::Tensor torch_generalized_gravity(torch::Tensor q, double gravity) {
     grid_torch_init_or_throw();
@@ -5760,7 +5843,9 @@ torch::Tensor torch_generalized_gravity(torch::Tensor q, double gravity) {
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_c, batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_GENERALIZED_GRAVITY
 
+#if GRID_HAS_NONLINEAR_EFFECTS
 template <bool MUJOCO>
 torch::Tensor torch_nonlinear_effects(torch::Tensor q, torch::Tensor qd, double gravity) {
     grid_torch_init_or_throw();
@@ -5776,7 +5861,9 @@ torch::Tensor torch_nonlinear_effects(torch::Tensor q, torch::Tensor qd, double 
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_c, batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_NONLINEAR_EFFECTS
 
+#if GRID_HAS_CORIOLIS_MATRIX
 template <bool MUJOCO>
 torch::Tensor torch_coriolis_matrix(torch::Tensor q, torch::Tensor qd, double gravity) {
     grid_torch_init_or_throw();
@@ -5792,7 +5879,9 @@ torch::Tensor torch_coriolis_matrix(torch::Tensor q, torch::Tensor qd, double gr
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_coriolis, batch * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_CORIOLIS_MATRIX
 
+#if GRID_HAS_KINETIC_ENERGY_REGRESSOR
 template <bool MUJOCO>
 torch::Tensor torch_kinetic_energy_regressor(torch::Tensor q, torch::Tensor qd, double gravity) {
     grid_torch_init_or_throw();
@@ -5808,7 +5897,9 @@ torch::Tensor torch_kinetic_energy_regressor(torch::Tensor q, torch::Tensor qd, 
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_ke_regressor, batch * 10 * nb * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_KINETIC_ENERGY_REGRESSOR
 
+#if GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
 template <bool MUJOCO>
 torch::Tensor torch_potential_energy_regressor(torch::Tensor q, double gravity) {
     grid_torch_init_or_throw();
@@ -5824,6 +5915,7 @@ torch::Tensor torch_potential_energy_regressor(torch::Tensor q, double gravity) 
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_pe_regressor, batch * 10 * nb * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
 
 #ifdef GRID_HAS_ENERGY
 template <bool MUJOCO>
@@ -5989,30 +6081,72 @@ torch::Tensor torch_osc_inertia(torch::Tensor q) {
 #define GRID_RBD_TORCH_LIBRARY_IMPL(ns, k, m) TORCH_LIBRARY_IMPL(ns, k, m)
 
 GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
+#if GRID_HAS_INVERSE_DYNAMICS
     m.def("inverse_dynamics(Tensor q, Tensor qd, float gravity, Tensor? qdd=None, Tensor? f_ext=None) -> Tensor");
+#endif  // GRID_HAS_INVERSE_DYNAMICS
+#if GRID_HAS_MINV
     m.def("minv(Tensor q) -> Tensor");
+#endif  // GRID_HAS_MINV
+#if GRID_HAS_FORWARD_DYNAMICS
     m.def("forward_dynamics(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
+#endif  // GRID_HAS_FORWARD_DYNAMICS
+#if GRID_HAS_ABA
     m.def("aba(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
+#endif  // GRID_HAS_ABA
+#if GRID_HAS_CRBA
     m.def("crba(Tensor q, float gravity) -> Tensor");
+#endif  // GRID_HAS_CRBA
+#if GRID_HAS_END_EFFECTOR_POSE
     m.def("end_effector_pose(Tensor q) -> Tensor");
+#endif  // GRID_HAS_END_EFFECTOR_POSE
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
     m.def("end_effector_pose_gradient(Tensor q) -> Tensor");
+#endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
     m.def("end_effector_pose_hessian(Tensor q) -> Tensor");
+#endif  // GRID_HAS_END_EFFECTOR_POSE_HESSIAN
+#if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
     m.def("inverse_dynamics_gradient(Tensor q, Tensor qd, float gravity, Tensor? qdd=None, Tensor? f_ext=None) -> Tensor");
+#endif  // GRID_HAS_INVERSE_DYNAMICS_GRADIENT
+#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
     m.def("forward_dynamics_gradient(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
+#endif  // GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+#if GRID_HAS_IDSVA_SO
     m.def("idsva_so(Tensor q, Tensor qd, Tensor qdd, float gravity) -> Tensor");
+#endif  // GRID_HAS_IDSVA_SO
+#if GRID_HAS_FDSVA_SO
     m.def("fdsva_so(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
+#endif  // GRID_HAS_FDSVA_SO
+#if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
     m.def("inverse_dynamics_regressor(Tensor q, Tensor qd, Tensor qdd, float gravity) -> Tensor");
+#endif  // GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
+#if GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
     m.def("forward_dynamics_parameter_gradient(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
+#endif  // GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
+#if GRID_HAS_INTEGRATOR
     m.def("integrator(Tensor q, Tensor qd, Tensor u, float dt, int it, float gravity) -> Tensor");
+#endif  // GRID_HAS_INTEGRATOR
+#if GRID_HAS_INTEGRATOR_GRADIENT
     m.def("integrator_gradient(Tensor q, Tensor qd, Tensor u, float dt, int it, float gravity) -> Tensor");
+#endif  // GRID_HAS_INTEGRATOR_GRADIENT
     // P-tier1 centroidal/energy/kinematics family (single flat Tensor each; the
     // Python layer reshapes/splits per _handle.py). Gated schemas are always
     // def'd (cheap) but only impl'd under the matching GRID_HAS_* below.
+#if GRID_HAS_GENERALIZED_GRAVITY
     m.def("generalized_gravity(Tensor q, float gravity) -> Tensor");
+#endif  // GRID_HAS_GENERALIZED_GRAVITY
+#if GRID_HAS_NONLINEAR_EFFECTS
     m.def("nonlinear_effects(Tensor q, Tensor qd, float gravity) -> Tensor");
+#endif  // GRID_HAS_NONLINEAR_EFFECTS
+#if GRID_HAS_CORIOLIS_MATRIX
     m.def("coriolis_matrix(Tensor q, Tensor qd, float gravity) -> Tensor");
+#endif  // GRID_HAS_CORIOLIS_MATRIX
+#if GRID_HAS_KINETIC_ENERGY_REGRESSOR
     m.def("kinetic_energy_regressor(Tensor q, Tensor qd, float gravity) -> Tensor");
+#endif  // GRID_HAS_KINETIC_ENERGY_REGRESSOR
+#if GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
     m.def("potential_energy_regressor(Tensor q, float gravity) -> Tensor");
+#endif  // GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
     m.def("energy(Tensor q, Tensor qd, float gravity) -> Tensor");
     m.def("com(Tensor q) -> Tensor");
     m.def("ccrba(Tensor q, Tensor qd) -> Tensor");
@@ -6049,27 +6183,67 @@ GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
 #ifdef GRID_RBD_WITH_MUJOCO
     // MuJoCo-convention ops (floating only): same schema, name suffixed _mujoco; the
     // CUDA impl launches the kernel with MUJOCO_OUTPUT=true.
+#if GRID_HAS_INVERSE_DYNAMICS
     m.def("inverse_dynamics_mujoco(Tensor q, Tensor qd, float gravity, Tensor? qdd=None, Tensor? f_ext=None) -> Tensor");
+#endif  // GRID_HAS_INVERSE_DYNAMICS
+#if GRID_HAS_MINV
     m.def("minv_mujoco(Tensor q) -> Tensor");
+#endif  // GRID_HAS_MINV
+#if GRID_HAS_FORWARD_DYNAMICS
     m.def("forward_dynamics_mujoco(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
+#endif  // GRID_HAS_FORWARD_DYNAMICS
+#if GRID_HAS_ABA
     m.def("aba_mujoco(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
+#endif  // GRID_HAS_ABA
+#if GRID_HAS_CRBA
     m.def("crba_mujoco(Tensor q, float gravity) -> Tensor");
+#endif  // GRID_HAS_CRBA
+#if GRID_HAS_END_EFFECTOR_POSE
     m.def("end_effector_pose_mujoco(Tensor q) -> Tensor");
+#endif  // GRID_HAS_END_EFFECTOR_POSE
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
     m.def("end_effector_pose_gradient_mujoco(Tensor q) -> Tensor");
+#endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
     m.def("end_effector_pose_hessian_mujoco(Tensor q) -> Tensor");
+#endif  // GRID_HAS_END_EFFECTOR_POSE_HESSIAN
+#if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
     m.def("inverse_dynamics_gradient_mujoco(Tensor q, Tensor qd, float gravity, Tensor? qdd=None, Tensor? f_ext=None) -> Tensor");
+#endif  // GRID_HAS_INVERSE_DYNAMICS_GRADIENT
+#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
     m.def("forward_dynamics_gradient_mujoco(Tensor q, Tensor qd, Tensor u, float gravity, Tensor? f_ext=None) -> Tensor");
+#endif  // GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+#if GRID_HAS_IDSVA_SO
     m.def("idsva_so_mujoco(Tensor q, Tensor qd, Tensor qdd, float gravity) -> Tensor");
+#endif  // GRID_HAS_IDSVA_SO
+#if GRID_HAS_FDSVA_SO
     m.def("fdsva_so_mujoco(Tensor q, Tensor qd, Tensor u, float gravity) -> Tensor");
+#endif  // GRID_HAS_FDSVA_SO
+#if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
     m.def("inverse_dynamics_regressor_mujoco(Tensor q, Tensor qd, Tensor qdd, float gravity) -> Tensor");
+#endif  // GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
+#if GRID_HAS_INTEGRATOR
     m.def("integrator_mujoco(Tensor q, Tensor qd, Tensor u, float dt, int it, float gravity) -> Tensor");
+#endif  // GRID_HAS_INTEGRATOR
+#if GRID_HAS_INTEGRATOR_GRADIENT
     m.def("integrator_gradient_mujoco(Tensor q, Tensor qd, Tensor u, float dt, int it, float gravity) -> Tensor");
+#endif  // GRID_HAS_INTEGRATOR_GRADIENT
     // P-tier1 mujoco-convention variants (floating only; impl'd under the same GRID_HAS_* below).
+#if GRID_HAS_GENERALIZED_GRAVITY
     m.def("generalized_gravity_mujoco(Tensor q, float gravity) -> Tensor");
+#endif  // GRID_HAS_GENERALIZED_GRAVITY
+#if GRID_HAS_NONLINEAR_EFFECTS
     m.def("nonlinear_effects_mujoco(Tensor q, Tensor qd, float gravity) -> Tensor");
+#endif  // GRID_HAS_NONLINEAR_EFFECTS
+#if GRID_HAS_CORIOLIS_MATRIX
     m.def("coriolis_matrix_mujoco(Tensor q, Tensor qd, float gravity) -> Tensor");
+#endif  // GRID_HAS_CORIOLIS_MATRIX
+#if GRID_HAS_KINETIC_ENERGY_REGRESSOR
     m.def("kinetic_energy_regressor_mujoco(Tensor q, Tensor qd, float gravity) -> Tensor");
+#endif  // GRID_HAS_KINETIC_ENERGY_REGRESSOR
+#if GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
     m.def("potential_energy_regressor_mujoco(Tensor q, float gravity) -> Tensor");
+#endif  // GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
     m.def("energy_mujoco(Tensor q, Tensor qd, float gravity) -> Tensor");
     m.def("com_mujoco(Tensor q) -> Tensor");
     m.def("ccrba_mujoco(Tensor q, Tensor qd) -> Tensor");
@@ -6100,28 +6274,70 @@ GRID_RBD_TORCH_LIBRARY(GRID_RBD_TORCH_LIB, m) {
 }
 
 GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
+#if GRID_HAS_INVERSE_DYNAMICS
     m.impl("inverse_dynamics", torch_inverse_dynamics<false>);
+#endif  // GRID_HAS_INVERSE_DYNAMICS
+#if GRID_HAS_MINV
     m.impl("minv", torch_minv<false>);
+#endif  // GRID_HAS_MINV
+#if GRID_HAS_FORWARD_DYNAMICS
     m.impl("forward_dynamics", torch_forward_dynamics<false>);
+#endif  // GRID_HAS_FORWARD_DYNAMICS
+#if GRID_HAS_ABA
     m.impl("aba", torch_aba<false>);
+#endif  // GRID_HAS_ABA
+#if GRID_HAS_CRBA
     m.impl("crba", torch_crba<false>);
+#endif  // GRID_HAS_CRBA
+#if GRID_HAS_END_EFFECTOR_POSE
     m.impl("end_effector_pose", torch_end_effector_pose<false>);
+#endif  // GRID_HAS_END_EFFECTOR_POSE
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
     m.impl("end_effector_pose_gradient", torch_end_effector_pose_gradient<false>);
+#endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
     m.impl("end_effector_pose_hessian", torch_end_effector_pose_hessian<false>);
+#endif  // GRID_HAS_END_EFFECTOR_POSE_HESSIAN
+#if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
     m.impl("inverse_dynamics_gradient", torch_inverse_dynamics_gradient<false>);
+#endif  // GRID_HAS_INVERSE_DYNAMICS_GRADIENT
+#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
     m.impl("forward_dynamics_gradient", torch_forward_dynamics_gradient<false>);
+#endif  // GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+#if GRID_HAS_IDSVA_SO
     m.impl("idsva_so", torch_idsva_so<false>);
+#endif  // GRID_HAS_IDSVA_SO
+#if GRID_HAS_FDSVA_SO
     m.impl("fdsva_so", torch_fdsva_so<false>);
+#endif  // GRID_HAS_FDSVA_SO
+#if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
     m.impl("inverse_dynamics_regressor", torch_inverse_dynamics_regressor<false>);
+#endif  // GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
+#if GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
     m.impl("forward_dynamics_parameter_gradient", torch_forward_dynamics_parameter_gradient);
+#endif  // GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
+#if GRID_HAS_INTEGRATOR
     m.impl("integrator", torch_integrator<false>);
+#endif  // GRID_HAS_INTEGRATOR
+#if GRID_HAS_INTEGRATOR_GRADIENT
     m.impl("integrator_gradient", torch_integrator_gradient<false>);
+#endif  // GRID_HAS_INTEGRATOR_GRADIENT
     // P-tier1 ungated value ops.
+#if GRID_HAS_GENERALIZED_GRAVITY
     m.impl("generalized_gravity", torch_generalized_gravity<false>);
+#endif  // GRID_HAS_GENERALIZED_GRAVITY
+#if GRID_HAS_NONLINEAR_EFFECTS
     m.impl("nonlinear_effects", torch_nonlinear_effects<false>);
+#endif  // GRID_HAS_NONLINEAR_EFFECTS
+#if GRID_HAS_CORIOLIS_MATRIX
     m.impl("coriolis_matrix", torch_coriolis_matrix<false>);
+#endif  // GRID_HAS_CORIOLIS_MATRIX
+#if GRID_HAS_KINETIC_ENERGY_REGRESSOR
     m.impl("kinetic_energy_regressor", torch_kinetic_energy_regressor<false>);
+#endif  // GRID_HAS_KINETIC_ENERGY_REGRESSOR
+#if GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
     m.impl("potential_energy_regressor", torch_potential_energy_regressor<false>);
+#endif  // GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
     // P-tier1 gated value ops + int-attr kinematics.
 #ifdef GRID_HAS_ENERGY
     m.impl("energy", torch_energy<false>);
@@ -6172,27 +6388,67 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
 #ifdef GRID_RBD_WITH_MUJOCO
     // MuJoCo-convention impls (floating only): same op functions instantiated with
     // MUJOCO=true so the kernel launches with MUJOCO_OUTPUT=true.
+#if GRID_HAS_INVERSE_DYNAMICS
     m.impl("inverse_dynamics_mujoco", torch_inverse_dynamics<true>);
+#endif  // GRID_HAS_INVERSE_DYNAMICS
+#if GRID_HAS_MINV
     m.impl("minv_mujoco", torch_minv<true>);
+#endif  // GRID_HAS_MINV
+#if GRID_HAS_FORWARD_DYNAMICS
     m.impl("forward_dynamics_mujoco", torch_forward_dynamics<true>);
+#endif  // GRID_HAS_FORWARD_DYNAMICS
+#if GRID_HAS_ABA
     m.impl("aba_mujoco", torch_aba<true>);
+#endif  // GRID_HAS_ABA
+#if GRID_HAS_CRBA
     m.impl("crba_mujoco", torch_crba<true>);
+#endif  // GRID_HAS_CRBA
+#if GRID_HAS_END_EFFECTOR_POSE
     m.impl("end_effector_pose_mujoco", torch_end_effector_pose<true>);
+#endif  // GRID_HAS_END_EFFECTOR_POSE
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
     m.impl("end_effector_pose_gradient_mujoco", torch_end_effector_pose_gradient<true>);
+#endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
     m.impl("end_effector_pose_hessian_mujoco", torch_end_effector_pose_hessian<true>);
+#endif  // GRID_HAS_END_EFFECTOR_POSE_HESSIAN
+#if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
     m.impl("inverse_dynamics_gradient_mujoco", torch_inverse_dynamics_gradient<true>);
+#endif  // GRID_HAS_INVERSE_DYNAMICS_GRADIENT
+#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
     m.impl("forward_dynamics_gradient_mujoco", torch_forward_dynamics_gradient<true>);
+#endif  // GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+#if GRID_HAS_IDSVA_SO
     m.impl("idsva_so_mujoco", torch_idsva_so<true>);
+#endif  // GRID_HAS_IDSVA_SO
+#if GRID_HAS_FDSVA_SO
     m.impl("fdsva_so_mujoco", torch_fdsva_so<true>);
+#endif  // GRID_HAS_FDSVA_SO
+#if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
     m.impl("inverse_dynamics_regressor_mujoco", torch_inverse_dynamics_regressor<true>);
+#endif  // GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
+#if GRID_HAS_INTEGRATOR
     m.impl("integrator_mujoco", torch_integrator<true>);
+#endif  // GRID_HAS_INTEGRATOR
+#if GRID_HAS_INTEGRATOR_GRADIENT
     m.impl("integrator_gradient_mujoco", torch_integrator_gradient<true>);
+#endif  // GRID_HAS_INTEGRATOR_GRADIENT
     // P-tier1 mujoco-convention variants.
+#if GRID_HAS_GENERALIZED_GRAVITY
     m.impl("generalized_gravity_mujoco", torch_generalized_gravity<true>);
+#endif  // GRID_HAS_GENERALIZED_GRAVITY
+#if GRID_HAS_NONLINEAR_EFFECTS
     m.impl("nonlinear_effects_mujoco", torch_nonlinear_effects<true>);
+#endif  // GRID_HAS_NONLINEAR_EFFECTS
+#if GRID_HAS_CORIOLIS_MATRIX
     m.impl("coriolis_matrix_mujoco", torch_coriolis_matrix<true>);
+#endif  // GRID_HAS_CORIOLIS_MATRIX
+#if GRID_HAS_KINETIC_ENERGY_REGRESSOR
     m.impl("kinetic_energy_regressor_mujoco", torch_kinetic_energy_regressor<true>);
+#endif  // GRID_HAS_KINETIC_ENERGY_REGRESSOR
+#if GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
     m.impl("potential_energy_regressor_mujoco", torch_potential_energy_regressor<true>);
+#endif  // GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
 #ifdef GRID_HAS_ENERGY
     m.impl("energy_mujoco", torch_energy<true>);
 #endif

@@ -78,6 +78,13 @@ def _require_jax():
     return jax
 
 
+# A JAX FFI handler that is ALWAYS emitted when the jax surface compiles (an
+# ungated plant cost handler — not behind any per-algo `#if GRID_HAS_*`). Used by
+# `_register_method_target` to tell a SUBSET-omitted core algo (this present but
+# the requested handler absent) apart from a .so with NO jax surface at all.
+_JAX_SURFACE_SENTINEL = "grid_rbd_jax_plant_quadratic_input_cost"
+
+
 def _ffi_target_name(cache_key: str, method: str) -> str:
     """JAX FFI target names are global. Key by cache_key (.so identity) so
     different robots → different targets, and so re-registering the same
@@ -102,6 +109,27 @@ def _register_method_target(
         try:
             fn_ptr = getattr(lib, symbol)
         except AttributeError as e:
+            # Two distinct causes for a missing JAX handler symbol:
+            #   (a) the WHOLE jax FFI surface wasn't compiled into this .so
+            #       (jax absent at register_robot time → no GRID_RBD_WITH_JAX), or
+            #   (b) a SUBSET build (algorithm_list=...) that omitted this core algo —
+            #       its `#if GRID_HAS_<ALGO>` handler dropped out, but the rest of the
+            #       jax surface is present.
+            # Distinguish via a SENTINEL symbol that is ALWAYS emitted whenever the
+            # jax surface compiled at all (an ungated plant handler — not behind any
+            # GRID_HAS_* gate). Present ⇒ subset gap (b); absent ⇒ no surface (a).
+            try:
+                getattr(lib, _JAX_SURFACE_SENTINEL)
+                surface_present = True
+            except AttributeError:
+                surface_present = False
+            if surface_present:
+                raise RuntimeError(
+                    f"{method!r} not built into this robot .so — add {method!r} "
+                    f"to algorithm_list in register_robot() and rebuild "
+                    f"(force_rebuild=True). The jax FFI surface is present but this "
+                    f"algorithm was excluded by the subset build."
+                ) from e
             raise RuntimeError(
                 f"Symbol {symbol!r} missing from {so_path}; was the .so "
                 f"compiled with GRID_RBD_WITH_JAX? (Reinstall jax + "
@@ -1588,6 +1616,7 @@ def register_robot(
     force_rebuild: bool = False,
     cuda_arch: int | None = None,
     output_convention: str = "pinocchio",
+    algorithm_list: list[str] | str | None = None,
 ) -> JaxRobotHandle:
     """Register a robot for use with JAX.
 
@@ -1595,6 +1624,11 @@ def register_robot(
     :py:func:`grid_rbd.register_robot` uses (cache hit if already
     compiled). Additionally registers JAX FFI targets so the methods
     are callable inside ``jax.jit``.
+
+    ``algorithm_list`` (subset build) is supported: only the requested cores +
+    their transitive deps are compiled into the jax surface; calling a method that
+    was excluded raises a clean "not built into this robot .so — add to
+    algorithm_list and rebuild" error. ``None`` ⇒ the full default profile.
 
     Returns a :py:class:`JaxRobotHandle`.
     """
@@ -1609,6 +1643,7 @@ def register_robot(
         cache_dir=cache_dir,
         force_rebuild=force_rebuild,
         cuda_arch=cuda_arch,
+        algorithm_list=algorithm_list,
     )
     # Pull the cache_key + .so path from the manifest so we can dlopen
     # to register JAX FFI symbols.

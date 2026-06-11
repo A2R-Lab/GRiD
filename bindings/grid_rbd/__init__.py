@@ -166,8 +166,11 @@ def register_robot(
         ``crba``, ``inverse_dynamics_gradient``, ``forward_dynamics_gradient``,
         ``idsva_so_body_frame``, ``fdsva_so``, ``end_effector_pose``[``_gradient``/
         ``_hessian``], ``integrator``, ``integrator_gradient``, plus curated profile
-        sets like ``"dynamics-core"``. numpy backend only — a subset ``.so`` omits
-        the JAX/torch FFI surfaces (those are the full-profile fp32 path).
+        sets like ``"dynamics-core"``. Supported on ALL backends (numpy / jax /
+        torch): the JAX/torch FFI handlers are per-CORE-algo gated, so a subset
+        ``.so`` builds only the requested cores on those surfaces too. A method that
+        was NOT built raises the same clean "not built into this robot .so — add to
+        algorithm_list and rebuild" error on jax/torch as it does on numpy.
     output_convention : str, optional
         Default IO convention for the returned handle: ``"pinocchio"`` (default,
         GRiD-native) or ``"mujoco"`` (mjx parity — wxyz quat, global-linear free-joint
@@ -210,28 +213,24 @@ def register_robot(
             f"use_joint_dynamics=True is only supported for the numpy backend; the "
             f"{backend!r} backend does not yet thread the joint-dynamics flag. "
             f"Use backend='numpy'.")
-    if algorithm_list is not None and backend != "numpy":
-        # A subset .so omits the JAX/torch FFI surfaces (their core handlers call
-        # grid::*_kernel directly and are not per-algo gated). The subset feature is
-        # a numpy-backend compile-cost win; reject it for jax/torch with a clear msg.
-        raise ValueError(
-            f"algorithm_list (subset build) is only supported for the numpy backend; "
-            f"the {backend!r} backend builds the full profile (its FFI surfaces bind "
-            f"the complete algorithm set). Use backend='numpy'.")
+    # Subset build (algorithm_list) is now supported on ALL backends: the jax/torch
+    # FFI handlers are per-CORE-algo gated (#if GRID_HAS_<ALGO>), so a reduced profile
+    # builds only the requested cores on those surfaces too, and the backend wrappers
+    # map a missing-symbol AttributeError to the same clean subset error numpy raises.
     if backend == "jax":
         from . import jax as _jax_backend
         return _jax_backend.register_robot(
             name, urdf_path, urdf_string=urdf_string, floating_base=floating_base,
             ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
             cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
-            output_convention=output_convention)
+            output_convention=output_convention, algorithm_list=algorithm_list)
     if backend == "torch":
         from . import torch as _torch_backend
         return _torch_backend.register_robot(
             name, urdf_path, urdf_string=urdf_string, floating_base=floating_base,
             ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
             cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
-            output_convention=output_convention)
+            output_convention=output_convention, algorithm_list=algorithm_list)
 
     cache_dir = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
