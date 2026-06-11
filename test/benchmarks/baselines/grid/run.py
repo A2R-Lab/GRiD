@@ -1401,13 +1401,20 @@ def run_timing(binaries: tuple[Path | None, Path | None], base: str) -> str:
 #     "sweep_us": {threads: us, ...},
 # }
 # ---------------------------------------------------------------------------
-# Narrowed from {32,64,96,128,192,256,384,512}: sweep data
-# (results/perf_sweep_20260601_014157) shows winners cluster in 128-320 with
-# almost none below 96 or above 384, so we drop the rarely-winning 32/64/512
-# probes. The one-level refinement around each winner (_refine_grid_for_winner)
-# still probes the immediate neighbors, so genuine edge-case optima are not
-# missed. Override with --autotune-thread-grid.
-DEFAULT_AUTOTUNE_THREAD_GRID: tuple[int, ...] = (96, 128, 192, 256, 320, 384)
+# A1a (autotune-matrix Phase 1): widened to reach the warp floor (32) and the
+# hardware ceiling (1024). The earlier narrow {96..384} grid was tuned to small
+# fixed-base robots, but the fast regime SCALES UP with robot size + batch
+# (go2>=512, g1>=640, up to 1024 — see project_grid_jax_ffi_thread_pathology):
+# clamping at 384 hid the genuine large-robot optima. `_clip_grid_to_cap` drops
+# every probe above each tier's __launch_bounds__ (tier_max_threads<TIER>()), so
+# adding 512..1024 never launches above a tier's register cap — a probe that
+# would exceed it is silently dropped, NOT timed (guards against the §1c
+# bogus-fast / failed-launch-reads-fastest trap). The one-level refinement around
+# each winner (_refine_grid_for_winner) still probes immediate neighbors, so
+# edge-case optima between grid points are not missed. Override with
+# --autotune-thread-grid.
+DEFAULT_AUTOTUNE_THREAD_GRID: tuple[int, ...] = (
+    32, 64, 96, 128, 192, 256, 320, 384, 512, 640, 768, 896, 1024)
 DEFAULT_AUTOTUNE_N: int = 256            # batch size on which we tune (matches default bench)
 AUTOTUNE_TIERS: tuple[str, ...] = ("shared", "lite", "minimal")
 
