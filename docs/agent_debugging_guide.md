@@ -181,6 +181,9 @@ non-mimic codegen is unchanged (it already took the 3-param branch). RULE: a ker
 template args must emit N params on ALL robot classes — prefer making the DEFINITION uniform over branching
 every call site. (Validated bit-exact on iiwa14-fixed + go2-floating + fr3-mimic, jax+torch.)
 
+### 1j. `beta=0` GEMM still READS C → uninitialized-scratch `0*NaN` poisoning (load-dependent thread-inv flake)
+**Found in spherical CRBA (2026-06-11).** A composite-inertia fold emitted `grid_linalg_gemm<...,false,true>(.., &s_temp[off], 1, 0, ..)` — alpha=1, **beta=0**, into a scratch slot. GLASS's with-beta gemm kernel computes `C[i] = alpha*res + beta*C[i]`, i.e. it **reads C even when beta=0**. On the slot's COLD first use that scratch is uninitialized; whenever the leftover bit-pattern happened to be NaN/Inf, `0*NaN == NaN` poisoned the whole fold (and M, minv, fd downstream). It presented as a *thread-invariance flake on `mixed_spherical_arm` under heavy concurrent build load*: at `threads=1` the work serializes and the slot is effectively always overwritten cleanly; at `threads>1` it intermittently surfaced (slot contents are nondeterministic across launches). Equivalence-vs-oracle (single isolated run) almost always passed — so it hid as "1×/15 under load." Fix: **zero the gemm temp slot once before the first beta=0 write** (a tiny `parallel_loop` + `sync`). RULES: (1) `beta=0` is NOT "write-only" in GLASS — a destination that a beta gemm writes must be initialized (or use a beta-less / overwrite kernel variant). (2) A *thread-count-dependent* discrepancy that vanishes when isolated is almost always an **uninitialized/under-initialized shared-scratch read** (or a missing sync), not a hardware blip — hunt the cold scratch slot. (3) Reproduce flakes by running the thread-inv check 20–30× **under concurrent GPU load**, not isolated. (Gate-A byte-identical for cardinal robots — the fix is in the spherical-only emit path.)
+
 ---
 
 ## 2. Debugging methodology (what actually localizes a bug fast)
@@ -560,6 +563,15 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
 
 ## 7. Test-infra gotchas
 
+- **GPU is SHARED-OK for CORRECTNESS, ISOLATED-only for TIMING (orchestration rule).** Equivalence /
+  Gate-A / thread-invariance / batch runs are correctness checks — run MANY concurrently (sized to
+  cores + RAM; an nvcc compile peaks ~5 GB, so cap concurrency by free RAM, not just core count). Only
+  **performance timing** (single-call µs sweeps, tier sweeps, A/B) must run one-at-a-time on a quiet GPU
+  — contention skews the numbers, and that is the ONLY reason to serialize. So the right pattern for a
+  feature run is: fan out file-isolated correctness agents in parallel (each does its own Gate-A +
+  equivalence), and quarantine the perf sweep to its own isolated phase at the end. "No concurrent heavy
+  GPU builds" applies to TIMING, not to correctness builds. See [[feedback_parallel_equivalence_testing]],
+  [[feedback_safe_dev_and_timing_methodology]].
 - **pytest-xdist needs deterministic collection.** Per-process randomness (a random default thread
   count) → "different tests collected between workers." Make defaults deterministic.
 - The CUDA equivalence harness has graceful-skip idioms: `GRID_SKIP_IF_KERNEL_TOO_BIG` (smem cap)
