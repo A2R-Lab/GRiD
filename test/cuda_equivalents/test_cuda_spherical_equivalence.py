@@ -59,12 +59,12 @@ def _generate_header(robot, build_dir):
         robot, DEBUG_MODE=False, NEED_PRINT_MAT=True, FILE_NAMESPACE="grid"
     )
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        # inverse_dynamics is the only algorithm ported for spherical (Tier-C
-        # first slice); requesting others raises NotImplementedError by design.
+        # inverse_dynamics + crba are the ported algorithms for spherical (Tier-C);
+        # requesting any other raises NotImplementedError by design.
         codegen.gen_all_code(
             include_homogenous_transforms=True,
             output_path=str(header),
-            algorithm_list="inverse_dynamics",
+            algorithm_list=["inverse_dynamics", "crba"],
         )
     return header
 
@@ -168,6 +168,28 @@ def test_cuda_spherical_inverse_dynamics_matches_reference(tmp_path, fixture):
                 failures.append(
                     f"{tag} batch[{k}] vs device: max|d|={np.max(np.abs(row - cuda_dev)):.3e}")
 
+        # --- crba: mass matrix M (NV x NV) vs RBDReference oracle ---
+        ref_M = np.asarray(ref.crba(q), dtype=np.float64)
+        assert ref_M.shape == (nv, nv), f"{tag} oracle M shape {ref_M.shape} != {(nv, nv)}"
+        cuda_M = np.asarray(out["crba"], dtype=np.float64)
+        if cuda_M.size != nv * nv:
+            failures.append(f"{tag} crba device: size {cuda_M.size} != {nv*nv}")
+        else:
+            # CUDA M is column-major NV x NV; reshape to compare with row-major oracle.
+            cuda_M = cuda_M.reshape(nv, nv, order="F")
+            if not np.allclose(cuda_M, ref_M, atol=1e-4, rtol=1e-4):
+                failures.append(
+                    f"{tag} crba device: max|d|={np.max(np.abs(cuda_M - ref_M)):.3e}\n"
+                    f"  cuda=\n{cuda_M}\n  ref =\n{ref_M}")
+            for k in range(4):
+                blk = np.asarray(out[f"crba_batch_{k}"], dtype=np.float64).reshape(nv, nv, order="F")
+                if not np.allclose(blk, ref_M, atol=1e-4, rtol=1e-4):
+                    failures.append(
+                        f"{tag} crba batch[{k}] vs ref: max|d|={np.max(np.abs(blk - ref_M)):.3e}")
+                if not np.allclose(blk, cuda_M, atol=1e-5, rtol=1e-5):
+                    failures.append(
+                        f"{tag} crba batch[{k}] vs device: max|d|={np.max(np.abs(blk - cuda_M)):.3e}")
+
     assert not failures, "spherical CUDA equivalence failures:\n" + "\n".join(failures)
 
 
@@ -186,7 +208,9 @@ def test_cuda_spherical_thread_invariant(tmp_path, fixture):
     q = _random_q(robot, fixture, rng)
     qd = rng.uniform(-0.8, 0.8, robot.get_num_vel())
 
-    base = np.asarray(_run(exe, q, qd, threads=32)["inverse_dynamics"], dtype=np.float64)
+    base_out = _run(exe, q, qd, threads=32)
+    base = np.asarray(base_out["inverse_dynamics"], dtype=np.float64)
+    base_M = np.asarray(base_out["crba"], dtype=np.float64)
     failures = []
     for threads in (1, 32, 256):
         out = _run(exe, q, qd, threads=threads)
@@ -201,5 +225,16 @@ def test_cuda_spherical_thread_invariant(tmp_path, fixture):
             if not np.array_equal(row, dev):
                 failures.append(
                     f"{fixture} threads={threads}: batch[{k}] != device single-call")
+        # crba mass matrix must be bit-identical across thread counts + batch rows
+        devM = np.asarray(out["crba"], dtype=np.float64)
+        if not np.array_equal(devM, base_M):
+            failures.append(
+                f"{fixture} threads={threads}: crba device differs from threads=32 "
+                f"(max|d|={np.max(np.abs(devM - base_M)):.3e})")
+        for k in range(4):
+            blk = np.asarray(out[f"crba_batch_{k}"], dtype=np.float64)
+            if not np.array_equal(blk, devM):
+                failures.append(
+                    f"{fixture} threads={threads}: crba batch[{k}] != device single-call")
 
     assert not failures, "spherical thread-invariance failures:\n" + "\n".join(failures)

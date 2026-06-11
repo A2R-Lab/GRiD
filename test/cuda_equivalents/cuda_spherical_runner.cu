@@ -1,16 +1,18 @@
-// CUDA equivalence runner for SPHERICAL (ball) joint inverse_dynamics (Tier-C,
-// first slice). Spherical robots have NQ != NV (a 4-wide unit-quaternion q-block
+// CUDA equivalence runner for SPHERICAL (ball) joint inverse_dynamics + crba
+// (Tier-C). Spherical robots have NQ != NV (a 4-wide unit-quaternion q-block
 // per ball joint, 3 v-slots), so the per-timestep INPUT slot is NQ-wide
 // (= grid::NUM_JOINTS here, which the codegen defines as get_num_pos()=nq). This
-// runner exercises BOTH surfaces:
-//   (1) the device function inverse_dynamics_device (explicit nq-wide s_q /
-//       nv-wide s_qd / nv-wide s_out buffers), at a caller-chosen thread count
+// runner exercises BOTH surfaces for each ported algorithm:
+//   (1) the device functions inverse_dynamics_device / crba_device (explicit
+//       nq-wide s_q / nv-wide s_qd buffers), at a caller-chosen thread count
 //       (argv[1]) so the harness can sweep thread counts for invariance; and
-//   (2) the HOST batch wrapper inverse_dynamics<T,false,true> over a B-timestep
-//       trajectory (the §1e per-timestep nq-stride path the bindings use).
+//   (2) the HOST batch wrappers inverse_dynamics<T,false,true> /
+//       crba<T,false,GRID_DATA_ALL> over a B-timestep trajectory (the §1e
+//       per-timestep nq-stride path the bindings use).
 //
-// Only inverse_dynamics is emitted for spherical robots (the other algorithms
-// are follow-on slices), so this runner deliberately calls nothing else.
+// crba writes a NUM_VEL x NUM_VEL mass matrix (column-major). Only
+// inverse_dynamics + crba are emitted for spherical robots (the other
+// algorithms are follow-on slices), so this runner calls nothing else.
 #include <cstdio>
 #include <cstdlib>
 #include <iomanip>
@@ -71,6 +73,33 @@ __global__ void spherical_id_device_runner(
     for (int ind = threadIdx.x + threadIdx.y * blockDim.x;
          ind < grid::NUM_VEL; ind += blockDim.x * blockDim.y) {
         d_out[ind] = s_out[ind];
+    }
+}
+
+// (1b) Device-function runner for crba. s_q is NQ(=nq)-wide, s_qd is NV-wide,
+// s_M is NV x NV (column-major).
+template <typename T>
+__global__ void spherical_crba_device_runner(
+    T *d_M, const T *d_q, const T *d_qd,
+    const grid::robotModel<T> *d_robot_model, const T gravity
+) {
+    __shared__ T s_q[grid::NUM_JOINTS];      // NUM_JOINTS == nq for this codegen
+    __shared__ T s_qd[grid::NUM_VEL];
+    __shared__ T s_M[grid::NUM_VEL * grid::NUM_VEL];
+    for (int ind = threadIdx.x + threadIdx.y * blockDim.x;
+         ind < grid::NUM_JOINTS; ind += blockDim.x * blockDim.y) {
+        s_q[ind] = d_q[ind];
+    }
+    for (int ind = threadIdx.x + threadIdx.y * blockDim.x;
+         ind < grid::NUM_VEL; ind += blockDim.x * blockDim.y) {
+        s_qd[ind] = d_qd[ind];
+    }
+    __syncthreads();
+    grid::crba_device<T>(s_M, s_q, s_qd, d_robot_model, gravity);
+    __syncthreads();
+    for (int ind = threadIdx.x + threadIdx.y * blockDim.x;
+         ind < grid::NUM_VEL * grid::NUM_VEL; ind += blockDim.x * blockDim.y) {
+        d_M[ind] = s_M[ind];
     }
 }
 
@@ -147,6 +176,41 @@ void run() {
         print_vector("inverse_dynamics_batch_" + std::to_string(k), row.data(), nv);
     }
 
+    // ----- (3) crba device-function path: NV x NV mass matrix M -----
+    T *d_M;
+    gpuErrchk(cudaMalloc((void **)&d_M, nv * nv * sizeof(T)));
+    std::vector<T> h_M(nv * nv);
+    // crba_device packs its OWN arena: s_XImats(72*NUM_BODIES) + an s_temp band
+    // (the crba inner scratch + topology helpers), which exceeds the kernel-level
+    // CRBA_DYNAMIC_SHARED_MEM_BYTES, so that helper would OOB the device path.
+    // Over-allocate generously (a +512 T-buffer pad dwarfs the inner crba scratch
+    // for these small fixtures); extra dynamic smem is harmless (kernel uses a
+    // prefix), and over-allocation keeps the runner robot-independent.
+    const size_t crba_smem = grid::grid_shared_arena_bytes<T>(
+        72 * grid::NUM_BODIES + 512, grid::TOPOLOGY_HELPERS_COUNT,
+        grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>());
+    gpuErrchk(cudaFuncSetAttribute(spherical_crba_device_runner<T>,
+                                   cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                   static_cast<int>(crba_smem)));
+    spherical_crba_device_runner<T><<<1, g_num_threads, crba_smem>>>(d_M, d_q, d_qd, d_robot_model, gravity);
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
+    gpuErrchk(cudaMemcpy(h_M.data(), d_M, nv * nv * sizeof(T), cudaMemcpyDeviceToHost));
+    print_vector("crba", h_M.data(), nv * nv);
+
+    // ----- (4) crba host batch wrapper over the same B IDENTICAL timesteps -----
+    // (the h_q_qd_u / h_q_qd packs filled above are reused). Each timestep writes
+    // an NV x NV block at h_M[k*nv*nv]; every block must match the device M.
+    grid::crba<T, false, grid::GRID_DATA_ALL>(
+        hd_data, d_robot_model, gravity, B, block_dimms, thread_dimms, streams);
+    gpuErrchk(cudaPeekAtLastError());
+    for (int k = 0; k < B; ++k) {
+        std::vector<T> blk(nv * nv);
+        for (int i = 0; i < nv * nv; ++i) blk[i] = hd_data->h_M[k * nv * nv + i];
+        print_vector("crba_batch_" + std::to_string(k), blk.data(), nv * nv);
+    }
+
+    gpuErrchk(cudaFree(d_M));
     gpuErrchk(cudaFree(d_q));
     gpuErrchk(cudaFree(d_qd));
     gpuErrchk(cudaFree(d_out));
