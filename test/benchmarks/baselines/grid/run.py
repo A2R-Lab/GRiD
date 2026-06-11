@@ -1132,11 +1132,15 @@ def compile_binaries(
     # spill body). Defaulting via #ifndef in grid.cuh keeps PERF as the
     # baseline when --tier is not passed.
     if tier is not None:
+        # Match the bare style of the in-header `#define GRID_DEFAULT_RESOURCE_TIER
+        # TIER_SHARED`: passing `grid::TIER_*` here breaks the one algo (_plant)
+        # that emits `grid::GRID_DEFAULT_RESOURCE_TIER`, expanding to the illegal
+        # `grid::grid::TIER_*`. Bare names resolve identically at every emit site.
         tier_macro = {
-            "shared": "grid::TIER_SHARED",
-            "perf": "grid::TIER_SHARED",  # deprecated alias for "shared"
-            "lite": "grid::TIER_LITE",
-            "minimal": "grid::TIER_MINIMAL",
+            "shared": "TIER_SHARED",
+            "perf": "TIER_SHARED",  # deprecated alias for "shared"
+            "lite": "TIER_LITE",
+            "minimal": "TIER_MINIMAL",
         }.get(tier)
         if tier_macro is None:
             raise ValueError(f"unknown tier: {tier!r}; expected shared/lite/minimal (perf=shared alias)")
