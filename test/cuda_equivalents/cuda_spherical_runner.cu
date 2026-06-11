@@ -394,6 +394,74 @@ void run() {
         print_vector("inverse_dynamics_gradient_batch_" + std::to_string(k), blk.data(), idg_len);
     }
 
+    // ----- (10) forward_dynamics_gradient: df_du = -Minv * dc_du, 2*NV*NV -----
+    // Pure orchestrator: fd_gradient = -Minv(q) * id_gradient(q,qd,qdd=forward_
+    // dynamics(q,qd,u)). For spherical it composes the already-spherical-aware
+    // sub-inners (minv via crba, the dense id-gradient) and finishes with a
+    // dimension-agnostic nv x 2nv tangent-space matmul (NO joint-id indexing,
+    // NO nq dependence). Exercises BOTH surfaces:
+    //   * the u-input kernel single-call (d_q_qd_u canonical 3*nq pack; the kernel
+    //     computes qdd/Minv internally), and
+    //   * the host batch wrapper forward_dynamics_gradient<T,false> over B
+    //     IDENTICAL timesteps (the canonical 3*nq pack — the §1e nq-stride path).
+    const int fdg_len = 2 * nv * nv;
+    T *d_df_du;
+    gpuErrchk(cudaMalloc((void **)&d_df_du, fdg_len * sizeof(T)));
+    std::vector<T> h_df_du(fdg_len);
+    // Single-call pack: the u-input fd-grad kernel reads s_q_qd_u as the CANONICAL
+    // 3*nq pack (q@[0,nq), qd@[nq,2nq), u@[2nq,3nq); the qd/u slots are nq-wide,
+    // first nv meaningful + (nq-nv) zero padding -- the §1e nq-stride layout, NOT
+    // a tight nq+2*nv pack). Stride = 3*nq.
+    T *d_q_qd_u_fdg;
+    gpuErrchk(cudaMalloc((void **)&d_q_qd_u_fdg, (3 * nq) * sizeof(T)));
+    {
+        std::vector<T> pack(3 * nq, static_cast<T>(0));
+        for (int i = 0; i < nq; ++i) pack[i] = h_q[i];
+        for (int i = 0; i < nv; ++i) pack[nq + i] = h_qd[i];
+        for (int i = 0; i < nv; ++i) pack[2 * nq + i] = h_u[i];
+        gpuErrchk(cudaMemcpy(d_q_qd_u_fdg, pack.data(), (3 * nq) * sizeof(T), cudaMemcpyHostToDevice));
+    }
+    {
+        const size_t fdg_smem = grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
+        // Disambiguate the u-input overload (fd-grad kernel has a u-input and a
+        // qdd-Minv-input overload) by casting to the u-input pointer type before
+        // cudaFuncSetAttribute / the launch.
+        using fdg_u_kernel_t = void (*)(
+            T *, unsigned char *, const T *, const int,
+            T *, const grid::robotModel<T> *, const T, const int);  // d_f_ext is T*
+        fdg_u_kernel_t fdg_kernel = &grid::forward_dynamics_gradient_kernel<T>;
+        gpuErrchk(cudaFuncSetAttribute(
+            fdg_kernel,
+            cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(fdg_smem)));
+        if (grid::GRID_FORWARD_DYNAMICS_GRADIENT_USES_WORKSPACE_ANY_TIER) {
+            gpuErrchk(grid::grid_begin_l2_persisting(0, hd_data->d_workspace,
+                grid::GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()));
+        }
+        grid::forward_dynamics_gradient_kernel<T><<<1, g_num_threads, fdg_smem>>>(
+            d_df_du, hd_data->d_workspace, d_q_qd_u_fdg, 3 * nq,
+            /*d_f_ext=*/nullptr, d_robot_model, gravity, 1);
+        gpuErrchk(cudaPeekAtLastError());
+        gpuErrchk(cudaDeviceSynchronize());
+        if (grid::GRID_FORWARD_DYNAMICS_GRADIENT_USES_WORKSPACE_ANY_TIER) {
+            gpuErrchk(grid::grid_end_l2_persisting(0));
+        }
+        gpuErrchk(cudaMemcpy(h_df_du.data(), d_df_du, fdg_len * sizeof(T), cudaMemcpyDeviceToHost));
+        print_vector("forward_dynamics_gradient", h_df_du.data(), fdg_len);
+    }
+    // Host batch wrapper over B IDENTICAL timesteps. The 3*nq h_q_qd_u pack filled
+    // above carries q@[0,nq), qd@[nq,2nq), u@[2nq,3nq) — exactly what the u-input
+    // forward_dynamics_gradient<T,false> wrapper consumes (it computes qdd/Minv).
+    grid::forward_dynamics_gradient<T, false>(
+        hd_data, d_robot_model, gravity, B, block_dimms, thread_dimms, streams);
+    gpuErrchk(cudaPeekAtLastError());
+    for (int k = 0; k < B; ++k) {
+        std::vector<T> blk(fdg_len);
+        for (int i = 0; i < fdg_len; ++i) blk[i] = hd_data->h_df_du[k * fdg_len + i];
+        print_vector("forward_dynamics_gradient_batch_" + std::to_string(k), blk.data(), fdg_len);
+    }
+
+    gpuErrchk(cudaFree(d_df_du));
+    gpuErrchk(cudaFree(d_q_qd_u_fdg));
     gpuErrchk(cudaFree(d_dc_du));
     gpuErrchk(cudaFree(d_q_qd_idg));
     gpuErrchk(cudaFree(d_qdd_idg));
