@@ -72,7 +72,8 @@ def _generate_header(robot, build_dir):
         codegen.gen_all_code(
             include_homogenous_transforms=True,
             output_path=str(header),
-            algorithm_list=["inverse_dynamics", "crba", "minv", "forward_dynamics"],
+            algorithm_list=["inverse_dynamics", "crba", "minv", "forward_dynamics",
+                            "inverse_dynamics_gradient"],
         )
     return header
 
@@ -102,13 +103,15 @@ def _compile_runner(build_dir):
     return exe
 
 
-def _run(exe, q, qd, u, threads=32):
+def _run(exe, q, qd, u, threads=32, dtype="float"):
     def row(v):
         return " ".join(f"{x:.9g}" for x in np.asarray(v, dtype=np.float64))
     stdin = "\n".join([row(q), row(qd), row(u)]) + "\n"
+    env = dict(os.environ)
+    env["GRID_EQUIV_T"] = dtype  # "float" (fp32) or "double" (fp64)
     result = subprocess.run(
         [str(exe), str(threads)], input=stdin, cwd=exe.parent,
-        capture_output=True, text=True
+        capture_output=True, text=True, env=env
     )
     combined = f"{result.stdout}\n{result.stderr}".lower()
     if result.returncode != 0:
@@ -271,6 +274,7 @@ def test_cuda_spherical_thread_invariant(tmp_path, fixture):
     base_M = np.asarray(base_out["crba"], dtype=np.float64)
     base_Minv = np.asarray(base_out["minv"], dtype=np.float64)
     base_qdd = np.asarray(base_out["forward_dynamics"], dtype=np.float64)
+    base_idg = np.asarray(base_out["inverse_dynamics_gradient"], dtype=np.float64)
     failures = []
     # (algo output key, device baseline, batch key prefix) tuples to sweep.
     cells = [
@@ -278,6 +282,7 @@ def test_cuda_spherical_thread_invariant(tmp_path, fixture):
         ("crba", base_M, "crba_batch_"),
         ("minv", base_Minv, "minv_batch_"),
         ("forward_dynamics", base_qdd, "forward_dynamics_batch_"),
+        ("inverse_dynamics_gradient", base_idg, "inverse_dynamics_gradient_batch_"),
     ]
     for threads in (1, 32, 256):
         out = _run(exe, q, qd, u, threads=threads)
@@ -294,3 +299,89 @@ def test_cuda_spherical_thread_invariant(tmp_path, fixture):
                         f"{fixture} threads={threads}: {key} batch[{k}] != device single-call")
 
     assert not failures, "spherical thread-invariance failures:\n" + "\n".join(failures)
+
+
+# Per-(fixture, precision) absolute/relative tolerance buckets for the
+# inverse_dynamics_gradient cell. fp64 is near machine-exact vs the float64
+# oracle; fp32 carries the kernel's single-precision round-off (the dense
+# reduced-space fold does ~NB X^T/I matvecs). NEVER loosen a global tolerance —
+# bucket per cell (debug-guide §6).
+_IDG_TOL = {
+    ("spherical_arm.urdf", "float"): dict(atol=2e-4, rtol=2e-4),
+    ("mixed_spherical_arm.urdf", "float"): dict(atol=2e-4, rtol=2e-4),
+    ("spherical_arm.urdf", "double"): dict(atol=1e-8, rtol=1e-8),
+    ("mixed_spherical_arm.urdf", "double"): dict(atol=1e-8, rtol=1e-8),
+}
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+@pytest.mark.parametrize("dtype", ["float", "double"])
+@pytest.mark.parametrize("fixture", ["spherical_arm.urdf", "mixed_spherical_arm.urdf"])
+def test_cuda_spherical_inverse_dynamics_gradient_matches_reference(tmp_path, fixture, dtype):
+    """CUDA spherical inverse_dynamics_gradient (dc_du = [dc_dq | dc_dqd], 2*NV*NV)
+    must match the fixed RBDReference oracle on BOTH the with-qdd kernel single-call
+    and the host batch wrapper, at fp32 and fp64, and be batch self-consistent (§1e).
+
+    Routes through the DENSE serial reduced-space inner: a mid-chain (or fixed-root)
+    3-DoF ball joint owns a 3-wide v-block (NJ != NV) that the sparse single-DoF band
+    cannot represent. The runner uses the SAME nonzero accel for the kernel's qdd and
+    the wrapper's h_qdd slot, so the oracle is inverse_dynamics_gradient(q, qd, qdd=u).
+    mixed_spherical_arm (revolute -> ball -> revolute) is the decisive §1e case
+    (every downstream q/v slot shifts by the ball's nq=4 / nv=3 widths)."""
+    robot = _parse(fixture)
+    assert robot is not None
+    ref = RBDReference(robot)
+    nv = robot.get_num_vel()
+    tol = _IDG_TOL[(fixture, dtype)]
+
+    exe = _compile_runner(tmp_path) if _generate_header(robot, tmp_path) else None
+
+    rng = np.random.default_rng(23)
+    failures = []
+    for trial in range(4):
+        q = _random_q(robot, fixture, rng)
+        qd = rng.uniform(-0.8, 0.8, nv)
+        qdd = rng.uniform(-0.5, 0.5, nv)   # runner reads this slot (h_u) as qdd
+        out = _run(exe, q, qd, qdd, dtype=dtype)
+        tag = f"{fixture} [{dtype}] trial {trial}"
+
+        # Oracle dc_du in reduced v-space: [dc_dq (nv x nv) | dc_dqd (nv x nv)].
+        dc_du = ref.inverse_dynamics_gradient(
+            q.copy(), qd.copy(), qdd.copy(), GRAVITY=-9.81,
+            public_output=False, normalize_input=True)
+        ref_dq, ref_dqd = np.hsplit(np.asarray(dc_du, dtype=np.float64), [nv])
+
+        dev = np.asarray(out["inverse_dynamics_gradient"], dtype=np.float64).reshape(-1)
+        if dev.size != 2 * nv * nv:
+            failures.append(f"{tag} device: size {dev.size} != {2*nv*nv}")
+            continue
+        # column-major nv x nv per half (matches the kernel's [c*nv + v_i] store).
+        dev_dq = dev[:nv * nv].reshape(nv, nv, order="F")
+        dev_dqd = dev[nv * nv:].reshape(nv, nv, order="F")
+        if not np.allclose(dev_dq, ref_dq, **tol):
+            failures.append(
+                f"{tag} dc_dq device: max|d|={np.max(np.abs(dev_dq - ref_dq)):.3e}\n"
+                f"  cuda=\n{dev_dq}\n  ref =\n{ref_dq}")
+        if not np.allclose(dev_dqd, ref_dqd, **tol):
+            failures.append(
+                f"{tag} dc_dqd device: max|d|={np.max(np.abs(dev_dqd - ref_dqd)):.3e}\n"
+                f"  cuda=\n{dev_dqd}\n  ref =\n{ref_dqd}")
+
+        # Host batch wrapper: every timestep row == oracle AND == device single-call.
+        for k in range(4):
+            blk = np.asarray(out[f"inverse_dynamics_gradient_batch_{k}"], dtype=np.float64).reshape(-1)
+            blk_dq = blk[:nv * nv].reshape(nv, nv, order="F")
+            blk_dqd = blk[nv * nv:].reshape(nv, nv, order="F")
+            if not (np.allclose(blk_dq, ref_dq, **tol) and np.allclose(blk_dqd, ref_dqd, **tol)):
+                failures.append(
+                    f"{tag} batch[{k}] vs ref: max|d|="
+                    f"{max(np.max(np.abs(blk_dq - ref_dq)), np.max(np.abs(blk_dqd - ref_dqd))):.3e}")
+            # batched == standalone (the §1e nq-stride self-consistency check).
+            if not np.allclose(blk, dev, atol=1e-9 if dtype == "double" else 1e-5,
+                               rtol=1e-9 if dtype == "double" else 1e-5):
+                failures.append(
+                    f"{tag} batch[{k}] vs device: max|d|={np.max(np.abs(blk - dev)):.3e}")
+
+    assert not failures, "spherical id-gradient equivalence failures:\n" + "\n".join(failures)

@@ -10,9 +10,10 @@
 //       crba<T,false,GRID_DATA_ALL> over a B-timestep trajectory (the §1e
 //       per-timestep nq-stride path the bindings use).
 //
-// crba writes a NUM_VEL x NUM_VEL mass matrix (column-major). Only
-// inverse_dynamics + crba are emitted for spherical robots (the other
-// algorithms are follow-on slices), so this runner calls nothing else.
+// crba writes a NUM_VEL x NUM_VEL mass matrix (column-major). The ported
+// spherical algorithms are inverse_dynamics + crba + minv + forward_dynamics +
+// inverse_dynamics_gradient (the last = dc_du [dc_dq | dc_dqd], 2*NV*NV, via the
+// dense reduced-space inner); the other algorithms are follow-on slices.
 #include <cstdio>
 #include <cstdlib>
 #include <iomanip>
@@ -323,6 +324,79 @@ void run() {
         print_vector("forward_dynamics_batch_" + std::to_string(k), row.data(), nv);
     }
 
+    // ----- (9) inverse_dynamics_gradient: dc_du = [dc_dq | dc_dqd], 2*NV*NV -----
+    // The Tier-C spherical id-gradient routes through the DENSE serial reduced-
+    // space inner (a mid-chain 3-DoF ball joint owns a 3-wide v-block, which the
+    // sparse single-DoF band cannot represent). dc_du = [dc_dq (NV x NV) | dc_dqd
+    // (NV x NV)], column-major per half. Exercises BOTH surfaces:
+    //   * the with-qdd kernel single-call (d_q_qd stride nq+nv, d_qdd nq-wide), and
+    //   * the host batch wrapper inverse_dynamics_gradient<T,true,false> over B
+    //     IDENTICAL timesteps (the canonical 3*nq pack + nq-wide qdd slot — the
+    //     §1e nq-stride path the bindings use).
+    const int idg_len = 2 * nv * nv;
+    T *d_dc_du;
+    gpuErrchk(cudaMalloc((void **)&d_dc_du, idg_len * sizeof(T)));
+    std::vector<T> h_dc_du(idg_len);
+    // Single-call pack: d_q_qd = [q(nq) | qd(nv)] (stride nq+nv); d_qdd nq-wide.
+    T *d_q_qd_idg;
+    T *d_qdd_idg;
+    gpuErrchk(cudaMalloc((void **)&d_q_qd_idg, (nq + nv) * sizeof(T)));
+    gpuErrchk(cudaMalloc((void **)&d_qdd_idg, nq * sizeof(T)));
+    {
+        std::vector<T> pack(nq + nv);
+        for (int i = 0; i < nq; ++i) pack[i] = h_q[i];
+        for (int i = 0; i < nv; ++i) pack[nq + i] = h_qd[i];
+        gpuErrchk(cudaMemcpy(d_q_qd_idg, pack.data(), (nq + nv) * sizeof(T), cudaMemcpyHostToDevice));
+        std::vector<T> qddp(nq, static_cast<T>(0));
+        for (int i = 0; i < nv; ++i) qddp[i] = h_u[i];  // reuse h_u as a nonzero qdd
+        gpuErrchk(cudaMemcpy(d_qdd_idg, qddp.data(), nq * sizeof(T), cudaMemcpyHostToDevice));
+    }
+    {
+        const size_t idg_smem = grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
+        // Disambiguate the with-qdd overload (id-grad kernel has a with- and a
+        // without-qdd overload, both templated <T,TIER,MUJOCO>) by casting to the
+        // with-qdd pointer type before cudaFuncSetAttribute / the launch.
+        using idg_qdd_kernel_t = void (*)(
+            T *, unsigned char *, const T *, const int, const T *, T *,
+            const grid::robotModel<T> *, const T, const int);
+        idg_qdd_kernel_t idg_kernel = &grid::inverse_dynamics_gradient_kernel<T>;
+        gpuErrchk(cudaFuncSetAttribute(
+            idg_kernel,
+            cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(idg_smem)));
+        if (grid::GRID_INVERSE_DYNAMICS_GRADIENT_USES_WORKSPACE_ANY_TIER) {
+            gpuErrchk(grid::grid_begin_l2_persisting(0, hd_data->d_workspace,
+                grid::GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()));
+        }
+        grid::inverse_dynamics_gradient_kernel<T><<<1, g_num_threads, idg_smem>>>(
+            d_dc_du, hd_data->d_workspace, d_q_qd_idg, nq + nv, d_qdd_idg,
+            /*d_f_ext=*/nullptr, d_robot_model, gravity, 1);
+        gpuErrchk(cudaPeekAtLastError());
+        gpuErrchk(cudaDeviceSynchronize());
+        if (grid::GRID_INVERSE_DYNAMICS_GRADIENT_USES_WORKSPACE_ANY_TIER) {
+            gpuErrchk(grid::grid_end_l2_persisting(0));
+        }
+        gpuErrchk(cudaMemcpy(h_dc_du.data(), d_dc_du, idg_len * sizeof(T), cudaMemcpyDeviceToHost));
+        print_vector("inverse_dynamics_gradient", h_dc_du.data(), idg_len);
+    }
+    // Host batch wrapper over B IDENTICAL timesteps. The 3*nq h_q_qd_u pack filled
+    // above carries q@[0,nq), qd@[nq,2nq), u@[2nq,3nq); the gradient needs qdd in
+    // the nq-wide h_qdd slot, so fill it (first nv = the same nonzero accel).
+    for (int k = 0; k < B; ++k) {
+        for (int i = 0; i < nq; ++i)
+            hd_data->h_qdd[k * nq + i] = (i < nv) ? h_u[i] : static_cast<T>(0);
+    }
+    grid::inverse_dynamics_gradient<T, true, false>(
+        hd_data, d_robot_model, gravity, B, block_dimms, thread_dimms, streams);
+    gpuErrchk(cudaPeekAtLastError());
+    for (int k = 0; k < B; ++k) {
+        std::vector<T> blk(idg_len);
+        for (int i = 0; i < idg_len; ++i) blk[i] = hd_data->h_dc_du[k * idg_len + i];
+        print_vector("inverse_dynamics_gradient_batch_" + std::to_string(k), blk.data(), idg_len);
+    }
+
+    gpuErrchk(cudaFree(d_dc_du));
+    gpuErrchk(cudaFree(d_q_qd_idg));
+    gpuErrchk(cudaFree(d_qdd_idg));
     gpuErrchk(cudaFree(d_Minv));
     gpuErrchk(cudaFree(d_qdd));
     gpuErrchk(cudaFree(d_M));
