@@ -572,6 +572,16 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   equivalence), and quarantine the perf sweep to its own isolated phase at the end. "No concurrent heavy
   GPU builds" applies to TIMING, not to correctness builds. See [[feedback_parallel_equivalence_testing]],
   [[feedback_safe_dev_and_timing_methodology]].
+- **A test that validates a CODEGEN EMIT must `force_rebuild=True`.** grid-rbd's build cache is
+  content-addressed on build INPUTS (urdf + flags + arch + grid_rbd_version + wrapper_template_hash) —
+  NOT on the generated CUDA source, and NOT on the GCG codegen version. So after a codegen change, a
+  `register_robot(...)` with the same inputs silently returns a STALE `.so` built by the OLD codegen.
+  This burned a damping-gradient test: the robots were cached before the gradient emit existed, so
+  `inverse_dynamics_gradient` came out identical on-vs-off (the new term was in the source but not the
+  cached binary) — looking exactly like a "missing emit" bug when the emit was correct. Fix: any pytest
+  asserting on generated-code behavior must pass `force_rebuild=True` to `register_robot` (or clear
+  `~/.cache/grid-rbd`). Same root cause as "clear GCG `__pycache__` after codegen edits" — the cache
+  key doesn't track the codegen, so the human/test must force regeneration.
 - **pytest-xdist needs deterministic collection.** Per-process randomness (a random default thread
   count) → "different tests collected between workers." Make defaults deterministic.
 - The CUDA equivalence harness has graceful-skip idioms: `GRID_SKIP_IF_KERNEL_TOO_BIG` (smem cap)
