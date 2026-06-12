@@ -582,6 +582,26 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   asserting on generated-code behavior must pass `force_rebuild=True` to `register_robot` (or clear
   `~/.cache/grid-rbd`). Same root cause as "clear GCG `__pycache__` after codegen edits" — the cache
   key doesn't track the codegen, so the human/test must force regeneration.
+- **The `grid::grid::` per-tier macro trap.** `GRID_DEFAULT_RESOURCE_TIER` is `#define`d BARE (`TIER_SHARED`).
+  Algos emitting INSIDE `namespace grid` (11 of 12) reference it bare; `_plant` emits its kernel +
+  `*_DYNAMIC_SHARED_MEM_BYTES` OUTSIDE the namespace so it correctly qualifies `grid::GRID_DEFAULT_RESOURCE_TIER`
+  (bare would not resolve there — NOT a uniformity wart, do not "fix" it). The trap: a `-D` tier override must
+  MATCH the bare `#define` style — passing `-DGRID_DEFAULT_RESOURCE_TIER=grid::TIER_*` makes `_plant` expand to the
+  illegal `grid::grid::TIER_*` and breaks EVERY per-tier build. Pass bare `-D...=TIER_*`. (Cost a per-tier build
+  break this session; fixed in `baselines/grid/run.py`.)
+- **The bench harness `timeGRiD_{batch,single}.cu` + `timeGRiD_common.h` are NOT subset-aware.** Only the
+  SO/integrator measure block is `#if GRID_HAS_*`-gated; the 10 CORE measures (id/minv/fd/aba/crba/id_du/fd_du/
+  ee_pose{,_gradient,_hessian}) — both their CALLS and their `measure_*` / `*_single_timing` DEFINITIONS — reference
+  `grid::<algo>` unconditionally. So a `GRID_BENCH_ALGORITHM_LIST` subset build fails to link on every omitted core
+  algo. Gating the CALLS is necessary but NOT sufficient (the DEFINITIONS in `timeGRiD_common.h` + the
+  `_single_timing`/`_batch_timing` wrappers must also be `#if GRID_HAS_*`-wrapped — bench analogue of C1, still TODO).
+  Gating CALLS only is timing-neutral for FULL builds (`#if 1`), a safe partial step. After any gating edit, verify a
+  full build still TIMES all 10 core algos (a wrong macro name silently drops an algo from the sweep).
+- **Two DISTINCT caches in the bench path — a subset request must be in BOTH or a stale full-set artifact is served.**
+  `run.py generate_header` keys a `codegen_hash` cache (hashes the GCG `.py` tree, so codegen edits self-invalidate);
+  it now ALSO includes `GRID_BENCH_ALGORITHM_LIST` (else a cached full-set header is reused and the subset silently
+  ignored). The binary `runner_key` includes `header_hash` so it follows. SEPARATE from the bindings `grid-rbd`
+  content-cache above (which is NOT codegen-keyed). Don't conflate them.
 - **pytest-xdist needs deterministic collection.** Per-process randomness (a random default thread
   count) → "different tests collected between workers." Make defaults deterministic.
 - The CUDA equivalence harness has graceful-skip idioms: `GRID_SKIP_IF_KERNEL_TOO_BIG` (smem cap)
