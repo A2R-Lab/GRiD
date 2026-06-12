@@ -147,13 +147,17 @@ def generate_header(
     # rep loops (volatile reload + __noinline__ barrier). When toggled, the
     # generated header changes — must bust the header cache.
     no_licm_barrier_env = os.environ.get("GRID_NO_LICM_BARRIER", "0")
+    # GRID_BENCH_ALGORITHM_LIST (subset timing) changes the generated header, so it
+    # MUST be part of the cache key — otherwise a cached full-set binary is served
+    # and the requested subset is silently ignored.
+    bench_algo_list_env = os.environ.get("GRID_BENCH_ALGORITHM_LIST", "")
     cache_key = _hash_bytes(
         json.dumps({
             "urdf_hash": urdf_hash,
             "codegen_hash": codegen_hash,
             "robot": robot,
             "base": base,
-            "profile": "all+frame_jacobian",
+            "profile": bench_algo_list_env or "all+frame_jacobian",
             "homogenous": True,
             "no_licm_barrier": no_licm_barrier_env,
             "idsva_so_world_frame": True,
@@ -193,7 +197,13 @@ def generate_header(
             # byte-identical), but the bench DOES want to time it. Request the 'all'
             # set PLUS the three opt-in keys via algorithm_list (which supersedes
             # codegen_profile) so their kernels emit and the PER_ALGO_SPECS rows fire.
-            algorithm_list=["all", "frame_jacobian", "frame_jacobian_dot", "osc_inertia"],
+            # GRID_BENCH_ALGORITHM_LIST (comma-separated) overrides for SUBSET timing
+            # (e.g. =crba to time a single algo without paying the SO/gradient compile).
+            algorithm_list=(
+                [a.strip() for a in os.environ["GRID_BENCH_ALGORITHM_LIST"].split(",") if a.strip()]
+                if os.environ.get("GRID_BENCH_ALGORITHM_LIST")
+                else ["all", "frame_jacobian", "frame_jacobian_dot", "osc_inertia"]
+            ),
             enable_idsva_so_world_frame=True,
             enable_floating_second_order=True,
         )

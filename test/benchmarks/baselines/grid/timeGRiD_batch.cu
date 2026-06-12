@@ -177,16 +177,39 @@ __host__ void run_batch_at(bool floating_base, int N, cudaStream_t *streams, gri
     (void)floating_base;
     measure_ee_pose_hessian_batch<T,TEST_ITERS>(N, streams, m, d);
 #else
+    // Core measures gated on GRID_HAS_* so a subset build (GRID_BENCH_ALGORITHM_LIST)
+    // compiles — the measure_* templates are only instantiated when called, so gating
+    // the call is sufficient (mirrors the SO/integrator block below).
+#if GRID_HAS_INVERSE_DYNAMICS
     measure_id_batch<T,TEST_ITERS>(N, streams, m, d);
+#endif
+#if GRID_HAS_MINV
     measure_minv_batch<T,TEST_ITERS>(N, streams, m, d);
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS
     measure_fd_batch<T,TEST_ITERS>(N, streams, m, d);
+#endif
+#if GRID_HAS_ABA
     measure_aba_batch<T,TEST_ITERS>(N, streams, m, d);
+#endif
+#if GRID_HAS_CRBA
     measure_crba_batch<T,TEST_ITERS>(N, streams, m, d);
+#endif
+#if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
     measure_id_du_batch<T,TEST_ITERS>(N, streams, m, d);
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
     measure_fd_du_batch<T,TEST_ITERS>(N, streams, m, d);
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE
     measure_ee_pose_batch<T,TEST_ITERS>(N, streams, m, d);
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
     measure_ee_pose_gradient_batch<T,TEST_ITERS>(N, streams, m, d);
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
     measure_ee_pose_hessian_batch<T,TEST_ITERS>(N, streams, m, d);
+#endif
 #if GRID_HAS_IDSVA_SO
     measure_idsva_so_batch<T,TEST_ITERS>(N, streams, m, d);
 #endif

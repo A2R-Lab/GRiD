@@ -116,16 +116,37 @@ __host__ void measure_integrator_with_gradient_single(cudaStream_t *streams, gri
 template <typename T, int TEST_ITERS>
 __host__ void run_single_timings(bool floating_base, cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
 #if !TEST_FOR_EQUIVALENCE
+    // Core measures gated on GRID_HAS_* for subset builds (see timeGRiD_batch.cu).
+    #if GRID_HAS_INVERSE_DYNAMICS
     measure_id_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    #endif
+    #if GRID_HAS_MINV
     measure_minv_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    #endif
+    #if GRID_HAS_FORWARD_DYNAMICS
     measure_fd_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    #endif
+    #if GRID_HAS_ABA
     measure_aba_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    #endif
+    #if GRID_HAS_CRBA
     measure_crba_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    #endif
+    #if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
     measure_id_du_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    #endif
+    #if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
     measure_fd_du_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    #endif
+    #if GRID_HAS_END_EFFECTOR_POSE
     measure_ee_pose_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    #endif
+    #if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
     measure_ee_pose_gradient_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    #endif
+    #if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
     measure_ee_pose_hessian_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    #endif
     #if GRID_HAS_IDSVA_SO
     measure_idsva_so_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
     #endif
