@@ -118,6 +118,27 @@ def main():
              "",
              "GRiD = autotuned best **compute-only** total-batch us (GPU-resident). "
              "Competitor = **with-mem** total-batch us. speedup = comp/grid (>1 => GRiD faster).",
+             "",
+             "## Methodology + caveats (read before citing)",
+             "- **GRiD number** = the autotuned best (tier,threads) per (robot,base,algo) at N=256, "
+             "minimizing batch_256 **compute-only** us (GPU-resident — the MPC/rollout use case). "
+             "This is the A1 launch-config fix in action: it removes the FFI thread-default pathology "
+             "that contaminated the C.7 tally.",
+             "- **Competitor number** = batch_256 **with-mem** us (their natural mode). For CPU pinocchio "
+             "this is the standard framing. For GPU baselines (frax/mjx/mujoco_warp/curobo) with-mem includes "
+             "host transfer that GRiD's compute-only excludes — but the win magnitudes (3–90×) far exceed any "
+             "plausible transfer overhead, so the ranking is robust. A pure compute-only-vs-compute-only pass "
+             "is future work (most GPU adapters report with-mem only).",
+             "- **Coverage:** the tally only covers algos the competitor implements. GRiD ALSO ships many algos "
+             "with NO competitor equivalent (fd_du, idsva_so/fdsva_so 2nd-order, ee_pose hessian, integrators, "
+             "regressors, centroidal) — a capability lead not reflected in W/L.",
+             "- **SO comparison** uses GRiD's PRODUCTION dispatcher `idsva_so` (body-frame for fixed, world-frame "
+             "for floating) vs pinocchio's body-frame SO (algorithmically equivalent). The standalone "
+             "body-frame-FLOATING path is non-production + pathologically slow and was the C.7 'idsva_so loss' artifact.",
+             "- **cuRobo** loads its g1 config at **35 DOF** vs GRiD's g1_29dof (cuRobo does ~20% MORE work, "
+             "so the comparison slightly favors cuRobo); GRiD still wins g1 id 5.75× / id_du 10.44×. cuRobo only "
+             "ships configs for g1 (no iiwa14/go2) and is fixed-base only.",
+             "- N=256; autotune_N=256; RTX 5090 / sm_120. h1_2 omitted from this competitive run (focus iiwa14/go2/g1).",
              ""]
     tally = {}
     for col in sorted(comps):
