@@ -46,10 +46,16 @@ Figures stack these (compute + transfer + wrapper), mirroring the classic comput
 
 ## Pipeline
 1. `build_all_for_recapture.sh` — pre-compile GRiD harness (all tiers, N=1024) + pin into cache.
-2. Build grid_rbd bindings (iiwa14/go2, `-DGRID_RBD_MAX_BATCH=1024`) for layer 3.
-3. Timed re-capture (quiet GPU, serial): GRiD (3 layers) + pin-codegen + mjx + frax + mujoco_warp
-   + cuRobo, robots {iiwa14, go2, g1} × {fixed, floating} × N {32, 256, 1024}.
-4. `analyze_competitive.py` → tally; `plot_benchmarks.py` (latency / compete / summary) → figures.
+2. Timed competitor capture (quiet GPU, serial): `run_competitive_gpu_baselines.sh <dir>` —
+   pin-codegen + mjx + frax + mujoco_warp + cuRobo (cuRobo = g1/fixed only), each through its
+   own run.py, all sweeping N∈{16,32,64,128,256,1024}.
+3. GRiD layers 1+2: `run_multi_version.py --columns glass pinocchio --tiers shared lite minimal
+   --no-recompile` → unified json (grid_glass compute_only + with_mem per N; feeds latency/compete
+   plots and the analyze transfer-delta). Layer 1 best-tier also read from `autotune_best_<host>.json`.
+4. GRiD layer 3: `baselines/grid/timeGRiD_bindings.py --robot {iiwa14,go2} --base {fixed,floating}`
+   — wrapper-inclusive jax FFI e2e, SYMMETRIC JIT precompile (precompile bakes
+   `-DGRID_RBD_MAX_BATCH=1024`). Emits a `grid_bindings` column.
+5. `analyze_competitive.py` → tally; `plot_benchmarks.py` (latency / compete / summary) → figures.
 
 ## Known tails to close in the re-capture
 - pinocchio BATCH-codegen for id/fd/id_du cells read "—" in the first g1 run (single-call works);
