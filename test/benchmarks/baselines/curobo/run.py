@@ -21,14 +21,19 @@ real GPU competitive baseline for inverse_dynamics + inverse_dynamics_gradient
 mirrors that benchmark's sync/measurement approach but reports in OUR label
 format + batch sweep (16..256) so parse_grid_output can ingest it.
 
-INSTALL (heavy CUDA source build, ~20 min; needs nvcc + torch>=2.0):
-    sudo apt install git-lfs && git lfs install
-    git clone https://github.com/NVlabs/curobo.git
-    cd curobo && pip install -e . --no-build-isolation
-  The dynamics module (curobo._src.robot.dynamics) + the benchmark above are on
-  `main` HEAD; no special branch. On sm_120 / RTX 5090, cuRobo's TORCH_CUDA_ARCH
-  detection may need `export TORCH_CUDA_ARCH_LIST="12.0"` before the build (see
-  NVlabs/curobo issue #596).
+INSTALL (VERIFIED 2026-06-13 on RTX 5090 / sm_120 / torch 2.12-dev cu128):
+    git clone --depth 1 https://github.com/NVlabs/curobo.git
+    cd curobo && TORCH_CUDA_ARCH_LIST="12.0" pip install -e . --no-build-isolation
+    pip install cuda-core   # REQUIRED: the _src dynamics backend imports cuda.core.LaunchConfig
+  Notes from the real run: the editable install is FAST (kernels JIT on first use, no
+  20-min precompile); git-lfs is NOT needed for g1 (its URDF is plain text in the repo);
+  WITHOUT cuda-core the dynamics backend raises ModuleNotFoundError 'cuda.core' and every
+  algo nulls. cuRobo's unitree_g1_29dof_retarget.yml loads **35 DOF** (not 29) — it does
+  ~20% more work than our g1_29dof, so the comparison slightly favors cuRobo. Forward
+  kinematics (END_EFFECTOR_POSE) currently nulls ('Tensor' has no attribute 'joint_names'
+  — the Kinematics FK entry needs a JointState, not a bare tensor; id + id_du work + are
+  the meaningful comparison). Measured g1 fixed N=256: id 173.9us, id_du 644.8us (with-mem)
+  — GRiD-autotuned beats both (5.75x / 10.44x).
 
 ROBOT COVERAGE (cuRobo content/configs/robot/*.yml)
 ---------------------------------------------------
