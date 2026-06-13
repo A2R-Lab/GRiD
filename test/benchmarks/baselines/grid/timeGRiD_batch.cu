@@ -23,9 +23,9 @@
 #if GRID_HAS_INVERSE_DYNAMICS
 template <typename T, int TEST_ITERS>
 __host__ void measure_id_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
-    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("ID", N, INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("INVERSE_DYNAMICS", N, INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
-    measure_batch_pair<TEST_ITERS>("ID", N,
+    measure_batch_pair<TEST_ITERS>("INVERSE_DYNAMICS", N,
         [&]{ grid::inverse_dynamics<T,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
         [&]{ grid::inverse_dynamics_compute_only<T,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms); });
 }
@@ -43,9 +43,9 @@ __host__ void measure_minv_batch(int N, cudaStream_t *streams, grid::robotModel<
 #if GRID_HAS_FORWARD_DYNAMICS
 template <typename T, int TEST_ITERS>
 __host__ void measure_fd_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
-    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("FD", N, FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("FORWARD_DYNAMICS", N, FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
-    measure_batch_pair<TEST_ITERS>("FD", N,
+    measure_batch_pair<TEST_ITERS>("FORWARD_DYNAMICS", N,
         [&]{ grid::forward_dynamics<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
         [&]{ grid::forward_dynamics_compute_only<T>(d,m,GRAVITY,N,dim3(N,1,1),dimms); });
 }
@@ -73,9 +73,9 @@ __host__ void measure_crba_batch(int N, cudaStream_t *streams, grid::robotModel<
 #if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
 template <typename T, int TEST_ITERS>
 __host__ void measure_id_du_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
-    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("ID_DU", N, INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("INVERSE_DYNAMICS_GRADIENT", N, INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
-    measure_batch_pair<TEST_ITERS>("ID_DU", N,
+    measure_batch_pair<TEST_ITERS>("INVERSE_DYNAMICS_GRADIENT", N,
         [&]{ grid::inverse_dynamics_gradient<T,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
         [&]{ grid::inverse_dynamics_gradient_compute_only<T,false,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms); });
 }
@@ -83,9 +83,9 @@ __host__ void measure_id_du_batch(int N, cudaStream_t *streams, grid::robotModel
 #if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
 template <typename T, int TEST_ITERS>
 __host__ void measure_fd_du_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
-    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("FD_DU", N, FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("FORWARD_DYNAMICS_GRADIENT", N, FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
-    measure_batch_pair<TEST_ITERS>("FD_DU", N,
+    measure_batch_pair<TEST_ITERS>("FORWARD_DYNAMICS_GRADIENT", N,
         [&]{ grid::forward_dynamics_gradient<T,false>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams); },
         [&]{ grid::forward_dynamics_gradient_compute_only<T,false>(d,m,GRAVITY,N,dim3(N,1,1),dimms); });
 }
@@ -93,9 +93,9 @@ __host__ void measure_fd_du_batch(int N, cudaStream_t *streams, grid::robotModel
 #if GRID_HAS_END_EFFECTOR_POSE
 template <typename T, int TEST_ITERS>
 __host__ void measure_ee_pose_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
-    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("EE_POSE", N, END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("END_EFFECTOR_POSE", N, END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
-    measure_batch_pair<TEST_ITERS>("EE_POSE", N,
+    measure_batch_pair<TEST_ITERS>("END_EFFECTOR_POSE", N,
         [&]{ grid::end_effector_pose<T>(d,m,N,dim3(N,1,1),dimms,streams); },
         [&]{ grid::end_effector_pose_compute_only<T>(d,m,N,dim3(N,1,1),dimms); });
 }
@@ -103,9 +103,9 @@ __host__ void measure_ee_pose_batch(int N, cudaStream_t *streams, grid::robotMod
 #if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
 template <typename T, int TEST_ITERS>
 __host__ void measure_ee_pose_gradient_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
-    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("EE_POSE_GRADIENT", N, END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("END_EFFECTOR_POSE_GRADIENT", N, END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
-    measure_batch_pair<TEST_ITERS>("EE_POSE_GRADIENT", N,
+    measure_batch_pair<TEST_ITERS>("END_EFFECTOR_POSE_GRADIENT", N,
         [&]{ grid::end_effector_pose_gradient<T>(d,m,N,dim3(N,1,1),dimms,streams); },
         [&]{ grid::end_effector_pose_gradient_compute_only<T>(d,m,N,dim3(N,1,1),dimms); });
 }
@@ -113,9 +113,9 @@ __host__ void measure_ee_pose_gradient_batch(int N, cudaStream_t *streams, grid:
 #if GRID_HAS_END_EFFECTOR_POSE_HESSIAN || (defined(GRID_BENCH_D2EE_ONLY) && GRID_BENCH_D2EE_ONLY)
 template <typename T, int TEST_ITERS>
 __host__ void measure_ee_pose_hessian_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
-    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("EE_POSE_HESSIAN", N, END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES);
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("END_EFFECTOR_POSE_HESSIAN", N, END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES);
     dim3 dimms = grid_timing_dimms();
-    measure_batch_pair<TEST_ITERS>("EE_POSE_HESSIAN", N,
+    measure_batch_pair<TEST_ITERS>("END_EFFECTOR_POSE_HESSIAN", N,
         [&]{ grid::end_effector_pose_hessian<T>(d,m,N,dim3(N,1,1),dimms,streams); },
         [&]{ grid::end_effector_pose_hessian_compute_only<T>(d,m,N,dim3(N,1,1),dimms); });
 }
