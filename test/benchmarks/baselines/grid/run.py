@@ -1083,10 +1083,28 @@ def compile_binaries(
     tier: str | None = None,
     floating_base: bool | None = None,
     has_mimic: bool | None = None,
+    build_single: bool = True,
 ) -> tuple[Path, Path]:
     """Compile the single-call binary (with -rdc=true) and the batch binary
     (without -rdc=true) against the generated header. Returns
     (single_binary, batch_binary).
+
+    SINGLE-CALL TIMING IS OPT-IN / DEFAULT-OFF (`build_single=False`, B8).
+    -------------------------------------------------------------------------
+    The single-call latency binary (`timeGRiD_single.cu`) must be compiled with
+    `-rdc=true` so the anti-LICM shim works. Under `-rdc=true` nvcc does NOT
+    inline `inverse_dynamics_inner_vaf` (140 regs) into the launch-bounds(128)
+    kernels (fdsva_so / integrator(_with)_gradient / id-gradient), so ptxas
+    FATALLY errors on BIG FLOATING robots (g1/h1_2):
+        "Entry function <kernel> with max regcount of 128 calls <inner> with
+         regcount of 140".
+    There is no way to satisfy that under -rdc, and the doomed compile still
+    burns ~50 min/tier before giving up (an overnight g1-floating autotune ran
+    7+ hours). The BATCH binary (`-rdc=false`) inlines the inner → no regcount
+    error, and is the ONLY thing the autotune MATRIX uses. So callers must
+    explicitly opt in (`--single-timing` / `GRID_BENCH_SINGLE_TIMING=1`) to pay
+    for the single build+run; by default we skip it entirely (no TU emitted, no
+    compile attempted, no "single-call build failed" / "skipping single" churn).
 
     When `per_algo_tus=True` (default), each binary is built from N small
     per-algo TUs + a dispatcher main, all compiled in parallel via a thread
@@ -1243,29 +1261,30 @@ def compile_binaries(
         # kernels) doesn't take down the other — the batch (no-rdc) build
         # inlines and still produces data. Only fail the combo if BOTH die.
         single_binary = None
-        try:
-            single_binary = _compile_per_algo_binary(
-                kind="single",
-                tu_sources=[p for (_k, p) in single_tu_pairs],
-                main_source=single_main,
-                out_name="timeGRiD_single",
-                header_path=header_path,
-                build_dir=build_dir,
-                cxx_standard=cxx_standard,
-                compile_linalg_flags=single_c,
-                link_linalg_flags=single_l,
-                common_arch=common_arch,
-                ptxas_opt_level=ptxas_opt_level,
-                split_compile=split_compile,
-                ofast_compile=ofast_compile,
-                use_rdc=single_rdc,
-                runner_key=runner_key,
-                ccache_prefix=ccache_prefix,
-                nvcc=nvcc,
-                max_workers=compile_workers,
-            )
-        except Exception as e:
-            print(f"  [grid] WARNING: single-call build failed (batch will still run): {e}", file=sys.stderr)
+        if build_single:
+            try:
+                single_binary = _compile_per_algo_binary(
+                    kind="single",
+                    tu_sources=[p for (_k, p) in single_tu_pairs],
+                    main_source=single_main,
+                    out_name="timeGRiD_single",
+                    header_path=header_path,
+                    build_dir=build_dir,
+                    cxx_standard=cxx_standard,
+                    compile_linalg_flags=single_c,
+                    link_linalg_flags=single_l,
+                    common_arch=common_arch,
+                    ptxas_opt_level=ptxas_opt_level,
+                    split_compile=split_compile,
+                    ofast_compile=ofast_compile,
+                    use_rdc=single_rdc,
+                    runner_key=runner_key,
+                    ccache_prefix=ccache_prefix,
+                    nvcc=nvcc,
+                    max_workers=compile_workers,
+                )
+            except Exception as e:
+                print(f"  [grid] WARNING: single-call build failed (batch will still run): {e}", file=sys.stderr)
         batch_binary = None
         try:
             batch_binary = _compile_per_algo_binary(
@@ -1290,32 +1309,37 @@ def compile_binaries(
             )
         except Exception as e:
             print(f"  [grid] WARNING: batch build failed (single will still run): {e}", file=sys.stderr)
-        if single_binary is None and batch_binary is None:
-            raise RuntimeError("both single-call and batch builds failed")
+        if (build_single and single_binary is None and batch_binary is None) or (
+            not build_single and batch_binary is None
+        ):
+            raise RuntimeError("required timing build(s) failed")
+        _single_status = (f"ok={single_binary is not None}" if build_single else "SKIPPED (opt-in)")
         print(
             f"  [grid] per-algo TU compile+link finished in "
             f"{time.perf_counter() - t_total:.1f}s "
-            f"(single rdc={single_rdc} ok={single_binary is not None}, "
+            f"(single rdc={single_rdc} {_single_status}, "
             f"batch rdc={batch_rdc} ok={batch_binary is not None}, workers={compile_workers})"
         )
         return single_binary, batch_binary
 
     # ----- Monolithic fallback (pre-P6-7b layout) -----
     # Independent single/batch builds (see the per-algo path above for rationale).
+    # Single-call is opt-in/default-off (build_single); see the docstring.
     single_binary = None
-    try:
-        single_binary = _compile_one_source(
-            TIMING_SOURCE_SINGLE, "timeGRiD_single",
-            header_path=header_path, arch=arch, build_dir=build_dir,
-            cxx_standard=cxx_standard,
-            compile_linalg_flags=single_c, link_linalg_flags=single_l,
-            common_arch=common_arch,
-            ptxas_opt_level=ptxas_opt_level,
-            split_compile=split_compile, ofast_compile=ofast_compile,
-            runner_key=runner_key, ccache_prefix=ccache_prefix, nvcc=nvcc,
-        )
-    except Exception as e:
-        print(f"  [grid] WARNING: single-call build failed (batch will still run): {e}", file=sys.stderr)
+    if build_single:
+        try:
+            single_binary = _compile_one_source(
+                TIMING_SOURCE_SINGLE, "timeGRiD_single",
+                header_path=header_path, arch=arch, build_dir=build_dir,
+                cxx_standard=cxx_standard,
+                compile_linalg_flags=single_c, link_linalg_flags=single_l,
+                common_arch=common_arch,
+                ptxas_opt_level=ptxas_opt_level,
+                split_compile=split_compile, ofast_compile=ofast_compile,
+                runner_key=runner_key, ccache_prefix=ccache_prefix, nvcc=nvcc,
+            )
+        except Exception as e:
+            print(f"  [grid] WARNING: single-call build failed (batch will still run): {e}", file=sys.stderr)
     batch_binary = None
     try:
         batch_binary = _compile_one_source(
@@ -1330,12 +1354,15 @@ def compile_binaries(
         )
     except Exception as e:
         print(f"  [grid] WARNING: batch build failed (single will still run): {e}", file=sys.stderr)
-    if single_binary is None and batch_binary is None:
-        raise RuntimeError("both single-call and batch builds failed")
+    if (build_single and single_binary is None and batch_binary is None) or (
+        not build_single and batch_binary is None
+    ):
+        raise RuntimeError("required timing build(s) failed")
+    _single_status = (f"ok={single_binary is not None}" if build_single else "SKIPPED (opt-in)")
     print(
         f"  [grid] monolithic compile finished in "
         f"{time.perf_counter() - t_total:.1f}s "
-        f"(single rdc={single_rdc} ok={single_binary is not None}, "
+        f"(single rdc={single_rdc} {_single_status}, "
         f"batch rdc={batch_rdc} ok={batch_binary is not None})"
     )
     return single_binary, batch_binary
@@ -1344,19 +1371,26 @@ def compile_binaries(
 # ---------------------------------------------------------------------------
 # Run and parse
 # ---------------------------------------------------------------------------
-def run_timing(binaries: tuple[Path | None, Path | None], base: str) -> str:
+def run_timing(binaries: tuple[Path | None, Path | None], base: str,
+               single_enabled: bool = True) -> str:
     """Run whichever of the single / batch binaries built, INDEPENDENTLY, so a
     crash (or missing build) in one doesn't lose the other's data. Returns
     concatenated stdout so parse_grid_output picks up `Single Call X us` lines
     (single binary) AND `[N:K]: X` lines (batch binary). Raises only if neither
-    binary produced any output."""
+    binary produced any output.
+
+    `single_enabled=False` means single-call timing was intentionally skipped
+    (the default, B8 opt-in) — so we don't emit the "skipping single run"
+    warning, which would just be noise when the user never asked for single."""
     single_binary, batch_binary = binaries
     floating_arg = "T" if base == "floating" else "F"
     outputs = []
     produced_any = False
     for label, binary in (("single", single_binary), ("batch", batch_binary)):
         if binary is None:
-            print(f"  [grid] skipping {label} run (build unavailable)", file=sys.stderr)
+            # Silent when single was deliberately not built (opt-in/default-off).
+            if not (label == "single" and not single_enabled):
+                print(f"  [grid] skipping {label} run (build unavailable)", file=sys.stderr)
             continue
         result = subprocess.run(
             [str(binary), floating_arg],
@@ -1512,8 +1546,11 @@ def build_tier_binaries(
     out: dict[str, Path] = {}
     for tier in tiers:
         try:
+            # Only pay the (expensive, -rdc-fragile) single build when this mode
+            # actually needs the single binary. Batch autotune never touches it.
             single_bin, batch_bin = compile_binaries(
-                header_path, arch, build_dir, tier=tier, **compile_kwargs,
+                header_path, arch, build_dir, tier=tier,
+                build_single=want_single, **compile_kwargs,
             )
         except Exception as e:  # noqa: BLE001 — collect, don't crash the sweep
             print(f"  [autotune] WARN: tier={tier} build failed, skipping: {e}",
@@ -2105,6 +2142,16 @@ def main() -> None:
                              "the batch-N compute-only path; 'single' tunes the single-call "
                              "(single_us) path; 'both' runs each and writes batch picks under "
                              "'algo_picks' + single picks under 'algo_picks_single'.")
+    parser.add_argument("--single-timing", dest="single_timing", action="store_true",
+                        default=(os.environ.get("GRID_BENCH_SINGLE_TIMING", "0") not in ("0", "", "false", "False")),
+                        help="OPT-IN (default OFF): also build + run the single-CALL latency binary "
+                             "(timeGRiD_single.cu, -rdc=true). It is off by default because the "
+                             "-rdc=true shim it needs causes FATAL ptxas regcount errors on big "
+                             "floating robots (g1/h1_2 fdsva_so / integrator / id-gradient kernels: "
+                             "the non-inlined inner exceeds the kernel's __launch_bounds__) and "
+                             "wastes ~50 min/tier on a doomed compile. Batch throughput timing (what "
+                             "the autotune matrix uses) is unaffected and always runs. Also settable "
+                             "via env GRID_BENCH_SINGLE_TIMING=1.")
     args = parser.parse_args()
 
     ee_frame = args.ee_frame or DEFAULT_EE_FRAMES.get(args.robot, "")
@@ -2159,6 +2206,7 @@ def main() -> None:
             tier=args.tier,
             floating_base=(args.base == "floating"),
             has_mimic=has_mimic,
+            build_single=args.single_timing,
         )
     except Exception as e:
         print(f"  [grid] ERROR compiling binaries: {e}", file=sys.stderr)
@@ -2169,9 +2217,10 @@ def main() -> None:
         print(f"  [grid] --compile-only: binary cache populated, skipping timing.")
         return
 
-    print(f"  [grid] running timing binaries (single + batch)...")
+    print(f"  [grid] running timing binaries "
+          f"({'single + batch' if args.single_timing else 'batch (single-call opt-in: off)'})...")
     try:
-        output = run_timing(binaries, args.base)
+        output = run_timing(binaries, args.base, single_enabled=args.single_timing)
     except Exception as e:
         print(f"  [grid] ERROR running binary: {e}", file=sys.stderr)
         sys.exit(1)

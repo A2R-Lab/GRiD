@@ -221,7 +221,8 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
                   compile_workers: int | None = None,
                   autotune_threads: bool = False,
                   autotune_thread_grid: str | None = None,
-                  autotune_N: int | None = None) -> list[str]:
+                  autotune_N: int | None = None,
+                  single_timing: bool = False) -> list[str]:
     cmd = [
         sys.executable,
         str(harness_repo_root / "test" / "benchmarks" / "baselines" / "grid" / "run.py"),
@@ -258,6 +259,12 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
             cmd += ["--autotune-thread-grid", autotune_thread_grid]
         if autotune_N is not None:
             cmd += ["--autotune-N", str(autotune_N)]
+    # Single-CALL timing is opt-in/default-off (B8): the -rdc=true single build
+    # fatally errors (ptxas regcount) on big floating robots and wastes ~50
+    # min/tier. Only pass --single-timing when the orchestrator was asked for it;
+    # the autotune matrix uses batch-only timing, unaffected.
+    if single_timing:
+        cmd.append("--single-timing")
     return cmd
 
 
@@ -273,7 +280,8 @@ def run_grid_column(column: str, robot: str, base: str, *,
                     tier: str | None = None,
                     autotune_threads: bool = False,
                     autotune_thread_grid: str | None = None,
-                    autotune_N: int | None = None) -> Path | None:
+                    autotune_N: int | None = None,
+                    single_timing: bool = False) -> Path | None:
     """Run the appropriate GRiD harness for `column`. Returns output JSON path or None."""
     ee_frame = EE_FRAMES_GRID.get(robot, "")
     baseline_key = COLUMN_TO_BASELINE_KEY[column]
@@ -305,7 +313,8 @@ def run_grid_column(column: str, robot: str, base: str, *,
                             tier=tier,
                             autotune_threads=autotune_threads,
                             autotune_thread_grid=autotune_thread_grid,
-                            autotune_N=autotune_N)
+                            autotune_N=autotune_N,
+                            single_timing=single_timing)
     else:
         raise ValueError(f"Unknown grid column: {column}")
 
@@ -512,7 +521,8 @@ def _auto_build_jobs() -> int:
 def _build_grid_binaries(grid_columns, robots, bases, tiers, *, build_jobs,
                          worktree_path, output_dir, skip_set, no_rdc,
                          no_licm_barrier, single_call_iters, batch_iters,
-                         ptxas_opt_level, split_compile, ofast_compile) -> None:
+                         ptxas_opt_level, split_compile, ofast_compile,
+                         single_timing=False) -> None:
     """Parallel BUILD phase: compile + cache every GRiD (column,robot,base,tier)
     binary across `build_jobs` workers, WITHOUT timing. The serial measure phase
     re-runs each with --no-recompile (instant content-keyed cache hit), so timing
@@ -563,7 +573,8 @@ def _build_grid_binaries(grid_columns, robots, bases, tiers, *, build_jobs,
                                 ptxas_opt_level=effective_ptxas,
                                 split_compile=split_compile, ofast_compile=ofast_compile,
                                 tier=tier, build_dir=bdir, compile_only=True,
-                                compile_workers=per_task_workers)
+                                compile_workers=per_task_workers,
+                                single_timing=single_timing)
         t0 = datetime.now()
         r = subprocess.run(cmd, capture_output=True, text=True)
         dur = (datetime.now() - t0).total_seconds()
@@ -689,6 +700,14 @@ def main() -> None:
     parser.add_argument("--autotune-N", type=int, default=None,
                         help="Batch size to autotune on (default: 256). The winner is the thread "
                              "count that minimizes batch_<N>_compute_only µs/sample.")
+    parser.add_argument("--single-timing", action="store_true",
+                        default=(os.environ.get("GRID_BENCH_SINGLE_TIMING", "0") not in ("0", "", "false", "False")),
+                        help="OPT-IN (default OFF): forward --single-timing to the GRiD glass "
+                             "column so it ALSO builds + runs the single-CALL latency binary. Off "
+                             "by default because the -rdc=true single build fatally errors (ptxas "
+                             "regcount) on big floating robots (g1/h1_2) and wastes ~50 min/tier; "
+                             "batch throughput timing (the autotune matrix) is unaffected and "
+                             "always runs. Also settable via env GRID_BENCH_SINGLE_TIMING=1.")
     args = parser.parse_args()
 
     if args.fixed_only:
@@ -740,6 +759,7 @@ def main() -> None:
             single_call_iters=args.single_call_iters, batch_iters=args.batch_iters,
             ptxas_opt_level=args.ptxas_opt_level, split_compile=args.split_compile,
             ofast_compile=args.ofast_compile,
+            single_timing=args.single_timing,
         )
         # Measure phase pulls from the warm cache; never compile during timing.
         measure_no_recompile = True
@@ -811,6 +831,7 @@ def main() -> None:
                             autotune_threads=do_autotune,
                             autotune_thread_grid=args.autotune_thread_grid,
                             autotune_N=args.autotune_N,
+                            single_timing=args.single_timing,
                         )
                         if p is not None:
                             produced.append(p)

@@ -597,6 +597,20 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   `_single_timing`/`_batch_timing` wrappers must also be `#if GRID_HAS_*`-wrapped — bench analogue of C1, still TODO).
   Gating CALLS only is timing-neutral for FULL builds (`#if 1`), a safe partial step. After any gating edit, verify a
   full build still TIMES all 10 core algos (a wrong macro name silently drops an algo from the sweep).
+- **Single-CALL timing is OPT-IN / DEFAULT-OFF (`run.py --single-timing` / env `GRID_BENCH_SINGLE_TIMING=1`; B8,
+  2026-06-12).** The bench builds TWO timing binaries per cell: `timeGRiD_single.cu` (single-call latency,
+  `-rdc=true`) and `timeGRiD_batch.cu` (batch throughput, `-rdc=false`). The single binary NEEDS `-rdc=true` for its
+  anti-LICM shim, but under `-rdc` nvcc does NOT inline `inverse_dynamics_inner_vaf` (140 regs) into the
+  `__launch_bounds__(128)` kernels (fdsva_so / integrator(_with)_gradient / id-gradient), so ptxas FATALLY errors on
+  BIG FLOATING robots (g1/h1_2): `Entry function <kernel> with max regcount of 128 calls <inner> with regcount of 140`.
+  There is no way to satisfy that under `-rdc`, and the doomed compile still burns ~50 min/tier before giving up — an
+  overnight g1-floating autotune ran 7+ hours. The BATCH binary (`-rdc=false` → inner inlined → no regcount error) is
+  the ONLY thing the autotune MATRIX uses. So `compile_binaries(build_single=...)` defaults the single build OFF; the
+  flag/env opt back in. When OFF, NO single TU is compiled + NO single run happens in BOTH the standard path AND the
+  `--autotune-threads` path (`build_tier_binaries` passes `build_single=(mode=='single')`, so batch autotune never
+  touches it), with no "single-call build failed" / "skipping single run" churn. `run_multi_version.py` threads
+  `--single-timing` through too (so `run_a1b_*.sh` are default-OFF). Opt in only when you actually need single-call
+  latency on small/fixed robots; never expect it to build on g1/h1_2 floating.
 - **Two DISTINCT caches in the bench path — a subset request must be in BOTH or a stale full-set artifact is served.**
   `run.py generate_header` keys a `codegen_hash` cache (hashes the GCG `.py` tree, so codegen edits self-invalidate);
   it now ALSO includes `GRID_BENCH_ALGORITHM_LIST` (else a cached full-set header is reused and the subset silently
