@@ -12,6 +12,12 @@ A single µs number hides where the cost goes. GRiD is reported at three layers:
 3. **Through-bindings (wrapper-inclusive)** — the real `grid_rbd` python/jax/torch FFI
    end-to-end: pack + H2D + kernel + D2H + unpack + dispatch. The "what an adopter actually
    pays" number. Source: the grid_rbd binding.
+   **SYMMETRIC JIT RULE — GRiD's jax/torch binding gets the SAME precompile-then-time treatment
+   as the competitors.** The grid_rbd jax surface wraps the FFI call in `jax.jit`; timing it
+   cold would inflate layer-3 with the first-call trace/compile (the exact mjx artifact). So
+   warm the EXACT jitted FFI closure (`block_until_ready`, same shapes/dtypes, incl. the
+   numpy→device path) in warmup, then time pure execution. Same for the torch surface (warm the
+   graph). This is symmetric fairness — and it protects GRiD's own number from being unfairly worse.
 Figures stack these (compute + transfer + wrapper), mirroring the classic compute + I/O-overhead bar.
 
 ## Fairness rules (apply to ALL baselines)
