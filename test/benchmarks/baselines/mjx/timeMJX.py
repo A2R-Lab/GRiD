@@ -18,7 +18,7 @@ import numpy as np
 
 # Configurable via env var (set by mjx/run.py's --test-iters flag).
 TEST_ITERS  = int(os.environ.get("BENCH_TEST_ITERS", "500"))
-BATCH_SIZES = [16, 32, 64, 128, 256]
+BATCH_SIZES = [16, 32, 64, 128, 256, 1024]
 
 
 # ---------------------------------------------------------------------------
@@ -264,31 +264,39 @@ def main() -> None:
             return jax.vmap(lambda q, v, a: dx0.replace(qpos=q, qvel=v, qacc=a))(qs, vs, as_)
 
         _make_batch_jit = jax.jit(_make_batch_from_np)
-        # JIT compile + warmup the batch-dx builder
-        _qs_np = np.random.randn(N, nq).astype(np.float32)
-        _vs_np = np.random.randn(N, nv).astype(np.float32)
-        _as_np = np.random.randn(N, nv).astype(np.float32)
-        _jit_and_warmup(_make_batch_jit, (_qs_np, _vs_np, _as_np))
-
-        def _with_mem_fn(batch_fn, qs_np, vs_np, as_np):
-            return batch_fn(_make_batch_jit(
-                jnp.array(qs_np), jnp.array(vs_np), jnp.array(as_np)
-            ))
 
         n_batch_iters = max(10, TEST_ITERS // 5)
 
+        def _make_np_args():
+            return (
+                np.random.randn(N, nq).astype(np.float32),
+                np.random.randn(N, nv).astype(np.float32),
+                np.random.randn(N, nv).astype(np.float32),
+            )
+
         for label, _fn in [("INVERSE_DYNAMICS", _batch_id_fn), ("FORWARD_DYNAMICS", _batch_fd_fn), ("END_EFFECTOR_POSE", _batch_ee_fn)]:
             # WITH MEMORY
+            #
+            # FAIRNESS FIX (was mistiming JIT compile inside the timed region —
+            # mjx batch_256_with_mem came out ~41,500us, ~3000x slower than the
+            # COMPUTE-ONLY path and physically impossible for batched throughput).
+            # Root cause: the previous code warmed `_make_batch_jit` against raw
+            # NUMPY args but TIMED the composite `_fn(_make_batch_jit(jnp.array(...)))`
+            # closure, which was never warmed end-to-end. The first timed iter
+            # therefore traced+compiled `_make_batch_jit` against jnp-array inputs
+            # AND lowered the `_fn(...)`-of-builder dispatch — and since the report
+            # uses the MEAN over only n_batch_iters reps, that one compile dominated.
+            # Fix: build the EXACT composite closure once, then `_jit_and_warmup` it
+            # (block_until_ready, >=3 passes) so the timed region is pure execution
+            # + the intended host->device transfer (jnp.array(qs/vs/as)).
             try:
+                _wm_fn = (lambda qs, vs, as_, fn=_fn: fn(_make_batch_jit(
+                    jnp.array(qs), jnp.array(vs), jnp.array(as_)
+                )))
+                _jit_and_warmup(_wm_fn, _make_np_args())
                 wm = _time_with_mem(
-                    lambda qs, vs, as_, fn=_fn: fn(_make_batch_jit(
-                        jnp.array(qs), jnp.array(vs), jnp.array(as_)
-                    )),
-                    lambda: (
-                        np.random.randn(N, nq).astype(np.float32),
-                        np.random.randn(N, nv).astype(np.float32),
-                        np.random.randn(N, nv).astype(np.float32),
-                    ),
+                    _wm_fn,
+                    _make_np_args,
                     n_iters=n_batch_iters,
                 )
                 _print_stats(f"{label} WITH MEMORY", N, wm)
@@ -319,7 +327,9 @@ def main() -> None:
                     )(d.qpos, d.qvel, d.qacc)
                 return jax.vmap(_one)(batch_d)
 
-            jax.block_until_ready(_batch_id_du_fn(dx_batch))
+            # Compile + >=3 warmup passes so the jacobian trace/compile is fully
+            # cached before timing (was a single block_until_ready warmup).
+            _jit_and_warmup(_batch_id_du_fn, (dx_batch,))
             co = _time_device(
                 _batch_id_du_fn, dx_batch,
                 n_iters=max(1, TEST_ITERS // 20),
