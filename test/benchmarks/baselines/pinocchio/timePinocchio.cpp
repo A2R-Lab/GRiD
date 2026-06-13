@@ -735,9 +735,11 @@ void fdsvaSoThreaded(const pinocchio::Model *model, pinocchio::Data *datas,
 // ---------------------------------------------------------------------------
 
 // Algorithm gating for parallel per-algo subprocess runs. `enabled_algo` is the
-// CLI --algo value: "all" (default) runs every algorithm; "id", "minv", "fd",
-// "aba", "crba", "id_du", "fd_du", "ee_pose", "ee_pose_gradient", "idsva_so"
-// run only that algorithm and skip the codegen JIT for any algorithms whose
+// CLI --algo value: "all" (default) runs every algorithm; the verbose per-algo
+// tokens ("inverse_dynamics", "minv", "forward_dynamics", "aba", "crba",
+// "inverse_dynamics_gradient", "forward_dynamics_gradient", "end_effector_pose",
+// "end_effector_pose_gradient", "idsva_so_body_frame", ...) — matching the names
+// run.py passes — run only that algorithm and skip the codegen JIT for any algorithms whose
 // underlying CodeGen* objects are not needed (RNEA, Minv, ABA, CRBA,
 // RNEADerivatives). This is the lever for sidestepping the >25 min cppadcg
 // JIT wall on g1_floating: by farming algos out to parallel subprocesses in
@@ -747,17 +749,21 @@ inline bool is_algo_active(const std::string &enabled, const char *algo) {
 }
 inline bool needs_codegen(const std::string &enabled, const char *cg) {
     if (enabled == "all") return true;
-    // Map algos to the cppadcg CodeGen* objects each depends on.
-    // RNEA codegen used by: id, fd, fd_du
-    if (std::string(cg) == "rnea")   return enabled == "id" || enabled == "fd" || enabled == "fd_du";
-    // Minv codegen used by: minv, fd, fd_du
-    if (std::string(cg) == "minv")   return enabled == "minv" || enabled == "fd" || enabled == "fd_du";
+    // Map algos to the cppadcg CodeGen* objects each depends on. The `enabled`
+    // tokens MUST match the verbose --algo names that run.py passes (and that
+    // is_algo_active() compares against) — otherwise an algo's eval runs while
+    // its CodeGen* is never initLib()'d, leaving generatedFun_ptr NULL and
+    // segfaulting on the first evalFunction() call.
+    // RNEA codegen used by: inverse_dynamics, forward_dynamics, forward_dynamics_gradient
+    if (std::string(cg) == "rnea")   return enabled == "inverse_dynamics" || enabled == "forward_dynamics" || enabled == "forward_dynamics_gradient";
+    // Minv codegen used by: minv, forward_dynamics, forward_dynamics_gradient
+    if (std::string(cg) == "minv")   return enabled == "minv" || enabled == "forward_dynamics" || enabled == "forward_dynamics_gradient";
     // ABA codegen used by: aba
     if (std::string(cg) == "aba")    return enabled == "aba";
     // CRBA codegen used by: crba
     if (std::string(cg) == "crba")   return enabled == "crba";
-    // RNEADerivatives codegen used by: id_du, fd_du
-    if (std::string(cg) == "rnea_d") return enabled == "id_du" || enabled == "fd_du";
+    // RNEADerivatives codegen used by: inverse_dynamics_gradient, forward_dynamics_gradient
+    if (std::string(cg) == "rnea_d") return enabled == "inverse_dynamics_gradient" || enabled == "forward_dynamics_gradient";
     return false;
 }
 

@@ -372,11 +372,12 @@ if os.environ.get("PIN_BENCH_D2EE_ONLY", "0") != "0":
 # Per-algo subprocess wall-clock timeout. Some robot/algo combos have slow
 # cppadcg JIT; headroom keeps us under a 25-min ceiling per subprocess.
 # Override via PIN_PER_ALGO_TIMEOUT (seconds).
-# NOTE (2026-06-13): on g1 (29-DOF) the cppadcg-path algos id / fd / id_du /
-# fd_du / idsva_so_world_frame do NOT time out — they SIGSEGV (exit -11) inside
-# cppADCodeGen in ~1s during JIT. So these 5 g1 cells are null due to a
-# cppADCodeGen crash on the large model, not a timeout. The direct-pinocchio
-# algos (aba, crba, ee_pose*, fdsva_so, idsva_so_body, minv) capture fine.
+# NOTE (2026-06-13): an earlier ~1s SIGSEGV on the codegen-path algos
+# (inverse_dynamics / forward_dynamics / *_gradient) for ALL robots was a
+# needs_codegen() token-mismatch in timePinocchio.cpp (verbose --algo names vs
+# stale short "id"/"fd" tokens) that skipped initLib()/loadLib() while still
+# running evalFunction() on a NULL generatedFun_ptr. Fixed by aligning
+# needs_codegen() to the verbose tokens; codegen now JITs + captures normally.
 PER_ALGO_TIMEOUT_S = int(os.environ.get("PIN_PER_ALGO_TIMEOUT", "1500"))
 
 # Set in main() before run_timings_parallel; read in the executor default-arg
