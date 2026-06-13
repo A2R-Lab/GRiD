@@ -42,6 +42,7 @@ DEFAULT_EE_FRAMES: dict[str, str] = {
     "go2":    "FR_foot_joint",    # fixed joint at FR foot
     "g1":     "right_hand_palm_joint",  # fixed joint at right hand palm
     "h1_2":   "R_base_link_joint",      # fixed joint at base of right hand (h1_2)
+    "h2_plus": "right_hand_joint",      # fixed joint at right hand (H2+ large-robot scaling target)
 }
 
 # ---------------------------------------------------------------------------
@@ -52,6 +53,14 @@ ROBOT_DESCRIPTION_MODULE: dict[str, str] = {
     "go2":    "robot_descriptions.go2_description",
     "g1":     "robot_descriptions.g1_description",
     "h1_2":   "robot_descriptions.h1_2_description",
+}
+
+# Robots vendored locally (not in robot_descriptions). H2+ = Unitree H2+, the large
+# non-mimic humanoid (75-DOF fixed / 81-DOF floating) — the large-robot SCALING target
+# replacing the now-deprecated h1_2. No mjx/frax/pinocchio/cuRobo model exists for it, so
+# it is a GRiD-internal scaling study, not a competitive cell.
+LOCAL_URDF: dict[str, str] = {
+    "h2_plus": str(REPO_ROOT / "robot_assets" / "h2_plus.urdf"),
 }
 
 
@@ -72,9 +81,15 @@ def robot_is_mimic(urdf_path: str) -> bool:
 
 
 def get_urdf_path(robot: str) -> str:
+    if robot in LOCAL_URDF:
+        path = LOCAL_URDF[robot]
+        if not os.path.exists(path):
+            raise RuntimeError(f"local URDF for '{robot}' not found at {path}")
+        return path
     mod_name = ROBOT_DESCRIPTION_MODULE.get(robot)
     if mod_name is None:
-        raise ValueError(f"Unknown robot '{robot}'. Known: {list(ROBOT_DESCRIPTION_MODULE)}")
+        raise ValueError(f"Unknown robot '{robot}'. Known: "
+                         f"{list(ROBOT_DESCRIPTION_MODULE) + list(LOCAL_URDF)}")
     import importlib
     mod = importlib.import_module(mod_name)
     path = getattr(mod, "URDF_PATH", None)
@@ -2025,7 +2040,8 @@ def _argmin_tier_threads(
 # ---------------------------------------------------------------------------
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run GRiD benchmark for one robot/base")
-    parser.add_argument("--robot", required=True, choices=list(ROBOT_DESCRIPTION_MODULE))
+    parser.add_argument("--robot", required=True,
+                        choices=list(ROBOT_DESCRIPTION_MODULE) + list(LOCAL_URDF))
     parser.add_argument("--base", required=True, choices=["fixed", "floating"])
     parser.add_argument("--output", type=Path, default=None,
                         help="JSON output path (default: results/<robot>_<base>_grid_<host>.json)")
