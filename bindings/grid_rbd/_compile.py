@@ -114,8 +114,15 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # model.damping/friction). Injected into `options` (and thus the cache key) ONLY when
     # True, so a damped .so never collides with the historical no-op .so.
     use_joint_dynamics = bool(options.get("use_joint_dynamics", False))
+    # A1b launch-config bake: the launch_configs/<robot>/<gpu>.json dir is keyed
+    # by the URDF FILENAME stem (e.g. "iiwa14", "go2", "g1"), which does NOT
+    # always equal the URDF <robot name=...> (go2_description, g1_29dof). Pass the
+    # stem explicitly so codegen resolves the autotuned per-algo {tier,threads}.
+    # An explicit launch_config_robot option overrides (e.g. custom robot ids).
+    launch_config_robot = options.get("launch_config_robot") or Path(urdf_path).stem
     cg = GRiDCodeGenerator(robot, debug_mode, FILE_NAMESPACE=file_namespace,
-                           dtype=codegen_dtype, USE_JOINT_DYNAMICS=use_joint_dynamics)
+                           dtype=codegen_dtype, USE_JOINT_DYNAMICS=use_joint_dynamics,
+                           LAUNCH_CONFIG_ROBOT=launch_config_robot)
 
     # D.4 / Phase 5: runtime-mutable inertia table. options["runtime_inertia"]
     # (default absent/False) gates the codegen `runtime_inertia` flag (emits the
