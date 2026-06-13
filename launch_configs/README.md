@@ -40,7 +40,8 @@ bash tools/autotune_robot.sh <robot> [fixed floating]
 ```
 This runs the GRiD autotune sweep (single-call timing off by default; RAM-safe serial build for big robots) and
 writes `launch_configs/<robot>/<your_gpu>.json`. Re-run codegen + rebuild and the host launchers pick up your
-values. (See `docs/.../launch_config` for the full workflow.)
+values. (See the **"Autotune launch config for your robot / GPU"** section of
+`docs/source/user_guide/tutorials/benchmarks.rst` for the full workflow.)
 
 ## Contribute a (robot, GPU) combo (please do! — this crowdsources a complete matrix)
 1. Generate the config as above on a **quiet GPU** (timing must be isolated — close other GPU workloads).
