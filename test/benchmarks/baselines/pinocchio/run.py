@@ -369,10 +369,15 @@ PINOCCHIO_ALGOS: tuple[str, ...] = (
 if os.environ.get("PIN_BENCH_D2EE_ONLY", "0") != "0":
     PINOCCHIO_ALGOS = ("end_effector_pose_hessian",)
 
-# Per-algo subprocess wall-clock timeout. g1 codegen for any one algo
-# (e.g., fd_du which needs rnea + minv + rnea_d) can take 20+ minutes;
-# headroom keeps us under a single 25-min ceiling per subprocess.
-PER_ALGO_TIMEOUT_S = 1500
+# Per-algo subprocess wall-clock timeout. Some robot/algo combos have slow
+# cppadcg JIT; headroom keeps us under a 25-min ceiling per subprocess.
+# Override via PIN_PER_ALGO_TIMEOUT (seconds).
+# NOTE (2026-06-13): on g1 (29-DOF) the cppadcg-path algos id / fd / id_du /
+# fd_du / idsva_so_world_frame do NOT time out — they SIGSEGV (exit -11) inside
+# cppADCodeGen in ~1s during JIT. So these 5 g1 cells are null due to a
+# cppADCodeGen crash on the large model, not a timeout. The direct-pinocchio
+# algos (aba, crba, ee_pose*, fdsva_so, idsva_so_body, minv) capture fine.
+PER_ALGO_TIMEOUT_S = int(os.environ.get("PIN_PER_ALGO_TIMEOUT", "1500"))
 
 # Set in main() before run_timings_parallel; read in the executor default-arg
 # resolution so max_workers respects the actual internal thread count.
@@ -473,6 +478,9 @@ def main() -> None:
                         help="Override SINGLE_CALL_ITERS_GLOBAL (default 10000).")
     parser.add_argument("--batch-iters", type=int, default=None,
                         help="Override TEST_ITERS_GLOBAL (default 100).")
+    parser.add_argument("--algos", nargs="+", default=None,
+                        help="Subset of algos to time (default: all). Use to re-capture "
+                             "only the heavy algos that timed out on big robots.")
     parser.add_argument("--num-threads", type=int, default=None,
                         help="Override CPU_THREADS_GLOBAL at compile (default: physical "
                              "core count). The internal ReusableThreads<N> pool used to "
@@ -515,9 +523,16 @@ def main() -> None:
         sys.exit(1)
 
     print(f"  [pinocchio] running timing binary (EE frame: {ee_frame or 'none'})...")
+    sel_algos = PINOCCHIO_ALGOS
+    if args.algos:
+        unknown = [a for a in args.algos if a not in PINOCCHIO_ALGOS]
+        if unknown:
+            print(f"  [pinocchio] WARNING ignoring unknown algos: {unknown}")
+        sel_algos = tuple(a for a in args.algos if a in PINOCCHIO_ALGOS)
+        print(f"  [pinocchio] --algos subset: {list(sel_algos)}")
     try:
         per_algo_outputs = run_timings_parallel(
-            binary_path, urdf_path, args.base, ee_frame,
+            binary_path, urdf_path, args.base, ee_frame, algos=sel_algos,
         )
     except Exception as e:
         print(f"  [pinocchio] ERROR running binaries: {e}", file=sys.stderr)
