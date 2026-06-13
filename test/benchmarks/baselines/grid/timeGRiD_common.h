@@ -172,11 +172,23 @@ __host__ void run_all_tests(bool floating_base, DispatcherFn do_timings){
     gpuErrchk(cudaMemcpy(hd_data->d_q,hd_data->h_q,grid::NUM_JOINTS*MAX_TIMESTEPS*sizeof(T),cudaMemcpyHostToDevice));
     gpuErrchk(cudaDeviceSynchronize());
 
-    // GPU warmup: run several ID batches and discard before timing
+    // GPU warmup: run several batches and discard before timing. Warm with
+    // whichever core algo the (possibly-subset) header actually emits — a
+    // GRID_BENCH_ALGORITHM_LIST subset without inverse_dynamics would otherwise
+    // fail to compile this unconditional call (qualified grid:: name resolved
+    // at definition time). If neither is present the warmup is simply skipped.
     dim3 dimms = grid_timing_dimms();
+#if GRID_HAS_INVERSE_DYNAMICS
     for(int w = 0; w < 5; w++){
         grid::inverse_dynamics<T,false,true>(hd_data,d_robotModel,GRAVITY,MAX_TIMESTEPS,dim3(MAX_TIMESTEPS,1,1),dimms,streams);
     }
+#elif GRID_HAS_CRBA
+    for(int w = 0; w < 5; w++){
+        grid::crba<T>(hd_data,d_robotModel,GRAVITY,MAX_TIMESTEPS,dim3(MAX_TIMESTEPS,1,1),dimms,streams);
+    }
+#else
+    (void)dimms;
+#endif
     gpuErrchk(cudaDeviceSynchronize());
 
     do_timings(streams, d_robotModel, hd_data);
