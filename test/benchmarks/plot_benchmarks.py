@@ -145,11 +145,60 @@ def plot_compete(data, algo, base, robots, n, title, out):
     fig.savefig(out, dpi=150, bbox_inches="tight")
     print(f"[wrote {out}]")
 
+def plot_summary(autotune, results_dirs, algos, base, robots, title, out):
+    """N=256 grouped bars: GRiD (autotuned compute-only) vs EVERY competitor that has
+    the cell (pinocchio/mjx/frax/mujoco_warp/curobo), per robot, one subplot per algo,
+    log-y, ×speedup label over each competitor bar. Reads the SAME inputs as
+    analyze_competitive.py so the data + canonicalization match exactly."""
+    import importlib.util, sys
+    here = Path(__file__).resolve().parent
+    spec = importlib.util.spec_from_file_location("ac", here/"analyze_competitive.py")
+    ac = importlib.util.module_from_spec(spec); spec.loader.exec_module(ac)
+    grid = ac.load_grid(autotune)                       # {(robot,base,algo): compute_us}
+    comps = ac.load_competitors(results_dirs)           # {col: {(robot,base,algo): withmem}}
+    order = ["grid","pinocchio","curobo","mujoco_warp","mjx","frax_gpu","frax_cpu"]
+    cols = [c for c in order if c == "grid" or c in comps]
+    fig, axes = plt.subplots(1, len(algos), figsize=(4.2*len(algos), 4.6), squeeze=False)
+    axes = axes[0]
+    for ax, algo in zip(axes, algos):
+        x = np.arange(len(robots)); w = 0.8/len(cols); plotted = []
+        for ci, col in enumerate(cols):
+            vals = []
+            for robot in robots:
+                key = (robot, base, ac.CANON.get(algo, algo))
+                vals.append(grid.get(key) if col == "grid" else comps.get(col, {}).get(key))
+            if not any(vals):
+                continue
+            plotted.append(col)
+            off = (len(plotted)-1 - (len(cols)-1)/2)*w
+            ax.bar(x+off, [v or np.nan for v in vals], w,
+                   color=COMP_COLORS.get(col,"#888"), label="GRiD" if col=="grid" else col)
+            # speedup label (competitor / GRiD) over each competitor bar
+            if col != "grid":
+                for xi, robot in enumerate(robots):
+                    key=(robot,base,ac.CANON.get(algo,algo)); g=grid.get(key); c=vals[xi]
+                    if g and c: ax.annotate(f"{c/g:.0f}x",(x[xi]+off,c),ha="center",
+                                            va="bottom",fontsize=7,rotation=90,color="#333")
+        ax.set_yscale("log"); ax.set_xticks(x); ax.set_xticklabels(robots)
+        ax.set_title(algo, fontsize=11); ax.spines[["top","right"]].set_visible(False)
+        ax.grid(axis="y", ls=":", alpha=0.4)
+    axes[0].set_ylabel("Per-batch time @ N=256 (µs, log)\nGRiD=compute-only · competitors=with-mem")
+    h,l = axes[0].get_legend_handles_labels()
+    fig.legend(h,l,loc="upper center",ncol=len(cols),frameon=False,bbox_to_anchor=(0.5,1.0))
+    fig.suptitle(title, y=1.07, fontsize=14)
+    fig.tight_layout(rect=[0,0,1,0.93])
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    print(f"[wrote {out}]")
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["latency", "compete"])
-    ap.add_argument("--input", required=True)
-    ap.add_argument("--algo", required=True)
+    ap.add_argument("mode", choices=["latency", "compete", "summary"])
+    ap.add_argument("--input", help="unified multi_version json (latency/compete modes)")
+    ap.add_argument("--autotune", help="autotune_best json (summary mode = GRiD)")
+    ap.add_argument("--results", nargs="+", default=[], help="competitor result dirs (summary mode)")
+    ap.add_argument("--algo")
+    ap.add_argument("--algos", nargs="+", default=["inverse_dynamics","forward_dynamics","crba"])
     ap.add_argument("--base", default="fixed")
     ap.add_argument("--robots", nargs="+", default=["iiwa14","go2","g1"])
     ap.add_argument("--grid-col", default="grid_glass")
@@ -158,6 +207,10 @@ def main():
     ap.add_argument("--title", default=None)
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+    if a.mode == "summary":
+        title = a.title or f"GRiD vs competitors @ N=256 ({a.base})"
+        plot_summary(a.autotune, a.results, a.algos, a.base, a.robots, title, a.out)
+        return
     data = json.load(open(a.input))
     title = a.title or f"{a.algo} — GRiD vs baselines ({a.base})"
     if a.mode == "latency":
