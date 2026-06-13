@@ -1,0 +1,96 @@
+{
+  "autotune_N": 256,
+  "bases": {
+    "fixed": {
+      "aba": {
+        "threads": 320,
+        "tier": "shared",
+        "us_at_optimal": 519.21
+      },
+      "crba": {
+        "threads": 48,
+        "tier": "shared",
+        "us_at_optimal": 232.85
+      },
+      "ee_pose": {
+        "threads": 224,
+        "tier": "shared",
+        "us_at_optimal": 13.59
+      },
+      "ee_pose_gradient": {
+        "threads": 96,
+        "tier": "lite",
+        "us_at_optimal": 51.36
+      },
+      "ee_pose_hessian": {
+        "threads": 192,
+        "tier": "minimal",
+        "us_at_optimal": 463.67
+      },
+      "fd": {
+        "threads": 320,
+        "tier": "lite",
+        "us_at_optimal": 646.19
+      },
+      "fd_du": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 1141.32
+      },
+      "fdsva_so": {
+        "threads": 384,
+        "tier": "shared",
+        "us_at_optimal": 25223.88
+      },
+      "id": {
+        "threads": 80,
+        "tier": "shared",
+        "us_at_optimal": 51.49
+      },
+      "id_du": {
+        "threads": 64,
+        "tier": "shared",
+        "us_at_optimal": 308.12
+      },
+      "idsva_so": {
+        "threads": 384,
+        "tier": "shared",
+        "us_at_optimal": 5378.02
+      },
+      "idsva_so_body_frame": {
+        "threads": 384,
+        "tier": "shared",
+        "us_at_optimal": 5389.02
+      },
+      "idsva_so_world_frame": {
+        "threads": 384,
+        "tier": "minimal",
+        "us_at_optimal": 5051.84
+      },
+      "integrator": {
+        "threads": 192,
+        "tier": "minimal",
+        "us_at_optimal": 329.56
+      },
+      "integrator_gradient": {
+        "threads": 256,
+        "tier": "minimal",
+        "us_at_optimal": 1281.87
+      },
+      "integrator_with_gradient": {
+        "threads": 192,
+        "tier": "minimal",
+        "us_at_optimal": 1307.58
+      },
+      "minv": {
+        "threads": 448,
+        "tier": "shared",
+        "us_at_optimal": 461.07
+      }
+    }
+  },
+  "cuda_arch": "sm_120",
+  "gpu": "rtx5090_sm120",
+  "gpu_name": "NVIDIA GeForce RTX 5090",
+  "source": "GRiD autotune sweep 2026-06-13"
+}

@@ -1,0 +1,183 @@
+{
+  "autotune_N": 256,
+  "bases": {
+    "fixed": {
+      "aba": {
+        "threads": 128,
+        "tier": "shared",
+        "us_at_optimal": 16.05
+      },
+      "crba": {
+        "threads": 96,
+        "tier": "shared",
+        "us_at_optimal": 11.68
+      },
+      "ee_pose": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 6.92
+      },
+      "ee_pose_gradient": {
+        "threads": 128,
+        "tier": "lite",
+        "us_at_optimal": 15.33
+      },
+      "ee_pose_hessian": {
+        "threads": 128,
+        "tier": "lite",
+        "us_at_optimal": 13.62
+      },
+      "fd": {
+        "threads": 128,
+        "tier": "lite",
+        "us_at_optimal": 15.4
+      },
+      "fd_du": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 30.06
+      },
+      "fdsva_so": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 90.64
+      },
+      "id": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 11.47
+      },
+      "id_du": {
+        "threads": 128,
+        "tier": "shared",
+        "us_at_optimal": 21.98
+      },
+      "idsva_so": {
+        "threads": 352,
+        "tier": "lite",
+        "us_at_optimal": 48.38
+      },
+      "idsva_so_body_frame": {
+        "threads": 352,
+        "tier": "lite",
+        "us_at_optimal": 48.37
+      },
+      "idsva_so_world_frame": {
+        "threads": 64,
+        "tier": "shared",
+        "us_at_optimal": 121.81
+      },
+      "integrator": {
+        "threads": 112,
+        "tier": "minimal",
+        "us_at_optimal": 24.1
+      },
+      "integrator_gradient": {
+        "threads": 128,
+        "tier": "lite",
+        "us_at_optimal": 32.95
+      },
+      "integrator_with_gradient": {
+        "threads": 192,
+        "tier": "lite",
+        "us_at_optimal": 33.15
+      },
+      "minv": {
+        "threads": 128,
+        "tier": "lite",
+        "us_at_optimal": 13.37
+      }
+    },
+    "floating": {
+      "aba": {
+        "threads": 128,
+        "tier": "shared",
+        "us_at_optimal": 30.44
+      },
+      "crba": {
+        "threads": 160,
+        "tier": "lite",
+        "us_at_optimal": 12.11
+      },
+      "ee_pose": {
+        "threads": 384,
+        "tier": "minimal",
+        "us_at_optimal": 21.42
+      },
+      "ee_pose_gradient": {
+        "threads": 80,
+        "tier": "shared",
+        "us_at_optimal": 30.78
+      },
+      "ee_pose_hessian": {
+        "threads": 256,
+        "tier": "minimal",
+        "us_at_optimal": 36.97
+      },
+      "fd": {
+        "threads": 96,
+        "tier": "shared",
+        "us_at_optimal": 32.01
+      },
+      "fd_du": {
+        "threads": 224,
+        "tier": "minimal",
+        "us_at_optimal": 60.4
+      },
+      "fdsva_so": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 417.31
+      },
+      "id": {
+        "threads": 128,
+        "tier": "shared",
+        "us_at_optimal": 16.23
+      },
+      "id_du": {
+        "threads": 192,
+        "tier": "lite",
+        "us_at_optimal": 43.38
+      },
+      "idsva_so": {
+        "threads": 96,
+        "tier": "shared",
+        "us_at_optimal": 245.88
+      },
+      "idsva_so_body_frame": {
+        "threads": 64,
+        "tier": "minimal",
+        "us_at_optimal": 6133.25
+      },
+      "idsva_so_world_frame": {
+        "threads": 96,
+        "tier": "shared",
+        "us_at_optimal": 245.95
+      },
+      "integrator": {
+        "threads": 128,
+        "tier": "lite",
+        "us_at_optimal": 34.98
+      },
+      "integrator_gradient": {
+        "threads": 224,
+        "tier": "lite",
+        "us_at_optimal": 53.5
+      },
+      "integrator_with_gradient": {
+        "threads": 224,
+        "tier": "lite",
+        "us_at_optimal": 55.9
+      },
+      "minv": {
+        "threads": 128,
+        "tier": "shared",
+        "us_at_optimal": 22.41
+      }
+    }
+  },
+  "cuda_arch": "sm_120",
+  "gpu": "rtx5090_sm120",
+  "gpu_name": "NVIDIA GeForce RTX 5090",
+  "source": "GRiD autotune sweep 2026-06-13"
+}
