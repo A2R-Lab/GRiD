@@ -600,12 +600,14 @@ class TorchRobotHandle:
 
     @property
     def threads_per_block(self) -> int:
-        """Current per-block thread count used by kernel launches."""
+        """Active global threads-per-block override (``-1`` = per-algo autotuned
+        default baked into ``grid.cuh``; ``>= 1`` = a forced global override)."""
         return self._base.threads_per_block
 
     def set_threads_per_block(self, n: int) -> None:
-        """Override the per-block thread count for all subsequent kernel launches
-        issued through the underlying .so. Default: :py:attr:`max_perf_level_threads`."""
+        """Force a single global per-block thread count for all subsequent kernel
+        launches issued through the underlying .so. By default each algorithm uses
+        its own autotuned per-algo thread count; ``n >= 1`` overrides that."""
         self._base.set_threads_per_block(n)
 
     # ─── output convention (mjx parity) ──────────────────────────────────

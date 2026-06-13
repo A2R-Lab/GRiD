@@ -471,12 +471,20 @@ class RobotHandle:
 
     @property
     def threads_per_block(self) -> int:
-        """Current per-block thread count used by kernel launches."""
+        """Active global threads-per-block override.
+
+        Returns ``-1`` when no override is set, meaning each algorithm
+        launches at its own autotuned ``launch_cfg<ALGO>::THREADS`` baked
+        into ``grid.cuh`` (the per-algo default that fixes the FFI
+        thread-default pathology). A value ``>= 1`` is a global override
+        forced via :py:meth:`set_threads_per_block` that applies to every
+        algorithm. Do not assume this is a positive block size.
+        """
         return self._runner.threads_per_block
 
     def set_threads_per_block(self, n: int) -> None:
-        """Override the per-block thread count for all subsequent kernel
-        launches issued through this handle.
+        """Force a single global per-block thread count for all subsequent
+        kernel launches issued through this handle.
 
         The codegen does block-cooperative compute: each block handles one
         timestep with its threads cooperating via block-stride loops.
@@ -484,7 +492,9 @@ class RobotHandle:
         block size ``n >= 1`` (up to the per-block max, 1024 on current
         GPUs) is valid; smaller sizes are correct but slower.
 
-        Default: :py:attr:`max_perf_level_threads`.
+        By default (no override) each algorithm uses its own autotuned
+        per-algo thread count baked into ``grid.cuh``. Passing ``n >= 1``
+        overrides that for every algorithm.
         """
         self._runner.set_threads_per_block(int(n))
 
