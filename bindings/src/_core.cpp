@@ -299,12 +299,13 @@ public:
     int threads_per_block() const { return fn_threads_per_block_(); }
     void set_threads_per_block(int n) {
         // Override the per-block thread count for all subsequent kernel
-        // launches. Default is MAX_PERF_LEVEL_THREADS; the codegen no longer
-        // pins launch_bounds (cuBLASDx removed in v2.0), so any positive
-        // n that fits per-block (≤1024 on current GPUs) is valid.
-        if (n < 1) {
+        // launches. Default is the per-algo autotuned launch_cfg<ALGO>::THREADS;
+        // n==0 resets to that autotuned default, n>=1 forces one count for all
+        // algos. The codegen no longer pins launch_bounds (cuBLASDx removed in
+        // v2.0), so any n that fits per-block (≤1024 on current GPUs) is valid.
+        if (n < 0) {
             throw std::invalid_argument(
-                "set_threads_per_block: n must be >= 1, got " + std::to_string(n));
+                "set_threads_per_block: n must be >= 0 (0 resets to autotuned default), got " + std::to_string(n));
         }
         int rc = fn_set_threads_per_block_(n);
         if (rc != 0) {
