@@ -34,7 +34,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-NS = [16, 32, 64, 128, 256]
+NS = [16, 32, 64, 128, 256, 1024]
 # Palette matched to the example figure.
 C_COMPUTE = "#4472C4"   # GRiD compute (blue)
 C_IO      = "#BFBFBF"   # I/O overhead (gray)

@@ -42,7 +42,7 @@ import time
 import numpy as np
 
 TEST_ITERS  = int(os.environ.get("BENCH_TEST_ITERS", "500"))
-BATCH_SIZES = [16, 32, 64, 128, 256]
+BATCH_SIZES = [16, 32, 64, 128, 256, 1024]
 N_WARMUP_PASSES = 3
 
 # Select the torch device before timing. BARD advertises CPU + CUDA; the

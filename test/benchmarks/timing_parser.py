@@ -34,7 +34,7 @@ _PIN_META_END   = re.compile(r"=== END PINOCCHIO METADATA ===")
 _PIN_META_LINE  = re.compile(r"^(?P<algo>\S+)\s+codegen:\s+(?P<val>true|false|null)$", re.IGNORECASE)
 
 # Batch sizes used in timeGRiD and timePinocchio
-BATCH_SIZES = [16, 32, 64, 128, 256]
+BATCH_SIZES = [16, 32, 64, 128, 256, 1024]
 
 # ---------------------------------------------------------------------------
 # Label → JSON key mapping

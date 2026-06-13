@@ -36,7 +36,7 @@ ALGO_SECTIONS: dict[str, list[str]] = _build_sections()
 
 ROBOTS_DISPLAY = ["iiwa14", "go2", "g1", "h1_2"]
 BASES = ["fixed", "floating"]
-BATCH_SIZES = [16, 32, 64, 128, 256]
+BATCH_SIZES = [16, 32, 64, 128, 256, 1024]
 
 NOTE_SECOND_ORDER = (
     "> **Note (IDSVA_SO)**: Pinocchio's IDSVA_SO computes a rank-3 nv×nv×nv tensor on CPU "

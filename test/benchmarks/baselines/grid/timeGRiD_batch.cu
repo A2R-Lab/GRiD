@@ -266,12 +266,16 @@ __host__ void run_batch_timings(bool floating_base, cudaStream_t *streams, grid:
     run_batch_at<T,TEST_ITERS>(floating_base, 64, streams, m, d);
     run_batch_at<T,TEST_ITERS>(floating_base, 128, streams, m, d);
     run_batch_at<T,TEST_ITERS>(floating_base, 256, streams, m, d);
+    run_batch_at<T,TEST_ITERS>(floating_base, 1024, streams, m, d);
 #endif
 }
 
 int main(int argc, const char **argv){
     bool floating_base = parse_floating_base_arg(argc, argv);
-    run_all_tests<float, 256>(floating_base, [&](cudaStream_t *streams, grid::robotModel<float> *m, grid::gridData<float> *d){
+    // MAX_TIMESTEPS sizes the device buffers (d_q_qd_u etc. + gridData) — must be
+    // >= the largest batch N timed below (now 1024), or N=1024 launches read/write
+    // out of bounds.
+    run_all_tests<float, 1024>(floating_base, [&](cudaStream_t *streams, grid::robotModel<float> *m, grid::gridData<float> *d){
         run_batch_timings<float, TEST_ITERS_GLOBAL>(floating_base, streams, m, d);
     });
     return 0;

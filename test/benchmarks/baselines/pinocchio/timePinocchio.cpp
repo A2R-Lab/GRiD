@@ -1358,6 +1358,7 @@ void run_all_tests(std::string urdf_filepath, bool floating_base, std::string fr
         test<T,TEST_ITERS,CPU_THREADS,64>(urdf_filepath, floating_base, frame_name, enabled_algo);
         test<T,TEST_ITERS,CPU_THREADS,128>(urdf_filepath, floating_base, frame_name, enabled_algo);
         test<T,TEST_ITERS,CPU_THREADS,256>(urdf_filepath, floating_base, frame_name, enabled_algo);
+        test<T,TEST_ITERS,CPU_THREADS,1024>(urdf_filepath, floating_base, frame_name, enabled_algo);
     #endif
 }
 
