@@ -533,7 +533,13 @@ def _build_grid_binaries(grid_columns, robots, bases, tiers, *, build_jobs,
     if not tasks:
         return
     cores = os.cpu_count() or 4
-    per_task_workers = max(1, cores // max(1, build_jobs))
+    # GRID_COMPILE_WORKERS overrides the per-cell TU-compile parallelism. The big
+    # monolithic single_main + batch_main TUs for large robots (g1/h1_2 SO) use
+    # ~24-36 GB of cicc EACH; compiling them concurrently exhausts a 62 GB box.
+    # Set GRID_COMPILE_WORKERS=1 (with --build-jobs 1) to serialize to ONE big
+    # compile at a time (~36 GB peak = safe). See [[feedback_build_ram_so_compiles]].
+    _cw_env = os.environ.get("GRID_COMPILE_WORKERS", "")
+    per_task_workers = int(_cw_env) if _cw_env.strip() else max(1, cores // max(1, build_jobs))
     print(f"[{ts()}] === BUILD phase: {len(tasks)} GRiD binaries, {build_jobs} parallel "
           f"(compile-workers={per_task_workers} each); timing stays serial ===")
 

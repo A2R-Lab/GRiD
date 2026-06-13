@@ -18,15 +18,19 @@ set -uo pipefail
 cd /home/plancher/Desktop/GRiD
 export PATH=/usr/local/cuda/bin:$PATH
 BUILD_JOBS="${1:-4}"
+# A1B_ROBOTS env overrides the robot set. NOTE: h1_2's SO monolithic compile uses
+# ~36 GB RAM (single cicc) — exclude it unless build-jobs=1 + the box has the RAM,
+# or until the subset-timing harness (B7) lets us build it dynamics-only.
+ROBOTS="${A1B_ROBOTS:-iiwa14 go2 g1 h1_2}"
 OUTDIR="test/benchmarks/results/a1b_sweep_$(date +%Y%m%d_%H%M)"
 mkdir -p "$OUTDIR"
 
-echo "=== A1b sweep START $(date)  build_jobs=$BUILD_JOBS  outdir=$OUTDIR ==="
+echo "=== A1b sweep START $(date)  build_jobs=$BUILD_JOBS  robots=[$ROBOTS]  outdir=$OUTDIR ==="
 echo "GPU: $(nvidia-smi --query-gpu=name,memory.used --format=csv,noheader 2>/dev/null)"
 
 .venv/bin/python test/benchmarks/run_multi_version.py \
     --columns glass pinocchio \
-    --robots iiwa14 go2 g1 h1_2 \
+    --robots $ROBOTS \
     --bases fixed floating \
     --autotune-threads \
     --tiers shared lite minimal \
@@ -35,7 +39,7 @@ echo "GPU: $(nvidia-smi --query-gpu=name,memory.used --format=csv,noheader 2>/de
 echo "=== sweep exit code: $? at $(date) ==="
 
 echo "=== collect_kernel_limits ==="
-for r in iiwa14 go2 g1 h1_2; do for b in fixed floating; do
+for r in $ROBOTS; do for b in fixed floating; do
   .venv/bin/python test/benchmarks/collect_kernel_limits.py --robot "$r" --base "$b" --no-recompile || echo "WARN limits $r $b"
 done; done
 
