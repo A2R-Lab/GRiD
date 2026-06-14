@@ -191,11 +191,53 @@ def plot_summary(autotune, results_dirs, algos, base, robots, title, out):
     fig.savefig(out, dpi=150, bbox_inches="tight")
     print(f"[wrote {out}]")
 
+def plot_layers(autotune, glass_json, bindings_dir, algos, base, robots, n, title, out):
+    """GRiD's THREE measurement layers per (robot, algo) at batch n: L1 compute-only
+    (autotuned, GPU-resident) · L2 C++ +transfer (grid_glass with_mem) · L3 jax-wrapper
+    compute · L3 jax-wrapper +transfer (grid_rbd binding). The 'what an adopter pays at each
+    layer' transparency figure. Prefer value/gradient algos (monotonic); huge-output SO algos
+    are non-monotonic (L2's nv^3 D2H > L3's H2D-only with_mem) — better shown in the with-mem
+    two-regime analysis, not here."""
+    import importlib.util
+    here = Path(__file__).resolve().parent
+    spec = importlib.util.spec_from_file_location("ac", here/"analyze_competitive.py")
+    ac = importlib.util.module_from_spec(spec); spec.loader.exec_module(ac)
+    L1 = ac.load_grid(autotune)                       # {(robot,base,canon_algo): compute_us}
+    glass = json.load(open(glass_json))["results"]
+    def L2(r, a):
+        return _num(glass.get(r,{}).get(base,{}).get("grid_glass",{}).get(a,{}).get(f"batch_{n}_with_mem_us"))
+    def L3(r, a, kind):
+        try:
+            c = json.load(open(Path(bindings_dir)/f"{r}_{base}_grid_bindings.json"))["results"][r][base]["grid_bindings"][a]
+            return _num(c.get(f"batch_{n}_{kind}_us"))
+        except (OSError, KeyError, TypeError):
+            return None
+    labels = ["L1 compute-only\n(GPU-resident)", "L2 C++ +transfer", "L3 jax-wrapper\ncompute", "L3 jax-wrapper\n+transfer"]
+    colors = ["#4472C4", "#8FAADC", "#ED7D31", "#F4B183"]
+    fig, axes = plt.subplots(1, len(algos), figsize=(4.4*len(algos), 4.6), squeeze=False); axes = axes[0]
+    for ax, a in zip(axes, algos):
+        x = np.arange(len(robots)); w = 0.2; ca = ac.CANON.get(a, a)
+        for i, (lab, col) in enumerate(zip(labels, colors)):
+            vals = [{0: L1.get((r,base,ca)), 1: L2(r,a), 2: L3(r,a,"compute_only"), 3: L3(r,a,"with_mem")}[i] for r in robots]
+            ax.bar(x+(i-1.5)*w, [v or np.nan for v in vals], w, color=col, label=lab if ax is axes[0] else None)
+        ax.set_yscale("log"); ax.set_xticks(x); ax.set_xticklabels(robots); ax.set_title(a, fontsize=11)
+        ax.grid(axis="y", ls=":", alpha=0.4); ax.spines[["top","right"]].set_visible(False)
+    axes[0].set_ylabel(f"Per-batch time @ N={n} (µs, log)")
+    h,l = axes[0].get_legend_handles_labels()
+    fig.legend(h, l, loc="upper center", ncol=4, frameon=False, bbox_to_anchor=(0.5,1.02), fontsize=8)
+    fig.suptitle(title, y=1.08, fontsize=12)
+    fig.tight_layout(rect=[0,0,1,0.92])
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=150, bbox_inches="tight"); print(f"[wrote {out}]")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["latency", "compete", "summary"])
+    ap.add_argument("mode", choices=["latency", "compete", "summary", "layers"])
     ap.add_argument("--input", help="unified multi_version json (latency/compete modes)")
-    ap.add_argument("--autotune", help="autotune_best json (summary mode = GRiD)")
+    ap.add_argument("--autotune", help="autotune_best json (summary/layers mode = GRiD L1)")
+    ap.add_argument("--glass", help="unified glass json (layers mode = GRiD L2 with-mem)")
+    ap.add_argument("--bindings-dir", help="dir with <robot>_<base>_grid_bindings.json (layers mode = GRiD L3)")
     ap.add_argument("--results", nargs="+", default=[], help="competitor result dirs (summary mode)")
     ap.add_argument("--algo")
     ap.add_argument("--algos", nargs="+", default=["inverse_dynamics","forward_dynamics","crba"])
@@ -210,6 +252,10 @@ def main():
     if a.mode == "summary":
         title = a.title or f"GRiD vs competitors @ N=256 ({a.base})"
         plot_summary(a.autotune, a.results, a.algos, a.base, a.robots, title, a.out)
+        return
+    if a.mode == "layers":
+        title = a.title or f"GRiD's three measurement layers @ N={a.n} ({a.base}) — compute → +transfer → +python wrapper"
+        plot_layers(a.autotune, a.glass, a.bindings_dir, a.algos, a.base, a.robots, a.n, title, a.out)
         return
     data = json.load(open(a.input))
     title = a.title or f"{a.algo} — GRiD vs baselines ({a.base})"
