@@ -159,6 +159,30 @@ per-call and is thread-safe, so it's safe to mix with pinocchio-convention calls
 Today the **value** methods (id/fd/aba/crba/minv) honor mujoco mode; the derivative/second-order
 surfaces raise a clear error in mujoco mode (use pinocchio and transform).
 
+## Performance: the block size is tuned for *your* launch path + use case
+
+GRiD picks a per-algorithm CUDA block size (threads-per-block) by autotuning. The key thing to
+understand: **the optimal block size is not a property of the kernel alone — it depends on the
+launch path AND how you use it.** The C++/host autotune optimizes *pipelined throughput*; the
+python bindings launch the same kernel through the jax/torch **FFI** path, and for the
+**batch-to-land** use case (fire one batched launch of N, wait for all N to land — the control /
+trajectory-opt use case) that path has a *different* optimum. On iiwa14 `fd` the host path is
+fastest at 128 threads but the FFI path is fastest at ~768 — the same kernel, ~1.6× apart.
+
+- The bindings **ship FFI-tuned defaults** (the `ffi_bases` profile in
+  `launch_configs/<robot>/<gpu>.json`, baked into the `.so`). You get the FFI-fast path for free
+  on the robots/GPUs we tuned (per-algo fallback to the host pick for anything un-tuned).
+- **Run the autotune for your own robot / GPU / use case** — there is no single "true" block size:
+  ```bash
+  python test/benchmarks/autotune_ffi.py --robot <robot> --base both   # writes ffi_bases, then rebuild the binding
+  ```
+- **Override at runtime** without rebuilding: `handle.set_threads_per_block(n)` forces `n` threads
+  for every algo (e.g. to A/B a count, or tune for a non-default batch size). `-1` / default uses
+  the baked per-algo config.
+- A wrapper call is still a few µs of jax/XLA dispatch slower than the raw kernel even at the best
+  block size — that **dispatch tax** is fixed per call, so stay GPU-resident and `jit`/`capture` to
+  amortize it (see Do/Don't below). Threads fix the kernel regime; residency fixes the dispatch tax.
+
 ## Do / Don't
 
 - **Do** `device_put` inputs once and keep outputs as device arrays/tensors across calls.

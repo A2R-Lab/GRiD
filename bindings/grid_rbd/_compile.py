@@ -146,9 +146,16 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # per-algo {tier,threads}; without this it MISSED and fell back to conservative
     # defaults. An explicit launch_config_robot option overrides (e.g. custom robot ids).
     launch_config_robot = options.get("launch_config_robot") or _resolve_launch_config_robot(urdf_path)
+    # The binding IS the jax/torch FFI launch path, whose per-algo thread optimum
+    # differs from the C++/host one (the SAME kernel: e.g. iiwa14 fd host-best=128 but
+    # FFI-best=768 for batch-to-land). Bake the "ffi" profile (ffi_bases, autotune_ffi.py)
+    # so adopters get the FFI-fast config by default; per-algo fallback to host `bases`
+    # keeps un-FFI-tuned algos on the safe pick. Override with launch_config_profile.
+    launch_config_profile = options.get("launch_config_profile", "ffi")
     cg = GRiDCodeGenerator(robot, debug_mode, FILE_NAMESPACE=file_namespace,
                            dtype=codegen_dtype, USE_JOINT_DYNAMICS=use_joint_dynamics,
-                           LAUNCH_CONFIG_ROBOT=launch_config_robot)
+                           LAUNCH_CONFIG_ROBOT=launch_config_robot,
+                           LAUNCH_CONFIG_PROFILE=launch_config_profile)
 
     # D.4 / Phase 5: runtime-mutable inertia table. options["runtime_inertia"]
     # (default absent/False) gates the codegen `runtime_inertia` flag (emits the

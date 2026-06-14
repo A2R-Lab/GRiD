@@ -293,6 +293,24 @@ def register_robot(
         if not algos:
             raise ValueError("algorithm_list must name at least one algorithm or profile")
         code_options["algorithm_list"] = sorted(set(algos))
+    # Launch-config bake (A1b + FFI autotune): the binding launches via the jax/torch
+    # FFI path, so it bakes the "ffi" profile (ffi_bases) by default — see
+    # _compile.generate_grid_cuh + GRiDCodeGenerator.load_launch_config. The per-algo
+    # {tier,threads} that get baked are NOT derivable from urdf_bytes, so without these
+    # the cache would NOT invalidate when launch_configs/ changes (e.g. after re-running
+    # autotune_ffi.py) or when the profile differs. Fold BOTH the profile and the
+    # RESOLVED config values into the cache key so a re-autotune rebuilds the .so.
+    code_options["launch_config_profile"] = "ffi"
+    try:
+        from GRiDCodeGenerator.GRiDCodeGenerator import load_launch_config
+        from grid_rbd._compile import _resolve_launch_config_robot
+        _lc_robot = _resolve_launch_config_robot(str(urdf_p) if urdf_path is not None else name)
+        _lc = load_launch_config(_lc_robot, bool(floating_base), profile="ffi")
+        if _lc:
+            # canonical, json-safe fingerprint of the baked per-algo {tier,threads}
+            code_options["launch_config"] = {k: dict(v) for k, v in sorted(_lc.items())}
+    except Exception:
+        pass  # un-resolvable config -> conservative fallback bakes; key stays urdf-derived
     cache_key = compute_cache_key(urdf_bytes, code_options, cuda_arch)
     entry_dir = store_dir(cache_dir, cache_key)
     so_path = entry_dir / "robot.so"
