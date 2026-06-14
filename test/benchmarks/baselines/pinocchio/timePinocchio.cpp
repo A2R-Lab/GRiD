@@ -1145,7 +1145,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                     clock_gettime(CLOCK_MONOTONIC,&end);
                     times.push_back(time_delta_us_timespec(start,end));
                 }
-                printf("[N:%d]: ID codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("[N:%d]: INVERSE_DYNAMICS codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
                 printf("----------------------------------------\n");
             }
 
@@ -1180,7 +1180,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                     clock_gettime(CLOCK_MONOTONIC,&end);
                     times.push_back(time_delta_us_timespec(start,end));
                 }
-                printf("[N:%d]: FD codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("[N:%d]: FORWARD_DYNAMICS codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
                 printf("----------------------------------------\n");
             }
 
@@ -1203,7 +1203,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                     clock_gettime(CLOCK_MONOTONIC,&end);
                     times.push_back(time_delta_us_timespec(start,end));
                 }
-                printf("[N:%d]: ID_DU codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("[N:%d]: INVERSE_DYNAMICS_GRADIENT codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
                 printf("----------------------------------------\n");
             }
 
@@ -1217,7 +1217,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                     clock_gettime(CLOCK_MONOTONIC,&end);
                     times.push_back(time_delta_us_timespec(start,end));
                 }
-                printf("[N:%d]: FD_DU codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("[N:%d]: FORWARD_DYNAMICS_GRADIENT codegen: ",NUM_TIME_STEPS); printStats(&times); times.clear();
                 printf("----------------------------------------\n");
             }
 #endif // HAVE_CPPADCG
@@ -1229,7 +1229,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                     clock_gettime(CLOCK_MONOTONIC,&end);
                     times.push_back(time_delta_us_timespec(start,end));
                 }
-                printf("[N:%d]: ID direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("[N:%d]: INVERSE_DYNAMICS direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
                 printf("----------------------------------------\n");
             }
 
@@ -1273,7 +1273,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                     clock_gettime(CLOCK_MONOTONIC,&end);
                     times.push_back(time_delta_us_timespec(start,end));
                 }
-                printf("[N:%d]: ID_DU direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("[N:%d]: INVERSE_DYNAMICS_GRADIENT direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
                 printf("----------------------------------------\n");
             }
 
@@ -1284,7 +1284,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                     clock_gettime(CLOCK_MONOTONIC,&end);
                     times.push_back(time_delta_us_timespec(start,end));
                 }
-                printf("[N:%d]: FD_DU direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("[N:%d]: FORWARD_DYNAMICS_GRADIENT direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
                 printf("----------------------------------------\n");
             }
 
@@ -1295,7 +1295,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                     clock_gettime(CLOCK_MONOTONIC,&end);
                     times.push_back(time_delta_us_timespec(start,end));
                 }
-                printf("[N:%d]: EE_POSE direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("[N:%d]: END_EFFECTOR_POSE direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
                 printf("----------------------------------------\n");
             }
             if(have_frame && is_algo_active(enabled_algo, "end_effector_pose_gradient")){
@@ -1305,7 +1305,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                     clock_gettime(CLOCK_MONOTONIC,&end);
                     times.push_back(time_delta_us_timespec(start,end));
                 }
-                printf("[N:%d]: EE_POSE_GRADIENT direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("[N:%d]: END_EFFECTOR_POSE_GRADIENT direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
                 printf("----------------------------------------\n");
             }
             if(have_frame && is_algo_active(enabled_algo, "end_effector_pose_hessian")){
@@ -1315,7 +1315,7 @@ void test(std::string urdf_filepath, bool floating_base, std::string frame_name 
                     clock_gettime(CLOCK_MONOTONIC,&end);
                     times.push_back(time_delta_us_timespec(start,end));
                 }
-                printf("[N:%d]: EE_POSE_HESSIAN direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
+                printf("[N:%d]: END_EFFECTOR_POSE_HESSIAN direct: ",NUM_TIME_STEPS); printStats(&times); times.clear();
                 printf("----------------------------------------\n");
             }
 
