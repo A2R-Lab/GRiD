@@ -75,9 +75,14 @@ def _stats(times_us: np.ndarray) -> dict:
     }
 
 
-def _make_np(arity, n, nq, nv, rng):
-    """Random batched numpy inputs (host) for the requested arg arity."""
-    widths = {"q": nq, "v": nv, "a": nv, "u": nv}
+def _make_np(arity, n, nq, nv, rng, floating=False):
+    """Random batched numpy inputs (host) for the requested arg arity.
+
+    Floating base: GRiD packs every per-timestep input (q, qd, qacc/qfrc) into nq-wide
+    slots (stride = 3*NUM_JOINTS, NUM_JOINTS=nq), so qd/qacc/qfrc are nq-wide too — NOT nv.
+    Fixed base: nq==nv so this is identical."""
+    vw = nq if floating else nv
+    widths = {"q": nq, "v": vw, "a": vw, "u": vw}
     return tuple(rng.standard_normal((n, widths[k])).astype(np.float32) for k in arity)
 
 
@@ -121,6 +126,9 @@ def main() -> None:
     ap.add_argument("--output", type=Path, default=None)
     ap.add_argument("--iters", type=int, default=TEST_ITERS)
     ap.add_argument("--max-batch", type=int, default=1024)
+    ap.add_argument("--ffi-thread-sweep", action="store_true",
+                    help="re-autotune threads for the FFI launch path (default off: use the "
+                         "baked per-algo autotuned config = 'call it the way it was tuned')")
     ap.add_argument("--algos", nargs="+", default=None,
                     help="subset of algo names (default: all)")
     args = ap.parse_args()
@@ -159,7 +167,7 @@ def main() -> None:
     print(f"  [grid_bindings] {name} ready ({time.perf_counter()-t0:.1f}s), "
           f"nq={handle.num_joints} nv={handle.num_vel} max_batch={handle.max_batch}")
 
-    nq, nv = handle.num_joints, handle.num_vel
+    nq, nv = handle.num_joints, handle.num_vel   # num_joints IS nq (nv+1 for floating)
     want = set(args.algos) if args.algos else None
     rng = np.random.default_rng(0)
 
@@ -183,22 +191,31 @@ def main() -> None:
         fn = jax.jit(method)
         per_n: dict = {}
         ok = True
-        # FFI-regime thread autotune for THIS algo, at a representative batch, BEFORE timing.
-        probe_n = min(256, args.max_batch)
-        probe_args = tuple(jnp.asarray(a) for a in _make_np(arity, probe_n, nq, nv, rng))
-        jax.block_until_ready(fn(*probe_args))                     # JIT compile once
-        best_threads, best_us = _pick_threads(handle, fn, probe_args, THREAD_CANDIDATES)
-        if best_threads is not None:
-            handle.set_threads_per_block(best_threads)
-            print(f"  [grid_bindings] {algo:28s} FFI threads={best_threads} "
-                  f"(probe N={probe_n}: {best_us:.1f}us)")
-        per_n["ffi_threads"] = best_threads
+        # DEFAULT (P1.1b): the binding bakes each algo's AUTOTUNED per-algo {tier, threads}
+        # (launch_cfg<ALGO>) via the stem-resolved launch_configs, so the default launch IS the
+        # autotuned config — "the binding calls each kernel the way it was autotuned". We report
+        # THAT. (The jax FFI launch path has a slightly different thread optimum than the C++ path
+        # it was tuned on; a binding-path FFI re-autotune could squeeze further — opt-in with
+        # --ffi-thread-sweep, tracked as the FFI-autotune backlog.)
+        # handle defaults to threads_per_block=-1 (the baked per-algo autotuned config); no reset needed.
+        if args.ffi_thread_sweep:
+            probe_n = min(256, args.max_batch)
+            probe_args = tuple(jnp.asarray(a) for a in _make_np(arity, probe_n, nq, nv, rng, floating))
+            jax.block_until_ready(fn(*probe_args))                 # JIT compile once
+            best_threads, best_us = _pick_threads(handle, fn, probe_args, THREAD_CANDIDATES)
+            if best_threads is not None:
+                handle.set_threads_per_block(best_threads)
+                print(f"  [grid_bindings] {algo:28s} FFI-swept threads={best_threads} "
+                      f"(probe N={probe_n}: {best_us:.1f}us)")
+            per_n["ffi_threads"] = best_threads
+        else:
+            per_n["ffi_threads"] = handle.threads_per_block        # -1 = baked autotuned default
         for n in BATCH_SIZES:
             if n > args.max_batch:
                 continue
             try:
                 # ---- compute_only: device-resident args ----
-                np_args = _make_np(arity, n, nq, nv, rng)
+                np_args = _make_np(arity, n, nq, nv, rng, floating)
                 dev_args = tuple(jnp.asarray(a) for a in np_args)
                 jax.block_until_ready(fn(*dev_args))               # JIT compile (discard)
                 for _ in range(N_WARMUP_PASSES):
@@ -215,7 +232,7 @@ def main() -> None:
                     jax.block_until_ready(fn(*np_args))
                 wm = np.empty(args.iters)
                 for i in range(args.iters):
-                    fresh = _make_np(arity, n, nq, nv, rng)        # outside the timer
+                    fresh = _make_np(arity, n, nq, nv, rng, floating)        # outside the timer
                     t = time.perf_counter()
                     jax.block_until_ready(fn(*fresh))
                     wm[i] = (time.perf_counter() - t) * 1e6
