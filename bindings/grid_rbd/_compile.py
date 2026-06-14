@@ -47,6 +47,31 @@ _NVCC_DEFAULT_FLAGS = [
 ]
 
 
+def _resolve_launch_config_robot(urdf_path: str) -> str:
+    """Map a URDF filename stem to its launch_configs/<robot> key.
+
+    launch_configs/ is keyed by canonical robot id (iiwa14, go2, g1, h1_2), but the
+    URDF filename stem is often longer (iiwa14_primitive_collision, g1_29dof). Without
+    this, the binding looked up launch_configs/iiwa14_primitive_collision/ (a MISS) and
+    fell back to the conservative (TIER_SHARED, MAX_PERF_LEVEL_THREADS) default for every
+    algo — i.e. it never applied the autotuned per-algo {tier, threads}. Match the stem
+    exactly first, else by the longest launch_configs/<name> the stem starts with. Returns
+    the bare stem when nothing matches (an un-tuned robot stays on the safe fallback)."""
+    stem = Path(urdf_path).stem
+    try:
+        from GRiDCodeGenerator.GRiDCodeGenerator import _launch_configs_dir
+        lc = Path(_launch_configs_dir())
+        if (lc / stem).is_dir():
+            return stem
+        cands = [d.name for d in lc.iterdir()
+                 if d.is_dir() and (stem == d.name or stem.startswith(d.name))]
+        if cands:
+            return max(cands, key=len)  # longest = most specific match
+    except Exception:
+        pass
+    return stem
+
+
 def find_nvcc() -> str:
     nvcc = shutil.which("nvcc")
     if not nvcc:
@@ -115,11 +140,12 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # True, so a damped .so never collides with the historical no-op .so.
     use_joint_dynamics = bool(options.get("use_joint_dynamics", False))
     # A1b launch-config bake: the launch_configs/<robot>/<gpu>.json dir is keyed
-    # by the URDF FILENAME stem (e.g. "iiwa14", "go2", "g1"), which does NOT
-    # always equal the URDF <robot name=...> (go2_description, g1_29dof). Pass the
-    # stem explicitly so codegen resolves the autotuned per-algo {tier,threads}.
-    # An explicit launch_config_robot option overrides (e.g. custom robot ids).
-    launch_config_robot = options.get("launch_config_robot") or Path(urdf_path).stem
+    # by the CANONICAL robot id (e.g. "iiwa14", "go2", "g1"), which the URDF FILENAME
+    # stem often EXCEEDS (iiwa14_primitive_collision, g1_29dof). Resolve the stem to its
+    # launch_configs key (exact, else longest-prefix) so codegen bakes the autotuned
+    # per-algo {tier,threads}; without this it MISSED and fell back to conservative
+    # defaults. An explicit launch_config_robot option overrides (e.g. custom robot ids).
+    launch_config_robot = options.get("launch_config_robot") or _resolve_launch_config_robot(urdf_path)
     cg = GRiDCodeGenerator(robot, debug_mode, FILE_NAMESPACE=file_namespace,
                            dtype=codegen_dtype, USE_JOINT_DYNAMICS=use_joint_dynamics,
                            LAUNCH_CONFIG_ROBOT=launch_config_robot)
