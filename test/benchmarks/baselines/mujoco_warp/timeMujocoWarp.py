@@ -28,8 +28,14 @@ Algorithm coverage:
                           GRiD/Frax CRBA. Timed as the closest analog; verify the
                           output semantics before trusting the comparison.)
 NOT available (null): inverse_dynamics_gradient / forward_dynamics_gradient and
-    the SO algorithms — Warp kernels are not autodiff-traced the way MJX uses
-    jax.jacobian, so there is no drop-in batched dynamics-Jacobian call.
+    the SO algorithms. Warp ITSELF has autodiff (wp.Tape / wp.autograd.jacobian),
+    but mujoco_warp ships every module with wp.set_module_options(enable_backward=
+    False) (forward.py/inverse.py/support.py/... ~20 modules), so its kernels emit
+    NO adjoint code and wp.autograd.jacobian(mjw.forward, ...) raises "Kernel must
+    have backward pass enabled". A GPU finite-difference Jacobian (wp.autograd.
+    jacobian_fd, the mjd_transitionFD analogue) WOULD work without patching the
+    vendored package — left as a backlog option (the MJX adapter already provides
+    the GPU-autodiff derivative competitor bars). Intentional null, not an oversight.
 
 Usage:
     python timeMujocoWarp.py <mjcf_path> [T/F] [ee_body_name]
