@@ -93,15 +93,27 @@ def _host_tier_for(doc, base, key):
     return entry.get("tier", "shared")
 
 
-def autotune_base(robot, base, n, iters, warmup, want_algos):
+def autotune_base(robot, base, n, iters, warmup, want_algos, build_algos=None):
     import grid_rbd
     import grid_rbd.jax as grid_jax
 
     floating = base == "floating"
     urdf = get_urdf_path(robot)
     name = f"autotune_ffi_{robot}_{base}"
+    # RAM-safe subset build: big robots (g1 nv=35, h1_2 nv=75/81) blow a SINGLE
+    # nvcc process to 24-36GB when the SO kernels (idsva_so/fdsva_so) are in the
+    # .so. Pass --build-algos to compile ONLY a chosen set (deps pulled in by the
+    # codegen profile) so the build fits — e.g. tune the core/non-SO algos first
+    # and defer SO. When set we also only sweep what's built. None = full build.
+    precompile_kw = {}
+    if build_algos:
+        # algorithm_list (passed via a single tier override) re-keys the cache to its
+        # own subset .so (won't collide with the full build) and limits the nvcc memory
+        # footprint. Methods outside the subset simply won't exist on the handle and are
+        # skipped by the sweep loop below.
+        precompile_kw["tiers"] = [{"algorithm_list": list(build_algos)}]
     grid_rbd.precompile(name, urdf, floating_base=floating,
-                        max_batch_size=max(256, n), backends=("jax",))
+                        max_batch_size=max(256, n), backends=("jax",), **precompile_kw)
     handle = grid_jax.get_robot(name)
     nq, nv = handle.num_joints, handle.num_vel
     rng = np.random.default_rng(0)
@@ -170,7 +182,11 @@ def main():
     ap.add_argument("--iters", type=int, default=100, help="timed iters per thread count")
     ap.add_argument("--warmup", type=int, default=5)
     ap.add_argument("--gpu", default=LAUNCH_CONFIG_DEFAULT_GPU)
-    ap.add_argument("--algos", nargs="+", default=None, help="subset of algo symbols")
+    ap.add_argument("--algos", nargs="+", default=None, help="subset of algo symbols to SWEEP")
+    ap.add_argument("--build-algos", nargs="+", default=None,
+                    help="RAM-safe subset to BUILD into the .so (deps auto-pulled). Big robots "
+                         "(g1/h1_2) OOM a single nvcc when SO kernels are in the .so — build the "
+                         "core/non-SO set first and defer idsva_so/fdsva_so. Default = full build.")
     ap.add_argument("--dry-run", action="store_true", help="sweep + print, do not write")
     args = ap.parse_args()
 
@@ -178,7 +194,8 @@ def main():
     want = set(args.algos) if args.algos else None
     base_picks = {}
     for base in bases:
-        base_picks[base] = autotune_base(args.robot, base, args.n, args.iters, args.warmup, want)
+        base_picks[base] = autotune_base(args.robot, base, args.n, args.iters, args.warmup,
+                                         want, build_algos=args.build_algos)
 
     print("\n=== FFI picks (batch-to-land) ===")
     for base, picks in base_picks.items():
