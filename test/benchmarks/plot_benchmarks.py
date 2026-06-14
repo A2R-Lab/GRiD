@@ -38,7 +38,7 @@ NS = [16, 32, 64, 128, 256, 1024]
 # Palette matched to the example figure.
 C_COMPUTE = "#4472C4"   # GRiD compute (blue)
 C_IO      = "#BFBFBF"   # I/O overhead (gray)
-C_BASE    = "#4472C4"   # CPU baseline bars (same blue, no IO split)
+C_BASE    = "#A6A6A6"   # CPU baseline bars (gray, matching pinocchio in the summary fig)
 ORANGE    = "#ED7D31"
 GREEN     = "#548235"
 # Competitor bar colors for the grouped 'compete' figure.
