@@ -241,13 +241,25 @@ extern "C" int grid_rbd_inverse_dynamics(
     pack_q_qd_u(q, qd, nullptr, batch, nj);
     if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
+    // The non-mjx host wrapper carries a MUJOCO_OUTPUT template param ONLY for a
+    // floating non-mimic/skew robot (exactly when GRID_RBD_WITH_MUJOCO is defined),
+    // so the RESOURCE_TIER position shifts by one. Gate the trailing template args
+    // on that same macro to reach the per-algo autotuned tier on every robot shape.
     if (qdd_opt) {
         // Host wrapper copies h_qdd→d_qdd (NUM_JOINTS per timestep, contiguous).
         std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
-        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false>(
+#if defined(GRID_RBD_WITH_MUJOCO)
+        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
+#else
+        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
+#endif
             g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS>(), g_streams);
     } else {
-        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false>(
+#if defined(GRID_RBD_WITH_MUJOCO)
+        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
+#else
+        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
+#endif
             g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS>(), g_streams);
     }
 
@@ -293,7 +305,7 @@ extern "C" int grid_rbd_inverse_dynamics_mujoco(
     // Host wrapper copies h_qdd->d_qdd (NUM_JOINTS per timestep, contiguous).
     std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
     grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false,
-                           /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+                           /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -319,7 +331,11 @@ extern "C" int grid_rbd_minv(
     const int nv = grid::NUM_VEL;
     pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, nj);  // qd/u unused by minv
 
-    grid::minv<T, /*USE_COMPRESSED_MEM=*/false>(
+#if defined(GRID_RBD_WITH_MUJOCO)
+    grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(
+#else
+    grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(
+#endif
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_MINV>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -359,7 +375,7 @@ extern "C" int grid_rbd_minv_mujoco(
     pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, nj);  // qd/u unused by minv
 
     grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-               /*MUJOCO_OUTPUT=*/true>(
+               /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_MINV>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -386,7 +402,11 @@ extern "C" int grid_rbd_forward_dynamics(
     pack_q_qd_u(q, qd, u, batch, nj);
     if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
-    grid::forward_dynamics<T>(
+#if defined(GRID_RBD_WITH_MUJOCO)
+    grid::forward_dynamics<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(
+#else
+    grid::forward_dynamics<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(
+#endif
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -419,7 +439,7 @@ extern "C" int grid_rbd_forward_dynamics_mujoco(
     pack_q_qd_u(q, qd, u, batch, nj);
     if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
-    grid::forward_dynamics<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+    grid::forward_dynamics<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -446,7 +466,12 @@ extern "C" int grid_rbd_aba(
     pack_q_qd_u(q, qd, u, batch, nj);
     if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
-    grid::aba<T>(g_data, g_robot, gravity, batch,
+#if defined(GRID_RBD_WITH_MUJOCO)
+    grid::aba<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(
+#else
+    grid::aba<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(
+#endif
+        g_data, g_robot, gravity, batch,
                  dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_ABA>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -477,7 +502,7 @@ extern "C" int grid_rbd_aba_mujoco(
     pack_q_qd_u(q, qd, u, batch, nj);
     if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
-    grid::aba<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+    grid::aba<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_ABA>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -503,7 +528,12 @@ extern "C" int grid_rbd_crba(
     const int nv = grid::NUM_VEL;
     pack_q_qd_u(q, q, nullptr, batch, nj);  // qd/u unused
 
-    grid::crba<T>(g_data, g_robot, gravity, batch,
+#if defined(GRID_RBD_WITH_MUJOCO)
+    grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(
+#else
+    grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(
+#endif
+        g_data, g_robot, gravity, batch,
                   dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_CRBA>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -542,7 +572,7 @@ extern "C" int grid_rbd_crba_mujoco(
     pack_q_qd_u(q, q, nullptr, batch, nj);  // qd/u unused
 
     grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-               /*MUJOCO_OUTPUT=*/true>(
+               /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_CRBA>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -567,7 +597,11 @@ extern "C" int grid_rbd_end_effector_pose(
     const int nj = grid::NUM_JOINTS;
     pack_q_qd_u(q, q, nullptr, batch, nj);
 
-    grid::end_effector_pose<T, /*USE_COMPRESSED_MEM=*/false>(
+#if defined(GRID_RBD_WITH_MUJOCO)
+    grid::end_effector_pose<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
+#else
+    grid::end_effector_pose<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
+#endif
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -591,7 +625,7 @@ extern "C" int grid_rbd_end_effector_pose_mujoco(const T* q, T* ee_out, int batc
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
     grid::end_effector_pose<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                            /*MUJOCO_OUTPUT=*/true>(
+                            /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
@@ -661,7 +695,11 @@ extern "C" int grid_rbd_end_effector_pose_gradient(
     const int nv = grid::NUM_VEL;
     pack_q_qd_u(q, q, nullptr, batch, nj);
 
-    grid::end_effector_pose_gradient<T, /*USE_COMPRESSED_MEM=*/false>(
+#if defined(GRID_RBD_WITH_MUJOCO)
+    grid::end_effector_pose_gradient<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
+#else
+    grid::end_effector_pose_gradient<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
+#endif
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -686,7 +724,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(const T* q, T* dee_out
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
     grid::end_effector_pose_gradient<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                                     /*MUJOCO_OUTPUT=*/true>(
+                                     /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
@@ -720,13 +758,19 @@ extern "C" int grid_rbd_inverse_dynamics_gradient(
     // the qdd=0 overload.
     if (qdd_opt) {
         std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
-        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true,
-                                           /*USE_COMPRESSED_MEM=*/false>(
+#if defined(GRID_RBD_WITH_MUJOCO)
+        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
+#else
+        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
+#endif
             g_data, g_robot, gravity, batch,
             dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(), g_streams);
     } else {
-        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/false,
-                                           /*USE_COMPRESSED_MEM=*/false>(
+#if defined(GRID_RBD_WITH_MUJOCO)
+        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
+#else
+        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
+#endif
             g_data, g_robot, gravity, batch,
             dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(), g_streams);
     }
@@ -771,7 +815,7 @@ extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(
 
     std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
     grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false,
-                                    /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+                                    /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -801,7 +845,11 @@ extern "C" int grid_rbd_forward_dynamics_gradient(
     pack_q_qd_u(q, qd, u, batch, nj);
     if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
-    grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false>(
+#if defined(GRID_RBD_WITH_MUJOCO)
+    grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(
+#else
+    grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(
+#endif
         g_data, g_robot, gravity, batch,
         dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(), g_streams);
 
@@ -840,7 +888,7 @@ extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(
     if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
     grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                                    /*MUJOCO_OUTPUT=*/true>(
+                                    /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -872,7 +920,11 @@ extern "C" int grid_rbd_end_effector_pose_hessian(
     const int nv = grid::NUM_VEL;
     pack_q_qd_u(q, q, nullptr, batch, nj);
 
-    grid::end_effector_pose_hessian<T, /*USE_COMPRESSED_MEM=*/false>(
+#if defined(GRID_RBD_WITH_MUJOCO)
+    grid::end_effector_pose_hessian<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
+#else
+    grid::end_effector_pose_hessian<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
+#endif
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -897,7 +949,7 @@ extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(const T* q, T* d2ee_out
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
     grid::end_effector_pose_hessian<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                                    /*MUJOCO_OUTPUT=*/true>(
+                                    /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
@@ -1029,7 +1081,11 @@ extern "C" int grid_rbd_fdsva_so(
     const int nj = grid::NUM_JOINTS;
     pack_q_qd_u(q, qd, u, batch, nj);
 
-    grid::fdsva_so<T>(
+#if defined(GRID_RBD_WITH_MUJOCO)
+    grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(
+#else
+    grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(
+#endif
         g_data, g_robot, gravity, batch,
         dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FDSVA_SO>(), g_streams);
 
@@ -1055,7 +1111,7 @@ extern "C" int grid_rbd_fdsva_so_mujoco(const T* q, const T* qd, const T* u, T* 
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);
-    grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+    grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FDSVA_SO>(), g_streams);
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
@@ -1167,7 +1223,7 @@ extern "C" int grid_rbd_com_mujoco(const T* q, T* out, int batch) {
     if (batch > kMaxBatch) return 2;
     pack_q(q, batch, grid::NUM_JOINTS);
     grid::com<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-              /*MUJOCO_OUTPUT=*/true>(
+              /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
@@ -1186,7 +1242,7 @@ extern "C" int grid_rbd_ccrba_mujoco(const T* q, const T* qd, T* out, int batch)
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::ccrba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                /*MUJOCO_OUTPUT=*/true>(
+                /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
@@ -1205,7 +1261,7 @@ extern "C" int grid_rbd_energy_mujoco(const T* q, const T* qd, T* out, int batch
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::energy<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                 /*MUJOCO_OUTPUT=*/true>(
+                 /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
@@ -1725,7 +1781,7 @@ static void launch_integrator_host(int batch, T gravity, T dt) {
 #ifdef GRID_RBD_WITH_MUJOCO
 template <grid::IntegratorType IT>
 static void launch_integrator_host_mujoco(int batch, T gravity, T dt) {
-    grid::integrator<T, IT, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+    grid::integrator<T, IT, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR>::TIER>(
         g_data, g_robot, /*gravity=*/gravity,
         dt, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR>(), g_streams);
 }
