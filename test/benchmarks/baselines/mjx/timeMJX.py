@@ -19,6 +19,12 @@ import numpy as np
 # Configurable via env var (set by mjx/run.py's --test-iters flag).
 TEST_ITERS  = int(os.environ.get("BENCH_TEST_ITERS", "500"))
 BATCH_SIZES = [16, 32, 64, 128, 256, 1024]
+# Derivative (vmap(jacobian)) timing builds a SEPARATE giant XLA graph per batch
+# size; compiling it at N=1024 is intractable (minutes-to-wedged). The competitive
+# figures only need up to batch_256, so cap the derivative sweep here (override via
+# MJX_DERIV_BATCH_SIZES="16,256"). The value-function sweep still uses BATCH_SIZES.
+DERIV_BATCH_SIZES = [int(x) for x in
+                     os.environ.get("MJX_DERIV_BATCH_SIZES", "16,32,64,128,256").split(",") if x.strip()]
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +173,7 @@ def main() -> None:
     print("FD codegen: false")
     print("EE_POSE codegen: false")
     print("ID_DU codegen: false")
+    print("FD_DU codegen: false")
     print("=== END MJX METADATA ===")
 
     # ------------------------------------------------------------------
@@ -240,6 +247,26 @@ def main() -> None:
     except Exception as e:
         print(f"# Single Call INVERSE_DYNAMICS_GRADIENT skipped: {e}", file=sys.stderr)
 
+    # FD_DU (Jacobian of forward dynamics qacc w.r.t. q, v, qfrc_applied).
+    # d(qacc)/d(q,v,tau) via jax autodiff through mjx.forward — the mjx analogue of
+    # GRiD's analytic forward_dynamics_gradient (differentiate w.r.t. qfrc_applied,
+    # the generalized force = GRiD's tau, NOT ctrl which goes through the actuator).
+    try:
+        @jax.jit
+        def _fd_du_jit(d):
+            return jax.jacobian(
+                lambda qpos, qvel, qfrc: mjx.forward(
+                    mx, d.replace(qpos=qpos, qvel=qvel, qfrc_applied=qfrc)
+                ).qacc,
+                argnums=(0, 1, 2),
+            )(d.qpos, d.qvel, d.qfrc_applied)
+
+        _jit_and_warmup(_fd_du_jit, (dx_single,))
+        t = _time_device(_fd_du_jit, dx_single, n_iters=max(1, TEST_ITERS // 10))
+        print(f"Single Call FORWARD_DYNAMICS_GRADIENT {np.median(t):.4f}us")
+    except Exception as e:
+        print(f"# Single Call FORWARD_DYNAMICS_GRADIENT skipped: {e}", file=sys.stderr)
+
     # ------------------------------------------------------------------
     # Batch timing via vmap
     # ------------------------------------------------------------------
@@ -310,33 +337,68 @@ def main() -> None:
             except Exception as e:
                 print(f"# [N:{N}] {label} COMPUTE ONLY skipped: {e}", file=sys.stderr)
 
-    # ID_DU batch (fewer iters — expensive)
-    for N in BATCH_SIZES:
+    # ------------------------------------------------------------------
+    # Derivative (gradient) batch timing: id_du + fd_du, BOTH compute-only and
+    # with-memory — the mjx autodiff analogue of GRiD's analytic gradients. We
+    # emit WITH MEMORY too (was compute-only only) because the competitive
+    # analysis/plots read batch_256_with_mem_us; without it the gradient bars
+    # were null. vmap(jacobian(...)) is expensive, so fewer timed iters.
+    # ------------------------------------------------------------------
+    def _id_du_one(d):
+        return jax.jacobian(
+            lambda qpos, qvel, qacc: mjx.inverse(
+                mx, d.replace(qpos=qpos, qvel=qvel, qacc=qacc)
+            ).qfrc_inverse,
+            argnums=(0, 1, 2),
+        )(d.qpos, d.qvel, d.qacc)
+
+    def _fd_du_one(d):
+        return jax.jacobian(
+            lambda qpos, qvel, qfrc: mjx.forward(
+                mx, d.replace(qpos=qpos, qvel=qvel, qfrc_applied=qfrc)
+            ).qacc,
+            argnums=(0, 1, 2),
+        )(d.qpos, d.qvel, d.qfrc_applied)
+
+    # (label, per-sample jacobian fn, third-input field name) — id_du differentiates
+    # w.r.t. qacc, fd_du w.r.t. qfrc_applied (= GRiD's tau). The with-memory builder
+    # writes that third field from numpy so the H2D transfer is timed fairly.
+    _DERIVS = [
+        ("INVERSE_DYNAMICS_GRADIENT", _id_du_one, "qacc"),
+        ("FORWARD_DYNAMICS_GRADIENT", _fd_du_one, "qfrc_applied"),
+    ]
+    for N in DERIV_BATCH_SIZES:
         keys     = jax.random.split(rng, N)
         dx_batch = jax.vmap(_make_dx_jnp)(keys)
+        n_du_iters = max(1, TEST_ITERS // 20)
 
-        try:
-            @jax.jit
-            def _batch_id_du_fn(batch_d):
-                def _one(d):
-                    return jax.jacobian(
-                        lambda qpos, qvel, qacc: mjx.inverse(
-                            mx, d.replace(qpos=qpos, qvel=qvel, qacc=qacc)
-                        ).qfrc_inverse,
-                        argnums=(0, 1, 2),
-                    )(d.qpos, d.qvel, d.qacc)
-                return jax.vmap(_one)(batch_d)
+        for label, _one, third in _DERIVS:
+            try:
+                _batch_du_fn = jax.jit(lambda bd, f=_one: jax.vmap(f)(bd))
+                _jit_and_warmup(_batch_du_fn, (dx_batch,))
 
-            # Compile + >=3 warmup passes so the jacobian trace/compile is fully
-            # cached before timing (was a single block_until_ready warmup).
-            _jit_and_warmup(_batch_id_du_fn, (dx_batch,))
-            co = _time_device(
-                _batch_id_du_fn, dx_batch,
-                n_iters=max(1, TEST_ITERS // 20),
-            )
-            _print_stats("INVERSE_DYNAMICS_GRADIENT COMPUTE ONLY", N, co)
-        except Exception as e:
-            print(f"# [N:{N}] INVERSE_DYNAMICS_GRADIENT COMPUTE ONLY skipped: {e}", file=sys.stderr)
+                # WITH MEMORY: build the batch dx from numpy (q,v,third) inside the
+                # timed region, mirroring the value-function with-mem path.
+                def _build_du(qs, vs, ts, field=third):
+                    return jax.vmap(
+                        lambda q, v, t: dx0.replace(**{"qpos": q, "qvel": v, field: t})
+                    )(jnp.array(qs), jnp.array(vs), jnp.array(ts))
+                _build_du_jit = jax.jit(_build_du)
+                _wm_fn = (lambda qs, vs, ts, bf=_build_du_jit, ff=_batch_du_fn: ff(bf(qs, vs, ts)))
+                _du_np = lambda: (
+                    np.random.randn(N, nq).astype(np.float32),
+                    np.random.randn(N, nv).astype(np.float32),
+                    np.random.randn(N, nv).astype(np.float32),
+                )
+                _jit_and_warmup(_wm_fn, _du_np())
+                wm = _time_with_mem(_wm_fn, _du_np, n_iters=n_du_iters)
+                _print_stats(f"{label} WITH MEMORY", N, wm)
+
+                # COMPUTE ONLY: device-resident batch.
+                co = _time_device(_batch_du_fn, dx_batch, n_iters=n_du_iters)
+                _print_stats(f"{label} COMPUTE ONLY", N, co)
+            except Exception as e:
+                print(f"# [N:{N}] {label} skipped: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":
