@@ -104,6 +104,7 @@ def main() -> None:
         import jax
         import jax.numpy as jnp
         import grid_rbd
+        import grid_rbd.jax as grid_jax
     except ImportError as e:
         print(f"grid_rbd/jax import failed: {e}", file=sys.stderr)
         sys.exit(1)
@@ -121,11 +122,11 @@ def main() -> None:
         max_batch_size=args.max_batch,
         backends=("jax",),
     )
-    handle = grid_rbd.get_robot(name).jax
+    handle = grid_jax.get_robot(name)   # JaxRobotHandle (device-resident, jittable)
     print(f"  [grid_bindings] {name} ready ({time.perf_counter()-t0:.1f}s), "
-          f"nq={handle.num_joints()} nv={handle.num_vel()} max_batch={handle.max_batch()}")
+          f"nq={handle.num_joints} nv={handle.num_vel} max_batch={handle.max_batch}")
 
-    nq, nv = handle.num_joints(), handle.num_vel()
+    nq, nv = handle.num_joints, handle.num_vel
     want = set(args.algos) if args.algos else None
     rng = np.random.default_rng(0)
 
