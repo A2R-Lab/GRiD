@@ -42,9 +42,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 # Reuse the harness's robot/EE resolution so layer-3 uses the same URDF + EE frame
 # as the C++ layers (import-safe: grid/run.py guards main() under __main__).
-from test.benchmarks.baselines.grid.run import (  # noqa: E402
-    get_urdf_path, DEFAULT_EE_FRAMES,
-)
+from test.benchmarks.baselines.grid.run import get_urdf_path  # noqa: E402
 
 BATCH_SIZES = [16, 32, 64, 128, 256, 1024]
 TEST_ITERS = int(os.environ.get("BENCH_TEST_ITERS", "500"))
@@ -83,6 +81,37 @@ def _make_np(arity, n, nq, nv, rng):
     return tuple(rng.standard_normal((n, widths[k])).astype(np.float32) for k in arity)
 
 
+# FFI-regime thread candidates. The binding bakes the C++-autotuned per-algo threads
+# (register-clamped, often <=352), but the jax/torch FFI launch path is ~30x SLOWER in that
+# low-thread regime and only reaches GRiD's true batched throughput at higher thread counts
+# (robot/algo-dependent: iiwa14 fd needs >=512). GRiD kernels are thread-count-INVARIANT in
+# result (single-block design; verified max|err|=0 across 128..1024), so sweeping threads only
+# trades speed, never correctness. We autotune threads in the FFI regime — symmetric with how
+# the C++ layer is autotuned — so layer-3 reports GRiD-through-the-wrapper at ITS best, fairly.
+THREAD_CANDIDATES = [128, 256, 384, 512, 640, 768, 896, 1024]
+
+
+def _pick_threads(handle, fn, dev_args, candidates):
+    """Return (best_threads, best_us) for this jitted op at the probe batch by a quick sweep.
+    Skips candidates that raise (e.g. too-high thread/smem for a heavy algo)."""
+    import jax
+    best_t, best_us = None, float("inf")
+    for n in candidates:
+        try:
+            handle.set_threads_per_block(n)
+            for _ in range(3):
+                jax.block_until_ready(fn(*dev_args))      # warm at this thread count
+            t = time.perf_counter()
+            for _ in range(30):
+                jax.block_until_ready(fn(*dev_args))
+            us = (time.perf_counter() - t) / 30 * 1e6
+            if us < best_us:
+                best_t, best_us = n, us
+        except Exception:
+            continue
+    return best_t, best_us
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--robot", required=True)
@@ -98,7 +127,11 @@ def main() -> None:
 
     floating = args.base == "floating"
     urdf = args.urdf or get_urdf_path(args.robot)
-    ee_frame = args.ee_frame or DEFAULT_EE_FRAMES.get(args.robot)
+    # Default to the DEFAULT (unnamed) EE target: passing a NAMED ee_joint_names trips
+    # gen_end_effector_pose_gradient_inner ("named fixed_target not yet supported by the
+    # shared-chain geometric-Jacobian rewrite"). EE-frame choice doesn't affect the dynamics
+    # algos we benchmark, so only pass a named frame if the user explicitly asks for one.
+    ee_frame = args.ee_frame
 
     try:
         import jax
@@ -150,6 +183,16 @@ def main() -> None:
         fn = jax.jit(method)
         per_n: dict = {}
         ok = True
+        # FFI-regime thread autotune for THIS algo, at a representative batch, BEFORE timing.
+        probe_n = min(256, args.max_batch)
+        probe_args = tuple(jnp.asarray(a) for a in _make_np(arity, probe_n, nq, nv, rng))
+        jax.block_until_ready(fn(*probe_args))                     # JIT compile once
+        best_threads, best_us = _pick_threads(handle, fn, probe_args, THREAD_CANDIDATES)
+        if best_threads is not None:
+            handle.set_threads_per_block(best_threads)
+            print(f"  [grid_bindings] {algo:28s} FFI threads={best_threads} "
+                  f"(probe N={probe_n}: {best_us:.1f}us)")
+        per_n["ffi_threads"] = best_threads
         for n in BATCH_SIZES:
             if n > args.max_batch:
                 continue
