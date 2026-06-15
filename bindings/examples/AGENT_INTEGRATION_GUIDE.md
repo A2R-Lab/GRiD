@@ -149,6 +149,44 @@ differentiable method carries GRiD's own **analytic** Jacobian (a matvec FFI cal
 + `f_ext` parity. On torch: `inverse_dynamics`/`forward_dynamics`/`aba`/`integrator` (the rest are
 forward-only). The `inverse_dynamics` gradient is qdd-aware (includes the `∂(M·q̈)/∂q` term).
 
+## Runtime-mutable model params — sysID / domain-rand / calibration, no recompile
+
+Two opt-in tables let you change the model **after** compile with **no nvcc rebuild** (numpy
+backend only today; jax/torch raise a clear error — the FFI surfaces don't thread the tables yet):
+
+| Build flag | Mutator | Table shape | Mutates |
+|------------|---------|-------------|---------|
+| `runtime_inertia=True` | `handle.set_inertia_params(t)` | `(num_bodies, 10)` rows `[m, hx,hy,hz, Ixx,Ixy,Ixz, Iyy,Iyz, Izz]` | spatial inertia in **every** dynamics call (id/fd/aba/crba/minv/gradients) |
+| `runtime_transform=True` | `handle.set_transform_params(t)` | `(num_joints, 6)` rows `[x,y,z,roll,pitch,yaw]` (URDF `<origin>`) | each joint's `Xfixed` in the **dynamics** (EE pose still uses the baked origin in v1) |
+
+Fetch the baked table from `handle.inertia_params` / `handle.transform_params`, mutate, set it
+back. Passing the baked values back is byte-identical to a plain build. Each flag re-keys the
+cache (the mutable `.so` coexists with the baked one). This is the entry point for
+system-identification, payload changes, domain randomization, and kinematic calibration — see
+[`runtime_params.py`](runtime_params.py).
+
+```python
+h = grid_rbd.register_robot("arm", urdf, runtime_inertia=True)
+I = h.inertia_params.copy()           # (num_bodies, 10)
+I[-1, 0] += 0.5; I[-1, 1:4] *= ...    # +0.5 kg payload on the last link (scale h=m*c)
+h.set_inertia_params(I)               # every later forward_dynamics uses it — no rebuild
+```
+
+## Named end-effector targets — pick the EE frame by name
+
+The EE kernels target leaf links by default. To target a specific frame (tool flange, TCP,
+sensor), select it by **joint name** — two routes, see [`ee_named_targets.py`](ee_named_targets.py):
+
+- **Baked** (codegen, jittable, all surfaces): `register_robot(..., ee_joint_names=["tool_joint"])`.
+  `ee_joint_names` is in the cache key, so distinct targets land in distinct entries. The named
+  target now flows through `end_effector_pose` **and** `_gradient` **and** `_hessian` (the
+  just-landed gradient/hessian codegen support — not just the value).
+- **Runtime** (numpy only): one compiled robot, choose the frame **and** an offset point per call:
+  `end_effector_pose_runtime(q, ee_joint_names=..., ee_offsets=...)` → `(B, NUM_EE, 6)` and
+  `end_effector_pose_gradient_runtime(...)` → `(B, NUM_EE, 6, NV)`. `ee_joint_names` is `None`
+  (all leaves) / a name / a list; `ee_offsets` is `None` (origin) / one `[x,y,z]` per frame. Ideal
+  for OSC / task-space control where the target or offset changes online.
+
 ## Output conventions
 
 Default is **Pinocchio** convention. For MuJoCo/MJX-native I/O (wxyz quat, global-linear free-joint
@@ -218,3 +256,11 @@ fastest at 128 threads but the FFI path is fastest at ~768 — the same kernel, 
 - [`jax_gpu_resident.py`](jax_gpu_resident.py) — residency, jit/vmap/grad, `lax.scan` rollout,
   donate, dlpack. The reference for the JAX fast path.
 - [`torch_cuda_graphs.py`](torch_cuda_graphs.py) — CUDA tensors, autograd, CUDA-Graphs replay.
+- [`derivatives.py`](derivatives.py) — analytic first-order (`inverse/forward_dynamics_gradient`
+  = id_du/fd_du, `end_effector_pose_gradient`) + second-order (`idsva_so`/`fdsva_so`) tensors,
+  and the `jit`/`vmap`/`grad` autodiff idioms that pull the same Jacobians through a cost.
+- [`runtime_params.py`](runtime_params.py) — `set_inertia_params` (runtime_inertia) +
+  `set_transform_params` (runtime_transform): sysID / payload / domain-rand / calibration,
+  no recompile (numpy).
+- [`ee_named_targets.py`](ee_named_targets.py) — named EE frames: baked `ee_joint_names=`
+  (value + gradient + hessian) and the runtime `end_effector_pose[_gradient]_runtime` frame/offset.
