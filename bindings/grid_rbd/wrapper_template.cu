@@ -54,9 +54,11 @@ static cudaStream_t*         g_streams = nullptr;
 // the timestep via a grid-stride over num_timesteps); launching gridDim=1 is CORRECT but
 // runs the whole batch on ONE SM (~100x slow, linear in N). Every launch site below uses
 // dim3((unsigned)batch,1,1) so jax / torch / pybind all call the kernel the SAME way it was
-// autotuned. (Was a stuck dim3(1,1,1) global — the true cause of the "FFI thread pathology".)
+// autotuned. (Historically this was a stuck dim3(1,1,1) global that ran the whole batch on one
+// block — fixed; each sample is now its own block.)
 // Threads-per-block: default to the per-algo autotuned launch_cfg<ALGO>::THREADS
-// baked into grid.cuh (fixes the FFI thread-default pathology). g_threads_override
+// baked into grid.cuh (each algo uses its own autotuned count, not one global default).
+// g_threads_override
 // lets the caller force one count for ALL algos: -1 = use the autotuned per-algo
 // default; >=1 = force that many. Set via grid_rbd_set_threads_per_block().
 static int g_threads_override = -1;
@@ -123,9 +125,9 @@ extern "C" int grid_rbd_max_perf_level_threads() { return grid::MAX_PERF_LEVEL_T
 extern "C" int grid_rbd_threads_per_block() { return g_threads_override; }
 extern "C" int grid_rbd_set_threads_per_block(int n) {
     // Control the per-block thread count used for all subsequent kernel launches.
-    // The DEFAULT is now per-algo autotuned: each call defaults its threads-per-block
-    // to that algorithm's launch_cfg<ALGO>::THREADS baked into grid.cuh (fixing the
-    // FFI thread-default pathology). This setter forces a single global override:
+    // The DEFAULT is per-algo autotuned: each call defaults its threads-per-block
+    // to that algorithm's launch_cfg<ALGO>::THREADS baked into grid.cuh (per-algo,
+    // not one global count). This setter forces a single global override:
     //   * n == 0  -> reset to the per-algo autotuned defaults.
     //   * n >= 1  -> force that many threads for EVERY algo (overrides the autotune).
     //   * n <  0  -> invalid (returns 1, no change).
@@ -1796,7 +1798,7 @@ static void launch_integrator_grad_host(int batch, T gravity, T dt) {
 #ifdef GRID_RBD_WITH_MUJOCO
 template <grid::IntegratorType IT>
 static void launch_integrator_grad_host_mujoco(int batch, T gravity, T dt) {
-    grid::integrator_gradient<T, IT, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+    grid::integrator_gradient<T, IT, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR_GRADIENT>::TIER>(
         g_data, g_robot, /*gravity=*/gravity,
         dt, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR_GRADIENT>(), g_streams);
 }
