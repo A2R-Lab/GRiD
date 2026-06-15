@@ -100,9 +100,19 @@ include:
   ``d_inertia_params`` table plus a ``set_inertia_params`` device entry let
   sysID / domain-randomization mutate the per-link inertial parameters with no
   recompile; the baked default path is byte-identical.
-* **Joint types (stage 1):** an arbitrary/skew ``<axis>`` (non-cardinal) is
-  supported via a dense 6-vector motion subspace ``S`` — currently for
-  ``inverse_dynamics`` and ``crba`` only (cardinal-axis robots stay
-  byte-identical). Other algorithms and the helical / planar / spherical joint
-  types are later stages.
+* **Runtime-mutable joint-frame origins (flag-gated):** the ``runtime_transform``
+  option adds a ``d_transform_params`` table + ``set_transform_params`` so each
+  joint's ``<origin>`` xyz+rpy can be mutated at runtime with no recompile (mirrors
+  ``runtime_inertia``; opt-in, baked default byte-identical, the dense-rpy pattern
+  is baked so rpy can move). The constant ``Xfixed`` is rebuilt on-device once per
+  launch from the table; the default (unmutated) path is float-identical to baked.
+* **Joint types:** an arbitrary/skew ``<axis>`` (non-cardinal) is supported via a
+  dense 6-vector motion subspace ``S`` across all algorithms (cardinal-axis robots
+  stay byte-identical, gated on ``robot_has_skew_axis()``). The ``helical`` /
+  ``planar`` / ``translation`` joint types are also landed (planar decomposes to a
+  prismatic+prismatic+continuous chain). ``spherical`` (ball) emits value +
+  gradient paths; only its CUDA ``minv`` falls back to dense ``inv(crba)`` (matches
+  pinocchio's reduced model). Joint ``<dynamics damping/friction>`` is landed
+  behind the ``use_joint_dynamics`` flag (default off, byte-identical). See
+  ``docs/open-tasks/design_urdf_features_audit.md`` for the full feature matrix.
 
