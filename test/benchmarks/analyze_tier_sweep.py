@@ -101,7 +101,7 @@ def main() -> None:
 
     robots = list(results.keys())
     # Stable robot order matching ROBOTS tuple
-    canonical = ["iiwa14", "go2", "g1", "h1_2"]
+    canonical = ["iiwa14", "go2", "g1", "h2_plus"]
     robots = [r for r in canonical if r in robots] + [r for r in robots if r not in canonical]
     bases = ["fixed", "floating"]
 

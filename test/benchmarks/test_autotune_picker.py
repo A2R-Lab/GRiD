@@ -138,7 +138,7 @@ def test_algo_with_no_readings_is_omitted(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# A.7: h1_2.fixed `id` must NEVER tune to LITE.
+# A.7: h2_plus.fixed `id` must NEVER tune to LITE.
 #
 # `inverse_dynamics` has no smem spill, so SHARED and LITE share a body and
 # differ only in __launch_bounds__; LITE's looser bound starves registers, so
@@ -146,7 +146,7 @@ def test_algo_with_no_readings_is_omitted(monkeypatch):
 # that with a synthetic table where LITE is uniformly the slowest tier (the
 # empirical signature of the bug) and assert the property.
 # ---------------------------------------------------------------------------
-def test_h1_2_fixed_id_never_picks_lite(monkeypatch):
+def test_h2_plus_fixed_id_never_picks_lite(monkeypatch):
     # LITE is slowest everywhere (register starvation); SHARED and MINIMAL are
     # close and either could legitimately win — but never LITE.
     table = {

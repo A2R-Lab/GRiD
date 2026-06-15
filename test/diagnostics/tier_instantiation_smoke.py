@@ -166,7 +166,7 @@ def compile_all_tiers(grid_cuh: Path, emitted: list[str], build_dir: Path) -> di
     // and only the WORKSPACE bytes differ (0 at SHARED, >0 at LITE/MINIMAL).
     // The SMEM invariant is therefore "LITE never EXCEEDS SHARED" (>=), not a
     // strict drop. (A strict '>' here was a latent bug — it failed on every
-    // robot whose d2ee SMEM is tier-independent, i.e. all of iiwa14/go2/h1_2.)
+    // robot whose d2ee SMEM is tier-independent, i.e. all of iiwa14/go2/h2_plus.)
     static_assert(grid::END_EFFECTOR_POSE_HESSIAN_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_SHARED>() >=
                   grid::END_EFFECTOR_POSE_HESSIAN_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_LITE>(),
                   "END_EFFECTOR_POSE_HESSIAN_DEVICE_INLINE_SMEM_BYTES LITE must not exceed SHARED");
@@ -229,13 +229,15 @@ def _resolve_urdf_via_robot_descriptions(module_name: str) -> Path | None:
 
 
 # Robots to exercise. iiwa14 is the baseline (picks collapse, single-body emit).
-# go2_fixed is the most divergent — full 3-way picks on fdsva_so + d2ee. h1_2_fixed
-# is the high-DOF stress test where ID_DU/D2EE pick divergent levels and several
-# kernels overflow at runtime (bench skips those via grid_kernel_fits_device).
+# go2_fixed is the most divergent — full 3-way picks on fdsva_so + d2ee.
+# h2_plus_fixed is the high-DOF stress test where ID_DU/D2EE pick divergent levels
+# and several kernels overflow at runtime (bench skips those via
+# grid_kernel_fits_device). H2+ is GRiD-internal (vendored URDF, not in
+# robot_descriptions) — the second field is a local path, not a module name.
 SCENARIOS = [
     ("iiwa14_fixed",  "robot_descriptions.iiwa14_description",  False),
     ("go2_fixed",     "robot_descriptions.go2_description",     False),
-    ("h1_2_fixed",    "robot_descriptions.h1_2_description",    False),
+    ("h2_plus_fixed", str(REPO_ROOT / "robot_assets/h2_plus.urdf"), False),
 ]
 
 
@@ -248,7 +250,13 @@ def main():
 
     overall_ok = True
     for label, mod_name, floating in SCENARIOS:
-        urdf = _resolve_urdf_via_robot_descriptions(mod_name)
+        # The second field is either a robot_descriptions module name or, for
+        # GRiD-internal robots (e.g. h2_plus), a direct local URDF path.
+        local = Path(mod_name)
+        if local.exists():
+            urdf = local
+        else:
+            urdf = _resolve_urdf_via_robot_descriptions(mod_name)
         if urdf is None and label == "iiwa14_fixed" and legacy_iiwa.exists():
             urdf = legacy_iiwa
         if urdf is None:

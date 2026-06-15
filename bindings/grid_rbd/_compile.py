@@ -50,7 +50,7 @@ _NVCC_DEFAULT_FLAGS = [
 def _resolve_launch_config_robot(urdf_path: str) -> str:
     """Map a URDF filename stem to its launch_configs/<robot> key.
 
-    launch_configs/ is keyed by canonical robot id (iiwa14, go2, g1, h1_2), but the
+    launch_configs/ is keyed by canonical robot id (iiwa14, go2, g1, h2_plus), but the
     URDF filename stem is often longer (iiwa14_primitive_collision, g1_29dof). Without
     this, the binding looked up launch_configs/iiwa14_primitive_collision/ (a MISS) and
     fell back to the conservative (TIER_SHARED, MAX_PERF_LEVEL_THREADS) default for every

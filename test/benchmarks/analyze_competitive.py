@@ -196,7 +196,7 @@ def main():
              "- **cuRobo** loads its g1 config at **35 DOF** vs GRiD's g1_29dof (cuRobo does ~20% MORE work, "
              "so the comparison slightly favors cuRobo); GRiD still wins g1 id 5.75× / id_du 10.44×. cuRobo only "
              "ships configs for g1 (no iiwa14/go2) and is fixed-base only.",
-             "- N=256; autotune_N=256; RTX 5090 / sm_120. h1_2 omitted from this competitive run (focus iiwa14/go2/g1).",
+             "- N=256; autotune_N=256; RTX 5090 / sm_120. h2_plus is GRiD-internal (no competitor model) so it is excluded from this competitive run (focus iiwa14/go2/g1).",
              ""]
     def verdict(sp):
         return "GRiD" if sp > 1.05 else ("comp" if sp < 0.95 else "~tie")

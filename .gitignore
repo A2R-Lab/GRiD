@@ -116,3 +116,6 @@ docs/handoff-*.md
 # Generated benchmark figures — track the PLOT CODE, not its dated output.
 # Final figure design is a backlog item (decide together); regenerate via plot_benchmarks.py.
 docs/imgs/*_2026*.png
+
+# Local agent worktrees + Claude Code state
+.claude/

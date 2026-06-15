@@ -144,11 +144,13 @@ def run_mjx_native(robot, base="floating"):
         return f"MJX run failed: {e}"
 
 
-# robot -> robot_descriptions MJCF module (mirrors baselines/mjx/run.py)
+# robot -> robot_descriptions MJCF module (mirrors baselines/mjx/run.py).
+# This is an MJX-vs-Pinocchio competitor sweep, so it only lists robots with a
+# MuJoCo MJCF. The large-robot scaling target h2_plus is GRiD-internal (no MJCF),
+# so it is intentionally absent here (it retired the redundant h1_2).
 ROBOT_MJCF_MODULE = {
     "go2":  "robot_descriptions.go2_mj_description",
     "g1":   "robot_descriptions.g1_mj_description",
-    "h1_2": "robot_descriptions.h1_2_mj_description",
     "iiwa14": "robot_descriptions.iiwa14_mj_description",
 }
 

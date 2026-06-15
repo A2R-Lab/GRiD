@@ -123,10 +123,10 @@ CUROBO_ALGOS = ["inverse_dynamics", "inverse_dynamics_gradient", "end_effector_p
 # variant).
 # ---------------------------------------------------------------------------
 ROBOT_CUROBO_YML: dict[str, str | None] = {
-    "g1":     os.environ.get("CUROBO_G1_YML", "unitree_g1_29dof_retarget.yml"),
-    "iiwa14": None,   # cuRobo ships no iiwa/kuka config
-    "go2":    None,   # cuRobo ships no go2 config
-    "h1_2":   None,   # cuRobo ships no h1_2 config
+    "g1":      os.environ.get("CUROBO_G1_YML", "unitree_g1_29dof_retarget.yml"),
+    "iiwa14":  None,   # cuRobo ships no iiwa/kuka config
+    "go2":     None,   # cuRobo ships no go2 config
+    "h2_plus": None,   # H2+ is GRiD-internal; cuRobo ships no config -> null column
 }
 
 # cuRobo Dynamics models a FIXED base only (tree rooted at base_link, no

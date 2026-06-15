@@ -59,8 +59,19 @@ PRE_GLASS_REF = "d2c0d18"
 RESULTS_DIR   = THIS_DIR / "results" / "comparison"
 DEFAULT_WORKTREE_PATH = REPO_ROOT.parent / "GRiD-A2R-pre-glass"
 
-ROBOTS = ("iiwa14", "go2", "g1", "h1_2")
+ROBOTS = ("iiwa14", "go2", "g1", "h2_plus")
 BASES  = ("fixed", "floating")
+
+# Robots that exist ONLY inside GRiD: vendored URDF with no robot_descriptions
+# module, no MuJoCo MJCF, and no cuRobo config. The competitor columns all
+# resolve their model from robot_descriptions (pinocchio/frax/bard) or an MJCF
+# (mjx/mujoco_warp), so they cannot load these robots — we SKIP those columns
+# gracefully instead of crashing. H2+ = Unitree H2+ (nv=75 fixed / 81 floating),
+# the large-robot SCALING target that retired the redundant h1_2.
+GRID_ONLY_ROBOTS = frozenset({"h2_plus"})
+# Columns that need a non-GRiD model (robot_descriptions URDF or MuJoCo MJCF).
+# Skipped for any robot in GRID_ONLY_ROBOTS.
+NON_GRID_COLUMNS = frozenset({"pinocchio", "mjx", "frax", "bard"})
 # Columns the sweep knows how to run. cuBLASDx (glass_nvidia) was removed in
 # v2.0 — the 2026-05-18 sweep + per-host autotune showed it loses to SIMT at
 # every GEMM shape GRiD calls (notably 4×4×4 in end_effector_pose_hessian, where
@@ -85,13 +96,14 @@ EE_FRAMES_GRID = {
     "iiwa14": "iiwa_joint_ee",
     "go2":    "FR_foot_joint",
     "g1":     "right_hand_palm_joint",
-    "h1_2":   "R_base_link_joint",       # fixed joint at base of right hand (before fingers)
+    "h2_plus": "right_hand_joint",       # fixed joint at right hand (H2+ large-robot scaling target)
 }
+# Competitor frames: only robots with a robot_descriptions / MJCF model. h2_plus
+# is GRiD-internal (GRID_ONLY_ROBOTS) so it intentionally has no entry here.
 EE_FRAMES_PIN = {
     "iiwa14": "iiwa_link_ee",
     "go2":    "FR_foot",
     "g1":     "right_rubber_hand",
-    "h1_2":   "R_hand_base_link",
 }
 # MJX uses MuJoCo body names (same names as Pinocchio link names for these robots).
 EE_FRAMES_MJX = EE_FRAMES_PIN
@@ -544,7 +556,7 @@ def _build_grid_binaries(grid_columns, robots, bases, tiers, *, build_jobs,
         return
     cores = os.cpu_count() or 4
     # GRID_COMPILE_WORKERS overrides the per-cell TU-compile parallelism. The big
-    # monolithic single_main + batch_main TUs for large robots (g1/h1_2 SO) use
+    # monolithic single_main + batch_main TUs for large robots (g1/h2_plus SO) use
     # ~24-36 GB of cicc EACH; compiling them concurrently exhausts a 62 GB box.
     # Set GRID_COMPILE_WORKERS=1 (with --build-jobs 1) to serialize to ONE big
     # compile at a time (~36 GB peak = safe). See [[feedback_build_ram_so_compiles]].
@@ -705,7 +717,7 @@ def main() -> None:
                         help="OPT-IN (default OFF): forward --single-timing to the GRiD glass "
                              "column so it ALSO builds + runs the single-CALL latency binary. Off "
                              "by default because the -rdc=true single build fatally errors (ptxas "
-                             "regcount) on big floating robots (g1/h1_2) and wastes ~50 min/tier; "
+                             "regcount) on big floating robots (g1/h2_plus) and wastes ~50 min/tier; "
                              "batch throughput timing (the autotune matrix) is unaffected and "
                              "always runs. Also settable via env GRID_BENCH_SINGLE_TIMING=1.")
     args = parser.parse_args()
@@ -776,6 +788,14 @@ def main() -> None:
             for base in args.bases:
                 if f"{robot}_{base}" in skip_set:
                     print(f"  [{column}] SKIP {robot}/{base}: excluded via --skip")
+                    skipped.append((column, robot, base))
+                    continue
+                # GRiD-internal-only robots (e.g. H2+) have no robot_descriptions
+                # URDF / MJCF / cuRobo model, so the competitor columns can't load
+                # them. Skip those columns gracefully (the GRiD columns still run).
+                if robot in GRID_ONLY_ROBOTS and column in NON_GRID_COLUMNS:
+                    print(f"  [{column}] SKIP {robot}/{base}: GRiD-internal robot "
+                          f"(no {column} model)")
                     skipped.append((column, robot, base))
                     continue
                 if column == "pinocchio":

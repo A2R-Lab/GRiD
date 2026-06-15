@@ -100,7 +100,7 @@ def autotune_base(robot, base, n, iters, warmup, want_algos, build_algos=None):
     floating = base == "floating"
     urdf = get_urdf_path(robot)
     name = f"autotune_ffi_{robot}_{base}"
-    # RAM-safe subset build: big robots (g1 nv=35, h1_2 nv=75/81) blow a SINGLE
+    # RAM-safe subset build: big robots (g1 nv=35, h2_plus nv=75/81) blow a SINGLE
     # nvcc process to 24-36GB when the SO kernels (idsva_so/fdsva_so) are in the
     # .so. Pass --build-algos to compile ONLY a chosen set (deps pulled in by the
     # codegen profile) so the build fits — e.g. tune the core/non-SO algos first
@@ -204,7 +204,7 @@ def main():
     ap.add_argument("--algos", nargs="+", default=None, help="subset of algo symbols to SWEEP")
     ap.add_argument("--build-algos", nargs="+", default=None,
                     help="RAM-safe subset to BUILD into the .so (deps auto-pulled). Big robots "
-                         "(g1/h1_2) OOM a single nvcc when SO kernels are in the .so — build the "
+                         "(g1/h2_plus) OOM a single nvcc when SO kernels are in the .so — build the "
                          "core/non-SO set first and defer idsva_so/fdsva_so. Default = full build.")
     ap.add_argument("--dry-run", action="store_true", help="sweep + print, do not write")
     args = ap.parse_args()

@@ -50,4 +50,11 @@ values. (See the **"Autotune launch config for your robot / GPU"** section of
    description: GPU model, driver/CUDA version, and the robot's DoF/base. No code changes needed — codegen
    auto-discovers the file.
 
-Currently seeded: **iiwa14, go2, g1** (fixed + floating) and **h1_2** (fixed) on `rtx5090_sm120`.
+Currently seeded: **iiwa14, go2, g1** (fixed + floating) on `rtx5090_sm120`. The legacy `h1_2/`
+config is retained but **h1_2 is retired** from the swept robot set (replaced by H2+).
+
+TODO (H2+ autotune): **h2_plus** (the Unitree H2+, the large-robot scaling target that retired
+h1_2) has no `launch_configs/h2_plus/` yet — codegen currently resolves it to the conservative
+(TIER_SHARED, MAX_PERF_LEVEL_THREADS) fallback. Run `tools/autotune_robot.sh h2_plus fixed floating`
+(GPU-heavy) and drop the resulting `h2_plus/rtx5090_sm120.json` here to bake its per-algo
+{tier, threads} picks.

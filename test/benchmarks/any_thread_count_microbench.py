@@ -8,7 +8,7 @@ characterizes the perf trajectory across the sweep:
 
     {64, 128, 256, MAX_PERF_LEVEL_THREADS, 512}
 
-for a fixed batch on iiwa14, go2, g1, h1_2 (all fixed-base) using the
+for a fixed batch on iiwa14, go2, g1, h2_plus (all fixed-base) using the
 ``grid_rbd`` Python wrapper. Output is a small markdown table for each
 robot showing single-call median µs at each block size.
 
@@ -50,10 +50,9 @@ URDFS = {
         Path.home()
         / ".cache/robot_descriptions/unitree_ros/robots/g1_description/g1_29dof.urdf"
     ),
-    "h1_2": (
-        Path.home()
-        / ".cache/robot_descriptions/unitree_ros/robots/h1_2_description/h1_2.urdf"
-    ),
+    # H2+ (Unitree, nv=75/81) is GRiD-internal (vendored, not in robot_descriptions),
+    # the large-robot scaling target that retired the redundant h1_2.
+    "h2_plus": REPO_ROOT / "robot_assets/h2_plus.urdf",
 }
 
 

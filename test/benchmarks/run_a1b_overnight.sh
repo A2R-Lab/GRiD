@@ -1,19 +1,19 @@
 #!/bin/bash
-# A1b OVERNIGHT serial sweep — RAM-SAFE for big robots (g1/h1_2).
+# A1b OVERNIGHT serial sweep — RAM-SAFE for big robots (g1/h2_plus).
 #
 # Big-robot SO monolithic TUs (single_main + batch_main) use ~24-36 GB cicc EACH.
 # GRID_COMPILE_WORKERS=1 + --build-jobs 1 → exactly ONE TU compiles at a time
 # (~36 GB peak = safe on a 62 GB box). Slow but unattended-safe.
 #
 # Per-robot sequential into ONE $ROOT so partial progress is preserved: if it
-# doesn't reach h1_2, iiwa14/go2/g1 picks are already written + the matrix builds
+# doesn't reach h2_plus, iiwa14/go2/g1 picks are already written + the matrix builds
 # from whatever landed. Content-addressed cache (.pytest_cache/grid_cuda) means
 # already-built cells are instant on (re)run.
 set -uo pipefail
 cd /home/plancher/Desktop/GRiD
 export PATH=/usr/local/cuda/bin:$PATH
 export GRID_COMPILE_WORKERS=1
-ROBOTS="${A1B_ROBOTS:-iiwa14 go2 g1 h1_2}"
+ROBOTS="${A1B_ROBOTS:-iiwa14 go2 g1 h2_plus}"
 ROOT="test/benchmarks/results/a1b_overnight_$(date +%Y%m%d_%H%M)"
 mkdir -p "$ROOT"
 

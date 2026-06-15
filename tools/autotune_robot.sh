@@ -18,7 +18,7 @@
 #
 # USAGE
 #   bash tools/autotune_robot.sh <robot> [base ...]
-#       <robot>     robot id (iiwa14 | go2 | g1 | h1_2 | ...; must be a codegen robot)
+#       <robot>     robot id (iiwa14 | go2 | g1 | h2_plus | ...; must be a codegen robot)
 #       [base ...]  one or more of: fixed floating   (default: fixed floating)
 #
 #   GPU_KEY=<model>_<arch>   override GPU key if auto-detection fails (e.g. a40_sm86)

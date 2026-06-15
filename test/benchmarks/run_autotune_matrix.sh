@@ -12,7 +12,7 @@
 #
 # Invoke:
 #     ./test/benchmarks/run_autotune_matrix.sh [robot ...]
-# Default robots: iiwa14 go2 g1  (h1_2 omitted by default — its 2nd-order
+# Default robots: iiwa14 go2 g1  (h2_plus omitted by default — its 2nd-order
 # kernels compile 20-40 min each; add it explicitly for an overnight run).
 #
 # Background+detach:
