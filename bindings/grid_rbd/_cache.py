@@ -91,6 +91,33 @@ def _wrapper_template_hash() -> str:
         return ""
 
 
+def _codegen_source_hash() -> str:
+    """sha256 of the codegen source (GRiDCodeGenerator/ + URDFParser/ *.py) so that
+    EDITING THE CODEGEN invalidates the binding cache. The generated grid.cuh is NOT
+    in the cache key — only urdf_bytes + options + the resolved launch_config are — so
+    without this, changing how GRiDCodeGenerator emits code (tier macros, host wrappers,
+    launch_cfg, spill logic, …) would silently reuse a stale .so. Mirrors
+    _wrapper_template_hash for the same reason (editable dev installs don't bump the
+    package version per edit). Empty for an sdist install where the codegen package
+    isn't present (the .so is shipped prebuilt; nothing to re-key against)."""
+    # bindings/grid_rbd/_cache.py → repo_root = parent x3
+    repo = Path(__file__).resolve().parent.parent.parent
+    pkgs = [repo / "GRiDCodeGenerator", repo / "URDFParser"]
+    h = hashlib.sha256()
+    found = False
+    for pkg in pkgs:
+        if not pkg.is_dir():
+            continue
+        for py in sorted(pkg.rglob("*.py")):
+            try:
+                h.update(py.relative_to(repo).as_posix().encode())
+                h.update(py.read_bytes())
+                found = True
+            except OSError:
+                continue
+    return h.hexdigest() if found else ""
+
+
 def _torch_abi_tag() -> str:
     """Torch version + CXX11-ABI tag, mixed into the cache key so a torch-aware
     .so isn't reused across incompatible torch ABIs. Empty when torch is absent
@@ -139,6 +166,10 @@ def compute_cache_key(urdf_bytes: bytes, options: dict[str, Any], cuda_arch: int
     h.update(f"arch={cuda_arch}".encode())
     h.update(f"grid_rbd={package_version()}".encode())
     h.update(f"wrapper={_wrapper_template_hash()}".encode())
+    # Mix in the codegen source hash so editing GRiDCodeGenerator / URDFParser
+    # re-keys the cache (the generated grid.cuh is not itself in the key). Empty
+    # string for sdist installs (no codegen package) → no effect there.
+    h.update(f"codegen={_codegen_source_hash()}".encode())
     # Mix in the torch ABI tag so a torch-aware build isn't reused under an
     # incompatible torch version (the TORCH_LIBRARY symbols bake in the ABI).
     # Empty string when torch is absent → no effect on no-torch builds.
