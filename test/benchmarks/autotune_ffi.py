@@ -134,7 +134,18 @@ def autotune_base(robot, base, n, iters, warmup, want_algos, build_algos=None):
             continue
         fn = jax.jit(method)
         dev = tuple(jnp.asarray(a) for a in _make_np(arity, n, nq, nv, rng, floating))
-        jax.block_until_ready(fn(*dev))                 # one-time JIT
+        try:
+            jax.block_until_ready(fn(*dev))             # one-time JIT
+        except (RuntimeError, AttributeError) as e:
+            # --build-algos subset .so: the jax method exists on the handle but its
+            # compiled symbol (grid_rbd_jax_<algo>) was excluded from this build, so
+            # the FIRST call raises "not built into this robot .so" / undefined symbol.
+            # Skip it (this is the documented subset-build behavior — e.g. defer the
+            # SO kernels idsva_so/fdsva_so that OOM a single nvcc on big robots).
+            if "not built" in str(e) or "undefined symbol" in str(e):
+                print(f"    {algo:28s} skip (not in subset .so)")
+                continue
+            raise
         print(f"    {algo}:")
         curve, best_t, best_us = _sweep_algo(handle, fn, dev, THREAD_CANDIDATES, iters, warmup)
         # (no reset needed: the next algo's sweep sets its own thread count; the
