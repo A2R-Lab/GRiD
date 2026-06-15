@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Time MuJoCo Warp (MJWarp) algorithms for one robot.
 
-UNTESTED: no `mujoco_warp` package is installed on this machine yet. This script
-is a first-draft that mirrors timeMJX.py's structure and emits the SAME label
-format so `parse_grid_output` can be reused. See the module docstring of
-`run.py` and `docs/open-tasks/mujoco_warp_baseline_plan.md` for the first-run
-validation checklist (the things most likely to need a tweak against the real API).
+Mirrors timeMJX.py's structure and emits the SAME label format so
+`parse_grid_output` can be reused. See the module docstring of `run.py` and
+`docs/open-tasks/mujoco_warp_baseline_plan.md` for the validation checklist.
 
 MJWarp (https://github.com/google-deepmind/mujoco_warp) is the NVIDIA-Warp-based
 GPU successor to MJX. It loads a standard MuJoCo MJCF (same models as MJX), and
@@ -27,15 +25,22 @@ Algorithm coverage:
                           LTDL/LDL factorization in d.qLD, not a dense M like
                           GRiD/Frax CRBA. Timed as the closest analog; verify the
                           output semantics before trusting the comparison.)
-NOT available (null): inverse_dynamics_gradient / forward_dynamics_gradient and
-    the SO algorithms. Warp ITSELF has autodiff (wp.Tape / wp.autograd.jacobian),
-    but mujoco_warp ships every module with wp.set_module_options(enable_backward=
-    False) (forward.py/inverse.py/support.py/... ~20 modules), so its kernels emit
-    NO adjoint code and wp.autograd.jacobian(mjw.forward, ...) raises "Kernel must
-    have backward pass enabled". A GPU finite-difference Jacobian (wp.autograd.
-    jacobian_fd, the mjd_transitionFD analogue) WOULD work without patching the
-    vendored package — left as a backlog option (the MJX adapter already provides
-    the GPU-autodiff derivative competitor bars). Intentional null, not an oversight.
+Derivatives (inverse_dynamics_gradient / forward_dynamics_gradient): wired via the
+    GPU FINITE-DIFFERENCE Jacobian wp.autograd.jacobian_fd (the mjd_transitionFD GPU
+    analogue). Warp ITSELF has autodiff (wp.Tape / wp.autograd.jacobian), but
+    mujoco_warp ships every module with wp.set_module_options(enable_backward=False)
+    (forward.py/inverse.py/support.py/... ~20 modules), so its kernels emit NO adjoint
+    code and the AUTODIFF path wp.autograd.jacobian(mjw.forward, ...) raises "Kernel
+    must have backward pass enabled". jacobian_fd does NOT need backward — it just
+    relaunches the forward kernel with central-difference-perturbed inputs — so it
+    works against the vendored package unpatched. jacobian_fd does not accept
+    @wp.struct args, so we wrap mjw.inverse/forward in a plain Python function whose
+    differentiable inputs are bare warp arrays (qpos/qvel/qacc for id_du,
+    qpos/qvel/qfrc_applied for fd_du) that we assign into the captured Data struct
+    before each relaunch and whose output (qfrc_inverse / qacc) is returned as a
+    fresh requires_grad array. Capped at DERIV_BATCH_SIZES (default <=256, like the
+    MJX adapter) because FD does O(nworld*nv) forward launches per input.
+NOT available (null): the SO (second-order) algorithms — no FD path wired for those.
 
 Usage:
     python timeMujocoWarp.py <mjcf_path> [T/F] [ee_body_name]
@@ -51,6 +56,12 @@ import numpy as np
 # Configurable via env var (set by mujoco_warp/run.py's --test-iters flag).
 TEST_ITERS  = int(os.environ.get("BENCH_TEST_ITERS", "500"))
 BATCH_SIZES = [16, 32, 64, 128, 256, 1024]
+# Finite-difference Jacobian timing does O(nworld*nv) forward launches per input,
+# so N=1024 is intractable; the competitive gradient figures only need up to
+# batch_256. Cap here (override via MUJOCO_WARP_DERIV_BATCH_SIZES="16,256"),
+# mirroring the MJX adapter's DERIV_BATCH_SIZES.
+DERIV_BATCH_SIZES = [int(x) for x in
+                     os.environ.get("MUJOCO_WARP_DERIV_BATCH_SIZES", "16,32,64,128,256").split(",") if x.strip()]
 N_WARMUP_PASSES = 3
 
 
@@ -273,6 +284,35 @@ def main() -> None:
         except Exception as e:
             print(f"# Single Call {label} skipped: {e}", file=sys.stderr)
 
+    # Single-call FD-Jacobian timing (nworld = 1), mirroring timeMJX's single-call
+    # gradient bars. Same wp.autograd.jacobian_fd wrapper as the batch path below.
+    import warp.autograd as _wa_single
+    _SINGLE_DERIVS = [
+        ("INVERSE_DYNAMICS_GRADIENT", "qfrc_inverse", "qacc",         lambda dd: mjw.inverse(m, dd)),
+        ("FORWARD_DYNAMICS_GRADIENT", "qacc",         "qfrc_applied", lambda dd: mjw.forward(m, dd)),
+    ]
+    for label, out_field, third_field, kernel in _SINGLE_DERIVS:
+        try:
+            _qp = wp.array(np.random.randn(1, nq).astype(np.float32), dtype=wp.float32, requires_grad=True)
+            _qv = wp.array(np.random.randn(1, nv).astype(np.float32), dtype=wp.float32, requires_grad=True)
+            _th = wp.array(np.random.randn(1, nv).astype(np.float32), dtype=wp.float32, requires_grad=True)
+
+            def _du1(qp, qv, th, kf=kernel, of=out_field, tf=third_field):
+                d1.qpos.assign(qp); d1.qvel.assign(qv); getattr(d1, tf).assign(th)
+                kf(d1)
+                out = wp.zeros((1, nv), dtype=wp.float32, requires_grad=True)
+                wp.copy(out, getattr(d1, of))
+                return out
+
+            def _launch1(qp=_qp, qv=_qv, th=_th, f=_du1):
+                _wa_single.jacobian_fd(f, inputs=[qp, qv, th])
+
+            _warmup(_launch1)
+            t = _time_compute(_launch1, n_iters=max(1, TEST_ITERS // 20))
+            print(f"Single Call {label} {np.median(t):.4f}us")
+        except Exception as e:
+            print(f"# Single Call {label} skipped: {e}", file=sys.stderr)
+
     # ------------------------------------------------------------------
     # Batch timing via nworld (Warp's native batch axis — no vmap needed).
     # ------------------------------------------------------------------
@@ -317,6 +357,96 @@ def main() -> None:
                 _print_stats(f"{label} COMPUTE ONLY", N, co)
             except Exception as e:
                 print(f"# [N:{N}] {label} COMPUTE ONLY skipped: {e}", file=sys.stderr)
+
+    # ------------------------------------------------------------------
+    # Derivative (gradient) timing: id_du + fd_du via the GPU FINITE-DIFFERENCE
+    # Jacobian wp.autograd.jacobian_fd — the mujoco_warp analogue of GRiD's
+    # analytic gradients and of MJX's jax.jacobian path. mujoco_warp ships
+    # enable_backward=False so the AUTODIFF Jacobian is unavailable, but jacobian_fd
+    # only needs the forward kernel (central-difference relaunches), so it works
+    # unpatched. jacobian_fd rejects @wp.struct args, so each derivative wraps
+    # mjw.inverse/forward in a plain Python fn whose differentiable inputs are bare
+    # requires_grad warp arrays assigned into the captured Data before the launch.
+    # id_du differentiates qfrc_inverse w.r.t. (qpos, qvel, qacc); fd_du
+    # differentiates qacc w.r.t. (qpos, qvel, qfrc_applied) (qfrc_applied = GRiD's
+    # tau). Capped at DERIV_BATCH_SIZES because FD does O(nworld*nv) launches/input.
+    # ------------------------------------------------------------------
+    import warp.autograd as wa
+
+    def _rand_grad_array(rows: int, cols: int):
+        return wp.array(np.random.randn(rows, cols).astype(np.float32),
+                        dtype=wp.float32, requires_grad=True)
+
+    # (label, output-Data field, third differentiable input field). id_du perturbs
+    # qacc, fd_du perturbs qfrc_applied; both also perturb qpos/qvel.
+    _DERIVS = [
+        ("INVERSE_DYNAMICS_GRADIENT", "qfrc_inverse", "qacc",         lambda d: mjw.inverse(m, d)),
+        ("FORWARD_DYNAMICS_GRADIENT", "qacc",         "qfrc_applied", lambda d: mjw.forward(m, d)),
+    ]
+
+    for N in DERIV_BATCH_SIZES:
+        try:
+            dd = _make_device_data(N)
+        except Exception as e:
+            print(f"# [N:{N}] deriv make_data skipped: {e}", file=sys.stderr)
+            continue
+        n_du_iters = max(1, TEST_ITERS // 20)
+
+        for label, out_field, third_field, kernel in _DERIVS:
+            try:
+                # Differentiable inputs (requires_grad) assigned into the Data
+                # struct each launch; the captured `dd` provides every other field.
+                qpos_in = _rand_grad_array(N, nq)
+                qvel_in = _rand_grad_array(N, nv)
+                third_in = _rand_grad_array(N, nv)
+
+                def _du_fn(qp, qv, th, kf=kernel, of=out_field, tf=third_field, _dd=dd):
+                    _dd.qpos.assign(qp)
+                    _dd.qvel.assign(qv)
+                    getattr(_dd, tf).assign(th)
+                    kf(_dd)
+                    out = wp.zeros((N, nv), dtype=wp.float32, requires_grad=True)
+                    wp.copy(out, getattr(_dd, of))
+                    return out
+
+                def _launch_du(qp=qpos_in, qv=qvel_in, th=third_in, f=_du_fn):
+                    wa.jacobian_fd(f, inputs=[qp, qv, th])
+
+                _warmup(_launch_du)
+
+                # WITH MEMORY: upload fresh host state into the FD input arrays
+                # inside the timed region (host->device transfer included).
+                def _upload_du(host_state, qp=qpos_in, qv=qvel_in, th=third_in):
+                    hqpos, hqvel, hthird = host_state
+                    qp.assign(wp.array(hqpos, dtype=wp.float32))
+                    qv.assign(wp.array(hqvel, dtype=wp.float32))
+                    th.assign(wp.array(hthird, dtype=wp.float32))
+
+                def _make_du_host():
+                    hq = np.random.randn(N, nq).astype(np.float32)
+                    if floating_base and nq >= 7:
+                        quat = hq[:, 3:7]
+                        hq[:, 3:7] = quat / (np.linalg.norm(quat, axis=1, keepdims=True) + 1e-8)
+                    return (hq,
+                            np.random.randn(N, nv).astype(np.float32),
+                            np.random.randn(N, nv).astype(np.float32))
+
+                wm_times = []
+                for _ in range(n_du_iters):
+                    hs = _make_du_host()          # outside the timer
+                    _sync()
+                    t0 = time.perf_counter()
+                    _upload_du(hs)
+                    _launch_du()
+                    _sync()
+                    wm_times.append((time.perf_counter() - t0) * 1e6)
+                _print_stats(f"{label} WITH MEMORY", N, np.array(wm_times))
+
+                # COMPUTE ONLY: inputs already resident on device.
+                co = _time_compute(_launch_du, n_iters=n_du_iters)
+                _print_stats(f"{label} COMPUTE ONLY", N, co)
+            except Exception as e:
+                print(f"# [N:{N}] {label} skipped: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

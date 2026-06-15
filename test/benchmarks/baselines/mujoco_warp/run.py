@@ -50,10 +50,13 @@ from test.benchmarks.timing_parser import (  # noqa: E402
 # CONFIRMED top-level exports: mjw.inverse, mjw.forward, mjw.kinematics, mjw.crb,
 # mjw.factor_m. `crba` is UNCERTAIN — crb+factor_m yields a factorization (qLD),
 # not a dense mass matrix like GRiD/Frax CRBA; included as the closest analog.
-# Derivative/Jacobian algos are NOT available: Warp kernels aren't autodiff-
-# traced the way MJX uses jax.jacobian, so there is no batched dynamics-Jacobian.
+# Derivative/Jacobian algos (inverse_dynamics_gradient / forward_dynamics_gradient)
+# use a GPU FINITE-DIFFERENCE Jacobian (wp.autograd.jacobian_fd) — mujoco_warp
+# ships enable_backward=False so the autodiff Jacobian is unavailable, but the FD
+# path relaunches the forward kernel with perturbed inputs and works unpatched.
 # ---------------------------------------------------------------------------
-MUJOCO_WARP_ALGOS = ["inverse_dynamics", "forward_dynamics", "end_effector_pose", "crba"]
+MUJOCO_WARP_ALGOS = ["inverse_dynamics", "forward_dynamics", "end_effector_pose", "crba",
+                     "inverse_dynamics_gradient", "forward_dynamics_gradient"]
 
 # Canonical EE body names per robot in MuJoCo MJCF from robot_descriptions
 # (same MJCF models + body names as the mjx adapter).
