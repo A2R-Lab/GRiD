@@ -66,6 +66,19 @@ static int g_threads_override = -1;
 // Per-algo launch threads = the autotuned default unless the user forced an override.
 // (GRID_ALGO_COUNT hits the primary launch_cfg template = MAX_PERF_LEVEL_THREADS, i.e.
 // the historical default — use it for algos with no baked entry / plant kernels.)
+//
+// PER-ALGO TIER: the host-wrapper / direct-kernel launches below pass
+// grid::launch_cfg<GRID_ALGO_X>::TIER (per-algo autotuned resource tier). A FEW calls
+// INTENTIONALLY do NOT pass a tier — do not "fix" them:
+//   * grid::idsva_so(...)            — a DISPATCHER wrapper with NO RESOURCE_TIER param
+//                                       (it bakes the per-frame tier internally).
+//   * the non-mjx grid::integrator / grid::com / grid::ccrba / grid::energy calls —
+//     com/ccrba/energy have no baked launch_cfg entry (GRID_ALGO_COUNT == default tier,
+//     so a tier would be a no-op); the non-mjx integrator's MUJOCO_OUTPUT gate is plain
+//     floating_base (incl. mimic/skew) with no reliable floating-only macro here
+//     (tracked: backlog item L / the descriptor-table refactor will unify this).
+// All OTHER algos thread the tier through both the jax/torch direct launch AND the
+// numpy/pybind C-ABI host-wrapper call (Transform A + the C-ABI tier wiring).
 template <int ALGO>
 static inline dim3 grid_rbd_launch_threads() {
     int n = (g_threads_override >= 1) ? g_threads_override
