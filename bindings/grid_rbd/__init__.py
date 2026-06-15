@@ -18,6 +18,8 @@ use.
 """
 from __future__ import annotations
 
+import hashlib
+import warnings
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -46,6 +48,48 @@ class RobotNotRegisteredError(KeyError):
             f"grid_rbd.register_robot(name={name!r}, urdf_path=...) first."
         )
         self.name = name
+
+
+# Robots we've already warned about lacking an FFI-autotune entry — keyed on
+# (launch_config_robot, floating_base) so the no-autotune warning fires at most
+# once per robot/base per process, not once per register_robot/load_robot call.
+_FFI_AUTOTUNE_WARNED: set[tuple[str, bool]] = set()
+
+
+def _warn_if_no_ffi_autotune(robot_ident: str, floating_base: bool) -> None:
+    """Emit a one-time-per-(robot,base) warning when a robot resolves to NO
+    FFI-autotuned launch_config and will fall back to a conservative bake.
+
+    The jax/torch FFI launch path is acutely sensitive to the per-block thread
+    count: without a baked per-algo ``ffi_bases`` entry the robot lands on the
+    conservative (TIER_SHARED, MAX_PERF_LEVEL_THREADS) default, which can be
+    100-150x off the fast regime ([[project_grid_jax_ffi_thread_pathology]]).
+    Mirrors the resolve in :py:func:`register_robot` (``profile="ffi"``); a no-op
+    (no warning) whenever an entry exists or the config can't be resolved at all
+    (no codegen package → nothing to warn about). Best-effort: never raises."""
+    key = (str(robot_ident), bool(floating_base))
+    if key in _FFI_AUTOTUNE_WARNED:
+        return
+    try:
+        from GRiDCodeGenerator.GRiDCodeGenerator import load_launch_config
+    except Exception:
+        return  # no codegen package (sdist install) → can't assess; stay silent
+    try:
+        lc = load_launch_config(robot_ident, bool(floating_base), profile="ffi")
+    except Exception:
+        return
+    if lc:
+        return  # has an FFI-autotuned config → fast regime, nothing to warn about
+    _FFI_AUTOTUNE_WARNED.add(key)
+    warnings.warn(
+        f"grid_rbd: no FFI-autotuned thread config for {robot_ident!r} "
+        f"(floating_base={bool(floating_base)}); using a conservative thread "
+        f"bake. The jax/torch FFI launch path may run far below peak throughput. "
+        f"Run `python test/benchmarks/autotune_ffi.py --robot {robot_ident} "
+        f"--base {'floating' if floating_base else 'fixed'}` to tune it, or set "
+        f"handle.set_threads_per_block(n) explicitly.",
+        stacklevel=3,
+    )
 
 
 # ─── public API ──────────────────────────────────────────────────────────────
@@ -219,6 +263,19 @@ def register_robot(
             f"use_joint_dynamics=True is only supported for the numpy backend; the "
             f"{backend!r} backend does not yet thread the joint-dynamics flag. "
             f"Use backend='numpy'.")
+    # FFI-autotune coverage warning (Friction 9). All three backends launch their
+    # fast (jax/torch) path through the FFI thread-config; a robot with no baked
+    # ffi_bases entry falls back to a conservative thread count that can be far off
+    # the fast regime. Warn once per (robot, base) BEFORE dispatch so it covers
+    # numpy / jax / torch uniformly. Best-effort + one-shot (never raises).
+    try:
+        from grid_rbd._compile import _resolve_launch_config_robot
+        _ident = _resolve_launch_config_robot(
+            urdf_path if urdf_path is not None else name)
+        _warn_if_no_ffi_autotune(_ident, floating_base)
+    except Exception:
+        pass
+
     # Subset build (algorithm_list) is now supported on ALL backends: the jax/torch
     # FFI handlers are per-CORE-algo gated (#if GRID_HAS_<ALGO>), so a reduced profile
     # builds only the requested cores on those surfaces too, and the backend wrappers
@@ -450,12 +507,108 @@ def precompile(
     return results
 
 
+def load_robot(
+    urdf_path: str | None = None,
+    *,
+    backend: str = "numpy",
+    floating_base: bool = False,
+    urdf_string: str | None = None,
+    name: str | None = None,
+    cache_dir: str | Path | None = None,
+    **opts: Any,
+):
+    """One-call convenience: load a URDF and return a ready-to-use handle.
+
+    This is the frictionless entry point — no name ceremony, no two-call
+    precompile→get_robot dance. It is a THIN wrapper over
+    :py:func:`register_robot`:
+
+      1. Derives a stable, content-addressed ``name`` from the URDF bytes (so
+         the caller never types a name, and re-loading the SAME urdf returns the
+         SAME cached robot — no recompile). Override with ``name=`` if you want a
+         human-friendly handle.
+      2. Calls ``register_robot`` (which is itself idempotent on the cache key —
+         a matching ``.so`` is reused, no nvcc).
+      3. Returns a handle on the requested ``backend``: ``"numpy"`` → the pybind
+         :class:`RobotHandle`, ``"jax"`` → a ``grid_rbd.jax`` handle, ``"torch"``
+         → a ``grid_rbd.torch`` handle.
+
+    Parameters
+    ----------
+    urdf_path : str | None
+        Path to the robot URDF. Mutually exclusive with ``urdf_string``.
+    backend : str
+        ``"numpy"`` (default) / ``"jax"`` / ``"torch"``.
+    floating_base : bool
+        Treat the robot as floating-base (default fixed). Folded into the
+        derived name, so the fixed and floating loads of one URDF get distinct,
+        stable handles (they already compile to distinct cache entries).
+    urdf_string : str | None
+        Inline URDF text instead of a file. Mutually exclusive with ``urdf_path``.
+    name : str | None
+        Override the auto-derived handle name. Default ``None`` ⇒
+        ``f"{stem}_{floating|fixed}_{sha256(urdf)[:12]}"`` (collision-resistant:
+        a 48-bit content hash + the base flag).
+    cache_dir : str | Path | None
+        Cache root override (see :py:func:`register_robot`).
+    **opts
+        Any other :py:func:`register_robot` keyword (``ee_joint_names``,
+        ``max_batch_size``, ``runtime_inertia``, ``runtime_transform``,
+        ``output_convention``, ``algorithm_list``, ``dtype``, ``force_rebuild``,
+        ``cuda_arch``, …) — passed straight through. ``backend``-incompatible
+        options raise the same clear error ``register_robot`` already gives.
+
+    Returns
+    -------
+    RobotHandle | JaxRobotHandle | TorchRobotHandle
+        Ready for forward_dynamics / inverse_dynamics / minv / etc.
+    """
+    if backend not in ("numpy", "jax", "torch"):
+        raise ValueError(f"backend must be 'numpy', 'jax', or 'torch'; got {backend!r}")
+    if (urdf_path is None) == (urdf_string is None):
+        raise ValueError("pass exactly one of urdf_path= or urdf_string=")
+
+    # Stable, content-addressed default name: hash the URDF bytes so reusing the
+    # SAME urdf reuses the cache + manifest binding, and two DIFFERENT urdfs map
+    # to different names. sha256[:12] = 48 bits, collision-resistant for a robot
+    # library. Fold floating_base into the name so the fixed and floating loads
+    # of one urdf don't rebind each other's manifest entry (their cache keys
+    # already differ). NOTE: the auto-name is for cache reuse only; the .so cache
+    # key hashes the FULL urdf bytes + options, so a hash here never causes a
+    # wrong-robot reuse.
+    if name is None:
+        if urdf_string is not None:
+            urdf_bytes = urdf_string.encode("utf-8")
+            stem = "inline"
+        else:
+            up = Path(urdf_path).expanduser()
+            urdf_bytes = up.read_bytes()
+            stem = up.stem or "robot"
+        digest = hashlib.sha256(urdf_bytes).hexdigest()[:12]
+        base_tag = "floating" if floating_base else "fixed"
+        name = f"{stem}_{base_tag}_{digest}"
+
+    # register_robot is idempotent on the cache; for the fast backends it both
+    # builds-or-reuses and returns the backend handle directly, so a single call
+    # is all we need (no separate get_robot).
+    return register_robot(
+        name,
+        urdf_path,
+        urdf_string=urdf_string,
+        backend=backend,
+        floating_base=floating_base,
+        cache_dir=cache_dir,
+        **opts,
+    )
+
+
 __all__ = [
     "RobotHandle",
     "SecondOrderID",
     "SecondOrderFD",
     "RobotNotRegisteredError",
     "register_robot",
+    "load_robot",
     "get_robot",
     "list_registered",
     "precompile",
