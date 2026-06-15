@@ -59,6 +59,8 @@ template <class CT>
 struct CAbi {
     using fn_int_v_t        = int (*)();
     using fn_int_i_t        = int (*)(int);
+    using fn_int_s_t        = int (*)(const char*);   // kernel_max_threads(algo)
+    using fn_int_ii_t       = int (*)(int, int);      // set_threads_for(algo, n)
     using fn_dyn_t         = int (*)(const CT*, const CT*, const CT*,
                                       CT*, int, CT, const CT*);
     using fn_minv_t         = int (*)(const CT*, CT*, int);
@@ -96,6 +98,7 @@ struct CAbi {
     using fn_q_out_grav_t   = int (*)(const CT*, CT*, int, CT);
     using fn_set_inertia_t  = int (*)(const CT*);   // grid_rbd_set_inertia_params
     using fn_set_transform_t = int (*)(const CT*);  // grid_rbd_set_transform_params
+    using fn_set_jd_t       = int (*)(const CT*);   // grid_rbd_set_joint_dynamics_params
 };
 
 
@@ -106,6 +109,8 @@ class RunnerT {
     // C-ABI function-pointer typedefs (parameterized on the buffer dtype CT).
     using fn_int_v_t = typename CAbi<CT>::fn_int_v_t;
     using fn_int_i_t = typename CAbi<CT>::fn_int_i_t;
+    using fn_int_s_t = typename CAbi<CT>::fn_int_s_t;
+    using fn_int_ii_t = typename CAbi<CT>::fn_int_ii_t;
     using fn_dyn_t = typename CAbi<CT>::fn_dyn_t;
     using fn_minv_t = typename CAbi<CT>::fn_minv_t;
     using fn_fd_t = typename CAbi<CT>::fn_fd_t;
@@ -131,6 +136,7 @@ class RunnerT {
     using fn_q_out_grav_t = typename CAbi<CT>::fn_q_out_grav_t;
     using fn_set_inertia_t = typename CAbi<CT>::fn_set_inertia_t;
     using fn_set_transform_t = typename CAbi<CT>::fn_set_transform_t;
+    using fn_set_jd_t = typename CAbi<CT>::fn_set_jd_t;
     // Per-dtype numpy array alias: an input is force-cast to CT, outputs are CT.
     using arr_t = py::array_t<CT, py::array::c_style | py::array::forcecast>;
 public:
@@ -153,6 +159,13 @@ public:
         fn_max_perf_level_threads_ = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_max_perf_level_threads"));
         fn_threads_per_block_ = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_threads_per_block"));
         fn_set_threads_per_block_ = reinterpret_cast<fn_int_i_t>(require_sym("grid_rbd_set_threads_per_block"));
+        // OPTIONAL (E1): pre-this-patch .so lacks it -> kernel_max_threads returns -1
+        // and the FFI autotune falls back to swept-ceiling inference (never crashes).
+        fn_kernel_max_threads_ = reinterpret_cast<fn_int_s_t>(opt_sym("grid_rbd_kernel_max_threads"));
+        // OPTIONAL (E6 per-algo overlay): pre-this-patch .so lacks these -> overlay is a
+        // graceful no-op (has_per_algo_threads() == false).
+        fn_set_threads_for_  = reinterpret_cast<fn_int_ii_t>(opt_sym("grid_rbd_set_threads_for"));
+        fn_algo_count_       = reinterpret_cast<fn_int_v_t>(opt_sym("grid_rbd_algo_count"));
         fn_init_             = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_init"));
         fn_close_            = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_close"));
 
@@ -274,6 +287,11 @@ public:
         // raises a clear error if this symbol is null.
         fn_set_transform_params_ = reinterpret_cast<fn_set_transform_t>(opt_sym("grid_rbd_set_transform_params"));
 
+        // runtime_joint_dynamics — OPTIONAL: present only in a .so built with
+        // runtime_joint_dynamics=True (-DGRID_RBD_RUNTIME_JOINT_DYNAMICS).
+        // set_joint_dynamics_params() raises a clear error if this symbol is null.
+        fn_set_jd_params_ = reinterpret_cast<fn_set_jd_t>(opt_sym("grid_rbd_set_joint_dynamics_params"));
+
         // Cache constants (avoid the indirect-function-call cost on every read).
         num_joints_ = fn_num_joints_();
         num_vel_    = fn_num_vel_();
@@ -303,6 +321,26 @@ public:
     int num_bodies() const { return num_bodies_; }
     int max_batch()  const { return max_batch_; }
     int max_perf_level_threads() const { return fn_max_perf_level_threads_(); }
+    // E1: real compiled __launch_bounds__ ceiling of the baked kernel for `algo`
+    // (cudaFuncGetAttributes maxThreadsPerBlock). -1 if the symbol is absent (old
+    // .so) or the key is unknown/not-built; the FFI autotune treats -1 as "infer".
+    int kernel_max_threads(const std::string& algo) const {
+        return fn_kernel_max_threads_ ? fn_kernel_max_threads_(algo.c_str()) : -1;
+    }
+    // E6 per-algo threads overlay: force `n` threads for the GridAlgo at index `algo`
+    // (n==0 clears it back to the baked launch_cfg<ALGO>::THREADS). The global
+    // set_threads_per_block override still wins when set.
+    void set_threads_for(int algo, int n) {
+        if (!fn_set_threads_for_)
+            throw std::runtime_error("set_threads_for: this .so predates the per-algo "
+                "threads overlay (rebuild to use profile overlays)");
+        if (n < 0) throw std::invalid_argument("set_threads_for: n must be >= 0");
+        int rc = fn_set_threads_for_(algo, n);
+        if (rc != 0) throw std::runtime_error(
+            "grid_rbd_set_threads_for failed: rc=" + std::to_string(rc));
+    }
+    int algo_count() const { return fn_algo_count_ ? fn_algo_count_() : 0; }
+    bool has_per_algo_threads() const { return fn_set_threads_for_ != nullptr; }
     int threads_per_block() const { return fn_threads_per_block_(); }
     void set_threads_per_block(int n) {
         // Override the per-block thread count for all subsequent kernel
@@ -1975,6 +2013,31 @@ public:
             "grid_rbd_set_transform_params failed: rc=" + std::to_string(rc));
     }
 
+    // set_joint_dynamics_params(params) — runtime-mutable damping/friction (C5).
+    // params is a flat (2*num_vel,) array = [damping(nv) || friction(nv)], v-slot
+    // indexed and alpha-folded (matching init_joint_dynamics_params). Copies it into
+    // the device d_joint_dynamics_params table; all subsequent id/fd/aba/*_gradient
+    // calls read the biased coefficients from it (no recompile). Bit-identical to the
+    // baked literal until poked. Only available on a .so built with
+    // runtime_joint_dynamics=True.
+    void set_joint_dynamics_params(arr_t params) {
+        if (!fn_set_jd_params_) throw std::runtime_error(
+            "set_joint_dynamics_params not available in this .so: register the robot with "
+            "runtime_joint_dynamics=True (and force_rebuild=True) to enable the mutable "
+            "damping/friction table.");
+        const int want = 2 * num_vel_;
+        if (params.ndim() != 1 || (int)params.shape(0) != want) {
+            throw std::runtime_error(
+                "set_joint_dynamics_params: params must be a flat (" + std::to_string(want) +
+                ",) array = 2 * num_vel ([damping(nv) || friction(nv)]); got "
+                "ndim=" + std::to_string(params.ndim()) +
+                ", size=" + std::to_string(params.size()));
+        }
+        int rc = fn_set_jd_params_(params.data());
+        if (rc != 0) throw std::runtime_error(
+            "grid_rbd_set_joint_dynamics_params failed: rc=" + std::to_string(rc));
+    }
+
 private:
     void* require_sym(const char* name) {
         dlerror();  // clear errors
@@ -2059,6 +2122,9 @@ private:
     fn_int_v_t fn_max_perf_level_threads_      = nullptr;
     fn_int_v_t fn_threads_per_block_      = nullptr;
     fn_int_i_t fn_set_threads_per_block_  = nullptr;
+    fn_int_s_t fn_kernel_max_threads_     = nullptr;
+    fn_int_ii_t fn_set_threads_for_       = nullptr;
+    fn_int_v_t fn_algo_count_             = nullptr;
     fn_int_v_t fn_init_       = nullptr;
     fn_int_v_t fn_close_      = nullptr;
     fn_dyn_t  fn_inverse_dynamics_           = nullptr;
@@ -2146,6 +2212,7 @@ private:
     fn_q_qd_out_t      fn_cmm_time_variation_mujoco_   = nullptr;  // floating-base mjx (optional)
     fn_set_inertia_t   fn_set_inertia_params_          = nullptr;
     fn_set_transform_t fn_set_transform_params_        = nullptr;
+    fn_set_jd_t        fn_set_jd_params_               = nullptr;
 
     int num_joints_ = 0;
     int num_vel_    = 0;
@@ -2182,6 +2249,21 @@ static void register_runner(py::module_& m, const char* cls_name) {
             "Override the per-block thread count. Default is max_perf_level_threads. "
             "Smaller block sizes work (SIMT helpers use block-stride loops) but may be slower; "
             "larger sizes are valid up to the per-block max (1024 on current GPUs).")
+        .def("kernel_max_threads", &R::kernel_max_threads,
+            py::arg("algo"),
+            "Real compiled __launch_bounds__ ceiling (cudaFuncGetAttributes "
+            "maxThreadsPerBlock) of the baked kernel for the short autotune key "
+            "(id, minv, fd, aba, crba, id_du, fd_du, ee_pose, ee_pose_gradient, "
+            "ee_pose_hessian, idsva_so, fdsva_so). -1 if the key is unknown/not-built "
+            "or the .so predates this symbol; the FFI autotune treats -1 as 'infer'.")
+        .def("set_threads_for", &R::set_threads_for, py::arg("algo"), py::arg("n"),
+            "E6 per-algo threads overlay: force n threads for the GridAlgo at index "
+            "`algo` (n=0 clears to the baked default). Raises if the .so predates the "
+            "overlay. The global set_threads_per_block override still takes precedence.")
+        .def("algo_count", &R::algo_count,
+            "GridAlgo enum size (per-algo overlay index bound); 0 if the .so predates it.")
+        .def("has_per_algo_threads", &R::has_per_algo_threads,
+            "True if the .so exposes the E6 per-algo threads overlay (set_threads_for).")
         .def("inverse_dynamics", &R::inverse_dynamics,
              py::arg("q"), py::arg("qd"),
              py::arg("qdd") = py::none(),
@@ -2428,7 +2510,13 @@ static void register_runner(py::module_& m, const char* cls_name) {
              "Update the device-resident mutable joint-origin transform table "
              "(runtime_transform). params is a flat (6*num_joints,) array, joints "
              "0..NB-1, each a [x,y,z,roll,pitch,yaw] raw URDF <origin> vector. Only "
-             "available on a .so built with runtime_transform=True; raises otherwise.");
+             "available on a .so built with runtime_transform=True; raises otherwise.")
+        .def("set_joint_dynamics_params", &R::set_joint_dynamics_params,
+             py::arg("params"),
+             "Update the device-resident mutable damping/friction table (C5 "
+             "runtime_joint_dynamics). params is a flat (2*num_vel,) array = "
+             "[damping(nv) || friction(nv)], v-slot indexed (alpha-folded). Only "
+             "available on a .so built with runtime_joint_dynamics=True; raises otherwise.");
 }
 
 

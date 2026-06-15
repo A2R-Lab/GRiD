@@ -66,11 +66,45 @@ def _median_batch_to_land_us(fn, dev_args, iters):
     return float(np.median(t))
 
 
-def _sweep_algo(handle, fn, dev_args, candidates, iters, warmup):
-    """Return {threads: median_us} over candidates + the winning thread count."""
+def _kernel_real_ceiling(handle, algo_key):
+    """The kernel's REAL compiled __launch_bounds__ ceiling (= the baked tier's
+    maxThreadsPerBlock) via the grid_rbd_kernel_max_threads introspection C-ABI.
+
+    This is the E1 tier-contract fix: instead of GUESSING the tier (and defaulting
+    to "shared"/512), query cudaFuncGetAttributes(...).maxThreadsPerBlock for the
+    EXACT kernel + tier the binding bakes for this algo. Returns the int ceiling, or
+    None if the ABI is absent (old .so), the algo is unknown, or it reports <1 — in
+    which case the caller falls back to inferring the tier from the swept ceiling."""
+    fn = getattr(handle, "kernel_max_threads", None)
+    if fn is None:
+        return None
+    try:
+        cap = int(fn(algo_key))
+    except Exception:
+        return None
+    return cap if cap >= 1 else None
+
+
+def _sweep_algo(handle, fn, dev_args, candidates, iters, warmup, real_ceiling=None):
+    """Sweep block sizes for the batch-to-land metric.
+
+    Returns (curve, best_actual, best_us) where `curve` is keyed on the ACTUAL
+    launched thread count (= min(requested, real_ceiling)) — NOT the requested
+    count. De-duplicating on the actual count closes the Case-A reporting hole: if
+    640/768/1024 all clamp to the same real ceiling they collapse to ONE curve point
+    and cannot masquerade as a faster higher-thread regime (design_autotune_matrix.md
+    §1.2). When `real_ceiling` is known we also SKIP requests above it (they only
+    clamp-collapse onto the ceiling point), and we keep the SMALLEST request that maps
+    to each actual count (deterministic)."""
     import jax
     curve, best_t, best_us = {}, None, float("inf")
+    seen_actual = set()
     for thr in candidates:
+        actual = thr if real_ceiling is None else min(thr, real_ceiling)
+        if actual in seen_actual:
+            # already timed this actual launch (a higher request clamps to it) — skip
+            # the redundant point so the curve can't double-count a clamped regime.
+            continue
         try:
             handle.set_threads_per_block(thr)
             for _ in range(warmup):
@@ -79,16 +113,48 @@ def _sweep_algo(handle, fn, dev_args, candidates, iters, warmup):
         except Exception as e:                          # too-high smem/threads for a heavy algo
             print(f"      threads={thr:5d}  SKIP ({type(e).__name__})")
             continue
-        curve[thr] = us
+        seen_actual.add(actual)
+        curve[actual] = us           # KEY ON ACTUAL LAUNCHED COUNT, not the request
+        clamp = f" (->{actual})" if actual != thr else ""
         flag = ""
         if us < best_us:
-            best_t, best_us, flag = thr, us, "  <- best"
-        print(f"      threads={thr:5d}  {us:8.2f} us{flag}")
+            best_t, best_us, flag = actual, us, "  <- best"
+        print(f"      threads={thr:5d}{clamp}  {us:8.2f} us{flag}")
     return curve, best_t, best_us
 
 
+def _tier_for_ceiling(ceiling, max_perf):
+    """Invert grid::tier_max_threads<TIER>() : a real maxThreadsPerBlock -> tier label.
+
+      tier_max_threads<TIER_SHARED>()  = max_perf             (capped at 512)
+      tier_max_threads<TIER_LITE>()    = min(2*max_perf, 768)
+      tier_max_threads<TIER_MINIMAL>() = 1024
+
+    Returns the LOWEST tier whose launch_bounds equals `ceiling` (conservative on
+    ties: a kernel at exactly `max_perf` is "shared", never a higher tier). Returns
+    None if no tier matches (the introspected ceiling is inconsistent with this
+    robot's max_perf — surfaced as a hard error by the caller, never silently
+    recorded)."""
+    if not max_perf:
+        return None
+    shared = max_perf
+    lite = min(max_perf * 2, 768)
+    minimal = 1024
+    if ceiling == shared:
+        return "shared"
+    if ceiling == lite:
+        return "lite"
+    if ceiling == minimal:
+        return "minimal"
+    return None
+
+
 def _host_tier_for(doc, base, key):
-    """The host-autotuned tier for this algo (FFI v1 keeps it; threads-only retune)."""
+    """LAST-RESORT tier guess: the host-autotuned tier for this algo, defaulting to
+    "shared". Used ONLY when both the kernel introspection (Option 1) and the
+    swept-ceiling inference (Option 3) are unavailable — i.e. a pre-E1 .so with no
+    host `bases` entry. The E1 fix exists precisely because this guess is wrong for
+    un-tuned big robots (it clamps the real regime to shared/512)."""
     entry = ((doc.get("bases") or {}).get(base) or {}).get(key) or {}
     return entry.get("tier", "shared")
 
@@ -116,6 +182,7 @@ def autotune_base(robot, base, n, iters, warmup, want_algos, build_algos=None):
                         max_batch_size=max(256, n), backends=("jax",), **precompile_kw)
     handle = grid_jax.get_robot(name)
     nq, nv = handle.num_joints, handle.num_vel
+    max_perf = handle.max_perf_level_threads   # MPLT, for the tier inverse map (E1)
     rng = np.random.default_rng(0)
     print(f"\n=== {robot}/{base}  nq={nq} nv={nv}  N={n}  (FFI batch-to-land) ===")
 
@@ -146,8 +213,17 @@ def autotune_base(robot, base, n, iters, warmup, want_algos, build_algos=None):
                 print(f"    {algo:28s} skip (not in subset .so)")
                 continue
             raise
-        print(f"    {algo}:")
-        curve, best_t, best_us = _sweep_algo(handle, fn, dev, THREAD_CANDIDATES, iters, warmup)
+        # E1 tier-contract fix: read the kernel's REAL compiled launch_bounds ceiling
+        # (cudaFuncGetAttributes maxThreadsPerBlock) BEFORE the sweep, so we (a) never
+        # request a count that only clamp-collapses and (b) record the tier the kernel
+        # was actually compiled at — not a "shared" guess. None => ABI absent (old .so).
+        real_ceiling = _kernel_real_ceiling(handle, key)
+        if real_ceiling is not None:
+            print(f"    {algo}:  (kernel max_threads={real_ceiling})")
+        else:
+            print(f"    {algo}:  (kernel max_threads UNKNOWN -> infer from sweep)")
+        curve, best_t, best_us = _sweep_algo(handle, fn, dev, THREAD_CANDIDATES,
+                                             iters, warmup, real_ceiling=real_ceiling)
         # (no reset needed: the next algo's sweep sets its own thread count; the
         #  python handle guards n>=1 so we can't pass 0 to reset to the baked -1.)
         if best_t is None:
@@ -155,13 +231,28 @@ def autotune_base(robot, base, n, iters, warmup, want_algos, build_algos=None):
         # Tie-break: the fast regime is a flat top plateau (e.g. fd 768/896/1024 all
         # ~equal); argmin jitters run-to-run. Pick the SMALLEST thread count within
         # TOL of the best — deterministic + leaner on registers/occupancy, same speed.
+        # NOTE: curve is keyed on ACTUAL launched counts (clamped), so a clamped fast
+        # "regime" has already collapsed onto its real ceiling and can't win here.
         tol = 1.05
         thr = min(t for t, us in curve.items() if us <= best_us * tol)
+        # Derive the recorded tier from the kernel's real ceiling (Option 1); fall back
+        # to the swept ceiling (the max count that demonstrably launched) (Option 3).
+        ceiling_for_tier = real_ceiling if real_ceiling is not None else max(curve)
+        tier_source = "kernel" if real_ceiling is not None else "swept_ceiling"
+        recorded_tier = _tier_for_ceiling(ceiling_for_tier, max_perf)
         picks[key] = {"threads": int(thr), "us": round(curve[thr], 2),
-                      "argmin_threads": int(best_t), "argmin_us": round(best_us, 2)}
+                      "argmin_threads": int(best_t), "argmin_us": round(best_us, 2),
+                      "kernel_max_threads": int(ceiling_for_tier),
+                      "tier": recorded_tier, "tier_source": tier_source}
+        if recorded_tier is None:
+            # Introspected ceiling doesn't match any tier for this robot's max_perf —
+            # a real inconsistency (e.g. a kernel not actually launch_bounds-limited).
+            # Surface it loudly rather than silently recording a bad {tier, threads}.
+            print(f"      !! WARNING: ceiling {ceiling_for_tier} maps to NO tier "
+                  f"(max_perf={max_perf}); tier left null, FIX before baking")
         if thr != best_t:
             print(f"      -> pick {thr} (within {int((tol-1)*100)}% of best {best_t})")
-    return picks, handle.max_perf_level_threads
+    return picks, max_perf
 
 
 def _tier_max_threads(tier, max_perf):
@@ -177,30 +268,52 @@ def _tier_max_threads(tier, max_perf):
 
 
 def write_ffi_config(robot, gpu, base_picks, n, base_maxperf):
-    """Merge {base: {key: {threads, us}}} into launch_configs/<robot>/<gpu>.json
-    under `ffi_bases`, keeping each algo's host tier and leaving `bases` intact.
-    THREADS is clamped to the tier's launch_bounds (tier_max_threads) so the JSON
-    matches what the codegen bake actually launches."""
+    """Merge {base: {key: pick}} into launch_configs/<robot>/<gpu>.json under
+    `ffi_bases`, leaving `bases` intact.
+
+    E1 tier contract: the recorded tier is the KERNEL's real compiled tier (from
+    cudaFuncGetAttributes, `pick["tier"]`/`tier_source`), NOT a "shared" guess. The
+    swept `threads` is <= that tier's real launch_bounds BY CONSTRUCTION (the sweep
+    only kept counts that launched on the real kernel and de-dups on the clamped
+    count), so the old blanket clamp is now an ASSERTION — it can no longer silently
+    throw a valid pick away. Falls back to the host-tier guess only for a pre-E1 .so
+    that lacked the introspection ABI (tier == None)."""
     path = Path(_launch_configs_dir()) / robot / f"{gpu}.json"
     doc = json.loads(path.read_text()) if path.exists() else {}
     ffi = doc.setdefault("ffi_bases", {})
+    tier_sources = set()
     for base, picks in base_picks.items():
         blk = ffi.setdefault(base, {})
         mp = base_maxperf.get(base)
         for key, pk in picks.items():
-            tier = _host_tier_for(doc, base, key)
-            thr = pk["threads"]
+            tier = pk.get("tier")
+            src = pk.get("tier_source")
+            if tier is None:
+                # No kernel/swept ceiling available (old .so) -> last-resort host guess.
+                tier = _host_tier_for(doc, base, key)
+                src = "host_guess"
+            tier_sources.add(src)
+            thr = int(pk["threads"])
             if mp:
-                thr = min(thr, _tier_max_threads(tier, mp))
-            blk[key] = {"tier": tier, "threads": int(thr)}
+                ceiling = _tier_max_threads(tier, mp)
+                if thr > ceiling:
+                    # Should be impossible under the contract; if it fires the tier and
+                    # the pick disagree -> do NOT silently clamp (that re-introduces the
+                    # bug). Surface it and clamp defensively so the JSON stays launchable.
+                    print(f"  !! {base}/{key}: pick {thr} > tier {tier} ceiling {ceiling} "
+                          f"(src={src}) — tier/threads INCONSISTENT, clamping + flag")
+                    thr = ceiling
+            blk[key] = {"tier": tier, "threads": thr}
     meta = doc.setdefault("ffi_meta", {})
     meta["metric"] = "batch_to_land_median_us"
     meta["autotune_N"] = n
-    meta["note"] = ("FFI/jax launch-path optimum (threads-only retune of the host tier); "
-                    "regenerated by test/benchmarks/autotune_ffi.py")
+    meta["tier_source"] = sorted(tier_sources)   # how each tier was derived (audit)
+    meta["note"] = ("FFI/jax launch-path optimum; tier read from the kernel's REAL "
+                    "compiled launch_bounds (cudaFuncGetAttributes, E1 tier contract). "
+                    "Regenerated by test/benchmarks/autotune_ffi.py")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
-    print(f"\n  wrote ffi_bases -> {path}")
+    print(f"\n  wrote ffi_bases -> {path}  (tier_source={sorted(tier_sources)})")
 
 
 def main():
@@ -230,7 +343,10 @@ def main():
     print("\n=== FFI picks (batch-to-land) ===")
     for base, picks in base_picks.items():
         for key, pk in sorted(picks.items()):
-            print(f"  {base:8s} {key:24s} threads={pk['threads']:5d}  {pk['us']:8.2f} us")
+            tier = pk.get("tier") or "?"
+            src = pk.get("tier_source") or "?"
+            print(f"  {base:8s} {key:24s} threads={pk['threads']:5d}  {pk['us']:8.2f} us"
+                  f"  tier={tier:8s} (max={pk.get('kernel_max_threads','?')}, src={src})")
     if args.dry_run:
         print("\n  --dry-run: not writing ffi_bases")
         return

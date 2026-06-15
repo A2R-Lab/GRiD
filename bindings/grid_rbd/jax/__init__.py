@@ -328,6 +328,33 @@ class JaxRobotHandle:
         registered with ``runtime_inertia=True``."""
         self._base.set_inertia_params(params)
 
+    # ─── runtime-mutable joint dynamics (C5 / sysID) ─────────────────────
+    @property
+    def runtime_joint_dynamics(self) -> bool:
+        """True if registered with ``runtime_joint_dynamics=True`` (mutable
+        damping/friction table + :py:meth:`set_joint_dynamics`). The FFI kernels read
+        the same device-resident table, so a poke through any surface is seen here."""
+        return self._base.runtime_joint_dynamics
+
+    @property
+    def joint_damping(self):
+        """Baked per-v-slot viscous damping (length nv). Only on a
+        ``runtime_joint_dynamics`` build."""
+        return self._base.joint_damping
+
+    @property
+    def joint_friction(self):
+        """Baked per-v-slot Coulomb friction (length nv). Only on a
+        ``runtime_joint_dynamics`` build."""
+        return self._base.joint_friction
+
+    def set_joint_dynamics(self, damping=None, friction=None) -> None:
+        """Update the device-resident damping/friction table at runtime (no
+        recompile). ``damping``/``friction`` are length-nv (v-slot indexed); an
+        omitted side keeps its baked value. Only on a ``runtime_joint_dynamics``
+        build."""
+        self._base.set_joint_dynamics(damping=damping, friction=friction)
+
     # ─── kernel launch configuration ─────────────────────────────────────
     @property
     def max_perf_level_threads(self) -> int:
@@ -346,6 +373,15 @@ class JaxRobotHandle:
         launches issued through the underlying .so. By default each algorithm uses
         its own autotuned per-algo thread count; ``n >= 1`` overrides that."""
         self._base.set_threads_per_block(n)
+
+    def kernel_max_threads(self, algo: str) -> int:
+        """Real compiled ``__launch_bounds__`` ceiling of the baked kernel for the
+        short autotune key (``id``, ``fd``, ``minv``, ``id_du``, ``ee_pose``, …) —
+        ``cudaFuncGetAttributes().maxThreadsPerBlock`` at the kernel's baked
+        ``launch_cfg<ALGO>::TIER``. Returns ``-1`` when the key is unknown/not-built
+        or the .so predates the introspection symbol (the FFI autotune then infers
+        the tier from the swept ceiling)."""
+        return self._base.kernel_max_threads(algo)
 
     # ─── output convention (mjx parity) ──────────────────────────────────
     @property
@@ -1619,6 +1655,8 @@ def register_robot(
     cuda_arch: int | None = None,
     output_convention: str = "pinocchio",
     algorithm_list: list[str] | str | None = None,
+    use_joint_dynamics: bool = False,
+    runtime_joint_dynamics: bool = False,
 ) -> JaxRobotHandle:
     """Register a robot for use with JAX.
 
@@ -1646,6 +1684,9 @@ def register_robot(
         force_rebuild=force_rebuild,
         cuda_arch=cuda_arch,
         algorithm_list=algorithm_list,
+        use_joint_dynamics=use_joint_dynamics,  # C5: baked into id/fd/aba/*_gradient kernels
+        runtime_joint_dynamics=runtime_joint_dynamics,  # C5: mutable damping/friction table
+        _profile_overlay=None,  # jax's baked default IS the ffi profile — no overlay
     )
     # Pull the cache_key + .so path from the manifest so we can dlopen
     # to register JAX FFI symbols.
@@ -1672,7 +1713,7 @@ def get_robot(
     'mujoco') mirrors :py:func:`register_robot` and can also be set later
     via the handle's ``output_convention`` property."""
     _require_jax()  # fail early with install guidance if jax is missing
-    base = _grid_rbd.get_robot(name, cache_dir=cache_dir)
+    base = _grid_rbd.get_robot(name, cache_dir=cache_dir, _profile_overlay=None)  # jax baked default = ffi
     from grid_rbd._cache import default_cache_dir, manifest_lookup, store_dir
     cd = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     entry = manifest_lookup(cd, name)

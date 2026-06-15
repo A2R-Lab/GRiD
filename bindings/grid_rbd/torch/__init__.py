@@ -591,6 +591,34 @@ class TorchRobotHandle:
         registered with ``runtime_inertia=True``."""
         self._base.set_inertia_params(params)
 
+    # ─── runtime-mutable joint dynamics (C5 / sysID) ─────────────────────
+    @property
+    def runtime_joint_dynamics(self) -> bool:
+        """True if registered with ``runtime_joint_dynamics=True`` (mutable
+        damping/friction table + :py:meth:`set_joint_dynamics`). The torch-op kernels
+        read the same device-resident table, so a poke through any surface is seen
+        here."""
+        return self._base.runtime_joint_dynamics
+
+    @property
+    def joint_damping(self):
+        """Baked per-v-slot viscous damping (length nv). Only on a
+        ``runtime_joint_dynamics`` build."""
+        return self._base.joint_damping
+
+    @property
+    def joint_friction(self):
+        """Baked per-v-slot Coulomb friction (length nv). Only on a
+        ``runtime_joint_dynamics`` build."""
+        return self._base.joint_friction
+
+    def set_joint_dynamics(self, damping=None, friction=None) -> None:
+        """Update the device-resident damping/friction table at runtime (no
+        recompile). ``damping``/``friction`` are length-nv (v-slot indexed); an
+        omitted side keeps its baked value. Only on a ``runtime_joint_dynamics``
+        build."""
+        self._base.set_joint_dynamics(damping=damping, friction=friction)
+
     # ─── kernel launch configuration ─────────────────────────────────────
     @property
     def max_perf_level_threads(self) -> int:
@@ -1300,6 +1328,8 @@ def register_robot(
     cuda_arch: int | None = None,
     output_convention: str = "pinocchio",
     algorithm_list: list[str] | str | None = None,
+    use_joint_dynamics: bool = False,
+    runtime_joint_dynamics: bool = False,
 ) -> TorchRobotHandle:
     """Register a robot for the torch backend (same cache as the plain/JAX
     surfaces). Returns a :py:class:`TorchRobotHandle`.
@@ -1314,7 +1344,9 @@ def register_robot(
         floating_base=floating_base, ee_joint_names=ee_joint_names,
         max_batch_size=max_batch_size, cache_dir=cache_dir,
         force_rebuild=force_rebuild, cuda_arch=cuda_arch,
-        algorithm_list=algorithm_list,
+        algorithm_list=algorithm_list, use_joint_dynamics=use_joint_dynamics,  # C5
+        runtime_joint_dynamics=runtime_joint_dynamics,  # C5 mutable damping/friction table
+        _profile_overlay="torch",  # E6 torch threads overlay
     )
     cache_key, so_path = _lookup(name, cache_dir)
     return TorchRobotHandle(base, cache_key, so_path,
@@ -1327,7 +1359,7 @@ def get_robot(name: str, cache_dir: str | Path | None = None, *,
     ``output_convention`` ('pinocchio' or 'mujoco') mirrors register_robot and
     can also be set later via the handle's ``output_convention`` property."""
     _require_torch()  # fail early with install guidance if torch is missing
-    base = _grid_rbd.get_robot(name, cache_dir=cache_dir)
+    base = _grid_rbd.get_robot(name, cache_dir=cache_dir, _profile_overlay="torch")  # E6
     cache_key, so_path = _lookup(name, cache_dir)
     return TorchRobotHandle(base, cache_key, so_path,
                             output_convention=output_convention)

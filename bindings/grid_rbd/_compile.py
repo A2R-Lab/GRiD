@@ -170,6 +170,11 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # with the general-rpy DENSE X pattern baked). Default-off keeps the baked
     # header byte-identical; injected into the cache key ONLY when True.
     runtime_transform = bool(options.get("runtime_transform", False))
+    # runtime_joint_dynamics (C5, mirror of runtime_inertia): options gates the
+    # codegen flag (emits the d_joint_dynamics_params table + grid::set_joint_dynamics_params
+    # host mutator; the id/fd/aba/*_gradient bias reads the folded per-v-slot coeff from
+    # it). Default-off keeps the header byte-identical; in the cache key ONLY when True.
+    runtime_joint_dynamics = bool(options.get("runtime_joint_dynamics", False))
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -228,6 +233,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
             enable_idsva_so_world_frame=options.get("floating_base", False),
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform,
+            runtime_joint_dynamics=runtime_joint_dynamics,
         )
 
     if not out_path.exists():
@@ -269,6 +275,9 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         "num_vel": robot.get_num_vel(),
         "num_ees": robot.get_total_leaf_nodes(),
         "floating_base": bool(robot.floating_base),
+        # Canonical launch-config robot key (URDF stem -> tuned-JSON dir). Lets the
+        # handle locate launch_configs/<key>/<gpu>.json for the E6 profile overlay.
+        "launch_config_robot": launch_config_robot,
         "joint_names": joint_names,
         "leaf_jids": [int(j) for j in robot.get_leaf_nodes()],
         "joint_pos_limits": joint_pos_limits,
@@ -295,6 +304,16 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         meta["transform_params"] = [[float(v) for v in op] for op in oparams]
     if use_joint_dynamics:
         meta["use_joint_dynamics"] = True
+    # runtime_joint_dynamics (C5): persist the BAKED alpha-folded per-v-slot
+    # damping/friction (each length nv) so handle.joint_damping/.joint_friction echo
+    # EXACTLY what init_joint_dynamics_params wrote, and set_joint_dynamics can fetch-
+    # then-mutate. Built by the codegen's own fold (get_joint_dynamics_baked) so meta
+    # and the device init agree by construction.
+    if runtime_joint_dynamics:
+        b_vslot, f_vslot = cg.get_joint_dynamics_baked()   # two length-nv folded lists
+        meta["runtime_joint_dynamics"] = True
+        meta["joint_damping"]  = [float(b) for b in b_vslot]
+        meta["joint_friction"] = [float(f) for f in f_vslot]
     return meta
 
 
@@ -349,6 +368,7 @@ def compile_so(
     t_double: bool = False,
     runtime_inertia: bool = False,
     runtime_transform: bool = False,
+    runtime_joint_dynamics: bool = False,
 ) -> None:
     """Invoke nvcc to build wrapper.cu → robot.so.
 
@@ -393,6 +413,12 @@ def compile_so(
     # the wrapper's grid_rbd_set_transform_params C-ABI symbol on it.
     if runtime_transform:
         cmd.append("-DGRID_RBD_RUNTIME_TRANSFORM")
+
+    # runtime_joint_dynamics (C5, mirror): grid.cuh must have been generated with
+    # runtime_joint_dynamics=True (so grid::set_joint_dynamics_params exists); this
+    # -D gates the wrapper's grid_rbd_set_joint_dynamics_params C-ABI symbol on it.
+    if runtime_joint_dynamics:
+        cmd.append("-DGRID_RBD_RUNTIME_JOINT_DYNAMICS")
 
     # JAX FFI handlers: optionally enabled. When jax is available, point
     # nvcc at its FFI include dir and define GRID_RBD_WITH_JAX so the
@@ -494,7 +520,8 @@ def generate_and_compile(
                torch_op_key=torch_op_key, t_double=t_double,
                enable_jax_ffi=True, enable_torch=True,
                runtime_inertia=bool(options.get("runtime_inertia", False)),
-               runtime_transform=bool(options.get("runtime_transform", False)))
+               runtime_transform=bool(options.get("runtime_transform", False)),
+               runtime_joint_dynamics=bool(options.get("runtime_joint_dynamics", False)))
 
     # Persist meta.json
     meta["cuda_arch"] = cuda_arch

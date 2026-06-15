@@ -111,9 +111,11 @@ def register_robot(
     dtype: str = "float32",
     runtime_inertia: bool = False,
     runtime_transform: bool = False,
+    runtime_joint_dynamics: bool = False,
     use_joint_dynamics: bool = False,
     output_convention: str = "pinocchio",
     algorithm_list: list[str] | tuple[str, ...] | str | None = None,
+    _profile_overlay: str | None = "pybind",
 ) -> RobotHandle:
     """Register a robot for fast subsequent calls.
 
@@ -258,11 +260,9 @@ def register_robot(
             f"runtime_transform=True is only supported for the numpy backend; the "
             f"{backend!r} backend does not yet thread the mutable transform table. "
             f"Use backend='numpy'.")
-    if use_joint_dynamics and backend != "numpy":
-        raise ValueError(
-            f"use_joint_dynamics=True is only supported for the numpy backend; the "
-            f"{backend!r} backend does not yet thread the joint-dynamics flag. "
-            f"Use backend='numpy'.")
+    # use_joint_dynamics is a BUILD-TIME codegen flag baked into the id/fd/aba/*_gradient
+    # kernels (not a per-algo GRID_HAS_* gate); the jax/torch FFI handlers call those same
+    # baked symbols. So all three backends support it — it just re-keys the cache. (C5.)
     # FFI-autotune coverage warning (Friction 9). All three backends launch their
     # fast (jax/torch) path through the FFI thread-config; a robot with no baked
     # ffi_bases entry falls back to a conservative thread count that can be far off
@@ -286,14 +286,16 @@ def register_robot(
             name, urdf_path, urdf_string=urdf_string, floating_base=floating_base,
             ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
             cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
-            output_convention=output_convention, algorithm_list=algorithm_list)
+            output_convention=output_convention, algorithm_list=algorithm_list,
+            use_joint_dynamics=use_joint_dynamics)
     if backend == "torch":
         from . import torch as _torch_backend
         return _torch_backend.register_robot(
             name, urdf_path, urdf_string=urdf_string, floating_base=floating_base,
             ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
             cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
-            output_convention=output_convention, algorithm_list=algorithm_list)
+            output_convention=output_convention, algorithm_list=algorithm_list,
+            use_joint_dynamics=use_joint_dynamics)
 
     cache_dir = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -348,6 +350,12 @@ def register_robot(
     # entry — a damped build never collides with the historical no-op build.
     if use_joint_dynamics:
         code_options["use_joint_dynamics"] = True
+    # runtime_joint_dynamics (C5, mirror of runtime_inertia): runtime-mutable
+    # damping/friction table (set_joint_dynamics). Inject the flag (re-keying the
+    # cache) only when True, so a default register_robot is byte-identical and reuses
+    # its existing .so; a runtime_joint_dynamics .so lands in its own cache entry.
+    if runtime_joint_dynamics:
+        code_options["runtime_joint_dynamics"] = True
     # Subset-build: only inject the algorithm_list into the cache key (and thus
     # re-key the cache) when the caller requests a non-default subset, so a default
     # register_robot is byte-identical to before and reuses its existing full .so.
@@ -407,11 +415,17 @@ def register_robot(
     # output_convention is a runtime IO setting (no effect on the cached .so), so it
     # is applied to the handle rather than the cache key. mjx is a no-op on fixed base.
     handle.output_convention = output_convention
+    # E6 per-algo threads overlay: the numpy/pybind surface defaults to "pybind"; the
+    # jax/torch surfaces pass _profile_overlay=None/"torch" (jax's baked default IS
+    # ffi). No-op until the robot JSON carries a <profile>_bases block.
+    if _profile_overlay:
+        handle.apply_profile_overlay(_profile_overlay)
     return handle
 
 
 def get_robot(name: str, cache_dir: str | Path | None = None, *,
-              output_convention: str = "pinocchio") -> RobotHandle:
+              output_convention: str = "pinocchio",
+              _profile_overlay: str | None = "pybind") -> RobotHandle:
     """Look up a previously-registered robot by name.
 
     Raises RobotNotRegisteredError if `name` isn't in the manifest.
@@ -432,6 +446,8 @@ def get_robot(name: str, cache_dir: str | Path | None = None, *,
         )
     handle = RobotHandle(name, str(so_path), entry)
     handle.output_convention = output_convention
+    if _profile_overlay:
+        handle.apply_profile_overlay(_profile_overlay)  # E6 (no-op until tuned); jax/torch override
     return handle
 
 

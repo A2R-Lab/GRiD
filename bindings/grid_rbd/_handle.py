@@ -522,6 +522,62 @@ class RobotHandle:
         self._runner.set_transform_params(arr)
 
     @property
+    def runtime_joint_dynamics(self) -> bool:
+        """True if registered with runtime_joint_dynamics=True (the mutable
+        damping/friction table backing :py:meth:`set_joint_dynamics`)."""
+        return bool(self._meta.get("runtime_joint_dynamics", False))
+
+    @property
+    def joint_damping(self):
+        """Baked per-v-slot viscous damping (length nv, alpha-folded). Mutate a copy
+        and pass to :py:meth:`set_joint_dynamics`. Only on a runtime_joint_dynamics
+        build (raises otherwise)."""
+        vals = self._meta.get("joint_damping")
+        if vals is None:
+            raise RuntimeError(
+                "joint_damping is only available on a robot registered with "
+                "runtime_joint_dynamics=True. Re-register with "
+                "register_robot(..., runtime_joint_dynamics=True, force_rebuild=True).")
+        return np.asarray(vals, dtype=self._dt)
+
+    @property
+    def joint_friction(self):
+        """Baked per-v-slot Coulomb friction (length nv, alpha-folded). Only on a
+        runtime_joint_dynamics build (raises otherwise)."""
+        vals = self._meta.get("joint_friction")
+        if vals is None:
+            raise RuntimeError(
+                "joint_friction is only available on a robot registered with "
+                "runtime_joint_dynamics=True. Re-register with "
+                "register_robot(..., runtime_joint_dynamics=True, force_rebuild=True).")
+        return np.asarray(vals, dtype=self._dt)
+
+    def set_joint_dynamics(self, damping=None, friction=None) -> None:
+        """Update the device-resident damping/friction table at runtime (no recompile).
+
+        Pass either/both as length-nv arrays (v-slot indexed, same basis as
+        :py:attr:`joint_damping` / :py:attr:`joint_friction`). An omitted side keeps
+        its current baked value. This is the sysID / domain-randomization entry point
+        for joint dynamics; passing the baked values back reproduces the baked result
+        bit-for-bit. Only on a runtime_joint_dynamics build (raises otherwise).
+        """
+        if not self.runtime_joint_dynamics:
+            raise RuntimeError(
+                "set_joint_dynamics requires a robot registered with "
+                "runtime_joint_dynamics=True. Re-register with "
+                "register_robot(..., runtime_joint_dynamics=True, force_rebuild=True).")
+        nv = self.num_vel
+        b = np.asarray(self.joint_damping  if damping  is None else damping,  dtype=self._dt)
+        f = np.asarray(self.joint_friction if friction is None else friction, dtype=self._dt)
+        if b.shape != (nv,) or f.shape != (nv,):
+            raise ValueError(
+                f"damping and friction must each be length nv={nv} (v-slot indexed); "
+                f"got {b.shape} and {f.shape}.")
+        # [damping(nv) || friction(nv)], matching grid_rbd_set_joint_dynamics_params.
+        arr = np.ascontiguousarray(np.concatenate([b, f]), dtype=self._dt)
+        self._runner.set_joint_dynamics_params(arr)
+
+    @property
     def max_batch(self) -> int:
         return self._runner.max_batch
 
@@ -563,6 +619,80 @@ class RobotHandle:
         overrides that for every algorithm.
         """
         self._runner.set_threads_per_block(int(n))
+
+    def kernel_max_threads(self, algo: str) -> int:
+        """Real compiled ``__launch_bounds__`` ceiling of the baked kernel for the
+        short autotune key (``id``, ``fd``, ``minv``, ``id_du``, ``ee_pose``,
+        ``idsva_so``, …): ``cudaFuncGetAttributes().maxThreadsPerBlock`` for
+        ``grid::<algo>_kernel`` instantiated at its baked ``launch_cfg<ALGO>::TIER``.
+
+        This is the E1 tier-contract read: the FFI autotune uses it to record a
+        self-consistent ``{tier, threads}`` instead of guessing a host tier and
+        clamping to it. Returns ``-1`` when the key is unknown/not-built or the .so
+        predates the introspection symbol (the autotune then infers the tier from
+        the swept ceiling — it never crashes on a stale .so).
+        """
+        return self._runner.kernel_max_threads(str(algo))
+
+    def apply_profile_overlay(self, profile: str) -> int:
+        """Overlay this profile's per-algo threads (``torch_bases`` / ``pybind_bases``)
+        onto the baked .so at runtime (E6). The torch/pybind surfaces share the baked
+        ffi .so but want different per-algo block sizes; when a profile's tier matches
+        the baked (ffi) tier the only difference is the block size, settable here with
+        no rebuild.
+
+        SKIPS any algo whose profile tier != the baked ffi tier (a tier mismatch needs
+        a profile build, not a runtime overlay) so it never launches a kernel at a tier
+        it wasn't compiled for. Returns the number of algos overlaid. No-op (returns 0)
+        if the .so predates the per-algo overlay or the robot has no ``<profile>_bases``.
+        """
+        if not getattr(self._runner, "has_per_algo_threads", lambda: False)():
+            return 0
+        from GRiDCodeGenerator.GRiDCodeGenerator import (
+            LAUNCH_CONFIG_ALGO_TO_SYMBOL, LAUNCH_CONFIG_TIER_SYMBOL,
+            LAUNCH_CONFIG_DEFAULT_GPU, load_launch_config, _launch_configs_dir)
+        import json, os
+        robot_key = self._meta.get("launch_config_robot")
+        if not robot_key:
+            return 0
+        gpu = self._meta.get("launch_config_gpu", LAUNCH_CONFIG_DEFAULT_GPU)
+        floating = self.floating_base
+        base = "floating" if floating else "fixed"
+        path = os.path.join(_launch_configs_dir(), str(robot_key), str(gpu) + ".json")
+        try:
+            with open(path) as f:
+                doc = json.load(f)
+        except (OSError, ValueError):
+            return 0
+        # PROFILE-ONLY block (NOT load_launch_config — that falls back to host bases;
+        # an absent <profile>_bases must mean "no overlay", i.e. keep the baked ffi
+        # default, not silently apply host threads). Keyed by the short json algo key.
+        prof = (doc.get(str(profile) + "_bases") or {}).get(base) or {}
+        if not prof:
+            return 0
+        # index of each grid symbol = its position in the GridAlgo enum, emitted from
+        # dict.fromkeys(LAUNCH_CONFIG_ALGO_TO_SYMBOL.values()) — the SAME single source
+        # of truth the C-ABI uses. Assert the count matches the .so before indexing.
+        enum_syms = list(dict.fromkeys(LAUNCH_CONFIG_ALGO_TO_SYMBOL.values()))
+        algo_index = {sym: i for i, sym in enumerate(enum_syms)}
+        n_algo = self._runner.algo_count()
+        if n_algo and n_algo != len(enum_syms):
+            # codegen/binding drift — refuse to index rather than overlay the wrong algo
+            return 0
+        baked = load_launch_config(robot_key, floating, gpu, profile="ffi")  # the deployed bake {sym:{tier,threads}}
+        n = 0
+        for key, cfg in prof.items():
+            sym = LAUNCH_CONFIG_ALGO_TO_SYMBOL.get(key)
+            idx = algo_index.get(sym)
+            tier_sym = LAUNCH_CONFIG_TIER_SYMBOL.get(str(cfg.get("tier", "")).lower())
+            threads = cfg.get("threads")
+            if idx is None or tier_sym is None or not isinstance(threads, int) or threads < 1:
+                continue
+            if tier_sym != (baked.get(sym) or {}).get("tier"):
+                continue  # tier mismatch -> needs a profile build, not an overlay
+            self._runner.set_threads_for(idx, int(threads))
+            n += 1
+        return n
 
     # ─── algorithms ──────────────────────────────────────────────────────────
     #

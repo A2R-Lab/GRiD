@@ -63,6 +63,19 @@ static cudaStream_t*         g_streams = nullptr;
 // default; >=1 = force that many. Set via grid_rbd_set_threads_per_block().
 static int g_threads_override = -1;
 
+// Per-algo threads overlay (E6): the torch/pybind profiles share the baked .so but
+// want DIFFERENT per-algo block sizes than the baked ffi default (CUDA-graph replay
+// vs raw numpy shift the optimum). -1 = "use launch_cfg<ALGO>::THREADS". The GLOBAL
+// override (g_threads_override) still wins when set (explicit user intent via
+// set_threads_per_block). Applied at handle init via apply_profile_overlay(profile).
+static int g_threads_per_algo[grid::GRID_ALGO_COUNT];
+static bool g_threads_per_algo_init = false;
+static inline void grid_rbd_threads_per_algo_init() {
+    if (g_threads_per_algo_init) return;
+    for (int i = 0; i < grid::GRID_ALGO_COUNT; ++i) g_threads_per_algo[i] = -1;
+    g_threads_per_algo_init = true;
+}
+
 // Per-algo launch threads = the autotuned default unless the user forced an override.
 // (GRID_ALGO_COUNT hits the primary launch_cfg template = MAX_PERF_LEVEL_THREADS, i.e.
 // the historical default — use it for algos with no baked entry / plant kernels.)
@@ -81,8 +94,15 @@ static int g_threads_override = -1;
 // numpy/pybind C-ABI host-wrapper call (Transform A + the C-ABI tier wiring).
 template <int ALGO>
 static inline dim3 grid_rbd_launch_threads() {
-    int n = (g_threads_override >= 1) ? g_threads_override
-                                      : grid::launch_cfg<ALGO>::THREADS;
+    // Priority: explicit global override > per-algo profile overlay > baked launch_cfg.
+    if (g_threads_override >= 1) return dim3((unsigned)g_threads_override, 1, 1);
+    grid_rbd_threads_per_algo_init();
+    // ALGO == GRID_ALGO_COUNT (plant / no-entry path) hits the primary launch_cfg
+    // template; constexpr-exclude it so the per-algo array is never indexed OOB.
+    if constexpr (ALGO >= 0 && ALGO < grid::GRID_ALGO_COUNT) {
+        if (g_threads_per_algo[ALGO] >= 1) return dim3((unsigned)g_threads_per_algo[ALGO], 1, 1);
+    }
+    int n = grid::launch_cfg<ALGO>::THREADS;
     return dim3((unsigned)n, 1, 1);
 }
 
@@ -153,6 +173,134 @@ extern "C" int grid_rbd_set_threads_per_block(int n) {
     return 0;
 }
 
+// ─── per-algo threads overlay (E6) ───────────────────────────────────────────
+// Number of baked algos = the GridAlgo enum size; Python derives the overlay index
+// from the SAME LAUNCH_CONFIG_ALGO_TO_SYMBOL declaration order and asserts it matches.
+extern "C" int grid_rbd_algo_count() { return grid::GRID_ALGO_COUNT; }
+// Set a per-algo threads override. algo = the GridAlgo enum index. n==0 -> clear
+// (back to launch_cfg<ALGO>::THREADS); n>=1 -> force for that algo only. The global
+// override (set_threads_per_block) still takes precedence when set.
+extern "C" int grid_rbd_set_threads_for(int algo, int n) {
+    if (algo < 0 || algo >= grid::GRID_ALGO_COUNT || n < 0) return 1;
+    grid_rbd_threads_per_algo_init();
+    g_threads_per_algo[algo] = (n == 0) ? -1 : n;
+    return 0;
+}
+
+// ─── kernel introspection: real compiled __launch_bounds__ ceiling (E1) ──────
+//
+// grid_rbd_kernel_max_threads(algo) returns the REAL maxThreadsPerBlock of the
+// kernel this binding bakes for `algo` — cudaFuncGetAttributes() on
+// grid::<algo>_kernel instantiated at the SAME tier the host launchers use
+// (launch_cfg<ALGO>::TIER, forwarded into the kernel's RESOURCE_TIER). That is
+// min(__launch_bounds__(tier_max_threads<TIER>()), register-limited max), so the
+// FFI autotune can record a SELF-CONSISTENT {tier, threads} instead of guessing a
+// host tier and clamping to it (the tier-contract fix; design_autotune_matrix.md
+// §1). Returns -1 on a null/unknown key or a CUDA error — the Python side then
+// falls back to swept-ceiling inference and never crashes (so a stale .so missing
+// this symbol degrades gracefully). Reuses grid_clamp_threads_for's mechanism.
+//
+// `algo` is the SHORT autotune key (id, minv, fd, aba, crba, id_du, fd_du,
+// ee_pose, ee_pose_gradient, ee_pose_hessian, idsva_so, fdsva_so) — same keys the
+// sweep passes. Each branch is guarded by the algo's GRID_HAS_* macro so a subset
+// .so that didn't emit a kernel returns -1 rather than failing to link. Overloaded
+// kernels (id / id_du / fd_du have qdd + no-qdd overloads that SHARE
+// __launch_bounds__) are disambiguated with an explicit function-pointer cast to
+// one overload's signature — either reports the identical ceiling (mirrors the
+// codegen's own static_cast<void(*)(...)> kernel aliases).
+static int grid_kernel_ceiling(const void* fp) {
+    cudaFuncAttributes attr;
+    if (cudaFuncGetAttributes(&attr, fp) != cudaSuccess) {
+        cudaGetLastError();  // swallow — report "unknown" so Python falls back
+        return -1;
+    }
+    return (attr.maxThreadsPerBlock > 0) ? attr.maxThreadsPerBlock : -1;
+}
+
+// Take the address of grid::KERN<T, launch_cfg<ALGO>::TIER>, cast to SIG (selects
+// one overload for the overloaded kernels; a no-op for single-definition ones),
+// and read its maxThreadsPerBlock.
+#define GRID_KERNEL_CEIL(KERN, ALGO, ...) \
+    grid_kernel_ceiling((const void*)static_cast<__VA_ARGS__>( \
+        &grid::KERN<T, grid::launch_cfg<grid::ALGO>::TIER>))
+
+extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
+    if (!algo) return -1;
+    using RM = const grid::robotModel<T>*;
+#if GRID_HAS_INVERSE_DYNAMICS
+    if (std::strcmp(algo, "id") == 0)
+        return GRID_KERNEL_CEIL(inverse_dynamics_kernel, GRID_ALGO_INVERSE_DYNAMICS,
+                                void(*)(T*, const T*, const int, T*, RM, const T, const int));
+#endif
+#if GRID_HAS_MINV
+    if (std::strcmp(algo, "minv") == 0)
+        return GRID_KERNEL_CEIL(minv_kernel, GRID_ALGO_MINV,
+                                void(*)(T*, unsigned char*, const T*, const int, RM, const int));
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS
+    if (std::strcmp(algo, "fd") == 0)
+        return GRID_KERNEL_CEIL(forward_dynamics_kernel, GRID_ALGO_FORWARD_DYNAMICS,
+                                void(*)(T*, unsigned char*, const T*, const int, T*, RM, const T, const int));
+#endif
+#if GRID_HAS_ABA
+    if (std::strcmp(algo, "aba") == 0)
+        return GRID_KERNEL_CEIL(aba_kernel, GRID_ALGO_ABA,
+                                void(*)(T*, unsigned char*, const T*, const int, T*, RM, const T, const int));
+#endif
+#if GRID_HAS_CRBA
+    if (std::strcmp(algo, "crba") == 0)
+        return GRID_KERNEL_CEIL(crba_kernel, GRID_ALGO_CRBA,
+                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
+#endif
+#if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
+    if (std::strcmp(algo, "id_du") == 0)
+        return GRID_KERNEL_CEIL(inverse_dynamics_gradient_kernel, GRID_ALGO_INVERSE_DYNAMICS_GRADIENT,
+                                void(*)(T*, unsigned char*, const T*, const int, T*, RM, const T, const int));
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+    if (std::strcmp(algo, "fd_du") == 0)
+        return GRID_KERNEL_CEIL(forward_dynamics_gradient_kernel, GRID_ALGO_FORWARD_DYNAMICS_GRADIENT,
+                                void(*)(T*, unsigned char*, const T*, const int, T*, RM, const T, const int));
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE
+    if (std::strcmp(algo, "ee_pose") == 0)
+        return GRID_KERNEL_CEIL(end_effector_pose_kernel, GRID_ALGO_END_EFFECTOR_POSE,
+                                void(*)(T*, const T*, const int, RM, const int));
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
+    if (std::strcmp(algo, "ee_pose_gradient") == 0)
+        return GRID_KERNEL_CEIL(end_effector_pose_gradient_kernel, GRID_ALGO_END_EFFECTOR_POSE_GRADIENT,
+                                void(*)(T*, unsigned char*, const T*, const int, RM, const int));
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
+    if (std::strcmp(algo, "ee_pose_hessian") == 0)
+        return GRID_KERNEL_CEIL(end_effector_pose_hessian_kernel, GRID_ALGO_END_EFFECTOR_POSE_HESSIAN,
+                                void(*)(T*, T*, unsigned char*, const T*, const int, RM, const int));
+#endif
+    if (std::strcmp(algo, "idsva_so") == 0) {
+        // Dispatcher: the codegen emits EXACTLY ONE concrete frame kernel per robot
+        // (world for floating/spherical, body for cardinal fixed). Query whichever
+        // variant is present, at its frame-specific tier. Frame-specific ceilings can
+        // differ (different register footprints) — correct, we want the one that runs.
+#if GRID_HAS_IDSVA_SO_WORLD_FRAME
+        return GRID_KERNEL_CEIL(idsva_so_world_frame_kernel, GRID_ALGO_IDSVA_SO_WORLD_FRAME,
+                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
+#elif GRID_HAS_IDSVA_SO_BODY_FRAME
+        return GRID_KERNEL_CEIL(idsva_so_body_frame_kernel, GRID_ALGO_IDSVA_SO_BODY_FRAME,
+                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
+#else
+        return -1;
+#endif
+    }
+#if GRID_HAS_FDSVA_SO
+    if (std::strcmp(algo, "fdsva_so") == 0)
+        return GRID_KERNEL_CEIL(fdsva_so_kernel, GRID_ALGO_FDSVA_SO,
+                                void(*)(T*, unsigned char*, const T*, const int, T*, RM, const T, const int));
+#endif
+    return -1;  // unknown / not-built algo key
+}
+#undef GRID_KERNEL_CEIL
+
 // ─── runtime-mutable inertia (D.4 / Phase 5) ─────────────────────────────────
 //
 // Gated on GRID_RBD_RUNTIME_INERTIA, which grid_rbd._compile sets (alongside the
@@ -200,6 +348,26 @@ extern "C" int grid_rbd_set_transform_params(const T* h_params) {
     return (err == cudaSuccess) ? 0 : (int)err;
 }
 extern "C" int grid_rbd_transform_params_size() { return 6 * grid::NUM_JOINTS; }
+#endif
+
+// ─── runtime-mutable joint dynamics (runtime_joint_dynamics) ──────────────────
+//
+// Gated on GRID_RBD_RUNTIME_JOINT_DYNAMICS (set by grid_rbd._compile alongside the
+// codegen runtime_joint_dynamics flag). grid.cuh then exports
+// grid::set_joint_dynamics_params (a thin cudaMemcpy into the device-resident
+// d_joint_dynamics_params table). h_params: 2*grid::NUM_VEL scalars,
+// [damping(nv) || friction(nv)], v-slot indexed and ALPHA-FOLDED (one fused
+// coefficient per v-slot, matching init_joint_dynamics_params). The table is
+// bit-identical to the baked literal bias until poked (no sincos rebuild, no
+// sparsity change). Returns 0 on success.
+#ifdef GRID_RBD_RUNTIME_JOINT_DYNAMICS
+extern "C" int grid_rbd_set_joint_dynamics_params(const T* h_params) {
+    if (!g_robot) { int rc = grid_rbd_init(); if (rc) return rc; }
+    grid::set_joint_dynamics_params<T>(g_robot, h_params);
+    cudaError_t err = cudaDeviceSynchronize();
+    return (err == cudaSuccess) ? 0 : (int)err;
+}
+extern "C" int grid_rbd_joint_dynamics_params_size() { return 2 * grid::NUM_VEL; }
 #endif
 
 // ─── shared input-packing helper ─────────────────────────────────────────────

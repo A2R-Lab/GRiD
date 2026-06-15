@@ -1,0 +1,76 @@
+{
+  "_README": [
+    "HAND-AUTHORED PLACEHOLDER (A2 / E5). NOT a real tuned config — DO NOT bake.",
+    "Demonstrates the additive `matrix` + `torch_bases`/`pybind_bases` schema that",
+    "the GPU autotune fill (Phase 1) will produce for iiwa14/rtx5090_sm120. Every",
+    "value tagged TODO-FILL-ON-GPU is a placeholder copied from the existing ffi_bases",
+    "pick or set to the conservative tier ceiling. The real tool overwrites them.",
+    "The existing `bases`/`ffi_bases` blocks below are REAL (carried verbatim from the",
+    "live rtx5090_sm120.json) and prove backward-compatibility: load_launch_config()",
+    "profile=host/ffi reads ONLY those two and is byte-identical to today."
+  ],
+
+  "bases": {
+    "fixed": {
+      "fd": { "threads": 128, "tier": "lite", "us_at_optimal": 15.4 }
+    }
+  },
+  "ffi_bases": {
+    "fixed": {
+      "fd": { "threads": 768, "tier": "lite" }
+    }
+  },
+
+  "torch_bases": {
+    "_TODO": "FILL-ON-GPU: autotune_profile.py --profile torch (graph-replay metric).",
+    "fixed": {
+      "fd": { "threads": 512, "tier": "lite" }
+    }
+  },
+  "pybind_bases": {
+    "_TODO": "FILL-ON-GPU: autotune_profile.py --profile pybind (numpy C-ABI metric).",
+    "fixed": {
+      "fd": { "threads": 256, "tier": "lite" }
+    }
+  },
+
+  "matrix": {
+    "_README": [
+      "Rich per-(base, algo, tier) table — tooling/A-B facing, OPTIONAL for the bake.",
+      "max_threads + min_smem are DETERMINISTIC (kernel introspection: E1",
+      "handle.kernel_max_threads(algo) for max_threads; collect_kernel_limits.py for",
+      "min_smem). suggested_threads is per launch-path profile, always <= max_threads.",
+      "build_<profile>_bases() projects this -> the flattened <profile>_bases blocks",
+      "by choosing, per algo, the tier whose suggested_threads[profile] is net-fastest."
+    ],
+    "fixed": {
+      "fd": {
+        "shared": {
+          "max_threads": 512,
+          "min_smem": 49152,
+          "suggested_threads": { "host": 128, "ffi": 512, "torch": 384, "pybind": 256 }
+        },
+        "lite": {
+          "max_threads": 768,
+          "min_smem": 65536,
+          "suggested_threads": { "host": 128, "ffi": 768, "torch": 512, "pybind": 256 }
+        },
+        "minimal": {
+          "max_threads": 1024,
+          "min_smem": 98304,
+          "suggested_threads": { "host": 128, "ffi": 768, "torch": 640, "pybind": 256 }
+        }
+      }
+    }
+  },
+
+  "gpu": "rtx5090_sm120",
+  "matrix_meta": {
+    "_TODO": "FILL-ON-GPU",
+    "metric": { "ffi": "batch_to_land_median_us", "torch": "graph_replay_median_us", "pybind": "numpy_call_median_us" },
+    "autotune_N": 256,
+    "gpu_name": "NVIDIA GeForce RTX 5090",
+    "cuda_arch": "sm_120",
+    "note": "PLACEHOLDER schema example authored by A2 (E5/E6). Replace with real autotune output."
+  }
+}
