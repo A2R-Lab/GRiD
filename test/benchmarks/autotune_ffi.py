@@ -150,19 +150,38 @@ def autotune_base(robot, base, n, iters, warmup, want_algos, build_algos=None):
                       "argmin_threads": int(best_t), "argmin_us": round(best_us, 2)}
         if thr != best_t:
             print(f"      -> pick {thr} (within {int((tol-1)*100)}% of best {best_t})")
-    return picks
+    return picks, handle.max_perf_level_threads
 
 
-def write_ffi_config(robot, gpu, base_picks, n):
+def _tier_max_threads(tier, max_perf):
+    """Mirror C++ grid::tier_max_threads<TIER>(): the tier's __launch_bounds__ ceiling.
+    A pick above this is silently clamped at launch (jax path) and would crash the raw
+    numpy/pybind launch — the codegen bakes the clamp; we clamp the JSON to match."""
+    t = str(tier).lower()
+    if t == "minimal":
+        return 1024
+    if t == "lite":
+        return min(max_perf * 2, 768)
+    return max_perf  # shared
+
+
+def write_ffi_config(robot, gpu, base_picks, n, base_maxperf):
     """Merge {base: {key: {threads, us}}} into launch_configs/<robot>/<gpu>.json
-    under `ffi_bases`, keeping each algo's host tier and leaving `bases` intact."""
+    under `ffi_bases`, keeping each algo's host tier and leaving `bases` intact.
+    THREADS is clamped to the tier's launch_bounds (tier_max_threads) so the JSON
+    matches what the codegen bake actually launches."""
     path = Path(_launch_configs_dir()) / robot / f"{gpu}.json"
     doc = json.loads(path.read_text()) if path.exists() else {}
     ffi = doc.setdefault("ffi_bases", {})
     for base, picks in base_picks.items():
         blk = ffi.setdefault(base, {})
+        mp = base_maxperf.get(base)
         for key, pk in picks.items():
-            blk[key] = {"tier": _host_tier_for(doc, base, key), "threads": pk["threads"]}
+            tier = _host_tier_for(doc, base, key)
+            thr = pk["threads"]
+            if mp:
+                thr = min(thr, _tier_max_threads(tier, mp))
+            blk[key] = {"tier": tier, "threads": int(thr)}
     meta = doc.setdefault("ffi_meta", {})
     meta["metric"] = "batch_to_land_median_us"
     meta["autotune_N"] = n
@@ -192,10 +211,10 @@ def main():
 
     bases = ["fixed", "floating"] if args.base == "both" else [args.base]
     want = set(args.algos) if args.algos else None
-    base_picks = {}
+    base_picks, base_maxperf = {}, {}
     for base in bases:
-        base_picks[base] = autotune_base(args.robot, base, args.n, args.iters, args.warmup,
-                                         want, build_algos=args.build_algos)
+        base_picks[base], base_maxperf[base] = autotune_base(
+            args.robot, base, args.n, args.iters, args.warmup, want, build_algos=args.build_algos)
 
     print("\n=== FFI picks (batch-to-land) ===")
     for base, picks in base_picks.items():
@@ -204,7 +223,7 @@ def main():
     if args.dry_run:
         print("\n  --dry-run: not writing ffi_bases")
         return
-    write_ffi_config(args.robot, args.gpu, base_picks, args.n)
+    write_ffi_config(args.robot, args.gpu, base_picks, args.n, base_maxperf)
 
 
 if __name__ == "__main__":
