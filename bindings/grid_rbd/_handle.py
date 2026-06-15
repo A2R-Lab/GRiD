@@ -455,6 +455,72 @@ class RobotHandle:
         arr = np.ascontiguousarray(arr, dtype=self._dt)
         self._runner.set_inertia_params(arr)
 
+    # ─── runtime-mutable joint-frame transform (runtime_transform) ───────────
+
+    @property
+    def runtime_transform(self) -> bool:
+        """True if this robot was registered with ``runtime_transform=True`` (the
+        .so carries a mutable joint-origin table + :py:meth:`set_transform_params`)."""
+        return bool(self._meta.get("runtime_transform", False))
+
+    @property
+    def transform_params(self):
+        """The BAKED 6-param-per-joint origin table, shape ``(num_joints, 6)``.
+
+        Each row is ``[x, y, z, roll, pitch, yaw]`` — the raw URDF ``<origin>``
+        translation + rpy of joint ``i`` (joint-indexed, ALL joints 0..NB-1).
+        Fetch this, mutate it, and pass it to :py:meth:`set_transform_params`.
+        Only available on a ``runtime_transform`` build (raises otherwise).
+        """
+        params = self._meta.get("transform_params")
+        if params is None:
+            raise RuntimeError(
+                "transform_params is only available on a robot registered with "
+                "runtime_transform=True. Re-register with "
+                "register_robot(..., runtime_transform=True, force_rebuild=True).")
+        return np.asarray(params, dtype=self._dt)
+
+    def set_transform_params(self, params) -> None:
+        """Update the device-resident joint-origin table at runtime (no recompile).
+
+        ``params`` is the 6-param-per-joint table — either flat
+        ``(6*num_joints,)`` or ``(num_joints, 6)`` — in the same layout / basis
+        as :py:attr:`transform_params` (joints 0..NB-1, each
+        ``[x, y, z, roll, pitch, yaw]``). All subsequent algorithm calls rebuild
+        each joint's constant ``Xfixed`` from the updated table. The kinematic
+        calibration / domain-randomization entry point for joint frames.
+
+        Only valid on a robot registered with ``runtime_transform=True``; raises a
+        clear error otherwise. Passing the baked :py:attr:`transform_params` back
+        reproduces the baked result.
+
+        v1 scope: this mutates the spatial X transforms used by the DYNAMICS
+        (inverse_dynamics, crba, forward_dynamics, Minv, gradients, …). The
+        END-EFFECTOR / homogeneous-transform kinematics (end_effector_pose and its
+        gradient/hessian) still use the BAKED origin and are NOT affected — making
+        them mutable is a planned v2 follow-up.
+        """
+        if not self.runtime_transform:
+            raise RuntimeError(
+                "set_transform_params requires a robot registered with "
+                "runtime_transform=True. Re-register with "
+                "register_robot(..., runtime_transform=True, force_rebuild=True).")
+        # The device d_transform_params table is 6*grid::NUM_JOINTS, where
+        # NUM_JOINTS is the PARSER body count (get_num_joints()) — NOT the handle's
+        # num_joints metadata (which is get_num_pos(), differing on a floating
+        # base, e.g. go2: 13 origins vs num_pos==19). Drive the row count off the
+        # persisted baked table, whose length is exactly that parser count.
+        nj = len(self._meta.get("transform_params", []))
+        arr = np.ascontiguousarray(params, dtype=self._dt)
+        if arr.shape == (nj, 6):
+            arr = arr.reshape(-1)
+        elif arr.shape != (6 * nj,):
+            raise ValueError(
+                f"params must be ({nj}, 6) or ({6 * nj},) = 6*num_joints "
+                f"([x,y,z,roll,pitch,yaw] each); got shape {arr.shape}.")
+        arr = np.ascontiguousarray(arr, dtype=self._dt)
+        self._runner.set_transform_params(arr)
+
     @property
     def max_batch(self) -> int:
         return self._runner.max_batch

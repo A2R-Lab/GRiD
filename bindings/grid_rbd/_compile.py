@@ -164,6 +164,13 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # injected into `options` (and thus the cache key) ONLY when True.
     runtime_inertia = bool(options.get("runtime_inertia", False))
 
+    # runtime_transform (mirror of runtime_inertia): options["runtime_transform"]
+    # gates the codegen `runtime_transform` flag (emits the d_transform_params
+    # table + on-device Xfixed rebuild + grid::set_transform_params host mutator,
+    # with the general-rpy DENSE X pattern baked). Default-off keeps the baked
+    # header byte-identical; injected into the cache key ONLY when True.
+    runtime_transform = bool(options.get("runtime_transform", False))
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Plumb ee_joint_names → fixed_target_name. The codegen expects a single
@@ -220,6 +227,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
             enable_floating_second_order=True,
             enable_idsva_so_world_frame=options.get("floating_base", False),
             runtime_inertia=runtime_inertia,
+            runtime_transform=runtime_transform,
         )
 
     if not out_path.exists():
@@ -277,6 +285,14 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         params = robot.get_inertia_params_ordered_by_id()[1:]  # drop base body
         meta["runtime_inertia"] = True
         meta["inertia_params"] = [[float(v) for v in pi] for pi in params]
+    # runtime_transform: persist the BAKED 6-param-per-joint origin table so the
+    # handle can fetch-then-mutate via set_transform_params. Layout mirrors
+    # gen_init_transform_params / init_transform_params: ALL joints 0..NB-1, each
+    # a [x,y,z,roll,pitch,yaw] vector. Flat: op[0..NB-1] -> 6*NB floats.
+    if runtime_transform:
+        oparams = robot.get_origin_params_ordered_by_id()
+        meta["runtime_transform"] = True
+        meta["transform_params"] = [[float(v) for v in op] for op in oparams]
     if use_joint_dynamics:
         meta["use_joint_dynamics"] = True
     return meta
@@ -332,6 +348,7 @@ def compile_so(
     torch_op_key: str | None = None,
     t_double: bool = False,
     runtime_inertia: bool = False,
+    runtime_transform: bool = False,
 ) -> None:
     """Invoke nvcc to build wrapper.cu → robot.so.
 
@@ -370,6 +387,12 @@ def compile_so(
     # this -D gates the wrapper's grid_rbd_set_inertia_params C-ABI symbol on it.
     if runtime_inertia:
         cmd.append("-DGRID_RBD_RUNTIME_INERTIA")
+
+    # runtime_transform (mirror): the grid.cuh must have been generated with
+    # runtime_transform=True (so grid::set_transform_params exists); this -D gates
+    # the wrapper's grid_rbd_set_transform_params C-ABI symbol on it.
+    if runtime_transform:
+        cmd.append("-DGRID_RBD_RUNTIME_TRANSFORM")
 
     # JAX FFI handlers: optionally enabled. When jax is available, point
     # nvcc at its FFI include dir and define GRID_RBD_WITH_JAX so the
@@ -470,7 +493,8 @@ def generate_and_compile(
                max_batch=max_batch, glass_root=glass_root,
                torch_op_key=torch_op_key, t_double=t_double,
                enable_jax_ffi=True, enable_torch=True,
-               runtime_inertia=bool(options.get("runtime_inertia", False)))
+               runtime_inertia=bool(options.get("runtime_inertia", False)),
+               runtime_transform=bool(options.get("runtime_transform", False)))
 
     # Persist meta.json
     meta["cuda_arch"] = cuda_arch

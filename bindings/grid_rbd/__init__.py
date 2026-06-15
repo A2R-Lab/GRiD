@@ -66,6 +66,7 @@ def register_robot(
     allow_fp64: bool = False,
     dtype: str = "float32",
     runtime_inertia: bool = False,
+    runtime_transform: bool = False,
     use_joint_dynamics: bool = False,
     output_convention: str = "pinocchio",
     algorithm_list: list[str] | tuple[str, ...] | str | None = None,
@@ -208,6 +209,11 @@ def register_robot(
             f"runtime_inertia=True is only supported for the numpy backend; the "
             f"{backend!r} backend does not yet thread the mutable inertia table. "
             f"Use backend='numpy'.")
+    if runtime_transform and backend != "numpy":
+        raise ValueError(
+            f"runtime_transform=True is only supported for the numpy backend; the "
+            f"{backend!r} backend does not yet thread the mutable transform table. "
+            f"Use backend='numpy'.")
     if use_joint_dynamics and backend != "numpy":
         raise ValueError(
             f"use_joint_dynamics=True is only supported for the numpy backend; the "
@@ -273,6 +279,12 @@ def register_robot(
     # and reuses its existing fp32 .so. A runtime_inertia .so lands in its own entry.
     if runtime_inertia:
         code_options["runtime_inertia"] = True
+    # runtime_transform (mirror of runtime_inertia): runtime-mutable joint-frame
+    # <origin>. Only inject the flag (re-keying the cache) when True so a default
+    # register_robot is byte-identical and reuses its existing .so; a
+    # runtime_transform .so lands in its own cache entry.
+    if runtime_transform:
+        code_options["runtime_transform"] = True
     # Joint dynamics (viscous damping + Coulomb friction). Only inject the flag (and
     # thus re-key the cache) when True, so a default register_robot is byte-identical
     # to before and reuses its existing .so. A use_joint_dynamics .so lands in its own

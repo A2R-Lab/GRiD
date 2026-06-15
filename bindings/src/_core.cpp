@@ -95,6 +95,7 @@ struct CAbi {
     using fn_q_qd_out_grav_t = int (*)(const CT*, const CT*, CT*, int, CT);
     using fn_q_out_grav_t   = int (*)(const CT*, CT*, int, CT);
     using fn_set_inertia_t  = int (*)(const CT*);   // grid_rbd_set_inertia_params
+    using fn_set_transform_t = int (*)(const CT*);  // grid_rbd_set_transform_params
 };
 
 
@@ -129,6 +130,7 @@ class RunnerT {
     using fn_q_qd_out_grav_t = typename CAbi<CT>::fn_q_qd_out_grav_t;
     using fn_q_out_grav_t = typename CAbi<CT>::fn_q_out_grav_t;
     using fn_set_inertia_t = typename CAbi<CT>::fn_set_inertia_t;
+    using fn_set_transform_t = typename CAbi<CT>::fn_set_transform_t;
     // Per-dtype numpy array alias: an input is force-cast to CT, outputs are CT.
     using arr_t = py::array_t<CT, py::array::c_style | py::array::forcecast>;
 public:
@@ -266,6 +268,11 @@ public:
         // built with runtime_inertia=True (compiled with -DGRID_RBD_RUNTIME_INERTIA).
         // set_inertia_params() raises a clear error if this symbol is null.
         fn_set_inertia_params_ = reinterpret_cast<fn_set_inertia_t>(opt_sym("grid_rbd_set_inertia_params"));
+
+        // runtime_transform — OPTIONAL: present only in a .so built with
+        // runtime_transform=True (-DGRID_RBD_RUNTIME_TRANSFORM). set_transform_params()
+        // raises a clear error if this symbol is null.
+        fn_set_transform_params_ = reinterpret_cast<fn_set_transform_t>(opt_sym("grid_rbd_set_transform_params"));
 
         // Cache constants (avoid the indirect-function-call cost on every read).
         num_joints_ = fn_num_joints_();
@@ -1943,6 +1950,31 @@ public:
             "grid_rbd_set_inertia_params failed: rc=" + std::to_string(rc));
     }
 
+    // set_transform_params(params) — runtime-mutable joint-frame transform.
+    // params is a flat (6*num_joints,) array, joint-indexed ALL joints 0..NB-1,
+    // each a [x,y,z,roll,pitch,yaw] raw URDF <origin> vector. Copies it into the
+    // device d_transform_params table; all subsequent kernel calls rebuild each
+    // joint's constant Xfixed from it (no recompile). Only available on a .so
+    // built with runtime_transform=True. The table is sized by NUM_JOINTS (one
+    // origin per joint), NOT NUM_BODIES.
+    void set_transform_params(arr_t params) {
+        if (!fn_set_transform_params_) throw std::runtime_error(
+            "set_transform_params not available in this .so: register the robot with "
+            "runtime_transform=True (and force_rebuild=True) to enable the mutable "
+            "joint-origin table.");
+        const int want = 6 * num_joints_;
+        if (params.ndim() != 1 || (int)params.shape(0) != want) {
+            throw std::runtime_error(
+                "set_transform_params: params must be a flat (" + std::to_string(want) +
+                ",) array = 6 * num_joints ([x,y,z,roll,pitch,yaw] each); got "
+                "ndim=" + std::to_string(params.ndim()) +
+                ", size=" + std::to_string(params.size()));
+        }
+        int rc = fn_set_transform_params_(params.data());
+        if (rc != 0) throw std::runtime_error(
+            "grid_rbd_set_transform_params failed: rc=" + std::to_string(rc));
+    }
+
 private:
     void* require_sym(const char* name) {
         dlerror();  // clear errors
@@ -2113,6 +2145,7 @@ private:
     fn_q_qd_out_t      fn_cmm_time_variation_          = nullptr;
     fn_q_qd_out_t      fn_cmm_time_variation_mujoco_   = nullptr;  // floating-base mjx (optional)
     fn_set_inertia_t   fn_set_inertia_params_          = nullptr;
+    fn_set_transform_t fn_set_transform_params_        = nullptr;
 
     int num_joints_ = 0;
     int num_vel_    = 0;
@@ -2389,7 +2422,13 @@ static void register_runner(py::module_& m, const char* cls_name) {
              "Update the device-resident mutable inertia table (D.4 / Phase 5). "
              "params is a flat (10*num_joints,) array, bodies 1..N, each a length-10 "
              "[m, h(3), I_O(6)] vector. Only available on a .so built with "
-             "runtime_inertia=True; raises otherwise.");
+             "runtime_inertia=True; raises otherwise.")
+        .def("set_transform_params", &R::set_transform_params,
+             py::arg("params"),
+             "Update the device-resident mutable joint-origin transform table "
+             "(runtime_transform). params is a flat (6*num_joints,) array, joints "
+             "0..NB-1, each a [x,y,z,roll,pitch,yaw] raw URDF <origin> vector. Only "
+             "available on a .so built with runtime_transform=True; raises otherwise.");
 }
 
 

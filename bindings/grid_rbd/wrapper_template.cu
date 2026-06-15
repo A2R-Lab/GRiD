@@ -182,6 +182,26 @@ extern "C" int grid_rbd_set_inertia_params(const T* h_params) {
 extern "C" int grid_rbd_inertia_params_size() { return 10 * grid::NUM_BODIES; }
 #endif
 
+// ─── runtime-mutable joint-frame transform (runtime_transform) ────────────────
+//
+// Gated on GRID_RBD_RUNTIME_TRANSFORM (set by grid_rbd._compile alongside the
+// codegen `runtime_transform` flag). The generated grid.cuh exports
+// grid::set_transform_params (a thin cudaMemcpy into the device-resident
+// d_transform_params table). h_params: 6*grid::NUM_JOINTS scalars, joint-indexed
+// ALL joints 0..NB-1, each a [x,y,z,roll,pitch,yaw] raw URDF <origin> vector. The
+// device rebuilds each joint's constant Xfixed from it once per launch. The table
+// is sized by NUM_JOINTS (one origin per joint), NOT NUM_BODIES. Returns 0 on
+// success.
+#ifdef GRID_RBD_RUNTIME_TRANSFORM
+extern "C" int grid_rbd_set_transform_params(const T* h_params) {
+    if (!g_robot) { int rc = grid_rbd_init(); if (rc) return rc; }
+    grid::set_transform_params<T>(g_robot, h_params);
+    cudaError_t err = cudaDeviceSynchronize();
+    return (err == cudaSuccess) ? 0 : (int)err;
+}
+extern "C" int grid_rbd_transform_params_size() { return 6 * grid::NUM_JOINTS; }
+#endif
+
 // ─── shared input-packing helper ─────────────────────────────────────────────
 //
 // h_q_qd_u layout (matches generated host wrappers):
