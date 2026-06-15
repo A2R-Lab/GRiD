@@ -336,6 +336,39 @@ def compile_binary(
 # ---------------------------------------------------------------------------
 # Run and parse
 # ---------------------------------------------------------------------------
+def _parse_pinocchio_metadata(stdout: str) -> dict[str, str]:
+    """Extract the `=== BEGIN PINOCCHIO METADATA ===`...`=== END ===` block into
+    a flat metadata dict, mirroring the other adapters' _parse_*_metadata helpers
+    (mjx/frax/mujoco_warp/curobo).
+
+    The pinocchio timing binary emits per-algorithm `<ALGO> codegen: true/false`
+    and `<ALGO> direct: true/false` lines (rather than version strings). We capture
+    each as `<algo>_codegen` / `<algo>_direct` so the top-level metadata records
+    which backend path each algo timed on. Note: the per-algo codegen booleans are
+    ALSO attached per-timing-entry by parse_pinocchio_output() (entry["codegen"]);
+    this surfaces the same provenance at the metadata level for parity with the
+    other adapters that stash backend info in metadata.
+
+    Values are kept as strings ("true"/"false"/"null") to match the str-valued
+    shape the sibling parsers return.
+    """
+    meta: dict[str, str] = {}
+    in_block = False
+    for line in stdout.splitlines():
+        if "=== BEGIN PINOCCHIO METADATA ===" in line:
+            in_block = True
+            continue
+        if "=== END PINOCCHIO METADATA ===" in line:
+            break
+        if in_block and ":" in line:
+            k, _, v = line.partition(":")
+            key = k.strip().lower().replace(" ", "_")
+            # Only keep the flag lines (keys ending in _codegen / _direct).
+            if key.endswith("_codegen") or key.endswith("_direct"):
+                meta[key] = v.strip().lower()
+    return meta
+
+
 def _runtime_env() -> dict[str, str]:
     """Build environment with cmeel lib path prepended to LD_LIBRARY_PATH."""
     env = os.environ.copy()
@@ -544,15 +577,21 @@ def main() -> None:
     # subprocess's stdout independently and take that algo's entry from the
     # parsed dict. Algos that errored or timed out stay null via fill_nulls().
     timings: dict[str, object] = {}
+    parsed_meta: dict[str, str] = {}
     for algo, output in per_algo_outputs.items():
         if not output:
             continue
         parsed = parse_pinocchio_output(output)
         if algo in parsed and parsed[algo] is not None:
             timings[algo] = parsed[algo]
+        # Each per-algo subprocess emits the same metadata block; merge the
+        # parsed codegen/direct flags across them (later runs fill any keys an
+        # earlier run's block omitted).
+        parsed_meta.update(_parse_pinocchio_metadata(output))
     filled = fill_nulls(timings)
 
     meta = build_metadata(include_gpu=False, include_pinocchio=True)
+    meta.update(parsed_meta)
     meta["robot"] = args.robot
     meta["base"] = args.base
     meta["ee_frame"] = ee_frame
