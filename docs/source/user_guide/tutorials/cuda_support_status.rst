@@ -107,9 +107,9 @@ Known Caveats
   treating fallback paths as fully sanitizer-clean.
 * Performance tier choices can depend on register pressure and occupancy; use
   ptxas output and timing kernels on the target GPU before saving local
-  baselines. Tiers are now named ``TIER_SHARED`` (default) / ``TIER_LITE`` /
-  ``TIER_MINIMAL``; ``TIER_PERF`` remains as a deprecated alias of
-  ``TIER_SHARED``. See :doc:`../concepts/resource_tier_system`.
+  baselines. Tiers are named ``TIER_SHARED`` (default) / ``TIER_LITE`` /
+  ``TIER_MINIMAL`` (the old ``TIER_PERF`` alias has been removed — use
+  ``TIER_SHARED``). See :doc:`../concepts/resource_tier_system`.
 * Robots with **mimic joints**: non-gradient algorithms are supported, and
   **every** gradient now emits a correct mimic-reduced result on both bases —
   ``inverse_dynamics_gradient`` / ``forward_dynamics_gradient``,

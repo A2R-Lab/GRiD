@@ -72,7 +72,7 @@ include:
   Hessian), and joint position/velocity/torque log-barriers.
 * **Resource tiers:** every emitted kernel and inline-CUDA ``_device`` /
   ``_inner`` surface takes a ``RESOURCE_TIER`` template parameter defaulting to
-  ``TIER_SHARED`` (a deprecated ``TIER_PERF = TIER_SHARED`` alias is kept). See
+  ``TIER_SHARED`` (the old ``TIER_PERF`` alias has been removed). See
   :doc:`../concepts/resource_tier_system`.
 * **Mimic joints:** non-gradient algorithms support mimic robots, and **every**
   gradient codegen now folds correctly to the reduced coordinates on both bases —

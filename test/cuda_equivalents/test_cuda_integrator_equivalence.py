@@ -192,8 +192,8 @@ def _compile_runner(build_dir: Path, tier: str | None = None):
     # GRID_CUDA_INTEGRATOR_TIER env still overrides it for ad-hoc single-tier runs.
     tier = os.environ.get("GRID_CUDA_INTEGRATOR_TIER", tier)
     if tier and tier != "TIER_SHARED":
-        if tier not in ("TIER_PERF", "TIER_LITE", "TIER_MINIMAL"):
-            pytest.fail("GRID_CUDA_INTEGRATOR_TIER must be TIER_SHARED (a.k.a. legacy TIER_PERF), TIER_LITE, or TIER_MINIMAL.")
+        if tier not in ("TIER_SHARED", "TIER_LITE", "TIER_MINIMAL"):
+            pytest.fail("GRID_CUDA_INTEGRATOR_TIER must be TIER_SHARED, TIER_LITE, or TIER_MINIMAL.")
         cmd.insert(-1, f"-DGRID_DEFAULT_RESOURCE_TIER={tier}")
     result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
