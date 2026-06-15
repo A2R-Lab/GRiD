@@ -787,6 +787,28 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   isolated perf-timing phase at the end. "No concurrent heavy GPU builds" applies to TIMING, never to
   correctness. [[feedback_parallel_equivalence_testing]] [[feedback_safe_dev_and_timing_methodology]]
 
+## 9. Lessons (2026-06-15 — runtime_transform + autonomous-run session)
+
+- **Shared-helper scratch must be reserved in EVERY per-algo arena `t_count` (a SILENT OOB class).** When a SHARED device
+  helper (e.g. `load_update_XImats_helpers`) writes a new block into `s_temp` (runtime_transform appended a 36·NB `Xfixed`
+  block at offset 2·num_pos), growing the helper's OWN declared temp size is NOT enough — every algorithm's arena `t_count`
+  (GRiDCodeGenerator.py ~659-960, feeding `grid_shared_arena_bytes(t_count,…)`) must reserve it too, or the helper writes past
+  the kernel's dynamic-shared allocation. NO compile error, and the functional test can pass on small data — only
+  **`compute-sanitizer --tool memcheck`** catches the "Invalid __shared__ write … out of bounds". A purely-additive `+= reserve`
+  per arena is safe when the block is consumed inside the helper (dead after). The M descriptor table kills this class via an
+  auto-injected reservation region (`design_descriptor_table_spec.md`).
+- **Don't trust a subagent's "done" — capture the verdict yourself** (recurred 3× this session). Codegen agents end their turn
+  with "waiting for the Monitor event" while their OWN detached validation (nvcc + `/tmp/validate_*.py`) is still building, so
+  they report nothing and commit nothing. After an agent returns: `git diff --stat`, `ps` for a detached `nvcc`/`validate_*`,
+  wait on the PID, then RE-RUN the validation yourself — definitive gate = compute-sanitizer + a committed equivalence test.
+  Memory `feedback_capture_subagent_verdict_yourself`. (Also: pass `isolation: worktree` so WIP isn't left on the main tree.)
+- **Editing codegen invalidates the .so cache → every robot is a FRESH 28-57min rebuild.** The cache key hashes the
+  GRiDCodeGenerator+URDFParser source (the J fix), so after any codegen commit ALL robots cache-miss. This paces GPU
+  validation; keep it serial, prefer light robots (iiwa14/fr3) for correctness, reserve g1/h2_plus SO builds for when needed.
+- **"Already built but unvalidated" is the dominant backlog state.** This session confirmed mimic, damping/friction,
+  install-extras, runtime_inertia were ALL already implemented — the work was VALIDATION (run the test) + closing narrow gaps,
+  not building. Always grep/run-the-test before authoring a "missing" feature.
+
 ---
 
 *Linked from HANDOFF.md. Companion: `docs/idsva_so_inner_refactor_notes.md` (SO internals + resume hints).*
