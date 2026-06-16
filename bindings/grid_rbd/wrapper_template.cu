@@ -21,6 +21,16 @@
 #include <algorithm>
 #include <cstring>
 
+// C4 EE binding aliases (codegen emits these in grid.cuh whenever kinematics are
+// built; see gen_all_code). A single named fixed target routes them to the
+// _<name> launchers + a 1-EE count. Fallback to the all-leaf default so a
+// kinematics-free subset profile (where grid_rbd_num_ees() still references
+// GRID_RBD_NUM_EES unconditionally) compiles; the FN/KERNEL aliases are only used
+// under GRID_HAS_END_EFFECTOR_POSE* guards, so they need no fallback here.
+#ifndef GRID_RBD_NUM_EES
+#define GRID_RBD_NUM_EES grid::NUM_EES
+#endif
+
 // fp64 (Phase 8): the buffer/compute element type. Default float (byte-identical
 // fp32 ABI). A .so built with -DGRID_WRAPPER_T_DOUBLE uses double — same symbol
 // names, doubled smem footprint, re-derived spill tiers (see the matching codegen
@@ -148,7 +158,7 @@ extern "C" int grid_rbd_close() {
 
 extern "C" int grid_rbd_num_joints()     { return grid::NUM_JOINTS; }
 extern "C" int grid_rbd_num_vel()        { return grid::NUM_VEL; }
-extern "C" int grid_rbd_num_ees()        { return grid::NUM_EES; }
+extern "C" int grid_rbd_num_ees()        { return GRID_RBD_NUM_EES; }
 extern "C" int grid_rbd_num_bodies()     { return grid::NUM_BODIES; }
 extern "C" int grid_rbd_max_batch()      { return kMaxBatch; }
 extern "C" int grid_rbd_max_perf_level_threads() { return grid::MAX_PERF_LEVEL_THREADS; }
@@ -264,17 +274,17 @@ extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
 #endif
 #if GRID_HAS_END_EFFECTOR_POSE
     if (std::strcmp(algo, "ee_pose") == 0)
-        return GRID_KERNEL_CEIL(end_effector_pose_kernel, GRID_ALGO_END_EFFECTOR_POSE,
+        return GRID_KERNEL_CEIL(GRID_RBD_EE_POSE_KERNEL, GRID_ALGO_END_EFFECTOR_POSE,
                                 void(*)(T*, const T*, const int, RM, const int));
 #endif
 #if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
     if (std::strcmp(algo, "ee_pose_gradient") == 0)
-        return GRID_KERNEL_CEIL(end_effector_pose_gradient_kernel, GRID_ALGO_END_EFFECTOR_POSE_GRADIENT,
+        return GRID_KERNEL_CEIL(GRID_RBD_EE_POSE_GRADIENT_KERNEL, GRID_ALGO_END_EFFECTOR_POSE_GRADIENT,
                                 void(*)(T*, unsigned char*, const T*, const int, RM, const int));
 #endif
 #if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
     if (std::strcmp(algo, "ee_pose_hessian") == 0)
-        return GRID_KERNEL_CEIL(end_effector_pose_hessian_kernel, GRID_ALGO_END_EFFECTOR_POSE_HESSIAN,
+        return GRID_KERNEL_CEIL(GRID_RBD_EE_POSE_HESSIAN_KERNEL, GRID_ALGO_END_EFFECTOR_POSE_HESSIAN,
                                 void(*)(T*, T*, unsigned char*, const T*, const int, RM, const int));
 #endif
     if (std::strcmp(algo, "idsva_so") == 0) {
@@ -801,16 +811,16 @@ extern "C" int grid_rbd_end_effector_pose(
     pack_q_qd_u(q, q, nullptr, batch, nj);
 
 #if defined(GRID_RBD_WITH_MUJOCO)
-    grid::end_effector_pose<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
+    grid::GRID_RBD_EE_POSE_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
 #else
-    grid::end_effector_pose<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
+    grid::GRID_RBD_EE_POSE_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
 #endif
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
 
-    std::memcpy(ee_out, g_data->h_end_effector_pose, batch * 6 * grid::NUM_EES * sizeof(T));
+    std::memcpy(ee_out, g_data->h_end_effector_pose, batch * 6 * GRID_RBD_NUM_EES * sizeof(T));
     return 0;
 #else
     (void)q; (void)ee_out; (void)batch;
@@ -827,12 +837,12 @@ extern "C" int grid_rbd_end_effector_pose_mujoco(const T* q, T* ee_out, int batc
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
-    grid::end_effector_pose<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+    grid::GRID_RBD_EE_POSE_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                             /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
-    std::memcpy(ee_out, g_data->h_end_effector_pose, (size_t)batch * 6 * grid::NUM_EES * sizeof(T));
+    std::memcpy(ee_out, g_data->h_end_effector_pose, (size_t)batch * 6 * GRID_RBD_NUM_EES * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_END_EFFECTOR_POSE
@@ -899,9 +909,9 @@ extern "C" int grid_rbd_end_effector_pose_gradient(
     pack_q_qd_u(q, q, nullptr, batch, nj);
 
 #if defined(GRID_RBD_WITH_MUJOCO)
-    grid::end_effector_pose_gradient<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
+    grid::GRID_RBD_EE_POSE_GRADIENT_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
 #else
-    grid::end_effector_pose_gradient<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
+    grid::GRID_RBD_EE_POSE_GRADIENT_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
 #endif
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(), g_streams);
 
@@ -909,7 +919,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient(
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(dee_out, g_data->h_end_effector_pose_gradient,
-                batch * 6 * grid::NUM_EES * nv * sizeof(T));
+                batch * 6 * GRID_RBD_NUM_EES * nv * sizeof(T));
     return 0;
 #else
     (void)q; (void)dee_out; (void)batch;
@@ -926,13 +936,13 @@ extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(const T* q, T* dee_out
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
-    grid::end_effector_pose_gradient<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+    grid::GRID_RBD_EE_POSE_GRADIENT_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                                      /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(dee_out, g_data->h_end_effector_pose_gradient,
-                (size_t)batch * 6 * grid::NUM_EES * grid::NUM_VEL * sizeof(T));
+                (size_t)batch * 6 * GRID_RBD_NUM_EES * grid::NUM_VEL * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_END_EFFECTOR_POSE_GRADIENT
@@ -1124,9 +1134,9 @@ extern "C" int grid_rbd_end_effector_pose_hessian(
     pack_q_qd_u(q, q, nullptr, batch, nj);
 
 #if defined(GRID_RBD_WITH_MUJOCO)
-    grid::end_effector_pose_hessian<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
+    grid::GRID_RBD_EE_POSE_HESSIAN_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
 #else
-    grid::end_effector_pose_hessian<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
+    grid::GRID_RBD_EE_POSE_HESSIAN_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
 #endif
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(), g_streams);
 
@@ -1134,7 +1144,7 @@ extern "C" int grid_rbd_end_effector_pose_hessian(
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(d2ee_out, g_data->h_end_effector_pose_hessian,
-                batch * 6 * grid::NUM_EES * nv * nv * sizeof(T));
+                batch * 6 * GRID_RBD_NUM_EES * nv * nv * sizeof(T));
     return 0;
 #else
     (void)q; (void)d2ee_out; (void)batch;
@@ -1151,13 +1161,13 @@ extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(const T* q, T* d2ee_out
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
-    grid::end_effector_pose_hessian<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
+    grid::GRID_RBD_EE_POSE_HESSIAN_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                                     /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(d2ee_out, g_data->h_end_effector_pose_hessian,
-                (size_t)batch * 6 * grid::NUM_EES * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
+                (size_t)batch * 6 * GRID_RBD_NUM_EES * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_END_EFFECTOR_POSE_HESSIAN
@@ -3228,7 +3238,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_impl(
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
 
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
-    grid::end_effector_pose_kernel<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
+    grid::GRID_RBD_EE_POSE_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
         dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE>(),
         grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
@@ -3236,7 +3246,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_impl(
             g_robot, batch);
 
     cudaMemcpyAsync(ee_out->typed_data(), g_data->d_end_effector_pose,
-                    batch * 6 * grid::NUM_EES * sizeof(T),
+                    batch * 6 * GRID_RBD_NUM_EES * sizeof(T),
                     cudaMemcpyDeviceToDevice, stream);
     return ffi::Error::Success();
 }
@@ -3289,7 +3299,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_gradient_impl(
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
 
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
-    grid::end_effector_pose_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
+    grid::GRID_RBD_EE_POSE_GRADIENT_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
         dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(),
         grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(),
         stream>>>(
@@ -3297,7 +3307,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_gradient_impl(
             g_robot, batch);
 
     cudaMemcpyAsync(dee_out->typed_data(), g_data->d_end_effector_pose_gradient,
-                    batch * 6 * grid::NUM_EES * nv * sizeof(T),
+                    batch * 6 * GRID_RBD_NUM_EES * nv * sizeof(T),
                     cudaMemcpyDeviceToDevice, stream);
     return ffi::Error::Success();
 }
@@ -3487,7 +3497,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_hessian_impl(
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
 
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
-    grid::end_effector_pose_hessian_kernel<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
+    grid::GRID_RBD_EE_POSE_HESSIAN_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
         dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(),
         grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(),
         stream>>>(
@@ -3495,7 +3505,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_hessian_impl(
             g_data->d_q_qd_u, stride_q, g_robot, batch);
 
     cudaMemcpyAsync(d2ee_out->typed_data(), g_data->d_end_effector_pose_hessian,
-                    batch * 6 * grid::NUM_EES * nv * nv * sizeof(T),
+                    batch * 6 * GRID_RBD_NUM_EES * nv * nv * sizeof(T),
                     cudaMemcpyDeviceToDevice, stream);
     return ffi::Error::Success();
 }
@@ -5488,14 +5498,14 @@ torch::Tensor torch_crba(torch::Tensor q, double gravity) {
 template <bool MUJOCO>
 torch::Tensor torch_end_effector_pose(torch::Tensor q) {
     grid_torch_init_or_throw();
-    const int nj = grid::NUM_JOINTS, nee = grid::NUM_EES;
+    const int nj = grid::NUM_JOINTS, nee = GRID_RBD_NUM_EES;
     grid_torch_check(q, "end_effector_pose: q", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, 6 * nee, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::end_effector_pose_kernel<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE>(), grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::GRID_RBD_EE_POSE_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE>(), grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_end_effector_pose, g_data->d_q_qd_u, stride, g_robot, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_end_effector_pose, batch * 6 * nee * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
@@ -5506,14 +5516,14 @@ torch::Tensor torch_end_effector_pose(torch::Tensor q) {
 template <bool MUJOCO>
 torch::Tensor torch_end_effector_pose_gradient(torch::Tensor q) {
     grid_torch_init_or_throw();
-    const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL, nee = grid::NUM_EES;
+    const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL, nee = GRID_RBD_NUM_EES;
     grid_torch_check(q, "end_effector_pose_gradient: q", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, 6 * nee * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::end_effector_pose_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(), grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(), stream>>>(
+    grid::GRID_RBD_EE_POSE_GRADIENT_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(), grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(), stream>>>(
         g_data->d_end_effector_pose_gradient, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_end_effector_pose_gradient, batch * 6 * nee * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
@@ -5524,14 +5534,14 @@ torch::Tensor torch_end_effector_pose_gradient(torch::Tensor q) {
 template <bool MUJOCO>
 torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q) {
     grid_torch_init_or_throw();
-    const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL, nee = grid::NUM_EES;
+    const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL, nee = GRID_RBD_NUM_EES;
     grid_torch_check(q, "end_effector_pose_hessian: q", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, 6 * nee * nv * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::end_effector_pose_hessian_kernel<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(), grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(), stream>>>(
+    grid::GRID_RBD_EE_POSE_HESSIAN_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(), grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(), stream>>>(
         g_data->d_end_effector_pose_hessian, g_data->d_end_effector_pose_gradient, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_end_effector_pose_hessian, batch * 6 * nee * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;

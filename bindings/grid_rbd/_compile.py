@@ -273,7 +273,11 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     meta = {
         "num_joints": robot.get_num_pos(),
         "num_vel": robot.get_num_vel(),
-        "num_ees": robot.get_total_leaf_nodes(),
+        # A single named fixed target exposes ONE EE (the named flange) — mirror the
+        # codegen's GRID_RBD_NUM_EES so meta matches the .so's grid_rbd_num_ees().
+        # "" / "all" keep the all-leaf count.
+        "num_ees": (1 if (fixed_target_name and fixed_target_name != "all")
+                    else robot.get_total_leaf_nodes()),
         "floating_base": bool(robot.floating_base),
         # Canonical launch-config robot key (URDF stem -> tuned-JSON dir). Lets the
         # handle locate launch_configs/<key>/<gpu>.json for the E6 profile overlay.
