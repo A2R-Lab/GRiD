@@ -119,6 +119,10 @@ __global__ void plant_kernel(const T *g_q, const T *g_qd, const T *g_u, T dt,
     __shared__ T s_out[1];
     __shared__ T s_grad[NX], s_hess[NX * NX];
     __shared__ T s_eePos[6 * grid::NUM_EES], s_deePos[6 * NV * grid::NUM_EES];
+    // Dynamic arena for the caller-scratch EE-cost inners (the launch reserves
+    // END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES; s_scratch[NX] above is the
+    // tiny reduction buffer for the quadratic/barrier costs and is far too small here).
+    extern __shared__ __align__(16) T s_ee_arena[];
     // barrier bounds (interior: [val-1, val+1]); DOF 0 position barrier unbounded.
     __shared__ T s_lo_q[NQ], s_hi_q[NQ], s_lo_v[NV], s_hi_v[NV], s_lo_u[NU], s_hi_u[NU];
 
@@ -171,13 +175,13 @@ __global__ void plant_kernel(const T *g_q, const T *g_qd, const T *g_u, T dt,
     __syncthreads();
 
     // ---- ee position cost ---- (s_x[:NQ] is q)
-    grid_plant::ee_pos_cost<T, PLANT_EE>(s_out, s_x, s_pdes, s_W, s_eePos, d_robotModel);
+    grid_plant::ee_pos_cost<T, PLANT_EE>(s_out, s_x, s_pdes, s_W, s_eePos, s_ee_arena, d_robotModel);
     __syncthreads(); if (tid == 0) { o_ee_val[0] = s_out[0]; for (int r = 0; r < 3; ++r) o_eepos[r] = s_eePos[6 * PLANT_EE + r]; } __syncthreads();
-    grid_plant::ee_pos_cost_gradient<T, PLANT_EE, false>(s_grad, s_x, s_pdes, s_W, s_eePos, s_deePos, d_robotModel);
+    grid_plant::ee_pos_cost_gradient<T, PLANT_EE, false>(s_grad, s_x, s_pdes, s_W, s_eePos, s_deePos, s_ee_arena, d_robotModel);
     __syncthreads();
     for (int i = tid; i < NX; i += nth) o_ee_grad[i] = s_grad[i];
     __syncthreads();
-    grid_plant::ee_pos_cost_hessian<T, PLANT_EE, false>(s_hess, s_x, s_W, s_deePos, d_robotModel);
+    grid_plant::ee_pos_cost_hessian<T, PLANT_EE, false>(s_hess, s_x, s_W, s_deePos, s_ee_arena, d_robotModel);
     __syncthreads();
     for (int i = tid; i < NX * NX; i += nth) o_ee_hess[i] = s_hess[i];
     __syncthreads();
