@@ -66,6 +66,15 @@ def _world_frame_robot_ids() -> tuple[str, ...]:
     )
 
 
+def _world_frame_base_modes() -> tuple[str, ...]:
+    # EXP-1 (perf_idsva_so_bigrobot.md): the world-frame inner is now a PRODUCTION path
+    # for high-DOF FIXED-base robots (NV >= NV_FIXED_WORLD_THRESHOLD), not just floating.
+    # Default keeps the original floating-only coverage; set
+    # GRID_CUDA_IDSVA_SO_WORLD_FRAME_BASES=fixed (or "floating,fixed") to exercise the
+    # fixed-base world-frame emission the EXP-1 routing now selects for g1/h1_2/h2_plus.
+    return _comma_separated_env("GRID_CUDA_IDSVA_SO_WORLD_FRAME_BASES", "floating")
+
+
 def _world_frame_target_shared_bytes() -> int:
     raw = os.environ.get("GRID_CUDA_IDSVA_SO_WORLD_FRAME_TARGET_SHARED_BYTES", "100000")
     try:
@@ -245,14 +254,15 @@ def _assert_blocks_close(actual, expected, nv, sample_name):
 
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
+@pytest.mark.parametrize("base_mode", _world_frame_base_modes())
 @pytest.mark.parametrize(
     "robot_id",
     _world_frame_robot_ids(),
-    ids=lambda robot_id: f"{robot_id}-floating-world-frame",
+    ids=lambda robot_id: f"{robot_id}-world-frame",
 )
-def test_cuda_world_frame_matches_python_reference(tmp_path, robot_id):
+def test_cuda_world_frame_matches_python_reference(tmp_path, robot_id, base_mode):
     """CUDA `idsva_so_world_frame_kernel` must match Python `idsva_so_world_frame`."""
-    spec = _robot_spec(robot_id, "floating")
+    spec = _robot_spec(robot_id, base_mode)
     try:
         resolved = resolve_robot_spec(spec)
     except RuntimeError as exc:
@@ -260,8 +270,8 @@ def test_cuda_world_frame_matches_python_reference(tmp_path, robot_id):
             f"Could not resolve manifest {spec.robot_id}. Run ./developer_install.sh "
             f"before executing CUDA equivalence tests. Resolution error: {exc}"
         )
-    project_model = build_project_adapter(spec, resolved, base_mode="floating")
-    reference_model = _build_so_oracle(spec, resolved, "floating")
+    project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
+    reference_model = _build_so_oracle(spec, resolved, base_mode)
     target_shared_bytes = _world_frame_target_shared_bytes()
     executable, compile_cmd = _build_world_frame_case(
         project_model, tmp_path, f"{robot_id}_cuda_world_frame", target_shared_bytes
