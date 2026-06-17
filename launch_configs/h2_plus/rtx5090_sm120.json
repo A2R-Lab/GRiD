@@ -25,12 +25,66 @@
         "threads": 384,
         "tier": "shared"
       },
+      "fdsva_so": {
+        "threads": 128,
+        "tier": "shared"
+      },
       "id": {
         "threads": 128,
         "tier": "shared"
       },
       "id_du": {
         "threads": 512,
+        "tier": "shared"
+      },
+      "idsva_so": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "minv": {
+        "threads": 256,
+        "tier": "shared"
+      }
+    },
+    "floating": {
+      "aba": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "crba": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "ee_pose": {
+        "threads": 256,
+        "tier": "shared"
+      },
+      "ee_pose_gradient": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "fd": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "fd_du": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "fdsva_so": {
+        "threads": 128,
+        "tier": "shared"
+      },
+      "id": {
+        "threads": 256,
+        "tier": "shared"
+      },
+      "id_du": {
+        "threads": 512,
+        "tier": "shared"
+      },
+      "idsva_so": {
+        "threads": 128,
         "tier": "shared"
       },
       "minv": {
