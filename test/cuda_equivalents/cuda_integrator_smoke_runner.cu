@@ -67,7 +67,7 @@ void run_value_only(const std::string &prefix,
                     const T *original_q_qd_u,
                     T gravity,
                     T dt) {
-    const int input_count = grid::NUM_POS + 2 * grid::NUM_VEL;
+    const int input_count = 3 * grid::NUM_POS;  // gridData canonical [q|qd@nq|u@2nq] (nq-wide slots)
     const int x_kp1_count = grid::NUM_POS + grid::NUM_VEL;
     std::memcpy(hd_data->h_q_qd_u, original_q_qd_u, input_count * sizeof(T));
     grid::integrator<T, IT>(hd_data, d_robotModel, gravity, dt, 1, block_dimms, thread_dimms, streams);
@@ -84,7 +84,7 @@ void run_one(const std::string &prefix,
              const T *original_q_qd_u,
              T gravity,
              T dt) {
-    const int input_count = grid::NUM_POS + 2 * grid::NUM_VEL;
+    const int input_count = 3 * grid::NUM_POS;  // gridData canonical [q|qd@nq|u@2nq] (nq-wide slots)
     const int x_kp1_count = grid::NUM_POS + grid::NUM_VEL;
     const int nv = grid::NUM_VEL;
     // value-only (always)
@@ -144,13 +144,19 @@ void run() {
     }
     const T dt = static_cast<T>(dt_double);
 
-    // Pack into h_q_qd_u as [q (nq) | qd (nv) | u (nv)].
-    const int input_count = nq + 2 * nv;
-    std::vector<T> original(input_count);
+    // Pack into h_q_qd_u as the gridData canonical layout [q (nq) | qd @ nq | u @ 2*nq]
+    // — nq-WIDE slots (stride nq), matching what the integrator host wrapper copies
+    // (stride_q = 3*NUM_JOINTS) and what forward_dynamics reads (s_u = &s_q_qd_u[2*nq]).
+    // NOTE: u must sit at 2*nq, NOT nq+nv. For a FLOATING base nq != nv, so packing u at
+    // nq+nv misaligns it by (nq-nv) and feeds forward_dynamics a garbage torque -> wrong
+    // qdd everywhere (fixed-base nq==nv hid this). The qd/u tails (indices [nq+nv, 2*nq)
+    // and [2*nq+nv, 3*nq)) are unused padding; zero them for determinism.
+    const int input_count = 3 * nq;
+    std::vector<T> original(input_count, T(0));
     for (int i = 0; i < nq; ++i) original[i] = h_q[i];
     for (int i = 0; i < nv; ++i) {
-        original[nq + i]      = h_qd[i];
-        original[nq + nv + i] = h_u[i];
+        original[nq + i]       = h_qd[i];
+        original[2 * nq + i]   = h_u[i];
     }
     std::memcpy(hd_data->h_q_qd_u, original.data(), input_count * sizeof(T));
 
