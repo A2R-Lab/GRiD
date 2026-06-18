@@ -538,7 +538,12 @@ def build_floating_cuda_case_params():
     return build_cuda_case_params("floating")
 
 
-def _header_cache_key(project_model, resolved_model, include_homogenous_transforms: bool) -> str:
+def _header_cache_key(
+    project_model,
+    resolved_model,
+    include_homogenous_transforms: bool,
+    codegen_algorithm_list=None,
+) -> str:
     urdf_path = Path(resolved_model.urdf_path)
     payload = {
         "schema": CACHE_SCHEMA_VERSION,
@@ -570,12 +575,29 @@ def _header_cache_key(project_model, resolved_model, include_homogenous_transfor
         "need_print_mat": True,
         "file_namespace": "grid",
     }
+    # Value-only / subset headers (e.g. test_cuda_floating_values_equivalence builds a
+    # gradient-free header so a gradient build break can't mask value bugs) get a DISTINCT
+    # key so they never collide with the full-"all" header. Added ONLY when set, so the
+    # default (None) key is byte-identical to the historical full-header key.
+    if codegen_algorithm_list is not None:
+        payload["codegen_algorithm_list"] = sorted(codegen_algorithm_list)
     return _stable_json_hash(payload)
 
 
-def _run_gen_all_code(codegen, project_model, output_path, include_homogenous_transforms):
+def _run_gen_all_code(
+    codegen,
+    project_model,
+    output_path,
+    include_homogenous_transforms,
+    codegen_algorithm_list=None,
+):
     """Codegen the header, selecting the mimic-safe (non-gradient) algorithm
-    list for mimic robots so the G0 gradient-refusal guard isn't tripped."""
+    list for mimic robots so the G0 gradient-refusal guard isn't tripped.
+
+    ``codegen_algorithm_list`` (non-mimic only) emits a SUBSET header — used by the
+    value-only floating test to build a gradient-free header so a gradient codegen
+    break (e.g. unresolved crba_inner) can never again mask a value bug. Mimic robots
+    keep their own reduced list (the mimic guard takes precedence)."""
     kwargs = dict(
         include_homogenous_transforms=include_homogenous_transforms,
         output_path=str(output_path),
@@ -589,16 +611,21 @@ def _run_gen_all_code(codegen, project_model, output_path, include_homogenous_tr
             kwargs["algorithm_list"] = MIMIC_CODEGEN_ALGORITHM_LIST_FLOATING
         else:
             kwargs["algorithm_list"] = MIMIC_CODEGEN_ALGORITHM_LIST_FIXED
+    elif codegen_algorithm_list is not None:
+        kwargs["algorithm_list"] = list(codegen_algorithm_list)
     codegen.gen_all_code(**kwargs)
 
 
-def _generate_grid_header(project_model, resolved_model, build_dir: Path, config) -> tuple[Path, str]:
+def _generate_grid_header(
+    project_model, resolved_model, build_dir: Path, config, codegen_algorithm_list=None
+) -> tuple[Path, str]:
     header_path = build_dir / "grid.cuh"
     include_homogenous_transforms = True
     header_key = _header_cache_key(
         project_model,
         resolved_model,
         include_homogenous_transforms=include_homogenous_transforms,
+        codegen_algorithm_list=codegen_algorithm_list,
     )
     if not _cache_enabled():
         _progress(config, f"generating header for {project_model.spec.robot_id}-{project_model.base_mode}")
@@ -609,7 +636,10 @@ def _generate_grid_header(project_model, resolved_model, build_dir: Path, config
             FILE_NAMESPACE="grid",
         )
         with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-            _run_gen_all_code(codegen, project_model, header_path, include_homogenous_transforms)
+            _run_gen_all_code(
+                codegen, project_model, header_path, include_homogenous_transforms,
+                codegen_algorithm_list=codegen_algorithm_list,
+            )
         return header_path, header_key
 
     cached_dir = _cache_root() / "headers" / header_key
@@ -628,7 +658,10 @@ def _generate_grid_header(project_model, resolved_model, build_dir: Path, config
         FILE_NAMESPACE="grid",
     )
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        _run_gen_all_code(codegen, project_model, cached_header, include_homogenous_transforms)
+        _run_gen_all_code(
+            codegen, project_model, cached_header, include_homogenous_transforms,
+            codegen_algorithm_list=codegen_algorithm_list,
+        )
     (cached_dir / "manifest.json").write_text(
         json.dumps(
             {
@@ -742,6 +775,13 @@ def _compile_runner(
     if result.returncode != 0:
         pytest.fail(
             "CUDA equivalence runner compilation failed.\n"
+            "⚠ COVERAGE VOID: this runner compiles ALL of its algorithms into one executable, so this\n"
+            "  build failure means NONE of them were validated for this robot/base. Fixing the compile\n"
+            "  is NECESSARY BUT NOT SUFFICIENT — the value/correctness of EVERY algorithm in this runner\n"
+            "  is UNVERIFIED until it builds and the comparison runs. (This is exactly how Bug A hid: a\n"
+            "  `crba_inner` build break masked a latent forward_dynamics VALUE bug. After fixing a build\n"
+            "  error here, RE-RUN and treat any newly-reachable mismatch as a real, previously-masked bug.\n"
+            "  The VALUE algos also have an isolated home in test_cuda_floating_values_equivalence.py.)\n"
             f"Command: {' '.join(cmd)}\n"
             f"stdout:\n{result.stdout}\n"
             f"stderr:\n{result.stderr}"
@@ -1528,6 +1568,7 @@ def _run_cuda_equivalence_case(
     random_count=None,
     config=None,
     num_threads=None,
+    codegen_algorithm_list=None,
 ):
     if sample_selection is None:
         sample_selection = SampleSelection(None, False, False)
@@ -1583,21 +1624,41 @@ def _run_cuda_equivalence_case(
 
     build_dir = tmp_path / f"cuda_{spec.robot_id}_{base_mode}"
     build_dir.mkdir()
-    header_path, header_key = _generate_grid_header(project_model, resolved, build_dir, config)
+    header_path, header_key = _generate_grid_header(
+        project_model, resolved, build_dir, config,
+        codegen_algorithm_list=codegen_algorithm_list,
+    )
     _progress(config, f"fallback summary for {spec.robot_id}-{base_mode}: {_fallback_summary(header_path)}")
+    # When a SUBSET header is requested (codegen_algorithm_list), the runner must skip
+    # launching any kernel the header doesn't emit, else it references a missing symbol
+    # (e.g. forward_dynamics_gradient_kernel). Derive the runner skips from the SAME list
+    # that drove the header so they stay consistent. Default (full header) keeps both
+    # False — the historical behavior (non-mimic robots always compile every block).
+    _grad_tokens = ("inverse_dynamics_gradient", "forward_dynamics_gradient", "id_du", "fd_du")
+    _ee_grad_tokens = ("end_effector_pose_gradient", "end_effector_pose_hessian")
+    if codegen_algorithm_list is not None:
+        _runner_skip_gradients = not any(
+            any(tok in algo for tok in _grad_tokens) for algo in codegen_algorithm_list
+        )
+        _runner_skip_eepose_gradients = not any(
+            any(tok in algo for tok in _ee_grad_tokens) for algo in codegen_algorithm_list
+        )
+    else:
+        _runner_skip_gradients = False
+        _runner_skip_eepose_gradients = False
     executable, compile_cmd = _compile_runner(
         build_dir,
         floating_base=base_mode == "floating",
         header_key=header_key,
         # Mimic gradients: both fixed-base (P3) and floating-base (B1) mimic now
         # emit id_du/fd_du, so the runner always compiles its dynamics-gradient
-        # block. (Never skip the whole gradient block for mimic robots.)
-        skip_gradients=False,
+        # block (skip stays False unless a subset header explicitly drops them).
+        skip_gradients=_runner_skip_gradients,
         # ee_pose gradients/hessian: both fixed-base mimic (B2-ee) and floating-base
         # mimic (B2-ee FLOATING, 2026-05-31) emit the alpha-weighted geometric-
         # Jacobian / world-frame-generator fold, so the runner always compiles the
-        # ee-pose gradient block. (Never skip it for mimic robots.)
-        skip_eepose_gradients=False,
+        # ee-pose gradient block (skip stays False unless a subset header drops them).
+        skip_eepose_gradients=_runner_skip_eepose_gradients,
         config=config,
     )
 
