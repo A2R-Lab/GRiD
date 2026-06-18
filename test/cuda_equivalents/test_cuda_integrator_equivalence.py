@@ -60,16 +60,17 @@ RUNNER_SOURCE = Path(__file__).with_name("cuda_integrator_smoke_runner.cu")
 # below), exactly as the floating-mimic SO equivalence test does. The VALUE
 # (x_kp1) path stays well-conditioned and is compared on every sample/dt.
 # (prefix, python-side integrator name, has_gradient, fixed_base_only)
-# TRAPEZOIDAL is single-stage and FIXED-BASE ONLY (the floating trapezoidal arm is
-# codegen-refused via static_assert), so the runner gates it on NUM_POS==NUM_VEL and
-# the test skips it for floating cells (see the fixed_base_only guard below).
+# TRAPEZOIDAL is single-stage; both fixed- and floating-base now emit value +
+# gradient (the floating trapezoidal gradient carries the SE(3) dIntegrate
+# chain-rule wiring at the combined tangent w = dt*qd + 0.5*dt^2*qdd, mirroring
+# the floating SI-Euler gradient). fixed_base_only is now False for all rows.
 _INTEGRATORS = (
     ("integrator_euler",       "euler",                True,  False),
     ("integrator_si_euler",    "semi_implicit_euler",  True,  False),
     ("integrator_midpoint",    "midpoint",             True,  False),
     ("integrator_rk3",         "rk3",                  True,  False),
     ("integrator_rk4",         "rk4",                  True,  False),
-    ("integrator_trapezoidal", "trapezoidal",          True,  True),
+    ("integrator_trapezoidal", "trapezoidal",          True,  False),
 )
 
 

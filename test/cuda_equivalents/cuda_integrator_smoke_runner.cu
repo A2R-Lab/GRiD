@@ -196,14 +196,13 @@ void run() {
     run_one<T, grid::IntegratorType::RK4>("integrator_rk4",
         hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
 
-    // Trapezoidal: single-stage, FIXED-BASE ONLY (floating trapezoidal is
-    // codegen-refused via static_assert). Gate at compile time on NUM_POS==NUM_VEL
-    // (fixed base) so the floating build never instantiates integrator<T,TRAPEZOIDAL>.
-    // run<T> is a template, so the discarded if-constexpr branch is not instantiated.
-    if constexpr (grid::NUM_POS == grid::NUM_VEL) {
-        run_one<T, grid::IntegratorType::TRAPEZOIDAL>("integrator_trapezoidal",
-            hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
-    }
+    // Trapezoidal: single-stage. Value = combined-tangent retract
+    // q_new = integrate(q, dt*qd + 0.5*dt^2*qdd); v_new = qd + dt*qdd. Gradient now
+    // emitted for BOTH fixed- and floating-base (the floating top rows carry the
+    // SE(3) dIntegrate chain-rule wiring at the combined tangent w), so it runs the
+    // full value+gradient+both path like the other single-stage integrators.
+    run_one<T, grid::IntegratorType::TRAPEZOIDAL>("integrator_trapezoidal",
+        hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
 
     grid::close_grid<T>(streams, d_robotModel, hd_data);
 }

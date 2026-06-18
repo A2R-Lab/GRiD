@@ -128,6 +128,20 @@ humanoids) launched with `cudaErrorInvalidValue` ("invalid argument") while thei
   `self.robot.floating_base` robot (the template param is added there); they are NOT gated on the
   `MUJOCO_OUTPUT` constructor arg, which the per-robot `.so` build (`_compile.py`) never sets. Gating the
   registration on `self.MUJOCO_OUTPUT` silently emitted nothing → no-op fix. Gate on `self.robot.floating_base`.
+- **2nd instance — a non-type-template (IntegratorType) value, not just MJX (TRAPEZOIDAL, 2026-06-18).**
+  Ungating the floating TRAPEZOIDAL integrator gradient made `integrator_gradient_kernel<T,TRAPEZOIDAL,...>`
+  a NEW distinct `__global__`. The `KERNEL_ATTR_MANIFEST` integrator entries enumerated ITs as
+  `EULER/SI/MIDPOINT/RK3/RK4` — TRAPEZOIDAL omitted (it had been fixed-base-only / floating-refused, so
+  address-taking it tripped the old static_assert). go2-floating crashed `GPUassert: invalid argument` at
+  the gradient launch at TIER_SHARED but PASSED at TIER_LITE — the spilled tier's dynamic smem is ≤48 KB so
+  it needs no opt-in, which is exactly what makes this class hide on small/spilled cases. Same fix: add the IT
+  to the 3 non-mjx manifest tuples (leave mjx euler/si-only). **GUARD ADDED:**
+  `test/test_kernel_attr_manifest_consistency.py` asserts every non-mjx integrator family registers exactly
+  `_INTEGRATOR_TYPES` — pure-Python, catches any future emitted-but-unregistered IT before a GPU run.
+- **General rule:** ANY new fully-instantiated kernel (new template TYPE, new non-type VALUE like an IT, new
+  flag) is a new `__global__` needing its own `cudaFuncSetAttribute`. Tier-spill HIDES the omission (spilled
+  ≤48 KB launches fine), so test the UNSPILLED tier on a robot whose arena exceeds 48 KB, and prefer a static
+  manifest-parity test over relying on a GPU run to surface it.
 
 ### 1g. In-kernel mjx OUTPUT-BAND scratch must be spill-aware (aliases spilled buffers → state-dependent garbage)
 **Found in fdsva_so mjx (2026-06-09, still open).** An mjx epilogue that writes a large output band into
@@ -595,6 +609,16 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   asserting on generated-code behavior must pass `force_rebuild=True` to `register_robot` (or clear
   `~/.cache/grid-rbd`). Same root cause as "clear GCG `__pycache__` after codegen edits" — the cache
   key doesn't track the codegen, so the human/test must force regeneration.
+- **VENDORED dependency content is a codegen INPUT — the cache key must track it (GLASS bump, 2026-06-18).**
+  The CUDA-equivalence header cache (`test_cuda_executable_equivalence._header_cache_key`) hashed
+  `_hash_tree(GRiDCodeGenerator, ".py")` but NOT the GLASS submodule commit — yet GLASS sources are vendored
+  VERBATIM into every generated `grid.cuh` (`helpers/_lin_alg_helpers.py::_emit_glass_source_file`). So after
+  a GLASS bump the cache would FALSELY HIT headers vendored from the OLD GLASS — a silent stale-codegen
+  validation, the same family as the grid-rbd build-cache trap above. Fix: fold `_glass_commit()` into the
+  cache-key payload (git HEAD of the GLASS submodule, with a hash-of-`src/base` fallback for exported trees).
+  **General rule:** anything copied INTO generated output (vendored headers, baked tables, template files) is a
+  codegen input; if the cache key only tracks the generator's own source, a dependency bump goes undetected.
+  When in doubt after bumping a vendored dep, clear `.pytest_cache/grid_cuda` to force regeneration.
 - **The `grid::grid::` per-tier macro trap.** `GRID_DEFAULT_RESOURCE_TIER` is `#define`d BARE (`TIER_SHARED`).
   Algos emitting INSIDE `namespace grid` (11 of 12) reference it bare; `_plant` emits its kernel +
   `*_DYNAMIC_SHARED_MEM_BYTES` OUTSIDE the namespace so it correctly qualifies `grid::GRID_DEFAULT_RESOURCE_TIER`
