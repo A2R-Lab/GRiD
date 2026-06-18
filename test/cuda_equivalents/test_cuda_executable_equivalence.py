@@ -429,6 +429,27 @@ def _stable_json_hash(payload: dict) -> str:
     return _sha256_bytes(encoded)
 
 
+def _glass_commit() -> str:
+    """HEAD commit of the vendored GLASS submodule.
+
+    GLASS is vendored into every generated grid.cuh at codegen time
+    (``GRiDCodeGenerator/helpers/_lin_alg_helpers.py``), so its content is a
+    codegen INPUT every bit as much as the GRiDCodeGenerator .py tree. The
+    header cache key must fold it in, otherwise a GLASS bump leaves the cache
+    falsely hitting headers vendored from the OLD GLASS. Fall back to a hash of
+    the vendored base sources if git is unavailable (e.g. an exported tree)."""
+    glass_root = REPO_ROOT / "GLASS"
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(glass_root), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        base = glass_root / "src" / "base"
+        return _hash_tree(base, (".cuh",)) if base.exists() else "unknown"
+
+
 def _nvcc_version_text() -> str:
     nvcc = shutil.which("nvcc")
     if nvcc is None:
@@ -556,6 +577,9 @@ def _header_cache_key(
         "urdf_hash": _hash_file(urdf_path) if urdf_path.exists() else "missing",
         "robot_description_revision": resolved_model.revision,
         "codegen_hash": _hash_tree(REPO_ROOT / "GRiDCodeGenerator", (".py",)),
+        # GLASS is vendored into the header at codegen time, so its commit is a
+        # codegen input — fold it in so a GLASS bump invalidates stale headers.
+        "glass_commit": _glass_commit(),
         "target_shared_mem_bytes": os.environ.get("GRID_CUDA_TARGET_SHARED_MEM_BYTES", "default"),
         "shared_mem_type_size_bytes": os.environ.get("GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES", "default"),
         "codegen_profile": os.environ.get("GRID_CODEGEN_PROFILE", "all"),
