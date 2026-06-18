@@ -324,6 +324,25 @@ def test_cuda_plant_matches_reference(tmp_path, robot_id, base_mode):
         close(out["ctrl_barrier_value"].reshape(-1)[0], bv, f"{tag} ctrl barrier value")
         close(out["ctrl_barrier_grad"].reshape(-1), bg, f"{tag} ctrl barrier grad")
 
+        # ---------- tracking_cost PRESET == independent per-term composition ----------
+        # Fixed-base only (the preset is emitted only there; the runner emits a
+        # `tracking_preset_skipped` sentinel otherwise). The runner computes the
+        # preset (chained ACCUMULATE) AND an independent reference (each term standalone,
+        # summed explicitly) for value / s_qk(NX) / s_rk(NU) / s_Qk(NX*NX) / s_Rk(NU*NU);
+        # assert the two agree (the per-term inners are oracle-validated above, so this
+        # pins the composition: ACCUMULATE chaining + block offsets + race-free syncs).
+        if "tracking_preset_skipped" not in out:
+            close(out["tracking_preset_value"].reshape(-1)[0],
+                  out["tracking_ref_value"].reshape(-1)[0], f"{tag} tracking preset value == composition")
+            close(out["tracking_preset_qk"].reshape(-1), out["tracking_ref_qk"].reshape(-1),
+                  f"{tag} tracking preset s_qk == composition")
+            close(out["tracking_preset_rk"].reshape(-1), out["tracking_ref_rk"].reshape(-1),
+                  f"{tag} tracking preset s_rk == composition")
+            close(out["tracking_preset_Qk"].reshape(nx, nx, order="F"),
+                  out["tracking_ref_Qk"].reshape(nx, nx, order="F"), f"{tag} tracking preset s_Qk == composition")
+            close(out["tracking_preset_Rk"].reshape(nu, nu, order="F"),
+                  out["tracking_ref_Rk"].reshape(nu, nu, order="F"), f"{tag} tracking preset s_Rk == composition")
+
         # ---------- plant pass-through: plant == grid::integrator ----------
         # The runner self-gates the plant_step/integrator pass-through behind
         # `plant_step_fits` (the fixed-size s_temp[4096] caller pool overflows for
