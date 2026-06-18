@@ -329,6 +329,123 @@ __global__ void plant_centroidal_kernel(const T *g_q, const T *g_qd,
 }
 #endif  // GRID_PLANT_HAS_COM_COST && GRID_PLANT_HAS_MOMENTUM_COST
 
+// ---- tracking_cost PRESET check (fixed-base only; GRID_PLANT_HAS_TRACKING_COST) ----
+// Drives grid_plant::tracking_cost[_gradient/_hessian] (the GATO BSQP recipe, a chained
+// ACCUMULATE composition) AND an INDEPENDENT reference that recomputes each term standalone
+// (ACCUMULATE=false into a temp) and sums them explicitly — a different code path, so it
+// catches ACCUMULATE-chain / block-offset bugs in the preset. The Python test asserts
+// preset == reference for all five blocks (value, s_qk, s_rk, s_Qk, s_Rk). The per-term
+// inners themselves are oracle-validated by the main plant equivalence test.
+#if defined(GRID_PLANT_HAS_TRACKING_COST)
+template <typename T>
+__global__ void tracking_preset_kernel(const T *g_q, const T *g_qd, const T *g_u,
+                                       const grid::robotModel<T> *d_robotModel,
+                                       T *o_pv, T *o_pqk, T *o_prk, T *o_pQk, T *o_pRk,
+                                       T *o_rv, T *o_rqk, T *o_rrk, T *o_rQk, T *o_rRk) {
+    __shared__ T s_x[NX], s_u[NU], s_xdes[NX], s_udes[NU], s_eedes[3], s_Q[NX], s_R[NU], s_W[3];
+    __shared__ T s_lo_q[NQ], s_hi_q[NQ], s_lo_v[NV], s_hi_v[NV], s_lo_u[NU], s_hi_u[NU];
+    __shared__ T s_eePos[6 * grid::NUM_EES], s_deePos[6 * NV * grid::NUM_EES];
+    extern __shared__ __align__(16) T s_arena[];
+    __shared__ T s_pv[1], s_pqk[NX], s_prk[NU], s_pQk[NX * NX], s_pRk[NU * NU];
+    __shared__ T s_rv[1], s_rqk[NX], s_rrk[NU], s_rQk[NX * NX], s_rRk[NU * NU];
+    __shared__ T s_tv[1], s_tg[NX], s_th[NX * NX];
+
+    const int tid = threadIdx.x + threadIdx.y * blockDim.x;
+    const int nth = blockDim.x * blockDim.y;
+    const T mu = static_cast<T>(0.1);
+
+    // deterministic setup (same functions as plant_kernel / the Python test)
+    for (int i = tid; i < NX; i += nth) { s_x[i] = (i < NQ) ? g_q[i] : g_qd[i - NQ]; s_xdes[i] = x_des_val<T>(i); s_Q[i] = Qw_val<T>(i); }
+    for (int i = tid; i < NU; i += nth) { s_u[i] = g_u[i]; s_udes[i] = u_des_val<T>(i); s_R[i] = Rw_val<T>(i); }
+    for (int r = tid; r < 3; r += nth) { s_eedes[r] = static_cast<T>(0); s_W[r] = Ww_val<T>(r); }
+    for (int i = tid; i < NQ; i += nth) { s_lo_q[i] = g_q[i] - static_cast<T>(1); s_hi_q[i] = g_q[i] + static_cast<T>(1); if (i == 0) { s_lo_q[i] = -HUGE_VALF; s_hi_q[i] = HUGE_VALF; } }
+    for (int i = tid; i < NV; i += nth) { s_lo_v[i] = g_qd[i] - static_cast<T>(1); s_hi_v[i] = g_qd[i] + static_cast<T>(1); }
+    for (int i = tid; i < NU; i += nth) { s_lo_u[i] = g_u[i] - static_cast<T>(1); s_hi_u[i] = g_u[i] + static_cast<T>(1); }
+    __syncthreads();
+
+    // ===== PRESET (chained ACCUMULATE) =====
+    grid_plant::tracking_cost<T, PLANT_EE>(s_pv, s_x, s_u, s_xdes, s_udes, s_eedes, s_Q, s_R, s_W,
+        s_lo_q, s_hi_q, mu, s_lo_v, s_hi_v, mu, s_lo_u, s_hi_u, mu, s_eePos, s_arena, d_robotModel);
+    __syncthreads();
+    grid_plant::tracking_cost_gradient<T, PLANT_EE>(s_pqk, s_prk, s_x, s_u, s_xdes, s_udes, s_eedes, s_Q, s_R, s_W,
+        s_lo_q, s_hi_q, mu, s_lo_v, s_hi_v, mu, s_lo_u, s_hi_u, mu, s_eePos, s_deePos, s_arena, d_robotModel);
+    __syncthreads();
+    grid_plant::tracking_cost_hessian<T, PLANT_EE>(s_pQk, s_pRk, s_x, s_u, s_Q, s_R, s_W,
+        s_lo_q, s_hi_q, mu, s_lo_v, s_hi_v, mu, s_lo_u, s_hi_u, mu, s_deePos, s_arena, d_robotModel);
+    __syncthreads();
+
+    // ===== INDEPENDENT REFERENCE (each term standalone, summed explicitly) =====
+    if (tid == 0) s_rv[0] = static_cast<T>(0);
+    for (int i = tid; i < NX; i += nth) s_rqk[i] = static_cast<T>(0);
+    for (int i = tid; i < NU; i += nth) s_rrk[i] = static_cast<T>(0);
+    for (int i = tid; i < NX * NX; i += nth) s_rQk[i] = static_cast<T>(0);
+    for (int i = tid; i < NU * NU; i += nth) s_rRk[i] = static_cast<T>(0);
+    __syncthreads();
+
+    // value = sum of the 6 standalone term values (barriers always +=, so pre-zero s_tv)
+    grid_plant::ee_pos_cost<T, PLANT_EE>(s_tv, s_x, s_eedes, s_W, s_eePos, s_arena, d_robotModel);
+    __syncthreads(); if (tid == 0) s_rv[0] += s_tv[0]; __syncthreads();
+    grid_plant::quadratic_state_cost<T>(s_tv, s_x, s_xdes, s_Q, s_th);
+    __syncthreads(); if (tid == 0) s_rv[0] += s_tv[0]; __syncthreads();
+    grid_plant::quadratic_input_cost<T>(s_tv, s_u, s_udes, s_R, s_th);
+    __syncthreads(); if (tid == 0) s_rv[0] += s_tv[0]; __syncthreads();
+    if (tid == 0) s_tv[0] = static_cast<T>(0); __syncthreads();
+    grid_plant::joint_position_barrier<T>(s_tv, s_x, s_lo_q, s_hi_q, mu, s_th);
+    __syncthreads(); if (tid == 0) s_rv[0] += s_tv[0]; __syncthreads();
+    if (tid == 0) s_tv[0] = static_cast<T>(0); __syncthreads();
+    grid_plant::joint_velocity_barrier<T>(s_tv, s_x, s_lo_v, s_hi_v, mu, s_th);
+    __syncthreads(); if (tid == 0) s_rv[0] += s_tv[0]; __syncthreads();
+    if (tid == 0) s_tv[0] = static_cast<T>(0); __syncthreads();
+    grid_plant::joint_torque_barrier<T>(s_tv, s_u, s_lo_u, s_hi_u, mu, s_th);
+    __syncthreads(); if (tid == 0) s_rv[0] += s_tv[0]; __syncthreads();
+
+    // s_qk = ee_grad + state_grad + posb_grad + velb_grad
+    grid_plant::ee_pos_cost_gradient<T, PLANT_EE, false>(s_tg, s_x, s_eedes, s_W, s_eePos, s_deePos, s_arena, d_robotModel);
+    __syncthreads(); for (int i = tid; i < NX; i += nth) s_rqk[i] += s_tg[i]; __syncthreads();
+    grid_plant::quadratic_state_cost_gradient<T, false>(s_tg, s_x, s_xdes, s_Q);
+    __syncthreads(); for (int i = tid; i < NX; i += nth) s_rqk[i] += s_tg[i]; __syncthreads();
+    for (int i = tid; i < NX; i += nth) s_tg[i] = static_cast<T>(0); __syncthreads();
+    grid_plant::joint_position_barrier_gradient<T, 0, 0>(s_tg, s_x, s_lo_q, s_hi_q, mu);
+    __syncthreads(); for (int i = tid; i < NX; i += nth) s_rqk[i] += s_tg[i]; __syncthreads();
+    for (int i = tid; i < NX; i += nth) s_tg[i] = static_cast<T>(0); __syncthreads();
+    grid_plant::joint_velocity_barrier_gradient<T, NQ, NQ>(s_tg, s_x, s_lo_v, s_hi_v, mu);
+    __syncthreads(); for (int i = tid; i < NX; i += nth) s_rqk[i] += s_tg[i]; __syncthreads();
+
+    // s_rk = input_grad + ctrlb_grad
+    grid_plant::quadratic_input_cost_gradient<T, false>(s_tg, s_u, s_udes, s_R);
+    __syncthreads(); for (int i = tid; i < NU; i += nth) s_rrk[i] += s_tg[i]; __syncthreads();
+    for (int i = tid; i < NU; i += nth) s_tg[i] = static_cast<T>(0); __syncthreads();
+    grid_plant::joint_torque_barrier_gradient<T, 0, 0>(s_tg, s_u, s_lo_u, s_hi_u, mu);
+    __syncthreads(); for (int i = tid; i < NU; i += nth) s_rrk[i] += s_tg[i]; __syncthreads();
+
+    // s_Qk = ee_hess + state_hess + posb_hess + velb_hess
+    grid_plant::ee_pos_cost_hessian<T, PLANT_EE, false>(s_th, s_x, s_W, s_deePos, s_arena, d_robotModel);
+    __syncthreads(); for (int i = tid; i < NX * NX; i += nth) s_rQk[i] += s_th[i]; __syncthreads();
+    grid_plant::quadratic_state_cost_hessian<T, false>(s_th, s_Q);
+    __syncthreads(); for (int i = tid; i < NX * NX; i += nth) s_rQk[i] += s_th[i]; __syncthreads();
+    for (int i = tid; i < NX * NX; i += nth) s_th[i] = static_cast<T>(0); __syncthreads();
+    grid_plant::joint_position_barrier_hessian<T, NX, 0, 0>(s_th, s_x, s_lo_q, s_hi_q, mu);
+    __syncthreads(); for (int i = tid; i < NX * NX; i += nth) s_rQk[i] += s_th[i]; __syncthreads();
+    for (int i = tid; i < NX * NX; i += nth) s_th[i] = static_cast<T>(0); __syncthreads();
+    grid_plant::joint_velocity_barrier_hessian<T, NX, NQ, NQ>(s_th, s_x, s_lo_v, s_hi_v, mu);
+    __syncthreads(); for (int i = tid; i < NX * NX; i += nth) s_rQk[i] += s_th[i]; __syncthreads();
+
+    // s_Rk = input_hess + ctrlb_hess (reuse s_th; NX*NX >= NU*NU)
+    grid_plant::quadratic_input_cost_hessian<T, false>(s_th, s_R);
+    __syncthreads(); for (int i = tid; i < NU * NU; i += nth) s_rRk[i] += s_th[i]; __syncthreads();
+    for (int i = tid; i < NU * NU; i += nth) s_th[i] = static_cast<T>(0); __syncthreads();
+    grid_plant::joint_torque_barrier_hessian<T, NU, 0, 0>(s_th, s_u, s_lo_u, s_hi_u, mu);
+    __syncthreads(); for (int i = tid; i < NU * NU; i += nth) s_rRk[i] += s_th[i]; __syncthreads();
+
+    // write out preset + reference
+    if (tid == 0) { o_pv[0] = s_pv[0]; o_rv[0] = s_rv[0]; }
+    for (int i = tid; i < NX; i += nth) { o_pqk[i] = s_pqk[i]; o_rqk[i] = s_rqk[i]; }
+    for (int i = tid; i < NU; i += nth) { o_prk[i] = s_prk[i]; o_rrk[i] = s_rrk[i]; }
+    for (int i = tid; i < NX * NX; i += nth) { o_pQk[i] = s_pQk[i]; o_rQk[i] = s_rQk[i]; }
+    for (int i = tid; i < NU * NU; i += nth) { o_pRk[i] = s_pRk[i]; o_rRk[i] = s_rRk[i]; }
+}
+#endif  // GRID_PLANT_HAS_TRACKING_COST
+
 template <typename T>
 T *dmalloc(int count) { T *p; cudaMalloc(&p, count * sizeof(T)); return p; }
 template <typename T>
@@ -422,6 +539,19 @@ void run() {
 #if defined(GRID_PLANT_HAS_COM_COST) && defined(GRID_PLANT_HAS_MOMENTUM_COST)
     plant_centroidal_kernel<T><<<1, nthreads, cent_dyn>>>(g_q, g_qd, d_robotModel,
         o_comv, o_comg, o_comh, o_momv, o_momg, o_momh);
+    gpuErrchkKernel();
+#endif
+
+#if defined(GRID_PLANT_HAS_TRACKING_COST)
+    // tracking_cost preset == independent per-term composition (fixed-base recipe).
+    // Reuses the EE-pose-gradient dynamic arena (same as plant_kernel).
+    T *o_tpv = dmalloc<T>(1), *o_tpqk = dmalloc<T>(NX), *o_tprk = dmalloc<T>(NU);
+    T *o_tpQk = dmalloc<T>(NX * NX), *o_tpRk = dmalloc<T>(NU * NU);
+    T *o_trv = dmalloc<T>(1), *o_trqk = dmalloc<T>(NX), *o_trrk = dmalloc<T>(NU);
+    T *o_trQk = dmalloc<T>(NX * NX), *o_trRk = dmalloc<T>(NU * NU);
+    cudaFuncSetAttribute(tracking_preset_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)plant_dyn);
+    tracking_preset_kernel<T><<<1, nthreads, plant_dyn>>>(g_q, g_qd, g_u, d_robotModel,
+        o_tpv, o_tpqk, o_tprk, o_tpQk, o_tpRk, o_trv, o_trqk, o_trrk, o_trQk, o_trRk);
     gpuErrchkKernel();
 #endif
 
@@ -521,6 +651,20 @@ void run() {
     // e.g. a mimic robot). Emit a parseable sentinel so the Python centroidal test
     // pytest.skips this cell (mirrors the plant_step_skipped sentinel above).
     std::cout << "BEGIN com_cost_skipped 1 1\n1\nEND com_cost_skipped\n";
+#endif
+#if defined(GRID_PLANT_HAS_TRACKING_COST)
+    dcopy_out("tracking_preset_value", o_tpv, 1, 1);
+    dcopy_out("tracking_preset_qk", o_tpqk, 1, NX);
+    dcopy_out("tracking_preset_rk", o_tprk, 1, NU);
+    dcopy_out("tracking_preset_Qk", o_tpQk, NX, NX);
+    dcopy_out("tracking_preset_Rk", o_tpRk, NU, NU);
+    dcopy_out("tracking_ref_value", o_trv, 1, 1);
+    dcopy_out("tracking_ref_qk", o_trqk, 1, NX);
+    dcopy_out("tracking_ref_rk", o_trrk, 1, NU);
+    dcopy_out("tracking_ref_Qk", o_trQk, NX, NX);
+    dcopy_out("tracking_ref_Rk", o_trRk, NU, NU);
+#else
+    std::cout << "BEGIN tracking_preset_skipped 1 1\n1\nEND tracking_preset_skipped\n";
 #endif
 #ifdef GRID_PLANT_HAS_STEP_HESSIAN
     // Row-major flat (1 x D2AB_CNT); reshaped to (2*NV, 3*NV, 3*NV) C-order in Python.
