@@ -2193,7 +2193,10 @@ static int plant_alloc() {
                                 (size_t)(2 * nv) * (size_t)(3 * nv));
     // d_grad doubles as the plant_step x_kp1 (nx) reuse AND must NOT be confused
     // with the gradient size; the cost grads are <= nx, so vec covers it.
-    // d_end_effector_pose is reused as the com (3+3*nv) / ccrba (6*nv+6) device scratch.
+    // d_end_effector_pose holds the EE pose output (6*nee). The com (3+3*nv) /
+    // ccrba (6*nv+6) terms are vestigial — the com/momentum cost kernels now lay
+    // their centroidal scratch out of dynamic shared memory, not this buffer — but
+    // kept as a conservative floor (harmless over-allocation).
     const size_t kin_scratch = std::max((size_t)(6 * nee),
                                 std::max((size_t)(3 + 3 * nv), (size_t)(6 * nv + 6)));
     auto ok = [](cudaError_t e){ return e == cudaSuccess; };
@@ -2457,7 +2460,7 @@ extern "C" int grid_plant_com_cost(
     grid_plant::com_cost_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
-        g_plant.d_end_effector_pose /*reused as com (3+3*NV) scratch*/, g_robot, batch);
+        g_robot, batch);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2496,7 +2499,7 @@ extern "C" int grid_plant_momentum_cost(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b,
         g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6,
-        g_plant.d_end_effector_pose /*reused as ccrba (6*NV+6) scratch*/, g_robot, batch);
+        g_robot, batch);
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
@@ -2558,7 +2561,7 @@ extern "C" int grid_rbd_com_cost_mujoco(
     grid_plant::com_cost_kernel<T, /*MUJOCO_OUTPUT=*/true><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
-        g_plant.d_end_effector_pose /*reused as com scratch*/, g_robot, batch);
+        g_robot, batch);
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2593,7 +2596,7 @@ extern "C" int grid_rbd_momentum_cost_mujoco(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b,
         g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6,
-        g_plant.d_end_effector_pose /*reused as ccrba scratch*/, g_robot, batch);
+        g_robot, batch);
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
@@ -4530,7 +4533,7 @@ static ffi::Error grid_rbd_jax_plant_com_cost_impl(
     grid_plant::com_cost_kernel<T, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
-        g_plant.d_end_effector_pose, g_robot, batch);
+        g_robot, batch);
     cudaMemcpyAsync(out->typed_data(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(grad->typed_data(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(hess->typed_data(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -4579,7 +4582,7 @@ static ffi::Error grid_rbd_jax_plant_momentum_cost_impl(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b,
         g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6,
-        g_plant.d_end_effector_pose, g_robot, batch);
+        g_robot, batch);
     cudaMemcpyAsync(out->typed_data(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(grad->typed_data(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(hess->typed_data(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6070,7 +6073,7 @@ std::vector<torch::Tensor> torch_com_cost(torch::Tensor q, torch::Tensor p_des, 
     dim3 grid_dim((unsigned)batch, 1, 1);
     grid_plant::com_cost_kernel<T, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
-        g_plant.d_end_effector_pose, g_robot, batch);
+        g_robot, batch);
     cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(grad.data_ptr<float>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(hess.data_ptr<float>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6102,7 +6105,7 @@ std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Tensor qd
     dim3 thr = grid_clamp_threads_for(grid_plant::momentum_cost_kernel<T, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
     grid_plant::momentum_cost_kernel<T, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b,
-        g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6, g_plant.d_end_effector_pose, g_robot, batch);
+        g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6, g_robot, batch);
     cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(grad.data_ptr<float>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(hess.data_ptr<float>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
