@@ -164,6 +164,19 @@ void run() {
         std::cout << "END input_dt\n";
     }
 
+    // External forces (opt-in via GRID_RUNNER_FEXT): read 6*NUM_BODIES body-major
+    // local-frame [angular; linear] values (next on stdin after dt) into
+    // hd_data->h_f_ext and copy to d_f_ext. The integrator host wrapper reads
+    // hd_data->d_f_ext, so every integrator launch below evaluates FD at the
+    // f_ext-perturbed operating point. Default (env unset): d_f_ext stays zeroed,
+    // byte-identical to the no-fext path.
+    if (std::getenv("GRID_RUNNER_FEXT") != nullptr) {
+        read_vector(hd_data->h_f_ext, 6 * grid::NUM_BODIES);
+        gpuErrchk(cudaMemcpy(hd_data->d_f_ext, hd_data->h_f_ext,
+                             6 * grid::NUM_BODIES * sizeof(T), cudaMemcpyHostToDevice));
+        print_vector("input_f_ext", hd_data->h_f_ext, 6 * grid::NUM_BODIES);
+    }
+
     run_one<T, grid::IntegratorType::EULER>("integrator_euler",
         hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
     run_one<T, grid::IntegratorType::SEMI_IMPLICIT_EULER>("integrator_si_euler",
@@ -176,6 +189,15 @@ void run() {
         hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
     run_one<T, grid::IntegratorType::RK4>("integrator_rk4",
         hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
+
+    // Trapezoidal: single-stage, FIXED-BASE ONLY (floating trapezoidal is
+    // codegen-refused via static_assert). Gate at compile time on NUM_POS==NUM_VEL
+    // (fixed base) so the floating build never instantiates integrator<T,TRAPEZOIDAL>.
+    // run<T> is a template, so the discarded if-constexpr branch is not instantiated.
+    if constexpr (grid::NUM_POS == grid::NUM_VEL) {
+        run_one<T, grid::IntegratorType::TRAPEZOIDAL>("integrator_trapezoidal",
+            hd_data, d_robotModel, streams, block_dimms, thread_dimms, original.data(), gravity, dt);
+    }
 
     grid::close_grid<T>(streams, d_robotModel, hd_data);
 }

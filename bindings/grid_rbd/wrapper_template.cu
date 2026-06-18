@@ -4012,7 +4012,7 @@ static void launch_integrator_kernel_jax(cudaStream_t stream, int batch, float d
         dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR>(),
         grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR>::TIER>(), stream>>>(
             g_data->d_x_kp1, g_data->d_workspace, g_data->d_q_qd_u, stride,
-            g_robot, /*gravity=*/static_cast<T>(gravity), static_cast<T>(dt), batch);
+            g_robot, g_data->d_f_ext, /*gravity=*/static_cast<T>(gravity), static_cast<T>(dt), batch);
 }
 #endif  // GRID_HAS_INTEGRATOR
 #if GRID_HAS_INTEGRATOR_GRADIENT
@@ -4023,7 +4023,7 @@ static void launch_integrator_grad_kernel_jax(cudaStream_t stream, int batch, fl
         dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR_GRADIENT>(),
         grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR_GRADIENT>::TIER>(), stream>>>(
             g_data->d_dAB, g_data->d_workspace, g_data->d_q_qd_u, stride,
-            g_robot, /*gravity=*/static_cast<T>(gravity), static_cast<T>(dt), batch);
+            g_robot, g_data->d_f_ext, /*gravity=*/static_cast<T>(gravity), static_cast<T>(dt), batch);
 }
 #endif  // GRID_HAS_INTEGRATOR_GRADIENT
 
@@ -5802,7 +5802,7 @@ template <grid::IntegratorType IT, bool MUJOCO>
 static void torch_launch_integrator(cudaStream_t stream, int batch, double dt, double gravity) {
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::integrator_kernel<T, IT, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR>(), grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR>::TIER>(), stream>>>(
-        g_data->d_x_kp1, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, (T)dt, batch);
+        g_data->d_x_kp1, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, g_data->d_f_ext, (T)gravity, (T)dt, batch);
 }
 #endif  // GRID_HAS_INTEGRATOR
 #if GRID_HAS_INTEGRATOR_GRADIENT
@@ -5810,7 +5810,7 @@ template <grid::IntegratorType IT, bool MUJOCO>
 static void torch_launch_integrator_grad(cudaStream_t stream, int batch, double dt, double gravity) {
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::integrator_gradient_kernel<T, IT, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR_GRADIENT>(), grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR_GRADIENT>::TIER>(), stream>>>(
-        g_data->d_dAB, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, (T)dt, batch);
+        g_data->d_dAB, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, g_data->d_f_ext, (T)gravity, (T)dt, batch);
 }
 #endif  // GRID_HAS_INTEGRATOR_GRADIENT
 

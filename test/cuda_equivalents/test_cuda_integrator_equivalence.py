@@ -44,10 +44,10 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_integrator_smoke_runner.cu")
 
-# (prefix, python-side integrator name, has_gradient)
 # Both fixed- and floating-base emit value + gradient + both-at-once kernels for
-# all five integrators (the floating SI-Euler / Midpoint / RK3 / RK4 gradients
-# carry the SE(3) dIntegrate chain-rule wiring). Floating-base MIMIC robots now
+# the EULER / SI-Euler / Midpoint / RK3 / RK4 integrators (the floating SI-Euler /
+# Midpoint / RK3 / RK4 gradients carry the SE(3) dIntegrate chain-rule wiring);
+# TRAPEZOIDAL is fixed-base only (see below). Floating-base MIMIC robots now
 # emit the gradient too (B3 RESOLVED 2026-06-02 — the floating multi-stage mimic
 # gradient composes the correct B1 floating-mimic FD gradient in reduced tangent
 # space and is structurally exact, matched by go2-floating non-mimic to ~3e-7).
@@ -59,12 +59,17 @@ RUNNER_SOURCE = Path(__file__).with_name("cuda_integrator_smoke_runner.cu")
 # guard (see _floating_mimic_gradient_cell / _GRADIENT_NORM_RTOL_FLOATING_MIMIC
 # below), exactly as the floating-mimic SO equivalence test does. The VALUE
 # (x_kp1) path stays well-conditioned and is compared on every sample/dt.
+# (prefix, python-side integrator name, has_gradient, fixed_base_only)
+# TRAPEZOIDAL is single-stage and FIXED-BASE ONLY (the floating trapezoidal arm is
+# codegen-refused via static_assert), so the runner gates it on NUM_POS==NUM_VEL and
+# the test skips it for floating cells (see the fixed_base_only guard below).
 _INTEGRATORS = (
-    ("integrator_euler",    "euler",                True),
-    ("integrator_si_euler", "semi_implicit_euler",  True),
-    ("integrator_midpoint", "midpoint",             True),
-    ("integrator_rk3",      "rk3",                  True),
-    ("integrator_rk4",      "rk4",                  True),
+    ("integrator_euler",       "euler",                True,  False),
+    ("integrator_si_euler",    "semi_implicit_euler",  True,  False),
+    ("integrator_midpoint",    "midpoint",             True,  False),
+    ("integrator_rk3",         "rk3",                  True,  False),
+    ("integrator_rk4",         "rk4",                  True,  False),
+    ("integrator_trapezoidal", "trapezoidal",          True,  True),
 )
 
 
@@ -370,7 +375,11 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode,
             # the third vector serves as the control torque u.
             actual = _run_sample(executable, compile_cmd, sample, dt, num_threads=num_threads)
             u = sample.qdd
-            for prefix, integrator_type, has_gradient in _INTEGRATORS:
+            for prefix, integrator_type, has_gradient, fixed_base_only in _INTEGRATORS:
+                # TRAPEZOIDAL is fixed-base only (floating arm codegen-refused); the
+                # runner doesn't emit it on floating builds, so skip it there.
+                if fixed_base_only and base_mode != "fixed":
+                    continue
                 expected_x_kp1 = project_model.integrator(
                     sample.q, sample.qd, u, dt, integrator_type=integrator_type,
                 )
@@ -464,4 +473,91 @@ def test_cuda_integrator_matches_python_reference(tmp_path, robot_id, base_mode,
                 _assert_close_scaled(
                     dAB_with_block, expected_dAB, rtol, atol,
                     err_msg=f"{robot_id}-{base_mode} {prefix} dAB_with_x_kp1 @ {sample.name} dt={dt} threads={num_threads}",
+                )
+
+
+def _num_bodies(project_model):
+    r = project_model.robot
+    for attr in ("get_num_bodies", "get_num_links"):
+        if hasattr(r, attr):
+            return int(getattr(r, attr)())
+    return project_model.nv  # fixed-base non-mimic fallback (NUM_BODIES == NUM_VEL)
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+def test_cuda_integrator_fext_matches_python_reference(tmp_path, monkeypatch):
+    """Integrator with NONZERO external forces matches the Python reference.
+
+    Gate for the f_ext threading through the integrator value + gradient: GRiD now
+    passes d_f_ext into the integrator's FD inner (value) and the gradient's
+    vaf/ID linearization, so a nonzero f_ext must shift x_kp1 AND [A|B] to match
+    FD(q,qd,u, f_ext). The runner reads a body-major local-frame f_ext (opt-in via
+    GRID_RUNNER_FEXT) into hd_data->d_f_ext; the host integrator wrapper reads it.
+
+    Fixed-base iiwa14 (well-conditioned; also covers the new TRAPEZOIDAL with
+    f_ext). The no-fext path stays byte-identical (env unset) and is covered by
+    test_cuda_integrator_matches_python_reference.
+    """
+    robot_id, base_mode = "iiwa14", "fixed"
+    spec = _robot_spec(robot_id, base_mode)
+    try:
+        resolved = resolve_robot_spec(spec)
+    except RuntimeError as exc:  # pragma: no cover - environment guard
+        pytest.skip(f"Could not resolve manifest {spec.robot_id}: {exc}")
+    project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
+    nq, nv = project_model.nq, project_model.nv
+    nb = _num_bodies(project_model)
+
+    executable, compile_cmd = _build_case(
+        project_model, tmp_path, f"{robot_id}_{base_mode}_fext_cuda_integrator", tier="TIER_SHARED"
+    )
+    samples = _samples(project_model)
+    dts = _dts()
+
+    # Deterministic NONZERO body-major local-frame f_ext ([angular; linear] per body),
+    # same convention the f_ext 3-way equivalence test uses.
+    rng = np.random.default_rng(20260617)
+    f_ext = [rng.uniform(-3.0, 3.0, size=6) for _ in range(nb)]
+    f_ext_flat = np.concatenate(f_ext).astype(np.float64)
+    f_ext_str = " ".join(repr(float(x)) for x in f_ext_flat) + "\n"
+
+    monkeypatch.setenv("GRID_RUNNER_FEXT", "1")
+    rtol = 5e-4
+    atol = 5e-4
+
+    for dt in dts:
+        for sample in samples:
+            u = sample.qdd  # the shared sample's third vector is the control torque
+            stdin = _sample_stdin_with_dt(sample, dt) + f_ext_str
+            actual = _parse_runner_output(_run_runner(executable, stdin, compile_cmd))
+            # The runner must have actually received the f_ext we fed it.
+            echoed = np.asarray(actual["input_f_ext"], dtype=np.float64).reshape(-1)
+            np.testing.assert_allclose(
+                echoed, f_ext_flat, rtol=0.0, atol=1e-5,
+                err_msg="runner did not receive the f_ext sent on stdin",
+            )
+            for prefix, integrator_type, has_gradient, fixed_base_only in _INTEGRATORS:
+                if fixed_base_only and base_mode != "fixed":
+                    continue
+                exp_x = project_model.integrator(
+                    sample.q, sample.qd, u, dt, integrator_type=integrator_type, f_ext=f_ext,
+                )
+                x_blk = np.asarray(actual[prefix + "_x_kp1"], dtype=np.float64).reshape(-1)
+                assert x_blk.shape == (nq + nv,), f"{prefix} x_kp1 shape {x_blk.shape}"
+                _assert_close_scaled(
+                    x_blk, exp_x, rtol, atol,
+                    err_msg=f"{robot_id}-{base_mode} fext {prefix} x_kp1 @ {sample.name} dt={dt}",
+                )
+                if not has_gradient:
+                    continue
+                exp_dAB = project_model.integrator_gradient(
+                    sample.q, sample.qd, u, dt, integrator_type=integrator_type, f_ext=f_ext,
+                )
+                dAB_blk = np.asarray(actual[prefix + "_dAB"], dtype=np.float64)
+                assert dAB_blk.shape == (2 * nv, 3 * nv), f"{prefix} dAB shape {dAB_blk.shape}"
+                _assert_close_scaled(
+                    dAB_blk, exp_dAB, rtol, atol,
+                    err_msg=f"{robot_id}-{base_mode} fext {prefix} dAB @ {sample.name} dt={dt}",
                 )
