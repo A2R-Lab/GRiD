@@ -153,8 +153,17 @@ __global__ void plant_kernel(const T *g_q, const T *g_qd, const T *g_u, T dt,
     // ---- quadratic state cost ----
     grid_plant::quadratic_state_cost<T>(s_out, s_x, s_xdes, s_Q, s_scratch);
     __syncthreads(); if (tid == 0) o_state_val[0] = s_out[0]; __syncthreads();
-    grid_plant::quadratic_state_cost_gradient<T, false>(s_grad, s_x, s_xdes, s_Q);
-    grid_plant::quadratic_state_cost_hessian<T, false>(s_hess, s_Q);
+    // FLOATING base: the STATE cost grad/hess gain a trailing `s_q` (xyzw config,
+    // used ONLY to build R under MUJOCO_OUTPUT). On the pin path (<T,false>) it is
+    // unused, so the config prefix s_x is a valid pass. Fixed-base has no such arg
+    // (the signatures differ by ARG COUNT), so gate compile-time on NUM_POS!=NUM_VEL.
+    if constexpr (grid::NUM_POS != grid::NUM_VEL) {
+        grid_plant::quadratic_state_cost_gradient<T, false>(s_grad, s_x, s_xdes, s_Q, s_x);
+        grid_plant::quadratic_state_cost_hessian<T, false>(s_hess, s_Q, s_x);
+    } else {
+        grid_plant::quadratic_state_cost_gradient<T, false>(s_grad, s_x, s_xdes, s_Q);
+        grid_plant::quadratic_state_cost_hessian<T, false>(s_hess, s_Q);
+    }
     __syncthreads();
     for (int i = tid; i < NX; i += nth) o_state_grad[i] = s_grad[i];
     for (int i = tid; i < NX * NX; i += nth) o_state_hess[i] = s_hess[i];
