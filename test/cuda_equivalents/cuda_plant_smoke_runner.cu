@@ -289,8 +289,9 @@ __global__ void plant_centroidal_kernel(const T *g_q, const T *g_qd,
                                         T *o_com_val, T *o_com_grad, T *o_com_hess,
                                         T *o_mom_val, T *o_mom_grad, T *o_mom_hess) {
     __shared__ T s_q[NQ], s_qd[NV];
-    __shared__ T s_com[3 + 3 * NV];        // grid::com_device output [p_com(3); J_com(3 x NV)]
-    __shared__ T s_ccrba[6 * NV + 6];      // grid::ccrba_device output [A(6 x NV); h(6)]
+    // Caller-scratch centroidal arena for the com/momentum cost inners (the launch reserves
+    // max(COM, CCRBA)_DYNAMIC_SHARED_MEM_BYTES; the cost inners lay out s_A/s_com/s_extra here).
+    extern __shared__ __align__(16) T s_cent_arena[];
     __shared__ T s_pdes[3], s_cW[3];       // CoM desired + per-axis weight
     __shared__ T s_hdes[6], s_mW[6];       // momentum desired + per-component weight
     __shared__ T s_out[1];
@@ -305,20 +306,22 @@ __global__ void plant_centroidal_kernel(const T *g_q, const T *g_qd,
     __syncthreads();
 
     // ---- CoM-tracking cost (value + grad over x=[q;qd] + GN hess) ----
-    grid_plant::com_cost<T>(s_out, s_q, s_pdes, s_cW, s_com, d_robotModel);
+    grid_plant::com_cost<T>(s_out, s_q, s_pdes, s_cW, s_cent_arena, d_robotModel);
     __syncthreads(); if (tid == 0) o_com_val[0] = s_out[0]; __syncthreads();
-    grid_plant::com_cost_gradient<T, false>(s_grad, s_q, s_pdes, s_cW, s_com, d_robotModel);
-    grid_plant::com_cost_hessian<T, false>(s_hess, s_q, s_cW, s_com, d_robotModel);
+    grid_plant::com_cost_gradient<T, false>(s_grad, s_q, s_pdes, s_cW, s_cent_arena, d_robotModel);
+    __syncthreads();
+    grid_plant::com_cost_hessian<T, false>(s_hess, s_q, s_cW, s_cent_arena, d_robotModel);
     __syncthreads();
     for (int i = tid; i < NX; i += nth) o_com_grad[i] = s_grad[i];
     for (int i = tid; i < NX * NX; i += nth) o_com_hess[i] = s_hess[i];
     __syncthreads();
 
     // ---- centroidal-momentum-tracking cost (value + grad + GN hess) ----
-    grid_plant::momentum_cost<T>(s_out, s_q, s_qd, s_hdes, s_mW, s_ccrba, d_robotModel);
+    grid_plant::momentum_cost<T>(s_out, s_q, s_qd, s_hdes, s_mW, s_cent_arena, d_robotModel);
     __syncthreads(); if (tid == 0) o_mom_val[0] = s_out[0]; __syncthreads();
-    grid_plant::momentum_cost_gradient<T, false>(s_grad, s_q, s_qd, s_hdes, s_mW, s_ccrba, d_robotModel);
-    grid_plant::momentum_cost_hessian<T, false>(s_hess, s_q, s_qd, s_mW, s_ccrba, d_robotModel);
+    grid_plant::momentum_cost_gradient<T, false>(s_grad, s_q, s_qd, s_hdes, s_mW, s_cent_arena, d_robotModel);
+    __syncthreads();
+    grid_plant::momentum_cost_hessian<T, false>(s_hess, s_q, s_qd, s_mW, s_cent_arena, d_robotModel);
     __syncthreads();
     for (int i = tid; i < NX; i += nth) o_mom_grad[i] = s_grad[i];
     for (int i = tid; i < NX * NX; i += nth) o_mom_hess[i] = s_hess[i];
