@@ -2102,6 +2102,8 @@ extern "C" int grid_rbd_integrator_gradient(
 
     GRID_RBD_IT_DISPATCH(it, launch_integrator_grad_host, batch, gravity, dt);
 
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
 
@@ -2352,7 +2354,10 @@ template <grid::IntegratorType IT>
 static void launch_plant_step(int batch, T gravity, T dt) {
     const int nx = grid::NUM_POS + grid::NUM_VEL;
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::plant_step_kernel<T, IT><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(),
+    // clamp to the kernel's launch cap (register-heavy; else a silent launch failure
+    // leaves the stale d_grad buffer -> looks like a no-op step). Mirrors the mjx twin.
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_kernel<T, IT>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    grid_plant::plant_step_kernel<T, IT><<<grid_dim, thr,
         grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>(), g_streams[0]>>>(
             g_plant.d_grad /*reuse as d_x_kp1, size NX*/, g_plant.d_in_a, g_plant.d_in_b,
             nx, grid::NUM_VEL, g_robot, gravity, dt, batch);
@@ -2368,6 +2373,8 @@ extern "C" int grid_plant_step(
     cudaMemcpy(g_plant.d_in_a, x, batch * nx * sizeof(T), cudaMemcpyHostToDevice);
     cudaMemcpy(g_plant.d_in_b, u, batch * nv * sizeof(T), cudaMemcpyHostToDevice);
     GRID_RBD_IT_DISPATCH(it, launch_plant_step, batch, (T)gravity, (T)dt);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(x_kp1, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2427,10 +2434,15 @@ extern "C" int grid_plant_ee_pos_cost(
     // the device fns it invokes (pose-gradient dominates pose).
     size_t smem = grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::ee_pos_cost_kernel<T, 0><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), smem, g_streams[0]>>>(
+    // clamp to the kernel's launch cap + surface launch errors (else a register-OOR
+    // launch is silently rejected -> stale-zero d_grad base block).
+    dim3 thr = grid_clamp_threads_for(grid_plant::ee_pos_cost_kernel<T, 0>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    grid_plant::ee_pos_cost_kernel<T, 0><<<grid_dim, thr, smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
         g_plant.d_end_effector_pose, g_plant.d_end_effector_pose_gradient, g_robot, batch);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2457,10 +2469,16 @@ extern "C" int grid_plant_com_cost(
     cudaMemcpy(g_plant.d_in_c, W,     batch * 3  * sizeof(T), cudaMemcpyHostToDevice);
     size_t smem = grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::com_cost_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), smem, g_streams[0]>>>(
+    // com_cost_kernel can be register-heavy; clamp to its launch cap (else the
+    // launch is silently rejected -> stale-zero d_grad). cudaGetLastError surfaces
+    // any launch-config/resource rejection as rc=200+e instead of silent zeros.
+    dim3 thr = grid_clamp_threads_for(grid_plant::com_cost_kernel<T, false>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    grid_plant::com_cost_kernel<T><<<grid_dim, thr, smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
         g_robot, batch);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2529,10 +2547,13 @@ extern "C" int grid_rbd_ee_pos_cost_mujoco(
     cudaMemcpy(g_plant.d_in_c, W,     batch * 3  * sizeof(T), cudaMemcpyHostToDevice);
     size_t smem = grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::ee_pos_cost_kernel<T, /*EE=*/0, /*MUJOCO_OUTPUT=*/true><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), smem, g_streams[0]>>>(
+    dim3 thr = grid_clamp_threads_for(grid_plant::ee_pos_cost_kernel<T, 0, true>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    grid_plant::ee_pos_cost_kernel<T, /*EE=*/0, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr, smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
         g_plant.d_end_effector_pose, g_plant.d_end_effector_pose_gradient, g_robot, batch);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2558,10 +2579,14 @@ extern "C" int grid_rbd_com_cost_mujoco(
     cudaMemcpy(g_plant.d_in_c, W,     batch * 3  * sizeof(T), cudaMemcpyHostToDevice);
     size_t smem = grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::com_cost_kernel<T, /*MUJOCO_OUTPUT=*/true><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), smem, g_streams[0]>>>(
+    // clamp to the kernel's launch cap + surface launch errors (mirror the pin path).
+    dim3 thr = grid_clamp_threads_for(grid_plant::com_cost_kernel<T, true>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    grid_plant::com_cost_kernel<T, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr, smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
         g_robot, batch);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2619,8 +2644,15 @@ static void launch_plant_step_gradient(int batch, T gravity, T dt) {
     const int nx = grid::NUM_POS + grid::NUM_VEL;
     const int nv = grid::NUM_VEL;
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::plant_step_gradient_kernel<T, IT><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(),
-        grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), g_streams[0]>>>(
+    // clamp to the kernel's launch cap (register-heavy; mirror the mjx twin).
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    // the dAB output band + fdsva-grad scratch arena exceeds the 48 KB static-smem
+    // default -> raise the per-kernel dynamic-smem cap (else cudaErrorInvalidValue/rc=201).
+    const size_t smem = grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>();
+    cudaFuncSetAttribute(grid_plant::plant_step_gradient_kernel<T, IT>,
+                         cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
+    grid_plant::plant_step_gradient_kernel<T, IT><<<grid_dim, thr,
+        smem, g_streams[0]>>>(
             g_plant.d_grad /*reuse as d_dAB, size 2*NV*3*NV*/, g_plant.d_in_a, g_plant.d_in_b,
             nx, nv, g_robot, gravity, dt, batch);
 }
@@ -2636,6 +2668,8 @@ extern "C" int grid_plant_step_gradient(
     cudaMemcpy(g_plant.d_in_a, x, batch * nx * sizeof(T), cudaMemcpyHostToDevice);
     cudaMemcpy(g_plant.d_in_b, u, batch * nv * sizeof(T), cudaMemcpyHostToDevice);
     GRID_RBD_IT_DISPATCH(it, launch_plant_step_gradient, batch, (T)gravity, (T)dt);
+    cudaError_t le = cudaGetLastError();
+    if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(dAB, g_plant.d_grad, batch * dab * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2652,8 +2686,12 @@ static void launch_plant_step_gradient_mujoco(int batch, T gravity, T dt) {
     const int nv = grid::NUM_VEL;
     dim3 grid_dim((unsigned)batch, 1, 1);
     dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT, true>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    // raise the per-kernel dynamic-smem cap (arena > 48 KB; else rc=201).
+    const size_t smem = grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>();
+    cudaFuncSetAttribute(grid_plant::plant_step_gradient_kernel<T, IT, true>,
+                         cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
     grid_plant::plant_step_gradient_kernel<T, IT, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr,
-        grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), g_streams[0]>>>(
+        smem, g_streams[0]>>>(
             g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
             nx, nv, g_robot, gravity, dt, batch);
 }

@@ -198,6 +198,32 @@ every call site. (Validated bit-exact on iiwa14-fixed + go2-floating + fr3-mimic
 ### 1j. `beta=0` GEMM still READS C → uninitialized-scratch `0*NaN` poisoning (load-dependent thread-inv flake)
 **Found in spherical CRBA (2026-06-11).** A composite-inertia fold emitted `grid_linalg_gemm<...,false,true>(.., &s_temp[off], 1, 0, ..)` — alpha=1, **beta=0**, into a scratch slot. GLASS's with-beta gemm kernel computes `C[i] = alpha*res + beta*C[i]`, i.e. it **reads C even when beta=0**. On the slot's COLD first use that scratch is uninitialized; whenever the leftover bit-pattern happened to be NaN/Inf, `0*NaN == NaN` poisoned the whole fold (and M, minv, fd downstream). It presented as a *thread-invariance flake on `mixed_spherical_arm` under heavy concurrent build load*: at `threads=1` the work serializes and the slot is effectively always overwritten cleanly; at `threads>1` it intermittently surfaced (slot contents are nondeterministic across launches). Equivalence-vs-oracle (single isolated run) almost always passed — so it hid as "1×/15 under load." Fix: **zero the gemm temp slot once before the first beta=0 write** (a tiny `parallel_loop` + `sync`). RULES: (1) `beta=0` is NOT "write-only" in GLASS — a destination that a beta gemm writes must be initialized (or use a beta-less / overwrite kernel variant). (2) A *thread-count-dependent* discrepancy that vanishes when isolated is almost always an **uninitialized/under-initialized shared-scratch read** (or a missing sync), not a hardware blip — hunt the cold scratch slot. (3) Reproduce flakes by running the thread-inv check 20–30× **under concurrent GPU load**, not isolated. (Gate-A byte-identical for cardinal robots — the fix is in the spherical-only emit path.)
 
+### 1k. pin↔mjx is a KNOWN frame transform — don't "debug" the reframe; check the pin baseline FIRST
+**Cost a long session 2026-06-19.** GRiD exposes BOTH pinocchio (default) and mujoco/mjx output conventions
+(intentional, user directive — keep both; flag = handle `output_convention` / the per-call `handle.mujoco`
+view / C-ABI `*_mujoco` twins). They differ by a **documented, validated** base-frame transform, NOT a bug:
+pinocchio = quat **xyzw** + free-joint velocity `[v_lin LOCAL; ω LOCAL]`; mujoco = quat **wxyz** + `qvel
+[v_lin GLOBAL; ω LOCAL]`. Transform `G(q)=blockdiag(R, I_3)` on the leading 6 tangent DOF (R = base rotation);
+G orthogonal ⇒ `G^{-1}=G^T`. Gradient base-linear maps `grad_mjx = R·grad_pin`; GN-hessian by congruence
+`G X Gᵀ`; velocity inputs `v_pin = Rᵀ v_mjx`. **SSOT: `RBDReference/equivalents/mujoco_convention.py`** +
+`docs/open-tasks/mjx_output_convention_flag.md`. CUDA emit: `_code_generation_helpers.py`
+(`gen_mjx_base_rotate`/`gen_mjx_congruence`/`_gen_mjx_build_R_lines`) + `_plant.py` (`_gen_cost_mjx_kernel_input`).
+- **THE TRAP:** `test_mujoco_kernel` (and friends) are a CONSISTENCY check `mjx_kernel(q) == G·pin_kernel(q_pin)`.
+  When one fails, the reflex "the reframe is broken / centroidal base columns are stale" is almost always WRONG.
+- **DO THIS FIRST:** dump the mjx kernel's INTERNAL pre-reframe value (a one-line `printf` in `gen_mjx_base_rotate`
+  before the `R*b` write) and compare to **RBDReference** (pinocchio). In the com_cost case the pre-reframe
+  base-linear gradient `b=[-0.3356,-0.1297,0.0157]` bit-matched RBDReference exactly, and `R·b=[0.2405,…]` was the
+  correct mjx value — i.e. **the reframe was perfect**. If `b` matches the pin oracle, the reframe is fine and the
+  discrepancy is in the PIN BASELINE the oracle reframes (or a stale/version-rotated build), not the mjx path.
+- **CHECK THE CORE IS VALIDATED:** the CUDA `com_cost` gradient (incl. floating base block) is already verified vs
+  RBDReference by `test_cuda_plant_centroidal_costs_match_reference` (go2:floating, via the standalone `.cu` harness).
+  A passing plant-equiv ⇒ the centroidal/cost CORE is correct ⇒ a binding-layer mjx test failure is in the bindings
+  wiring or build staleness, not the kernel math. (Don't re-derive a "kernel bug" the .cu harness already disproved.)
+- **STALE-BUILD GOTCHA (reprise of [[project_grid_glass_hjcd_integration]] trap #1):** the grid_rbd compile cache key
+  hashes URDF+options+arch+**package version**, NOT the GRiDCodeGenerator source. A codegen edit alone does NOT
+  rotate the key — `force_rebuild=True` is REQUIRED to pick it up; `force_rebuild=False` silently reuses an old .so
+  even after you changed `_plant.py`. Verify with `stat` (robot.so mtime ≥ grid.cuh mtime) and /proc/self/maps.
+
 ---
 
 ## 2. Debugging methodology (what actually localizes a bug fast)
