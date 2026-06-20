@@ -927,7 +927,8 @@ def test_native_mjx_end_effector_pose_gradient_runtime_matches_oracle(go2_floati
         exp = np.empty_like(native)
         for b in range(B):
             for e in range(native.shape[1]):
-                exp[b, e] = bm.jacobian_pin_to_mjx(pin_J[b, e], R[b], True)
+                # jacobian_pin_to_mjx is batched (B, rows, NV); pass a 1-batch slice.
+                exp[b, e] = bm.jacobian_pin_to_mjx(pin_J[b:b+1, e], R[b:b+1], True)[0]
         assert np.allclose(native, exp, rtol=2e-3, atol=2e-2), \
             f"ee_pose_gradient_runtime mjx != oracle (B={B}): max|d|={np.abs(native-exp).max():.3e}"
     # non-triviality: base-linear columns differ from the raw pin frame.
