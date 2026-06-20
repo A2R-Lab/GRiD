@@ -198,6 +198,22 @@ every call site. (Validated bit-exact on iiwa14-fixed + go2-floating + fr3-mimic
 ### 1j. `beta=0` GEMM still READS C → uninitialized-scratch `0*NaN` poisoning (load-dependent thread-inv flake)
 **Found in spherical CRBA (2026-06-11).** A composite-inertia fold emitted `grid_linalg_gemm<...,false,true>(.., &s_temp[off], 1, 0, ..)` — alpha=1, **beta=0**, into a scratch slot. GLASS's with-beta gemm kernel computes `C[i] = alpha*res + beta*C[i]`, i.e. it **reads C even when beta=0**. On the slot's COLD first use that scratch is uninitialized; whenever the leftover bit-pattern happened to be NaN/Inf, `0*NaN == NaN` poisoned the whole fold (and M, minv, fd downstream). It presented as a *thread-invariance flake on `mixed_spherical_arm` under heavy concurrent build load*: at `threads=1` the work serializes and the slot is effectively always overwritten cleanly; at `threads>1` it intermittently surfaced (slot contents are nondeterministic across launches). Equivalence-vs-oracle (single isolated run) almost always passed — so it hid as "1×/15 under load." Fix: **zero the gemm temp slot once before the first beta=0 write** (a tiny `parallel_loop` + `sync`). RULES: (1) `beta=0` is NOT "write-only" in GLASS — a destination that a beta gemm writes must be initialized (or use a beta-less / overwrite kernel variant). (2) A *thread-count-dependent* discrepancy that vanishes when isolated is almost always an **uninitialized/under-initialized shared-scratch read** (or a missing sync), not a hardware blip — hunt the cold scratch slot. (3) Reproduce flakes by running the thread-inv check 20–30× **under concurrent GPU load**, not isolated. (Gate-A byte-identical for cardinal robots — the fix is in the spherical-only emit path.)
 
+### 1l. In-device mjx epilogue reading parallel-written scratch needs a barrier FIRST (race → zeros, printf masks it)
+**Found in integrator_gradient mjx (2026-06-19).** The `_emit_integrator_gradient_mjx_output` epilogue runs
+IN the device function right after `gen_integrator_gradient_dAB_assembly`, whose parallel loop writes `s_dAB`
+with **NO trailing `__syncthreads()`**. The epilogue's Phase 1 reads `s_dAB` across all threads — so the
+**high-column entries (the du-block), written by high-index threads, are read before they land → zeros** in
+exactly the bottom-half base rows. The pin path is safe because the kernel-level output copy supplies a
+barrier; the in-device mjx epilogue had none. Symptom: `integrator_gradient mjx != oracle max|d|=0.5`, with
+CUDA **pin** dAB matching RBDReference to 1.5e-5 (so the algorithm is correct — bug is in the mjx epilogue).
+**HEISENBUG TELL:** adding a `printf` reading `s_dAB` at the epilogue top made the test PASS (the read/serialize
+perturbed scheduling enough to hide the race). RULES: (1) any in-device epilogue (mjx or otherwise) that READS
+a buffer a prior **parallel loop WROTE must `__syncthreads()` first** — don't assume the writer synced.
+(2) "a `printf` makes the failure disappear" ≈ race / missing sync / uninitialized read — never ship the
+printf; find the barrier. (3) localize value bugs by comparing the **pin** path to RBDReference first: if pin
+matches, the bug is in the mjx transform/epilogue, not the algorithm. Fix: `gen_add_sync()` at the epilogue
+start. (Pairs with §1j's "thread-dependent discrepancy = scratch race".)
+
 ### 1k. pin↔mjx is a KNOWN frame transform — don't "debug" the reframe; check the pin baseline FIRST
 **Cost a long session 2026-06-19.** GRiD exposes BOTH pinocchio (default) and mujoco/mjx output conventions
 (intentional, user directive — keep both; flag = handle `output_convention` / the per-call `handle.mujoco`

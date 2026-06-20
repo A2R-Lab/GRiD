@@ -2356,9 +2356,12 @@ static void launch_plant_step(int batch, T gravity, T dt) {
     dim3 grid_dim((unsigned)batch, 1, 1);
     // clamp to the kernel's launch cap (register-heavy; else a silent launch failure
     // leaves the stale d_grad buffer -> looks like a no-op step). Mirrors the mjx twin.
+    // smem opt-in too (arena can exceed 48 KB on a big floating robot -> rc=201).
+    const size_t smem = grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>();
+    cudaFuncSetAttribute(grid_plant::plant_step_kernel<T, IT>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
     dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_kernel<T, IT>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
     grid_plant::plant_step_kernel<T, IT><<<grid_dim, thr,
-        grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>(), g_streams[0]>>>(
+        smem, g_streams[0]>>>(
             g_plant.d_grad /*reuse as d_x_kp1, size NX*/, g_plant.d_in_a, g_plant.d_in_b,
             nx, grid::NUM_VEL, g_robot, gravity, dt, batch);
 }
@@ -2389,9 +2392,11 @@ template <grid::IntegratorType IT>
 static void launch_plant_step_mujoco(int batch, T gravity, T dt) {
     const int nx = grid::NUM_POS + grid::NUM_VEL;
     dim3 grid_dim((unsigned)batch, 1, 1);
+    const size_t smem = grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>();
+    cudaFuncSetAttribute(grid_plant::plant_step_kernel<T, IT, true>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
     dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_kernel<T, IT, true>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
     grid_plant::plant_step_kernel<T, IT, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr,
-        grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>(), g_streams[0]>>>(
+        smem, g_streams[0]>>>(
             g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
             nx, grid::NUM_VEL, g_robot, gravity, dt, batch);
 }
@@ -4384,8 +4389,11 @@ template <grid::IntegratorType IT, bool MUJOCO>
 static void launch_plant_step_jax(cudaStream_t stream, int batch, float gravity, float dt) {
     const int nx = grid::NUM_POS + grid::NUM_VEL;
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::plant_step_kernel<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(),
-        grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    const size_t smem = grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>();
+    cudaFuncSetAttribute(grid_plant::plant_step_kernel<T, IT, MUJOCO>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_kernel<T, IT, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    grid_plant::plant_step_kernel<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr,
+        smem, stream>>>(
             g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
             nx, grid::NUM_VEL, g_robot, (T)gravity, (T)dt, batch);
 }
@@ -4444,8 +4452,11 @@ static void launch_plant_step_gradient_jax(cudaStream_t stream, int batch, float
     const int nx = grid::NUM_POS + grid::NUM_VEL;
     const int nv = grid::NUM_VEL;
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::plant_step_gradient_kernel<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(),
-        grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    const size_t smem = grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>();
+    cudaFuncSetAttribute(grid_plant::plant_step_gradient_kernel<T, IT, MUJOCO>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    grid_plant::plant_step_gradient_kernel<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr,
+        smem, stream>>>(
             g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
             nx, nv, g_robot, (T)gravity, (T)dt, batch);
 }
@@ -4526,10 +4537,12 @@ static ffi::Error grid_rbd_jax_plant_ee_pos_cost_impl(
     cudaMemcpyAsync(g_plant.d_in_c, W.typed_data(),     (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     size_t smem = grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::ee_pos_cost_kernel<T, /*EE=*/0, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), smem, stream>>>(
+    dim3 thr = grid_clamp_threads_for(grid_plant::ee_pos_cost_kernel<T, 0, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    grid_plant::ee_pos_cost_kernel<T, /*EE=*/0, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
         g_plant.d_end_effector_pose, g_plant.d_end_effector_pose_gradient, g_robot, batch);
+    if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("ee_pos_cost launch failed");
     cudaMemcpyAsync(out->typed_data(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(grad->typed_data(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(hess->typed_data(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -4568,10 +4581,12 @@ static ffi::Error grid_rbd_jax_plant_com_cost_impl(
     cudaMemcpyAsync(g_plant.d_in_c, W.typed_data(),     (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     size_t smem = grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::com_cost_kernel<T, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), smem, stream>>>(
+    dim3 thr = grid_clamp_threads_for(grid_plant::com_cost_kernel<T, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    grid_plant::com_cost_kernel<T, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
         g_robot, batch);
+    if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("com_cost launch failed");
     cudaMemcpyAsync(out->typed_data(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(grad->typed_data(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(hess->typed_data(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6006,8 +6021,11 @@ template <grid::IntegratorType IT, bool MUJOCO>
 static void torch_launch_plant_step(cudaStream_t stream, int batch, double gravity, double dt) {
     const int nx = grid::NUM_POS + grid::NUM_VEL;
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::plant_step_kernel<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(),
-        grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    const size_t smem = grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>();
+    cudaFuncSetAttribute(grid_plant::plant_step_kernel<T, IT, MUJOCO>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_kernel<T, IT, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    grid_plant::plant_step_kernel<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr,
+        smem, stream>>>(
             g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
             nx, grid::NUM_VEL, g_robot, (T)gravity, (T)dt, batch);
 }
@@ -6034,8 +6052,11 @@ template <grid::IntegratorType IT, bool MUJOCO>
 static void torch_launch_plant_step_gradient(cudaStream_t stream, int batch, double gravity, double dt) {
     const int nx = grid::NUM_POS + grid::NUM_VEL, nv = grid::NUM_VEL;
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::plant_step_gradient_kernel<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(),
-        grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    const size_t smem = grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>();
+    cudaFuncSetAttribute(grid_plant::plant_step_gradient_kernel<T, IT, MUJOCO>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    grid_plant::plant_step_gradient_kernel<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr,
+        smem, stream>>>(
             g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
             nx, nv, g_robot, (T)gravity, (T)dt, batch);
 }
@@ -6081,9 +6102,11 @@ std::vector<torch::Tensor> torch_ee_pos_cost(torch::Tensor q, torch::Tensor p_de
     auto hess = grid_torch_empty(batch, nx * nx, q);
     size_t smem = grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::ee_pos_cost_kernel<T, 0, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), smem, stream>>>(
+    dim3 thr = grid_clamp_threads_for(grid_plant::ee_pos_cost_kernel<T, 0, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    grid_plant::ee_pos_cost_kernel<T, 0, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
         g_plant.d_end_effector_pose, g_plant.d_end_effector_pose_gradient, g_robot, batch);
+    TORCH_CHECK(cudaGetLastError() == cudaSuccess, "ee_pos_cost launch failed");
     cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(grad.data_ptr<float>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(hess.data_ptr<float>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6109,9 +6132,11 @@ std::vector<torch::Tensor> torch_com_cost(torch::Tensor q, torch::Tensor p_des, 
     auto hess = grid_torch_empty(batch, nx * nx, q);
     size_t smem = grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim((unsigned)batch, 1, 1);
-    grid_plant::com_cost_kernel<T, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), smem, stream>>>(
+    dim3 thr = grid_clamp_threads_for(grid_plant::com_cost_kernel<T, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    grid_plant::com_cost_kernel<T, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
         g_robot, batch);
+    TORCH_CHECK(cudaGetLastError() == cudaSuccess, "com_cost launch failed");
     cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(grad.data_ptr<float>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(hess.data_ptr<float>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
