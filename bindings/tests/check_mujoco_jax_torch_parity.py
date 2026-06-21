@@ -38,13 +38,11 @@ def main():
 
     jh = gjax.register_robot("go2_mjx_all_val", str(_GO2), floating_base=True,
                              force_rebuild=True, output_convention="mujoco")
-    # fdsva_so mjx un-skipped 2026-06-21: jax+torch match the numpy mujoco oracle on
-    # go2-floating (max |Δ| ~9e-5 fp32, all 4 tensors). The old ">48KB opt-in gap" reason
-    # is stale — go2-floating fdsva_so uses 85KB smem and the launch succeeds (the kernel is
-    # registered via init_grid_kernel_attrs). The "spilled-epilogue" concern only applies at
-    # LITE/MINIMAL tier (default tier here does NOT spill) and is tracked separately for the
-    # mjx-fusion/perf phase; it does not affect this default-tier parity check.
-    SKIP = set()
+    # NOTE: nothing is skipped here. fdsva_so mjx was un-skipped 2026-06-21 (jax+torch match
+    # the numpy mujoco oracle on go2-floating, max |Δ| ~9e-5 fp32). The old ">48KB opt-in gap"
+    # reason was stale (go2-floating fdsva_so uses 85KB smem and launches fine via
+    # init_grid_kernel_attrs). The LITE/MINIMAL spilled-epilogue concern is a separate
+    # perf-phase item; the default tier exercised here does not spill.
     th = gtorch.get_robot("go2_mjx_all_val")
     ref = jh._base  # numpy handle (proven mjx oracle)
     nq, nv, nb = jh.num_joints, jh.num_vel, jh.num_bodies
@@ -90,8 +88,6 @@ def main():
         ("idsva_so",              lambda: ref.idsva_so(q, qd, qdd, _convention='mujoco'),  lambda: jh.mujoco.idsva_so(jq, jqd, jqdd),  lambda: th.mujoco.idsva_so(tq, tqd, tqdd)),
         ("fdsva_so",              lambda: ref.fdsva_so(q, qd, u, _convention='mujoco'),    lambda: jh.mujoco.fdsva_so(jq, jqd, ju),    lambda: th.mujoco.fdsva_so(tq, tqd, tu)),
     ]:
-        if nm in SKIP:
-            R.append((nm, "SKIP", ">48KB mjx smem opt-in gap")); continue
         try:
             r = rf()
             # idsva_so/fdsva_so return tuples of 4 tensors
