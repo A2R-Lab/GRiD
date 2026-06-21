@@ -115,6 +115,19 @@ def _codegen_source_hash() -> str:
                 found = True
             except OSError:
                 continue
+    # _compile.py drives the codegen INVOCATION (algorithm_list + the enable_*
+    # flags passed to gen_all_code), which materially shapes the generated header
+    # even though it lives outside the codegen packages. Without it, editing those
+    # flags here silently reuses a stale .so (this is how an enable_idsva_so_world_frame
+    # default change went unbuilt). Hash it explicitly; keep the rest of the binding
+    # package out so runtime-only file churn doesn't force needless rebuilds.
+    compile_py = Path(__file__).resolve().parent / "_compile.py"
+    try:
+        h.update(b"bindings/grid_rbd/_compile.py")
+        h.update(compile_py.read_bytes())
+        found = True
+    except OSError:
+        pass
     return h.hexdigest() if found else ""
 
 
