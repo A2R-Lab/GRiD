@@ -38,7 +38,13 @@ def main():
 
     jh = gjax.register_robot("go2_mjx_all_val", str(_GO2), floating_base=True,
                              force_rebuild=True, output_convention="mujoco")
-    SKIP = {"fdsva_so"}  # fdsva_so mjx is GUARDED (known spilled-epilogue bug); see handoff/backlog
+    # fdsva_so mjx un-skipped 2026-06-21: jax+torch match the numpy mujoco oracle on
+    # go2-floating (max |Δ| ~9e-5 fp32, all 4 tensors). The old ">48KB opt-in gap" reason
+    # is stale — go2-floating fdsva_so uses 85KB smem and the launch succeeds (the kernel is
+    # registered via init_grid_kernel_attrs). The "spilled-epilogue" concern only applies at
+    # LITE/MINIMAL tier (default tier here does NOT spill) and is tracked separately for the
+    # mjx-fusion/perf phase; it does not affect this default-tier parity check.
+    SKIP = set()
     th = gtorch.get_robot("go2_mjx_all_val")
     ref = jh._base  # numpy handle (proven mjx oracle)
     nq, nv, nb = jh.num_joints, jh.num_vel, jh.num_bodies
