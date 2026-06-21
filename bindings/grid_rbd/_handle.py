@@ -849,7 +849,7 @@ class RobotHandle:
         u_pin = None if u is None else _mujoco.force_mjx_to_pin(np.asarray(u, np.float64), R, True)
         return q_pin, qd_pin, qdd_pin, u_pin, R
 
-    def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None, _convention=None):
+    def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
         """Inverse dynamics (RNEA): τ = M(q)·qdd + h(q,qd) − g(q). Returns ``(B, NJ)``.
 
         With ``qdd=None`` (default) this is the **bias** c = h(q,qd) − g(q)
@@ -895,7 +895,7 @@ class RobotHandle:
             c = _mujoco.id_tau_pin_to_mjx(np.asarray(c, np.float64), R, True).astype(self._dt)
         return self._cast_out(c)
 
-    def minv(self, q, *, _convention=None):
+    def minv(self, q, *, _convention=None) -> np.ndarray:
         """Direct mass-matrix inverse Minv(q). Returns shape (B, NV, NV).
 
         Minv is the tangent-space (pinocchio-convention) inverse mass matrix:
@@ -930,7 +930,7 @@ class RobotHandle:
             m_full = _mujoco.minv_pin_to_mjx(np.asarray(m_full, np.float64), R, True).astype(self._dt)
         return self._cast_out(m_full)
 
-    def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None):
+    def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
         """Forward dynamics qdd = M⁻¹·(τ − c). Returns shape (B, NJ).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``,
@@ -960,7 +960,7 @@ class RobotHandle:
             acc = _mujoco.fd_qdd_pin_to_mjx(np.asarray(acc, np.float64), qd_pin, R, True).astype(self._dt)
         return self._cast_out(acc)
 
-    def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None):
+    def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
         """Recursive forward dynamics via Articulated Body Algorithm.
         Returns shape (B, NJ). Alternative to forward_dynamics() with the
         same output but a different implementation.
@@ -989,7 +989,7 @@ class RobotHandle:
             acc = _mujoco.fd_qdd_pin_to_mjx(np.asarray(acc, np.float64), qd_pin, R, True).astype(self._dt)
         return self._cast_out(acc)
 
-    def crba(self, q, *, gravity: float = -9.81, _convention=None):
+    def crba(self, q, *, gravity: float = -9.81, _convention=None) -> np.ndarray:
         """Joint-space mass matrix M(q) via Composite Rigid Body Algorithm.
         Returns shape (B, NV, NV) — the tangent-space (pinocchio-convention)
         mass matrix. FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ
@@ -1015,7 +1015,7 @@ class RobotHandle:
             M = _mujoco.mass_matrix_pin_to_mjx(np.asarray(M, np.float64), R, True).astype(self._dt)
         return self._cast_out(M)
 
-    def end_effector_pose(self, q, *, _convention=None):
+    def end_effector_pose(self, q, *, _convention=None) -> np.ndarray:
         """End-effector pose [xyz, rpy] per EE. Returns shape (B, 6*NUM_EES).
         For multi-EE robots, reshape to (B, NUM_EES, 6) at the caller side.
 
@@ -1034,7 +1034,7 @@ class RobotHandle:
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.end_effector_pose(q)
 
-    def fk_batched(self, q, *, use_warp: bool = False):
+    def fk_batched(self, q, *, use_warp: bool = False) -> np.ndarray:
         """Large-batch forward kinematics, one block (thread variant) or warp
         (warp variant) per sample.
 
@@ -1048,7 +1048,7 @@ class RobotHandle:
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.fk_batched(q, use_warp)
 
-    def end_effector_pose_gradient(self, q, *, _convention=None):
+    def end_effector_pose_gradient(self, q, *, _convention=None) -> np.ndarray:
         """End-effector pose Jacobian d/dv (TANGENT, pinocchio convention).
 
         Returns shape (B, 6*NUM_EES, NV). Floating-base produces the
@@ -1079,7 +1079,7 @@ class RobotHandle:
         B = raw.shape[0]
         return raw.reshape(B, NEE, NV, 6).transpose(0, 1, 3, 2).reshape(B, 6 * NEE, NV)
 
-    def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None, _convention=None):
+    def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
         """∂τ/∂(q, qd). Returns shape (B, NV, 2*NV) — concatenated
         [dc_dq | dc_dqd], tangent-space (pinocchio) convention. Slice with
         `[..., :NV]` / `[..., NV:]`. FIXED base: NV == NJ (unchanged); FLOATING
@@ -1130,7 +1130,7 @@ class RobotHandle:
         blocks = raw.reshape(B, 2, NV, NV).transpose(0, 1, 3, 2)  # row-major now
         return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
-    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None):
+    def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
         """∂qdd/∂(q, qd). Returns shape (B, NV, 2*NV), tangent-space (pinocchio)
         convention. FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ.
 
@@ -1167,7 +1167,7 @@ class RobotHandle:
         blocks = raw.reshape(B, 2, NV, NV).transpose(0, 1, 3, 2)
         return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
 
-    def end_effector_pose_hessian(self, q, *, _convention=None):
+    def end_effector_pose_hessian(self, q, *, _convention=None) -> np.ndarray:
         """End-effector pose Hessian ∂²(pose)/∂v² (tangent-space, pinocchio convention).
         Returns shape (B, 6*NUM_EES, NV, NV). For fixed-base NV == NJ; for
         floating-base the (NV, NV) block indexes spatial twist components.
@@ -1186,7 +1186,7 @@ class RobotHandle:
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.end_effector_pose_hessian(q)
 
-    def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81, _convention=None):
+    def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81, _convention=None) -> SecondOrderID:
         """Second-order inverse dynamics. Returns a :class:`SecondOrderID`
         NamedTuple ``(d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq)``, each tensor
         shape ``(B, NV, NV, NV)``. (NamedTuple is a plain tuple — positional
@@ -1224,7 +1224,7 @@ class RobotHandle:
         blocks = [flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4)]
         return SecondOrderID(*self._cast_out(*blocks))
 
-    def inverse_dynamics_regressor(self, q, qd, qdd=None, *, gravity: float = -9.81, _convention=None):
+    def inverse_dynamics_regressor(self, q, qd, qdd=None, *, gravity: float = -9.81, _convention=None) -> np.ndarray:
         """Inverse-dynamics inertial-parameter regressor ``Y`` with
         ``tau = Y . pi`` (``pi`` = the stacked 10-param spatial inertia of each link).
         Returns ``(B, NV, 10*NUM_BODIES)``. Mirrors
@@ -1253,7 +1253,7 @@ class RobotHandle:
         B = flat.shape[0]
         return self._cast_out(flat.reshape(B, NV, ncol))  # (B, NV, 10*NUM_BODIES)
 
-    def fdsva_so(self, q, qd, u, *, gravity: float = -9.81, _convention=None):
+    def fdsva_so(self, q, qd, u, *, gravity: float = -9.81, _convention=None) -> SecondOrderFD:
         """Second-order forward dynamics. Returns a :class:`SecondOrderFD`
         NamedTuple of 4 tensors each shape ``(B, NV, NV, NV)`` (a plain tuple,
         so positional unpacking / indexing still work).

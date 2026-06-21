@@ -56,4 +56,8 @@ include-package-data = true
 include = ["grid_rbd*"]
 
 [tool.setuptools.package-data]
-grid_rbd = ["wrapper_template.cu"]
+# py.typed (PEP 561): ship the inline type annotations so consumers' type
+# checkers / IDEs honor them (grid_rbd is a typed package, no separate .pyi).
+grid_rbd = ["wrapper_template.cu", "py.typed"]
+"grid_rbd.jax" = ["py.typed"]
+"grid_rbd.torch" = ["py.typed"]
