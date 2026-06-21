@@ -230,7 +230,13 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
             fixed_target_name=fixed_target_name,
             algorithm_list=algorithm_list,
             enable_floating_second_order=True,
-            enable_idsva_so_world_frame=options.get("floating_base", False),
+            # Defer the world-frame emission decision to gen_all_code's default
+            # (None -> _idsva_so_use_world_frame): world-frame for floating,
+            # spherical, OR high-DOF fixed-base (NV >= threshold). Hardcoding
+            # floating_base here dropped the world-frame inner on high-DOF
+            # fixed-base robots (g1/h1_2/h2_plus) whose idsva_so_device still
+            # dispatches there -> undefined idsva_so_world_frame_inner.
+            enable_idsva_so_world_frame=None,
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform,
             runtime_joint_dynamics=runtime_joint_dynamics,
