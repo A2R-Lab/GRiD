@@ -395,23 +395,11 @@ class RobotHandle:
         :py:attr:`mujoco` view passes it instead of mutating shared state)."""
         return self._resolve_convention(convention) == "mujoco" and self.floating_base
 
-    def _mjx_guard_unsupported(self, method: str) -> None:
-        """Interim scaffold (removed as the codegen mjx fusion lands per algorithm):
-        RAISE on a floating-base derivative/second-order method while
-        ``output_convention="mujoco"`` rather than silently returning a PIN-frame
-        result. The value methods (id/fd/aba/crba/minv) already transform correctly;
-        the gradient / Hessian / second-order surfaces do NOT yet, so fail loudly.
-        The mjx transforms for these are validated in
-        ``RBDReference/equivalents/mujoco_convention.py`` and are being baked into the
-        kernels (see docs/open-tasks/mjx_codegen_fusion_master_plan.md)."""
-        if self._mjx_active():
-            raise NotImplementedError(
-                f"{method}() does not yet support output_convention='mujoco' on a "
-                "floating base (it would silently return a pinocchio-frame result). "
-                "Use output_convention='pinocchio' and transform with "
-                "RBDReference.equivalents.mujoco_convention, or wait for the mjx "
-                "codegen fusion. The value methods (inverse_dynamics, forward_dynamics, "
-                "crba, minv, aba) DO support mujoco mode.")
+    # (Removed 2026-06-21: `_mjx_guard_unsupported` interim scaffold. The mjx
+    # codegen fusion has landed for ALL derivative/second-order surfaces —
+    # id/fd gradients, ee_pose gradient+hessian, idsva_so/fdsva_so — verified
+    # against the RBDReference mujoco oracle on jax+torch (~1e-5 fp32) and the
+    # 39/39 native-kernel test. The guard had zero call sites; nothing to gate.)
 
     # ─── runtime-mutable inertia (D.4 / Phase 5) ─────────────────────────────
 
