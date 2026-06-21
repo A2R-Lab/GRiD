@@ -424,15 +424,28 @@ def register_robot(
 
 
 def get_robot(name: str, cache_dir: str | Path | None = None, *,
+              backend: str = "numpy",
               output_convention: str = "pinocchio",
               _profile_overlay: str | None = "pybind") -> RobotHandle:
     """Look up a previously-registered robot by name.
 
     Raises RobotNotRegisteredError if `name` isn't in the manifest.
+    ``backend`` ('numpy' / 'jax' / 'torch') mirrors :py:func:`register_robot`:
+    it returns the matching backend handle for the same cached ``.so`` (the
+    cache is shared across backends). Default 'numpy' keeps the historical
+    return type.
     ``output_convention`` ('pinocchio' or 'mujoco') is a runtime IO setting
     mirroring :py:func:`register_robot`; it can also be set later via
     ``handle.output_convention``.
     """
+    if backend not in ("numpy", "jax", "torch"):
+        raise ValueError(f"backend must be 'numpy', 'jax', or 'torch'; got {backend!r}")
+    if backend == "jax":
+        from . import jax as _jax_backend
+        return _jax_backend.get_robot(name, cache_dir, output_convention=output_convention)
+    if backend == "torch":
+        from . import torch as _torch_backend
+        return _torch_backend.get_robot(name, cache_dir, output_convention=output_convention)
     cache_dir = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     entry = manifest_lookup(cache_dir, name)
     if entry is None:
