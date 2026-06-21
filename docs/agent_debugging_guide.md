@@ -235,10 +235,29 @@ G orthogonal ⇒ `G^{-1}=G^T`. Gradient base-linear maps `grad_mjx = R·grad_pin
   RBDReference by `test_cuda_plant_centroidal_costs_match_reference` (go2:floating, via the standalone `.cu` harness).
   A passing plant-equiv ⇒ the centroidal/cost CORE is correct ⇒ a binding-layer mjx test failure is in the bindings
   wiring or build staleness, not the kernel math. (Don't re-derive a "kernel bug" the .cu harness already disproved.)
-- **STALE-BUILD GOTCHA (reprise of [[project_grid_glass_hjcd_integration]] trap #1):** the grid_rbd compile cache key
-  hashes URDF+options+arch+**package version**, NOT the GRiDCodeGenerator source. A codegen edit alone does NOT
-  rotate the key — `force_rebuild=True` is REQUIRED to pick it up; `force_rebuild=False` silently reuses an old .so
-  even after you changed `_plant.py`. Verify with `stat` (robot.so mtime ≥ grid.cuh mtime) and /proc/self/maps.
+- **STALE-BUILD GOTCHA (updated 2026-06-21):** the grid_rbd compile cache key hashes URDF + options + arch +
+  package version + `_wrapper_template_hash()` + `_codegen_source_hash()` (the latter hashes all `*.py` under
+  `GRiDCodeGenerator/` + `URDFParser/`, AND now `bindings/grid_rbd/_compile.py`). So a codegen-SOURCE edit DOES
+  rotate the key (no `force_rebuild` needed). The historical trap was narrower: editing the codegen INVOCATION in
+  `_compile.py` (algorithm_list / `enable_*` flags) was NOT hashed → a flag change silently reused an old .so. That
+  gap is now closed (`_compile.py` hashed). Still verify with `stat` if suspicious. NOTE: re-keying invalidates ALL
+  cached robots → every robot's next build is a fresh (slow) compile; expected, not a failure.
+
+### 1m. Codegen-time DISPATCHER predicate must match the EMISSION gate (else "undefined inner" at compile)
+**Cost a build cycle 2026-06-21; broke ALL high-DOF fixed-base robots (g1/h1_2/h2_plus fixed) on pushed
+modernizing-tests.** `idsva_so` picks body- vs world-frame at codegen time via `_idsva_so_use_world_frame(self)`
+(= floating OR spherical OR NV≥`NV_FIXED_WORLD_THRESHOLD`-fixed; `_idsva_so.py:20`). The dispatcher + `idsva_so_device`
+EMIT a call to `idsva_so_world_frame_inner` whenever that predicate is true — but the world-frame *emission*
+(`gen_idsva_so_world_frame()`, which DEFINES the inner) was gated on `floating_base` only, in TWO places
+(`GRiDCodeGenerator.py` default + the `_compile.py` binding kwarg). For a high-DOF FIXED robot the predicate routes
+to world, the inner is CALLED, but never DEFINED → `error: identifier "idsva_so_world_frame_inner" is undefined`.
+- **THE RULE:** any "pick variant X at codegen time" predicate used by a dispatcher/device wrapper MUST be the SAME
+  predicate that gates EMISSION of X. Don't write the selection logic twice. Fix here: emission default now reuses
+  `_idsva_so_use_world_frame` (`b4719cc`); binding defers to it via `enable_*=None` (`b75eefa`).
+- **WHY THE GATE MISSED IT:** the pre-push gate built only low-DOF (iiwa14/go2, NV<threshold) + floating, where the
+  predicate and the floating-only gate happen to agree. **Always compile at least ONE high-DOF FIXED robot
+  (g1-fixed) when touching idsva_so/fdsva_so frame selection** — that's where dispatch and emission diverge.
+- Relevant to the perf-cleanup idsva_so agents (11a/11b): they rework exactly this body/world emission.
 
 ---
 
