@@ -18,9 +18,55 @@ results; the default already matches.
 """
 from __future__ import annotations
 
+import functools
 from typing import Any, NamedTuple
 
 import numpy as np
+
+
+def _unbatch(out):
+    """Squeeze a leading batch dim of size 1 off a method result — an array,
+    ``None``, or a (possibly named) tuple of arrays. Used by ``_accept_1d`` to
+    return single-sample outputs for single-sample inputs."""
+    if out is None:
+        return None
+    if isinstance(out, tuple):
+        vals = [_unbatch(o) for o in out]
+        try:
+            return type(out)(*vals)          # namedtuple (e.g. SecondOrderID)
+        except TypeError:
+            return tuple(vals)               # plain tuple
+    arr = np.asarray(out)
+    return arr[0] if (arr.ndim >= 1 and arr.shape[0] == 1) else out
+
+
+def _accept_1d(method):
+    """Friction 6: let a numpy value/kinematic method take a SINGLE unbatched
+    sample — a 1-D ``q`` of shape ``(nq,)`` (and matching 1-D ``qd``/``qdd``/``u``
+    /``f_ext``) — and return correspondingly unbatched outputs. An already-batched
+    ``(B, nq)`` input passes through completely unchanged (purely additive). Only
+    the leading positional DOF arrays and the ``f_ext`` kwarg are reshaped to
+    ``(1, -1)``; scalars (``dt``, ``gravity``), strings (``_convention``), and any
+    ndim>=2 input are untouched. The reshape happens BEFORE the method body, so
+    ``_check_nq_width`` still fires on an nv-wide floating-base velocity (the
+    Friction 3 guard is preserved). The jax/torch surfaces already accept 1-D via
+    ``vmap``; this brings the numpy surface to parity."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        if not args or np.asarray(args[0]).ndim != 1:
+            return method(self, *args, **kwargs)
+        new_args = []
+        for a in args:
+            if a is None:
+                new_args.append(a)
+                continue
+            aa = np.asarray(a)
+            new_args.append(aa.reshape(1, -1) if aa.ndim == 1 else a)
+        fe = kwargs.get("f_ext")
+        if fe is not None and np.asarray(fe).ndim == 1:
+            kwargs = {**kwargs, "f_ext": np.asarray(fe).reshape(1, -1)}
+        return _unbatch(method(self, *new_args, **kwargs))
+    return wrapper
 
 
 # ─── structured second-order return types (shared across numpy/jax/torch) ─────
@@ -1962,3 +2008,20 @@ class RobotHandle:
             f"num_vel={self.num_vel}, num_ees={self.num_ees}, "
             f"floating_base={self.floating_base})"
         )
+
+
+# Friction 6: accept a single unbatched (nq,) sample on the core numpy value /
+# kinematic methods (jax/torch already accept 1-D via vmap). Wrapped post-class so
+# the method bodies stay batch-only and the single-sample plumbing lives in ONE
+# visible place. The cost/integrator methods (quadratic_state_cost, integrator,
+# …) are intentionally excluded — their dt / Q / x_des args need separate care.
+for _m in ("inverse_dynamics", "forward_dynamics", "aba", "crba", "minv",
+           "end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
+           "fk_batched", "inverse_dynamics_gradient", "forward_dynamics_gradient",
+           "idsva_so", "fdsva_so", "inverse_dynamics_regressor"):
+    setattr(RobotHandle, _m, _accept_1d(getattr(RobotHandle, _m)))
+del _m
+# Re-bind the short aliases to the now-wrapped methods (the class-body
+# `rnea = inverse_dynamics` captured the un-wrapped functions).
+RobotHandle.rnea = RobotHandle.inverse_dynamics
+RobotHandle.fd = RobotHandle.forward_dynamics
