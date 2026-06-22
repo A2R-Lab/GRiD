@@ -259,6 +259,29 @@ to world, the inner is CALLED, but never DEFINED → `error: identifier "idsva_s
   (g1-fixed) when touching idsva_so/fdsva_so frame selection** — that's where dispatch and emission diverge.
 - Relevant to the perf-cleanup idsva_so agents (11a/11b): they rework exactly this body/world emission.
 
+### 1n. Consumer NaN from direct `*_inner` calls is USUALLY caller wiring, not codegen (triage before "fixing")
+**A consumer (GATO) filed "iiwa14 7-DoF `forward_dynamics` → NaN for every input, indy7 6-DoF fine, DoF-specific,
+initcheck→finite, racecheck→NaN+0 hazards" (2026-06-21).** Signature screams "real uninitialized-shared codegen bug."
+It was NOT. The `*_device` wrappers (`forward_dynamics_device`, `minv_device`, …) do two things for you that the
+`*_inner` functions deliberately push to the caller; consumers who call the `_inner` directly must replicate BOTH:
+1. **Load XImats first.** `*_inner` READS `s_XImats` but never writes it. The wrapper calls
+   `load_update_XImats_helpers(s_XImats, s_q, s_topology_helpers, d_robotModel, s_temp)` + `__syncthreads()` before
+   the inner. Skip it → inner reads uninitialized shared → NaN, race-clean, initcheck-fixable.
+2. **Size `s_temp` to `FD_INNER_SMEM_BYTES<T, MINV_F_IN_SMEM>()` (resp. `MINV_INNER_SMEM_BYTES`).** At
+   `MINV_F_IN_SMEM=true` the `6*NV*NV` Minv-F band lives in the **TAIL of `s_temp`**; `d_workspace`/workspace-bytes is
+   0 but that does NOT mean the band is free — it moved into `s_temp`. A caller who sizes `s_temp` short (e.g. reuses a
+   smaller-DoF constant) makes the inner read its own never-written band → NaN. **DoF-specific because the band scales
+   as `6*NV*NV`** (indy7 216 fits the slack; iiwa14 294 overflows). This is the "why only 7-DoF" tell.
+- **THE RULE / triage order:** before touching codegen for a consumer-reported NaN, reproduce **correct GRiD usage** in
+  a standalone harness — `*_device<T, TIER_SHARED>` (and the correctly-wired `*_inner`) on zero input. If that's finite
+  (it was: float+double, 1+32 threads, sensible gravity qdd), the codegen is fine and the bug is the call site:
+  unloaded/partial XImats, under-sized `s_temp` (missing the band), wrong `MINV_F_IN_SMEM`/`nullptr` pairing, or scratch
+  overwritten mid-call. Harnesses kept at `/tmp/fdbug/{fd_repro,fd_repro2}.cu` (device path + inner-direct misuse modes).
+- **Doc hardening (so the next consumer doesn't trip):** the `forward_dynamics_inner`/`minv_inner` emitted docstrings now
+  carry an explicit "CALLER CONTRACT" block (`_forward_dynamics.py` func_notes, `_minv.py` func_notes); the recommended
+  consumer path is always `*_device` (sizes + loads everything). `nq=NUM_JOINTS` vs `nv=NUM_VEL` arena confusion is the
+  same family as §1a/§1e.
+
 ---
 
 ## 2. Debugging methodology (what actually localizes a bug fast)
