@@ -970,6 +970,40 @@ def _floating_algorithm_selection() -> tuple[str, ...]:
     return requested
 
 
+# Value-only subset (no gradients, no second-order kernels). Used to NUMERICALLY
+# validate a spilled VALUE-algo rung (e.g. crba's s_M output-spill) under a forced
+# low GRID_CUDA_TARGET_SHARED_MEM_BYTES WITHOUT also deep-spilling idsva_so/fdsva_so
+# — a low global target makes the SO kernels' 4*NV^3 contract spill pathologically
+# (nvcc cicc stalls for >1h). Emitting only the value block keeps the SO kernels out
+# of the header entirely, so the forced-spill rung of crba/minv/fd/aba/ee_pose can be
+# exercised cheaply. Opt in via GRID_CUDA_CODEGEN_SUBSET=value (or a comma list of
+# codegen algorithm keys). These are exactly the kernels cuda_equivalence_runner.cu
+# launches unconditionally with GRID_RUNNER_SKIP_GRADIENTS=1.
+_VALUE_ONLY_CODEGEN = [
+    "inverse_dynamics", "minv", "forward_dynamics", "aba", "crba", "end_effector_pose",
+]
+_VALUE_ONLY_COMPARE = (
+    "inverse_dynamics", "minv", "forward_dynamics", "aba", "crba", "end_effector_pose",
+)
+
+
+def _codegen_subset_from_env():
+    """Optional value-only SUBSET header request (GRID_CUDA_CODEGEN_SUBSET).
+
+    Returns (codegen_algorithm_list, compare_algorithms) or (None, None) when unset.
+    `value`/`value-only` -> the gradient-free value block; otherwise a comma list of
+    codegen keys (the compare set is then the intersection with the value block, since
+    the runner only emits the value kernels under the derived SKIP_GRADIENTS)."""
+    raw = os.environ.get("GRID_CUDA_CODEGEN_SUBSET")
+    if not raw:
+        return None, None
+    if raw.strip().lower() in ("value", "value-only", "value_only"):
+        return list(_VALUE_ONLY_CODEGEN), _VALUE_ONLY_COMPARE
+    requested = [part.strip() for part in raw.split(",") if part.strip()]
+    compare = tuple(a for a in _VALUE_ONLY_COMPARE if a in set(requested))
+    return requested, compare
+
+
 def _parse_sample_names(raw: str) -> set[str] | None:
     if raw.strip().lower() == "all":
         return None
@@ -1550,15 +1584,17 @@ def _assert_close(
 def test_fixed_base_generated_cuda_matches_python_reference(spec, base_mode, num_threads, tmp_path, request):
     selection = _sample_name_selection(base_mode)
     random_count = 0 if selection.explicit and os.environ.get("GRID_CUDA_RANDOM_SAMPLES") is None else None
+    codegen_subset, compare_subset = _codegen_subset_from_env()
     _run_cuda_equivalence_case(
         spec,
         base_mode,
         tmp_path,
-        FIXED_CUDA_ALGORITHMS,
+        compare_subset if compare_subset is not None else FIXED_CUDA_ALGORITHMS,
         sample_selection=selection,
         random_count=random_count,
         config=request.config,
         num_threads=num_threads,
+        codegen_algorithm_list=codegen_subset,
     )
 
 
@@ -1571,15 +1607,17 @@ def test_floating_base_generated_cuda_matches_python_reference(spec, base_mode, 
         selection.explicit or selection.names == {"zero"}
     ):
         random_count = 0
+    codegen_subset, compare_subset = _codegen_subset_from_env()
     _run_cuda_equivalence_case(
         spec,
         base_mode,
         tmp_path,
-        _floating_algorithm_selection(),
+        compare_subset if compare_subset is not None else _floating_algorithm_selection(),
         sample_selection=selection,
         random_count=random_count,
         config=request.config,
         num_threads=num_threads,
+        codegen_algorithm_list=codegen_subset,
     )
 
 
