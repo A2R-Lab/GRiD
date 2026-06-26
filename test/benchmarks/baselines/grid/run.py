@@ -43,6 +43,7 @@ DEFAULT_EE_FRAMES: dict[str, str] = {
     "g1":     "right_hand_palm_joint",  # fixed joint at right hand palm
     "h1_2":   "R_base_link_joint",      # fixed joint at base of right hand (h1_2)
     "h2_plus": "right_hand_joint",      # fixed joint at right hand (H2+ large-robot scaling target)
+    "baxter":  "left_endpoint",         # fixed joint mounting the left gripper (dual-arm; single-EE convention)
 }
 
 # ---------------------------------------------------------------------------
@@ -61,6 +62,10 @@ ROBOT_DESCRIPTION_MODULE: dict[str, str] = {
 # it is a GRiD-internal scaling study, not a competitive cell.
 LOCAL_URDF: dict[str, str] = {
     "h2_plus": str(REPO_ROOT / "robot_assets" / "h2_plus.urdf"),
+    # Baxter = Rethink dual-arm (14-DOF actuated, fixed-base) — vendored URDF for
+    # fixed-base benchmark variety. GRiD-internal (treated GRID_ONLY); single-EE
+    # (left_endpoint) per the one-EE-per-robot convention (both-grippers backlog).
+    "baxter":  str(REPO_ROOT / "robot_assets" / "baxter.urdf"),
 }
 
 

@@ -59,7 +59,7 @@ PRE_GLASS_REF = "d2c0d18"
 RESULTS_DIR   = THIS_DIR / "results" / "comparison"
 DEFAULT_WORKTREE_PATH = REPO_ROOT.parent / "GRiD-A2R-pre-glass"
 
-ROBOTS = ("iiwa14", "go2", "g1", "h2_plus")
+ROBOTS = ("iiwa14", "go2", "g1", "h2_plus", "baxter")
 BASES  = ("fixed", "floating")
 
 # Robots that exist ONLY inside GRiD: vendored URDF with no robot_descriptions
@@ -68,7 +68,7 @@ BASES  = ("fixed", "floating")
 # (mjx/mujoco_warp), so they cannot load these robots — we SKIP those columns
 # gracefully instead of crashing. H2+ = Unitree H2+ (nv=75 fixed / 81 floating),
 # the large-robot SCALING target that retired the redundant h1_2.
-GRID_ONLY_ROBOTS = frozenset({"h2_plus"})
+GRID_ONLY_ROBOTS = frozenset({"h2_plus", "baxter"})
 # Columns that need a non-GRiD model (robot_descriptions URDF or MuJoCo MJCF).
 # Skipped for any robot in GRID_ONLY_ROBOTS.
 NON_GRID_COLUMNS = frozenset({"pinocchio", "mjx", "frax", "bard"})
@@ -97,9 +97,10 @@ EE_FRAMES_GRID = {
     "go2":    "FR_foot_joint",
     "g1":     "right_hand_palm_joint",
     "h2_plus": "right_hand_joint",       # fixed joint at right hand (H2+ large-robot scaling target)
+    "baxter":  "left_endpoint",          # fixed joint at left gripper (dual-arm; single-EE convention)
 }
 # Competitor frames: only robots with a robot_descriptions / MJCF model. h2_plus
-# is GRiD-internal (GRID_ONLY_ROBOTS) so it intentionally has no entry here.
+# and baxter are GRiD-internal (GRID_ONLY_ROBOTS) so they intentionally have no entry here.
 EE_FRAMES_PIN = {
     "iiwa14": "iiwa_link_ee",
     "go2":    "FR_foot",
