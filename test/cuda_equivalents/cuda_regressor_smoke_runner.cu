@@ -64,11 +64,14 @@ int run() {
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 
-    // q|qd|qdd into the q_qd_u host buffer, floating-aware layout:
-    //   q  (NUM_POS) | qd (NUM_VEL) | qdd (NUM_VEL), total Q_QD_U_STRIDE.
+    // q|qd|qdd into the q_qd_u host buffer. Canonical layout (Q_QD_U_STRIDE == 3*NUM_POS):
+    // each field gets a NUM_POS(=nq)-wide slot -> q@0, qd@nq, qdd@2*nq (the kernel reads
+    // s_qdd at 2*NUM_POS). Fixed-base nq==nv makes this byte-identical to the old nv-based
+    // qdd@nq+nv; FLOATING nq>nv needs the nq-based 2*NUM_POS offset (else qdd is read shifted
+    // by nq-nv -> wrong base acceleration -> globally wrong regressor).
     read_vector(hd_data->h_q_qd_u, grid::NUM_POS);
     read_vector(&hd_data->h_q_qd_u[grid::NUM_POS], grid::NUM_VEL);
-    read_vector(&hd_data->h_q_qd_u[grid::NUM_POS + grid::NUM_VEL], grid::NUM_VEL);
+    read_vector(&hd_data->h_q_qd_u[2 * grid::NUM_POS], grid::NUM_VEL);
 
     // R2: regressor output lives in gridData (hd_data->d_Y / hd_data->h_Y); the
     // host launcher copies device->host into hd_data->h_Y.

@@ -66,11 +66,14 @@ int run() {
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 
-    // q|qd|u into the q_qd_u host buffer, floating-aware layout:
-    //   q (NUM_POS) | qd (NUM_VEL) | u (NUM_VEL), total Q_QD_U_STRIDE.
+    // q|qd|u into the q_qd_u host buffer. Canonical layout (Q_QD_U_STRIDE == 3*NUM_POS):
+    // each field gets a NUM_POS(=nq)-wide slot -> q@0, qd@nq, u@2*nq (the kernel reads
+    // s_u at 2*NUM_POS). Fixed-base nq==nv makes this byte-identical to the old nv-based
+    // u@nq+nv; FLOATING nq>nv needs the nq-based 2*NUM_POS offset (else u is read shifted
+    // by nq-nv -> wrong torque input -> globally wrong dqdd/dpi).
     read_vector(hd_data->h_q_qd_u, grid::NUM_POS);
     read_vector(&hd_data->h_q_qd_u[grid::NUM_POS], grid::NUM_VEL);
-    read_vector(&hd_data->h_q_qd_u[grid::NUM_POS + grid::NUM_VEL], grid::NUM_VEL);
+    read_vector(&hd_data->h_q_qd_u[2 * grid::NUM_POS], grid::NUM_VEL);
 
     // R2: output lives in gridData (hd_data->d_dqdd_dpi / hd_data->h_dqdd_dpi);
     // the host launcher copies device->host into hd_data->h_dqdd_dpi.

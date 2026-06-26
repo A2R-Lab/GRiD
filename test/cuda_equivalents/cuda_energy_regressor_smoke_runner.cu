@@ -63,11 +63,13 @@ int run() {
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 
-    // q|qd|qdd into the q_qd_u host buffer, floating-aware layout:
-    //   q  (NUM_POS) | qd (NUM_VEL) | qdd (NUM_VEL), total Q_QD_U_STRIDE.
+    // q|qd|qdd into the q_qd_u host buffer. Canonical layout (Q_QD_U_STRIDE == 3*NUM_POS):
+    // each field gets a NUM_POS(=nq)-wide slot -> q@0, qd@nq, qdd@2*nq (kernels read the
+    // 3rd field at 2*NUM_POS). KE/PE do not consume qdd so this is harmless here, but use
+    // the canonical nq-based offset for consistency with the other q|qd|* runners.
     read_vector(hd_data->h_q_qd_u, grid::NUM_POS);
     read_vector(&hd_data->h_q_qd_u[grid::NUM_POS], grid::NUM_VEL);
-    read_vector(&hd_data->h_q_qd_u[grid::NUM_POS + grid::NUM_VEL], grid::NUM_VEL);
+    read_vector(&hd_data->h_q_qd_u[2 * grid::NUM_POS], grid::NUM_VEL);
     // The KE / PE hosts read from the compressed buffers hd_data->h_q_qd / h_q
     // (non-compressed branch uses h_q_qd_u for KE and h_q for PE). Mirror q (and
     // q|qd) into those host buffers so both code paths see consistent inputs.
