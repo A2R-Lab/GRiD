@@ -43,6 +43,10 @@
 # Usage:   bash test/benchmarks/run_tier_sweep_phased.sh [PHASE] [BUILD_JOBS]
 #            PHASE      = 1 | 2 | all   (default all -> phase 1 then phase 2)
 #            BUILD_JOBS = phase-1 build parallelism (default 4; phase 2 forces <=2)
+#          BUILD_ONLY=1 bash test/benchmarks/run_tier_sweep_phased.sh [PHASE] [BUILD_JOBS]
+#            -> PRE-COMPILE every cell's binaries into the cache and STOP before timing
+#               (warm now; time later with the SAME command minus BUILD_ONLY on a quiet
+#               GPU -> pure cache-hit). Drops the pinocchio column during pre-build.
 #
 # PREREQS TO VERIFY ON FIRST REAL RUN (not yet exercised end-to-end):
 #   (a) GRID_BENCH_ALGORITHM_LIST exported here reaches run.py through
@@ -74,21 +78,30 @@ FLOATING_ROBOTS="go2 g1 h2_plus"
 TIERS="shared lite minimal"
 BATCH_SIZES="32 256"   # see PREREQ (b)
 
+# BUILD_ONLY=1 -> pre-compile every cell's binaries into the content-addressed cache
+# and STOP before timing (warm the cache now; time later on a quiet GPU with the same
+# command minus --build-only). In build-only mode we also drop the pinocchio column
+# (nothing to pre-build there) so the pre-build is pure GRiD compile.
+BUILD_ONLY="${BUILD_ONLY:-0}"
+
 run_cell() {  # $1=phase-tag $2=algos $3=robots $4=base $5=build_jobs
   local tag="$1" algos="$2" robots="$3" base="$4" bj="$5"
   local out="$OUTROOT/${tag}_${base}"
   mkdir -p "$out"
-  echo "=== [$tag/$base] robots=[$robots] build_jobs=$bj  $(date) ==="
+  local extra=() cols=(glass pinocchio)
+  if [ "$BUILD_ONLY" = "1" ]; then extra=(--build-only); cols=(glass); fi
+  echo "=== [$tag/$base]$([ "$BUILD_ONLY" = "1" ] && echo ' BUILD-ONLY') robots=[$robots] build_jobs=$bj  $(date) ==="
   echo "    free -g: $(free -g | awk '/Mem:/{print "used="$3" free="$4" avail="$7}')"
   echo "    GPU: $(nvidia-smi --query-gpu=memory.used --format=csv,noheader 2>/dev/null)"
   GRID_BENCH_ALGORITHM_LIST="$algos" \
   .venv/bin/python test/benchmarks/run_multi_version.py \
-      --columns glass pinocchio \
+      --columns "${cols[@]}" \
       --robots $robots \
       --bases "$base" \
       --autotune-threads \
       --tiers $TIERS \
       --build-jobs "$bj" \
+      "${extra[@]}" \
       --output-dir "$out" 2>&1 | tee "$out/sweep.log"
 }
 

@@ -696,6 +696,15 @@ def main() -> None:
                              "(MEASURE) phase always stays SERIAL on the isolated GPU, so this "
                              "never affects the numbers. Default: auto (from cores + free RAM, "
                              "~6GB/compile). Pass 1 for the legacy fully-serial behavior.")
+    parser.add_argument("--build-only", action="store_true",
+                        help="PRE-BUILD only: run the parallel BUILD phase (warm the content-"
+                             "addressed binary cache for every requested robot/base/tier of the "
+                             "GRiD columns) and STOP before the serial MEASURE phase. No timing, "
+                             "no report. Lets you compile all sweep versions ahead of time (e.g. "
+                             "while the box is busy) so the later real sweep is pure cache-hit "
+                             "timing on a quiet GPU. Cache keys match the timed run exactly because "
+                             "it is the SAME build call. Forces the build phase even at "
+                             "--build-jobs 1.")
     parser.add_argument("--autotune-threads", action="store_true",
                         help="Forward --autotune-threads to the GRiD glass column. For each "
                              "(robot, base, algo) tuple, do the JOINT (tier × thread-count) "
@@ -762,7 +771,9 @@ def main() -> None:
     grid_columns = [c for c in args.columns if c in ("glass", "pre_glass")]
     build_jobs = args.build_jobs if args.build_jobs is not None else _auto_build_jobs()
     measure_no_recompile = False
-    if grid_columns and build_jobs > 1:
+    # --build-only forces the build phase even at build_jobs==1 (the usual >1 guard
+    # is a perf optimization for the timed path; here the build IS the deliverable).
+    if grid_columns and (build_jobs > 1 or args.build_only):
         _build_grid_binaries(
             grid_columns, args.robots, args.bases, args.tiers,
             build_jobs=build_jobs, worktree_path=args.worktree_path,
@@ -775,6 +786,15 @@ def main() -> None:
         )
         # Measure phase pulls from the warm cache; never compile during timing.
         measure_no_recompile = True
+
+    # --build-only: the binary cache is now warm for every requested cell. Stop here;
+    # the real (timed) sweep re-runs the same command WITHOUT --build-only and hits
+    # the cache for the build, leaving only serial GPU timing.
+    if args.build_only:
+        print(f"[{ts()}] === --build-only: binary cache warmed for "
+              f"robots={args.robots} bases={args.bases} tiers={args.tiers}; "
+              f"skipping MEASURE + report. ===")
+        return
 
     # 2) MEASURE phase: run all (column, robot, base) combinations sequentially.
     #    The GPU is the shared serial resource; timing must not contend. GRiD
