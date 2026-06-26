@@ -73,11 +73,9 @@ NOSO_ALGOS="inverse_dynamics,minv,forward_dynamics,inverse_dynamics_gradient,for
 SO_ALGOS="inverse_dynamics,minv,forward_dynamics,inverse_dynamics_gradient,forward_dynamics_gradient,idsva_so_body_frame,fdsva_so,idsva_so_world_frame"
 
 # --- shared config ----------------------------------------------------------
-# Robot lists are env-overridable. NOTE: baxter must first be REGISTERED in the bench
-# harness (run.py LOCAL_URDF + EE frame; run_multi_version ROBOTS/EE_FRAMES/GRID_ONLY)
-# before it can be swept — it is NOT in the default registered set yet, so the default
-# fixed list is just iiwa14. Once registered: FIXED_ROBOTS="iiwa14 baxter".
-FIXED_ROBOTS="${FIXED_ROBOTS:-iiwa14}"
+# Robot lists are env-overridable. baxter is REGISTERED (commit 1226853: run.py LOCAL_URDF +
+# left_endpoint EE; run_multi_version ROBOTS/EE_FRAMES/GRID_ONLY) and verified fixed-base.
+FIXED_ROBOTS="${FIXED_ROBOTS:-iiwa14 baxter}"
 FLOATING_ROBOTS="${FLOATING_ROBOTS:-go2 g1 h2_plus}"
 TIERS="shared lite minimal"
 BATCH_SIZES="32 256"   # see PREREQ (b)
