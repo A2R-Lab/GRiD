@@ -575,9 +575,11 @@ def test_linalg_backend_controls_and_helpers_are_generated(tmp_path):
     assert "BEGIN GLASS src/base/L2/gemv_strided.cuh" in header
     assert "BEGIN GLASS src/base/L3/gemm_strided.cuh" in header
     assert "glass::dot_strided" in header
-    assert "glass::row_strided_gemv" in header
-    assert "glass::row_strided_gemm" in header
-    assert "glass::gemm_ex" in header
+    # GLASS v2 BLAS-convention names (row_strided_* -> *_strided; gemm_ex removed).
+    assert "glass::gemv_strided" in header
+    assert "glass::gemm_strided" in header
+    assert "glass::gemm_ex" not in header
+    assert "glass::gemv_ex" not in header
 
     # The arena-sizing stub must remain (returns 0 now, but the macros call it).
     assert "GRID_LINALG_NVIDIA_MAX_HELPER_BYTES" in header
