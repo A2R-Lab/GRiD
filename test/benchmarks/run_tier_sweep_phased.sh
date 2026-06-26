@@ -70,7 +70,12 @@ mkdir -p "$OUTROOT"
 # Phase 1 = `all` MINUS the SO trio, PLUS osc_inertia (opt-in; de-gate #4).
 NOSO_ALGOS="inverse_dynamics,minv,forward_dynamics,inverse_dynamics_gradient,forward_dynamics_gradient,aba,crba,end_effector_pose,end_effector_pose_gradient,end_effector_pose_hessian,integrator,integrator_gradient,integrator_with_gradient,f_ext_gradient,inverse_dynamics_regressor,forward_dynamics_parameter_gradient,kinetic_energy_regressor,potential_energy_regressor,com,ccrba,energy,generalized_gravity,nonlinear_effects,coriolis_matrix,dccrba,cmm_time_variation,osc_inertia,frame_jacobian,frame_jacobian_dot"
 # Phase 2 = the SO kernels + their first-order deps (deps are cheap; SO is the wall).
-SO_ALGOS="inverse_dynamics,minv,forward_dynamics,inverse_dynamics_gradient,forward_dynamics_gradient,idsva_so_body_frame,fdsva_so,idsva_so_world_frame"
+# integrator family is REQUIRED: the SO algos pull in integrator_gradient transitively,
+# whose floating mjx-output path calls grid_dIntegrate_q_block (defined by base `integrator`,
+# _integrator.py:244). Without integrator in the set the SO-only header emits the caller but
+# not the helper -> "type name is not allowed" on floating (fixed-base never hits that path;
+# the full 'all' header always has integrator). [codegen dep-graph gap backlogged]
+SO_ALGOS="inverse_dynamics,minv,forward_dynamics,inverse_dynamics_gradient,forward_dynamics_gradient,integrator,integrator_gradient,integrator_with_gradient,idsva_so_body_frame,fdsva_so,idsva_so_world_frame"
 
 # --- shared config ----------------------------------------------------------
 # Robot lists are env-overridable. baxter is REGISTERED (commit 1226853: run.py LOCAL_URDF +
