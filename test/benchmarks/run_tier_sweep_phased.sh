@@ -73,8 +73,12 @@ NOSO_ALGOS="inverse_dynamics,minv,forward_dynamics,inverse_dynamics_gradient,for
 SO_ALGOS="inverse_dynamics,minv,forward_dynamics,inverse_dynamics_gradient,forward_dynamics_gradient,idsva_so_body_frame,fdsva_so,idsva_so_world_frame"
 
 # --- shared config ----------------------------------------------------------
-FIXED_ROBOTS="iiwa14 baxter"
-FLOATING_ROBOTS="go2 g1 h2_plus"
+# Robot lists are env-overridable. NOTE: baxter must first be REGISTERED in the bench
+# harness (run.py LOCAL_URDF + EE frame; run_multi_version ROBOTS/EE_FRAMES/GRID_ONLY)
+# before it can be swept — it is NOT in the default registered set yet, so the default
+# fixed list is just iiwa14. Once registered: FIXED_ROBOTS="iiwa14 baxter".
+FIXED_ROBOTS="${FIXED_ROBOTS:-iiwa14}"
+FLOATING_ROBOTS="${FLOATING_ROBOTS:-go2 g1 h2_plus}"
 TIERS="shared lite minimal"
 BATCH_SIZES="32 256"   # see PREREQ (b)
 
@@ -116,11 +120,14 @@ phase2() {
   # SO ONLY, serial, RAM-gated. build-jobs <=2; h2_plus forced to 1.
   local bj=2
   echo "########## PHASE 2 (SO-only) START $(date)  build_jobs<=$bj ##########"
-  run_cell "p2_SO" "$SO_ALGOS" "iiwa14 baxter" fixed    "$bj"
-  run_cell "p2_SO" "$SO_ALGOS" "go2 g1"        floating "$bj"
-  # h2_plus SO single-TU is ~36 GB -> build-jobs 1, on its own, last.
-  echo "--- h2_plus SO is the heaviest single compile (~36 GB). build-jobs=1, solo. ---"
-  run_cell "p2_SO" "$SO_ALGOS" "h2_plus"       floating 1
+  run_cell "p2_SO" "$SO_ALGOS" "$FIXED_ROBOTS" fixed    "$bj"
+  # floating SO minus h2_plus (which is the ~36 GB single-TU monster — solo @1, last).
+  local fl_no_h2=$(echo "$FLOATING_ROBOTS" | tr ' ' '\n' | grep -v h2_plus | tr '\n' ' ')
+  [ -n "${fl_no_h2// }" ] && run_cell "p2_SO" "$SO_ALGOS" "$fl_no_h2" floating "$bj"
+  if echo "$FLOATING_ROBOTS" | grep -qw h2_plus; then
+    echo "--- h2_plus SO is the heaviest single compile (~36 GB). build-jobs=1, solo. ---"
+    run_cell "p2_SO" "$SO_ALGOS" "h2_plus"     floating 1
+  fi
   echo "########## PHASE 2 DONE $(date) ##########"
 }
 
