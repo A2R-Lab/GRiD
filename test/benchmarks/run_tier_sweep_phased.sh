@@ -43,18 +43,28 @@
 # Usage:   bash test/benchmarks/run_tier_sweep_phased.sh [PHASE] [BUILD_JOBS]
 #            PHASE      = 1 | 2 | all   (default all -> phase 1 then phase 2)
 #            BUILD_JOBS = phase-1 build parallelism (default 4; phase 2 forces <=2)
-#          BUILD_ONLY=1 bash test/benchmarks/run_tier_sweep_phased.sh [PHASE] [BUILD_JOBS]
-#            -> PRE-COMPILE every cell's binaries into the cache and STOP before timing
-#               (warm now; time later with the SAME command minus BUILD_ONLY on a quiet
-#               GPU -> pure cache-hit). Drops the pinocchio column during pre-build.
 #
-# PREREQS TO VERIFY ON FIRST REAL RUN (not yet exercised end-to-end):
-#   (a) GRID_BENCH_ALGORITHM_LIST exported here reaches run.py through
-#       run_multi_version's subprocess (it inherits parent env by default; confirm
-#       the generated header's "Codegen profile:" note lists the intended set).
-#   (b) batch sizes 32/256 wiring: run_multi_version currently prints single/N=16/
-#       N=256 summaries. Confirm/extend the batch-N knob (BATCH_SIZES below) maps to
-#       a real flag before trusting the 32-column. Until then 256 is the safe column.
+# ---- OVERNIGHT ONE-SHOT (the autonomous "cached-time-first, then compile+time") ----
+#   bash test/benchmarks/run_tier_sweep_phased.sh all 4      # NO BUILD_ONLY
+#   ONE launch -> runs unattended to completion, cache-aware:
+#     Phase 1 (no-SO): run_multi_version build phase CACHE-HITS the already-compiled
+#       no-SO binaries (instant) and immediately TIMES them -> first results land fast.
+#     Phase 2 (SO):    COMPILES the SO binaries (not yet cached) then TIMES them.
+#   So everything already compiled is timed FIRST; only the uncached SO pass pays
+#   compile. Resumable: the run.py content-addressed cache persists, so if the SO
+#   compile is interrupted, relaunch the SAME command and it continues (Phase-1
+#   timings are already written). LAUNCH ONLY ON A QUIET GPU (timing contends).
+#
+# ---- PRE-BUILD ONLY (warm the cache ahead of time, no timing) ----
+#   BUILD_ONLY=1 bash test/benchmarks/run_tier_sweep_phased.sh [PHASE] [BUILD_JOBS]
+#     -> compile every cell's binaries into the cache and STOP before timing; drops
+#        the pinocchio column. (Phase 1 no-SO already pre-built 2026-06-26.)
+#
+# VERIFIED 2026-06-26: GRID_BENCH_ALGORITHM_LIST DOES reach run.py via
+#   run_multi_version's env-inheriting subprocess (header "Generated algorithms:"
+#   matched the intended set; SO excluded in Phase 1).
+# OPEN: batch sizes 32/256 wiring — run_multi_version prints single/N=16/N=256
+#   summaries; confirm/extend the batch-N knob before trusting a 32-column (256 safe).
 # ============================================================================
 set -uo pipefail
 cd /home/plancher/Desktop/GRiD
