@@ -44,16 +44,17 @@
 #            PHASE      = 1 | 2 | all   (default all -> phase 1 then phase 2)
 #            BUILD_JOBS = phase-1 build parallelism (default 4; phase 2 forces <=2)
 #
-# ---- OVERNIGHT ONE-SHOT (the autonomous "cached-time-first, then compile+time") ----
-#   bash test/benchmarks/run_tier_sweep_phased.sh all 4      # NO BUILD_ONLY
-#   ONE launch -> runs unattended to completion, cache-aware:
-#     Phase 1 (no-SO): run_multi_version build phase CACHE-HITS the already-compiled
-#       no-SO binaries (instant) and immediately TIMES them -> first results land fast.
-#     Phase 2 (SO):    COMPILES the SO binaries (not yet cached) then TIMES them.
-#   So everything already compiled is timed FIRST; only the uncached SO pass pays
-#   compile. Resumable: the run.py content-addressed cache persists, so if the SO
-#   compile is interrupted, relaunch the SAME command and it continues (Phase-1
-#   timings are already written). LAUNCH ONLY ON A QUIET GPU (timing contends).
+# ---- OVERNIGHT ONE-SHOT (bedtime: time everything cached FIRST, then compile+time) ----
+#   bash test/benchmarks/run_tier_sweep_phased.sh overnight 4
+#   ONE launch -> runs unattended, in the order the user asked for:
+#     [1/2] TIME every already-compiled binary first (all no-SO + the cached SO =
+#           fixed iiwa14/baxter + go2-floating) via cache-hit build -> pure timing,
+#           so results land FAST and survive an interruption.
+#     [2/2] COMPILE+TIME the last two SO robots at the very end: g1-floating, then
+#           h2_plus-floating solo @1 (the long ones).
+#   Resumable (run.py content-addressed cache persists). LAUNCH ONLY ON A QUIET GPU.
+#   (The `all` phase also works but groups go2+g1 together, delaying go2's timing
+#    behind g1's compile; `overnight` separates them so cached timing is strictly first.)
 #
 # ---- PRE-BUILD ONLY (warm the cache ahead of time, no timing) ----
 #   BUILD_ONLY=1 bash test/benchmarks/run_tier_sweep_phased.sh [PHASE] [BUILD_JOBS]
@@ -144,11 +145,38 @@ phase2() {
   echo "########## PHASE 2 DONE $(date) ##########"
 }
 
+# OVERNIGHT one-shot (user-structured 2026-06-26): TIME everything already compiled
+# FIRST (results land before any long compile + survive an interruption), THEN
+# compile+time the last two SO robots at the very end. Reflects the 2026-06-26 cache
+# state: cached SO = fixed(iiwa14,baxter) + go2-floating; to-compile SO = g1, h2_plus
+# floating. Override the two splits via env if the cache state changes.
+SO_CACHED_FLOATING="${SO_CACHED_FLOATING:-go2}"
+SO_COMPILE_FLOATING="${SO_COMPILE_FLOATING:-g1 h2_plus}"
+
+overnight() {
+  echo "########## OVERNIGHT (time-cached-first, then compile+time last two) START $(date) ##########"
+  # --- [1/2] TIME all already-compiled binaries (cache-hit build -> pure timing) ---
+  echo "### [1/2] TIME all cached: no-SO (all) + SO (fixed + ${SO_CACHED_FLOATING}-floating) ###"
+  run_cell "ov1_noSO" "$NOSO_ALGOS" "$FIXED_ROBOTS"        fixed    "$BUILD_JOBS"
+  run_cell "ov1_noSO" "$NOSO_ALGOS" "$FLOATING_ROBOTS"     floating "$BUILD_JOBS"
+  run_cell "ov1_SO"   "$SO_ALGOS"   "$FIXED_ROBOTS"        fixed    2
+  run_cell "ov1_SO"   "$SO_ALGOS"   "$SO_CACHED_FLOATING"  floating 2
+  # --- [2/2] COMPILE + TIME the last SO robots, one at a time, at the end ---
+  echo "### [2/2] COMPILE+TIME last SO robots: ${SO_COMPILE_FLOATING} (floating) ###"
+  for r in $SO_COMPILE_FLOATING; do
+    local bj=2; [ "$r" = "h2_plus" ] && bj=1   # h2_plus ~36GB single-TU -> solo @1
+    echo "--- compile+time ${r}-floating SO (build-jobs=$bj) ---"
+    run_cell "ov2_SO_${r}" "$SO_ALGOS" "$r" floating "$bj"
+  done
+  echo "########## OVERNIGHT DONE $(date) ##########"
+}
+
 echo "=== PHASED tier sweep  phase=$PHASE  outroot=$OUTROOT  $(date) ==="
 case "$PHASE" in
-  1)   phase1 ;;
-  2)   phase2 ;;
-  all) phase1; phase2 ;;
-  *)   echo "unknown PHASE '$PHASE' (use 1|2|all)"; exit 2 ;;
+  1)        phase1 ;;
+  2)        phase2 ;;
+  all)      phase1; phase2 ;;
+  overnight) overnight ;;
+  *)   echo "unknown PHASE '$PHASE' (use 1|2|all|overnight)"; exit 2 ;;
 esac
 echo "=== PHASED tier sweep COMPLETE  $(date)  results in $OUTROOT ==="
