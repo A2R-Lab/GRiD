@@ -164,7 +164,7 @@ overnight() {
   # --- [2/2] COMPILE + TIME the last SO robots, one at a time, at the end ---
   echo "### [2/2] COMPILE+TIME last SO robots: ${SO_COMPILE_FLOATING} (floating) ###"
   for r in $SO_COMPILE_FLOATING; do
-    local bj=2; [ "$r" = "h2_plus" ] && bj=1   # h2_plus ~36GB single-TU -> solo @1
+    local bj=1   # SO single-TU is a RAM monster (g1 OOM'd VS Code at bj=2 = 2 parallel cicc); compile tiers serially
     echo "--- compile+time ${r}-floating SO (build-jobs=$bj) ---"
     run_cell "ov2_SO_${r}" "$SO_ALGOS" "$r" floating "$bj"
   done
