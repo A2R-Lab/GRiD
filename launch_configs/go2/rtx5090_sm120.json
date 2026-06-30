@@ -90,59 +90,59 @@
     },
     "floating": {
       "aba": {
-        "threads": 128,
+        "threads": 192,
         "tier": "shared",
-        "us_at_optimal": 40.78
+        "us_at_optimal": 36.8
       },
       "crba": {
         "threads": 192,
         "tier": "shared",
-        "us_at_optimal": 14.88
+        "us_at_optimal": 13.73
       },
       "ee_pose": {
-        "threads": 320,
+        "threads": 224,
         "tier": "shared",
-        "us_at_optimal": 21.36
+        "us_at_optimal": 21.02
       },
       "ee_pose_gradient": {
         "threads": 80,
         "tier": "shared",
-        "us_at_optimal": 35.1
+        "us_at_optimal": 33.15
       },
       "ee_pose_hessian": {
         "threads": 448,
         "tier": "lite",
-        "us_at_optimal": 50.54
+        "us_at_optimal": 39.97
       },
       "fd": {
-        "threads": 112,
-        "tier": "lite",
-        "us_at_optimal": 34.4
+        "threads": 224,
+        "tier": "shared",
+        "us_at_optimal": 27.74
       },
       "fd_du": {
-        "threads": 320,
-        "tier": "lite",
-        "us_at_optimal": 76.69
+        "threads": 256,
+        "tier": "shared",
+        "us_at_optimal": 53.7
       },
       "fdsva_so": {
         "threads": 320,
         "tier": "minimal",
-        "us_at_optimal": 776.29
+        "us_at_optimal": 686.87
       },
       "id": {
-        "threads": 128,
-        "tier": "lite",
-        "us_at_optimal": 19.57
+        "threads": 224,
+        "tier": "shared",
+        "us_at_optimal": 18.87
       },
       "id_du": {
-        "threads": 320,
-        "tier": "lite",
-        "us_at_optimal": 53.13
+        "threads": 256,
+        "tier": "shared",
+        "us_at_optimal": 39.8
       },
       "idsva_so": {
-        "threads": 96,
-        "tier": "shared",
-        "us_at_optimal": 383.09
+        "threads": 192,
+        "tier": "minimal",
+        "us_at_optimal": 392.08
       },
       "idsva_so_body_frame": {
         "threads": 64,
@@ -150,29 +150,29 @@
         "us_at_optimal": 9375.41
       },
       "idsva_so_world_frame": {
-        "threads": 96,
-        "tier": "shared",
-        "us_at_optimal": 383.0
+        "threads": 192,
+        "tier": "minimal",
+        "us_at_optimal": 392.18
       },
       "integrator": {
-        "threads": 224,
-        "tier": "shared",
-        "us_at_optimal": 38.93
+        "threads": 192,
+        "tier": "lite",
+        "us_at_optimal": 35.77
       },
       "integrator_gradient": {
         "threads": 320,
         "tier": "lite",
-        "us_at_optimal": 80.12
+        "us_at_optimal": 73.51
       },
       "integrator_with_gradient": {
-        "threads": 288,
+        "threads": 224,
         "tier": "lite",
-        "us_at_optimal": 82.04
+        "us_at_optimal": 67.69
       },
       "minv": {
-        "threads": 192,
+        "threads": 224,
         "tier": "shared",
-        "us_at_optimal": 26.14
+        "us_at_optimal": 23.29
       }
     }
   },
@@ -281,5 +281,5 @@
   },
   "gpu": "rtx5090_sm120",
   "gpu_name": "NVIDIA GeForce RTX 5090",
-  "source": "GRiD autotune sweep 2026-06-13"
+  "source": "GRiD autotune sweep 2026-06-30"
 }
