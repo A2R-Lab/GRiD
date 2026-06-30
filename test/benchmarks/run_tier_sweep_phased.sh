@@ -106,7 +106,7 @@ run_cell() {  # $1=phase-tag $2=algos $3=robots $4=base $5=build_jobs
   local tag="$1" algos="$2" robots="$3" base="$4" bj="$5"
   local out="$OUTROOT/${tag}_${base}"
   mkdir -p "$out"
-  local extra=() cols=(glass pinocchio)
+  local extra=() cols=(glass pinocchio mjx mujoco_warp)
   if [ "$BUILD_ONLY" = "1" ]; then extra=(--build-only); cols=(glass); fi
   echo "=== [$tag/$base]$([ "$BUILD_ONLY" = "1" ] && echo ' BUILD-ONLY') robots=[$robots] build_jobs=$bj  $(date) ==="
   echo "    free -g: $(free -g | awk '/Mem:/{print "used="$3" free="$4" avail="$7}')"

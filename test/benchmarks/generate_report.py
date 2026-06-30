@@ -193,7 +193,7 @@ def _robot_rows(results: dict, algo: str, section_robots: list[str]) -> list[str
 # ---------------------------------------------------------------------------
 
 MULTI_VERSION_KEYS = ("grid_pre_glass", "grid_glass",
-                      "pinocchio", "mjx", "frax_cpu", "frax_gpu",
+                      "pinocchio", "mjx", "mujoco_warp", "frax_cpu", "frax_gpu",
                       "bard_cpu", "bard_gpu")
 
 
@@ -226,6 +226,7 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
             gl_min  = (base_dict.get("grid_glass_tier_minimal") or {}).get(algo)
             pi = (base_dict.get("pinocchio") or {}).get(algo)
             mx = (base_dict.get("mjx") or {}).get(algo)
+            mw = (base_dict.get("mujoco_warp") or {}).get(algo)
             # Frax columns: split into CPU + GPU since Frax advertises both as fast.
             # Back-compat: legacy JSONs with key "frax" populate frax_gpu (the prior
             # default), leaving frax_cpu as `—`.
@@ -264,6 +265,7 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
                     "—",
                     _entry_single(pi) + _codegen_flag(pi),
                     _entry_single(mx),
+                    _entry_single(mw),
                     _entry_single(fx_cpu), _entry_single(fx_gpu),
                     _entry_single(bd_cpu), _entry_single(bd_gpu),
                 ]
@@ -287,6 +289,7 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
                     _entry_best(picks, algo) if n == 256 else "—",
                     _entry_batch(pi, n),
                     _entry_batch(mx, n, "compute_only"),
+                    _entry_batch(mw, n, "compute_only"),
                     _entry_batch(fx_cpu, n, "compute_only"),
                     _entry_batch(fx_gpu, n, "compute_only"),
                     _entry_batch(bd_cpu, n, "compute_only"),
@@ -352,6 +355,8 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
         "- **pin**: Pinocchio CPU reference (codegen where available).",
         "- **mjx**: MuJoCo MJX (JAX) GPU reference. Subset of algos only "
         "(id / fd / ee_pose / id_du); others render `—`.",
+        "- **mujoco_warp**: MuJoCo Warp (Warp-based MJX successor) GPU reference. "
+        "Same MJCF + algo coverage as mjx; others render `—`.",
         "- **frax_cpu / frax_gpu**: Frax (JAX) reference (https://github.com/danielpmorton/frax) "
         "timed separately on JAX's CPU and CUDA backends — Frax advertises both as fast. "
         "Subset of algos only (id / fd / crba / minv); others render `—`.",
@@ -387,11 +392,11 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
             }
             col_header = (
                 "| Robot | Base | pre_glass | glass | glass_lite | glass_min | grid_best "
-                "| pin | mjx | frax_cpu | frax_gpu | bard_cpu | bard_gpu | glass/pre |"
+                "| pin | mjx | mujoco_warp | frax_cpu | frax_gpu | bard_cpu | bard_gpu | glass/pre |"
             )
             col_align = (
                 "|-------|------|:---------:|:-----:|:----------:|:---------:|:--------:"
-                "|:---:|:---:|:--------:|:--------:|:--------:|:--------:|:---------:|"
+                "|:---:|:---:|:-----------:|:--------:|:--------:|:--------:|:--------:|:---------:|"
             )
             for metric in ("single", "n16", "n256"):
                 lines += [f"**{metric_header[metric]}**", ""]

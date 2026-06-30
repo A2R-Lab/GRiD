@@ -71,15 +71,15 @@ BASES  = ("fixed", "floating")
 GRID_ONLY_ROBOTS = frozenset({"h2_plus", "baxter"})
 # Columns that need a non-GRiD model (robot_descriptions URDF or MuJoCo MJCF).
 # Skipped for any robot in GRID_ONLY_ROBOTS.
-NON_GRID_COLUMNS = frozenset({"pinocchio", "mjx", "frax", "bard"})
+NON_GRID_COLUMNS = frozenset({"pinocchio", "mjx", "mujoco_warp", "frax", "bard"})
 # Columns the sweep knows how to run. cuBLASDx (glass_nvidia) was removed in
 # v2.0 — the 2026-05-18 sweep + per-host autotune showed it loses to SIMT at
 # every GEMM shape GRiD calls (notably 4×4×4 in end_effector_pose_hessian, where
 # SIMT wins by 2.6×). The historical data is preserved at the
 # `archive/last-cublasdx` git tag; see
 # docs/source/user_guide/concepts/cublasdx_removal_design.rst.
-COLUMNS = ("pre_glass", "glass", "pinocchio", "mjx", "frax", "bard")
-DEFAULT_COLUMNS = ("pre_glass", "glass", "pinocchio", "mjx", "frax", "bard")
+COLUMNS = ("pre_glass", "glass", "pinocchio", "mjx", "mujoco_warp", "frax", "bard")
+DEFAULT_COLUMNS = ("pre_glass", "glass", "pinocchio", "mjx", "mujoco_warp", "frax", "bard")
 
 # Maps the column identifier to the baseline key used in the merged JSON
 # (so generate_report.py / generate_multi_version_report.py can find them).
@@ -88,6 +88,7 @@ COLUMN_TO_BASELINE_KEY = {
     "glass":        "grid_glass",
     "pinocchio":    "pinocchio",
     "mjx":          "mjx",
+    "mujoco_warp":  "mujoco_warp",
     "frax":         "frax",
     "bard":         "bard",
 }
@@ -108,6 +109,8 @@ EE_FRAMES_PIN = {
 }
 # MJX uses MuJoCo body names (same names as Pinocchio link names for these robots).
 EE_FRAMES_MJX = EE_FRAMES_PIN
+# mujoco_warp loads the same MJCF as MJX, so it uses the same body names.
+EE_FRAMES_MUJOCO_WARP = EE_FRAMES_MJX
 
 
 def ts() -> str:
@@ -153,6 +156,15 @@ def _check_column_deps(column: str, worktree_path: Path) -> tuple[bool, str]:
         if rc != 0:
             return False, ("jax+mujoco+mujoco-mjx not installed "
                            "(`pip install mujoco mujoco-mjx 'jax[cuda12]'`)")
+        return True, ""
+    if column == "mujoco_warp":
+        rc = subprocess.run(
+            [sys.executable, "-c", "import mujoco, mujoco_warp"],
+            capture_output=True,
+        ).returncode
+        if rc != 0:
+            return False, ("mujoco-warp not installed "
+                           "(`pip install mujoco mujoco-warp`)")
         return True, ""
     if column == "frax":
         rc = subprocess.run(
@@ -397,9 +409,36 @@ def run_mjx_column(robot: str, base: str, *,
     if batch_iters is not None:
         cmd += ["--test-iters", str(batch_iters)]
     print(f"[{ts()}] [mjx] {robot} {base} → {output.name}")
-    result = subprocess.run(cmd, capture_output=False, text=True)
+    # Don't let JAX preallocate ~the whole GPU (its default) — keeps a shared box
+    # safe and the comparison fair (MJX is JIT-bound, not memory-bound here).
+    env = {**os.environ, "XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
+    result = subprocess.run(cmd, capture_output=False, text=True, env=env)
     if result.returncode != 0 or not output.exists():
         print(f"  [mjx] FAILED for {robot}/{base}", file=sys.stderr)
+        return None
+    return output
+
+
+def run_mujoco_warp_column(robot: str, base: str, *,
+                          output_dir: Path,
+                          batch_iters: int | None = None) -> Path | None:
+    ee_frame = EE_FRAMES_MUJOCO_WARP.get(robot, "")
+    output = output_dir / f"{robot}_{base}_mujoco_warp.json"
+    cmd = [
+        sys.executable,
+        str(REPO_ROOT / "test" / "benchmarks" / "baselines" / "mujoco_warp" / "run.py"),
+        "--robot", robot, "--base", base, "--output", str(output),
+        "--ee-frame", ee_frame,
+    ]
+    if batch_iters is not None:
+        cmd += ["--test-iters", str(batch_iters)]
+    print(f"[{ts()}] [mujoco_warp] {robot} {base} → {output.name}")
+    # mujoco_warp can pull in JAX/XLA transitively; same no-preallocate guard so it
+    # doesn't grab the whole GPU on a shared box.
+    env = {**os.environ, "XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
+    result = subprocess.run(cmd, capture_output=False, text=True, env=env)
+    if result.returncode != 0 or not output.exists():
+        print(f"  [mujoco_warp] FAILED for {robot}/{base}", file=sys.stderr)
         return None
     return output
 
@@ -829,6 +868,11 @@ def main() -> None:
                     )
                 elif column == "mjx":
                     p = run_mjx_column(
+                        robot, base, output_dir=args.output_dir,
+                        batch_iters=args.batch_iters,
+                    )
+                elif column == "mujoco_warp":
+                    p = run_mujoco_warp_column(
                         robot, base, output_dir=args.output_dir,
                         batch_iters=args.batch_iters,
                     )
