@@ -41,6 +41,19 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# autotune_best / algo_picks key the entries by the GRiD *symbol* (long name, e.g.
+# "forward_dynamics"), but launch_configs `bases` must use the *short* launch-config
+# key (e.g. "fd") — that's what GRiDCodeGenerator.load_launch_config() looks up in
+# LAUNCH_CONFIG_ALGO_TO_SYMBOL. Build the long->short reverse map so the bake emits
+# loadable keys (long keys would be silently skipped by load_launch_config).
+sys.path.insert(0, str(REPO_ROOT))
+try:
+    from GRiDCodeGenerator.GRiDCodeGenerator import LAUNCH_CONFIG_ALGO_TO_SYMBOL
+    SYMBOL_TO_KEY = {sym: key for key, sym in LAUNCH_CONFIG_ALGO_TO_SYMBOL.items()}
+except Exception:  # pragma: no cover - keep tool usable if import path shifts
+    LAUNCH_CONFIG_ALGO_TO_SYMBOL = {}
+    SYMBOL_TO_KEY = {}
+
 
 def _host() -> str:
     return platform.node().replace(" ", "_")
@@ -107,9 +120,24 @@ def main() -> None:
             continue
         algos_out: dict[str, dict] = {}
         for algo, info in base_slice.items():
+            # Resolve to the SHORT launch-config key, accepting EITHER convention
+            # the autotune_best may carry: an already-short key (e.g. "fd") or the
+            # long GRiD symbol (e.g. "forward_dynamics"). Skip anything in neither —
+            # load_launch_config() would skip it anyway, so don't bake dead keys.
+            if not LAUNCH_CONFIG_ALGO_TO_SYMBOL:        # import failed: pass through
+                key = algo
+            elif algo in LAUNCH_CONFIG_ALGO_TO_SYMBOL:  # already a short key
+                key = algo
+            elif algo in SYMBOL_TO_KEY:                 # long symbol -> short
+                key = SYMBOL_TO_KEY[algo]
+            else:
+                print(f"WARN: '{algo}' is not a launch-config algo "
+                      f"(neither a short key nor a known symbol) — skipping.",
+                      file=sys.stderr)
+                continue
             # autotune_best uses {tier, threads, us}; launch_configs wants
             # {tier, threads, us_at_optimal}.
-            algos_out[algo] = {
+            algos_out[key] = {
                 "tier": info["tier"],
                 "threads": int(info["threads"]),
                 "us_at_optimal": round(float(info["us"]), 2),
@@ -124,17 +152,38 @@ def main() -> None:
     today = datetime.date.today().isoformat()
     source = args.source or f"GRiD autotune sweep {today}"
 
-    out_doc = {
+    out_path = args.out or (
+        REPO_ROOT / "launch_configs" / args.robot / f"{args.gpu_key}.json")
+
+    # Merge into any existing config so we PRESERVE ffi_bases / torch_bases /
+    # pybind_bases (baked by autotune_ffi.py) and only update the host `bases`
+    # block (per-base) + the top-level metadata. Overwriting would silently wipe
+    # the FFI picks.
+    existing: dict = {}
+    if out_path.exists():
+        try:
+            existing = json.loads(out_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+
+    out_doc = dict(existing)
+    out_doc.update({
         "gpu": args.gpu_key,
         "cuda_arch": args.cuda_arch,
         "gpu_name": args.gpu_name,
         "autotune_N": int(args.autotune_N),
         "source": source,
-        "bases": dict(sorted(bases_out.items())),
-    }
+    })
+    # Per-ALGO merge: update the algos we just (re)timed, preserve any existing
+    # algo picks we didn't time this run. This keeps a SUBSET re-tune (e.g.
+    # first-order only) from wiping the rest (e.g. the SO picks), and avoids
+    # dropping algos that are N/A in this run but valid elsewhere.
+    merged_bases = {b: dict(v) for b, v in (existing.get("bases") or {}).items()}
+    for base, algos in bases_out.items():
+        merged_bases.setdefault(base, {}).update(algos)
+    out_doc["bases"] = {b: dict(sorted(merged_bases[b].items()))
+                        for b in sorted(merged_bases)}
 
-    out_path = args.out or (
-        REPO_ROOT / "launch_configs" / args.robot / f"{args.gpu_key}.json")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out_doc, indent=2, sort_keys=True) + "\n")
 
