@@ -44,6 +44,7 @@ import concurrent.futures
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -395,9 +396,32 @@ def run_pinocchio_column(robot: str, base: str, *,
     return output
 
 
+def _reuse_competitor_json(robot: str, base: str, column: str,
+                           output_dir: Path) -> Path | None:
+    """Competitor adapters (mjx/mujoco_warp) time a FIXED algo set that does not
+    depend on GRID_BENCH_ALGORITHM_LIST, so within one phased sweep their output
+    for (robot, base) is identical across cells. If a sibling cell dir (same
+    sweep root = output_dir.parent) already produced the JSON, copy it instead
+    of re-JITting/re-timing (saves ~10-60 min per big robot per cell)."""
+    target = output_dir / f"{robot}_{base}_{column}.json"
+    if target.exists():
+        return target
+    for prior in sorted(output_dir.parent.glob(f"*/{robot}_{base}_{column}.json")):
+        if prior != target:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(prior, target)
+            print(f"  [{column}] REUSE {robot}/{base} from sibling cell "
+                  f"{prior.parent.name} (adapter output is algo-list-independent)")
+            return target
+    return None
+
+
 def run_mjx_column(robot: str, base: str, *,
                    output_dir: Path,
                    batch_iters: int | None = None) -> Path | None:
+    reused = _reuse_competitor_json(robot, base, "mjx", output_dir)
+    if reused is not None:
+        return reused
     ee_frame = EE_FRAMES_MJX.get(robot, "")
     output = output_dir / f"{robot}_{base}_mjx.json"
     cmd = [
@@ -422,6 +446,9 @@ def run_mjx_column(robot: str, base: str, *,
 def run_mujoco_warp_column(robot: str, base: str, *,
                           output_dir: Path,
                           batch_iters: int | None = None) -> Path | None:
+    reused = _reuse_competitor_json(robot, base, "mujoco_warp", output_dir)
+    if reused is not None:
+        return reused
     ee_frame = EE_FRAMES_MUJOCO_WARP.get(robot, "")
     output = output_dir / f"{robot}_{base}_mujoco_warp.json"
     cmd = [
