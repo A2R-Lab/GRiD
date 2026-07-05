@@ -1,13 +1,15 @@
 name: Verify GPU Proof
 
-# CPU-only CI. Two jobs, no GPU, no secrets:
-#   1. verify-receipt — validates the committed gpu-proof.json (signature via
-#      github.com/{signer}.keys, code fingerprint, commit SHA, freshness, and the
-#      allow_dirty:false / expected-skips policy). This is what lets GPU
-#      correctness gate merges without paying for GPU CI.
+# CPU-only CI. No GPU, no secrets. Two independent jobs:
+#   1. verify-receipt — validates the committed gpu-proof.json IF one is present
+#      (signature via github.com/{signer}.keys, code fingerprint, commit SHA,
+#      freshness, allow_dirty:false + expected-skips policy). This is what lets
+#      GPU correctness gate merges without paying for GPU CI. It SKIPS gracefully
+#      when no receipt is committed yet, so code changes can ship before the
+#      (long) GPU receipt run happens — downstream adopts immediately; the receipt
+#      lands later and activates enforcement.
 #   2. cpu-lane — the GRiD tests that need no GPU (descriptor parity, kernel-attr
-#      manifest, plant launch hygiene), so structural regressions are still caught
-#      in ordinary CI.
+#      manifest, plant launch hygiene), always run.
 
 on:
   push:
@@ -24,22 +26,39 @@ jobs:
           submodules: true          # need test/pytest-gpu-proof for the verifier
           fetch-depth: 0            # commit-SHA check compares against full history
 
+      - name: Detect receipt
+        id: detect
+        run: |
+          if [[ -f gpu-proof.json ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No gpu-proof.json committed yet — skipping receipt verification. Generate one with test/run_gpu_proof.sh on a GPU box and commit it to enable enforcement."
+          fi
+
       - uses: actions/setup-python@v5
+        if: steps.detect.outputs.present == 'true'
         with:
           python-version: "3.12"
 
       - name: Install pytest-gpu-proof
+        if: steps.detect.outputs.present == 'true'
         run: pip install ./test/pytest-gpu-proof
 
       - name: Verify receipt
-        # gpu-proof.json is committed by whoever ran test/run_gpu_proof.sh locally.
-        # The verifier fetches the signer's public keys from github.com/{user}.keys.
+        if: steps.detect.outputs.present == 'true'
+        # The signer's public keys come from github.com/{user}.keys — no secrets.
+        # --expected-skips is applied only if a baseline file is present.
         run: |
+          SKIPS_ARG=()
+          if [[ -f test/gpu-proof-expected-skips.txt ]]; then
+            SKIPS_ARG=(--expected-skips test/gpu-proof-expected-skips.txt)
+          fi
           gpu-proof verify \
             --receipt gpu-proof.json \
             --repo . \
             --policy test/gpu-proof-policy.yaml \
-            --expected-skips test/gpu-proof-expected-skips.txt
+            "${SKIPS_ARG[@]}"
 
   cpu-lane:
     runs-on: ubuntu-latest
