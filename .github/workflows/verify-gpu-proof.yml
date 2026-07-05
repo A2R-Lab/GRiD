@@ -1,0 +1,64 @@
+name: Verify GPU Proof
+
+# CPU-only CI. Two jobs, no GPU, no secrets:
+#   1. verify-receipt — validates the committed gpu-proof.json (signature via
+#      github.com/{signer}.keys, code fingerprint, commit SHA, freshness, and the
+#      allow_dirty:false / expected-skips policy). This is what lets GPU
+#      correctness gate merges without paying for GPU CI.
+#   2. cpu-lane — the GRiD tests that need no GPU (descriptor parity, kernel-attr
+#      manifest, plant launch hygiene), so structural regressions are still caught
+#      in ordinary CI.
+
+on:
+  push:
+    branches: [modernizing-tests, main]
+  pull_request:
+    branches: [modernizing-tests, main]
+
+jobs:
+  verify-receipt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true          # need test/pytest-gpu-proof for the verifier
+          fetch-depth: 0            # commit-SHA check compares against full history
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest-gpu-proof
+        run: pip install ./test/pytest-gpu-proof
+
+      - name: Verify receipt
+        # gpu-proof.json is committed by whoever ran test/run_gpu_proof.sh locally.
+        # The verifier fetches the signer's public keys from github.com/{user}.keys.
+        run: |
+          gpu-proof verify \
+            --receipt gpu-proof.json \
+            --repo . \
+            --policy test/gpu-proof-policy.yaml \
+            --expected-skips test/gpu-proof-expected-skips.txt
+
+  cpu-lane:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install GRiD (CPU deps only)
+        run: pip install -e . && pip install pytest
+
+      - name: Run CPU-only lane
+        run: |
+          python -m pytest \
+            test/test_algo_descriptor_parity.py \
+            test/test_kernel_attr_manifest_consistency.py \
+            test/test_plant_launch_hygiene.py \
+            -v

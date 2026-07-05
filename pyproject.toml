@@ -52,4 +52,21 @@ markers = [
     "cuda_equivalence: CUDA executable equivalence coverage for generated GRiD code.",
     "python_wrappers: grid-rbd Python wrapper coverage; requires CUDA + grid-rbd installed.",
     "notebooks: Executable example notebooks (run via nbval-lax); requires CUDA + grid-rbd installed.",
+    "gpu_proof: Test outcomes recorded in the signed pytest-gpu-proof receipt (auto-applied to cuda_equivalence + python_wrappers by test/conftest.py).",
 ]
+
+[tool.gpu_proof]
+# GPU tests run locally on a real GPU; the signed receipt (gpu-proof.json) is
+# verified in CPU-only CI via github.com/plancherb1.keys. See test/run_gpu_proof.sh.
+mode = "local"
+output = "gpu-proof.json"
+github_username = "plancherb1"     # org remotes (A2R-Lab) carry no SSH keys — sign as the keyholder
+required_marker = "gpu_proof"
+# Fingerprint the test harness only. The code-under-test (codegen + GLASS) lives in
+# submodules whose exact commits are pinned by the parent tree; the verifier's
+# commit-SHA check invalidates the receipt on any pin bump, so a submodule change
+# forces a re-run without needing to hash gitlink content (which the fingerprinter
+# cannot descend into anyway).
+fingerprint_paths = ["test/cuda_equivalents", "test/python_wrappers"]
+max_age_days = 30
+require_gpu = true

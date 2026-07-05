@@ -1,0 +1,12 @@
+# pytest-gpu-proof verification policy for GRiD.
+#
+# allow_dirty:false is load-bearing here, not cosmetic. The fingerprint hashes
+# only the test harness (test/cuda_equivalents, test/python_wrappers); the actual
+# code under test — the GRiDCodeGenerator / GLASS / RBDReference submodules — is
+# pinned by the parent tree's gitlinks, which the fingerprinter cannot descend
+# into. A clean tree is what guarantees those pins (and thus the receipt's
+# commit SHA) faithfully describe the code that was exercised. A dirty tree could
+# hide an uncommitted submodule-pointer change, so we refuse to honor such a
+# receipt.
+allow_dirty: false
+max_age_days: 30
