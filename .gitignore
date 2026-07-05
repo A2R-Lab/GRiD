@@ -119,3 +119,7 @@ docs/imgs/*_2026*.png
 
 # Local agent worktrees + Claude Code state
 .claude/
+
+# Local, per-machine session helpers (not project artifacts)
+docs/STARTUP_PROMPT.md
+tools/overnight_batch.sh
