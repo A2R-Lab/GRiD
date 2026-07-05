@@ -190,7 +190,10 @@ __global__ void plant_kernel(const T *g_q, const T *g_qd, const T *g_u, T dt,
     __syncthreads();
     for (int i = tid; i < NX; i += nth) o_ee_grad[i] = s_grad[i];
     __syncthreads();
-    grid_plant::ee_pos_cost_hessian<T, PLANT_EE, false>(s_hess, s_x, s_W, s_deePos, s_ee_arena, d_robotModel);
+    // GAUSS_NEWTON=true pinned (template <T, EE, ACCUMULATE, GAUSS_NEWTON>): this leg
+    // checks the ratified GN surface the solver composites use; the full-Newton default
+    // is validated separately (newton-vs-FD of the analytic gradient).
+    grid_plant::ee_pos_cost_hessian<T, PLANT_EE, false, true>(s_hess, s_x, nullptr, s_W, nullptr, s_deePos, nullptr, s_ee_arena, d_robotModel);
     __syncthreads();
     for (int i = tid; i < NX * NX; i += nth) o_ee_hess[i] = s_hess[i];
     __syncthreads();
@@ -428,7 +431,7 @@ __global__ void tracking_preset_kernel(const T *g_q, const T *g_qd, const T *g_u
     __syncthreads(); for (int i = tid; i < NU; i += nth) s_rrk[i] += s_tg[i]; __syncthreads();
 
     // s_Qk = ee_hess + state_hess + posb_hess + velb_hess
-    grid_plant::ee_pos_cost_hessian<T, PLANT_EE, false>(s_th, s_x, s_W, s_deePos, s_arena, d_robotModel);
+    grid_plant::ee_pos_cost_hessian<T, PLANT_EE, false, true>(s_th, s_x, nullptr, s_W, nullptr, s_deePos, nullptr, s_arena, d_robotModel);
     __syncthreads(); for (int i = tid; i < NX * NX; i += nth) s_rQk[i] += s_th[i]; __syncthreads();
     grid_plant::quadratic_state_cost_hessian<T, false>(s_th, s_Q);
     __syncthreads(); for (int i = tid; i < NX * NX; i += nth) s_rQk[i] += s_th[i]; __syncthreads();
