@@ -157,36 +157,50 @@ def test_descriptors_reproduce_kernel_attr_manifest_metadata():
     )
 
 
+# Frozen golden for the floating mjx twins (Step 2). The mujoco_manifest is now
+# DERIVED (gen_init_close_grid: head = short+"(mjx)" + descriptor gate/bytes; payload =
+# GRiDCodeGenerator.MJX_KERNEL_OVERLOADS). This golden pins which algos have an mjx twin
+# and the (gate_attr, bytes_macro) each must resolve to — so a descriptor edit that would
+# silently change an mjx twin's macro is caught here, same single-source-of-truth invariant.
+_GOLDEN_MJX_HEADS = {
+    "inverse_dynamics":            (None, "INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+    "minv":                        (None, "MINV_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+    "forward_dynamics":            (None, "FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+    "aba":                         (None, "ABA_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+    "crba":                        (None, "CRBA_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+    "end_effector_pose":           (None, "END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+    "osc_inertia":                 (None, "OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+    "end_effector_pose_gradient":  (None, "END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+    "end_effector_pose_hessian":   ("generate_end_effector_pose_hessian", "END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+    "inverse_dynamics_gradient":   ("generate_inverse_dynamics_gradient", "INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+    "forward_dynamics_gradient":   ("generate_forward_dynamics_gradient", "FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+    "inverse_dynamics_regressor":  (None, "INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+    "idsva_so_world_frame":        ("generate_idsva_so_world_frame", "IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+    "fdsva_so":                    ("generate_fdsva_so", "FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+    "integrator":                  (None, "INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+    "integrator_gradient":         (None, "INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>()"),
+}
+
+
 def test_descriptors_cover_mujoco_manifest_metadata():
-    """Site #9: the floating mjx twin (built inside gen_init_close_grid for a
-    floating robot) registers a SUBSET of the kernel-attr algos. Every mjx-twin
-    entry's (short, gate_attr, bytes_macro) must match its descriptor — same
-    single-source-of-truth invariant, so an mjx twin can never reference a macro
-    spelled differently from its pin twin."""
-    import re
-
-    src = GRiDCodeGenerator.gen_init_close_grid.__code__
-    # The mjx manifest is a local literal; introspect via the source rather than
-    # running codegen. Parse the (label, short, gate, bytes) head of each tuple in
-    # the `mujoco_manifest = [ ... ]` block.
-    import inspect
-    text = inspect.getsource(GRiDCodeGenerator.gen_init_close_grid)
-    block = text.split("mujoco_manifest = [", 1)
-    assert len(block) == 2, "could not locate the mujoco_manifest literal block"
-    body = block[1].split("\n        ]", 1)[0]
-    # match: ("label(mjx)", "short", None|"gate", "BYTES<T>()",
-    pat = re.compile(r'\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*(None|"[^"]+")\s*,\s*"([^"]+)"\s*,')
-    # Keep only the manifest-head tuples (label ends in "(mjx)"); the regex also
-    # catches the inner `for it in ("EULER", "SEMI_IMPLICIT_EULER", ...)` literals.
-    found = [m for m in pat.findall(body) if m[0].endswith("(mjx)")]
-    assert found, "no mjx manifest tuples parsed — the literal shape changed; update this test"
-
-    for label, short, gate_raw, bytes_macro in found:
-        assert label == short + "(mjx)", f"mjx label {label!r} != {short}(mjx)"
-        gate = None if gate_raw == "None" else gate_raw.strip('"')
+    """Site #9: the floating mjx twins register a SUBSET of the kernel-attr algos.
+    The manifest is DERIVED from MJX_KERNEL_OVERLOADS + descriptor rows; assert the
+    mjx set matches the golden and every twin's descriptor gate_attr/bytes_macro is
+    what the golden expects — so an mjx twin can never reference a macro spelled
+    differently from its pin twin, and no twin is silently added/dropped."""
+    mjx_shorts = list(GRiDCodeGenerator.MJX_KERNEL_OVERLOADS.keys())
+    assert set(mjx_shorts) == set(_GOLDEN_MJX_HEADS), (
+        "MJX_KERNEL_OVERLOADS set drifted from the golden mjx-twin set.\n"
+        f"  added:   {sorted(set(mjx_shorts) - set(_GOLDEN_MJX_HEADS))}\n"
+        f"  dropped: {sorted(set(_GOLDEN_MJX_HEADS) - set(mjx_shorts))}"
+    )
+    for short in mjx_shorts:
+        golden_gate, golden_bytes = _GOLDEN_MJX_HEADS[short]
         d = descriptor_for(short)
         assert d.has_kernel_attr, f"{short}(mjx): descriptor.has_kernel_attr is False"
-        assert d.gate_attr == gate, f"{short}(mjx): descriptor gate_attr {d.gate_attr!r} != mjx {gate!r}"
-        assert d.bytes_macro == bytes_macro, (
-            f"{short}(mjx): descriptor bytes_macro {d.bytes_macro!r} != mjx {bytes_macro!r}"
+        assert d.gate_attr == golden_gate, (
+            f"{short}(mjx): descriptor gate_attr {d.gate_attr!r} != golden {golden_gate!r}"
+        )
+        assert d.bytes_macro == golden_bytes, (
+            f"{short}(mjx): descriptor bytes_macro {d.bytes_macro!r} != golden {golden_bytes!r}"
         )
