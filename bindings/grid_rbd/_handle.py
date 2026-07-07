@@ -683,8 +683,12 @@ class RobotHandle:
         if not getattr(self._runner, "has_per_algo_threads", lambda: False)():
             return 0
         from GRiDCodeGenerator.GRiDCodeGenerator import (
-            LAUNCH_CONFIG_ALGO_TO_SYMBOL, LAUNCH_CONFIG_TIER_SYMBOL,
+            LAUNCH_CONFIG_TIER_SYMBOL,
             LAUNCH_CONFIG_DEFAULT_GPU, load_launch_config, _launch_configs_dir)
+        from GRiDCodeGenerator.algo_registry import build_launch_config_algo_to_symbol
+        # {short json algo key -> grid symbol}, derived from the descriptor table
+        # (the single source of truth that also drives the emitted GridAlgo enum).
+        algo_to_symbol = build_launch_config_algo_to_symbol()
         import json, os
         robot_key = self._meta.get("launch_config_robot")
         if not robot_key:
@@ -705,9 +709,9 @@ class RobotHandle:
         if not prof:
             return 0
         # index of each grid symbol = its position in the GridAlgo enum, emitted from
-        # dict.fromkeys(LAUNCH_CONFIG_ALGO_TO_SYMBOL.values()) — the SAME single source
-        # of truth the C-ABI uses. Assert the count matches the .so before indexing.
-        enum_syms = list(dict.fromkeys(LAUNCH_CONFIG_ALGO_TO_SYMBOL.values()))
+        # dict.fromkeys(algo_to_symbol.values()) — the SAME descriptor-table single
+        # source of truth the C-ABI uses. Assert the count matches the .so before indexing.
+        enum_syms = list(dict.fromkeys(algo_to_symbol.values()))
         algo_index = {sym: i for i, sym in enumerate(enum_syms)}
         n_algo = self._runner.algo_count()
         if n_algo and n_algo != len(enum_syms):
@@ -716,7 +720,7 @@ class RobotHandle:
         baked = load_launch_config(robot_key, floating, gpu, profile="ffi")  # the deployed bake {sym:{tier,threads}}
         n = 0
         for key, cfg in prof.items():
-            sym = LAUNCH_CONFIG_ALGO_TO_SYMBOL.get(key)
+            sym = algo_to_symbol.get(key)
             idx = algo_index.get(sym)
             tier_sym = LAUNCH_CONFIG_TIER_SYMBOL.get(str(cfg.get("tier", "")).lower())
             threads = cfg.get("threads")

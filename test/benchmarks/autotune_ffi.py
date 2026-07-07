@@ -48,11 +48,13 @@ from test.benchmarks.baselines.grid.timeGRiD_bindings import (  # noqa: E402
 )
 from test.benchmarks.baselines.grid.run import get_urdf_path  # noqa: E402
 from GRiDCodeGenerator.GRiDCodeGenerator import (  # noqa: E402
-    LAUNCH_CONFIG_ALGO_TO_SYMBOL, LAUNCH_CONFIG_DEFAULT_GPU, _launch_configs_dir,
+    LAUNCH_CONFIG_DEFAULT_GPU, _launch_configs_dir,
 )
+from GRiDCodeGenerator.algo_registry import build_launch_config_algo_to_symbol  # noqa: E402
 
 # symbol (handle method name) -> short launch_configs json key (fd, id, ...).
-SYMBOL_TO_KEY = {sym: key for key, sym in LAUNCH_CONFIG_ALGO_TO_SYMBOL.items()}
+# Built from the descriptor table (single source of truth for {json key -> symbol}).
+SYMBOL_TO_KEY = {sym: key for key, sym in build_launch_config_algo_to_symbol().items()}
 
 
 def _median_batch_to_land_us(fn, dev_args, iters):

@@ -185,7 +185,8 @@ extern "C" int grid_rbd_set_threads_per_block(int n) {
 
 // ─── per-algo threads overlay (E6) ───────────────────────────────────────────
 // Number of baked algos = the GridAlgo enum size; Python derives the overlay index
-// from the SAME LAUNCH_CONFIG_ALGO_TO_SYMBOL declaration order and asserts it matches.
+// from the SAME descriptor-table launch order (algo_registry.ALGO_DESCRIPTORS) and
+// asserts it matches.
 extern "C" int grid_rbd_algo_count() { return grid::GRID_ALGO_COUNT; }
 // Set a per-algo threads override. algo = the GridAlgo enum index. n==0 -> clear
 // (back to launch_cfg<ALGO>::THREADS); n>=1 -> force for that algo only. The global
