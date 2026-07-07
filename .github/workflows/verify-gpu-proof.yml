@@ -23,7 +23,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: true          # need test/pytest-gpu-proof for the verifier
+          # No submodules needed: the receipt fingerprint pins submodules by their
+          # gitlink SHA (it never descends into them), and the verifier is now the
+          # pytest-gpu-proof PyPI package rather than the old vendored submodule.
           fetch-depth: 0            # commit-SHA check compares against full history
 
       - name: Detect receipt
@@ -45,7 +47,7 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         # pyyaml is required by `gpu-proof verify` when --policy is a .yaml file
         # (verify.py imports yaml); the plugin package itself does not depend on it.
-        run: pip install ./test/pytest-gpu-proof pyyaml
+        run: pip install pytest-gpu-proof pyyaml
 
       - name: Verify receipt
         if: steps.detect.outputs.present == 'true'

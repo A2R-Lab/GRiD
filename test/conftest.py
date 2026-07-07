@@ -5,14 +5,11 @@ any item already carrying the ``cuda_equivalence`` or ``python_wrappers`` marker
 is auto-tagged ``gpu_proof`` so its outcome lands in the signed receipt
 (``[tool.gpu_proof] required_marker = "gpu_proof"``). See test/run_gpu_proof.sh.
 
-The vendored ``test/pytest-gpu-proof`` submodule ships its OWN test suite (the
-plugin's internals); we must not collect it as part of GRiD's suite.
+The plugin now ships from PyPI (``pytest-gpu-proof`` in requirements-dev.txt); it
+was previously a vendored ``test/pytest-gpu-proof`` submodule.
 """
 
 import pytest
-
-# Don't descend into the plugin submodule's own tests when collecting under test/.
-collect_ignore_glob = ["pytest-gpu-proof/*"]
 
 _GPU_PROOF_SOURCE_MARKERS = ("cuda_equivalence", "python_wrappers")
 

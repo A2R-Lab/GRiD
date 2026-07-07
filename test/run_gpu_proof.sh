@@ -21,9 +21,9 @@
 # signs the code fingerprint with your local SSH key. CI verifies it CPU-only.
 #
 # IMPORTANT: pass EXPLICIT test paths, never a bare `pytest test/` — a bare run
-# would descend into the pytest-gpu-proof submodule's own suite and (harmlessly,
-# via collect_ignore) waste collection, and would also pick up the CPU-only lane
-# tests that belong in ordinary CI, not the GPU receipt.
+# would pick up the CPU-only lane tests that belong in ordinary CI, not the GPU
+# receipt. (The plugin is the pytest-gpu-proof PyPI package now, installed via
+# requirements-dev.txt — no vendored submodule to collect.)
 set -euo pipefail
 
 # SCOPE -> a -k expression narrowing the gpu_proof test set. Empty = full suite.

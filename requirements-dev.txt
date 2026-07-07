@@ -1,5 +1,6 @@
 pytest
 pytest-xdist     # parallel CUDA equivalence runs (see test/cuda_equivalents/run_parallel.sh)
+pytest-gpu-proof>=0.1.0   # signed GPU-equivalence receipts (test/run_gpu_proof.sh); was the test/pytest-gpu-proof submodule, now on PyPI
 nbval            # execute example notebooks as smoke tests (pytest --nbval-lax notebooks/)
 pin
 robot_descriptions>=1.23.0
