@@ -5,6 +5,22 @@ changes since the GLASS rollout for our own historical reference.
 
 ## Unreleased — v2.0 — cuBLASDx removal + resource-tier system
 
+### 2026-07-07 — tooling + codegen maintainability
+
+- **GPU-proof receipts now via PyPI:** the `pytest-gpu-proof` plugin moved
+  from a vendored `test/pytest-gpu-proof` submodule to the published PyPI
+  package (`requirements-dev.txt`); CI install + `test/conftest.py` +
+  `run_gpu_proof.sh` updated, and the verify-receipt CI job no longer needs
+  submodules (the fingerprint pins them by gitlink SHA). See
+  `tutorials/cuda_validation.rst`.
+- **Descriptor table (per-algo metadata unification), Steps 1+2:** one
+  `AlgoDescriptor` row per algorithm in `algo_registry.py` is now the single
+  source of truth driving the `GridAlgo` enum, the launch-config symbol map,
+  and the `KERNEL_ATTR_MANIFEST` / mjx manifest heads — replacing several
+  hand-maintained module dicts. Byte-identical generated output;
+  `test/test_algo_descriptor_parity.py` locks the table. Step 3 (arena/spill)
+  scoped, not yet landed. See `concepts/codegen_architecture.rst`.
+
 ### 2026-06-07 — new value ops, de-gating, runtime params, joint types
 
 - **New algorithms (codegen + CUDA-validated):** Coriolis matrix

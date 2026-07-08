@@ -212,6 +212,26 @@ The codegen currently still emits ``__launch_bounds__(MAX_PERF_LEVEL_THREADS)``
 on each ``X_kernel``. That attribute drops in phase B1 (any-thread-count
 emission); see the design doc for the rollout sequence.
 
+Per-algo metadata: the descriptor table
+---------------------------------------
+
+Each algorithm also carries a small amount of *irregular* per-algo metadata:
+which autotune launch-config key(s) it uses, the ``cudaFuncSetAttribute`` opt-in
+gate, the dynamic-shared-memory bytes-macro stem, whether it has an mjx
+(MUJOCO_OUTPUT) twin, and so on. This lives as one ``AlgoDescriptor`` row per
+algorithm in ``GRiDCodeGenerator/algo_registry.py`` (the ``ALGO_DESCRIPTORS``
+tuple) — the **single source of truth** from which the generator derives:
+
+* the ``GridAlgo`` enum and the launch-config symbol map (``build_launch_config_algo_to_symbol``),
+* the ``KERNEL_ATTR_MANIFEST`` and the mjx (floating-twin) manifest heads.
+
+Previously these were several hand-maintained module-level dicts that had to be
+kept in lockstep by hand; the descriptor table removed that duplication. Adding
+an algorithm is now (metadata-wise) one row. ``test/test_algo_descriptor_parity.py``
+locks the table to the generated output so a mismatch fails CPU-only in CI. (A
+further step — folding the per-algo arena/spill ``t_count`` math into the same
+table — is scoped but not yet landed.)
+
 See also
 --------
 

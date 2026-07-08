@@ -282,6 +282,18 @@ It was NOT. The `*_device` wrappers (`forward_dynamics_device`, `minv_device`, �
   consumer path is always `*_device` (sizes + loads everything). `nq=NUM_JOINTS` vs `nv=NUM_VEL` arena confusion is the
   same family as §1a/§1e.
 
+### 1o. Frame-index convention mismatch — anchoring a target/sphere to the WRONG frame (ANTICIPATED — W3 collision)
+Not yet encountered, but flagged in the collision design (`docs/open-tasks/design_W3_collision_2026-07-07.md`)
+as the #1 silent-wrong-answer risk, and it is the same *index-convention* family as §1a/§1e. A "target" (named EE
+point, or a foam collision sphere) is a fixed offset off a link; its world position/gradient reads
+`s_Xworld[16*anchor_jid]`. Different tools index links DIFFERENTLY: **foam's `sphere_to_joint` uses an
+actuated-joint COUNT** (base=0, +1 per revolute/prismatic/continuous, fixed joints don't advance), while HJCD's
+`utils.cuh` *also* carries a rival URDF-link-ORDINAL table (hand=9 vs 7). **GRiD must map each target's link to
+ITS OWN frame/joint id (the `s_Xhom`/`s_Xworld` slot) via `URDFParser`, NOT copy either external table.** A
+mismatch silently checks collision / places the target on the wrong link with NO error — positions look
+plausible. Guard: assert the mapping against a base-0-monotone-down-chain property (port foam's
+`test_foam_spheres.py` UR10e assertion) and cross-check one sphere's world position vs an independent numpy FK.
+
 ---
 
 ## 2. Debugging methodology (what actually localizes a bug fast)
@@ -500,6 +512,22 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   with the residual mimic-block-pair ladder). NB the table is `static const` declared inside the parallel
   `for` loop body but BEFORE the `if(loop_var<n_cross)` guard — fine (compiler hoists to one static
   instance; threads with `loop_var>=n_cross` skip the body so no OOB on `&tab[6*loop_var]`).
+- **SHAPE-VARYING cells collapse too — via SHAPE-BUCKETED tables (2026-07-07, W1a, extends the above).**
+  The prior guidance ("keep shape-varying same-joint rev/pris + mimic cells in the residual `if==k`
+  ladder") is superseded for the same-joint family. When a residual cell's op SHAPE varies over a SMALL
+  fixed set (eepose same-joint = {rev-rev, mixed lin-ang, pris-pris}), bake a `shape` code + the offsets
+  + the shape's constants into a per-cell table and emit ONE shared body with an internal
+  `if(shape==0)…else if(shape==1)…` switch — each shape's arm appears ONCE, not once-per-cell. This
+  collapses the residual ladder with the same emit-shape win, O(1) bodies instead of O(cells). (mimic
+  block-pair, whose SUM length varies, stays in the small ladder — rare, mimic-robots-only.)
+  - **Bit-identity trick for baked axis coefficients**: a world-axis emit that inline-DROPS near-zero
+    coefficient terms becomes, in the table body, all-3-terms `X0*t0 + X1*t1 + X2*t2` with the near-zero
+    coeff baked as exact `0.0`. This is BIT-identical (`X*0.0==0.0`, `sum+0.0==sum` in IEEE; no
+    signed-zero/NaN in play) — same argument the gradient inner's `eeg_job_ax` table already relies on.
+    Snap `|c|<1e-15→0.0` when baking and format `{:.17g}` so the loaded `const T` equals the old inline
+    literal exactly. Gate = CUDA numerical equivalence (grid.cuh TEXT changes — that's the win — so it
+    is NOT a byte-diff gate). Validated 2026-07-07 (GCG b8bc31e): CUDA equivalence PASSED on iiwa14-fixed
+    (rev-rev + tail) AND go2-floating (mixed + off-diagonal + pris-pris, all three shape arms).
 - **PERF TIMING — measure in ISOLATION; concurrently-measured verdicts are PROVISIONAL (2026-06-07).**
   Correctness (equivalence + thread-invariance) runs in per-test `tmp_path` dirs + a content-hashed
   header cache → contention changes how LONG a run takes, not pass/fail, so **parallelize correctness

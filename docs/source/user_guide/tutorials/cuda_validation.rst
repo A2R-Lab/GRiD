@@ -70,6 +70,44 @@ seeded random sweep:
      --stage long-random \
      --timeout-per-command 7200
 
+GPU-Proof Signed Receipts
+-------------------------
+
+Because the CUDA equivalence suite needs a real GPU (and a full cold run is
+hours), GRiD records correctness in a *signed receipt* so a merge can be gated
+CPU-only, without re-running GPU tests in CI. This uses the ``pytest-gpu-proof``
+plugin, installed from PyPI via ``requirements-dev.txt`` (it was previously a
+vendored ``test/pytest-gpu-proof`` submodule):
+
+.. code-block:: bash
+
+   .venv/bin/python -m pip install -r requirements-dev.txt   # brings in pytest-gpu-proof
+
+Generate the receipt on a quiet GPU box. The scope is tiered so it is never an
+all-or-nothing barrier — the signature, code fingerprint, and commit-SHA proof
+are identical regardless of how many tests the receipt attests:
+
+.. code-block:: bash
+
+   SCOPE=smoke   test/run_gpu_proof.sh   # ~2 robots, cached cells — minutes; proves the plumbing
+   SCOPE=curated test/run_gpu_proof.sh   # representative robot set — tens of minutes
+   SCOPE=full    test/run_gpu_proof.sh   # every gpu_proof test — hours cold, the nightly job (default)
+
+The ``gpu_proof`` marker is auto-applied to every ``cuda_equivalence`` and
+``python_wrappers`` item by ``test/conftest.py`` (no per-test annotation), so
+receipt membership tracks the existing marker taxonomy. Running the script signs
+``gpu-proof.json`` in place with your local SSH key and refuses a dirty tree
+(``allow_dirty:false`` in ``test/gpu-proof-policy.yaml``): the fingerprint cannot
+descend into the codegen/GLASS submodules, so a clean tree is what makes the
+receipt's commit SHA an honest pin of the code under test.
+
+CI (``.github/workflows/verify-gpu-proof.yml``) verifies whatever receipt is
+committed — signature (via ``github.com/{signer}.keys``), fingerprint, commit
+SHA, freshness — with no GPU and no secrets, and **skips gracefully when no
+receipt is present** so code can ship before the long GPU run lands. A second
+always-on CPU lane runs the no-GPU tests (descriptor parity, kernel-attr
+manifest, plant launch hygiene).
+
 CUDA Artifact Cache
 -------------------
 

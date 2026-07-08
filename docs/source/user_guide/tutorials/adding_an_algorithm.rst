@@ -63,10 +63,14 @@ emitter functions. The functions are:
        top-level driver ``GRiDCodeGenerator.gen_all_code`` calls this
        for every registered algorithm.
 
-Plus, you'll register the algorithm in ``algo_registry.py`` (for the
-bench), and add a ``gen_X_inner_temp_mem_size`` reference to
-``GRiDCodeGenerator.py`` (top-level imports + per-robot scratch tier
-selection).
+Plus, you'll add one ``AlgoDescriptor`` row to ``algo_registry.py`` — the
+descriptor table is the single source of truth for per-algo metadata, and
+that one row drives the ``GridAlgo`` enum, the launch-config symbol map, and
+the ``KERNEL_ATTR_MANIFEST`` / mjx manifest heads (previously these were
+scattered hand-maintained dicts). You'll also add a
+``gen_X_inner_temp_mem_size`` reference to ``GRiDCodeGenerator.py`` (top-level
+imports + per-robot scratch tier selection). See
+:doc:`../concepts/codegen_architecture` for the descriptor table.
 
 Step-by-step recipe (worked example: ``fdsva_so``)
 --------------------------------------------------
@@ -207,12 +211,18 @@ Step-by-step recipe (worked example: ``fdsva_so``)
    per-tier target. ``PERF`` falls through to the most-spilled rung if
    nothing fits — that's the whole point: big robots spill at PERF too.
 
-#. **Add the host wrapper + ALGO_REGISTRY entry**
+#. **Add the host wrapper + descriptor-table row**
 
-   ``gen_X_host`` mirrors any other host wrapper. The
-   ``ALGO_REGISTRY`` entry in ``GRiDCodeGenerator/algo_registry.py``
-   wires the algorithm into the bench, equivalence runner, and
-   per-algo TUs.
+   ``gen_X_host`` mirrors any other host wrapper. Add one
+   ``AlgoDescriptor`` row (and its ``ALGO_REGISTRY`` entry) in
+   ``GRiDCodeGenerator/algo_registry.py``: the descriptor row carries the
+   algorithm's irregular metadata (autotune keys, ``gate_attr``,
+   ``bytes_macro`` overrides) and drives the ``GridAlgo`` enum, the
+   launch-config symbol map, and the kernel-attr / mjx manifests from a
+   single source, while the registry wires the algorithm into the bench,
+   equivalence runner, and per-algo TUs. The
+   ``test/test_algo_descriptor_parity.py`` net locks the table to the
+   generated output.
 
 #. **Add a CUDA equivalence test**
 
