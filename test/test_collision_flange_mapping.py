@@ -127,6 +127,56 @@ def test_build_sphere_tiers_composes_welded_offset(mini):
     assert d["radius"] == [0.05, 0.05, 0.03]
 
 
+# ------------------------------------------------------- multi-hop welded chain (fixed->fixed->movable)
+_MINI2_URDF = """<?xml version="1.0"?>
+<robot name="mini2">
+  <link name="base"/>
+  <link name="l1"><inertial><mass value="1"/><origin xyz="0 0 0"/>
+    <inertia ixx="0.1" ixy="0" ixz="0" iyy="0.1" iyz="0" izz="0.1"/></inertial></link>
+  <link name="l2"><inertial><mass value="1"/><origin xyz="0 0 0"/>
+    <inertia ixx="0.1" ixy="0" ixz="0" iyy="0.1" iyz="0" izz="0.1"/></inertial></link>
+  <link name="mid"/>
+  <link name="tip">
+    <collision><origin xyz="0.02 0 0"/><geometry><sphere radius="0.03"/></geometry></collision></link>
+  <joint name="j1" type="revolute"><parent link="base"/><child link="l1"/>
+    <origin xyz="0 0 0.3"/><axis xyz="0 0 1"/><limit lower="-3" upper="3" effort="10" velocity="10"/></joint>
+  <joint name="j2" type="revolute"><parent link="l1"/><child link="l2"/>
+    <origin xyz="0 0 0.4"/><axis xyz="0 0 1"/><limit lower="-3" upper="3" effort="10" velocity="10"/></joint>
+  <joint name="jfA" type="fixed"><parent link="l2"/><child link="mid"/>
+    <origin xyz="0.1 0 0.2" rpy="0 0 1.5707963267948966"/></joint>
+  <joint name="jfB" type="fixed"><parent link="mid"/><child link="tip"/>
+    <origin xyz="0.05 0 0"/></joint>
+</robot>
+"""
+
+
+def _T_from_origin(xyz, rpy):
+    """URDF origin -> 4x4 homogeneous (R = Rz(yaw) Ry(pitch) Rx(roll)). Independent oracle."""
+    r, p, y = rpy
+    Rx = np.array([[1, 0, 0], [0, np.cos(r), -np.sin(r)], [0, np.sin(r), np.cos(r)]])
+    Ry = np.array([[np.cos(p), 0, np.sin(p)], [0, 1, 0], [-np.sin(p), 0, np.cos(p)]])
+    Rz = np.array([[np.cos(y), -np.sin(y), 0], [np.sin(y), np.cos(y), 0], [0, 0, 1]])
+    T = np.eye(4); T[:3, :3] = Rz @ Ry @ Rx; T[:3, 3] = xyz
+    return T
+
+
+def test_multihop_welded_chain_composes_full_transform(tmp_path):
+    """A sphere two fixed joints deep (tip <-fixed- mid <-fixed- l2 <-movable- j2) must anchor
+    to the MOVABLE parent (j2 = jid 1) with its offset composed through BOTH fixed joints. GRiD
+    pre-collapses fixed chains onto the nearest movable joint, so the one-hop lookup suffices --
+    this locks that in against an independent two-link-chain oracle."""
+    p = tmp_path / "mini2_spherized.urdf"
+    p.write_text(_MINI2_URDF)
+    robot = _parse(p)
+    tiers = build_sphere_tiers(robot, {"fine": str(p)})
+    d = tiers["fine"]
+    assert d["n"] == 1 and d["anchor"] == [1], d          # NOT skipped, anchored to movable j2
+    # independent oracle: compose the two fixed origins, apply to the sphere's local center
+    T = _T_from_origin([0.1, 0.0, 0.2], [0, 0, np.pi / 2]) @ _T_from_origin([0.05, 0.0, 0.0], [0, 0, 0])
+    expected = (T @ np.array([0.02, 0.0, 0.0, 1.0]))[:3]
+    np.testing.assert_allclose(np.array(d["offset"]), expected, atol=1e-12)
+
+
 def test_build_self_cc_ranges_matches_bruteforce(mini):
     robot = _parse(mini)
     # spheres on frames [l1, l1, l3, l3, l2] -> anchors [0,0,2,2,1]
