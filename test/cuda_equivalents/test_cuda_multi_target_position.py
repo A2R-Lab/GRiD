@@ -131,6 +131,12 @@ def test_multi_target_position(tmp_path, robot_id, base_mode):
         "multi_target_position runner FAILED (thread-variance or CUDA error).\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
+    # forced-spill gate: TIER_MINIMAL routes the FK scratch to d_workspace; the batched
+    # output must be BIT-identical to TIER_SHARED (whole-arena spill only relocates memory).
+    spill = next((l for l in result.stdout.splitlines() if l.startswith("SPILLDIFF")), None)
+    assert spill is not None, f"runner emitted no SPILLDIFF line:\n{result.stdout}"
+    assert float(spill.split("maxdiff=")[1].split()[0]) == 0.0, f"spill not bit-identical: {spill}"
+
     mt, ee = _parse(result.stdout)
     assert len(mt) == len(targets), f"expected {len(targets)} MT rows, got {len(mt)}"
 

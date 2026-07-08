@@ -131,6 +131,12 @@ def test_multi_target_position_gradient(tmp_path, robot_id, base_mode):
         "multi_target_position_gradient runner FAILED.\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
+    # forced-spill gate: TIER_MINIMAL routes the Jacobian scratch to d_workspace; the batched
+    # gradient must be BIT-identical to TIER_SHARED (whole-arena spill only relocates memory).
+    spill = next((l for l in result.stdout.splitlines() if l.startswith("SPILLDIFF")), None)
+    assert spill is not None, f"runner emitted no SPILLDIFF line:\n{result.stdout}"
+    assert float(spill.split("maxdiff=")[1].split()[0]) == 0.0, f"spill not bit-identical: {spill}"
+
     mtg, eeg = _parse(result.stdout)
     nv = robot.get_num_vel()
     nq = robot.get_num_pos()
