@@ -1,10 +1,13 @@
-"""CUDA gate for W3 Step 3 `grid_collision::config_free` (the namespace emitter).
+"""CUDA gate for W3 `grid_collision::config_free` (the namespace emitter).
 
 Certifies the END-TO-END binding: the codegen emits a `grid_collision` namespace whose
 `config_free` runs the W1b batched extractor (grid::multi_target_position_device) then the
 static SDF checks (grid_collision_geometry.cuh). Self-consistent (no external oracle):
   * empty / far environment + tiny radii  => config_free == free
   * obstacle placed ON sphere 0           => config_free == in-collision
+  * self-collision path (Increment 0): huge radii on a NON-ADJACENT sphere pair, empty env
+    => config_free == in-collision (via grid_cc_self_collision); an ADJACENT-only pair
+    (excluded from the baked ranges) => free, proving the adjacency exclusion through config_free.
 The SDF math + baked-range self-collision are unit-tested by test_cuda_collision_geometry.py;
 this gate covers the generated data tables + the extractor->config_free wiring.
 """
@@ -28,6 +31,7 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COLLISION_INCLUDE = REPO_ROOT / "collision"
 RUNNER_SOURCE = Path(__file__).with_name("cuda_collision_config_free_runner.cu")
+SELFCC_RUNNER_SOURCE = Path(__file__).with_name("cuda_collision_self_collision_runner.cu")
 
 
 def _robot(robot_id="iiwa14", base_mode="fixed"):
@@ -58,6 +62,53 @@ def _collision_spec(robot):
             "self_cc_ranges": build_self_cc_ranges(robot, anchors)}
 
 
+def _two_sphere_spec(robot, anchor_a, anchor_b, radius):
+    """A minimal two-sphere spec anchored on the two given movable joints (huge radius so the
+    verdict is governed only by whether the pair is in the baked self_cc_ranges). Used to probe
+    the self-collision path in isolation: a NON-adjacent pair collides; an ADJACENT pair is
+    excluded from the ranges and stays free."""
+    anchors = [int(anchor_a), int(anchor_b)]
+    offset = [0.02, -0.01, 0.03, -0.02, 0.01, -0.03]
+    return {"anchor": anchors, "offset": offset, "radius": [float(radius), float(radius)],
+            "self_cc_ranges": build_self_cc_ranges(robot, anchors)}
+
+
+def _gen_header(robot, build_dir, spec):
+    build_dir.mkdir(parents=True, exist_ok=True)
+    header = build_dir / "grid.cuh"
+    codegen = GRiDCodeGenerator(robot, FILE_NAMESPACE="grid")
+    with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
+        codegen.gen_all_code(codegen_profile="all", output_path=str(header), collision_spec=spec)
+    return header
+
+
+def _compile_and_run(build_dir, runner_source):
+    nvcc = shutil.which("nvcc")
+    if nvcc is None:
+        pytest.skip("nvcc not found; install CUDA Toolkit to run CUDA tests.")
+    runner_copy = build_dir / runner_source.name
+    shutil.copyfile(runner_source, runner_copy)
+    arch = _detect_cuda_arch()
+    exe = build_dir / (runner_source.stem + ".exe")
+    cmd = [nvcc, "-std=c++17", "-O2", "-gencode", f"arch=compute_{arch},code=sm_{arch}",
+           "-I", str(build_dir), "-I", str(COLLISION_INCLUDE), "-o", str(exe), str(runner_copy)]
+    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
+    if result.returncode != 0:
+        pytest.fail(f"{runner_source.name} compile FAILED.\ncmd: {' '.join(cmd)}\n"
+                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+    run = subprocess.run([str(exe)], capture_output=True, text=True)
+    assert run.returncode == 0, f"{runner_source.name} FAILED:\nstdout:\n{run.stdout}\nstderr:\n{run.stderr}"
+    assert run.stdout.strip().endswith("RESULT: PASS"), run.stdout
+    return run.stdout
+
+
+def _parse_kv(stdout, key):
+    for tok in stdout.split():
+        if tok.startswith(key + "="):
+            return int(tok.split("=", 1)[1])
+    raise AssertionError(f"'{key}=' not found in runner stdout:\n{stdout}")
+
+
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
@@ -65,27 +116,37 @@ def test_collision_config_free(tmp_path):
     robot = _robot()
     spec = _collision_spec(robot)
     build_dir = tmp_path / "collision_config_free"
-    build_dir.mkdir()
-    header = build_dir / "grid.cuh"
-    codegen = GRiDCodeGenerator(robot, FILE_NAMESPACE="grid")
-    with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        codegen.gen_all_code(codegen_profile="all", output_path=str(header), collision_spec=spec)
+    _gen_header(robot, build_dir, spec)
+    print(_compile_and_run(build_dir, RUNNER_SOURCE))
 
-    nvcc = shutil.which("nvcc")
-    if nvcc is None:
-        pytest.skip("nvcc not found; install CUDA Toolkit to run CUDA tests.")
-    runner_copy = build_dir / RUNNER_SOURCE.name
-    shutil.copyfile(RUNNER_SOURCE, runner_copy)
-    arch = _detect_cuda_arch()
-    exe = build_dir / "cuda_collision_config_free_runner.exe"
-    cmd = [nvcc, "-std=c++17", "-O2", "-gencode", f"arch=compute_{arch},code=sm_{arch}",
-           "-I", str(build_dir), "-I", str(COLLISION_INCLUDE), "-o", str(exe), str(runner_copy)]
-    result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
-    if result.returncode != 0:
-        pytest.fail(f"config_free runner compile FAILED.\ncmd: {' '.join(cmd)}\n"
-                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
 
-    run = subprocess.run([str(exe)], capture_output=True, text=True)
-    assert run.returncode == 0, f"config_free runner FAILED:\nstdout:\n{run.stdout}\nstderr:\n{run.stderr}"
-    assert run.stdout.strip().endswith("RESULT: PASS"), run.stdout
-    print(run.stdout)
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+def test_collision_self_collision(tmp_path):
+    """Increment 0: drive grid_cc_self_collision THROUGH config_free (empty env). A non-adjacent
+    huge-radius pair must be flagged (config_free false); an adjacent-only pair is excluded from
+    the baked ranges and stays free -- the range table's adjacency exclusion, proven end-to-end."""
+    robot = _robot()
+
+    # POSITIVE: full per-joint spec with huge radii on a NON-adjacent pair (iiwa14 is a serial
+    # chain, so anchors 0 and 2 are non-adjacent) -> self-collision -> config_free == in-collision.
+    pos_spec = _collision_spec(robot)
+    pos_spec["radius"][0] = 1.0e3
+    pos_spec["radius"][2] = 1.0e3
+    assert pos_spec["self_cc_ranges"], "expected non-empty self_cc_ranges for the serial chain"
+    pos_dir = tmp_path / "selfcc_positive"
+    _gen_header(robot, pos_dir, pos_spec)
+    pos_out = _compile_and_run(pos_dir, SELFCC_RUNNER_SOURCE)
+    assert _parse_kv(pos_out, "empty_free") == 0, f"non-adjacent huge pair should self-collide:\n{pos_out}"
+
+    # NEGATIVE (exclusion): two spheres on ADJACENT frames (anchors 0 and 1) with huge radii. The
+    # only possible pair is adjacent -> build_self_cc_ranges emits ZERO ranges -> config_free free.
+    neg_spec = _two_sphere_spec(robot, 0, 1, radius=1.0e3)
+    assert not neg_spec["self_cc_ranges"], "adjacent-only pair must yield empty self_cc_ranges"
+    neg_dir = tmp_path / "selfcc_negative"
+    _gen_header(robot, neg_dir, neg_spec)
+    neg_out = _compile_and_run(neg_dir, SELFCC_RUNNER_SOURCE)
+    assert _parse_kv(neg_out, "empty_free") == 1, f"adjacent-excluded pair should stay free:\n{neg_out}"
+    assert _parse_kv(neg_out, "NRANGES") == 0, f"adjacent-only pair must bake 0 ranges:\n{neg_out}"
+    print(pos_out + neg_out)
