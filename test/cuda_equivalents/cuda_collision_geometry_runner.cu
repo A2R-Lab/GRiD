@@ -161,7 +161,41 @@ int main(){
     printf("COMPO env_hit=%d env_miss=%d self_hit=%d self_free=%d\n",
            e_hit?1:0, e_miss?1:0, s_hit?1:0, s_free?1:0);
 
-    bool ok = (hd<1e-12) && (signdiff==0) && e_hit && !e_miss && s_hit && !s_free;
+    // -------- signed-distance + NORMAL (differentiable path): FD the returned normal per primitive --------
+    // The signed SDFs return n = d(signed_dist)/d(sphere_center); central-difference the signed distance
+    // w.r.t. the query point (host: the primitives are __host__ __device__) and compare (all 3 shapes,
+    // outside points where the normal is well-defined). Covers the capsule/cuboid branches the robot
+    // cost FD (sphere obstacle) does not hit.
+    Capsule<T> cap{ -0.2,0,0,  0.2,0,0,  0.05 };   // segment along x, radius 0.05
+    Cuboid<T>  box{ 0,0,0,  1,0,0,0.1,  0,1,0,0.15,  0,0,1,0.2 };  // axis-aligned box
+    T pts[4][3] = {{0.30,0.10,0.00},{0.00,0.20,0.10},{0.25,0.25,0.30},{0.40,0.00,0.05}};
+    T eps=1e-6, nerr=0;
+    for (int k=0;k<4;++k){
+        T x=pts[k][0], y=pts[k][1], z=pts[k][2], r=0.03;
+        for (int shape=0; shape<3; ++shape){
+            T nx,ny,nz;
+            T d0 = shape==0 ? grid_collision::grid_cc_sphere_sphere_signed<T>(x,y,z,r, 0.0,0.0,0.0,0.08, &nx,&ny,&nz)
+                 : shape==1 ? grid_collision::grid_cc_sphere_capsule_signed<T>(cap,x,y,z,r,&nx,&ny,&nz)
+                 :            grid_collision::grid_cc_sphere_cuboid_signed<T>(box,x,y,z,r,&nx,&ny,&nz);
+            (void)d0;
+            T fd[3]; T p[3]={x,y,z};
+            for (int a=0;a<3;++a){
+                T sv=p[a]; T t2,t3,t4; p[a]=sv+eps;
+                T dp = shape==0 ? grid_collision::grid_cc_sphere_sphere_signed<T>(p[0],p[1],p[2],r,0.0,0.0,0.0,0.08,&t2,&t3,&t4)
+                     : shape==1 ? grid_collision::grid_cc_sphere_capsule_signed<T>(cap,p[0],p[1],p[2],r,&t2,&t3,&t4)
+                     :            grid_collision::grid_cc_sphere_cuboid_signed<T>(box,p[0],p[1],p[2],r,&t2,&t3,&t4);
+                p[a]=sv-eps;
+                T dm = shape==0 ? grid_collision::grid_cc_sphere_sphere_signed<T>(p[0],p[1],p[2],r,0.0,0.0,0.0,0.08,&t2,&t3,&t4)
+                     : shape==1 ? grid_collision::grid_cc_sphere_capsule_signed<T>(cap,p[0],p[1],p[2],r,&t2,&t3,&t4)
+                     :            grid_collision::grid_cc_sphere_cuboid_signed<T>(box,p[0],p[1],p[2],r,&t2,&t3,&t4);
+                p[a]=sv; fd[a]=(dp-dm)/(2*eps);
+            }
+            nerr = std::max(nerr, std::max(std::fabs(fd[0]-nx), std::max(std::fabs(fd[1]-ny), std::fabs(fd[2]-nz))));
+        }
+    }
+    printf("NORMALS fd_maxerr=%.3e\n", nerr);
+
+    bool ok = (hd<1e-12) && (signdiff==0) && e_hit && !e_miss && s_hit && !s_free && (nerr<1e-6);
     printf("RESULT: %s\n", ok?"PASS":"FAIL");
     return ok?0:3;
 }

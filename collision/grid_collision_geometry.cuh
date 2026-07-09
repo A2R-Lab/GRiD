@@ -13,6 +13,7 @@
 // sign(g)*sqrt(|g|) when a metric value is needed (differentiable path, Phase 2).
 #pragma once
 #include <cuda_runtime.h>
+#include <cmath>   // sqrtf/sqrt for the differentiable (true-distance + normal) path
 
 namespace grid_collision {
 
@@ -56,6 +57,12 @@ __host__ __device__ __forceinline__ T grid_cc_sql2_3(T ax, T ay, T az, T bx, T b
     T dx = ax - bx, dy = ay - by, dz = az - bz;
     return dx * dx + dy * dy + dz * dz;
 }
+
+// precision-correct sqrt (float->sqrtf, double->sqrt), host + device, no float->double promotion.
+__host__ __device__ __forceinline__ float  grid_cc_sqrt_impl(float v)  { return sqrtf(v); }
+__host__ __device__ __forceinline__ double grid_cc_sqrt_impl(double v) { return sqrt(v); }
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_sqrt(T v) { return grid_cc_sqrt_impl(v); }
 
 // ------------------------------------------------------------------ SDFs (squared_gap; <0 = collision)
 // sphere vs sphere
@@ -133,6 +140,104 @@ __host__ __device__ __forceinline__ bool grid_cc_self_collision(
     // TODO(perf, W3-D): block/warp-parallelize the range loop (thread-per-range, warp any-reduce
     // early-bail) as the reference does; keep single-block. A link_CC mask enables the broad->fine
     // narrowing below.
+}
+
+// ================================================================== differentiable path
+// SIGNED-DISTANCE + NORMAL variants (the differentiable collision cost, W3 Phase 2). Each returns
+// the TRUE signed clearance d = dist - r_sum (NOT the squared gap) and writes the unit surface
+// normal n = d(d)/d(sphere_center) = the direction from the obstacle toward the sphere center
+// (increasing-clearance direction). Composed with the batched position gradient dp/dq (W2a) this
+// gives d(d)/dq = n^T (dp/dq). At the degenerate coincident case (dist -> 0) n falls back to a
+// fixed unit vector (the cost there is dominated by penetration; the direction is arbitrary).
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_normalize3(T &vx, T &vy, T &vz) {
+    T d = grid_cc_sqrt<T>(vx * vx + vy * vy + vz * vz);
+    if (d > static_cast<T>(1e-12)) { T inv = static_cast<T>(1) / d; vx *= inv; vy *= inv; vz *= inv; }
+    else { vx = static_cast<T>(1); vy = static_cast<T>(0); vz = static_cast<T>(0); }
+    return d;
+}
+
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_sphere_sphere_signed(
+        T x, T y, T z, T r, T cx, T cy, T cz, T cr, T *nx, T *ny, T *nz) {
+    T vx = x - cx, vy = y - cy, vz = z - cz;
+    T dist = grid_cc_normalize3<T>(vx, vy, vz);
+    *nx = vx; *ny = vy; *nz = vz;
+    return dist - (r + cr);
+}
+
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_sphere_capsule_signed(
+        const Capsule<T> &c, T x, T y, T z, T r, T *nx, T *ny, T *nz) {
+    T abx = c.bx - c.ax, aby = c.by - c.ay, abz = c.bz - c.az;
+    T apx = x - c.ax, apy = y - c.ay, apz = z - c.az;
+    T denom = abx * abx + aby * aby + abz * abz;
+    T t = denom > static_cast<T>(0) ? (apx * abx + apy * aby + apz * abz) / denom : static_cast<T>(0);
+    t = grid_cc_clamp01<T>(t);
+    T qx = c.ax + t * abx, qy = c.ay + t * aby, qz = c.az + t * abz;
+    T vx = x - qx, vy = y - qy, vz = z - qz;
+    T dist = grid_cc_normalize3<T>(vx, vy, vz);
+    *nx = vx; *ny = vy; *nz = vz;
+    return dist - (r + c.r);
+}
+
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_sphere_cuboid_signed(
+        const Cuboid<T> &b, T x, T y, T z, T r, T *nx, T *ny, T *nz) {
+    T dx = x - b.cx, dy = y - b.cy, dz = z - b.cz;
+    T pu = dx * b.ux + dy * b.uy + dz * b.uz;   // sphere-center offset in the box axis frame
+    T pv = dx * b.vx + dy * b.vy + dz * b.vz;
+    T pw = dx * b.wx + dy * b.wy + dz * b.wz;
+    T eu = grid_cc_abs<T>(pu) - b.hu, ev = grid_cc_abs<T>(pv) - b.hv, ew = grid_cc_abs<T>(pw) - b.hw;
+    T su = pu < static_cast<T>(0) ? static_cast<T>(-1) : static_cast<T>(1);
+    T sv = pv < static_cast<T>(0) ? static_cast<T>(-1) : static_cast<T>(1);
+    T sw = pw < static_cast<T>(0) ? static_cast<T>(-1) : static_cast<T>(1);
+    if (eu > static_cast<T>(0) || ev > static_cast<T>(0) || ew > static_cast<T>(0)) {
+        // OUTSIDE at least one slab: normal = normalized world excess (clamped per axis).
+        T ou = eu > static_cast<T>(0) ? eu : static_cast<T>(0);
+        T ov = ev > static_cast<T>(0) ? ev : static_cast<T>(0);
+        T ow = ew > static_cast<T>(0) ? ew : static_cast<T>(0);
+        T au = su * ou, av = sv * ov, aw = sw * ow;   // signed excess along each axis
+        T wx = au * b.ux + av * b.vx + aw * b.wx;     // -> world
+        T wy = au * b.uy + av * b.vy + aw * b.wy;
+        T wz = au * b.uz + av * b.vz + aw * b.wz;
+        T dist = grid_cc_normalize3<T>(wx, wy, wz);
+        *nx = wx; *ny = wy; *nz = wz;
+        return dist - r;
+    }
+    // INSIDE the box: penetrating. Normal = the axis of LEAST penetration (nearest face).
+    T slu = b.hu - grid_cc_abs<T>(pu), slv = b.hv - grid_cc_abs<T>(pv), slw = b.hw - grid_cc_abs<T>(pw);
+    T pen; T ax, ay, az; T sgn;
+    if (slu <= slv && slu <= slw) { pen = slu; ax = b.ux; ay = b.uy; az = b.uz; sgn = su; }
+    else if (slv <= slw)          { pen = slv; ax = b.vx; ay = b.vy; az = b.vz; sgn = sv; }
+    else                          { pen = slw; ax = b.wx; ay = b.wy; az = b.wz; sgn = sw; }
+    *nx = sgn * ax; *ny = sgn * ay; *nz = sgn * az;   // box axes are unit -> normal already unit
+    return -pen - r;
+}
+
+// One point (sphere i) vs the WHOLE environment: nearest (most negative) signed distance + its
+// surface normal. Returns a large positive sentinel + a fixed normal when the environment is empty.
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_nearest_obstacle(
+        const Environment<T> &env, T x, T y, T z, T r, T *nx, T *ny, T *nz) {
+    T best = static_cast<T>(1e30);
+    T bnx = static_cast<T>(1), bny = static_cast<T>(0), bnz = static_cast<T>(0);
+    T tnx, tny, tnz, d;
+    for (int i = 0; i < env.n_spheres; ++i) {
+        const Sphere<T> &s = env.spheres[i];
+        d = grid_cc_sphere_sphere_signed<T>(x, y, z, r, s.x, s.y, s.z, s.r, &tnx, &tny, &tnz);
+        if (d < best) { best = d; bnx = tnx; bny = tny; bnz = tnz; }
+    }
+    for (int i = 0; i < env.n_capsules; ++i) {
+        d = grid_cc_sphere_capsule_signed<T>(env.capsules[i], x, y, z, r, &tnx, &tny, &tnz);
+        if (d < best) { best = d; bnx = tnx; bny = tny; bnz = tnz; }
+    }
+    for (int i = 0; i < env.n_cuboids; ++i) {
+        d = grid_cc_sphere_cuboid_signed<T>(env.cuboids[i], x, y, z, r, &tnx, &tny, &tnz);
+        if (d < best) { best = d; bnx = tnx; bny = tny; bnz = tnz; }
+    }
+    *nx = bnx; *ny = bny; *nz = bnz;
+    return best;
 }
 
 // ------------------------------------------------------------------ broad -> fine driver
