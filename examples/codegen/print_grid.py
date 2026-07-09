@@ -53,7 +53,7 @@ def main():
         build_header = build_dir / "grid.cuh"
 
         if inputs is not None:
-            URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE, FIXED_TARGET_NAMES = inputs
+            URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE, FIXED_TARGET_NAMES, _, _ = inputs
             parser = URDFParser()
             robot = parser.parse(URDF_PATH, floating_base=FLOATING_BASE)
 

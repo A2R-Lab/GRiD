@@ -18,7 +18,7 @@ from test.helpers import initializeValues
 
 
 def main():
-    URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE, FIXED_TARGET_NAMES = parseInputs()
+    URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE, FIXED_TARGET_NAMES, _, _ = parseInputs()
 
     parser = URDFParser()
     robot = parser.parse(URDF_PATH, floating_base=FLOATING_BASE)

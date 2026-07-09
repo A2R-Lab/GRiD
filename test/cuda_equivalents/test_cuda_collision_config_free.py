@@ -82,7 +82,7 @@ def _gen_header(robot, build_dir, spec):
     return header
 
 
-def _compile_and_run(build_dir, runner_source):
+def _compile_and_run(build_dir, runner_source, extra_args=None):
     nvcc = shutil.which("nvcc")
     if nvcc is None:
         pytest.skip("nvcc not found; install CUDA Toolkit to run CUDA tests.")
@@ -96,7 +96,7 @@ def _compile_and_run(build_dir, runner_source):
     if result.returncode != 0:
         pytest.fail(f"{runner_source.name} compile FAILED.\ncmd: {' '.join(cmd)}\n"
                     f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
-    run = subprocess.run([str(exe)], capture_output=True, text=True)
+    run = subprocess.run([str(exe)] + [str(a) for a in (extra_args or [])], capture_output=True, text=True)
     assert run.returncode == 0, f"{runner_source.name} FAILED:\nstdout:\n{run.stdout}\nstderr:\n{run.stderr}"
     assert run.stdout.strip().endswith("RESULT: PASS"), run.stdout
     return run.stdout
@@ -118,6 +118,34 @@ def test_collision_config_free(tmp_path):
     build_dir = tmp_path / "collision_config_free"
     _gen_header(robot, build_dir, spec)
     print(_compile_and_run(build_dir, RUNNER_SOURCE))
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+def test_collision_config_free_real_robot(tmp_path):
+    """Full AUTOMATED flow on a real, fully-covered robot: the custom spherizer converts go2's
+    URDF collision geometry -> covering spheres -> collision_spec_from_urdf -> grid_collision::
+    config_free that compiles and runs. go2 at its home config (q=0) is self-collision-free, so
+    the config_free verdict is governed by the environment: empty/far => free, obstacle-on-sphere
+    => in-collision. This is the end-to-end certification of the `--collision` pipeline."""
+    from URDFParser import URDFParser
+    from GRiDCodeGenerator.algorithms._collision import collision_spec_from_urdf
+    urdf = REPO_ROOT / "robot_assets" / "go2.urdf"
+    if not urdf.exists():
+        pytest.skip("go2.urdf not found")
+    with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
+        robot = URDFParser().parse(str(urdf), floating_base=False)
+        if robot is None:
+            pytest.skip("go2 URDF parse failed")
+        spec = collision_spec_from_urdf(robot, str(urdf), resolution=0.05)
+    nq = len(robot.get_joints_ordered_by_id())  # movable dof (fixed-base) == NUM_POS
+    build_dir = tmp_path / "collision_real_go2"
+    _gen_header(robot, build_dir, spec)
+    # home config (q=0) is self-collision-free -> the config_free runner's EMPTY/ONHIT/FAR gate holds.
+    out = _compile_and_run(build_dir, RUNNER_SOURCE, extra_args=["0"] * nq)
+    assert _parse_kv(out, "free") == 1  # first "free=" token is the EMPTY verdict
+    print(out)
 
 
 @pytest.mark.cuda_equivalence

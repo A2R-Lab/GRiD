@@ -12,6 +12,7 @@
 #define GRID_HEADER
 #include "grid.cuh"
 #include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <vector>
 
@@ -36,11 +37,14 @@ __global__ void cf_kernel(const T *d_q, const grid::robotModel<T> *m,
     }
 }
 
-int main(){
+int main(int argc, char **argv){
     const grid::robotModel<T> *d_m = grid::init_robotModel<T>();
     size_t smem = grid::MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES<T>();
 
+    // q defaults to a deterministic bent config; an optional NQ-length argv overrides it (used by
+    // the real-robot gate to evaluate at a known self-collision-free config, e.g. the home pose).
     std::vector<T> hq(NQ); for(int i=0;i<NQ;++i) hq[i]=0.2f*sinf(0.7f*i)+0.1f;
+    if (argc - 1 == NQ) { for(int i=0;i<NQ;++i) hq[i] = (T)atof(argv[i+1]); }
     T *d_q, *d_pos; int *d_free; gc::Sphere<T> *d_obst;
     CK(cudaMalloc(&d_q, NQ*sizeof(T)));
     CK(cudaMalloc(&d_pos, 3*NS*sizeof(T)));
