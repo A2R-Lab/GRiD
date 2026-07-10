@@ -16,10 +16,10 @@ byte-identical gate. This is pure Python — no nvcc, no GPU.
 
 Matrix (orthogonal axes): iiwa14-fixed (T-only), go2-floating (base-DOF terms),
 fr3-fixed (mimic, NB>nv), + iiwa14-fixed with runtime_transform (the rt_xfixed term,
-the §2 bug class). fdsva_so (8-rung ladder) is composed as of 3.4. The 2 idsva_so
-SO-dispatch algos (body/world) have per_base_override / workspace closures inseparable
-from their multi-rung emission and are composed in commit 3.5 — captured in
-`_arena_full_t_counts` but excluded from `ARENA_COMPOSED_KEYS` (asserted below).
+the §2 bug class). fdsva_so (8-rung, 3.4) and idsva_so_world_frame (4-rung, 3.5) are
+fully composed. idsva_so_body_frame's fixed-base 5-rung ladder is composed (3.5, checked
+via the rung net) but its FULL is excluded from `ARENA_COMPOSED_KEYS` (asserted below) —
+the floating body path is a picker-dependent grav_full_spill override, not ctx-pure.
 """
 
 from __future__ import annotations
@@ -48,9 +48,12 @@ _MATRIX = [
     ("iiwa14", "fixed", True),      # runtime_transform: the rt_xfixed reservation (§2)
 ]
 
-# Captured in _arena_full_t_counts but composed later (3.5), so not asserted here.
-# fdsva_so was folded in 3.4 (now composed); idsva_so body/world remain deferred.
-_SO_DISPATCH_DEFERRED = {"idsva_so_body_frame", "idsva_so_world_frame"}
+# idsva_so_body_frame full is NOT composed: its floating path is a picker-dependent
+# single-value override (grav_full_spill) inseparable from the smem budget, so it stays
+# deferred for the FULL-composer check. Its fixed-base RUNG ladder IS composed (3.5) and
+# checked via _arena_rung_t_counts. fdsva_so (3.4) + idsva_so_world_frame (3.5) are fully
+# composed. So the only remaining full-deferred SO-dispatch key is the body frame.
+_SO_DISPATCH_DEFERRED = {"idsva_so_body_frame"}
 
 
 def _robot_spec(robot_id, base_mode):
