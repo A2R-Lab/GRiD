@@ -16,10 +16,10 @@ byte-identical gate. This is pure Python — no nvcc, no GPU.
 
 Matrix (orthogonal axes): iiwa14-fixed (T-only), go2-floating (base-DOF terms),
 fr3-fixed (mimic, NB>nv), + iiwa14-fixed with runtime_transform (the rt_xfixed term,
-the §2 bug class). The 3 SO-dispatch algos (idsva_so body/world, fdsva_so) have
-per_base_override / workspace closures inseparable from their multi-rung emission and
-are composed in commits 3.4/3.5 — captured in `_arena_full_t_counts` but excluded from
-`ARENA_COMPOSED_KEYS` (asserted below).
+the §2 bug class). fdsva_so (8-rung ladder) is composed as of 3.4. The 2 idsva_so
+SO-dispatch algos (body/world) have per_base_override / workspace closures inseparable
+from their multi-rung emission and are composed in commit 3.5 — captured in
+`_arena_full_t_counts` but excluded from `ARENA_COMPOSED_KEYS` (asserted below).
 """
 
 from __future__ import annotations
@@ -48,8 +48,9 @@ _MATRIX = [
     ("iiwa14", "fixed", True),      # runtime_transform: the rt_xfixed reservation (§2)
 ]
 
-# Captured in _arena_full_t_counts but composed later (3.4/3.5), so not asserted here.
-_SO_DISPATCH_DEFERRED = {"idsva_so_body_frame", "idsva_so_world_frame", "fdsva_so"}
+# Captured in _arena_full_t_counts but composed later (3.5), so not asserted here.
+# fdsva_so was folded in 3.4 (now composed); idsva_so body/world remain deferred.
+_SO_DISPATCH_DEFERRED = {"idsva_so_body_frame", "idsva_so_world_frame"}
 
 
 def _robot_spec(robot_id, base_mode):
