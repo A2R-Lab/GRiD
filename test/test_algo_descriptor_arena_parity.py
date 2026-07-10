@@ -32,7 +32,6 @@ import pytest
 from GRiDCodeGenerator import GRiDCodeGenerator
 from GRiDCodeGenerator.algo_registry import (
     ARENA_COMPOSED_KEYS,
-    arena_ctx_from_codegen,
     compose_arena_full,
 )
 from RBDReference.tests import MANIFEST_PATH
@@ -88,7 +87,7 @@ def test_arena_full_composer_matches_imperative(robot_id, base_mode, runtime_tra
     FULL/rung-0 arena t_count exactly, on each matrix robot (incl. runtime_transform)."""
     gen = _codegen_for(robot_id, base_mode, runtime_transform, tmp_path)
     truth = gen._arena_full_t_counts
-    ctx = arena_ctx_from_codegen(gen)
+    ctx = gen._arena_ctx   # the exact snapshot generation used to drive the folded arenas
 
     mismatches = []
     for key in sorted(ARENA_COMPOSED_KEYS):
