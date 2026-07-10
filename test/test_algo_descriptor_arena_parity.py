@@ -129,10 +129,10 @@ def test_composed_keys_exclude_only_so_dispatch(tmp_path):
     net or forgetting to compose one when its fold lands."""
     gen = _codegen_for("iiwa14", "fixed", False, tmp_path)
     arena_keys = set(gen._arena_full_t_counts)
-    # integrator_hessian is captured for the plant_step_hessian fold but has no
-    # standalone benchmarked kernel (has_kernel_attr False) and is not a rung-0 arena
-    # the composer owns yet — treat it like the SO-dispatch deferrals.
-    deferred = _SO_DISPATCH_DEFERRED | {"integrator_hessian"}
+    # integrator_hessian (plant_step_hessian) is composed as of 3.5e. The only key
+    # whose FULL is still deferred is idsva_so_body_frame (floating grav_full_spill
+    # picker override — see _SO_DISPATCH_DEFERRED).
+    deferred = _SO_DISPATCH_DEFERRED
     assert ARENA_COMPOSED_KEYS == arena_keys - deferred, (
         "composed-key set drifted from (imperative arena keys - deferred).\n"
         f"  composed-only: {sorted(ARENA_COMPOSED_KEYS - (arena_keys - deferred))}\n"
