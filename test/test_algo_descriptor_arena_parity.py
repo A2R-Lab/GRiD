@@ -32,7 +32,9 @@ import pytest
 from GRiDCodeGenerator import GRiDCodeGenerator
 from GRiDCodeGenerator.algo_registry import (
     ARENA_COMPOSED_KEYS,
+    ARENA_RUNG_KEYS,
     compose_arena_full,
+    compose_arena_rungs,
 )
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
@@ -99,6 +101,21 @@ def test_arena_full_composer_matches_imperative(robot_id, base_mode, runtime_tra
         f"arena_full composer disagrees with imperative t_count on "
         f"{robot_id}-{base_mode} (runtime_transform={runtime_transform}):\n"
         + "\n".join(mismatches)
+    )
+
+    # Laddered folds (3.2+): the composed rung arenas reproduce the imperative rungs,
+    # and rung[0] (least-spill) equals the FULL arena (self-consistency).
+    rung_truth = getattr(gen, "_arena_rung_t_counts", {})
+    rung_mismatches = []
+    for key in sorted(ARENA_RUNG_KEYS):
+        rungs = compose_arena_rungs(key, ctx)
+        if key in rung_truth and tuple(rungs) != tuple(rung_truth[key]):
+            rung_mismatches.append(f"  {key}: composer={tuple(rungs)} imperative={tuple(rung_truth[key])}")
+        if key in ARENA_COMPOSED_KEYS and rungs[0] != compose_arena_full(key, ctx):
+            rung_mismatches.append(f"  {key}: rung[0]={rungs[0]} != full={compose_arena_full(key, ctx)}")
+    assert not rung_mismatches, (
+        f"arena rung composer disagrees on {robot_id}-{base_mode} "
+        f"(runtime_transform={runtime_transform}):\n" + "\n".join(rung_mismatches)
     )
 
 
