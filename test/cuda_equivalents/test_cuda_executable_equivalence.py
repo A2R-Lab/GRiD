@@ -1249,6 +1249,39 @@ def _parse_runner_output(stdout: str) -> dict[str, np.ndarray]:
     return outputs
 
 
+def _first_differing_block(a: str, b: str) -> str:
+    """Name the first BEGIN/END block whose raw text differs between two runner
+    outputs (used by the Inc6 run-to-run determinism gate to point at the culprit
+    kernel). Falls back to a raw line index when block structure can't be paired."""
+    def blocks(text):
+        out = []
+        lines = iter(text.splitlines())
+        for line in lines:
+            stripped = line.strip()
+            if not stripped.startswith("BEGIN "):
+                continue
+            name = stripped.split()[1]
+            rows = int(stripped.split()[2])
+            body = [next(lines) for _ in range(rows)]
+            next(lines)  # END
+            out.append((name, "\n".join(body)))
+        return out
+    try:
+        ba, bb = blocks(a), blocks(b)
+        for (na, va), (nb, vb) in zip(ba, bb):
+            if na != nb or va != vb:
+                return na
+        if len(ba) != len(bb):
+            return "<block count differs>"
+    except (StopIteration, ValueError):
+        pass
+    a_lines, b_lines = a.splitlines(), b.splitlines()
+    for i, (la, lb) in enumerate(zip(a_lines, b_lines)):
+        if la != lb:
+            return f"<raw line {i}: {la!r} != {lb!r}>"
+    return "<unknown>"
+
+
 def _normalize_cuda_minv(matrix: np.ndarray) -> np.ndarray:
     normalized = matrix.copy()
     lower = np.tril(normalized, k=-1)
@@ -1739,6 +1772,28 @@ def _run_cuda_equivalence_case(
         matched_samples += 1
         _progress(config, f"{spec.robot_id}-{base_mode}/{sample.name}: running CUDA runner (threads={num_threads or 32})")
         stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd, num_threads=num_threads)
+        # Run-to-run determinism gate (Inc6). Single-block GRiD kernels must be
+        # bit-deterministic run-to-run, not merely oracle-close: a warp-scheduling-
+        # dependent shared-memory reduction (e.g. the floating-base shared-parent
+        # atomicAdd folds fixed in GCG bc6c75a) drifts by 1-2 ULP between launches
+        # even at identical input+thread-count. The runner prints float32 at
+        # setprecision(10) (2-3 digits beyond float precision), so a byte-identical
+        # stdout is a genuine ULP-level check. Gate at the MAX_PERF sentinel
+        # (num_threads == 0 -> the robot's launch-bounds cap, the highest-contention
+        # point where the drift surfaced at 288/352 threads) on floating robots (the
+        # only ones with shared-parent folds; fixed-base already pass by construction).
+        if base_mode == "floating" and num_threads == 0:
+            stdout_repeat = _run_runner(
+                executable, _sample_to_stdin(sample), compile_cmd, num_threads=num_threads
+            )
+            if stdout_repeat != stdout:
+                first_diff = _first_differing_block(stdout, stdout_repeat)
+                pytest.fail(
+                    f"{spec.robot_id}-{base_mode}/{sample.name}: CUDA runner is NON-DETERMINISTIC "
+                    f"run-to-run at MAX_PERF_LEVEL_THREADS (identical input + thread count, two "
+                    f"launches differ). This is a warp-order-dependent in-block reduction (the "
+                    f"Inc6 shared-parent class). First differing block: {first_diff}"
+                )
         cuda = _parse_runner_output(stdout)
 
         np.testing.assert_allclose(
