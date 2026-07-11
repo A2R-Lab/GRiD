@@ -138,8 +138,8 @@ __host__ __device__ __forceinline__ bool grid_cc_self_collision(
     }
     return false;
     // TODO(perf, W3-D): block/warp-parallelize the range loop (thread-per-range, warp any-reduce
-    // early-bail) as the reference does; keep single-block. A link_CC mask enables the broad->fine
-    // narrowing below.
+    // early-bail) as the reference does; keep single-block. (The broad->fine link_CC narrowing is
+    // now implemented in grid_cc_config_free below via a per-link uint64 hit-mask.)
 }
 
 // ================================================================== differentiable path
@@ -240,29 +240,72 @@ __host__ __device__ __forceinline__ T grid_cc_nearest_obstacle(
     return best;
 }
 
-// ------------------------------------------------------------------ broad -> fine driver
-// grid_cc_config_free: (1) approx (broad) spheres -> approx env+self check; (2) ONLY if the broad
-// pass flags a possible collision, run the fine tier + full checks. GRiD supplies both sphere tiers
-// as named batches (broad="approx", fine="all") via the batched extractor; positions come from
-// grid::multi_target_position over each tier's descriptor.
+// ------------------------------------------------------------------ broad -> fine driver (link_CC mask)
+// grid_cc_config_free: (1) run the broad (approx) tier in FULL, OR-ing every hit link into a uint64
+// hit-mask keyed by anchor (frame) id; (2) if no link is flagged, the config is definitely free;
+// (3) otherwise run the fine tier but re-check ONLY spheres whose link the broad pass flagged.
+// The covering-sphere property (a broad sphere on link L encloses the fine spheres on L) guarantees a
+// real fine collision on link L is always broad-flagged, so the mask NEVER drops a true hit -> the
+// verdict stays bit-identical to a fine-only check, while the (larger) fine tier skips unflagged links.
+// broad_sphere_link[i] / fine_sphere_link[i] = the sphere's anchor id (bit index); NUM_JOINTS<=64 is
+// static_asserted at the baked-table site so every id fits a uint64. dbg_fine_rechecked (optional, a
+// caller thread-LOCAL to stay race-free) receives the count of fine spheres surviving the mask.
 template <typename T>
 __host__ __device__ bool grid_cc_config_free(
         const Environment<T> &env,
         const T *s_broad_pos, const T *s_broad_r, const int *broad_self_ranges, int n_broad_ranges, int n_broad,
-        const T *s_fine_pos,  const T *s_fine_r,  const int *fine_self_ranges,  int n_fine_ranges,  int n_fine) {
-    bool broad_hit = grid_cc_self_collision<T>(s_broad_pos, s_broad_r, broad_self_ranges, n_broad_ranges);
-    for (int i = 0; !broad_hit && i < n_broad; ++i)
-        broad_hit = grid_cc_sphere_in_environment<T>(env, s_broad_pos[3*i], s_broad_pos[3*i+1], s_broad_pos[3*i+2], s_broad_r[i]);
-    if (!broad_hit) return true;                       // coarse reject -> definitely free
-    if (grid_cc_self_collision<T>(s_fine_pos, s_fine_r, fine_self_ranges, n_fine_ranges)) return false;
-    for (int i = 0; i < n_fine; ++i)
+        const int *broad_sphere_link,
+        const T *s_fine_pos,  const T *s_fine_r,  const int *fine_self_ranges,  int n_fine_ranges,  int n_fine,
+        const int *fine_sphere_link, int *dbg_fine_rechecked = nullptr) {
+    unsigned long long hit_mask = 0ull;
+    // Broad self-collision: full scan (NO early-out — the mask needs every hit), flag BOTH endpoints'
+    // links of each hit range (a self-pair's two spheres may sit on different links).
+    for (int k = 0; k < n_broad_ranges; ++k) {
+        int i = broad_self_ranges[3*k], j0 = broad_self_ranges[3*k+1], j1 = broad_self_ranges[3*k+2];
+        T ix = s_broad_pos[3*i], iy = s_broad_pos[3*i+1], iz = s_broad_pos[3*i+2], ir = s_broad_r[i];
+        for (int j = j0; j <= j1; ++j)
+            if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir,
+                    s_broad_pos[3*j], s_broad_pos[3*j+1], s_broad_pos[3*j+2], s_broad_r[j]) < static_cast<T>(0)) {
+                hit_mask |= (1ull << broad_sphere_link[i]);
+                hit_mask |= (1ull << broad_sphere_link[j]);
+            }
+    }
+    // Broad vs environment: full scan, flag each hit sphere's link.
+    for (int i = 0; i < n_broad; ++i)
+        if (grid_cc_sphere_in_environment<T>(env, s_broad_pos[3*i], s_broad_pos[3*i+1], s_broad_pos[3*i+2], s_broad_r[i]))
+            hit_mask |= (1ull << broad_sphere_link[i]);
+
+    // Narrowing measure (non-vacuous-gate hook): fine spheres surviving the mask. Written before the
+    // fine checks so it is set on every non-trivially-free path regardless of an early collision exit.
+    if (dbg_fine_rechecked != nullptr) {
+        int survive = 0;
+        for (int i = 0; i < n_fine; ++i)
+            if ((hit_mask >> fine_sphere_link[i]) & 1ull) ++survive;
+        *dbg_fine_rechecked = survive;
+    }
+    if (hit_mask == 0ull) return true;                 // no link flagged -> definitely free
+
+    // Fine pass, NARROWED. self-range {i, j0..j1}: skip the whole range if link(i) is unflagged — by
+    // the covering property no j can truly collide with i then (a real i-j hit would have broad-flagged
+    // link(i)). If link(i) IS flagged we still scan all its j (conservative, and cheap).
+    for (int k = 0; k < n_fine_ranges; ++k) {
+        int i = fine_self_ranges[3*k], j0 = fine_self_ranges[3*k+1], j1 = fine_self_ranges[3*k+2];
+        if (((hit_mask >> fine_sphere_link[i]) & 1ull) == 0ull) continue;
+        T ix = s_fine_pos[3*i], iy = s_fine_pos[3*i+1], iz = s_fine_pos[3*i+2], ir = s_fine_r[i];
+        for (int j = j0; j <= j1; ++j)
+            if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir,
+                    s_fine_pos[3*j], s_fine_pos[3*j+1], s_fine_pos[3*j+2], s_fine_r[j]) < static_cast<T>(0)) return false;
+    }
+    // Fine vs environment: skip spheres on unflagged links.
+    for (int i = 0; i < n_fine; ++i) {
+        if (((hit_mask >> fine_sphere_link[i]) & 1ull) == 0ull) continue;
         if (grid_cc_sphere_in_environment<T>(env, s_fine_pos[3*i], s_fine_pos[3*i+1], s_fine_pos[3*i+2], s_fine_r[i]))
             return false;
+    }
     return true;
-    // NOTE: broad_hit is coarse (whole-config). The reference narrows by a per-link link_CC mask so
-    // the fine pass only re-checks flagged links; add that once the batched extractor exposes per-link
-    // sphere ranges. Differentiable path (GATO/PDDP) reuses these SDFs for d(sdf)/dp = surface normal,
-    // composed with the W2a batched gradient -> d(min-dist)/dq. See design_W3.
+    // Differentiable path (GATO/PDDP) reuses these SDFs for d(sdf)/dp = surface normal, composed with
+    // the W2a batched gradient -> d(min-dist)/dq. See design_W3. Future >64-frame robots: swap the
+    // uint64 hit_mask for a bool[NUM_JOINTS] (the static_assert at the baked table site fires first).
 }
 
 }  // namespace grid_collision
