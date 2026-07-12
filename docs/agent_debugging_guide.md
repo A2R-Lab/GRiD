@@ -416,6 +416,45 @@ size depends on a batch/config count, check this floor.**
 
 ---
 
+### 1s. A FIXED-target jid has NO link — resolving its parent via `get_link_by_id` silently kills the whole chain-up (2026-07-11, GATO Ask-4)
+
+**Symptom.** On a **BRANCHED** robot (go2), `end_effector_pose_inner_<target>` for a named fixed
+kinematic target returned a pose that *looked* plausible — it matched the parent joint's world frame
+exactly — instead of the target frame (go2 `FR_foot_joint`: the 0.213 m foot origin was missing).
+On a **SERIAL** robot (iiwa14) the same feature worked perfectly, which is why it survived so long.
+
+**Root cause.** Moving joints and fixed joints live in **separate tables** with **disjoint id spaces**
+(go2: moving 0-11, fixed 12-40). The branched chain-up resolved each level's parent with
+`get_link_by_id(jid).get_parent_id()` — but a *fixed-target* jid (32) has **no link**, so that returned
+`None` → the `-1` root sentinel. The emitted code therefore read
+`int parent_jid = (ind < 16) * -1;` at **every** level, and the guard `if(parent_jid == -1){continue;}`
+skipped **every single compose**. The chain-up never ran. The serial path was immune because it
+resolves the first hop through the fixed-joint table
+(`get_fixed_joint_by_id(jid).get_parent()` → `get_joint_by_name(...).get_id()`).
+
+**Why it looked right (the dangerous part).** With no level ever writing, the extract read a
+**never-written half of `s_temp`** — an uninitialized shared-memory read (§1a/§1p family). It happened
+to return the parent joint's world transform *only because a prior `end_effector_pose` call in the same
+block had left one there*. Call it in isolation and you get garbage; call it after the generic EE fn
+and you get a confidently wrong answer. **A plausible-looking value is not evidence the chain ran.**
+
+**Fix.** Resolve a fixed-target jid through the fixed-joint table before falling back to the link table
+(`_parent_or_root` in `_eepose_gradient_hessian.py`). Moving jids are unaffected
+(`get_fixed_joint_by_id` → `None`), so generic/all-leaf emission stays **byte-identical** on every robot.
+
+**Lessons.**
+- **Two id spaces ⇒ two lookups.** Any helper that walks a topology by jid must say what it does when
+  handed a *fixed* jid. Returning the root sentinel is the worst option: it fails **silently**.
+- **A `continue` guard is a chain-up kill switch.** If a sentinel can be produced by a *lookup failure*
+  rather than by genuinely reaching the root, the guard turns a bug into a no-op.
+- **Test the feature on a BRANCHED robot.** Serial chains take a completely separate emission path here
+  (`robot.is_serial_chain()`), so an iiwa-only test proves nothing about go2/h1.
+- The gradient/hessian inners were **already correct** — they chain through the shared world-FK pass
+  (`s_Xworld`, which bakes fixed targets), not this per-level parent walk. Verified vs pinocchio
+  `getFrameJacobian(LOCAL_WORLD_ALIGNED)` at 2.8e-17. Don't assume a whole family shares a bug.
+
+---
+
 ## 2. Debugging methodology (what actually localizes a bug fast)
 
 - **Validate the DEPENDENCY standalone first.** Before assuming "Λ = J·M⁻¹·Jᵀ is broken for mimic,"
