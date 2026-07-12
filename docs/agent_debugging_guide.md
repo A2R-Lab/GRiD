@@ -294,6 +294,126 @@ mismatch silently checks collision / places the target on the wrong link with NO
 plausible. Guard: assert the mapping against a base-0-monotone-down-chain property (port foam's
 `test_foam_spheres.py` UR10e assertion) and cross-check one sphere's world position vs an independent numpy FK.
 
+### 1p. Consumer "uninitialized-`s_vaf` read" is USUALLY a STALE GLASS pin (§1j), not a GRiD read-before-write — the NaN-poison harness settles it
+**PDDP filed (2026-07-09):** `grid_plant::plant_step_gradient` → the emitted `[A|B]` B-block (the
+`d(qd_next)/dx` rows) goes NaN whenever garbage/NaN is resident in shared memory (a diverged rollout);
+poison-bisect showed zeroing **only** the `s_vaf` slice restores immunity → looks like a genuine
+`s_vaf` read-before-write in the du-gradient chain. **It is not.** It is §1j (a `beta==0` GLASS gemm
+that still READS its destination `C`, `0*NaN=NaN`) landing on an `s_vaf` slot — and it was **already
+fixed upstream** by GLASS PR#19 (`beta_blend`, pinned `08b98a7`). A consumer only still hits it if its
+vendored GLASS predates PR#19 (PDDP's checked-in header was GLASS `5caa6d0`).
+- **THE TRIAGE (do this before touching any emitter):** generate the header at *current* GRiD HEAD and
+  diff the whole chain function-by-function against the consumer's header
+  (`plant_step_gradient` → `integrator_gradient_device` → `forward_dynamics_gradient_device` →
+  `inverse_dynamics_gradient_inner` / `inverse_dynamics_inner` / `minv_inner`). If **every
+  GRiD-generated function is byte-identical** and only the vendored GLASS block differs, the fix is a
+  **GLASS pin bump + REGEN**, not a codegen change. (Verified: current HEAD, GLASS `08b98a7`, is
+  poison-immune with no zeroing; PDDP's `5caa6d0` header reproduces 98 NaN, deterministic.)
+- **THE TOOL — NaN-poison harness** (reusable; the arbiter for every "is this arena slot read before
+  written?" question, since **initcheck is blind to shared memory** and **racecheck doesn't flag a
+  never-written read**): (1) a `poison_kernel` fills the block's dynamic smem with `0xFF` bytes (`=NaN`
+  for float AND double) over `8*numSMs` blocks + `cudaDeviceSynchronize`; (2) launch the target kernel
+  with **finite** inputs; (3) assert the output is finite. A genuine read-before-write then fails
+  **first-iteration, every run** (deterministic — no "1×/15 under load" flake). **MANDATORY positive
+  control:** a twin kernel that carves the same arena and reads the suspect slice *without writing it*
+  must come back NaN — otherwise an `ALL_FINITE` just means the poison didn't land (wrong smem size /
+  scheduling), not that the path is clean. Reference harness + scrub-bisect (`zero=none|vaf|df_du|…`)
+  in this session's scratch `poison/` + `poison_pddp/`; the poison recipe mirrors PDDP
+  `docs/agent_debugging_guide.md` "Bug class 8".
+- **RESOLUTION for consumers (PDDP et al.):** bump the GLASS pin to `≥08b98a7` (via a GRiD submodule
+  bump), then **regenerate `grid.cuh`** — a *gitignored/per-robot* header does NOT auto-regen when you
+  bump the submodule pointer (PDDP's did not, which is why they believed "08b98a7 still reproduces").
+  Then drop any caller-side `s_vaf` zero-fill workaround. GRiD itself needs no change: the `beta==0`
+  contract is GLASS's (`beta_blend`), and current HEAD already pins the fix.
+- Same family as §1j (root), §1n (consumer-NaN triage-before-fixing), §1a (`s_vaf` sizing).
+
+### 1q. Floating-base shared-parent `atomicAdd` folds are run-to-run NON-DETERMINISTIC (last-ULP) — replace with a parent-major fixed-order sum (also FASTER)
+
+**Found 2026-07-09 (Inc6), fixed GCG `bc6c75a`.** Branched floating-base robots (quadruped legs, e.g.
+go2-floating) fold each child link's spatial contribution onto the SHARED floating root (parent 0) via
+`atomicAdd` into a shared-memory cell. `atomicAdd` sums in **warp-scheduling order**, which varies
+launch-to-launch → the reduction's last **1–2 ULP** drift run-to-run on the SAME binary + SAME input.
+It hit `crba` (composite-inertia IC fold), `minv` (IA fold), and `inverse_dynamics_gradient` (df/du
+floating path); crba's jitter propagated into `forward_dynamics_gradient`. **Deterministic at 1 thread**
+(serial), non-deterministic only at >1 thread — the tell for a scheduling-order reduction (vs a
+compile-time FMA-contraction difference, which is stable run-to-run). NOT an init/poison defect: 0 NaN
+under the §1p 0xFF sweep — the slots ARE written, only their *summation order* varies.
+- **THE FIX (root cause, not a guard):** replace the slot-major `atomicAdd` with a **parent-major
+  fixed-order sum** — iterate over the UNIQUE-parent cells (one thread owns each `(parent,row,col)`),
+  sum the child slots in FIXED ascending slot order with a plain `+=` (single writer per cell → no
+  atomics, no race). Wrap each per-BFS-level emission in its own `{}` scope so multi-branch humanoids
+  don't redeclare the `s_upar_lvl` table. This is deterministic BY CONSTRUCTION and thread-count-invariant.
+- **IT'S ALSO FASTER (measured, not assumed).** A/B on go2-floating (quiet GPU, cudaEvent, batch=2000×15,
+  min-of-reps): crba **−8.0%** @288 / −3.7% @448, minv −3.6/−1.2%, id_grad −3.3/−1.5%, fd_grad
+  −1.9/−1.2%; an untouched control kernel (aba) matched to 0.01% (noise floor). Removing shared-memory
+  atomic contention (all leg threads racing into the SAME root cells) BOTH kills the nondeterminism AND
+  cuts latency. **So convert these folds unconditionally — no opt-in perf flag.** Harness:
+  `scratchpad/eqaudit/abtiming.cu`.
+- **VERIFY: correctness, not the symptom.** The nondeterminism is INTERMITTENT (a warp-race needs
+  scheduling contention — on a quiet box even the pre-fix binary is often bit-stable across dozens of
+  trials), so don't try to reproduce the jitter as your gate. Instead verify the conversion is
+  numerically correct: equivalence-vs-oracle still passes + `grid.cuh` byte-identical for robots the
+  fold doesn't exercise (fixed-base) → identical-in-exact-arithmetic by construction (pure summation
+  reorder). The new values land inside the old atomicAdd jitter band (old = oracle-passing).
+- **DURABLE GATE (§0-style):** `test_cuda_executable_equivalence.py` now runs the equivalence runner
+  TWICE at `num_threads==0` (MAX_PERF) on floating robots and asserts byte-identical stdout
+  (`_first_differing_block` names the culprit). Non-vacuous because the runner prints float32 at
+  `setprecision(10)` (2–3 digits past float precision). It's a PROBABILISTIC catch-net (can't force an
+  intermittent race), zero-cost when deterministic.
+- **TAIL (same class, not yet converted — do the same parent-major treatment when you touch them):**
+  `aba` fixed-base fold (`_aba.py`, unexercised by the current matrix — go2-fixed's only repeated-parent
+  BFS level is 0, skipped by the `bfs_level!=0` guard; fr3 mimic collapses; iiwa14 is a chain),
+  `idsva_so` SO sibling folds (`_idsva_so.py:2780,3849`), `dccrba`/cmm (`_dccrba.py:345-350`),
+  `coriolis` mimic (`_coriolis.py:448`), and the `inverse_dynamics_gradient` FIXED-base sparsity path
+  (`_inverse_dynamics_gradient.py:1010-1012`, high-risk compressed indexing — only the floating path was
+  converted). Same family as §1b (a shared-reduce fix has fleet-wide blast radius — prefer the narrowest
+  per-fold change, Gate-A byte-identical on fixed-base).
+
+### 1r. Two sanitizer findings that are NOT bugs — do not "fix" them (2026-07-11)
+
+Both were investigated to the bottom during Inc4b (multi_target bench registration) and cost real time.
+**Triage them with the tests below before touching any code** — the "fix" in both cases would perturb
+oracle-validated codegen (and break header byte-identity) for zero correctness gain.
+
+**(a) `racecheck` "Potential WAR hazard (Warp Level Programming)" in `end_effector_pose_kernel`.**
+Reported as **3 hazards / 0 errors / 3 WARNINGS** (racecheck classifies genuine races as *errors*;
+"Potential ..." is advisory). It is a FALSE POSITIVE on a **structurally-constant** shared slot:
+`s_XmatsHom` is re-written each timestep from the FIXED `d_XImats` model data, and a homogeneous
+transform's `[3][3]` element is **always exactly 1.0** (products of homogeneous transforms preserve the
+bottom row `[0,0,0,1]`). So iteration *k*'s read and iteration *k+1*'s rewrite touch a slot whose value
+never changes.
+  * **The tell:** racecheck prints `Current Value : X, Incoming Value : X` — *identical* — on every
+    flagged access. A WAR can only corrupt anything if the write changes what the reader observes; when
+    incoming == current, no execution order can produce a different result. **If Current == Incoming on
+    every access, stop — it is benign.**
+  * Source check confirms it: every access pair is separated by `__syncthreads()` (`load_update_XmatsHom`
+    ends with one; every serial-chain ping-pong level ends with one), and within a level the reads/writes
+    hit **disjoint halves** of `s_temp` (`[0..15]` vs `[16..31]`).
+  * Empirical confirmation (do this, it's cheap): ee_pose is **bit-identical across 8 runs** and agrees
+    with the INDEPENDENT `multi_target_position` FK path to float32 eps — plus it already passes CUDA
+    equivalence vs the numpy oracle across the robot matrix.
+
+**(b) `initcheck` "Uninitialized __global__ memory read" in EVERY `*_kernel_single_timing`.**
+This is the **anti-LICM feedback by design**, and it is FLEET-WIDE, not specific to any one algo.
+`gen_anti_licm_input_reload` injects a loop-carried dependency by reading a PRIOR rep's output slot —
+`d_<out>[(rep + 0x3FF) & 0x3FF]` — which on rep 0 has never been written (the buffer is `cudaMalloc`'d,
+not zeroed). The value is **deliberately garbage-tolerant**: it only perturbs the input so ptxas cannot
+hoist the rep loop. Timing-only path; it never reaches a correctness output.
+  * **Control that proves it:** build a binary calling ONLY an existing single_timing algo (e.g.
+    `end_effector_pose_single_timing`) and run initcheck — it reports the same **6 errors per kernel**.
+    Any new algo will show 6×(number of its single_timing kernels).
+  * Do NOT "fix" by zeroing the buffer or changing `gen_anti_licm_*` — that is a SHARED primitive
+    (fleet-wide blast radius, §1b family) and zeroing would weaken the LICM barrier it exists to provide.
+
+**⚠ But `memcheck` on the SAME path DID find a real bug — don't let (b) desensitize you.** The anti-LICM
+feedback indexes up to slot **1023**, so `gen_anti_licm_*` silently REQUIRE the output buffer to have
+**≥ 1024 elements**. Every legacy algo satisfies this by accident (`ee_pose` = `6*NUM_EES*256` = 1536),
+but any algo whose output scales with a *user-supplied batch* can under-allocate: a 1-target
+`multi_target` batch is only `3*1*256` = 768 < 1024 → **out-of-bounds read**, surfacing as
+`cudaErrorLaunchFailure (719)` under memcheck. Fixed by flooring the DEVICE buffer at 1024 elements in
+`gen_init_gridData` (the D2H copy still moves only the natural size). **If you add an algo whose output
+size depends on a batch/config count, check this floor.**
+
 ---
 
 ## 2. Debugging methodology (what actually localizes a bug fast)
