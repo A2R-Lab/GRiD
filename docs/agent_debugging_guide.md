@@ -501,6 +501,19 @@ arena doesn't just under-reserve — it defeats the fits-check that exists to pr
   **≥ the sum of the regions the kernel actually carves**. Here they disagreed by 1077 elems and nothing
   caught it. (Cross-check: `inverse_dynamics` 1468 == 1468 and `idsva_so_world_frame` 4023 == 4023 —
   fdsva_so was the ONLY algo where macro ≠ carve, which is how it was localized.)
+  **★ NOW ENFORCED — `test/test_shared_arena_covers_carve.py` (2026-07-13).** Purely static on the
+  GENERATED header (no compile, no GPU, zero blast radius on codegen): `gen_declare_shared_arena` already
+  emits every carve as a `// GRID shared arena layout` comment block, so the test sums each `__global__`
+  kernel's regions per tier branch and asserts its launch-sizing macro covers them. **Positive control
+  run:** re-introducing the bad rung makes it fail with
+  `fdsva_so_kernel: tier 0 macro reports 24234 but the kernel CARVES 25311 (short by 1077)` — i.e. it
+  names the algo, the tier, and the exact shortfall. Matrix: iiwa14-fixed, go2-floating, go2-fixed,
+  fr3(mimic); 48 kernel/tier pairs checked. The assert is `>=`, not `==`: a spill ladder legitimately
+  leaves slack (the arena is a max over rungs and the picked rung may not be the argmax). **Slack is
+  waste; under-count is corruption.**
+  Note the pre-existing `#ifdef GRID_CUDA_DEBUG_LAYOUT` assert in `gen_declare_shared_arena` does NOT
+  cover this — it checks the carve against the SAME t_buffers list it was built from (self-consistent by
+  construction) and never against the macro the HOST uses to size the launch. That was the whole gap.
 - **Sanitizers find this instantly, tier sweeps don't.** The bug needs (floating base) × (TIER_SHARED) ×
   (contraction-dominated pool) — a corner no default run hits. It sat here from before the Inc3 arena
   fold (verified: pre-Inc3 `4381096` emits the identical wrong 24234).
