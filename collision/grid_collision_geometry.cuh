@@ -32,13 +32,25 @@ struct Cuboid {                                     // oriented box: center c + 
     T wx, wy, wz, hw;
 };
 
+// Half-space {p : n.p >= d}, with n a UNIT normal pointing into the FREE side (n.p - d is the
+// signed distance of p from the surface, > 0 = clear). The canonical ground plane is
+// {0,0,1, z_floor}. Unlike every other primitive its signed distance is EXACTLY LINEAR in p,
+// so its gradient is constant and globally smooth — no argmin seam, no degenerate normal.
+template <typename T>
+struct Plane { T nx, ny, nz, d; };
+
 // Runtime obstacle set (NOT baked — matches the reference Environment<T>). Pointers + counts;
 // device upload deep-copies each list then patches these members (Component D upload contract).
+// The FLATTENED obstacle index space (used by the per-pair rows below) is, in order:
+//   [0, n_spheres) spheres | capsules | cuboids | planes.
+// Planes are appended LAST so existing positional brace-init of the first 6 members still
+// value-initializes them to {nullptr, 0} (an env with no planes).
 template <typename T>
 struct Environment {
-    const Sphere<T>  *spheres;  int n_spheres;
-    const Capsule<T> *capsules; int n_capsules;
-    const Cuboid<T>  *cuboids;  int n_cuboids;
+    const Sphere<T>  *spheres  = nullptr; int n_spheres  = 0;
+    const Capsule<T> *capsules = nullptr; int n_capsules = 0;
+    const Cuboid<T>  *cuboids  = nullptr; int n_cuboids  = 0;
+    const Plane<T>   *planes   = nullptr; int n_planes   = 0;
 };
 
 // ------------------------------------------------------------------ helpers
@@ -101,6 +113,16 @@ __host__ __device__ __forceinline__ T grid_cc_sphere_cuboid(const Cuboid<T> &b, 
     return (eu * eu + ev * ev + ew * ew) - r * r;
 }
 
+// sphere vs half-space: s = n.p - d is the (exact, signed) center distance from the surface. Take the
+// outside-excess max(0,s) exactly as the cuboid does, so a center BELOW the plane (s<0) yields -r^2 < 0
+// (collision) rather than a spuriously positive s^2. <0 <=> s < r <=> collision.
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_sphere_plane(const Plane<T> &p, T x, T y, T z, T r) {
+    T s = p.nx * x + p.ny * y + p.nz * z - p.d;
+    T e = s > static_cast<T>(0) ? s : static_cast<T>(0);
+    return e * e - r * r;
+}
+
 // ------------------------------------------------------------------ environment reduction
 // One sphere vs ALL obstacle lists; early-out on first collision.
 template <typename T>
@@ -114,6 +136,8 @@ __host__ __device__ __forceinline__ bool grid_cc_sphere_in_environment(
         if (grid_cc_sphere_capsule<T>(env.capsules[i], x, y, z, r) < static_cast<T>(0)) return true;
     for (int i = 0; i < env.n_cuboids; ++i)
         if (grid_cc_sphere_cuboid<T>(env.cuboids[i], x, y, z, r) < static_cast<T>(0)) return true;
+    for (int i = 0; i < env.n_planes; ++i)
+        if (grid_cc_sphere_plane<T>(env.planes[i], x, y, z, r) < static_cast<T>(0)) return true;
     return false;
 }
 
@@ -215,25 +239,55 @@ __host__ __device__ __forceinline__ T grid_cc_sphere_cuboid_signed(
     return -pen - r;
 }
 
+// sphere vs half-space, signed. The clearance is EXACT and linear (dist - r, no clamping) and the
+// normal is the plane's own — constant, always unit, no degenerate case. This is the primitive GATO's
+// ground-contact rows want: g(q) and dg/dq are smooth everywhere, unlike the argmin over a set.
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_sphere_plane_signed(
+        const Plane<T> &p, T x, T y, T z, T r, T *nx, T *ny, T *nz) {
+    *nx = p.nx; *ny = p.ny; *nz = p.nz;
+    return (p.nx * x + p.ny * y + p.nz * z - p.d) - r;
+}
+
+// ------------------------------------------------------------------ flattened obstacle index space
+// Obstacles are addressed by a single index o in [0, grid_cc_num_obstacles(env)), laid out
+// spheres | capsules | cuboids | planes. This is the column index of the PER-PAIR rows
+// (grid_collision::collision_distance_pairs) and the iteration order of the argmin below.
+template <typename T>
+__host__ __device__ __forceinline__ int grid_cc_num_obstacles(const Environment<T> &env) {
+    return env.n_spheres + env.n_capsules + env.n_cuboids + env.n_planes;
+}
+
+// Sphere vs the o-th obstacle: signed clearance + unit surface normal (increasing-clearance direction).
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_obstacle_signed(
+        const Environment<T> &env, int o, T x, T y, T z, T r, T *nx, T *ny, T *nz) {
+    if (o < env.n_spheres) {
+        const Sphere<T> &s = env.spheres[o];
+        return grid_cc_sphere_sphere_signed<T>(x, y, z, r, s.x, s.y, s.z, s.r, nx, ny, nz);
+    }
+    o -= env.n_spheres;
+    if (o < env.n_capsules) return grid_cc_sphere_capsule_signed<T>(env.capsules[o], x, y, z, r, nx, ny, nz);
+    o -= env.n_capsules;
+    if (o < env.n_cuboids)  return grid_cc_sphere_cuboid_signed<T>(env.cuboids[o], x, y, z, r, nx, ny, nz);
+    o -= env.n_cuboids;
+    return grid_cc_sphere_plane_signed<T>(env.planes[o], x, y, z, r, nx, ny, nz);
+}
+
 // One point (sphere i) vs the WHOLE environment: nearest (most negative) signed distance + its
 // surface normal. Returns a large positive sentinel + a fixed normal when the environment is empty.
+// The argmin ties break toward the LOWEST flattened obstacle index (strict <), and it is exactly this
+// switch of the winning obstacle that makes the reduced distance non-smooth in q — the reason the
+// per-pair rows exist alongside it.
 template <typename T>
 __host__ __device__ __forceinline__ T grid_cc_nearest_obstacle(
         const Environment<T> &env, T x, T y, T z, T r, T *nx, T *ny, T *nz) {
     T best = static_cast<T>(1e30);
     T bnx = static_cast<T>(1), bny = static_cast<T>(0), bnz = static_cast<T>(0);
-    T tnx, tny, tnz, d;
-    for (int i = 0; i < env.n_spheres; ++i) {
-        const Sphere<T> &s = env.spheres[i];
-        d = grid_cc_sphere_sphere_signed<T>(x, y, z, r, s.x, s.y, s.z, s.r, &tnx, &tny, &tnz);
-        if (d < best) { best = d; bnx = tnx; bny = tny; bnz = tnz; }
-    }
-    for (int i = 0; i < env.n_capsules; ++i) {
-        d = grid_cc_sphere_capsule_signed<T>(env.capsules[i], x, y, z, r, &tnx, &tny, &tnz);
-        if (d < best) { best = d; bnx = tnx; bny = tny; bnz = tnz; }
-    }
-    for (int i = 0; i < env.n_cuboids; ++i) {
-        d = grid_cc_sphere_cuboid_signed<T>(env.cuboids[i], x, y, z, r, &tnx, &tny, &tnz);
+    T tnx, tny, tnz;
+    const int n_obs = grid_cc_num_obstacles<T>(env);
+    for (int o = 0; o < n_obs; ++o) {
+        T d = grid_cc_obstacle_signed<T>(env, o, x, y, z, r, &tnx, &tny, &tnz);
         if (d < best) { best = d; bnx = tnx; bny = tny; bnz = tnz; }
     }
     *nx = bnx; *ny = bny; *nz = bnz;
