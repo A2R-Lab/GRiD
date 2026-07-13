@@ -455,6 +455,61 @@ and you get a confidently wrong answer. **A plausible-looking value is not evide
 
 ---
 
+### 1t. A spill rung must apply its reduction INSIDE the `max()`, not subtract it from the total (2026-07-13)
+
+**Symptom.** `fdsva_so_kernel` threw **"an illegal memory access"** on **go2-floating @ TIER_SHARED at
+EVERY thread count** (32..1024) and every batch size (died on the first launch, N=16). memcheck:
+`Invalid __shared__ write of size 4` at `0x190fc` = **102652 B — 252 B past the 100 KiB HW cap**.
+
+**Blast radius (why this cost us a whole robot's autotune).** The batch binary runs every algo in ONE
+process and `gpuErrchk` does `exit(code)`. So one kernel's death **killed the entire shared-tier
+binary**, and *every* algo on go2-floating lost its shared-tier probes (`shared=0 / lite=240 /
+minimal=192`). SHARED is the no-spill tier and usually the fastest ⇒ the autotune silently fell back to
+lite/minimal and **GRiD under-reported its own performance on that robot**. The picks were not *wrong*,
+they were *pessimistic* — a far quieter failure than a crash.
+
+**Root cause.** The spill pool is a **`max` over three INDEPENDENT consumers**:
+
+    fdsva_temp_full = max(idsva_inner, contraction 4·nv³, fd_grad_inline) + rt
+
+The `idsva_cold` rung spills the idsva world inner's *cold quad* to global — which shrinks **only the
+idsva term**. But the rung formula subtracted it from the **total**:
+
+    base + fdsva_temp_full - cold_floats          # WRONG
+
+On go2-floating the max is dominated by the **contraction**, not the idsva inner
+(`idsva=3030, contraction=23328, fdg=10494`), so shrinking idsva `3030 → 1938` changes the max by
+**nothing** — yet the formula still cut 1092 elements off the arena. Correct:
+
+    base + max(idsva_inner - cold_floats, 4·nv³, fd_grad_inline) + rt     # RIGHT
+
+**The kernel was correct all along; the ARENA FORMULA lied.** The kernel carved the full pool (25311
+elems) while the launch reserved the fraudulent 24234 → **short by 1077 elems (4308 B)** → OOB write.
+
+**Why the "does it fit" guard didn't catch it.** `grid_check_dynamic_shared_memory_bytes` compares the
+*computed* arena against `GRID_CUDA_TARGET_SHARED_MEM_BYTES` (98304). The fraudulent 24234 (= 97396 B)
+**passed** the check; the honest 25326 (= 101764 B) does **not** — so with the fix the picker correctly
+rejects the rung and falls to `workspace_temp` (spilling the contraction to global). **An under-counted
+arena doesn't just under-reserve — it defeats the fits-check that exists to prevent exactly this.**
+
+**Lessons.**
+- **A reduction that targets ONE term of a `max` must be applied to that term, inside the max.**
+  Subtracting it from the total is only valid if that term *is* the max — which is a robot-dependent
+  fact, so it is never safe to assume. This is a whole *class*: audit every rung whose formula does
+  `pool - something`.
+- **Invariant worth asserting in codegen:** for every algo/tier, `DYNAMIC_SHARED_MEM_BYTES` must be
+  **≥ the sum of the regions the kernel actually carves**. Here they disagreed by 1077 elems and nothing
+  caught it. (Cross-check: `inverse_dynamics` 1468 == 1468 and `idsva_so_world_frame` 4023 == 4023 —
+  fdsva_so was the ONLY algo where macro ≠ carve, which is how it was localized.)
+- **Sanitizers find this instantly, tier sweeps don't.** The bug needs (floating base) × (TIER_SHARED) ×
+  (contraction-dominated pool) — a corner no default run hits. It sat here from before the Inc3 arena
+  fold (verified: pre-Inc3 `4381096` emits the identical wrong 24234).
+- **A dead value must still be CORRECT.** The in-gen 9-tuple's arena column is unused since Step 3.4
+  (the composer supplies arenas) — but it carried the same wrong formula. Leaving a stale-but-wrong
+  number next to the right one is a trap; fix both or delete one.
+
+---
+
 ## 2. Debugging methodology (what actually localizes a bug fast)
 
 - **Validate the DEPENDENCY standalone first.** Before assuming "Λ = J·M⁻¹·Jᵀ is broken for mimic,"

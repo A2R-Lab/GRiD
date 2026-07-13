@@ -2143,7 +2143,8 @@ def main() -> None:
     parser.add_argument("--autotune-threads", action="store_true",
                         help="After the standard timing run, do a JOINT (tier × thread-count) "
                              "autotune: for each tier (shared/lite/minimal) sweep a small grid of "
-                             "per-block thread counts (default: 96,128,192,256,320,384 + "
+                             "per-block thread counts (default: DEFAULT_AUTOTUNE_THREAD_GRID = "
+                             "32..1024, i.e. the warp floor through the hw ceiling + "
                              "one-level refinement, clipped per tier to its launch_bounds cap) and "
                              "pick the global min-µs/sample winner (tier, threads) per algo. The "
                              "per-tier binaries are reused from the content-keyed binary cache (no "
@@ -2155,8 +2156,11 @@ def main() -> None:
                              "timeGRiD_common.h::grid_timing_dimms.")
     parser.add_argument("--autotune-thread-grid", type=str, default=None,
                         help="Comma-separated thread counts to sweep when --autotune-threads is "
-                             "set. Default: '96,128,192,256,320,384'. Useful for narrowing "
-                             "the sweep on slow robots (e.g. '128,256,384' for a quick re-tune).")
+                             "set. Default: DEFAULT_AUTOTUNE_THREAD_GRID = "
+                             "32,64,96,128,192,256,320,384,512,640,768,896,1024. Useful for "
+                             "narrowing the sweep on slow robots (e.g. '128,256,384' for a quick "
+                             "re-tune) -- but note a narrow grid SILENTLY DROPS the large-robot "
+                             "optima (go2>=512, g1>=640): the old 96..384 default hid them.")
     parser.add_argument("--autotune-N", type=int, default=DEFAULT_AUTOTUNE_N,
                         help=f"Batch size to autotune on (default: {DEFAULT_AUTOTUNE_N}). The "
                              "winner is the (tier, thread count) that minimizes "
