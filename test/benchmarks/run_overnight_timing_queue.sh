@@ -16,8 +16,13 @@
 #   3. Rebuild the autotune matrix + re-run the competitive analysis so the published table finally
 #      reflects (a) the post-Inc6 GRiD column and (b) the un-pessimized go2-floating picks.
 #
-# TIMING ISOLATION IS THE WHOLE POINT: this script does NO compiles (everything is cache-warm) and
-# refuses to start if anything else is on the GPU. Do not run other agents/builds while it is up.
+#   4. runtime-param A/B (hardware co-design): what does runtime-mutability actually COST? See leg 3.
+#
+# TIMING ISOLATION IS THE WHOLE POINT: this script refuses to start if anything else is on the GPU.
+# Do not run other agents/builds while it is up.
+# ⚠ Legs 1-2 are pure measure (cache-warm). Leg 3 DOES COMPILE (8 headers, cache-MISS by construction —
+#   the runtime-param variants are part of the header cache key). Serial, GRID_COMPILE_WORKERS=1.
+# NOTE the multi_target leg was CUT (see the 3b block below) — its rows never reached the results JSON.
 #
 # Usage: bash test/benchmarks/run_overnight_timing_queue.sh
 set -uo pipefail
@@ -121,6 +126,17 @@ done
 
 say "  runtime-param A/B table (baked = 1.00x baseline; >1 means the table-read COSTS time):"
 .venv/bin/python test/benchmarks/compare_runtime_param_ab.py --dir "$RTDIR" 2>&1 | tee -a "$LOG"
+
+# ---------------------------------------------------------------- 3b. multi_target — DISABLED 2026-07-14
+# PER_ALGO_SPECS rows for multi_target_position{,_gradient} ARE wired (they no longer appear in the
+# harness's "skipping algos missing a PER_ALGO_SPECS row" warning) and the batch builds
+# (--multi-target-from-collision, iiwa14 N=34) -- but NO MULTI_TARGET_POSITION row comes out of the
+# timing binary: the key is absent from the results JSON entirely (17 algos timed, none null).
+# Something downstream of the specs still swallows it (suspect: the GRID_HAS_MULTI_TARGET_POSITION
+# gate not reaching the emitted measure block, or the results dict being keyed off a different list).
+# CUT FROM THE OVERNIGHT RUN rather than debug it against the clock -- a silently-absent row is the
+# zero-parse failure mode, and shipping it would waste the sweep. Daylight task; see
+# docs/open-tasks/deferred_after_timing_2026-07-14_AM.md item 3.
 
 # ---------------------------------------------------------------- 4. rebuild table
 say ""

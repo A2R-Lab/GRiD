@@ -160,6 +160,7 @@ def generate_header(
     runtime_inertia: bool = False,
     runtime_transform: bool = False,
     runtime_joint_dynamics: bool = False,
+    multi_target_from_collision: bool = False,
 ) -> Path:
     """Generate grid.cuh for the given robot/base, using content-hash cache."""
     floating_base = (base == "floating")
@@ -189,6 +190,7 @@ def generate_header(
             "runtime_inertia": runtime_inertia,
             "runtime_transform": runtime_transform,
             "runtime_joint_dynamics": runtime_joint_dynamics,
+            "multi_target_from_collision": multi_target_from_collision,
             "profile": bench_algo_list_env or "all+frame_jacobian",
             "homogenous": True,
             "no_licm_barrier": no_licm_barrier_env,
@@ -217,12 +219,32 @@ def generate_header(
         NEED_PRINT_MAT=True,
         FILE_NAMESPACE="grid",
     )
+    # multi_target_position's cost SCALES WITH THE BATCH SIZE, so a timing number is meaningless
+    # without saying how many targets it was taken at. We use the robot's own COLLISION SPHERIZATION
+    # as the batch: collision is multi_target's actual consumer, so this keeps the multi_target and
+    # (future) config_free numbers describing the SAME geometry rather than two unrelated batches.
+    # The batch size is baked into the JSON + printed, so the number is never quoted bare.
+    mt_batch = None
+    if multi_target_from_collision:
+        from GRiDCodeGenerator.algorithms._collision import collision_spec_from_urdf, normalize_collision_tiers
+        with contextlib.redirect_stdout(io.StringIO()):
+            spec = collision_spec_from_urdf(robot_obj, str(urdf_path), resolution=0.05)
+        finest = normalize_collision_tiers(spec)[-1]
+        mt_batch = [{"anchor_jid": int(a),
+                     "offset": (finest["offset"][3 * i], finest["offset"][3 * i + 1], finest["offset"][3 * i + 2])}
+                    for i, a in enumerate(finest["anchor"])]
+        print(f"  [grid] multi_target batch from collision spherization: N={len(mt_batch)} targets")
+
     with contextlib.redirect_stdout(io.StringIO()):
         codegen.gen_all_code(
             # Runtime-param variants: default False => the baked path, byte-identical to before.
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform,
             runtime_joint_dynamics=runtime_joint_dynamics,
+            # multi_target_batch and collision_spec are EXCLUSIVE (each defines NUM_MULTI_TARGETS).
+            # We pass the BATCH, which is what emits the timeable kernels + hosts; config_free itself
+            # is still a __device__ composite with no __global__ wrapper, so it is not timed here.
+            multi_target_batch=mt_batch,
             include_homogenous_transforms=True,
             # fixed_target_name omitted: passing it with the 'all' set triggers a
             # generator bug where kinematics_only() references an _hessian_{name} variant
@@ -428,6 +450,30 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_label": "END_EFFECTOR_POSE",
         "gate": None,
         "shared_mem_skip": "END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    # multi_target_position{,_gradient}: kernels + hosts landed in Inc4b and are registered in
+    # algo_registry, but were never wired into the bench harness -- so they were fully emitted, fully
+    # correct, and invisible to timing. These rows close that. They are GATED, so a robot generated
+    # WITHOUT a target batch simply compiles the blocks out (the default competitive robots are
+    # unaffected); pass --multi-target-from-collision to make them fire.
+    # ⚠ The cost SCALES WITH THE BATCH SIZE (N targets), so these numbers are only meaningful next to
+    # the target count -- which is why the count is recorded in the JSON. No competitor has a
+    # counterpart, so this is a CAPABILITY-LEAD cell (like config_free), not a W/L.
+    "multi_target_position": {
+        "single_call":        "grid::multi_target_position_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::multi_target_position<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::multi_target_position_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "MULTI_TARGET_POSITION",
+        "gate": "GRID_HAS_MULTI_TARGET_POSITION",
+        "shared_mem_skip": "MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "multi_target_position_gradient": {
+        "single_call":        "grid::multi_target_position_gradient_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::multi_target_position_gradient<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::multi_target_position_gradient_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "MULTI_TARGET_POSITION_GRADIENT",
+        "gate": "GRID_HAS_MULTI_TARGET_POSITION",
+        "shared_mem_skip": "MULTI_TARGET_POSITION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
     },
     "end_effector_pose_gradient": {
         "single_call":        "grid::end_effector_pose_gradient_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -2081,6 +2127,10 @@ def main() -> None:
                              "unlike the cold-ish inertia table.")
     parser.add_argument("--runtime-joint-dynamics", action="store_true",
                         help="per-DOF damping/friction read from a mutable table (set_joint_dynamics_params)")
+    parser.add_argument("--multi-target-from-collision", action="store_true",
+                        help="emit the multi_target_position{,_gradient} batch from this robot's collision "
+                             "spherization so those kernels can be TIMED. Their cost scales with the batch "
+                             "size, so the target count is recorded in the JSON -- never quote the number bare.")
     parser.add_argument("--output", type=Path, default=None,
                         help="JSON output path (default: results/<robot>_<base>_grid_<host>.json)")
     parser.add_argument("--no-recompile", action="store_true",
@@ -2244,7 +2294,8 @@ def main() -> None:
         header_path = generate_header(urdf_path, args.robot, args.base, ee_frame, build_dir, args.no_recompile,
                                       runtime_inertia=args.runtime_inertia,
                                       runtime_transform=args.runtime_transform,
-                                      runtime_joint_dynamics=args.runtime_joint_dynamics)
+                                      runtime_joint_dynamics=args.runtime_joint_dynamics,
+                                      multi_target_from_collision=args.multi_target_from_collision)
     except Exception as e:
         print(f"  [grid] ERROR generating header: {e}", file=sys.stderr)
         sys.exit(1)
