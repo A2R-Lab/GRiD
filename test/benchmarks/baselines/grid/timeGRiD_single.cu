@@ -76,6 +76,20 @@ __host__ void measure_ee_pose_gradient_single(cudaStream_t *streams, grid::robot
     grid::end_effector_pose_gradient_single_timing<T>(hd_data,d_robotModel,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
 }
 #endif
+// multi_target_position{,_gradient}: OPT-IN family (only when generated WITH a target batch).
+// ⚠ cost scales with NUM_MULTI_TARGETS -- never quote these µs without the target count.
+#if GRID_HAS_MULTI_TARGET_POSITION
+template <typename T, int TEST_ITERS>
+__host__ void measure_multi_target_position_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
+    GRID_SKIP_IF_KERNEL_TOO_BIG("MULTI_TARGET_POSITION", MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES);
+    grid::multi_target_position_single_timing<T>(hd_data,d_robotModel,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
+}
+template <typename T, int TEST_ITERS>
+__host__ void measure_multi_target_position_gradient_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
+    GRID_SKIP_IF_KERNEL_TOO_BIG("MULTI_TARGET_POSITION_GRADIENT", MULTI_TARGET_POSITION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES);
+    grid::multi_target_position_gradient_single_timing<T>(hd_data,d_robotModel,TEST_ITERS,dim3(1,1,1),grid_timing_dimms(),streams);
+}
+#endif
 #if GRID_HAS_END_EFFECTOR_POSE_HESSIAN || (defined(GRID_BENCH_D2EE_ONLY) && GRID_BENCH_D2EE_ONLY)
 template <typename T, int TEST_ITERS>
 __host__ void measure_ee_pose_hessian_single(cudaStream_t *streams, grid::robotModel<T> *d_robotModel, grid::gridData<T> *hd_data){
@@ -163,6 +177,10 @@ __host__ void run_single_timings(bool floating_base, cudaStream_t *streams, grid
     #endif
     #if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
     measure_ee_pose_gradient_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    #endif
+    #if GRID_HAS_MULTI_TARGET_POSITION
+    measure_multi_target_position_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
+    measure_multi_target_position_gradient_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);
     #endif
     #if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
     measure_ee_pose_hessian_single<T,TEST_ITERS>(streams, d_robotModel, hd_data);

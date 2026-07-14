@@ -110,6 +110,28 @@ __host__ void measure_ee_pose_gradient_batch(int N, cudaStream_t *streams, grid:
         [&]{ grid::end_effector_pose_gradient_compute_only<T>(d,m,N,dim3(N,1,1),dimms); });
 }
 #endif
+// multi_target_position{,_gradient}: an OPT-IN family -- these blocks only exist when the robot was
+// generated WITH a target batch (--multi-target-from-collision), so a default robot compiles them out
+// and is unaffected. ⚠ THE COST SCALES WITH THE BATCH SIZE (NUM_MULTI_TARGETS): these µs are only
+// meaningful next to the target count. No competitor has a counterpart -> capability-lead, not a W/L.
+#if GRID_HAS_MULTI_TARGET_POSITION
+template <typename T, int TEST_ITERS>
+__host__ void measure_multi_target_position_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("MULTI_TARGET_POSITION", N, MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES);
+    dim3 dimms = grid_timing_dimms();
+    measure_batch_pair<TEST_ITERS>("MULTI_TARGET_POSITION", N,
+        [&]{ grid::multi_target_position<T>(d,m,N,dim3(N,1,1),dimms,streams); },
+        [&]{ grid::multi_target_position_compute_only<T>(d,m,N,dim3(N,1,1),dimms); });
+}
+template <typename T, int TEST_ITERS>
+__host__ void measure_multi_target_position_gradient_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
+    GRID_SKIP_BATCH_IF_KERNEL_TOO_BIG("MULTI_TARGET_POSITION_GRADIENT", N, MULTI_TARGET_POSITION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES);
+    dim3 dimms = grid_timing_dimms();
+    measure_batch_pair<TEST_ITERS>("MULTI_TARGET_POSITION_GRADIENT", N,
+        [&]{ grid::multi_target_position_gradient<T>(d,m,N,dim3(N,1,1),dimms,streams); },
+        [&]{ grid::multi_target_position_gradient_compute_only<T>(d,m,N,dim3(N,1,1),dimms); });
+}
+#endif
 #if GRID_HAS_END_EFFECTOR_POSE_HESSIAN || (defined(GRID_BENCH_D2EE_ONLY) && GRID_BENCH_D2EE_ONLY)
 template <typename T, int TEST_ITERS>
 __host__ void measure_ee_pose_hessian_batch(int N, cudaStream_t *streams, grid::robotModel<T> *m, grid::gridData<T> *d){
@@ -226,6 +248,10 @@ __host__ void run_batch_at(bool floating_base, int N, cudaStream_t *streams, gri
 #endif
 #if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
     measure_ee_pose_gradient_batch<T,TEST_ITERS>(N, streams, m, d);
+#endif
+#if GRID_HAS_MULTI_TARGET_POSITION
+    measure_multi_target_position_batch<T,TEST_ITERS>(N, streams, m, d);
+    measure_multi_target_position_gradient_batch<T,TEST_ITERS>(N, streams, m, d);
 #endif
 #if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
     measure_ee_pose_hessian_batch<T,TEST_ITERS>(N, streams, m, d);
