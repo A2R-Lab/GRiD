@@ -22,7 +22,8 @@
 # Do not run other agents/builds while it is up.
 # ⚠ Legs 1-2 are pure measure (cache-warm). Leg 3 DOES COMPILE (8 headers, cache-MISS by construction —
 #   the runtime-param variants are part of the header cache key). Serial, GRID_COMPILE_WORKERS=1.
-# NOTE the multi_target leg was CUT (see the 3b block below) — its rows never reached the results JSON.
+# NOTE leg 3b (multi_target) also compiles. It was CUT on 2026-07-14 and is now FIXED + RE-ENABLED
+#   (parent 2dcedb2 — the monolithic timing TUs had no measure block; PER_ALGO_SPECS alone never fired).
 #
 # Usage: bash test/benchmarks/run_overnight_timing_queue.sh
 set -uo pipefail
@@ -127,16 +128,31 @@ done
 say "  runtime-param A/B table (baked = 1.00x baseline; >1 means the table-read COSTS time):"
 .venv/bin/python test/benchmarks/compare_runtime_param_ab.py --dir "$RTDIR" 2>&1 | tee -a "$LOG"
 
-# ---------------------------------------------------------------- 3b. multi_target — DISABLED 2026-07-14
-# PER_ALGO_SPECS rows for multi_target_position{,_gradient} ARE wired (they no longer appear in the
-# harness's "skipping algos missing a PER_ALGO_SPECS row" warning) and the batch builds
-# (--multi-target-from-collision, iiwa14 N=34) -- but NO MULTI_TARGET_POSITION row comes out of the
-# timing binary: the key is absent from the results JSON entirely (17 algos timed, none null).
-# Something downstream of the specs still swallows it (suspect: the GRID_HAS_MULTI_TARGET_POSITION
-# gate not reaching the emitted measure block, or the results dict being keyed off a different list).
-# CUT FROM THE OVERNIGHT RUN rather than debug it against the clock -- a silently-absent row is the
-# zero-parse failure mode, and shipping it would waste the sweep. Daylight task; see
-# docs/open-tasks/deferred_after_timing_2026-07-14_AM.md item 3.
+# ---------------------------------------------------------------- 3b. multi_target (FIXED + RE-ENABLED)
+# WAS DISABLED 2026-07-14 because no MULTI_TARGET_POSITION row ever reached the results JSON.
+# ROOT CAUSE (fixed, parent 2dcedb2): PER_ALGO_SPECS drives the PER-ALGO TU path, but a default run uses
+# the HAND-WRITTEN MONOLITHIC timeGRiD_{batch,single}.cu -- which had no multi_target measure block. The
+# specs were necessary but not sufficient. Both paths now have it; verified on iiwa14-fixed (N=34):
+# multi_target_position 18.22us compute-only, _gradient 25.73us (vs end_effector_pose 7.22us @ 1 target
+# -- sublinear, as expected: the shared FK chain-up amortizes over the batch, only extraction scales).
+#
+# ⚠ THE NUMBER IS ONLY MEANINGFUL WITH ITS BATCH SIZE. Cost scales with the target count, so the batch is
+#   the robot's own COLLISION SPHERIZATION (collision is multi_target's real consumer -> multi_target and
+#   config_free then describe the SAME geometry). The N is printed + lands in the JSON. NEVER quote bare.
+# ⚠ NOT a W/L cell: no competitor has a multi_target counterpart -> capability-lead, like config_free.
+say ""
+say "=== [3b/4] multi_target_position{,_gradient} — first-ever timing (batch = collision spherization) ==="
+MTDIR="$ROOT/multi_target"
+mkdir -p "$MTDIR"
+for cell in "iiwa14 fixed" "go2 floating"; do
+  set -- $cell
+  say "  [mt] $1 $2   mem_avail=$(free -g | awk '/^Mem:/{print $7}')GB"
+  GRID_COMPILE_WORKERS=1 step .venv/bin/python test/benchmarks/baselines/grid/run.py \
+      --robot "$1" --base "$2" --multi-target-from-collision --compile-workers 1 \
+      --output "$MTDIR/${1}_${2}_multi_target.json"
+done
+say "  (grep the log for 'multi_target batch from collision spherization: N=' — that N is the batch size"
+say "   these µs are FOR. A multi_target number quoted without its N is meaningless.)"
 
 # ---------------------------------------------------------------- 4. rebuild table
 say ""
