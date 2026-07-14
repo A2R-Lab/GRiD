@@ -85,9 +85,47 @@ for cell in "go2 fixed" "go2 floating" "g1 fixed" "g1 floating"; do
   step .venv/bin/python test/benchmarks/collect_kernel_limits.py --robot "$1" --base "$2" --no-recompile
 done
 
-# ---------------------------------------------------------------- 3. rebuild table
+# ---------------------------------------------------------------- 3. runtime-param A/B (hardware co-design)
+# THE QUESTION: what does runtime-mutability actually COST? Each variant sources one class of model
+# params from a MUTABLE device table instead of baking it as a compile-time literal. SPARSITY stays
+# baked in every case, and each is BIT-IDENTICAL to the baked path until you call its set_*_params()
+# mutator — so the ONLY thing being measured here is the loss of the compiler's VALUE-folding.
+#
+# HYPOTHESIS TO TEST: inertia + joint-dynamics should be ~free (cold-ish loads, hoisted out of the hot
+# path), while runtime_transform should be the one that BITES — its loads land per-cell INSIDE the hot
+# X-recompute. Codegen diff on iiwa14-fixed backs this up: transform changes 1440 lines vs inertia's
+# 378 and joint-dynamics' 216.
+#
+# WHAT THE ANSWER DECIDES: whether runtime params stay an OPT-IN codegen variant (a separate artifact
+# per robot — zero cost when off, which is what protects the perf story) or can just become the
+# DEFAULT (one artifact, pay the table-read everywhere). Cannot be answered without these numbers.
+#
+# ⚠ UNLIKE legs 1-2 THIS LEG COMPILES (4 variants x 2 robots = 8 headers, all cache-MISS by
+#   construction — the variants are in the header cache key). Serial, GRID_COMPILE_WORKERS=1.
+#   Build and measure are NOT interleaved per variant: we time each variant right after its own build,
+#   but nothing else is on the GPU, so the isolation that matters (no CONCURRENT timing) holds.
 say ""
-say "=== [3/3] rebuild autotune matrix + re-run competitive analysis ==="
+say "=== [3/4] runtime-param A/B — what does hardware-co-design mutability actually cost? ==="
+RTDIR="$ROOT/runtime_params_ab"
+mkdir -p "$RTDIR"
+for cell in "iiwa14 fixed" "go2 floating"; do
+  set -- $cell
+  for variant in baked runtime-inertia runtime-transform runtime-joint-dynamics; do
+    flag=""; [ "$variant" = "baked" ] || flag="--$variant"
+    say "  [rt-ab] $1 $2 / $variant   mem_avail=$(free -g | awk '/^Mem:/{print $7}')GB"
+    GRID_COMPILE_WORKERS=1 step .venv/bin/python test/benchmarks/baselines/grid/run.py \
+        --robot "$1" --base "$2" --compile-workers 1 $flag \
+        --output "$RTDIR/${1}_${2}_${variant//-/_}.json"
+  done
+done
+
+say "  runtime-param A/B table (baked = 1.00x baseline; >1 means the table-read COSTS time):"
+.venv/bin/python test/benchmarks/compare_runtime_param_ab.py --dir "$RTDIR" 2>&1 | tee -a "$LOG"
+
+# ---------------------------------------------------------------- 4. rebuild table
+say ""
+say "=== [4/4] rebuild autotune matrix + re-run competitive analysis ==="
+# NOTE: only the BAKED captures feed the published table (glob excludes runtime_params_ab/).
 step .venv/bin/python test/benchmarks/build_autotune_matrix.py --picks "$ROOT"/*_grid*.json
 
 NEW_AUTOTUNE="$(ls -t test/benchmarks/results/autotune_best_*.json 2>/dev/null | head -1)"
@@ -98,7 +136,8 @@ step .venv/bin/python test/benchmarks/analyze_competitive.py \
 
 say ""
 say "=== OVERNIGHT TIMING QUEUE DONE ==="
-say "  analysis : $COMPETITORS/ANALYSIS.md"
-say "  log      : $LOG"
+say "  analysis    : $COMPETITORS/ANALYSIS.md"
+say "  runtime A/B : $RTDIR/  (+ the table printed above)"
+say "  log         : $LOG"
 say "  NOTE grep the log for '[autotune] WARN' — a failed probe is DROPPED (never recorded as fast,"
 say "       per §1c), but it silently costs coverage. Zero WARNs is the goal now that §1t is fixed."

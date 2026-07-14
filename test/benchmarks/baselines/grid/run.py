@@ -157,6 +157,9 @@ def generate_header(
     ee_frame: str,
     build_dir: Path,
     no_recompile: bool = False,
+    runtime_inertia: bool = False,
+    runtime_transform: bool = False,
+    runtime_joint_dynamics: bool = False,
 ) -> Path:
     """Generate grid.cuh for the given robot/base, using content-hash cache."""
     floating_base = (base == "floating")
@@ -171,12 +174,21 @@ def generate_header(
     # MUST be part of the cache key — otherwise a cached full-set binary is served
     # and the requested subset is silently ignored.
     bench_algo_list_env = os.environ.get("GRID_BENCH_ALGORITHM_LIST", "")
+    # RUNTIME-PARAM VARIANTS (hardware co-design A/B). Each of these sources a class of model
+    # parameters from a MUTABLE device table instead of baking it as a compile-time literal --
+    # keeping the SPARSITY PATTERN baked either way, so the only cost is losing value-folding.
+    # They change the generated header, so they MUST be in the cache key: without this the baked
+    # header is silently served for a "runtime" run and the A/B compares a header to ITSELF,
+    # reporting a perfect (and completely fake) wash.
     cache_key = _hash_bytes(
         json.dumps({
             "urdf_hash": urdf_hash,
             "codegen_hash": codegen_hash,
             "robot": robot,
             "base": base,
+            "runtime_inertia": runtime_inertia,
+            "runtime_transform": runtime_transform,
+            "runtime_joint_dynamics": runtime_joint_dynamics,
             "profile": bench_algo_list_env or "all+frame_jacobian",
             "homogenous": True,
             "no_licm_barrier": no_licm_barrier_env,
@@ -207,6 +219,10 @@ def generate_header(
     )
     with contextlib.redirect_stdout(io.StringIO()):
         codegen.gen_all_code(
+            # Runtime-param variants: default False => the baked path, byte-identical to before.
+            runtime_inertia=runtime_inertia,
+            runtime_transform=runtime_transform,
+            runtime_joint_dynamics=runtime_joint_dynamics,
             include_homogenous_transforms=True,
             # fixed_target_name omitted: passing it with the 'all' set triggers a
             # generator bug where kinematics_only() references an _hessian_{name} variant
@@ -2051,6 +2067,20 @@ def main() -> None:
     parser.add_argument("--robot", required=True,
                         choices=list(ROBOT_DESCRIPTION_MODULE) + list(LOCAL_URDF))
     parser.add_argument("--base", required=True, choices=["fixed", "floating"])
+    # --- runtime-param variants (hardware co-design A/B) ------------------------------------
+    # Each sources a class of model params from a MUTABLE device table instead of baking them as
+    # literals. SPARSITY stays baked in every case, and each variant is BIT-IDENTICAL to the baked
+    # path until the corresponding set_*_params() mutator is called -- so the ONLY thing these cost
+    # is the compiler's value-folding, which is exactly what this A/B measures. They are part of the
+    # header cache key, so a variant run cannot be served a cached baked header.
+    parser.add_argument("--runtime-inertia", action="store_true",
+                        help="link inertias read from a mutable table (set_inertia_params) instead of baked literals")
+    parser.add_argument("--runtime-transform", action="store_true",
+                        help="fixed joint-frame transforms read from a mutable table (set_transform_params). "
+                             "EXPECT THE BIGGEST HIT: these loads land per-cell INSIDE the hot X-recompute, "
+                             "unlike the cold-ish inertia table.")
+    parser.add_argument("--runtime-joint-dynamics", action="store_true",
+                        help="per-DOF damping/friction read from a mutable table (set_joint_dynamics_params)")
     parser.add_argument("--output", type=Path, default=None,
                         help="JSON output path (default: results/<robot>_<base>_grid_<host>.json)")
     parser.add_argument("--no-recompile", action="store_true",
@@ -2211,7 +2241,10 @@ def main() -> None:
     print(f"[grid] {args.robot} {args.base} — URDF: {urdf_path} (mimic={has_mimic})")
 
     try:
-        header_path = generate_header(urdf_path, args.robot, args.base, ee_frame, build_dir, args.no_recompile)
+        header_path = generate_header(urdf_path, args.robot, args.base, ee_frame, build_dir, args.no_recompile,
+                                      runtime_inertia=args.runtime_inertia,
+                                      runtime_transform=args.runtime_transform,
+                                      runtime_joint_dynamics=args.runtime_joint_dynamics)
     except Exception as e:
         print(f"  [grid] ERROR generating header: {e}", file=sys.stderr)
         sys.exit(1)
