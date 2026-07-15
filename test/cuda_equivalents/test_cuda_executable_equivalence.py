@@ -1523,7 +1523,15 @@ def _assert_close(
     algorithm: str,
     n_leaves: int = 0,
     gimbal_lock_leaves=frozenset(),
-) -> None:
+) -> int:
+    """Assert CUDA `actual` matches oracle `expected`; RAISE on mismatch.
+
+    Returns the NUMBER OF ELEMENTS actually compared. This is load-bearing: a return of 0 means every
+    row was filtered as a legitimate singularity (gimbal lock / reference blow-up), so the caller must
+    NOT count this as a validated comparison. Before this returned None, a vacuous filter looked
+    identical to a real pass and inflated the caller's `compared` counter -- letting a test certify
+    `compared > 0` while validating nothing (2026-07-14 audit).
+    """
     actual = np.asarray(actual, dtype=np.float64)
     expected = np.asarray(expected, dtype=np.float64)
     tol = _cuda_tolerance(robot_id, algorithm)
@@ -1558,20 +1566,26 @@ def _assert_close(
                 # up as pitch_sqrt_term -> 0), OR (ii) the finite-diff reference
                 # spiked to ~pi/step from an angle wrapping across +/-pi between
                 # the +/-step samples (|expected| explodes) even away from gimbal
-                # lock, OR (iii) the float32 CUDA value went non-finite there.
-                # This is the finite-reference analogue of the caller's
-                # non-finite-reference skip; scoped to orientation-derivative rows.
+                # lock. These are the SINGULARITY conditions, defined by the
+                # REFERENCE/config -- NOT by the CUDA output.
+                #
+                # ⚠ We deliberately DO NOT mask `~np.isfinite(actual)` here. That
+                # excused a CUDA NaN even on a NON-singular row with a finite,
+                # small reference -- i.e. it masked the kernel's own bug on exactly
+                # the rows most likely to produce one, and let a NaN-emitting kernel
+                # pass the main equivalence gate (2026-07-14 audit). A CUDA NaN at a
+                # gimbal/blowup row is already covered by (i)/(ii); a CUDA NaN
+                # anywhere else is a REAL defect and MUST fail assert_allclose below.
                 skip = orient_m & (
                     in_gimbal_leaf
                     | (np.abs(expected) > EE_ORIENTATION_DERIV_BLOWUP_THRESHOLD)
-                    | ~np.isfinite(actual)
                 )
             keep = ~skip
             if not np.all(keep):
                 actual = actual[keep]
                 expected = expected[keep]
                 if expected.size == 0:
-                    return
+                    return 0   # every row was a legitimate singularity: nothing compared
     # Magnitude-scaled absolute floor (mirrors RBDReference/tests/comparators.py).
     # np.testing.assert_allclose checks |actual-expected| <= atol + rtol*|expected|
     # per element. For an array whose overall scale is huge (e.g. h1_2 has a
@@ -1592,6 +1606,7 @@ def _assert_close(
             rtol=tol["rtol"],
             atol=atol_eff,
         )
+        return int(expected.size)   # number of elements actually compared (0 = vacuous, see callers)
     except AssertionError as exc:
         diff = np.abs(actual - expected)
         rel = diff / np.maximum(np.abs(expected), 1e-12)
@@ -1600,7 +1615,7 @@ def _assert_close(
         norm_rel = np.linalg.norm(diff) / max(np.linalg.norm(expected), 1e-12)
         norm_rtol = tol.get("norm_rtol")
         if norm_rtol is not None and norm_rel <= norm_rtol:
-            return
+            return int(expected.size)   # passed on the norm tolerance -- did compare
         actual_at_index = actual[index]
         expected_at_index = expected[index]
         raise AssertionError(
@@ -1883,7 +1898,7 @@ def _run_cuda_equivalence_case(
                     if name in _EE_POSE_ALGORITHMS
                     else frozenset()
                 )
-                _assert_close(
+                n_cmp = _assert_close(
                     f"{spec.robot_id}/{sample.name}/{name}/threads={num_threads or 32}",
                     cuda[name],
                     expected_value,
@@ -1892,7 +1907,13 @@ def _run_cuda_equivalence_case(
                     n_leaves=len(project_model.robot.get_leaf_nodes()),
                     gimbal_lock_leaves=gimbal_lock_leaves,
                 )
-                compared += 1
+                # Count ONLY comparisons that actually compared elements. A vacuous return (every row
+                # filtered as a legitimate singularity) reports 0 and must NOT inflate `compared` — else
+                # `compared > 0` would falsely certify that something was validated.
+                if n_cmp > 0:
+                    compared += 1
+                else:
+                    skipped.append(f"{sample.name}/{name} (all rows singular)")
             except AssertionError as exc:
                 if (name in KNOWN_FAILING_ALGORITHMS
                         or (spec.robot_id, name) in KNOWN_FAILING_ROBOT_ALGORITHMS):
@@ -1930,5 +1951,15 @@ def _run_cuda_equivalence_case(
         pytest.skip(
             "Skipped CUDA comparisons (singular / float32-ABA); none comparable: "
             + ", ".join(skipped)
+        )
+    # THE VACUOUS-PASS FLOOR (2026-07-14). We matched samples (asserted above) but compared ZERO
+    # elements and recorded NO skip -- so every comparison silently returned nothing and this test would
+    # pass green having validated NOTHING. That is a bug in the harness or the codegen, not a pass.
+    if compared == 0:
+        pytest.fail(
+            f"{spec.robot_id}-{base_mode}: matched {matched_samples} sample(s) but compared 0 elements "
+            f"and skipped nothing -- the test would pass without validating anything. This means every "
+            f"algorithm's output was empty/filtered without being recorded as a skip; investigate the "
+            f"codegen output and the sample selection, do not paper over it."
         )
     _progress(config, f"complete {spec.robot_id}-{base_mode}: {matched_samples} sample(s)")

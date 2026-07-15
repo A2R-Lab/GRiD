@@ -197,8 +197,15 @@ def _assert_thread_invariant(baseline, candidate, label):
     base = np.asarray(baseline, dtype=np.float64)
     cand = np.asarray(candidate, dtype=np.float64)
     finite = np.isfinite(base) & np.isfinite(cand)
-    if not np.any(finite):
-        return
+    # ⚠ Do NOT `return` on all-non-finite (2026-07-14 audit). Kinematics outputs (positions, Jacobians)
+    # are finite for ANY finite q -- only orientation-derivative rows can legitimately go singular, and
+    # never ALL of them. So both runs being entirely non-finite is a BROKEN kernel, not thread-invariance,
+    # and silently returning declared it "invariant" while comparing nothing. Fail instead. (A PARTIAL
+    # NaN still compares its finite part below, which is correct: consistent NaN at a singular row is fine.)
+    assert np.any(finite), (
+        f"{label}: BOTH thread-count runs are ENTIRELY non-finite. That is a broken kernel, not "
+        f"thread-invariance -- a finite q must yield finite kinematics. Investigate the codegen output."
+    )
     base_f = base[finite]
     cand_f = cand[finite]
     scale = float(np.max(np.abs(base_f))) if base_f.size else 0.0
