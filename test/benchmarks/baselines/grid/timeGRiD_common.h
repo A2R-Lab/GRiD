@@ -172,23 +172,38 @@ __host__ void run_all_tests(bool floating_base, DispatcherFn do_timings){
     gpuErrchk(cudaMemcpy(hd_data->d_q,hd_data->h_q,grid::NUM_JOINTS*MAX_TIMESTEPS*sizeof(T),cudaMemcpyHostToDevice));
     gpuErrchk(cudaDeviceSynchronize());
 
-    // GPU warmup: run several batches and discard before timing. Warm with
-    // whichever core algo the (possibly-subset) header actually emits — a
-    // GRID_BENCH_ALGORITHM_LIST subset without inverse_dynamics would otherwise
-    // fail to compile this unconditional call (qualified grid:: name resolved
-    // at definition time). If neither is present the warmup is simply skipped.
-    dim3 dimms = grid_timing_dimms();
-#if GRID_HAS_INVERSE_DYNAMICS
-    for(int w = 0; w < 5; w++){
-        grid::inverse_dynamics<T,false,true>(hd_data,d_robotModel,GRAVITY,MAX_TIMESTEPS,dim3(MAX_TIMESTEPS,1,1),dimms,streams);
-    }
-#elif GRID_HAS_CRBA
-    for(int w = 0; w < 5; w++){
-        grid::crba<T>(hd_data,d_robotModel,GRAVITY,MAX_TIMESTEPS,dim3(MAX_TIMESTEPS,1,1),dimms,streams);
-    }
-#else
-    (void)dimms;
+    // GPU warmup: burn the GPU up to its SUSTAINED boost clock before timing, so the numbers do not
+    // depend on the GPU's power/clock state at process start.
+    //
+    // ⚠ WHY TIME-BASED, NOT A FIXED ITERATION COUNT. This box cannot lock clocks (no root), and it idles
+    // at 180 MHz vs a ~2415 MHz sustained boost — a 13x range. The old "5 iterations" warmup was
+    // microseconds on a small robot and never left 180 MHz, so a MONOLITHIC binary (one long process)
+    // drifted up to boost across its many algos while an ISOLATED per-algo binary measured its small
+    // early batches cold — a systematic ~8% slowdown, uniform across algos (measured 2026-07-15). A
+    // sustained burn reaches steady-state boost in ~0.66s here; we burn WARMUP_SECONDS (default 1.5s,
+    // comfortable margin) so every process — monolithic or isolated-per-algo — times at the same clock.
+    // Override at compile time with -DGRID_BENCH_WARMUP_SECONDS=<float>.
+#ifndef GRID_BENCH_WARMUP_SECONDS
+#define GRID_BENCH_WARMUP_SECONDS 1.5
 #endif
+    dim3 dimms = grid_timing_dimms();
+    {
+        struct timespec _w0, _wn;
+        clock_gettime(CLOCK_MONOTONIC, &_w0);
+        double _elapsed = 0.0;
+        do {
+#if GRID_HAS_INVERSE_DYNAMICS
+            grid::inverse_dynamics<T,false,true>(hd_data,d_robotModel,GRAVITY,MAX_TIMESTEPS,dim3(MAX_TIMESTEPS,1,1),dimms,streams);
+#elif GRID_HAS_CRBA
+            grid::crba<T>(hd_data,d_robotModel,GRAVITY,MAX_TIMESTEPS,dim3(MAX_TIMESTEPS,1,1),dimms,streams);
+#else
+            (void)dimms; break;   // no core algo in this subset: nothing to warm with
+#endif
+            gpuErrchk(cudaDeviceSynchronize());
+            clock_gettime(CLOCK_MONOTONIC, &_wn);
+            _elapsed = (_wn.tv_sec - _w0.tv_sec) + (_wn.tv_nsec - _w0.tv_nsec) * 1e-9;
+        } while (_elapsed < (double)(GRID_BENCH_WARMUP_SECONDS));
+    }
     gpuErrchk(cudaDeviceSynchronize());
 
     do_timings(streams, d_robotModel, hd_data);
