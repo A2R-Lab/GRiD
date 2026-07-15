@@ -18,8 +18,12 @@ changes since the GLASS rollout for our own historical reference.
   source of truth driving the `GridAlgo` enum, the launch-config symbol map,
   and the `KERNEL_ATTR_MANIFEST` / mjx manifest heads — replacing several
   hand-maintained module dicts. Byte-identical generated output;
-  `test/test_algo_descriptor_parity.py` locks the table. Step 3 (arena/spill)
-  scoped, not yet landed. See `concepts/codegen_architecture.rst`.
+  `test/test_algo_descriptor_parity.py` locks the table. Step 3 (arena/spill) is
+  now landed too: per-algo arena/spill `t_count` math lives in the table
+  (`ArenaRegion`/`SpillRung`/`compose_arena_*`) and drives every
+  `select_shared_tier_3way` site; `test/test_shared_arena_covers_carve.py` guards
+  it independently (launch macro vs the kernel's actual carve). See
+  `concepts/codegen_architecture.rst`.
 
 ### 2026-06-07 — new value ops, de-gating, runtime params, joint types
 

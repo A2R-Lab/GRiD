@@ -228,9 +228,16 @@ tuple) — the **single source of truth** from which the generator derives:
 Previously these were several hand-maintained module-level dicts that had to be
 kept in lockstep by hand; the descriptor table removed that duplication. Adding
 an algorithm is now (metadata-wise) one row. ``test/test_algo_descriptor_parity.py``
-locks the table to the generated output so a mismatch fails CPU-only in CI. (A
-further step — folding the per-algo arena/spill ``t_count`` math into the same
-table — is scoped but not yet landed.)
+locks the table to the generated output so a mismatch fails CPU-only in CI. The
+per-algo arena/spill ``t_count`` math is now folded into the table too (the
+``ArenaRegion`` / ``SpillRung`` / ``ArenaCtx`` machinery in ``algo_registry.py``,
+composed by ``compose_arena_full`` / ``compose_arena_rungs``): every
+``select_shared_tier_3way`` site is driven from the composer, so arena sizes are no
+longer hand-written in ``GRiDCodeGenerator.py``. The arena's correctness is guarded
+independently by ``test/test_shared_arena_covers_carve.py``, which checks each
+kernel's launch-sizing macro against the regions the kernel actually carves. To
+change an algorithm's arena, edit its closure in ``algo_registry.py`` — do NOT
+hand-edit ``t_count`` expressions in the generator.
 
 See also
 --------

@@ -661,15 +661,15 @@ NON_PRODUCTION_ALGOS_BY_BASE: dict[str, frozenset[str]] = {
 
 # Algos the codegen SKIPS for mimic robots, so their grid:: symbols are absent
 # and the matching bench TU would fail to compile/link. com/ccrba/energy are the
-# kinematics-domain centroidal quick-wins whose per-body Jacobian fold is not yet
-# mimic-reduced (see GRiDCodeGenerator/GRiDCodeGenerator.py gen_centroidal_quickwins
-# ~:2070: "com/ccrba/energy skipped: mimic robots' per-body Jacobian fold is not
-# yet mimic-reduced"). generalized_gravity / nonlinear_effects DO emit for mimic
-# robots (they reuse the mimic-aware RNEA inner) and so stay. There is no
-# GRID_HAS_* preprocessor macro for these families to #if-gate on, so the bench
-# must drop them in Python — data-driven on robot_has_mimic_joints(), NOT on a
-# hardcoded robot-name assumption (h1_2 IS mimic; the prior comment was wrong).
-MIMIC_UNSUPPORTED_ALGOS: frozenset[str] = frozenset({"com", "ccrba", "energy"})
+# (Was MIMIC_UNSUPPORTED_ALGOS = {com, ccrba, energy}.) EMPTIED 2026-07-14: the drop was STALE. Its two
+# justifications were both false — (1) gen_centroidal_quickwins now states "Mimic robots are SUPPORTED"
+# (the per-body Jacobian + dccrba per-unit phi are alpha-folded, mirroring the mimic-aware oracle), the
+# skip it cited no longer exists; (2) GRID_HAS_COM / GRID_HAS_CCRBA / GRID_HAS_ENERGY ARE emitted (=1 on
+# fr3-mimic, kernels present — verified), so a #if gate is available and the Python drop is unnecessary.
+# Consequence of the stale drop: every mimic robot (h1_2, h2_plus) silently lost com/ccrba/energy from
+# all sweep coverage. Kept as an (empty) frozenset so the _algo_keys_in_registry_order call site is
+# unchanged; add a key back ONLY with a passing mimic equivalence test proving the drop is real.
+MIMIC_UNSUPPORTED_ALGOS: frozenset[str] = frozenset()
 
 
 def _algo_keys_in_registry_order(floating_base: bool | None = None,
