@@ -7,22 +7,37 @@ Descriptor-table Step 3 folded the ~272 hand-written `*_t_count` arena expressio
 §3-4). Step 3.6 deleted the inline `assert composed == legacy` shims + the `_*_legacy`
 imperative duplicates — the composer is now the single source of arena logic.
 
-This test is the regression net that replaced those shims (user choice: invariants +
-rt-guard, not an exact-value golden — arenas are actively tuned by the surgical-spill
-perf work, so pinning exact values would churn):
+★★ REMOVED 2026-07-14 — `test_arena_full_composer_matches_generator` WAS CIRCULAR AND IS GONE.
 
-  * `test_arena_full_composer_matches_generator` — the composer reproduces the
-    generator's own `_arena_full_t_counts` snapshot. Several of those entries are still
-    the surviving IMPERATIVE full locals (they feed the `*_MAX_SHARED_MEM_COUNT` macros),
-    so this remains a real composer-vs-imperative cross-check for those algos; for the
-    rest it is a self-consistency check.
-  * `test_arena_ladder_invariants` — every composed rung is positive and rung[0] == the
-    full arena (the generator asserts this in-line on EVERY robot; here on the matrix).
-  * `test_rt_reservation` — the §2 bug-class guard: under `runtime_transform` each
-    s_temp-domain full arena grows by EXACTLY 36*NJ (the rt_xfixed reservation) and every
-    other by 0. A dropped/duplicated rt term (the §2 silent under-size) fails this.
-  * `test_composed_keys_exclude_only_so_dispatch` — the composed set is exactly the
-    generator's arena keys minus the one deferred full (idsva_so_body_frame).
+It asserted `compose_arena_full(k, ctx) == gen._arena_full_t_counts[k]`. But after the Step-3 fold, 22
+of the 34 entries in that snapshot are THEMSELVES assigned from the composer — e.g.
+`GRiDCodeGenerator.py` has `"fdsva_so": _fdsva_so_arenas[0]` where
+`_fdsva_so_arenas = compose_arena_rungs("fdsva_so", self._arena_ctx)`. So for those keys the test
+asserted `compose_arena_full(k) == compose_arena_full(k)`. **It could not fail.**
+
+That is not a hypothetical. It is exactly what happened: the parity net reported GREEN for the entire
+life of the §1t bug, while `fdsva_so`'s arena under-counted by 1077 elements and wrote past the end of
+shared memory on go2-floating. The fold deleted the `assert composed == legacy` shims but rewired the
+"truth" side of the test to the code under test. A green test over an unverified arena is WORSE than no
+test — it launders the thing it was built to catch.
+
+★ THE ARENA'S REAL AUTHORITY IS NOW `test/test_shared_arena_covers_carve.py`. That one is genuinely
+INDEPENDENT: it compares each kernel's launch-sizing macro against the regions that kernel ACTUALLY
+CARVES (parsed out of the emitted header), i.e. two paths that are computed separately and must agree.
+Its positive control — re-introducing the bad rung — names `fdsva_so tier 0 short-by-1077` immediately.
+**Do not "restore" a composer-vs-generator comparison here. Any such test is a tautology by construction,
+because the composer is now the ONLY source of arena logic.**
+
+What remains here are the three checks that are NOT circular — each compares the composer against
+something computed independently of it:
+
+  * `test_arena_ladder_invariants` — every composed rung is positive and rung[0] == the full arena
+    (structural properties, not a self-comparison).
+  * `test_rt_reservation` — the §2 bug-class guard, and the strongest test in this file: it is a
+    DIFFERENTIAL check. Compose with `runtime_transform` OFF and ON; every s_temp-domain full arena must
+    grow by EXACTLY 36*NJ and every other by 0. The composer cannot satisfy this by agreeing with itself.
+  * `test_composed_keys_exclude_only_so_dispatch` — the composed set is exactly the generator's arena
+    keys minus the one deferred full (idsva_so_body_frame). A bijection, not a value check.
 
 Matrix (orthogonal axes): iiwa14-fixed (T-only, n==nv), go2-floating (base-DOF terms,
 n>nv), fr3-fixed (mimic, NB>nv), + iiwa14-fixed with runtime_transform (the rt_xfixed
@@ -35,6 +50,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+from pathlib import Path
 
 import pytest
 
@@ -68,7 +84,7 @@ _SO_DISPATCH_DEFERRED = {"idsva_so_body_frame"}
 # flips membership and fails test_rt_reservation. Computed once from the composer; the
 # rt-domain rarely changes, so this set is stable (unlike exact arena values).
 _RT_RESERVING_FULL_KEYS = frozenset({
-    "aba", "coriolis_matrix", "crba", "f_ext_gradient", "fdsva_so", "forward_dynamics",
+    "aba", "coriolis_matrix", "crba", "f_ext_gradient", "f_ext_gradient_dq", "fdsva_so", "forward_dynamics",
     "forward_dynamics_gradient", "forward_dynamics_parameter_gradient", "generalized_gravity",
     "idsva_so_world_frame", "integrator", "integrator_gradient", "integrator_hessian",
     "integrator_with_gradient", "inverse_dynamics", "inverse_dynamics_gradient",
@@ -108,39 +124,48 @@ def _codegen_for(robot_id, base_mode, runtime_transform, tmp_path):
     return codegen
 
 
-@pytest.mark.parametrize("robot_id,base_mode,runtime_transform", _MATRIX)
-def test_arena_full_composer_matches_generator(robot_id, base_mode, runtime_transform, tmp_path):
-    """The composer reproduces the generator's `_arena_full_t_counts` snapshot on each
-    matrix robot. For algos whose imperative full local survives (it feeds the
-    `*_MAX_SHARED_MEM_COUNT` macros) this is a real composer-vs-imperative check; for the
-    rest it is self-consistency. Also checks the composed rung ladders vs the generator's
-    `_arena_rung_t_counts` record + rung[0]==full."""
-    gen = _codegen_for(robot_id, base_mode, runtime_transform, tmp_path)
-    ctx = gen._arena_ctx   # the exact snapshot generation used to drive the folded arenas
-    truth = gen._arena_full_t_counts
+def test_no_circular_composer_vs_generator_check_is_reintroduced():
+    """REGRESSION GUARD for the removed tautology (see the module docstring).
 
-    mismatches = []
-    for key in sorted(ARENA_COMPOSED_KEYS):
-        assert key in truth, f"{key} composed but absent from _arena_full_t_counts"
-        composed = compose_arena_full(key, ctx)
-        if composed != truth[key]:
-            mismatches.append(f"  {key}: composer={composed} generator={truth[key]} (Δ={composed - truth[key]})")
-    assert not mismatches, (
-        f"arena_full composer disagrees with the generator on "
-        f"{robot_id}-{base_mode} (runtime_transform={runtime_transform}):\n"
-        + "\n".join(mismatches)
+    `GRiDCodeGenerator._arena_full_t_counts` is now POPULATED BY THE COMPOSER — e.g.
+    `"fdsva_so": _fdsva_so_arenas[0]` where `_fdsva_so_arenas = compose_arena_rungs("fdsva_so", ctx)`.
+    Comparing `compose_arena_full(k)` against that snapshot therefore compares the composer to itself.
+    The old `test_arena_full_composer_matches_generator` did exactly that and stayed GREEN through the
+    entire life of the §1t shared-memory OOB.
+
+    This guard fails if someone re-adds such a comparison. The tautology's signature is: a single
+    function that BOTH calls a `compose_arena_*` composer AND reads a `_arena_*_t_counts` generator
+    snapshot — i.e. it compares the composer to a value the composer produced. Reading only the snapshot's
+    KEYS (as the bijection test does) is fine and does not trip this; calling only the composer (the
+    invariant/rt/carve tests) is fine too. It is the CONJUNCTION that is circular. AST-based, so
+    docstrings/comments don't count.
+    """
+    import ast
+    COMPOSERS = {"compose_arena_full", "compose_arena_rungs"}
+    SNAPSHOTS = {"_arena_full_t_counts", "_arena_rung_t_counts"}
+    src = (Path(__file__).parent / "test_algo_descriptor_arena_parity.py").read_text()
+    offenders = []
+    for fn in ast.walk(ast.parse(src)):
+        if not isinstance(fn, ast.FunctionDef) or fn.name == "test_no_circular_composer_vs_generator_check_is_reintroduced":
+            continue
+        names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}
+        attrs = {a.attr for a in ast.walk(fn) if isinstance(a, ast.Attribute)}
+        if (names & COMPOSERS) and ((names | attrs) & SNAPSHOTS):
+            offenders.append(fn.name)
+    assert not offenders, (
+        f"{offenders}: a composer-vs-generator-snapshot comparison was re-added. The `_arena_*_t_counts` "
+        "snapshots are populated BY the composer, so comparing compose_arena_*() against them is a "
+        "tautology that CANNOT FAIL — it is exactly how §1t reached production. The arena's independent "
+        "authority is test/test_shared_arena_covers_carve.py (launch macro vs the kernel's ACTUAL carve)."
     )
 
-    rung_truth = getattr(gen, "_arena_rung_t_counts", {})
-    rung_mismatches = []
-    for key in sorted(ARENA_RUNG_KEYS):
-        rungs = compose_arena_rungs(key, ctx)
-        if key in rung_truth and tuple(rungs) != tuple(rung_truth[key]):
-            rung_mismatches.append(f"  {key}: composer={tuple(rungs)} generator={tuple(rung_truth[key])}")
-    assert not rung_mismatches, (
-        f"arena rung composer disagrees on {robot_id}-{base_mode} "
-        f"(runtime_transform={runtime_transform}):\n" + "\n".join(rung_mismatches)
-    )
+
+# NOTE: the former `test_arena_ladder_matches_generator_record` was ALSO removed 2026-07-14. It compared
+# `compose_arena_rungs(k)` against the generator's `_arena_rung_t_counts[k]` — but that record is ALSO
+# composer-sourced (Step 3.4), so it was the same tautology on the rung ladders. Its only non-circular
+# content (ladder length / key composed-but-not-captured) is already covered by test_arena_ladder_invariants
+# and test_composed_keys_exclude_only_so_dispatch. The regression guard below forbids re-adding either
+# form (full OR rung).
 
 
 @pytest.mark.parametrize("robot_id,base_mode,runtime_transform", _MATRIX)

@@ -32,9 +32,25 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# (robot, floating) -- the matrix that actually exercises the spill ladders. go2-floating is the cell
-# that §1t blew up on; iiwa14 is the fixed-base control; fr3 carries the mimic fold.
-_CASES = [("iiwa14", False), ("go2", True), ("go2", False), ("fr3", False)]
+# (robot, floating, runtime_transform) -- the matrix that actually exercises the spill ladders.
+# go2-floating is the cell §1t blew up on; iiwa14 is the fixed-base control; fr3 carries the mimic fold.
+# The runtime_transform cells matter because rt reserves an EXTRA 36*NJ region in ~20 arenas -- that
+# reservation being dropped from either the macro or the carve is the §2 silent-under-size class, and
+# this test is now the only thing that would catch it in the emitted header.
+#
+# ★ THIS TEST IS THE ARENA'S INDEPENDENT AUTHORITY (see test_algo_descriptor_arena_parity.py's module
+#   docstring). The old composer-vs-generator "parity" check was a TAUTOLOGY -- the generator's snapshot
+#   is populated by the composer -- and it stayed green through the entire life of the §1t OOB. This test
+#   compares two genuinely independent things: the launch-sizing MACRO vs the regions the kernel actually
+#   CARVES. Keep it that way; do not re-source either side from the other.
+_CASES = [
+    ("iiwa14", False, False),
+    ("go2",    True,  False),
+    ("go2",    False, False),
+    ("fr3",    False, False),
+    ("iiwa14", False, True),    # rt: +36*NJ in ~20 arenas
+    ("go2",    True,  True),    # rt on the floating/branched cell -- the hardest one
+]
 
 # Regions the arena carves but that are NOT part of the T-count the macro reports (the macro accounts
 # for them separately, via its own topology/linalg arguments).
@@ -48,7 +64,7 @@ _MACRO_DEF = re.compile(r"\b(\w+)_DYNAMIC_SHARED_MEM_BYTES\s*\(\)")
 _ARENA_BYTES_CALL = re.compile(r"grid_shared_arena_bytes<T>\(\s*([0-9]+)\s*,")
 
 
-def _generate(robot_id: str, floating: bool, out: Path) -> Path:
+def _generate(robot_id: str, floating: bool, out: Path, runtime_transform: bool = False) -> Path:
     from URDFParser import URDFParser
     from GRiDCodeGenerator import GRiDCodeGenerator
     urdf = REPO_ROOT / "robot_assets" / f"{robot_id}.urdf"
@@ -59,7 +75,7 @@ def _generate(robot_id: str, floating: bool, out: Path) -> Path:
         if robot is None:
             pytest.skip(f"{robot_id} URDF parse failed")
         GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(
-            codegen_profile="all", output_path=str(out))
+            codegen_profile="all", output_path=str(out), runtime_transform=runtime_transform)
     return out
 
 
@@ -148,9 +164,9 @@ def _kernel_carves(text: str) -> list[tuple[str, int | None, int, int]]:
     return carves
 
 
-@pytest.mark.parametrize(("robot_id", "floating"), _CASES)
-def test_shared_mem_macro_covers_kernel_carve(robot_id, floating, tmp_path):
-    header = _generate(robot_id, floating, tmp_path / "grid.cuh")
+@pytest.mark.parametrize(("robot_id", "floating", "runtime_transform"), _CASES)
+def test_shared_mem_macro_covers_kernel_carve(robot_id, floating, runtime_transform, tmp_path):
+    header = _generate(robot_id, floating, tmp_path / "grid.cuh", runtime_transform)
     text = header.read_text()
     macros = _macro_tier_counts(text)
     carves = _kernel_carves(text)
@@ -182,5 +198,6 @@ def test_shared_mem_macro_covers_kernel_carve(robot_id, floating, tmp_path):
 
     assert checked >= 20, f"only matched {checked} kernel/tier pairs -- the naming convention drifted"
     assert not violations, (
-        f"{robot_id} ({'floating' if floating else 'fixed'}): shared arena under-counted for "
+        f"{robot_id} ({'floating' if floating else 'fixed'}, rt={runtime_transform}): "
+        f"shared arena under-counted for "
         f"{len(violations)} kernel/tier(s):\n  " + "\n  ".join(violations))
