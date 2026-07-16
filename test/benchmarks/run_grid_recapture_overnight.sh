@@ -23,7 +23,7 @@
 #   Phase 3 ANALYZE -- CPU only.
 #
 # RAM SAFETY (the thing that crashes the box):
-#   Big-robot SO monolithic TUs use ~24-36 GB of cicc EACH (see run_a1b_overnight.sh). On a 62 GB
+#   Big-robot SO monolithic TUs use ~24-36 GB of cicc EACH. On a 62 GB
 #   box that means g1 compiles STRICTLY ONE TU AT A TIME. iiwa14/go2 are small enough to overlap 2.
 #   Every compile runs GRID_COMPILE_WORKERS=1 --build-jobs 1 regardless.
 #

@@ -878,8 +878,6 @@ Existing entry points to extend:
   harness with the appropriate template-arg-specifying compile flag
   (TIER_SHARED default, TIER_LITE/MINIMAL via a new ``--resource-tier``
   passthrough on the GRiD harness).
-* ``test/benchmarks/run_overnight_sweep.sh`` — already wraps the
-  big runs; add the tiers parameter.
 * Each cell's ``try`` block in the runner needs to catch all
   ``Exception`` (including ``cudaError`` surfacing as Python
   exceptions, OOM, codegen failures, timeout) and write a placeholder

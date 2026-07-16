@@ -7,7 +7,7 @@
 # g1 SO translation unit is ~6-7 GB of cicc and can take 60+ min; h2_plus SO is
 # ~36 GB single-TU. Building those alongside everything else (or 8-way) spikes RAM
 # toward the 62 GB limit -> crashes VS Code -> tears down the snap.code cgroup ->
-# kills the sweep (see run_a1b_sweep.sh header + memory build_ram_so_compiles).
+# kills the sweep (see memory build_ram_so_compiles).
 #
 # So we split the sweep into two phases that NEVER share a compile:
 #

@@ -40,12 +40,12 @@ Figures stack these (compute + transfer + wrapper), mirroring the classic comput
   harness MAX_TIMESTEPS raised to 1024; binding needs `-DGRID_RBD_MAX_BATCH=1024` for layer 3.)
 - **GRiD config = autotuned best** (per-algo tier×threads from `autotune_best_<host>.json`), so
   GRiD is shown at its real best, not a default. The autotune fixed the FFI thread pathology.
-- **Build ≠ time.** Pre-compile all binaries (`build_all_for_recapture.sh`, `--compile-only`,
-  all tiers, RAM-safe `GRID_COMPILE_WORKERS=1`) BEFORE the timed run; the timed run is pure
+- **Build ≠ time.** Pre-compile all binaries (`--compile-only`, all tiers, RAM-safe
+  `GRID_COMPILE_WORKERS=1`) BEFORE the timed run; the timed run is pure
   `--no-recompile` on a quiet GPU, one capture at a time (no concurrent heavy CPU/GPU work).
 
 ## Pipeline
-1. `build_all_for_recapture.sh` — pre-compile GRiD harness (all tiers, N=1024) + pin into cache.
+1. Pre-compile the GRiD harness (all tiers, N=1024, `--compile-only`) + pin into cache.
 2. Timed competitor capture (quiet GPU, serial): `run_competitive_gpu_baselines.sh <dir>` —
    pin-codegen + mjx + frax + mujoco_warp + cuRobo (cuRobo = g1/fixed only), each through its
    own run.py, all sweeping N∈{16,32,64,128,256,1024}.
