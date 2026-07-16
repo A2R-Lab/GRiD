@@ -636,6 +636,77 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "gate": "GRID_HAS_INTEGRATOR_GRADIENT",
         "shared_mem_skip": "INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES",
     },
+    # --- Registry<->specs bijection completion (2026-07-16) ---
+    # These 7 keys each have a real benchmarkable kernel + host symbols (verified:
+    # <algo>{,_compute_only,_single_timing} + <ALGO>_DYNAMIC_SHARED_MEM_BYTES) but
+    # had no bench spec, so the wrapper printed "skipping algos missing a
+    # PER_ALGO_SPECS row" and could never time them. test_per_algo_specs_bijection
+    # now asserts set(PER_ALGO_SPECS) == {registry keys with a benchmarkable
+    # kernel}, so this cannot silently drift again -- the same HAS-vs-emission
+    # class that produced the f_ext_gradient_dq null-alloc bug. All 7 carry a
+    # GRID_HAS_* gate so a robot whose codegen omits the family compiles the TU
+    # out cleanly (never a link failure).
+    #   coriolis_matrix / *_energy_regressor : take the gravity arg (RNEA sweep).
+    #   dccrba / cmm_time_variation          : centroidal time-derivatives, NO gravity.
+    #   end_effector_pose{,_gradient}_runtime: runtime-target pose surfaces (emitted
+    #     only for runtime_transform builds), NO gravity; host mirrors end_effector_pose
+    #     with a trailing target_jid defaulted to the leaf-EE joint.
+    "coriolis_matrix": {
+        "single_call":        "grid::coriolis_matrix_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::coriolis_matrix<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::coriolis_matrix_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "batch_label": "CORIOLIS_MATRIX",
+        "gate": "GRID_HAS_CORIOLIS_MATRIX",
+        "shared_mem_skip": "CORIOLIS_MATRIX_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "dccrba": {
+        "single_call":        "grid::dccrba_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::dccrba<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::dccrba_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "DCCRBA",
+        "gate": "GRID_HAS_DCCRBA",
+        "shared_mem_skip": "DCCRBA_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "cmm_time_variation": {
+        "single_call":        "grid::cmm_time_variation_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::cmm_time_variation<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::cmm_time_variation_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "CMM_TIME_VARIATION",
+        "gate": "GRID_HAS_CMM_TIME_VARIATION",
+        "shared_mem_skip": "CMM_TIME_VARIATION_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "kinetic_energy_regressor": {
+        "single_call":        "grid::kinetic_energy_regressor_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::kinetic_energy_regressor<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::kinetic_energy_regressor_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "batch_label": "KINETIC_ENERGY_REGRESSOR",
+        "gate": "GRID_HAS_KINETIC_ENERGY_REGRESSOR",
+        "shared_mem_skip": "KINETIC_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "potential_energy_regressor": {
+        "single_call":        "grid::potential_energy_regressor_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::potential_energy_regressor<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::potential_energy_regressor_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "batch_label": "POTENTIAL_ENERGY_REGRESSOR",
+        "gate": "GRID_HAS_POTENTIAL_ENERGY_REGRESSOR",
+        "shared_mem_skip": "POTENTIAL_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "end_effector_pose_runtime": {
+        "single_call":        "grid::end_effector_pose_runtime_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::end_effector_pose_runtime<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::end_effector_pose_runtime_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "END_EFFECTOR_POSE_RUNTIME",
+        "gate": "GRID_HAS_END_EFFECTOR_POSE_RUNTIME",
+        "shared_mem_skip": "END_EFFECTOR_POSE_RUNTIME_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "end_effector_pose_gradient_runtime": {
+        "single_call":        "grid::end_effector_pose_gradient_runtime_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::end_effector_pose_gradient_runtime<float>(d,m,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::end_effector_pose_gradient_runtime_compute_only<float>(d,m,N,dim3(N,1,1),dimms)",
+        "batch_label": "END_EFFECTOR_POSE_GRADIENT_RUNTIME",
+        "gate": "GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME",
+        "shared_mem_skip": "END_EFFECTOR_POSE_GRADIENT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES",
+    },
 }
 
 
@@ -672,6 +743,18 @@ NON_PRODUCTION_ALGOS_BY_BASE: dict[str, frozenset[str]] = {
 MIMIC_UNSUPPORTED_ALGOS: frozenset[str] = frozenset()
 
 
+# Registry keys intentionally NOT benchmarked: has_kernel_attr=False composites
+# with no standalone benchmarkable host (no <algo>_single_timing / _compute_only).
+# Kept explicit so (a) the "missing spec row" warning below only fires on genuine
+# registry<->specs drift, and (b) test_per_algo_specs_bijection can assert this is
+# the COMPLETE exclusion set. Adding a new algo forces a choice: give it a
+# PER_ALGO_SPECS row (benchmarkable) or list it here with justification.
+#   integrator_hessian : plant_step_hessian composite (no standalone host)
+#   plant              : cost/constraint/step primitives (no single kernel)
+#   collision          : device-composite; a timing wrapper is separate staged work
+BENCH_EXCLUDED_ALGOS: frozenset[str] = frozenset({"integrator_hessian", "plant", "collision"})
+
+
 def _algo_keys_in_registry_order(floating_base: bool | None = None,
                                  has_mimic: bool | None = None) -> list[str]:
     """Return algo keys in ALGO_REGISTRY order, filtered to those in PER_ALGO_SPECS.
@@ -697,13 +780,14 @@ def _algo_keys_in_registry_order(floating_base: bool | None = None,
             continue
         if entry.key in PER_ALGO_SPECS:
             keys.append(entry.key)
-        else:
+        elif entry.key not in BENCH_EXCLUDED_ALGOS:
             missing.append(entry.key)
     if missing:
-        # Skip (don't hard-fail) algos that have no bench spec yet — e.g. the
-        # integrator family, whose host signature takes extra dt/IntegratorType
-        # args and needs custom buffer setup (a separate follow-up). Warn so the
-        # omission stays visible.
+        # A registry algo with a benchmarkable kernel lost its spec row (genuine
+        # drift). BENCH_EXCLUDED_ALGOS (integrator_hessian/plant/collision) are
+        # intentionally un-benchmarked and filtered out above, so anything that
+        # reaches here is a real gap — warn loudly. test_per_algo_specs_bijection
+        # is the hard gate; this warning catches it at sweep time too.
         print(f"  [grid] WARNING: skipping algos missing a PER_ALGO_SPECS row: {', '.join(missing)}",
               file=sys.stderr)
     return keys
