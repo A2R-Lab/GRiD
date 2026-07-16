@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import os
 import shutil
@@ -43,7 +44,15 @@ sys.path.insert(0, str(THIS_DIR))
 
 # Reuse the SINGLE source of truth + header generation from the existing harness -- do NOT duplicate.
 from baselines.grid import run as gridrun  # noqa: E402
-from timing_parser import parse_grid_output, build_metadata  # noqa: E402
+from timing_parser import parse_grid_output, build_metadata, fill_nulls, ALL_ALGOS  # noqa: E402
+
+# Autotune mode reuses run.py's picker VERBATIM (schema-2 algo_picks, tie-breaks, SASS tier-dedup,
+# one-level refinement) so the wrapper's picks are structurally identical to the monolithic path by
+# construction -- that is exactly what the Phase-2 gate checks. We only feed it a per-algo {tier: exe}
+# dict instead of one linked binary per tier; each solo exe emits just its own algo, so the picker's
+# _present_algos_in_binary / _sweep_one_binary / dedup all operate correctly on it.
+_AUTOTUNE_TIERS = gridrun.AUTOTUNE_TIERS                       # ("shared", "lite", "minimal")
+_TIER_MACRO = {"shared": None, "lite": "TIER_LITE", "minimal": "TIER_MINIMAL"}  # shared == default (no -D)
 
 
 # --------------------------------------------------------------------------- self-contained per-algo TU
@@ -112,28 +121,57 @@ def _wait_for_ram(min_gb: float, label: str) -> None:
 
 
 # --------------------------------------------------------------------------- compile + run one algo
-def _nvcc_cmd(src: Path, exe: Path, header_file: Path, arch: str) -> list[str]:
+def _tier_suffix(tier: str | None) -> str:
+    """Exe/src filename suffix for a resource tier. 'shared' (== the TIER_SHARED default) and None both
+    map to NO suffix, so the shared-tier autotune exe IS the timing exe -- the expensive SO-monster
+    compile is paid once and serves both the timing pass and the autotune 'shared' tier."""
+    return "" if tier in (None, "shared") else f"__tier_{tier}"
+
+
+def _nvcc_cmd(src: Path, exe: Path, header_file: Path, arch: str, tier: str | None = None) -> list[str]:
     nvcc = shutil.which("nvcc") or "nvcc"
-    return [
+    cmd = [
         nvcc, "-std=c++17", "-O3", f"-arch=sm_{arch}",
         "-I", str(header_file.parent), "-I", str(REPO_ROOT), "-I", str(THIS_DIR / "baselines" / "grid"),
         "-DGRID_HEADER_FILE=" + f'"{header_file}"',   # generate_header names it <robot>_<base>.cuh, not grid.cuh
-        "-o", str(exe), str(src),
     ]
+    macro = _TIER_MACRO.get(tier)
+    if macro is not None:   # shared == default => no flag (byte-identical to run.py's TIER_SHARED)
+        cmd.append(f"-DGRID_DEFAULT_RESOURCE_TIER={macro}")
+    cmd += ["-o", str(exe), str(src)]
+    return cmd
 
 
 def _compile_one(algo: str, build_dir: Path, header_file: Path, arch: str,
-                 ram_per_compile_gb: float) -> tuple[str, Path | None, str]:
-    """Write the algo's self-contained .cu and compile it to an .exe. Returns (algo, exe|None, log)."""
+                 ram_per_compile_gb: float, tier: str | None = None) -> tuple[str, Path | None, str]:
+    """Write the algo's self-contained .cu and compile it to an .exe. Returns (algo, exe|None, log).
+
+    The .cu is tier-independent (the resource tier is a compile-time -D flag, not source), so the source
+    text is shared across tiers -- only the .exe differs. `tier` selects the -DGRID_DEFAULT_RESOURCE_TIER
+    macro + the exe suffix; None/'shared' = the default tier (timing path)."""
+    sfx = _tier_suffix(tier)
     src = build_dir / f"solo_batch_{algo}.cu"
-    gridrun._write_if_changed(src, _solo_batch_tu_source(algo))
-    exe = build_dir / f"solo_batch_{algo}.exe"
-    _wait_for_ram(ram_per_compile_gb, f"compile {algo}")
+    src_txt = _solo_batch_tu_source(algo)
+    gridrun._write_if_changed(src, src_txt)
+    exe = build_dir / f"solo_batch_{algo}{sfx}.exe"
+    stamp = build_dir / f"solo_batch_{algo}{sfx}.stamp"
+    # CONTENT-keyed compile cache. generate_header rewrites the .cuh (fresh mtime) on EVERY run -- even
+    # on a content cache-hit -- so mtime is unreliable. Key on (source text + tier flag + header bytes)
+    # instead. This makes the autotune 'shared' tier reuse the timing pass's suffix-less exe (no double
+    # ~355s compile), makes a resumed sweep cheap, and can't be fooled by mtime churn. The exe path
+    # encodes the tier via `sfx`, so tiers never alias.
+    key = hashlib.sha1(
+        (src_txt + "\0" + str(_TIER_MACRO.get(tier)) + "\0" + header_file.read_text()).encode()
+    ).hexdigest()
+    if exe.exists() and stamp.exists() and stamp.read_text().strip() == key:
+        return algo, exe, "cache hit (content stamp match)"
+    _wait_for_ram(ram_per_compile_gb, f"compile {algo}{sfx}")
     t0 = time.monotonic()
-    proc = subprocess.run(_nvcc_cmd(src, exe, header_file, arch), capture_output=True, text=True)
+    proc = subprocess.run(_nvcc_cmd(src, exe, header_file, arch, tier), capture_output=True, text=True)
     dt = time.monotonic() - t0
     if proc.returncode != 0:
         return algo, None, f"COMPILE FAILED rc={proc.returncode} ({dt:.0f}s):\n{proc.stderr[-2000:]}"
+    stamp.write_text(key)
     return algo, exe, f"compiled ({dt:.0f}s)"
 
 
@@ -162,12 +200,169 @@ def _run_one(algo: str, exe: Path, base: str, timeout_s: float) -> tuple[str, di
     return algo, {}, "gated", "gated out of this header (no rows) -- normal, not a failure"
 
 
+# --------------------------------------------------------------------------- compile / run fan-out
+def _compile_algos(algos: list[str], build_dir: Path, header: Path, arch: str,
+                   ram_per_compile_gb: float, jobs: int, tier: str | None = None) -> dict[str, Path]:
+    """Compile each algo's solo exe for `tier`, RAM-guarded parallel. Returns {algo: exe}."""
+    exes: dict[str, Path] = {}
+    label = _tier_suffix(tier) or "(shared)"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        futs = {pool.submit(_compile_one, a, build_dir, header, arch, ram_per_compile_gb, tier): a
+                for a in algos}
+        for fut in concurrent.futures.as_completed(futs):
+            algo, exe, log = fut.result()
+            print(f"  [compile{label}] {algo}: {log.splitlines()[0]}")
+            if exe is not None:
+                exes[algo] = exe
+            else:
+                print(log)
+    return exes
+
+
+def _run_isolated(algos: list[str], exes: dict[str, Path], base: str,
+                  timeout_s: float) -> tuple[dict, list[str], list[str]]:
+    """Run each algo's exe ISOLATED, serially (timing must not overlap on the GPU). Crashes are
+    contained + attributed. Returns (results, gated, crashed)."""
+    results: dict[str, dict] = {}
+    crashed: list[str] = []
+    gated: list[str] = []
+    for algo in algos:
+        if algo not in exes:
+            crashed.append(f"{algo}(compile)")
+            print(f"  [run] {algo}: SKIPPED (compile failed)")
+            continue
+        a, got, status, log = _run_one(algo, exes[algo], base, timeout_s)
+        print(f"  [run] {a}: {log.splitlines()[0]}")
+        if status == "ok":
+            results.update(got)
+        elif status == "gated":
+            gated.append(a)
+        else:
+            crashed.append(f"{a}({status})")
+    return results, gated, crashed
+
+
+# --------------------------------------------------------------------------- autotune (tier x threads)
+def _run_autotune(algos: list[str], build_dir: Path, header: Path, arch: str, base: str,
+                  ram_per_compile_gb: float, jobs: int, *, thread_grid: tuple[int, ...],
+                  autotune_N: int, tiers: tuple[str, ...]) -> dict[str, dict]:
+    """Build each algo's {tier: solo_exe} set and run run.py's picker VERBATIM on it -> schema-2
+    algo_picks[algo] (tier_optimal/threads_optimal/us_at_optimal/sweep/sweep_us[/tier_equiv_to]).
+
+    The 'shared' tier reuses the suffix-less timing exe (no -D flag), so the expensive SO-monster
+    compile is paid once. Each solo exe emits only its own algo, so the picker's SASS tier-dedup,
+    thread sweep + one-level refinement all operate correctly per-algo. The picker runs the exes
+    SERIALLY within an algo, and we loop algos serially -- so no two timing launches overlap."""
+    max_perf = gridrun._read_max_perf_level_threads(header)
+    print(f"[autotune] MAX_PERF_LEVEL_THREADS={max_perf} | tiers={list(tiers)} | N={autotune_N} "
+          f"| thread grid={list(thread_grid)}")
+    # Compile every (algo, tier) exe up front, one tier at a time so a tier's SO-monster compiles
+    # finish + free RAM before the next tier starts (RAM-guarded within each tier too).
+    tier_exes: dict[str, dict[str, Path]] = {}
+    for tier in tiers:
+        print(f"[autotune] compiling tier={tier} for {len(algos)} algos...")
+        tier_exes[tier] = _compile_algos(algos, build_dir, header, arch, ram_per_compile_gb, jobs, tier)
+
+    algo_picks: dict[str, dict] = {}
+    for algo in algos:
+        binaries = {t: tier_exes[t][algo] for t in tiers if algo in tier_exes.get(t, {})}
+        if not binaries:
+            print(f"  [autotune] {algo}: no tier exe built -- skipped")
+            continue
+        picks = gridrun._autotune_pick_winners(
+            binaries, base, thread_grid=thread_grid, autotune_N=autotune_N,
+            max_perf_level_threads=max_perf, mode="batch")
+        if algo in picks:
+            algo_picks[algo] = picks[algo]
+            p = picks[algo]
+            print(f"  [autotune] {algo}: tier={p['tier_optimal']} threads={p['threads_optimal']} "
+                  f"us={p['us_at_optimal']:.3f}"
+                  + (f" (tier_equiv {p['tier_equiv_to']})" if "tier_equiv_to" in p else ""))
+        else:
+            print(f"  [autotune] {algo}: no readings at any (tier,threads) -- omitted")
+    return algo_picks
+
+
+def _repick_from_sweep(pick: dict) -> dict:
+    """Re-derive (tier_optimal, threads_optimal, us_at_optimal, sweep_us) from a saved pick['sweep']
+    grid WITHOUT re-timing -- the cheap --stage analyze path. Uses run.py's argmin so the tie-break
+    (first-encountered on ties) matches the sweep-time pick exactly."""
+    by_tier = {t: {int(th): float(us) for th, us in s.items()}
+               for t, s in pick.get("sweep", {}).items()}
+    best = gridrun._argmin_tier_threads(by_tier)
+    if best is None:
+        return pick
+    wtier, wthreads, wus = best
+    pick["tier_optimal"] = wtier
+    pick["threads_optimal"] = int(wthreads)
+    pick["us_at_optimal"] = float(wus)
+    pick["sweep_us"] = {str(int(th)): float(us) for th, us in sorted(by_tier.get(wtier, {}).items())}
+    return pick
+
+
+def _emit_tier_analysis(robot: str, base: str, algo_picks: dict[str, dict]) -> str:
+    """Markdown tier-comparison table from the autotune sweeps: best-achievable us per tier (min over
+    the thread sweep) + lite/minimal-vs-shared ratios. Salvages analyze_tier_sweep.py's ratio table
+    onto the autotune data so that orphan analyzer can be retired."""
+    def best(by_tier: dict, tier: str):
+        s = by_tier.get(tier)
+        return min(s.values()) if s else None
+
+    def ratio(num, den):
+        return f"{num / den:.2f}x" if (num is not None and den not in (None, 0)) else "—"
+
+    def fmt(v):
+        return f"{v:.2f}" if v is not None else "—"
+
+    lines = [
+        f"# Autotune tier analysis — {robot}-{base}", "",
+        f"Best-achievable us per tier (min over the thread sweep at N={gridrun.DEFAULT_AUTOTUNE_N}); "
+        "ratios are tier/shared (>1.0 = tier slower). `opt` = the joint (tier, threads) argmin.", "",
+        "| Algo | opt tier | opt thr | opt us | shared | lite | minimal | lite/shd | min/shd |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    for algo in sorted(algo_picks):
+        p = algo_picks[algo]
+        by_tier = {t: {int(th): float(us) for th, us in s.items()}
+                   for t, s in p.get("sweep", {}).items()}
+        sh, li, mi = best(by_tier, "shared"), best(by_tier, "lite"), best(by_tier, "minimal")
+        lines.append(
+            f"| {algo} | {p.get('tier_optimal', '—')} | {p.get('threads_optimal', '—')} | "
+            f"{fmt(p.get('us_at_optimal'))} | {fmt(sh)} | {fmt(li)} | {fmt(mi)} | "
+            f"{ratio(li, sh)} | {ratio(mi, sh)} |")
+    return "\n".join(lines) + "\n"
+
+
 # --------------------------------------------------------------------------- orchestrate
+def _report_run(results: dict, gated: list[str], crashed: list[str], out: Path) -> None:
+    print(f"\n[per-algo] {len(results)} timed | {len(gated)} gated-out | {len(crashed)} FAILED")
+    if gated:
+        print(f"[per-algo] gated out of this header (normal): {gated}")
+    print(f"[per-algo] wrote {out}")
+    # A failure does NOT fail the whole run (that is the point) -- but surface it loudly for triage.
+    if crashed:
+        print(f"[per-algo] ⚠ {len(crashed)} algo(s) FAILED (isolated, attributed): {crashed}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--robot", required=True)
     ap.add_argument("--base", required=True, choices=["fixed", "floating"])
     ap.add_argument("--output", type=Path, default=None)
+    ap.add_argument("--mode", choices=["timing", "autotune"], default="timing",
+                    help="timing = plain N-sweep (default, unchanged); autotune = tier x thread sweep "
+                         "producing schema-2 algo_picks (+ the grid timing block)")
+    ap.add_argument("--stage", choices=["sweep", "analyze", "both"], default="both",
+                    help="autotune only: sweep = build+time+write (needs a quiet GPU); analyze = re-pick "
+                         "from an EXISTING sweep JSON + emit the tier table, NO timing (CPU-only); "
+                         "both = sweep then analyze")
+    ap.add_argument("--autotune-N", type=int, default=gridrun.DEFAULT_AUTOTUNE_N,
+                    help="batch size the autotune minimizes over (default 256)")
+    ap.add_argument("--tiers", type=str, default=None,
+                    help="comma-separated resource tiers for autotune (default: shared,lite,minimal)")
+    ap.add_argument("--thread-grid", type=str, default=None,
+                    help="comma-separated thread counts for the autotune sweep (default: run.py's grid)")
+    ap.add_argument("--analysis-output", type=Path, default=None, help="tier-analysis markdown path")
     ap.add_argument("--compile-jobs", type=int, default=0,
                     help="max concurrent compiles (0 = auto from RAM headroom)")
     ap.add_argument("--ram-per-compile-gb", type=float, default=8.0,
@@ -180,6 +375,28 @@ def main() -> None:
 
     build_dir = args.build_dir or (THIS_DIR / "results" / f"per_algo_{args.robot}_{args.base}")
     build_dir.mkdir(parents=True, exist_ok=True)
+    tiers = tuple(t.strip() for t in args.tiers.split(",")) if args.tiers else _AUTOTUNE_TIERS
+    thread_grid = (tuple(int(t) for t in args.thread_grid.split(","))
+                   if args.thread_grid else gridrun.DEFAULT_AUTOTUNE_THREAD_GRID)
+
+    # ---- analyze-only fast path: re-pick from a saved sweep + emit the tier table. NO nvcc/GPU/header
+    # (the whole point of --stage analyze: re-analyze a completed overnight sweep cheaply). ----
+    if args.mode == "autotune" and args.stage == "analyze":
+        out = args.output or (build_dir / f"{args.robot}_{args.base}_grid_glass.json")
+        if not out.exists():
+            sys.exit(f"[analyze] no sweep JSON at {out} -- run --stage sweep first")
+        payload = json.loads(out.read_text())
+        block = payload["results"][args.robot][args.base]
+        algo_picks = block.get("algo_picks", {})
+        for a in algo_picks:
+            _repick_from_sweep(algo_picks[a])
+        out.write_text(json.dumps(payload, indent=1))
+        print(f"[analyze] re-picked {len(algo_picks)} algo(s) from saved sweeps -> {out}")
+        md_path = args.analysis_output or (build_dir / f"{args.robot}_{args.base}_tier_analysis.md")
+        md_path.write_text(_emit_tier_analysis(args.robot, args.base, algo_picks))
+        print(f"[analyze] wrote {md_path}")
+        return
+
     floating = args.base == "floating"
 
     # 1. Generate the header ONCE (reuse the harness path -> same header the monolithic bench uses).
@@ -198,54 +415,56 @@ def main() -> None:
     print(f"[per-algo] {len(algos)} algos in scope: {', '.join(algos)}")
 
     jobs = args.compile_jobs or max(1, int(_ram_avail_gb() / args.ram_per_compile_gb))
-    print(f"[per-algo] compiling with up to {jobs} parallel job(s) (RAM guard {args.ram_per_compile_gb:.0f} GB/compile)")
+    print(f"[per-algo] mode={args.mode} | compiling with up to {jobs} parallel job(s) "
+          f"(RAM guard {args.ram_per_compile_gb:.0f} GB/compile)")
 
-    # 2. COMPILE each algo to its own exe, RAM-guarded parallel.
-    exes: dict[str, Path] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
-        futs = {pool.submit(_compile_one, a, build_dir, header, arch, args.ram_per_compile_gb): a
-                for a in algos}
-        for fut in concurrent.futures.as_completed(futs):
-            algo, exe, log = fut.result()
-            print(f"  [compile] {algo}: {log.splitlines()[0]}")
-            if exe is not None:
-                exes[algo] = exe
-            else:
-                print(log)
+    # === TIMING MODE (default, unchanged) ===================================================
+    if args.mode == "timing":
+        exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs)
+        results, gated, crashed = _run_isolated(algos, exes, args.base, args.per_exe_timeout)
+        out = args.output or (build_dir / f"{args.robot}_{args.base}_grid_per_algo.json")
+        payload = {
+            "metadata": {**build_metadata(include_gpu=True), "robot": args.robot, "base": args.base,
+                         "bench_path": "per_algo_isolated"},
+            "results": {args.robot: {args.base: {"grid": results}}},
+        }
+        out.write_text(json.dumps(payload, indent=1))
+        _report_run(results, gated, crashed, out)
+        return
 
-    # 3. RUN each exe ISOLATED, serially (timing must not overlap on the GPU). Crashes are contained.
-    results: dict[str, dict] = {}
-    crashed: list[str] = []   # real failures (compile/crash/timeout) -- attributed, sweep continues
-    gated: list[str] = []     # gated out of this header -- normal
-    for algo in algos:
-        if algo not in exes:
-            crashed.append(f"{algo}(compile)")
-            print(f"  [run] {algo}: SKIPPED (compile failed)")
-            continue
-        a, got, status, log = _run_one(algo, exes[algo], args.base, args.per_exe_timeout)
-        print(f"  [run] {a}: {log.splitlines()[0]}")
-        if status == "ok":
-            results.update(got)
-        elif status == "gated":
-            gated.append(a)
-        else:
-            crashed.append(f"{a}({status})")
+    # === AUTOTUNE MODE (stage sweep|both) ===================================================
+    # Timing pass first (the 'grid' block) -- the SHARED-tier exes double as the autotune 'shared'
+    # tier (suffix-less, no -D flag), so the expensive SO-monster compile is paid once.
+    print("[autotune] --- timing pass (grid block) ---")
+    exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs)
+    results, gated, crashed = _run_isolated(algos, exes, args.base, args.per_exe_timeout)
+    filled = fill_nulls(dict(results))   # ensure the ALL_ALGOS core keys exist as null when un-run
 
-    # 4. Assemble the results JSON in the SAME schema run.py writes.
-    out = args.output or (build_dir / f"{args.robot}_{args.base}_grid_per_algo.json")
-    payload = {
-        "metadata": {**build_metadata(include_gpu=True), "robot": args.robot, "base": args.base,
-                     "bench_path": "per_algo_isolated"},
-        "results": {args.robot: {args.base: {"grid": results}}},
-    }
+    print("[autotune] --- tier x thread pass (algo_picks) ---")
+    algo_picks = _run_autotune(algos, build_dir, header, arch, args.base,
+                               args.ram_per_compile_gb, jobs, thread_grid=thread_grid,
+                               autotune_N=args.autotune_N, tiers=tiers)
+
+    # Assemble the run.py-faithful autotune payload: results[robot][base] = {"grid": filled,
+    # "algo_picks": {...}} with a schema-2 autotune_threads metadata block. Column key stays "grid"
+    # exactly as run.py emits it; the grid->grid_glass RENAME is run_multi_version._rename_grid_key's
+    # job when this is wired into the hub (Phase 3). Default filename is the grid_glass name the
+    # autotune consumers glob (build_autotune_matrix / sweep_to_autotune_best).
+    meta = {**build_metadata(include_gpu=True), "robot": args.robot, "base": args.base,
+            "bench_path": "per_algo_isolated",
+            "autotune_threads": {"thread_grid": list(thread_grid), "autotune_N": int(args.autotune_N),
+                                 "mode": "batch", "tiers": list(tiers), "schema": 2}}
+    out = args.output or (build_dir / f"{args.robot}_{args.base}_grid_glass.json")
+    payload = {"metadata": meta,
+               "results": {args.robot: {args.base: {"grid": filled, "algo_picks": algo_picks}}}}
     out.write_text(json.dumps(payload, indent=1))
-    print(f"\n[per-algo] {len(results)} timed | {len(gated)} gated-out | {len(crashed)} FAILED")
-    if gated:
-        print(f"[per-algo] gated out of this header (normal): {gated}")
-    print(f"[per-algo] wrote {out}")
-    # A failure does NOT fail the whole run (that is the point) -- but surface it loudly for triage.
-    if crashed:
-        print(f"[per-algo] ⚠ {len(crashed)} algo(s) FAILED (isolated, attributed): {crashed}")
+    _report_run(results, gated, crashed, out)
+    print(f"[autotune] {len(algo_picks)} algo_picks written")
+
+    if args.stage == "both":
+        md_path = args.analysis_output or (build_dir / f"{args.robot}_{args.base}_tier_analysis.md")
+        md_path.write_text(_emit_tier_analysis(args.robot, args.base, algo_picks))
+        print(f"[autotune] wrote {md_path}")
 
 
 if __name__ == "__main__":
