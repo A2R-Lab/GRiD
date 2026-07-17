@@ -371,6 +371,10 @@ def main() -> None:
     ap.add_argument("--ram-per-compile-gb", type=float, default=8.0,
                     help="assumed RAM per nvcc; the RAM guard blocks a new compile below this free")
     ap.add_argument("--per-exe-timeout", type=float, default=900.0)
+    ap.add_argument("--compile-only", action="store_true",
+                    help="build the per-(algo[,tier]) exes and exit WITHOUT timing (the hub's build "
+                         "phase). A later run cache-hits every exe (content stamp), so measurement is "
+                         "pure timing on a quiet GPU -- the 'build != time' methodology.")
     ap.add_argument("--build-dir", type=Path, default=None)
     ap.add_argument("--algos", type=str, default=None,
                     help="comma-separated subset of algos to build/run (default: all in scope)")
@@ -420,6 +424,19 @@ def main() -> None:
     jobs = args.compile_jobs or max(1, int(_ram_avail_gb() / args.ram_per_compile_gb))
     print(f"[per-algo] mode={args.mode} | compiling with up to {jobs} parallel job(s) "
           f"(RAM guard {args.ram_per_compile_gb:.0f} GB/compile)")
+
+    # --compile-only: the hub's BUILD phase. Build the needed exes and exit; a later run cache-hits
+    # every one (content stamp), so measurement is pure timing on a quiet GPU.
+    if args.compile_only:
+        if args.mode == "timing":
+            _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier=args.tier)
+            what = f"tier {args.tier or 'shared'}"
+        else:  # autotune: pre-build every tier so the measure run compiles nothing
+            for tier in tiers:
+                _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier)
+            what = f"tiers {','.join(tiers)}"
+        print(f"[per-algo] --compile-only: exes built for {what}; skipping timing")
+        return
 
     # === TIMING MODE (default) ==============================================================
     # --tier selects the resource tier (default None == shared == no -D flag, the original path).
