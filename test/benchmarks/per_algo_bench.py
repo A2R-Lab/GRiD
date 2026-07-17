@@ -360,6 +360,9 @@ def main() -> None:
                     help="batch size the autotune minimizes over (default 256)")
     ap.add_argument("--tiers", type=str, default=None,
                     help="comma-separated resource tiers for autotune (default: shared,lite,minimal)")
+    ap.add_argument("--tier", type=str, default=None, choices=["shared", "lite", "minimal"],
+                    help="timing mode only: compile+time at this resource tier (default: shared). Lets "
+                         "run_multi_version drive per-tier timing columns through the wrapper.")
     ap.add_argument("--thread-grid", type=str, default=None,
                     help="comma-separated thread counts for the autotune sweep (default: run.py's grid)")
     ap.add_argument("--analysis-output", type=Path, default=None, help="tier-analysis markdown path")
@@ -418,14 +421,15 @@ def main() -> None:
     print(f"[per-algo] mode={args.mode} | compiling with up to {jobs} parallel job(s) "
           f"(RAM guard {args.ram_per_compile_gb:.0f} GB/compile)")
 
-    # === TIMING MODE (default, unchanged) ===================================================
+    # === TIMING MODE (default) ==============================================================
+    # --tier selects the resource tier (default None == shared == no -D flag, the original path).
     if args.mode == "timing":
-        exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs)
+        exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier=args.tier)
         results, gated, crashed = _run_isolated(algos, exes, args.base, args.per_exe_timeout)
         out = args.output or (build_dir / f"{args.robot}_{args.base}_grid_per_algo.json")
         payload = {
             "metadata": {**build_metadata(include_gpu=True), "robot": args.robot, "base": args.base,
-                         "bench_path": "per_algo_isolated"},
+                         "bench_path": "per_algo_isolated", "resource_tier": args.tier or "shared"},
             "results": {args.robot: {args.base: {"grid": results}}},
         }
         out.write_text(json.dumps(payload, indent=1))
