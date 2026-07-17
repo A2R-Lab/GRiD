@@ -676,8 +676,13 @@ def _build_grid_binaries(grid_columns, robots, bases, tiers, *, build_jobs,
                                 compile_workers=per_task_workers)
         else:
             # glass BUILD phase: pre-compile this tier's per-algo exes via the wrapper (--compile-only).
-            # The measure phase then cache-hits every one (content stamp) -> pure timing on a quiet GPU.
-            cmd = _wrapper_run_cmd(robot, base, scratch, tier=tier, build_dir=bdir,
+            # NB: the wrapper's content cache is LOCAL to its build-dir (unlike run.py's global cache), so
+            # we do NOT pass --build-dir here -- both the build and measure phases fall through to the
+            # wrapper's stable default (results/per_algo_<robot>_<base>), sharing the cache so the measure
+            # phase cache-hits. (Tasks for distinct (robot,base) use distinct default dirs; only same-
+            # (robot,base) different-tier build tasks share a dir, and their .cu is identical + their exes
+            # differ by tier suffix, so the concurrent writes are benign.)
+            cmd = _wrapper_run_cmd(robot, base, scratch, tier=tier,
                                    compile_only=True, compile_workers=per_task_workers)
         t0 = datetime.now()
         r = subprocess.run(cmd, capture_output=True, text=True)
