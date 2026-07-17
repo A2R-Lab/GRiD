@@ -294,6 +294,42 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
     return cmd
 
 
+def _wrapper_run_cmd(robot: str, base: str, output: Path, *,
+                     tier: str | None = None, build_dir: Path | None = None,
+                     compile_only: bool = False, compile_workers: int | None = None,
+                     autotune_threads: bool = False,
+                     autotune_thread_grid: str | None = None,
+                     autotune_N: int | None = None) -> list[str]:
+    """per_algo_bench.py command for the GRiD 'glass' column (the per-exe cutover).
+
+    Replaces the monolithic run.py path: RAM-safe (small per-algo TUs, no 24-36 GB monolith), crash-
+    isolated (one algo's failure can't nuke the sweep), broader coverage (full registry vs the monolith's
+    17). Downstream is UNCHANGED -- the wrapper emits results[robot][base]={'grid':...[,'algo_picks':...]},
+    which _rename_grid_key turns into grid_glass exactly as run.py's output does. run.py-only compile-tuning
+    flags (--no-rdc / --ptxas-opt-level / --single-timing / --batch-iters / ...) are intentionally dropped:
+    the wrapper owns its compile path + content-keyed cache (so the measure phase needs no --no-recompile)."""
+    cmd = [sys.executable, "-u",
+           str(REPO_ROOT / "test" / "benchmarks" / "per_algo_bench.py"),
+           "--robot", robot, "--base", base, "--output", str(output)]
+    if build_dir is not None:
+        cmd += ["--build-dir", str(build_dir)]
+    if compile_workers is not None:
+        cmd += ["--compile-jobs", str(compile_workers)]
+    if compile_only:
+        cmd.append("--compile-only")
+    if autotune_threads:
+        cmd += ["--mode", "autotune", "--stage", "sweep"]
+        if autotune_N is not None:
+            cmd += ["--autotune-N", str(autotune_N)]
+        if autotune_thread_grid is not None:
+            cmd += ["--thread-grid", autotune_thread_grid]
+    else:
+        cmd += ["--mode", "timing"]
+        if tier is not None and tier not in ("shared", "perf"):
+            cmd += ["--tier", tier]
+    return cmd
+
+
 def run_grid_column(column: str, robot: str, base: str, *,
                     output_dir: Path, worktree_path: Path,
                     no_recompile: bool,
@@ -329,18 +365,13 @@ def run_grid_column(column: str, robot: str, base: str, *,
         cmd = _grid_run_cmd(worktree_path, robot, base, output, ee_frame,
                             no_recompile=no_recompile)
     elif column == "glass":
-        effective_ptxas = ptxas_opt_level if base == "floating" else None
-        cmd = _grid_run_cmd(REPO_ROOT, robot, base, output, ee_frame,
-                            no_recompile=no_recompile, no_rdc=no_rdc,
-                            no_licm_barrier=no_licm_barrier,
-                            single_call_iters=single_call_iters, batch_iters=batch_iters,
-                            ptxas_opt_level=effective_ptxas,
-                            split_compile=split_compile, ofast_compile=ofast_compile,
-                            tier=tier,
-                            autotune_threads=autotune_threads,
-                            autotune_thread_grid=autotune_thread_grid,
-                            autotune_N=autotune_N,
-                            single_timing=single_timing)
+        # Per-exe cutover: the glass column is driven by per_algo_bench (RAM-safe, crash-isolated,
+        # full-registry coverage) instead of the monolithic run.py path. Measure phase compiles nothing
+        # (content-cache hits from the BUILD phase). pre_glass stays on its frozen worktree run.py below.
+        cmd = _wrapper_run_cmd(robot, base, output, tier=tier,
+                               autotune_threads=autotune_threads,
+                               autotune_thread_grid=autotune_thread_grid,
+                               autotune_N=autotune_N)
     else:
         raise ValueError(f"Unknown grid column: {column}")
 
@@ -644,16 +675,10 @@ def _build_grid_binaries(grid_columns, robots, bases, tiers, *, build_jobs,
                                 no_recompile=False, build_dir=bdir, compile_only=True,
                                 compile_workers=per_task_workers)
         else:
-            effective_ptxas = ptxas_opt_level if base == "floating" else None
-            cmd = _grid_run_cmd(harness_root, robot, base, scratch, ee_frame,
-                                no_recompile=False, no_rdc=no_rdc,
-                                no_licm_barrier=no_licm_barrier,
-                                single_call_iters=single_call_iters, batch_iters=batch_iters,
-                                ptxas_opt_level=effective_ptxas,
-                                split_compile=split_compile, ofast_compile=ofast_compile,
-                                tier=tier, build_dir=bdir, compile_only=True,
-                                compile_workers=per_task_workers,
-                                single_timing=single_timing)
+            # glass BUILD phase: pre-compile this tier's per-algo exes via the wrapper (--compile-only).
+            # The measure phase then cache-hits every one (content stamp) -> pure timing on a quiet GPU.
+            cmd = _wrapper_run_cmd(robot, base, scratch, tier=tier, build_dir=bdir,
+                                   compile_only=True, compile_workers=per_task_workers)
         t0 = datetime.now()
         r = subprocess.run(cmd, capture_output=True, text=True)
         dur = (datetime.now() - t0).total_seconds()
