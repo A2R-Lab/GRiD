@@ -41,6 +41,15 @@ URDFS = {
 CUDA_ARCH = "120"
 NVCC = "/usr/local/cuda/bin/nvcc"
 
+# The per-exe bench cutover retired HEAD's monolithic timeGRiD_batch.cu. A per_algo_bench solo TU is an
+# equivalent ptxas -v driver (it instantiates every kernel via init_grid_kernel_attrs). Materialize one for
+# the HEAD_glass variant; the pre_glass variant still uses its frozen worktree's timeGRiD.cu, unchanged.
+HEAD_BENCH_DIR = HEAD_REPO / "test/benchmarks/baselines/grid"
+sys.path.insert(0, str(HEAD_REPO / "test/benchmarks"))
+from per_algo_bench import _solo_batch_tu_source  # noqa: E402
+_HEAD_DRIVER = Path("/tmp/glass_vs_pre_glass_head_driver.cu")
+_HEAD_DRIVER.write_text(_solo_batch_tu_source("inverse_dynamics"))
+
 
 def gen_grid_cuh(repo: Path, robot: str, urdf: Path, out_dir: Path) -> None:
     """Run codegen using the given repo's URDFParser + GRiDCodeGenerator."""
@@ -74,6 +83,7 @@ def compile_ptxas_v(grid_cuh: Path, batch_cu: Path, glass_root: Path | None,
         f"-gencode=arch=compute_{CUDA_ARCH},code=sm_{CUDA_ARCH}",
         "-O3", "-ftz=true", "-prec-div=false", "-prec-sqrt=false",
         f"-I{batch_cu.parent}",
+        f"-I{HEAD_BENCH_DIR}",   # timeGRiD_common.h for the HEAD solo driver (pre_glass -I wins for its own)
         f"-I{grid_cuh.parent}",
         "-Xptxas", "-v",
         "-Wno-deprecated-gpu-targets",
@@ -181,7 +191,7 @@ def main():
         for variant_name, repo, batch_cu, linalg in [
             ("HEAD_glass",
              HEAD_REPO,
-             HEAD_REPO / "test/benchmarks/baselines/grid/timeGRiD_batch.cu",
+             _HEAD_DRIVER,
              "glass"),
             ("pre_glass",
              PRE_GLASS_REPO,

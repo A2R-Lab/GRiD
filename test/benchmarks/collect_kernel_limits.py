@@ -61,12 +61,16 @@ from test.benchmarks.baselines.grid.run import (  # noqa: E402
     _algo_keys_in_registry_order,
     _read_max_perf_level_threads,
     _tier_thread_cap,
-    build_tier_binaries,
     detect_cuda_arch,
     generate_header,
     get_urdf_path,
     robot_is_mimic,
 )
+# per_algo_bench builds a self-contained solo exe per (algo, tier). Each solo exe LINKS ALL kernels
+# (via init_grid_kernel_attrs in run_all_tests), so cuobjdump -res-usage on ONE solo exe per tier yields
+# every algo's register count -- exactly what collect_regs_and_max_threads needs. This replaces the old
+# run.py per-algo-tus dispatcher (build_tier_binaries), deleted in the per-exe bench cutover.
+from test.benchmarks import per_algo_bench as pab  # noqa: E402
 
 # Tier name -> grid.cuh enum int (grid::TIER_SHARED=0, TIER_LITE=1, TIER_MINIMAL=2).
 TIER_ENUM: dict[str, str] = {
@@ -357,18 +361,19 @@ def main() -> None:
         header_path, algos, tiers, arch=arch, build_dir=build_dir, nvcc=nvcc,
     )
 
-    # 3) num_regs + max_threads — from the per-tier bench batch binaries (cache
-    #    hits if the sweep already built them; mode='batch' matches the sweep).
-    print("[limits] building/cache-hitting per-tier bench binaries ...")
-    tier_binaries = build_tier_binaries(
-        header_path, arch, build_dir, base=args.base, mode="batch",
-        tiers=tiers,
-        no_recompile=args.no_recompile, no_rdc=False,
-        single_call_iters=None, batch_iters=None,
-        ptxas_opt_level=None, split_compile=None, ofast_compile=None,
-        per_algo_tus=True, compile_workers=None,
-        floating_base=floating_base, has_mimic=has_mimic,
-    )
+    # 3) num_regs + max_threads — from one per-tier solo exe. Each solo exe links every kernel, so a
+    #    single cuobjdump per tier reads all algos' registers (content-stamp cache -> hits the sweep's
+    #    exes if per_algo_bench already built them for this robot/base/tier).
+    print("[limits] building/cache-hitting one per-tier solo exe (all kernels linked) ...")
+    ram_gb = float(os.environ.get("GRID_RAM_PER_COMPILE_GB", "8"))
+    rep_algo = algos[0]   # any in-scope algo: its solo exe links the full kernel set regardless
+    tier_binaries: dict[str, Path] = {}
+    for tier in tiers:
+        _, exe, log = pab._compile_one(rep_algo, build_dir, header_path, arch, ram_gb, tier=tier)
+        if exe is not None:
+            tier_binaries[tier] = exe
+        else:
+            print(f"[limits] WARN: tier {tier} solo exe build failed: {log}", file=sys.stderr)
     if not tier_binaries:
         print("[limits] WARN: no per-tier bench binary available; "
               "num_regs/max_threads will fall back to launch-bounds caps only",

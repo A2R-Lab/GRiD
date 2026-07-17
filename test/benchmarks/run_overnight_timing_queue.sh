@@ -119,8 +119,12 @@ for cell in "iiwa14 fixed" "go2 floating"; do
   for variant in baked runtime-inertia runtime-transform runtime-joint-dynamics; do
     flag=""; [ "$variant" = "baked" ] || flag="--$variant"
     say "  [rt-ab] $1 $2 / $variant   mem_avail=$(free -g | awk '/^Mem:/{print $7}')GB"
-    GRID_COMPILE_WORKERS=1 step .venv/bin/python test/benchmarks/baselines/grid/run.py \
-        --robot "$1" --base "$2" --compile-workers 1 $flag \
+    # per-exe cutover: each variant has a DISTINCT header -> its own build-dir so the solo exes don't
+    # overwrite across variants (and a re-run cache-hits per variant). compare_runtime_param_ab keys on
+    # the output filename's _<variant> suffix, so the JSON name convention is preserved.
+    step .venv/bin/python test/benchmarks/per_algo_bench.py \
+        --robot "$1" --base "$2" --compile-jobs 1 $flag \
+        --build-dir "$RTDIR/build_${1}_${2}_${variant//-/_}" \
         --output "$RTDIR/${1}_${2}_${variant//-/_}.json"
   done
 done
@@ -129,10 +133,11 @@ say "  runtime-param A/B table (baked = 1.00x baseline; >1 means the table-read 
 .venv/bin/python test/benchmarks/compare_runtime_param_ab.py --dir "$RTDIR" 2>&1 | tee -a "$LOG"
 
 # ---------------------------------------------------------------- 3b. multi_target (FIXED + RE-ENABLED)
-# WAS DISABLED 2026-07-14 because no MULTI_TARGET_POSITION row ever reached the results JSON.
-# ROOT CAUSE (fixed, parent 2dcedb2): PER_ALGO_SPECS drives the PER-ALGO TU path, but a default run uses
-# the HAND-WRITTEN MONOLITHIC timeGRiD_{batch,single}.cu -- which had no multi_target measure block. The
-# specs were necessary but not sufficient. Both paths now have it; verified on iiwa14-fixed (N=34):
+# WAS DISABLED 2026-07-14 because no MULTI_TARGET_POSITION row ever reached the results JSON. That was a
+# monolithic-timeGRiD gap (the hand-written TU had no multi_target measure block). The per-exe cutover
+# retired the monolith: PER_ALGO_SPECS drives the wrapper's per-algo TUs directly, so the specs are now
+# both necessary AND sufficient -- --multi-target-from-collision bakes the collision batch as the target
+# set and per_algo_bench times multi_target_position{,_gradient} against it. Reference (iiwa14-fixed, N=34):
 # multi_target_position 18.22us compute-only, _gradient 25.73us (vs end_effector_pose 7.22us @ 1 target
 # -- sublinear, as expected: the shared FK chain-up amortizes over the batch, only extraction scales).
 #
@@ -147,8 +152,9 @@ mkdir -p "$MTDIR"
 for cell in "iiwa14 fixed" "go2 floating"; do
   set -- $cell
   say "  [mt] $1 $2   mem_avail=$(free -g | awk '/^Mem:/{print $7}')GB"
-  GRID_COMPILE_WORKERS=1 step .venv/bin/python test/benchmarks/baselines/grid/run.py \
-      --robot "$1" --base "$2" --multi-target-from-collision --compile-workers 1 \
+  step .venv/bin/python test/benchmarks/per_algo_bench.py \
+      --robot "$1" --base "$2" --multi-target-from-collision --compile-jobs 1 \
+      --build-dir "$MTDIR/build_${1}_${2}" \
       --output "$MTDIR/${1}_${2}_multi_target.json"
 done
 say "  (grep the log for 'multi_target batch from collision spherization: N=' — that N is the batch size"

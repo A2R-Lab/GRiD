@@ -124,23 +124,29 @@ HOST="$(python3 -c 'import platform;print(platform.node().replace(" ","_"))' 2>/
 BEST_FILE="$REPO_ROOT/test/benchmarks/results/autotune_best_${HOST}.json"
 
 # ---- run the autotune sweep (RAM-safe serial; single-timing OFF) ---------
-# One run.py invocation per base. run.py --autotune-threads sweeps the tier ×
-# thread grid (up to 1024) at N=$AUTOTUNE_N and merges the per-(robot,base,algo)
-# winners into autotune_best_<host>.json. GRID_COMPILE_WORKERS=1 + --build-jobs 1
-# => exactly one TU compiles at a time (big-robot SO TUs need ~36 GB each).
-export GRID_COMPILE_WORKERS=1
+# One per_algo_bench.py invocation per base (the per-exe cutover: small per-algo TUs, one exe/process,
+# crash-isolated -- replaces the monolithic run.py path). Each writes a per-cell *_grid_glass.json with
+# algo_picks into $SWEEPDIR; sweep_to_autotune_best.py then merges just THIS run's valid picks into a
+# clean autotune_best_<host>.json (no stale-entry accumulation). --compile-jobs 1 => one TU at a time.
+SWEEPDIR="$REPO_ROOT/test/benchmarks/results/autotune_sweep_${ROBOT}"
+mkdir -p "$SWEEPDIR"
 if [ "${AUTOTUNE_DRY_RUN:-0}" = "1" ]; then
   echo "=== AUTOTUNE_DRY_RUN=1: skipping the real sweep (no nvcc build) ==="
 else
   for b in "${BASES[@]}"; do
     echo "=== [$ROBOT/$b] autotune sweep START $(date)  mem_avail=$(free -m 2>/dev/null | awk '/^Mem:/{print $7}')MB ==="
-    "$PY" test/benchmarks/baselines/grid/run.py \
+    "$PY" test/benchmarks/per_algo_bench.py \
         --robot "$ROBOT" --base "$b" \
-        --autotune-threads --autotune-N "$AUTOTUNE_N" \
-        --build-jobs 1 \
+        --mode autotune --stage sweep --autotune-N "$AUTOTUNE_N" \
+        --compile-jobs 1 \
+        --output "$SWEEPDIR/${ROBOT}_${b}_grid_glass.json" \
       || { echo "ERROR: autotune sweep failed for $ROBOT/$b." >&2; exit 1; }
     echo "=== [$ROBOT/$b] autotune sweep DONE $(date) ==="
   done
+
+  # Merge this run's per-cell picks -> a fresh autotune_best_<host>.json for the bake step.
+  "$PY" tools/sweep_to_autotune_best.py --sweep-dir "$SWEEPDIR" --out "$BEST_FILE" \
+    || { echo "ERROR: autotune_best merge failed." >&2; exit 1; }
 
   if [ ! -f "$BEST_FILE" ]; then
     echo "ERROR: expected autotune artifact not found: $BEST_FILE" >&2

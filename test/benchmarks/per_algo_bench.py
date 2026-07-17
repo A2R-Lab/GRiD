@@ -378,6 +378,17 @@ def main() -> None:
     ap.add_argument("--build-dir", type=Path, default=None)
     ap.add_argument("--algos", type=str, default=None,
                     help="comma-separated subset of algos to build/run (default: all in scope)")
+    # Header-variant flags (passed straight to generate_header, which owns the codegen). Each CHANGES
+    # the generated header -> distinct content stamp -> correct rebuild, no cache collision with baked.
+    ap.add_argument("--runtime-inertia", action="store_true",
+                    help="source link inertias from a mutable device table (sparsity stays baked)")
+    ap.add_argument("--runtime-transform", action="store_true",
+                    help="source joint transforms from a mutable device table (sparsity stays baked)")
+    ap.add_argument("--runtime-joint-dynamics", action="store_true",
+                    help="source joint damping/friction from a mutable device table")
+    ap.add_argument("--multi-target-from-collision", action="store_true",
+                    help="bake the robot's collision spherization as the multi_target batch, so "
+                         "multi_target_position{,_gradient} time against the real (collision-sized) batch")
     args = ap.parse_args()
 
     build_dir = args.build_dir or (THIS_DIR / "results" / f"per_algo_{args.robot}_{args.base}")
@@ -410,7 +421,12 @@ def main() -> None:
     urdf = gridrun.get_urdf_path(args.robot)
     ee_frame = gridrun.DEFAULT_EE_FRAMES.get(args.robot, "")
     print(f"[per-algo] generating header for {args.robot}-{args.base}...")
-    header = gridrun.generate_header(urdf, args.robot, args.base, ee_frame, build_dir)
+    header = gridrun.generate_header(
+        urdf, args.robot, args.base, ee_frame, build_dir,
+        runtime_inertia=args.runtime_inertia,
+        runtime_transform=args.runtime_transform,
+        runtime_joint_dynamics=args.runtime_joint_dynamics,
+        multi_target_from_collision=args.multi_target_from_collision)
 
     # Which algos are in scope for this robot/base (drops non-production + mimic-unsupported).
     has_mimic = gridrun.robot_is_mimic(urdf)

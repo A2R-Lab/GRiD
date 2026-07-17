@@ -50,7 +50,15 @@ ROBOTS = [
 WORK = Path(os.environ.get("TIER_BASELINE_WORK", "/tmp/tier_baseline_v2"))
 NVCC = "/usr/local/cuda/bin/nvcc"
 ARCH = "120"
-BATCH_CU = REPO_ROOT / "test/benchmarks/baselines/grid/timeGRiD_batch.cu"
+# The per-exe bench cutover retired the monolithic timeGRiD_batch.cu. Any TU that #includes grid.cuh and
+# instantiates every kernel is an equivalent ptxas -v driver; a per_algo_bench solo TU does exactly that
+# (its run_all_tests -> init_grid_kernel_attrs references every kernel). Materialize one into WORK.
+BENCH_GRID_DIR = REPO_ROOT / "test/benchmarks/baselines/grid"
+sys.path.insert(0, str(REPO_ROOT / "test/benchmarks"))
+from per_algo_bench import _solo_batch_tu_source  # noqa: E402
+WORK.mkdir(parents=True, exist_ok=True)
+BATCH_CU = WORK / "instantiate_all_kernels.cu"
+BATCH_CU.write_text(_solo_batch_tu_source("inverse_dynamics"))
 
 # Friendly label per kernel name. Names match emitted symbols in grid.cuh.
 KERNEL_LABELS = {
@@ -150,6 +158,7 @@ def compile_with_bounds(grid_cuh: Path, label: str, launch_bounds_override: int 
         f"-gencode=arch=compute_{ARCH},code=sm_{ARCH}",
         "-O3", "-ftz=true", "-prec-div=false", "-prec-sqrt=false",
         f"-I{BATCH_CU.parent}",
+        f"-I{BENCH_GRID_DIR}",   # timeGRiD_common.h (the solo TU #includes it)
         f"-I{active_cuh.parent}",
         f"-I{REPO_ROOT / 'GLASS'}",
         f"-I{REPO_ROOT / 'GLASS/src'}",

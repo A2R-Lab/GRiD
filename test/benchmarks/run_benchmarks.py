@@ -60,19 +60,32 @@ def run_baseline(
     no_recompile: bool,
     ee_frame: str,
 ) -> dict | None:
-    script = REPO_ROOT / "test" / "benchmarks" / "baselines" / baseline / "run.py"
-    cmd = [
-        sys.executable, str(script),
-        "--robot", robot,
-        "--base", base,
-        "--output", str(output),
-        "--ee-frame", ee_frame,
-    ]
-    if no_recompile:
-        cmd.append("--no-recompile")
-    if baseline == "pinocchio":
-        cmd.append("--no-cpu-lock")  # coordinator manages locking externally
-    # mjx has no extra flags needed
+    if baseline == "grid":
+        # per-exe cutover: the grid column runs through per_algo_bench (per-algo TUs -> per-exe/process,
+        # RAM-safe + crash-isolated). ee_frame is sourced from DEFAULT_EE_FRAMES inside the wrapper (and is
+        # not passed to gen_all_code anyway); --no-recompile is unneeded (the wrapper's content cache hits).
+        # The emitted column key is "grid", exactly as the old run.py path emitted -- merge_results unchanged.
+        script = REPO_ROOT / "test" / "benchmarks" / "per_algo_bench.py"
+        cmd = [
+            sys.executable, str(script),
+            "--robot", robot,
+            "--base", base,
+            "--output", str(output),
+        ]
+    else:
+        script = REPO_ROOT / "test" / "benchmarks" / "baselines" / baseline / "run.py"
+        cmd = [
+            sys.executable, str(script),
+            "--robot", robot,
+            "--base", base,
+            "--output", str(output),
+            "--ee-frame", ee_frame,
+        ]
+        if no_recompile:
+            cmd.append("--no-recompile")
+        if baseline == "pinocchio":
+            cmd.append("--no-cpu-lock")  # coordinator manages locking externally
+        # mjx has no extra flags needed
 
     try:
         result = subprocess.run(cmd, capture_output=False, text=True)

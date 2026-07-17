@@ -37,8 +37,8 @@ Then run benchmarks:
 # Include MJX:
 .venv/bin/python test/benchmarks/run_benchmarks.py --baselines grid pinocchio mjx
 
-# Just GRiD, one robot:
-.venv/bin/python test/benchmarks/baselines/grid/run.py --robot iiwa14 --base fixed
+# Just GRiD, one robot (per-exe path: one TU/exe/process per algo, RAM-safe + crash-isolated):
+.venv/bin/python test/benchmarks/per_algo_bench.py --robot iiwa14 --base fixed
 
 # Just Pinocchio, one robot:
 .venv/bin/python test/benchmarks/baselines/pinocchio/run.py --robot iiwa14 --base fixed

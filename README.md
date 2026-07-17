@@ -208,9 +208,8 @@ and Docker, see the full
 
 On Ampere (sm_86 / CUDA 12.6) the bench harness can wedge `nvcc` /
 `ptxas` at 100 % CPU when compiling heavy floating-base GRiD harnesses.
-Pass `--ptxas-opt-level 2` to `test/benchmarks/run_multi_version.py` or
-the per-robot `test/benchmarks/baselines/grid/run.py` — it forwards
-`-Xptxas -O2` to floating-base compiles only. Blackwell (sm_120) does
+Pass `--ptxas-opt-level 2` to `test/benchmarks/run_multi_version.py` — it
+forwards `-Xptxas -O2` to floating-base compiles only. Blackwell (sm_120) does
 not hit this. Typical user code that includes `grid.cuh` and calls the
 batch host wrappers (e.g. `grid::forward_dynamics<T>(...)`) does not
 trigger the hang — it's specific to the timing-bench template surface.

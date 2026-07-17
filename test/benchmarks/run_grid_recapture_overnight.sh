@@ -87,9 +87,12 @@ say "=== PHASE 1: BUILD (compile-only; no GPU timing) ==="
 
 build_cell() {  # robot base tier
   local r="$1" b="$2" t="$3"
-  GRID_COMPILE_WORKERS=1 python test/benchmarks/baselines/grid/run.py \
-      --robot "$r" --base "$b" --tier "$t" --compile-only --compile-workers 1 \
-      --build-dir "$ROOT/build_${r}_${b}_${t}" >>"$LOG" 2>&1
+  # per-exe cutover: build this tier's per-algo solo exes via the wrapper (--compile-only). NO --build-dir:
+  # the wrapper's content cache is LOCAL to its build-dir, so both this build and the PHASE-2 measure (which
+  # calls the wrapper through run_multi_version) must share the wrapper's default dir (results/per_algo_<r>_<b>)
+  # for the measure to cache-hit. --tier shared builds the suffix-less exe the autotune 'shared' tier reuses.
+  python test/benchmarks/per_algo_bench.py \
+      --robot "$r" --base "$b" --tier "$t" --compile-only --compile-jobs 1 >>"$LOG" 2>&1
   echo "[$(date +%H:%M:%S)]     built $r/$b/$t rc=$?" >> "$LOG"
 }
 
