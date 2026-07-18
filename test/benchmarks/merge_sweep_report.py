@@ -13,7 +13,7 @@ which cells never produce in practice since no (robot,base,column,algo) is timed
 twice) and renders the report ONCE from the merged doc via generate_report.py.
 
 Usage:
-    python tools/merge_sweep_report.py --sweep-dir test/benchmarks/results/tier_sweep_phased_<TS> \
+    python test/benchmarks/merge_sweep_report.py --sweep-dir test/benchmarks/results/tier_sweep_phased_<TS> \
         [--output test/benchmarks/benchmark_multi_version.md]
 """
 from __future__ import annotations
@@ -24,8 +24,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-GENERATE_REPORT = REPO_ROOT / "test" / "benchmarks" / "generate_report.py"
+# This script lives in test/benchmarks/ next to generate_report.py and the
+# canonical report; keep all paths sibling-relative so it survives moves.
+THIS_DIR = Path(__file__).resolve().parent
+GENERATE_REPORT = THIS_DIR / "generate_report.py"
 
 
 def deep_merge(dst: dict, src: dict) -> dict:
@@ -44,7 +46,7 @@ def main() -> None:
     ap.add_argument("--sweep-dir", type=Path, required=True,
                     help="Sweep root; all benchmark_multi_version_*.json below it are merged.")
     ap.add_argument("--output", type=Path,
-                    default=REPO_ROOT / "test" / "benchmarks" / "benchmark_multi_version.md",
+                    default=THIS_DIR / "benchmark_multi_version.md",
                     help="Markdown report path (default: the canonical report).")
     ap.add_argument("--merged-json", type=Path, default=None,
                     help="Where to write the merged unified JSON "
