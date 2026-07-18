@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 import tempfile
 
 import numpy as np
@@ -21,6 +22,8 @@ from GRiDCodeGenerator.algorithms._spherize import (
 from GRiDCodeGenerator.algorithms._collision import parse_spherized_urdf, urdf_joint_tree
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO_ROOT)
+from config import robot_urdf
 
 
 def _max_uncovered_gap(points, spheres):
@@ -97,7 +100,7 @@ def test_cover_mesh_covers_surface():
 def test_spherize_urdf_roundtrip_go2():
     """Spherize a real all-primitive robot and confirm the foam interchange round-trips: every
     link with source collision geometry emits sphere collisions, joints are preserved, radii>0."""
-    urdf = os.path.join(REPO_ROOT, "config/robot_assets", "go2.urdf")
+    urdf = str(robot_urdf("go2"))
     if not os.path.exists(urdf):
         pytest.skip("go2.urdf not found")
     with tempfile.TemporaryDirectory() as d:

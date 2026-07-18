@@ -17,13 +17,16 @@ developer_only and skipped where the toolchain/GPU is absent.
 from __future__ import annotations
 
 import shutil
+import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
-_GO2 = _REPO / "config/robot_assets" / "go2.urdf"
+sys.path.insert(0, str(_REPO))
+from config import robot_urdf
+_GO2 = robot_urdf("go2")
 
 pytestmark = pytest.mark.developer_only
 

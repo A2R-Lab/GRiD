@@ -35,6 +35,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO_ROOT))
 
+from config import robot_urdf  # noqa: E402
 from GRiDCodeGenerator import GRiDCodeGenerator  # noqa: E402
 from GRiDCodeGenerator.algo_registry import ALGO_REGISTRY  # noqa: E402
 from RBDReference.equivalents.reference_backend import strict_parse_robot  # noqa: E402
@@ -70,11 +71,11 @@ ROBOT_DESCRIPTION_MODULE: dict[str, str] = {
 # replacing the now-deprecated h1_2. No mjx/frax/pinocchio/cuRobo model exists for it, so
 # it is a GRiD-internal scaling study, not a competitive cell.
 LOCAL_URDF: dict[str, str] = {
-    "h2_plus": str(REPO_ROOT / "config/robot_assets" / "h2_plus.urdf"),
+    "h2_plus": str(robot_urdf("h2_plus")),
     # Baxter = Rethink dual-arm (14-DOF actuated, fixed-base) — vendored URDF for
     # fixed-base benchmark variety. GRiD-internal (treated GRID_ONLY); single-EE
     # (left_endpoint) per the one-EE-per-robot convention (both-grippers backlog).
-    "baxter":  str(REPO_ROOT / "config/robot_assets" / "baxter.urdf"),
+    "baxter":  str(robot_urdf("baxter")),
 }
 
 

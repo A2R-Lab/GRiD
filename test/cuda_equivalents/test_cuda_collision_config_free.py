@@ -17,6 +17,7 @@ import contextlib
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,8 @@ from RBDReference.tests import MANIFEST_PATH
 from RBDReference.equivalents.reference_backend import build_project_adapter
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+from config import robot_urdf
 COLLISION_INCLUDE = REPO_ROOT / "collision"
 RUNNER_SOURCE = Path(__file__).with_name("cuda_collision_config_free_runner.cu")
 SELFCC_RUNNER_SOURCE = Path(__file__).with_name("cuda_collision_self_collision_runner.cu")
@@ -131,7 +134,7 @@ def test_collision_config_free_real_robot(tmp_path):
     => in-collision. This is the end-to-end certification of the `--collision` pipeline."""
     from URDFParser import URDFParser
     from GRiDCodeGenerator.algorithms._collision import collision_spec_from_urdf
-    urdf = REPO_ROOT / "config/robot_assets" / "go2.urdf"
+    urdf = robot_urdf("go2")
     if not urdf.exists():
         pytest.skip("go2.urdf not found")
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):

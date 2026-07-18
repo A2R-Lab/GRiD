@@ -13,6 +13,7 @@ the (heavy, optional) foam toolchain, on:
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -27,7 +28,9 @@ from GRiDCodeGenerator.algorithms._collision import (
 )
 
 REPO = Path(__file__).resolve().parents[1]
-IIWA = REPO / "config/robot_assets" / "iiwa14.urdf"
+sys.path.insert(0, str(REPO))
+from config import robot_urdf
+IIWA = robot_urdf("iiwa14")
 
 
 def _parse(path):

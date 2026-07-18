@@ -61,6 +61,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_REPO_ROOT / "bindings"))
+from config import robot_urdf
 
 
 # ─── skip preconditions ─────────────────────────────────────────────────────
@@ -71,8 +72,8 @@ if shutil.which("nvcc") is None:
     pytest.skip("nvcc not on PATH; grid-rbd register_robot requires it",
                 allow_module_level=True)
 
-_IIWA = _REPO_ROOT / "config/robot_assets" / "iiwa14.urdf"
-_GO2 = _REPO_ROOT / "config/robot_assets" / "go2.urdf"
+_IIWA = robot_urdf("iiwa14")
+_GO2 = robot_urdf("go2")
 if not _IIWA.exists():
     pytest.skip(f"iiwa14 URDF not present at {_IIWA}", allow_module_level=True)
 

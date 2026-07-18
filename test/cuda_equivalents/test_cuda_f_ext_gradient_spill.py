@@ -31,6 +31,7 @@ import contextlib
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -44,6 +45,10 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 from RBDReference.tests.state_sampling import build_dynamics_samples
 from test.cuda_equivalents.test_cuda_executable_equivalence import _detect_cuda_arch
 from test.cuda_equivalents.test_cuda_f_ext_gradient_equivalence import _parse_runner_output
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO_ROOT))
+from config import robot_urdf
 
 _RUNNER = Path(__file__).with_name("cuda_f_ext_gradient_runner.cu")
 _SUBSET = ["inverse_dynamics", "minv", "f_ext_gradient"]  # no SO kernels -> no deep-spill compile wall
@@ -185,7 +190,7 @@ def test_cuda_f_ext_gradient_spill_matches_full(tmp_path, robot_id, base_mode):
 
 
 def _h2plus_robot():
-    urdf = Path(__file__).resolve().parents[2] / "config/robot_assets" / "h2_plus.urdf"
+    urdf = robot_urdf("h2_plus")
     if not urdf.exists():
         pytest.skip("h2_plus.urdf not vendored")
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):

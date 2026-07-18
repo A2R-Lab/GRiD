@@ -26,11 +26,14 @@ from __future__ import annotations
 import contextlib
 import os
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+from config import robot_urdf
 
 # (robot, floating, runtime_transform) -- the matrix that actually exercises the spill ladders.
 # go2-floating is the cell §1t blew up on; iiwa14 is the fixed-base control; fr3 carries the mimic fold.
@@ -67,7 +70,7 @@ _ARENA_BYTES_CALL = re.compile(r"grid_shared_arena_bytes<T>\(\s*([0-9]+)\s*,")
 def _generate(robot_id: str, floating: bool, out: Path, runtime_transform: bool = False) -> Path:
     from URDFParser import URDFParser
     from GRiDCodeGenerator import GRiDCodeGenerator
-    urdf = REPO_ROOT / "config/robot_assets" / f"{robot_id}.urdf"
+    urdf = robot_urdf(robot_id)
     if not urdf.exists():
         pytest.skip(f"{robot_id}.urdf not found")
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):

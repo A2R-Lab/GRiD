@@ -38,6 +38,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
+from config import robot_urdf
 
 
 # ─── skip preconditions ─────────────────────────────────────────────────────
@@ -47,7 +48,7 @@ _jax          = pytest.importorskip("jax",          reason="jax not installed (p
 _grid_rbd_jax = pytest.importorskip("grid_rbd.jax", reason="grid_rbd.jax import failed")
 
 # In-repo iiwa14 URDF (always present alongside the codegen submodules).
-_URDF = _REPO_ROOT / "config/robot_assets" / "iiwa14.urdf"
+_URDF = robot_urdf("iiwa14")
 if not _URDF.exists():
     pytest.skip(f"iiwa14 URDF fixture not present at {_URDF}", allow_module_level=True)
 

@@ -21,6 +21,7 @@ import contextlib
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,8 @@ from GRiDCodeGenerator.algorithms._collision import collision_spec_from_urdf
 from test.cuda_equivalents.test_cuda_executable_equivalence import _detect_cuda_arch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+from config import robot_urdf
 COLLISION_INCLUDE = REPO_ROOT / "collision"
 RUNNER_SOURCE = Path(__file__).with_name("cuda_collision_pairs_runner.cu")
 
@@ -39,7 +42,7 @@ RUNNER_SOURCE = Path(__file__).with_name("cuda_collision_pairs_runner.cu")
 @pytest.mark.robot_smoke
 def test_collision_distance_pairs_fd(tmp_path):
     from URDFParser import URDFParser
-    urdf = REPO_ROOT / "config/robot_assets" / "iiwa14.urdf"
+    urdf = robot_urdf("iiwa14")
     if not urdf.exists():
         pytest.skip("iiwa14.urdf not found")
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):

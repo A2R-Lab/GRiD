@@ -25,6 +25,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
+from config import robot_urdf
 
 _grid_rbd = pytest.importorskip("grid_rbd", reason="grid-rbd not installed")
 if shutil.which("nvcc") is None:
@@ -32,8 +33,8 @@ if shutil.which("nvcc") is None:
 
 pytestmark = pytest.mark.python_wrappers
 _TOL = 1e-3
-_IIWA = _REPO_ROOT / "config/robot_assets" / "iiwa14.urdf"
-_FR3 = _REPO_ROOT / "config/robot_assets" / "fr3.urdf"
+_IIWA = robot_urdf("iiwa14")
+_FR3 = robot_urdf("fr3")
 if not (_IIWA.exists() and _FR3.exists()):
     pytest.skip("iiwa14/fr3 URDF not present", allow_module_level=True)
 

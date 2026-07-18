@@ -34,6 +34,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
+from config import robot_urdf
 
 
 # ─── preconditions ───────────────────────────────────────────────────────────
@@ -43,7 +44,7 @@ _grid_rbd = pytest.importorskip("grid_rbd", reason="grid-rbd not installed")
 if shutil.which("nvcc") is None:
     pytest.skip("nvcc not on PATH; register_robot requires it", allow_module_level=True)
 
-_URDF = _REPO_ROOT / "config/robot_assets" / "iiwa14.urdf"
+_URDF = robot_urdf("iiwa14")
 if not _URDF.exists():
     pytest.skip(f"iiwa14 URDF fixture not present at {_URDF}", allow_module_level=True)
 

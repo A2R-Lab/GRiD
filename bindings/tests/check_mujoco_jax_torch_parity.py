@@ -1,11 +1,14 @@
 """Comprehensive jax + torch mjx parity: every wired mjx method's jax.mujoco.X and
 torch.mujoco.X must match the proven numpy ref.mujoco.X oracle (fp32 tolerance).
 Builds go2-floating ONCE (force_rebuild) so the .so carries all new mjx handlers."""
+import sys
 import numpy as np
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[2]
-_GO2 = _REPO / "config/robot_assets" / "go2.urdf"
+sys.path.insert(0, str(_REPO))
+from config import robot_urdf
+_GO2 = robot_urdf("go2")
 TOL = 2e-3
 
 

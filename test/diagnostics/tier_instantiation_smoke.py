@@ -16,6 +16,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
+from config import robot_urdf
 
 NVCC = "/usr/local/cuda/bin/nvcc"
 ARCH = "120"
@@ -237,7 +238,7 @@ def _resolve_urdf_via_robot_descriptions(module_name: str) -> Path | None:
 SCENARIOS = [
     ("iiwa14_fixed",  "robot_descriptions.iiwa14_description",  False),
     ("go2_fixed",     "robot_descriptions.go2_description",     False),
-    ("h2_plus_fixed", str(REPO_ROOT / "config/robot_assets/h2_plus.urdf"), False),
+    ("h2_plus_fixed", str(robot_urdf("h2_plus")), False),
 ]
 
 

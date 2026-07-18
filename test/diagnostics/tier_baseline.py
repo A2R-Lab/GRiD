@@ -33,6 +33,7 @@ from pathlib import Path
 # Repo root is two levels up from test/diagnostics/.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
+from config import robot_urdf
 
 URDF_DIR = Path.home() / ".cache/robot_descriptions"
 ROBOTS = [
@@ -43,8 +44,8 @@ ROBOTS = [
     # H2+ (Unitree, nv=75 fixed / 81 floating) is the large-robot scaling target
     # that retired the redundant h1_2. Vendored locally (GRiD-internal, not in
     # robot_descriptions), so it loads from config/robot_assets/.
-    ("h2_plus_fixed",     REPO_ROOT / "config/robot_assets/h2_plus.urdf", False),
-    ("h2_plus_floating",  REPO_ROOT / "config/robot_assets/h2_plus.urdf", True),
+    ("h2_plus_fixed",     robot_urdf("h2_plus"), False),
+    ("h2_plus_floating",  robot_urdf("h2_plus"), True),
 ]
 
 WORK = Path(os.environ.get("TIER_BASELINE_WORK", "/tmp/tier_baseline_v2"))
