@@ -70,11 +70,11 @@ ROBOT_DESCRIPTION_MODULE: dict[str, str] = {
 # replacing the now-deprecated h1_2. No mjx/frax/pinocchio/cuRobo model exists for it, so
 # it is a GRiD-internal scaling study, not a competitive cell.
 LOCAL_URDF: dict[str, str] = {
-    "h2_plus": str(REPO_ROOT / "robot_assets" / "h2_plus.urdf"),
+    "h2_plus": str(REPO_ROOT / "config/robot_assets" / "h2_plus.urdf"),
     # Baxter = Rethink dual-arm (14-DOF actuated, fixed-base) — vendored URDF for
     # fixed-base benchmark variety. GRiD-internal (treated GRID_ONLY); single-EE
     # (left_endpoint) per the one-EE-per-robot convention (both-grippers backlog).
-    "baxter":  str(REPO_ROOT / "robot_assets" / "baxter.urdf"),
+    "baxter":  str(REPO_ROOT / "config/robot_assets" / "baxter.urdf"),
 }
 
 

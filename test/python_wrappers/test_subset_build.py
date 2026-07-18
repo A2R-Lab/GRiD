@@ -45,7 +45,7 @@ _grid_rbd = pytest.importorskip("grid_rbd", reason="grid-rbd not installed (pip 
 
 # Use the in-repo iiwa14 URDF (always present alongside the codegen submodules),
 # so the suite doesn't depend on an external robot_descriptions cache.
-_URDF = _REPO_ROOT / "robot_assets" / "iiwa14.urdf"
+_URDF = _REPO_ROOT / "config/robot_assets" / "iiwa14.urdf"
 if not _URDF.exists():
     pytest.skip(f"iiwa14 URDF fixture not present at {_URDF}", allow_module_level=True)
 

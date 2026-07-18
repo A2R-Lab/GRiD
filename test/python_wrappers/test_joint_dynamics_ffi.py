@@ -43,8 +43,8 @@ if not _torch.cuda.is_available():
 pytestmark = pytest.mark.python_wrappers
 
 _TOL = 2e-3   # fp32 cross-surface agreement (same kernel, different launch path)
-_IIWA = _REPO_ROOT / "robot_assets" / "iiwa14.urdf"
-_FR3 = _REPO_ROOT / "robot_assets" / "fr3.urdf"
+_IIWA = _REPO_ROOT / "config/robot_assets" / "iiwa14.urdf"
+_FR3 = _REPO_ROOT / "config/robot_assets" / "fr3.urdf"
 if not (_IIWA.exists() and _FR3.exists()):
     pytest.skip("iiwa14/fr3 URDF not present", allow_module_level=True)
 

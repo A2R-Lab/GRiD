@@ -39,7 +39,7 @@ RUNNER_SOURCE = Path(__file__).with_name("cuda_collision_pairs_runner.cu")
 @pytest.mark.robot_smoke
 def test_collision_distance_pairs_fd(tmp_path):
     from URDFParser import URDFParser
-    urdf = REPO_ROOT / "robot_assets" / "iiwa14.urdf"
+    urdf = REPO_ROOT / "config/robot_assets" / "iiwa14.urdf"
     if not urdf.exists():
         pytest.skip("iiwa14.urdf not found")
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):

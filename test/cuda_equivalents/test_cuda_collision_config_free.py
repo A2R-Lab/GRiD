@@ -131,7 +131,7 @@ def test_collision_config_free_real_robot(tmp_path):
     => in-collision. This is the end-to-end certification of the `--collision` pipeline."""
     from URDFParser import URDFParser
     from GRiDCodeGenerator.algorithms._collision import collision_spec_from_urdf
-    urdf = REPO_ROOT / "robot_assets" / "go2.urdf"
+    urdf = REPO_ROOT / "config/robot_assets" / "go2.urdf"
     if not urdf.exists():
         pytest.skip("go2.urdf not found")
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):

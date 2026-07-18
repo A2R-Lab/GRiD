@@ -237,7 +237,7 @@ def _resolve_urdf_via_robot_descriptions(module_name: str) -> Path | None:
 SCENARIOS = [
     ("iiwa14_fixed",  "robot_descriptions.iiwa14_description",  False),
     ("go2_fixed",     "robot_descriptions.go2_description",     False),
-    ("h2_plus_fixed", str(REPO_ROOT / "robot_assets/h2_plus.urdf"), False),
+    ("h2_plus_fixed", str(REPO_ROOT / "config/robot_assets/h2_plus.urdf"), False),
 ]
 
 

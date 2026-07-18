@@ -45,7 +45,7 @@ if _REPO_ROOT not in _GRID_RBD_DIR.parents:
         allow_module_level=True,
     )
 
-_ASSETS = _REPO_ROOT / "robot_assets"
+_ASSETS = _REPO_ROOT / "config/robot_assets"
 
 pytestmark = pytest.mark.python_wrappers
 

@@ -1065,7 +1065,7 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    pipeline is healthy on all collected algos.
 6. ~~**Vendor URDFs instead of pulling `robot_descriptions`.**~~
    **DONE 2026-05-29 (parent 34492f7, RBDReference 990786a):** vendored
-   the 9 smoke-tier URDFs (~255 KB total) at `robot_assets/` with SHA
+   the 9 smoke-tier URDFs (~255 KB total) at `config/robot_assets/` with SHA
    provenance in `URDF_SOURCES.md`. Added `"vendored"` source_kind to
    `model_sources.py`; manifest now lists it FIRST with the
    `robot_descriptions` candidate as fallback. Equivalence resolution

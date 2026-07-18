@@ -23,7 +23,7 @@ import numpy as np
 import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
-_GO2 = _REPO / "robot_assets" / "go2.urdf"
+_GO2 = _REPO / "config/robot_assets" / "go2.urdf"
 
 pytestmark = pytest.mark.developer_only
 

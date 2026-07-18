@@ -43,8 +43,8 @@ if shutil.which("nvcc") is None:
 
 pytestmark = pytest.mark.python_wrappers
 
-_IIWA = _REPO_ROOT / "robot_assets" / "iiwa14.urdf"
-_FR3 = _REPO_ROOT / "robot_assets" / "fr3.urdf"
+_IIWA = _REPO_ROOT / "config/robot_assets" / "iiwa14.urdf"
+_FR3 = _REPO_ROOT / "config/robot_assets" / "fr3.urdf"
 if not _IIWA.exists():
     pytest.skip("iiwa14 URDF not present", allow_module_level=True)
 

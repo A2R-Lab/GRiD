@@ -42,9 +42,9 @@ ROBOTS = [
     ("g1_floating",    URDF_DIR / "unitree_ros/robots/g1_description/g1_29dof.urdf", True),
     # H2+ (Unitree, nv=75 fixed / 81 floating) is the large-robot scaling target
     # that retired the redundant h1_2. Vendored locally (GRiD-internal, not in
-    # robot_descriptions), so it loads from robot_assets/.
-    ("h2_plus_fixed",     REPO_ROOT / "robot_assets/h2_plus.urdf", False),
-    ("h2_plus_floating",  REPO_ROOT / "robot_assets/h2_plus.urdf", True),
+    # robot_descriptions), so it loads from config/robot_assets/.
+    ("h2_plus_fixed",     REPO_ROOT / "config/robot_assets/h2_plus.urdf", False),
+    ("h2_plus_floating",  REPO_ROOT / "config/robot_assets/h2_plus.urdf", True),
 ]
 
 WORK = Path(os.environ.get("TIER_BASELINE_WORK", "/tmp/tier_baseline_v2"))

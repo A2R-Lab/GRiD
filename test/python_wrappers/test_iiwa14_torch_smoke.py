@@ -32,7 +32,7 @@ if not torch.cuda.is_available():
 if shutil.which("nvcc") is None:
     pytest.skip("nvcc not on PATH", allow_module_level=True)
 
-_URDF = _REPO_ROOT / "robot_assets" / "iiwa14.urdf"
+_URDF = _REPO_ROOT / "config/robot_assets" / "iiwa14.urdf"
 if not _URDF.exists():
     pytest.skip(f"iiwa14 URDF fixture not present at {_URDF}", allow_module_level=True)
 

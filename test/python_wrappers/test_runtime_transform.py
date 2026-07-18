@@ -30,7 +30,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "bindings"))
 import grid_rbd  # noqa: E402
 
-IIWA = str(REPO / "robot_assets" / "iiwa14.urdf")
+IIWA = str(REPO / "config/robot_assets" / "iiwa14.urdf")
 CHECK1_REL_TOL = 1e-4   # float32 rebuild-vs-folded-constant noise (observed ~1e-7)
 CHECK2_REL_TOL = 5e-3
 CHECK3_ABS_TOL = 1e-5
@@ -86,7 +86,7 @@ def main():
             origin = joint.find("origin") or ET.SubElement(joint, "origin")
             origin.set("xyz", f"{x} {y} {z}")
             origin.set("rpy", f"{r} {p} {yw}")
-    pert_urdf = str(REPO / "robot_assets" / ".iiwa14_perturbed_rt_test.urdf")
+    pert_urdf = str(REPO / "config/robot_assets" / ".iiwa14_perturbed_rt_test.urdf")
     tree.write(pert_urdf)
     with contextlib.redirect_stdout(io.StringIO()):
         recodegen = grid_rbd.register_robot(name="iiwa_recodegen_pert_test", urdf_path=pert_urdf,

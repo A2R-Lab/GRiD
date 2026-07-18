@@ -71,8 +71,8 @@ if shutil.which("nvcc") is None:
     pytest.skip("nvcc not on PATH; grid-rbd register_robot requires it",
                 allow_module_level=True)
 
-_IIWA = _REPO_ROOT / "robot_assets" / "iiwa14.urdf"
-_GO2 = _REPO_ROOT / "robot_assets" / "go2.urdf"
+_IIWA = _REPO_ROOT / "config/robot_assets" / "iiwa14.urdf"
+_GO2 = _REPO_ROOT / "config/robot_assets" / "go2.urdf"
 if not _IIWA.exists():
     pytest.skip(f"iiwa14 URDF not present at {_IIWA}", allow_module_level=True)
 

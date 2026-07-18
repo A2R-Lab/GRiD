@@ -42,7 +42,7 @@ GO2_FEET = ["FR_foot_joint", "FL_foot_joint", "RR_foot_joint", "RL_foot_joint"]
 @pytest.mark.developer_only
 def test_f_ext_contact_frame_map_fd(tmp_path):
     from URDFParser import URDFParser
-    urdf = REPO_ROOT / "robot_assets" / "go2.urdf"
+    urdf = REPO_ROOT / "config/robot_assets" / "go2.urdf"
     if not urdf.exists():
         pytest.skip("go2.urdf not found")
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):

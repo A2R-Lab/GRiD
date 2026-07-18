@@ -97,7 +97,7 @@ def test_cover_mesh_covers_surface():
 def test_spherize_urdf_roundtrip_go2():
     """Spherize a real all-primitive robot and confirm the foam interchange round-trips: every
     link with source collision geometry emits sphere collisions, joints are preserved, radii>0."""
-    urdf = os.path.join(REPO_ROOT, "robot_assets", "go2.urdf")
+    urdf = os.path.join(REPO_ROOT, "config/robot_assets", "go2.urdf")
     if not os.path.exists(urdf):
         pytest.skip("go2.urdf not found")
     with tempfile.TemporaryDirectory() as d:

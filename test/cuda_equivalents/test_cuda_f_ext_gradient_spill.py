@@ -185,7 +185,7 @@ def test_cuda_f_ext_gradient_spill_matches_full(tmp_path, robot_id, base_mode):
 
 
 def _h2plus_robot():
-    urdf = Path(__file__).resolve().parents[2] / "robot_assets" / "h2_plus.urdf"
+    urdf = Path(__file__).resolve().parents[2] / "config/robot_assets" / "h2_plus.urdf"
     if not urdf.exists():
         pytest.skip("h2_plus.urdf not vendored")
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):

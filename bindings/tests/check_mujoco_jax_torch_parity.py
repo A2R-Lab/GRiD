@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[2]
-_GO2 = _REPO / "robot_assets" / "go2.urdf"
+_GO2 = _REPO / "config/robot_assets" / "go2.urdf"
 TOL = 2e-3
 
 
