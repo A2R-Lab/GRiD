@@ -15,7 +15,7 @@ optimum. Measured on iiwa14/fixed/fd/N=256 (lite tier, identical kernel):
 
 So a binding that inherits the host's 128 runs fd ~1.6x slow. This tool sweeps
 the FFI launch path for the batch-to-land metric and writes the winners into
-launch_configs/<robot>/<gpu>.json under `ffi_bases` (the host `bases` block is
+config/launch_configs/<robot>/<gpu>.json under `ffi_bases` (the host `bases` block is
 left untouched). The binding's codegen reads `ffi_bases` by default (profile=
 "ffi"; see GRiDCodeGenerator.load_launch_config + bindings/grid_rbd/_compile.py),
 falling back per-algo to host `bases` for any algo this tool didn't tune.
@@ -270,7 +270,7 @@ def _tier_max_threads(tier, max_perf):
 
 
 def write_ffi_config(robot, gpu, base_picks, n, base_maxperf):
-    """Merge {base: {key: pick}} into launch_configs/<robot>/<gpu>.json under
+    """Merge {base: {key: pick}} into config/launch_configs/<robot>/<gpu>.json under
     `ffi_bases`, leaving `bases` intact.
 
     E1 tier contract: the recorded tier is the KERNEL's real compiled tier (from

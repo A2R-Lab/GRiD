@@ -19,7 +19,7 @@ from .algo_registry import (ALGO_DESCRIPTORS, build_launch_config_algo_to_symbol
 
 # ─── A1b launch-config bake (single source of truth) ─────────────────────────
 # The autotuned per-(robot,base,algo) {tier,threads} live in
-# launch_configs/<robot>/<DEFAULT_GPU>.json. At codegen time we read the
+# config/launch_configs/<robot>/<DEFAULT_GPU>.json. At codegen time we read the
 # matching entry and bake it into the generated header as host-side constants
 # (grid::launch_cfg<ALGO_*>). This is purely ADDITIVE host content — kernel
 # bodies are untouched (Gate-A). A missing robot / GPU / algo falls back to the
@@ -46,14 +46,14 @@ _ALGO_TO_SYMBOL = build_launch_config_algo_to_symbol()
 
 
 def _launch_configs_dir():
-    """Absolute path to the repo's launch_configs/ dir (sibling of GRiDCodeGenerator)."""
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "launch_configs")
+    """Absolute path to the repo's config/launch_configs/ dir (sibling of GRiDCodeGenerator)."""
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "launch_configs")
 
 
 def load_launch_config(robot_id, floating_base, gpu = LAUNCH_CONFIG_DEFAULT_GPU, profile = "host"):
     """Return {grid_symbol: {"tier": TIER_*, "threads": int}} for (robot_id, base).
 
-    Reads launch_configs/<robot_id>/<gpu>.json and picks the matching base
+    Reads config/launch_configs/<robot_id>/<gpu>.json and picks the matching base
     ("floating" or "fixed"). Returns {} (-> full fallback) when the file is
     absent / unreadable / lacks the base. Unknown algo keys / tiers are skipped
     individually (so a partially-populated config still bakes what it can).
@@ -255,7 +255,7 @@ class GRiDCodeGenerator:
         # + load_launch_config). Falls back per-algo to host when ffi is absent.
         self.launch_config_profile = LAUNCH_CONFIG_PROFILE
         # A1b launch-config bake: the robot id used to locate the autotuned
-        # launch_configs/<robot>/<DEFAULT_GPU>.json (per-algo {tier,threads}).
+        # config/launch_configs/<robot>/<DEFAULT_GPU>.json (per-algo {tier,threads}).
         # The launch_configs dir is keyed by the URDF FILENAME stem (e.g.
         # "iiwa14", "go2", "g1"), which does NOT always equal the URDF
         # <robot name=...> (e.g. go2_description, g1_29dof). Callers that know
@@ -593,7 +593,7 @@ class GRiDCodeGenerator:
     def gen_add_launch_config_helpers(self):
         """Emit the A1b baked launch-config table (single source of truth).
 
-        Reads launch_configs/<robot>/<DEFAULT_GPU>.json for this robot+base and
+        Reads config/launch_configs/<robot>/<DEFAULT_GPU>.json for this robot+base and
         emits per-algo `grid::launch_cfg<GRID_ALGO_*>` specializations carrying
         the autotuned {TIER, THREADS}. The primary template falls back to the
         conservative (GRID_DEFAULT_RESOURCE_TIER, MAX_PERF_LEVEL_THREADS) default,
@@ -617,7 +617,7 @@ class GRiDCodeGenerator:
         enum_names = {d.key: d.enum_name for d in launch_descriptors}
         base_name = "floating" if self.robot.floating_base else "fixed"
         if cfg:
-            src = "launch_configs/" + str(robot_id) + "/" + LAUNCH_CONFIG_DEFAULT_GPU + ".json (" + base_name + ", profile=" + profile + ")"
+            src = "config/launch_configs/" + str(robot_id) + "/" + LAUNCH_CONFIG_DEFAULT_GPU + ".json (" + base_name + ", profile=" + profile + ")"
         else:
             src = "NONE found for robot=" + str(robot_id) + " base=" + base_name + " gpu=" + LAUNCH_CONFIG_DEFAULT_GPU + " profile=" + profile + " -> conservative fallback"
         self.gen_add_code_lines([

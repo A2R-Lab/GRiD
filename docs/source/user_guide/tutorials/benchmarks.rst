@@ -134,7 +134,7 @@ GRiD kernels are single-block and **thread-count-invariant** (same result
 at any block size), so the optimal ``(resource_tier, threads_per_block)``
 for each algorithm is a pure *performance* choice that depends on the
 **robot** (DoF / topology) and the **GPU**. GRiD ships measured-optimal
-launch configs under ``launch_configs/<robot>/<gpu>.json``; codegen bakes
+launch configs under ``config/launch_configs/<robot>/<gpu>.json``; codegen bakes
 the matching file into ``grid_launch_config.cuh`` and the host launchers
 (and therefore the python / jax / torch bindings) default their launch
 config from it. With no entry for your (robot, GPU), GRiD falls back to a
@@ -144,12 +144,12 @@ To autotune **your** robot on **your** GPU and write the override:
 
 .. code-block:: shell
 
-   bash tools/autotune_robot.sh <robot> [fixed floating]
+   bash config/autotune_robot.sh <robot> [fixed floating]
 
    # examples
-   bash tools/autotune_robot.sh iiwa14             # fixed + floating
-   bash tools/autotune_robot.sh go2 floating        # floating only
-   GPU_KEY=a40_sm86 bash tools/autotune_robot.sh g1  # force the GPU key
+   bash config/autotune_robot.sh iiwa14             # fixed + floating
+   bash config/autotune_robot.sh go2 floating        # floating only
+   GPU_KEY=a40_sm86 bash config/autotune_robot.sh g1  # force the GPU key
 
 This:
 
@@ -160,7 +160,7 @@ This:
    robot + bases. The build is **RAM-safe serial**
    (``GRID_COMPILE_WORKERS=1 --build-jobs 1``) so the big-robot second-order
    TUs — which need ~24–36 GB of ``cicc`` each — never OOM the box.
-#. Converts the swept winners into ``launch_configs/<robot>/<gpu>.json`` in
+#. Converts the swept winners into ``config/launch_configs/<robot>/<gpu>.json`` in
    the documented schema (``gpu``, ``cuda_arch``, ``gpu_name``,
    ``autotune_N``, ``source``, ``bases``).
 
@@ -182,11 +182,11 @@ Run the sweep on a **quiet GPU** — timing must be isolated, so close other
 GPU workloads first.
 
 **Crowdsource it (please do!):** once you have a good config, open a PR
-adding ``launch_configs/<robot>/<gpu>.json`` (one file per (robot, GPU)) so
+adding ``config/launch_configs/<robot>/<gpu>.json`` (one file per (robot, GPU)) so
 everyone defaults to fast launches on your hardware. No code changes are
 needed — codegen auto-discovers the file. See
-`launch_configs/README.md
-<https://github.com/A2R-Lab/GRiD/blob/main/launch_configs/README.md>`_
+`config/launch_configs/README.md
+<https://github.com/A2R-Lab/GRiD/blob/main/config/launch_configs/README.md>`_
 for the full contribution checklist (GPU model, driver / CUDA version,
 robot DoF / base to include in the PR description).
 

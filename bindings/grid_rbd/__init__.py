@@ -374,7 +374,7 @@ def register_robot(
     # FFI path, so it bakes the "ffi" profile (ffi_bases) by default — see
     # _compile.generate_grid_cuh + GRiDCodeGenerator.load_launch_config. The per-algo
     # {tier,threads} that get baked are NOT derivable from urdf_bytes, so without these
-    # the cache would NOT invalidate when launch_configs/ changes (e.g. after re-running
+    # the cache would NOT invalidate when config/launch_configs/ changes (e.g. after re-running
     # autotune_ffi.py) or when the profile differs. Fold BOTH the profile and the
     # RESOLVED config values into the cache key so a re-autotune rebuilds the .so.
     code_options["launch_config_profile"] = "ffi"

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Convert an ``autotune_best_<host>.json`` slice into a
-``launch_configs/<robot>/<gpu_key>.json`` override (the A1 launch-config schema).
+``config/launch_configs/<robot>/<gpu_key>.json`` override (the A1 launch-config schema).
 
 The autotune sweep (``run.py --autotune-threads``, driven by
-``tools/autotune_robot.sh``) writes the canonical per-host artifact
+``config/autotune_robot.sh``) writes the canonical per-host artifact
 ``test/benchmarks/results/autotune_best_<host>.json``::
 
     {"metadata": {hostname, gpu_name, cuda_arch}, "best": {robot: {base: {algo: {tier, threads, us}}}}}
 
-``launch_configs/<robot>/<gpu>.json`` (consumed by codegen to emit
+``config/launch_configs/<robot>/<gpu>.json`` (consumed by codegen to emit
 ``grid_launch_config.cuh``) wants the documented schema::
 
     {gpu, cuda_arch, gpu_name, autotune_N, source,
@@ -16,18 +16,18 @@ The autotune sweep (``run.py --autotune-threads``, driven by
 
 This script reads ONE robot's slice out of the autotune_best file and writes the
 launch_configs override. Pure JSON transform — no GPU, no build. Called by
-``tools/autotune_robot.sh`` after the sweep, but usable standalone to (re)convert
+``config/autotune_robot.sh`` after the sweep, but usable standalone to (re)convert
 an existing autotune_best file.
 
 Usage::
 
-    python tools/autotune_to_launch_config.py \
+    python config/autotune_to_launch_config.py \
         --robot iiwa14 --bases fixed floating \
         --gpu-key rtx5090_sm120 --cuda-arch sm_120 \
         --gpu-name "NVIDIA GeForce RTX 5090" --autotune-N 256 \
         [--best test/benchmarks/results/autotune_best_<host>.json] \
         [--source "GRiD autotune sweep 2026-06-13"] \
-        [--out launch_configs/iiwa14/rtx5090_sm120.json]
+        [--out config/launch_configs/iiwa14/rtx5090_sm120.json]
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ def main() -> None:
                     help="`source` provenance string (default: "
                          "'GRiD autotune sweep <today>').")
     ap.add_argument("--out", type=Path, default=None,
-                    help="Output path (default: launch_configs/<robot>/<gpu_key>.json).")
+                    help="Output path (default: config/launch_configs/<robot>/<gpu_key>.json).")
     args = ap.parse_args()
 
     best_path = args.best or (
@@ -93,7 +93,7 @@ def main() -> None:
         / f"autotune_best_{_host()}.json")
     if not best_path.exists():
         print(f"ERROR: autotune_best file not found: {best_path}\n"
-              f"       Run the autotune sweep first (tools/autotune_robot.sh).",
+              f"       Run the autotune sweep first (config/autotune_robot.sh).",
               file=sys.stderr)
         sys.exit(1)
 
@@ -153,7 +153,7 @@ def main() -> None:
     source = args.source or f"GRiD autotune sweep {today}"
 
     out_path = args.out or (
-        REPO_ROOT / "launch_configs" / args.robot / f"{args.gpu_key}.json")
+        REPO_ROOT / "config" / "launch_configs" / args.robot / f"{args.gpu_key}.json")
 
     # Merge into any existing config so we PRESERVE ffi_bases / torch_bases /
     # pybind_bases (baked by autotune_ffi.py) and only update the host `bases`

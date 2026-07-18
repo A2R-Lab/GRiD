@@ -5,14 +5,14 @@ GRiD kernels are single-block and **thread-count-invariant** (same result at any
 **robot** (DoF/topology) and the **GPU**. This directory holds measured-optimal launch configs so GRiD defaults
 to fast launches out of the box — instead of the register-clamped fallback that can be 100×+ too slow.
 
-At codegen time, GRiD bakes the matching `launch_configs/<robot>/<gpu>.json` into the generated
+At codegen time, GRiD bakes the matching `config/launch_configs/<robot>/<gpu>.json` into the generated
 `grid_launch_config.cuh`; the host kernel launchers (and therefore the python/jax/torch bindings) default their
 launch config from it. If there's no entry for your (robot, GPU), GRiD falls back to a conservative default —
 still correct, just not optimal.
 
 ## Layout
 ```
-launch_configs/<robot>/<gpu>.json
+config/launch_configs/<robot>/<gpu>.json
 ```
 - `<robot>` — the robot name (matches the URDF/codegen robot id, e.g. `iiwa14`, `go2`, `g1`).
 - `<gpu>`   — a GPU key, `<model>_<arch>` lowercased, e.g. `rtx5090_sm120`.
@@ -36,17 +36,17 @@ is the measured per-problem µs at N=`autotune_N` (informational).
 
 ## Generate a config for YOUR robot / GPU
 ```
-bash tools/autotune_robot.sh <robot> [fixed floating]
+bash config/autotune_robot.sh <robot> [fixed floating]
 ```
 This runs the GRiD autotune sweep (single-call timing off by default; RAM-safe serial build for big robots) and
-writes `launch_configs/<robot>/<your_gpu>.json`. Re-run codegen + rebuild and the host launchers pick up your
+writes `config/launch_configs/<robot>/<your_gpu>.json`. Re-run codegen + rebuild and the host launchers pick up your
 values. (See the **"Autotune launch config for your robot / GPU"** section of
 `docs/source/user_guide/tutorials/benchmarks.rst` for the full workflow.)
 
 ## Contribute a (robot, GPU) combo (please do! — this crowdsources a complete matrix)
 1. Generate the config as above on a **quiet GPU** (timing must be isolated — close other GPU workloads).
 2. Sanity-check the JSON against the format above; confirm `gpu`/`cuda_arch`/`gpu_name` are correct.
-3. Open a PR adding `launch_configs/<robot>/<gpu>.json`. One file per (robot, GPU). Include in the PR
+3. Open a PR adding `config/launch_configs/<robot>/<gpu>.json`. One file per (robot, GPU). Include in the PR
    description: GPU model, driver/CUDA version, and the robot's DoF/base. No code changes needed — codegen
    auto-discovers the file.
 
@@ -54,7 +54,7 @@ Currently seeded: **iiwa14, go2, g1** (fixed + floating) on `rtx5090_sm120`. The
 config is retained but **h1_2 is retired** from the swept robot set (replaced by H2+).
 
 TODO (H2+ autotune): **h2_plus** (the Unitree H2+, the large-robot scaling target that retired
-h1_2) has no `launch_configs/h2_plus/` yet — codegen currently resolves it to the conservative
-(TIER_SHARED, MAX_PERF_LEVEL_THREADS) fallback. Run `tools/autotune_robot.sh h2_plus fixed floating`
+h1_2) has no `config/launch_configs/h2_plus/` yet — codegen currently resolves it to the conservative
+(TIER_SHARED, MAX_PERF_LEVEL_THREADS) fallback. Run `config/autotune_robot.sh h2_plus fixed floating`
 (GPU-heavy) and drop the resulting `h2_plus/rtx5090_sm120.json` here to bake its per-algo
 {tier, threads} picks.

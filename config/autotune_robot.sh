@@ -1,6 +1,6 @@
 #!/bin/bash
 # Autotune GRiD launch configs for YOUR robot + GPU, then write a
-# launch_configs/<robot>/<gpu>.json override that codegen bakes into
+# config/launch_configs/<robot>/<gpu>.json override that codegen bakes into
 # grid_launch_config.cuh (A1 launch-config feature).
 #
 # WHAT IT DOES
@@ -11,13 +11,13 @@
 #      time and needs the rdc shim — batch N=256 timing is what we tune on).
 #      Serial build (GRID_COMPILE_WORKERS=1 --build-jobs 1) so the big-robot SO
 #      monolithic TUs (~24-36 GB cicc each) never OOM the box.
-#   3. Converts the swept winners into launch_configs/<robot>/<gpu>.json in the
-#      documented schema (via tools/autotune_to_launch_config.py).
+#   3. Converts the swept winners into config/launch_configs/<robot>/<gpu>.json in the
+#      documented schema (via config/autotune_to_launch_config.py).
 #   4. Prints next steps: re-codegen + rebuild to pick up the values, and how to
 #      PR the JSON to crowdsource the matrix.
 #
 # USAGE
-#   bash tools/autotune_robot.sh <robot> [base ...]
+#   bash config/autotune_robot.sh <robot> [base ...]
 #       <robot>     robot id (iiwa14 | go2 | g1 | h2_plus | ...; must be a codegen robot)
 #       [base ...]  one or more of: fixed floating   (default: fixed floating)
 #
@@ -26,9 +26,9 @@
 #   AUTOTUNE_DRY_RUN=1       skip the actual sweep (detection + plumbing check only)
 #
 # EXAMPLES
-#   bash tools/autotune_robot.sh iiwa14                 # fixed + floating
-#   bash tools/autotune_robot.sh go2 floating           # floating only
-#   GPU_KEY=a40_sm86 bash tools/autotune_robot.sh g1     # forced GPU key
+#   bash config/autotune_robot.sh iiwa14                 # fixed + floating
+#   bash config/autotune_robot.sh go2 floating           # floating only
+#   GPU_KEY=a40_sm86 bash config/autotune_robot.sh g1     # forced GPU key
 #
 # Run on a QUIET GPU — timing must be isolated (close other GPU workloads).
 set -uo pipefail
@@ -44,8 +44,8 @@ PY="$REPO_ROOT/.venv/bin/python"
 
 # ---- args ----------------------------------------------------------------
 if [ "$#" -lt 1 ]; then
-  echo "Usage: bash tools/autotune_robot.sh <robot> [fixed floating]" >&2
-  echo "  e.g. bash tools/autotune_robot.sh iiwa14 fixed floating" >&2
+  echo "Usage: bash config/autotune_robot.sh <robot> [fixed floating]" >&2
+  echo "  e.g. bash config/autotune_robot.sh iiwa14 fixed floating" >&2
   exit 2
 fi
 ROBOT="$1"; shift
@@ -118,7 +118,7 @@ echo "    GPU_KEY   = $GPU_KEY"
 echo "    gpu_name  = $GPU_NAME"
 echo "    cuda_arch = $CUDA_ARCH"
 echo "    autotune_N= $AUTOTUNE_N"
-echo "    output    = launch_configs/$ROBOT/$GPU_KEY.json"
+echo "    output    = config/launch_configs/$ROBOT/$GPU_KEY.json"
 
 HOST="$(python3 -c 'import platform;print(platform.node().replace(" ","_"))' 2>/dev/null || hostname)"
 BEST_FILE="$REPO_ROOT/test/benchmarks/results/autotune_best_${HOST}.json"
@@ -145,7 +145,7 @@ else
   done
 
   # Merge this run's per-cell picks -> a fresh autotune_best_<host>.json for the bake step.
-  "$PY" tools/sweep_to_autotune_best.py --sweep-dir "$SWEEPDIR" --out "$BEST_FILE" \
+  "$PY" config/sweep_to_autotune_best.py --sweep-dir "$SWEEPDIR" --out "$BEST_FILE" \
     || { echo "ERROR: autotune_best merge failed." >&2; exit 1; }
 
   if [ ! -f "$BEST_FILE" ]; then
@@ -155,11 +155,11 @@ else
   fi
 fi
 
-# ---- convert winners -> launch_configs/<robot>/<gpu>.json ----------------
+# ---- convert winners -> config/launch_configs/<robot>/<gpu>.json ----------------
 if [ "${AUTOTUNE_DRY_RUN:-0}" = "1" ] && [ ! -f "$BEST_FILE" ]; then
   echo "=== AUTOTUNE_DRY_RUN: no autotune_best file to convert (expected in a dry run) ==="
 else
-  "$PY" tools/autotune_to_launch_config.py \
+  "$PY" config/autotune_to_launch_config.py \
       --robot "$ROBOT" --bases "${BASES[@]}" \
       --gpu-key "$GPU_KEY" --cuda-arch "$CUDA_ARCH" \
       --gpu-name "$GPU_NAME" --autotune-N "$AUTOTUNE_N" \
@@ -170,18 +170,18 @@ fi
 # ---- next steps ----------------------------------------------------------
 cat <<EOF
 
-=== DONE: launch_configs/$ROBOT/$GPU_KEY.json written ===
+=== DONE: config/launch_configs/$ROBOT/$GPU_KEY.json written ===
 
 Next steps:
   1. Re-run codegen + rebuild so the host launchers pick up your tuned values
-     (codegen bakes launch_configs/<robot>/<gpu>.json into grid_launch_config.cuh):
+     (codegen bakes config/launch_configs/<robot>/<gpu>.json into grid_launch_config.cuh):
 
          python3 -m GRiDCodeGenerator ...   # your usual codegen for $ROBOT
          # then rebuild your GRiD / bindings as usual
 
   2. (Optional, please do!) PR the JSON to crowdsource the matrix:
-         git add launch_configs/$ROBOT/$GPU_KEY.json
-     See launch_configs/README.md for the contribution checklist (GPU model,
+         git add config/launch_configs/$ROBOT/$GPU_KEY.json
+     See config/launch_configs/README.md for the contribution checklist (GPU model,
      driver/CUDA version, robot DoF/base in the PR description).
 
 Note: single-call timing is OFF by default (B8) — it is hard to time and needs

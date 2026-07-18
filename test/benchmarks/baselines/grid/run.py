@@ -12,8 +12,8 @@ exe/process, RAM-safe + crash-isolated). This file is imported for its reusable 
   * tier caps, thread grids, kernel-symbol helpers
 
 Consumers: per_algo_bench.py, collect_kernel_limits.py, build_autotune_matrix.py, autotune_ffi.py.
-The autotune_best merge lives in tools/sweep_to_autotune_best.py; the launch-config bake in
-tools/autotune_to_launch_config.py.
+The autotune_best merge lives in config/sweep_to_autotune_best.py; the launch-config bake in
+config/autotune_to_launch_config.py.
 """
 
 from __future__ import annotations

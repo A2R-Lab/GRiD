@@ -9,12 +9,12 @@ launch-config bake you want exactly ONE run's picks. This reads every
 and emits a fresh autotune_best containing ONLY that run's valid (non-null) picks.
 
 Algo keys are kept as emitted by the sweep (the long GRiD symbol, e.g.
-``forward_dynamics``); ``tools/autotune_to_launch_config.py`` maps them to the
+``forward_dynamics``); ``config/autotune_to_launch_config.py`` maps them to the
 short launch-config key at bake time and accepts either convention.
 
 Pairs with the bake step:
-    python tools/sweep_to_autotune_best.py --sweep-dir <dir> --out /tmp/best.json
-    python tools/autotune_to_launch_config.py --robot go2 --bases floating \
+    python config/sweep_to_autotune_best.py --sweep-dir <dir> --out /tmp/best.json
+    python config/autotune_to_launch_config.py --robot go2 --bases floating \
         --gpu-key rtx5090_sm120 --cuda-arch sm_120 \
         --gpu-name "NVIDIA GeForce RTX 5090" --best /tmp/best.json
 """

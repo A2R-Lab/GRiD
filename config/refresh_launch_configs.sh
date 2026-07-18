@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Refresh the LIVE launch_configs/<robot>/<gpu>.json picks from a tier-sweep, WITHOUT
-# the day-long recompile. Pipeline (see launch_configs/README.md):
+# Refresh the LIVE config/launch_configs/<robot>/<gpu>.json picks from a tier-sweep, WITHOUT
+# the day-long recompile. Pipeline (see config/launch_configs/README.md):
 #
 #   sweep (cached, split) ── host bases ──> harvest ──> bake ──> [ffi] ──> diff
 #
@@ -9,22 +9,22 @@
 #           `bash test/benchmarks/run_tier_sweep_phased.sh overnight 4` (it cache-HITS
 #           the content-addressed binaries -> NO recompile) and pass --sweep-dir, OR let
 #           this script pick the latest tier_sweep_phased_* dir.
-#   stage 1: tools/sweep_to_autotune_best.py   -> ONE clean autotune_best (this run only).
-#   stage 2: tools/autotune_to_launch_config.py -> bake `bases` per robot (symbol->short
+#   stage 1: config/sweep_to_autotune_best.py   -> ONE clean autotune_best (this run only).
+#   stage 2: config/autotune_to_launch_config.py -> bake `bases` per robot (symbol->short
 #            key, per-algo merge, preserves ffi_bases). GPU-free.
 #   stage 3 (--with-ffi, GPU/overnight): test/benchmarks/autotune_ffi.py -> `ffi_bases`.
 #            Big robots (g1/h2_plus) get a non-SO .so subset (SO ffi falls back to host).
-#   stage 4: print git diff of launch_configs/ (NEVER commits).
+#   stage 4: print git diff of config/launch_configs/ (NEVER commits).
 #
-# WHY NOT tools/autotune_robot.sh: it builds a FULL monolithic per-tier binary, so g1/h2_plus
+# WHY NOT config/autotune_robot.sh: it builds a FULL monolithic per-tier binary, so g1/h2_plus
 # hit the ~hour SO recompile (only the SPLIT noSO/SO binaries are cached). The sweep above
 # reuses those cached split binaries.
 #
 # Usage:
-#   bash tools/refresh_launch_configs.sh                      # latest sweep, bake bases only
-#   bash tools/refresh_launch_configs.sh --sweep-dir DIR      # bake from a specific sweep
-#   bash tools/refresh_launch_configs.sh --with-ffi           # also (re)tune ffi_bases (GPU)
-#   DRY_RUN=1 bash tools/refresh_launch_configs.sh --with-ffi # print commands only
+#   bash config/refresh_launch_configs.sh                      # latest sweep, bake bases only
+#   bash config/refresh_launch_configs.sh --sweep-dir DIR      # bake from a specific sweep
+#   bash config/refresh_launch_configs.sh --with-ffi           # also (re)tune ffi_bases (GPU)
+#   DRY_RUN=1 bash config/refresh_launch_configs.sh --with-ffi # print commands only
 set -uo pipefail
 REPO_ROOT="/home/plancher/Desktop/GRiD"
 cd "$REPO_ROOT"
@@ -65,8 +65,8 @@ echo "########## refresh_launch_configs  sweep=$SWEEP_DIR  with_ffi=$WITH_FFI  $
 
 # stage 1: harvest this sweep's picks into ONE clean autotune_best
 # (always runs even under DRY_RUN — GPU-free, and the bake/ffi discovery needs it)
-echo "+ $PY tools/sweep_to_autotune_best.py --sweep-dir $SWEEP_DIR --out $BEST"
-"$PY" tools/sweep_to_autotune_best.py --sweep-dir "$SWEEP_DIR" --out "$BEST" || exit 1
+echo "+ $PY config/sweep_to_autotune_best.py --sweep-dir $SWEEP_DIR --out $BEST"
+"$PY" config/sweep_to_autotune_best.py --sweep-dir "$SWEEP_DIR" --out "$BEST" || exit 1
 
 # discover (robot, base) pairs present in the harvested best
 mapfile -t PAIRS < <("$PY" - "$BEST" <<'PYEOF'
@@ -83,7 +83,7 @@ PYEOF
 for p in "${PAIRS[@]}"; do
   set -- $p; r="$1"; b="$2"
   echo "--- [$r/$b] bake bases ---"
-  run "$PY" tools/autotune_to_launch_config.py --robot "$r" --bases "$b" \
+  run "$PY" config/autotune_to_launch_config.py --robot "$r" --bases "$b" \
       --gpu-key "$GPU_KEY" --cuda-arch "$CUDA_ARCH" --gpu-name "$GPU_NAME" \
       --autotune-N "$AUTOTUNE_N" --best "$BEST"
 done
@@ -103,5 +103,5 @@ if [ "$WITH_FFI" = "1" ]; then
 fi
 
 echo "########## DONE $(date) — review diffs, commit manually ##########"
-git -C "$REPO_ROOT" status -s launch_configs/
-git -C "$REPO_ROOT" diff --stat launch_configs/
+git -C "$REPO_ROOT" status -s config/launch_configs/
+git -C "$REPO_ROOT" diff --stat config/launch_configs/

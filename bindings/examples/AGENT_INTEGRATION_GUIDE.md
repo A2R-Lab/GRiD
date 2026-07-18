@@ -208,7 +208,7 @@ trajectory-opt use case) that path has a *different* optimum. On iiwa14 `fd` the
 fastest at 128 threads but the FFI path is fastest at ~768 — the same kernel, ~1.6× apart.
 
 - The bindings **ship FFI-tuned defaults** (the `ffi_bases` profile in
-  `launch_configs/<robot>/<gpu>.json`, baked into the `.so`). You get the FFI-fast path for free
+  `config/launch_configs/<robot>/<gpu>.json`, baked into the `.so`). You get the FFI-fast path for free
   on the robots/GPUs we tuned (per-algo fallback to the host pick for anything un-tuned).
 - **Run the autotune for your own robot / GPU / use case** — there is no single "true" block size:
   ```bash
