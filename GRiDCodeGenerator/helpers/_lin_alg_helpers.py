@@ -8,22 +8,36 @@ import subprocess
 # docs/source/user_guide/concepts/cublasdx_removal_design.rst for the
 # rationale and the `archive/last-cublasdx` git tag for the historical
 # vendoring list.
+# ORDER MATTERS: vendoring strips every `#include`, so a file that references
+# another op's `*_impl` body (or a shared enum) must be listed AFTER its
+# dependency. Cross-file deps recorded inline below (e.g. posv composes
+# potrf/trsm/trsv; trsm needs potrf; trsv/trsm/syrk need FillMode from flags;
+# eigh/psd_project compose syev).
 _GLASS_BASE_FILES = [
     # Barrier policy for the shared *_impl bodies (GLASS v2 cgrps dedup + TRAILING_SYNC);
     # defines BlockBarrier, which every L1/L2/L3 op body now references. MUST be first.
     "src/base/barrier.cuh",
+    "src/base/flags.cuh",             # FillMode / Diag enums (shared by trsv/trsm/syrk). MUST precede them.
     "src/base/L1/reduce.cuh",
     "src/base/L1/dot.cuh",
     "src/base/L1/dot_strided.cuh",
     "src/base/L1/dot_strided_coalesced.cuh",
+    "src/base/L1/set_const.cuh",      # block set-to-constant (standardizes smem zero-fill / init discipline)
+    "src/base/L1/symmetrize.cuh",     # in-place (A + A^T)/2 (replaces hand-rolled symmetrization)
     "src/base/L2/gemv.cuh",
     "src/base/L2/gemv_strided.cuh",
     "src/base/L2/gemv_segmented.cuh",
+    "src/base/L2/trsv.cuh",           # triangular solve (needs flags); building block for posv
     "src/base/L3/gemm.cuh",
     "src/base/L3/gemm_strided.cuh",
     "src/base/L3/gemm_batched_indexed.cuh",
     "src/base/L3/inv.cuh",            # used by invert_matrix (floating-base 6x6 root invert)
+    "src/base/L3/potrf.cuh",          # Cholesky factor (SPD); building block for posv/trsm
+    "src/base/L3/trsm.cuh",           # triangular solve multi-RHS (needs flags + potrf)
+    "src/base/L3/posv.cuh",           # SPD solve A x = b (composes potrf + trsm/trsv). For CRBA+chol forward_dynamics.
+    "src/base/L3/syrk.cuh",           # symmetric rank-k A A^T (needs flags); halves flops vs gemm for symmetric outputs
     "src/base/L3/syev.cuh",           # symmetric eigensolve + eig_clamp (PSD projection of the Newton ee cost hessian)
+    "src/base/L3/eigh.cuh",           # Jacobi eigensolve + psd_project one-call (composes syev). MUST follow syev.
 ]
 
 
