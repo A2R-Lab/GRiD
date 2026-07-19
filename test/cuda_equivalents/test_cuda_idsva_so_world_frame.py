@@ -157,7 +157,7 @@ def _compile_world_frame_runner(build_dir: Path):
     executable = build_dir / "cuda_idsva_so_world_frame_smoke_runner.exe"
     cmd = [
         nvcc,
-        "-std=c++11",
+        "-std=c++17",
         "-O0",
         "-gencode",
         f"arch=compute_{arch},code=sm_{arch}",

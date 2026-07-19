@@ -489,6 +489,15 @@ class GRiDCodeGenerator:
             algorithms.add("inverse_dynamics")
             if self.robot.floating_base:
                 algorithms.add("inverse_dynamics_gradient")
+                # FLOATING idsva_so (both the body-frame floating-reference inner and
+                # the world-frame inner) builds the dense mass matrix M via crba_inner
+                # (M into the dead gradient pool), same as floating forward_dynamics_gradient
+                # above. A non-mimic/non-spherical floating robot is NOT caught by the
+                # mimic/spherical minv->crba guards, so it would emit the crba_inner CALL
+                # without the DEFINITION -> nvlink: unresolved extern crba_inner (surfaces
+                # in subset codegen requesting idsva_so WITHOUT crba). Fixed-base idsva_so
+                # never calls crba_inner, so gate on floating (cardinal byte-identical).
+                algorithms.add("crba")
             # Spherical (ball) joints route the idsva_so dispatcher to the WORLD
             # frame (the body-frame inner's single-DoF S contractions are wrong
             # for a 3-DoF joint). Force the world-frame emit so the routed
