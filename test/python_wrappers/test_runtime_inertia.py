@@ -397,6 +397,48 @@ def iiwa_baked():
         floating_base=False, runtime_inertia=False, max_batch_size=8)
 
 
+# ─── FFI parity of a poke (numpy/jax/torch share the device inertia table) ────
+
+
+def test_inertia_poke_seen_across_surfaces():
+    """A poke through the numpy handle mutates the single device-resident
+    d_inertia_params table, so jax/torch (sharing the same dlopen'd .so __device__
+    global) see the poked inertias: numpy == jax == torch AFTER set_inertia_params.
+    This is the runtime_inertia analogue of
+    test_runtime_joint_dynamics::test_poke_seen_across_surfaces, and the end-to-end
+    check that the jax/torch runtime_inertia exposure threads the shared table.
+    Skips if jax/torch unavailable."""
+    gj = pytest.importorskip("grid_rbd.jax")
+    pytest.importorskip("jax")
+    gt = pytest.importorskip("grid_rbd.torch")
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA device not available for torch")
+    common = dict(urdf_path=str(_IIWA), floating_base=False, max_batch_size=8,
+                  runtime_inertia=True)
+    hn = _grid_rbd.register_robot(name="iiwa14_rti_ffi_pytest", force_rebuild=True, **common)
+    hj = gj.register_robot(name="iiwa14_rti_ffi_pytest", **common)
+    ht = gt.register_robot(name="iiwa14_rti_ffi_pytest", **common)
+    nj = hn.num_joints
+    rng = np.random.default_rng(31)
+    perturbed = _perturb(hn.inertia_params, rng).astype(np.float32)
+    hn.set_inertia_params(perturbed)                  # poke via numpy -> device table
+    q = rng.standard_normal((4, nj)).astype(np.float32)
+    qd = rng.standard_normal((4, nj)).astype(np.float32)
+    qt = torch.tensor(q, device="cuda", dtype=torch.float32)
+    qdt = torch.tensor(qd, device="cuda", dtype=torch.float32)
+    cn = np.asarray(hn.inverse_dynamics(q, qd))
+    cj = np.asarray(hj.inverse_dynamics(q, qd))
+    ct = ht.inverse_dynamics(qt, qdt).detach().cpu().numpy()
+    assert _max_rel_err(cn, cj) < 2e-3, "jax did not see the numpy inertia poke"
+    assert _max_rel_err(cn, ct) < 2e-3, "torch did not see the numpy inertia poke"
+    # Confirm the poke genuinely moved the output (not a trivial baked==baked pass).
+    hn.set_inertia_params(hn.inertia_params)
+    cb = np.asarray(hn.inverse_dynamics(q, qd))
+    assert _max_rel_err(cn, cb) > 1e-2, "inertia poke had no effect"
+    hn.set_inertia_params(hn.inertia_params)          # restore
+
+
 def test_runtime_equals_baked_so(iiwa_rt, iiwa_baked):
     """A runtime_inertia=True .so, fed its ORIGINAL baked params, must reproduce
     the plain baked .so to fp tolerance — the rebuild is a pure scatter of the

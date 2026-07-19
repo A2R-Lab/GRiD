@@ -250,16 +250,12 @@ def register_robot(
         raise ValueError(
             f"dtype='float64' is only supported for the numpy backend; the "
             f"{backend!r} backend is strictly fp32 (Phase 8). Use backend='numpy'.")
-    if runtime_inertia and backend != "numpy":
-        raise ValueError(
-            f"runtime_inertia=True is only supported for the numpy backend; the "
-            f"{backend!r} backend does not yet thread the mutable inertia table. "
-            f"Use backend='numpy'.")
-    if runtime_transform and backend != "numpy":
-        raise ValueError(
-            f"runtime_transform=True is only supported for the numpy backend; the "
-            f"{backend!r} backend does not yet thread the mutable transform table. "
-            f"Use backend='numpy'.")
+    # runtime_inertia / runtime_transform are supported on ALL backends: the jax
+    # FFI + torch custom-op kernels read the SAME device-resident mutable table the
+    # numpy runner pokes (a single dlopen'd .so → one d_inertia_params /
+    # d_transform_params __device__ global), exactly like runtime_joint_dynamics
+    # (test_runtime_joint_dynamics::test_poke_seen_across_surfaces). A poke through
+    # any surface is seen by all three.
     # use_joint_dynamics is a BUILD-TIME codegen flag baked into the id/fd/aba/*_gradient
     # kernels (not a per-algo GRID_HAS_* gate); the jax/torch FFI handlers call those same
     # baked symbols. So all three backends support it — it just re-keys the cache. (C5.)
@@ -287,7 +283,8 @@ def register_robot(
             ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
             cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
             output_convention=output_convention, algorithm_list=algorithm_list,
-            use_joint_dynamics=use_joint_dynamics)
+            use_joint_dynamics=use_joint_dynamics, runtime_inertia=runtime_inertia,
+            runtime_transform=runtime_transform)
     if backend == "torch":
         from . import torch as _torch_backend
         return _torch_backend.register_robot(
@@ -295,7 +292,8 @@ def register_robot(
             ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
             cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
             output_convention=output_convention, algorithm_list=algorithm_list,
-            use_joint_dynamics=use_joint_dynamics)
+            use_joint_dynamics=use_joint_dynamics, runtime_inertia=runtime_inertia,
+            runtime_transform=runtime_transform)
 
     cache_dir = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)

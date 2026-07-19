@@ -591,6 +591,28 @@ class TorchRobotHandle:
         registered with ``runtime_inertia=True``."""
         self._base.set_inertia_params(params)
 
+    # ─── runtime-mutable joint-frame transform (runtime_transform) ───────
+    @property
+    def runtime_transform(self) -> bool:
+        """True if registered with ``runtime_transform=True`` (mutable joint-origin
+        table + :py:meth:`set_transform_params`). The torch-op kernels read the same
+        device-resident table, so a poke through any surface is seen here."""
+        return self._base.runtime_transform
+
+    @property
+    def transform_params(self):
+        """The BAKED per-joint origin table, shape ``(num_joints, 6)``
+        (``[x, y, z, r, p, y]`` per joint). Fetch, mutate, and pass to
+        :py:meth:`set_transform_params`. Only on a ``runtime_transform`` build."""
+        return self._base.transform_params
+
+    def set_transform_params(self, params) -> None:
+        """Update the device-resident joint-origin table at runtime (no recompile).
+        ``params`` is the ``(num_joints, 6)`` (or flat ``6*num_joints``) table in the
+        same basis as :py:attr:`transform_params`. Only valid on a robot registered
+        with ``runtime_transform=True``."""
+        self._base.set_transform_params(params)
+
     # ─── runtime-mutable joint dynamics (C5 / sysID) ─────────────────────
     @property
     def runtime_joint_dynamics(self) -> bool:
@@ -1330,6 +1352,8 @@ def register_robot(
     algorithm_list: list[str] | str | None = None,
     use_joint_dynamics: bool = False,
     runtime_joint_dynamics: bool = False,
+    runtime_inertia: bool = False,
+    runtime_transform: bool = False,
 ) -> TorchRobotHandle:
     """Register a robot for the torch backend (same cache as the plain/JAX
     surfaces). Returns a :py:class:`TorchRobotHandle`.
@@ -1346,6 +1370,8 @@ def register_robot(
         force_rebuild=force_rebuild, cuda_arch=cuda_arch,
         algorithm_list=algorithm_list, use_joint_dynamics=use_joint_dynamics,  # C5
         runtime_joint_dynamics=runtime_joint_dynamics,  # C5 mutable damping/friction table
+        runtime_inertia=runtime_inertia,  # D.4: mutable inertia table (torch op reads same device global)
+        runtime_transform=runtime_transform,  # mutable joint-origin table (shared device global)
         _profile_overlay="torch",  # E6 torch threads overlay
     )
     cache_key, so_path = _lookup(name, cache_dir)

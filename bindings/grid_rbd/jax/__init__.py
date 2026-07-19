@@ -328,6 +328,28 @@ class JaxRobotHandle:
         registered with ``runtime_inertia=True``."""
         self._base.set_inertia_params(params)
 
+    # ─── runtime-mutable joint-frame transform (runtime_transform) ───────
+    @property
+    def runtime_transform(self) -> bool:
+        """True if registered with ``runtime_transform=True`` (mutable joint-origin
+        table + :py:meth:`set_transform_params`). The FFI kernels read the same
+        device-resident table, so a poke through any surface is seen here."""
+        return self._base.runtime_transform
+
+    @property
+    def transform_params(self):
+        """The BAKED per-joint origin table, shape ``(num_joints, 6)``
+        (``[x, y, z, r, p, y]`` per joint). Fetch, mutate, and pass to
+        :py:meth:`set_transform_params`. Only on a ``runtime_transform`` build."""
+        return self._base.transform_params
+
+    def set_transform_params(self, params) -> None:
+        """Update the device-resident joint-origin table at runtime (no recompile).
+        ``params`` is the ``(num_joints, 6)`` (or flat ``6*num_joints``) table in the
+        same basis as :py:attr:`transform_params`. Only valid on a robot registered
+        with ``runtime_transform=True``."""
+        self._base.set_transform_params(params)
+
     # ─── runtime-mutable joint dynamics (C5 / sysID) ─────────────────────
     @property
     def runtime_joint_dynamics(self) -> bool:
@@ -1657,6 +1679,8 @@ def register_robot(
     algorithm_list: list[str] | str | None = None,
     use_joint_dynamics: bool = False,
     runtime_joint_dynamics: bool = False,
+    runtime_inertia: bool = False,
+    runtime_transform: bool = False,
 ) -> JaxRobotHandle:
     """Register a robot for use with JAX.
 
@@ -1686,6 +1710,8 @@ def register_robot(
         algorithm_list=algorithm_list,
         use_joint_dynamics=use_joint_dynamics,  # C5: baked into id/fd/aba/*_gradient kernels
         runtime_joint_dynamics=runtime_joint_dynamics,  # C5: mutable damping/friction table
+        runtime_inertia=runtime_inertia,  # D.4: mutable inertia table (FFI reads the same device global)
+        runtime_transform=runtime_transform,  # mutable joint-origin table (shared device global)
         _profile_overlay=None,  # jax's baked default IS the ffi profile — no overlay
     )
     # Pull the cache_key + .so path from the manifest so we can dlopen
