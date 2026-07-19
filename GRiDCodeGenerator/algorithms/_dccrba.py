@@ -250,10 +250,7 @@ def _emit_dccrba_assembly(self, out_name, contract_qd):
     if contract_qd:
         # zero the Adot output (6*nv) once
         self.gen_add_code_line("// zero Adot output")
-        self.gen_add_parallel_loop("ind", str(6 * nv))
-        self.gen_add_code_line(out_name + "[ind] = static_cast<T>(0);")
-        self.gen_add_end_control_flow()
-        self.gen_add_sync()
+        self.gen_add_code_line("glass::set_const<T, " + str(6 * nv) + ">(static_cast<T>(0), " + out_name + ");")
 
     # ---- Step B: P2 fan over columns m. Each thread owns ONE m, builds the full
     #      6*nv column dA[:, :, m] into a per-thread accumulator? 6*nv can be large

@@ -196,10 +196,7 @@ def gen_f_ext_body_inner(self, contacts):
 
     # zero the WHOLE output first: bodies with no contact must read 0.
     self.gen_add_code_line("// zero every slot: bodies with no contact contribute nothing")
-    self.gen_add_parallel_loop("ind", str(6 * NB))
-    self.gen_add_code_line("s_f_ext[ind] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(6 * NB) + ">(static_cast<T>(0), s_f_ext);")
 
     # one thread per (contacted body, component) -- exactly one writer per slot, fixed-order sum.
     self.gen_add_code_line("// one thread per (contacted body, component): single writer, fixed-order sum")
@@ -279,10 +276,7 @@ def gen_f_ext_body_jacobian_dq_inner(self, contacts):
     _emit_contact_tables(self, cs)
 
     self.gen_add_code_line("// zero every slot: bodies with no contact have zero sensitivity")
-    self.gen_add_parallel_loop("ind", str(6 * NB * nv))
-    self.gen_add_code_line("s_dfext_dq[ind] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(6 * NB * nv) + ">(static_cast<T>(0), s_dfext_dq);")
 
     self.gen_add_code_line("// one thread per (contacted body, component, velocity): single writer")
     self.gen_add_parallel_loop("ind", str(6 * m * nv))
@@ -427,10 +421,7 @@ def gen_f_ext_body_jacobian_dfc_inner(self, contacts):
     _emit_contact_tables(self, cs)
 
     self.gen_add_code_line("// zero: only the (body of contact c) rows are nonzero for column block c")
-    self.gen_add_parallel_loop("ind", str(NR * 6 * n))
-    self.gen_add_code_line("s_dfext_dfc[ind] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(NR * 6 * n) + ">(static_cast<T>(0), s_dfext_dfc);")
 
     # one thread per (contact, output-row k, input-col j): every slot has a single writer.
     self.gen_add_code_line("// one thread per (contact, out-component k, in-component j)")

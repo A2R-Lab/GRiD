@@ -161,10 +161,7 @@ def gen_f_ext_gradient_jacobianT_inner(self):
     out_size = nv * 6 * NB
     # zero the output
     self.gen_add_code_line("// zero the full nv x 6*NB output (out-of-chain cols stay zero)")
-    self.gen_add_parallel_loop("ind", str(out_size))
-    self.gen_add_code_line("s_dtau_dfext[ind] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(out_size) + ">(static_cast<T>(0), s_dtau_dfext);")
 
     # For each job (body i, chain joint j): the -J^T column block is -col, where
     #   col = X[i] X[i-1] ... X[j+1] S_j   (push the motion subspace S_j from joint

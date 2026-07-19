@@ -180,10 +180,7 @@ def _gen_crba_inner_spherical_fixed(self, NB, n_bfs_levels):
     # IC band lives in s_temp[0, 36*NB) — same as the cardinal `alpha` buffer.
     self.gen_add_code_line("// === Tier-C spherical CRBA (serial generalized-block fold) ===")
     self.gen_add_code_line("// Clear reduced mass matrix M (NV x NV)")
-    self.gen_add_parallel_loop("i", str(nv * nv))
-    self.gen_add_code_line("s_M[i] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(nv * nv) + ">(static_cast<T>(0), s_M);")
     self.gen_add_code_line("T *alpha = &s_temp[0];   // [0, 36*NB) composite inertia IC")
     self.gen_add_code_line("// IC[ind] = I[ind] (column-major 6x6 per body)")
     self.gen_add_parallel_loop("i", str(36 * NB))
@@ -199,10 +196,7 @@ def _gen_crba_inner_spherical_fixed(self, NB, n_bfs_levels):
     # beta=0, which still READS C (C = 1*res + 0*C). On the cold first use that
     # slot is uninitialized shared scratch, and 0*NaN == NaN would poison the
     # whole composite-inertia fold (a load-dependent thread-invariance flake).
-    self.gen_add_parallel_loop("i", "36")
-    self.gen_add_code_line(f"s_temp[{36*NB} + i] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, 36>(static_cast<T>(0), &s_temp[" + str(36*NB) + "]);")
     for bfs_level in range(n_bfs_levels - 1, 0, -1):
         inds = self.robot.get_ids_by_bfs_level(bfs_level)
         joint_names = [self.robot.get_joint_by_id(j).get_name() for j in inds]
@@ -317,10 +311,7 @@ def gen_crba_inner(self):
         return
 
     # first clear the matrix
-    self.gen_add_parallel_loop("i",str(n*n))
-    self.gen_add_code_line('s_M[i] = static_cast<T>(0);')
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(n*n) + ">(static_cast<T>(0), s_M);")
     # Two HOT scratch buffers, packed contiguously (band = 42*NJ, see
     # gen_crba_inner_temp_mem_size). The former `beta` (36n) and `s_jid_list`
     # slots were dead (declared, never referenced) and are removed so s_fh sits
@@ -743,10 +734,7 @@ def _gen_crba_mimic_floating_phase2(self, NJ):
     self.gen_add_code_line("// === mimic-aware floating CRBA Phase 2 (serial reduced-space fold) ===")
     # Clear joint<->joint and joint<->root cells (the root 6x6 block is written
     # by the parallel loop below, but clear it too for a clean accumulate base).
-    self.gen_add_parallel_loop("i", str(nv * nv))
-    self.gen_add_code_line("s_M[i] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(nv * nv) + ">(static_cast<T>(0), s_M);")
     self.gen_add_serial_ops()
     self.gen_add_code_line("T s_fh[6];")
     self.gen_add_code_line("T s_fh2[6];")

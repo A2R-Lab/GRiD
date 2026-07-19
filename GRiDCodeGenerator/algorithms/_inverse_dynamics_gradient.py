@@ -761,10 +761,7 @@ def gen_inverse_dynamics_gradient_inner(self):
     
     # Intiialize df/du to 0 to make sure we don't have issues with remaining values later when we do +=
     self.gen_add_code_line("// Init df/du to 0")
-    self.gen_add_parallel_loop("ind",str(6*2*df_cols_per_partial))
-    self.gen_add_code_line("s_temp[" + str(Offset_df_dq) + " + ind] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(6*2*df_cols_per_partial) + ">(static_cast<T>(0), &s_temp[" + str(Offset_df_dq) + "]);")
 
     # Start the df/du by setting = fx(dv/du)*Iv and also compute the temp = Fx(v)*I 
     # aka do all of the Fx comps in parallel
@@ -1865,10 +1862,7 @@ def _gen_inverse_dynamics_gradient_mimic_inner(self, nv, NB):
     self.gen_add_parallel_loop("i", str(off_iv))
     self.gen_add_code_line("s_temp[i] = static_cast<T>(0);")
     self.gen_add_end_control_flow()
-    self.gen_add_parallel_loop("i", str(2 * nv * nv))
-    self.gen_add_code_line("s_dc_du[i] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(2 * nv * nv) + ">(static_cast<T>(0), s_dc_du);")
 
     # ---- forward pass (serial over bodies, root first) ----
     # WIN B: the body-walk MUST stay serial-ordered (each body reads its parent's

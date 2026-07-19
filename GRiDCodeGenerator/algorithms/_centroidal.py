@@ -78,18 +78,12 @@ def gen_id_bias_device(self, gravity_only):
 
     def _inner():
         if gravity_only:
-            self.gen_add_parallel_loop("i", str(nv))
-            self.gen_add_code_line("s_qd0[i] = static_cast<T>(0);")
-            self.gen_add_end_control_flow()
-            self.gen_add_sync()
+            self.gen_add_code_line("glass::set_const<T, " + str(nv) + ">(static_cast<T>(0), s_qd0);")
         if use_qdd:
             # s_qdd = 0 so ID(q,qd,0) = nle (value identical to the use_qdd_input=False
             # path). The device wrapper carries no MUJOCO_OUTPUT epilogue (host-template
             # mjx convert is kernel-only), so s_qdd stays all-zero here.
-            self.gen_add_parallel_loop("i", str(nv))
-            self.gen_add_code_line("s_qdd[i] = static_cast<T>(0);")
-            self.gen_add_end_control_flow()
-            self.gen_add_sync()
+            self.gen_add_code_line("glass::set_const<T, " + str(nv) + ">(static_cast<T>(0), s_qdd);")
         qd_arg = "s_qd0" if gravity_only else "s_qd"
         self.gen_inverse_dynamics_inner_function_call(
             compute_c=True, use_qdd_input=use_qdd,
@@ -131,18 +125,12 @@ def _emit_id_bias_kernel_body(self, gravity_only, single_call_timing, mjx_kernel
         # path. For the mjx instantiation the input-convert (emitted right after this,
         # before the compute) overwrites only s_qdd[0:3] = delta_a = -(omega x v); the
         # non-base entries [3:] stay 0.
-        self.gen_add_parallel_loop("i", str(nv))
-        self.gen_add_code_line("s_qdd[i] = static_cast<T>(0);")
-        self.gen_add_end_control_flow()
-        self.gen_add_sync()
+        self.gen_add_code_line("glass::set_const<T, " + str(nv) + ">(static_cast<T>(0), s_qdd);")
 
     def _compute():
         self.gen_load_update_XImats_helpers_function_call()
         if gravity_only:
-            self.gen_add_parallel_loop("i", str(nv))
-            self.gen_add_code_line("s_qd0[i] = static_cast<T>(0);")
-            self.gen_add_end_control_flow()
-            self.gen_add_sync()
+            self.gen_add_code_line("glass::set_const<T, " + str(nv) + ">(static_cast<T>(0), s_qd0);")
         qd_arg = "s_qd0" if gravity_only else "s_qd"
         self.gen_inverse_dynamics_inner_function_call(
             compute_c=True, use_qdd_input=use_qdd,
@@ -477,10 +465,7 @@ def gen_centroidal_inner(self):
 
     # ---- Step 3: world spatial Jacobian per body (angular-first) ----
     self.gen_add_code_line("// Step 3: per-body world spatial Jacobian J (6 x NV, angular-first)")
-    self.gen_add_parallel_loop("ind", str(6 * nv * NB))
-    self.gen_add_code_line("s_J[ind] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(6 * nv * NB) + ">(static_cast<T>(0), s_J);")
     # Build column fills: for each (body jid, ancestor-or-self jj, S-col c) the
     # world contribution to J[:, vi] is the screw of joint jj at the world origin.
     # We bake the per-body chain jobs at codegen time.

@@ -610,10 +610,7 @@ def emit_geometric_jacobian_jvjw(self, nv, num_ees, single_jobs, multi_groups, h
     self.gen_add_code_line("//")
     self.gen_add_code_line("// Step 2: zero the J_v and J_w scratch (out-of-chain columns stay zero)")
     self.gen_add_code_line("//")
-    self.gen_add_parallel_loop("ind", str(2 * 3 * nv * num_ees))
-    self.gen_add_code_line("s_Jv[ind] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(2 * 3 * nv * num_ees) + ">(static_cast<T>(0), s_Jv);")
 
     # ============ Step 3: per-(ee, S-col) block-parallel disjoint column fills ============
     n_flat = len(single_jobs)
@@ -1425,10 +1422,7 @@ def gen_end_effector_pose_hessian_inner(self, fixed_target_name = ""):
     self.gen_add_code_line("// Step 2: build per-DOF world-frame 4x4 generator S_i_world")
     self.gen_add_code_line("//")
     # First zero all of s_Sworld (out-of-chain DOFs stay zero — they contribute nothing).
-    self.gen_add_parallel_loop("ind", str(16 * nv * num_ees))
-    self.gen_add_code_line("s_Sworld[ind] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(16 * nv * num_ees) + ">(static_cast<T>(0), s_Sworld);")
     # Then emit per (ee, chain-joint, S-col) the explicit 4x4 fill. Serial-ops
     # per slot — total work is small (chain_depth * dofs_per_joint * num_ees blocks).
     #
@@ -1663,10 +1657,7 @@ def gen_end_effector_pose_hessian_inner(self, fixed_target_name = ""):
     self.gen_add_code_line("//")
     self.gen_add_code_line("// Step 5a: zero the full end_effector_pose_hessian output (out-of-chain pairs stay zero)")
     self.gen_add_code_line("//")
-    self.gen_add_parallel_loop("ind", str(6 * nv * nv * num_ees))
-    self.gen_add_code_line("s_end_effector_pose_hessian[ind] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(6 * nv * nv * num_ees) + ">(static_cast<T>(0), s_end_effector_pose_hessian);")
 
     # Step 5b: per-pair d2M -> H_xyz + (temporarily, into end_effector_pose_hessian rpy rows) d2R_R^T
     # We use the rpy rows (c=3,4,5 of s_end_effector_pose_hessian) as a SCRATCH BUFFER for d2R_R^T's

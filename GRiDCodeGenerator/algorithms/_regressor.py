@@ -193,10 +193,7 @@ def gen_inverse_dynamics_regressor_inner(self):
 
     # 2) Zero the whole regressor.
     self.gen_add_code_line("// zero the regressor")
-    self.gen_add_parallel_loop("ind", str(nv * 10 * NB))
-    self.gen_add_code_line("s_Y[ind] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(nv * 10 * NB) + ">(static_cast<T>(0), s_Y);")
 
     # 3) Backward block sweep. One thread owns one (link i, basis-column k) pair
     #    -> a single 6-vector "force regressor column" that we propagate from

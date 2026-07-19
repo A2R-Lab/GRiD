@@ -276,10 +276,7 @@ def gen_coriolis_matrix_inner(self):
 
     # ---- zero the output (parallel) ----
     self.gen_add_code_line("// zero the output Coriolis matrix")
-    self.gen_add_parallel_loop("ind", str(nv * nv))
-    self.gen_add_code_line("s_coriolis[ind] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(nv * nv) + ">(static_cast<T>(0), s_coriolis);")
 
     # ---- forward pass: accumulate iX0 = X_i . iX0[parent] (serial over bodies) ----
     # X_i (local joint transform) lives in s_XImats[36*jid]; I_loc in s_XImats[36*(jid+n)].

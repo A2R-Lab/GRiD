@@ -337,10 +337,7 @@ def gen_end_effector_pose_gradient_runtime_inner(self):
     # Step 2: zero Jv/Jw (stored in s_grad rows; we accumulate into a temp Jw
     # band, then convert). We assemble Jv directly into rows 0..2 of s_grad and
     # Jw into rows 3..5, then in Step 4 rewrite rows 3..5 = E^-1 * Jw in place.
-    self.gen_add_parallel_loop("ind", str(6 * nv))
-    self.gen_add_code_line("s_grad[ind] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(6 * nv) + ">(static_cast<T>(0), s_grad);")
 
     # Step 3: geometric Jacobian at the offset-shifted point p_ee, world axes.
     # Clone of the frame_jacobian job-table (runtime target filter). p_ee =

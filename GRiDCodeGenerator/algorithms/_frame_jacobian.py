@@ -112,10 +112,7 @@ def gen_frame_jacobian_inner(self):
     _emit_world_transform_chainup(self)
 
     # ---- Step 2: zero the Jacobian ----
-    self.gen_add_parallel_loop("ind", str(6 * nv))
-    self.gen_add_code_line("s_J[ind] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + str(6 * nv) + ">(static_cast<T>(0), s_J);")
 
     # ---- Step 3: assemble J at the frame ORIGIN with WORLD axes ----
     # Bake the per-target-joint chain jobs at codegen time, behind a runtime

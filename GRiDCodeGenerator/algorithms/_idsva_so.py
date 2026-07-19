@@ -1144,10 +1144,7 @@ def gen_idsva_so_body_frame_reference_order_output_repair(self):
     # (byte-identical for non-mimic, where NB==NV). Mirrors the mimic-aware zero
     # in gen_idsva_so_device's output-init (the `4*n_int^3 if is_mimic` site).
     zero_span = "4*NUM_BODIES*NUM_BODIES*NUM_BODIES" if self.robot_has_mimic_joints() else "SECOND_ORDER_TENSOR_SIZE"
-    self.gen_add_parallel_loop("out_idx", zero_span)
-    self.gen_add_code_line("s_idsva_so[out_idx] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, " + zero_span + ">(static_cast<T>(0), s_idsva_so);")
     # Pass 2: one work-item per disjoint (jid, ancestor_j) pair.
     self.gen_add_parallel_loop("pair_idx", str(num_pairs))
     self.gen_add_code_line("T rt1[36], rt2[36], rt3[36], rt4[36], rt5[36], rt6[36], rt7[36], rt8[36], rt9[36];")
@@ -1950,10 +1947,7 @@ def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
     self.gen_add_code_line("if constexpr (!BC_IN_SMEM) { BC = d_workspace; }")
 
     self.gen_add_code_line("// Initialize output tensor; optimized assembly paths only write structurally nonzero entries.")
-    self.gen_add_parallel_loop('i', '4*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS')
-    self.gen_add_code_line("s_idsva_so[i] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    self.gen_add_code_line("glass::set_const<T, 4*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS*SECOND_ORDER_COORDS>(static_cast<T>(0), s_idsva_so);")
 
     parent_ind_cpp, S_ind_cpp = self.gen_topology_helpers_pointers_for_cpp([i for i in range(num_bodies)], NO_GRAD_FLAG = True)
     S_sign_cpp = self.gen_topology_S_sign_for_cpp([i for i in range(num_bodies)])
@@ -2759,10 +2753,7 @@ def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
             "static const T so_fold_alpha[] = { " + ", ".join(
                 "static_cast<T>(" + repr(a) + ")" for a in fold_alpha) + " };")
         # Zero the public NV^3 output (4 blocks).
-        self.gen_add_parallel_loop('i', f'4*{NV**3}')
-        self.gen_add_code_line("s_idsva_so_public[i] = static_cast<T>(0);")
-        self.gen_add_end_control_flow()
-        self.gen_add_sync()
+        self.gen_add_code_line(f"glass::set_const<T, 4*{NV**3}>(static_cast<T>(0), s_idsva_so_public);")
         # Scatter-accumulate. One thread per internal cell per block; the destination
         # public cell is uniquely determined by (v(i),v(j),v(k)). Multiple internal
         # cells can map to the SAME public cell (mimic siblings), so we must use an
@@ -3831,10 +3822,7 @@ def gen_idsva_so_world_frame_inner(self, use_qdd_input = False):
         # 4 tensor blocks folds independently; collisions (siblings) use atomicAdd.
         self.gen_add_code_line("// Mimic fold: reduce internal n_int^3 sweep to public NV^3 output.")
         # Zero the public NV^3 output (4 blocks).
-        self.gen_add_parallel_loop("i", f"4*{NV**3}")
-        self.gen_add_code_line("s_idsva_so_public[i] = static_cast<T>(0);")
-        self.gen_add_end_control_flow()
-        self.gen_add_sync()
+        self.gen_add_code_line(f"glass::set_const<T, 4*{NV**3}>(static_cast<T>(0), s_idsva_so_public);")
         # Scatter-accumulate one thread per internal cell per block.
         self.gen_add_parallel_loop("idx", f"4*{n_int**3}")
         self.gen_add_code_line(f"int blk = idx / {n_int**3};")
