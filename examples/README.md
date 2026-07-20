@@ -30,10 +30,13 @@ your own MPC/RL/controls binary — rather than calling GRiD through Python.
 |--------|--------------|
 | `generate_iiwa14.py` | generate a fixed-base iiwa14 `grid.cuh` (zero-config) |
 | `generate_go2_floating.py` | generate a floating-base Go2 `grid.cuh` (with `--profile`) |
+| `generate_collision.py` | generate iiwa14 `grid.cuh` with the two-tier `config_free` collision routine (spherized broad/fine geometry) |
+| `generate_multi_target.py` | generate iiwa14 `grid.cuh` with batched `multi_target_position{,_gradient}` kernels (one FK/Jacobian launch over many baked EE targets) |
+| `generate_runtime_params.py` | generate iiwa14 `grid.cuh` with runtime-mutable inertia / fixed-transform tables (`set_inertia_params` / `set_transform_params`, no recompile) |
 | `print_grid.py` | compile + run the built-in `printGRiD` kernel to dump generated outputs |
 | `print_reference_values.py` | print the `RBDReference` CPU oracle values for a URDF (validate CUDA output) |
 
-Run from the repo root so `URDFParser` / `GRiDCodeGenerator` import, e.g.
+Run from the repo root so `URDFParser` / `grid_codegen` import, e.g.
 `python examples/codegen/generate_iiwa14.py --output /tmp/grid.cuh`. The
 installed `grid-generate` CLI is the general (any-URDF) entry point.
 
