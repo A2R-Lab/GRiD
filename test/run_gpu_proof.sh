@@ -23,7 +23,7 @@
 # IMPORTANT: pass EXPLICIT test paths, never a bare `pytest test/` — a bare run
 # would pick up the CPU-only lane tests that belong in ordinary CI, not the GPU
 # receipt. (The plugin is the pytest-gpu-proof PyPI package now, installed via
-# requirements-dev.txt — no vendored submodule to collect.)
+# install/requirements-dev.txt — no vendored submodule to collect.)
 set -euo pipefail
 
 # SCOPE -> a -k expression narrowing the gpu_proof test set. Empty = full suite.

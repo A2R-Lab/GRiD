@@ -27,7 +27,7 @@ else
 fi
 
 "${SCRIPT_DIR}/base_install.sh"
-"${VENV_DIR}/bin/python" -m pip install -r "${REPO_ROOT}/requirements-dev.txt"
+"${VENV_DIR}/bin/python" -m pip install -r "${SCRIPT_DIR}/requirements-dev.txt"
 "${VENV_DIR}/bin/python" -m pip install -r "${REPO_ROOT}/docs/requirements.txt"
 
 # Optional: install CppADCodeGen so Pinocchio's code-generated algos

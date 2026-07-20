@@ -5,7 +5,7 @@ any item already carrying the ``cuda_equivalence`` or ``python_wrappers`` marker
 is auto-tagged ``gpu_proof`` so its outcome lands in the signed receipt
 (``[tool.gpu_proof] required_marker = "gpu_proof"``). See test/run_gpu_proof.sh.
 
-The plugin now ships from PyPI (``pytest-gpu-proof`` in requirements-dev.txt); it
+The plugin now ships from PyPI (``pytest-gpu-proof`` in install/requirements-dev.txt); it
 was previously a vendored ``test/pytest-gpu-proof`` submodule.
 
 ★ THE SUITE FLOOR (2026-07-14). The GPU suite has 219 `pytest.skip` sites, ~61 of them a per-file
