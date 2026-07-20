@@ -122,4 +122,7 @@ docs/imgs/*_2026*.png
 
 # Local, per-machine session helpers (not project artifacts)
 docs/STARTUP_PROMPT.md
-tools/overnight_batch.sh
+test/benchmarks/overnight_batch.sh
+
+# Scratch working dir (agent temp files; never tracked)
+scratchpad/
