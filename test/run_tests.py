@@ -20,7 +20,7 @@ from RBDReference.tests.source_lock import build_lock_entry
 from RBDReference.tests import MANIFEST_PATH, SOURCE_LOCK_PATH
 
 
-SUITE_ROOT = REPO_ROOT / "RBDReference" / "tests"
+SUITE_ROOT = REPO_ROOT / "external" / "RBDReference" / "tests"
 DEFAULT_TARGET = SUITE_ROOT / "test_all.py"
 
 

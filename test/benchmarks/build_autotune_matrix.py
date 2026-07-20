@@ -75,7 +75,7 @@ def _grid_rbd_version() -> str | None:
 
 def _glass_commit() -> str | None:
     import subprocess
-    glass_dir = REPO_ROOT / "GLASS"
+    glass_dir = REPO_ROOT / "external" / "GLASS"
     if not glass_dir.exists():
         # GLASS may be vendored under GRiDCodeGenerator's submodule path.
         for cand in REPO_ROOT.glob("**/GLASS"):

@@ -82,7 +82,7 @@ fi
 # default. The extension wraps `pinocchio::ComputeRNEASecondOrderDerivatives` and
 # is built in-place so the loader at RBDReference/equivalents/pin_so_ext/__init__.py
 # can import it directly.
-PIN_SO_EXT_DIR="${SCRIPT_DIR}/RBDReference/equivalents/pin_so_ext"
+PIN_SO_EXT_DIR="${SCRIPT_DIR}/external/RBDReference/equivalents/pin_so_ext"
 # The `pin` wheel installs pinocchio.pc under the venv's cmeel.prefix rather
 # than on the system pkg-config path, so point pkg-config at it.
 CMEEL_PC_DIR="$("${VENV_DIR}/bin/python" -c 'import sysconfig, pathlib, cmeel.config; print(pathlib.Path(sysconfig.get_paths()["purelib"]) / cmeel.config.CMEEL_PREFIX / "lib" / "pkgconfig")')"

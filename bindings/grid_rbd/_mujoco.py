@@ -1,7 +1,7 @@
 """MuJoCo / mjx output-convention transforms (binding-side mirror).
 
 A self-contained copy of the floating-base pin<->mjx value transforms validated
-in ``RBDReference/equivalents/mujoco_convention.py`` (which the binding cannot
+in ``external/RBDReference/equivalents/mujoco_convention.py`` (which the binding cannot
 import). Used by ``RobotHandle`` when ``output_convention="mujoco"``.
 
 GRiD is natively pinocchio-convention. For a free-floating base MuJoCo differs in

@@ -19,7 +19,7 @@ echo ">> [1/4] generating $HEADER (inverse_dynamics only)"
 PYTHONPATH=. "$PY" "$EX_DIR/gen_iiwa14_header.py" --output "$HEADER" >/dev/null
 
 echo ">> [2/4] compiling with nvcc ($ARCH)"
-"$NVCC" -arch="$ARCH" -std=c++17 -I "$EX_DIR" -I GLASS/include \
+"$NVCC" -arch="$ARCH" -std=c++17 -I "$EX_DIR" -I external/GLASS/include \
     "$EX_DIR/inverse_dynamics_kernel_example.cu" -o "$BIN"
 
 echo ">> [3/4] running"
@@ -48,7 +48,7 @@ GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(
 PYGEN
 
 echo ">> [2/4] compiling with nvcc ($ARCH)"
-"$NVCC" -arch="$ARCH" -std=c++17 -I "$EX_DIR" -I GLASS/include \
+"$NVCC" -arch="$ARCH" -std=c++17 -I "$EX_DIR" -I external/GLASS/include \
     "$EX_DIR/idsva_so_host_example.cu" -o "$SO_BIN"
 
 echo ">> [3/4] running"

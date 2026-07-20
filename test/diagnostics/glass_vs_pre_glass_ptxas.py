@@ -207,7 +207,7 @@ def main():
             cell_dir.mkdir(exist_ok=True)
             try:
                 gen_grid_cuh(repo, robot, urdf, cell_dir)
-                glass_root_local = (repo / "GLASS") if (repo / "GLASS").exists() else None
+                glass_root_local = (repo / "external" / "GLASS") if (repo / "external" / "GLASS").exists() else None
                 stderr = compile_ptxas_v(
                     cell_dir / "grid.cuh",
                     batch_cu,

@@ -93,7 +93,7 @@ def _compile(build_dir, arch):
     if shutil.which("nvcc") is None and not Path(nvcc).exists():
         pytest.skip("nvcc not found; install CUDA Toolkit to run CUDA tests.")
     shutil.copyfile(_RUNNER, build_dir / "runner.cu")
-    glass = Path(__file__).resolve().parents[2] / "GLASS" / "include"
+    glass = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
     exe = build_dir / "runner.exe"
     cmd = [nvcc, "-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}",
            "-DGRID_RUNNER_SKIP_GRADIENTS=0", "-DGRID_RUNNER_SKIP_EEPOSE_GRADIENTS=1",

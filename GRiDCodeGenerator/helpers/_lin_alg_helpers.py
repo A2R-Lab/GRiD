@@ -46,10 +46,10 @@ def _grid_repo_root():
 
 
 def _glass_root():
-    root = _grid_repo_root() / "GLASS"
+    root = _grid_repo_root() / "external" / "GLASS"
     if not root.exists():
         raise FileNotFoundError(
-            "GLASS submodule is missing. Run `git submodule update --init GLASS` "
+            "GLASS submodule is missing. Run `git submodule update --init external/GLASS` "
             "from the GRiD-A2R repository root."
         )
     return root
@@ -231,7 +231,7 @@ def gen_grid_linalg_backend_helpers(self):
 
 def gen_invert_matrix(self):
     """Emits a thin wrapper around `glass::inv_dense` (block-
-    cooperative Gauss-Jordan; `GLASS/src/base/L3/inv.cuh`).
+    cooperative Gauss-Jordan; `external/GLASS/src/base/L3/inv.cuh`).
 
     Why a wrapper rather than re-implementing here: GLASS is the first-party
     linalg layer (memory `project_grid_glass_first_party.md`); pinning the

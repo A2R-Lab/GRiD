@@ -1,6 +1,6 @@
 """CUDA-free unit tests for the binding-side MuJoCo-convention transforms
 (``grid_rbd._mujoco``). The transforms mirror the validated oracle in
-``RBDReference/equivalents/mujoco_convention.py``; here we check the batched
+``external/RBDReference/equivalents/mujoco_convention.py``; here we check the batched
 slice behaviour, the round-trips, and — crucially — the fixed-base no-op
 (the regression guarantee: ``output_convention="mujoco"`` never changes a
 fixed-base result).

@@ -18,6 +18,7 @@ dependencies = [
 grid-generate = "GRiDCodeGenerator.cli:main"
 
 [tool.setuptools.packages.find]
+where = [".", "external"]
 include = ["GRiDCodeGenerator*", "URDFParser*", "RBDReference*"]
 
 [tool.black]

@@ -37,8 +37,8 @@ from test.cuda_equivalents.test_cuda_executable_equivalence import (
 )
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_branching_skew_runner.cu")
-FIXDIR = Path(__file__).resolve().parents[2] / "URDFParser" / "tests" / "fixtures"
-GLASS_INCLUDE = Path(__file__).resolve().parents[2] / "GLASS" / "include"
+FIXDIR = Path(__file__).resolve().parents[2] / "external" / "URDFParser" / "tests" / "fixtures"
+GLASS_INCLUDE = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
 
 pytestmark = [
     pytest.mark.cuda_equivalence,

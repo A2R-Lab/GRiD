@@ -94,7 +94,7 @@ def repo_root() -> Path | None:
     # bindings/grid_rbd/_compile.py  →  repo_root = .../bindings/..
     pkg = Path(__file__).resolve().parent
     candidate = pkg.parent.parent
-    if (candidate / "GRiDCodeGenerator").exists() and (candidate / "URDFParser").exists():
+    if (candidate / "GRiDCodeGenerator").exists() and (candidate / "external" / "URDFParser").exists():
         return candidate
     return None
 
@@ -109,8 +109,12 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # Ensure the GRiD submodules are importable. For editable installs, add
     # the repo root to sys.path so URDFParser / GRiDCodeGenerator resolve.
     root = repo_root()
-    if root and str(root) not in sys.path:
-        sys.path.insert(0, str(root))
+    if root:
+        # repo root resolves GRiDCodeGenerator; external/ resolves the peer
+        # submodules (URDFParser / RBDReference / GLASS live under external/).
+        for _p in (str(root), str(root / "external")):
+            if _p not in sys.path:
+                sys.path.insert(0, _p)
 
     from URDFParser import URDFParser
     from GRiDCodeGenerator import GRiDCodeGenerator
@@ -506,8 +510,8 @@ def generate_and_compile(
     # ship the GLASS headers inside the package data (TODO).
     glass_root = None
     root = repo_root()
-    if root and (root / "GLASS").exists():
-        glass_root = root / "GLASS"
+    if root and (root / "external" / "GLASS").exists():
+        glass_root = root / "external" / "GLASS"
 
     so_path = target_dir / "robot.so"
     # The torch op-library namespace is keyed by the cache_key (== entry dir

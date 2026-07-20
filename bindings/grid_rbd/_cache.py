@@ -102,7 +102,7 @@ def _codegen_source_hash() -> str:
     isn't present (the .so is shipped prebuilt; nothing to re-key against)."""
     # bindings/grid_rbd/_cache.py → repo_root = parent x3
     repo = Path(__file__).resolve().parent.parent.parent
-    pkgs = [repo / "GRiDCodeGenerator", repo / "URDFParser"]
+    pkgs = [repo / "GRiDCodeGenerator", repo / "external" / "URDFParser"]
     h = hashlib.sha256()
     found = False
     for pkg in pkgs:

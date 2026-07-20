@@ -355,7 +355,7 @@ class RobotHandle:
         global-linear free-joint velocity). Setting ``"mujoco"`` makes the value
         methods take and return MuJoCo-convention ``q``/``qd``/``qdd``/``M``/... for
         a FLOATING base; it is a byte-identical no-op for a fixed base. See
-        ``RBDReference/equivalents/mujoco_convention.md`` for the exact transforms.
+        ``external/RBDReference/equivalents/mujoco_convention.md`` for the exact transforms.
         Currently applies to the VALUE methods (inverse_dynamics, forward_dynamics,
         aba, crba, minv); gradient/second-order surfaces stay pinocchio-convention."""
         return self._output_convention
@@ -828,7 +828,7 @@ class RobotHandle:
     # kernel, outputs pin->mjx after. The transforms touch only the free-flyer
     # block (quat reorder + the G=blockdiag(R,I) root basis change + the omega x v
     # acceleration term); internal joints are untouched. See `_mujoco.py` and
-    # `RBDReference/equivalents/mujoco_convention.md`. Velocity-space inputs are
+    # `external/RBDReference/equivalents/mujoco_convention.md`. Velocity-space inputs are
     # nq-wide (tangent in the first NV slots), so the slice-based transforms apply
     # unchanged. Done in float64 then cast back to the handle dtype.
 

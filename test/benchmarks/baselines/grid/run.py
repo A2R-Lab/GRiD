@@ -34,6 +34,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "external"))  # peer submodules (RBDReference/URDFParser/GLASS)
 
 from config import robot_urdf  # noqa: E402
 from GRiDCodeGenerator import GRiDCodeGenerator  # noqa: E402

@@ -104,6 +104,7 @@ def gen_grid_cuh(robot_label: str, urdf: Path, floating: bool, out_dir: Path) ->
     code = f"""
 import sys
 sys.path.insert(0, "{REPO_ROOT}")
+sys.path.insert(0, "{REPO_ROOT}/external")
 from URDFParser import URDFParser
 from GRiDCodeGenerator import GRiDCodeGenerator
 p = URDFParser()
@@ -161,8 +162,8 @@ def compile_with_bounds(grid_cuh: Path, label: str, launch_bounds_override: int 
         f"-I{BATCH_CU.parent}",
         f"-I{BENCH_GRID_DIR}",   # timeGRiD_common.h (the solo TU #includes it)
         f"-I{active_cuh.parent}",
-        f"-I{REPO_ROOT / 'GLASS'}",
-        f"-I{REPO_ROOT / 'GLASS/src'}",
+        f"-I{REPO_ROOT / 'external' / 'GLASS'}",
+        f"-I{REPO_ROOT / 'external' / 'GLASS/src'}",
         "-DGRID_TIMING_TEST_ITERS=1",
         "-Xptxas", "-v",
         "-Wno-deprecated-gpu-targets",

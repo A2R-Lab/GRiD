@@ -438,7 +438,7 @@ def _glass_commit() -> str:
     header cache key must fold it in, otherwise a GLASS bump leaves the cache
     falsely hitting headers vendored from the OLD GLASS. Fall back to a hash of
     the vendored base sources if git is unavailable (e.g. an exported tree)."""
-    glass_root = REPO_ROOT / "GLASS"
+    glass_root = REPO_ROOT / "external" / "GLASS"
     try:
         return subprocess.check_output(
             ["git", "-C", str(glass_root), "rev-parse", "HEAD"],

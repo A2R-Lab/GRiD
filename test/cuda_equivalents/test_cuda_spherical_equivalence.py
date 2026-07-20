@@ -47,7 +47,7 @@ from test.cuda_equivalents.test_cuda_executable_equivalence import (
 )
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_spherical_runner.cu")
-FIXDIR = Path(__file__).resolve().parents[2] / "URDFParser" / "tests" / "fixtures"
+FIXDIR = Path(__file__).resolve().parents[2] / "external" / "URDFParser" / "tests" / "fixtures"
 
 # Each fixture's quaternion-block start index in q (the spherical joint's first
 # q slot). spherical_arm: ball at jid0 -> q[0:4]. mixed_spherical_arm: revolute

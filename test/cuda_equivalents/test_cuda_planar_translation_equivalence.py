@@ -32,7 +32,7 @@ from test.cuda_equivalents.test_cuda_executable_equivalence import (
 )
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_equivalence_runner.cu")
-FIXDIR = Path(__file__).resolve().parents[2] / "URDFParser" / "tests" / "fixtures"
+FIXDIR = Path(__file__).resolve().parents[2] / "external" / "URDFParser" / "tests" / "fixtures"
 
 
 def _parse(name):

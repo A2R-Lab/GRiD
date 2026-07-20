@@ -1,12 +1,12 @@
 [submodule "RBDReference"]
-	path = RBDReference
+	path = external/RBDReference
 	url = git@github.com:A2R-Lab/RBDReference.git
 [submodule "URDFParser"]
-	path = URDFParser
+	path = external/URDFParser
 	url = git@github.com:A2R-Lab/URDFParser.git
 [submodule "test/benchmarks/baselines/pinocchio/ReusableThreads"]
 	path = test/benchmarks/baselines/pinocchio/ReusableThreads
 	url = https://github.com/plancherb1/ReusableThreads
 [submodule "GLASS"]
-	path = GLASS
+	path = external/GLASS
 	url = git@github.com:A2R-Lab/GLASS.git

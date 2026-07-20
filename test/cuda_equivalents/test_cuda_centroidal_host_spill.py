@@ -95,7 +95,7 @@ def _compile_runner(build_dir):
     shutil.copyfile(RUNNER_SOURCE, runner_copy)
     arch = _detect_cuda_arch()
     executable = build_dir / "cuda_centroidal_host_spill_runner.exe"
-    glass_inc = Path(__file__).resolve().parents[2] / "GLASS" / "include"
+    glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
     cmd = [
         nvcc, "-std=c++17", "-O0",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
