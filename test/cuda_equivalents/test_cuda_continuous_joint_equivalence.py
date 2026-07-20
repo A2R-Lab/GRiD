@@ -207,7 +207,7 @@ def test_cuda_continuous_joint_matches_reference_at_wrapped_angles(tmp_path, bas
         resolved = resolve_robot_spec(spec)
     except RuntimeError as exc:
         pytest.skip(
-            f"Could not resolve manifest {spec.robot_id}. Run ./developer_install.sh "
+            f"Could not resolve manifest {spec.robot_id}. Run ./install/developer_install.sh "
             f"before executing CUDA equivalence tests. Resolution error: {exc}"
         )
     project_model = build_project_adapter(spec, resolved, base_mode=base_mode)

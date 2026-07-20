@@ -229,7 +229,7 @@ Documentation
 Install / build system
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-* :file:`base_install.sh`, :file:`developer_install.sh` — drop libmathdx
+* :file:`install/base_install.sh`, :file:`install/developer_install.sh` — drop libmathdx
   setup steps if present.
 * :file:`pyproject.toml`, :file:`bindings/pyproject.toml`,
   :file:`bindings/setup.py` — drop cuBLASDx-related extras if any.
@@ -409,8 +409,8 @@ Each phase is a self-contained commit with passing tests. Phase 1
    ``--columns glass`` and confirm parity with archived sweep.
 5. **Docs rip (A4)** — sweep installation.rst, codegen_architecture.rst,
    READMEs, tutorials. Sphinx ``make html`` clean.
-6. **Install scripts rip (A5)** — strip libmathdx from base_install.sh /
-   developer_install.sh.
+6. **Install scripts rip (A5)** — strip libmathdx from install/base_install.sh /
+   install/developer_install.sh.
 7. **Install scripts (A6)** — strip libmathdx setup from base/developer
    install scripts; no version bump (never published).
 8. **Any-thread-count emission (B1)** — drop the ``__launch_bounds__``

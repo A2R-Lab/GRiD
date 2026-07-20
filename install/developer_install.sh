@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="${SCRIPT_DIR}/.venv"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+VENV_DIR="${REPO_ROOT}/.venv"
 TIER="${PINOCCHIO_EQUIVALENCE_TIER:-smoke}"
 
 # System build deps for the pinocchio pybind11 extension built below. The `pin`
@@ -26,8 +27,8 @@ else
 fi
 
 "${SCRIPT_DIR}/base_install.sh"
-"${VENV_DIR}/bin/python" -m pip install -r "${SCRIPT_DIR}/requirements-dev.txt"
-"${VENV_DIR}/bin/python" -m pip install -r "${SCRIPT_DIR}/docs/requirements.txt"
+"${VENV_DIR}/bin/python" -m pip install -r "${REPO_ROOT}/requirements-dev.txt"
+"${VENV_DIR}/bin/python" -m pip install -r "${REPO_ROOT}/docs/requirements.txt"
 
 # Optional: install CppADCodeGen so Pinocchio's code-generated algos
 # (forward_dynamics, forward_dynamics_gradient, idsva_so, fdsva_so) populate in
@@ -50,7 +51,7 @@ if [[ -z "${SKIP_CPPADCG_INSTALL:-}" ]]; then
     else
       echo "Warning: apt-get not found. Install CppAD manually (the apt package on Debian/Ubuntu is libcppad-dev)." >&2
     fi
-    CPPADCG_SRC="${SCRIPT_DIR}/.cache/CppADCodeGen"
+    CPPADCG_SRC="${REPO_ROOT}/.cache/CppADCodeGen"
     if [[ ! -d "${CPPADCG_SRC}" ]]; then
       mkdir -p "$(dirname "${CPPADCG_SRC}")"
       echo "Cloning CppADCodeGen → ${CPPADCG_SRC}"
@@ -82,11 +83,11 @@ fi
 # default. The extension wraps `pinocchio::ComputeRNEASecondOrderDerivatives` and
 # is built in-place so the loader at RBDReference/equivalents/pin_so_ext/__init__.py
 # can import it directly.
-PIN_SO_EXT_DIR="${SCRIPT_DIR}/external/RBDReference/equivalents/pin_so_ext"
+PIN_SO_EXT_DIR="${REPO_ROOT}/external/RBDReference/equivalents/pin_so_ext"
 # The `pin` wheel installs pinocchio.pc under the venv's cmeel.prefix rather
 # than on the system pkg-config path, so point pkg-config at it.
 CMEEL_PC_DIR="$("${VENV_DIR}/bin/python" -c 'import sysconfig, pathlib, cmeel.config; print(pathlib.Path(sysconfig.get_paths()["purelib"]) / cmeel.config.CMEEL_PREFIX / "lib" / "pkgconfig")')"
 export PKG_CONFIG_PATH="${CMEEL_PC_DIR}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 (cd "${PIN_SO_EXT_DIR}" && "${VENV_DIR}/bin/python" setup.py build_ext --inplace)
 
-"${VENV_DIR}/bin/python" "${SCRIPT_DIR}/test/run_tests.py" --prepare-models --tier "${TIER}"
+"${VENV_DIR}/bin/python" "${REPO_ROOT}/test/run_tests.py" --prepare-models --tier "${TIER}"

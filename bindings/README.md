@@ -248,7 +248,7 @@ Notes:
   sm_120). For `[jax]`, install `jax[cuda12]` for your platform.
 * The heavy comparator/oracle stack (Pinocchio / mjx / frax / bard) is **not**
   in any extra here — that's a developer concern carried by the repo-root
-  `requirements-dev.txt` / `developer_install.sh`.
+  `requirements-dev.txt` / `install/developer_install.sh`.
 
 A PyPI release will follow once the surface is feature-complete.
 

@@ -32,7 +32,7 @@ numpy oracle in `RBDReference` (validated against Pinocchio) and the generated C
 ## Generate code
 
 ```bash
-bash base_install.sh && source .venv/bin/activate      # codegen venv + `grid-generate` CLI
+bash install/base_install.sh && source .venv/bin/activate      # codegen venv + `grid-generate` CLI
 grid-generate path/to/robot.urdf [-f] [-t EE_JOINT] [-n NAMESPACE]
 python examples/codegen/generate_iiwa14.py             # fixed-base example
 python examples/codegen/generate_go2_floating.py       # floating-base example

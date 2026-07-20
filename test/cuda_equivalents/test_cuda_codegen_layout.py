@@ -66,7 +66,7 @@ def _generate_header(
         resolved = resolve_robot_spec(spec)
     except RuntimeError as exc:
         pytest.skip(
-            f"Could not resolve manifest {spec.robot_id}. Run ./developer_install.sh "
+            f"Could not resolve manifest {spec.robot_id}. Run ./install/developer_install.sh "
             f"before executing CUDA codegen tests. Resolution error: {exc}"
         )
     project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
@@ -96,7 +96,7 @@ def _codegen_for_robot(robot_id: str, base_mode: str):
         resolved = resolve_robot_spec(spec)
     except RuntimeError as exc:
         pytest.skip(
-            f"Could not resolve manifest {spec.robot_id}. Run ./developer_install.sh "
+            f"Could not resolve manifest {spec.robot_id}. Run ./install/developer_install.sh "
             f"before executing CUDA codegen tests. Resolution error: {exc}"
         )
     project_model = build_project_adapter(spec, resolved, base_mode=base_mode)

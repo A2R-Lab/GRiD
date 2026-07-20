@@ -1698,7 +1698,7 @@ def _run_cuda_equivalence_case(
         resolved = resolve_robot_spec(spec)
     except RuntimeError as exc:
         pytest.skip(
-            f"Could not resolve manifest {spec.robot_id}. Run ./developer_install.sh before "
+            f"Could not resolve manifest {spec.robot_id}. Run ./install/developer_install.sh before "
             f"executing CUDA equivalence tests. Resolution error: {exc}"
         )
     # Two roles:

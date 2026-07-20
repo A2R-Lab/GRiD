@@ -20,7 +20,7 @@ For additional information and links to our paper on this work, check out our [p
 
 Install (creates a local venv and registers the `grid-generate` CLI):
 ```shell
-bash base_install.sh
+bash install/base_install.sh
 source .venv/bin/activate
 ```
 
@@ -145,7 +145,7 @@ for the rationale and concrete signatures.
 For Python users the `grid-rbd` package (in [`bindings/`](bindings/)) wraps
 the per-robot codegen behind a register-then-run UX with `numpy`, `jax`,
 and `torch` backends. Install it editable from a checkout with
-`pip install -e bindings/` (`base_install.sh` sets up the codegen venv;
+`pip install -e bindings/` (`install/base_install.sh` sets up the codegen venv;
 the bindings are an opt-in editable install on top of it). The base install is
 minimal; pick a backend extra for the surface you want:
 

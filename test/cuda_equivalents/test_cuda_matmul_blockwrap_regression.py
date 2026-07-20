@@ -65,7 +65,7 @@ def _generate_fr3_fixed_header(tmp_path):
     except RuntimeError as exc:
         pytest.skip(
             "Could not resolve manifest fr3 (mimic robot). Run "
-            f"./developer_install.sh before this test. Resolution error: {exc}"
+            f"./install/developer_install.sh before this test. Resolution error: {exc}"
         )
     project_model = build_project_adapter(spec, resolved, base_mode="fixed")
     header_path = tmp_path / "fr3_fixed_matmul_blockwrap.cuh"

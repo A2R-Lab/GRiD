@@ -200,7 +200,7 @@ def _resolve_spec(robot_id, base_mode):
 def _urdf_path(resolved):
     p = Path(resolved.urdf_path)
     if not p.exists():
-        pytest.skip(f"URDF asset not present at {p}; run ./developer_install.sh")
+        pytest.skip(f"URDF asset not present at {p}; run ./install/developer_install.sh")
     return p
 
 

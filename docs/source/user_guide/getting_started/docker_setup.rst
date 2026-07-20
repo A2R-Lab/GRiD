@@ -2,7 +2,7 @@ Docker
 ======
 
 GRiD does not currently ship an official Docker image. The repo's two
-install scripts (``base_install.sh`` and ``developer_install.sh``) are
+install scripts (``install/base_install.sh`` and ``install/developer_install.sh``) are
 the supported install path on bare-metal hosts.
 
 If you want to run GRiD in a container, the recipe below is a starting
@@ -20,7 +20,7 @@ Reference Dockerfile sketch
    # are present.
    FROM nvidia/cuda:13.2.0-devel-ubuntu24.04
 
-   # System build deps used by developer_install.sh for the Pinocchio
+   # System build deps used by install/developer_install.sh for the Pinocchio
    # pybind11 extension. Plus python and the standard build tools.
    RUN apt-get update && apt-get install -y --no-install-recommends \
            python3 python3-venv python3-pip \
@@ -34,12 +34,12 @@ Reference Dockerfile sketch
    WORKDIR /opt/GRiD
 
    # End-user install (creates the .venv used by all scripts).
-   RUN bash base_install.sh
+   RUN bash install/base_install.sh
 
    # Developer install (adds Pinocchio + robot_descriptions + Pinocchio
    # second-order pybind11 extension). Comment out if you only need the
    # codegen CLI.
-   RUN bash developer_install.sh
+   RUN bash install/developer_install.sh
 
    # Make the CLI available on PATH.
    ENV PATH="/opt/GRiD/.venv/bin:${PATH}"

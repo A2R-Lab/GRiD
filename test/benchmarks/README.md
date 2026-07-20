@@ -118,7 +118,7 @@ The `RBDReference/` suite uses Pinocchio's C++ implementation
 as the golden oracle for RBDReference + CUDA equivalence tests
 (particularly for second-order derivatives, where Python Pinocchio's
 SO API isn't directly comparable). This binding is built automatically
-by `developer_install.sh` and on first import of the suite via
+by `install/developer_install.sh` and on first import of the suite via
 `setuptools`.
 
 Requirements (on top of the standard dev install):

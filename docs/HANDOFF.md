@@ -641,7 +641,7 @@ fallback must wait for the `idsva_so` spill.
   submodule. `RBDReference/equivalents/` = reusable lib (conventions + `reference_backend`
   + `pinocchio_backend` + `pin_so_ext`); `RBDReference/tests/` = the suite + its infra
   (manifest/sampling/tolerances/comparators/model_sources/source_lock). Base vs dev
-  requirements; README documents the swap. All GRiD importers + `developer_install.sh`
+  requirements; README documents the swap. All GRiD importers + `install/developer_install.sh`
   rewired; 936 tests collect.
 - **crba S-index fix CONFIRMED** on baxter+fetch fixed+floating.
 - **Independent pinocchio oracle wired** as the default (`GRID_REFERENCE_BACKEND=pinocchio`):
@@ -797,7 +797,7 @@ the analytic d2ee was both slow AND wrong; the pinocchio finite-diff d2ee is fas
     env `GRID_REFERENCE_BACKEND` — wired into the CUDA harness at the
     `build_adapter(...)` call. Requirements split: base `requirements.txt`
     (numpy+sympy) vs `requirements-dev.txt` (pin/robot_descriptions/bs4/pybind11/
-    pytest). All 7 GRiD importers + `developer_install.sh` pin_so_ext path rewired;
+    pytest). All 7 GRiD importers + `install/developer_install.sh` pin_so_ext path rewired;
     validated both backends build + agree on rnea (iiwa14, 7e-15) and iiwa14 rnea
     equivalence passes through the moved suite. **Committed + pushed** on `perf-cleanup`
     (submodule `abdbd95`, parent `3da85d2`, gitlink bumped).

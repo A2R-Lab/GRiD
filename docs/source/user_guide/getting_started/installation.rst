@@ -48,7 +48,7 @@ For end-user installs (just the runtime + CLI):
 
 .. code-block:: shell
 
-   bash base_install.sh
+   bash install/base_install.sh
    source .venv/bin/activate
 
 For developer installs (adds Pinocchio, robot-description fixtures,
@@ -57,13 +57,13 @@ used as the golden oracle in the equivalence tests):
 
 .. code-block:: shell
 
-   bash developer_install.sh
+   bash install/developer_install.sh
 
 The developer script will, on Debian/Ubuntu, install the system build
 deps needed by the Pinocchio pybind11 extension via ``apt-get``:
 ``pkg-config``, ``g++``, ``libeigen3-dev``, ``liburdfdom-headers-dev``.
 The ``pin`` wheel ships its own ``pinocchio.pc`` inside the venv via
-``cmeel``, and ``developer_install.sh`` computes the right
+``cmeel``, and ``install/developer_install.sh`` computes the right
 ``PKG_CONFIG_PATH`` automatically for the extension build — no manual
 configuration is required.
 
