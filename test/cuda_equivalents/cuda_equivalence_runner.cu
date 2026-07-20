@@ -39,6 +39,30 @@ __global__ void runtime_probe_kernel(T *dst) {
     }
 }
 
+// ── smem-poison audit mode (opt-in via GRID_POISON_SMEM=1) ───────────────────
+// Fills every SM's dynamic shared memory with NaN (0xFF bytes = NaN for float AND
+// double) BEFORE each algorithm launch, so any device fn that reads a caller-carved
+// arena slot before writing it surfaces as a NaN in its output — which then fails
+// the golden comparison. initcheck is blind to shared memory and racecheck does not
+// flag never-written reads, so this poison sweep is the only tool that catches the
+// §1j/§1p class (a beta==0 GLASS op reading its poisoned destination, or a genuine
+// read-before-write). Default OFF ⇒ byte-identical to before. See docs §1p.
+__global__ void poison_smem_kernel(int nbytes) {
+    extern __shared__ unsigned char s_poison[];
+    for (int i = threadIdx.x; i < nbytes; i += blockDim.x) s_poison[i] = 0xFF;
+    __syncthreads();
+    if (threadIdx.x == 0 && s_poison[0] == 0x00) printf("poison-unreachable\n");
+}
+bool   g_poison_on    = false;
+int    g_poison_bytes = 0;
+int    g_poison_numSMs = 0;
+static inline void maybe_poison_smem() {
+    if (!g_poison_on) return;
+    poison_smem_kernel<<<8 * g_poison_numSMs, 256, g_poison_bytes>>>(g_poison_bytes);
+    gpuErrchk(cudaPeekAtLastError());
+    gpuErrchk(cudaDeviceSynchronize());
+}
+
 #if GRID_CUDA_FLOATING_BASE
 template <typename T>
 __device__ void load_floating_inputs(
@@ -230,6 +254,21 @@ void run() {
     grid::robotModel<T> *d_robot_model = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, 1>();
 
+    // smem-poison audit setup: poison a generous fixed span (the device's max opt-in
+    // dynamic smem) before each launch — it covers every algo's arena, so no per-algo
+    // byte accounting is needed. Off unless GRID_POISON_SMEM is set.
+    g_poison_on = (std::getenv("GRID_POISON_SMEM") != nullptr);
+    if (g_poison_on) {
+        gpuErrchk(cudaDeviceGetAttribute(&g_poison_numSMs, cudaDevAttrMultiProcessorCount, 0));
+        int max_optin = 0;
+        gpuErrchk(cudaDeviceGetAttribute(&max_optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, 0));
+        g_poison_bytes = max_optin;
+        gpuErrchk(cudaFuncSetAttribute(poison_smem_kernel,
+            cudaFuncAttributeMaxDynamicSharedMemorySize, g_poison_bytes));
+        std::fprintf(stderr, "[poison] smem-poison ON: %d bytes x %d SMs x8\n",
+                     g_poison_bytes, g_poison_numSMs);
+    }
+
 #if GRID_CUDA_FLOATING_BASE
     std::vector<T> h_q(grid::NUM_JOINTS);
     std::vector<T> h_qd(grid::NUM_VEL);
@@ -337,6 +376,7 @@ void run() {
 #endif  // !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
 
     if (floating_algorithm_requested("inverse_dynamics")) {
+        maybe_poison_smem();
         floating_inverse_dynamics_runner<T><<<1, g_num_threads, grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_vec, d_q, d_qd, d_zero, d_robot_model, gravity, /*d_f_ext=*/nullptr
         );
@@ -347,6 +387,7 @@ void run() {
     }
 
     if (floating_algorithm_requested("minv")) {
+        maybe_poison_smem();
         grid::minv_kernel<T><<<1, g_num_threads, grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_mat, hd_data->d_workspace, d_q, grid::NUM_JOINTS, d_robot_model, 1
         );
@@ -357,6 +398,7 @@ void run() {
     }
 
     if (floating_algorithm_requested("forward_dynamics")) {
+        maybe_poison_smem();
         floating_forward_dynamics_runner<T><<<1, g_num_threads, grid::FORWARD_DYNAMICS_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>()>>>(
             d_vec, d_q, d_qd, d_u, d_robot_model, gravity, hd_data->d_workspace, /*d_f_ext=*/nullptr
         );
@@ -367,6 +409,7 @@ void run() {
     }
 
     if (floating_algorithm_requested("aba")) {
+        maybe_poison_smem();
         grid::aba_kernel<T><<<1, g_num_threads, grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_vec,
             hd_data->d_workspace,
@@ -384,6 +427,7 @@ void run() {
     }
 
     if (floating_algorithm_requested("crba")) {
+        maybe_poison_smem();
         grid::crba_kernel<T><<<1, g_num_threads, grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_mat,
             hd_data->d_workspace,
@@ -400,6 +444,7 @@ void run() {
     }
 
     if (floating_algorithm_requested("end_effector_pose")) {
+        maybe_poison_smem();
         grid::end_effector_pose_kernel<T><<<1, g_num_threads, grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_ee,
             d_q,
@@ -422,6 +467,7 @@ void run() {
     // so non-mimic floating (both 0) still compiles the ee blocks as before.
 #if !GRID_RUNNER_SKIP_EEPOSE_GRADIENTS
     if (floating_algorithm_requested("end_effector_pose_gradient")) {
+        maybe_poison_smem();
         grid::end_effector_pose_gradient_kernel<T><<<1, g_num_threads, grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_dee,
             hd_data->d_workspace,
@@ -442,6 +488,7 @@ void run() {
                 0, hd_data->d_workspace, grid::GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()
             ));
         }
+        maybe_poison_smem();
         grid::end_effector_pose_hessian_kernel<T><<<1, g_num_threads, grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_d2ee,
             d_dee,
@@ -463,6 +510,7 @@ void run() {
 
     if (floating_algorithm_requested("inverse_dynamics_gradient_q") ||
         floating_algorithm_requested("inverse_dynamics_gradient_qd")) {
+        maybe_poison_smem();
         grid::inverse_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_grad,
             hd_data->d_workspace,
@@ -487,6 +535,7 @@ void run() {
 
     if (floating_algorithm_requested("forward_dynamics_gradient_q") ||
         floating_algorithm_requested("forward_dynamics_gradient_qd")) {
+        maybe_poison_smem();
         grid::forward_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_grad,
             hd_data->d_workspace,
@@ -515,6 +564,7 @@ void run() {
     // used nullptr (byte-identical to no-fext). d_f_ext_active was populated from
     // stdin earlier in this block.
     if (g_use_fext) {
+        maybe_poison_smem();
         floating_inverse_dynamics_runner<T><<<1, g_num_threads, grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_vec, d_q, d_qd, d_zero, d_robot_model, gravity, d_f_ext_active
         );
@@ -523,6 +573,7 @@ void run() {
         gpuErrchk(cudaMemcpy(h_vec.data(), d_vec, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
         print_vector("inverse_dynamics_fext", h_vec.data(), grid::NUM_VEL);
 
+        maybe_poison_smem();
         floating_forward_dynamics_runner<T><<<1, g_num_threads, grid::FORWARD_DYNAMICS_DEVICE_INLINE_SMEM_BYTES<T, grid::TIER_MINIMAL>()>>>(
             d_vec, d_q, d_qd, d_u, d_robot_model, gravity, hd_data->d_workspace, d_f_ext_active
         );
@@ -531,6 +582,7 @@ void run() {
         gpuErrchk(cudaMemcpy(h_vec.data(), d_vec, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
         print_vector("forward_dynamics_fext", h_vec.data(), grid::NUM_VEL);
 
+        maybe_poison_smem();
         grid::aba_kernel<T><<<1, g_num_threads, grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_vec, hd_data->d_workspace, d_q_qd_u, grid::NUM_JOINTS + 2 * grid::NUM_VEL,
             d_f_ext_active, d_robot_model, gravity, 1
@@ -541,6 +593,7 @@ void run() {
         print_vector("aba_fext", h_vec.data(), grid::NUM_VEL);
 
 #if !GRID_RUNNER_SKIP_GRADIENTS
+        maybe_poison_smem();
         grid::inverse_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_grad, hd_data->d_workspace, d_q_qd, grid::NUM_JOINTS + grid::NUM_VEL,
             d_f_ext_active, d_robot_model, gravity, 1
@@ -552,6 +605,7 @@ void run() {
         print_matrix_col_major("inverse_dynamics_gradient_qd_fext",
             &h_grad[grid::NUM_VEL * grid::NUM_VEL], grid::NUM_VEL, grid::NUM_VEL);
 
+        maybe_poison_smem();
         grid::forward_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
             d_grad, hd_data->d_workspace, d_q_qd_u, grid::NUM_JOINTS + 2 * grid::NUM_VEL,
             d_f_ext_active, d_robot_model, gravity, 1
