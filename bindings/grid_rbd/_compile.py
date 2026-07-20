@@ -59,7 +59,7 @@ def _resolve_launch_config_robot(urdf_path: str) -> str:
     the bare stem when nothing matches (an un-tuned robot stays on the safe fallback)."""
     stem = Path(urdf_path).stem
     try:
-        from GRiDCodeGenerator.GRiDCodeGenerator import _launch_configs_dir
+        from grid_codegen.GRiDCodeGenerator import _launch_configs_dir
         lc = Path(_launch_configs_dir())
         if (lc / stem).is_dir():
             return stem
@@ -94,7 +94,7 @@ def repo_root() -> Path | None:
     # bindings/grid_rbd/_compile.py  →  repo_root = .../bindings/..
     pkg = Path(__file__).resolve().parent
     candidate = pkg.parent.parent
-    if (candidate / "GRiDCodeGenerator").exists() and (candidate / "external" / "URDFParser").exists():
+    if (candidate / "grid_codegen").exists() and (candidate / "external" / "URDFParser").exists():
         return candidate
     return None
 
@@ -117,7 +117,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
                 sys.path.insert(0, _p)
 
     from URDFParser import URDFParser
-    from GRiDCodeGenerator import GRiDCodeGenerator
+    from grid_codegen import GRiDCodeGenerator
 
     parser = URDFParser()
     robot = parser.parse(

@@ -16,10 +16,10 @@ import tempfile
 import numpy as np
 import pytest
 
-from GRiDCodeGenerator.algorithms._spherize import (
+from grid_codegen.algorithms._spherize import (
     _cover_sphere, _cover_cylinder, _cover_box, _cover_mesh, spherize_urdf,
 )
-from GRiDCodeGenerator.algorithms._collision import parse_spherized_urdf, urdf_joint_tree
+from grid_codegen.algorithms._collision import parse_spherized_urdf, urdf_joint_tree
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)

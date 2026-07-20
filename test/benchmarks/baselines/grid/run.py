@@ -37,8 +37,8 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "external"))  # peer submodules (RBDReference/URDFParser/GLASS)
 
 from config import robot_urdf  # noqa: E402
-from GRiDCodeGenerator import GRiDCodeGenerator  # noqa: E402
-from GRiDCodeGenerator.algo_registry import ALGO_REGISTRY  # noqa: E402
+from grid_codegen import GRiDCodeGenerator  # noqa: E402
+from grid_codegen.algo_registry import ALGO_REGISTRY  # noqa: E402
 from RBDReference.equivalents.reference_backend import strict_parse_robot  # noqa: E402
 from test.benchmarks.timing_parser import (  # noqa: E402
     parse_grid_output, fill_nulls, build_metadata,
@@ -177,7 +177,7 @@ def generate_header(
     floating_base = (base == "floating")
 
     urdf_hash = _hash_file(Path(urdf_path))
-    codegen_hash = _hash_tree(REPO_ROOT / "GRiDCodeGenerator", (".py",))
+    codegen_hash = _hash_tree(REPO_ROOT / "grid_codegen", (".py",))
     # GRID_NO_LICM_BARRIER suppresses the anti-LICM machinery in _single_timing
     # rep loops (volatile reload + __noinline__ barrier). When toggled, the
     # generated header changes — must bust the header cache.
@@ -237,7 +237,7 @@ def generate_header(
     # The batch size is baked into the JSON + printed, so the number is never quoted bare.
     mt_batch = None
     if multi_target_from_collision:
-        from GRiDCodeGenerator.algorithms._collision import collision_spec_from_urdf, normalize_collision_tiers
+        from grid_codegen.algorithms._collision import collision_spec_from_urdf, normalize_collision_tiers
         with contextlib.redirect_stdout(io.StringIO()):
             spec = collision_spec_from_urdf(robot_obj, str(urdf_path), resolution=0.05)
         finest = normalize_collision_tiers(spec)[-1]
@@ -387,7 +387,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
     # d_dqdd_dfext / d_f_ext_gradient_dq buffers (allocated in gen_init_gridData), so
     # the call convention matches the standard (hd_data, d_robotModel, N, ...)
     # shape — no gravity arg (RNEA bias is folded into the kernel) and no extra
-    # caller buffer. See GRiDCodeGenerator/algorithms/_f_ext_gradient.py:
+    # caller buffer. See grid_codegen/algorithms/_f_ext_gradient.py:
     # gen_f_ext_gradient_host (mode 0/1/2) and gen_f_ext_gradient_dq_host.
     "f_ext_gradient": {
         "single_call":        "grid::f_ext_gradient_single_timing<float>(hd_data,d_robotModel,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -541,7 +541,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
     #     gravity arg; signature mirrors `id` + gravity. Emitted whenever `id`
     #     is generated (always, under codegen_profile='all'). Shared smem macro
     #     is INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES for BOTH.
-    #     See GRiDCodeGenerator/algorithms/_centroidal.py:gen_id_bias_host.
+    #     See grid_codegen/algorithms/_centroidal.py:gen_id_bias_host.
     #   - com: kinematics-domain, NO gravity / NO qd. ccrba: NO gravity (uses qd).
     #     energy: takes the gravity arg (uses qd). Output sizes: com=3+3*NUM_VEL,
     #     ccrba=6*NUM_VEL+6, energy=3.  See _centroidal.py:_gen_kin_centroidal_host.
@@ -704,7 +704,7 @@ PER_ALGO_SPECS: dict[str, dict] = {
 #   idsva_so_body_frame @ floating:
 #     The floating-base body-frame SO kernel compiles
 #     `gen_idsva_so_body_frame_floating_reference_inner` — explicitly documented
-#     in GRiDCodeGenerator/algorithms/_idsva_so.py (~:1170) as NOT emitted in
+#     in grid_codegen/algorithms/_idsva_so.py (~:1170) as NOT emitted in
 #     production: the dispatcher routes ALL floating-base SO to the WORLD frame,
 #     so this body-frame floating branch is unreachable/dispatch-dead and is
 #     ~single-threaded. Benchmarking it produced the spurious g1/iiwa/go2

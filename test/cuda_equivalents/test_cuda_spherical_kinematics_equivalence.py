@@ -37,7 +37,7 @@ import pytest
 
 from URDFParser import URDFParser
 from RBDReference import RBDReference
-from GRiDCodeGenerator import GRiDCodeGenerator
+from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.test_cuda_executable_equivalence import (
     _detect_cuda_arch,
     _parse_runner_output,

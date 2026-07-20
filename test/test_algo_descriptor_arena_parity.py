@@ -54,8 +54,8 @@ from pathlib import Path
 
 import pytest
 
-from GRiDCodeGenerator import GRiDCodeGenerator
-from GRiDCodeGenerator.algo_registry import (
+from grid_codegen import GRiDCodeGenerator
+from grid_codegen.algo_registry import (
     ARENA_COMPOSED_KEYS,
     ARENA_RUNG_KEYS,
     arena_ctx_from_codegen,

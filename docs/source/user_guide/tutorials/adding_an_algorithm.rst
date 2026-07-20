@@ -22,7 +22,7 @@ The shape of the work
 ---------------------
 
 Every algorithm ``X`` ships as one Python file at
-``GRiDCodeGenerator/algorithms/_X.py`` exposing a set of ``gen_*``
+``grid_codegen/algorithms/_X.py`` exposing a set of ``gen_*``
 emitter functions. The functions are:
 
 .. list-table::
@@ -215,7 +215,7 @@ Step-by-step recipe (worked example: ``fdsva_so``)
 
    ``gen_X_host`` mirrors any other host wrapper. Add one
    ``AlgoDescriptor`` row (and its ``ALGO_REGISTRY`` entry) in
-   ``GRiDCodeGenerator/algo_registry.py``: the descriptor row carries the
+   ``grid_codegen/algo_registry.py``: the descriptor row carries the
    algorithm's irregular metadata (autotune keys, ``gate_attr``,
    ``bytes_macro`` overrides) and drives the ``GridAlgo`` enum, the
    launch-config symbol map, and the kernel-attr / mjx manifests from a
@@ -296,7 +296,7 @@ Common pitfalls
 Code-generation helpers (cheat sheet)
 -------------------------------------
 
-Most useful helpers (in ``GRiDCodeGenerator/helpers/``):
+Most useful helpers (in ``grid_codegen/helpers/``):
 
 * ``gen_add_code_line(line)`` / ``gen_add_code_lines([...])`` — emit
   text into the current function.

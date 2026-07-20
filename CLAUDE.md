@@ -15,10 +15,11 @@ numpy oracle in `RBDReference` (validated against Pinocchio) and the generated C
 
 ## Layout
 
-- `GRiDCodeGenerator/` — the code-generation engine (the heart of GRiD); emits `grid.cuh`.
-- `GLASS/`, `RBDReference/`, `URDFParser/` — submodules; **four separate peer products** with GRiD
-  (GPU linear algebra, Pinocchio-validated reference dynamics, URDF parsing). All under `A2R-Lab`.
-- `collision/` — collision-geometry codegen + assets (spherized broad/fine two-tier `config_free`).
+- `grid_codegen/` — the code-generation engine (the heart of GRiD); emits `grid.cuh`. Includes
+  `grid_codegen/collision/` (collision-geometry SDF header + spherized assets for two-tier `config_free`).
+- `external/` — the peer-product submodules `GLASS/`, `RBDReference/`, `URDFParser/` (GPU linear
+  algebra, Pinocchio-validated reference dynamics, URDF parsing). **Four separate peer products** with
+  GRiD, all under `A2R-Lab`; grouped here so the top level stays about GRiD itself.
 - `bindings/` — the `grid-rbd` Python package: `register_robot(...)` → numpy / jax / torch handles.
 - `examples/codegen/`, `examples/cuda/` — runnable generate + validate walkthroughs.
 - `test/` — pytest suites (see markers below); `test/cuda_equivalents/` (CUDA equivalence runners),
@@ -38,7 +39,7 @@ python examples/codegen/generate_go2_floating.py       # floating-base example
 ```
 
 For generation always use `.venv/bin/python` with `PYTHONPATH=/home/plancher/Desktop/GRiD` (never
-bare `python`). CUDA arch for this box: `sm_120`/`compute_120`. Clear `GRiDCodeGenerator/__pycache__`
+bare `python`). CUDA arch for this box: `sm_120`/`compute_120`. Clear `grid_codegen/__pycache__`
 after codegen changes.
 
 ## Test

@@ -1,7 +1,7 @@
 """Regression sentinel for the shared `gen_matmul` block-wrap modulus.
 
 BUG (fixed 2026-05-31): the shared matmul helper emitted by
-`GRiDCodeGenerator/helpers/_lin_alg_helpers.py:gen_matmul` computed the
+`grid_codegen/helpers/_lin_alg_helpers.py:gen_matmul` computed the
 per-block base offset as
 
     int cur = 36*((index/num)%NUM_JOINTS);   # <-- WRONG for mimic robots
@@ -33,7 +33,7 @@ import re
 
 import pytest
 
-from GRiDCodeGenerator import GRiDCodeGenerator
+from grid_codegen import GRiDCodeGenerator
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter

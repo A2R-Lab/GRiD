@@ -58,7 +58,7 @@ def gen_grid_cuh(repo: Path, robot: str, urdf: Path, out_dir: Path) -> None:
 import sys
 sys.path.insert(0, "{repo}")
 from URDFParser import URDFParser
-from GRiDCodeGenerator import GRiDCodeGenerator
+from grid_codegen import GRiDCodeGenerator
 p = URDFParser()
 r = p.parse("{urdf}", floating_base=False)
 cg = GRiDCodeGenerator(r, 0, FILE_NAMESPACE="grid")
@@ -172,7 +172,7 @@ def parse_ptxas(stderr: str) -> dict[str, dict[str, int]]:
 
 
 def main():
-    glass_root = HEAD_REPO / "GLASS"
+    glass_root = HEAD_REPO / "external" / "GLASS"
     work = Path("/tmp/ptxas_diag")
     work.mkdir(exist_ok=True)
     results = {}

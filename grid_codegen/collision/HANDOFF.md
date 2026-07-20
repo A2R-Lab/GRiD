@@ -54,7 +54,7 @@ spherized URDF is drop-in interchangeable (`parse_spherized_urdf` reads either).
 
 ---
 
-## 2. The spherizer (`GRiDCodeGenerator/algorithms/_spherize.py`)
+## 2. The spherizer (`grid_codegen/algorithms/_spherize.py`)
 
 `spherize_urdf(urdf, resolution)` rewrites each link's `<collision>` geometry as covering
 spheres and returns a spherized URDF:

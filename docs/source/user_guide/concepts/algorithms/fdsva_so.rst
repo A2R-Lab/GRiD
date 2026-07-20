@@ -43,7 +43,7 @@ The reference implementation is ``RBDReference.fdsva_so`` in
 `RBDReference/RBDReference.py
 <https://github.com/A2R-Lab/RBDReference>`__. The CUDA kernel codegen
 lives in
-`GRiDCodeGenerator/algorithms/_fdsva_so.py
+`grid_codegen/algorithms/_fdsva_so.py
 <https://github.com/A2R-Lab/GRiDCodeGenerator>`__.
 
 Example Usage

@@ -682,10 +682,10 @@ class RobotHandle:
         """
         if not getattr(self._runner, "has_per_algo_threads", lambda: False)():
             return 0
-        from GRiDCodeGenerator.GRiDCodeGenerator import (
+        from grid_codegen.GRiDCodeGenerator import (
             LAUNCH_CONFIG_TIER_SYMBOL,
             LAUNCH_CONFIG_DEFAULT_GPU, load_launch_config, _launch_configs_dir)
-        from GRiDCodeGenerator.algo_registry import build_launch_config_algo_to_symbol
+        from grid_codegen.algo_registry import build_launch_config_algo_to_symbol
         # {short json algo key -> grid symbol}, derived from the descriptor table
         # (the single source of truth that also drives the emitted GridAlgo enum).
         algo_to_symbol = build_launch_config_algo_to_symbol()

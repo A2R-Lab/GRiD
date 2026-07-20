@@ -138,7 +138,7 @@ B. **Any-thread-count emission** — drop the ``__launch_bounds__``
    ``g_thread_dimms`` in the wrapper, and convert ``threadIdx.x < N``
    guards in ``_inner`` functions to block-stride loops via the
    existing helper at
-   ``GRiDCodeGenerator/helpers/_code_generation_helpers.py:87-88``.
+   ``grid_codegen/helpers/_code_generation_helpers.py:87-88``.
 
 (B) becomes mechanical once (A) is done — without the cuBLASDx ``static_assert``
 floor, there's no second mode to emit, and the only remaining work is the
@@ -147,17 +147,17 @@ floor, there's no second mode to emit, and the only remaining work is the
 Codegen layer
 ~~~~~~~~~~~~~~
 
-* :file:`GRiDCodeGenerator/GRiDCodeGenerator.py` — drop
+* :file:`grid_codegen/GRiDCodeGenerator.py` — drop
   ``enable_cublasdx`` / linalg-backend kwargs from ``__init__``; drop
   emission of ``GRID_LINALG_GLASS_NVIDIA`` / ``GRID_CUBLASDX_HEADER_AVAILABLE``
   / ``GRID_CUSOLVERDX_HEADER_AVAILABLE`` macros into ``grid.cuh``.
   Simplify the ``MAX_PERF_LEVEL_THREADS`` computation (no longer pinned to
   cuBLASDx minimum).
-* :file:`GRiDCodeGenerator/helpers/_lin_alg_helpers.py` — single-path
+* :file:`grid_codegen/helpers/_lin_alg_helpers.py` — single-path
   SIMT emission. Drop the ``DEFINE_NVIDIA_GEMM_BLOCKDIM`` /
   ``DEFINE_NVIDIA_GEMV_BLOCKDIM`` machinery and the ``if constexpr``
   dispatch at every call site. This file gets substantially smaller.
-* :file:`GRiDCodeGenerator/helpers/_code_generation_helpers.py` — drop any
+* :file:`grid_codegen/helpers/_code_generation_helpers.py` — drop any
   backend-conditional branches.
 * Per-algorithm files that branch on backend:
   ``_forward_dynamics.py``, ``_eepose_gradient_hessian.py``, ``_fdsva_so.py``.
@@ -343,7 +343,7 @@ If we ever need to restore cuBLASDx support:
    ``GLASS/bench/tuning/plancher-omen-26_results.md`` (sm_120 / 5090
    RTX), kept in-repo as historical record.
 4. The fdsva_so contraction analysis at
-   ``GRiDCodeGenerator/algorithms/_fdsva_so.py:75-93`` (archived) is
+   ``grid_codegen/algorithms/_fdsva_so.py:75-93`` (archived) is
    the most useful starting point for anyone reviving cuBLASDx for the
    one shape where it might pay off.
 
@@ -459,5 +459,5 @@ See also
   constraint section gets updated as part of phase 5.
 * ``test/benchmarks/run_multi_version.py:50-56`` — the original
   comment that captured the empirical case.
-* ``GRiDCodeGenerator/algorithms/_fdsva_so.py:75-93`` — the one place
+* ``grid_codegen/algorithms/_fdsva_so.py:75-93`` — the one place
   where the open research question lives.

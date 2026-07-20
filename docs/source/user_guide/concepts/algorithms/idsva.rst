@@ -49,7 +49,7 @@ The reference implementations live in
 ``idsva_so_body_frame``, ``idsva_so_world_frame``, and the meta
 ``idsva_so`` dispatcher. The codegen for the corresponding CUDA kernels
 lives in
-`GRiDCodeGenerator/algorithms/_idsva_so.py
+`grid_codegen/algorithms/_idsva_so.py
 <https://github.com/A2R-Lab/GRiDCodeGenerator>`__.
 
 Example Usage

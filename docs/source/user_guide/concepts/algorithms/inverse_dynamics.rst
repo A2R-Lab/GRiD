@@ -38,7 +38,7 @@ Implementation
 The Python reference is ``RBDReference.inverse_dynamics`` in
 `RBDReference/RBDReference.py
 <https://github.com/A2R-Lab/RBDReference>`__. CUDA codegen lives in
-`GRiDCodeGenerator/algorithms/_inverse_dynamics.py
+`grid_codegen/algorithms/_inverse_dynamics.py
 <https://github.com/A2R-Lab/GRiDCodeGenerator>`__.
 
 See Also

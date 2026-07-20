@@ -22,8 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from GRiDCodeGenerator import GRiDCodeGenerator
-from GRiDCodeGenerator.algorithms._collision import build_self_cc_ranges
+from grid_codegen import GRiDCodeGenerator
+from grid_codegen.algorithms._collision import build_self_cc_ranges
 from test.cuda_equivalents.test_cuda_executable_equivalence import _detect_cuda_arch
 from RBDReference.tests.model_sources import resolve_robot_spec, iter_robot_cases
 from RBDReference.tests import MANIFEST_PATH
@@ -32,7 +32,7 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 from config import robot_urdf
-COLLISION_INCLUDE = REPO_ROOT / "collision"
+COLLISION_INCLUDE = REPO_ROOT / "grid_codegen" / "collision"
 RUNNER_SOURCE = Path(__file__).with_name("cuda_collision_config_free_runner.cu")
 SELFCC_RUNNER_SOURCE = Path(__file__).with_name("cuda_collision_self_collision_runner.cu")
 
@@ -133,7 +133,7 @@ def test_collision_config_free_real_robot(tmp_path):
     the config_free verdict is governed by the environment: empty/far => free, obstacle-on-sphere
     => in-collision. This is the end-to-end certification of the `--collision` pipeline."""
     from URDFParser import URDFParser
-    from GRiDCodeGenerator.algorithms._collision import collision_spec_from_urdf
+    from grid_codegen.algorithms._collision import collision_spec_from_urdf
     urdf = robot_urdf("go2")
     if not urdf.exists():
         pytest.skip("go2.urdf not found")

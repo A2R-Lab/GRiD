@@ -4,7 +4,7 @@ Codegen Architecture
 Every GRiD algorithm is emitted in three layers (``_host`` / ``_kernel`` /
 ``_device``). Knowing the layering helps when you want to compose generated
 functions, call kernels from your own CUDA host code, or read the emitter
-source in ``GRiDCodeGenerator/algorithms/``.
+source in ``grid_codegen/algorithms/``.
 
 .. note::
 
@@ -79,7 +79,7 @@ other algorithms' ``_inner`` (the placement-free math) directly to reuse one
 expensive ``XImats`` load.
 
 For example, second-order forward dynamics
-(`_fdsva_so.py <https://github.com/A2R-Lab/GRiD/blob/main/GRiDCodeGenerator/algorithms/_fdsva_so.py>`_)
+(`_fdsva_so.py <https://github.com/A2R-Lab/GRiD/blob/main/grid_codegen/algorithms/_fdsva_so.py>`_)
 needs both forward dynamics and direct inverse-mass-matrix outputs internally.
 ``fdsva_so_device`` loads XImats once at the top, then calls the placement-free
 ``_inner`` variants:
@@ -219,7 +219,7 @@ Each algorithm also carries a small amount of *irregular* per-algo metadata:
 which autotune launch-config key(s) it uses, the ``cudaFuncSetAttribute`` opt-in
 gate, the dynamic-shared-memory bytes-macro stem, whether it has an mjx
 (MUJOCO_OUTPUT) twin, and so on. This lives as one ``AlgoDescriptor`` row per
-algorithm in ``GRiDCodeGenerator/algo_registry.py`` (the ``ALGO_DESCRIPTORS``
+algorithm in ``grid_codegen/algo_registry.py`` (the ``ALGO_DESCRIPTORS``
 tuple) — the **single source of truth** from which the generator derives:
 
 * the ``GridAlgo`` enum and the launch-config symbol map (``build_launch_config_algo_to_symbol``),
@@ -243,5 +243,5 @@ See also
 --------
 
 * :doc:`algorithms/index` — algorithm-level docs.
-* ``GRiDCodeGenerator/README.md`` (repo root) — codegen-helper
+* ``grid_codegen/README.md`` (repo root) — codegen-helper
   reference for emitter authors.

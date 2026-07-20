@@ -16,7 +16,7 @@ from pathlib import Path
 from robot_descriptions import go2_description
 
 from URDFParser import URDFParser
-from GRiDCodeGenerator import GRiDCodeGenerator
+from grid_codegen import GRiDCodeGenerator
 
 URDF_PATH = go2_description.URDF_PATH
 

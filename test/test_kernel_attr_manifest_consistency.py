@@ -28,8 +28,8 @@ from __future__ import annotations
 
 import re
 
-from GRiDCodeGenerator.GRiDCodeGenerator import GRiDCodeGenerator
-from GRiDCodeGenerator.algorithms._integrator import _INTEGRATOR_TYPES
+from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator
+from grid_codegen.algorithms._integrator import _INTEGRATOR_TYPES
 
 # The non-mjx integrator kernel families that fan out over IntegratorType and
 # whose every emitted IT must carry a registered cudaFuncSetAttribute entry.

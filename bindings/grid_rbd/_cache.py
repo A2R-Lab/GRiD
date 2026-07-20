@@ -92,7 +92,7 @@ def _wrapper_template_hash() -> str:
 
 
 def _codegen_source_hash() -> str:
-    """sha256 of the codegen source (GRiDCodeGenerator/ + URDFParser/ *.py) so that
+    """sha256 of the codegen source (grid_codegen/ + URDFParser/ *.py) so that
     EDITING THE CODEGEN invalidates the binding cache. The generated grid.cuh is NOT
     in the cache key — only urdf_bytes + options + the resolved launch_config are — so
     without this, changing how GRiDCodeGenerator emits code (tier macros, host wrappers,
@@ -102,7 +102,7 @@ def _codegen_source_hash() -> str:
     isn't present (the .so is shipped prebuilt; nothing to re-key against)."""
     # bindings/grid_rbd/_cache.py → repo_root = parent x3
     repo = Path(__file__).resolve().parent.parent.parent
-    pkgs = [repo / "GRiDCodeGenerator", repo / "external" / "URDFParser"]
+    pkgs = [repo / "grid_codegen", repo / "external" / "URDFParser"]
     h = hashlib.sha256()
     found = False
     for pkg in pkgs:

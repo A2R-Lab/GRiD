@@ -71,7 +71,7 @@ def _warn_if_no_ffi_autotune(robot_ident: str, floating_base: bool) -> None:
     if key in _FFI_AUTOTUNE_WARNED:
         return
     try:
-        from GRiDCodeGenerator.GRiDCodeGenerator import load_launch_config
+        from grid_codegen.GRiDCodeGenerator import load_launch_config
     except Exception:
         return  # no codegen package (sdist install) → can't assess; stay silent
     try:
@@ -377,7 +377,7 @@ def register_robot(
     # RESOLVED config values into the cache key so a re-autotune rebuilds the .so.
     code_options["launch_config_profile"] = "ffi"
     try:
-        from GRiDCodeGenerator.GRiDCodeGenerator import load_launch_config
+        from grid_codegen.GRiDCodeGenerator import load_launch_config
         from grid_rbd._compile import _resolve_launch_config_robot
         _lc_robot = _resolve_launch_config_robot(str(urdf_p) if urdf_path is not None else name)
         _lc = load_launch_config(_lc_robot, bool(floating_base), profile="ffi")

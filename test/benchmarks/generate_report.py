@@ -25,9 +25,9 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 # Algorithm display names, row ordering, and section grouping derive from
-# GRiDCodeGenerator/algo_registry.py — that file is the single source of truth.
+# grid_codegen/algo_registry.py — that file is the single source of truth.
 # To add a new algo or rename a display label, edit the registry, not this module.
-from GRiDCodeGenerator.algo_registry import (
+from grid_codegen.algo_registry import (
     build_display_map as _build_display,
     build_sections_map as _build_sections,
 )

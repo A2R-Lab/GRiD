@@ -60,9 +60,9 @@ order, so CUDA-vs-ProjectModelAdapter is an apples-to-apples internal-order
 comparison.
 
 CUDA codegen:
-- `GRiDCodeGenerator/algorithms/_integrator.py` — value path incl. floating
+- `grid_codegen/algorithms/_integrator.py` — value path incl. floating
   Lie-group retract helpers for the q-update.
-- `GRiDCodeGenerator/algorithms/_integrator_gradient.py` — gradient assembly.
+- `grid_codegen/algorithms/_integrator_gradient.py` — gradient assembly.
   Floating Euler reads precomputed `s_dInt_q_6x6` / `s_dInt_v_6x6` for the top
   `nv` rows; bottom rows are `dt·J_qq | I+dt·J_qv | dt·Minv`.
 - `GRID_HAS_INTEGRATOR` / `GRID_HAS_INTEGRATOR_GRADIENT` macros gate consumer
@@ -1003,7 +1003,7 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    `b228756` stripped 191 lines of dead `if use_thread_group:` branches
    across 15 codegen files. `75089f8` dropped the `use_thread_group`
    parameter itself across 1079 scrubs in 16 files. Audit 2026-05-29
-   EVENING-2: grep `use_thread_group` across `GRiDCodeGenerator/**.py`
+   EVENING-2: grep `use_thread_group` across `grid_codegen/**.py`
    returns 0 hits. iiwa14 fixed+floating + go2 floating equivalence GREEN.
    (b) ✅ **Consolidate emitter helpers — MAIN PASS DONE 2026-05-29 (codegen
    `75089f8`):** consolidated `gen_kernel_load_inputs` / `gen_kernel_save_result`
@@ -1136,7 +1136,7 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    matters most, less on big robots where memory bandwidth dominates). Two
    templates per algorithm: emit both, measure the gap on the standard sweep.
 5. **RBDReference file split — user-filed 2026-05-30.** `RBDReference.py` has
-   grown SOOOO long (~3000+ lines) — split it the way `GRiDCodeGenerator/` is
+   grown SOOOO long (~3000+ lines) — split it the way `grid_codegen/` is
    organized:
    - `helpers.py` — spatial-algebra primitives, quaternion utilities, small
      utility math (the `mx0…mx6` / cross-product / Lie-group helpers).

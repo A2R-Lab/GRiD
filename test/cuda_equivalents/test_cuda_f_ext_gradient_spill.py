@@ -37,7 +37,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from GRiDCodeGenerator import GRiDCodeGenerator
+from grid_codegen import GRiDCodeGenerator
 from URDFParser import URDFParser
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec

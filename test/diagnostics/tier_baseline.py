@@ -106,7 +106,7 @@ import sys
 sys.path.insert(0, "{REPO_ROOT}")
 sys.path.insert(0, "{REPO_ROOT}/external")
 from URDFParser import URDFParser
-from GRiDCodeGenerator import GRiDCodeGenerator
+from grid_codegen import GRiDCodeGenerator
 p = URDFParser()
 r = p.parse("{urdf}", floating_base={floating})
 cg = GRiDCodeGenerator(r, 0, FILE_NAMESPACE="grid")

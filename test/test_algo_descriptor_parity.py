@@ -23,8 +23,8 @@ parity gate.
 
 from __future__ import annotations
 
-from GRiDCodeGenerator.GRiDCodeGenerator import GRiDCodeGenerator
-from GRiDCodeGenerator.algo_registry import (
+from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator
+from grid_codegen.algo_registry import (
     ALGO_DESCRIPTORS,
     ALGO_REGISTRY,
     build_launch_config_algo_to_symbol,

@@ -1,1 +1,1 @@
-__all__ = ["GRiDCodeGenerator", "RBDReference", "URDFParser", "test", "examples"]
+__all__ = ["grid_codegen", "RBDReference", "URDFParser", "test", "examples"]

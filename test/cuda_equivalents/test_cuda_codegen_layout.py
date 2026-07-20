@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from GRiDCodeGenerator import GRiDCodeGenerator
-from GRiDCodeGenerator.algorithms._idsva_so import (
+from grid_codegen import GRiDCodeGenerator
+from grid_codegen.algorithms._idsva_so import (
     idsva_so_parent_topology_needs_reference_order_output_repair,
 )
 from test.cuda_equivalents.test_cuda_executable_equivalence import _detect_cuda_arch
@@ -23,7 +23,7 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 
 CONST_RE = re.compile(r"const int (?P<name>[A-Z0-9_]+) = (?P<value>-?[0-9]+);")
 
-CODEGEN_ROOT = Path(__file__).resolve().parents[2] / "GRiDCodeGenerator"
+CODEGEN_ROOT = Path(__file__).resolve().parents[2] / "grid_codegen"
 
 
 @contextlib.contextmanager

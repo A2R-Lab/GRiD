@@ -94,7 +94,7 @@ def _parse(urdf_path, floating_base):
 def _spatial_inertia_from_params(p):
     """Rebuild the spatial 6x6 from a 10-param row exactly as the device does.
 
-    Mirrors GRiDCodeGenerator/helpers/_topology_helpers._emit_runtime_inertia_rebuild:
+    Mirrors grid_codegen/helpers/_topology_helpers._emit_runtime_inertia_rebuild:
         p = [m, hx, hy, hz, Ixx, Ixy, Ixz, Iyy, Iyz, Izz]
         I = [[ I_O,        skew(h) ],
              [ skew(h)^T,  m*I3    ]]

@@ -68,7 +68,7 @@ def generate(robot_label: str, urdf: Path, floating: bool, out_dir: Path) -> Pat
 import sys
 sys.path.insert(0, "{REPO_ROOT}")
 from URDFParser import URDFParser
-from GRiDCodeGenerator import GRiDCodeGenerator
+from grid_codegen import GRiDCodeGenerator
 p = URDFParser()
 r = p.parse("{urdf}", floating_base={floating})
 cg = GRiDCodeGenerator(r, 0, FILE_NAMESPACE="grid")

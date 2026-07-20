@@ -12,8 +12,8 @@ import numpy as np
 
 from URDFParser import URDFParser
 from RBDReference import RBDReference
-from GRiDCodeGenerator import GRiDCodeGenerator
-from GRiDCodeGenerator.cli import parseInputs, validateRobot
+from grid_codegen import GRiDCodeGenerator
+from grid_codegen.cli import parseInputs, validateRobot
 from test.helpers import initializeValues
 
 

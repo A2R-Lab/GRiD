@@ -539,7 +539,7 @@ algo. That work is deferred to the humanoid follow-up because:
 What's in the framework but not yet exercised at LITE-distinct-from-MINIMAL:
 
 * The ``gen_declare_shared_arena(tier_workspace_expr=...)``
-  mechanism in ``GRiDCodeGenerator/helpers/_code_generation_helpers.py``
+  mechanism in ``grid_codegen/helpers/_code_generation_helpers.py``
   is binary (PERF in smem / non-PERF in workspace). The follow-up
   extends it to ternary picks.
 
@@ -799,7 +799,7 @@ inner-temp buffer — e.g. Minv's ``s_F`` — into a separate ``s_F`` /
 ``d_workspace`` parameter, re-base the other offsets to 0, and pick the
 placement per tier via ``select_shared_tier_3way``) is the same one the
 integrator and idsva_so now follow. See the per-algo ``gen_*`` functions in
-``GRiDCodeGenerator/algorithms/`` for the concrete signatures.
+``grid_codegen/algorithms/`` for the concrete signatures.
 
 LITE 48 KB smem target — shipped; value tuning remains
 -------------------------------------------------------
@@ -920,7 +920,7 @@ References
   verifies all 9 single-overload kernels compile at all 3 tiers
   AND 17 static_asserts validate per-tier SMEM/WORKSPACE invariants.
 * Reusable arena helper:
-  ``GRiDCodeGenerator/helpers/_code_generation_helpers.py:504-583``
+  ``grid_codegen/helpers/_code_generation_helpers.py:504-583``
   (``gen_declare_shared_arena``, ``tier_workspace_expr``).
 * Existing bench harness:
   ``test/benchmarks/run_multi_version.py`` (multi-column driver),

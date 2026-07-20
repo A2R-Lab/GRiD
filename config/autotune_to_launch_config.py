@@ -48,7 +48,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # loadable keys (long keys would be silently skipped by load_launch_config).
 sys.path.insert(0, str(REPO_ROOT))
 try:
-    from GRiDCodeGenerator.GRiDCodeGenerator import LAUNCH_CONFIG_ALGO_TO_SYMBOL
+    from grid_codegen.GRiDCodeGenerator import LAUNCH_CONFIG_ALGO_TO_SYMBOL
     SYMBOL_TO_KEY = {sym: key for key, sym in LAUNCH_CONFIG_ALGO_TO_SYMBOL.items()}
 except Exception:  # pragma: no cover - keep tool usable if import path shifts
     LAUNCH_CONFIG_ALGO_TO_SYMBOL = {}

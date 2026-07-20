@@ -23,7 +23,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from GRiDCodeGenerator.algo_registry import ALGO_DESCRIPTORS, ALGO_REGISTRY
+from grid_codegen.algo_registry import ALGO_DESCRIPTORS, ALGO_REGISTRY
 
 # run.py lives in a non-package dir; load it by path (same idiom as test_autotune_picker).
 _RUN_PY = REPO_ROOT / "test" / "benchmarks" / "baselines" / "grid" / "run.py"

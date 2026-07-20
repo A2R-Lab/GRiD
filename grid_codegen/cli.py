@@ -103,7 +103,7 @@ def validateRobot(robot, NO_ARG_OPTION=False):
 def main():
     """Entry point for the ``grid-generate`` CLI command."""
     from URDFParser import URDFParser
-    from GRiDCodeGenerator import GRiDCodeGenerator
+    from grid_codegen import GRiDCodeGenerator
 
     (URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE, FIXED_TARGET_NAMES,
      COLLISION, COLLISION_RES) = parseInputs()
@@ -114,7 +114,7 @@ def main():
 
     collision_spec = None
     if COLLISION:
-        from GRiDCodeGenerator.algorithms._collision import multi_tier_collision_spec_from_urdf
+        from grid_codegen.algorithms._collision import multi_tier_collision_spec_from_urdf
         collision_spec = multi_tier_collision_spec_from_urdf(robot, URDF_PATH, COLLISION_RES)
         if "tiers" in collision_spec:
             print("      collision spheres = " + ", ".join(

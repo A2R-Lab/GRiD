@@ -27,7 +27,7 @@ Implementation
 The Python reference is ``RBDReference.aba`` in
 `RBDReference/RBDReference.py
 <https://github.com/A2R-Lab/RBDReference>`__. CUDA codegen lives in
-`GRiDCodeGenerator/algorithms/_aba.py
+`grid_codegen/algorithms/_aba.py
 <https://github.com/A2R-Lab/GRiDCodeGenerator>`__.
 
 See Also

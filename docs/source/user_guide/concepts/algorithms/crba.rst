@@ -29,7 +29,7 @@ Implementation
 The Python reference is ``RBDReference.crba`` in
 `RBDReference/RBDReference.py
 <https://github.com/A2R-Lab/RBDReference>`__. CUDA codegen lives in
-`GRiDCodeGenerator/algorithms/_crba.py
+`grid_codegen/algorithms/_crba.py
 <https://github.com/A2R-Lab/GRiDCodeGenerator>`__.
 
 See Also

@@ -34,8 +34,8 @@ by the caller). An `isfinite` guard skips any side whose bound is +/-inf, so an
 unbounded joint contributes EXACTLY zero to value/gradient/hessian.
 """
 
-from GRiDCodeGenerator.helpers._code_generation_helpers import _gen_mjx_build_R_lines
-from GRiDCodeGenerator.algorithms._centroidal import (
+from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines
+from grid_codegen.algorithms._centroidal import (
     _gen_centroidal_call, _centroidal_inner_temp_mem_size, _centroidal_device_extra,
 )
 

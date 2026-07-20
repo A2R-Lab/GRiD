@@ -12,7 +12,7 @@ from typing import NamedTuple
 import numpy as np
 import pytest
 
-from GRiDCodeGenerator import GRiDCodeGenerator
+from grid_codegen import GRiDCodeGenerator
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import (
     iter_robot_cases,
@@ -433,7 +433,7 @@ def _glass_commit() -> str:
     """HEAD commit of the vendored GLASS submodule.
 
     GLASS is vendored into every generated grid.cuh at codegen time
-    (``GRiDCodeGenerator/helpers/_lin_alg_helpers.py``), so its content is a
+    (``grid_codegen/helpers/_lin_alg_helpers.py``), so its content is a
     codegen INPUT every bit as much as the GRiDCodeGenerator .py tree. The
     header cache key must fold it in, otherwise a GLASS bump leaves the cache
     falsely hitting headers vendored from the OLD GLASS. Fall back to a hash of
@@ -576,7 +576,7 @@ def _header_cache_key(
         "urdf_path": str(urdf_path),
         "urdf_hash": _hash_file(urdf_path) if urdf_path.exists() else "missing",
         "robot_description_revision": resolved_model.revision,
-        "codegen_hash": _hash_tree(REPO_ROOT / "GRiDCodeGenerator", (".py",)),
+        "codegen_hash": _hash_tree(REPO_ROOT / "grid_codegen", (".py",)),
         # GLASS is vendored into the header at codegen time, so its commit is a
         # codegen input — fold it in so a GLASS bump invalidates stale headers.
         "glass_commit": _glass_commit(),

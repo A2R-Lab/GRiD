@@ -15,7 +15,7 @@ from pathlib import Path
 from robot_descriptions import iiwa14_description
 
 from URDFParser import URDFParser
-from GRiDCodeGenerator import GRiDCodeGenerator
+from grid_codegen import GRiDCodeGenerator
 
 
 def main() -> None:

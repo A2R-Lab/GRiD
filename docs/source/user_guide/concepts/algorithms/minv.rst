@@ -35,7 +35,7 @@ Implementation
 The Python reference is ``RBDReference.minv`` in
 `RBDReference/RBDReference.py
 <https://github.com/A2R-Lab/RBDReference>`__. CUDA codegen lives in
-`GRiDCodeGenerator/algorithms/_minv.py
+`grid_codegen/algorithms/_minv.py
 <https://github.com/A2R-Lab/GRiDCodeGenerator>`__.
 
 See Also

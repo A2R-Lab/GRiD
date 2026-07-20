@@ -40,9 +40,9 @@ BATCH_SIZES = [16, 32, 64, 128, 256, 1024]
 # Label → JSON key mapping
 # ---------------------------------------------------------------------------
 
-# GRiD labels (derived from GRiDCodeGenerator/algo_registry.py — single source of truth).
+# GRiD labels (derived from grid_codegen/algo_registry.py — single source of truth).
 # To add a new algorithm or alias, edit that file instead of these maps.
-from GRiDCodeGenerator.algo_registry import (
+from grid_codegen.algo_registry import (
     build_single_label_map as _build_grid_single,
     build_batch_with_mem_label_map as _build_grid_mem,
     build_batch_compute_only_label_map as _build_grid_compute,

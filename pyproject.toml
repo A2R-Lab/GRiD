@@ -15,11 +15,11 @@ dependencies = [
 ]
 
 [project.scripts]
-grid-generate = "GRiDCodeGenerator.cli:main"
+grid-generate = "grid_codegen.cli:main"
 
 [tool.setuptools.packages.find]
 where = [".", "external"]
-include = ["GRiDCodeGenerator*", "URDFParser*", "RBDReference*"]
+include = ["grid_codegen*", "URDFParser*", "RBDReference*"]
 
 [tool.black]
 line-length = 88  # Sets the maximum line length; default is 88, but you can adjust it if needed.

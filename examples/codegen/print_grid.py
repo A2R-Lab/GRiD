@@ -15,8 +15,8 @@ import tempfile
 from pathlib import Path
 
 from URDFParser import URDFParser
-from GRiDCodeGenerator import GRiDCodeGenerator
-from GRiDCodeGenerator.cli import parseInputs, validateRobot
+from grid_codegen import GRiDCodeGenerator
+from grid_codegen.cli import parseInputs, validateRobot
 
 
 def detect_cuda_arch() -> str:

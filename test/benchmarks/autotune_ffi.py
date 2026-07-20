@@ -47,10 +47,10 @@ from test.benchmarks.baselines.grid.timeGRiD_bindings import (  # noqa: E402
     ALGOS, THREAD_CANDIDATES, _make_np,
 )
 from test.benchmarks.baselines.grid.run import get_urdf_path  # noqa: E402
-from GRiDCodeGenerator.GRiDCodeGenerator import (  # noqa: E402
+from grid_codegen.GRiDCodeGenerator import (  # noqa: E402
     LAUNCH_CONFIG_DEFAULT_GPU, _launch_configs_dir,
 )
-from GRiDCodeGenerator.algo_registry import build_launch_config_algo_to_symbol  # noqa: E402
+from grid_codegen.algo_registry import build_launch_config_algo_to_symbol  # noqa: E402
 
 # symbol (handle method name) -> short launch_configs json key (fd, id, ...).
 # Built from the descriptor table (single source of truth for {json key -> symbol}).

@@ -69,7 +69,7 @@ _ARENA_BYTES_CALL = re.compile(r"grid_shared_arena_bytes<T>\(\s*([0-9]+)\s*,")
 
 def _generate(robot_id: str, floating: bool, out: Path, runtime_transform: bool = False) -> Path:
     from URDFParser import URDFParser
-    from GRiDCodeGenerator import GRiDCodeGenerator
+    from grid_codegen import GRiDCodeGenerator
     urdf = robot_urdf(robot_id)
     if not urdf.exists():
         pytest.skip(f"{robot_id}.urdf not found")

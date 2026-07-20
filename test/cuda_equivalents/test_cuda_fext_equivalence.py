@@ -26,7 +26,7 @@ from RBDReference.equivalents.pinocchio_backend import build_pinocchio_adapter
 from RBDReference.tests.state_sampling import build_dynamics_samples
 from RBDReference.tests.tolerances import get_tolerance
 
-from GRiDCodeGenerator import GRiDCodeGenerator
+from grid_codegen import GRiDCodeGenerator
 
 from test.cuda_equivalents.test_cuda_executable_equivalence import (
     _detect_cuda_arch,

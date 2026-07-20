@@ -10,7 +10,7 @@ emitting CUDA C++ from URDFs; numpy/pinocchio reference oracle lives in `RBDRefe
 ## 0. The validation checklist (do these EVERY time — they each caught a real bug)
 1. **Clean the generated-header cache before re-validating.** A stale `grid.cuh` gives phantom
    pass/fail. The CUDA equivalence harness keys its cache on a hash of the whole
-   `GRiDCodeGenerator/*.py` tree (`_header_cache_key`), so codegen edits self-invalidate — but
+   `grid_codegen/*.py` tree (`_header_cache_key`), so codegen edits self-invalidate — but
    manual/ad-hoc `gen_all_code` runs into temp dirs do not. When in doubt, clear it.
 2. **Gate-A byte-identical** for any refactor or opt-in algorithm: capture the generated `grid.cuh`
    for representative robots (iiwa14-fixed + a floating + a big robot) BEFORE your change, regen
@@ -237,7 +237,7 @@ G orthogonal ⇒ `G^{-1}=G^T`. Gradient base-linear maps `grad_mjx = R·grad_pin
   wiring or build staleness, not the kernel math. (Don't re-derive a "kernel bug" the .cu harness already disproved.)
 - **STALE-BUILD GOTCHA (updated 2026-06-21):** the grid_rbd compile cache key hashes URDF + options + arch +
   package version + `_wrapper_template_hash()` + `_codegen_source_hash()` (the latter hashes all `*.py` under
-  `GRiDCodeGenerator/` + `URDFParser/`, AND now `bindings/grid_rbd/_compile.py`). So a codegen-SOURCE edit DOES
+  `grid_codegen/` + `URDFParser/`, AND now `bindings/grid_rbd/_compile.py`). So a codegen-SOURCE edit DOES
   rotate the key (no `force_rebuild` needed). The historical trap was narrower: editing the codegen INVOCATION in
   `_compile.py` (algorithm_list / `enable_*` flags) was NOT hashed → a flag change silently reused an old .so. That
   gap is now closed (`_compile.py` hashed). Still verify with `stat` if suspicious. NOTE: re-keying invalidates ALL
@@ -663,7 +663,7 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   thread-count-SCALING regression is the tell. (#3 stays open in the audit with this caveat; the win is real only
   for big floating robots and would need the const-table-hoist redesign to not regress the common small case.)
 - **GLASS is VENDORED (inlined) into every generated `grid.cuh` at codegen time — a GLASS change does NOT reach
-  GRiD's emit until you also do the GRiD-side plumbing.** Mechanism (`GRiDCodeGenerator/helpers/_lin_alg_helpers.py`):
+  GRiD's emit until you also do the GRiD-side plumbing.** Mechanism (`grid_codegen/helpers/_lin_alg_helpers.py`):
   `gen_grid_linalg_backend_helpers` reads each file in the curated list `_GLASS_BASE_FILES` *fresh from the GLASS
   submodule* and inlines it into the header (`// BEGIN/END GLASS ...`), pinning the GLASS commit in a comment.
   GRiD code never `#include`s GLASS — it's embedded, so the generated header is self-contained. Three consequences

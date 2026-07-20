@@ -33,7 +33,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from GRiDCodeGenerator import GRiDCodeGenerator
+from grid_codegen import GRiDCodeGenerator
 from test.cuda_equivalents.test_cuda_executable_equivalence import (
     _detect_cuda_arch,
     _parse_runner_output,

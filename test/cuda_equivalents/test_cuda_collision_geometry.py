@@ -28,7 +28,7 @@ import pytest
 from test.cuda_equivalents.test_cuda_executable_equivalence import _detect_cuda_arch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-COLLISION_INCLUDE = REPO_ROOT / "collision"
+COLLISION_INCLUDE = REPO_ROOT / "grid_codegen" / "collision"
 RUNNER_SOURCE = Path(__file__).with_name("cuda_collision_geometry_runner.cu")
 
 

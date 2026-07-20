@@ -68,7 +68,7 @@ The Python reference is ``RBDReference.frame_jacobian`` /
 <https://github.com/A2R-Lab/RBDReference>`__.
 
 CUDA codegen lives in
-`GRiDCodeGenerator/algorithms/_frame_jacobian.py
+`grid_codegen/algorithms/_frame_jacobian.py
 <https://github.com/A2R-Lab/GRiDCodeGenerator>`__. It is an
 **opt-in, additive** family: the surfaces are only emitted when the
 ``frame_jacobian`` key is explicitly selected (it pulls in the

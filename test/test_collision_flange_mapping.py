@@ -1,4 +1,4 @@
-"""Unit gate for the W3 Component D FLANGE mapping (`GRiDCodeGenerator/algorithms/_collision.py`).
+"""Unit gate for the W3 Component D FLANGE mapping (`grid_codegen/algorithms/_collision.py`).
 
 The FLANGE mapping is the #1 silent-wrong-frame hazard in the collision pipeline: every foam
 sphere must bind to ITS OWN GRiD `s_Xworld` frame slot. This test certifies that mapping WITHOUT
@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 
 from URDFParser import URDFParser
-from GRiDCodeGenerator.algorithms._collision import (
+from grid_codegen.algorithms._collision import (
     build_self_cc_ranges,
     build_sphere_tiers,
     parse_spherized_urdf,

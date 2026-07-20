@@ -18,14 +18,14 @@ from pathlib import Path
 
 import pytest
 
-from GRiDCodeGenerator import GRiDCodeGenerator
-from GRiDCodeGenerator.algorithms._collision import collision_spec_from_urdf
+from grid_codegen import GRiDCodeGenerator
+from grid_codegen.algorithms._collision import collision_spec_from_urdf
 from test.cuda_equivalents.test_cuda_executable_equivalence import _detect_cuda_arch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 from config import robot_urdf
-COLLISION_INCLUDE = REPO_ROOT / "collision"
+COLLISION_INCLUDE = REPO_ROOT / "grid_codegen" / "collision"
 RUNNER_SOURCE = Path(__file__).with_name("cuda_collision_cost_runner.cu")
 
 
