@@ -1,25 +1,75 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=61", "pybind11>=2.11"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "GRiD-RBD"
+# Single distribution for the whole repo. `GRiD-RBD` (the codegen toolkit) and
+# `grid-rbd` (the runtime Python wrapper) normalize to the SAME PEP 503 name and
+# the wrapper hard-imports the codegen tree at register_robot time, so they were
+# always one distribution — now folded into one editable install.
+name = "grid-rbd"
 version = "1.0.0"
 description = "GPU-Accelerated Rigid Body Dynamics"
-requires-python = ">=3.9"
+readme = "README.md"
+# 3.10 floor: the runtime wrapper + its pybind11 _core ext require it; codegen
+# is 3.9-compatible but there is no reason to ship the split floor.
+requires-python = ">=3.10"
+license = {text = "MIT"}
 dependencies = [
-    "numpy>=1.17.4",
+    # codegen / reference toolkit
+    "numpy>=1.23",
     "sympy>=1.7.1",
     "beautifulsoup4>=4.9.3",
     "lxml>=4.2.1",
+    # runtime wrapper (cache dirs; nvcc invoked at register_robot time)
+    "platformdirs>=4.0",
+]
+
+[project.optional-dependencies]
+# Backend extras mirror the jax-vs-jax[cuda] pattern: the user picks the GPU
+# wheel (jax[cuda] / a torch cu1xx build) matching their arch; we only pin the
+# minimum API version. No upper cap — an over-tight cap just blocks users.
+jax = [
+    "jax>=0.4.40",
+]
+torch = [
+    "torch>=2.1",
+]
+# Both backend surfaces in one shot (recursive self-extras). NO dev/benchmark
+# weight here, and NO cuRobo — cuRobo installs last via the bench channel.
+all = [
+    "grid-rbd[jax]",
+    "grid-rbd[torch]",
+]
+# Test deps for the bindings suite (imports grid_rbd.jax / grid_rbd.torch to
+# exercise the jax<->torch parity + autograd paths). The optional real-MuJoCo
+# cross-check is importorskip-guarded, so `mujoco` stays optional. The heavy
+# comparator/oracle stack (pinocchio/mjx/frax) lives in install/requirements-dev.txt.
+dev = [
+    "grid-rbd[all]",
+    "pytest>=7.0",
 ]
 
 [project.scripts]
 grid-generate = "grid_codegen.cli:main"
 
+[tool.setuptools]
+# The runtime wrapper ships a C++ extension (grid_rbd._core); a minimal root
+# setup.py owns the Extension declaration. include-package-data ships the
+# wrapper template + py.typed markers below.
+include-package-data = true
+
 [tool.setuptools.packages.find]
-where = [".", "external"]
-include = ["grid_codegen*", "URDFParser*", "RBDReference*"]
+# grid_codegen at ./, grid_rbd under ./bindings, peer products under ./external.
+where = [".", "bindings", "external"]
+include = ["grid_codegen*", "grid_rbd*", "URDFParser*", "RBDReference*"]
+
+[tool.setuptools.package-data]
+# py.typed (PEP 561): ship inline type annotations so consumers' type checkers /
+# IDEs honor them (grid_rbd is a typed package, no separate .pyi).
+grid_rbd = ["wrapper_template.cu", "py.typed"]
+"grid_rbd.jax" = ["py.typed"]
+"grid_rbd.torch" = ["py.typed"]
 
 [tool.black]
 line-length = 88  # Sets the maximum line length; default is 88, but you can adjust it if needed.
