@@ -13,7 +13,7 @@ Run with:
     python bindings/examples/quickstart_iiwa14.py
 
 Requires:
-    pip install -e bindings/   # in your virtualenv
+    pip install -e .   # in your virtualenv
     nvcc on PATH             # CUDA Toolkit installed
     An iiwa14 URDF           # see _URDF below; or pass --urdf <path>
 """

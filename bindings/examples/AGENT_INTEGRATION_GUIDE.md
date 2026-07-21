@@ -15,7 +15,7 @@ one-shot calls that round-trip to the host.
 
 All three share **one cache** (the same compiled `.so`, keyed by URDF bytes + codegen options +
 GRiD version + CUDA arch). Build once, use from any surface. Install is opt-in per backend:
-`pip install -e "bindings/[jax]"` / `[torch]` / `[all]` (base is numpy-only). `nvcc` must be on
+`pip install -e ".[jax]"` / `[torch]` / `[all]` (base is numpy-only). `nvcc` must be on
 `PATH` at build time (not at `pip install` time); the per-robot `.so` is built on first use.
 
 ## Lifecycle: register → precompile → get_robot

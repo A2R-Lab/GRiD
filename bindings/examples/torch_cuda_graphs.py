@@ -15,7 +15,7 @@ Demonstrates:
   4. (optional) zero-copy dlpack handoff PyTorch → JAX.
 
 Run:  python bindings/examples/torch_cuda_graphs.py [--urdf PATH] [--batch 256]
-Needs: pip install -e bindings/[torch]   ·   a CUDA GPU + torch built with CUDA   ·   iiwa14 URDF
+Needs: pip install -e .[torch]   ·   a CUDA GPU + torch built with CUDA   ·   iiwa14 URDF
 """
 from __future__ import annotations
 

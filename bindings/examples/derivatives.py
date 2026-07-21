@@ -18,7 +18,7 @@ two ways to reach them and this file shows both:
      grad does the chain rule with no finite differencing.
 
 Run:  python bindings/examples/derivatives.py [--urdf PATH] [--batch 64]
-Needs: pip install -e bindings/[jax]   ·   nvcc on PATH   ·   an iiwa14 URDF
+Needs: pip install -e .[jax]   ·   nvcc on PATH   ·   an iiwa14 URDF
 """
 from __future__ import annotations
 
@@ -93,7 +93,7 @@ def main() -> None:
         import jax.numpy as jnp
         import grid_rbd.jax as grid_jax
     except Exception as e:
-        print(f"\n[C] JAX surface skipped ({type(e).__name__}: {e}). pip install -e bindings/[jax]")
+        print(f"\n[C] JAX surface skipped ({type(e).__name__}: {e}). pip install -e .[jax]")
         return
 
     grid_rbd.precompile("iiwa14_deriv_jax", str(urdf),

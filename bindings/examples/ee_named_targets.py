@@ -20,7 +20,7 @@ Two routes:
      Great for OSC / task-space control where the target/offset changes online without a rebuild.
 
 Run:  python bindings/examples/ee_named_targets.py --urdf PATH --ee-joint JOINT_NAME [--batch 8]
-Needs: pip install -e bindings/   ·   nvcc on PATH   ·   a URDF + a fixed-joint EE/tool name
+Needs: pip install -e .   ·   nvcc on PATH   ·   a URDF + a fixed-joint EE/tool name
 
 NOTE: the EE joint name is robot-specific (it is a <joint> name in YOUR URDF). Pass it with
 --ee-joint; there is no universal default. For iiwa14 the flange joint is often "iiwa_joint_ee".

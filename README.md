@@ -144,16 +144,16 @@ for the rationale and concrete signatures.
 
 For Python users the `grid-rbd` package (in [`bindings/`](bindings/)) wraps
 the per-robot codegen behind a register-then-run UX with `numpy`, `jax`,
-and `torch` backends. Install it editable from a checkout with
-`pip install -e bindings/` (`install/base_install.sh` sets up the codegen venv;
-the bindings are an opt-in editable install on top of it). The base install is
-minimal; pick a backend extra for the surface you want:
+and `torch` backends. It ships as part of the single repo distribution — a
+`pip install -e .` (what `install/base_install.sh` runs) installs the codegen
+toolkit *and* the `grid_rbd` wrapper together. The base install is minimal;
+pick a backend extra for the surface you want:
 
 ```bash
-pip install -e "bindings/"          # base: numpy handle only
-pip install -e "bindings/[jax]"     # + JAX FFI surface
-pip install -e "bindings/[torch]"   # + torch backend (CUDA wheel matching your GPU arch)
-pip install -e "bindings/[all]"     # jax + torch
+pip install -e "."          # base: numpy handle only
+pip install -e ".[jax]"     # + JAX FFI surface
+pip install -e ".[torch]"   # + torch backend (CUDA wheel matching your GPU arch)
+pip install -e ".[all]"     # jax + torch
 ```
 
 See the [install matrix in `bindings/README.md`](bindings/README.md#install-editable-from-a-grid-checkout)

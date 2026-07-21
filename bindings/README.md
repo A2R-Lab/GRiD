@@ -216,16 +216,17 @@ both the numpy and JAX surfaces.
 
 ## Install (editable, from a GRiD checkout)
 
-The base install is deliberately minimal (numpy + platformdirs); each backend
-is an opt-in extra. Pick the row for the wrapper surface you want:
+`grid_rbd` ships as part of the single repo distribution, so `pip install -e .`
+installs the codegen toolkit and the wrapper together; each GPU backend is an
+opt-in extra on top of the numpy base. Pick the row for the wrapper surface you want:
 
 ```bash
 cd path/to/GRiD
-pip install -e "bindings/"          # base: numpy handle only
-pip install -e "bindings/[jax]"     # + JAX FFI surface (grid_rbd.jax)
-pip install -e "bindings/[torch]"   # + torch backend (backend="torch")
-pip install -e "bindings/[all]"     # jax + torch (both backends)
-pip install -e "bindings/[dev]"     # all backends + pytest (run the bindings' tests)
+pip install -e "."          # base: numpy handle only
+pip install -e ".[jax]"     # + JAX FFI surface (grid_rbd.jax)
+pip install -e ".[torch]"   # + torch backend (backend="torch")
+pip install -e ".[all]"     # jax + torch (both backends)
+pip install -e ".[dev]"     # all backends + pytest (run the bindings' tests)
 ```
 
 | Extra | Pulls in | Unlocks |

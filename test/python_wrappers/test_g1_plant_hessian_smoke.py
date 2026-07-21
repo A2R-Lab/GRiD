@@ -32,7 +32,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 from config import robot_urdf
 
-_grid_rbd = pytest.importorskip("grid_rbd", reason="grid-rbd not installed (pip install -e bindings)")
+_grid_rbd = pytest.importorskip("grid_rbd", reason="grid-rbd not installed (pip install -e .)")
 
 _URDF = robot_urdf("g1")
 if not _URDF.exists():

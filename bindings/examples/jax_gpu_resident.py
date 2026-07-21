@@ -21,7 +21,7 @@ What this file demonstrates, in order:
   8. (optional) zero-copy dlpack handoff JAX → PyTorch — share the literal GPU pointer.
 
 Run:  python bindings/examples/jax_gpu_resident.py [--urdf PATH] [--batch 256] [--steps 50]
-Needs: pip install -e bindings/[jax]   ·   nvcc on PATH   ·   an iiwa14 URDF
+Needs: pip install -e .[jax]   ·   nvcc on PATH   ·   an iiwa14 URDF
 """
 from __future__ import annotations
 

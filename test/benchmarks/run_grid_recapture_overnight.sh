@@ -114,7 +114,7 @@ say "  big-robot builds done"
 
 # wrapper artifact: same generated headers, second build target
 say "  [build] grid_rbd bindings (wrapper/FFI regime)"
-step pip install -e "bindings/[jax]"
+step pip install -e ".[jax]"
 
 # ============================================================ PHASE 2: MEASURE (serial, isolated)
 say ""

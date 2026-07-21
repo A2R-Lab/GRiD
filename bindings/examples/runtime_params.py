@@ -21,7 +21,7 @@ when you pass the baked values straight back. Each re-keys the cache, so the run
 coexists with the plain one.
 
 Run:  python bindings/examples/runtime_params.py [--urdf PATH]
-Needs: pip install -e bindings/   ·   nvcc on PATH   ·   an iiwa14 URDF
+Needs: pip install -e .   ·   nvcc on PATH   ·   an iiwa14 URDF
 """
 from __future__ import annotations
 
