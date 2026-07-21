@@ -59,6 +59,8 @@ ALGO_REGISTRY: tuple[AlgoEntry, ...] = (
               "Gradients"),
     AlgoEntry("f_ext_gradient_dq",    "F_EXT_GRADIENT_DQ (∂(inverse_dynamics_gradient)/∂fext=-∂Jᵀ/∂q, fixed base)",
               "Gradients"),
+    AlgoEntry("f_ext_contact",        "F_EXT_CONTACT (contact-frame wrench→joint-local f_ext + ∂/∂f_c, ∂/∂q; GATO ask 1 C.2)",
+              "Gradients"),
     AlgoEntry("inverse_dynamics_regressor", "Inverse Dynamics Regressor (Joint-torque Y; tau=Y·π, ∂tau/∂π)",
               "Gradients"),
     AlgoEntry("forward_dynamics_parameter_gradient", "Forward Dynamics Parameter Gradient (∂q̈/∂π = -M⁻¹·Y)",
@@ -196,6 +198,15 @@ ALGO_DESCRIPTORS: tuple[AlgoDescriptor, ...] = (
                    gate_attr="generate_forward_dynamics_gradient"),
     AlgoDescriptor("f_ext_gradient"),
     AlgoDescriptor("f_ext_gradient_dq", gate_attr="_f_ext_gradient_dq_emitted"),
+    # C.2 (GATO ask 1): contact-frame wrench -> joint-local f_ext + ∂/∂f_c + ∂/∂q.
+    # Opt-in (emitted only when gen_all_code gets contact_frames=). A device-composite
+    # like `collision`/`plant`: it emits `f_ext_body{,_jacobian_dq,_jacobian_dfc}_device`
+    # (__device__, CALLER-launched over a fixed world-FK arena) — NO standalone
+    # __global__/benchmarked kernel and no *_DYNAMIC_SHARED_MEM_BYTES macro, so
+    # has_kernel_attr=False (registry key only; contributes nothing to
+    # KERNEL_ATTR_MANIFEST or the launch-config enum). Correctness is gated by the
+    # go2-floating FD-oracle test test/cuda_equivalents/test_cuda_f_ext_contact.py.
+    AlgoDescriptor("f_ext_contact", has_kernel_attr=False),
     AlgoDescriptor("inverse_dynamics_regressor"),
     AlgoDescriptor("forward_dynamics_parameter_gradient"),
     AlgoDescriptor("kinetic_energy_regressor"),
