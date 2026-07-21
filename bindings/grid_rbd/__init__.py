@@ -36,7 +36,16 @@ from ._compile import generate_and_compile
 from ._handle import RobotHandle, SecondOrderID, SecondOrderFD
 
 
-__version__ = "0.4.0"
+# Single-source the version from the installed distribution metadata so it can
+# never drift from pyproject. Falls back to "unknown" when running from an
+# uninstalled tree (e.g. a bare source checkout with no editable install).
+try:
+    from importlib.metadata import version as _pkg_version
+
+    __version__ = _pkg_version("grid-rbd")
+    del _pkg_version
+except Exception:  # pragma: no cover - only hit when not installed
+    __version__ = "unknown"
 
 
 class RobotNotRegisteredError(KeyError):
