@@ -2,7 +2,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/A2R-Lab/GRiD/verify-gpu-proof.yml?branch=main&style=flat-square&label=CI)](https://github.com/A2R-Lab/GRiD/actions/workflows/verify-gpu-proof.yml)
 [![docs](https://img.shields.io/github/actions/workflow/status/A2R-Lab/GRiD/gh-pages.yml?branch=main&style=flat-square&label=docs)](https://a2r-lab.github.io/GRiD/)
 [![license](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
-[![python](https://img.shields.io/badge/python-3.9%2B-blue?style=flat-square)](pyproject.toml)
+[![python](https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square)](pyproject.toml)
 [![agent-ready](https://img.shields.io/badge/agent--ready-CLAUDE.md-8A2BE2?style=flat-square)](CLAUDE.md)
 [![All Contributors](https://img.shields.io/github/all-contributors/A2R-Lab/GRiD?color=ee8449&style=flat-square)](#contributors)
 
@@ -79,7 +79,7 @@ The Pinocchio-side floating convention regression suite exercises both public
 floating-base orderings across the current floating robot manifest:
 
 ```bash
-.venv/bin/python -m pytest RBDReference/tests/test_floating_base_conventions.py -q
+.venv/bin/python -m pytest external/RBDReference/tests/test_floating_base_conventions.py -q
 ```
 
 The CUDA executable equivalence suite still defaults to the Pinocchio-facing

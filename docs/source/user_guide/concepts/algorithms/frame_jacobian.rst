@@ -58,7 +58,7 @@ reference frames on both a fixed-base (iiwa14) and a floating-base
 * :math:`\Lambda` vs ``(J\,M^{-1}\,J^{\top})^{-1}`` built from
   Pinocchio's ``computeMinverse``.
 
-See ``RBDReference/tests/test_frame_jacobian_equivalence.py``.
+See ``external/RBDReference/tests/test_frame_jacobian_equivalence.py``.
 
 Implementation
 --------------

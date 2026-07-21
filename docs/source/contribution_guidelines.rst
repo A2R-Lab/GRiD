@@ -28,7 +28,7 @@ Code of Conduct
 
 We are committed to fostering a welcoming and respectful environment for all contributors. Please be considerate, kind, and respectful in your interactions with others.
 
-We follow the [Contributor Covenant Code of Conduct](https://www.contributor-covenant.org/), which you can read more about here. If you experience or witness any behavior that violates this code, please contact the project maintainers.
+We follow the `Contributor Covenant Code of Conduct <https://www.contributor-covenant.org/>`__, which you can read more about here. If you experience or witness any behavior that violates this code, please contact the project maintainers.
 
 Pull Request Process
 ====================
@@ -52,7 +52,7 @@ Code Style
 We use the following guidelines for code style:
 
 - **Python Code**:
-  - Follow [PEP 8](https://www.python.org/dev/peps/pep-0008/).
+  - Follow `PEP 8 <https://www.python.org/dev/peps/pep-0008/>`__.
   - Use 4 spaces per indentation level.
   - Avoid using `print()` statements for debugging. Use logging or proper exception handling.
   
@@ -64,7 +64,7 @@ We use the following guidelines for code style:
 
 - **Docstrings**:
   - Use docstrings to describe all public functions and classes.
-  - Follow the [Google Style Python Docstrings](https://sphinxcontrib-napoleon.readthedocs.io/en/latest/example_google.html).
+  - Follow the `Google Style Python Docstrings <https://sphinxcontrib-napoleon.readthedocs.io/en/latest/example_google.html>`__.
   
 - **Code Formatting**:
   - We use `black` to format Python code. Make sure your changes are formatted using `black` before submitting.

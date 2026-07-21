@@ -38,7 +38,7 @@ checkout):
 pip install -e .                 # numpy backend
 pip install -e ".[jax]"          # + JAX FFI bridge
 pip install -e ".[torch]"        # + torch autograd bridge (notebook 02)
-pip install -r requirements-dev.txt     # nbval, for running the notebooks as tests
+pip install -r install/requirements-dev.txt     # nbval, for running the notebooks as tests
 ```
 
 > **Importing the right tree.** If you keep multiple checkouts/worktrees, make

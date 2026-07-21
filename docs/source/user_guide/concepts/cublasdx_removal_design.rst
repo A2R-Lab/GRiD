@@ -232,7 +232,7 @@ Install / build system
 * :file:`install/base_install.sh`, :file:`install/developer_install.sh` — drop libmathdx
   setup steps if present.
 * :file:`pyproject.toml`, :file:`bindings/pyproject.toml`,
-  :file:`bindings/setup.py` — drop cuBLASDx-related extras if any.
+  :file:`setup.py` (repo root) — drop cuBLASDx-related extras if any.
 * GitHub Actions / CI — drop ``--mathdx-root`` or
   ``GRID_CUDA_LINALG_BACKEND`` from any workflow.
 

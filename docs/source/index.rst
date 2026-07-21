@@ -17,7 +17,7 @@ Pick how you want to call GRiD
       :link: user_guide/tutorials/python_wrappers
       :link-type: doc
 
-      ``pip install grid-rbd`` and call the ``RobotHandle`` API — 12 batched
+      ``pip install grid-rbd`` and call the ``RobotHandle`` API — 20+ batched
       methods covering RNEA, FD/ABA, CRBA, Minv, EE pose family, RNEA/FD
       gradients, and second-order ID/FD.
 

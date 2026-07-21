@@ -52,7 +52,7 @@ after codegen changes.
 ```
 
 Markers: `pinocchio_equivalence`, `cuda_equivalence`, `python_wrappers`, `floating_base`,
-`robot_{smoke,curated,nightly}`, `gpu_proof`. GPU test outcomes are captured in a signed
+`robot_{smoke,curated,nightly}`, `gpu_proof`, `notebooks`, `developer_only`. GPU test outcomes are captured in a signed
 `gpu-proof.json` receipt (see `test/run_gpu_proof.sh`) that CPU-only CI verifies — so GPU correctness
 can gate merges without paid GPU CI.
 
