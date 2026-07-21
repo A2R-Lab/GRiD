@@ -247,10 +247,9 @@ def _emit_dccrba_assembly(self, out_name, contract_qd):
     self.gen_add_code_line("T dc_cx = s_com[0], dc_cy = s_com[1], dc_cz = s_com[2];")
     self.gen_add_code_line("T dc_inv_m = static_cast<T>(1)/s_extra[0];")
 
-    if contract_qd:
-        # zero the Adot output (6*nv) once
-        self.gen_add_code_line("// zero Adot output")
-        self.gen_add_code_line("glass::set_const<T, " + str(6 * nv) + ">(static_cast<T>(0), " + out_name + ");")
+    # (contract_qd no longer pre-zeros: the deterministic k-major fan below writes
+    #  every out[:,k] cell directly, so the old set_const was dead once the atomicAdd
+    #  accumulation was replaced by a fixed-order private-acc sum.)
 
     # ---- Step B: P2 fan over columns m. Each thread owns ONE m, builds the full
     #      6*nv column dA[:, :, m] into a per-thread accumulator? 6*nv can be large
@@ -268,10 +267,24 @@ def _emit_dccrba_assembly(self, out_name, contract_qd):
     #
     # Fan over (m, k) cells = nv*nv threads. Each computes the 6-vector dA0col then
     # applies CoM-shift + reorder, then writes (contract or full).
-    self.gen_add_code_line("// P2 fan: one thread per (m, k) output cell")
-    self.gen_add_parallel_loop("cell", str(nv * nv))
-    self.gen_add_code_line(f"int m = cell / {nv}; int k = cell % {nv};")
-    self.gen_add_code_line("T dA0col[6]; for (int r=0;r<6;++r) dA0col[r] = static_cast<T>(0);")
+    if contract_qd:
+        # Deterministic contraction (Inc6 shared-slot class). The full-tensor path
+        # writes a unique out[:,k,m] cell per (m,k) thread, but the CONTRACTED Adot
+        # sums over m into out[:,k] -- the old code fanned (m,k) and atomicAdd-folded
+        # those m-contributions, whose warp-order sum drifted 1-2 ULP run-to-run. Fan
+        # ONE thread per column k instead, summing m in FIXED ascending order into a
+        # private acc: identical total dA0col work, no atomics, no scratch, thread-count
+        # invariant + bit-deterministic. (Mirrors the crba parent-major fixed-order sum.)
+        self.gen_add_code_line("// P2 fan: one thread per column k; sum m in FIXED order (was atomicAdd over m)")
+        self.gen_add_parallel_loop("k", str(nv))
+        self.gen_add_code_line("T acc[6]; for (int r=0;r<6;++r) acc[r] = static_cast<T>(0);")
+        self.gen_add_code_line(f"for (int m = 0; m < {nv}; ++m) {{", True)
+        self.gen_add_code_line("T dA0col[6]; for (int r=0;r<6;++r) dA0col[r] = static_cast<T>(0);")
+    else:
+        self.gen_add_code_line("// P2 fan: one thread per (m, k) output cell")
+        self.gen_add_parallel_loop("cell", str(nv * nv))
+        self.gen_add_code_line(f"int m = cell / {nv}; int k = cell % {nv};")
+        self.gen_add_code_line("T dA0col[6]; for (int r=0;r<6;++r) dA0col[r] = static_cast<T>(0);")
 
     # find the unit(s) owning slot m. Non-mimic: exactly one. We loop all units and
     # branch on vi==m to stay mimic-structurally-correct (gate keeps it 1-unit).
@@ -339,12 +352,11 @@ def _emit_dccrba_assembly(self, out_name, contract_qd):
     # reorder [ang;lin] -> [lin;ang]: out rows [0..2]=lin, [3..5]=ang
     if contract_qd:
         self.gen_add_code_line("T qm = s_qd[m];")
-        self.gen_add_code_line("atomicAdd(&" + out_name + "[0 + 6*k], xl0*qm);")
-        self.gen_add_code_line("atomicAdd(&" + out_name + "[1 + 6*k], xl1*qm);")
-        self.gen_add_code_line("atomicAdd(&" + out_name + "[2 + 6*k], xl2*qm);")
-        self.gen_add_code_line("atomicAdd(&" + out_name + "[3 + 6*k], xa0*qm);")
-        self.gen_add_code_line("atomicAdd(&" + out_name + "[4 + 6*k], xa1*qm);")
-        self.gen_add_code_line("atomicAdd(&" + out_name + "[5 + 6*k], xa2*qm);")
+        self.gen_add_code_line("acc[0] += xl0*qm; acc[1] += xl1*qm; acc[2] += xl2*qm;")
+        self.gen_add_code_line("acc[3] += xa0*qm; acc[4] += xa1*qm; acc[5] += xa2*qm;")
+        self.gen_add_end_control_flow()  # inner m loop (fixed-order accumulation)
+        self.gen_add_code_line(out_name + "[0 + 6*k] = acc[0]; " + out_name + "[1 + 6*k] = acc[1]; " + out_name + "[2 + 6*k] = acc[2];")
+        self.gen_add_code_line(out_name + "[3 + 6*k] = acc[3]; " + out_name + "[4 + 6*k] = acc[4]; " + out_name + "[5 + 6*k] = acc[5];")
     else:
         # full tensor: out[row + 6*k + 6*nv*m]
         base = f"{out_name}[6*k + {6*nv}*m"
@@ -354,7 +366,7 @@ def _emit_dccrba_assembly(self, out_name, contract_qd):
         self.gen_add_code_line(base + " + 3] = xa0;")
         self.gen_add_code_line(base + " + 4] = xa1;")
         self.gen_add_code_line(base + " + 5] = xa2;")
-    self.gen_add_end_control_flow()  # cell loop
+    self.gen_add_end_control_flow()  # cell / k loop
     self.gen_add_sync()
 
 
