@@ -1,5 +1,6 @@
 import os
 import json
+import warnings
 import numpy as np
 
 # Codegen-time frame-selection predicate shared with the idsva_so dispatcher /
@@ -230,7 +231,7 @@ class GRiDCodeGenerator:
     from .algorithms._dccrba import _dccrba_inner_temp_mem_size, _dccrba_sweep_J_count, gen_cmm_time_variation, gen_dccrba
 
     # finally import the test code
-    from ._test import test_rnea_fpass, test_rnea_bpass, test_rnea, test_minv_bpass, test_minv_fpass, test_densify_Minv, test_minv, test_rnea_grad_inner, \
+    from ._reference_impl import test_rnea_fpass, test_rnea_bpass, test_rnea, test_minv_bpass, test_minv_fpass, test_densify_Minv, test_minv, test_rnea_grad_inner, \
                       test_rnea_grad, test_fd_grad, mx0, mx1, mx2, mx3, mx4, mx5, mx, mxS, mxv, fx, fxS, fxv
 
     # initialize the object
@@ -3607,7 +3608,7 @@ class GRiDCodeGenerator:
                     if _t["suffix"] == "":  # finest / public tier -> the differentiable path
                         self.gen_multi_target_position_gradient(_cc_batch, suffix="")
         if self.robot.floating_base and not enable_floating_second_order:
-            print('floating-base second order dynamics are still under development')
+            warnings.warn('floating-base second order dynamics are still under development')
         # then generate the dynamics algorithms
         if "inverse_dynamics" in algorithms:
             self.gen_inverse_dynamics()

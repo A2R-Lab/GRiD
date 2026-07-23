@@ -51,10 +51,8 @@ RUNNER_SOURCE = Path(__file__).with_name("cuda_fd_parameter_gradient_smoke_runne
 # dqdd/dpi = -Minv.Y is not a well-defined oracle (the free-flyer root is covered by g1).
 _CASES = [
     ("iiwa14", "fixed"),
-    pytest.param("iiwa14", "floating", marks=pytest.mark.skip(
-        reason="iiwa14 URDF 'base' link has a degenerate/missing inertial -> singular "
-               "floating-base Minv; dqdd/dpi=-Minv.Y is ill-defined. Free-flyer root path "
-               "covered by g1-floating.")),
+    # (iiwa14-floating deliberately omitted per the note above — physically ill-posed,
+    #  not a guardable bug; the free-flyer root path is covered by g1-floating below.)
     ("g1", "floating"),
 ]
 
