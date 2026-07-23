@@ -25,7 +25,7 @@ Full reference (gravity convention, cache layout, EE-target selection,
 JAX FFI, etc.) lives in the
 [main docs](https://a2r-lab.github.io/GRiD/).
 
-## Status — v0.4
+## Status — v0.5
 
 Methods bound and validated against [`RBDReference`](https://github.com/A2R-Lab/RBDReference)
 at float32 precision:
@@ -51,9 +51,9 @@ are `NJ`-wide (GRiD's kernels consume velocity vectors at the nq stride; for a
 floating base the base 6-dof velocity sits in the leading slots with a padded
 quaternion-offset slot). Matrix/Jacobian outputs are tangent-space (pinocchio
 convention) and `NV`-dimensioned. For a **FIXED base `NV == NJ`**, so every shape
-above is identical to the pre-v0.4.1 behaviour.
+above is identical to the pre-v0.5 behaviour.
 
-> **Breaking change (v0.4.1) — floating-base only.** `crba`/`minv` now return
+> **Breaking change (v0.5) — floating-base only.** `crba`/`minv` now return
 > `(B, NV, NV)` and `inverse_dynamics_gradient`/`forward_dynamics_gradient` return
 > `(B, NV, 2*NV)` instead of the previous `NJ`-sized shapes. The CUDA kernels have
 > always written these as `NV`-dimensioned (`NUM_VEL*NUM_VEL`); the old binding

@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 # the wrapper hard-imports the codegen tree at register_robot time, so they were
 # always one distribution — now folded into one editable install.
 name = "grid-rbd"
-version = "1.0.0"
+version = "0.5.0"
 description = "GPU-Accelerated Rigid Body Dynamics"
 readme = "README.md"
 # 3.10 floor: the runtime wrapper + its pybind11 _core ext require it; codegen

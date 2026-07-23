@@ -14,7 +14,9 @@ changes since the GLASS rollout for our own historical reference.
   `setup.py`. The old two-step (`pip install -e .` then `pip install -e
   bindings/`) is gone; install docs updated repo-wide. `grid_rbd.__version__`
   is now single-sourced from the installed metadata (was a hand-maintained
-  0.4.0 that had drifted from the distribution).
+  0.4.0 that had drifted from the distribution). The unified distribution
+  version is **0.5.0** (codegen and wrapper were previously at incoherent
+  1.0.0 / 0.4.x lines).
 - **pyproject metadata:** added authors / keywords / classifiers / URLs.
 - **Codegen cleanup:** removed 17 dead arena-size locals from
   `GRiDCodeGenerator.py` (generated `grid.cuh` byte-identical on
