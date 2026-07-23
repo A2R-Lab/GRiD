@@ -744,7 +744,6 @@ class GRiDCodeGenerator:
         # The ID kernel's s_vaf band is body-indexed (18*NJ); for mimic robots
         # (NJ > n) size it 18*NJ so the inner's body f-writes don't overflow into
         # the XImats region. Non-mimic keeps the legacy 18*n byte-identical.
-        _id_vaf = 18 * (self.robot.get_num_joints() if self.robot_has_mimic_joints() else n)
         id_t_count = compose_arena_full("inverse_dynamics", self._arena_ctx)   # Step 3.1 fold
         # joint-torque regressor (E1): kernel smem = XI + s_q_qd_qdd(NUM_POS+2nv)
         # + s_Y (nv x 10*NUM_BODIES) + s_vaf(18*NUM_POS) + RNEA forward scratch.
@@ -798,7 +797,6 @@ class GRiDCodeGenerator:
         # Jw band; its tiny 6*nv output never spills): L0 keeps s_J in smem, L1 spills
         # it to the d_workspace SO band.
         #   base = s_q_qd(2n) + s_out(6nv) + s_A(6nv) + s_com(3) + s_extra(4) + inner + XHom.
-        _cmm_base = 2*n + 6*nv + 6*nv + 3 + 4 + _dccrba_inner_temp + XHom_size
         (_cmm_t_count_full, _cmm_t_count_Jspill) = compose_arena_rungs("cmm_time_variation", self._arena_ctx)   # Step 3.3 fold
         self.cmm_time_variation_spill_tier_3way = select_shared_tier_3way(_cmm_t_count_full, _cmm_t_count_Jspill)
         self.cmm_time_variation_t_count_per_tier = tuple(
@@ -811,7 +809,6 @@ class GRiDCodeGenerator:
         # output and s_J -> d_workspace at distinct SO sub-offsets (the de-gating rung).
         #   base = s_q(n) + s_A(6nv) + s_com(3) + s_extra(4) + inner + XHom (no out, no s_J).
         _dccrba_out = 6 * nv * nv
-        _dccrba_base = n + 6*nv + 3 + 4 + _dccrba_inner_temp + XHom_size
         (_dccrba_L0, _dccrba_L1, _dccrba_L2) = compose_arena_rungs("dccrba", self._arena_ctx)   # Step 3.3 fold
         self.dccrba_spill_tier_3way = select_shared_tier_3way(_dccrba_L0, _dccrba_L1, _dccrba_L2)
         self.dccrba_t_count_per_tier = tuple(
@@ -860,8 +857,6 @@ class GRiDCodeGenerator:
         #     false). On h2_plus (nv=81) rung 0/1 are ~506/361 KB (UNLAUNCHABLE); the deep
         #     rung is ~68 KB. s_Minv (nv*nv) + the J^T-inner + minv no-F scratch stay hot
         #     in smem. select picks the least-spill rung that fits, so small robots keep 0.
-        _feg_temp_deep = nv*nv + max(self.gen_f_ext_gradient_inner_temp_mem_size(),
-                                     self.gen_minv_inner_no_F_size())
         (_feg_t_count_full, _feg_t_count_out_spill, _feg_t_count_deep) = compose_arena_rungs("f_ext_gradient", self._arena_ctx)   # Step 3.5d fold
         self.f_ext_gradient_spill_tier_3way = select_shared_tier_3way(
             _feg_t_count_full, _feg_t_count_out_spill, _feg_t_count_deep)
@@ -896,8 +891,6 @@ class GRiDCodeGenerator:
         self.f_ext_gradient_dq_spill_jt_ws_count = _feg_dq_jt
         # Minv Phase 3a: per-tier spill picks. Level 0 = F in smem (6*NV*NV
         # bytes); Level 1 = surgical F to L2-pinned workspace.
-        _minv_F_count = self.gen_minv_inner_F_size()
-        _minv_no_F_count = self.gen_minv_inner_no_F_size()
         (_minv_t_count_full, _minv_t_count_surgical) = compose_arena_rungs("minv", self._arena_ctx)   # Step 3.2 fold
         self.minv_spill_tier_3way = select_shared_tier_3way(_minv_t_count_full, _minv_t_count_surgical)
         self.minv_use_workspace_F = self.minv_spill_tier_3way[0] == 1
@@ -915,7 +908,6 @@ class GRiDCodeGenerator:
         # nv. For a FIXED base n==nv so 3*n == old 3*nv+fb byte-identical; FLOATING
         # n>nv so the arena must reserve the wider 3*n slot the kernel slices (the
         # old 3*nv+fb under-reserved by 3*(n-nv)-fb floats -> smem overrun).
-        _fd_base = 3*n + nv + XI_size + rt_xfixed_reserve
         (_fd_t_count_full, _fd_t_count_surgical) = compose_arena_rungs("forward_dynamics", self._arena_ctx)   # Step 3.2 fold
         self.fd_spill_tier_3way = select_shared_tier_3way(_fd_t_count_full, _fd_t_count_surgical)
         self.fd_use_workspace_F = self.fd_spill_tier_3way[0] == 1
@@ -934,7 +926,6 @@ class GRiDCodeGenerator:
         # so this reserves the wider input slot (old 3*nv+fb under-reserved -> overrun).
         # max_stages = 4 (RK4) — see _integrator._max_stages_in_use().
         _max_stages = 4
-        _fb = int(self.robot.floating_base)
         _integrator_base = ((3*n) + nv
                             + (_max_stages - 1) * nv
                             + (_max_stages - 1) * (n + nv)
@@ -1015,10 +1006,6 @@ class GRiDCodeGenerator:
         # rung 3 (whole pool -> d_workspace); the selective rungs 1/2 collapse onto
         # the full-inner size so the picker never lands a mimic robot on a rung that
         # under-sizes the dense pool.
-        _integrator_gradient_inner_selective = (
-            _integrator_gradient_inner_full if self.robot_has_mimic_joints()
-            else max(self.gen_minv_inner_temp_mem_size(),
-                     self.gen_inverse_dynamics_gradient_temp_layout()["selective_shared_count"]))
         _integrator_gradient_full = max(integrator_gradient_t_count, integrator_gradient_with_x_kp1_t_count)
         _integrator_gradient_arenas = compose_arena_rungs("integrator_gradient", self._arena_ctx)   # Step 3.5b fold
         self.integrator_gradient_spill_tier_3way = select_shared_tier_3way(*_integrator_gradient_arenas)
@@ -1141,8 +1128,6 @@ class GRiDCodeGenerator:
         # tail (hot ends at 98*n); FLOATING reclaims only the 138-float fb* tail
         # above tempVec (the interior vcross slot still relocates to d_cold but
         # cannot be byte-identically compacted out of smem).
-        _aba_surgical_inner_count = (_aba_inner_temp_count - 138) if self.robot.floating_base else (98 * NJ)
-        _aba_base_count = nv + aba_input_t_count + 12*NJ + XI_size + rt_xfixed_reserve
         _aba_arenas = compose_arena_rungs("aba", self._arena_ctx)   # Step 3.5c fold
         self.aba_spill_tier_3way = select_shared_tier_3way(*_aba_arenas)
         self.aba_use_workspace_temp = self.aba_spill_tier_3way[0] == 2
@@ -1180,10 +1165,7 @@ class GRiDCodeGenerator:
         # ~228KB (UNLAUNCHABLE). 2-rung ladder: full (s_F in smem) | spill-F (s_F ->
         # the L2-pinned minv-F workspace offset, keeping s_Minv + everything else in
         # smem). h2_plus picks spill-F (~74KB) -> LAUNCHES; all other robots fit full.
-        _osc_XI = self.gen_get_XI_size(False, False)
         _osc_Xhom, _, _ = self.gen_get_Xhom_size()
-        _osc_F = self.gen_minv_inner_F_size()                          # 6*nv*nv minv F-region
-        _osc_temp = max(self.gen_minv_inner_no_F_size(), 16 * self.robot.get_num_joints())
         (_osc_t_full, _osc_t_spill_F) = compose_arena_rungs("osc_inertia", self._arena_ctx)   # Step 3.5e fold
         self.osc_inertia_spill_tier_3way = select_shared_tier_3way(_osc_t_full, _osc_t_spill_F)
         self.osc_inertia_t_count_per_tier = tuple(
@@ -1492,9 +1474,6 @@ class GRiDCodeGenerator:
         # clamps >= PERF; MINIMAL is always the deep-spill tier. Only meaningful on a
         # fixed base (floating + RK static_assert out in the device fn), but compute
         # it unconditionally — the kernel/macros are only emitted on fixed-base anyway.
-        _psh_d2ab = 2 * nv * (3 * nv) * (3 * nv)
-        _psh_base = (nv + nv) + nv + nv*nv + 2*nv*nv + nv + XI_size  # s_x(nx==2nv fixed) + s_u + s_qdd + Minv + df_du
-        _psh_pool = max(fdsva_so_inner_idsva_so_temp_count, fdsva_so_contract_temp_count, fdsva_so_fd_gradient_inline_temp_count) + rt_xfixed_reserve
         (_psh_t_full, _psh_t_spill) = compose_arena_rungs("integrator_hessian", self._arena_ctx)   # Step 3.5e fold
         self.plant_step_hessian_spill_tier_3way = select_shared_tier_3way(_psh_t_full, _psh_t_spill)
 

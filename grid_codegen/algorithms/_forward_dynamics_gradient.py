@@ -11,10 +11,6 @@ def gen_forward_dynamics_gradient_inner_python(self, use_qdd_Minv_input = False,
                                                d_f_ext_name = "d_f_ext"):
     n = self.robot.get_num_vel()
     if not use_qdd_Minv_input:
-        #
-        # TODO: there is a slightly faster way as s_v does not change -- thus no recompute needed
-        #       but that requires a custom function to be written
-        #
         self.gen_add_code_line("//TODO: there is a slightly faster way as s_v does not change -- thus no recompute needed")
         # Inner-controlled placement: minv_inner slices its own F-region
         # from the tail of s_temp (FD_DU keeps Minv-F in smem; its surgical spill
