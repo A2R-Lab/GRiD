@@ -126,3 +126,7 @@ test/benchmarks/overnight_batch.sh
 
 # Scratch working dir (agent temp files; never tracked)
 scratchpad/
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store

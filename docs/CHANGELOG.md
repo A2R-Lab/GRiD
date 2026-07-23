@@ -5,6 +5,28 @@ changes since the GLASS rollout for our own historical reference.
 
 ## Unreleased — v2.0 — cuBLASDx removal + resource-tier system
 
+### 2026-07-21 — single-distribution packaging + project hygiene
+
+- **One `pip install -e .`:** the codegen toolkit and the `grid_rbd` Python
+  wrapper are now a single distribution. The nested `bindings/pyproject.toml` +
+  `setup.py` folded into the root project (name `grid-rbd`, Python ≥ 3.10,
+  MIT); the `grid_rbd._core` pybind11 extension builds from a minimal root
+  `setup.py`. The old two-step (`pip install -e .` then `pip install -e
+  bindings/`) is gone; install docs updated repo-wide. `grid_rbd.__version__`
+  is now single-sourced from the installed metadata (was a hand-maintained
+  0.4.0 that had drifted from the distribution).
+- **pyproject metadata:** added authors / keywords / classifiers / URLs.
+- **Codegen cleanup:** removed 17 dead arena-size locals from
+  `GRiDCodeGenerator.py` (generated `grid.cuh` byte-identical on
+  iiwa14/go2/fr3/h2_plus), a duplicated fd-gradient TODO, and renamed the
+  misleadingly-named `grid_codegen/_test.py` → `_reference_impl.py` (it is a
+  numpy reference-impl mixin, not a pytest module). Codegen-time diagnostic
+  switched from `print` to `warnings.warn`.
+- **Docs coherence:** fixed broken `external/` + `install/` paths, the stale
+  manual clone/submodule install block, old `robot-acceleration` org links
+  (→ `A2R-Lab`), unpublished `pip install grid-rbd` snippets, the Python
+  version badge, and RST link syntax; removed a tracked `docs/.DS_Store`.
+
 ### 2026-07-07 — tooling + codegen maintainability
 
 - **GPU-proof receipts now via PyPI:** the `pytest-gpu-proof` plugin moved
