@@ -21,7 +21,9 @@ numpy oracle in `RBDReference` (validated against Pinocchio) and the generated C
   algebra, Pinocchio-validated reference dynamics, URDF parsing). **Four separate peer products** with
   GRiD, all under `A2R-Lab`; grouped here so the top level stays about GRiD itself.
 - `bindings/` — the `grid-rbd` Python package: `register_robot(...)` → numpy / jax / torch handles.
-- `examples/codegen/`, `examples/cuda/` — runnable generate + validate walkthroughs.
+  Agent-facing API tour: `bindings/examples/AGENT_INTEGRATION_GUIDE.md`.
+- `examples/` — start here: `examples/notebooks/` (Python-wrapper walkthroughs, the "start here" track;
+  see `examples/README.md`), `examples/codegen/` + `examples/cuda/` (generate + validate walkthroughs).
 - `test/` — pytest suites (see markers below); `test/cuda_equivalents/` (CUDA equivalence runners),
   `test/python_wrappers/` (jax/torch), `test/benchmarks/` (timing harness + orchestration scripts).
 - `docs/source/` — Sphinx docs (published to https://a2r-lab.github.io/GRiD/).
@@ -32,15 +34,16 @@ numpy oracle in `RBDReference` (validated against Pinocchio) and the generated C
 ## Generate code
 
 ```bash
-bash install/base_install.sh && source .venv/bin/activate      # codegen venv + `grid-generate` CLI
-grid-generate path/to/robot.urdf [-f] [-t EE_JOINT] [-n NAMESPACE]
-python examples/codegen/generate_iiwa14.py             # fixed-base example
-python examples/codegen/generate_go2_floating.py       # floating-base example
+bash install/base_install.sh && source .venv/bin/activate      # single `pip install -e .` + `grid-generate` CLI
+grid-generate path/to/robot.urdf [-f] [-t EE_JOINT] [-n NAMESPACE] [-c] [-d]
+.venv/bin/python examples/codegen/generate_iiwa14.py             # fixed-base example
+.venv/bin/python examples/codegen/generate_go2_floating.py       # floating-base example
 ```
 
-For generation always use `.venv/bin/python` with `PYTHONPATH=/home/plancher/Desktop/GRiD` (never
-bare `python`). CUDA arch for this box: `sm_120`/`compute_120`. Clear `grid_codegen/__pycache__`
-after codegen changes.
+Always use `.venv/bin/python` (never bare `python`). The editable install puts `grid_codegen`,
+`URDFParser`, `RBDReference`, and `grid_rbd` on the venv path, so no `PYTHONPATH` is needed. Box CUDA
+arch: `sm_120`/`compute_120` (per-machine notes belong in the gitignored `docs/STARTUP_PROMPT.md`).
+Clear `grid_codegen/__pycache__` after codegen changes.
 
 ## Test
 
