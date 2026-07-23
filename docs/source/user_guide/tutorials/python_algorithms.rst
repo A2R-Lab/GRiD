@@ -13,7 +13,7 @@ Usage and API:
 --------------
 
 This package relies on an already parsed ``robot`` object from our
-`URDFParser <https://github.com/robot-acceleration/URDFParser>`__
+`URDFParser <https://github.com/A2R-Lab/URDFParser>`__
 package.
 
 .. code:: python
@@ -77,8 +77,8 @@ installed by running:
 
 .. code:: shell
 
-   pip3 install -r requirements.txt
+   pip install -e .
 
 This package also depends on our
-`URDFParser <https://github.com/robot-acceleration/URDFParser>`__
+`URDFParser <https://github.com/A2R-Lab/URDFParser>`__
 package.

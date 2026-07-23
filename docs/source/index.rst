@@ -17,7 +17,7 @@ Pick how you want to call GRiD
       :link: user_guide/tutorials/python_wrappers
       :link-type: doc
 
-      ``pip install grid-rbd`` and call the ``RobotHandle`` API — 20+ batched
+      ``pip install -e .`` and call the ``RobotHandle`` API — 20+ batched
       methods covering RNEA, FD/ABA, CRBA, Minv, EE pose family, RNEA/FD
       gradients, and second-order ID/FD.
 
@@ -25,7 +25,7 @@ Pick how you want to call GRiD
       :link: jax-ffi-quickstart
       :link-type: ref
 
-      ``pip install grid-rbd[jax]`` for a device-resident, ``jax.jit``-compatible
+      ``pip install -e ".[jax]"`` for a device-resident, ``jax.jit``-compatible
       FFI surface. Same per-robot ``.so`` cache as the plain Python wrapper.
 
    .. grid-item-card:: From raw CUDA

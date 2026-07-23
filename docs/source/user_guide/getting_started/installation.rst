@@ -1,42 +1,19 @@
 Installation
 ============
 
-It is recommended when installing GRiD to use git clone on the main library `GRiD <https://github.com/robot-acceleration/GRiD>`.
-In the case that the linked submodules :doc:`URDFParser <../tutorials/urdf_parser>`, :doc:`GRiDCodeGenerator <../tutorials/codegen>`, :doc:`RBDReference <../tutorials/python_algorithms>` and are empty folders,
-one can individually popoulate each submodule using its git link as needed. 
-
-Run the following script to install GRiD and its related submodules.
-`URDFParser <https://github.com/robot-acceleration/URDFParser>`__,
-`GRiDCodeGenerator <https://github.com/robot-acceleration/GRiDCodeGenerator>`__,
-and
-`RBDReference <https://github.com/robot-acceleration/RBDReference>`__
-
-.. code:: shell
-
-    # In the root of your desired project directory
-    git clone https://github.com/A2R-Lab/GRiD.git
-    cd RBDReference
-    git clone https://github.com/A2R-Lab/RBDReference.git
-    cd ..
-    cd URDFParser
-    git clone https://github.com/A2R-Lab/URDFParser.git
-    cd ..
-    cd GRiDCodeGenerator
-    git clone https://github.com/A2R-Lab/GRiDCodeGenerator.git
-
-.. note::
-    
-    Alternatively, can directly download the zips from these links: `URDFParser <https://github.com/robot-acceleration/URDFParser>`__, `GRiDCodeGenerator <https://github.com/robot-acceleration/GRiDCodeGenerator>`__, and `RBDReference <https://github.com/robot-acceleration/RBDReference>`__.
-    Note that directory setup in this manner requires adjustment of python ``import`` statements such that ``from URDFParser import URDFParser`` becomes ``from URDFParser.URDFParser import URDFParser``. Thus, each import statement from submodules will require an additional call for correct directory linking. 
-
-
-It is also recommended to create a virtual environment for each external dependency for ease of access. Run the following script to list and update the requirements tab if other dependencies are needed during the installation process.
+GRiD is a single repository with its peer products (``GLASS``, ``RBDReference``,
+``URDFParser``) vendored as git submodules under ``external/``. Clone with
+``--recursive`` so those populate, then run the install script — a single
+``pip install -e .`` installs the codegen toolkit and the ``grid_rbd`` Python
+wrapper together (see the :doc:`../../../index` quick-start for the extras).
 
 .. code-block:: shell
 
-    # Run in virtual enviornment
-    pip3 list # list all pip modules
-    pip freeze > requirements.txt
+    git clone --recursive https://github.com/A2R-Lab/GRiD.git
+    cd GRiD
+
+If you already cloned without ``--recursive``, populate the submodules with
+``git submodule update --init --recursive``.
 
 Install Python Dependencies
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

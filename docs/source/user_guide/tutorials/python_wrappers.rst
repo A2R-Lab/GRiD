@@ -187,7 +187,7 @@ both targets can coexist in the cache.
 JAX FFI (``grid_rbd[jax]``)
 ---------------------------
 
-Install with ``pip install grid-rbd[jax]`` to get the JAX bridge.
+Install with ``pip install -e ".[jax]"`` to get the JAX bridge.
 The same per-robot ``.so`` is shared with the plain wrapper — no
 recompile on first ``grid_rbd.jax.register_robot``:
 

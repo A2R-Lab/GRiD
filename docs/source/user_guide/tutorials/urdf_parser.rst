@@ -27,7 +27,7 @@ which can be automatically installed by running:
 
 .. code:: shell
 
-   pip3 install -r requirements.txt
+   pip install -e .
 
 Robot API:
 ----------

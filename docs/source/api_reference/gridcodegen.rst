@@ -9,7 +9,7 @@ functions have been written to speed up the algorithm implementation
 process and are detailed below. If your favorite rigid body dynamics
 algorithm is not yet implemented please either submit a PR to this repo
 with the code generation implementation or simply submit a PR to our
-`rbdReference <https://github.com/robot-acceleration/rbdReference>`__
+`RBDReference <https://github.com/A2R-Lab/RBDReference>`__
 package with the Python implementation and we’ll then try to get a GPU
 implementation designed as soon as possible.
 
@@ -17,7 +17,7 @@ Usage:
 ------
 
 This package relies on an already parsed ``robot`` object from our
-`URDFParser <https://github.com/robot-acceleration/URDFParser>`__
+`URDFParser <https://github.com/A2R-Lab/URDFParser>`__
 package.
 
 .. code:: python
@@ -26,27 +26,28 @@ package.
    GRiDCodeGenerator.gen_all_code()
 
 A file named ``grid.cuh`` will be written to the current working
-directory and can then be included into your project. See the wrapper
-`GRiD <https://github.com/robot-acceleration/GRiD>`__ package for more
+directory and can then be included into your project. See the
+`GRiD <https://github.com/A2R-Lab/GRiD>`__ repository for more
 instructions on how to use and test this code.
 
 Instalation Instructions:
 -------------------------
 
-The only external dependencies needed to run this package are
-``numpy,sympy`` which can be automatically installed by running:
+The code generator (``grid_codegen``) ships with the GRiD repository. A
+single editable install pulls it in along with the ``URDFParser`` /
+``RBDReference`` peers and the ``grid_rbd`` runtime wrapper:
 
 .. code:: shell
 
-   pip3 install -r requirements.txt
+   pip install -e .
 
-This package also depends on our
-`URDFParser <https://github.com/robot-acceleration/URDFParser>`__
-package.
+This package depends on our
+`URDFParser <https://github.com/A2R-Lab/URDFParser>`__
+package (vendored under ``external/``).
 
 Running the CUDA C++ code output by the GRiDCodegenerator also requires
 CUDA to be installed on your system. Please see the `README.md in the
-GRID <https://github.com/robot-acceleration/GRiD>`__ wrapper package for
+GRID <https://github.com/A2R-Lab/GRiD>`__ repository for
 instalation notes for CUDA.
 
 C++ API
