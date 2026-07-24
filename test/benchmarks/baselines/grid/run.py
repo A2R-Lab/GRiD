@@ -740,7 +740,14 @@ MIMIC_UNSUPPORTED_ALGOS: frozenset[str] = frozenset()
 #   integrator_hessian : plant_step_hessian composite (no standalone host)
 #   plant              : cost/constraint/step primitives (no single kernel)
 #   collision          : device-composite; a timing wrapper is separate staged work
-BENCH_EXCLUDED_ALGOS: frozenset[str] = frozenset({"integrator_hessian", "plant", "collision"})
+#   f_ext_contact      : has_kernel_attr=False device composite (contact-frame
+#                        wrench -> joint-local f_ext + derivatives, GATO ask 1 C.2).
+#                        Emits *_inner/*_device only -- no __global__ kernel and no
+#                        _single_timing/_compute_only host, so there is nothing to
+#                        time. Correctness is covered by the go2-floating FD-oracle
+#                        test/cuda_equivalents/test_cuda_f_ext_contact.py.
+BENCH_EXCLUDED_ALGOS: frozenset[str] = frozenset({"integrator_hessian", "plant", "collision",
+                                                  "f_ext_contact"})
 
 
 def _algo_keys_in_registry_order(floating_base: bool | None = None,
