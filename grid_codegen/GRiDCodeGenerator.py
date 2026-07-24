@@ -2844,7 +2844,10 @@ class GRiDCodeGenerator:
         # kernel-overload signatures come from MJX_KERNEL_OVERLOADS. Order follows that
         # dict (== the historical mujoco_manifest order) for a byte-identical attr block.
         mujoco_manifest = []
-        if self.robot.floating_base:
+        # enable_mujoco_kernels=False skips the aggregate's mjx registration -> the
+        # address-take that ODR-uses (and therefore instantiates) every mjx twin never
+        # happens (trigger 1 of 2; see gen_all_code).
+        if getattr(self, "enable_mujoco_kernels", True) and self.robot.floating_base:
             mujoco_manifest = [
                 (short + "(mjx)", short, descriptor_for(short).gate_attr,
                  descriptor_for(short).bytes_macro, kernels)
@@ -2894,7 +2897,7 @@ class GRiDCodeGenerator:
         pin_by_short = {short: (label, gate_attr, bytes_macro, kernels)
                         for (label, short, gate_attr, bytes_macro, kernels) in self.KERNEL_ATTR_MANIFEST}
         mjx_by_short = {}
-        if self.robot.floating_base:
+        if getattr(self, "enable_mujoco_kernels", True) and self.robot.floating_base:
             for short, kernels in self.MJX_KERNEL_OVERLOADS.items():
                 d = descriptor_for(short)
                 mjx_by_short[short] = (short + "(mjx)", d.bytes_macro, kernels)
@@ -3223,7 +3226,22 @@ class GRiDCodeGenerator:
                      codegen_profile = "all", algorithm_list = None, enable_floating_second_order = True,
                      enable_idsva_so_world_frame = None, runtime_inertia = False, runtime_transform = False,
                      runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
-                     contact_frames = None):
+                     contact_frames = None, enable_mujoco_kernels = True):
+        # enable_mujoco_kernels=False builds a PIN-ONLY header: the mjx
+        # (MUJOCO_OUTPUT=true) template overloads are still EMITTED (they are
+        # templates -- uninstantiated they cost nothing; a bare #include is 2 s /
+        # 0.3 GB), but nothing INSTANTIATES them, because the only two triggers are
+        # gated off: (1) the aggregate init_grid_kernel_attrs' mjx registration block
+        # and (2) `#define GRID_RBD_WITH_MUJOCO`, which is what compiles the binding's
+        # mjx C-ABI entry points. That matters because the mjx twin of a
+        # derivative/second-order kernel is MASSIVELY larger than its pin counterpart
+        # (measured g1-floating: idsva_so_world_frame 28.1x, fdsva_so 4.5x,
+        # inverse_dynamics_gradient 2.9x; first-order value kernels ~1.0x) -- ~2.1M of
+        # ~2.4M SASS lines in a humanoid build are mjx-only, which is what makes a
+        # big-humanoid robot.so OOM. Pin-only consumers (GATO/PDDP 2nd-order DDP, and
+        # anyone not using the MuJoCo output convention) can now opt out and pay none
+        # of it. Default True = existing behavior, byte-identical.
+        self.enable_mujoco_kernels = enable_mujoco_kernels
         # Default-pick the SO variant that wins per the 2026-05 perf sweep
         # (see test/benchmarks/benchmark_multi_version_sm120_5090_full.md
         # § IDSVA_SO_BODY_FRAME vs IDSVA_SO_WORLD_FRAME):
@@ -3529,7 +3547,10 @@ class GRiDCodeGenerator:
         # on `grid::*<...,true>` "no matching function". Defined (to 1) iff the mjx
         # overloads were emitted; absent otherwise so `#ifdef GRID_RBD_WITH_MUJOCO`
         # is a clean no-op on fixed-base AND mimic/skew headers.
-        if self.robot.floating_base and not (
+        # enable_mujoco_kernels=False suppresses this define -> the binding's mjx
+        # entry points compile out -> the mjx twins are never instantiated (trigger 2
+        # of 2; see gen_all_code). getattr keeps legacy callers that never set it.
+        if getattr(self, "enable_mujoco_kernels", True) and self.robot.floating_base and not (
                 self.robot_has_mimic_joints() or self.robot.robot_has_skew_axis()):
             self.gen_add_code_line("#define GRID_RBD_WITH_MUJOCO 1")
         self.gen_add_code_line("")
