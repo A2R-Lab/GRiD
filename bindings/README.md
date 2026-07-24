@@ -66,12 +66,13 @@ above is identical to the pre-v0.5 behaviour.
 > the old `NJ`-sized floating shapes pending a coordinated autodiff-side
 > migration; the numpy `register_robot(...)` handle is the corrected surface.
 >
-> Known separate issue (NOT a binding bug; not fixed here): the floating-base
-> **CRBA kernel** itself returns inconsistent mass matrices for `batch > 1` (an
-> identical-`q` batch yields differing `M` across batch slots). `minv` and the
-> dynamics gradients are correct batched; standalone (`batch == 1`) `crba` matches
-> the reference. This lives in the generated CUDA kernel (codegen), not the
-> binding, and needs a kernel-side fix.
+> Previously-noted floating-base CRBA batch issue — **RESOLVED**. The floating-base
+> CRBA kernel used to return inconsistent mass matrices across `batch > 1` slots for
+> an identical-`q` batch (a warp-scheduling-order shared-parent `atomicAdd` in the
+> composite-inertia fold). Fixed in codegen by a deterministic parent-major
+> fixed-order reduction (`grid_codegen/algorithms/_crba.py`, ~L571). Verified
+> 2026-07-24 on go2-floating: a 64-wide identical-`q` batch returns bit-identical `M`
+> across all slots (`max |M[b]−M[0]| = 0`) and is bit-identical run-to-run.
 
 `register_robot` accepts `ee_joint_names=[...]` to pin specific
 end-effector frames (default: all leaf links), and `allow_fp64=True` for an
