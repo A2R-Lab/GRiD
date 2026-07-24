@@ -3226,7 +3226,7 @@ class GRiDCodeGenerator:
                      codegen_profile = "all", algorithm_list = None, enable_floating_second_order = True,
                      enable_idsva_so_world_frame = None, runtime_inertia = False, runtime_transform = False,
                      runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
-                     contact_frames = None, enable_mujoco_kernels = True):
+                     contact_frames = None, enable_mujoco_kernels = None):
         # enable_mujoco_kernels=False builds a PIN-ONLY header: the mjx
         # (MUJOCO_OUTPUT=true) template overloads are still EMITTED (they are
         # templates -- uninstantiated they cost nothing; a bare #include is 2 s /
@@ -3241,6 +3241,14 @@ class GRiDCodeGenerator:
         # big-humanoid robot.so OOM. Pin-only consumers (GATO/PDDP 2nd-order DDP, and
         # anyone not using the MuJoCo output convention) can now opt out and pay none
         # of it. Default True = existing behavior, byte-identical.
+        #
+        # None (the default) means "consult GRID_ENABLE_MUJOCO_KERNELS, else True", so a
+        # whole session can go pin-only without touching each of the ~50 gen_all_code
+        # call sites (the CUDA equivalence suite does exactly this -- see
+        # test/cuda_equivalents/conftest.py). An EXPLICIT True/False always wins over the
+        # env var, so a test that genuinely exercises mjx can opt back in locally.
+        if enable_mujoco_kernels is None:
+            enable_mujoco_kernels = os.environ.get("GRID_ENABLE_MUJOCO_KERNELS", "1") != "0"
         self.enable_mujoco_kernels = enable_mujoco_kernels
         # Default-pick the SO variant that wins per the 2026-05 perf sweep
         # (see test/benchmarks/benchmark_multi_version_sm120_5090_full.md

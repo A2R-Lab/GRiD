@@ -49,6 +49,10 @@ _TEST_ROOT = pathlib.Path(__file__).resolve().parent
 # because that is the surface they guard. Each must stay genuinely compile-free.
 _COMPILE_FREE_IN_CUDA_EQUIVALENTS = {
     "test_cuda_matmul_blockwrap_regression.py",
+    # Asserts this suite's pin-only header default (conftest.py). Deliberately runs under
+    # the CPU-only filter too -- that is precisely when you want to catch the default
+    # having silently reverted.
+    "test_pin_only_default.py",
 }
 
 # Decorators that are plumbing, not markers -- legal on helpers and fixtures.

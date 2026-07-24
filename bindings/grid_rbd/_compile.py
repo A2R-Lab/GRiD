@@ -238,6 +238,12 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # 2nd-order DDP, or anyone not using the MuJoCo convention) build a g1 .so in
     # ~33 min at ~11 GB peak instead of exhausting a 62 GB box. Default True keeps
     # the historical behavior byte-identical (inject-only-when-set discipline).
+    #
+    # Deliberately resolves to an EXPLICIT True/False here rather than passing None and
+    # letting gen_all_code consult GRID_ENABLE_MUJOCO_KERNELS. The compiled .so is cached
+    # under canonical_options(options); an env var that silently flipped the build without
+    # changing that key would hand back a stale .so built the other way. Binding consumers
+    # pass the option; the env var is a codegen-session convenience (the test suite).
     enable_mujoco_kernels = options.get("enable_mujoco_kernels", True)
     with contextlib.redirect_stdout(io.StringIO()):
         cg.gen_all_code(
