@@ -308,9 +308,6 @@ def _floating_second_order_samples(project_model):
     return [samples_by_name[name] for name in sample_names]
 
 
-@pytest.mark.cuda_equivalence
-@pytest.mark.developer_only
-@pytest.mark.robot_smoke
 def _flatten_second_order_tensors(tensors):
     return np.concatenate([np.asarray(tensor, dtype=np.float64).reshape(-1) for tensor in tensors]).reshape(1, -1)
 
@@ -441,6 +438,9 @@ def _fdsva_so_tolerance(robot_id: str):
     return dict(norm_rtol=2e-4, max_abs=3e-2, max_abs_rtol=5e-5)
 
 
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
 @pytest.mark.parametrize(
     "robot_id",
     _second_order_smoke_robot_ids(),
@@ -505,6 +505,10 @@ def test_fixed_second_order_forced_fallback_matches_python_reference(tmp_path, r
             )
 
 
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+@pytest.mark.floating_base
 @pytest.mark.parametrize(
     "robot_id",
     _floating_second_order_robot_ids(),
