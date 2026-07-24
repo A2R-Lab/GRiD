@@ -2905,29 +2905,41 @@ class GRiDCodeGenerator:
                 continue
             if gate_attr is None and generated_set is not None and short not in generated_set:
                 continue
-            self.gen_add_func_doc("Set MaxDynamicSharedMemorySize for the %s kernel(s) only "
-                                  "(callable from any TU; idempotent). Split-compile entry "
-                                  "point: registers just this algo so a solo TU instantiates "
-                                  "only its kernel." % label, [], [], None)
-            self.gen_add_code_line("template <typename T>")
-            self.gen_add_code_line("__host__ __forceinline__")
-            self.gen_add_code_line("void init_grid_kernel_attr_%s(){" % short, True)
-            per_lines = ["size_t _grid_smem_max = 0; gpuErrchk(grid_get_max_dynamic_shared_memory_bytes(&_grid_smem_max));"]
-            per_entries = [(label, bytes_macro, kernels)]
+            # PIN and MJX are emitted as SEPARATE functions on purpose. The
+            # MUJOCO_OUTPUT=true twin is a DISTINCT device function, and on the
+            # derivative/second-order kernels it is MASSIVELY larger than its pin
+            # counterpart (measured, g1-floating: idsva_so_world_frame 1,140,660 vs
+            # 40,541 SASS lines = 28.1x; fdsva_so 4.5x; inverse_dynamics_gradient
+            # 2.9x; first-order value kernels ~1.0x). That single instantiation is
+            # what drives cicc to 40 GB and a ~16 min compile. Splitting them lets a
+            # consumer that never launches mjx kernels (the benchmark; any pin-only
+            # user such as GATO/PDDP) pay NOTHING for them, while the floating-base
+            # mjx wrappers still register theirs by calling the _mjx variant.
+            def _emit_attr_fn(fn_suffix, doc_what, entries):
+                self.gen_add_func_doc("Set MaxDynamicSharedMemorySize for the %s kernel(s) only "
+                                      "(callable from any TU; idempotent). Split-compile entry "
+                                      "point: registers just this algo so a solo TU instantiates "
+                                      "only its kernel." % doc_what, [], [], None)
+                self.gen_add_code_line("template <typename T>")
+                self.gen_add_code_line("__host__ __forceinline__")
+                self.gen_add_code_line("void init_grid_kernel_attr_%s(){" % fn_suffix, True)
+                per_lines = ["size_t _grid_smem_max = 0; gpuErrchk(grid_get_max_dynamic_shared_memory_bytes(&_grid_smem_max));"]
+                per_alias = 0
+                for entry_label, entry_bytes, entry_kernels in entries:
+                    per_lines.append(f"if ({entry_bytes} <= _grid_smem_max) {{")
+                    per_lines.append(f"    gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"{entry_label}\", {entry_bytes}));")
+                    for kernel_name, signature in entry_kernels:
+                        alias = f"_grid_kern_alias_{per_alias}"
+                        per_alias += 1
+                        per_lines.append(f"    auto {alias} = static_cast<{signature}>(&{kernel_name});")
+                        per_lines.append(f"    gpuErrchk(cudaFuncSetAttribute({alias}, cudaFuncAttributeMaxDynamicSharedMemorySize, {entry_bytes}));")
+                    per_lines.append("}")
+                self.gen_add_code_lines(per_lines)
+                self.gen_add_end_function()
+
+            _emit_attr_fn(short, label, [(label, bytes_macro, kernels)])
             if short in mjx_by_short:
-                per_entries.append(mjx_by_short[short])
-            per_alias = 0
-            for entry_label, entry_bytes, entry_kernels in per_entries:
-                per_lines.append(f"if ({entry_bytes} <= _grid_smem_max) {{")
-                per_lines.append(f"    gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"{entry_label}\", {entry_bytes}));")
-                for kernel_name, signature in entry_kernels:
-                    alias = f"_grid_kern_alias_{per_alias}"
-                    per_alias += 1
-                    per_lines.append(f"    auto {alias} = static_cast<{signature}>(&{kernel_name});")
-                    per_lines.append(f"    gpuErrchk(cudaFuncSetAttribute({alias}, cudaFuncAttributeMaxDynamicSharedMemorySize, {entry_bytes}));")
-                per_lines.append("}")
-            self.gen_add_code_lines(per_lines)
-            self.gen_add_end_function()
+                _emit_attr_fn(short + "_mjx", label + "(mjx)", [mjx_by_short[short]])
 
         # ----- init_grid_streams<T>(): streams only, no attr registration -------
         # The stream-allocation half of init_grid, WITHOUT init_grid_kernel_attrs
