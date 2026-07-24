@@ -790,6 +790,32 @@ def _gate_close(spec: dict) -> str:
     return "#endif\n" if spec.get("gate") else ""
 
 
+def _attr_init_call(algo_key: str, spec: dict, guarded: bool) -> str:
+    """C++ statement(s) registering ONLY this algo's kernel attributes -- the per-algo
+    split (grid::init_grid_kernel_attr_<short>) that REPLACES the init_grid_kernel_attrs
+    monolith. The monolith address-takes all ~35 kernels, so every solo TU that called it
+    instantiated the WHOLE set + hit ptxas (the OOM/slow-compile on big humanoids). This
+    pulls in only this algo's kernel.
+
+    `idsva_so` is a dispatch alias with no own kernel -> register whichever concrete
+    variant(s) the header emitted (a floating header has only world_frame). When `guarded`,
+    wrap the call in the algo's GRID_HAS_* gate -- needed OUTSIDE the measure entry (which is
+    already inside its own gate) so a robot that didn't generate the algo still compiles."""
+    if algo_key == "idsva_so":
+        return (
+            "\n#if GRID_HAS_IDSVA_SO_WORLD_FRAME\n"
+            "        grid::init_grid_kernel_attr_idsva_so_world_frame<float>();\n"
+            "#endif\n#if GRID_HAS_IDSVA_SO_BODY_FRAME\n"
+            "        grid::init_grid_kernel_attr_idsva_so_body_frame<float>();\n"
+            "#endif\n        "
+        )
+    call = f"grid::init_grid_kernel_attr_{algo_key}<float>();"
+    gate = spec.get("gate")
+    if guarded and gate:
+        return f"\n#if {gate}\n        {call}\n#endif\n        "
+    return call
+
+
 def _per_algo_batch_tu_source(algo_key: str) -> str:
     """Source for timeGRiD_batch_<algo>.cu: defines measure_<algo>_batch_entry."""
     spec = PER_ALGO_SPECS[algo_key]
@@ -804,7 +830,7 @@ def _per_algo_batch_tu_source(algo_key: str) -> str:
     body = (
         f"{_gate_open(spec)}"
         f"void measure_{algo_key}_batch_entry(int N, cudaStream_t *streams, grid::robotModel<float> *m, grid::gridData<float> *d){{\n"
-        f"    static const bool _attrs_set = []() {{ grid::init_grid_kernel_attrs<float>(); return true; }}();\n"
+        f"    static const bool _attrs_set = []() {{ {_attr_init_call(algo_key, spec, guarded=False)} return true; }}();\n"
         f"    (void)_attrs_set;\n"
         f"    dim3 dimms = grid_timing_dimms();\n"
         f"{skip_block}"

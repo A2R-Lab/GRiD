@@ -2881,6 +2881,76 @@ class GRiDCodeGenerator:
         self.gen_add_code_lines(attr_lines)
         self.gen_add_end_function()
 
+        # ----- Per-algo init_grid_kernel_attr_<short><T>() (P0: split-compile) ----
+        # Each registers ONLY its own kernel's attribute(s) (pin + mjx twin). A TU
+        # that calls just one of these ODR-uses only that kernel, so only that
+        # kernel instantiates + hits ptxas -- instead of the whole ~35-kernel set
+        # the aggregate init_grid_kernel_attrs above forces (the monolith that OOMs
+        # big-humanoid compiles). Consumed by the per-algo bench (Fix #1) and the
+        # Model X launcher TUs. Additive: the aggregate is unchanged, so existing
+        # emission stays byte-identical. Same guard / alias / gate logic as above;
+        # per-function local alias counter. __forceinline__ (as on the aggregate) so
+        # &kernel<T> binds to the CALLING TU's host stubs.
+        pin_by_short = {short: (label, gate_attr, bytes_macro, kernels)
+                        for (label, short, gate_attr, bytes_macro, kernels) in self.KERNEL_ATTR_MANIFEST}
+        mjx_by_short = {}
+        if self.robot.floating_base:
+            for short, kernels in self.MJX_KERNEL_OVERLOADS.items():
+                d = descriptor_for(short)
+                mjx_by_short[short] = (short + "(mjx)", d.bytes_macro, kernels)
+        for short, (label, gate_attr, bytes_macro, kernels) in pin_by_short.items():
+            # Mirror the aggregate's gate: skip un-generated algos so the function
+            # never references a non-emitted kernel.
+            if gate_attr is not None and not getattr(self, gate_attr, True):
+                continue
+            if gate_attr is None and generated_set is not None and short not in generated_set:
+                continue
+            self.gen_add_func_doc("Set MaxDynamicSharedMemorySize for the %s kernel(s) only "
+                                  "(callable from any TU; idempotent). Split-compile entry "
+                                  "point: registers just this algo so a solo TU instantiates "
+                                  "only its kernel." % label, [], [], None)
+            self.gen_add_code_line("template <typename T>")
+            self.gen_add_code_line("__host__ __forceinline__")
+            self.gen_add_code_line("void init_grid_kernel_attr_%s(){" % short, True)
+            per_lines = ["size_t _grid_smem_max = 0; gpuErrchk(grid_get_max_dynamic_shared_memory_bytes(&_grid_smem_max));"]
+            per_entries = [(label, bytes_macro, kernels)]
+            if short in mjx_by_short:
+                per_entries.append(mjx_by_short[short])
+            per_alias = 0
+            for entry_label, entry_bytes, entry_kernels in per_entries:
+                per_lines.append(f"if ({entry_bytes} <= _grid_smem_max) {{")
+                per_lines.append(f"    gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"{entry_label}\", {entry_bytes}));")
+                for kernel_name, signature in entry_kernels:
+                    alias = f"_grid_kern_alias_{per_alias}"
+                    per_alias += 1
+                    per_lines.append(f"    auto {alias} = static_cast<{signature}>(&{kernel_name});")
+                    per_lines.append(f"    gpuErrchk(cudaFuncSetAttribute({alias}, cudaFuncAttributeMaxDynamicSharedMemorySize, {entry_bytes}));")
+                per_lines.append("}")
+            self.gen_add_code_lines(per_lines)
+            self.gen_add_end_function()
+
+        # ----- init_grid_streams<T>(): streams only, no attr registration -------
+        # The stream-allocation half of init_grid, WITHOUT init_grid_kernel_attrs
+        # (so it instantiates zero kernels). A split-compile / per-algo TU pairs
+        # this with a single init_grid_kernel_attr_<algo> to avoid pulling in the
+        # whole kernel set (P0/P1). Mirrors the init_grid stream block below.
+        self.gen_add_func_doc("Allocates streams for host functions WITHOUT registering any kernel "
+                              "attributes (pair with an init_grid_kernel_attr_<algo> for split "
+                              "compiles).", [], [], "A pointer to the array of streams")
+        self.gen_add_code_line("template <typename T>")
+        self.gen_add_code_line("__host__")
+        self.gen_add_code_line("cudaStream_t *init_grid_streams(){", True)
+        self.gen_add_code_lines(["gpuErrchk(cudaDeviceSynchronize());",
+                      "// allocate streams",
+                      "cudaStream_t *streams = (cudaStream_t *)malloc(" + str(MAX_STREAMS) + "*sizeof(cudaStream_t));",
+                      "int priority, minPriority, maxPriority;",
+                      "gpuErrchk(cudaDeviceGetStreamPriorityRange(&minPriority, &maxPriority));",
+                      "for(int i=0; i<" + str(MAX_STREAMS) + "; i++){",
+                      "    int adjusted_max = maxPriority - i; priority = adjusted_max > minPriority ? adjusted_max : minPriority;",
+                      "    gpuErrchk(cudaStreamCreateWithPriority(&(streams[i]),cudaStreamNonBlocking,priority));",
+                      "}", "return streams;"])
+        self.gen_add_end_function()
+
         # ----- init_grid<T>(): full init = attrs + streams (the original API) ----
         self.gen_add_func_doc("Sets MaxDynamicSharedMemorySize for every algorithm kernel and initializes streams for host functions", \
                               [], [], "A pointer to the array of streams")

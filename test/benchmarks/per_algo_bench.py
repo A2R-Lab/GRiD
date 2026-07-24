@@ -68,6 +68,13 @@ def _solo_batch_tu_source(algo_key: str) -> str:
     open_g = f"#if {gate}\n" if gate else ""
     close_g = "#endif\n" if gate else ""
     entry = gridrun._per_algo_batch_tu_source(algo_key)  # includes timeGRiD_common.h + the entry
+    # Per-algo kernel-attr registration functor (P1 / Fix #1): the solo TU calls the
+    # run_all_tests overload that takes this functor + init_grid_streams, so it NEVER
+    # pulls in init_grid's monolith init_grid_kernel_attrs (which address-takes ALL ~35
+    # kernels -> whole-set instantiation -> ptxas OOM on big humanoids). Registers just
+    # this algo (guarded, since it sits OUTSIDE the measure entry's own gate). Same
+    # per-algo registration the measure entry does internally -- idempotent.
+    attr_init = f"[](){{ {gridrun._attr_init_call(algo_key, spec, guarded=True)} }}"
     # main: run_all_tests provides init/load/warmup/close; call only THIS algo's entry per N.
     # If the algo is gated out for this header (GRID_HAS_* == 0), the entry does not exist, so the main
     # must also be gated -- and we still emit a valid, do-nothing main so the exe builds and exits clean
@@ -87,7 +94,7 @@ def _solo_batch_tu_source(algo_key: str) -> str:
         "#else\n"
         "        (void)streams; (void)m; (void)d;\n"
         "#endif\n"
-        "    });\n"
+        f"    }}, {attr_init});\n"
         "    (void)floating_base;\n"
         "    return 0;\n"
         "}\n"

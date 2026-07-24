@@ -143,10 +143,12 @@ inline bool grid_kernel_fits_device(size_t requested_bytes) {
 // streams + device pointers + max timesteps so the dispatcher can pick
 // whichever NUM_TIMESTEPS values it cares about.
 // ---------------------------------------------------------------------------
+// Shared body: given already-registered kernel attrs + allocated streams/robotModel,
+// load inputs, warm up, run do_timings, and clean up. Split out so the monolith and
+// per-algo (split-compile) entry points share one implementation.
 template <typename T, int MAX_TIMESTEPS, typename DispatcherFn>
-__host__ void run_all_tests(bool floating_base, DispatcherFn do_timings){
-    cudaStream_t *streams = grid::init_grid<T>();
-    grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
+__host__ void run_all_tests_body(bool floating_base, DispatcherFn do_timings,
+                                 cudaStream_t *streams, grid::robotModel<T> *d_robotModel){
     grid::gridData<T> *hd_data = grid::init_gridData<T,MAX_TIMESTEPS>();
 
     // load q,qd,u — codegen's NUM_JOINTS already accounts for floating-base position dim;
@@ -230,6 +232,28 @@ __host__ void run_all_tests(bool floating_base, DispatcherFn do_timings){
     }
 
     grid::close_grid<T>(streams,d_robotModel,hd_data);
+}
+
+// Overload taking an explicit kernel-attr registration functor. A per-algo TU
+// passes a functor that registers ONLY its own kernel (grid::init_grid_kernel_attr_<algo>),
+// so the TU instantiates just that kernel instead of the whole ~35-kernel set the
+// monolith init_grid_kernel_attrs forces (the OOM on big-humanoid solo compiles).
+// Streams come from init_grid_streams (no attr registration).
+template <typename T, int MAX_TIMESTEPS, typename DispatcherFn, typename AttrInitFn>
+__host__ void run_all_tests(bool floating_base, DispatcherFn do_timings, AttrInitFn init_kernel_attrs){
+    init_kernel_attrs();
+    cudaStream_t *streams = grid::init_grid_streams<T>();
+    grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
+    run_all_tests_body<T, MAX_TIMESTEPS>(floating_base, do_timings, streams, d_robotModel);
+}
+
+// Default: register EVERY algorithm kernel (the monolith path) -- used by the
+// full batch/single bench TUs that launch all algos.
+template <typename T, int MAX_TIMESTEPS, typename DispatcherFn>
+__host__ void run_all_tests(bool floating_base, DispatcherFn do_timings){
+    cudaStream_t *streams = grid::init_grid<T>();
+    grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
+    run_all_tests_body<T, MAX_TIMESTEPS>(floating_base, do_timings, streams, d_robotModel);
 }
 
 inline bool parse_floating_base_arg(int argc, const char **argv){
