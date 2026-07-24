@@ -135,6 +135,54 @@ def _tier_suffix(tier: str | None) -> str:
     return "" if tier in (None, "shared") else f"__tier_{tier}"
 
 
+# Compile-heavy SO / second-order family. Their cicc/ptxas can balloon to tens of GB
+# (measured overnight: cicc 21.5 GB on a g1-floating SO twin), and the `_wait_for_ram`
+# guard is PRE-ADMISSION ONLY — it checks free RAM before launch but cannot throttle a
+# compile that grows AFTER admission. Two of these in parallel OOM-killed the box (and
+# the VSCode scope, and Claude Code with it). So: force these SERIAL and put a HARD
+# cgroup ceiling on each (see _cgroup_wrap / _compile_algos).
+_SO_FAMILY_ALGOS = frozenset({
+    "idsva_so", "idsva_so_body_frame", "idsva_so_world_frame", "fdsva_so",
+    "end_effector_pose_hessian",
+})
+
+
+def _cgroup_available() -> bool:
+    """True iff `systemd-run --user --scope` works here (a user systemd manager is up).
+
+    Headless/cron runs may lack a user manager; then we fall back to the pre-admission
+    RAM guard alone. Cached on first call."""
+    if getattr(_cgroup_available, "_cached", None) is None:
+        ok = False
+        if shutil.which("systemd-run"):
+            try:
+                r = subprocess.run(
+                    ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=256M",
+                     "--collect", "/bin/true"],
+                    capture_output=True, text=True, timeout=30)
+                ok = r.returncode == 0
+            except Exception:
+                ok = False
+        _cgroup_available._cached = ok
+    return _cgroup_available._cached
+
+
+def _cgroup_wrap(cmd: list[str], cap_gb: float) -> list[str]:
+    """Prefix a HARD memory ceiling onto `cmd` via a transient user cgroup scope.
+
+    The cap is enforced on the scope, and nvcc's children (cudafe++/cicc/ptxas — the
+    actual RAM hogs) inherit it, so a runaway device compile is OOM-killed inside its
+    own scope instead of taking down the box. MemorySwapMax=0 makes the ceiling real
+    (no swap-thrash past it). No-op when a user manager isn't available."""
+    if cap_gb <= 0 or not _cgroup_available():
+        return cmd
+    return [
+        "systemd-run", "--user", "--scope", "-q", "--collect",
+        "-p", f"MemoryMax={cap_gb:.0f}G", "-p", "MemorySwapMax=0",
+        *cmd,
+    ]
+
+
 def _nvcc_cmd(src: Path, exe: Path, header_file: Path, arch: str, tier: str | None = None) -> list[str]:
     nvcc = shutil.which("nvcc") or "nvcc"
     cmd = [
@@ -150,7 +198,8 @@ def _nvcc_cmd(src: Path, exe: Path, header_file: Path, arch: str, tier: str | No
 
 
 def _compile_one(algo: str, build_dir: Path, header_file: Path, arch: str,
-                 ram_per_compile_gb: float, tier: str | None = None) -> tuple[str, Path | None, str]:
+                 ram_per_compile_gb: float, tier: str | None = None,
+                 cgroup_cap_gb: float = 0.0) -> tuple[str, Path | None, str]:
     """Write the algo's self-contained .cu and compile it to an .exe. Returns (algo, exe|None, log).
 
     The .cu is tier-independent (the resource tier is a compile-time -D flag, not source), so the source
@@ -174,10 +223,13 @@ def _compile_one(algo: str, build_dir: Path, header_file: Path, arch: str,
         return algo, exe, "cache hit (content stamp match)"
     _wait_for_ram(ram_per_compile_gb, f"compile {algo}{sfx}")
     t0 = time.monotonic()
-    proc = subprocess.run(_nvcc_cmd(src, exe, header_file, arch, tier), capture_output=True, text=True)
+    cmd = _cgroup_wrap(_nvcc_cmd(src, exe, header_file, arch, tier), cgroup_cap_gb)
+    proc = subprocess.run(cmd, capture_output=True, text=True)
     dt = time.monotonic() - t0
     if proc.returncode != 0:
-        return algo, None, f"COMPILE FAILED rc={proc.returncode} ({dt:.0f}s):\n{proc.stderr[-2000:]}"
+        # 137 = SIGKILL, the OOM-killer's signature when the cgroup ceiling is hit.
+        oom = " (likely OOM-killed at the cgroup MemoryMax ceiling)" if proc.returncode == 137 else ""
+        return algo, None, f"COMPILE FAILED rc={proc.returncode}{oom} ({dt:.0f}s):\n{proc.stderr[-2000:]}"
     stamp.write_text(key)
     return algo, exe, f"compiled ({dt:.0f}s)"
 
@@ -209,20 +261,45 @@ def _run_one(algo: str, exe: Path, base: str, timeout_s: float) -> tuple[str, di
 
 # --------------------------------------------------------------------------- compile / run fan-out
 def _compile_algos(algos: list[str], build_dir: Path, header: Path, arch: str,
-                   ram_per_compile_gb: float, jobs: int, tier: str | None = None) -> dict[str, Path]:
-    """Compile each algo's solo exe for `tier`, RAM-guarded parallel. Returns {algo: exe}."""
+                   ram_per_compile_gb: float, jobs: int, tier: str | None = None,
+                   cgroup_cap_gb: float = 0.0) -> dict[str, Path]:
+    """Compile each algo's solo exe for `tier`. Returns {algo: exe}.
+
+    Two-phase so the compile-heavy SO family can't OOM the box:
+      1. the SO family (_SO_FAMILY_ALGOS) compiles SERIALLY, each under a hard cgroup
+         MemoryMax ceiling (the `_wait_for_ram` pre-admission guard can't throttle a
+         compile that balloons after launch; two SO compiles in parallel is exactly
+         what killed the box overnight);
+      2. everything else compiles RAM-guarded parallel as before.
+    The cgroup ceiling still applies to the light phase (cheap, harmless) so a
+    surprise heavyweight is contained too."""
     exes: dict[str, Path] = {}
     label = _tier_suffix(tier) or "(shared)"
-    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
-        futs = {pool.submit(_compile_one, a, build_dir, header, arch, ram_per_compile_gb, tier): a
-                for a in algos}
-        for fut in concurrent.futures.as_completed(futs):
-            algo, exe, log = fut.result()
-            print(f"  [compile{label}] {algo}: {log.splitlines()[0]}")
-            if exe is not None:
-                exes[algo] = exe
-            else:
-                print(log)
+    so_algos = [a for a in algos if a in _SO_FAMILY_ALGOS]
+    light_algos = [a for a in algos if a not in _SO_FAMILY_ALGOS]
+
+    def _record(algo: str, exe: Path | None, log: str) -> None:
+        print(f"  [compile{label}] {algo}: {log.splitlines()[0]}")
+        if exe is not None:
+            exes[algo] = exe
+        else:
+            print(log)
+
+    if so_algos:
+        cap_note = (f"cgroup MemoryMax={cgroup_cap_gb:.0f}G" if cgroup_cap_gb and _cgroup_available()
+                    else "no cgroup cap (systemd --user unavailable — RAM guard only)")
+        print(f"  [compile{label}] {len(so_algos)} SO-family algo(s) SERIAL, {cap_note}: "
+              f"{', '.join(so_algos)}")
+        for a in so_algos:
+            _record(*_compile_one(a, build_dir, header, arch, ram_per_compile_gb, tier, cgroup_cap_gb))
+
+    if light_algos:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+            futs = {pool.submit(_compile_one, a, build_dir, header, arch,
+                                ram_per_compile_gb, tier, cgroup_cap_gb): a
+                    for a in light_algos}
+            for fut in concurrent.futures.as_completed(futs):
+                _record(*fut.result())
     return exes
 
 
@@ -252,7 +329,7 @@ def _run_isolated(algos: list[str], exes: dict[str, Path], base: str,
 # --------------------------------------------------------------------------- autotune (tier x threads)
 def _run_autotune(algos: list[str], build_dir: Path, header: Path, arch: str, base: str,
                   ram_per_compile_gb: float, jobs: int, *, thread_grid: tuple[int, ...],
-                  autotune_N: int, tiers: tuple[str, ...]) -> dict[str, dict]:
+                  autotune_N: int, tiers: tuple[str, ...], cgroup_cap_gb: float = 0.0) -> dict[str, dict]:
     """Build each algo's {tier: solo_exe} set and run run.py's picker VERBATIM on it -> schema-2
     algo_picks[algo] (tier_optimal/threads_optimal/us_at_optimal/sweep/sweep_us[/tier_equiv_to]).
 
@@ -268,7 +345,8 @@ def _run_autotune(algos: list[str], build_dir: Path, header: Path, arch: str, ba
     tier_exes: dict[str, dict[str, Path]] = {}
     for tier in tiers:
         print(f"[autotune] compiling tier={tier} for {len(algos)} algos...")
-        tier_exes[tier] = _compile_algos(algos, build_dir, header, arch, ram_per_compile_gb, jobs, tier)
+        tier_exes[tier] = _compile_algos(algos, build_dir, header, arch, ram_per_compile_gb, jobs, tier,
+                                         cgroup_cap_gb=cgroup_cap_gb)
 
     algo_picks: dict[str, dict] = {}
     for algo in algos:
@@ -377,6 +455,11 @@ def main() -> None:
                     help="max concurrent compiles (0 = auto from RAM headroom)")
     ap.add_argument("--ram-per-compile-gb", type=float, default=8.0,
                     help="assumed RAM per nvcc; the RAM guard blocks a new compile below this free")
+    ap.add_argument("--cgroup-cap-gb", type=float, default=45.0,
+                    help="HARD per-compile memory ceiling via a transient systemd --user cgroup scope "
+                         "(0 = off). The SO family compiles serially under this cap so a device compile "
+                         "that balloons after admission is OOM-killed in its own scope, not on the box. "
+                         "Default 45 on a 62 GB box; no-op where a user systemd manager isn't available.")
     ap.add_argument("--per-exe-timeout", type=float, default=900.0)
     ap.add_argument("--compile-only", action="store_true",
                     help="build the per-(algo[,tier]) exes and exit WITHOUT timing (the hub's build "
@@ -437,7 +520,10 @@ def main() -> None:
 
     # Which algos are in scope for this robot/base (drops non-production + mimic-unsupported).
     has_mimic = gridrun.robot_is_mimic(urdf)
-    algos = gridrun._algo_keys_in_registry_order(floating, has_mimic)
+    # When the user names algos explicitly, don't dedup the dispatcher-redundant SO
+    # row away — they may want to build exactly `idsva_so_world_frame` for an A/B.
+    algos = gridrun._algo_keys_in_registry_order(
+        floating, has_mimic, dedup_dispatcher_redundant=not args.algos)
     if args.algos:
         want = {a.strip() for a in args.algos.split(",") if a.strip()}
         algos = [a for a in algos if a in want]
@@ -452,11 +538,13 @@ def main() -> None:
     # every one (content stamp), so measurement is pure timing on a quiet GPU.
     if args.compile_only:
         if args.mode == "timing":
-            _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier=args.tier)
+            _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier=args.tier,
+                           cgroup_cap_gb=args.cgroup_cap_gb)
             what = f"tier {args.tier or 'shared'}"
         else:  # autotune: pre-build every tier so the measure run compiles nothing
             for tier in tiers:
-                _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier)
+                _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier,
+                               cgroup_cap_gb=args.cgroup_cap_gb)
             what = f"tiers {','.join(tiers)}"
         print(f"[per-algo] --compile-only: exes built for {what}; skipping timing")
         return
@@ -464,7 +552,8 @@ def main() -> None:
     # === TIMING MODE (default) ==============================================================
     # --tier selects the resource tier (default None == shared == no -D flag, the original path).
     if args.mode == "timing":
-        exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier=args.tier)
+        exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier=args.tier,
+                           cgroup_cap_gb=args.cgroup_cap_gb)
         results, gated, crashed = _run_isolated(algos, exes, args.base, args.per_exe_timeout)
         out = args.output or (build_dir / f"{args.robot}_{args.base}_grid_per_algo.json")
         payload = {
@@ -480,13 +569,15 @@ def main() -> None:
     # Timing pass first (the 'grid' block) -- the SHARED-tier exes double as the autotune 'shared'
     # tier (suffix-less, no -D flag), so the expensive SO-monster compile is paid once.
     print("[autotune] --- timing pass (grid block) ---")
-    exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs)
+    exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs,
+                          cgroup_cap_gb=args.cgroup_cap_gb)
     results, gated, crashed = _run_isolated(algos, exes, args.base, args.per_exe_timeout)
     filled = fill_nulls(dict(results))   # ensure the ALL_ALGOS core keys exist as null when un-run
 
     print("[autotune] --- tier x thread pass (algo_picks) ---")
     algo_picks = _run_autotune(algos, build_dir, header, arch, args.base,
                                args.ram_per_compile_gb, jobs, thread_grid=thread_grid,
+                               cgroup_cap_gb=args.cgroup_cap_gb,
                                autotune_N=args.autotune_N, tiers=tiers)
 
     # Assemble the run.py-faithful autotune payload: results[robot][base] = {"grid": filled,

@@ -718,6 +718,30 @@ NON_PRODUCTION_ALGOS_BY_BASE: dict[str, frozenset[str]] = {
     "fixed": frozenset(),
 }
 
+# Algos whose per-base generated kernel is BIT-IDENTICAL to the `idsva_so`
+# dispatcher's, so building BOTH compiles the same __global__ twice for zero
+# added coverage. The `idsva_so` host wrapper forwards, at codegen time, to
+# whichever frame the dispatcher picks for this base (grid.cuh:
+# `void idsva_so(...) { idsva_so_world_frame<...>(...); }` on floating), and its
+# `_single_timing` launches that frame's kernel DIRECTLY (no extra indirection),
+# so the dispatcher row already times the exact same kernel.
+#
+#   floating: dispatcher -> world_frame  => `idsva_so_world_frame` is redundant
+#   fixed:    dispatcher -> body_frame   => `idsva_so_body_frame`  is redundant
+#
+# On g1-floating that lone duplicate is the WORLD-frame SO kernel — the single
+# most expensive compile in the tree (28x its pin SASS): ~978 s + ~982 s built
+# back-to-back, ~16 min of pure waste. We keep the `idsva_so` dispatcher row (the
+# production-honest one, and the only SO row analyze_competitive scores — it
+# canonicalizes body/world to 'idsva_so' and drops the standalone entries), and
+# drop the dispatched-frame standalone. The OTHER frame's standalone row (the
+# non-dispatched A/B alternative) is unaffected: on fixed it stays for the
+# body-vs-world A/B; on floating it is separately dropped as NON_PRODUCTION.
+REDUNDANT_WITH_DISPATCHER_BY_BASE: dict[str, frozenset[str]] = {
+    "floating": frozenset({"idsva_so_world_frame"}),
+    "fixed": frozenset({"idsva_so_body_frame"}),
+}
+
 # Algos the codegen SKIPS for mimic robots, so their grid:: symbols are absent
 # and the matching bench TU would fail to compile/link. com/ccrba/energy are the
 # (Was MIMIC_UNSUPPORTED_ALGOS = {com, ccrba, energy}.) EMPTIED 2026-07-14: the drop was STALE. Its two
@@ -751,20 +775,29 @@ BENCH_EXCLUDED_ALGOS: frozenset[str] = frozenset({"integrator_hessian", "plant",
 
 
 def _algo_keys_in_registry_order(floating_base: bool | None = None,
-                                 has_mimic: bool | None = None) -> list[str]:
+                                 has_mimic: bool | None = None,
+                                 dedup_dispatcher_redundant: bool = True) -> list[str]:
     """Return algo keys in ALGO_REGISTRY order, filtered to those in PER_ALGO_SPECS.
 
     When `floating_base` is given, also drop any algo whose generated kernel is a
     non-production reference path for that base (see NON_PRODUCTION_ALGOS_BY_BASE)
-    so the competitive sweep never times dispatch-dead code. When `has_mimic` is
-    True, drop algos the codegen omits for mimic robots (MIMIC_UNSUPPORTED_ALGOS)
-    whose grid:: symbols would otherwise be absent and break the build. Both
-    default to None (keep everything) — used by callers that only need the full
-    key universe (e.g. cache-key bookkeeping that hashes per base/robot).
+    so the competitive sweep never times dispatch-dead code, AND — unless
+    `dedup_dispatcher_redundant=False` — the standalone SO row that is bit-identical
+    to the `idsva_so` dispatcher on this base (REDUNDANT_WITH_DISPATCHER_BY_BASE), so
+    the same expensive kernel is not compiled twice. Pass
+    `dedup_dispatcher_redundant=False` when the caller has EXPLICITLY named the algos
+    (e.g. `--algos idsva_so_world_frame`) and must be able to build that exact row.
+    When `has_mimic` is True, drop algos the codegen omits for mimic robots
+    (MIMIC_UNSUPPORTED_ALGOS) whose grid:: symbols would otherwise be absent and break
+    the build. `floating_base`/`has_mimic` default to None (keep everything) — used by
+    callers that only need the full key universe (e.g. cache-key bookkeeping).
     """
     drop: frozenset[str] = frozenset()
     if floating_base is not None:
-        drop |= NON_PRODUCTION_ALGOS_BY_BASE["floating" if floating_base else "fixed"]
+        base_key = "floating" if floating_base else "fixed"
+        drop |= NON_PRODUCTION_ALGOS_BY_BASE[base_key]
+        if dedup_dispatcher_redundant:
+            drop |= REDUNDANT_WITH_DISPATCHER_BY_BASE[base_key]
     if has_mimic:
         drop |= MIMIC_UNSUPPORTED_ALGOS
 
