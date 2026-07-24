@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include "grid.cuh"
 
@@ -75,9 +76,30 @@ int run() {
 #endif
 
     const int tensor_count = grid::SECOND_ORDER_TENSOR_SIZE;
-#if !GRID_CUDA_SECOND_ORDER_ENABLE_FDSVA
+    // h_df2 exists only when the generated header actually BUILT fdsva_so. Two
+    // different flags govern that and they are NOT interchangeable:
+    //   GRID_CUDA_SECOND_ORDER_ENABLE_FDSVA - this runner's -D, "call fdsva_so"
+    //   GRID_HAS_FDSVA_SO                   - codegen, "hd_data->h_df2 was malloc'd"
+    // gen_init_gridData wraps the h_df2/d_df2 allocations in `#if GRID_HAS_FDSVA_SO`,
+    // so when the caller generates a header WITHOUT fdsva_so (the floating diagnostic
+    // passes algorithm_list="idsva_so_body_frame") h_df2 is never allocated. Writing
+    // tensor_count zeros through it then segfaults on the HOST before a single line of
+    // output -- which is exactly what every floating cell of
+    // test_cuda_second_order_fallback.py did (iiwa14/go2/fr3/g1/h1_2-floating), while
+    // fixed-base passed because its default algorithm_list builds fdsva_so.
+    // So: keep emitting a well-formed zero-filled "fdsva_so" block (the parser expects
+    // it, and the test asserts GENERATES_FDSVA_SO==0 separately), but source it from a
+    // buffer that is guaranteed to exist.
+#if GRID_HAS_FDSVA_SO
+    T *fdsva_out = hd_data->h_df2;
+#else
+    std::vector<T> fdsva_zeros(static_cast<size_t>(tensor_count), static_cast<T>(0));
+    T *fdsva_out = fdsva_zeros.data();
+#endif
+#if GRID_HAS_FDSVA_SO && !GRID_CUDA_SECOND_ORDER_ENABLE_FDSVA
+    // Built but deliberately not called: zero it so the block is defined, not stale.
     for (int i = 0; i < tensor_count; ++i) {
-        hd_data->h_df2[i] = static_cast<T>(0);
+        fdsva_out[i] = static_cast<T>(0);
     }
 #endif
     int first_bad_idsva = -1;
@@ -88,7 +110,7 @@ int run() {
             first_bad_idsva = i;
         }
         if (first_bad_fdsva < 0 &&
-            !std::isfinite(static_cast<double>(hd_data->h_df2[i]))) {
+            !std::isfinite(static_cast<double>(fdsva_out[i]))) {
             first_bad_fdsva = i;
         }
     }
@@ -117,7 +139,7 @@ int run() {
 
     print_flat("second_order_config", config, 12);
     print_flat("idsva_so_body_frame", hd_data->h_idsva_so, tensor_count);
-    print_flat("fdsva_so", hd_data->h_df2, tensor_count);
+    print_flat("fdsva_so", fdsva_out, tensor_count);
 
     grid::close_grid<T>(streams, d_robot_model, hd_data);
     return 0;
