@@ -207,6 +207,62 @@ An `f_ext=` kwarg (shape `(B, 6*num_bodies)`, body-major) is exposed on the
 `forward_dynamics` / `aba` and the inverse-/forward-dynamics gradients — on
 both the numpy and JAX surfaces.
 
+## Build cost on big floating-base robots (`enable_mujoco_kernels`)
+
+By default GRiD emits **two** variants of each kernel on a floating-base,
+non-mimic robot: the Pinocchio-convention ("pin") kernel and a MuJoCo-convention
+("mjx") twin that applies the `G = blockdiag(R, I)` output basis change. That
+convention change is cheap in principle but not in generated code — measured on
+**g1-floating** (`nv=35`), the mjx twin's SASS relative to its pin counterpart:
+
+| Kernel | mjx / pin |
+|---|---|
+| `idsva_so_world_frame` | **28.1x** |
+| `fdsva_so` | 4.5x |
+| `inverse_dynamics_gradient` | 2.9x |
+| `forward_dynamics`, `minv`, `crba`, `aba` | ~1.0x |
+
+About **2.1M of the ~2.4M SASS lines** in a humanoid build are mjx-only. That is
+what makes a big-humanoid `.so` exhaust a 62 GB box.
+
+If you do not use the MuJoCo output convention — GATO / PDDP second-order DDP,
+or anything reading Pinocchio-convention derivatives — build **pin-only**:
+
+```python
+handle = grid_rbd.register_robot(
+    name="g1", urdf_path="g1.urdf", floating_base=True,
+    enable_mujoco_kernels=False,     # drop the mjx twins
+)
+```
+
+`enable_mujoco_kernels=False` is mutually exclusive with
+`output_convention="mujoco"` (that convention needs the very kernels it drops);
+passing both raises at `register_robot` rather than failing later with a bare
+rc=3 on each derivative call.
+
+On g1-floating that is the difference between *not building at all* and a ~33 min
+build at ~11 GB peak. Fixed-base and mimic robots (e.g. `h1_2`) never get mjx
+twins, so the flag is a no-op there. It is a **codegen-affecting option**: it
+participates in the `.so` cache key, so flipping it triggers one rebuild.
+
+> The 28x is a known defect in the mjx emitter, not an inherent cost of the
+> convention — tracked for a fix, after which this flag becomes a preference
+> rather than a workaround. `fdsva_so`'s mjx twin is separately known-broken and
+> returns rc=3 ("not built into this .so").
+
+The generator prints a build-time warning naming this flag when it detects a
+large floating-base non-mimic robot, so you find it before the OOM rather than
+after.
+
+**Test suites / codegen sessions** can set `GRID_ENABLE_MUJOCO_KERNELS=0` to make
+pin-only the default for every `gen_all_code` call that does not pass the
+argument explicitly (an explicit argument always wins). GRiD's own CUDA
+equivalence suite does this — it cut a go2-floating second-order cell from 175 s
+to 20 s. The env var deliberately does **not** affect `register_robot` /
+`precompile`: those cache the `.so` under the option dict, and an env var that
+silently changed the build without changing the cache key would hand back a
+stale `.so`.
+
 ## Requirements
 
 * Python ≥ 3.10

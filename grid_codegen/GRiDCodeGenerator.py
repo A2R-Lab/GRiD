@@ -3561,6 +3561,24 @@ class GRiDCodeGenerator:
         if getattr(self, "enable_mujoco_kernels", True) and self.robot.floating_base and not (
                 self.robot_has_mimic_joints() or self.robot.robot_has_skew_axis()):
             self.gen_add_code_line("#define GRID_RBD_WITH_MUJOCO 1")
+            # Warn BEFORE the multi-hour compile rather than after the OOM. The mjx twins
+            # dominate a big floating-base build (~2.1M of ~2.4M SASS lines on
+            # g1-floating; the idsva_so_world_frame twin alone is 28x its pin kernel), so
+            # a humanoid built with them can exhaust a 62 GB box, while the same robot
+            # built pin-only lands in ~33 min at ~11 GB peak. Threshold is empirical:
+            # go2-floating (nv=18) builds fine with mjx; g1-floating (nv=36) did not
+            # build at all. Only fires where the twins actually exist (floating,
+            # non-mimic, non-skew) and only when they are switched ON.
+            if self.robot.get_num_vel() >= 30:
+                warnings.warn(
+                    f"Generating MuJoCo-convention (mjx) kernel twins for a large "
+                    f"floating-base robot (nv={self.robot.get_num_vel()}). These twins "
+                    f"dominate the build and can exhaust host RAM during nvcc/cicc. If "
+                    f"you do not need the MuJoCo output convention, build pin-only with "
+                    f"enable_mujoco_kernels=False (register_robot / gen_all_code), or set "
+                    f"GRID_ENABLE_MUJOCO_KERNELS=0 for a whole codegen session.",
+                    stacklevel=2,
+                )
         self.gen_add_code_line("")
         # then open our namespace
         self.gen_add_func_doc("All functions are kept in this namespace")

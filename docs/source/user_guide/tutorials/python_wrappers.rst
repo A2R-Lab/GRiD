@@ -142,6 +142,56 @@ Validation against ``RBDReference`` lives at
 ``test/python_wrappers/test_iiwa14_smoke.py`` (16 tests, all numerical
 methods pass at float32 precision).
 
+Build cost on large floating-base robots
+----------------------------------------
+
+On a floating-base, non-mimic robot GRiD emits **two** variants of each
+kernel: the Pinocchio-convention ("pin") kernel and a MuJoCo-convention
+("mjx") twin applying the ``G = blockdiag(R, I)`` output basis change.
+That convention change is cheap in principle but not in generated code.
+Measured on **g1-floating** (``nv=35``), mjx SASS relative to pin:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Kernel
+     - mjx / pin
+   * - ``idsva_so_world_frame``
+     - **28.1x**
+   * - ``fdsva_so``
+     - 4.5x
+   * - ``inverse_dynamics_gradient``
+     - 2.9x
+   * - ``forward_dynamics``, ``minv``, ``crba``, ``aba``
+     - ~1.0x
+
+About **2.1M of the ~2.4M SASS lines** in a humanoid build are mjx-only —
+which is what makes such a build exhaust host RAM during ``nvcc``/``cicc``.
+
+If you do not need the MuJoCo output convention, build pin-only:
+
+.. code-block:: python
+
+   handle = grid_rbd.register_robot(
+       name="g1", urdf_path="g1.urdf", floating_base=True,
+       enable_mujoco_kernels=False,
+   )
+
+On g1-floating that is the difference between not building at all and a
+~33 min build at ~11 GB peak. Fixed-base and mimic robots (e.g. ``h1_2``)
+never get mjx twins, so the flag is a no-op there. It is mutually
+exclusive with ``output_convention="mujoco"``, and participates in the
+``.so`` cache key only when ``False``, so existing caches stay valid.
+The generator emits a warning naming this flag when it detects a large
+floating-base non-mimic robot.
+
+For test suites and codegen sessions, ``GRID_ENABLE_MUJOCO_KERNELS=0``
+makes pin-only the default for every ``gen_all_code`` call that does not
+pass the argument explicitly (an explicit argument always wins). It does
+**not** affect ``register_robot``/``precompile``, whose ``.so`` is cached
+under the option dict — an env var that changed the build without changing
+the cache key would return a stale ``.so``.
+
 Cache layout
 ------------
 

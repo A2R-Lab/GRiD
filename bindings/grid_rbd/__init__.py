@@ -124,6 +124,7 @@ def register_robot(
     use_joint_dynamics: bool = False,
     output_convention: str = "pinocchio",
     algorithm_list: list[str] | tuple[str, ...] | str | None = None,
+    enable_mujoco_kernels: bool = True,
     _profile_overlay: str | None = "pybind",
 ) -> RobotHandle:
     """Register a robot for fast subsequent calls.
@@ -236,6 +237,19 @@ def register_robot(
         mujoco mode until their codegen fusion lands. Equivalent to setting
         ``handle.output_convention`` after registration, or using the per-call thread-safe
         ``handle.mujoco`` view. numpy backend only for now.
+    enable_mujoco_kernels : bool, optional
+        Default ``True``. Set ``False`` to build a PIN-ONLY ``.so``: the mjx
+        (MuJoCo-convention) kernel twins are not instantiated and their C-ABI entry
+        points return rc=3 ("not built into this .so"). On a large floating-base
+        non-mimic robot this is the difference between building and running out of
+        memory — the twins are ~2.1M of the ~2.4M SASS lines on g1-floating (the
+        ``idsva_so_world_frame`` twin alone is 28x its pin kernel), so pin-only builds
+        g1 in ~33 min at ~11 GB peak instead of exhausting a 62 GB box. Use it if you
+        do not need the MuJoCo output convention (GATO / PDDP second-order DDP, or
+        anything reading Pinocchio-convention derivatives). No-op on fixed-base and
+        mimic robots, which never get mjx twins. Mutually exclusive with
+        ``output_convention="mujoco"``. Codegen-affecting: it participates in the
+        ``.so`` cache key only when ``False``, so existing caches stay valid.
 
     Returns
     -------
@@ -253,6 +267,14 @@ def register_robot(
         raise ValueError(
             "output_convention='mujoco' requires floating_base=True "
             "(mjx and pinocchio coincide on a fixed base).")
+    if output_convention == "mujoco" and not enable_mujoco_kernels:
+        # Caught here rather than at call time: enable_mujoco_kernels=False drops the
+        # mjx kernels from the .so entirely, so a 'mujoco' handle over that .so would
+        # build fine and then fail on every derivative call with a bare rc=3.
+        raise ValueError(
+            "output_convention='mujoco' is incompatible with "
+            "enable_mujoco_kernels=False (the mjx kernels are not built into the .so). "
+            "Pass enable_mujoco_kernels=True, or use output_convention='pinocchio'.")
     if dtype not in ("float32", "float64"):
         raise ValueError(f"dtype must be 'float32' or 'float64'; got {dtype!r}")
     if dtype == "float64" and backend != "numpy":
@@ -377,6 +399,15 @@ def register_robot(
         if not algos:
             raise ValueError("algorithm_list must name at least one algorithm or profile")
         code_options["algorithm_list"] = sorted(set(algos))
+    # Pin-only build: drop the mjx (MuJoCo output-convention) kernel twins. On a big
+    # floating-base non-mimic robot those twins dominate the build (~2.1M of ~2.4M SASS
+    # lines on g1-floating; idsva_so_world_frame's twin alone is 28x its pin kernel),
+    # which is what makes a humanoid .so exhaust a 62 GB box. Inject-only-when-False so
+    # every existing cache entry (keyed without this field) stays valid and a default
+    # register_robot still reuses its .so. No-op on fixed-base and mimic robots, which
+    # never get mjx twins -- but still re-keys, so it is only injected when asked for.
+    if not enable_mujoco_kernels:
+        code_options["enable_mujoco_kernels"] = False
     # Launch-config bake (A1b + FFI autotune): the binding launches via the jax/torch
     # FFI path, so it bakes the "ffi" profile (ffi_bases) by default — see
     # _compile.generate_grid_cuh + GRiDCodeGenerator.load_launch_config. The per-algo

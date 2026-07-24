@@ -71,6 +71,14 @@ can gate merges without paid GPU CI.
 - **Fix, don't guard** — no `xfail`/`skip`/defensive guards; fix the root cause.
 - **Physics**: gravity `-9.81`; Pinocchio is authoritative. Prefer extending GLASS primitives over
   working around them (GLASS is first-party).
+- **Big floating-base builds are mjx-dominated.** On a floating, non-mimic robot GRiD also emits a
+  MuJoCo-convention ("mjx") twin of each kernel, and those twins are ~2.1M of the ~2.4M SASS lines
+  on g1-floating (`idsva_so_world_frame` twin = **28x** its pin kernel). That — not second-order
+  kernel size — is why humanoid builds OOM. Build pin-only with `enable_mujoco_kernels=False`
+  (`register_robot` / `gen_all_code`), or `GRID_ENABLE_MUJOCO_KERNELS=0` for a whole codegen
+  session; an explicit argument always beats the env var. The CUDA equivalence suite defaults to
+  pin-only (`test/cuda_equivalents/conftest.py`) — it exercises no mjx path, and that alone took a
+  go2-floating second-order cell from 175 s to 20 s.
 - **Verify yourself** before committing — re-run the sanitizers / equivalence / poison harness; don't
   trust a subagent's "done" (subagents can lose Bash mid-run).
 - **Git**: short single-line commit messages, no Co-Authored-By footer; path-scoped `git add` (never
