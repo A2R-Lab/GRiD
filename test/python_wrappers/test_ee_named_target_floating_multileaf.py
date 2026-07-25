@@ -236,6 +236,8 @@ def _register(robot_id, base_mode, ee_mode, ee_joint_name, urdf, batch):
         urdf_path=str(urdf),
         floating_base=(base_mode == "floating"),
         ee_joint_names=ee_names,
+        # EE-pose (kinematic) test -> no mjx twins needed; drop them for a fast compile.
+        enable_mujoco_kernels=False,
         max_batch_size=max(batch, 8),
     )
 

@@ -250,6 +250,8 @@ def test_fk_batched_absent_for_floating_base():
         name="fk_batched_pytest_iiwa14_floating",
         urdf_path=str(urdf_path),
         floating_base=True,
+        # FK-only test on a floating robot -> drop the mjx twins (the bulk of the compile).
+        enable_mujoco_kernels=False,
         max_batch_size=_B,
     )
     assert handle.floating_base is True

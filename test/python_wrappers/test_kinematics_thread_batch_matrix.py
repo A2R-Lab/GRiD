@@ -137,6 +137,8 @@ def _register(name, urdf, floating):
         name=f"v6_kin_{name}_{'fb' if floating else 'fx'}",
         urdf_path=str(urdf_path),
         floating_base=floating,
+        # Kinematics-only test -> no mjx twins needed; drop them for a fast compile.
+        enable_mujoco_kernels=False,
         max_batch_size=_MAX_BATCH,
     )
 

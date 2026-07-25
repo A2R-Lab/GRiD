@@ -280,6 +280,8 @@ def go2_rt():
         urdf_path=str(_GO2),
         floating_base=True,
         runtime_inertia=True,
+        # Non-mjx test on a floating robot -> drop the mjx twins (the bulk of the compile).
+        enable_mujoco_kernels=False,
         max_batch_size=8,
     )
 

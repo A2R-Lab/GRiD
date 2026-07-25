@@ -59,6 +59,11 @@ def handle():
         name="g1_plant_hessian_smoke",
         urdf_path=str(_URDF),
         floating_base=False,
+        # Subset build: this smoke only exercises plant_step_hessian, whose codegen key is
+        # `integrator_hessian` (it auto-pulls fdsva_so + the gradient deps). Without this the
+        # .so compiles the whole ~35-algo surface for g1 (nv~29) = 20-40 min; the subset is a
+        # fraction. (See test/test_fast_compile_hygiene.py.)
+        algorithm_list=["integrator_hessian"],
         max_batch_size=8,
     )
 
