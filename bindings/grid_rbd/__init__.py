@@ -232,11 +232,12 @@ def register_robot(
         Default IO convention for the returned handle: ``"pinocchio"`` (default,
         GRiD-native) or ``"mujoco"`` (mjx parity — wxyz quat, global-linear free-joint
         velocity). A runtime setting (NOT in the cache key — the .so is identical); it
-        is a byte-identical no-op on a fixed base. Currently the VALUE methods
-        (id/fd/aba/crba/minv) honor it; the derivative/second-order surfaces raise in
-        mujoco mode until their codegen fusion lands. Equivalent to setting
-        ``handle.output_convention`` after registration, or using the per-call thread-safe
-        ``handle.mujoco`` view. numpy backend only for now.
+        is a byte-identical no-op on a fixed base (mjx≡pinocchio with no free-flyer), so
+        it is accepted on fixed AND floating robots alike for a uniform interface. The
+        value methods (id/fd/aba/crba/minv) and the native-mjx derivative/second-order
+        surfaces (id_gradient / fd_gradient / idsva_so / fdsva_so, floating base) honor
+        it. Equivalent to setting ``handle.output_convention`` after registration, or
+        using the per-call thread-safe ``handle.mujoco`` view.
     enable_mujoco_kernels : bool, optional
         Default ``True``. Set ``False`` to build a PIN-ONLY ``.so``: the mjx
         (MuJoCo-convention) kernel twins are not instantiated and their C-ABI entry
@@ -247,9 +248,11 @@ def register_robot(
         g1 in ~33 min at ~11 GB peak instead of exhausting a 62 GB box. Use it if you
         do not need the MuJoCo output convention (GATO / PDDP second-order DDP, or
         anything reading Pinocchio-convention derivatives). No-op on fixed-base and
-        mimic robots, which never get mjx twins. Mutually exclusive with
-        ``output_convention="mujoco"``. Codegen-affecting: it participates in the
-        ``.so`` cache key only when ``False``, so existing caches stay valid.
+        mimic robots, which never get mjx twins. On a FLOATING base it is mutually
+        exclusive with ``output_convention="mujoco"`` (that needs the twins); on a fixed
+        base ``output_convention="mujoco"`` is itself a no-op, so the two compose freely.
+        Codegen-affecting: it participates in the ``.so`` cache key only when ``False``,
+        so existing caches stay valid.
 
     Returns
     -------
@@ -261,15 +264,15 @@ def register_robot(
     if output_convention not in ("pinocchio", "mujoco"):
         raise ValueError(
             f"output_convention must be 'pinocchio' or 'mujoco'; got {output_convention!r}")
-    if output_convention == "mujoco" and not floating_base:
-        # mjx and pinocchio coincide on a fixed base (no free-flyer); the _mujoco
-        # native symbols are floating-base only, so reject early with a clear message.
-        raise ValueError(
-            "output_convention='mujoco' requires floating_base=True "
-            "(mjx and pinocchio coincide on a fixed base).")
-    if output_convention == "mujoco" and not enable_mujoco_kernels:
-        # Caught here rather than at call time: enable_mujoco_kernels=False drops the
-        # mjx kernels from the .so entirely, so a 'mujoco' handle over that .so would
+    # mjx and pinocchio COINCIDE on a fixed base (no free-flyer): output_convention="mujoco"
+    # is a provable byte-identical no-op there (handle._mjx_active gates on floating_base), so
+    # accept it silently -- generic code that registers every robot with
+    # output_convention="mujoco" then works on fixed AND floating robots alike (same interface).
+    # The mjx kernels/symbols are only needed (and only emitted) on a FLOATING base, so the
+    # enable_mujoco_kernels compatibility guard below applies only there.
+    if output_convention == "mujoco" and floating_base and not enable_mujoco_kernels:
+        # Caught here rather than at call time: on a floating base enable_mujoco_kernels=False
+        # drops the mjx kernels from the .so entirely, so a 'mujoco' handle over that .so would
         # build fine and then fail on every derivative call with a bare rc=3.
         raise ValueError(
             "output_convention='mujoco' is incompatible with "
