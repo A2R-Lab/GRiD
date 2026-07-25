@@ -144,6 +144,8 @@ def _tier_suffix(tier: str | None) -> str:
 _SO_FAMILY_ALGOS = frozenset({
     "idsva_so", "idsva_so_body_frame", "idsva_so_world_frame", "fdsva_so",
     "end_effector_pose_hessian",
+    # mjx twins of the second-order kernels are just as heavy -> serial + cgroup-capped too.
+    "idsva_so_world_frame_mjx", "fdsva_so_mjx",
 })
 
 
@@ -526,7 +528,13 @@ def main() -> None:
         floating, has_mimic, dedup_dispatcher_redundant=not args.algos)
     if args.algos:
         want = {a.strip() for a in args.algos.split(",") if a.strip()}
+        # Explicit --algos may name PER_ALGO_SPECS keys that are NOT in the registry-order
+        # list (e.g. the mjx timing twins `<algo>_mjx`, which have no registry/descriptor row
+        # -- they are bench-only). Keep registry order for the ones that are, then append any
+        # remaining requested keys that exist in PER_ALGO_SPECS (their per-header GRID_HAS_* /
+        # GRID_RBD_WITH_MUJOCO gate still decides whether they actually build).
         algos = [a for a in algos if a in want]
+        algos += [a for a in want if a not in algos and a in gridrun.PER_ALGO_SPECS]
     arch = gridrun.detect_cuda_arch()
     print(f"[per-algo] {len(algos)} algos in scope: {', '.join(algos)}")
 

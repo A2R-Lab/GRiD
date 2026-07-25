@@ -52,6 +52,26 @@ _GRID_SINGLE_LABELS: dict[str, str] = _build_grid_single()
 _GRID_BATCH_WITH_MEM_LABELS: dict[str, str] = _build_grid_mem()
 _GRID_BATCH_COMPUTE_ONLY_LABELS: dict[str, str] = _build_grid_compute()
 
+# --- Bench-only mjx timing twins (B4) -------------------------------------------------
+# The PER_ALGO_SPECS "<algo>_mjx" rows hand measure_batch_pair a "<PIN_LABEL>(mjx)" label,
+# so their bars print as e.g. "IDSVA_SO_WORLD_FRAME(mjx) WITH MEMORY". Those keys are TIMING
+# variants, not codegen algorithms, so they are absent from algo_registry's label maps ->
+# patch "<PIN_LABEL>(mjx)" -> "<algo>_mjx" here so parse_grid_output attributes them.
+_MJX_TIMING_ALGOS = ("idsva_so_world_frame", "fdsva_so",
+                     "inverse_dynamics_gradient", "forward_dynamics_gradient")
+def _patch_mjx_labels(label_map: dict[str, str]) -> None:
+    # The printed mjx name is "<PIN_NAME>(mjx) WITH MEMORY" -> normalized
+    # "<algo>(mjx) with memory": the "(mjx)" sits right after the algo-name token,
+    # BEFORE the suffix. The pin label starts with the lowercased algo key, so splice
+    # "(mjx)" in at len(algo).
+    key_to_label = {v: k for k, v in label_map.items()}
+    for algo in _MJX_TIMING_ALGOS:
+        base = key_to_label.get(algo)
+        if base is not None and base.startswith(algo):
+            label_map[algo + "(mjx)" + base[len(algo):]] = f"{algo}_mjx"
+for _m in (_GRID_SINGLE_LABELS, _GRID_BATCH_WITH_MEM_LABELS, _GRID_BATCH_COMPUTE_ONLY_LABELS):
+    _patch_mjx_labels(_m)
+
 # Pinocchio single-call labels
 _PIN_SINGLE_LABELS: dict[str, str] = {
     "inverse_dynamics codegen":          "inverse_dynamics",

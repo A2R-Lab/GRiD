@@ -535,6 +535,45 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "gate": "GRID_HAS_FDSVA_SO",
         "shared_mem_skip": "FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES",
     },
+    # --- mjx-convention timing twins (B4) -------------------------------------------------
+    # Time the MUJOCO_OUTPUT=true kernel instantiation (the previously-missing mjx
+    # second-order/gradient bars). Emitted ONLY on floating non-mimic robots, so gate on
+    # GRID_RBD_WITH_MUJOCO (defined =1 in those headers, absent otherwise) so a fixed/mimic
+    # header still compiles the bench with the mjx rows gated out. Key "<algo>_mjx" auto-
+    # wires the attr: _attr_init_call emits grid::init_grid_kernel_attr_<algo>_mjx<float>().
+    # Pair each with its pin row for a clean mjx-vs-pin A/B.
+    "idsva_so_world_frame_mjx": {
+        "single_call":        "grid::idsva_so_world_frame_single_timing<float,grid::GRID_DATA_ALL,true>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::idsva_so_world_frame<float,grid::GRID_DATA_ALL,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::idsva_so_world_frame_compute_only<float,grid::GRID_DATA_ALL,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "batch_label": "IDSVA_SO_WORLD_FRAME(mjx)",
+        "gate": "GRID_HAS_IDSVA_SO_WORLD_FRAME && GRID_RBD_WITH_MUJOCO",
+        "shared_mem_skip": "IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "fdsva_so_mjx": {
+        "single_call":        "grid::fdsva_so_single_timing<float,grid::GRID_DATA_ALL,true>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::fdsva_so<float,grid::GRID_DATA_ALL,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::fdsva_so_compute_only<float,grid::GRID_DATA_ALL,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "batch_label": "FDSVA_SO(mjx)",
+        "gate": "GRID_HAS_FDSVA_SO && GRID_RBD_WITH_MUJOCO",
+        "shared_mem_skip": "FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "inverse_dynamics_gradient_mjx": {
+        "single_call":        "grid::inverse_dynamics_gradient_single_timing<float,false,true,grid::GRID_DATA_ALL,true>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::inverse_dynamics_gradient<float,false,true,grid::GRID_DATA_ALL,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::inverse_dynamics_gradient_compute_only<float,false,true,grid::GRID_DATA_ALL,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "batch_label": "INVERSE_DYNAMICS_GRADIENT(mjx)",
+        "gate": "GRID_RBD_WITH_MUJOCO",
+        "shared_mem_skip": "INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
+    },
+    "forward_dynamics_gradient_mjx": {
+        "single_call":        "grid::forward_dynamics_gradient_single_timing<float,false,grid::GRID_DATA_ALL,true>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::forward_dynamics_gradient<float,false,grid::GRID_DATA_ALL,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::forward_dynamics_gradient_compute_only<float,false,grid::GRID_DATA_ALL,true>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "batch_label": "FORWARD_DYNAMICS_GRADIENT(mjx)",
+        "gate": "GRID_RBD_WITH_MUJOCO",
+        "shared_mem_skip": "FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
+    },
     # Centroidal / energy quick-wins (A1). Host wrappers write into gridData
     # buffers (d_c for the RNEA-bias families; d_com / d_ccrba / d_energy).
     #   - generalized_gravity / nonlinear_effects: RNEA-bias wrappers, take the
