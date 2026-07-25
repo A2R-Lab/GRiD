@@ -516,6 +516,21 @@ def _emit_fdsva_so_mjx_output(self):
     INNERTMP_off = VAF_off + vaf_band
     idgrad_temp = self.gen_inverse_dynamics_gradient_inner_temp_mem_size()
     OUT_off     = INNERTMP_off + idgrad_temp
+    # Block-parallel per-k assembly: the 6 per-k nv^2 matrices (work1/work2/inner_u +
+    # the sensitivities d_dq/d_dqd/d_Mi) are BLOCK-SHARED (whole block cooperates on
+    # one k), carved after the 4*NV^3 output band. Per-k scalars (R, jqk/jvk/juk/jvvk/
+    # juuk, Rd, d_qd[0:3]) stay per-thread register-local. This removes the 6*nv^2
+    # (=1944 float @ nv=18) register-array footprint that spilled to local memory.
+    BP_off      = OUT_off + 4 * nv3
+    BP_W1   = BP_off
+    BP_W2   = BP_W1 + nv2
+    BP_IU   = BP_W2 + nv2
+    BP_DDQ  = BP_IU + nv2
+    BP_DDQD = BP_DDQ + nv2
+    BP_DMI  = BP_DDQD + nv2
+    BP_END  = BP_DMI + nv2
+    assert BP_END <= 8 * nv3, \
+        f"fdsva_so mjx scratch overflow: need {BP_END} > 8*nv^3={8*nv3} (nv={nv})"
 
     self.gen_add_code_line("// === mjx output convention (floating-base fdsva_so) ===")
     self.gen_add_code_lines([
@@ -527,6 +542,8 @@ def _emit_fdsva_so_mjx_output(self):
         "T *s_vaf      = d_mjx_scratch + " + str(VAF_off) + ";     // id-value band",
         "T *s_mjx_tmp  = d_mjx_scratch + " + str(INNERTMP_off) + ";    // reused-inner scratch (one at a time)",
         "T *s_mjx_out  = d_mjx_scratch + " + str(OUT_off) + ";     // 4*NV^3 mjx output band",
+        "T *s_work1 = d_mjx_scratch + " + str(BP_W1) + "; T *s_work2 = d_mjx_scratch + " + str(BP_W2) + "; T *s_inner_u = d_mjx_scratch + " + str(BP_IU) + ";  // block-shared per-k work",
+        "T *s_d_dq = d_mjx_scratch + " + str(BP_DDQ) + "; T *s_d_dqd = d_mjx_scratch + " + str(BP_DDQD) + "; T *s_d_Mi = d_mjx_scratch + " + str(BP_DMI) + ";  // block-shared per-k sensitivities",
     ])
     # ---- 1) recompute the fd VALUE qdd FRESH (forward_dynamics_inner) ----
     # Uses the live s_XImats (built for the converted q). s_mjx_tmp is its scratch.
@@ -567,26 +584,14 @@ def _emit_fdsva_so_mjx_output(self):
     self.gen_add_code_line("s_mjx_dfdu[ind] = -val;")
     self.gen_add_end_control_flow()
     self.gen_add_sync()
-    # ---- 5) per-k assembly (parallel over k; register-local R + base vectors) ----
-    # Same build-cost hot spot as idsva_so: the dense per-k sensitivity contractions +
-    # slab matrix ops are constant-bound loops nvcc fully unrolls (fdsva_so mjx twin =
-    # 4.5x its pin kernel). Roll every nv-/nv^2-bound loop with `#pragma unroll 1` (the
-    # proven idsva_so treatment; numerically identical) via a scoped emit wrapper.
-    from ._idsva_so import _ur1 as _ur1_roll
-    _orig_lines, _orig_line = self.gen_add_code_lines, self.gen_add_code_line
-    def _rolled_lines(lst, *a, **k):
-        return _orig_lines(_ur1_roll(list(lst), nv), *a, **k)
-    def _rolled_line(ln, *a, **k):
-        r = _ur1_roll([ln], nv)
-        if len(r) == 2:
-            _orig_line(r[0])
-            return _orig_line(r[1], *a, **k)
-        return _orig_line(ln, *a, **k)
-    self.gen_add_code_lines, self.gen_add_code_line = _rolled_lines, _rolled_line
-    try:
-        _emit_fdsva_so_mjx_perk_assembly(self, nv)
-    finally:
-        self.gen_add_code_lines, self.gen_add_code_line = _orig_lines, _orig_line
+    # ---- 5) BLOCK-PARALLEL per-k assembly ----
+    # The whole block cooperates on one k at a time: each dense nv^2 op is spread
+    # across all threads (block-strided) over the block-shared s_work1/s_work2/
+    # s_inner_u + s_d_dq/s_d_dqd/s_d_Mi, instead of one-thread-per-k with 6 nv^2
+    # register arrays (which spilled to local memory -> huge SASS). Block-strided
+    # loops carry a runtime bound so nvcc cannot unroll them -> rolled with NO _ur1.
+    # Numerically identical (per-element math preserved; scalars stay register-local).
+    _emit_fdsva_so_mjx_blockpar_assembly(self, nv)
     self.gen_add_sync()
     # ---- 6) copy the mjx output band back over s_df2 (block-parallel) ----
     self.gen_add_parallel_loop("ci", str(4 * nv3))
@@ -909,6 +914,327 @@ def gen_fdsva_so_host(self, mode = 0):
         from ..algo_registry import single_call_printf_line
         self.gen_add_code_line(single_call_printf_line("fdsva_so"))
     self.gen_add_end_function()
+
+def _bpctrl(var, n):
+    """Block-strided loop control (no trailing brace), so it substitutes into both
+    `for(...) stmt;` and `for(...) {` forms."""
+    N = str(n)
+    return ("for (int " + var + " = threadIdx.x + threadIdx.y*blockDim.x; " + var
+            + " < " + N + "; " + var + " += blockDim.x*blockDim.y)")
+
+
+def _fbp(lines, n):
+    """Make the full-nv `for r`/`for c` loops of an fdsva reusable block block-strided
+    (parallelize over rows / cols). Leaves `for a<3` and `for r/c=3` copy loops as-is.
+    Numerically identical to the serial form (only which thread computes each element
+    changes; all writes to a given (col,row) come from one thread)."""
+    N = str(n)
+    reps = [("for (int r = 0; r < " + N + "; r++)", _bpctrl("r", n)),
+            ("for (int c = 0; c < " + N + "; c++)", _bpctrl("c", n))]
+    out = []
+    for ln in lines:
+        for old, new in reps:
+            ln = ln.replace(old, new)
+        out.append(ln)
+    return out
+
+
+def _emit_fdsva_so_mjx_blockpar_assembly(self, n):
+    """BLOCK-PARALLEL per-k assembly of all 4 fdsva_so mjx tensors. Same math as
+    _emit_fdsva_so_mjx_perk_assembly (transcribed from proto_fdsva_so_emit_spec.py)
+    but the whole block cooperates on one k at a time: the 6 per-k nv^2 matrices
+    (s_work1/s_work2/s_inner_u + sensitivities s_d_dq/s_d_dqd/s_d_Mi) are BLOCK-SHARED
+    and every dense op is spread across the block (block-strided) with a sync between
+    producers and consumers. Per-k scalars (R, jqk/jvk/juk/jvvk/juuk, Rd, d_qd[0:3])
+    stay per-thread register-local, so per-element results are bit-identical to the
+    thread-per-k form; only WHICH thread computes each nv^2 element changes."""
+    from ._idsva_so import _bpfor
+    nv3 = n * n * n
+    nv2 = n * n
+    N = str(n)
+    def t3(i, j, k):
+        return "((" + i + ")*" + N + " + (" + j + "))*" + N + " + (" + k + ")"
+    self.gen_add_code_line("// === block-parallel per-k assembly (whole block cooperates per k) ===")
+    self.gen_add_code_line("#pragma unroll 1")
+    self.gen_add_code_line("for (int k = 0; k < " + N + "; k++) {", True)
+    self.gen_add_code_lines(_emit_fdsva_so_mjx_locals_lines(self, n, nv3))
+    # jqk/jvk/juk (base-block sparse) + jvvk/juuk (== jqk-form) — register per thread.
+    self.gen_add_code_lines([
+        "T jqk[" + str(n) + "], jvk[" + str(n) + "], juk[" + str(n) + "], jvvk[" + str(n) + "], juuk[" + str(n) + "];",
+        "for (int q_ = 0; q_ < " + N + "; q_++) { jqk[q_] = static_cast<T>(0); jvk[q_] = static_cast<T>(0); juk[q_] = static_cast<T>(0); jvvk[q_] = static_cast<T>(0); juuk[q_] = static_cast<T>(0); }",
+        "bool is_rot = (k >= 3 && k < 6);",
+        "int a_rot = k - 3;",
+        "if (k < 3) { jqk[0] = R[3*k+0]; jqk[1] = R[3*k+1]; jqk[2] = R[3*k+2]; }",
+        "else { jqk[k] = static_cast<T>(1); }",
+        "for (int q_ = 0; q_ < " + N + "; q_++) { jvvk[q_] = jqk[q_]; juuk[q_] = jqk[q_]; }",
+        "if (is_rot) {",
+        "  T evx = (a_rot==1)*( v_lin[2]) + (a_rot==2)*(-v_lin[1]);",
+        "  T evy = (a_rot==0)*(-v_lin[2]) + (a_rot==2)*( v_lin[0]);",
+        "  T evz = (a_rot==0)*( v_lin[1]) + (a_rot==1)*(-v_lin[0]);",
+        "  jvk[0] = -evx; jvk[1] = -evy; jvk[2] = -evz;",
+        "  T eux = (a_rot==1)*( u_lin[2]) + (a_rot==2)*(-u_lin[1]);",
+        "  T euy = (a_rot==0)*(-u_lin[2]) + (a_rot==2)*( u_lin[0]);",
+        "  T euz = (a_rot==0)*( u_lin[1]) + (a_rot==1)*(-u_lin[0]);",
+        "  juk[0] = -eux; juk[1] = -euy; juk[2] = -euz;",
+        "}",
+    ])
+    # Rd = R @ skew(e_{a_rot}) — register per thread.
+    self.gen_add_code_lines([
+        "T Rd[9];",
+        "for (int ii = 0; ii < 9; ii++) Rd[ii] = static_cast<T>(0);",
+        "if (is_rot) {",
+        "  T sk[9]; for (int ii=0; ii<9; ii++) sk[ii]=static_cast<T>(0);",
+        "  if (a_rot==0){ sk[1*3+2] = static_cast<T>(-1); sk[2*3+1] = static_cast<T>(1); }",
+        "  if (a_rot==1){ sk[2*3+0] = static_cast<T>(-1); sk[0*3+2] = static_cast<T>(1); }",
+        "  if (a_rot==2){ sk[0*3+1] = static_cast<T>(-1); sk[1*3+0] = static_cast<T>(1); }",
+        "  for (int r = 0; r < 3; r++) for (int c = 0; c < 3; c++) {",
+        "    T acc = static_cast<T>(0);",
+        "    for (int p = 0; p < 3; p++) acc += R[3*r+p]*sk[3*p+c];",
+        "    Rd[3*r+c] = acc;",
+        "  }",
+        "}",
+    ])
+    # Sensitivities d_dq/d_dqd/d_Mi -> BLOCK-SHARED (block-strided over rows i).
+    self.gen_add_code_lines([
+        _bpfor("i", n),
+        "  for (int j = 0; j < " + N + "; j++) {",
+        "    T s = static_cast<T>(0);",
+        "    for (int m = 0; m < " + N + "; m++) s += T_d2q[" + t3("i", "j", "m") + "]*jqk[m];",
+        "    for (int nn = 0; nn < " + N + "; nn++) s += T_cross[" + t3("i", "nn", "j") + "]*jvk[nn];",
+        "    for (int l = 0; l < " + N + "; l++) s += T_dtdq[" + t3("i", "l", "j") + "]*juk[l];",
+        "    s_d_dq[j*" + N + " + i] = s;",
+        "    T s2 = static_cast<T>(0);",
+        "    for (int m = 0; m < " + N + "; m++) s2 += T_cross[" + t3("i", "j", "m") + "]*jqk[m];",
+        "    for (int nn = 0; nn < " + N + "; nn++) s2 += T_d2qd[" + t3("i", "j", "nn") + "]*jvk[nn];",
+        "    s_d_dqd[j*" + N + " + i] = s2;",
+        "    T s3 = static_cast<T>(0);",
+        "    for (int m = 0; m < " + N + "; m++) s3 += T_dtdq[" + t3("i", "j", "m") + "]*jqk[m];",
+        "    s_d_Mi[j*" + N + " + i] = s3;",
+        "  }",
+        "}",
+    ]); self.gen_add_sync()
+    # d_qd[0:3] only (out_R base needs the base-linear 3) — register per thread.
+    self.gen_add_code_lines([
+        "T d_qd[3];",
+        "for (int i = 0; i < 3; i++) {",
+        "  T st = static_cast<T>(0);",
+        "  for (int j = 0; j < " + N + "; j++) {",
+        "    T mij = s_Minv[(i<=j) ? (j*" + N + "+i) : (i*" + N + "+j)];",
+        "    st += s_dqdd_dq[j*" + N + "+i]*jqk[j] + s_dqdd_dqd[j*" + N + "+i]*jvk[j] + mij*juk[j];",
+        "  }",
+        "  d_qd[i] = st;",
+        "}",
+    ])
+    # each slab in a fresh brace scope (its d(out_*) setup scalars must not collide
+    # across slabs in the shared per-k loop body).
+    for _slab in (_emit_fbp_slab_d2q, _emit_fbp_slab_cross, _emit_fbp_slab_d2qd, _emit_fbp_slab_dtdq):
+        self.gen_add_code_line("{", True)
+        _slab(self, n)
+        self.gen_add_end_control_flow()
+    self.gen_add_end_control_flow()   # k
+
+
+def _fbp_writeback(self, n, src, Oname):
+    """Block-strided transpose writeback: O[i,j,k] = src[j*nv+i], over rows i."""
+    from ._idsva_so import _bpfor
+    N = str(n)
+    self.gen_add_code_lines([
+        _bpfor("i", n),
+        "  for (int j = 0; j < " + N + "; j++) " + Oname + "[(i*" + N + " + j)*" + N + " + k] = " + src + "[j*" + N + " + i];",
+        "}",
+    ]); self.gen_add_sync()
+
+
+def _emit_fbp_slab_d2q(self, n):
+    """d2qdd/dq2 slab, block-parallel. Mirrors _emit_fdsva_so_mjx_slab_d2q."""
+    from ._idsva_so import _bpfor
+    N = str(n)
+    self.gen_add_code_line("// --- d2qdd/dq2 slab[:,:,k] (block-parallel) ---")
+    # P (value inner pin-accel gradient) into s_work1
+    self.gen_add_code_lines(_fbp(_fdsva_reframe_cols(n, "s_dqdd_dq", "s_work1"), n)); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_add_XJvq(n, "s_dqdd_dqd", "v_lin", "s_work1"), n)); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_add_MinvJvq(n, "u_lin", "s_work1"), n)); self.gen_add_sync()
+    # dP into s_work2
+    self.gen_add_code_lines(_fbp(_fdsva_reframe_cols(n, "s_d_dq", "s_work2"), n)); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_add_Rd_reframe(n, "s_dqdd_dq", "s_work2"), n)); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_add_XJvq(n, "s_d_dqd", "v_lin", "s_work2"), n)); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_add_XJvq(n, "s_dqdd_dqd", "jvk", "s_work2"), n)); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_add_XJvq(n, "s_d_Mi", "u_lin", "s_work2"), n)); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_add_MinvJvq(n, "juk", "s_work2"), n)); self.gen_add_sync()
+    # g0 = rot_rows(dP=s_work2) -> s_inner_u ; + Gd @ P(s_work1)
+    self.gen_add_code_lines(_fbp(_fdsva_rot_rows(n, "s_work2", "s_inner_u"), n)); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_add_Gd(n, "s_work1", "s_inner_u"), n)); self.gen_add_sync()
+    # d(out_R) + d(out_vd): setup (register, all threads) then += over a in [0,3).
+    self.gen_add_code_lines([
+        "T ov0 = omega[1]*v_lin[2] - omega[2]*v_lin[1];",
+        "T ov1 = omega[2]*v_lin[0] - omega[0]*v_lin[2];",
+        "T ov2 = omega[0]*v_lin[1] - omega[1]*v_lin[0];",
+        "T base0 = qdd_lin[0]+ov0, base1 = qdd_lin[1]+ov1, base2 = qdd_lin[2]+ov2;",
+        "T dvx = jvk[0], dvy = jvk[1], dvz = jvk[2];",
+        "T domx = jvk[3], domy = jvk[4], domz = jvk[5];",
+        "T dob0 = (domy*v_lin[2]-domz*v_lin[1]) + (omega[1]*dvz-omega[2]*dvy);",
+        "T dob1 = (domz*v_lin[0]-domx*v_lin[2]) + (omega[2]*dvx-omega[0]*dvz);",
+        "T dob2 = (domx*v_lin[1]-domy*v_lin[0]) + (omega[0]*dvy-omega[1]*dvx);",
+        "T dbase0 = d_qd[0]+dob0, dbase1 = d_qd[1]+dob1, dbase2 = d_qd[2]+dob2;",
+        _bpfor("a", 3),
+        "  T wb0 = (a==1)*( dbase2) + (a==2)*(-dbase1);",
+        "  T wb1 = (a==0)*(-dbase2) + (a==2)*( dbase0);",
+        "  T wb2 = (a==0)*( dbase1) + (a==1)*(-dbase0);",
+        "  s_inner_u[(3+a)*" + N + "+0] += R[0]*wb0 + R[1]*wb1 + R[2]*wb2;",
+        "  s_inner_u[(3+a)*" + N + "+1] += R[3]*wb0 + R[4]*wb1 + R[5]*wb2;",
+        "  s_inner_u[(3+a)*" + N + "+2] += R[6]*wb0 + R[7]*wb1 + R[8]*wb2;",
+        "  T rb0 = (a==1)*( base2) + (a==2)*(-base1);",
+        "  T rb1 = (a==0)*(-base2) + (a==2)*( base0);",
+        "  T rb2 = (a==0)*( base1) + (a==1)*(-base0);",
+        "  s_inner_u[(3+a)*" + N + "+0] += Rd[0]*rb0 + Rd[1]*rb1 + Rd[2]*rb2;",
+        "  s_inner_u[(3+a)*" + N + "+1] += Rd[3]*rb0 + Rd[4]*rb1 + Rd[5]*rb2;",
+        "  s_inner_u[(3+a)*" + N + "+2] += Rd[6]*rb0 + Rd[7]*rb1 + Rd[8]*rb2;",
+        "  T evx = (a==1)*( v_lin[2]) + (a==2)*(-v_lin[1]);",
+        "  T evy = (a==0)*(-v_lin[2]) + (a==2)*( v_lin[0]);",
+        "  T evz = (a==0)*( v_lin[1]) + (a==1)*(-v_lin[0]);",
+        "  T dvqx = -evx, dvqy = -evy, dvqz = -evz;",
+        "  T edvx = (a==1)*( dvz) + (a==2)*(-dvy);",
+        "  T edvy = (a==0)*(-dvz) + (a==2)*( dvx);",
+        "  T edvz = (a==0)*( dvy) + (a==1)*(-dvx);",
+        "  T ddvqx = -edvx, ddvqy = -edvy, ddvqz = -edvz;",
+        "  T w0 = (domy*dvqz-domz*dvqy) + (omega[1]*ddvqz-omega[2]*ddvqy);",
+        "  T w1 = (domz*dvqx-domx*dvqz) + (omega[2]*ddvqx-omega[0]*ddvqz);",
+        "  T w2 = (domx*dvqy-domy*dvqx) + (omega[0]*ddvqy-omega[1]*ddvqx);",
+        "  s_inner_u[(3+a)*" + N + "+0] += R[0]*w0 + R[1]*w1 + R[2]*w2;",
+        "  s_inner_u[(3+a)*" + N + "+1] += R[3]*w0 + R[4]*w1 + R[5]*w2;",
+        "  s_inner_u[(3+a)*" + N + "+2] += R[6]*w0 + R[7]*w1 + R[8]*w2;",
+        "  T wr0 = omega[1]*dvqz - omega[2]*dvqy;",
+        "  T wr1 = omega[2]*dvqx - omega[0]*dvqz;",
+        "  T wr2 = omega[0]*dvqy - omega[1]*dvqx;",
+        "  s_inner_u[(3+a)*" + N + "+0] += Rd[0]*wr0 + Rd[1]*wr1 + Rd[2]*wr2;",
+        "  s_inner_u[(3+a)*" + N + "+1] += Rd[3]*wr0 + Rd[4]*wr1 + Rd[5]*wr2;",
+        "  s_inner_u[(3+a)*" + N + "+2] += Rd[6]*wr0 + Rd[7]*wr1 + Rd[8]*wr2;",
+        "}",
+    ]); self.gen_add_sync()
+    _fbp_writeback(self, n, "s_inner_u", "O_d2q")
+
+
+def _emit_fbp_slab_cross(self, n):
+    """cross slab, block-parallel. Mirrors _emit_fdsva_so_mjx_slab_cross."""
+    from ._idsva_so import _bpfor
+    N = str(n)
+    self.gen_add_code_line("// --- cross (d2qdd/dqd dq) slab[:,:,k] (block-parallel) ---")
+    self.gen_add_code_lines(_fbp(_fdsva_reframe_cols(n, "s_dqdd_dqd", "s_work1"), n)); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_reframe_cols(n, "s_d_dqd", "s_work2"), n)); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_add_Rd_reframe(n, "s_dqdd_dqd", "s_work2"), n)); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_rot_rows(n, "s_work2", "s_inner_u"), n)); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_add_Gd(n, "s_work1", "s_inner_u"), n)); self.gen_add_sync()
+    self.gen_add_code_lines([
+        "T dvx = jvk[0], dvy = jvk[1], dvz = jvk[2];",
+        "T domx = jvk[3], domy = jvk[4], domz = jvk[5];",
+        _bpfor("a", 3),
+        "  T rte0 = R[3*a+0], rte1 = R[3*a+1], rte2 = R[3*a+2];",
+        "  T rdte0 = Rd[3*a+0], rdte1 = Rd[3*a+1], rdte2 = Rd[3*a+2];",
+        "  T wl0 = (domy*rte2-domz*rte1) + (omega[1]*rdte2-omega[2]*rdte1);",
+        "  T wl1 = (domz*rte0-domx*rte2) + (omega[2]*rdte0-omega[0]*rdte2);",
+        "  T wl2 = (domx*rte1-domy*rte0) + (omega[0]*rdte1-omega[1]*rdte0);",
+        "  s_inner_u[(0+a)*" + N + "+0] += R[0]*wl0 + R[1]*wl1 + R[2]*wl2;",
+        "  s_inner_u[(0+a)*" + N + "+1] += R[3]*wl0 + R[4]*wl1 + R[5]*wl2;",
+        "  s_inner_u[(0+a)*" + N + "+2] += R[6]*wl0 + R[7]*wl1 + R[8]*wl2;",
+        "  T wlr0 = omega[1]*rte2 - omega[2]*rte1;",
+        "  T wlr1 = omega[2]*rte0 - omega[0]*rte2;",
+        "  T wlr2 = omega[0]*rte1 - omega[1]*rte0;",
+        "  s_inner_u[(0+a)*" + N + "+0] += Rd[0]*wlr0 + Rd[1]*wlr1 + Rd[2]*wlr2;",
+        "  s_inner_u[(0+a)*" + N + "+1] += Rd[3]*wlr0 + Rd[4]*wlr1 + Rd[5]*wlr2;",
+        "  s_inner_u[(0+a)*" + N + "+2] += Rd[6]*wlr0 + Rd[7]*wlr1 + Rd[8]*wlr2;",
+        "  T wn0 = (a==1)*( dvz) + (a==2)*(-dvy);",
+        "  T wn1 = (a==0)*(-dvz) + (a==2)*( dvx);",
+        "  T wn2 = (a==0)*( dvy) + (a==1)*(-dvx);",
+        "  s_inner_u[(3+a)*" + N + "+0] += R[0]*wn0 + R[1]*wn1 + R[2]*wn2;",
+        "  s_inner_u[(3+a)*" + N + "+1] += R[3]*wn0 + R[4]*wn1 + R[5]*wn2;",
+        "  s_inner_u[(3+a)*" + N + "+2] += R[6]*wn0 + R[7]*wn1 + R[8]*wn2;",
+        "  T wnr0 = (a==1)*( v_lin[2]) + (a==2)*(-v_lin[1]);",
+        "  T wnr1 = (a==0)*(-v_lin[2]) + (a==2)*( v_lin[0]);",
+        "  T wnr2 = (a==0)*( v_lin[1]) + (a==1)*(-v_lin[0]);",
+        "  s_inner_u[(3+a)*" + N + "+0] += Rd[0]*wnr0 + Rd[1]*wnr1 + Rd[2]*wnr2;",
+        "  s_inner_u[(3+a)*" + N + "+1] += Rd[3]*wnr0 + Rd[4]*wnr1 + Rd[5]*wnr2;",
+        "  s_inner_u[(3+a)*" + N + "+2] += Rd[6]*wnr0 + Rd[7]*wnr1 + Rd[8]*wnr2;",
+        "}",
+    ]); self.gen_add_sync()
+    _fbp_writeback(self, n, "s_inner_u", "O_cross")
+
+
+def _emit_fbp_slab_d2qd(self, n):
+    """d2qdd/dqd2 slab, block-parallel. Mirrors _emit_fdsva_so_mjx_slab_d2qd."""
+    from ._idsva_so import _bpfor
+    N = str(n)
+    self.gen_add_code_line("// --- d2qdd/dqd2 slab[:,:,k] (qvel perturb, R fixed) (block-parallel) ---")
+    # dvQ[i,j] = sum_n d2qd[i,j,n]*jvvk[n] -> s_work1 (over rows i)
+    self.gen_add_code_lines([
+        _bpfor("i", n),
+        "  for (int j = 0; j < " + N + "; j++) {",
+        "    T s = static_cast<T>(0);",
+        "    for (int nn = 0; nn < " + N + "; nn++) s += T_d2qd[(i*" + N + " + j)*" + N + " + nn]*jvvk[nn];",
+        "    s_work1[j*" + N + " + i] = s;",
+        "  }",
+        "}",
+    ]); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_reframe_cols(n, "s_work1", "s_work2"), n)); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_rot_rows(n, "s_work2", "s_inner_u"), n)); self.gen_add_sync()
+    self.gen_add_code_lines([
+        "T dvvv0 = jvvk[0], dvvv1 = jvvk[1], dvvv2 = jvvk[2];",
+        "T dvvo0 = jvvk[3], dvvo1 = jvvk[4], dvvo2 = jvvk[5];",
+        _bpfor("a", 3),
+        "  T rte0 = R[3*a+0], rte1 = R[3*a+1], rte2 = R[3*a+2];",
+        "  T wl0 = dvvo1*rte2 - dvvo2*rte1;",
+        "  T wl1 = dvvo2*rte0 - dvvo0*rte2;",
+        "  T wl2 = dvvo0*rte1 - dvvo1*rte0;",
+        "  s_inner_u[(0+a)*" + N + "+0] += R[0]*wl0 + R[1]*wl1 + R[2]*wl2;",
+        "  s_inner_u[(0+a)*" + N + "+1] += R[3]*wl0 + R[4]*wl1 + R[5]*wl2;",
+        "  s_inner_u[(0+a)*" + N + "+2] += R[6]*wl0 + R[7]*wl1 + R[8]*wl2;",
+        "  T wn0 = (a==1)*( dvvv2) + (a==2)*(-dvvv1);",
+        "  T wn1 = (a==0)*(-dvvv2) + (a==2)*( dvvv0);",
+        "  T wn2 = (a==0)*( dvvv1) + (a==1)*(-dvvv0);",
+        "  s_inner_u[(3+a)*" + N + "+0] += R[0]*wn0 + R[1]*wn1 + R[2]*wn2;",
+        "  s_inner_u[(3+a)*" + N + "+1] += R[3]*wn0 + R[4]*wn1 + R[5]*wn2;",
+        "  s_inner_u[(3+a)*" + N + "+2] += R[6]*wn0 + R[7]*wn1 + R[8]*wn2;",
+        "}",
+    ]); self.gen_add_sync()
+    _fbp_writeback(self, n, "s_inner_u", "O_d2qd")
+
+
+def _emit_fbp_slab_dtdq(self, n):
+    """dtdq slab, block-parallel. Mirrors _emit_fdsva_so_mjx_slab_dtdq. Final in s_work2."""
+    from ._idsva_so import _bpfor
+    N = str(n)
+    self.gen_add_code_line("// --- d2qdd/du dq slab[:,:,k] (force perturb, R fixed) (block-parallel) ---")
+    # du_dq[i,j] = sum_l T_dtdq[i,l,j]*juuk[l] -> s_work1 (over rows i)
+    self.gen_add_code_lines([
+        _bpfor("i", n),
+        "  for (int j = 0; j < " + N + "; j++) {",
+        "    T s = static_cast<T>(0);",
+        "    for (int l = 0; l < " + N + "; l++) s += T_dtdq[(i*" + N + " + l)*" + N + " + j]*juuk[l];",
+        "    s_work1[j*" + N + " + i] = s;",
+        "  }",
+        "}",
+    ]); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_reframe_cols(n, "s_work1", "s_inner_u"), n)); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_add_MinvJvq(n, "juuk", "s_inner_u"), n)); self.gen_add_sync()
+    self.gen_add_code_lines(_fbp(_fdsva_rot_rows(n, "s_inner_u", "s_work2"), n)); self.gen_add_sync()
+    # du_qdd[0:3] = Minv[0:3,:] @ juuk (register per thread), then d(out_R)/du over a.
+    self.gen_add_code_lines([
+        "T duq0 = static_cast<T>(0), duq1 = static_cast<T>(0), duq2 = static_cast<T>(0);",
+        "for (int j = 0; j < " + N + "; j++) {",
+        "  duq0 += s_Minv[(0<=j) ? (j*" + N + "+0) : (0*" + N + "+j)]*juuk[j];",
+        "  duq1 += s_Minv[(1<=j) ? (j*" + N + "+1) : (1*" + N + "+j)]*juuk[j];",
+        "  duq2 += s_Minv[(2<=j) ? (j*" + N + "+2) : (2*" + N + "+j)]*juuk[j];",
+        "}",
+        _bpfor("a", 3),
+        "  T w0 = (a==1)*( duq2) + (a==2)*(-duq1);",
+        "  T w1 = (a==0)*(-duq2) + (a==2)*( duq0);",
+        "  T w2 = (a==0)*( duq1) + (a==1)*(-duq0);",
+        "  s_work2[(3+a)*" + N + "+0] += R[0]*w0 + R[1]*w1 + R[2]*w2;",
+        "  s_work2[(3+a)*" + N + "+1] += R[3]*w0 + R[4]*w1 + R[5]*w2;",
+        "  s_work2[(3+a)*" + N + "+2] += R[6]*w0 + R[7]*w1 + R[8]*w2;",
+        "}",
+    ]); self.gen_add_sync()
+    _fbp_writeback(self, n, "s_work2", "O_dtdq")
+
 
 def _emit_fdsva_so_mjx_perk_assembly(self, n):
     """Per-k assembly of all 4 fdsva_so mjx tensors (d2q / cross / d2qd / dtdq),
