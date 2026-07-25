@@ -568,7 +568,25 @@ def _emit_fdsva_so_mjx_output(self):
     self.gen_add_end_control_flow()
     self.gen_add_sync()
     # ---- 5) per-k assembly (parallel over k; register-local R + base vectors) ----
-    _emit_fdsva_so_mjx_perk_assembly(self, nv)
+    # Same build-cost hot spot as idsva_so: the dense per-k sensitivity contractions +
+    # slab matrix ops are constant-bound loops nvcc fully unrolls (fdsva_so mjx twin =
+    # 4.5x its pin kernel). Roll every nv-/nv^2-bound loop with `#pragma unroll 1` (the
+    # proven idsva_so treatment; numerically identical) via a scoped emit wrapper.
+    from ._idsva_so import _ur1 as _ur1_roll
+    _orig_lines, _orig_line = self.gen_add_code_lines, self.gen_add_code_line
+    def _rolled_lines(lst, *a, **k):
+        return _orig_lines(_ur1_roll(list(lst), nv), *a, **k)
+    def _rolled_line(ln, *a, **k):
+        r = _ur1_roll([ln], nv)
+        if len(r) == 2:
+            _orig_line(r[0])
+            return _orig_line(r[1], *a, **k)
+        return _orig_line(ln, *a, **k)
+    self.gen_add_code_lines, self.gen_add_code_line = _rolled_lines, _rolled_line
+    try:
+        _emit_fdsva_so_mjx_perk_assembly(self, nv)
+    finally:
+        self.gen_add_code_lines, self.gen_add_code_line = _orig_lines, _orig_line
     self.gen_add_sync()
     # ---- 6) copy the mjx output band back over s_df2 (block-parallel) ----
     self.gen_add_parallel_loop("ci", str(4 * nv3))
