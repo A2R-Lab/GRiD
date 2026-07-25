@@ -521,6 +521,39 @@ arena doesn't just under-reserve — it defeats the fits-check that exists to pr
   (the composer supplies arenas) — but it carried the same wrong formula. Leaving a stale-but-wrong
   number next to the right one is a trap; fix both or delete one.
 
+### 1u. A large per-thread REGISTER ARRAY in a single-block kernel spills → huge SASS AND slow; block-share it (2026-07-25)
+
+**The mjx second-order epilogues (idsva_so / fdsva_so) assembled each output slab "thread-per-k": every
+thread owned some k-slabs and built them in PER-THREAD register arrays** — idsva `T work1[nv^2],
+work2[nv^2]` (648 floats @ nv=18), fdsva SIX nv^2 arrays (`work1/work2/inner_u` + sensitivities
+`d_dq/d_dqd/d_Mi` = 1944 floats). That far exceeds the register budget → ptxas **spills to local memory**,
+and the spill/reload code is the DOMINANT SASS (it *looks* like "irreducible dense math" in a nulling
+experiment, but it is spill traffic). It is also slow: only ~nv of the ~448 launched threads are active,
+and every op hits local memory.
+
+**Fix = BLOCK-PARALLEL: move the work matrices to block-shared scratch (here `d_mjx_scratch`, global,
+tier-safe) and spread each nv^2 op across the whole block (block-strided loop + a `__syncthreads()`
+between producer and consumer). Keep the cheap per-k SCALARS (R, the j-vectors, Rd, the 3 base-linear
+sensitivities) per-thread register-local — every thread recomputes them deterministically, so per-element
+results stay BIT-IDENTICAL.** Measured go2-floating: idsva mjx SASS 5.53x→2.42x + runtime 1.44x; fdsva
+2.97x→1.41x + runtime 2.44x. Block-strided loops also carry a runtime bound (`blockDim`) so nvcc cannot
+unroll them → they roll for free (no `#pragma unroll 1` needed).
+
+- **Tell:** a nulling experiment shows a slab "costs" a lot of SASS, but the slab's actual FLOPs are
+  O(nv) (only 3 rotated cols/rows) — the size is spill, not compute. Check the kernel's local-memory
+  frame (`nvcc -Xptxas -v` → "stack frame" / "spill stores"); a big frame on a single-block kernel is the
+  smell.
+- **Gotcha:** each block-parallel op needs a `__syncthreads()` before any read of an element a DIFFERENT
+  thread wrote (rot_rows/gd/reframe cross rows or cols). Sync-after-every-op is correct; racecheck
+  validates. `+=` accumulate blocks that write a fixed 3×3 base sub-block must be parallelized over the
+  column index `a∈[0,3)`, NOT left to all threads (all-threads += is a WAW corruption).
+- **Validate fast:** golden-compare the new kernel's output to the OLD (committed) kernel bit-for-bit
+  (per output tensor) — a refactor that preserves per-element math is bit-identical; no numpy oracle
+  needed for the inner loop. Harness pattern in `scratchpad/glass_slabs/` (git-stash the one edited file
+  to regen the baseline header, compile both, diff device output). Then run the real oracle + 4 sanitizers.
+- Same "single-block perf comes from in-block parallelism" mental model as §4; the trap is that the
+  register-array form looked already-parallel (over k) but under-utilized threads and spilled.
+
 ---
 
 ## 2. Debugging methodology (what actually localizes a bug fast)

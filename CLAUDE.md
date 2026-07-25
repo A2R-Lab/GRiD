@@ -72,9 +72,13 @@ can gate merges without paid GPU CI.
 - **Physics**: gravity `-9.81`; Pinocchio is authoritative. Prefer extending GLASS primitives over
   working around them (GLASS is first-party).
 - **Big floating-base builds are mjx-dominated.** On a floating, non-mimic robot GRiD also emits a
-  MuJoCo-convention ("mjx") twin of each kernel, and those twins are ~2.1M of the ~2.4M SASS lines
-  on g1-floating (`idsva_so_world_frame` twin = **28x** its pin kernel). That — not second-order
-  kernel size — is why humanoid builds OOM. Build pin-only with `enable_mujoco_kernels=False`
+  MuJoCo-convention ("mjx") twin of each kernel; the second-order twins used to dwarf their pin
+  kernels (`idsva_so_world_frame` twin was **28x** raw, cut to 5.5x by rolling, then to **2.42x** by
+  block-parallelizing the epilogue; `fdsva_so` **1.41x**; first-order twins ~1.0x). That — not
+  second-order kernel size — is why humanoid builds OOM. To shrink the mjx epilogue: it assembled each
+  output slab in PER-THREAD register arrays (nv²-sized) that spilled to local memory; block-sharing
+  them + spreading each op across the block removed the spill (both smaller AND faster) — see
+  `docs/agent_debugging_guide.md` §1u. Build pin-only with `enable_mujoco_kernels=False`
   (`register_robot` / `gen_all_code`), or `GRID_ENABLE_MUJOCO_KERNELS=0` for a whole codegen
   session; an explicit argument always beats the env var. The CUDA equivalence suite defaults to
   pin-only (`test/cuda_equivalents/conftest.py`) — it exercises no mjx path, and that alone took a

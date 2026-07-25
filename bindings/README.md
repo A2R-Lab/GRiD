@@ -213,18 +213,18 @@ both the numpy and JAX surfaces.
 By default GRiD emits **two** variants of each kernel on a floating-base,
 non-mimic robot: the Pinocchio-convention ("pin") kernel and a MuJoCo-convention
 ("mjx") twin that applies the `G = blockdiag(R, I)` output basis change. That
-convention change is cheap in principle but not in generated code — measured on
-**g1-floating** (`nv=35`), the mjx twin's SASS relative to its pin counterpart:
+convention change is cheap in principle but was expensive in generated code; the
+second-order mjx epilogues have since been block-parallelized, cutting them
+substantially. Current mjx SASS relative to pin (measured **go2-floating**, `nv=18`):
 
 | Kernel | mjx / pin |
 |---|---|
-| `idsva_so_world_frame` | **28.1x** |
-| `fdsva_so` | 4.5x |
-| `inverse_dynamics_gradient` | 2.9x |
-| `forward_dynamics`, `minv`, `crba`, `aba` | ~1.0x |
+| `idsva_so_world_frame` | **2.42x** (was 5.5x rolled / 28x raw) |
+| `fdsva_so` | **1.41x** (was 3.0x) |
+| `inverse_dynamics_gradient`, `forward_dynamics`, `minv`, `crba` | ~1.0x |
 
-About **2.1M of the ~2.4M SASS lines** in a humanoid build are mjx-only. That is
-what makes a big-humanoid `.so` exhaust a 62 GB box.
+The second-order mjx twins are still the largest kernels in a humanoid build, so a
+big-humanoid `.so` is lighter to compile pin-only.
 
 If you do not use the MuJoCo output convention — GATO / PDDP second-order DDP,
 or anything reading Pinocchio-convention derivatives — build **pin-only**:

@@ -243,9 +243,9 @@ def register_robot(
         (MuJoCo-convention) kernel twins are not instantiated and their C-ABI entry
         points return rc=3 ("not built into this .so"). On a large floating-base
         non-mimic robot this is the difference between building and running out of
-        memory — the twins are ~2.1M of the ~2.4M SASS lines on g1-floating (the
-        ``idsva_so_world_frame`` twin alone is 28x its pin kernel), so pin-only builds
-        g1 in ~33 min at ~11 GB peak instead of exhausting a 62 GB box. Use it if you
+        memory — the second-order mjx twins are the largest kernels (``idsva_so_world_frame``
+        was 28x its pin kernel raw; block-parallelizing the epilogue cut it to 2.42x pin on
+        go2-floating), so pin-only builds g1 in ~33 min at ~11 GB peak. Use it if you
         do not need the MuJoCo output convention (GATO / PDDP second-order DDP, or
         anything reading Pinocchio-convention derivatives). No-op on fixed-base and
         mimic robots, which never get mjx twins. On a FLOATING base it is mutually
@@ -403,9 +403,9 @@ def register_robot(
             raise ValueError("algorithm_list must name at least one algorithm or profile")
         code_options["algorithm_list"] = sorted(set(algos))
     # Pin-only build: drop the mjx (MuJoCo output-convention) kernel twins. On a big
-    # floating-base non-mimic robot those twins dominate the build (~2.1M of ~2.4M SASS
-    # lines on g1-floating; idsva_so_world_frame's twin alone is 28x its pin kernel),
-    # which is what makes a humanoid .so exhaust a 62 GB box. Inject-only-when-False so
+    # floating-base non-mimic robot the second-order mjx twins are the largest kernels
+    # (idsva_so_world_frame's twin was 28x its pin kernel raw, cut to 2.42x by block-
+    # parallelizing the epilogue), still the bulk of a humanoid build. Inject-only-when-False so
     # every existing cache entry (keyed without this field) stays valid and a default
     # register_robot still reuses its .so. No-op on fixed-base and mimic robots, which
     # never get mjx twins -- but still re-keys, so it is only injected when asked for.

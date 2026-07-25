@@ -148,8 +148,10 @@ Build cost on large floating-base robots
 On a floating-base, non-mimic robot GRiD emits **two** variants of each
 kernel: the Pinocchio-convention ("pin") kernel and a MuJoCo-convention
 ("mjx") twin applying the ``G = blockdiag(R, I)`` output basis change.
-That convention change is cheap in principle but not in generated code.
-Measured on **g1-floating** (``nv=35``), mjx SASS relative to pin:
+That convention change is cheap in principle but was expensive in generated
+code; the second-order mjx epilogues have since been block-parallelized, which
+cut them substantially. Current mjx SASS relative to pin (measured
+**go2-floating**, ``nv=18``):
 
 .. list-table::
    :header-rows: 1
@@ -157,16 +159,14 @@ Measured on **g1-floating** (``nv=35``), mjx SASS relative to pin:
    * - Kernel
      - mjx / pin
    * - ``idsva_so_world_frame``
-     - **28.1x**
+     - **2.42x** (was 5.5x rolled / 28x raw)
    * - ``fdsva_so``
-     - 4.5x
-   * - ``inverse_dynamics_gradient``
-     - 2.9x
-   * - ``forward_dynamics``, ``minv``, ``crba``, ``aba``
+     - **1.41x** (was 3.0x)
+   * - ``inverse_dynamics_gradient``, ``forward_dynamics``, ``minv``, ``crba``
      - ~1.0x
 
-About **2.1M of the ~2.4M SASS lines** in a humanoid build are mjx-only —
-which is what makes such a build exhaust host RAM during ``nvcc``/``cicc``.
+The second-order mjx twins are still the largest kernels in a humanoid build,
+so if you do not need the MuJoCo convention, pin-only is lighter to compile.
 
 If you do not need the MuJoCo output convention, build pin-only:
 

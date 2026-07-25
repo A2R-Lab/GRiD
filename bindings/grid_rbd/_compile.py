@@ -231,10 +231,10 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # enable_mujoco_kernels=False builds a PIN-ONLY .so: the mjx (MuJoCo
     # output-convention) C-ABI entry points are dropped and, crucially, the mjx
     # kernel twins are never instantiated. On a big floating-base humanoid those
-    # twins dominate the build -- the mjx twin of a derivative/second-order kernel
-    # is far larger than its pin counterpart (measured g1-floating:
-    # idsva_so_world_frame 28.1x, fdsva_so 4.5x, inverse_dynamics_gradient 2.9x),
-    # ~2.1M of ~2.4M SASS lines. Opting out lets a pin-only consumer (GATO/PDDP
+    # twins are still the largest kernels -- the mjx second-order twins were far
+    # larger than their pin counterparts (idsva_so_world_frame was 28x raw), but the
+    # epilogues have since been block-parallelized (go2-floating: idsva_so 2.42x,
+    # fdsva_so 1.41x pin). Opting out lets a pin-only consumer (GATO/PDDP
     # 2nd-order DDP, or anyone not using the MuJoCo convention) build a g1 .so in
     # ~33 min at ~11 GB peak instead of exhausting a 62 GB box. Default True keeps
     # the historical behavior byte-identical (inject-only-when-set discipline).
