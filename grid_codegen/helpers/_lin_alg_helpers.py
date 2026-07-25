@@ -31,6 +31,8 @@ _GLASS_BASE_FILES = [
     "src/base/L3/gemm.cuh",
     "src/base/L3/gemm_strided.cuh",
     "src/base/L3/gemm_batched_indexed.cuh",
+    "src/base/L3/gemm_reduced.cuh",   # contraction-parallel engine (reduced_tree32); dep of tensor_contract. MUST precede it.
+    "src/base/L3/tensor_contract.cuh", # tensor_vec_contract (idsva_so mjx sensitivity contractions). MUST follow gemm_reduced.
     "src/base/L3/inv.cuh",            # used by invert_matrix (floating-base 6x6 root invert)
     "src/base/L3/potrf.cuh",          # Cholesky factor (SPD); building block for posv/trsm
     "src/base/L3/trsm.cuh",           # triangular solve multi-RHS (needs flags + potrf)

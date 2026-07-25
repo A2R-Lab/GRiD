@@ -3922,7 +3922,27 @@ def _emit_idsva_so_mjx_output(self):
     vaf_band = 18 * NJ
     INNERTMP_off = VAF_off + vaf_band
     idgrad_temp = self.gen_inverse_dynamics_gradient_inner_temp_mem_size()
-    OUT_off = INNERTMP_off + idgrad_temp
+    # All-k sensitivity buffers (col-major per-k nv2 blocks) — the GLASS refactor:
+    # the per-k contractions d_dtdq/d_dtdqd/d_Msens (formerly 6*nv^3 fully-unrolled
+    # scalar loops = 94% of the mjx SASS) are precomputed for ALL k via block-level
+    # glass::tensor_vec_contract, then the per-k slab assembly repoints its (read-only)
+    # d_dtdq/d_dtdqd/d_Msens at D_*_all + k*nv2 (col-major, matches the slab layout).
+    # The sensitivity buffers OVERLAP the inner-temp region (s_mjx_tmp): s_mjx_tmp is
+    # live only during the 3 inner calls (Phase 0), and the sensitivity precompute +
+    # slab assembly run strictly AFTER (a sync separates them), so they are time-
+    # disjoint and can share the space. This keeps peak live = 3*nv^3 (sens) + 4*nv^3
+    # (out) = 7*nv^3 < 8*nv^3 without pushing past the idgrad_temp band.
+    DDTDQ_off  = INNERTMP_off
+    DDTDQD_off = DDTDQ_off + nv3
+    DMSENS_off = DDTDQ_off + 2 * nv3
+    JVEC_off   = DDTDQ_off + 3 * nv3   # jqk|jvk|jak = 3*nv shared band (rebuilt per k)
+    OUT_off = JVEC_off + 3 * nv
+    # Layout must fit the SO-temp region (>= 8*nv^3; see so_workspace_t_count). Fail
+    # fast at codegen if a robot overflows. Also guard the inner-temp overlap premise.
+    assert idgrad_temp <= 3 * nv3 + 3 * nv, \
+        f"idsva_so mjx: idgrad_temp {idgrad_temp} exceeds the overlapped sens band {3*nv3+3*nv} (nv={nv})"
+    assert OUT_off + 4 * nv3 <= 8 * nv3, \
+        f"idsva_so mjx scratch overflow: need {OUT_off + 4*nv3} > 8*nv^3={8*nv3} (nv={nv})"
     # tau base-linear = LINEAR part of base wrench f[0] = s_vaf[12*NJ+3..5] (spatial [ang;lin]).
     _fb = 12 * NJ
 
@@ -3932,6 +3952,10 @@ def _emit_idsva_so_mjx_output(self):
         "T *s_dc_du = d_mjx_scratch + " + str(DCDU_off) + ";   // pin dtau_dq | dtau_dqd",
         "T *s_vaf   = d_mjx_scratch + " + str(VAF_off) + ";   // id-value band (tau via f[0])",
         "T *s_mjx_tmp = d_mjx_scratch + " + str(INNERTMP_off) + ";   // reused-inner scratch (one at a time)",
+        "T *D_dtdq_all  = d_mjx_scratch + " + str(DDTDQ_off) + ";   // all-k d_dtdq  (col-major nv^2 blocks)",
+        "T *D_dtdqd_all = d_mjx_scratch + " + str(DDTDQD_off) + ";   // all-k d_dtdqd (col-major nv^2 blocks)",
+        "T *D_Msens_all = d_mjx_scratch + " + str(DMSENS_off) + ";   // all-k d_Msens (col-major nv^2 blocks)",
+        "T *s_jqk = d_mjx_scratch + " + str(JVEC_off) + "; T *s_jvk = d_mjx_scratch + " + str(JVEC_off + nv) + "; T *s_jak = d_mjx_scratch + " + str(JVEC_off + 2 * nv) + ";",
         "T *s_mjx_out = d_mjx_scratch + " + str(OUT_off) + ";   // 4*NV^3 mjx output band",
     ])
     # 1) id-value (vaf), 2) crba (dense M), 3) id-gradient (pin dtau_dq|dtau_dqd).
@@ -3952,6 +3976,11 @@ def _emit_idsva_so_mjx_output(self):
              d_temp_spill_name="nullptr", temp_spill_flag_name="false"))
     self.gen_add_sync()
 
+    # ---- GLASS all-k sensitivity precompute (replaces the 6*nv^3 unrolled per-k
+    #      contraction that was 94% of the mjx SASS) ----
+    _emit_idsva_so_mjx_precompute_sensitivities(self, nv)
+    self.gen_add_sync()
+
     # ---- block-parallel assembly (was single-thread; ~50% overhead at batch) ----
     # The natural parallel axis is k, the OUTER tensor-slab index: each k owns its
     # own thread-stack scratch (work1/work2/d_*), reads only shared read-only
@@ -3963,15 +3992,111 @@ def _emit_idsva_so_mjx_output(self):
     # the spilled buffers (cf. the fdsva_so spill bug). The dM Step3 base-rot frame
     # term (+= into O_dM[...,3+c]) reads O_dM written by Step1+2, so it follows a
     # sync and is parallelized over c in [0,3).
-    _emit_idsva_so_mjx_perk_assembly(self, nv)        # parallel over k
-    self.gen_add_sync()
-    _emit_idsva_so_mjx_dM_closed_form(self, nv)       # parallel over k, then over c (sync between)
+    # Emit the slab assembly + dM with `#pragma unroll 1` auto-prepended to every
+    # nv-/nv^2-bound loop (the 94% build-cost hot spot; see _ur1). Scoped wrappers so
+    # the helper blocks (_emit_jvq_jaq_block etc.) get rolled too; restored in finally.
+    _orig_lines, _orig_line = self.gen_add_code_lines, self.gen_add_code_line
+    def _rolled_lines(lst, *a, **k):
+        return _orig_lines(_ur1(list(lst), nv), *a, **k)
+    def _rolled_line(ln, *a, **k):
+        r = _ur1([ln], nv)
+        if len(r) == 2:
+            _orig_line(r[0])
+            return _orig_line(r[1], *a, **k)
+        return _orig_line(ln, *a, **k)
+    self.gen_add_code_lines, self.gen_add_code_line = _rolled_lines, _rolled_line
+    try:
+        _emit_idsva_so_mjx_perk_assembly(self, nv)        # parallel over k (loops rolled)
+        self.gen_add_sync()
+        _emit_idsva_so_mjx_dM_closed_form(self, nv)       # parallel over k, then over c (rolled)
+    finally:
+        self.gen_add_code_lines, self.gen_add_code_line = _orig_lines, _orig_line
     self.gen_add_sync()
     # ---- copy the mjx output band back over s_idsva_so (block-parallel) ----
     self.gen_add_parallel_loop("ci", str(4 * nv3))
     self.gen_add_code_line("s_idsva_so[ci] = s_mjx_out[ci];")
     self.gen_add_end_control_flow()
     self.gen_add_sync()
+
+
+def _emit_idsva_so_mjx_precompute_sensitivities(self, nv):
+    """GLASS refactor of the per-k sensitivity contractions (the 6*nv^3 fully-unrolled
+    scalar loops that were 94% of the mjx SASS). For every slab index k we need
+      d_dtdq [i,j] = sum_m T_d2q [i,j,m]*jqk[m] + sum_n T_cross[i,n,j]*jvk[n] + sum_l T_dM[i,l,j]*jak[l]
+      d_dtdqd[i,j] = sum_m T_cross[i,j,m]*jqk[m] + sum_n T_d2qd[i,j,n]*jvk[n]
+      d_Msens[i,l] = sum_m T_dM  [i,l,m]*jqk[m]
+    Each term is a 3-tensor x vector contraction, which glass::tensor_vec_contract
+    expresses in ONE rolled block op (contract axis picked by the TensorAxis enum, so
+    NO transpose; output is column-major = [i + j*nv], exactly the slab's d_*[j*nv+i]).
+    We loop k (block-cooperative), build the base-block-sparse jqk/jvk/jak into a small
+    shared band, and write the results to the all-k buffers D_*_all + k*nv2; the per-k
+    slab assembly then just repoints its read-only d_dtdq/d_dtdqd/d_Msens at those.
+    tensor_vec_contract is thread-count invariant + run-to-run bit-identical (warp
+    reduced_tree32), so determinism/invariance are preserved."""
+    nv2 = nv * nv
+    nv3 = nv * nv * nv
+    _fb = 12 * self.robot.get_num_joints()
+    self.gen_add_code_line("// --- GLASS all-k sensitivity precompute (tensor_vec_contract, replaces 6*nv^3 unroll) ---")
+    self.gen_add_code_line("{", True)
+    # R + base source vectors (register-local; same recompute the slab uses).
+    self.gen_add_code_lines(_emit_idsva_so_mjx_locals_lines(nv, nv3, _fb))
+    N = str(nv)
+    # #pragma unroll 1: the tensor_vec_contract block ops ARE the (rolled) fix; the
+    # k-loop around them must stay rolled too, else nvcc unrolls it nv-fold and
+    # replicates all 6 contractions (defeating the code-size win — measured 375k
+    # unrolled vs the target).
+    self.gen_add_code_line("#pragma unroll 1")
+    self.gen_add_code_line("for (int k = 0; k < " + N + "; k++) {", True)
+    # Build jqk/jvk/jak (base-block sparse) into the shared band on rank 0.
+    self.gen_add_code_line("if (threadIdx.x + threadIdx.y*blockDim.x == 0) {", True)
+    self.gen_add_code_lines([
+        "for (int q_ = 0; q_ < " + N + "; q_++) { s_jqk[q_] = static_cast<T>(0); s_jvk[q_] = static_cast<T>(0); s_jak[q_] = static_cast<T>(0); }",
+        "bool is_rot = (k >= 3 && k < 6);",
+        "int a_rot = k - 3;",
+        "if (k < 3) { s_jqk[0] = R[3*k+0]; s_jqk[1] = R[3*k+1]; s_jqk[2] = R[3*k+2]; }",
+        "else { s_jqk[k] = static_cast<T>(1); }",
+        "if (is_rot) {",
+        "  T evx = (a_rot==1)*( v_lin[2]) + (a_rot==2)*(-v_lin[1]);",
+        "  T evy = (a_rot==0)*(-v_lin[2]) + (a_rot==2)*( v_lin[0]);",
+        "  T evz = (a_rot==0)*( v_lin[1]) + (a_rot==1)*(-v_lin[0]);",
+        "  s_jvk[0] = -evx; s_jvk[1] = -evy; s_jvk[2] = -evz;",
+        "  T ovx = omega[1]*v_lin[2] - omega[2]*v_lin[1];",
+        "  T ovy = omega[2]*v_lin[0] - omega[0]*v_lin[2];",
+        "  T ovz = omega[0]*v_lin[1] - omega[1]*v_lin[0];",
+        "  T eqx = (a_rot==1)*( qdd_lin[2]) + (a_rot==2)*(-qdd_lin[1]);",
+        "  T eqy = (a_rot==0)*(-qdd_lin[2]) + (a_rot==2)*( qdd_lin[0]);",
+        "  T eqz = (a_rot==0)*( qdd_lin[1]) + (a_rot==1)*(-qdd_lin[0]);",
+        "  T eovx = (a_rot==1)*( ovz) + (a_rot==2)*(-ovy);",
+        "  T eovy = (a_rot==0)*(-ovz) + (a_rot==2)*( ovx);",
+        "  T eovz = (a_rot==0)*( ovy) + (a_rot==1)*(-ovx);",
+        "  T oevx = omega[1]*evz - omega[2]*evy;",
+        "  T oevy = omega[2]*evx - omega[0]*evz;",
+        "  T oevz = omega[0]*evy - omega[1]*evx;",
+        "  s_jak[0] = -eqx - eovx + oevx; s_jak[1] = -eqy - eovy + oevy; s_jak[2] = -eqz - eovz + oevz;",
+        "}",
+    ])
+    self.gen_add_end_control_flow()   # rank-0 build
+    self.gen_add_sync()
+    self.gen_add_code_lines([
+        "T *dq = D_dtdq_all + k*" + str(nv2) + ";",
+        "T *dqd = D_dtdqd_all + k*" + str(nv2) + ";",
+        "T *dM = D_Msens_all + k*" + str(nv2) + ";",
+        # first terms (contract the last stored axis = B for all; A for the middle-index
+        # cross/dM terms of d_dtdq are added below). Output col-major [i + j*nv].
+        "glass::tensor_vec_contract<T, " + N + ", " + N + ", " + N + ", glass::TensorAxis::B, false, false, true>(T_d2q, s_jqk, dq);",
+        "glass::tensor_vec_contract<T, " + N + ", " + N + ", " + N + ", glass::TensorAxis::B, false, false, true>(T_cross, s_jqk, dqd);",
+        "glass::tensor_vec_contract<T, " + N + ", " + N + ", " + N + ", glass::TensorAxis::B, false, false, true>(T_dM, s_jqk, dM);",
+    ])
+    self.gen_add_sync()   # first terms complete before the accumulating reads
+    self.gen_add_code_lines([
+        "glass::tensor_vec_contract<T, " + N + ", " + N + ", " + N + ", glass::TensorAxis::A, false, true, true>(T_cross, s_jvk, dq);",
+        "glass::tensor_vec_contract<T, " + N + ", " + N + ", " + N + ", glass::TensorAxis::B, false, true, true>(T_d2qd, s_jvk, dqd);",
+    ])
+    self.gen_add_sync()   # before dq's third accumulate reads dq
+    self.gen_add_code_line("glass::tensor_vec_contract<T, " + N + ", " + N + ", " + N + ", glass::TensorAxis::A, false, true, true>(T_dM, s_jak, dq);")
+    self.gen_add_sync()   # all reads of s_jqk/s_jvk/s_jak done before the next k rebuilds them
+    self.gen_add_end_control_flow()   # for k
+    self.gen_add_end_control_flow()   # scope
 
 
 def _emit_idsva_so_mjx_perk_assembly(self, nv):
@@ -3995,8 +4120,13 @@ def _emit_idsva_so_mjx_perk_assembly(self, nv):
     # d_Msens (persisted across the slab build), work1/work2 (A/inner_v/B reuse),
     # d_tau[nv], and the jqk/jvk/jak base-block columns. Declared per-iteration —
     # one private copy per thread, no cross-k sharing.
+    # d_dtdq/d_dtdqd/d_Msens are now READ-ONLY pointers into the all-k buffers filled
+    # by _emit_idsva_so_mjx_precompute_sensitivities (col-major nv*nv block per k) —
+    # the former 6*nv^3 fully-unrolled scalar contraction is gone.
     self.gen_add_code_lines([
-        "T d_dtdq[" + str(n * n) + "], d_dtdqd[" + str(n * n) + "], d_Msens[" + str(n * n) + "];",
+        "T *d_dtdq  = D_dtdq_all  + k*" + str(n * n) + ";",
+        "T *d_dtdqd = D_dtdqd_all + k*" + str(n * n) + ";",
+        "T *d_Msens = D_Msens_all + k*" + str(n * n) + ";",
         "T work1[" + str(n * n) + "], work2[" + str(n * n) + "];",
         "T d_tau[" + str(n) + "];",
         "T jqk[" + str(n) + "], jvk[" + str(n) + "], jak[" + str(n) + "];",
@@ -4049,25 +4179,9 @@ def _emit_idsva_so_mjx_perk_assembly(self, nv):
         "  }",
         "}",
     ])
-    # ---- sensitivities ----
-    self.gen_add_code_line("// sensitivities d_dtdq, d_dtdqd, d_Msens (col-major), d_tau")
+    # ---- d_tau (cheap nv^2; the nv^3 sensitivities are precomputed above) ----
+    self.gen_add_code_line("// d_tau[i] = sum_j (dtau_dq|dtau_dqd|M) . (jqk|jvk|jak)")
     self.gen_add_code_line("for (int i = 0; i < " + str(n) + "; i++) {", True)
-    self.gen_add_code_line("for (int j = 0; j < " + str(n) + "; j++) {", True)
-    self.gen_add_code_lines([
-        "T s = static_cast<T>(0);",
-        "for (int m = 0; m < " + str(n) + "; m++) s += T_d2q[" + t3("i", "j", "m") + "]*jqk[m];",
-        "for (int nn = 0; nn < " + str(n) + "; nn++) s += T_cross[" + t3("i", "nn", "j") + "]*jvk[nn];",
-        "for (int l = 0; l < " + str(n) + "; l++) s += T_dM[" + t3("i", "l", "j") + "]*jak[l];",
-        "d_dtdq[j*" + str(n) + " + i] = s;",
-        "T s2 = static_cast<T>(0);",
-        "for (int m = 0; m < " + str(n) + "; m++) s2 += T_cross[" + t3("i", "j", "m") + "]*jqk[m];",
-        "for (int nn = 0; nn < " + str(n) + "; nn++) s2 += T_d2qd[" + t3("i", "j", "nn") + "]*jvk[nn];",
-        "d_dtdqd[j*" + str(n) + " + i] = s2;",
-        "T s3 = static_cast<T>(0);",
-        "for (int m = 0; m < " + str(n) + "; m++) s3 += T_dM[" + t3("i", "j", "m") + "]*jqk[m];",
-        "d_Msens[j*" + str(n) + " + i] = s3;",
-    ])
-    self.gen_add_end_control_flow()  # j
     self.gen_add_code_lines([
         "T st = static_cast<T>(0);",
         "for (int j = 0; j < " + str(n) + "; j++) st += s_dc_du[" + str(0) + " + j*" + str(n) + " + i]*jqk[j]"
@@ -4087,7 +4201,32 @@ def _emit_idsva_so_mjx_perk_assembly(self, nv):
 # col-major matrices X[c*nv + r]; the three jqk/jvk/jak vectors + Rd are in
 # scope from _emit_idsva_so_mjx_perk_assembly. Output written to O_d2q/O_cross/
 # O_d2qd row-major [(i*nv + j)*nv + k]. Transcribed from proto_idsva_so_emit_spec.py.
+#
+# ★ These slab bodies are the mjx build-cost hot spot: the dense reframe/rot_rows/
+# coupling/write matrix ops are O(nv^2) constant-bound loops that nvcc fully unrolls
+# -> ~94% of the mjx SASS (measured go2-floating: 351k of 375k). `_ur1` prepends
+# `#pragma unroll 1` to every nv-/nv^2-bound loop so they stay ROLLED, cutting the
+# mjx kernel 375k -> ~68k (29x -> 5.5x) with ZERO numeric change (same ops, rolled).
+# The FULL fix (block-parallel glass gemm/congruence, ~2x) is a tracked follow-up
+# (docs/open-tasks/b1b2_idsva_so_mjx_glass_2026-07-24.md).
 # ----------------------------------------------------------------------------
+def _ur1(lines, n):
+    """Prepend '#pragma unroll 1' before each nv- or nv^2-bound for-loop in a code
+    line list (leaves the tiny <3/<6/<9 base-block loops unrolled — they are cheap
+    and rolling them would only add loop overhead)."""
+    import re as _re
+    N = str(n)
+    pat = _re.compile(r'for \(int \w+ = \w+; \w+ < (' + _re.escape(N) + r'\*' + _re.escape(N)
+                      + r'|' + _re.escape(N) + r')\s*;')
+    out = []
+    for ln in lines:
+        s = ln.lstrip()
+        if pat.match(s):
+            out.append(ln[:len(ln) - len(s)] + "#pragma unroll 1")
+        out.append(ln)
+    return out
+
+
 def _emit_idsva_so_mjx_slab_d2q(self, n):
     """d2tau_dq2[:,:,k] = MAIN + CORR (form a)."""
     N = str(n)
