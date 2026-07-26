@@ -2,18 +2,18 @@
 
 The f_ext-gradient family blows the sm_120 ~99 KB smem cap on big robots. On h2_plus
 (floating nv=81) the FIRST-order kernel needs ~361 KB (two nv x 6NB outputs + minv's
-6*nv*nv F-region) and the dq kernel ~311 KB (the s_JTp/s_JTm -J^T FD pair) -- both
-UNLAUNCHABLE. Two surgical ladders fix this:
+6*nv*nv F-region) -- UNLAUNCHABLE. Two surgical ladders fix this:
 
   * first-order: 3-rung (rung 0 full; rung 1 spill s_dqdd; rung 2 ALSO spill s_dtau +
     route minv's F-region to the GRAD-section minv-F workspace offset). h2_plus lands
     rung 2 at ~74 KB; mid robots stop at rung 1; small robots keep rung 0.
-  * dq: 2-rung (rung 0 full; rung 1 spill the s_JTp/s_JTm pair to the SO band).
-    h2_plus lands rung 1 at ~50 KB.
+  * dq (ANALYTIC -dJ^T/dq): 2-rung (rung 0 full; rung 1 spill the MIMIC per-sub slab
+    to the SO band). Non-mimic robots write each sub-job to its unique output cell
+    (no slab) so both rungs collapse (no spill); only mimic robots (fr3) engage rung 1.
 
 The spill RELOCATES buffers (smem -> L2-pinned d_workspace); it must not change the
-result. f_ext is fully DETERMINISTIC (RNEA-backprop -J^T + minv + a dense GEMM + central
-FD), so this forces the deepest rung at codegen (a low GRID_CUDA_TARGET_SHARED_MEM_BYTES)
+result. f_ext is fully DETERMINISTIC (RNEA-backprop -J^T + minv + a dense GEMM + the
+analytic -dJ^T/dq fold), so this forces the deepest rung at codegen (a low GRID_CUDA_TARGET_SHARED_MEM_BYTES)
 and asserts the host-wrapper outputs are BIT-IDENTICAL to the unspilled full-smem rung
 (the oracle-validated path, checked vs pinocchio in test_cuda_f_ext_gradient_equivalence.py).
 A minimal id/minv/f_ext_gradient codegen subset keeps the SO kernels out of the header so
@@ -164,7 +164,7 @@ def test_cuda_f_ext_gradient_spill_matches_full(tmp_path, robot_id, base_mode):
     q = np.asarray(sample.q, dtype=np.float64)[:nq]
     full_out = _run(full_exe, q)
     deep_out = _run(deep_exe, q)
-    # dtau (-J^T, lane-0 serial reduce) and did_du (central FD of -J^T) are q-only and
+    # dtau (-J^T, lane-0 serial reduce) and did_du (analytic -dJ^T/dq fold) are q-only and
     # fully DETERMINISTIC -> assert BIT-IDENTICAL (the strongest output-spill relocation
     # check). dqdd = -Minv @ dtau depends on minv, whose GLASS articulated-body reduction
     # reorders fp32 adds (the same inversion/atomic non-determinism osc_inertia hit, §14):
@@ -208,8 +208,12 @@ def test_cuda_f_ext_gradient_h2plus_launches(tmp_path):
     cg = _gen(robot, tmp_path, 98304)  # at the real sm_120 target, perf MUST already spill
     assert cg.f_ext_gradient_spill_tier_3way[0] == 2, \
         f"h2_plus first-order did not land the deep rung at the sm_120 target (got {cg.f_ext_gradient_spill_tier_3way})"
-    assert cg.f_ext_gradient_dq_spill_tier_3way[0] == 1, \
-        f"h2_plus dq did not land the spill rung at the sm_120 target (got {cg.f_ext_gradient_dq_spill_tier_3way})"
+    # The ANALYTIC -dJ^T/dq kernel loads s_XImats ONCE and (for the non-mimic h2_plus)
+    # writes each sub-job to its unique output cell -> NO large scratch, NO slab. So it
+    # fits at TIER_SHARED with NO spill (was the ~311 KB s_JTp/s_JTm FD pair that forced
+    # rung 1). The de-FD removed the h2_plus dq spill entirely -- the win this asserts.
+    assert cg.f_ext_gradient_dq_spill_tier_3way[0] == 0, \
+        f"h2_plus analytic dq should fit at TIER_SHARED without spilling (got {cg.f_ext_gradient_dq_spill_tier_3way})"
     exe = _compile(tmp_path, arch, floating=True)
     # identity floating config: xyz=0, quat xyzw=(0,0,0,1), joints=0 -> finite, valid.
     q = np.zeros(nq, dtype=np.float64)

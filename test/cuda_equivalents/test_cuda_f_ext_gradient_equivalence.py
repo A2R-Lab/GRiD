@@ -13,14 +13,13 @@ outputs against the RBDReference + pinocchio oracle:
                                   closed form) on BOTH fixed and floating base
 
 All three are q-only (f_ext enters RNEA additively & linearly), so the runner
-reads only q. The A.3 block (-dJ^T/dq) is emitted for BOTH base modes: the EMITTED
-CUDA kernel central-finite-differences -J^T on-device (fixed base perturbs each q
-coordinate by a scalar q[i] += h; floating base perturbs the root (jid 0) along
-its 6-DoF twist via the on-device SE(3) Lie-group retract grid_integrate_floating_q,
-revolute joints keep the scalar add). The numpy RBDReference oracle it is compared
-against is now the ANALYTIC closed form for both base modes (the floating root's 6
-motion-subspace columns slot into the same Featherstone -crm(S)X pushdown), and the
-pinocchio cross-check stays self.integrate(q, dv) FD-of-exact.
+reads only q. The A.3 block (-dJ^T/dq) is emitted for BOTH base modes as the
+ANALYTIC closed form -- both the EMITTED CUDA kernel and the numpy RBDReference
+oracle use RBDReference.f_ext_jacobian_transpose_dq's d col_{i,j}/d q_m =
+-X_{m->i}(S_m x col_{m,j}) (Featherstone dX[m]/dq_m = -crm(S_m)X[m]); the floating
+root's 6 motion-subspace columns slot into the same pushdown with no SE(3) FD. Since
+both sides are the same closed form, A.3 holds to a TIGHT f32 floor (was central-FD
+vs analytic at ~5e-3). The pinocchio cross-check stays self.integrate(q, dv) FD-of-exact.
 
 Gated iiwa14 (fixed, all three) plus go2 / g1 (floating, all three).
 """
@@ -49,20 +48,22 @@ from test.cuda_equivalents.test_cuda_executable_equivalence import (
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_f_ext_gradient_runner.cu")
 
-# (robot_id, base_mode). iiwa14 (fixed) exercises all three outputs incl. the
-# A.3 -dJ^T/dq block (scalar FD); go2 / g1 (floating) exercise all three incl.
-# the A.3 block via the SE(3) Lie-group root retract. fr3 (fixed + floating) is a
-# MIMIC robot: its mimic joint shares its target's reduced v-slot, so its
-# geometric-Jacobian column folds (alpha-weighted) into that shared column — the
-# mimic path in _f_ext_gradient.py's J^T inner. (The full default profile pulls in
-# the still-refused integrator gradients for mimic robots, so fr3 is codegen'd with
-# the 'f-ext-gradient' profile {id, minv, f_ext_grad}; non-mimic cases use 'all'.)
+# (robot_id, base_mode). The A.3 -dJ^T/dq block is the ANALYTIC closed form for all.
+# iiwa14 (fixed) + go2 / g1 (floating) are NON-MIMIC: each sub-job writes its unique
+# output cell directly (no slab). fr3 (fixed + floating) and h1_2 (floating) are MIMIC:
+# a mimic joint shares its target's reduced v-slot, so its column folds (alpha-weighted)
+# into that shared slot -- the per-sub SLAB + deterministic serial reduce path. h1_2's
+# slab (nsub ~ 3.4k -> ~81 KB) exceeds the smem cap, so it exercises the MIMIC-SLAB
+# SPILL to the L2-pinned d_workspace SO band (the only case that does); fr3's fits in
+# smem. (The full default profile pulls in the still-refused integrator gradients for
+# mimic robots, so fr3 / h1_2 are codegen'd with the 'f-ext-gradient' profile
+# {id, minv, f_ext_grad}; non-mimic cases use 'all'.)
 _CASES = [("iiwa14", "fixed"), ("go2", "floating"), ("g1", "floating"),
-          ("fr3", "fixed"), ("fr3", "floating")]
+          ("fr3", "fixed"), ("fr3", "floating"), ("h1_2", "floating")]
 
 # Robots whose full default codegen profile would hit a still-refused mimic
 # gradient (integrator gradients); generate them with the f-ext-gradient profile.
-_MIMIC_FEG_PROFILE = {"fr3"}
+_MIMIC_FEG_PROFILE = {"fr3", "h1_2"}
 
 
 def _build_adapters(robot_id, base_mode):
@@ -167,13 +168,16 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
 
     failures = []
 
-    def _check(label, cuda_flat, ref_arr, pin_arr, tol_algo):
+    def _check(label, cuda_flat, ref_arr, pin_arr, tol_algo, f32_floor=5e-3):
         ref_arr = np.asarray(ref_arr, dtype=np.float64).reshape(-1)
         cuda_flat = np.asarray(cuda_flat, dtype=np.float64).reshape(-1)
         tol = get_tolerance(tol_algo, robot_id=robot_id)
         scale = max(1.0, float(np.max(np.abs(ref_arr))) if ref_arr.size else 1.0)
-        # float32 CUDA path: widen the absolute floor by the value magnitude.
-        atol = tol.atol + tol.rtol * scale + 5e-3 * scale
+        # float32 CUDA path: widen the absolute floor by the value magnitude. The
+        # -dJ^T/dq block is now ANALYTIC (was central-FD): both sides are the exact
+        # closed form, so it holds to a TIGHT f32 floor (was 5e-3 for the FD step),
+        # proving the de-FD. The first-order pair keeps the wider f32 floor.
+        atol = tol.atol + tol.rtol * scale + f32_floor * scale
         err_ref = float(np.max(np.abs(cuda_flat - ref_arr))) if ref_arr.size else 0.0
         if err_ref > atol:
             failures.append(f"{label}: CUDA-vs-RBDReference maxerr={err_ref:.3e} > {atol:.3e}")
@@ -203,6 +207,6 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
     for vj in range(nv):
         for col in range(6 * nb):
             cuda3[vj, col, :] = cuda_djt[vj + nv * col, :]
-    _check("did_du_dfext_dq", cuda3, a_djt, e_djt, "f_ext_grad_so")
+    _check("did_du_dfext_dq", cuda3, a_djt, e_djt, "f_ext_grad_so", f32_floor=2e-4)
 
     assert not failures, "f_ext_gradient CUDA equivalence failures:\n" + "\n".join(failures)

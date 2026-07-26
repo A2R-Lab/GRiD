@@ -5,11 +5,11 @@
 //
 //   dtau_dfext      = -J^T          (nv x 6*NB)            [A.1]
 //   dqdd_dfext      =  M^{-1} J^T   (nv x 6*NB)            [A.2]
-//   did_du_dfext_dq = -dJ^T/dq      (nv x 6*NB x nv)       [A.3, fixed base only]
+//   did_du_dfext_dq = -dJ^T/dq      (nv x 6*NB x nv)       [A.3, both base modes]
 //
 // All three are q-only (f_ext enters RNEA additively & linearly), so the runner
 // reads ONLY q on stdin (NUM_JOINTS values, project layout). The A.3 block is
-// emitted for fixed-base robots only; it is printed iff GRID_HAS_F_EXT_GRADIENT_DQ.
+// emitted for both base modes; it is printed iff GRID_HAS_F_EXT_GRADIENT_DQ.
 //
 // Output: BEGIN/END framed, column-major print (row + rows*col), matching the
 // other cuda_equivalents runners so test_cuda_executable_equivalence._parse_runner_output
@@ -21,8 +21,8 @@
 
 #include "grid.cuh"
 
-// The A.3 (-dJ^T/dq) host wrapper is now emitted for BOTH base modes (fixed:
-// scalar FD; floating: SE(3) Lie-group root retract via grid_integrate_floating_q).
+// The A.3 (-dJ^T/dq) host wrapper is emitted for BOTH base modes as the ANALYTIC
+// closed form (the free-flyer root is subsumed by the per-column S loop, no FD).
 #ifndef GRID_CUDA_FLOATING_BASE
 #define GRID_CUDA_FLOATING_BASE 0
 #endif

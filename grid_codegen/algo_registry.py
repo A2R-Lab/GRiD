@@ -414,6 +414,7 @@ class ArenaCtx:
     dccrba_sJ: int
     fpg_inner: int
     feg_inner: int
+    feg_dq_jobs: int   # number of analytic -dJ^T/dq sub-jobs (mimic slab sizing)
     minv_inner: int
     minv_F: int
     minv_noF: int
@@ -552,6 +553,7 @@ def arena_ctx_from_codegen(gen, xi=None, xhom=None, rt=None) -> ArenaCtx:
         dccrba_sJ=gen._dccrba_sweep_J_count(),
         fpg_inner=gen.gen_forward_dynamics_parameter_gradient_inner_temp_mem_size(),
         feg_inner=gen.gen_f_ext_gradient_inner_temp_mem_size(),
+        feg_dq_jobs=gen.gen_f_ext_gradient_dq_num_jobs(),
         minv_inner=gen.gen_minv_inner_temp_mem_size(),
         minv_F=gen.gen_minv_inner_F_size(),
         minv_noF=gen.gen_minv_inner_no_F_size(),
@@ -603,10 +605,10 @@ _ARENA_FULL_FNS: dict[str, Callable[[ArenaCtx], int]] = {
     "f_ext_gradient":
         lambda c: c.n + 2*(c.nv*6*c.NB) + c.nv*c.nv + max(c.feg_inner, c.minv_inner) + c.XI + c.rt,
     "f_ext_gradient_dq":
-        # + c.rt: FD loop recomputes XImats per perturbation -> rt_xfixed reserved under
-        # runtime_transform (matches the rt-aware kernel carve; §2 fix 2026-07-14). See the rung closure.
-        lambda c: c.n + (c.n + (c.nv if c.floating else 0) + 2*c.nv*6*c.NB
-                         + c.feg_inner + c.ximats_helper_temp) + c.XI + c.rt,
+        # ANALYTIC: s_XImats loaded ONCE + a MIMIC-only 6*nsub per-sub slab; == rung[0]. See
+        # the rung closure. + c.rt: the single load_update_XImats reserves rt_xfixed under
+        # runtime_transform (matches the rt-aware kernel carve; §2 fix 2026-07-14).
+        lambda c: c.n + ((6*c.feg_dq_jobs if c.has_mimic else 0) + c.ximats_helper_temp) + c.XI + c.rt,
     "inverse_dynamics_regressor":
         lambda c: (c.n + 2*c.nv) + c.nv*10*c.NB + 18*c.n + c.idr_inner + c.XI + c.rt,
     "forward_dynamics_parameter_gradient":
@@ -778,16 +780,13 @@ _ARENA_RUNG_FNS: dict[str, tuple[Callable[[ArenaCtx], int], ...]] = {
         lambda c: c.n + c.nv*c.nv + max(c.feg_inner, c.minv_noF) + c.XI + c.rt,                        # deep: both outs -> ws, minv no-F
     ),
     "f_ext_gradient_dq": (
-        # + c.rt: the FD loop RECOMPUTES XImats per perturbation, so under runtime_transform its
-        # load_update_XImats scratch reserves the rt_xfixed region (36*NJ) exactly like every other
-        # s_temp-domain arena. The imperative kernel carve (_f_ext_gradient_dq_smem_count -> the rt-aware
-        # gen_load_update_XImats_helpers_temp_mem_size) already includes it; this closure did NOT, so the
-        # launch macro under-counted by 36*NJ under rt (a §2 silent under-size, caught by
-        # test_shared_arena_covers_carve's rt cells 2026-07-14).
-        lambda c: c.n + (c.n + (c.nv if c.floating else 0) + 2*c.nv*6*c.NB
-                         + c.feg_inner + c.ximats_helper_temp) + c.XI + c.rt,  # full: both JT bufs in smem
-        lambda c: c.n + (c.n + (c.nv if c.floating else 0)
-                         + c.feg_inner + c.ximats_helper_temp) + c.XI + c.rt,  # spill: JT pair -> ws
+        # ANALYTIC -dJ^T/dq: s_XImats loaded ONCE (+ c.rt: that single load_update_XImats
+        # reserves the rt_xfixed region 36*NJ under runtime_transform). MIMIC robots carve a
+        # 6*nsub per-sub slab (folded in a deterministic serial reduce); non-mimic robots write
+        # each sub-job to its unique output cell, so no slab. The spill rung routes the slab to
+        # the d_workspace SO band, so both rungs collapse for non-mimic (no slab either way).
+        lambda c: c.n + ((6*c.feg_dq_jobs if c.has_mimic else 0) + c.ximats_helper_temp) + c.XI + c.rt,  # full: slab in smem
+        lambda c: c.n + c.ximats_helper_temp + c.XI + c.rt,                                              # spill: slab -> ws
     ),
     # ── 3.5e kinematics ladders (XmatsHom domain; degenerate 3rd rung == 2nd) ──
     "osc_inertia": (

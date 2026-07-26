@@ -554,6 +554,31 @@ unroll them → they roll for free (no `#pragma unroll 1` needed).
 - Same "single-block perf comes from in-block parallelism" mental model as §4; the trap is that the
   register-array form looked already-parallel (over k) but under-utilized threads and spilled.
 
+### 1v. A NON-static local `const T[]` array lands on the per-thread STACK → `cudaLaunchKernel` OOMs on a big robot (2026-07-26)
+
+**A kernel that bakes robot topology as function-local `const T foo[] = {...}` (NOT `static`) puts the
+array on the per-thread STACK.** For a small robot this is invisible; for a big one it is fatal. The
+analytic `f_ext_gradient_dq` kernel baked its sub-job 6-vecs as `const T fegdq_Sj[]`/`fegdq_Sm[]`; on
+H2 (nv=81, nsub=8022) each is 48 k floats = 192 KB, so the kernel's **stack frame hit 385 KB**
+(`cuobjdump -res-usage` → `STACK:385088`). The driver reserves local memory = stack_frame ×
+max_resident_threads across the WHOLE device (≈ threads/SM × #SMs), so 385 KB × ~270 k threads ≈ 100 GB →
+`cudaLaunchKernel` returns **`cudaErrorMemoryAllocation` "out of memory"** (error 2). Small robots
+launch; only the largest one fails.
+
+- **Fix = `static const`.** A function-local `static const` array with constant initializers goes to
+  constant/global memory (read-only, shared by all threads), NOT the stack. Stack frame drops to ~0.
+  Values are unchanged → **bit-identical output** (a storage-class change only; prior equivalence still
+  holds). Integer topology arrays (`fegdq_pre[]` etc.) were already `static const`; the float ones were
+  the leak.
+- **Tell:** `cudaErrorMemoryAllocation` on the *launch* (not a `cudaMalloc`) of ONLY the biggest robot,
+  q-independent (baked arrays don't depend on inputs). Confirm with `cuobjdump -res-usage <exe>` — a
+  large `STACK:` on a single-block kernel is the smell (same probe as §1u's register spill, different
+  cause: DATA on the stack vs WORKING arrays spilling).
+- **Gotcha:** the error surfaces at the *next* `gpuErrchkKernel`/sync after the failed launch, so the
+  reported `grid.cuh` line points at the sync, not the array. Distinct from §1u (that was per-thread
+  working arrays spilling to local; this is per-thread const DATA sitting on the stack). Sweep for the
+  same pattern in sibling emitters (the value −Jᵀ path's `feg_job_S[]` had the same latent leak).
+
 ---
 
 ## 2. Debugging methodology (what actually localizes a bug fast)

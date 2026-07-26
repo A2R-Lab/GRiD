@@ -24,9 +24,10 @@ The output layout is body-major: s_dtau_dfext is nv x (6*NB), column-major in th
 [v_row + nv*col] sense used by the rest of GRiD's dense gradient outputs.
 
 dqdd/dfext is -s_Minv @ s_dtau_dfext (a single nv x nv * nv x 6NB GEMM reusing the
-minv s_Minv). dJ^T/dq is central-FD of the analytic -J^T over each
-generalized coordinate (the same FD-on-Jacobian strategy the d2ee GPU path uses);
-the q-dot block is identically zero (J^T is q-only) and is not stored.
+minv s_Minv). dJ^T/dq is the ANALYTIC closed form of the -J^T q-derivative
+(RBDReference.f_ext_jacobian_transpose_dq: d col_{i,j}/d q_m = -X_{m->i}(S_m x
+col_{m,j}) via the Featherstone identity dX[m]/dq_m = -crm(S_m)X[m]); the q-dot
+block is identically zero (J^T is q-only) and is not stored.
 """
 
 
@@ -214,11 +215,15 @@ def gen_f_ext_gradient_jacobianT_inner(self):
         self.gen_add_code_line("static const int feg_job_i[]    = " + _ints(job_i) + ";")
         self.gen_add_code_line("static const int feg_job_vrow[] = " + _ints(job_vrow) + ";")
         flatS = [s for job in job_S for s in job]
-        self.gen_add_code_line("const T feg_job_S[] = " + _floats(flatS) + ";")
+        # static const -> constant/global (NOT per-thread stack): a non-static local
+        # const array is stack-resident, so a big robot's njobs*6 floats inflate the
+        # stack frame and cudaLaunchKernel can OOM reserving local memory across the
+        # device's resident threads (see the dq kernel's fegdq_Sj/Sm for the acute case).
+        self.gen_add_code_line("static const T feg_job_S[] = " + _floats(flatS) + ";")
         # MIMIC fold: per-job mimic multiplier alpha (only emitted for mimic robots
         # so non-mimic grid.cuh stays byte-identical; alpha == 1.0 for non-mimic).
         if HAS_MIMIC:
-            self.gen_add_code_line("const T feg_job_alpha[] = " + _floats(job_alpha) + ";")
+            self.gen_add_code_line("static const T feg_job_alpha[] = " + _floats(job_alpha) + ";")
 
         njobs = len(jobs)
         # Two-phase to avoid += races on shared (i, v_j) destinations: (1) each job
@@ -284,148 +289,267 @@ def gen_f_ext_gradient_output_size(self):
     return nv * 6 * NB
 
 
-def _f_ext_gradient_dq_smem_count(self):
-    """T-element shared count for the -dJ^T/dq kernel arena.
+def _f_ext_gradient_dq_jobs(self):
+    """Bake the ANALYTIC -dJ^T/dq sub-jobs (one per (source S-col, perturbed S-col)).
 
-    Layout in s_temp: s_qpert[n_pos] | s_JTp[nv*6NB] | s_JTm[nv*6NB] |
-    s_jt_temp[jt_inner] | s_xi_scratch[xi]. The XImats buffer + s_q live in their
-    own arena regions (declared via gen_XImats_helpers_temp_shared_memory_code).
+    A 1:1 transcription of RBDReference.f_ext_jacobian_transpose_dq. For body i,
+    chain joint j (source), and chain joint m in (j, i] (perturbed) the closed form
+    (Featherstone dX[m]/dq_m = -crm(S_m) X[m]) is
 
-    Floating base additionally needs an nv-sized velocity-perturbation buffer
-    (s_dv) for the SE(3) Lie-group retract that perturbs the root twist (and the
-    revolute joints) for the central FD -- the root's 6-DoF tangent cannot be a
-    scalar q[i] += h, it must go through grid_integrate_floating_q."""
+        d col_{i,j} / d q_m = -X_{m->i} ( S_m x col_{m,j} ),
+        col_{m,j} = X[m]..X[j+1] S_j    (pushdown to frame m; the 'pre' fold),
+        X_{m->i}  = X[i]..X[m+1]        (the 'post' fold).
+
+    Each (S_j column c_j, S_m column c_m) pair is one parallel sub-job. The CUDA
+    output is -dJ^T/dq (= d(inverse_dynamics_gradient)/dfext), which NEGATES the
+    oracle's dJT (oracle dcol = -(X_{m->i}(S_m x col))), so the per-sub contribution
+    is  +alpha_j*alpha_m * X_{m->i}(S_m x col_{m,j}).
+
+    Returns (NB, nv, subjobs); each sub-job is a dict:
+      { 'vj': source v-slot, 'i': body id, 'vm': perturbed v-slot,
+        'Sj': S_j column 6-vec (fold seed), 'Sm': S_m column 6-vec (crm operand),
+        'pre':  tf_chain[0:midx+1] = [j+1..m] (builds col_{m,j}),
+        'post': tf_chain[midx+1:]  = [m+1..i] (= X_{m->i} left-fold),
+        'alpha': alpha_j*alpha_m (mimic scaling; 1.0 for non-mimic) }
+
+    The multi-column S loop subsumes scalar revolute/prismatic joints (1 column,
+    1 v-slot) and the 6-column free-flyer root (one v-slot per twist column), so
+    the floating root needs no special case (same as the oracle)."""
+    import numpy as _np
     NB = self.robot.get_num_bodies()
     nv = self.robot.get_num_vel()
-    n_pos = self.robot.get_num_pos()
-    out6 = 6 * NB
-    jt_temp = self.gen_f_ext_gradient_inner_temp_mem_size()
+
+    def _vslots(jid):
+        try:
+            v = self.robot.get_joint_index_v(jid)
+        except Exception:
+            v = self.robot.get_joint_index_q(jid)
+        if isinstance(v, (list, tuple, _np.ndarray)):
+            return [int(x) for x in v]
+        return [int(v)]
+
+    def _Sof(jid):
+        S = _np.asarray(self.robot.get_S_by_id(jid), dtype=_np.float64)
+        if S.ndim == 1:
+            S = S.reshape(-1, 1)
+        return S
+
+    subjobs = []
+    for i in range(NB):
+        chain = sorted(self.robot.get_ancestors_by_id(i)) + [i]
+        for j in chain:
+            Sj = _Sof(j)
+            vj_list = _vslots(j)
+            # ordered chain joints (j, i] whose local transforms push S_j down
+            tf = []
+            mm = i
+            while mm != j:
+                tf.append(int(mm))
+                mm = self.robot.get_parent_id(mm)
+            tf = list(reversed(tf))  # j+1, j+2, ..., i
+            alpha_j = self._alpha_for_jid(j)
+            for cj in range(Sj.shape[1]):
+                vj = vj_list[cj] if cj < len(vj_list) else vj_list[-1]
+                Sjcol = [float(x) for x in Sj[:6, cj]]
+                for midx, m in enumerate(tf):
+                    Sm = _Sof(m)
+                    vm_list = _vslots(m)
+                    alpha_m = self._alpha_for_jid(m)
+                    pre = tf[:midx + 1]    # [j+1..m]  -> col_{m,j}
+                    post = tf[midx + 1:]   # [m+1..i]  -> X_{m->i}
+                    for cm in range(Sm.shape[1]):
+                        vm = vm_list[cm] if cm < len(vm_list) else vm_list[-1]
+                        Smcol = [float(x) for x in Sm[:6, cm]]
+                        subjobs.append({
+                            "vj": int(vj), "i": int(i), "vm": int(vm),
+                            "Sj": Sjcol, "Sm": Smcol,
+                            "pre": list(pre), "post": list(post),
+                            "alpha": float(alpha_j * alpha_m),
+                        })
+    return NB, nv, subjobs
+
+
+def gen_f_ext_gradient_dq_num_jobs(self):
+    """Number of analytic -dJ^T/dq sub-jobs (drives the mimic slab / ws sizing)."""
+    _, _, subjobs = _f_ext_gradient_dq_jobs(self)
+    return len(subjobs)
+
+
+def _f_ext_gradient_dq_smem_count(self, slab_in_smem=True):
+    """s_temp scratch T-count for the ANALYTIC -dJ^T/dq kernel.
+
+    Layout in s_temp: [s_dq_slab (6*nsub, MIMIC only)] | s_xi_scratch[xi]. The
+    s_XImats buffer + s_q live in their own arena regions (declared via
+    gen_XImats_helpers_temp_shared_memory_code); s_XImats is loaded ONCE for the
+    current q (the analytic path needs no per-coordinate recompute).
+
+    Non-mimic robots write each sub-job to its UNIQUE output cell in parallel, so
+    no slab is carved. Mimic robots fold shared alpha-weighted (v_j, v_m) slots in
+    a deterministic serial reduce over the per-sub slab; at the spilled rung the
+    slab routes to the L2-pinned d_workspace SO section (slab_in_smem=False)."""
     xi_scratch = self.gen_load_update_XImats_helpers_temp_mem_size()
-    dv_extra = nv if self.robot.floating_base else 0
-    return n_pos + dv_extra + 2 * nv * out6 + jt_temp + xi_scratch
+    if (not self.robot_has_mimic_joints()) or (not slab_in_smem):
+        return xi_scratch
+    return 6 * self.gen_f_ext_gradient_dq_num_jobs() + xi_scratch
 
 
-def _emit_f_ext_gradient_dq_perturb(self, sign):
-    """Emit the FD perturbation of s_q into s_qpert by `sign`*fd_h on coordinate qi.
+def _emit_f_ext_gradient_dq_body(self, out_ptr_expr, in_timestep_loop, slab_in_smem):
+    """Emit the per-timestep ANALYTIC -dJ^T/dq body. Assumes s_q (smem) and the
+    s_temp arena are declared; loads s_XImats ONCE for the current s_q, then builds
+    the closed form (RBDReference.f_ext_jacobian_transpose_dq) into `out_ptr_expr`
+    (a global or shared pointer to the nv*6NB*nv output for this timestep).
 
-    Fixed base: a plain scalar retract q[qi] += sign*h (re-seeded from s_q each
-    time). The position and velocity coordinates coincide, so this is exact.
-
-    Floating base: the root (jid 0) carries a 6-DoF SE(3) twist, so a scalar add
-    on the quaternion prefix is NOT the tangent perturbation the oracle uses. We
-    instead build a velocity perturbation dv (size nv, all zero except
-    dv[qi] = sign*h) and apply the SAME on-device Lie-group retract the integrator
-    uses, grid_integrate_floating_q(s_q, dv, s_qpert). For root qi in [0,6) this
-    is an SE(3)-exp of the perturbed twist (matching RBDReference.integrate, which
-    the numpy/pin oracle calls with dv[i]=h); for revolute qi >= 6 the helper's
-    tail does the plain Euler add q[7+...] += dv[6+...]. This makes the FD
-    perturbation uniform across root + joints and exactly mirrors the oracle."""
-    nv = self.robot.get_num_vel()
-    n_pos = self.robot.get_num_pos()
-    if not self.robot.floating_base:
-        # scalar retract: s_qpert = s_q then s_qpert[qi] += sign*h
-        self.gen_add_parallel_loop("ind", str(n_pos))
-        self.gen_add_code_line("s_qpert[ind] = s_q[ind];")
-        self.gen_add_end_control_flow()
-        self.gen_add_sync()
-        self.gen_add_serial_ops()
-        self.gen_add_code_line("s_qpert[qi] " + ("+= fd_h;" if sign > 0 else "-= fd_h;"))
-        self.gen_add_end_control_flow()
-        self.gen_add_sync()
-        return
-    # floating: build dv (nv) then grid_integrate_floating_q(s_q, dv, s_qpert).
-    self.gen_add_parallel_loop("ind", str(nv))
-    self.gen_add_code_line("s_dv[ind] = (ind == qi) ? (" + ("fd_h" if sign > 0 else "-fd_h") + ") : static_cast<T>(0);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
-    self.gen_add_serial_ops()
-    self.gen_add_code_line("grid_integrate_floating_q<T, " + str(n_pos) + ">(s_q, s_dv, s_qpert);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
-
-
-def _emit_f_ext_gradient_dq_body(self, out_ptr_expr, in_timestep_loop, jt_smem):
-    """Emit the per-timestep -dJ^T/dq FD body. Assumes s_q (smem), s_XImats, and
-    s_temp arena are already declared/loaded. Writes into `out_ptr_expr` (a global
-    or shared pointer to the nv*6NB*nv output for this timestep).
-
-    The per-coordinate perturbation is a scalar retract on a fixed base and an
-    SE(3) Lie-group retract on a floating base (see
-    _emit_f_ext_gradient_dq_perturb); both feed the same central FD of -J^T.
-
-    h2_plus-spill: the two nv x (6*NB) -J^T FD buffers (s_JTp, s_JTm) are the dominant
-    band (~288 KB on h2_plus). When jt_smem is False (rung 1) they live in the L2-pinned
-    d_workspace SO section (s_JTp at SO base, s_JTm at SO base + nv*6NB) and the smem layout
-    drops them; s_qpert/s_dv/s_jt_temp/s_xi_scratch stay hot in smem."""
+    Each sub-job (source S-col, perturbed S-col) folds col_{m,j} = X[m]..X[j+1] S_j
+    ('pre'), applies the motion cross S_m x col_{m,j} (crm_mul), then X_{m->i} =
+    X[i]..X[m+1] ('post'); the -dJ^T/dq contribution is +alpha*(that). Non-mimic
+    robots write each sub-job to its UNIQUE output cell in parallel (no slab). Mimic
+    robots stage each into a per-sub slab, then serial-reduce into the shared
+    alpha-weighted (v_j, v_m) slots in deterministic order. MIMIC spill: when
+    slab_in_smem is False the slab lives in the L2-pinned d_workspace SO section."""
     NB = self.robot.get_num_bodies()
     nv = self.robot.get_num_vel()
-    n_pos = self.robot.get_num_pos()
-    fb = self.robot.floating_base
     out6 = 6 * NB
-    jt_temp = self.gen_f_ext_gradient_inner_temp_mem_size()
+    out_each = nv * out6 * nv
+    HAS_MIMIC = self.robot_has_mimic_joints()
+    _, _, subjobs = _f_ext_gradient_dq_jobs(self)
+    nsub = len(subjobs)
+
     self.gen_add_code_line("T *s_f_ext_gradient_dq = " + out_ptr_expr + ";")
-    self.gen_add_code_line("const T fd_h = static_cast<T>(1e-3);")
-    self.gen_add_code_line("T *s_qpert = s_temp;")
-    dv_extra = nv if fb else 0
-    if fb:
-        # s_dv velocity-perturbation buffer (nv) lives at the head, after s_qpert.
-        self.gen_add_code_line("T *s_dv = &s_temp[" + str(n_pos) + "];")
-    base = n_pos + dv_extra
-    # The s_JTp/s_JTm pair occupies 2*nv*out6 smem slots only when jt_smem; when spilled,
-    # the smem layout closes that gap and the pair points at the d_workspace SO section.
-    jt_slot = 2 * nv * out6 if jt_smem else 0
-    self.gen_add_code_line("T *s_jt_temp = &s_temp[" + str(base + jt_slot) + "];")
-    self.gen_add_code_line("T *s_xi_scratch = &s_temp[" + str(base + jt_slot + jt_temp) + "];")
-    if jt_smem:
-        self.gen_add_code_line("T *s_JTp = &s_temp[" + str(base) + "];")
-        self.gen_add_code_line("T *s_JTm = &s_temp[" + str(base + nv * out6) + "];")
-        self.gen_add_code_line("(void)d_workspace;")
+    # s_temp: [s_dq_slab (mimic only)] | s_xi_scratch
+    slab = 6 * nsub if (HAS_MIMIC and slab_in_smem) else 0
+    if HAS_MIMIC and nsub > 0:
+        if slab_in_smem:
+            self.gen_add_code_line("T *s_dq_slab = s_temp;   // per-sub contribution slab, size " + str(6 * nsub))
+            self.gen_add_code_line("(void)d_workspace;")
+        else:
+            _ws_base = ("k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " if in_timestep_loop else "") + "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()"
+            self.gen_add_code_line("T *s_dq_slab = reinterpret_cast<T *>(&d_workspace[" + _ws_base + "]);   // spilled slab")
     else:
-        _ws_base = ("k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " if in_timestep_loop else "") + "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()"
-        self.gen_add_code_line("T *s_JTp = reinterpret_cast<T *>(&d_workspace[" + _ws_base + "]);")
-        self.gen_add_code_line("T *s_JTm = reinterpret_cast<T *>(&d_workspace[" + _ws_base + " + " + str(nv * out6) + "*sizeof(T)]);")
-    # loop over each q coordinate qi in [0, nv)
-    self.gen_add_code_line("for (int qi = 0; qi < " + str(nv) + "; ++qi) {", True)
-    # +h perturbation -> s_qpert
-    _emit_f_ext_gradient_dq_perturb(self, +1)
-    self.gen_load_update_XImats_helpers_function_call(updated_var_names={"s_q_name": "s_qpert", "s_temp_name": "s_xi_scratch"})
-    self.gen_add_sync()
-    self.gen_f_ext_gradient_inner_function_call(updated_var_names={
-        "s_dtau_dfext_name": "s_JTp", "s_q_name": "s_qpert", "s_temp_name": "s_jt_temp"})
-    self.gen_add_sync()
-    # -h perturbation -> s_qpert (re-seeded from s_q inside the perturb helper)
-    _emit_f_ext_gradient_dq_perturb(self, -1)
-    self.gen_load_update_XImats_helpers_function_call(updated_var_names={"s_q_name": "s_qpert", "s_temp_name": "s_xi_scratch"})
-    self.gen_add_sync()
-    self.gen_f_ext_gradient_inner_function_call(updated_var_names={
-        "s_dtau_dfext_name": "s_JTm", "s_q_name": "s_qpert", "s_temp_name": "s_jt_temp"})
-    self.gen_add_sync()
-    # central diff into output column qi: out[...][qi] = (JTp - JTm)/(2h).
-    # s_JTp/s_JTm already hold -J^T (the inner emits -J^T), so this is -dJ^T/dq.
-    # output layout: [ (row v_j) + nv*(6NB col) + nv*6NB*qi ]
-    self.gen_add_parallel_loop("ind", str(nv * out6))
-    self.gen_add_code_line("s_f_ext_gradient_dq[ind + " + str(nv * out6) + "*qi] = "
-                           "(s_JTp[ind] - s_JTm[ind]) / (static_cast<T>(2)*fd_h);")
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
-    self.gen_add_end_control_flow()  # for qi
-    # Restore s_XImats / s_q-state for the ORIGINAL q so any later use is correct.
+        self.gen_add_code_line("(void)d_workspace;")
+    self.gen_add_code_line("T *s_xi_scratch = &s_temp[" + str(slab) + "];")
+
+    # load s_XImats ONCE for the current q, then zero the full output (out-of-chain
+    # (i, m) cells stay zero; in-chain cells are each written by exactly one sub-job).
     self.gen_load_update_XImats_helpers_function_call(updated_var_names={"s_temp_name": "s_xi_scratch"})
     self.gen_add_sync()
+    self.gen_add_parallel_loop("ind", str(out_each))
+    self.gen_add_code_line("s_f_ext_gradient_dq[ind] = static_cast<T>(0);")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+
+    if nsub == 0:
+        return  # no perturbable chain (e.g. single-DoF robot): -dJ^T/dq == 0
+
+    # Bake the per-sub chains + 6-vecs as flat const arrays (bounded, O(nsub)).
+    pre_flat, pre_off, pre_len = [], [], []
+    post_flat, post_off, post_len = [], [], []
+    vj_arr, i_arr, vm_arr, Sj_arr, Sm_arr, alpha_arr = [], [], [], [], [], []
+    for sj in subjobs:
+        pre_off.append(len(pre_flat)); pre_len.append(len(sj["pre"])); pre_flat.extend(sj["pre"])
+        post_off.append(len(post_flat)); post_len.append(len(sj["post"])); post_flat.extend(sj["post"])
+        vj_arr.append(sj["vj"]); i_arr.append(sj["i"]); vm_arr.append(sj["vm"])
+        Sj_arr.append(sj["Sj"]); Sm_arr.append(sj["Sm"]); alpha_arr.append(sj["alpha"])
+
+    def _ints(vals):
+        return "{ " + ", ".join(str(v) for v in vals) + " }"
+
+    def _floats(vals):
+        return "{ " + ", ".join("static_cast<T>({:.17g})".format(v) for v in vals) + " }"
+
+    if len(pre_flat) == 0:
+        pre_flat = [0]   # avoid zero-size array
+    if len(post_flat) == 0:
+        post_flat = [0]
+    self.gen_add_code_line("// analytic -dJ^T/dq sub-jobs (source col, perturbed col); s_XImats holds X[m] for the current q")
+    self.gen_add_code_line("static const int fegdq_pre[]      = " + _ints(pre_flat) + ";")
+    self.gen_add_code_line("static const int fegdq_pre_off[]  = " + _ints(pre_off) + ";")
+    self.gen_add_code_line("static const int fegdq_pre_len[]  = " + _ints(pre_len) + ";")
+    self.gen_add_code_line("static const int fegdq_post[]     = " + _ints(post_flat) + ";")
+    self.gen_add_code_line("static const int fegdq_post_off[] = " + _ints(post_off) + ";")
+    self.gen_add_code_line("static const int fegdq_post_len[] = " + _ints(post_len) + ";")
+    self.gen_add_code_line("static const int fegdq_vj[]       = " + _ints(vj_arr) + ";")
+    self.gen_add_code_line("static const int fegdq_i[]        = " + _ints(i_arr) + ";")
+    self.gen_add_code_line("static const int fegdq_vm[]       = " + _ints(vm_arr) + ";")
+    # static const -> constant/global memory (NOT per-thread stack). Non-static local
+    # const arrays land on the stack; for a big robot (H2: nsub=8022 -> 2x192 KB) that
+    # is a ~385 KB stack frame, and cudaLaunchKernel OOMs reserving local memory across
+    # the device's resident threads. static makes them read-only shared, off-stack.
+    self.gen_add_code_line("static const T fegdq_Sj[] = " + _floats([x for v in Sj_arr for x in v]) + ";")
+    self.gen_add_code_line("static const T fegdq_Sm[] = " + _floats([x for v in Sm_arr for x in v]) + ";")
+    if HAS_MIMIC:
+        self.gen_add_code_line("static const T fegdq_alpha[] = " + _floats(alpha_arr) + ";")
+
+    # parallel over sub-jobs: fold col_{m,j}, cross with S_m, push down X_{m->i}
+    self.gen_add_parallel_loop("sb", str(nsub))
+    self.gen_add_code_line("int po = fegdq_pre_off[sb]; int pl = fegdq_pre_len[sb];")
+    self.gen_add_code_line("int qo = fegdq_post_off[sb]; int ql = fegdq_post_len[sb];")
+    self.gen_add_code_line("T col[6];")
+    self.gen_add_code_line("#pragma unroll")
+    self.gen_add_code_line("for (int r = 0; r < 6; ++r) { col[r] = fegdq_Sj[6*sb + r]; }")
+    # pre fold: col := X[m] @ col for m in [j+1..m*]  -> col_{m,j}
+    self.gen_add_code_line("for (int s = 0; s < pl; ++s) {", True)
+    self.gen_add_code_line("const T *X = &s_XImats[36*fegdq_pre[po + s]];")
+    self.gen_add_code_line("T tmp[6];")
+    self.gen_add_code_line("#pragma unroll")
+    self.gen_add_code_line("for (int r = 0; r < 6; ++r) { tmp[r] = dot_prod<T,6,6,1>(&X[r], col); }")
+    self.gen_add_code_line("#pragma unroll")
+    self.gen_add_code_line("for (int r = 0; r < 6; ++r) { col[r] = tmp[r]; }")
+    self.gen_add_end_control_flow()
+    # cross: term = crm(S_m) @ col_{m,j}
+    self.gen_add_code_line("T Sm[6];")
+    self.gen_add_code_line("#pragma unroll")
+    self.gen_add_code_line("for (int r = 0; r < 6; ++r) { Sm[r] = fegdq_Sm[6*sb + r]; }")
+    self.gen_add_code_line("T term[6];")
+    self.gen_add_code_line("#pragma unroll")
+    self.gen_add_code_line("for (int r = 0; r < 6; ++r) { term[r] = crm_mul<T>(r, Sm, col); }")
+    # post fold: term := X[m2] @ term for m2 in [m+1..i]  -> X_{m->i} @ term
+    self.gen_add_code_line("for (int s = 0; s < ql; ++s) {", True)
+    self.gen_add_code_line("const T *X = &s_XImats[36*fegdq_post[qo + s]];")
+    self.gen_add_code_line("T tmp[6];")
+    self.gen_add_code_line("#pragma unroll")
+    self.gen_add_code_line("for (int r = 0; r < 6; ++r) { tmp[r] = dot_prod<T,6,6,1>(&X[r], term); }")
+    self.gen_add_code_line("#pragma unroll")
+    self.gen_add_code_line("for (int r = 0; r < 6; ++r) { term[r] = tmp[r]; }")
+    self.gen_add_end_control_flow()
+    # SIGN: output is -dJ^T/dq = -(oracle dJT); oracle dcol = -(X_{m->i}(S_m x col)),
+    # so the output contribution is +alpha*(X_{m->i}(S_m x col)) = +alpha*term.
+    if HAS_MIMIC:
+        # stage into the per-sub slab; the serial reduce folds shared v-slots below.
+        self.gen_add_code_line("T a = fegdq_alpha[sb];")
+        self.gen_add_code_line("#pragma unroll")
+        self.gen_add_code_line("for (int r = 0; r < 6; ++r) { s_dq_slab[6*sb + r] = a * term[r]; }")
+    else:
+        # non-mimic: each (v_j, i, v_m) cell is written by exactly one sub-job.
+        self.gen_add_code_line("int vj = fegdq_vj[sb]; int i = fegdq_i[sb]; int vm = fegdq_vm[sb];")
+        self.gen_add_code_line("#pragma unroll")
+        self.gen_add_code_line("for (int r = 0; r < 6; ++r) { s_f_ext_gradient_dq[vj + " + str(nv) + "*(6*i + r) + " + str(nv * out6) + "*vm] = term[r]; }")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+
+    if HAS_MIMIC:
+        # serial reduce (lane 0): fold each sub-job's slab into its output cell in a
+        # fixed order so shared alpha-weighted (v_j, v_m) mimic slots accumulate
+        # deterministically (mirrors the first-order J^T inner's reduce).
+        self.gen_add_code_line("// reduce per-sub contributions (serial to fold shared mimic v-slots deterministically)")
+        self.gen_add_serial_ops()
+        self.gen_add_code_line("for (int sb = 0; sb < " + str(nsub) + "; ++sb) {", True)
+        self.gen_add_code_line("int vj = fegdq_vj[sb]; int i = fegdq_i[sb]; int vm = fegdq_vm[sb];")
+        self.gen_add_code_line("#pragma unroll")
+        self.gen_add_code_line("for (int r = 0; r < 6; ++r) { s_f_ext_gradient_dq[vj + " + str(nv) + "*(6*i + r) + " + str(nv * out6) + "*vm] += s_dq_slab[6*sb + r]; }")
+        self.gen_add_end_control_flow()
+        self.gen_add_end_control_flow()
+        self.gen_add_sync()
 
 
 def gen_f_ext_gradient_dq_kernel(self, single_call_timing=False):
     """Emit f_ext_gradient_dq_kernel: the mixed second-order block
     d(inverse_dynamics_gradient)/dfext = -dJ^T/dq  (section A.3), size nv x (6*NB) x nv.
 
-    Central finite-difference of the analytic A.1 -J^T over each generalized
-    coordinate (the same FD-on-Jacobian approach the d2ee GPU path uses for the
-    kinematic Hessian). A velocity-coordinate perturbation equals q[i] += h
-    directly on a fixed base; on a floating base the root (jid 0) is perturbed
-    along its 6-DoF twist via the on-device SE(3) Lie-group retract
-    grid_integrate_floating_q (revolute joints keep the scalar add), exactly
-    mirroring the numpy + pinocchio oracle's self.integrate(q, dv) FD. The q-dot
-    block is identically zero (J^T is q-only) and is not emitted."""
+    ANALYTIC closed form (RBDReference.f_ext_jacobian_transpose_dq): the body-Jacobian
+    column derivative d col_{i,j}/d q_m = -X_{m->i}(S_m x col_{m,j}) via the
+    Featherstone identity dX[m]/dq_m = -crm(S_m)X[m]. Both fixed and floating base
+    (the 6-DoF free-flyer root is subsumed by the per-column S loop — no SE(3) FD).
+    The q-dot block is identically zero (J^T is q-only) and is not emitted."""
     NB = self.robot.get_num_bodies()
     nv = self.robot.get_num_vel()
     n_pos = self.robot.get_num_pos()
@@ -438,41 +562,38 @@ def gen_f_ext_gradient_dq_kernel(self, single_call_timing=False):
         "d_robotModel is the initialized model helpers on the GPU",
         "NUM_TIMESTEPS is the trajectory length (or timing reps)",
     ]
-    # h2_plus-spill: d_workspace 2nd arg backs the spilled s_JTp/s_JTm pair at rung 1.
+    # mimic-spill: d_workspace 2nd arg backs the spilled per-sub slab at rung 1 (mimic only).
     func_def_start = ("void f_ext_gradient_dq_kernel(T *d_f_ext_gradient_dq, unsigned char *d_workspace, "
                       "const T *d_q, const int stride_q, ")
     func_def_end = "const robotModel<T> *d_robotModel, const int NUM_TIMESTEPS) {"
     func_def = func_def_start + func_def_end
     if single_call_timing:
         func_def = func_def.replace("(", "_single_timing(")
-    self.gen_add_func_doc("Compute -dJ^T/dq = d(inverse_dynamics_gradient)/dfext (section A.3, fixed base, batched kernel)",
+    self.gen_add_func_doc("Compute -dJ^T/dq = d(inverse_dynamics_gradient)/dfext (section A.3, analytic, batched kernel)",
                           [], func_params, None)
     self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER, bool MUJOCO_OUTPUT = false>")
     self.gen_add_code_line("__global__")
     self.gen_add_code_line("__launch_bounds__(tier_max_threads<RESOURCE_TIER>())")
     self.gen_add_code_line(func_def, True)
-    _dq_full = _f_ext_gradient_dq_smem_count(self)
 
     def _emit_body(pick):
-        # pick 0: JT pair in smem (full arena). pick 1: spill the pair to d_workspace.
-        jt_smem = (pick == 0)
-        scratch = _dq_full if jt_smem else _dq_full - 2 * nv * out6
+        # pick 0: mimic slab in smem (full arena). pick 1: spill it to d_workspace.
+        slab_in_smem = (pick == 0)
+        scratch = _f_ext_gradient_dq_smem_count(self, slab_in_smem=slab_in_smem)
         self.gen_XImats_helpers_temp_shared_memory_code(
             scratch, extra_t_buffers=[("s_q", n_pos)], include_linalg_scratch=True)
-        if jt_smem:
-            self.gen_add_code_line("(void)d_workspace;")
         if not single_call_timing:
             self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
             self.gen_kernel_load_inputs("q", str(n_pos), stride="stride_q")
             self.gen_add_code_line("// compute")
-            _emit_f_ext_gradient_dq_body(self, "&d_f_ext_gradient_dq[k*" + str(out_each) + "]", in_timestep_loop=True, jt_smem=jt_smem)
+            _emit_f_ext_gradient_dq_body(self, "&d_f_ext_gradient_dq[k*" + str(out_each) + "]", in_timestep_loop=True, slab_in_smem=slab_in_smem)
             self.gen_add_end_control_flow()
         else:
             self.gen_kernel_load_inputs("q", str(n_pos))
             self.gen_add_code_line("// compute with NUM_TIMESTEPS as NUM_REPS for timing")
             self.gen_add_code_line("for (int rep = 0; rep < NUM_TIMESTEPS; rep++){", True)
             self.gen_anti_licm_input_reload("q", str(n_pos), feedback_from="f_ext_gradient_dq")
-            _emit_f_ext_gradient_dq_body(self, "d_f_ext_gradient_dq", in_timestep_loop=False, jt_smem=jt_smem)
+            _emit_f_ext_gradient_dq_body(self, "d_f_ext_gradient_dq", in_timestep_loop=False, slab_in_smem=slab_in_smem)
             self.gen_add_end_control_flow()
 
     picks = getattr(self, "f_ext_gradient_dq_spill_tier_3way", (0, 0, 0))
@@ -499,7 +620,7 @@ def gen_f_ext_gradient_dq_host(self, mode=0):
     if compute_only:
         func_def_start = func_def_start.replace("(", "_compute_only(")
         func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
-    self.gen_add_func_doc("Compute -dJ^T/dq = d(inverse_dynamics_gradient)/dfext (host wrapper, fixed base)", [], func_params, None)
+    self.gen_add_func_doc("Compute -dJ^T/dq = d(inverse_dynamics_gradient)/dfext (host wrapper, analytic)", [], func_params, None)
     self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line(func_def_start)
@@ -529,10 +650,11 @@ def gen_f_ext_gradient_dq_host(self, mode=0):
         func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"f_ext_gradient_dq\", F_EXT_GRADIENT_DQ_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
-    # h2_plus-spill: L2-pin d_workspace when the tier spills the s_JTp/s_JTm pair into it.
+    # mimic-spill: L2-pin d_workspace when the tier spills the per-sub slab into it
+    # (non-mimic robots never spill, so SLAB_IN_SMEM stays true and this is a no-op).
     _feg_dq_ws_bytes = ("GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()" if single_call_timing
                         else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(num_timesteps)")
-    self.gen_add_code_line("if (!F_EXT_GRADIENT_DQ_JT_IN_SMEM<RESOURCE_TIER>() && hd_data->d_workspace != nullptr) {gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, " + _feg_dq_ws_bytes + "));}")
+    self.gen_add_code_line("if (!F_EXT_GRADIENT_DQ_SLAB_IN_SMEM<RESOURCE_TIER>() && hd_data->d_workspace != nullptr) {gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, " + _feg_dq_ws_bytes + "));}")
     self.gen_add_code_lines(func_call_code)
     if not compute_only:
         self.gen_add_code_lines([
@@ -817,17 +939,14 @@ def gen_f_ext_gradient(self):
     """Emit the full f_ext-gradient family: J^T inner, device, kernels, hosts.
 
     A.1 (-J^T) and A.2 (M^-1 J^T) are emitted for ALL base modes. A.3 (-dJ^T/dq,
-    the mixed second-order block) is now emitted for BOTH base modes: fixed-base
-    perturbs each q coordinate by a scalar q[i] += h, floating-base perturbs the
-    root (jid 0) along its 6-DoF twist via the on-device SE(3) Lie-group retract
-    grid_integrate_floating_q (revolute joints keep the scalar add). The numpy +
-    pinocchio oracle ships A.3 for BOTH base modes."""
-    # The A.3 floating-base FD calls grid_integrate_floating_q (an SE(3) Lie-group
-    # helper). gen_f_ext_gradient runs BEFORE gen_integrator in gen_all_code, and
+    the mixed second-order block) is emitted for BOTH base modes as the ANALYTIC
+    closed form (RBDReference.f_ext_jacobian_transpose_dq); the 6-DoF free-flyer
+    root is subsumed by the per-column S loop with no SE(3) finite difference."""
+    # gen_f_ext_gradient runs BEFORE gen_integrator in gen_all_code. The floating
+    # integrator/integrator_gradient still need the SE(3) Lie-group helpers, and
     # ee_pose_hessian (the only other early emitter) may not be requested, so emit
-    # the Lie helpers here if floating and not already emitted (gen_integrator then
-    # skips its own emit via the same _lie_helpers_emitted flag, avoiding a C++
-    # redefinition).
+    # them here if floating and not already emitted (gen_integrator then skips its
+    # own emit via the same _lie_helpers_emitted flag, avoiding a C++ redefinition).
     if self.robot.floating_base and not getattr(self, "_lie_helpers_emitted", False):
         self.gen_lie_group_helpers()
         self._lie_helpers_emitted = True
