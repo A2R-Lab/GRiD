@@ -7,6 +7,9 @@ They appear only in the FIRST-order inverse_dynamics_gradient output, which
 fdsva_so already composes — never here.
 """
 
+# Shared block-parallel emit primitives (also used by _idsva_so). See _mjx_blockpar.
+from ._mjx_blockpar import bpfor as _bpfor, bpctrl as _bpctrl, stride_rc as _fbp
+
 MEMORY_THRESHOLD = 8 # Max num joints for shared mem allocation of result
 
 
@@ -915,40 +918,15 @@ def gen_fdsva_so_host(self, mode = 0):
         self.gen_add_code_line(single_call_printf_line("fdsva_so"))
     self.gen_add_end_function()
 
-def _bpctrl(var, n):
-    """Block-strided loop control (no trailing brace), so it substitutes into both
-    `for(...) stmt;` and `for(...) {` forms."""
-    N = str(n)
-    return ("for (int " + var + " = threadIdx.x + threadIdx.y*blockDim.x; " + var
-            + " < " + N + "; " + var + " += blockDim.x*blockDim.y)")
-
-
-def _fbp(lines, n):
-    """Make the full-nv `for r`/`for c` loops of an fdsva reusable block block-strided
-    (parallelize over rows / cols). Leaves `for a<3` and `for r/c=3` copy loops as-is.
-    Numerically identical to the serial form (only which thread computes each element
-    changes; all writes to a given (col,row) come from one thread)."""
-    N = str(n)
-    reps = [("for (int r = 0; r < " + N + "; r++)", _bpctrl("r", n)),
-            ("for (int c = 0; c < " + N + "; c++)", _bpctrl("c", n))]
-    out = []
-    for ln in lines:
-        for old, new in reps:
-            ln = ln.replace(old, new)
-        out.append(ln)
-    return out
-
-
 def _emit_fdsva_so_mjx_blockpar_assembly(self, n):
     """BLOCK-PARALLEL per-k assembly of all 4 fdsva_so mjx tensors. Same math as
-    _emit_fdsva_so_mjx_perk_assembly (transcribed from proto_fdsva_so_emit_spec.py)
+    the (removed) thread-per-k form (proto_fdsva_so_emit_spec.py)
     but the whole block cooperates on one k at a time: the 6 per-k nv^2 matrices
     (s_work1/s_work2/s_inner_u + sensitivities s_d_dq/s_d_dqd/s_d_Mi) are BLOCK-SHARED
     and every dense op is spread across the block (block-strided) with a sync between
     producers and consumers. Per-k scalars (R, jqk/jvk/juk/jvvk/juuk, Rd, d_qd[0:3])
     stay per-thread register-local, so per-element results are bit-identical to the
     thread-per-k form; only WHICH thread computes each nv^2 element changes."""
-    from ._idsva_so import _bpfor
     nv3 = n * n * n
     nv2 = n * n
     N = str(n)
@@ -1036,7 +1014,6 @@ def _emit_fdsva_so_mjx_blockpar_assembly(self, n):
 
 def _fbp_writeback(self, n, src, Oname):
     """Block-strided transpose writeback: O[i,j,k] = src[j*nv+i], over rows i."""
-    from ._idsva_so import _bpfor
     N = str(n)
     self.gen_add_code_lines([
         _bpfor("i", n),
@@ -1046,8 +1023,7 @@ def _fbp_writeback(self, n, src, Oname):
 
 
 def _emit_fbp_slab_d2q(self, n):
-    """d2qdd/dq2 slab, block-parallel. Mirrors _emit_fdsva_so_mjx_slab_d2q."""
-    from ._idsva_so import _bpfor
+    """d2qdd/dq2 slab, block-parallel. Transcribed from proto_fdsva_so_emit_spec.py."""
     N = str(n)
     self.gen_add_code_line("// --- d2qdd/dq2 slab[:,:,k] (block-parallel) ---")
     # P (value inner pin-accel gradient) into s_work1
@@ -1115,8 +1091,7 @@ def _emit_fbp_slab_d2q(self, n):
 
 
 def _emit_fbp_slab_cross(self, n):
-    """cross slab, block-parallel. Mirrors _emit_fdsva_so_mjx_slab_cross."""
-    from ._idsva_so import _bpfor
+    """cross slab, block-parallel. Transcribed from proto_fdsva_so_emit_spec.py."""
     N = str(n)
     self.gen_add_code_line("// --- cross (d2qdd/dqd dq) slab[:,:,k] (block-parallel) ---")
     self.gen_add_code_lines(_fbp(_fdsva_reframe_cols(n, "s_dqdd_dqd", "s_work1"), n)); self.gen_add_sync()
@@ -1160,8 +1135,7 @@ def _emit_fbp_slab_cross(self, n):
 
 
 def _emit_fbp_slab_d2qd(self, n):
-    """d2qdd/dqd2 slab, block-parallel. Mirrors _emit_fdsva_so_mjx_slab_d2qd."""
-    from ._idsva_so import _bpfor
+    """d2qdd/dqd2 slab, block-parallel. Transcribed from proto_fdsva_so_emit_spec.py."""
     N = str(n)
     self.gen_add_code_line("// --- d2qdd/dqd2 slab[:,:,k] (qvel perturb, R fixed) (block-parallel) ---")
     # dvQ[i,j] = sum_n d2qd[i,j,n]*jvvk[n] -> s_work1 (over rows i)
@@ -1199,8 +1173,7 @@ def _emit_fbp_slab_d2qd(self, n):
 
 
 def _emit_fbp_slab_dtdq(self, n):
-    """dtdq slab, block-parallel. Mirrors _emit_fdsva_so_mjx_slab_dtdq. Final in s_work2."""
-    from ._idsva_so import _bpfor
+    """dtdq slab, block-parallel. Transcribed from proto_fdsva_so_emit_spec.py. Final in s_work2."""
     N = str(n)
     self.gen_add_code_line("// --- d2qdd/du dq slab[:,:,k] (force perturb, R fixed) (block-parallel) ---")
     # du_dq[i,j] = sum_l T_dtdq[i,l,j]*juuk[l] -> s_work1 (over rows i)

@@ -2910,11 +2910,10 @@ class GRiDCodeGenerator:
                 continue
             # PIN and MJX are emitted as SEPARATE functions on purpose. The
             # MUJOCO_OUTPUT=true twin is a DISTINCT device function, and on the
-            # derivative/second-order kernels it is MASSIVELY larger than its pin
-            # counterpart (measured, g1-floating: idsva_so_world_frame 1,140,660 vs
-            # 40,541 SASS lines = 28.1x; fdsva_so 4.5x; inverse_dynamics_gradient
-            # 2.9x; first-order value kernels ~1.0x). That single instantiation is
-            # what drives cicc to 40 GB and a ~16 min compile. Splitting them lets a
+            # derivative/second-order kernels it is larger than its pin counterpart
+            # (idsva_so_world_frame was 28.1x pin raw; block-parallelizing the epilogue
+            # brought it to 2.42x, fdsva_so to 1.41x on go2-floating -- agent_debugging
+            # _guide 1u -- still the largest kernels). Splitting them lets a
             # consumer that never launches mjx kernels (the benchmark; any pin-only
             # user such as GATO/PDDP) pay NOTHING for them, while the floating-base
             # mjx wrappers still register theirs by calling the _mjx variant.
@@ -3234,13 +3233,13 @@ class GRiDCodeGenerator:
         # gated off: (1) the aggregate init_grid_kernel_attrs' mjx registration block
         # and (2) `#define GRID_RBD_WITH_MUJOCO`, which is what compiles the binding's
         # mjx C-ABI entry points. That matters because the mjx twin of a
-        # derivative/second-order kernel is MASSIVELY larger than its pin counterpart
-        # (measured g1-floating: idsva_so_world_frame 28.1x, fdsva_so 4.5x,
-        # inverse_dynamics_gradient 2.9x; first-order value kernels ~1.0x) -- ~2.1M of
-        # ~2.4M SASS lines in a humanoid build are mjx-only, which is what makes a
-        # big-humanoid robot.so OOM. Pin-only consumers (GATO/PDDP 2nd-order DDP, and
-        # anyone not using the MuJoCo output convention) can now opt out and pay none
-        # of it. Default True = existing behavior, byte-identical.
+        # derivative/second-order kernel is larger than its pin counterpart. Those
+        # twins used to be enormous (idsva_so_world_frame was 28x pin raw); the epilogue
+        # is now block-parallel (go2-floating: idsva_so 2.42x, fdsva_so 1.41x pin -- see
+        # docs/agent_debugging_guide.md 1u), but the second-order twins are still the
+        # largest kernels and the bulk of a big-humanoid build. Pin-only consumers
+        # (GATO/PDDP 2nd-order DDP, and anyone not using the MuJoCo output convention)
+        # can opt out and pay none of it. Default True = existing behavior, byte-identical.
         #
         # None (the default) means "consult GRID_ENABLE_MUJOCO_KERNELS, else True", so a
         # whole session can go pin-only without touching each of the ~50 gen_all_code

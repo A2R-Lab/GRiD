@@ -6,6 +6,9 @@ this file emits no damping term. The damping bias τ_damp = b·qd is linear in q
 They appear only in the FIRST-order inverse_dynamics_gradient output, never here.
 """
 
+# Shared block-parallel emit primitives (also used by _fdsva_so). See _mjx_blockpar.
+from ._mjx_blockpar import bpfor as _bpfor, stride_rc as _bp_stride_rloop
+
 SHARED_MEMORY_JOINT_THRESHOLD = 10 # Max shared memory threshold => Write directly to RAM
 
 # EXP-1 (perf_idsva_so_bigrobot.md): high-DOF FIXED-base robots route to the world-frame
@@ -4097,36 +4100,10 @@ def _emit_idsva_so_mjx_precompute_sensitivities(self, nv):
     self.gen_add_end_control_flow()   # scope
 
 
-def _bpfor(var, n):
-    """Block-strided loop header over [0,n): each thread walks a disjoint stride of
-    the index. The whole block executes it cooperatively (used INSIDE the plain `for
-    k` so the nv^2 matrix work of each slab is spread across all threads)."""
-    N = str(n)
-    return ("for (int " + var + " = threadIdx.x + threadIdx.y*blockDim.x; " + var
-            + " < " + N + "; " + var + " += blockDim.x*blockDim.y) {")
-
-
-def _bp_stride_rloop(lines, n):
-    """Take a coupling helper block (`for a<3 { <setup>; for r<nv { += } }`) and make
-    its single inner `for r` loop BLOCK-STRIDED — parallelize the rank-≤3 column
-    updates over rows. The `for a<3` stays executed by every thread (a few register
-    flops); for each a the row work is split, and every (3+a,r) element is written by
-    exactly one thread (its row owner). Numerically identical to the serial form."""
-    N = str(n)
-    tgt = "for (int r = 0; r < " + N + "; r++) {"
-    out = []
-    for ln in lines:
-        if ln.strip() == tgt:
-            out.append(ln[:len(ln) - len(ln.lstrip())] + _bpfor("r", n))
-        else:
-            out.append(ln)
-    return out
-
-
 def _emit_idsva_so_mjx_blockpar_assembly(self, nv):
     """BLOCK-PARALLEL per-k assembly of d2tau_dq2 / d2tau_dvdq(cross) / d2tau_dqd2.
 
-    Same math as `_emit_idsva_so_mjx_perk_assembly` (form (a), transcribed from
+    Same math as the (removed) thread-per-k form (form (a), transcribed from
     proto_idsva_so_emit_spec.py) but restructured: the outer `for k` is executed by
     the WHOLE block (rolled via `#pragma unroll 1`), and inside it each dense nv^2
     matrix op is spread across all threads via a block-strided loop over the
@@ -4300,7 +4277,7 @@ def _bp_write(n, Oname, src):
 
 
 def _emit_bp_slab_d2q(self, n, S):
-    """d2tau_dq2 slab, block-parallel. Mirrors _emit_idsva_so_mjx_slab_d2q."""
+    """d2tau_dq2 slab, block-parallel. Transcribed from proto_idsva_so_emit_spec.py."""
     N = str(n)
     self.gen_add_code_line("// --- d2tau_dq2 slab[:,:,k] = MAIN + CORR (block-parallel) ---")
     # MAIN
@@ -4329,7 +4306,7 @@ def _emit_bp_slab_d2q(self, n, S):
 
 
 def _emit_bp_slab_cross(self, n, S):
-    """d2tau_dvdq (cross) slab, block-parallel. Mirrors _emit_idsva_so_mjx_slab_cross."""
+    """d2tau_dvdq (cross) slab, block-parallel. Transcribed from proto_idsva_so_emit_spec.py."""
     N = str(n)
     self.gen_add_code_line("// --- d2tau_dvdq (cross) slab[:,:,k] (block-parallel) ---")
     # A1 = reframe(d_dtdqd) + d_Msens@Jav
@@ -4356,7 +4333,7 @@ def _emit_bp_slab_cross(self, n, S):
 
 
 def _emit_bp_slab_d2qd(self, n):
-    """d2tau_dqd2 slab, block-parallel. Mirrors _emit_idsva_so_mjx_slab_d2qd.
+    """d2tau_dqd2 slab, block-parallel. Transcribed from proto_idsva_so_emit_spec.py.
     Final result lands in s_work1 (like the thread-per-k form)."""
     N = str(n)
     self.gen_add_code_line("// --- d2tau_dqd2 slab[:,:,k] (qvel perturbation, R fixed) (block-parallel) ---")
@@ -4545,7 +4522,7 @@ def _emit_javd_block(n, src_M, dest):
 
 def _emit_idsva_so_mjx_dM_blockpar(self, n):
     """dM_dq (block3) closed form, BLOCK-PARALLEL. Same math as
-    _emit_idsva_so_mjx_dM_closed_form (Step1 reframe q-tangent, Step2 congruence,
+    the dM closed form (Step1 reframe q-tangent, Step2 congruence,
     Step3 base-rot frame) but the whole block cooperates per k / per c over the
     block-shared s_work1/s_work2 (no 2*nv^2 register-array spill). Only R (Step1/2)
     and R+Rdc (Step3) stay per-thread register-local."""
