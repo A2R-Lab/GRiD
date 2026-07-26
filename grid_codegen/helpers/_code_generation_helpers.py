@@ -88,6 +88,29 @@ def gen_add_code_line(self, new_code_line, add_indent_after = False):
     if add_indent_after:
         self.indent_level += 1
 
+def gen_bake_const_array(self, name, vals, elem="int"):
+    """Emit a baked compile-time constant array: `static const <elem> NAME[] = { ... };`.
+
+    The single chokepoint for baking robot-topology constants into a kernel. `elem`:
+      * "int"  -> plain integer elements (`str(int(v))`).
+      * else   -> a scalar type name (usually "T"); each element is wrapped
+                  `static_cast<elem>(<v:.17g>)` (full float64 round-trip precision).
+    An empty `vals` emits a 1-element `{ 0 }` placeholder (a zero-size array is illegal).
+
+    ALWAYS `static const` -> the array lives in constant/global memory, NOT the per-thread
+    STACK. A non-static local `const T[]` is stack-resident, so a big robot's baked arrays
+    inflate the stack frame and `cudaLaunchKernel` OOMs reserving device-wide local memory
+    (agent_debugging_guide §1v). Routing every baker through here makes that trap unrepeatable."""
+    if len(vals) == 0:
+        vals = [0]
+    if elem == "int":
+        body = "{ " + ", ".join(str(int(v)) for v in vals) + " }"
+        self.gen_add_code_line("static const int " + name + "[] = " + body + ";")
+    else:
+        body = "{ " + ", ".join("static_cast<" + elem + ">({:.17g})".format(float(v)) for v in vals) + " }"
+        self.gen_add_code_line("static const " + elem + " " + name + "[] = " + body + ";")
+
+
 def gen_add_code_lines(self, new_code_lines, add_indent_after = False):
     """Emit a list of code lines.
 

@@ -201,29 +201,19 @@ def gen_f_ext_gradient_jacobianT_inner(self):
             job_S.append(job["Scol"])
             job_alpha.append(job.get("alpha", 1.0))
 
-        def _ints(vals):
-            return "{ " + ", ".join(str(v) for v in vals) + " }"
-
-        def _floats(vals):
-            return "{ " + ", ".join("static_cast<T>({:.17g})".format(v) for v in vals) + " }"
-
-        if len(flat_chain) == 0:
-            flat_chain = [0]  # avoid zero-size array
-        self.gen_add_code_line("static const int feg_chain[]   = " + _ints(flat_chain) + ";")
-        self.gen_add_code_line("static const int feg_job_off[]  = " + _ints(job_off) + ";")
-        self.gen_add_code_line("static const int feg_job_len[]  = " + _ints(job_len) + ";")
-        self.gen_add_code_line("static const int feg_job_i[]    = " + _ints(job_i) + ";")
-        self.gen_add_code_line("static const int feg_job_vrow[] = " + _ints(job_vrow) + ";")
+        # gen_bake_const_array emits `static const` (off-stack; agent_debugging_guide §1v)
+        # and centralizes the zero-size guard + float format.
+        self.gen_bake_const_array("feg_chain", flat_chain, "int")
+        self.gen_bake_const_array("feg_job_off", job_off, "int")
+        self.gen_bake_const_array("feg_job_len", job_len, "int")
+        self.gen_bake_const_array("feg_job_i", job_i, "int")
+        self.gen_bake_const_array("feg_job_vrow", job_vrow, "int")
         flatS = [s for job in job_S for s in job]
-        # static const -> constant/global (NOT per-thread stack): a non-static local
-        # const array is stack-resident, so a big robot's njobs*6 floats inflate the
-        # stack frame and cudaLaunchKernel can OOM reserving local memory across the
-        # device's resident threads (see the dq kernel's fegdq_Sj/Sm for the acute case).
-        self.gen_add_code_line("static const T feg_job_S[] = " + _floats(flatS) + ";")
+        self.gen_bake_const_array("feg_job_S", flatS, "T")
         # MIMIC fold: per-job mimic multiplier alpha (only emitted for mimic robots
-        # so non-mimic grid.cuh stays byte-identical; alpha == 1.0 for non-mimic).
+        # so non-mimic grid.cuh stays alpha-free; alpha == 1.0 for non-mimic).
         if HAS_MIMIC:
-            self.gen_add_code_line("static const T feg_job_alpha[] = " + _floats(job_alpha) + ";")
+            self.gen_bake_const_array("feg_job_alpha", job_alpha, "T")
 
         njobs = len(jobs)
         # Two-phase to avoid += races on shared (i, v_j) destinations: (1) each job
@@ -450,34 +440,25 @@ def _emit_f_ext_gradient_dq_body(self, out_ptr_expr, in_timestep_loop, slab_in_s
         vj_arr.append(sj["vj"]); i_arr.append(sj["i"]); vm_arr.append(sj["vm"])
         Sj_arr.append(sj["Sj"]); Sm_arr.append(sj["Sm"]); alpha_arr.append(sj["alpha"])
 
-    def _ints(vals):
-        return "{ " + ", ".join(str(v) for v in vals) + " }"
-
-    def _floats(vals):
-        return "{ " + ", ".join("static_cast<T>({:.17g})".format(v) for v in vals) + " }"
-
-    if len(pre_flat) == 0:
-        pre_flat = [0]   # avoid zero-size array
-    if len(post_flat) == 0:
-        post_flat = [0]
+    # gen_bake_const_array emits `static const` -> constant/global memory, NOT the
+    # per-thread stack. A non-static local const array is stack-resident; for a big robot
+    # (H2: nsub=8022 -> 2x192 KB) that was a ~385 KB stack frame that OOMed cudaLaunchKernel
+    # reserving device-wide local memory (agent_debugging_guide §1v). It also centralizes the
+    # zero-size guard + float format.
     self.gen_add_code_line("// analytic -dJ^T/dq sub-jobs (source col, perturbed col); s_XImats holds X[m] for the current q")
-    self.gen_add_code_line("static const int fegdq_pre[]      = " + _ints(pre_flat) + ";")
-    self.gen_add_code_line("static const int fegdq_pre_off[]  = " + _ints(pre_off) + ";")
-    self.gen_add_code_line("static const int fegdq_pre_len[]  = " + _ints(pre_len) + ";")
-    self.gen_add_code_line("static const int fegdq_post[]     = " + _ints(post_flat) + ";")
-    self.gen_add_code_line("static const int fegdq_post_off[] = " + _ints(post_off) + ";")
-    self.gen_add_code_line("static const int fegdq_post_len[] = " + _ints(post_len) + ";")
-    self.gen_add_code_line("static const int fegdq_vj[]       = " + _ints(vj_arr) + ";")
-    self.gen_add_code_line("static const int fegdq_i[]        = " + _ints(i_arr) + ";")
-    self.gen_add_code_line("static const int fegdq_vm[]       = " + _ints(vm_arr) + ";")
-    # static const -> constant/global memory (NOT per-thread stack). Non-static local
-    # const arrays land on the stack; for a big robot (H2: nsub=8022 -> 2x192 KB) that
-    # is a ~385 KB stack frame, and cudaLaunchKernel OOMs reserving local memory across
-    # the device's resident threads. static makes them read-only shared, off-stack.
-    self.gen_add_code_line("static const T fegdq_Sj[] = " + _floats([x for v in Sj_arr for x in v]) + ";")
-    self.gen_add_code_line("static const T fegdq_Sm[] = " + _floats([x for v in Sm_arr for x in v]) + ";")
+    self.gen_bake_const_array("fegdq_pre", pre_flat, "int")
+    self.gen_bake_const_array("fegdq_pre_off", pre_off, "int")
+    self.gen_bake_const_array("fegdq_pre_len", pre_len, "int")
+    self.gen_bake_const_array("fegdq_post", post_flat, "int")
+    self.gen_bake_const_array("fegdq_post_off", post_off, "int")
+    self.gen_bake_const_array("fegdq_post_len", post_len, "int")
+    self.gen_bake_const_array("fegdq_vj", vj_arr, "int")
+    self.gen_bake_const_array("fegdq_i", i_arr, "int")
+    self.gen_bake_const_array("fegdq_vm", vm_arr, "int")
+    self.gen_bake_const_array("fegdq_Sj", [x for v in Sj_arr for x in v], "T")
+    self.gen_bake_const_array("fegdq_Sm", [x for v in Sm_arr for x in v], "T")
     if HAS_MIMIC:
-        self.gen_add_code_line("static const T fegdq_alpha[] = " + _floats(alpha_arr) + ";")
+        self.gen_bake_const_array("fegdq_alpha", alpha_arr, "T")
 
     # parallel over sub-jobs: fold col_{m,j}, cross with S_m, push down X_{m->i}
     self.gen_add_parallel_loop("sb", str(nsub))
