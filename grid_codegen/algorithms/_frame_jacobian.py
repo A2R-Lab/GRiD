@@ -427,29 +427,30 @@ def gen_frame_jacobian(self):
     self.gen_frame_jacobian_host(mode=2)
 
 
-# Finite-difference step for J-dot (mirrors RBDReference.frame_jacobian_dot,
-# which central-differences the analytic Jacobian along the integrator flow).
-_FRAME_JAC_DOT_FD_STEP = 1e-4
-
-
 def gen_frame_jacobian_dot_device(self):
-    """Emit frame_jacobian_dot_device: the time derivative Jdot of the
-    general-frame geometric Jacobian along v = qd.
+    """Emit frame_jacobian_dot_device: the ANALYTIC time derivative Jdot of the
+    general-frame geometric Jacobian along v = qd (6 x NUM_VEL).
 
-    Direct CUDA transcription of the RBDReference numpy oracle
-    (`RBDReference.frame_jacobian_dot`), which central-differences the analytic
-    `frame_jacobian` along the Lie-group integrator flow:
+    Direct CUDA transcription of the analytic RBDReference oracle
+    (`RBDReference.frame_jacobian_dot`). Differentiates the SAME world-axis
+    Jacobian `frame_jacobian_inner` builds (NOT a finite difference). Column i
+    owns joint j with world axis a_w = R_j S; the value and its time derivative
+    (R_j-dot = w_j x R_j, world point velocities) are, in the LWA basis:
 
-        Jdot = (J(integrate(q,+h*qd)) - J(integrate(q,-h*qd))) / (2h).
+        Jv[:,i]  = l_w + a_w x (p_f - p_j)            Jw[:,i]  = a_w
+        Jvd[:,i] = (w_j x a_w) x (p_f - p_j)
+                   + a_w x (v_f - v_j) + w_j x l_w     Jwd[:,i] = w_j x a_w
 
-    We integrate q on device (vector add for fixed base; SE(3) retract
-    `grid_integrate_floating_q` for floating base), rebuild the world-transform
-    machinery at each perturbed q, reuse `frame_jacobian_inner` to assemble J,
-    then difference. Correctness-first single-block (mirrors frame_jacobian)."""
-    n_pos = self.robot.get_num_pos()
+    with l_w = R_j S_lin (0 for a revolute col, so the form is BRANCHLESS), and
+    w_j / v_j the world angular / origin-linear velocities of joint j's frame from
+    a forward velocity sweep (rigid transport from the parent + each joint's own
+    S contribution), consistent with frame_jacobian_inner's own assembly. The
+    reference-frame derivative (WORLD / LOCAL) folds in the frame-velocity terms.
+    Correctness-first single-block (serial assembly, mirrors frame_jacobian_inner).
+    """
+    NJ = self.robot.get_num_joints()
     nv = self.robot.get_num_vel()
-    floating = self.robot.floating_base
-    step = _FRAME_JAC_DOT_FD_STEP
+    HAS_MIMIC = self.robot_has_mimic_joints()
 
     func_def = ("void frame_jacobian_dot_device(T *s_Jdot, const int target_jid, "
                 "const int reference_frame, const T *s_q, const T *s_qd, "
@@ -460,52 +461,183 @@ def gen_frame_jacobian_dot_device(self):
                    "s_q is the joint position vector",
                    "s_qd is the joint velocity vector v (Pinocchio order [v_lin; omega; joints] for floating base)",
                    "d_robotModel is the GPU model helpers"]
-    func_notes = ["Central finite difference of frame_jacobian along the integrator flow (matches the numpy oracle)."]
+    func_notes = ["Analytic Jdot (matches pinocchio getFrameJacobianTimeVariation); no finite difference."]
     self.gen_add_func_doc("Compute the time derivative of a general-frame geometric Jacobian",
                           func_notes, func_params, None)
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def, True)
 
-    # Arena: world-transform machinery + 3 scratch buffers (perturbed q and the
-    # two perturbed Jacobians). s_Jdot is a caller-provided function param.
-    extra = [("s_qpert", n_pos), ("s_Jp", 6 * nv), ("s_Jm", 6 * nv)]
+    # Arena: s_Xworld (16*NJ, chain-up) + world velocity scratch (w,v per joint) +
+    # the LWA value Jacobian (needed by the WORLD/LOCAL derivative fold). s_Jdot is
+    # the caller-provided output.
+    extra = [("s_wvel", 3 * NJ), ("s_vvel", 3 * NJ), ("s_Jval", 6 * nv)]
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
         _frame_jacobian_inner_temp_mem_size(self), extra_t_buffers=extra,
         include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
 
-    step_lit = "static_cast<T>({:.17g})".format(step)
-    self.gen_add_code_line("const T fj_h = " + step_lit + ";")
+    # ---- Step 1: build local homogeneous transforms for s_q, then world chain-up ----
+    self.gen_load_update_XmatsHom_helpers_function_call()
+    self.gen_add_code_line("const T *s_Xhom = s_XmatsHom;")
+    _emit_world_transform_chainup(self)
 
-    # Two passes: +h then -h. Build q_pert = integrate(q, sgn*h*qd), rebuild
-    # world transforms, assemble J into s_Jp / s_Jm.
-    for sgn, dest in (("static_cast<T>(1)", "s_Jp"), ("static_cast<T>(-1)", "s_Jm")):
-        self.gen_add_code_line("// perturb (" + ("+h" if dest == "s_Jp" else "-h") + "), rebuild transforms, assemble J -> " + dest)
-        if floating:
-            # Build v_dt = sgn*h*qd into a small per-thread scratch, then SE(3) retract.
-            self.gen_add_serial_ops()
-            self.gen_add_code_line("{")
-            self.gen_add_code_line("T v_dt[" + str(nv) + "];")
-            self.gen_add_code_line("for (int i = 0; i < " + str(nv) + "; ++i) v_dt[i] = (" + sgn + ") * fj_h * s_qd[i];")
-            self.gen_add_code_line("grid_integrate_floating_q<T, " + str(n_pos) + ">(s_q, v_dt, s_qpert);")
-            self.gen_add_code_line("}")
-            self.gen_add_end_control_flow()  # serial
-            self.gen_add_sync()
-        else:
-            self.gen_add_parallel_loop("i", str(n_pos))
-            self.gen_add_code_line("s_qpert[i] = s_q[i] + (" + sgn + ") * fj_h * s_qd[i];")
-            self.gen_add_end_control_flow()
-            self.gen_add_sync()
-        self.gen_load_update_XmatsHom_helpers_function_call(
-            updated_var_names=dict(s_q_name="s_qpert"))
-        self.gen_add_code_line("frame_jacobian_inner<T>(" + dest + ", target_jid, reference_frame, "
-                               "s_qpert, s_XmatsHom, d_robotModel, s_temp);")
+    # ---- Step 2: forward world-velocity sweep -> s_wvel[3*j], s_vvel[3*j] ----
+    self.gen_add_code_line("// Step 2: world angular (w) / origin-linear (v) velocity per joint frame")
+    self.gen_add_parallel_loop("i", str(3 * NJ))
+    self.gen_add_code_line("s_wvel[i] = static_cast<T>(0); s_vvel[i] = static_cast<T>(0);")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+
+    # Bake the sweep (BFS order, one entry per joint S-column; parent-before-child so
+    # the serial recursion reads final parent velocities). first==1 on a joint's first
+    # column triggers the rigid transport from its parent.
+    s_jid, s_par, s_vi, s_first, s_ang, s_lin, s_alpha = [], [], [], [], [], [], []
+    for level in range(self.robot.get_max_bfs_level() + 1):
+        for jid in self.robot.get_ids_by_bfs_level(level):
+            par = self.robot.get_parent_id(jid)
+            S = np.asarray(self.robot.get_S_by_id(jid), dtype=np.float64)
+            if S.ndim == 1:
+                S = S.reshape(-1, 1)
+            vinds = self.robot.get_joint_index_v(jid)
+            vinds = list(vinds) if isinstance(vinds, (list, tuple, np.ndarray)) else [vinds]
+            alpha = self._alpha_for_jid(jid) if HAS_MIMIC else 1.0
+            for c in range(S.shape[1]):
+                s_jid.append(jid); s_par.append(par)
+                s_vi.append(int(vinds[c] if c < len(vinds) else vinds[-1]))
+                s_first.append(1 if c == 0 else 0)
+                s_ang += [float(S[0, c]), float(S[1, c]), float(S[2, c])]
+                s_lin += [float(S[3, c]), float(S[4, c]), float(S[5, c])]
+                s_alpha.append(float(alpha))
+    nsweep = len(s_jid)
+    if nsweep > 0:
+        self.gen_bake_const_array("fjd_jid", s_jid, "int")
+        self.gen_bake_const_array("fjd_par", s_par, "int")
+        self.gen_bake_const_array("fjd_vi", s_vi, "int")
+        self.gen_bake_const_array("fjd_first", s_first, "int")
+        self.gen_bake_const_array("fjd_ang", s_ang, "T")
+        self.gen_bake_const_array("fjd_lin", s_lin, "T")
+        if HAS_MIMIC:
+            self.gen_bake_const_array("fjd_alpha", s_alpha, "T")
+        self.gen_add_serial_ops()
+        self.gen_add_code_line("for (int t = 0; t < " + str(nsweep) + "; ++t) {", True)
+        self.gen_add_code_line("int jid = fjd_jid[t]; int par = fjd_par[t]; int vi = fjd_vi[t];")
+        self.gen_add_code_line("const T *Xj = &s_Xworld[16*jid];")
+        self.gen_add_code_line("T *wj = &s_wvel[3*jid]; T *vj = &s_vvel[3*jid];")
+        # first column of the joint: rigid transport of the parent's motion to p_jid
+        self.gen_add_code_line("if (fjd_first[t] && par >= 0) {", True)
+        self.gen_add_code_line("const T *Xp = &s_Xworld[16*par]; const T *wp = &s_wvel[3*par]; const T *vp = &s_vvel[3*par];")
+        self.gen_add_code_line("T dx = Xj[12]-Xp[12], dy = Xj[13]-Xp[13], dz = Xj[14]-Xp[14];")
+        self.gen_add_code_line("wj[0]=wp[0]; wj[1]=wp[1]; wj[2]=wp[2];")
+        self.gen_add_code_line("vj[0]=vp[0]+(wp[1]*dz-wp[2]*dy); vj[1]=vp[1]+(wp[2]*dx-wp[0]*dz); vj[2]=vp[2]+(wp[0]*dy-wp[1]*dx);")
+        self.gen_add_end_control_flow()
+        # this column's own contribution: w += sc*(R_j S_ang), v += sc*(R_j S_lin)
+        self.gen_add_code_line("T a0=fjd_ang[3*t],a1=fjd_ang[3*t+1],a2=fjd_ang[3*t+2];")
+        self.gen_add_code_line("T l0=fjd_lin[3*t],l1=fjd_lin[3*t+1],l2=fjd_lin[3*t+2];")
+        self.gen_add_code_line("T aw0=Xj[0]*a0+Xj[4]*a1+Xj[8]*a2, aw1=Xj[1]*a0+Xj[5]*a1+Xj[9]*a2, aw2=Xj[2]*a0+Xj[6]*a1+Xj[10]*a2;")
+        self.gen_add_code_line("T lw0=Xj[0]*l0+Xj[4]*l1+Xj[8]*l2, lw1=Xj[1]*l0+Xj[5]*l1+Xj[9]*l2, lw2=Xj[2]*l0+Xj[6]*l1+Xj[10]*l2;")
+        self.gen_add_code_line("T sc = " + ("fjd_alpha[t]*" if HAS_MIMIC else "") + "s_qd[vi];")
+        self.gen_add_code_line("wj[0]+=sc*aw0; wj[1]+=sc*aw1; wj[2]+=sc*aw2;")
+        self.gen_add_code_line("vj[0]+=sc*lw0; vj[1]+=sc*lw1; vj[2]+=sc*lw2;")
+        self.gen_add_end_control_flow()  # for t
+        self.gen_add_end_control_flow()  # serial
         self.gen_add_sync()
 
-    # Jdot = (s_Jp - s_Jm) / (2h).
-    self.gen_add_parallel_loop("ind", str(6 * nv))
-    self.gen_add_code_line("s_Jdot[ind] = (s_Jp[ind] - s_Jm[ind]) / (static_cast<T>(2) * fj_h);")
-    self.gen_add_end_control_flow()
+    # ---- Step 3: per-column value (LWA) + its time derivative ----
+    self.gen_add_code_line("glass::set_const<T, " + str(6 * nv) + ">(static_cast<T>(0), s_Jval);")
+    self.gen_add_code_line("glass::set_const<T, " + str(6 * nv) + ">(static_cast<T>(0), s_Jdot);")
+    self.gen_add_sync()
+    # Column jobs: (target, jj, vi, ang, lin, alpha) -- same chain jobs as the value inner.
+    jobs = []
+    for jid in range(NJ):
+        chain = sorted(self.robot.get_ancestors_by_id(jid)) + [jid]
+        for jj in chain:
+            S = np.asarray(self.robot.get_S_by_id(jj), dtype=np.float64)
+            if S.ndim == 1:
+                S = S.reshape(-1, 1)
+            vinds = self.robot.get_joint_index_v(jj)
+            vinds = list(vinds) if isinstance(vinds, (list, tuple, np.ndarray)) else [vinds]
+            alpha = self._alpha_for_jid(jj) if HAS_MIMIC else 1.0
+            for c in range(S.shape[1]):
+                vi = vinds[c] if c < len(vinds) else vinds[-1]
+                jobs.append((jid, jj, int(vi),
+                             [float(S[0, c]), float(S[1, c]), float(S[2, c])],
+                             [float(S[3, c]), float(S[4, c]), float(S[5, c])], float(alpha)))
+    njobs = len(jobs)
+    if njobs > 0:
+        self.gen_bake_const_array("fjc_target", [j[0] for j in jobs], "int")
+        self.gen_bake_const_array("fjc_jj", [j[1] for j in jobs], "int")
+        self.gen_bake_const_array("fjc_vi", [j[2] for j in jobs], "int")
+        self.gen_bake_const_array("fjc_ang", [v for j in jobs for v in j[3]], "T")
+        self.gen_bake_const_array("fjc_lin", [v for j in jobs for v in j[4]], "T")
+        if HAS_MIMIC:
+            self.gen_bake_const_array("fjc_alpha", [j[5] for j in jobs], "T")
+        self.gen_add_serial_ops()
+        self.gen_add_code_line("const T *Xf = &s_Xworld[16*target_jid];")
+        self.gen_add_code_line("T pfx=Xf[12], pfy=Xf[13], pfz=Xf[14];")
+        self.gen_add_code_line("const T *wf = &s_wvel[3*target_jid]; const T *vf = &s_vvel[3*target_jid];")
+        self.gen_add_code_line("for (int t = 0; t < " + str(njobs) + "; ++t) {", True)
+        self.gen_add_code_line("if (fjc_target[t] != target_jid) continue;")
+        self.gen_add_code_line("int jj = fjc_jj[t]; int vi = fjc_vi[t];")
+        self.gen_add_code_line("const T *Xj = &s_Xworld[16*jj]; const T *wj = &s_wvel[3*jj]; const T *vj = &s_vvel[3*jj];")
+        self.gen_add_code_line("T a0=fjc_ang[3*t],a1=fjc_ang[3*t+1],a2=fjc_ang[3*t+2];")
+        self.gen_add_code_line("T l0=fjc_lin[3*t],l1=fjc_lin[3*t+1],l2=fjc_lin[3*t+2];")
+        self.gen_add_code_line("T aw0=Xj[0]*a0+Xj[4]*a1+Xj[8]*a2, aw1=Xj[1]*a0+Xj[5]*a1+Xj[9]*a2, aw2=Xj[2]*a0+Xj[6]*a1+Xj[10]*a2;")
+        self.gen_add_code_line("T lw0=Xj[0]*l0+Xj[4]*l1+Xj[8]*l2, lw1=Xj[1]*l0+Xj[5]*l1+Xj[9]*l2, lw2=Xj[2]*l0+Xj[6]*l1+Xj[10]*l2;")
+        self.gen_add_code_line("T dx=pfx-Xj[12], dy=pfy-Xj[13], dz=pfz-Xj[14];")
+        # value column (LWA): Jv = lw + aw x d ; Jw = aw
+        self.gen_add_code_line("T jv0 = lw0 + (aw1*dz-aw2*dy), jv1 = lw1 + (aw2*dx-aw0*dz), jv2 = lw2 + (aw0*dy-aw1*dx);")
+        # derivative: awd = w_j x aw
+        self.gen_add_code_line("T awd0 = wj[1]*aw2-wj[2]*aw1, awd1 = wj[2]*aw0-wj[0]*aw2, awd2 = wj[0]*aw1-wj[1]*aw0;")
+        self.gen_add_code_line("T dvx=vf[0]-vj[0], dvy=vf[1]-vj[1], dvz=vf[2]-vj[2];")
+        # Jvd = awd x d + aw x (v_f - v_j) + w_j x lw
+        self.gen_add_code_line("T jvd0 = (awd1*dz-awd2*dy) + (aw1*dvz-aw2*dvy) + (wj[1]*lw2-wj[2]*lw1);")
+        self.gen_add_code_line("T jvd1 = (awd2*dx-awd0*dz) + (aw2*dvx-aw0*dvz) + (wj[2]*lw0-wj[0]*lw2);")
+        self.gen_add_code_line("T jvd2 = (awd0*dy-awd1*dx) + (aw0*dvy-aw1*dvx) + (wj[0]*lw1-wj[1]*lw0);")
+        self.gen_add_code_line("T *Vc = &s_Jval[6*vi]; T *Dc = &s_Jdot[6*vi];")
+        if HAS_MIMIC:
+            self.gen_add_code_line("T al = fjc_alpha[t];")
+            self.gen_add_code_line("Vc[0]+=al*jv0; Vc[1]+=al*jv1; Vc[2]+=al*jv2; Vc[3]+=al*aw0; Vc[4]+=al*aw1; Vc[5]+=al*aw2;")
+            self.gen_add_code_line("Dc[0]+=al*jvd0; Dc[1]+=al*jvd1; Dc[2]+=al*jvd2; Dc[3]+=al*awd0; Dc[4]+=al*awd1; Dc[5]+=al*awd2;")
+        else:
+            self.gen_add_code_line("Vc[0]+=jv0; Vc[1]+=jv1; Vc[2]+=jv2; Vc[3]+=aw0; Vc[4]+=aw1; Vc[5]+=aw2;")
+            self.gen_add_code_line("Dc[0]+=jvd0; Dc[1]+=jvd1; Dc[2]+=jvd2; Dc[3]+=awd0; Dc[4]+=awd1; Dc[5]+=awd2;")
+        self.gen_add_end_control_flow()  # for t
+        self.gen_add_end_control_flow()  # serial
+        self.gen_add_sync()
+
+    # ---- Step 4: reference-frame derivative transform (in place per column) ----
+    # s_Jdot currently holds the LWA derivative; s_Jval the LWA value. WORLD/LOCAL
+    # fold in the frame-velocity terms (d/dt of the value inner's Step-4 transform).
+    self.gen_add_code_line("// Step 4: reference-frame transform of the derivative")
+    self.gen_add_serial_ops()
+    self.gen_add_code_line("const T *Xf2 = &s_Xworld[16*target_jid];")
+    self.gen_add_code_line("T Rf[9]; for (int c=0;c<3;++c) for (int r=0;r<3;++r) Rf[r+3*c] = Xf2[r + 4*c];")
+    self.gen_add_code_line("T pfx=Xf2[12], pfy=Xf2[13], pfz=Xf2[14];")
+    self.gen_add_code_line("const T *wf = &s_wvel[3*target_jid]; const T *vf = &s_vvel[3*target_jid];")
+    self.gen_add_code_line("for (int vi = 0; vi < " + str(nv) + "; ++vi) {", True)
+    self.gen_add_code_line("T *Dc = &s_Jdot[6*vi]; T *Vc = &s_Jval[6*vi];")
+    self.gen_add_code_line("T dv0=Dc[0],dv1=Dc[1],dv2=Dc[2], dw0=Dc[3],dw1=Dc[4],dw2=Dc[5];")
+    self.gen_add_code_line("T v0=Vc[0],v1=Vc[1],v2=Vc[2], w0=Vc[3],w1=Vc[4],w2=Vc[5];")
+    self.gen_add_code_lines([
+        "if (reference_frame == " + str(_REF_WORLD) + ") {",
+        # d/dt[ Jv + p_f x Jw ] = Jvd + v_f x Jw + p_f x Jwd ; angular unchanged.
+        "  Dc[0] = dv0 + (vf[1]*w2 - vf[2]*w1) + (pfy*dw2 - pfz*dw1);",
+        "  Dc[1] = dv1 + (vf[2]*w0 - vf[0]*w2) + (pfz*dw0 - pfx*dw2);",
+        "  Dc[2] = dv2 + (vf[0]*w1 - vf[1]*w0) + (pfx*dw1 - pfy*dw0);",
+        "} else if (reference_frame == " + str(_REF_LOCAL) + ") {",
+        # d/dt[ R_f^T J ] = R_f^T ( Jd - w_f x J ) for each 3-block.
+        "  T uv0 = dv0 - (wf[1]*v2 - wf[2]*v1), uv1 = dv1 - (wf[2]*v0 - wf[0]*v2), uv2 = dv2 - (wf[0]*v1 - wf[1]*v0);",
+        "  T uw0 = dw0 - (wf[1]*w2 - wf[2]*w1), uw1 = dw1 - (wf[2]*w0 - wf[0]*w2), uw2 = dw2 - (wf[0]*w1 - wf[1]*w0);",
+        "  Dc[0] = Rf[0]*uv0 + Rf[1]*uv1 + Rf[2]*uv2;",
+        "  Dc[1] = Rf[3]*uv0 + Rf[4]*uv1 + Rf[5]*uv2;",
+        "  Dc[2] = Rf[6]*uv0 + Rf[7]*uv1 + Rf[8]*uv2;",
+        "  Dc[3] = Rf[0]*uw0 + Rf[1]*uw1 + Rf[2]*uw2;",
+        "  Dc[4] = Rf[3]*uw0 + Rf[4]*uw1 + Rf[5]*uw2;",
+        "  Dc[5] = Rf[6]*uw0 + Rf[7]*uw1 + Rf[8]*uw2;",
+        "}",
+    ])
+    self.gen_add_end_control_flow()  # for vi
+    self.gen_add_end_control_flow()  # serial
     self.gen_add_sync()
     self.gen_add_end_function()
 

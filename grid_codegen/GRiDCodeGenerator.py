@@ -3832,12 +3832,12 @@ class GRiDCodeGenerator:
             self.gen_frame_jacobian()
             # E2 CUDA parity (opt-in siblings). Jdot/Lambda reuse frame_jacobian_inner.
             if "frame_jacobian_dot" in algorithms:
-                # Jdot arena = s_XmatsHom + extras(s_qpert[n_pos] + s_Jp[6nv] + s_Jm[6nv])
-                # + inner_temp(16*NJ). The launchable kernel keeps its input (s_q_qd)
-                # and output (s_frame_jacobian_dot) in STATIC __shared__ — NOT this
-                # dynamic arena, which the frame_jacobian_dot_device wrapper owns
+                # ANALYTIC Jdot arena = s_XmatsHom + extras(s_wvel[3*NJ] + s_vvel[3*NJ] +
+                # s_Jval[6nv]) + inner_temp(16*NJ, s_Xworld). The launchable kernel keeps
+                # its input (s_q_qd) and output (s_frame_jacobian_dot) in STATIC __shared__
+                # — NOT this dynamic arena, which the frame_jacobian_dot_device wrapper owns
                 # entirely — so this size matches the wrapper exactly.
-                fjd_t_count = Xhom_size_fj + n_pos_fj + (2 * 6 * nv_fj) + (16 * NJ_fj)
+                fjd_t_count = Xhom_size_fj + (6 * NJ_fj) + (6 * nv_fj) + (16 * NJ_fj)
                 self.gen_add_code_line(
                     "template <typename T> __host__ __device__ inline size_t FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES() "
                     "{ return grid_shared_arena_bytes<T>(" + str(fjd_t_count) +

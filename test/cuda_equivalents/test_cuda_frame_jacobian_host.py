@@ -156,11 +156,13 @@ def test_cuda_frame_jacobian_host_matches_reference(tmp_path, robot_id, base_mod
         rel_errs.append(float(np.max(np.abs(J_cuda - J_ref))) / denom)
 
         if "FJD" in out:
+            # Jdot is now ANALYTIC on BOTH sides (device + oracle) -> tight f32 tol,
+            # matching the value J check (was 5e-2 for the old central-FD device).
             Jd_ref = np.asarray(
                 project_model.frame_jacobian_dot(q, qd, leaf_name, _REF_FRAME),
                 dtype=np.float64)
             close(out["FJD"].reshape(6, nv, order="F"), Jd_ref, f"Jdot {tag}",
-                  rtol=5e-2, atol=5e-2)
+                  rtol=2e-3, atol=2e-3)
 
         if "LAM" in out:
             task = (J_ref @ np.asarray(project_model.minv(q), dtype=np.float64) @ J_ref.T)
