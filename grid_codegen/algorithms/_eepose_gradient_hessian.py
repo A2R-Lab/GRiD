@@ -628,16 +628,12 @@ def emit_geometric_jacobian_jvjw(self, nv, num_ees, single_jobs, multi_groups, h
             # Snap sub-threshold components to exact 0 (adding 0.0 never perturbs a finite float).
             job_ax.append([float(ax[c]) if abs(ax[c]) >= 1e-15 else 0.0 for c in range(3)])
 
-        def _int_arr(vals):
-            return "{ " + ", ".join(str(v) for v in vals) + " }"
-        def _ax_arr(vals):
-            return "{ " + ", ".join("static_cast<T>({:.17g})".format(v) for v in vals) + " }"
-
-        self.gen_add_code_line("static const int eeg_job_j[]    = " + _int_arr(job_j) + ";")
-        self.gen_add_code_line("static const int eeg_job_anc[]  = " + _int_arr(job_anc) + ";")
-        self.gen_add_code_line("static const int eeg_job_rev[]  = " + _int_arr(job_rev) + ";")
-        self.gen_add_code_line("static const int eeg_job_base[] = " + _int_arr(job_base) + ";")
-        self.gen_add_code_line("const T eeg_job_ax[] = " + _ax_arr([a for ax in job_ax for a in ax]) + ";")
+        # Baked topology via gen_bake_const_array -> `static const` (off-stack; §1v).
+        self.gen_bake_const_array("eeg_job_j", job_j, "int")
+        self.gen_bake_const_array("eeg_job_anc", job_anc, "int")
+        self.gen_bake_const_array("eeg_job_rev", job_rev, "int")
+        self.gen_bake_const_array("eeg_job_base", job_base, "int")
+        self.gen_bake_const_array("eeg_job_ax", [a for ax in job_ax for a in ax], "T")
         self.gen_add_parallel_loop("job_idx", str(n_flat))
         self.gen_add_code_line("int j   = eeg_job_j[job_idx];")
         self.gen_add_code_line("int ee_anchor = eeg_job_anc[job_idx];")
@@ -1841,12 +1837,10 @@ def gen_end_effector_pose_hessian_inner(self, fixed_target_name = ""):
         for (shape, pa_base, si_base, sj_base, pee_base, out_base, axis6) in same_table:
             int_flat.extend([shape, pa_base, si_base, sj_base, pee_base, out_base])
             ax_flat.extend(axis6)
-        int_literal = ", ".join(str(x) for x in int_flat)
-        ax_literal = ", ".join("static_cast<T>({:.17g})".format(v) for v in ax_flat)
         self.gen_add_code_line("// Same-joint (intra-joint) cells: one shared shape-switched body")
         self.gen_add_code_line("// driven by baked per-cell shape/offset + world-axis tables.")
-        self.gen_add_code_line("static const int s_d2ee_same_tab[" + str(len(int_flat)) + "] = {" + int_literal + "};")
-        self.gen_add_code_line("const T s_d2ee_same_axis[" + str(len(ax_flat)) + "] = {" + ax_literal + "};")
+        self.gen_bake_const_array("s_d2ee_same_tab", int_flat, "int")
+        self.gen_bake_const_array("s_d2ee_same_axis", ax_flat, "T")
         self.gen_add_code_line("if (d2m_cell >= " + str(n_cross) + " && d2m_cell < " + str(n_cross + n_same) + ") {", True)
         self.gen_add_code_line("int same_cell = d2m_cell - " + str(n_cross) + ";")
         _emit_d2M_same_joint_table_body(self, nv)

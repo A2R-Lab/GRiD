@@ -131,12 +131,10 @@ def gen_multi_target_position_inner(self, batch, suffix=""):
                       "//"],
         fixed_anchors=None)  # welded (fixed-joint) anchors: pass their (anchor,parent) here (W3)
 
-    # --- baked batch tables ---
+    # --- baked batch tables (via gen_bake_const_array -> `static const`, off-stack §1v) ---
     self.gen_add_code_line("// baked target batch: anchor frame id + LOCAL offset per target")
-    self.gen_add_code_line("static const int mt_anchor[" + str(n) + "] = {" +
-                           ", ".join(str(a) for a in batch["anchor"]) + "};")
-    self.gen_add_code_line("const T mt_offset[" + str(3 * n) + "] = {" +
-                           ", ".join("static_cast<T>({:.17g})".format(v) for v in batch["offset"]) + "};")
+    self.gen_bake_const_array("mt_anchor", batch["anchor"], "int")
+    self.gen_bake_const_array("mt_offset", batch["offset"], "T")
 
     # --- parallel extraction: one thread per (target, xyz) ---
     self.gen_add_code_line("//")
@@ -336,11 +334,11 @@ def gen_multi_target_position_gradient_inner(self, batch, suffix=""):
     single_jobs, multi_groups, has_mimic = group_jacobian_jobs(self, fill_jobs, anchors)
     emit_geometric_jacobian_jvjw(self, nv, n_anchor, single_jobs, multi_groups, has_mimic)
 
-    # Phase B: baked batch tables
+    # Phase B: baked batch tables (via gen_bake_const_array -> `static const`, off-stack §1v)
     self.gen_add_code_line("// baked batch: target -> anchor world-frame jid, target -> deduped anchor slot, LOCAL offset")
-    self.gen_add_code_line("static const int mt_anchor[" + str(n) + "] = {" + ", ".join(str(a) for a in batch["anchor"]) + "};")
-    self.gen_add_code_line("static const int mt_anchor_idx[" + str(n) + "] = {" + ", ".join(str(a) for a in anchor_idx_of_target) + "};")
-    self.gen_add_code_line("const T mt_offset[" + str(3 * n) + "] = {" + ", ".join("static_cast<T>({:.17g})".format(v) for v in batch["offset"]) + "};")
+    self.gen_bake_const_array("mt_anchor", batch["anchor"], "int")
+    self.gen_bake_const_array("mt_anchor_idx", anchor_idx_of_target, "int")
+    self.gen_bake_const_array("mt_offset", batch["offset"], "T")
     # Phase B pre-pass: rotate each target's LOCAL offset into world (vi-independent).
     self.gen_add_code_line("//")
     self.gen_add_code_line("// Phase B pre-pass: ro[t] = R_world[anchor(t)] @ offset(t)  (once per target)")

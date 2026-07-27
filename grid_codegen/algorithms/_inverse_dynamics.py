@@ -208,11 +208,9 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
             if self.robot.floating_base and j == 0:
                 return 0
             return self._v_slot_cpp(j)
-        vslot_arr = ", ".join(str(_vslot_tbl(j)) for j in range(n))
-        alpha_arr = ", ".join(repr(self._alpha_for_jid(j)) for j in range(n))
-        self.gen_add_code_line("// mimic per-body v-slot + multiplier tables")
-        self.gen_add_code_line("const int s_mimic_vslot[" + str(n) + "] = {" + vslot_arr + "};")
-        self.gen_add_code_line("const T s_mimic_alpha[" + str(n) + "] = {" + alpha_arr + "};")
+        self.gen_add_code_line("// mimic per-body v-slot + multiplier tables (static const, off-stack §1v)")
+        self.gen_bake_const_array("s_mimic_vslot", [_vslot_tbl(j) for j in range(n)], "int")
+        self.gen_bake_const_array("s_mimic_alpha", [self._alpha_for_jid(j) for j in range(n)], "T")
         self.gen_add_code_line("(void)s_mimic_vslot; (void)s_mimic_alpha;")
 
     HAS_SPHERICAL = self.robot.robot_has_spherical()

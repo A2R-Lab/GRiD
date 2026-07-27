@@ -499,19 +499,14 @@ def gen_centroidal_inner(self):
                 jobs.append((jid, jj, vi, ang, lin, alpha))
     njobs = len(jobs)
     if njobs > 0:
-        jid_arr = ", ".join(str(j[0]) for j in jobs)
-        jj_arr = ", ".join(str(j[1]) for j in jobs)
-        vi_arr = ", ".join(str(j[2]) for j in jobs)
-        ax_arr = ", ".join("static_cast<T>({:.17g})".format(v) for j in jobs for v in j[3])
-        lx_arr = ", ".join("static_cast<T>({:.17g})".format(v) for j in jobs for v in j[4])
-        self.gen_add_code_line("const int cj_jid[" + str(njobs) + "] = {" + jid_arr + "};")
-        self.gen_add_code_line("const int cj_jj[" + str(njobs) + "] = {" + jj_arr + "};")
-        self.gen_add_code_line("const int cj_vi[" + str(njobs) + "] = {" + vi_arr + "};")
-        self.gen_add_code_line("const T cj_ang[" + str(3 * njobs) + "] = {" + ax_arr + "};")
-        self.gen_add_code_line("const T cj_lin[" + str(3 * njobs) + "] = {" + lx_arr + "};")
+        # Baked topology via gen_bake_const_array -> `static const` (off-stack; §1v).
+        self.gen_bake_const_array("cj_jid", [j[0] for j in jobs], "int")
+        self.gen_bake_const_array("cj_jj", [j[1] for j in jobs], "int")
+        self.gen_bake_const_array("cj_vi", [j[2] for j in jobs], "int")
+        self.gen_bake_const_array("cj_ang", [v for j in jobs for v in j[3]], "T")
+        self.gen_bake_const_array("cj_lin", [v for j in jobs for v in j[4]], "T")
         if HAS_MIMIC:
-            al_arr = ", ".join("static_cast<T>({:.17g})".format(j[5]) for j in jobs)
-            self.gen_add_code_line("const T cj_alpha[" + str(njobs) + "] = {" + al_arr + "};")
+            self.gen_bake_const_array("cj_alpha", [j[5] for j in jobs], "T")
         # Serial accumulation (columns within one body can repeat vi across bodies;
         # different bodies write disjoint J slabs, but to keep it simple & correct
         # we accumulate serially). Correctness-first.

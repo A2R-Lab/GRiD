@@ -433,11 +433,9 @@ def gen_crba_inner(self):
     # owning jid's (they differ on branched robots). s_Sidx/s_Ssgn_by_jid are
     # compile-time per-joint tables looked up at runtime by parent id.
     max_ancestors = self.robot.get_max_num_ancestors()
-    S_idx_arr = "{" + ", ".join(str(self.robot.get_S_index_by_id(j)) for j in range(n)) + "}"
-    S_sgn_arr = "{" + ", ".join(str(self.robot.get_S_sign_by_id(j)) for j in range(n)) + "}"
     self.gen_add_parallel_loop("jid", str(n))
-    self.gen_add_code_line(f"const int s_Sidx_by_jid[{n}] = {S_idx_arr};")
-    self.gen_add_code_line(f"const T s_Ssgn_by_jid[{n}] = {S_sgn_arr};")
+    self.gen_bake_const_array("s_Sidx_by_jid", [self.robot.get_S_index_by_id(j) for j in range(n)], "int")
+    self.gen_bake_const_array("s_Ssgn_by_jid", [self.robot.get_S_sign_by_id(j) for j in range(n)], "T")
     parent_chain_init = "{" + "-1, " * (max_ancestors - 1) + "-1}" if max_ancestors >= 1 else "{-1}"
     self.gen_add_code_line(f"int jid_parents[] = {parent_chain_init};")
     self.gen_add_code_line("int num_parents = 0;")
@@ -537,8 +535,6 @@ def gen_crba_inner_floating(self):
         # k siblings ≥ 2 — fused per-level forward + backward. Wrap in a block
         # scope so per-level compile-time tables (s_jid_lvl, s_par_lvl) don't
         # collide across BFS levels emitted into the same function body.
-        jids_csv = ", ".join(str(j) for j in inds)
-        parents_csv = ", ".join(str(self.robot.get_parent_id(j)) for j in inds)
 
         self.gen_add_code_line("{", True)
         # Forward: alpha[slot] = X[jid]^T * IC[jid] for slot in [0, k).
@@ -548,8 +544,8 @@ def gen_crba_inner_floating(self):
         # so X^T[r,p] = X[p,r] is read via Xj[p + 6*r] in the column-major slab.
         # IC is also column-major: IC[p,c] = s_temp[ICOffset + 36*jid + p + 6*c].
         self.gen_add_code_line(f"// fused forward: {k} siblings, each computes 36 outputs (alpha[slot] = X[jid_slot]^T * IC[jid_slot])")
-        self.gen_add_code_line(f"const int s_jid_lvl[{k}] = {{{jids_csv}}};")
-        self.gen_add_code_line(f"const int s_par_lvl[{k}] = {{{parents_csv}}};")
+        self.gen_bake_const_array("s_jid_lvl", list(inds), "int")
+        self.gen_bake_const_array("s_par_lvl", [self.robot.get_parent_id(j) for j in inds], "int")
         self.gen_add_parallel_loop("el", str(36 * k))
         self.gen_add_code_line("int slot = el / 36;")
         self.gen_add_code_line("int rc = el % 36;")
@@ -579,9 +575,8 @@ def gen_crba_inner_floating(self):
         if self.robot.has_repeated_parents(inds):
             unique_parents = sorted(set(self.robot.get_parent_id(j) for j in inds))
             nup = len(unique_parents)
-            upar_csv = ", ".join(str(p) for p in unique_parents)
             self.gen_add_code_line("// fused backward (shared parents → deterministic parent-major fixed-order sum): IC[parent] += sum_slot alpha[slot] * X[jid_slot]")
-            self.gen_add_code_line(f"const int s_upar_lvl[{nup}] = {{{upar_csv}}};")
+            self.gen_bake_const_array("s_upar_lvl", unique_parents, "int")
             self.gen_add_parallel_loop("el", str(36 * nup))
             self.gen_add_code_line("int up = el / 36;")
             self.gen_add_code_line("int rc = el % 36;")
@@ -646,13 +641,11 @@ def gen_crba_inner_floating(self):
     self.gen_add_code_line("// each thread only touches M cells indexed by its own dof = jid+5.")
     self.gen_add_code_line("//")
     max_ancestors = max(1, self.robot.get_max_num_ancestors())
-    S_idx_arr = "{" + ", ".join(str(self.robot.get_S_index_by_id(j)) for j in range(NJ)) + "}"
-    S_sgn_arr = "{" + ", ".join(str(self.robot.get_S_sign_by_id(j)) for j in range(NJ)) + "}"
     self.gen_add_parallel_loop("jid_off", str(NJ - 1))
     self.gen_add_code_line("int jid = jid_off + 1;          // jid in [1, NJ)")
     self.gen_add_code_line(f"int dof = jid + 5;")
-    self.gen_add_code_line(f"const int s_Sidx_by_jid[{NJ}] = {S_idx_arr};")
-    self.gen_add_code_line(f"const T s_Ssgn_by_jid[{NJ}] = {S_sgn_arr};")
+    self.gen_bake_const_array("s_Sidx_by_jid", [self.robot.get_S_index_by_id(j) for j in range(NJ)], "int")
+    self.gen_bake_const_array("s_Ssgn_by_jid", [self.robot.get_S_sign_by_id(j) for j in range(NJ)], "T")
     # Per-jid compile-time ancestor chain (matches fixed-base's pattern, _crba.py:165-183).
     parent_chain_init = "{" + ", ".join(["-1"] * max_ancestors) + "}"
     self.gen_add_code_line(f"int jid_parents[{max_ancestors}] = {parent_chain_init};")

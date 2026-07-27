@@ -460,10 +460,9 @@ def _emit_q_update(self, scale_expr, dst_name, src_q_name="s_q", src_v_name="s_s
             # scoped: integrator_inner emits several q-update sites (stages 2-4 +
             # final assembly) into ONE function scope, so unscoped decls collide.
             self.gen_add_code_line("{", True)
-            self.gen_add_code_line(
-                "const int add_q[" + str(n_add) + "] = {" + ", ".join(str(i) for i in add_q) + "};")
-            self.gen_add_code_line(
-                "const int add_v[" + str(n_add) + "] = {" + ", ".join(str(i) for i in add_v) + "};")
+            # off-stack `static const` (§1v); each emit site has its own {} scope above.
+            self.gen_bake_const_array("add_q", add_q, "int")
+            self.gen_bake_const_array("add_v", add_v, "int")
             self.gen_add_parallel_loop("ind", str(n_add))
             self.gen_add_code_line(
                 f"{dst_name}[add_q[ind]] = {src_q_name}[add_q[ind]] + {scale_expr} * {src_v_name}[add_v[ind]]{_acc('add_v[ind]')};")

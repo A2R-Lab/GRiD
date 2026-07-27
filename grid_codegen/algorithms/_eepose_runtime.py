@@ -366,19 +366,14 @@ def gen_end_effector_pose_gradient_runtime_inner(self):
 
     njobs = len(jobs)
     if njobs > 0:
-        tj_arr = ", ".join(str(j[0]) for j in jobs)
-        jj_arr = ", ".join(str(j[1]) for j in jobs)
-        vi_arr = ", ".join(str(j[2]) for j in jobs)
-        ax_arr = ", ".join("static_cast<T>({:.17g})".format(v) for j in jobs for v in j[3])
-        lx_arr = ", ".join("static_cast<T>({:.17g})".format(v) for j in jobs for v in j[4])
-        self.gen_add_code_line("const int epg_target[" + str(njobs) + "] = {" + tj_arr + "};")
-        self.gen_add_code_line("const int epg_jj[" + str(njobs) + "] = {" + jj_arr + "};")
-        self.gen_add_code_line("const int epg_vi[" + str(njobs) + "] = {" + vi_arr + "};")
-        self.gen_add_code_line("const T epg_ang[" + str(3 * njobs) + "] = {" + ax_arr + "};")
-        self.gen_add_code_line("const T epg_lin[" + str(3 * njobs) + "] = {" + lx_arr + "};")
+        # Baked topology via gen_bake_const_array -> `static const` (off-stack; §1v).
+        self.gen_bake_const_array("epg_target", [j[0] for j in jobs], "int")
+        self.gen_bake_const_array("epg_jj", [j[1] for j in jobs], "int")
+        self.gen_bake_const_array("epg_vi", [j[2] for j in jobs], "int")
+        self.gen_bake_const_array("epg_ang", [v for j in jobs for v in j[3]], "T")
+        self.gen_bake_const_array("epg_lin", [v for j in jobs for v in j[4]], "T")
         if HAS_MIMIC:
-            al_arr = ", ".join("static_cast<T>({:.17g})".format(j[5]) for j in jobs)
-            self.gen_add_code_line("const T epg_alpha[" + str(njobs) + "] = {" + al_arr + "};")
+            self.gen_bake_const_array("epg_alpha", [j[5] for j in jobs], "T")
         self.gen_add_serial_ops()
         # p_ee = p_target + R_target * offset (column-major target block).
         self.gen_add_code_line("const T *Xf = &s_Xworld[16*target_jid];")

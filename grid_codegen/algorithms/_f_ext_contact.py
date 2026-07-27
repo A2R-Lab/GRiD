@@ -115,18 +115,15 @@ def gen_f_ext_contact_inner_temp_mem_size(self):
 
 
 def _emit_contact_tables(self, cs):
-    n, m = cs["n"], len(cs["uniq"])
-    self.gen_add_code_lines([
-        "// baked contact set: body id + LOCAL frame origin offset per contact",
-        "static const int fc_body[" + str(n) + "] = {" + ", ".join(str(v) for v in cs["jid"]) + "};",
-        "const T fc_offset[" + str(3 * n) + "] = {" +
-        ", ".join("static_cast<T>({:.17g})".format(v) for v in cs["offset"]) + "};",
-        "// body-grouped: one writer per output slot, fixed-order sums, NO atomics (determinism)",
-        "static const int fc_uniq[" + str(m) + "] = {" + ", ".join(str(v) for v in cs["uniq"]) + "};",
-        "static const int fc_start[" + str(m) + "] = {" + ", ".join(str(v) for v in cs["start"]) + "};",
-        "static const int fc_count[" + str(m) + "] = {" + ", ".join(str(v) for v in cs["count"]) + "};",
-        "static const int fc_ids[" + str(n) + "] = {" + ", ".join(str(v) for v in cs["ids"]) + "};",
-    ])
+    # baked contact set (all via gen_bake_const_array -> `static const`, off-stack §1v)
+    self.gen_add_code_line("// baked contact set: body id + LOCAL frame origin offset per contact")
+    self.gen_bake_const_array("fc_body", cs["jid"], "int")
+    self.gen_bake_const_array("fc_offset", cs["offset"], "T")
+    self.gen_add_code_line("// body-grouped: one writer per output slot, fixed-order sums, NO atomics (determinism)")
+    self.gen_bake_const_array("fc_uniq", cs["uniq"], "int")
+    self.gen_bake_const_array("fc_start", cs["start"], "int")
+    self.gen_bake_const_array("fc_count", cs["count"], "int")
+    self.gen_bake_const_array("fc_ids", cs["ids"], "int")
 
 
 def _emit_gh(self, fc_expr="s_f_c"):

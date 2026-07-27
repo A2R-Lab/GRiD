@@ -2372,12 +2372,14 @@ def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
     for t_idx, (j, a) in enumerate(zip(jids_a, ancestors)):
         t_index_map[j][a] = t_idx
 
-    # Emit CUDA code (NJ x NJ to match Python-side sizing above)
-    self.gen_add_code_line("const int t_index_map[{}][{}] = {{".format(NJ, NJ))
+    # Emit CUDA code (NJ x NJ to match Python-side sizing above). `static const`
+    # keeps this NJxNJ table OFF the per-thread stack (big-robot launch OOM; §1v);
+    # 2D so the many t_index_map[jid][anc] consumers below stay unchanged.
+    self.gen_add_code_line("static const int t_index_map[{}][{}] = {{".format(NJ, NJ))
     for row in t_index_map:
         self.gen_add_code_line("    { " + ", ".join("{:2}".format(x) for x in row) + " },")
     self.gen_add_code_line("};")
-    
+
     self.gen_add_parallel_loop('i',f'{len(jids_a)}*36')
     self.gen_add_code_line('int jid = jids[i / 36];')
     self.gen_add_code_line('int ancestor_j = ancestors_j[i / 36];')

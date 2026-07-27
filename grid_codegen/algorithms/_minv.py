@@ -474,16 +474,13 @@ def gen_minv_inner(self):
                 # slot order (race-free, deterministic, no atomics).
                 unique_parents = sorted(set(self.robot.get_parent_id(j) for j in inds))
                 nup = len(unique_parents)
-                upar_csv = ", ".join(str(p) for p in unique_parents)
-                jids_csv = ", ".join(str(j) for j in inds)
-                pars_csv = ", ".join(str(self.robot.get_parent_id(j)) for j in inds)
                 # Per-level {} scope so the compile-time tables don't collide
                 # across BFS levels emitted into the same function body.
                 self.gen_add_code_line("// deterministic parent-major fixed-order sum (shared parent): IA[parent] += sum_slot IA_Update_Temp[slot] * X[jid_slot]")
                 self.gen_add_code_line("{", True)
-                self.gen_add_code_line(f"const int s_jid_lvl[{len(inds)}] = {{{jids_csv}}};")
-                self.gen_add_code_line(f"const int s_par_lvl[{len(inds)}] = {{{pars_csv}}};")
-                self.gen_add_code_line(f"const int s_upar_lvl[{nup}] = {{{upar_csv}}};")
+                self.gen_bake_const_array("s_jid_lvl", list(inds), "int")
+                self.gen_bake_const_array("s_par_lvl", [self.robot.get_parent_id(j) for j in inds], "int")
+                self.gen_bake_const_array("s_upar_lvl", unique_parents, "int")
                 self.gen_add_parallel_loop("ind",str(6*6*nup))
                 self.gen_add_code_line("int up = ind / 36; int rc = ind % 36;")
                 self.gen_add_code_line("int col_max6 = rc / 6; int row = rc % 6;")
