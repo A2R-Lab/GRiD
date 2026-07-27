@@ -153,19 +153,15 @@ def gen_frame_jacobian_inner(self):
 
     njobs = len(jobs)
     if njobs > 0:
-        tj_arr = ", ".join(str(j[0]) for j in jobs)
-        jj_arr = ", ".join(str(j[1]) for j in jobs)
-        vi_arr = ", ".join(str(j[2]) for j in jobs)
-        ax_arr = ", ".join("static_cast<T>({:.17g})".format(v) for j in jobs for v in j[3])
-        lx_arr = ", ".join("static_cast<T>({:.17g})".format(v) for j in jobs for v in j[4])
-        self.gen_add_code_line("const int fj_target[" + str(njobs) + "] = {" + tj_arr + "};")
-        self.gen_add_code_line("const int fj_jj[" + str(njobs) + "] = {" + jj_arr + "};")
-        self.gen_add_code_line("const int fj_vi[" + str(njobs) + "] = {" + vi_arr + "};")
-        self.gen_add_code_line("const T fj_ang[" + str(3 * njobs) + "] = {" + ax_arr + "};")
-        self.gen_add_code_line("const T fj_lin[" + str(3 * njobs) + "] = {" + lx_arr + "};")
+        # Baked topology via gen_bake_const_array -> `static const` (off-stack;
+        # agent_debugging_guide §1v). Consumers index [t] with no size dependence.
+        self.gen_bake_const_array("fj_target", [j[0] for j in jobs], "int")
+        self.gen_bake_const_array("fj_jj", [j[1] for j in jobs], "int")
+        self.gen_bake_const_array("fj_vi", [j[2] for j in jobs], "int")
+        self.gen_bake_const_array("fj_ang", [v for j in jobs for v in j[3]], "T")
+        self.gen_bake_const_array("fj_lin", [v for j in jobs for v in j[4]], "T")
         if HAS_MIMIC:
-            al_arr = ", ".join("static_cast<T>({:.17g})".format(j[5]) for j in jobs)
-            self.gen_add_code_line("const T fj_alpha[" + str(njobs) + "] = {" + al_arr + "};")
+            self.gen_bake_const_array("fj_alpha", [j[5] for j in jobs], "T")
         # Serial accumulation (correctness-first; columns may repeat vi).
         self.gen_add_serial_ops()
         # frame origin p_f in world.
