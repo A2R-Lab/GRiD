@@ -46,8 +46,12 @@ _REF_FRAME = "LOCAL_WORLD_ALIGNED"  # the host's baked default reference frame
 
 
 def _robot_modes():
+    # fr3 (fixed + floating) is a MIMIC robot: its mimic joint shares its target's
+    # reduced v-slot, so the frame Jacobian + its Jdot fold the mimic body's column
+    # alpha-weighted into the shared column (frame_jacobian_dot_device's fjc_alpha /
+    # fjd_alpha path). Covers the analytic-CUDA-vs-analytic-oracle mimic transcription.
     raw = os.environ.get("GRID_CUDA_FRAME_JAC_HOST_ROBOTS",
-                         "iiwa14:fixed,go2:floating")
+                         "iiwa14:fixed,go2:floating,fr3:fixed,fr3:floating")
     out = []
     for tok in raw.split(","):
         tok = tok.strip()
