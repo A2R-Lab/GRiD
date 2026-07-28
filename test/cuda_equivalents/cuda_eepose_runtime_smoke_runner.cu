@@ -12,12 +12,12 @@
 //
 // Input on stdin (whitespace-separated):
 //   target_jid (int)        joint id of the EE frame
-//   offset (3 floats)       point offset in the target frame
+//   X_tool (16 floats)      4x4 col-major SE(3) tool/tip transform in the target frame
 //   q  (NUM_POS floats)
 //
 // Emitted blocks:
-//   pose0 / grad0           offset = {0,0,0}  (frame origin)
-//   poseN / gradN           offset = supplied
+//   pose0 / grad0           X_tool = identity   (frame origin)
+//   poseN / gradN           X_tool = supplied
 #include <cmath>
 #include <cstdlib>
 #include <iomanip>
@@ -55,37 +55,37 @@ constexpr int NV = grid::NUM_VEL;
 
 int g_num_threads = 0;
 
-// pose kernel: emit the 6-vector pose at the supplied offset.
+// pose kernel: emit the 6-vector pose at the supplied 4x4 col-major tool transform.
 template <typename T>
-__global__ void pose_kernel(const T *g_q, const int target_jid, const T *g_offset,
+__global__ void pose_kernel(const T *g_q, const int target_jid, const T *g_Xtool,
                             const grid::robotModel<T> *d_robotModel, T *o_pose) {
     __shared__ T s_q[NQ];
-    __shared__ T s_offset[3];
+    __shared__ T s_Xtool[16];
     __shared__ T s_pose[6];
     const int tid = threadIdx.x + threadIdx.y * blockDim.x;
     const int nth = blockDim.x * blockDim.y;
     for (int i = tid; i < NQ; i += nth) s_q[i] = g_q[i];
-    if (tid == 0) { s_offset[0]=g_offset[0]; s_offset[1]=g_offset[1]; s_offset[2]=g_offset[2]; }
+    for (int i = tid; i < 16; i += nth) s_Xtool[i] = g_Xtool[i];
     __syncthreads();
-    grid::end_effector_pose_runtime_device<T>(s_pose, target_jid, s_offset, s_q, d_robotModel);
+    grid::end_effector_pose_runtime_device<T>(s_pose, target_jid, s_Xtool, s_q, d_robotModel);
     __syncthreads();
     for (int i = tid; i < 6; i += nth) o_pose[i] = s_pose[i];
     __syncthreads();
 }
 
-// gradient kernel: emit the 6 x NV pose gradient at the supplied offset.
+// gradient kernel: emit the 6 x NV pose gradient at the supplied 4x4 col-major tool transform.
 template <typename T>
-__global__ void grad_kernel(const T *g_q, const int target_jid, const T *g_offset,
+__global__ void grad_kernel(const T *g_q, const int target_jid, const T *g_Xtool,
                             const grid::robotModel<T> *d_robotModel, T *o_grad) {
     __shared__ T s_q[NQ];
-    __shared__ T s_offset[3];
+    __shared__ T s_Xtool[16];
     __shared__ T s_grad[6 * NV];
     const int tid = threadIdx.x + threadIdx.y * blockDim.x;
     const int nth = blockDim.x * blockDim.y;
     for (int i = tid; i < NQ; i += nth) s_q[i] = g_q[i];
-    if (tid == 0) { s_offset[0]=g_offset[0]; s_offset[1]=g_offset[1]; s_offset[2]=g_offset[2]; }
+    for (int i = tid; i < 16; i += nth) s_Xtool[i] = g_Xtool[i];
     __syncthreads();
-    grid::end_effector_pose_gradient_runtime_device<T>(s_grad, target_jid, s_offset, s_q, d_robotModel);
+    grid::end_effector_pose_gradient_runtime_device<T>(s_grad, target_jid, s_Xtool, s_q, d_robotModel);
     __syncthreads();
     for (int i = tid; i < 6 * NV; i += nth) o_grad[i] = s_grad[i];
     __syncthreads();
@@ -108,16 +108,18 @@ void run() {
 
     int target_jid;
     if (!(std::cin >> target_jid)) { std::cerr << "read fail target_jid\n"; std::exit(2); }
-    std::vector<T> h_off(3), h_q(NQ);
-    read_vector(h_off.data(), 3);
+    // 4x4 col-major SE(3) tool transform (16 floats), then q.
+    std::vector<T> h_Xtool(16), h_q(NQ);
+    read_vector(h_Xtool.data(), 16);
     read_vector(h_q.data(), NQ);
     print_matrix_col_major("input_q", h_q.data(), 1, NQ);
 
     T *g_q = dmalloc<T>(NQ);
     cudaMemcpy(g_q, h_q.data(), NQ * sizeof(T), cudaMemcpyHostToDevice);
-    T h_zero[3] = {static_cast<T>(0), static_cast<T>(0), static_cast<T>(0)};
-    T *g_off0 = dmalloc<T>(3); cudaMemcpy(g_off0, h_zero, 3 * sizeof(T), cudaMemcpyHostToDevice);
-    T *g_offN = dmalloc<T>(3); cudaMemcpy(g_offN, h_off.data(), 3 * sizeof(T), cudaMemcpyHostToDevice);
+    T h_ident[16] = {static_cast<T>(1),0,0,0, 0,static_cast<T>(1),0,0,
+                     0,0,static_cast<T>(1),0, 0,0,0,static_cast<T>(1)};
+    T *g_off0 = dmalloc<T>(16); cudaMemcpy(g_off0, h_ident, 16 * sizeof(T), cudaMemcpyHostToDevice);
+    T *g_offN = dmalloc<T>(16); cudaMemcpy(g_offN, h_Xtool.data(), 16 * sizeof(T), cudaMemcpyHostToDevice);
 
     T *o_p0 = dmalloc<T>(6), *o_pN = dmalloc<T>(6);
     T *o_g0 = dmalloc<T>(6 * NV), *o_gN = dmalloc<T>(6 * NV);

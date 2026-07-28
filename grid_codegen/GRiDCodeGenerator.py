@@ -217,7 +217,7 @@ class GRiDCodeGenerator:
                             gen_coriolis_matrix_inner_temp_mem_size, gen_coriolis_matrix_inner_function_call, \
                             gen_coriolis_matrix_inner, gen_coriolis_matrix_device, \
                             gen_coriolis_matrix_kernel, gen_coriolis_matrix_host, gen_coriolis_matrix, \
-                            gen_f_ext_contact, gen_f_ext_contact_inner_temp_mem_size, \
+                            gen_f_ext_contact, gen_f_ext_contact_runtime, gen_f_ext_contact_inner_temp_mem_size, \
                             build_target_batch, gen_multi_target_position_inner_temp_mem_size, \
                             gen_multi_target_position_inner_function_call, gen_multi_target_position_inner, \
                             gen_multi_target_position_device, gen_multi_target_position, \
@@ -2169,10 +2169,10 @@ class GRiDCodeGenerator:
                                  "    T *d_frame_jacobian_dot;   // frame_jacobian_dot (6 x NUM_VEL)", \
                                  "    T *d_osc_inertia;          // osc_inertia Lambda (6 x 6)", \
                                  # runtime-target pose/pose-gradient (additive, opt-in). The 3-vector
-                                 # runtime offset is a single device buffer, host-init to {0,0,0}.
+                                 # runtime tool/tip transform is a single device buffer, host-init to identity.
                                  "    T *d_eePose;               // end_effector_pose_runtime (6 = [xyz;rpy])", \
                                  "    T *d_eePoseGrad;           // end_effector_pose_gradient_runtime (6 x NUM_VEL)", \
-                                 "    T *d_eepose_runtime_offset; // runtime 3-vector point offset (target frame)"] \
+                                 "    T *d_eepose_runtime_offset; // runtime 4x4 col-major SE(3) tool/tip transform (target frame)"] \
                                  # W1b.3 batched multi-target world positions / position-gradient (opt-in via
                                  # multi_target_batch). Emitted ONLY for an MT robot -- a Python-side condition,
                                  # not a #if, so a non-MT header stays BYTE-IDENTICAL (no inert preprocessor
@@ -2353,11 +2353,12 @@ class GRiDCodeGenerator:
                       "    hd_data->h_osc_inertia = (T *)malloc(36*NUM_TIMESTEPS*sizeof(T));", \
                       # runtime-target pose / pose-gradient (additive, opt-in). The runtime
                       # 3-vector offset is a single device buffer init to {0,0,0} (frame origin);
-                      # a binding overwrites it before the call to request a nonzero offset.
+                      # a binding overwrites it before the call to request a nonzero tool transform.
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_eePose, 6*NUM_TIMESTEPS*sizeof(T)));", \
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_eePoseGrad, 6*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
-                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_eepose_runtime_offset, 3*sizeof(T)));", \
-                      "    gpuErrchk(cudaMemset(hd_data->d_eepose_runtime_offset, 0, 3*sizeof(T)));", \
+                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_eepose_runtime_offset, 16*sizeof(T)));", \
+                      "    { T h_Xtool_identity[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};", \
+                      "      gpuErrchk(cudaMemcpy(hd_data->d_eepose_runtime_offset, h_Xtool_identity, 16*sizeof(T), cudaMemcpyHostToDevice)); }", \
                       "    hd_data->h_eePose = (T *)malloc(6*NUM_TIMESTEPS*sizeof(T));", \
                       "    hd_data->h_eePoseGrad = (T *)malloc(6*NUM_VEL*NUM_TIMESTEPS*sizeof(T));"] \
                       # W1b.3 batched multi-target. Emitted ONLY for an MT robot (Python-conditional,
@@ -3219,7 +3220,7 @@ class GRiDCodeGenerator:
                      codegen_profile = "all", algorithm_list = None, enable_floating_second_order = True,
                      enable_idsva_so_world_frame = None, runtime_inertia = False, runtime_transform = False,
                      runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
-                     contact_frames = None, enable_mujoco_kernels = None):
+                     contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None):
         # enable_mujoco_kernels=False builds a PIN-ONLY header: the mjx
         # (MUJOCO_OUTPUT=true) template overloads are still EMITTED (they are
         # templates -- uninstantiated they cost nothing; a bare #include is 2 s /
@@ -3714,6 +3715,10 @@ class GRiDCodeGenerator:
             # chain-up as multi_target (emit_world_fk_chainup) — no second copy.
             if contact_frames:
                 self.gen_f_ext_contact(contact_frames)
+            # Tool-use: runtime single-contact f_ext (the welded-tool tip). Body id + local
+            # offset are RUNTIME args. Opt-in (default False => byte-identical header).
+            if enable_contact_runtime:
+                self.gen_f_ext_contact_runtime()
             # W3: collision. Each sphere-density tier IS a multi_target batch — build it in the
             # tier's own order (NO group re-sort) so the baked radii/self_cc_ranges stay
             # index-aligned. Emit a POSITION extractor per tier (config_free's broad-phase needs

@@ -264,3 +264,39 @@ fastest at 128 threads but the FFI path is fastest at ~768 — the same kernel, 
   no recompile (numpy).
 - [`ee_named_targets.py`](ee_named_targets.py) — named EE frames: baked `ee_joint_names=`
   (value + gradient + hessian) and the runtime `end_effector_pose[_gradient]_runtime` frame/offset.
+- [`tool_use.py`](tool_use.py) — weld a rigid tool/payload at RUNTIME (`attach_tool`/`detach_tool`),
+  no recompile: payload inertia + a full SE(3) tool-tip frame, attach anywhere, gripping + closed-loop
+  recipes, payload-hypothesis sweep.
+
+## Welded tools / payloads (`attach_tool`, no recompile)
+
+Register with `enable_tool=True` (turns on the runtime inertia table + runtime contact surface; the
+runtime EE surfaces are already in the default build), then:
+
+```python
+h = grid_rbd.register_robot("arm", urdf_path=..., enable_tool=True)
+# a rigid tool = payload inertia on a link + an SE(3) tip frame off that joint:
+h.attach_tool("iiwa_joint_7", mass=2.0, com=[0,0,0.08],
+              inertia=np.diag([0.02,0.02,0.008]),   # about the payload CoM (optional)
+              tip_transform=X_tool)                  # 4x4 SE(3) in the joint frame (optional)
+h.inverse_dynamics(q, qd)          # dynamics now carry the tool's weight
+h.end_effector_pose_runtime(q)     # defaults to the SE(3) tool-tip frame
+h.detach_tool()                    # restore the baked robot
+```
+
+- **Attach anywhere** — the first arg is a joint NAME; the tool welds to that joint's child link and
+  the tip hangs off that joint. Mid-chain payloads change upstream torques and leave the downstream
+  tip untouched. Omit `tip_transform` for a pure carried payload (inertia only).
+- **Gripping a tool** — model a firm grasp as a rigid attach on the palm/wrist; you do NOT remove the
+  finger DOFs (that would need a recompile). Hold the fingers with `qd=0` (optionally stiff via
+  `runtime_joint_dynamics`). Only an *articulated* tool (adds a DOF) needs a rebuild.
+- **Tip forces** (grinding, pushing, a second gripper finger) — `h.tool_fext(q, wrench)` maps a
+  world-aligned tool-tip wrench `(B, 6)` = `[n_w; f_w]` → a joint-local `f_ext` `(B, 6*num_bodies)`
+  you pass straight to `inverse_dynamics(f_ext=...)` / `aba(f_ext=...)`. The `∂/∂f_c` and `∂/∂q`
+  derivatives are validated at the device level (`grid::f_ext_body_jacobian_d{fc,q}_runtime_device`)
+  for solvers that need the chain-rule term.
+- **Two-finger closed-loop grasp** — a tool bridging two fingertips is a closed kinematic loop (not
+  representable in a tree). Attach to ONE fingertip + model the other finger's grip as a `tool_fext`
+  wrench on the tool tip → an open tree, no closed loop.
+- Requires `enable_tool=True`; one tool at a time. Payload composition is additive and
+  pinocchio-validated; a null tool is byte-identical to the baked robot.

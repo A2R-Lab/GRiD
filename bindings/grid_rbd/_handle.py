@@ -489,6 +489,111 @@ class RobotHandle:
         arr = np.ascontiguousarray(arr, dtype=self._dt)
         self._runner.set_inertia_params(arr)
 
+    # ─── welded tool / payload (attach_tool) ─────────────────────────────────
+    def attach_tool(self, joint, *, mass, com=(0.0, 0.0, 0.0), inertia=None,
+                    tip_transform=None):
+        """Weld a rigid tool/payload to the link moved by ``joint`` at runtime.
+
+        This is the "the robot now has a tool" entry point, and it needs no
+        recompile. It does two things:
+
+        1. **Inertia** — composes the payload's spatial inertia (``mass`` [kg],
+           ``com`` [m, in the link frame], ``inertia`` [3x3 or 6-vector about the
+           payload CoM]) into that link's spatial inertia and pokes it via
+           :py:meth:`set_inertia_params`. The whole dynamics stack (inverse/forward
+           dynamics + gradients) then sees the composite rigid body.
+        2. **Tip frame** — if ``tip_transform`` (a 4x4 SE(3) matrix in the joint
+           frame) is given, stores it so subsequent :py:meth:`end_effector_pose_runtime`
+           / :py:meth:`end_effector_pose_gradient_runtime` calls (with no explicit
+           target) report the SE(3) tool-tip frame. Omit it for a pure payload.
+
+        ``joint`` is a joint NAME; the tool welds to that joint's child link, and
+        the tip frame hangs off that joint's frame — so a tool can be attached
+        ANYWHERE in the chain, not just a leaf. Requires ``runtime_inertia=True``
+        (use ``register_robot(..., enable_tool=True)``). One tool at a time;
+        :py:meth:`detach_tool` restores the baked robot.
+        """
+        if not self.runtime_inertia:
+            raise RuntimeError(
+                "attach_tool requires a robot registered with enable_tool=True "
+                "(or runtime_inertia=True). Re-register with "
+                "register_robot(..., enable_tool=True, force_rebuild=True).")
+        j2row = self._meta.get("inertia_row_by_joint_name") or {}
+        if joint not in j2row:
+            raise ValueError(
+                f"attach joint '{joint}' has no movable child link. Known attach "
+                f"joints: {sorted(j2row.keys())}")
+        row = j2row[joint]
+        from ._payload import compose_payload_inertia
+        baked = np.asarray(self.inertia_params, dtype=self._dt)  # (num_bodies, 10) BAKED
+        tbl = np.array(baked, dtype=self._dt, copy=True)
+        tbl[row] = compose_payload_inertia(baked[row], mass, com, inertia)
+        self.set_inertia_params(tbl)
+        Xtool = None
+        if tip_transform is not None:
+            Xtool = np.asarray(tip_transform, dtype=np.float64)
+            if Xtool.shape != (4, 4):
+                raise ValueError("tip_transform must be a 4x4 SE(3) matrix.")
+        self._tool = {"joint": joint, "row": int(row), "Xtool": Xtool}
+        return self._tool
+
+    def detach_tool(self):
+        """Remove the attached tool: restore the baked inertia for its link and
+        clear the stored tip frame. A no-op if nothing is attached."""
+        if getattr(self, "_tool", None) is None:
+            return
+        # inertia_params is the immutable BAKED table, so re-poking it restores the
+        # single-tool link exactly (composition was baked + payload).
+        self.set_inertia_params(np.asarray(self.inertia_params, dtype=self._dt))
+        self._tool = None
+
+    @property
+    def tool(self):
+        """The currently attached tool dict ``{joint, row, Xtool}`` or ``None``."""
+        return getattr(self, "_tool", None)
+
+    def tool_fext(self, q, wrench, *, joint=None, offset=None):
+        """Map a world-aligned tool-tip wrench to a joint-local ``f_ext`` array.
+
+        ``wrench`` is ``(B, 6)`` = ``[n_w; f_w]`` (moment about the tool tip; world axes)
+        per timestep. Returns ``(B, 6*num_bodies)`` joint-local f_ext ([angular;linear]
+        per body) that feeds straight into :py:meth:`inverse_dynamics` /
+        :py:meth:`forward_dynamics` / :py:meth:`aba` as ``f_ext=...`` — i.e. the effect
+        of the tool pushing on the world (grinding, pushing, a second gripper finger).
+
+        With a tool attached (via :py:meth:`attach_tool`) the contact body + tip offset
+        default to that tool; otherwise pass ``joint`` (a joint name) and ``offset``
+        (the 3-vector tip point in the joint frame). Needs an ``enable_tool`` .so."""
+        if not getattr(self._runner, "has_tool_fext", False):
+            raise NotImplementedError(
+                "tool_fext needs an enable_tool .so (re-register with "
+                "register_robot(..., enable_tool=True, force_rebuild=True)).")
+        tool = getattr(self, "_tool", None)
+        if joint is None:
+            if tool is None:
+                raise ValueError("tool_fext: no tool attached; pass joint= and offset=.")
+            joint = tool["joint"]
+            if offset is None:
+                X = tool.get("Xtool")
+                offset = (X[:3, 3] if X is not None else np.zeros(3))
+        if offset is None:
+            offset = np.zeros(3)
+        jid = int(self._resolve_ee_jids(joint)[0])
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        w = np.ascontiguousarray(wrench, dtype=self._dt)
+        rc = np.ascontiguousarray(np.asarray(offset, dtype=self._dt).reshape(-1)[:3])
+        raw = self._runner.tool_fext(q, w, jid, rc)     # (B, 6*num_bodies)
+        return self._cast_out(raw)
+
+    def _tool_tip_default(self, ee_joint_names, ee_offsets):
+        """If a tool with a tip frame is attached and the caller gave no explicit
+        target/offset, default the runtime EE query to the tool tip frame."""
+        tool = getattr(self, "_tool", None)
+        if (ee_joint_names is None and ee_offsets is None
+                and tool is not None and tool.get("Xtool") is not None):
+            return tool["joint"], [tool["Xtool"]]
+        return ee_joint_names, ee_offsets
+
     # ─── runtime-mutable joint-frame transform (runtime_transform) ───────────
 
     @property
@@ -1895,13 +2000,31 @@ class RobotHandle:
         return jids
 
     def _normalize_ee_offsets(self, ee_offsets, num_ees):
-        """Normalize ee_offsets to a list of length-3 [x,y,z] (one per EE).
-        ``None`` => zero offset (frame origin); a single offset is applied to all
-        EEs (matches the oracle's first-offset broadcast). Accepts [x,y,z] or
-        homogeneous [x,y,z,1]."""
+        """Normalize ee_offsets to a list of 16-float COLUMN-MAJOR 4x4 SE(3) tool
+        transforms (one per EE), matching the device ``s_Xtool`` layout.
+
+        ``None`` => identity (frame origin). Each entry may be a point (``[x,y,z]``
+        or homogeneous ``[x,y,z,1]`` -> pure translation, ``R_tool = I``) or a full
+        4x4 SE(3) transform (rotation + translation of the tool/tip frame in the
+        target joint frame). A single offset is broadcast to all EEs."""
+        def _to_xtool(o):
+            A = np.asarray(o, dtype=self._dt)
+            if A.shape == (4, 4):
+                X = A
+            elif A.size in (3, 4):
+                X = np.eye(4, dtype=self._dt)
+                X[:3, 3] = A.reshape(-1)[:3]
+            else:
+                raise ValueError(
+                    "ee offset must be [x,y,z], [x,y,z,1], or a 4x4 SE(3) transform")
+            return np.ascontiguousarray(X.reshape(-1, order="F"), dtype=self._dt)
+        identity = np.ascontiguousarray(np.eye(4, dtype=self._dt).reshape(-1, order="F"))
         if ee_offsets is None:
-            return [np.zeros(3, dtype=self._dt)] * num_ees
-        offs = [np.asarray(o, dtype=self._dt).reshape(-1)[:3] for o in ee_offsets]
+            return [identity] * num_ees
+        # a bare 4x4 is a SINGLE offset, not an iterable of rows.
+        if isinstance(ee_offsets, np.ndarray) and ee_offsets.shape == (4, 4):
+            ee_offsets = [ee_offsets]
+        offs = [_to_xtool(o) for o in ee_offsets]
         if len(offs) == 1:
             offs = offs * num_ees
         if len(offs) != num_ees:
@@ -1924,6 +2047,7 @@ class RobotHandle:
         With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
         (quat reordered in-kernel); the pose VALUE is frame-invariant.
         """
+        ee_joint_names, ee_offsets = self._tool_tip_default(ee_joint_names, ee_offsets)
         q = np.ascontiguousarray(q, dtype=self._dt)
         jids = self._resolve_ee_jids(ee_joint_names)
         offsets = self._normalize_ee_offsets(ee_offsets, len(jids))
@@ -1953,6 +2077,7 @@ class RobotHandle:
         With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention;
         the base-linear columns are reframed by R^T in-kernel (column-reframe class).
         """
+        ee_joint_names, ee_offsets = self._tool_tip_default(ee_joint_names, ee_offsets)
         q = np.ascontiguousarray(q, dtype=self._dt)
         NV = self.num_vel
         jids = self._resolve_ee_jids(ee_joint_names)

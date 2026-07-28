@@ -262,6 +262,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform,
             runtime_joint_dynamics=runtime_joint_dynamics,
+            enable_contact_runtime=bool(options.get("enable_contact_runtime", False)),
         )
 
     if not out_path.exists():
@@ -326,6 +327,20 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         params = robot.get_inertia_params_ordered_by_id()[1:]  # drop base body
         meta["runtime_inertia"] = True
         meta["inertia_params"] = [[float(v) for v in pi] for pi in params]
+        # attach_tool needs joint name -> inertia row. inertia_params is ordered by
+        # get_links_ordered_by_id()[1:] (base dropped), so map each joint to the row
+        # of its CHILD link (the body that joint moves). Robust vs jid != lid ordering.
+        row_of_link = {l.get_name(): (r - 1)
+                       for r, l in enumerate(robot.get_links_ordered_by_id())}  # base -> -1
+        j2row = {}
+        for jid in range(robot.get_num_joints()):
+            jo = robot.get_joint_by_id(jid)
+            if jo is None:
+                continue
+            row = row_of_link.get(jo.get_child())
+            if row is not None and row >= 0:
+                j2row[jo.get_name()] = int(row)
+        meta["inertia_row_by_joint_name"] = j2row
     # runtime_transform: persist the BAKED 6-param-per-joint origin table so the
     # handle can fetch-then-mutate via set_transform_params. Layout mirrors
     # gen_init_transform_params / init_transform_params: ALL joints 0..NB-1, each

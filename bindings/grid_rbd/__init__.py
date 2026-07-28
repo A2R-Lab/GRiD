@@ -122,6 +122,7 @@ def register_robot(
     runtime_transform: bool = False,
     runtime_joint_dynamics: bool = False,
     use_joint_dynamics: bool = False,
+    enable_tool: bool = False,
     output_convention: str = "pinocchio",
     algorithm_list: list[str] | tuple[str, ...] | str | None = None,
     enable_mujoco_kernels: bool = True,
@@ -368,6 +369,14 @@ def register_robot(
     # D.4 / Phase 5: runtime-mutable inertia. Only inject the flag (and thus re-key
     # the cache) when True, so a default register_robot is byte-identical to before
     # and reuses its existing fp32 .so. A runtime_inertia .so lands in its own entry.
+    # enable_tool (welded tool / payload): a convenience that turns on the pieces
+    # attach_tool needs in one flag — the runtime-mutable inertia table (to compose
+    # the payload) AND the runtime single-contact f_ext surface (tip forces). The
+    # runtime EE pose/gradient surfaces are already in the default build. Only inject
+    # the extra flag (re-keying the cache) when set, so a default build is unchanged.
+    if enable_tool:
+        runtime_inertia = True
+        code_options["enable_contact_runtime"] = True
     if runtime_inertia:
         code_options["runtime_inertia"] = True
     # runtime_transform (mirror of runtime_inertia): runtime-mutable joint-frame

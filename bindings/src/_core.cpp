@@ -94,6 +94,7 @@ struct CAbi {
     using fn_frame_jac_t    = int (*)(const CT*, CT*, int, int, int);
     using fn_frame_jac_dot_t = int (*)(const CT*, const CT*, CT*, int, int, int);
     using fn_ee_runtime_t   = int (*)(const CT*, CT*, int, int, const CT*);
+    using fn_tool_fext_t    = int (*)(const CT*, const CT*, int, const CT*, CT*, int);  // grid_rbd_tool_fext
     using fn_q_qd_out_grav_t = int (*)(const CT*, const CT*, CT*, int, CT);
     using fn_q_out_grav_t   = int (*)(const CT*, CT*, int, CT);
     using fn_set_inertia_t  = int (*)(const CT*);   // grid_rbd_set_inertia_params
@@ -132,6 +133,7 @@ class RunnerT {
     using fn_frame_jac_t = typename CAbi<CT>::fn_frame_jac_t;
     using fn_frame_jac_dot_t = typename CAbi<CT>::fn_frame_jac_dot_t;
     using fn_ee_runtime_t = typename CAbi<CT>::fn_ee_runtime_t;
+    using fn_tool_fext_t = typename CAbi<CT>::fn_tool_fext_t;
     using fn_q_qd_out_grav_t = typename CAbi<CT>::fn_q_qd_out_grav_t;
     using fn_q_out_grav_t = typename CAbi<CT>::fn_q_out_grav_t;
     using fn_set_inertia_t = typename CAbi<CT>::fn_set_inertia_t;
@@ -262,6 +264,7 @@ public:
         fn_ee_pose_grad_runtime_ = reinterpret_cast<fn_ee_runtime_t>(opt_sym("grid_rbd_end_effector_pose_gradient_runtime"));
         fn_ee_pose_runtime_mujoco_      = reinterpret_cast<fn_ee_runtime_t>(opt_sym("grid_rbd_end_effector_pose_runtime_mujoco"));            // floating only
         fn_ee_pose_grad_runtime_mujoco_ = reinterpret_cast<fn_ee_runtime_t>(opt_sym("grid_rbd_end_effector_pose_gradient_runtime_mujoco")); // floating only
+        fn_tool_fext_            = reinterpret_cast<fn_tool_fext_t>(opt_sym("grid_rbd_tool_fext"));  // enable_tool only
 
         // PS5 value ops — OPTIONAL: present in newer .so files.
         // coriolis_matrix / kinetic_energy_regressor / potential_energy_regressor
@@ -1778,12 +1781,30 @@ public:
         if (!fn_ee_pose_runtime_) throw std::runtime_error("end_effector_pose_runtime not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "end_effector_pose_runtime");
         const CT* off_ptr = nullptr;
-        if (offset.size() == 3) off_ptr = offset.data();
-        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_runtime: offset must be length-3 or empty");
+        if (offset.size() == 16) off_ptr = offset.data();
+        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_runtime: offset must be length-16 (4x4 col-major) or empty");
         py::array_t<CT> out({batch, 6});
         int rc = fn_ee_pose_runtime_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
         if (rc == 3) throw std::runtime_error("end_effector_pose_runtime not generated for this robot .so");
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_runtime failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // tool_fext(q, wrench, jid, rc) -> (batch, 6*NUM_BODIES) joint-local f_ext from a
+    // world-aligned tool-tip wrench at runtime (body jid, offset rc). Feed to
+    // inverse_dynamics(f_ext=...). Present only on an enable_tool .so.
+    bool has_tool_fext() const { return fn_tool_fext_ != nullptr; }
+    py::array_t<CT> tool_fext(arr_t q, arr_t wrench, int jid, arr_t rc)
+    {
+        if (!fn_tool_fext_) throw std::runtime_error("tool_fext not available in this .so (register with enable_tool=True, force_rebuild=True)");
+        int batch = check_q(q, "tool_fext");
+        if (wrench.size() != (py::ssize_t)6 * batch)
+            throw std::invalid_argument("tool_fext: wrench must be (batch, 6)");
+        if (rc.size() != 3) throw std::invalid_argument("tool_fext: rc must be length-3");
+        py::array_t<CT> out({batch, 6 * num_bodies_});
+        int rc0 = fn_tool_fext_(q.data(), wrench.data(), jid, rc.data(), out.mutable_data(), batch);
+        if (rc0 == 3) throw std::runtime_error("tool_fext not generated for this robot .so");
+        if (rc0 != 0) throw std::runtime_error("grid_rbd_tool_fext failed: rc=" + std::to_string(rc0));
         return out;
     }
 
@@ -1798,8 +1819,8 @@ public:
         if (!fn_ee_pose_grad_runtime_) throw std::runtime_error("end_effector_pose_gradient_runtime not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "end_effector_pose_gradient_runtime");
         const CT* off_ptr = nullptr;
-        if (offset.size() == 3) off_ptr = offset.data();
-        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_gradient_runtime: offset must be length-3 or empty");
+        if (offset.size() == 16) off_ptr = offset.data();
+        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_gradient_runtime: offset must be length-16 (4x4 col-major) or empty");
         py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_ee_pose_grad_runtime_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
         if (rc == 3) throw std::runtime_error("end_effector_pose_gradient_runtime not generated for this robot .so");
@@ -1817,8 +1838,8 @@ public:
             "end_effector_pose_runtime_mujoco unavailable: floating-base .so only");
         int batch = check_q(q, "end_effector_pose_runtime_mujoco");
         const CT* off_ptr = nullptr;
-        if (offset.size() == 3) off_ptr = offset.data();
-        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_runtime_mujoco: offset must be length-3 or empty");
+        if (offset.size() == 16) off_ptr = offset.data();
+        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_runtime_mujoco: offset must be length-16 (4x4 col-major) or empty");
         py::array_t<CT> out({batch, 6});
         int rc = fn_ee_pose_runtime_mujoco_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
         if (rc == 3) throw std::runtime_error("end_effector_pose_runtime_mujoco not generated for this robot .so");
@@ -1836,8 +1857,8 @@ public:
             "end_effector_pose_gradient_runtime_mujoco unavailable: floating-base .so only");
         int batch = check_q(q, "end_effector_pose_gradient_runtime_mujoco");
         const CT* off_ptr = nullptr;
-        if (offset.size() == 3) off_ptr = offset.data();
-        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_gradient_runtime_mujoco: offset must be length-3 or empty");
+        if (offset.size() == 16) off_ptr = offset.data();
+        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_gradient_runtime_mujoco: offset must be length-16 (4x4 col-major) or empty");
         py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_ee_pose_grad_runtime_mujoco_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
         if (rc == 3) throw std::runtime_error("end_effector_pose_gradient_runtime_mujoco not generated for this robot .so");
@@ -2200,6 +2221,7 @@ private:
     fn_q_out_t         fn_osc_inertia_         = nullptr;
     fn_ee_runtime_t    fn_ee_pose_runtime_      = nullptr;
     fn_ee_runtime_t    fn_ee_pose_grad_runtime_ = nullptr;
+    fn_tool_fext_t     fn_tool_fext_            = nullptr;
     fn_ee_runtime_t    fn_ee_pose_runtime_mujoco_      = nullptr;  // floating mjx (optional)
     fn_ee_runtime_t    fn_ee_pose_grad_runtime_mujoco_ = nullptr;  // floating mjx (optional)
     // PS5 value ops (optional symbols)
@@ -2477,6 +2499,9 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("end_effector_pose_gradient_runtime", &R::end_effector_pose_gradient_runtime,
              py::arg("q"), py::arg("target_jid") = -1,
              py::arg("offset") = py::array_t<float>())
+        .def_property_readonly("has_tool_fext", &R::has_tool_fext)
+        .def("tool_fext", &R::tool_fext,
+             py::arg("q"), py::arg("wrench"), py::arg("jid"), py::arg("rc"))
         .def_property_readonly("has_end_effector_pose_runtime_mujoco", &R::has_end_effector_pose_runtime_mujoco)
         .def("end_effector_pose_runtime_mujoco", &R::end_effector_pose_runtime_mujoco,
              py::arg("q"), py::arg("target_jid") = -1,

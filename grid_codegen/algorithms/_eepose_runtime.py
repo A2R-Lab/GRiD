@@ -50,6 +50,29 @@ def _runtime_inner_temp_mem_size(self):
     return 16 * self.robot.get_num_joints()
 
 
+def _emit_tip_frame_pos_rot(self):
+    """Emit the tool/tip frame ``X_frame = X_target * X_tool`` from ``Xf`` (the
+    target's world 4x4, col-major, already in scope) and ``s_Xtool`` (the runtime
+    tool 4x4, col-major, in scope). Produces locals:
+
+      * ``pex, pey, pez`` -- tip position = R_target * p_tool + p_target,
+      * ``rf00, rf10, rf20, rf21, rf22`` -- the R_frame = R_target * R_tool entries
+        (col-major [row][col]) needed for the rpy extraction / E^-1 block.
+
+    For a point offset / identity R_tool every sum collapses (``x*1 + y*0 + z*0``)
+    bit-exactly to the legacy point-offset path, so a null tool is byte-identical."""
+    self.gen_add_code_line("// tip frame X_frame = X_target * X_tool (col-major 4x4); R_tool=I => legacy point path")
+    self.gen_add_code_line("const T tlx = s_Xtool[12], tly = s_Xtool[13], tlz = s_Xtool[14];")
+    self.gen_add_code_line("T pex = Xf[0]*tlx + Xf[4]*tly + Xf[8]*tlz  + Xf[12];")
+    self.gen_add_code_line("T pey = Xf[1]*tlx + Xf[5]*tly + Xf[9]*tlz  + Xf[13];")
+    self.gen_add_code_line("T pez = Xf[2]*tlx + Xf[6]*tly + Xf[10]*tlz + Xf[14];")
+    self.gen_add_code_line("T rf00 = Xf[0]*s_Xtool[0] + Xf[4]*s_Xtool[1] + Xf[8]*s_Xtool[2];")
+    self.gen_add_code_line("T rf10 = Xf[1]*s_Xtool[0] + Xf[5]*s_Xtool[1] + Xf[9]*s_Xtool[2];")
+    self.gen_add_code_line("T rf20 = Xf[2]*s_Xtool[0] + Xf[6]*s_Xtool[1] + Xf[10]*s_Xtool[2];")
+    self.gen_add_code_line("T rf21 = Xf[2]*s_Xtool[4] + Xf[6]*s_Xtool[5] + Xf[10]*s_Xtool[6];")
+    self.gen_add_code_line("T rf22 = Xf[2]*s_Xtool[8] + Xf[6]*s_Xtool[9] + Xf[10]*s_Xtool[10];")
+
+
 # =====================================================================
 # end_effector_pose_runtime (POSE)
 # =====================================================================
@@ -59,14 +82,14 @@ def gen_end_effector_pose_runtime_inner(self):
     the 6-vector pose [xyz; rpy] of `target_jid` at the offset-shifted point.
     The offset shifts the position by R_target * offset; rpy is unchanged."""
     func_params = [
-        "s_eePose is the output 6-vector pose [xyz; rpy] of target_jid",
+        "s_eePose is the output 6-vector pose [xyz; rpy] of target_jid at the tool tip",
         "target_jid is the joint id whose frame pose is requested",
-        "s_offset is the 3-vector point offset in the target frame (frame origin if {0,0,0})",
+        "s_Xtool is the 16-float 4x4 col-major SE(3) tool/tip transform in the target frame (identity => frame origin)",
         "s_q is the vector of joint positions (unused; baked into s_Xhom)",
         "s_Xhom is the per-joint LOCAL homogeneous transforms",
         "d_robotModel is the GPU model helpers",
         "s_temp is scratch of size " + str(_runtime_inner_temp_mem_size(self))]
-    func_def_middle = ("T *s_eePose, const int target_jid, const T *s_offset, "
+    func_def_middle = ("T *s_eePose, const int target_jid, const T *s_Xtool, "
                        "const T *s_q, const T *s_Xhom, const robotModel<T> *d_robotModel, ")
     func_def = "void end_effector_pose_runtime_inner(" + func_def_middle + "T *s_temp) {"
     self.gen_add_func_doc("Compute a runtime-target end-effector pose [xyz; rpy] at an offset point",
@@ -79,23 +102,19 @@ def gen_end_effector_pose_runtime_inner(self):
     # Step 1: world homogeneous transforms (chain-up).
     _emit_world_transform_chainup(self)
 
-    # Step 2: extract pose from the target's world transform (serial; tiny).
-    self.gen_add_code_line("// Step 2: pose = [ (Xworld[target] * [offset,1])[:3] ; rpy(Xworld[target]) ]")
+    # Step 2: extract pose from the tool tip frame X_frame = Xworld[target]*X_tool (serial; tiny).
+    self.gen_add_code_line("// Step 2: pose = [ p_tip ; rpy(R_frame) ] with X_frame = Xworld[target] * X_tool")
     self.gen_add_serial_ops()
     self.gen_add_code_line("const T *Xf = &s_Xworld[16*target_jid];")
-    # column-major: R[r,c] = Xf[r + 4*c], p = Xf[12..14]. pos = R*offset + p.
-    self.gen_add_code_line("T ox = s_offset[0], oy = s_offset[1], oz = s_offset[2];")
-    self.gen_add_code_line("s_eePose[0] = Xf[0]*ox + Xf[4]*oy + Xf[8]*oz  + Xf[12];")
-    self.gen_add_code_line("s_eePose[1] = Xf[1]*ox + Xf[5]*oy + Xf[9]*oz  + Xf[13];")
-    self.gen_add_code_line("s_eePose[2] = Xf[2]*ox + Xf[6]*oy + Xf[10]*oz + Xf[14];")
-    # rpy from rotation block (offset does NOT change rpy). Matches the baked-leaf
-    # extraction (_eepose_gradient_hessian Step-4 / the eePos_from_Xmat_hom oracle):
-    #   roll  = atan2(R[2,1], R[2,2])  -> Xf[6], Xf[10]
-    #   pitch = -atan2(R[2,0], sqrt(R[2,2]^2 + R[2,1]^2)) -> Xf[2], Xf[10], Xf[6]
-    #   yaw   = atan2(R[1,0], R[0,0])  -> Xf[1], Xf[0]
-    self.gen_add_code_line("s_eePose[3] = atan2(Xf[6], Xf[10]);")
-    self.gen_add_code_line("s_eePose[4] = -atan2(Xf[2], sqrt(Xf[10]*Xf[10] + Xf[6]*Xf[6]));")
-    self.gen_add_code_line("s_eePose[5] = atan2(Xf[1], Xf[0]);")
+    _emit_tip_frame_pos_rot(self)
+    self.gen_add_code_line("s_eePose[0] = pex; s_eePose[1] = pey; s_eePose[2] = pez;")
+    # rpy from the TOOL-frame rotation block R_frame = R_target * R_tool:
+    #   roll  = atan2(R[2,1], R[2,2])  -> rf21, rf22
+    #   pitch = -atan2(R[2,0], sqrt(R[2,2]^2 + R[2,1]^2)) -> rf20, rf22, rf21
+    #   yaw   = atan2(R[1,0], R[0,0])  -> rf10, rf00
+    self.gen_add_code_line("s_eePose[3] = atan2(rf21, rf22);")
+    self.gen_add_code_line("s_eePose[4] = -atan2(rf20, sqrt(rf22*rf22 + rf21*rf21));")
+    self.gen_add_code_line("s_eePose[5] = atan2(rf10, rf00);")
     self.gen_add_end_control_flow()  # serial
     self.gen_add_sync()
     self.gen_add_end_function()
@@ -104,13 +123,13 @@ def gen_end_effector_pose_runtime_inner(self):
 def gen_end_effector_pose_runtime_device(self):
     """Auto-smem device wrapper around end_effector_pose_runtime_inner."""
     func_def = ("void end_effector_pose_runtime_device(T *s_eePose, const int target_jid, "
-                "const T *s_offset, const T *s_q, const robotModel<T> *d_robotModel) {")
+                "const T *s_Xtool, const T *s_q, const robotModel<T> *d_robotModel) {")
     func_params = ["s_eePose holds the 6-vector pose [xyz; rpy]",
                    "target_jid is the joint id of the frame",
-                   "s_offset is the 3-vector point offset in the target frame",
+                   "s_Xtool is the 16-float 4x4 col-major SE(3) tool/tip transform in the target frame",
                    "s_q is the joint position vector",
                    "d_robotModel is the GPU model helpers"]
-    self.gen_add_func_doc("Compute a runtime-target end-effector pose at an offset point",
+    self.gen_add_func_doc("Compute a runtime-target end-effector pose at a tool tip frame",
                           [], func_params, None)
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
@@ -119,7 +138,7 @@ def gen_end_effector_pose_runtime_device(self):
         _runtime_inner_temp_mem_size(self),
         include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
     self.gen_load_update_XmatsHom_helpers_function_call()
-    self.gen_add_code_line("end_effector_pose_runtime_inner<T>(s_eePose, target_jid, s_offset, s_q, s_XmatsHom, d_robotModel, s_temp);")
+    self.gen_add_code_line("end_effector_pose_runtime_inner<T>(s_eePose, target_jid, s_Xtool, s_q, s_XmatsHom, d_robotModel, s_temp);")
     self.gen_add_sync()
     self.gen_add_end_function()
 
@@ -134,11 +153,11 @@ def gen_end_effector_pose_runtime_kernel(self, single_call_timing=False):
                    "d_q is the vector of joint positions",
                    "stride_q is the stride between each q",
                    "target_jid is the joint id whose pose is requested (runtime)",
-                   "d_offset is the 3-vector point offset in the target frame (runtime)",
+                   "d_Xtool is the 16-float 4x4 col-major SE(3) tool/tip transform in the target frame (runtime)",
                    "d_robotModel is the pointer to the initialized model specific helpers on the GPU",
                    "num_timesteps is the length of the trajectory points (or overloaded as test_iters for timing)"]
     func_def_start = ("void end_effector_pose_runtime_kernel(T *d_eePose, const T *d_q, const int stride_q, "
-                      "const int target_jid, const T *d_offset, ")
+                      "const int target_jid, const T *d_Xtool, ")
     func_def_end = "const robotModel<T> *d_robotModel, const int NUM_TIMESTEPS) {"
     func_def = func_def_start + func_def_end
     if single_call_timing:
@@ -157,12 +176,12 @@ def gen_end_effector_pose_runtime_kernel(self, single_call_timing=False):
     self.gen_add_code_line("__launch_bounds__(tier_max_threads<RESOURCE_TIER>())")
     self.gen_add_code_line(func_def, True)
     # cache the runtime offset in shared so every thread/inner reads from smem.
-    self.gen_add_code_line("__shared__ T s_offset[3];")
+    self.gen_add_code_line("__shared__ T s_Xtool[16];")
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
         _runtime_inner_temp_mem_size(self),
         extra_t_buffers=[("s_q", n), ("s_eePose", 6)],
         include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
-    self.gen_add_code_line("if (threadIdx.x == 0 && threadIdx.y == 0) { s_offset[0]=d_offset[0]; s_offset[1]=d_offset[1]; s_offset[2]=d_offset[2]; }")
+    self.gen_add_code_line("for (int _i = threadIdx.x + threadIdx.y*blockDim.x; _i < 16; _i += blockDim.x*blockDim.y) { s_Xtool[_i] = d_Xtool[_i]; }")
     self.gen_add_sync()
     if not single_call_timing:
         self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
@@ -176,7 +195,7 @@ def gen_end_effector_pose_runtime_kernel(self, single_call_timing=False):
             self.gen_add_end_control_flow()
         self.gen_add_code_line("// compute")
         self.gen_load_update_XmatsHom_helpers_function_call()
-        self.gen_add_code_line("end_effector_pose_runtime_inner<T>(s_eePose, target_jid, s_offset, s_q, s_XmatsHom, d_robotModel, s_temp);")
+        self.gen_add_code_line("end_effector_pose_runtime_inner<T>(s_eePose, target_jid, s_Xtool, s_q, s_XmatsHom, d_robotModel, s_temp);")
         self.gen_add_sync()
         self.gen_kernel_save_result("eePose", "6", stride="6")
         self.gen_add_end_control_flow()
@@ -192,7 +211,7 @@ def gen_end_effector_pose_runtime_kernel(self, single_call_timing=False):
         self.gen_add_code_line("for (int rep = 0; rep < NUM_TIMESTEPS; rep++){", True)
         self.gen_anti_licm_input_reload("q", str(n), feedback_from="eePose")
         self.gen_load_update_XmatsHom_helpers_function_call()
-        self.gen_add_code_line("end_effector_pose_runtime_inner<T>(s_eePose, target_jid, s_offset, s_q, s_XmatsHom, d_robotModel, s_temp);")
+        self.gen_add_code_line("end_effector_pose_runtime_inner<T>(s_eePose, target_jid, s_Xtool, s_q, s_XmatsHom, d_robotModel, s_temp);")
         self.gen_anti_licm_output_write("eePose")
         self.gen_add_end_control_flow()
         self.gen_kernel_save_result("eePose", "6")
@@ -316,12 +335,12 @@ def gen_end_effector_pose_gradient_runtime_inner(self):
     func_params = [
         "s_grad is the output 6 x NUM_VEL gradient d[xyz; rpy]/dv (column-major)",
         "target_jid is the joint id whose pose gradient is requested",
-        "s_offset is the 3-vector point offset in the target frame",
+        "s_Xtool is the 16-float 4x4 col-major SE(3) tool/tip transform in the target frame",
         "s_q is the vector of joint positions (unused; baked into s_Xhom)",
         "s_Xhom is the per-joint LOCAL homogeneous transforms",
         "d_robotModel is the GPU model helpers",
         "s_temp is scratch of size " + str(_runtime_inner_temp_mem_size(self))]
-    func_def_middle = ("T *s_grad, const int target_jid, const T *s_offset, "
+    func_def_middle = ("T *s_grad, const int target_jid, const T *s_Xtool, "
                        "const T *s_q, const T *s_Xhom, const robotModel<T> *d_robotModel, ")
     func_def = "void end_effector_pose_gradient_runtime_inner(" + func_def_middle + "T *s_temp) {"
     self.gen_add_func_doc("Compute a runtime-target end-effector pose gradient at an offset point",
@@ -375,9 +394,10 @@ def gen_end_effector_pose_gradient_runtime_inner(self):
         if HAS_MIMIC:
             self.gen_bake_const_array("epg_alpha", [j[5] for j in jobs], "T")
         self.gen_add_serial_ops()
-        # p_ee = p_target + R_target * offset (column-major target block).
+        # tip lever point p_ee = p_target + R_target * p_tool (p_tool = X_tool translation).
+        # Only the tool TRANSLATION enters the lever arm (R_tool affects only the E^-1 block).
         self.gen_add_code_line("const T *Xf = &s_Xworld[16*target_jid];")
-        self.gen_add_code_line("T ox = s_offset[0], oy = s_offset[1], oz = s_offset[2];")
+        self.gen_add_code_line("T ox = s_Xtool[12], oy = s_Xtool[13], oz = s_Xtool[14];")
         self.gen_add_code_line("T pex = Xf[0]*ox + Xf[4]*oy + Xf[8]*oz  + Xf[12];")
         self.gen_add_code_line("T pey = Xf[1]*ox + Xf[5]*oy + Xf[9]*oz  + Xf[13];")
         self.gen_add_code_line("T pez = Xf[2]*ox + Xf[6]*oy + Xf[10]*oz + Xf[14];")
@@ -412,13 +432,17 @@ def gen_end_effector_pose_gradient_runtime_inner(self):
         self.gen_add_sync()
 
     # Step 4: rewrite rows 3..5 of each column = E(rpy)^-1 * Jw (in place).
-    # E^-1 for R = Rz(yaw)Ry(pitch)Rx(roll); rpy from the target rotation block.
-    # Mirrors _eepose_gradient_hessian Step-5 (rows 3..5).
-    self.gen_add_code_line("// Step 4: rows 3..5 <- E(rpy)^-1 * Jw (rpy from target world rotation)")
+    # E^-1 for R = Rz(yaw)Ry(pitch)Rx(roll); rpy from the TOOL-frame rotation
+    # R_frame = R_target * R_tool. Mirrors _eepose_gradient_hessian Step-5 (rows 3..5).
+    self.gen_add_code_line("// Step 4: rows 3..5 <- E(rpy)^-1 * Jw (rpy from R_frame = R_target * R_tool)")
     self.gen_add_serial_ops()
     self.gen_add_code_line("const T *Xf2 = &s_Xworld[16*target_jid];")
-    self.gen_add_code_line("T R20 = Xf2[2];  T R21 = Xf2[6];  T R22 = Xf2[10];")
-    self.gen_add_code_line("T R10 = Xf2[1];  T R00 = Xf2[0];")
+    # R_frame[r][c] = sum_k R_target[r][k] * R_tool[k][c]  (col-major: Xf2[r+4k], s_Xtool[k+4c])
+    self.gen_add_code_line("T R00 = Xf2[0]*s_Xtool[0] + Xf2[4]*s_Xtool[1] + Xf2[8]*s_Xtool[2];")
+    self.gen_add_code_line("T R10 = Xf2[1]*s_Xtool[0] + Xf2[5]*s_Xtool[1] + Xf2[9]*s_Xtool[2];")
+    self.gen_add_code_line("T R20 = Xf2[2]*s_Xtool[0] + Xf2[6]*s_Xtool[1] + Xf2[10]*s_Xtool[2];")
+    self.gen_add_code_line("T R21 = Xf2[2]*s_Xtool[4] + Xf2[6]*s_Xtool[5] + Xf2[10]*s_Xtool[6];")
+    self.gen_add_code_line("T R22 = Xf2[2]*s_Xtool[8] + Xf2[6]*s_Xtool[9] + Xf2[10]*s_Xtool[10];")
     self.gen_add_code_line("T yaw = atan2(R10, R00);")
     self.gen_add_code_line("T pitch = atan2(-R20, sqrt(R22*R22 + R21*R21));")
     self.gen_add_code_line("T cy = cos(yaw), sy = sin(yaw), cp = cos(pitch), sp = sin(pitch);")
@@ -437,13 +461,13 @@ def gen_end_effector_pose_gradient_runtime_inner(self):
 def gen_end_effector_pose_gradient_runtime_device(self):
     """Auto-smem device wrapper around end_effector_pose_gradient_runtime_inner."""
     func_def = ("void end_effector_pose_gradient_runtime_device(T *s_grad, const int target_jid, "
-                "const T *s_offset, const T *s_q, const robotModel<T> *d_robotModel) {")
+                "const T *s_Xtool, const T *s_q, const robotModel<T> *d_robotModel) {")
     func_params = ["s_grad holds the 6 x NUM_VEL pose gradient (column-major)",
                    "target_jid is the joint id of the frame",
-                   "s_offset is the 3-vector point offset in the target frame",
+                   "s_Xtool is the 16-float 4x4 col-major SE(3) tool/tip transform in the target frame",
                    "s_q is the joint position vector",
                    "d_robotModel is the GPU model helpers"]
-    self.gen_add_func_doc("Compute a runtime-target end-effector pose gradient at an offset point",
+    self.gen_add_func_doc("Compute a runtime-target end-effector pose gradient at a tool tip frame",
                           [], func_params, None)
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
@@ -452,7 +476,7 @@ def gen_end_effector_pose_gradient_runtime_device(self):
         _runtime_inner_temp_mem_size(self),
         include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
     self.gen_load_update_XmatsHom_helpers_function_call()
-    self.gen_add_code_line("end_effector_pose_gradient_runtime_inner<T>(s_grad, target_jid, s_offset, s_q, s_XmatsHom, d_robotModel, s_temp);")
+    self.gen_add_code_line("end_effector_pose_gradient_runtime_inner<T>(s_grad, target_jid, s_Xtool, s_q, s_XmatsHom, d_robotModel, s_temp);")
     self.gen_add_sync()
     self.gen_add_end_function()
 
@@ -466,11 +490,11 @@ def gen_end_effector_pose_gradient_runtime_kernel(self, single_call_timing=False
                    "d_q is the vector of joint positions",
                    "stride_q is the stride between each q",
                    "target_jid is the joint id whose pose gradient is requested (runtime)",
-                   "d_offset is the 3-vector point offset in the target frame (runtime)",
+                   "d_Xtool is the 16-float 4x4 col-major SE(3) tool/tip transform in the target frame (runtime)",
                    "d_robotModel is the pointer to the initialized model specific helpers on the GPU",
                    "num_timesteps is the length of the trajectory points (or overloaded as test_iters for timing)"]
     func_def_start = ("void end_effector_pose_gradient_runtime_kernel(T *d_eePoseGrad, const T *d_q, const int stride_q, "
-                      "const int target_jid, const T *d_offset, ")
+                      "const int target_jid, const T *d_Xtool, ")
     func_def_end = "const robotModel<T> *d_robotModel, const int NUM_TIMESTEPS) {"
     func_def = func_def_start + func_def_end
     if single_call_timing:
@@ -488,12 +512,12 @@ def gen_end_effector_pose_gradient_runtime_kernel(self, single_call_timing=False
     self.gen_add_code_line("__global__")
     self.gen_add_code_line("__launch_bounds__(tier_max_threads<RESOURCE_TIER>())")
     self.gen_add_code_line(func_def, True)
-    self.gen_add_code_line("__shared__ T s_offset[3];")
+    self.gen_add_code_line("__shared__ T s_Xtool[16];")
     self.gen_XmatsHom_helpers_temp_shared_memory_code(
         _runtime_inner_temp_mem_size(self),
         extra_t_buffers=[("s_q", n), ("s_eePoseGrad", 6 * nv)],
         include_linalg_scratch=True, linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
-    self.gen_add_code_line("if (threadIdx.x == 0 && threadIdx.y == 0) { s_offset[0]=d_offset[0]; s_offset[1]=d_offset[1]; s_offset[2]=d_offset[2]; }")
+    self.gen_add_code_line("for (int _i = threadIdx.x + threadIdx.y*blockDim.x; _i < 16; _i += blockDim.x*blockDim.y) { s_Xtool[_i] = d_Xtool[_i]; }")
     self.gen_add_sync()
     if not single_call_timing:
         self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
@@ -506,7 +530,7 @@ def gen_end_effector_pose_gradient_runtime_kernel(self, single_call_timing=False
             self.gen_add_end_control_flow()
         self.gen_add_code_line("// compute")
         self.gen_load_update_XmatsHom_helpers_function_call()
-        self.gen_add_code_line("end_effector_pose_gradient_runtime_inner<T>(s_eePoseGrad, target_jid, s_offset, s_q, s_XmatsHom, d_robotModel, s_temp);")
+        self.gen_add_code_line("end_effector_pose_gradient_runtime_inner<T>(s_eePoseGrad, target_jid, s_Xtool, s_q, s_XmatsHom, d_robotModel, s_temp);")
         self.gen_add_sync()
         # mjx output: column reframe J G^{-1} (base-linear cols . R^T) of the single
         # 6 x nv ee block, in place on s_eePoseGrad.
@@ -528,7 +552,7 @@ def gen_end_effector_pose_gradient_runtime_kernel(self, single_call_timing=False
         self.gen_add_code_line("for (int rep = 0; rep < NUM_TIMESTEPS; rep++){", True)
         self.gen_anti_licm_input_reload("q", str(n), feedback_from="eePoseGrad")
         self.gen_load_update_XmatsHom_helpers_function_call()
-        self.gen_add_code_line("end_effector_pose_gradient_runtime_inner<T>(s_eePoseGrad, target_jid, s_offset, s_q, s_XmatsHom, d_robotModel, s_temp);")
+        self.gen_add_code_line("end_effector_pose_gradient_runtime_inner<T>(s_eePoseGrad, target_jid, s_Xtool, s_q, s_XmatsHom, d_robotModel, s_temp);")
         # mjx output: column reframe J G^{-1} (base-linear cols . R^T) per ee block.
         if mjx:
             self.gen_add_code_line("if constexpr (MUJOCO_OUTPUT) {", True)

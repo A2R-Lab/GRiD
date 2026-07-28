@@ -457,6 +457,288 @@ def gen_f_ext_body_jacobian_dfc_inner(self, contacts):
     self.gen_add_end_function()
 
 
+# ===========================================================================
+# RUNTIME single-contact sibling (the welded-tool tip). Same map/derivative math
+# as the baked family above, but the contact body `b` and local offset `s_rc` are
+# RUNTIME arguments (a runtime tool frame, not a baked URDF frame). A single
+# contact => no body grouping / determinism table is needed (one writer per slot
+# by construction). The tool's ORIENTATION never enters (world-aligned axes; only
+# the offset matters -- design doc section 2).
+# ===========================================================================
+
+def _emit_gh_runtime(self):
+    """g = R_b^T n_w, h = R_b^T f_w for the single runtime contact on runtime body
+    `b`, plus r0/r1/r2 from the runtime offset `s_rc`. Assumes `b`, `s_rc`,
+    `s_f_c` (6), and `s_Xworld` are in scope."""
+    self.gen_add_code_lines([
+        "const T *nw = &s_f_c[0];   // world angular (moment about the contact origin)",
+        "const T *fw = &s_f_c[3];   // world linear",
+        "T g[3], h[3];",
+        "for (int a = 0; a < 3; ++a) {", True,
+        "const T *Ra = &s_Xworld[16*b + 4*a];   // column a of R -> row a of R^T",
+        "g[a] = Ra[0]*nw[0] + Ra[1]*nw[1] + Ra[2]*nw[2];",
+        "h[a] = Ra[0]*fw[0] + Ra[1]*fw[1] + Ra[2]*fw[2];",
+    ])
+    self.gen_add_end_control_flow()
+    self.gen_add_code_line("const T r0 = s_rc[0], r1 = s_rc[1], r2 = s_rc[2];")
+
+
+def _emit_runtime_fk_prefix(self, n_joints):
+    self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
+    self.gen_add_code_line("(void)s_q; (void)s_linalg_smem;")
+    self.gen_add_code_line("T *s_Xworld = s_temp;   // 16 * " + str(n_joints))
+    from ._eepose_gradient_hessian import emit_world_fk_chainup
+    emit_world_fk_chainup(
+        self,
+        header_lines=["//", "// Build world transforms for every joint via BFS-level chain-up", "//"],
+        fixed_anchors=None)
+
+
+def gen_f_ext_body_runtime_inner(self):
+    """Emit `f_ext_body_runtime_inner`: a SINGLE runtime contact (body `b`, offset
+    `s_rc`, wrench `s_f_c`[6]) -> joint-local f_ext (6*NUM_BODIES)."""
+    NB = self.robot.get_num_bodies()
+    n_joints = self.robot.get_num_joints()
+    func_params = [
+        "s_f_ext is the output, size 6*NUM_BODIES (joint-local Featherstone [angular;linear]); ZEROED then scattered",
+        "s_f_c is the SINGLE contact wrench input, size 6 ([n_w; f_w], WORLD-ALIGNED, moment about the contact origin)",
+        "b is the RUNTIME body/joint id the tool contact is attached to",
+        "s_rc is the RUNTIME 3-vector contact offset in body b's joint frame",
+        "s_q is the vector of joint positions",
+        "s_Xhom is the per-joint local homogeneous transforms (already updated for q)",
+        "s_temp is helper shared memory (holds s_Xworld = 16*NUM_JOINTS)",
+        "d_workspace is the global-memory scratch used when !TEMP_IN_SMEM",
+    ]
+    func_notes = [
+        "Runtime single-contact sibling of f_ext_body_inner: b and s_rc are RUNTIME (the welded-tool "
+        "tip), not a baked URDF frame. f_ext[b] = [ R^T n_w + r_c x (R^T f_w) ; R^T f_w ]; all other bodies 0.",
+    ]
+    func_def_start = "void f_ext_body_runtime_inner("
+    func_def_middle = "T *s_f_ext, const T *s_f_c, const int b, const T *s_rc, const T *s_q, const T *s_Xhom, "
+    func_def_end = "T *s_temp, T *d_workspace, unsigned char *s_linalg_smem) {"
+    func_def_middle, func_params = self.gen_insert_helpers_func_def_params(
+        func_def_middle, func_params, -1, NO_XI_FLAG=True)
+    self.gen_add_func_doc("Runtime-target contact wrench -> joint-local f_ext", func_notes, func_params, None)
+    self.gen_add_code_line("template <typename T, bool TEMP_IN_SMEM = true>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line(func_def_start + func_def_middle + func_def_end, True)
+    _emit_runtime_fk_prefix(self, n_joints)
+
+    self.gen_add_code_line("// zero every slot: only body b contributes")
+    self.gen_add_code_line("glass::set_const<T, " + str(6 * NB) + ">(static_cast<T>(0), s_f_ext);")
+    self.gen_add_sync()
+    self.gen_add_code_line("// one thread per output component of body b (single writer)")
+    self.gen_add_parallel_loop("k", "6")
+    _emit_gh_runtime(self)
+    self.gen_add_code_lines([
+        "T acc;",
+        "if (k >= 3) { acc = h[k-3]; }",
+        "else {", True,
+        "// angular = g + r_c x h",
+        "const T rxh0 = r1*h[2] - r2*h[1];",
+        "const T rxh1 = r2*h[0] - r0*h[2];",
+        "const T rxh2 = r0*h[1] - r1*h[0];",
+        "acc = g[k] + ((k == 0) ? rxh0 : ((k == 1) ? rxh1 : rxh2));",
+    ])
+    self.gen_add_end_control_flow()   # else
+    self.gen_add_code_line("s_f_ext[6*b + k] = acc;")
+    self.gen_add_end_control_flow()   # parallel loop
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+
+def gen_f_ext_body_jacobian_dfc_runtime_inner(self):
+    """Emit `f_ext_body_jacobian_dfc_runtime_inner`: d(f_ext)/d(f_c), size
+    6*NUM_BODIES x 6 for the single runtime contact (f_c-independent)."""
+    NB = self.robot.get_num_bodies()
+    NR = 6 * NB
+    n_joints = self.robot.get_num_joints()
+    func_params = [
+        "s_dfext_dfc is the output, size " + str(NR * 6) + " (column-major [row + " + str(NR) + "*j], j = 0..5)",
+        "b is the RUNTIME body/joint id the tool contact is attached to",
+        "s_rc is the RUNTIME 3-vector contact offset in body b's joint frame",
+        "s_q is the vector of joint positions",
+        "s_Xhom is the per-joint local homogeneous transforms (already updated for q)",
+        "s_temp is helper shared memory (holds s_Xworld = 16*NUM_JOINTS)",
+        "d_workspace is the global-memory scratch used when !TEMP_IN_SMEM",
+    ]
+    func_notes = [
+        "f_c-INDEPENDENT (linear map). Per body b it is [ R^T  skew(r_c) R^T ; 0  R^T ]; zero elsewhere.",
+    ]
+    func_def_start = "void f_ext_body_jacobian_dfc_runtime_inner("
+    func_def_middle = "T *s_dfext_dfc, const int b, const T *s_rc, const T *s_q, const T *s_Xhom, "
+    func_def_end = "T *s_temp, T *d_workspace, unsigned char *s_linalg_smem) {"
+    func_def_middle, func_params = self.gen_insert_helpers_func_def_params(
+        func_def_middle, func_params, -1, NO_XI_FLAG=True)
+    self.gen_add_func_doc("Runtime-target d(f_ext)/d(contact wrench) -- f_c-independent", func_notes, func_params, None)
+    self.gen_add_code_line("template <typename T, bool TEMP_IN_SMEM = true>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line(func_def_start + func_def_middle + func_def_end, True)
+    _emit_runtime_fk_prefix(self, n_joints)
+
+    self.gen_add_code_line("// zero: only body b's rows are nonzero")
+    self.gen_add_code_line("glass::set_const<T, " + str(NR * 6) + ">(static_cast<T>(0), s_dfext_dfc);")
+    self.gen_add_sync()
+    self.gen_add_code_line("// one thread per (out-component k, in-component j)")
+    self.gen_add_parallel_loop("ind", "36")
+    self.gen_add_code_lines([
+        "int j = ind % 6; int k = ind / 6;",
+        "const T r0 = s_rc[0], r1 = s_rc[1], r2 = s_rc[2];",
+        "T val = static_cast<T>(0);",
+        "if (k >= 3) {", True,
+        "if (j >= 3) { val = s_Xworld[16*b + 4*(k-3) + (j-3)]; }",
+    ])
+    self.gen_add_end_control_flow()
+    self.gen_add_code_lines([
+        "else {", True,
+        "if (j < 3) { val = s_Xworld[16*b + 4*k + j]; }",
+        "else {", True,
+        "const int jj = j - 3;",
+        "const T Rt0 = s_Xworld[16*b + 4*0 + jj];",
+        "const T Rt1 = s_Xworld[16*b + 4*1 + jj];",
+        "const T Rt2 = s_Xworld[16*b + 4*2 + jj];",
+        "val = (k == 0) ? (-r2*Rt1 + r1*Rt2)",
+        "    : ((k == 1) ? ( r2*Rt0 - r0*Rt2)",
+        "                : (-r1*Rt0 + r0*Rt1));",
+    ])
+    self.gen_add_end_control_flow()   # else j>=3
+    self.gen_add_end_control_flow()   # else k<3
+    self.gen_add_code_line("s_dfext_dfc[(6*b + k) + " + str(NR) + "*j] = val;")
+    self.gen_add_end_control_flow()   # parallel loop
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+
+def gen_f_ext_body_jacobian_dq_runtime_inner(self):
+    """Emit `f_ext_body_jacobian_dq_runtime_inner`: d(f_ext)/dq at FIXED f_c, size
+    6*NUM_BODIES x NUM_VEL for the single runtime contact."""
+    nv = self.robot.get_num_vel()
+    NB = self.robot.get_num_bodies()
+    n_joints = self.robot.get_num_joints()
+    func_params = [
+        "s_dfext_dq is the output, size 6*NUM_BODIES*NUM_VEL, column-major [row + 6*NUM_BODIES*v]",
+        "s_f_c is the SINGLE contact wrench input, size 6 (the Jacobian is LINEAR in it)",
+        "b is the RUNTIME body/joint id the tool contact is attached to",
+        "s_rc is the RUNTIME 3-vector contact offset in body b's joint frame",
+        "s_dtau_dfext is -J^T from grid::f_ext_gradient_device, size NUM_VEL*6*NUM_BODIES "
+        "(column-major [v + NUM_VEL*(6*i+k)]); its columns ARE the local body Jacobian",
+        "s_q is the vector of joint positions",
+        "s_Xhom is the per-joint local homogeneous transforms (already updated for q)",
+        "s_temp is helper shared memory (holds s_Xworld = 16*NUM_JOINTS)",
+        "d_workspace is the global-memory scratch used when !TEMP_IN_SMEM",
+    ]
+    func_notes = [
+        "d(f_ext[b])/dq_v = [ -w_v x g - r_c x (w_v x h) ; -w_v x h ], w_v = -s_dtau_dfext[v + nv*(6b+k)] "
+        "(k in 0..2). The chain-rule term a solver DROPS if it treats the applied wrench as q-independent.",
+    ]
+    func_def_start = "void f_ext_body_jacobian_dq_runtime_inner("
+    func_def_middle = ("T *s_dfext_dq, const T *s_f_c, const int b, const T *s_rc, const T *s_dtau_dfext, "
+                       "const T *s_q, const T *s_Xhom, ")
+    func_def_end = "T *s_temp, T *d_workspace, unsigned char *s_linalg_smem) {"
+    func_def_middle, func_params = self.gen_insert_helpers_func_def_params(
+        func_def_middle, func_params, -1, NO_XI_FLAG=True)
+    self.gen_add_func_doc("Runtime-target d(f_ext)/dq at fixed contact wrench", func_notes, func_params, None)
+    self.gen_add_code_line("template <typename T, bool TEMP_IN_SMEM = true>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line(func_def_start + func_def_middle + func_def_end, True)
+    _emit_runtime_fk_prefix(self, n_joints)
+
+    self.gen_add_code_line("// zero every slot: only body b has nonzero sensitivity")
+    self.gen_add_code_line("glass::set_const<T, " + str(6 * NB * nv) + ">(static_cast<T>(0), s_dfext_dq);")
+    self.gen_add_sync()
+    self.gen_add_code_line("// one thread per (output component k, velocity v)")
+    self.gen_add_parallel_loop("ind", str(6 * nv))
+    self.gen_add_code_lines([
+        "int k = ind % 6; int v = ind / 6;",
+        "const T w0 = -s_dtau_dfext[v + " + str(nv) + "*(6*b + 0)];",
+        "const T w1 = -s_dtau_dfext[v + " + str(nv) + "*(6*b + 1)];",
+        "const T w2 = -s_dtau_dfext[v + " + str(nv) + "*(6*b + 2)];",
+    ])
+    _emit_gh_runtime(self)
+    self.gen_add_code_lines([
+        "// dh = -w x h ;  dg = -w x g",
+        "const T dh0 = -(w1*h[2] - w2*h[1]), dh1 = -(w2*h[0] - w0*h[2]), dh2 = -(w0*h[1] - w1*h[0]);",
+        "T acc;",
+        "if (k >= 3) { acc = (k == 3) ? dh0 : ((k == 4) ? dh1 : dh2); }",
+        "else {", True,
+        "const T dg0 = -(w1*g[2] - w2*g[1]), dg1 = -(w2*g[0] - w0*g[2]), dg2 = -(w0*g[1] - w1*g[0]);",
+        "// angular sensitivity = dg + r_c x dh",
+        "const T rxd0 = r1*dh2 - r2*dh1;",
+        "const T rxd1 = r2*dh0 - r0*dh2;",
+        "const T rxd2 = r0*dh1 - r1*dh0;",
+        "acc = ((k == 0) ? (dg0 + rxd0) : ((k == 1) ? (dg1 + rxd1) : (dg2 + rxd2)));",
+    ])
+    self.gen_add_end_control_flow()   # else
+    self.gen_add_code_line("s_dfext_dq[(6*b + k) + " + str(6 * NB) + "*v] = acc;")
+    self.gen_add_end_control_flow()   # parallel loop
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+
+def _emit_device_runtime(self, which):
+    """Device wrapper for the runtime single-contact family. which in {value, dq, dfc}."""
+    scratch = gen_f_ext_contact_inner_temp_mem_size(self)
+    nv = self.robot.get_num_vel()
+    NB = self.robot.get_num_bodies()
+    NAME = {"value": "f_ext_body_runtime_device",
+            "dq":    "f_ext_body_jacobian_dq_runtime_device",
+            "dfc":   "f_ext_body_jacobian_dfc_runtime_device"}[which]
+    OUT = {"value": ("T *s_f_ext, ",     "s_f_ext is the output joint-local wrench array, size " + str(6 * NB)),
+           "dq":    ("T *s_dfext_dq, ",  "s_dfext_dq is the output d(f_ext)/dq, size " + str(6 * NB * nv)),
+           "dfc":   ("T *s_dfext_dfc, ", "s_dfext_dfc is the output d(f_ext)/d(f_c), size " + str(6 * NB * 6))}[which]
+    func_params = [OUT[1]]
+    if which != "dfc":
+        func_params.append("s_f_c is the SINGLE contact wrench input, size 6")
+    func_params += [
+        "b is the RUNTIME body/joint id the tool contact is attached to",
+        "s_rc is the RUNTIME 3-vector contact offset in body b's joint frame"]
+    if which == "dq":
+        func_params.append("s_dtau_dfext is -J^T from grid::f_ext_gradient_device, size " + str(nv * 6 * NB))
+    func_params += [
+        "s_q is the vector of joint positions",
+        "d_robotModel is the initialized model-specific helpers on the GPU",
+        "d_workspace is the global scratch (0 bytes at TIER_SHARED, " + str(scratch) + "*sizeof(T) at TIER_LITE+)"]
+    doc = {"value": "Runtime-target contact wrench -> the joint-local f_ext array plant_step consumes",
+           "dq":    "Runtime-target d(f_ext)/dq at fixed contact wrench",
+           "dfc":   "Runtime-target d(f_ext)/d(contact wrench)"}[which]
+    self.gen_add_func_doc(doc, [], func_params, None)
+    self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
+    self.gen_add_code_line("__device__")
+    sig = "void " + NAME + "(" + OUT[0]
+    if which != "dfc":
+        sig += "const T *s_f_c, "
+    sig += "const int b, const T *s_rc, "
+    if which == "dq":
+        sig += "const T *s_dtau_dfext, "
+    sig += "const T *s_q, const robotModel<T> *d_robotModel, T *d_workspace = nullptr) {"
+    self.gen_add_code_line(sig, True)
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(scratch, include_linalg_scratch=True,
+                                                      linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()",
+                                                      tier_workspace_expr="d_workspace")
+    self.gen_load_update_XmatsHom_helpers_function_call()
+    inner = {"value": "f_ext_body_runtime_inner<T>(s_f_ext, s_f_c, b, s_rc, s_q, s_XmatsHom, ",
+             "dq":    "f_ext_body_jacobian_dq_runtime_inner<T>(s_dfext_dq, s_f_c, b, s_rc, s_dtau_dfext, s_q, s_XmatsHom, ",
+             "dfc":   "f_ext_body_jacobian_dfc_runtime_inner<T>(s_dfext_dfc, b, s_rc, s_q, s_XmatsHom, "}[which]
+    inner += self.gen_insert_helpers_function_call(NO_XI_FLAG=True)
+    inner += "s_temp, nullptr, s_linalg_smem);"
+    self.gen_add_code_line(inner)
+    self.gen_add_end_function()
+
+
+def gen_f_ext_contact_runtime(self):
+    """Dispatcher: emit the RUNTIME single-contact f_ext surface (the welded-tool tip)."""
+    self.gen_add_code_line("")
+    self.gen_add_code_line("// ---- runtime single contact (welded-tool tip): world-aligned wrench -> joint-local f_ext")
+    self.gen_add_code_line("//   body id + local offset are RUNTIME arguments (not a baked URDF frame)")
+    self.gen_add_code_line("#define GRID_HAS_CONTACT_RUNTIME 1")
+    gen_f_ext_body_runtime_inner(self)
+    gen_f_ext_body_jacobian_dfc_runtime_inner(self)
+    gen_f_ext_body_jacobian_dq_runtime_inner(self)
+    _emit_device_runtime(self, "value")
+    _emit_device_runtime(self, "dfc")
+    _emit_device_runtime(self, "dq")
+
+
 def gen_f_ext_contact(self, contacts):
     """Dispatcher: emit the whole contact-frame f_ext surface (constants + inners + devices)."""
     if not contacts:

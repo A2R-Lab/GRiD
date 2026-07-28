@@ -591,6 +591,34 @@ class TorchRobotHandle:
         registered with ``runtime_inertia=True``."""
         self._base.set_inertia_params(params)
 
+    # ─── welded tool / payload (attach_tool) ─────────────────────────────
+    def attach_tool(self, joint, *, mass, com=(0.0, 0.0, 0.0), inertia=None,
+                    tip_transform=None):
+        """Weld a rigid tool/payload at runtime (no recompile). Delegates to the base
+        handle: composes the payload inertia into ``joint``'s child link and stores an
+        optional SE(3) ``tip_transform``. See :py:meth:`grid_rbd.RobotHandle.attach_tool`.
+        The inertia change is seen by every surface (numpy/jax/torch share the .so); for
+        the tool-tip frame, pass ``ee_offsets=[tip_transform]`` to
+        :py:meth:`end_effector_pose_runtime`."""
+        return self._base.attach_tool(joint, mass=mass, com=com, inertia=inertia,
+                                      tip_transform=tip_transform)
+
+    def detach_tool(self):
+        """Remove the attached tool (restore baked inertia). See
+        :py:meth:`grid_rbd.RobotHandle.detach_tool`."""
+        self._base.detach_tool()
+
+    @property
+    def tool(self):
+        """The currently attached tool dict or ``None``."""
+        return self._base.tool
+
+    def tool_fext(self, q, wrench, *, joint=None, offset=None):
+        """World-aligned tool-tip wrench -> joint-local f_ext ``(B, 6*num_bodies)``,
+        ready to pass as ``f_ext=`` to the dynamics. Delegates to the base handle
+        (returns a numpy array). See :py:meth:`grid_rbd.RobotHandle.tool_fext`."""
+        return self._base.tool_fext(q, wrench, joint=joint, offset=offset)
+
     # ─── runtime-mutable joint-frame transform (runtime_transform) ───────
     @property
     def runtime_transform(self) -> bool:

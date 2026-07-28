@@ -49,7 +49,27 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_eepose_runtime_smoke_runner.cu")
 _ALGO_KEYS = ["end_effector_pose_runtime", "end_effector_pose_gradient_runtime"]
-_OFFSET = np.array([0.05, -0.03, 0.07], dtype=np.float64)
+
+
+def _rot_axis_angle(axis, angle):
+    axis = np.asarray(axis, dtype=np.float64)
+    axis = axis / np.linalg.norm(axis)
+    K = np.array([[0.0, -axis[2], axis[1]],
+                  [axis[2], 0.0, -axis[0]],
+                  [-axis[1], axis[0], 0.0]], dtype=np.float64)
+    return np.eye(3) + np.sin(angle) * K + (1.0 - np.cos(angle)) * (K @ K)
+
+
+def _tool_transform():
+    """A nontrivial welded-tool offset: ~35 deg about a tilted axis + translation.
+    Exercises the full SE(3) path (R_tool != I AND p_tool != 0)."""
+    X = np.eye(4, dtype=np.float64)
+    X[:3, :3] = _rot_axis_angle([0.3, -0.7, 0.65], 0.6108)
+    X[:3, 3] = np.array([0.05, -0.03, 0.07], dtype=np.float64)
+    return X
+
+
+_XTOOL = _tool_transform()  # 4x4 SE(3) tool transform (rotation + translation)
 # Skip the rpy rows when the EE pitch is within this band of +-pi/2 (E^{-1}
 # gimbal-lock singularity, on the oracle AND the device).
 _PITCH_GUARD = 0.15
@@ -107,9 +127,11 @@ def _compile_runner(build_dir):
     return executable, cmd
 
 
-def _stdin(target_jid, offset, q):
+def _stdin(target_jid, Xtool, q):
+    # X_tool sent as 16 floats in COLUMN-MAJOR order (matches the device s_Xtool layout).
+    xt = np.asarray(Xtool, dtype=np.float32).reshape(4, 4)
     rows = [str(int(target_jid)),
-            " ".join(f"{v:.9g}" for v in np.asarray(offset, dtype=np.float32)),
+            " ".join(f"{v:.9g}" for v in xt.reshape(-1, order="F")),
             " ".join(f"{v:.9g}" for v in np.asarray(q, dtype=np.float32))]
     return "\n".join(rows) + "\n"
 
@@ -191,7 +213,7 @@ def test_cuda_eepose_runtime_matches_reference(tmp_path, robot_id, base_mode):
         for sample in samples:
             q = np.asarray(sample.q, np.float64)
             out = _parse_runner_output(
-                _run_runner(executable, _stdin(target_jid, _OFFSET, q), cmd))
+                _run_runner(executable, _stdin(target_jid, _XTOOL, q), cmd))
             tag = f"{robot_id}-{base_mode} tgt={target_name} @ {sample.name}"
             # float32 FK-chain conditioning floor for the position rows: a
             # single-precision world chain-up accumulates ~few*1e-3 absolute per
@@ -202,40 +224,33 @@ def test_cuda_eepose_runtime_matches_reference(tmp_path, robot_id, base_mode):
             pos_atol = max(2e-3, 4e-3 * _chain_world_scale(q, target_jid))
 
             # ---- POSE ----
+            # pose0: identity tool (frame origin). poseN: the full SE(3) tool frame.
             pose0 = out["pose0"].reshape(-1)
             poseN = out["poseN"].reshape(-1)
             ref0 = np.asarray(project_model.end_effector_pose(q, target_name, None),
                               dtype=np.float64).reshape(-1)
-            offN = np.array([_OFFSET[0], _OFFSET[1], _OFFSET[2], 1.0])
-            refN = np.asarray(project_model.end_effector_pose(q, target_name, offN),
+            refN = np.asarray(project_model.end_effector_pose(q, target_name, _XTOOL),
                               dtype=np.float64).reshape(-1)
 
-            pitch = float(ref0[4])
-            near_gimbal = abs(abs(pitch) - np.pi / 2) < _PITCH_GUARD
-            # rpy is a NONLINEAR function of the EE rotation; a very deep float32 FK
-            # chain (e.g. h1_2's depth-11 thumb) corrupts R enough that the rpy
-            # extraction diverges even far from gimbal lock. That is the same
-            # float32 CONDITIONING floor as the position (the float64 numpy mirror
-            # is exact -- the index math + mimic alpha-fold are byte-correct). Skip
-            # rpy for such deep chains; shallow chains (<=8 deep: iiwa/fr3/go2 and
-            # h1_2's non-thumb targets) still check rpy tightly.
-            rpy_trustworthy = (not near_gimbal) and (_chain_depth(target_jid) <= 8)
+            # rpy trustworthiness is per-frame (guard on each frame's own pitch): the
+            # identity frame uses ref0's pitch, the tool frame uses refN's.
+            def _rpy_ok(pitch):
+                near_gimbal = abs(abs(float(pitch)) - np.pi / 2) < _PITCH_GUARD
+                # rpy is a NONLINEAR function of R; a very deep float32 FK chain
+                # (e.g. h1_2's depth-11 thumb) corrupts R enough that rpy diverges
+                # even far from gimbal lock -- same float32 conditioning floor as the
+                # position (the float64 numpy mirror is exact). Skip rpy for deep chains.
+                return (not near_gimbal) and (_chain_depth(target_jid) <= 8)
+            rpy0_ok = _rpy_ok(ref0[4])
+            rpyN_ok = _rpy_ok(refN[4])
 
             # position (always valid; float32 FK-chain conditioning floor).
             close(pose0[:3], ref0[:3], f"pose0 xyz {tag}", atol=pos_atol)
             close(poseN[:3], refN[:3], f"poseN xyz {tag}", atol=pos_atol)
-            if rpy_trustworthy:
+            if rpy0_ok:
                 close(pose0[3:], ref0[3:], f"pose0 rpy {tag}")
-                close(poseN[3:], refN[3:], f"poseN rpy {tag}")
-                # rpy unchanged by the offset (device side, float32).
-                close(poseN[3:], pose0[3:], f"poseN rpy==pose0 rpy {tag}")
-            # nonzero offset shifts position by R_target * offset (device side).
-            # R_target also comes off the (float32) FK chain, so this residual
-            # carries the same conditioning floor as the position.
-            R = np.asarray(project_model.end_effector_rotation_matrix(q, target_name),
-                           dtype=np.float64)
-            close(poseN[:3] - pose0[:3], R @ _OFFSET, f"pos shift = R*offset {tag}",
-                  atol=pos_atol)
+            if rpyN_ok:
+                close(poseN[3:], refN[3:], f"poseN rpy (SE(3) tool) {tag}")
 
             # ---- GRADIENT ----
             grad0 = out["grad0"].reshape(6, nv, order="F")
@@ -244,15 +259,16 @@ def test_cuda_eepose_runtime_matches_reference(tmp_path, robot_id, base_mode):
                 project_model.end_effector_pose_gradient(q, target_name, None),
                 dtype=np.float64)
             gN_ref = np.asarray(
-                project_model.end_effector_pose_gradient(q, target_name, offN),
+                project_model.end_effector_pose_gradient(q, target_name, _XTOOL),
                 dtype=np.float64)
             # The Jv (xyz) rows carry the same float32 FK-chain conditioning floor
             # as the position; the rpy rows are valid only away from gimbal lock.
             close(grad0[:3, :], g0_ref[:3, :], f"grad0 Jv {tag}", atol=pos_atol)
-            close(gradN[:3, :], gN_ref[:3, :], f"gradN Jv {tag}", atol=pos_atol)
-            if rpy_trustworthy:
+            close(gradN[:3, :], gN_ref[:3, :], f"gradN Jv (SE(3) tool) {tag}", atol=pos_atol)
+            if rpy0_ok:
                 close(grad0[3:, :], g0_ref[3:, :], f"grad0 rpy-rows {tag}")
-                close(gradN[3:, :], gN_ref[3:, :], f"gradN rpy-rows {tag}")
+            if rpyN_ok:
+                close(gradN[3:, :], gN_ref[3:, :], f"gradN rpy-rows (SE(3) tool) {tag}")
 
 
 @pytest.mark.cuda_equivalence
@@ -281,7 +297,7 @@ def test_cuda_eepose_runtime_thread_invariance(tmp_path, robot_id, base_mode):
     target_jid, _ = _nonleaf_targets(robot)[-1]
     samples = _build_cuda_samples(project_model, random_count=1, include_corner_samples=True)
     sample = samples[0]
-    stdin = _stdin(target_jid, _OFFSET, np.asarray(sample.q, np.float64))
+    stdin = _stdin(target_jid, _XTOOL, np.asarray(sample.q, np.float64))
 
     ref = None
     for nthreads in (1, 32, 256):

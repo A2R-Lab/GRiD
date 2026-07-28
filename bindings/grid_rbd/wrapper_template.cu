@@ -1870,9 +1870,11 @@ extern "C" int grid_rbd_end_effector_pose_runtime(const T* q, T* out, int batch,
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd/u unused
     // stage the runtime offset (frame origin when offset==nullptr).
-    T off[3] = {static_cast<T>(0), static_cast<T>(0), static_cast<T>(0)};
-    if (offset) { off[0]=offset[0]; off[1]=offset[1]; off[2]=offset[2]; }
-    if (cudaMemcpy(g_data->d_eepose_runtime_offset, off, 3*sizeof(T),
+    // offset is now the 4x4 col-major SE(3) tool/tip transform (16 floats); identity => frame origin.
+    T Xtool[16] = {static_cast<T>(1),0,0,0, 0,static_cast<T>(1),0,0,
+                   0,0,static_cast<T>(1),0, 0,0,0,static_cast<T>(1)};
+    if (offset) { for (int i = 0; i < 16; ++i) Xtool[i] = offset[i]; }
+    if (cudaMemcpy(g_data->d_eepose_runtime_offset, Xtool, 16*sizeof(T),
                    cudaMemcpyHostToDevice) != cudaSuccess) return 101;
     grid::end_effector_pose_runtime<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(),
                                        g_streams, target_jid);
@@ -1896,9 +1898,11 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime(const T* q, T* out, i
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd/u unused
-    T off[3] = {static_cast<T>(0), static_cast<T>(0), static_cast<T>(0)};
-    if (offset) { off[0]=offset[0]; off[1]=offset[1]; off[2]=offset[2]; }
-    if (cudaMemcpy(g_data->d_eepose_runtime_offset, off, 3*sizeof(T),
+    // offset is now the 4x4 col-major SE(3) tool/tip transform (16 floats); identity => frame origin.
+    T Xtool[16] = {static_cast<T>(1),0,0,0, 0,static_cast<T>(1),0,0,
+                   0,0,static_cast<T>(1),0, 0,0,0,static_cast<T>(1)};
+    if (offset) { for (int i = 0; i < 16; ++i) Xtool[i] = offset[i]; }
+    if (cudaMemcpy(g_data->d_eepose_runtime_offset, Xtool, 16*sizeof(T),
                    cudaMemcpyHostToDevice) != cudaSuccess) return 101;
     grid::end_effector_pose_gradient_runtime<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1),
                                                 grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams, target_jid);
@@ -1923,9 +1927,11 @@ extern "C" int grid_rbd_end_effector_pose_runtime_mujoco(const T* q, T* out, int
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd/u unused
-    T off[3] = {static_cast<T>(0), static_cast<T>(0), static_cast<T>(0)};
-    if (offset) { off[0]=offset[0]; off[1]=offset[1]; off[2]=offset[2]; }
-    if (cudaMemcpy(g_data->d_eepose_runtime_offset, off, 3*sizeof(T),
+    // offset is now the 4x4 col-major SE(3) tool/tip transform (16 floats); identity => frame origin.
+    T Xtool[16] = {static_cast<T>(1),0,0,0, 0,static_cast<T>(1),0,0,
+                   0,0,static_cast<T>(1),0, 0,0,0,static_cast<T>(1)};
+    if (offset) { for (int i = 0; i < 16; ++i) Xtool[i] = offset[i]; }
+    if (cudaMemcpy(g_data->d_eepose_runtime_offset, Xtool, 16*sizeof(T),
                    cudaMemcpyHostToDevice) != cudaSuccess) return 101;
     grid::end_effector_pose_runtime<T, /*USE_COMPRESSED_MEM=*/false, grid::GRID_DATA_ALL,
                                     /*MUJOCO_OUTPUT=*/true>(
@@ -1950,9 +1956,11 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime_mujoco(const T* q, T*
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd/u unused
-    T off[3] = {static_cast<T>(0), static_cast<T>(0), static_cast<T>(0)};
-    if (offset) { off[0]=offset[0]; off[1]=offset[1]; off[2]=offset[2]; }
-    if (cudaMemcpy(g_data->d_eepose_runtime_offset, off, 3*sizeof(T),
+    // offset is now the 4x4 col-major SE(3) tool/tip transform (16 floats); identity => frame origin.
+    T Xtool[16] = {static_cast<T>(1),0,0,0, 0,static_cast<T>(1),0,0,
+                   0,0,static_cast<T>(1),0, 0,0,0,static_cast<T>(1)};
+    if (offset) { for (int i = 0; i < 16; ++i) Xtool[i] = offset[i]; }
+    if (cudaMemcpy(g_data->d_eepose_runtime_offset, Xtool, 16*sizeof(T),
                    cudaMemcpyHostToDevice) != cudaSuccess) return 101;
     grid::end_effector_pose_gradient_runtime<T, /*USE_COMPRESSED_MEM=*/false, grid::GRID_DATA_ALL,
                                              /*MUJOCO_OUTPUT=*/true>(
@@ -1967,6 +1975,73 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime_mujoco(const T* q, T*
 #endif
 }
 #endif  // GRID_RBD_WITH_MUJOCO
+
+
+// ────────────────────────────────────────────────────────────────────────────
+// Runtime tool-tip contact wrench -> joint-local f_ext (welded-tool tip forces)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// tool_fext(q, wrench, jid, rc) -> (batch, 6*NUM_BODIES) joint-local f_ext array
+// [angular;linear] per body, ready to feed straight to inverse_dynamics(f_ext=...)
+// / aba(f_ext=...). `wrench` is a world-aligned [n_w; f_w] 6-vector per timestep at
+// the runtime tool tip (body `jid`, local offset `rc`). Gated on GRID_HAS_CONTACT_RUNTIME
+// (register with enable_tool=True). The device fn owns the FK arena in dynamic smem;
+// we size it from the (>= this arena) EE-pose / f_ext_gradient macros and pass
+// d_workspace so it also works at spilling tiers on big robots.
+#ifdef GRID_HAS_CONTACT_RUNTIME
+__global__ void grid_rbd_tool_fext_kernel(const T* d_q, int stride_q, int jid,
+                                          const T* d_rc, const T* d_wrench,
+                                          const grid::robotModel<T>* d_robotModel,
+                                          T* d_workspace, T* d_out) {
+    const int k = blockIdx.x;
+    const int tid = threadIdx.x + threadIdx.y * blockDim.x;
+    const int nth = blockDim.x * blockDim.y;
+    __shared__ T s_fext[6 * grid::NUM_BODIES];
+    __shared__ T s_rc[3];
+    if (tid < 3) s_rc[tid] = d_rc[tid];
+    __syncthreads();
+    grid::f_ext_body_runtime_device<T>(s_fext, &d_wrench[k * 6], jid, s_rc,
+                                       &d_q[k * stride_q], d_robotModel, d_workspace);
+    __syncthreads();
+    for (int i = tid; i < 6 * grid::NUM_BODIES; i += nth)
+        d_out[k * 6 * grid::NUM_BODIES + i] = s_fext[i];
+}
+
+extern "C" int grid_rbd_tool_fext(const T* q, const T* wrench, int jid, const T* rc,
+                                  T* out, int batch) {
+    if (!g_data) { int rc0 = grid_rbd_init(); if (rc0) return rc0; }
+    if (batch > kMaxBatch) return 2;
+    const int nj = grid::NUM_JOINTS;
+    pack_q_qd_u(q, q, nullptr, batch, nj);   // q at offset 0, stride 3*nj
+    const int stride_q = 3 * nj;
+    if (cudaMemcpy(g_data->d_q_qd_u, g_data->h_q_qd_u,
+                   (size_t)batch * stride_q * sizeof(T), cudaMemcpyHostToDevice) != cudaSuccess) return 5;
+    T *d_wrench = nullptr, *d_rc = nullptr;
+    if (cudaMalloc(&d_wrench, (size_t)6 * batch * sizeof(T)) != cudaSuccess) return 6;
+    if (cudaMalloc(&d_rc, 3 * sizeof(T)) != cudaSuccess) { cudaFree(d_wrench); return 6; }
+    cudaMemcpy(d_wrench, wrench, (size_t)6 * batch * sizeof(T), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_rc, rc, 3 * sizeof(T), cudaMemcpyHostToDevice);
+    size_t smem = grid::F_EXT_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
+    size_t s2 = grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>();
+    if (s2 > smem) smem = s2;
+    smem += 4096;
+    cudaFuncSetAttribute(grid_rbd_tool_fext_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
+    grid_rbd_tool_fext_kernel<<<batch, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), smem>>>(
+        g_data->d_q_qd_u, stride_q, jid, d_rc, d_wrench, g_robot,
+        reinterpret_cast<T*>(g_data->d_workspace), g_data->d_f_ext);
+    cudaError_t e = cudaDeviceSynchronize();
+    cudaFree(d_wrench); cudaFree(d_rc);
+    if (e != cudaSuccess) return 100 + (int)e;
+    if (cudaMemcpy(out, g_data->d_f_ext, (size_t)6 * grid::NUM_BODIES * batch * sizeof(T),
+                   cudaMemcpyDeviceToHost) != cudaSuccess) return 5;
+    // d_f_ext is the shared f_ext buffer; re-zero it so a later NO-f_ext dynamics call
+    // (which does not reset it) is not polluted by the tool wrench we just wrote.
+    cudaMemset(g_data->d_f_ext, 0, (size_t)6 * grid::NUM_BODIES * kMaxBatch * sizeof(T));
+    return 0;
+}
+#else
+extern "C" int grid_rbd_tool_fext(const T*, const T*, int, const T*, T*, int) { return 3; }
+#endif
 
 
 // ────────────────────────────────────────────────────────────────────────────
