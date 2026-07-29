@@ -41,6 +41,8 @@ _GLASS_BASE_FILES = [
     "src/base/L3/syev.cuh",           # symmetric eigensolve + eig_clamp (PSD projection of the Newton ee cost hessian)
     "src/base/L3/eigh.cuh",           # Jacobi eigensolve + psd_project one-call (composes syev). MUST follow syev.
     "src/base/spatial/cross.cuh",     # Featherstone spatial 6-D cross products (motion/force cross + fused applies + dual). Uses beta_blend/ThreadBarrier from barrier.cuh (vendored first). Backs crm/fx/icrf spatial helpers.
+    "src/base/lie/quat.cuh",          # Hamilton quaternion algebra (xyzw): exp/mul/normalize/to_rot/retract. Standalone (defines QuatLayout + quat_detail). MUST precede so3.cuh (which uses quat_detail rot_to_quat/quat_log/copy_out). Backs the floating-base integrator Lie prefix.
+    "src/base/lie/so3.cuh",           # SO(3) maps + Jacobians (col-major): skew/exp/log/right_jacobian/left_jacobian(=SE(3) "V matrix"). Uses quat_detail from quat.cuh (vendored first).
 ]
 
 
