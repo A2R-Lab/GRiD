@@ -77,6 +77,63 @@ FLOATING_CUDA_CANDIDATE_ALGORITHMS = (
     "end_effector_pose_gradient",
     "end_effector_pose_hessian",
 )
+
+
+class SplitCell(NamedTuple):
+    """One per-algorithm SPLIT cell for the flagship equivalence runner.
+
+    Each cell (a) codegens a SUBSET header (`codegen_algorithm_list` — the algo plus
+    the inner deps its kernel calls, so the header is small: ~0.6-1.1 MB vs the 2.4 MB
+    all-algo header) and (b) compiles the runner gated to only `run_tokens`
+    (`-DGRID_RUN_SPLIT -D<token>=1`). The result is a ~2-50 s TU that references ONLY
+    this algo, so a build break in ANY other algorithm can never void this cell's
+    validation (the Bug-A coverage void). `compare_algorithms` is what the harness
+    validates vs the oracle for the cell — the q/qd gradient halves share one codegen
+    group + RUN token but compare as two named outputs.
+
+    NON-mimic robots use `codegen_algorithm_list` verbatim. Mimic robots (fr3/h1_2)
+    IGNORE it and codegen their forced mimic list (one shared header across cells);
+    the RUN token still isolates each compile. Dependency GROUPS (confirmed by the
+    2026-07-28 cell probe, recorded in the SSOT): forward_dynamics needs
+    minv+inverse_dynamics inners; the dynamics gradients need crba (+id) inners on the
+    floating path even though the fixed path links standalone."""
+
+    cell_id: str
+    codegen_algorithm_list: tuple[str, ...]
+    run_tokens: frozenset
+    compare_algorithms: tuple[str, ...]
+
+
+# The flagship runner's algorithms, one SPLIT cell each. FIXED base emits all ten;
+# FLOATING emits the subset selected by _floating_algorithm_selection() (ee_pose
+# gradient/hessian only when GRID_CUDA_FLOATING_ALGORITHMS requests them) — the same
+# gate the monolith used. See SplitCell for the codegen-group rationale.
+FLAGSHIP_SPLIT_CELLS = (
+    SplitCell("inverse_dynamics", ("inverse_dynamics",),
+              frozenset({"RUN_INVERSE_DYNAMICS"}), ("inverse_dynamics",)),
+    SplitCell("minv", ("minv",),
+              frozenset({"RUN_MINV"}), ("minv",)),
+    SplitCell("forward_dynamics", ("forward_dynamics", "minv", "inverse_dynamics"),
+              frozenset({"RUN_FORWARD_DYNAMICS"}), ("forward_dynamics",)),
+    SplitCell("aba", ("aba",),
+              frozenset({"RUN_ABA"}), ("aba",)),
+    SplitCell("crba", ("crba",),
+              frozenset({"RUN_CRBA"}), ("crba",)),
+    SplitCell("inverse_dynamics_gradient",
+              ("inverse_dynamics_gradient", "inverse_dynamics", "crba"),
+              frozenset({"RUN_INVERSE_DYNAMICS_GRADIENT"}),
+              ("inverse_dynamics_gradient_q", "inverse_dynamics_gradient_qd")),
+    SplitCell("forward_dynamics_gradient",
+              ("forward_dynamics_gradient", "forward_dynamics", "minv", "inverse_dynamics", "crba"),
+              frozenset({"RUN_FORWARD_DYNAMICS_GRADIENT"}),
+              ("forward_dynamics_gradient_q", "forward_dynamics_gradient_qd")),
+    SplitCell("end_effector_pose", ("end_effector_pose",),
+              frozenset({"RUN_END_EFFECTOR_POSE"}), ("end_effector_pose",)),
+    SplitCell("end_effector_pose_gradient", ("end_effector_pose_gradient",),
+              frozenset({"RUN_END_EFFECTOR_POSE_GRADIENT"}), ("end_effector_pose_gradient",)),
+    SplitCell("end_effector_pose_hessian", ("end_effector_pose_hessian",),
+              frozenset({"RUN_END_EFFECTOR_POSE_HESSIAN"}), ("end_effector_pose_hessian",)),
+)
 GPU_UNAVAILABLE_PATTERNS = (
     "no cuda-capable device",
     "cuda driver version is insufficient",
@@ -714,6 +771,7 @@ def _compile_runner(
     header_key: str,
     skip_gradients: bool = False,
     skip_eepose_gradients: bool = False,
+    run_tokens=None,
     config=None,
 ) -> tuple[Path, list[str]]:
     nvcc = shutil.which("nvcc")
@@ -751,6 +809,9 @@ def _compile_runner(
             "floating_eepose_hessian": enable_floating_eepose_hessian,
             "skip_gradients": bool(skip_gradients),
             "skip_eepose_gradients": bool(skip_eepose_gradients),
+            # Split mode: the RUN_<X> token set gates the runner to a single algo (or
+            # tight group). Fold it into the key so each cell's executable is distinct.
+            "run_tokens": sorted(run_tokens) if run_tokens else None,
             "compile_flags": compile_flags,
         }
     )
@@ -786,6 +847,17 @@ def _compile_runner(
     # ee_pose gradients (keeps id_du/fd_du); floating mimic skips all gradients.
     if skip_eepose_gradients and not skip_gradients:
         defines.append("-DGRID_RUNNER_SKIP_EEPOSE_GRADIENTS=1")
+    # Split mode: gate the runner to a single algorithm (or tight group). The RUN
+    # tokens fully control which per-algo blocks compile (every unlisted RUN_<X>
+    # defaults to 0 under GRID_RUN_SPLIT), so a broken/absent kernel in another algo
+    # can't void this cell (Bug-A isolation). Pairs with a subset header
+    # (codegen_algorithm_list) so the TU is tiny + fast (~2s vs >6m for the full
+    # header). Split gating supersedes the coarse SKIP_GRADIENTS flags, so those stay
+    # off (False) whenever run_tokens is set.
+    if run_tokens:
+        defines.append("-DGRID_RUN_SPLIT")
+        for token in sorted(run_tokens):
+            defines.append(f"-D{token}=1")
 
     cmd = [
         nvcc,
@@ -1634,46 +1706,77 @@ def _assert_close(
         ) from exc
 
 
+def _flagship_selected_algorithms(base_mode) -> set:
+    """The algorithm set the flagship validates for this base (monolith parity):
+    fixed = FIXED_CUDA_ALGORITHMS; floating = _floating_algorithm_selection().
+    GRID_CUDA_CODEGEN_SUBSET (spill-debug opt-in) narrows it to the requested algos."""
+    _, compare_subset = _codegen_subset_from_env()
+    if compare_subset is not None:
+        return set(compare_subset)
+    if base_mode == "floating":
+        return set(_floating_algorithm_selection())
+    return set(FIXED_CUDA_ALGORITHMS)
+
+
+def _run_flagship_split_cell(spec, base_mode, cell, num_threads, tmp_path, request):
+    """Validate ONE flagship split cell: codegen its subset header + compile the runner
+    gated to its RUN token(s), then compare only this cell's algorithm(s) vs the oracle.
+    A cell not in this base's selection is skipped (e.g. floating ee_pose gradient/hessian
+    unless GRID_CUDA_FLOATING_ALGORITHMS requests them). This REPLACES the monolithic
+    all-algorithm runner: a build break in any other algorithm can no longer void this
+    cell (the Bug-A coverage void), and each cell is a tiny, fast, independently-reported TU."""
+    selected = _flagship_selected_algorithms(base_mode)
+    effective_compare = tuple(a for a in cell.compare_algorithms if a in selected)
+    if not effective_compare:
+        pytest.skip(f"{cell.cell_id}: not in the {base_mode} flagship algorithm selection")
+
+    selection = _sample_name_selection(base_mode)
+    if base_mode == "floating":
+        random_count = None
+        if os.environ.get("GRID_CUDA_RANDOM_SAMPLES") is None and (
+            selection.explicit or selection.names == {"zero"}
+        ):
+            random_count = 0
+    else:
+        random_count = 0 if selection.explicit and os.environ.get("GRID_CUDA_RANDOM_SAMPLES") is None else None
+
+    # Non-mimic robots codegen this cell's tight dependency group (small, fast header).
+    # GRID_CUDA_CODEGEN_SUBSET (spill-debug) unions its requested algos in so all cells
+    # share one multi-algo header (forced-low smem spills the value rung together) while
+    # the RUN token still isolates each compile. Mimic robots ignore the list entirely
+    # (nulled inside _run_cuda_equivalence_case → one shared forced-mimic header).
+    codegen_subset, _ = _codegen_subset_from_env()
+    if codegen_subset is not None:
+        codegen_list = sorted(set(codegen_subset) | set(cell.codegen_algorithm_list))
+    else:
+        codegen_list = list(cell.codegen_algorithm_list)
+
+    _run_cuda_equivalence_case(
+        spec,
+        base_mode,
+        tmp_path,
+        effective_compare,
+        sample_selection=selection,
+        random_count=random_count,
+        config=request.config,
+        num_threads=num_threads,
+        codegen_algorithm_list=codegen_list,
+        run_tokens=cell.run_tokens,
+    )
+
+
 @pytest.mark.parametrize("num_threads", _thread_counts(), ids=lambda t: f"threads{'suggested' if t == 0 else t}")
+@pytest.mark.parametrize("cell", FLAGSHIP_SPLIT_CELLS, ids=lambda c: c.cell_id)
 @pytest.mark.parametrize(("spec", "base_mode"), build_fixed_cuda_case_params())
-def test_fixed_base_generated_cuda_matches_python_reference(spec, base_mode, num_threads, tmp_path, request):
-    selection = _sample_name_selection(base_mode)
-    random_count = 0 if selection.explicit and os.environ.get("GRID_CUDA_RANDOM_SAMPLES") is None else None
-    codegen_subset, compare_subset = _codegen_subset_from_env()
-    _run_cuda_equivalence_case(
-        spec,
-        base_mode,
-        tmp_path,
-        compare_subset if compare_subset is not None else FIXED_CUDA_ALGORITHMS,
-        sample_selection=selection,
-        random_count=random_count,
-        config=request.config,
-        num_threads=num_threads,
-        codegen_algorithm_list=codegen_subset,
-    )
+def test_fixed_base_generated_cuda_matches_python_reference(spec, base_mode, cell, num_threads, tmp_path, request):
+    _run_flagship_split_cell(spec, base_mode, cell, num_threads, tmp_path, request)
 
 
 @pytest.mark.parametrize("num_threads", _thread_counts(), ids=lambda t: f"threads{'suggested' if t == 0 else t}")
+@pytest.mark.parametrize("cell", FLAGSHIP_SPLIT_CELLS, ids=lambda c: c.cell_id)
 @pytest.mark.parametrize(("spec", "base_mode"), build_floating_cuda_case_params())
-def test_floating_base_generated_cuda_matches_python_reference(spec, base_mode, num_threads, tmp_path, request):
-    selection = _sample_name_selection(base_mode)
-    random_count = None
-    if os.environ.get("GRID_CUDA_RANDOM_SAMPLES") is None and (
-        selection.explicit or selection.names == {"zero"}
-    ):
-        random_count = 0
-    codegen_subset, compare_subset = _codegen_subset_from_env()
-    _run_cuda_equivalence_case(
-        spec,
-        base_mode,
-        tmp_path,
-        compare_subset if compare_subset is not None else _floating_algorithm_selection(),
-        sample_selection=selection,
-        random_count=random_count,
-        config=request.config,
-        num_threads=num_threads,
-        codegen_algorithm_list=codegen_subset,
-    )
+def test_floating_base_generated_cuda_matches_python_reference(spec, base_mode, cell, num_threads, tmp_path, request):
+    _run_flagship_split_cell(spec, base_mode, cell, num_threads, tmp_path, request)
 
 
 def _run_cuda_equivalence_case(
@@ -1686,6 +1789,7 @@ def _run_cuda_equivalence_case(
     config=None,
     num_threads=None,
     codegen_algorithm_list=None,
+    run_tokens=None,
 ):
     if sample_selection is None:
         sample_selection = SampleSelection(None, False, False)
@@ -1739,6 +1843,14 @@ def _run_cuda_equivalence_case(
             "(rizon4: flexiv xacro emits bare mass/inertia tags not wrapped in <inertial>.)"
         )
 
+    # Split mode + mimic robot: mimic robots codegen their own forced algorithm list
+    # (the mimic guard in _run_gen_all_code overrides codegen_algorithm_list), so a
+    # per-cell subset list would only fragment the header cache into byte-identical
+    # copies. Null it so all of a mimic robot's split cells share ONE mimic header;
+    # the RUN token still isolates each compile.
+    if run_tokens and codegen_algorithm_list is not None and _robot_has_mimic_joints(project_model):
+        codegen_algorithm_list = None
+
     build_dir = tmp_path / f"cuda_{spec.robot_id}_{base_mode}"
     build_dir.mkdir()
     header_path, header_key = _generate_grid_header(
@@ -1753,7 +1865,13 @@ def _run_cuda_equivalence_case(
     # False — the historical behavior (non-mimic robots always compile every block).
     _grad_tokens = ("inverse_dynamics_gradient", "forward_dynamics_gradient", "id_du", "fd_du")
     _ee_grad_tokens = ("end_effector_pose_gradient", "end_effector_pose_hessian")
-    if codegen_algorithm_list is not None:
+    if run_tokens:
+        # Split mode: the RUN_<X> gating alone decides which algo blocks compile, so
+        # the coarse SKIP_GRADIENTS flags must stay OFF — otherwise they'd also
+        # suppress a selected gradient cell's block.
+        _runner_skip_gradients = False
+        _runner_skip_eepose_gradients = False
+    elif codegen_algorithm_list is not None:
         _runner_skip_gradients = not any(
             any(tok in algo for tok in _grad_tokens) for algo in codegen_algorithm_list
         )
@@ -1767,6 +1885,7 @@ def _run_cuda_equivalence_case(
         build_dir,
         floating_base=base_mode == "floating",
         header_key=header_key,
+        run_tokens=run_tokens,
         # Mimic gradients: both fixed-base (P3) and floating-base (B1) mimic now
         # emit id_du/fd_du, so the runner always compiles its dynamics-gradient
         # block (skip stays False unless a subset header explicitly drops them).
