@@ -73,35 +73,9 @@ def gen_lie_group_helpers(self):
     """
     self.gen_add_func_doc("Floating-base Lie-group helpers (xyzw quaternion, Pinocchio v order).", [], [], None)
     self.gen_add_code_lines([
-        # ---- quaternion multiply (xyzw) ----
-        "template <typename T> __device__ inline void grid_quat_mul_xyzw(const T a[4], const T b[4], T out[4]) {",
-        "    out[0] = a[3]*b[0] + a[0]*b[3] + a[1]*b[2] - a[2]*b[1];",
-        "    out[1] = a[3]*b[1] - a[0]*b[2] + a[1]*b[3] + a[2]*b[0];",
-        "    out[2] = a[3]*b[2] + a[0]*b[1] - a[1]*b[0] + a[2]*b[3];",
-        "    out[3] = a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2];",
-        "}",
-        "",
-        # ---- quaternion exponential from half-omega ----
-        "template <typename T> __device__ inline void grid_quat_exp_half_omega(const T half_omega[3], T out[4]) {",
-        "    T theta = sqrt(half_omega[0]*half_omega[0] + half_omega[1]*half_omega[1] + half_omega[2]*half_omega[2]);",
-        "    T sinc, cos_t;",
-        "    if (theta < static_cast<T>(1e-12)) { sinc = static_cast<T>(1) - theta*theta/static_cast<T>(6); cos_t = static_cast<T>(1) - static_cast<T>(0.5)*theta*theta; }",
-        "    else { sinc = sin(theta)/theta; cos_t = cos(theta); }",
-        "    out[0] = sinc * half_omega[0]; out[1] = sinc * half_omega[1]; out[2] = sinc * half_omega[2]; out[3] = cos_t;",
-        "}",
-        "",
-        # ---- rotation matrix from xyzw quaternion ----
-        "template <typename T> __device__ inline void grid_rot_from_quat_xyzw(const T q[4], T R[9]) {",
-        "    T x=q[0], y=q[1], z=q[2], w=q[3];",
-        "    T xx=x*x, yy=y*y, zz=z*z;",
-        "    T xy=x*y, xz=x*z, yz=y*z;",
-        "    T wx=w*x, wy=w*y, wz=w*z;",
-        "    // row-major 3x3",
-        "    R[0]=static_cast<T>(1)-static_cast<T>(2)*(yy+zz); R[1]=static_cast<T>(2)*(xy-wz);     R[2]=static_cast<T>(2)*(xz+wy);",
-        "    R[3]=static_cast<T>(2)*(xy+wz);     R[4]=static_cast<T>(1)-static_cast<T>(2)*(xx+zz); R[5]=static_cast<T>(2)*(yz-wx);",
-        "    R[6]=static_cast<T>(2)*(xz-wy);     R[7]=static_cast<T>(2)*(yz+wx);     R[8]=static_cast<T>(1)-static_cast<T>(2)*(xx+yy);",
-        "}",
-        "",
+        # Quaternion primitives live in the vendored GLASS lie/quat.cuh
+        # (glass::thread::quat_{mul,exp,normalize,to_rot,retract}); the old
+        # hand-rolled grid_quat_* / grid_rot_from_quat_xyzw helpers are gone.
         # ---- 3x3 leaves: delegate to the tested GLASS thread ops (COLUMN-MAJOR).
         # The whole Lie block below is column-major: every composition (grid_so3_exp,
         # grid_se3_Q_block, grid_d2_*) is built from these three leaves + elementwise
@@ -449,20 +423,15 @@ def gen_lie_group_helpers(self):
     # Spherical (ball) joint SO(3) retract helper — emitted ONLY when the robot
     # has a spherical joint (so pure-floating robots stay byte-identical; the
     # block is absent from their header). Block-pointer form: q_new_blk =
-    # normalize(q_blk (x) exp(half)). `half` is 0.5*scale*omega (the caller
-    # pre-scales). Reuses grid_quat_exp_half_omega + grid_quat_mul_xyzw + the
-    # renorm — the SO(3) half of grid_integrate_floating_q with no SE(3) coupling.
+    # normalize(q_blk (x) exp(omega/2)) == glass quat_retract. `omega_vec` is the
+    # FULL rotation vector scale*omega (glass halves internally; the caller no
+    # longer pre-halves) — the SO(3) half of grid_integrate_floating_q with no
+    # SE(3) coupling.
     if self.robot.robot_has_spherical():
         self.gen_add_code_lines([
             "template <typename T> __device__ inline void grid_integrate_spherical_q(",
-            "    const T *q_blk, const T *half_omega, T *q_new_blk) {",
-            "    T dq[4]; grid_quat_exp_half_omega(half_omega, dq);",
-            "    T q_old_quat[4] = {q_blk[0], q_blk[1], q_blk[2], q_blk[3]};",
-            "    T q_new_quat[4]; grid_quat_mul_xyzw(q_old_quat, dq, q_new_quat);",
-            "    T qn = sqrt(q_new_quat[0]*q_new_quat[0] + q_new_quat[1]*q_new_quat[1] + q_new_quat[2]*q_new_quat[2] + q_new_quat[3]*q_new_quat[3]);",
-            "    T inv_qn = static_cast<T>(1) / qn;",
-            "    #pragma unroll",
-            "    for (int i = 0; i < 4; ++i) q_new_blk[i] = q_new_quat[i] * inv_qn;",
+            "    const T *q_blk, const T *omega_vec, T *q_new_blk) {",
+            "    glass::thread::quat_retract<T>(q_blk, omega_vec, q_new_blk);",
             "}",
             "",
         ])
@@ -471,36 +440,15 @@ def gen_lie_group_helpers(self):
 def gen_integrate_spherical_helper(self):
     """Standalone emitter for the spherical SO(3) retract device helper, used
     when the robot has a spherical joint but is NOT floating (so the floating
-    Lie-group helper bundle isn't otherwise emitted). Emits the small quaternion
-    primitives it depends on (grid_quat_mul_xyzw, grid_quat_exp_half_omega) plus
-    the grid_integrate_spherical_q wrapper. Pure-floating robots emit these via
-    gen_lie_group_helpers instead (and never call this)."""
+    Lie-group helper bundle isn't otherwise emitted). Delegates to the vendored
+    glass::thread::quat_retract (normalize(q (x) exp(omega/2)), FULL rotation
+    vector — glass halves internally). Pure-floating robots emit the same
+    wrapper via gen_lie_group_helpers instead (and never call this)."""
     self.gen_add_func_doc("Spherical (ball) joint SO(3) quaternion retract helper (xyzw).", [], [], None)
     self.gen_add_code_lines([
-        "template <typename T> __device__ inline void grid_quat_mul_xyzw(const T a[4], const T b[4], T out[4]) {",
-        "    out[0] = a[3]*b[0] + a[0]*b[3] + a[1]*b[2] - a[2]*b[1];",
-        "    out[1] = a[3]*b[1] - a[0]*b[2] + a[1]*b[3] + a[2]*b[0];",
-        "    out[2] = a[3]*b[2] + a[0]*b[1] - a[1]*b[0] + a[2]*b[3];",
-        "    out[3] = a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2];",
-        "}",
-        "",
-        "template <typename T> __device__ inline void grid_quat_exp_half_omega(const T half_omega[3], T out[4]) {",
-        "    T theta = sqrt(half_omega[0]*half_omega[0] + half_omega[1]*half_omega[1] + half_omega[2]*half_omega[2]);",
-        "    T sinc, cos_t;",
-        "    if (theta < static_cast<T>(1e-12)) { sinc = static_cast<T>(1) - theta*theta/static_cast<T>(6); cos_t = static_cast<T>(1) - static_cast<T>(0.5)*theta*theta; }",
-        "    else { sinc = sin(theta)/theta; cos_t = cos(theta); }",
-        "    out[0] = sinc * half_omega[0]; out[1] = sinc * half_omega[1]; out[2] = sinc * half_omega[2]; out[3] = cos_t;",
-        "}",
-        "",
         "template <typename T> __device__ inline void grid_integrate_spherical_q(",
-        "    const T *q_blk, const T *half_omega, T *q_new_blk) {",
-        "    T dq[4]; grid_quat_exp_half_omega(half_omega, dq);",
-        "    T q_old_quat[4] = {q_blk[0], q_blk[1], q_blk[2], q_blk[3]};",
-        "    T q_new_quat[4]; grid_quat_mul_xyzw(q_old_quat, dq, q_new_quat);",
-        "    T qn = sqrt(q_new_quat[0]*q_new_quat[0] + q_new_quat[1]*q_new_quat[1] + q_new_quat[2]*q_new_quat[2] + q_new_quat[3]*q_new_quat[3]);",
-        "    T inv_qn = static_cast<T>(1) / qn;",
-        "    #pragma unroll",
-        "    for (int i = 0; i < 4; ++i) q_new_blk[i] = q_new_quat[i] * inv_qn;",
+        "    const T *q_blk, const T *omega_vec, T *q_new_blk) {",
+        "    glass::thread::quat_retract<T>(q_blk, omega_vec, q_new_blk);",
         "}",
         "",
     ])
@@ -603,19 +551,20 @@ def _emit_q_update(self, scale_expr, dst_name, src_q_name="s_q", src_v_name="s_s
             self.gen_add_code_line(f"T sph_qblk_{blk_i}[4] = {{"
                                    f"{src_q_name}[sph_q_{blk_i}[0]], {src_q_name}[sph_q_{blk_i}[1]], "
                                    f"{src_q_name}[sph_q_{blk_i}[2]], {src_q_name}[sph_q_{blk_i}[3]]}};")
-            # half = 0.5 * (scale * omega [+ accel_scale * alpha])  (combined angular tangent)
-            def _sph_half(k):
+            # omega = scale * omega [+ accel_scale * alpha]  (combined angular tangent;
+            # FULL rotation vector — glass quat_retract halves internally)
+            def _sph_omega(k):
                 if accel_name is None:
-                    return f"static_cast<T>(0.5)*{scale_expr}*{src_v_name}[sph_v_{blk_i}[{k}]]"
-                return (f"static_cast<T>(0.5)*({scale_expr}*{src_v_name}[sph_v_{blk_i}[{k}]]"
+                    return f"{scale_expr}*{src_v_name}[sph_v_{blk_i}[{k}]]"
+                return (f"({scale_expr}*{src_v_name}[sph_v_{blk_i}[{k}]]"
                         f" + {accel_scale_expr}*{accel_name}[sph_v_{blk_i}[{k}]])")
-            self.gen_add_code_line(f"T sph_half_{blk_i}[3] = {{"
-                                   f"{_sph_half(0)}, "
-                                   f"{_sph_half(1)}, "
-                                   f"{_sph_half(2)}}};")
+            self.gen_add_code_line(f"T sph_omega_{blk_i}[3] = {{"
+                                   f"{_sph_omega(0)}, "
+                                   f"{_sph_omega(1)}, "
+                                   f"{_sph_omega(2)}}};")
             self.gen_add_code_line(f"T sph_qnew_{blk_i}[4];")
             self.gen_add_code_line(
-                f"grid_integrate_spherical_q<T>(sph_qblk_{blk_i}, sph_half_{blk_i}, sph_qnew_{blk_i});")
+                f"grid_integrate_spherical_q<T>(sph_qblk_{blk_i}, sph_omega_{blk_i}, sph_qnew_{blk_i});")
             self.gen_add_code_line("#pragma unroll")
             self.gen_add_code_line(
                 f"for (int i = 0; i < 4; ++i) {dst_name}[sph_q_{blk_i}[i]] = sph_qnew_{blk_i}[i];")

@@ -74,7 +74,7 @@ __global__ void spherical_integrator_device_runner(
         s_u[ind] = d_u[ind];
     }
     __syncthreads();
-    grid::integrator_device<T, IT>(s_x_kp1, s_q, s_qd, s_u, d_robot_model, gravity, dt);
+    grid::integrator_device<T, IT>(s_x_kp1, s_q, s_qd, s_u, d_robot_model, /*d_f_ext=*/nullptr, gravity, dt);
     __syncthreads();
     for (int ind = threadIdx.x + threadIdx.y * blockDim.x;
          ind < grid::NUM_POS + grid::NUM_VEL; ind += blockDim.x * blockDim.y) {
