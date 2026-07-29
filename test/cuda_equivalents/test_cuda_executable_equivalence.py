@@ -28,6 +28,9 @@ from RBDReference.tests.state_sampling import (
 
 
 RUNNER_SOURCE = Path(__file__).with_name("cuda_equivalence_runner.cu")
+# Per-algorithm compile-selection header the runner #includes; must be copied
+# alongside the runner into the (isolated) compile dir and hashed into the cache key.
+SELECT_HEADER = Path(__file__).with_name("grid_runner_select.cuh")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CACHE_SCHEMA_VERSION = 1
 DEFAULT_RANDOM_SAMPLE_COUNT = 3
@@ -740,6 +743,7 @@ def _compile_runner(
             "kind": "cuda_equivalence_runner",
             "header_key": header_key,
             "runner_source_hash": _hash_file(RUNNER_SOURCE),
+            "select_header_hash": _hash_file(SELECT_HEADER),
             "cuda_arch": arch,
             "nvcc_version": nvcc_version,
             "floating_base": bool(floating_base),
@@ -766,6 +770,9 @@ def _compile_runner(
 
     runner_copy = compile_dir / RUNNER_SOURCE.name
     shutil.copyfile(RUNNER_SOURCE, runner_copy)
+    # The runner #includes "grid_runner_select.cuh"; copy it next to the runner so
+    # the isolated-dir compile (cwd=compile_dir) resolves it.
+    shutil.copyfile(SELECT_HEADER, compile_dir / SELECT_HEADER.name)
 
     defines = [f"-DGRID_CUDA_FLOATING_BASE={1 if floating_base else 0}"]
     if l2_persisting is not None:
