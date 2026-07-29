@@ -40,6 +40,7 @@ _GLASS_BASE_FILES = [
     "src/base/L3/syrk.cuh",           # symmetric rank-k A A^T (needs flags); halves flops vs gemm for symmetric outputs
     "src/base/L3/syev.cuh",           # symmetric eigensolve + eig_clamp (PSD projection of the Newton ee cost hessian)
     "src/base/L3/eigh.cuh",           # Jacobi eigensolve + psd_project one-call (composes syev). MUST follow syev.
+    "src/base/spatial/cross.cuh",     # Featherstone spatial 6-D cross products (motion/force cross + fused applies + dual). Uses beta_blend/ThreadBarrier from barrier.cuh (vendored first). Backs crm/fx/icrf spatial helpers.
 ]
 
 

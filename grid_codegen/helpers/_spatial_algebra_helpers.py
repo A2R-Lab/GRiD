@@ -46,14 +46,9 @@ def gen_crm_mul(self):
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line("T crm_mul(int index, T *v_crm, T *v) {", True)
-    self.gen_add_code_line("T result;")
-    self.gen_add_code_line('if (index == 0) result = -v_crm[2] * v[1] + v_crm[1] * v[2];')
-    self.gen_add_code_line('if (index == 1) result = v_crm[2] * v[0] - v_crm[0] * v[2];')
-    self.gen_add_code_line('if (index == 2) result = -v_crm[1] * v[0] + v_crm[0] * v[1];')
-    self.gen_add_code_line('if (index == 3) result = -v_crm[5] * v[1] + v_crm[4] * v[2] - v_crm[2] * v[4] + v_crm[1] * v[5];')
-    self.gen_add_code_line('if (index == 4) result = v_crm[5] * v[0] - v_crm[3] * v[2] + v_crm[2] * v[3] - v_crm[0] * v[5];')
-    self.gen_add_code_line('if (index == 5) result = -v_crm[4] * v[0] + v_crm[3] * v[1] - v_crm[1] * v[3] + v_crm[0] * v[4];')
-    self.gen_add_code_line('return result;')
+    # Row `index` of motion_cross(v_crm)*v -- the GLASS spatial primitive (formulas
+    # promoted verbatim from this emitter). Scalar, single-thread, no barrier.
+    self.gen_add_code_line("return glass::spatial_detail::motion_cross_mul_row<T>((uint32_t)index, v_crm, v);")
     self.gen_add_end_function()
 
 
@@ -76,69 +71,24 @@ def gen_mxS_general(self):
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line("void mxS_general_peq_scaled(T *s_vecX, const T *s_vec, const T *S, const T alpha) {", True)
-    self.gen_add_code_line("for (int r = 0; r < 6; r++) { s_vecX[r] += alpha * crm_mul<T>(r, (T *)s_vec, (T *)S); }")
+    # s_vecX += alpha*(motion_cross(s_vec)*S) via the fused GLASS thread op
+    # (dense column S => AXIS=-1, HAS_BETA=true with beta=1 gives the += accumulate).
+    self.gen_add_code_line("glass::thread::motion_cross_mul<T, -1, true>(alpha, s_vec, S, static_cast<T>(1), s_vecX);")
     self.gen_add_end_function()
 
 
 def gen_crm(self):
-    """
-    This function generates the code for
-    the spatial motion cross product
-    operation function. It computes the
-    motion cross product operation of a vector.
-    """
+    """Entry `index` (flat column-major) of the motion cross product matrix
+    motion_cross(v). Delegated to the GLASS spatial primitive (verbatim formulas);
+    consumed element-wise by the block-parallel crm/crf matrix builds in idsva_so."""
     self.gen_add_func_doc("Compute the motion cross product matrix of a 6-vector, v Returns the entry at the index.", \
                           ['The force cross product matrix is just the negative transpose of this matrix'], \
                           ['index is the index of the result matirx to compute', \
                            'v is the 6-vector to take the cross product matrix of'])
-    
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line("T crm(int index, T *v) {", True)
-    self.gen_add_code_line("T result;")
-    self.gen_add_code_lines(['if (index == 0) result = static_cast<T>(0);',
-                             'if (index == 1) result = v[2];',
-                             'if (index == 2) result = -v[1];',
-                             'if (index == 3) result = static_cast<T>(0);',
-                             'if (index == 4) result = v[5];',
-                             'if (index == 5) result = -v[4];',
-                             
-                             'if (index == 6) result = -v[2];',
-                             'if (index == 7) result = static_cast<T>(0);',
-                             'if (index == 8) result = v[0];',
-                             'if (index == 9) result = -v[5];',
-                             'if (index == 10) result = static_cast<T>(0);',
-                             'if (index == 11) result = v[3];',
-                             
-                             'if (index == 12) result = v[1];',
-                             'if (index == 13) result = -v[0];',
-                             'if (index == 14) result = static_cast<T>(0);',
-                             'if (index == 15) result = v[4];',
-                             'if (index == 16) result = -v[3];',
-                             'if (index == 17) result = static_cast<T>(0);'
-
-                             'if (index == 18) result = static_cast<T>(0);',
-                             'if (index == 19) result = static_cast<T>(0);',
-                             'if (index == 20) result = static_cast<T>(0);',
-                             'if (index == 21) result = static_cast<T>(0);',
-                             'if (index == 22) result = v[2];',
-                             'if (index == 23) result = -v[1];',
-
-                             'if (index == 24) result = static_cast<T>(0);',
-                             'if (index == 25) result = static_cast<T>(0);',
-                             'if (index == 26) result = static_cast<T>(0);',
-                             'if (index == 27) result = -v[2];',
-                             'if (index == 28) result = static_cast<T>(0);',
-                             'if (index == 29) result = v[0];',
-                             
-                             'if (index == 30) result = static_cast<T>(0);',
-                             'if (index == 31) result = static_cast<T>(0);',
-                             'if (index == 32) result = static_cast<T>(0);',
-                             'if (index == 33) result = v[1];',
-                             'if (index == 34) result = -v[0];',
-                             'if (index == 35) result = static_cast<T>(0);'])
-
-    self.gen_add_code_line("return result;")
+    self.gen_add_code_line("return glass::spatial_detail::motion_cross_entry<T>((uint32_t)(index % 6), (uint32_t)(index / 6), v);")
     self.gen_add_end_function()
 
 
@@ -161,53 +111,16 @@ def gen_spatial_algebra_helpers(self):
         self.gen_add_code_line("return glass::dot_strided<T, N, S1, S2>(vec1, vec2);")
         self.gen_add_end_function()
 
-    # Then the motion vector matrix cross product operations
-    # We need to compute each column seperately as they are often multipled by S to pull out a column
-    # We need versions with and without an alpha multiplier to take advantage of fused multiple add opps
-    # and with and without a PEQ -- finally we need a generic one with a switch for dynamic column selection
-    MxCode = []
-    # Mx0
-    MxCode.append(["s_vecX[0] = static_cast<T>(0);", \
-                  "s_vecX[1] = s_vec[2];", \
-                  "s_vecX[2] = -s_vec[1];", \
-                  "s_vecX[3] = static_cast<T>(0);", \
-                  "s_vecX[4] = s_vec[5];", \
-                  "s_vecX[5] = -s_vec[4];"])
-    # Mx1
-    MxCode.append(["s_vecX[0] = -s_vec[2];", \
-                  "s_vecX[1] = static_cast<T>(0);", \
-                  "s_vecX[2] = s_vec[0];", \
-                  "s_vecX[3] = -s_vec[5];", \
-                  "s_vecX[4] = static_cast<T>(0);", \
-                  "s_vecX[5] = s_vec[3];"])
-    # Mx2
-    MxCode.append(["s_vecX[0] = s_vec[1];", \
-                  "s_vecX[1] = -s_vec[0];", \
-                  "s_vecX[2] = static_cast<T>(0);", \
-                  "s_vecX[3] = s_vec[4];", \
-                  "s_vecX[4] = -s_vec[3];", \
-                  "s_vecX[5] = static_cast<T>(0);"])
-    # Mx3
-    MxCode.append(["s_vecX[0] = static_cast<T>(0);", \
-                  "s_vecX[1] = static_cast<T>(0);", \
-                  "s_vecX[2] = static_cast<T>(0);", \
-                  "s_vecX[3] = static_cast<T>(0);", \
-                  "s_vecX[4] = s_vec[2];", \
-                  "s_vecX[5] = -s_vec[1];"])
-    # Mx3
-    MxCode.append(["s_vecX[0] = static_cast<T>(0);", \
-                  "s_vecX[1] = static_cast<T>(0);", \
-                  "s_vecX[2] = static_cast<T>(0);", \
-                  "s_vecX[3] = -s_vec[2];", \
-                  "s_vecX[4] = static_cast<T>(0);", \
-                  "s_vecX[5] = s_vec[0];"])
-    # Mx3
-    MxCode.append(["s_vecX[0] = static_cast<T>(0);", \
-                  "s_vecX[1] = static_cast<T>(0);",  \
-                  "s_vecX[2] = static_cast<T>(0);",  \
-                  "s_vecX[3] = s_vec[1];", \
-                  "s_vecX[4] = -s_vec[0];", \
-                  "s_vecX[5] = static_cast<T>(0);"])
+    # Then the motion vector matrix cross product operations: each mx{k} is the
+    # cardinal-axis column k of motion_cross(s_vec) (i.e. motion_cross(s_vec)*e_k).
+    # Delegated to the GLASS thread op (single-thread, no barrier; formulas promoted
+    # verbatim from this emitter). The (alpha, beta, HAS_BETA) triple encodes the
+    # four variants: plain=(1,0,false), _peq=(1,1,true), _scaled=(a,0,false),
+    # _peq_scaled=(a,1,true). x is ignored for AXIS>=0, so pass nullptr.
+    def _mx_body(k, has_beta, alpha, beta):
+        return ("glass::thread::motion_cross_mul<T, " + str(k) + ", "
+                + ("true" if has_beta else "false") + ">(" + alpha
+                + ", s_vec, nullptr, " + beta + ", s_vecX);")
     for ind in range(6):
         # without alpha
         self.gen_add_func_doc("Generates the motion vector cross product matrix column " + str(ind),\
@@ -216,7 +129,7 @@ def gen_spatial_algebra_helpers(self):
         self.gen_add_code_line("template <typename T>")
         self.gen_add_code_line("__device__")
         self.gen_add_code_line("void mx" + str(ind) + "(T *s_vecX, const T *s_vec) {", True)
-        self.gen_add_code_lines(MxCode[ind])
+        self.gen_add_code_line(_mx_body(ind, False, "static_cast<T>(1)", "static_cast<T>(0)"))
         self.gen_add_end_function()
         # without alpha PEQ
         self.gen_add_func_doc("Adds the motion vector cross product matrix column " + str(ind),\
@@ -225,9 +138,7 @@ def gen_spatial_algebra_helpers(self):
         self.gen_add_code_line("template <typename T>")
         self.gen_add_code_line("__device__")
         self.gen_add_code_line("void mx" + str(ind) + "_peq(T *s_vecX, const T *s_vec) {", True)
-        MxCodePEQ = [code_line.replace("=","+=") for code_line in MxCode[ind]]
-        MxCodePEQ = [code_line for code_line in MxCodePEQ if "static_cast<T>(0)" not in code_line]
-        self.gen_add_code_lines(MxCodePEQ)
+        self.gen_add_code_line(_mx_body(ind, True, "static_cast<T>(1)", "static_cast<T>(1)"))
         self.gen_add_end_function()
         # with alpha
         self.gen_add_func_doc("Generates the motion vector cross product matrix column " + str(ind),\
@@ -236,8 +147,7 @@ def gen_spatial_algebra_helpers(self):
         self.gen_add_code_line("template <typename T>")
         self.gen_add_code_line("__device__")
         self.gen_add_code_line("void mx" + str(ind) + "_scaled(T *s_vecX, const T *s_vec, const T alpha) {", True)
-        MxCodeWithAlpha = [code_line.replace("];","]*alpha;") for code_line in MxCode[ind]]
-        self.gen_add_code_lines(MxCodeWithAlpha)
+        self.gen_add_code_line(_mx_body(ind, False, "alpha", "static_cast<T>(0)"))
         self.gen_add_end_function()
         # with alpha PEQ
         self.gen_add_func_doc("Adds the motion vector cross product matrix column " + str(ind),\
@@ -246,10 +156,7 @@ def gen_spatial_algebra_helpers(self):
         self.gen_add_code_line("template <typename T>")
         self.gen_add_code_line("__device__")
         self.gen_add_code_line("void mx" + str(ind) + "_peq_scaled(T *s_vecX, const T *s_vec, const T alpha) {", True)
-        MxCodePEQ = [code_line.replace("=","+=") for code_line in MxCode[ind]]
-        MxCodePEQWithAlpha = [code_line.replace("];","]*alpha;") for code_line in MxCodePEQ]
-        MxCodePEQWithAlpha = [code_line for code_line in MxCodePEQWithAlpha if "static_cast<T>(0)" not in code_line]
-        self.gen_add_code_lines(MxCodePEQWithAlpha)
+        self.gen_add_code_line(_mx_body(ind, True, "alpha", "static_cast<T>(1)"))
         self.gen_add_end_function()
     # then the generics with a switch statement
     # without alpha
@@ -273,199 +180,50 @@ def gen_spatial_algebra_helpers(self):
         self.gen_add_end_control_flow()
         self.gen_add_end_function()
 
-    # The force cross product matrix transpose columns are simply 
-    # the negative of the motion vector matrix columns (as fx = -mx^T)
-    # so we can skip their codegen and just use -mx later
-    # We also need to compute the full fx matrix and full fx*vector
-    # Note: fx vec is:
-    #   0  -v(2)  v(1)    0  -v(5)  v(4)
-    # v(2)    0  -v(0)  v(5)    0  -v(3)
-    #-v(1)  v(0)    0  -v(4)  v(3)    0
-    #   0     0     0     0  -v(2)  v(1)
-    #   0     0     0   v(2)    0  -v(0)
-    #   0     0     0  -v(1)  v(0)    0
-    self.gen_add_func_doc("Generates the motion vector cross product matrix",\
-                         ["Assumes only one thread is running each function call"],\
-                         ["s_matX is the destination matrix","s_vecX is the source vector"],None)
-    self.gen_add_code_line("template <typename T>")
-    self.gen_add_code_line("__device__")
-    self.gen_add_code_line("void fx(T *s_matX, const T *s_vecX) {", True)
-    FxCode = ["s_matX[6*0 + 0] = static_cast<T>(0);",
-              "s_matX[6*0 + 1] = s_vecX[2];", \
-              "s_matX[6*0 + 2] = -s_vecX[1];", \
-              "s_matX[6*0 + 3] = static_cast<T>(0);", \
-              "s_matX[6*0 + 4] = static_cast<T>(0);", \
-              "s_matX[6*0 + 5] = static_cast<T>(0);", \
-              "s_matX[6*1 + 0] = -s_vecX[2];", \
-              "s_matX[6*1 + 1] = static_cast<T>(0);", \
-              "s_matX[6*1 + 2] = s_vecX[0];", \
-              "s_matX[6*1 + 3] = static_cast<T>(0);", \
-              "s_matX[6*1 + 4] = static_cast<T>(0);", \
-              "s_matX[6*1 + 5] = static_cast<T>(0);", \
-              "s_matX[6*2 + 0] = s_vecX[1];", \
-              "s_matX[6*2 + 1] = -s_vecX[0];", \
-              "s_matX[6*2 + 2] = static_cast<T>(0);", \
-              "s_matX[6*2 + 3] = static_cast<T>(0);", \
-              "s_matX[6*2 + 4] = static_cast<T>(0);", \
-              "s_matX[6*2 + 5] = static_cast<T>(0);", \
-              "s_matX[6*3 + 0] = static_cast<T>(0);", \
-              "s_matX[6*3 + 1] = s_vecX[5];", \
-              "s_matX[6*3 + 2] = -s_vecX[4];", \
-              "s_matX[6*3 + 3] = static_cast<T>(0);", \
-              "s_matX[6*3 + 4] = s_vecX[2];", \
-              "s_matX[6*3 + 5] = -s_vecX[1];", \
-              "s_matX[6*4 + 0] = -s_vecX[5];", \
-              "s_matX[6*4 + 1] = static_cast<T>(0);", \
-              "s_matX[6*4 + 2] = s_vecX[3];", \
-              "s_matX[6*4 + 3] = -s_vecX[2];", \
-              "s_matX[6*4 + 4] = static_cast<T>(0);", \
-              "s_matX[6*4 + 5] = s_vecX[0];", \
-              "s_matX[6*5 + 0] = s_vecX[4];", \
-              "s_matX[6*5 + 1] = -s_vecX[3];", \
-              "s_matX[6*5 + 2] = static_cast<T>(0);", \
-              "s_matX[6*5 + 3] = s_vecX[1];", \
-              "s_matX[6*5 + 4] = -s_vecX[0];", \
-              "s_matX[6*5 + 5] = static_cast<T>(0);"]
-    self.gen_add_code_lines(FxCode)
-    self.gen_add_end_function()
-    self.gen_add_func_doc("Generates the motion vector cross product matrix for a pre-zeroed destination",\
-                         ["Assumes only one thread is running each function call", "Assumes destination is zeroed"],\
-                         ["s_matX is the destination matrix","s_vecX is the source vector"],None)
-    self.gen_add_code_line("template <typename T>")
-    self.gen_add_code_line("__device__")
-    self.gen_add_code_line("void fx_zeroed(T *s_matX, const T *s_vecX) {", True)
-    FxCodeZeroed = [code_line for code_line in FxCode if "static_cast<T>(0)" not in code_line]
-    self.gen_add_code_lines(FxCodeZeroed)
-    self.gen_add_end_function()
-    self.gen_add_func_doc("Generates the motion vector cross product matrix and multiples by the input vector",\
+    # Force cross apply: fx_times_v(r, fxVec, timesVec) = force_cross(fxVec)*timesVec.
+    # Delegated to the GLASS thread op (single-thread, no barrier; force_cross_mul
+    # rows promoted verbatim from this emitter). HAS_BETA=false overwrites; the _peq
+    # sibling uses HAS_BETA=true, beta=1 for the += accumulate.
+    self.gen_add_func_doc("Generates the force cross product matrix and multiplies by the input vector",\
                          ["Assumes only one thread is running each function call"],\
                          ["s_result is the result vector","s_fxVec is the fx vector","s_timesVec is the multipled vector"],None)
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line("void fx_times_v(T *s_result, const T *s_fxVec, const T *s_timesVec) {", True)
-    FxCodeTimesVec = []
-    FxCodeTimesVec.append("s_result[0] = -s_fxVec[2] * s_timesVec[1] + s_fxVec[1] * s_timesVec[2] - s_fxVec[5] * s_timesVec[4] + s_fxVec[4] * s_timesVec[5];")
-    FxCodeTimesVec.append("s_result[1] =  s_fxVec[2] * s_timesVec[0] - s_fxVec[0] * s_timesVec[2] + s_fxVec[5] * s_timesVec[3] - s_fxVec[3] * s_timesVec[5];")
-    FxCodeTimesVec.append("s_result[2] = -s_fxVec[1] * s_timesVec[0] + s_fxVec[0] * s_timesVec[1] - s_fxVec[4] * s_timesVec[3] + s_fxVec[3] * s_timesVec[4];")
-    FxCodeTimesVec.append("s_result[3] =                                                          - s_fxVec[2] * s_timesVec[4] + s_fxVec[1] * s_timesVec[5];")
-    FxCodeTimesVec.append("s_result[4] =                                                            s_fxVec[2] * s_timesVec[3] - s_fxVec[0] * s_timesVec[5];")
-    FxCodeTimesVec.append("s_result[5] =                                                          - s_fxVec[1] * s_timesVec[3] + s_fxVec[0] * s_timesVec[4];")
-    self.gen_add_code_lines(FxCodeTimesVec)
+    self.gen_add_code_line("glass::thread::force_cross_mul<T, false>(static_cast<T>(1), s_fxVec, s_timesVec, static_cast<T>(0), s_result);")
     self.gen_add_end_function()
-    self.gen_add_func_doc("Adds the motion vector cross product matrix multiplied by the input vector",\
+    self.gen_add_func_doc("Adds the force cross product matrix multiplied by the input vector",\
                          ["Assumes only one thread is running each function call"],\
                          ["s_result is the result vector","s_fxVec is the fx vector","s_timesVec is the multipled vector"],None)
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line("void fx_times_v_peq(T *s_result, const T *s_fxVec, const T *s_timesVec) {", True)
-    FxCodeTimesVecPEQ = [code_line.replace("=","+=") for code_line in FxCodeTimesVec]
-    self.gen_add_code_lines(FxCodeTimesVecPEQ)
-    self.gen_add_end_control_flow()
-    
-    # fx = -mx^T
-    # So we may not need this? Or is this a repetition of fx above?
-    # @Emily
-    func_def = "void vcross(T *dest, T *v){"
+    self.gen_add_code_line("glass::thread::force_cross_mul<T, true>(static_cast<T>(1), s_fxVec, s_timesVec, static_cast<T>(1), s_result);")
+    self.gen_add_end_function()
+
+    # vcross: full 6x6 motion cross matrix (== crm(v)), consumed by coriolis' bias
+    # build. Delegated to the GLASS thread op (single-thread, all 36 entries).
+    self.gen_add_func_doc("Generates the full motion vector cross product matrix (6x6, column-major)",\
+                         ["Assumes only one thread is running each function call"],\
+                         ["dest is the destination 6x6 matrix","v is the source 6-vector"],None)
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
-    self.gen_add_code_line(func_def,True)
-    self.gen_add_code_line("dest[0] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[1] = v[2];")
-    self.gen_add_code_line("dest[2] = -1*v[1];")
-    self.gen_add_code_line("dest[3] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[4] = v[5];")
-    self.gen_add_code_line("dest[5] = -1*v[4];")
-    self.gen_add_code_line("dest[6] = -1*v[2];")
-    self.gen_add_code_line("dest[7] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[8] = v[0];")
-    self.gen_add_code_line("dest[9] = -1*v[5];")
-    self.gen_add_code_line("dest[10] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[11] = v[3];")
-    self.gen_add_code_line("dest[12] = v[1];")
-    self.gen_add_code_line("dest[13] = -1*v[0];")
-    self.gen_add_code_line("dest[14] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[15] = v[4];")
-    self.gen_add_code_line("dest[16] = -1*v[3];")
-    self.gen_add_code_line("dest[17] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[18] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[19] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[20] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[21] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[22] = v[2];")
-    self.gen_add_code_line("dest[23] = -1*v[1];")
-    self.gen_add_code_line("dest[24] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[25] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[26] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[27] = -1*v[2];")
-    self.gen_add_code_line("dest[28] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[29] = v[0];")
-    self.gen_add_code_line("dest[30] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[31] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[32] = static_cast<T>(0);")
-    self.gen_add_code_line("dest[33] = v[1];")
-    self.gen_add_code_line("dest[34] = -1*v[0];")
-    self.gen_add_code_line("dest[35] = static_cast<T>(0);")
-    self.gen_add_end_control_flow()
+    self.gen_add_code_line("void vcross(T *dest, T *v){", True)
+    self.gen_add_code_line("glass::thread::motion_cross(v, dest);")
+    self.gen_add_end_function()
 
-
-    # ICRF
-    """
-    Generates the function that computes
-    the inverse force cross product matrix.
-    icrf is defined such that v crf f = f icrf v.
-    """
+    # icrf(index, v): entry `index` (flat column-major) of the inverse force cross
+    # product matrix (v crf f == f icrf v). GLASS force_cross_dual bakes in the
+    # global negative, so return its entry directly. Consumed element-wise by the
+    # block-parallel BC/T3 builds in idsva_so.
     self.gen_add_func_doc("Compute the inverse force cross product matrix of a 6-vector, v Returns the entry at the index.", \
                           ['ICRF is the operation defined such that v crf f = f icrf v'], \
                           ['index is the index of the result matirx to compute', \
                            'v is the 6-vector to take the cross product matrix of'])
-    
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line("T icrf(int index, T *v) {", True)
-    self.gen_add_code_line("T result;")
-    self.gen_add_code_lines(['if (index == 0) result = static_cast<T>(0);',
-                             'if (index == 1) result = v[2];',
-                             'if (index == 2) result = -v[1];',
-                             'if (index == 3) result = static_cast<T>(0);',
-                             'if (index == 4) result = v[5];',
-                             'if (index == 5) result = -v[4];',
-                             
-                             'if (index == 6) result = -v[2];',
-                             'if (index == 7) result = static_cast<T>(0);',
-                             'if (index == 8) result = v[0];',
-                             'if (index == 9) result = -v[5];',
-                             'if (index == 10) result = static_cast<T>(0);',
-                             'if (index == 11) result = v[3];',
-                             
-                             'if (index == 12) result = v[1];',
-                             'if (index == 13) result = -v[0];',
-                             'if (index == 14) result = static_cast<T>(0);',
-                             'if (index == 15) result = v[4];',
-                             'if (index == 16) result = -v[3];',
-                             'if (index == 17) result = static_cast<T>(0);'
-
-                             'if (index == 18) result = static_cast<T>(0);',
-                             'if (index == 19) result = v[5];',
-                             'if (index == 20) result = -v[4];',
-                             'if (index == 21) result = static_cast<T>(0);',
-                             'if (index == 22) result = static_cast<T>(0);',
-                             'if (index == 23) result = static_cast<T>(0);',
-
-                             'if (index == 24) result = -v[5];',
-                             'if (index == 25) result = static_cast<T>(0);',
-                             'if (index == 26) result = v[3];',
-                             'if (index == 27) result = static_cast<T>(0);',
-                             'if (index == 28) result = static_cast<T>(0);',
-                             'if (index == 29) result = static_cast<T>(0);',
-                             
-                             'if (index == 30) result = v[4];',
-                             'if (index == 31) result = -v[3];',
-                             'if (index == 32) result = static_cast<T>(0);',
-                             'if (index == 33) result = static_cast<T>(0);',
-                             'if (index == 34) result = static_cast<T>(0);',
-                             'if (index == 35) result = static_cast<T>(0);'])
-
-    self.gen_add_code_line("return -result;")
+    self.gen_add_code_line("return glass::spatial_detail::force_cross_dual_entry<T>((uint32_t)(index % 6), (uint32_t)(index / 6), v);")
     self.gen_add_end_function()
 
     
