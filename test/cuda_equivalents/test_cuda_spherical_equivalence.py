@@ -60,37 +60,74 @@ def _parse(name):
         return URDFParser().parse(str(FIXDIR / name), floating_base=False)
 
 
-def _generate_header(robot, build_dir):
+# The eight ported spherical (Tier-C) algorithms. Requesting any other raises
+# NotImplementedError by design. This is the FULL set the thread-invariance test
+# (which reads every block) needs; the correctness tests each SPLIT off a subset.
+_SPHERICAL_ALL_ALGOS = [
+    "inverse_dynamics", "crba", "minv", "forward_dynamics",
+    "inverse_dynamics_gradient", "forward_dynamics_gradient",
+    "aba", "fdsva_so",
+]
+
+# Per-concern SPLIT cells: (codegen_algorithm_list, run_tokens). Each correctness test
+# codegens only its cell's algos (a broken/omitted OTHER algo can't void it — the Bug-A
+# fix) and compiles the runner gated to only its RUN token(s). The value test bundles the
+# five value algos it cross-checks; the gradient/second-order tests isolate to one. Groups
+# include the inner deps the kernel calls (FD → minv+id; gradients → crba+id; parity with
+# the flagship split's probe-confirmed dependency groups). run_tokens=None (thread-invariance)
+# builds the full all-block runner (GRID_RUN_DEFAULT=1) since it reads every output block.
+_SPHERICAL_VALUE_ALGOS = ["inverse_dynamics", "crba", "minv", "forward_dynamics", "aba"]
+_SPHERICAL_VALUE_TOKENS = frozenset({
+    "RUN_INVERSE_DYNAMICS", "RUN_CRBA", "RUN_MINV", "RUN_FORWARD_DYNAMICS", "RUN_ABA",
+})
+_SPHERICAL_IDG_ALGOS = ["inverse_dynamics_gradient", "inverse_dynamics", "crba", "minv", "forward_dynamics"]
+_SPHERICAL_FDG_ALGOS = ["forward_dynamics_gradient", "inverse_dynamics_gradient",
+                        "inverse_dynamics", "crba", "minv", "forward_dynamics"]
+# fdsva_so composes the id/fd gradient + Minv machinery, so its header pulls the full
+# dynamics-gradient dep set; keep it a tight-but-complete group (excludes nothing it needs).
+_SPHERICAL_FDSVA_ALGOS = _SPHERICAL_ALL_ALGOS
+
+
+def _generate_header(robot, build_dir, algos=None):
     header = build_dir / "grid.cuh"
     codegen = GRiDCodeGenerator(
         robot, DEBUG_MODE=False, NEED_PRINT_MAT=True, FILE_NAMESPACE="grid"
     )
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        # inverse_dynamics + crba + minv + forward_dynamics are the ported
-        # algorithms for spherical (Tier-C); requesting any other raises
-        # NotImplementedError by design.
         codegen.gen_all_code(
             include_homogenous_transforms=True,
             output_path=str(header),
-            algorithm_list=["inverse_dynamics", "crba", "minv", "forward_dynamics",
-                            "inverse_dynamics_gradient", "forward_dynamics_gradient",
-                            "aba", "fdsva_so"],
+            algorithm_list=list(algos) if algos is not None else list(_SPHERICAL_ALL_ALGOS),
         )
     return header
 
 
-def _compile_runner(build_dir):
+# Shared per-algorithm COMPILE selector (see grid_runner_select.cuh). The runner
+# #includes it; copy it next to the runner so the isolated-dir compile resolves it.
+_SELECT_HEADER = Path(__file__).with_name("grid_runner_select.cuh")
+
+
+def _compile_runner(build_dir, run_tokens=None):
     nvcc = shutil.which("nvcc") or "/usr/local/cuda/bin/nvcc"
     if not Path(nvcc).exists():
         pytest.skip("nvcc not found; install CUDA Toolkit to run CUDA equivalence tests.")
     runner_copy = build_dir / RUNNER_SOURCE.name
     shutil.copyfile(RUNNER_SOURCE, runner_copy)
+    shutil.copyfile(_SELECT_HEADER, build_dir / _SELECT_HEADER.name)
     arch = _detect_cuda_arch()
     exe = build_dir / "cuda_spherical_runner.exe"
+    # Split mode: gate the runner to only this cell's RUN token(s) so a build break in
+    # another algo can't void it (Bug-A isolation). Without run_tokens the runner builds
+    # every block (back-compat all-in-one, used by the thread-invariance test).
+    split_defines = []
+    if run_tokens:
+        split_defines.append("-DGRID_RUN_SPLIT")
+        split_defines.extend(f"-D{tok}=1" for tok in sorted(run_tokens))
     cmd = [
         nvcc, "-std=c++17", "-O0",
         "-DGRID_CUDA_FLOATING_BASE=0",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
+        *split_defines,
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         "-gencode", f"arch=compute_{arch},code=compute_{arch}",
         "-o", str(exe), str(runner_copy),
@@ -150,7 +187,9 @@ def test_cuda_spherical_inverse_dynamics_matches_reference(tmp_path, fixture):
     ref = RBDReference(robot)
     nv = robot.get_num_vel()
 
-    exe = _compile_runner(tmp_path) if _generate_header(robot, tmp_path) else None
+    # SPLIT: value cell — codegen + gate only the five value algos this test cross-checks.
+    exe = (_compile_runner(tmp_path, run_tokens=_SPHERICAL_VALUE_TOKENS)
+           if _generate_header(robot, tmp_path, _SPHERICAL_VALUE_ALGOS) else None)
 
     rng = np.random.default_rng(7)
     zeros = np.zeros(nv, dtype=np.float64)
@@ -292,6 +331,8 @@ def test_cuda_spherical_thread_invariant(tmp_path, fixture):
     kernels must be exactly thread-count invariant (bit-identical at 1/32/256)."""
     robot = _parse(fixture)
     assert robot is not None
+    # Thread-invariance reads EVERY output block, so it needs the full all-algo runner
+    # (run_tokens=None → GRID_RUN_DEFAULT builds all blocks) against the full header.
     exe = _compile_runner(tmp_path) if _generate_header(robot, tmp_path) else None
 
     rng = np.random.default_rng(11)
@@ -375,7 +416,9 @@ def test_cuda_spherical_inverse_dynamics_gradient_matches_reference(tmp_path, fi
     nv = robot.get_num_vel()
     tol = _IDG_TOL[(fixture, dtype)]
 
-    exe = _compile_runner(tmp_path) if _generate_header(robot, tmp_path) else None
+    # SPLIT: inverse_dynamics_gradient cell (excludes fd_gradient / fdsva_so).
+    exe = (_compile_runner(tmp_path, run_tokens=frozenset({"RUN_INVERSE_DYNAMICS_GRADIENT"}))
+           if _generate_header(robot, tmp_path, _SPHERICAL_IDG_ALGOS) else None)
 
     rng = np.random.default_rng(23)
     failures = []
@@ -479,7 +522,9 @@ def test_cuda_spherical_forward_dynamics_gradient_matches_reference(tmp_path, fi
     nv = robot.get_num_vel()
     tol = _FDG_TOL[(fixture, dtype)]
 
-    exe = _compile_runner(tmp_path) if _generate_header(robot, tmp_path) else None
+    # SPLIT: forward_dynamics_gradient cell (excludes fdsva_so).
+    exe = (_compile_runner(tmp_path, run_tokens=frozenset({"RUN_FORWARD_DYNAMICS_GRADIENT"}))
+           if _generate_header(robot, tmp_path, _SPHERICAL_FDG_ALGOS) else None)
 
     rng = np.random.default_rng(29)
     failures = []
@@ -618,7 +663,10 @@ def test_cuda_spherical_fdsva_so_matches_reference(tmp_path, fixture, dtype):
     vfd_tol = _FDSVA_SO_VALUE_FD_TOL[dtype]
     nv3 = nv * nv * nv
 
-    exe = _compile_runner(tmp_path) if _generate_header(robot, tmp_path) else None
+    # SPLIT: fdsva_so cell (gate to only the second-order block; header pulls its
+    # id/fd-gradient + Minv deps).
+    exe = (_compile_runner(tmp_path, run_tokens=frozenset({"RUN_FDSVA_SO"}))
+           if _generate_header(robot, tmp_path, _SPHERICAL_FDSVA_ALGOS) else None)
 
     rng = np.random.default_rng(31)
     failures = []

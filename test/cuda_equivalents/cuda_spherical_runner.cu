@@ -22,6 +22,38 @@
 #include <vector>
 
 #include "grid.cuh"
+#include "grid_runner_select.cuh"
+
+// Per-algorithm COMPILE selection (split). With -DGRID_RUN_SPLIT the harness compiles
+// ONE algo (or tight group) per TU (passes -DRUN_<ALGO>=1 for the selected set); every
+// other RUN_<ALGO> defaults to 0, so only that algo's alloc/compute/print/free blocks
+// compile and a build break (or subset-header omission) in another algo can't void this
+// cell. Without -DGRID_RUN_SPLIT every RUN_<ALGO> defaults to 1 (back-compat all-in-one
+// build — what the thread-invariance test uses). See grid_runner_select.cuh.
+#ifndef RUN_INVERSE_DYNAMICS
+#  define RUN_INVERSE_DYNAMICS GRID_RUN_DEFAULT
+#endif
+#ifndef RUN_CRBA
+#  define RUN_CRBA GRID_RUN_DEFAULT
+#endif
+#ifndef RUN_MINV
+#  define RUN_MINV GRID_RUN_DEFAULT
+#endif
+#ifndef RUN_FORWARD_DYNAMICS
+#  define RUN_FORWARD_DYNAMICS GRID_RUN_DEFAULT
+#endif
+#ifndef RUN_ABA
+#  define RUN_ABA GRID_RUN_DEFAULT
+#endif
+#ifndef RUN_INVERSE_DYNAMICS_GRADIENT
+#  define RUN_INVERSE_DYNAMICS_GRADIENT GRID_RUN_DEFAULT
+#endif
+#ifndef RUN_FORWARD_DYNAMICS_GRADIENT
+#  define RUN_FORWARD_DYNAMICS_GRADIENT GRID_RUN_DEFAULT
+#endif
+#ifndef RUN_FDSVA_SO
+#  define RUN_FDSVA_SO GRID_RUN_DEFAULT
+#endif
 
 int g_num_threads = 32;
 
@@ -48,6 +80,11 @@ void print_vector(const std::string &name, const T *data, int count) {
     std::cout << "\nEND " << name << "\n";
 }
 
+// The device-runner kernel DEFINITIONS reference grid::<algo>_device by QUALIFIED
+// name, which nvcc resolves at template-DEFINITION parse time (not instantiation) —
+// so each must be gated by its RUN token, else a subset header that omits that algo
+// fails to parse the kernel even though its launch is gated off.
+#if RUN_INVERSE_DYNAMICS
 // (1) Device-function runner. s_q is NQ(=nq)-wide, s_qd / s_out are NV-wide.
 template <typename T>
 __global__ void spherical_id_device_runner(
@@ -76,7 +113,9 @@ __global__ void spherical_id_device_runner(
         d_out[ind] = s_out[ind];
     }
 }
+#endif  // RUN_INVERSE_DYNAMICS
 
+#if RUN_CRBA
 // (1b) Device-function runner for crba. s_q is NQ(=nq)-wide, s_qd is NV-wide,
 // s_M is NV x NV (column-major).
 template <typename T>
@@ -103,7 +142,9 @@ __global__ void spherical_crba_device_runner(
         d_M[ind] = s_M[ind];
     }
 }
+#endif  // RUN_CRBA
 
+#if RUN_MINV
 // (1c) Device-function runner for minv. s_q is NQ(=nq)-wide, s_Minv is NV x NV
 // (column-major, SYMMETRIC_UPPER storage from the inv(CRBA) Tier-C path).
 template <typename T>
@@ -124,7 +165,9 @@ __global__ void spherical_minv_device_runner(
         d_Minv[ind] = s_Minv[ind];
     }
 }
+#endif  // RUN_MINV
 
+#if RUN_FORWARD_DYNAMICS
 // (1d) Device-function runner for forward_dynamics. s_q is NQ-wide; s_qd / s_u /
 // s_qdd are NV-wide. qdd = inv(CRBA(q)) * (u - c).
 template <typename T>
@@ -154,7 +197,9 @@ __global__ void spherical_fd_device_runner(
         d_qdd[ind] = s_qdd[ind];
     }
 }
+#endif  // RUN_FORWARD_DYNAMICS
 
+#if RUN_ABA
 // (1e) Device-function runner for the STANDALONE aba. s_q is NQ-wide; s_qd /
 // s_tau / s_qdd are NV-wide. Direct 3x3-D ABA recursion (NOT the Minv-compose
 // forward_dynamics path), so it must independently match ref.aba AND the cuda
@@ -186,6 +231,7 @@ __global__ void spherical_aba_device_runner(
         d_qdd[ind] = s_qdd[ind];
     }
 }
+#endif  // RUN_ABA
 
 template <typename T>
 void run() {
@@ -213,11 +259,14 @@ void run() {
     gpuErrchk(cudaMalloc((void **)&d_q, grid::NUM_JOINTS * sizeof(T)));
     gpuErrchk(cudaMalloc((void **)&d_qd, grid::NUM_VEL * sizeof(T)));
     gpuErrchk(cudaMalloc((void **)&d_u, grid::NUM_VEL * sizeof(T)));
+#if RUN_INVERSE_DYNAMICS
     gpuErrchk(cudaMalloc((void **)&d_out, grid::NUM_VEL * sizeof(T)));
+#endif
     gpuErrchk(cudaMemcpy(d_q, h_q.data(), grid::NUM_JOINTS * sizeof(T), cudaMemcpyHostToDevice));
     gpuErrchk(cudaMemcpy(d_qd, h_qd.data(), grid::NUM_VEL * sizeof(T), cudaMemcpyHostToDevice));
     gpuErrchk(cudaMemcpy(d_u, h_u.data(), grid::NUM_VEL * sizeof(T), cudaMemcpyHostToDevice));
 
+#if RUN_INVERSE_DYNAMICS
     std::vector<T> h_out(grid::NUM_VEL);
     const size_t dev_smem = grid::INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES<T>();
     gpuErrchk(cudaFuncSetAttribute(spherical_id_device_runner<T>,
@@ -228,6 +277,7 @@ void run() {
     gpuErrchk(cudaDeviceSynchronize());
     gpuErrchk(cudaMemcpy(h_out.data(), d_out, grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost));
     print_vector("inverse_dynamics", h_out.data(), grid::NUM_VEL);
+#endif  // RUN_INVERSE_DYNAMICS
 
     // ----- (2) host batch wrapper path over B IDENTICAL timesteps -----
     // The per-timestep slot is NQ-wide for q AND for qd / u (the canonical
@@ -258,6 +308,7 @@ void run() {
     }
     const dim3 block_dimms(1, 1, 1);
     const dim3 thread_dimms(g_num_threads, 1, 1);
+#if RUN_INVERSE_DYNAMICS
     grid::inverse_dynamics<T, false, true>(
         hd_data, d_robot_model, gravity, B, block_dimms, thread_dimms, streams);
     gpuErrchk(cudaPeekAtLastError());
@@ -268,7 +319,9 @@ void run() {
         for (int i = 0; i < nv; ++i) row[i] = hd_data->h_c[k * nq + i];
         print_vector("inverse_dynamics_batch_" + std::to_string(k), row.data(), nv);
     }
+#endif  // RUN_INVERSE_DYNAMICS
 
+#if RUN_CRBA
     // ----- (3) crba device-function path: NV x NV mass matrix M -----
     T *d_M;
     gpuErrchk(cudaMalloc((void **)&d_M, nv * nv * sizeof(T)));
@@ -302,7 +355,9 @@ void run() {
         for (int i = 0; i < nv * nv; ++i) blk[i] = hd_data->h_M[k * nv * nv + i];
         print_vector("crba_batch_" + std::to_string(k), blk.data(), nv * nv);
     }
+#endif  // RUN_CRBA
 
+#if RUN_MINV
     // ----- (5) minv device-function path: NV x NV Minv = inv(CRBA(q)) -----
     // Tier-C spherical Minv routes through crba_inner + invert_matrix (the
     // mimic-style inv(M) path), since the ABA-recursion minv does not generalize
@@ -331,7 +386,9 @@ void run() {
         for (int i = 0; i < nv * nv; ++i) blk[i] = hd_data->h_Minv[k * nv * nv + i];
         print_vector("minv_batch_" + std::to_string(k), blk.data(), nv * nv);
     }
+#endif  // RUN_MINV
 
+#if RUN_FORWARD_DYNAMICS
     // ----- (7) forward_dynamics device-function path: qdd (NV-wide) -----
     T *d_qdd;
     gpuErrchk(cudaMalloc((void **)&d_qdd, grid::NUM_VEL * sizeof(T)));
@@ -355,7 +412,9 @@ void run() {
         for (int i = 0; i < nv; ++i) row[i] = hd_data->h_qdd[k * nq + i];
         print_vector("forward_dynamics_batch_" + std::to_string(k), row.data(), nv);
     }
+#endif  // RUN_FORWARD_DYNAMICS
 
+#if RUN_ABA
     // ----- (8b) standalone aba device-function path: qdd (NV-wide) -----
     // The Tier-C spherical standalone ABA does the DIRECT 3x3-D recursion (NOT
     // the Minv-compose forward_dynamics path), so it independently validates the
@@ -389,7 +448,9 @@ void run() {
         for (int i = 0; i < nv; ++i) row[i] = hd_data->h_qdd[k * nq + i];
         print_vector("aba_batch_" + std::to_string(k), row.data(), nv);
     }
+#endif  // RUN_ABA
 
+#if RUN_INVERSE_DYNAMICS_GRADIENT
     // ----- (9) inverse_dynamics_gradient: dc_du = [dc_dq | dc_dqd], 2*NV*NV -----
     // The Tier-C spherical id-gradient routes through the DENSE serial reduced-
     // space inner (a mid-chain 3-DoF ball joint owns a 3-wide v-block, which the
@@ -459,7 +520,9 @@ void run() {
         for (int i = 0; i < idg_len; ++i) blk[i] = hd_data->h_dc_du[k * idg_len + i];
         print_vector("inverse_dynamics_gradient_batch_" + std::to_string(k), blk.data(), idg_len);
     }
+#endif  // RUN_INVERSE_DYNAMICS_GRADIENT
 
+#if RUN_FORWARD_DYNAMICS_GRADIENT
     // ----- (10) forward_dynamics_gradient: df_du = -Minv * dc_du, 2*NV*NV -----
     // Pure orchestrator: fd_gradient = -Minv(q) * id_gradient(q,qd,qdd=forward_
     // dynamics(q,qd,u)). For spherical it composes the already-spherical-aware
@@ -525,7 +588,9 @@ void run() {
         for (int i = 0; i < fdg_len; ++i) blk[i] = hd_data->h_df_du[k * fdg_len + i];
         print_vector("forward_dynamics_gradient_batch_" + std::to_string(k), blk.data(), fdg_len);
     }
+#endif  // RUN_FORWARD_DYNAMICS_GRADIENT
 
+#if RUN_FDSVA_SO
     // ----- (11) fdsva_so: 2nd-order forward-dynamics derivs, 4*NV^3 -----
     // s_df2 packs four NV x NV x NV tensors (row-major [(i*NV+j)*NV+k]) in order
     //   [daba_dqdq | daba_dvdq | daba_dvdv | daba_dtdq]
@@ -548,20 +613,37 @@ void run() {
             blk[i] = hd_data->h_df2[k * grid::SECOND_ORDER_TENSOR_SIZE + i];
         print_vector("fdsva_so_batch_" + std::to_string(k), blk.data(), so_len);
     }
+#endif  // RUN_FDSVA_SO
 
+    // Frees mirror the per-algo alloc gates so a cell that never allocated a buffer
+    // never frees an uninitialized pointer.
+#if RUN_FORWARD_DYNAMICS_GRADIENT
     gpuErrchk(cudaFree(d_df_du));
     gpuErrchk(cudaFree(d_q_qd_u_fdg));
+#endif
+#if RUN_INVERSE_DYNAMICS_GRADIENT
     gpuErrchk(cudaFree(d_dc_du));
     gpuErrchk(cudaFree(d_q_qd_idg));
     gpuErrchk(cudaFree(d_qdd_idg));
+#endif
+#if RUN_MINV
     gpuErrchk(cudaFree(d_Minv));
+#endif
+#if RUN_ABA
     gpuErrchk(cudaFree(d_qdd_aba));
+#endif
+#if RUN_FORWARD_DYNAMICS
     gpuErrchk(cudaFree(d_qdd));
+#endif
+#if RUN_CRBA
     gpuErrchk(cudaFree(d_M));
+#endif
     gpuErrchk(cudaFree(d_q));
     gpuErrchk(cudaFree(d_qd));
     gpuErrchk(cudaFree(d_u));
+#if RUN_INVERSE_DYNAMICS
     gpuErrchk(cudaFree(d_out));
+#endif
     grid::close_grid<T>(streams, d_robot_model, hd_data);
 }
 
