@@ -25,6 +25,12 @@ BATCH_SIZES = [16, 32, 64, 128, 256, 1024]
 # MJX_DERIV_BATCH_SIZES="16,256"). The value-function sweep still uses BATCH_SIZES.
 DERIV_BATCH_SIZES = [int(x) for x in
                      os.environ.get("MJX_DERIV_BATCH_SIZES", "16,32,64,128,256").split(",") if x.strip()]
+# SECOND-ORDER (jacfwd-over-jacobian) timing is OFF by default (BENCH_SECOND_ORDER=1 to
+# enable): the nested XLA graph is another multiplicative compile-time step on top of the
+# DERIV caveat above, so the batch sweep is capped even harder (override MJX_SO_BATCH_SIZES).
+SECOND_ORDER   = os.environ.get("BENCH_SECOND_ORDER", "0") == "1"
+SO_BATCH_SIZES = [int(x) for x in
+                  os.environ.get("MJX_SO_BATCH_SIZES", "16,256").split(",") if x.strip()]
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +405,84 @@ def main() -> None:
                 _print_stats(f"{label} COMPUTE ONLY", N, co)
             except Exception as e:
                 print(f"# [N:{N}] {label} skipped: {e}", file=sys.stderr)
+
+    # ------------------------------------------------------------------
+    # SECOND-ORDER derivative timing (BENCH_SECOND_ORDER=1): the mjx autodiff
+    # analogue of GRiD's analytic idsva_so / fdsva_so bars. jacfwd over the
+    # first-order jacobian closure — forward-over-reverse, the standard hessian
+    # composition. Labels match algo_registry so parse_grid_output attributes
+    # them to 'idsva_so' / 'fdsva_so'.
+    #   IDSVA_SO: d²(qfrc_inverse)/d(q,v)²          (τ hessian, qacc held fixed)
+    #   FDSVA_SO: d²(qacc)/d(q,v,qfrc_applied)²     (qdd hessian incl. tau cross terms)
+    # Nested-graph compile time is the dominant risk (see DERIV caveat above) —
+    # every leg is individually try/except'd so a big-robot compile blowup just
+    # skips that bar instead of killing the capture.
+    # ------------------------------------------------------------------
+    if SECOND_ORDER:
+        def _idsva_so_one(d):
+            return jax.jacfwd(
+                lambda qpos, qvel: jax.jacobian(
+                    lambda qp, qv: mjx.inverse(
+                        mx, d.replace(qpos=qp, qvel=qv)
+                    ).qfrc_inverse,
+                    argnums=(0, 1),
+                )(qpos, qvel),
+                argnums=(0, 1),
+            )(d.qpos, d.qvel)
+
+        def _fdsva_so_one(d):
+            return jax.jacfwd(
+                lambda qpos, qvel, qfrc: jax.jacobian(
+                    lambda qp, qv, qf: mjx.forward(
+                        mx, d.replace(qpos=qp, qvel=qv, qfrc_applied=qf)
+                    ).qacc,
+                    argnums=(0, 1, 2),
+                )(qpos, qvel, qfrc),
+                argnums=(0, 1, 2),
+            )(d.qpos, d.qvel, d.qfrc_applied)
+
+        n_so_iters = max(1, TEST_ITERS // 50)
+        _SO = [("IDSVA_SO", _idsva_so_one, "qacc"),
+               ("FDSVA_SO", _fdsva_so_one, "qfrc_applied")]
+
+        # Single-call
+        for label, _one, _ in _SO:
+            try:
+                _so_jit = jax.jit(_one)
+                _jit_and_warmup(_so_jit, (dx_single,))
+                t = _time_device(_so_jit, dx_single, n_iters=n_so_iters)
+                print(f"Single Call {label} {np.median(t):.4f}us")
+            except Exception as e:
+                print(f"# Single Call {label} skipped: {e}", file=sys.stderr)
+
+        # Batch (vmap) — capped sweep; mirrors the DERIV with-mem/compute-only pair.
+        for N in SO_BATCH_SIZES:
+            keys     = jax.random.split(rng, N)
+            dx_batch = jax.vmap(_make_dx_jnp)(keys)
+            for label, _one, third in _SO:
+                try:
+                    _batch_so_fn = jax.jit(lambda bd, f=_one: jax.vmap(f)(bd))
+                    _jit_and_warmup(_batch_so_fn, (dx_batch,))
+
+                    def _build_so(qs, vs, ts, field=third):
+                        return jax.vmap(
+                            lambda q, v, t: dx0.replace(**{"qpos": q, "qvel": v, field: t})
+                        )(jnp.array(qs), jnp.array(vs), jnp.array(ts))
+                    _build_so_jit = jax.jit(_build_so)
+                    _wm_fn = (lambda qs, vs, ts, bf=_build_so_jit, ff=_batch_so_fn: ff(bf(qs, vs, ts)))
+                    _so_np = lambda: (
+                        np.random.randn(N, nq).astype(np.float32),
+                        np.random.randn(N, nv).astype(np.float32),
+                        np.random.randn(N, nv).astype(np.float32),
+                    )
+                    _jit_and_warmup(_wm_fn, _so_np())
+                    wm = _time_with_mem(_wm_fn, _so_np, n_iters=n_so_iters)
+                    _print_stats(f"{label} WITH MEMORY", N, wm)
+
+                    co = _time_device(_batch_so_fn, dx_batch, n_iters=n_so_iters)
+                    _print_stats(f"{label} COMPUTE ONLY", N, co)
+                except Exception as e:
+                    print(f"# [N:{N}] {label} skipped: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

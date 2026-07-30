@@ -28,7 +28,10 @@ from test.benchmarks.timing_parser import (  # noqa: E402
 # MJX-available algorithms (others will be null after fill_nulls)
 # ---------------------------------------------------------------------------
 MJX_ALGOS = ["inverse_dynamics", "forward_dynamics", "end_effector_pose",
-             "inverse_dynamics_gradient", "forward_dynamics_gradient"]
+             "inverse_dynamics_gradient", "forward_dynamics_gradient",
+             # second-order autodiff twins — emitted only under BENCH_SECOND_ORDER=1
+             # (timeMJX.py); absent-from-stdout still nulls out via fill_nulls.
+             "idsva_so", "fdsva_so"]
 
 # Canonical EE body names per robot in MuJoCo MJCF from robot_descriptions
 DEFAULT_EE_FRAMES: dict[str, str] = {

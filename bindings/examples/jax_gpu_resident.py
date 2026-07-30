@@ -90,7 +90,10 @@ def main() -> None:
     print(f"[3] fused jit(forward_dynamics→cost) = {float(c):.4f}  (single GPU program)")
 
     # ── 4. vmap: batch a per-sample closure with no Python loop ───────────────
-    per_sample = lambda q1, v1, u1: h.forward_dynamics(q1[None], v1[None], u1[None])[0]
+    # Per-sample args are 1-D — the FFI calls carry vmap_method="broadcast_all",
+    # so vmap re-adds the mapped batch axis and GRiD sees one (B, n) call. (Do
+    # NOT wrap with [None]: that stacks to (B, 1, n), which the 2-D FFI rejects.)
+    per_sample = lambda q1, v1, u1: h.forward_dynamics(q1, v1, u1)
     vmapped = jax.jit(jax.vmap(per_sample))
     out = vmapped(q, qd, u); jax.block_until_ready(out)
     print(f"[4] vmap over B={B}: {tuple(out.shape)} on {out.devices()}")
