@@ -9,6 +9,34 @@ They appear only in the FIRST-order inverse_dynamics_gradient output, never here
 # Shared block-parallel emit primitives (also used by _fdsva_so). See _mjx_blockpar.
 from ._mjx_blockpar import bpfor as _bpfor, stride_rc as _bp_stride_rloop
 
+import os
+
+
+def _emit_t_outer(self, n_pairs, x_expr, y_expr):
+    """Emit one t-slab fill: t[t_idx] = outer(x, y) for every (jid, ancestor) pair.
+
+    Default: the historical per-element loop (one thread per matrix element via
+    outerProduct). GRID_IDSVA_GLASS_OUTER=1 opts into one PAIR per thread via
+    glass::thread::gemm<6,6,1> (an outer-product assign; same column-major layout
+    and the same single multiply per element, so outputs are bit-identical) — 36x
+    fewer index-table lookups but 36 serial stores per thread. A/B candidate gated
+    on the Phase-2 SO sweep; the loser (and this flag) gets deleted afterwards.
+    """
+    if os.environ.get("GRID_IDSVA_GLASS_OUTER", "0") == "1":
+        self.gen_add_parallel_loop('i', f'{n_pairs}')
+        self.gen_add_code_line('int jid = jids[i];')
+        self.gen_add_code_line('int ancestor_j = ancestors_j[i];')
+        self.gen_add_code_line('int t_idx = t_index_map[jid][ancestor_j]*36;')
+        self.gen_add_code_line(f'glass::thread::gemm<T, 6, 6, 1>(static_cast<T>(1), {x_expr}, {y_expr}, &t[t_idx]);')
+    else:
+        self.gen_add_parallel_loop('i', f'{n_pairs}*36')
+        self.gen_add_code_line('int jid = jids[i / 36];')
+        self.gen_add_code_line('int ancestor_j = ancestors_j[i / 36];')
+        self.gen_add_code_line('int t_idx = t_index_map[jid][ancestor_j]*36;')
+        self.gen_add_code_line(f'outerProduct<T>({x_expr}, {y_expr}, &t[t_idx], 6, 6, i%36);')
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+
 SHARED_MEMORY_JOINT_THRESHOLD = 10 # Max shared memory threshold => Write directly to RAM
 
 # EXP-1 (perf_idsva_so_bigrobot.md): high-DOF FIXED-base robots route to the world-frame
@@ -2380,13 +2408,7 @@ def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
         self.gen_add_code_line("    { " + ", ".join("{:2}".format(x) for x in row) + " },")
     self.gen_add_code_line("};")
 
-    self.gen_add_parallel_loop('i',f'{len(jids_a)}*36')
-    self.gen_add_code_line('int jid = jids[i / 36];')
-    self.gen_add_code_line('int ancestor_j = ancestors_j[i / 36];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line('outerProduct<T>(&S[jid*6], &psid[ancestor_j*6], &t[t_idx], 6, 6, i%36);')
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    _emit_t_outer(self, len(jids_a), '&S[jid*6]', '&psid[ancestor_j*6]')
 
     # Perform all computations with t1
     self.gen_add_code_line('\n\n')
@@ -2417,13 +2439,7 @@ def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
     self.gen_add_code_line('// Compute t2 = outer(S[j], S[ancestor])')
     self.gen_add_code_line('// t2[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    self.gen_add_parallel_loop('i',f'{len(jids_a)}*36')
-    self.gen_add_code_line('int jid = jids[i / 36];')
-    self.gen_add_code_line('int ancestor_j = ancestors_j[i / 36];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line('outerProduct<T>(&S[jid*6], &S[ancestor_j*6], &t[t_idx], 6, 6, i%36);')
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    _emit_t_outer(self, len(jids_a), '&S[jid*6]', '&S[ancestor_j*6]')
 
     # Perform all computations with t2
     self.gen_add_code_line('\n\n')
@@ -2456,13 +2472,7 @@ def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
     self.gen_add_code_line('// Compute t3 = outer(psid[j], psid[ancestor])')
     self.gen_add_code_line('// t3[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    self.gen_add_parallel_loop('i',f'{len(jids_a)}*36')
-    self.gen_add_code_line('int jid = jids[i / 36];')
-    self.gen_add_code_line('int ancestor_j = ancestors_j[i / 36];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line('outerProduct<T>(&psid[jid*6], &psid[ancestor_j*6], &t[t_idx], 6, 6, i%36);')
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    _emit_t_outer(self, len(jids_a), '&psid[jid*6]', '&psid[ancestor_j*6]')
 
     # Perform all computations with t3
     self.gen_add_code_line('\n\n')
@@ -2486,13 +2496,7 @@ def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
     self.gen_add_code_line('// Compute t4 = outer(S[j], psidd[ancestor])')
     self.gen_add_code_line('// t4[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    self.gen_add_parallel_loop('i',f'{len(jids_a)}*36')
-    self.gen_add_code_line('int jid = jids[i / 36];')
-    self.gen_add_code_line('int ancestor_j = ancestors_j[i / 36];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line('outerProduct<T>(&S[jid*6], &psidd[ancestor_j*6], &t[t_idx], 6, 6, i%36);')
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    _emit_t_outer(self, len(jids_a), '&S[jid*6]', '&psidd[ancestor_j*6]')
 
     # Perform all computations with t4
     self.gen_add_code_line('\n\n')
@@ -2516,13 +2520,7 @@ def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
     self.gen_add_code_line('// Compute t5 = outer(S[j], (Sd+psid)[ancestor])')
     self.gen_add_code_line('// t5[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    self.gen_add_parallel_loop('i',f'{len(jids_a)}*36')
-    self.gen_add_code_line('int jid = jids[i / 36];')
-    self.gen_add_code_line('int ancestor_j = ancestors_j[i / 36];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line('outerProduct<T>(&S[jid*6], &psid_Sd[ancestor_j*6], &t[t_idx], 6, 6, i%36);')
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    _emit_t_outer(self, len(jids_a), '&S[jid*6]', '&psid_Sd[ancestor_j*6]')
 
     # Perform all computations with t5
     self.gen_add_code_line('\n\n')
@@ -2544,13 +2542,7 @@ def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
     self.gen_add_code_line('// Compute t6 = outer(S[ancestor], psid[joint])')
     self.gen_add_code_line('// t6[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    self.gen_add_parallel_loop('i',f'{len(jids_a)}*36')
-    self.gen_add_code_line('int jid = jids[i / 36];')
-    self.gen_add_code_line('int ancestor_j = ancestors_j[i / 36];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line('outerProduct<T>(&S[ancestor_j*6], &psid[jid*6], &t[t_idx], 6, 6, i%36);')
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    _emit_t_outer(self, len(jids_a), '&S[ancestor_j*6]', '&psid[jid*6]')
 
     # Perform all computations with t6
     self.gen_add_code_line('\n\n')
@@ -2578,13 +2570,7 @@ def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
     self.gen_add_code_line('// Compute t7 = outer(S[ancestor], psidd[joint])')
     self.gen_add_code_line('// t7[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    self.gen_add_parallel_loop('i',f'{len(jids_a)}*36')
-    self.gen_add_code_line('int jid = jids[i / 36];')
-    self.gen_add_code_line('int ancestor_j = ancestors_j[i / 36];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line('outerProduct<T>(&S[ancestor_j*6], &psidd[jid*6], &t[t_idx], 6, 6, i%36);')
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    _emit_t_outer(self, len(jids_a), '&S[ancestor_j*6]', '&psidd[jid*6]')
 
     # Perform all computations with t7
     self.gen_add_code_line('\n\n')
@@ -2606,13 +2592,7 @@ def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
     self.gen_add_code_line('// Compute t8 = outer(S[ancestor], S[joint])')
     self.gen_add_code_line('// t8[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    self.gen_add_parallel_loop('i',f'{len(jids_a)}*36')
-    self.gen_add_code_line('int jid = jids[i / 36];')
-    self.gen_add_code_line('int ancestor_j = ancestors_j[i / 36];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line('outerProduct<T>(&S[ancestor_j*6], &S[jid*6], &t[t_idx], 6, 6, i%36);')
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    _emit_t_outer(self, len(jids_a), '&S[ancestor_j*6]', '&S[jid*6]')
 
     # Perform all computations with t8
     self.gen_add_code_line('\n\n')
@@ -2650,13 +2630,7 @@ def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
     jids_a, ancestors = self.robot.get_jid_ancestor_ids(include_joint=True)
     self.gen_add_code_line('// Compute t9 = outer(S[ancestor], (Sd+psid)[joint])')
     self.gen_add_code_line('// t9[j][k] is stored at t[((j*(j+1)/2) + k)*36]')
-    self.gen_add_parallel_loop('i',f'{len(jids_a)}*36')
-    self.gen_add_code_line('int jid = jids[i / 36];')
-    self.gen_add_code_line('int ancestor_j = ancestors_j[i / 36];')
-    self.gen_add_code_line(f'int t_idx = t_index_map[jid][ancestor_j]*36;')
-    self.gen_add_code_line('outerProduct<T>(&S[ancestor_j*6], &psid_Sd[jid*6], &t[t_idx], 6, 6, i%36);')
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
+    _emit_t_outer(self, len(jids_a), '&S[ancestor_j*6]', '&psid_Sd[jid*6]')
 
     # Perform all computations with t9
     self.gen_add_code_line('\n\n')
