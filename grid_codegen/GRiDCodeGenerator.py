@@ -189,6 +189,7 @@ class GRiDCodeGenerator:
                             gen_fdsva_so_device, gen_fdsva_so_device_function_call, gen_fdsva_so_kernel, gen_fdsva_so_host, \
                             gen_integrator_inner_temp_mem_size, gen_integrator_finish_function_call, gen_integrator_finish, \
                             _spherical_retract_index_tables, _emit_q_update, gen_integrate_spherical_helper, \
+                            gen_spherical_dintegrate_helpers, \
                             gen_integrator_inner_function_call, gen_integrator_inner, gen_integrator_device, \
                             gen_integrator_kernel, gen_integrator_host, gen_integrator, gen_lie_group_helpers, \
                             gen_integrator_gradient_inner_temp_mem_size, gen_integrator_gradient_dAB_assembly, \
@@ -2600,7 +2601,7 @@ class GRiDCodeGenerator:
             for suffix in ("", "_single_timing")
             for it in ("EULER", "SEMI_IMPLICIT_EULER", "MIDPOINT", "RK3", "RK4", "TRAPEZOIDAL")
         ],
-        "integrator_gradient": [
+"integrator_gradient": [
             (f"integrator_gradient_kernel{suffix}<T, IntegratorType::{it}>",
              "void (*)(T *, unsigned char *, const T *, const int, const robotModel<T> *, T *, const T, const T, const int)")
             for suffix in ("", "_single_timing")
@@ -2857,6 +2858,18 @@ class GRiDCodeGenerator:
                 continue
             if gate_attr is None and generated_set is not None and algo_short not in generated_set:
                 continue
+            # Spherical robots: the multi-stage RK integrator GRADIENTS
+            # static_assert (follow-on slice) — address-taking their kernel
+            # instantiations here would trip that assert from init_grid. Drop
+            # just the RK-typed gradient rows; every other robot keeps the full
+            # set (byte-identical). The VALUE integrator rows stay: spherical
+            # supports all five value ITs.
+            if (self.robot.robot_has_spherical()
+                    and algo_short in ("integrator_gradient", "integrator_with_gradient")):
+                kernels = [
+                    (kname, sig) for (kname, sig) in kernels
+                    if not any(rk in kname for rk in ("MIDPOINT", "RK3", "RK4"))
+                ]
             # Wrap EVERY kernel's attribute registration in a compile-time-
             # resolvable size guard so init_grid never hard-aborts when a kernel
             # literally can't fit a device even with cudaFuncSetAttribute (e.g.
@@ -3286,13 +3299,18 @@ class GRiDCodeGenerator:
                              "end_effector_pose", "frame_jacobian", "integrator",
                              "inverse_dynamics_gradient", "forward_dynamics_gradient",
                              "aba", "idsva_so_body_frame", "idsva_so_world_frame",
-                             "fdsva_so"}
+                             "fdsva_so",
+                             # integrator gradient slice (2026-07-30): per-joint SO(3)
+                             # dIntegrate blocks; single-stage IT only (multi-stage RK
+                             # static_asserts in the device — follow-on slice).
+                             "integrator_gradient", "integrator_with_gradient"}
             _unported = sorted(a for a in algorithms if a not in _SPHERICAL_OK)
             if _unported:
                 raise NotImplementedError(
                     "Spherical (ball) joint CUDA codegen currently supports "
                     "inverse_dynamics + crba + minv + forward_dynamics + "
                     f"end_effector_pose + frame_jacobian + integrator + "
+                    f"integrator_gradient/with_gradient (single-stage IT) + "
                     f"inverse_dynamics_gradient + forward_dynamics_gradient + aba + "
                     f"idsva_so + fdsva_so; requested unsupported algorithm(s) "
                     f"{_unported}. Remaining algorithms are follow-on slices "

@@ -39,6 +39,49 @@ _INTEGRATOR_BUTCHER = {
 }
 
 
+def _sph_grad_blocks(self):
+    """Spherical (q4, v3) blocks for the integrator gradient (fixed-base only;
+    floating+spherical integrator codegen is refused upstream)."""
+    from ._integrator import _spherical_retract_index_tables
+    _, _, blocks = _spherical_retract_index_tables(self)
+    return blocks
+
+
+def _emit_sph_grad_tables(self):
+    """Emit the per-v-slot spherical block tables consumed by the dAB assembly:
+    sph_blk_of[v] = spherical block index (or -1), sph_base[v] = the block's
+    first v-slot (0 for non-spherical slots, unused there)."""
+    n = self.robot.get_num_vel()
+    blocks = _sph_grad_blocks(self)
+    blk_of = [-1] * n
+    base = [0] * n
+    for b, (_iq, iv) in enumerate(blocks):
+        for slot in iv:
+            blk_of[slot] = b
+            base[slot] = iv[0]
+    self.gen_add_code_line("static const int sph_blk_of[" + str(n) + "] = { " + ", ".join(map(str, blk_of)) + " };")
+    self.gen_add_code_line("static const int sph_base[" + str(n) + "] = { " + ", ".join(map(str, base)) + " };")
+
+
+def _sph_dint_entry(row, c, buf):
+    """C++ expr: block-diagonal dIntegrate entry (row, c) — the 3x3 row-major
+    per-spherical-joint block from `buf` when both slots share a block,
+    identity/zero otherwise."""
+    return ("((sph_blk_of[" + row + "] >= 0 && sph_blk_of[" + row + "] == sph_blk_of[" + c + "]) ? "
+            + buf + "[9*sph_blk_of[" + row + "] + (" + row + " - sph_base[" + row + "])*3 + (" + c + " - sph_base[" + c + "])] : "
+            "((" + row + " == " + c + ") ? static_cast<T>(1) : static_cast<T>(0)))")
+
+
+def _emit_sph_dintv_fold(self, mm_name, row, dvdX_of_k, dvdX_of_row):
+    """Emit: mm = (dInt_v @ dvdX)[row] with the block-diagonal spherical dInt_v.
+    In-block rows fold over the block's 3 v-slots; other rows pass dvdX through
+    (dInt_v row = e_row). `dvdX_of_k` / `dvdX_of_row` are C++ exprs in `k` / `row`."""
+    self.gen_add_code_line("        T " + mm_name + ";")
+    self.gen_add_code_line("        int rb = sph_blk_of[" + row + "];")
+    self.gen_add_code_line("        if (rb >= 0) { " + mm_name + " = static_cast<T>(0); int b0 = sph_base[" + row + "]; for (int k3 = 0; k3 < 3; ++k3) { int k = b0 + k3; " + mm_name + " += s_dInt_v_6x6[9*rb + (" + row + " - b0)*3 + k3] * (" + dvdX_of_k + "); } }")
+    self.gen_add_code_line("        else { " + mm_name + " = " + dvdX_of_row + "; }")
+
+
 def gen_integrator_gradient_inner_temp_mem_size(self):
     # Identical to FD-gradient's inner mem requirement; the dAB assembly is
     # a single parallel loop over shared inputs that already exist.
@@ -65,11 +108,20 @@ def gen_integrator_gradient_dAB_assembly(self, integrator_type="IT",
     """
     n = self.robot.get_num_vel()
     fb = self.robot.floating_base
+    # Fixed-base spherical robots: the top-nv rows are block-diagonal with a
+    # 3x3 SO(3) dIntegrate block per spherical joint (exp(-phi) / J_r(phi)),
+    # the omega-only restriction of the floating free-flyer machinery. The
+    # blocks are precomputed row-major into the (repurposed, 9-per-block)
+    # s_dInt_*_6x6 buffers by gen_integrator_gradient_inner_python. Cardinal
+    # fixed-base robots take the historical identity arms (byte-identical).
+    sph = (not fb) and self.robot.robot_has_spherical()
     twoN = 2 * n
     nn = n * n
     self.gen_add_parallel_loop("ind", str(twoN * 3 * n))
     self.gen_add_code_line("int row = ind % " + str(twoN) + ";")
     self.gen_add_code_line("int col = ind / " + str(twoN) + ";")
+    if sph:
+        _emit_sph_grad_tables(self)
     tok = _integrator_type_token(integrator_type)
     # ----- EULER -----
     self.gen_add_code_line("if constexpr (" + tok + " == IntegratorType::EULER) {", True)
@@ -86,6 +138,8 @@ def gen_integrator_gradient_dAB_assembly(self, integrator_type="IT",
         self.gen_add_code_line("        } else if (row >= 6 && col >= 6) {")
         self.gen_add_code_line("            val = (row == col) ? static_cast<T>(1) : static_cast<T>(0);")
         self.gen_add_code_line("        } else { val = static_cast<T>(0); }")
+    elif sph:
+        self.gen_add_code_line("        val = " + _sph_dint_entry("row", "col", "s_dInt_q_6x6") + ";")
     else:
         self.gen_add_code_line("        val = (row == col) ? static_cast<T>(1) : static_cast<T>(0);")
     self.gen_add_code_line("    } else {")
@@ -103,6 +157,8 @@ def gen_integrator_gradient_dAB_assembly(self, integrator_type="IT",
         self.gen_add_code_line("        } else if (row >= 6 && j_local >= 6) {")
         self.gen_add_code_line("            val = (row == j_local) ? dt : static_cast<T>(0);")
         self.gen_add_code_line("        } else { val = static_cast<T>(0); }")
+    elif sph:
+        self.gen_add_code_line("        val = dt * " + _sph_dint_entry("row", "j_local", "s_dInt_v_6x6") + ";")
     else:
         self.gen_add_code_line("        val = (row == j_local) ? dt : static_cast<T>(0);")
     self.gen_add_code_line("    } else {")
@@ -177,6 +233,51 @@ def gen_integrator_gradient_dAB_assembly(self, integrator_type="IT",
         self.gen_add_code_line("        T mm;")
         self.gen_add_code_line("        if (row < 6) { mm = static_cast<T>(0); for (int k = 0; k < 6; ++k) { int midx = (k <= c) * (c * " + str(n) + " + k) + (k > c) * (k * " + str(n) + " + c); mm += s_dInt_v_6x6[row * 6 + k] * (dt * " + s_Minv_name + "[midx]); } }")
         self.gen_add_code_line("        else { int midx = (row <= c) * (c * " + str(n) + " + row) + (row > c) * (row * " + str(n) + " + c); mm = dt * " + s_Minv_name + "[midx]; }")
+        self.gen_add_code_line("        val = dt * mm;")
+        self.gen_add_code_line("    } else {")
+        self.gen_add_code_line("        int i_local = row - " + str(n) + ";")
+        self.gen_add_code_line("        int midx = (i_local <= c) * (c * " + str(n) + " + i_local) + (i_local > c) * (i_local * " + str(n) + " + c);")
+        self.gen_add_code_line("        val = dt * " + s_Minv_name + "[midx];")
+        self.gen_add_code_line("    }")
+        self.gen_add_code_line("}")
+    elif sph:
+        # Fixed-base + spherical SI-Euler: same structure as the floating arm —
+        # top rows = dInt_q + dInt_v @ dv/dX — with the block-diagonal SO(3)
+        # blocks in place of the 6x6 free-flyer corner. Non-spherical rows
+        # collapse to the historical fixed-base formula.
+        self.gen_add_code_line("if (col < " + str(n) + ") {")
+        self.gen_add_code_line("    // d/dq column. dvdq[k,c] = dt*J_qq[k,c] = dt*s_df_du[c*n + k].")
+        self.gen_add_code_line("    int c = col;")
+        self.gen_add_code_line("    if (row < " + str(n) + ") {")
+        self.gen_add_code_line("        T dInt_q_term = " + _sph_dint_entry("row", "c", "s_dInt_q_6x6") + ";")
+        _emit_sph_dintv_fold(self, "mm", "row",
+                             "dt * " + s_df_du_name + "[c * " + str(n) + " + k]",
+                             "dt * " + s_df_du_name + "[c * " + str(n) + " + row]")
+        self.gen_add_code_line("        val = dInt_q_term + dt * mm;")
+        self.gen_add_code_line("    } else {")
+        self.gen_add_code_line("        int i_local = row - " + str(n) + ";")
+        self.gen_add_code_line("        val = dt * " + s_df_du_name + "[c * " + str(n) + " + i_local];")
+        self.gen_add_code_line("    }")
+        self.gen_add_code_line("} else if (col < " + str(2 * n) + ") {")
+        self.gen_add_code_line("    // d/dqd column. dvdv[k,c] = (k==c) + dt*J_qv[k,c].")
+        self.gen_add_code_line("    int c = col - " + str(n) + ";")
+        self.gen_add_code_line("    if (row < " + str(n) + ") {")
+        _emit_sph_dintv_fold(self, "mm", "row",
+                             "((k == c) ? static_cast<T>(1) : static_cast<T>(0)) + dt * " + s_df_du_name + "[" + str(nn) + " + c * " + str(n) + " + k]",
+                             "((row == c) ? static_cast<T>(1) : static_cast<T>(0)) + dt * " + s_df_du_name + "[" + str(nn) + " + c * " + str(n) + " + row]")
+        self.gen_add_code_line("        val = dt * mm;")
+        self.gen_add_code_line("    } else {")
+        self.gen_add_code_line("        int i_local = row - " + str(n) + ";")
+        self.gen_add_code_line("        T diag = (i_local == c) ? static_cast<T>(1) : static_cast<T>(0);")
+        self.gen_add_code_line("        val = diag + dt * " + s_df_du_name + "[" + str(nn) + " + c * " + str(n) + " + i_local];")
+        self.gen_add_code_line("    }")
+        self.gen_add_code_line("} else {")
+        self.gen_add_code_line("    // d/du column. dvdu[k,c] = dt*Minv[k,c] (SYMMETRIC_UPPER).")
+        self.gen_add_code_line("    int c = col - " + str(2 * n) + ";")
+        self.gen_add_code_line("    if (row < " + str(n) + ") {")
+        _emit_sph_dintv_fold(self, "mm", "row",
+                             "dt * " + s_Minv_name + "[(k <= c) * (c * " + str(n) + " + k) + (k > c) * (k * " + str(n) + " + c)]",
+                             "dt * " + s_Minv_name + "[(row <= c) * (c * " + str(n) + " + row) + (row > c) * (row * " + str(n) + " + c)]")
         self.gen_add_code_line("        val = dt * mm;")
         self.gen_add_code_line("    } else {")
         self.gen_add_code_line("        int i_local = row - " + str(n) + ";")
@@ -276,6 +377,53 @@ def gen_integrator_gradient_dAB_assembly(self, integrator_type="IT",
         self.gen_add_code_line("        T mm;")
         self.gen_add_code_line("        if (row < 6) { mm = static_cast<T>(0); for (int k = 0; k < 6; ++k) { int midx = (k <= c) * (c * " + str(n) + " + k) + (k > c) * (k * " + str(n) + " + c); mm += s_dInt_v_6x6[row * 6 + k] * (dt2h * " + s_Minv_name + "[midx]); } }")
         self.gen_add_code_line("        else { int midx = (row <= c) * (c * " + str(n) + " + row) + (row > c) * (row * " + str(n) + " + c); mm = dt2h * " + s_Minv_name + "[midx]; }")
+        self.gen_add_code_line("        val = mm;")
+        self.gen_add_code_line("    } else {")
+        self.gen_add_code_line("        int i_local = row - " + str(n) + ";")
+        self.gen_add_code_line("        int midx = (i_local <= c) * (c * " + str(n) + " + i_local) + (i_local > c) * (i_local * " + str(n) + " + c);")
+        self.gen_add_code_line("        val = dt * " + s_Minv_name + "[midx];")
+        self.gen_add_code_line("    }")
+        self.gen_add_code_line("}")
+        self.gen_add_code_line(s_dAB_name + "[ind] = val;")
+    elif sph:
+        # Fixed-base + spherical TRAPEZOIDAL: top rows = dInt_q + dInt_v @ dw/dX
+        # with the block-diagonal SO(3) blocks (evaluated at w = dt*qd + dt2h*qdd
+        # by the precompute); bottom rows identical to Euler.
+        self.gen_add_code_line("T val = static_cast<T>(0);")
+        self.gen_add_code_line("T dt2h = static_cast<T>(0.5) * dt * dt;")
+        self.gen_add_code_line("if (col < " + str(n) + ") {")
+        self.gen_add_code_line("    // d/dq column. dw/dq[k] = dt2h*J_qq[c*n+k].")
+        self.gen_add_code_line("    int c = col;")
+        self.gen_add_code_line("    if (row < " + str(n) + ") {")
+        self.gen_add_code_line("        T dInt_q_term = " + _sph_dint_entry("row", "c", "s_dInt_q_6x6") + ";")
+        _emit_sph_dintv_fold(self, "mm", "row",
+                             "dt2h * " + s_df_du_name + "[c * " + str(n) + " + k]",
+                             "dt2h * " + s_df_du_name + "[c * " + str(n) + " + row]")
+        self.gen_add_code_line("        val = dInt_q_term + mm;")
+        self.gen_add_code_line("    } else {")
+        self.gen_add_code_line("        int i_local = row - " + str(n) + ";")
+        self.gen_add_code_line("        val = dt * " + s_df_du_name + "[c * " + str(n) + " + i_local];")
+        self.gen_add_code_line("    }")
+        self.gen_add_code_line("} else if (col < " + str(2 * n) + ") {")
+        self.gen_add_code_line("    // d/dqd column. dw/dqd[k] = (k==c?dt:0) + dt2h*J_qv[k].")
+        self.gen_add_code_line("    int c = col - " + str(n) + ";")
+        self.gen_add_code_line("    if (row < " + str(n) + ") {")
+        _emit_sph_dintv_fold(self, "mm", "row",
+                             "((k == c) ? dt : static_cast<T>(0)) + dt2h * " + s_df_du_name + "[" + str(nn) + " + c * " + str(n) + " + k]",
+                             "((row == c) ? dt : static_cast<T>(0)) + dt2h * " + s_df_du_name + "[" + str(nn) + " + c * " + str(n) + " + row]")
+        self.gen_add_code_line("        val = mm;")
+        self.gen_add_code_line("    } else {")
+        self.gen_add_code_line("        int i_local = row - " + str(n) + ";")
+        self.gen_add_code_line("        T diag = (i_local == c) ? static_cast<T>(1) : static_cast<T>(0);")
+        self.gen_add_code_line("        val = diag + dt * " + s_df_du_name + "[" + str(nn) + " + c * " + str(n) + " + i_local];")
+        self.gen_add_code_line("    }")
+        self.gen_add_code_line("} else {")
+        self.gen_add_code_line("    // d/du column. dw/du[k] = dt2h*Minv[k,c] (SYMMETRIC_UPPER).")
+        self.gen_add_code_line("    int c = col - " + str(2 * n) + ";")
+        self.gen_add_code_line("    if (row < " + str(n) + ") {")
+        _emit_sph_dintv_fold(self, "mm", "row",
+                             "dt2h * " + s_Minv_name + "[(k <= c) * (c * " + str(n) + " + k) + (k > c) * (k * " + str(n) + " + c)]",
+                             "dt2h * " + s_Minv_name + "[(row <= c) * (c * " + str(n) + " + row) + (row > c) * (row * " + str(n) + " + c)]")
         self.gen_add_code_line("        val = mm;")
         self.gen_add_code_line("    } else {")
         self.gen_add_code_line("        int i_local = row - " + str(n) + ";")
@@ -797,6 +945,27 @@ def gen_integrator_gradient_inner_python(self, compute_x_kp1=False,
         self.gen_add_code_line("grid_dIntegrate_v_block<T>(v_dt_for_dInt, s_dInt_v_6x6);")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
+    elif self.robot.robot_has_spherical():
+        # Fixed-base spherical: precompute the per-spherical-joint 3x3 SO(3)
+        # dIntegrate blocks (exp(-phi) / J_r(phi)) at the SAME per-type q-update
+        # increment the floating path uses, ROW-major, packed 9-per-block into
+        # the (repurposed) s_dInt_*_6x6 buffers.
+        tok = _integrator_type_token(integrator_type)
+        blocks = _sph_grad_blocks(self)
+        self.gen_add_serial_ops()
+        self.gen_add_code_line(f"T v_dt_for_dInt[{n}];")
+        self.gen_add_code_line("if constexpr (" + tok + " == IntegratorType::SEMI_IMPLICIT_EULER) {")
+        self.gen_add_code_line(f"    for (int i = 0; i < {n}; ++i) v_dt_for_dInt[i] = dt * (s_qd[i] + dt * s_qdd[i]);")
+        self.gen_add_code_line("} else if constexpr (" + tok + " == IntegratorType::TRAPEZOIDAL) {")
+        self.gen_add_code_line(f"    for (int i = 0; i < {n}; ++i) v_dt_for_dInt[i] = dt * s_qd[i] + static_cast<T>(0.5) * dt * dt * s_qdd[i];")
+        self.gen_add_code_line("} else {")
+        self.gen_add_code_line(f"    for (int i = 0; i < {n}; ++i) v_dt_for_dInt[i] = dt * s_qd[i];")
+        self.gen_add_code_line("}")
+        for b, (_iq, iv) in enumerate(blocks):
+            self.gen_add_code_line(f"grid_dIntegrate_q_so3<T>(&v_dt_for_dInt[{iv[0]}], &s_dInt_q_6x6[{9 * b}]);")
+            self.gen_add_code_line(f"grid_dIntegrate_v_so3<T>(&v_dt_for_dInt[{iv[0]}], &s_dInt_v_6x6[{9 * b}]);")
+        self.gen_add_end_control_flow()
+        self.gen_add_sync()
     self.gen_integrator_gradient_dAB_assembly(
         integrator_type=integrator_type,
         s_dAB_name=s_dAB_name,
@@ -976,6 +1145,12 @@ def gen_integrator_gradient_device(self, compute_x_kp1=False):
         self.gen_add_code_line("static_assert(!MUJOCO_OUTPUT, "
                                "\"integrator_gradient MUJOCO_OUTPUT is single-stage (EULER/SEMI_IMPLICIT_EULER) only; \"")
         self.gen_add_code_line("              \"multi-stage RK mjx is deferred.\");")
+    if self.robot.robot_has_spherical():
+        # Spherical + multi-stage RK is a follow-on slice (per-stage SO(3)
+        # blocks + the stage projections). Refuse at compile time rather than
+        # run the multistage path with its implicit dInt=I joint treatment.
+        self.gen_add_code_line("static_assert(IT == IntegratorType::EULER || IT == IntegratorType::SEMI_IMPLICIT_EULER || IT == IntegratorType::TRAPEZOIDAL,")
+        self.gen_add_code_line("              \"spherical-joint integrator gradient supports single-stage IT only (Midpoint/RK3/RK4 are a follow-on slice).\");")
     self.gen_integrator_gradient_multistage(
         compute_x_kp1=compute_x_kp1,
         d_temp_spill_name="d_temp_spill",
@@ -1092,11 +1267,16 @@ def gen_integrator_gradient_kernel(self, compute_x_kp1=False, single_call_timing
         ]
         if dqdd_in_smem:
             extra_t_buffers.append(("s_D_qdd_stage", d_qdd_count))
+        # Floating-base: the 6x6 SE(3) dIntegrate blocks. Fixed-base spherical:
+        # repurposed as 9-floats-per-spherical-joint SO(3) block storage (grown
+        # only past 4 spherical joints, so existing robots stay byte-identical).
+        # Plain fixed-base: unused (historical 36 kept for byte-identity).
+        dint_floats = 36
+        if (not fb) and self.robot.robot_has_spherical():
+            dint_floats = max(36, 9 * len(_sph_grad_blocks(self)))
         extra_t_buffers += [
-            # Floating-base 6x6 SE(3) dIntegrate blocks (Euler single-stage path).
-            # For fixed-base these stay unused.
-            ("s_dInt_q_6x6", 36),
-            ("s_dInt_v_6x6", 36),
+            ("s_dInt_q_6x6", dint_floats),
+            ("s_dInt_v_6x6", dint_floats),
         ]
         if compute_x_kp1:
             extra_t_buffers.append(("s_x_kp1", 2 * n + fb))  # = nq + nv
@@ -1978,6 +2158,10 @@ def gen_integrator_hessian_device(self):
 
 
 def gen_integrator_gradient(self):
+    # Fixed-base spherical robots need the SO(3) dIntegrate 3x3 helpers (the
+    # floating Lie bundle is not emitted for them). Idempotent; no-op otherwise.
+    if (not self.robot.floating_base) and self.robot.robot_has_spherical():
+        self.gen_spherical_dintegrate_helpers()
     # Canonical _device (orchestrator: owns s_temp placement; called from kernel).
     # One per output kind (gradient-only vs gradient + x_kp1).
     self.gen_integrator_gradient_device(compute_x_kp1=False)

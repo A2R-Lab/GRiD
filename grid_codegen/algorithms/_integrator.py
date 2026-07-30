@@ -454,6 +454,78 @@ def gen_integrate_spherical_helper(self):
     ])
 
 
+def gen_spherical_dintegrate_helpers(self):
+    """Emit the SO(3) dIntegrate 3x3 block helpers for a FIXED-base spherical
+    robot's integrator gradient (the omega-only restriction of the free-flyer
+    blocks; mirrors RBDReference.dIntegrate's spherical branch):
+        grid_dIntegrate_q_so3(omega_dt, J9) = exp(-omega_dt)   (ARG_q)
+        grid_dIntegrate_v_so3(omega_dt, J9) = J_r(omega_dt)    (ARG_v)
+    Output J9 is ROW-major (matches the 6x6 helpers' transpose-read convention,
+    so the dAB assembly indexes both the same way). The SO(3) primitives are
+    emitted here too (verbatim twins of the floating bundle's) because the
+    fixed-base spherical path deliberately skips gen_lie_group_helpers to keep
+    the header lean; a floating robot never calls this (its bundle already has
+    the primitives, and floating+spherical integrator codegen is refused).
+    Idempotent via _sph_dint_helpers_emitted."""
+    if getattr(self, "_sph_dint_helpers_emitted", False):
+        return
+    self._sph_dint_helpers_emitted = True
+    self.gen_add_func_doc("Spherical-joint SO(3) dIntegrate block helpers (fixed-base integrator gradient).", [], [], None)
+    self.gen_add_code_lines([
+        "template <typename T> __device__ inline void grid_so3_skew(const T v[3], T S[9]) {",
+        "    glass::thread::skew<T>(v, S);",
+        "}",
+        "",
+        "template <typename T> __device__ inline void grid_mat3_mul(const T A[9], const T B[9], T C[9]) {",
+        "    glass::thread::gemm<T,3,3,3>(static_cast<T>(1), A, B, static_cast<T>(0), C);",
+        "}",
+        "",
+        "template <typename T> __device__ inline void grid_so3_right_jacobian(const T phi[3], T J[9]) {",
+        "    T S[9]; grid_so3_skew(phi, S);",
+        "    T S2[9]; grid_mat3_mul(S, S, S2);",
+        "    T theta = sqrt(phi[0]*phi[0] + phi[1]*phi[1] + phi[2]*phi[2]);",
+        "    T a, b;",
+        "    if (theta < static_cast<T>(1e-8)) { a = static_cast<T>(0.5); b = static_cast<T>(1.0/6.0); }",
+        "    else { a = (static_cast<T>(1) - cos(theta)) / (theta*theta); b = (theta - sin(theta)) / (theta*theta*theta); }",
+        "    #pragma unroll",
+        "    for (int i = 0; i < 9; ++i) J[i] = (i % 4 == 0 ? static_cast<T>(1) : static_cast<T>(0)) - a*S[i] + b*S2[i];",
+        "}",
+        "",
+        "template <typename T> __device__ inline void grid_so3_exp(const T phi[3], T R[9]) {",
+        "    T S[9]; grid_so3_skew(phi, S);",
+        "    T S2[9]; grid_mat3_mul(S, S, S2);",
+        "    T theta = sqrt(phi[0]*phi[0] + phi[1]*phi[1] + phi[2]*phi[2]);",
+        "    T a, b;",
+        "    if (theta < static_cast<T>(1e-8)) { a = static_cast<T>(1); b = static_cast<T>(0.5); }",
+        "    else { a = sin(theta) / theta; b = (static_cast<T>(1) - cos(theta)) / (theta*theta); }",
+        "    #pragma unroll",
+        "    for (int i = 0; i < 9; ++i) R[i] = (i % 4 == 0 ? static_cast<T>(1) : static_cast<T>(0)) + a*S[i] + b*S2[i];",
+        "}",
+        "",
+        # ---- spherical dIntegrate ARG_q block: exp(-omega_dt), row-major out ----
+        "template <typename T> __device__ inline void grid_dIntegrate_q_so3(const T *omega_dt, T J[9]) {",
+        "    T neg[3] = {-omega_dt[0], -omega_dt[1], -omega_dt[2]};",
+        "    T R_inv[9]; grid_so3_exp(neg, R_inv);  // col-major",
+        "    #pragma unroll",
+        "    for (int i = 0; i < 3; ++i) {",
+        "        #pragma unroll",
+        "        for (int j = 0; j < 3; ++j) J[3*i + j] = R_inv[3*j + i];  // -> row-major",
+        "    }",
+        "}",
+        "",
+        # ---- spherical dIntegrate ARG_v block: J_r(omega_dt), row-major out ----
+        "template <typename T> __device__ inline void grid_dIntegrate_v_so3(const T *omega_dt, T J[9]) {",
+        "    T Jr[9]; grid_so3_right_jacobian(omega_dt, Jr);  // col-major",
+        "    #pragma unroll",
+        "    for (int i = 0; i < 3; ++i) {",
+        "        #pragma unroll",
+        "        for (int j = 0; j < 3; ++j) J[3*i + j] = Jr[3*j + i];  // -> row-major",
+        "    }",
+        "}",
+        "",
+    ])
+
+
 def _spherical_retract_index_tables(self):
     """Return (add_q, add_v, spherical_blocks) for the q-update on a robot that
     has spherical joints (fixed-base; spherical robots are not floating here).
