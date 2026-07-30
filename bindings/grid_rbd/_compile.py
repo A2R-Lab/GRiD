@@ -207,8 +207,9 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # them explicitly here. The codegen emits `#define GRID_HAS_FRAME_JACOBIAN`
     # and `#define GRID_PLANT_HAS_STEP_HESSIAN`, which gate the wrapper's
     # corresponding C-ABI symbols. integrator_hessian pulls in fdsva_so +
-    # integrator and is fixed-base only (the device fn static_asserts floating +
-    # RK out; the kernel is simply not emitted for a floating base). mimic robots
+    # integrator and emits for BOTH bases (floating routes to the SE(3)-retract
+    # Hessian, gen_integrator_hessian_device_floating); only multi-stage RK
+    # static_asserts out (clean-break deferral). mimic robots
     # refuse gradient algos inside gen_all_code; that refusal is unchanged (the
     # opt-in frame family is non-gradient, so this addition is mimic-safe).
     # Subset-build: by DEFAULT request the full "all" profile PLUS the opt-in

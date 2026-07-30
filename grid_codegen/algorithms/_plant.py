@@ -20,9 +20,10 @@ Cost convention (matches PDDP TrajoptCost / GATO trackingcost):
         quadratic   -> diag(W)
         ee-position -> J_p^T W J_p
 The true analytic 2nd-order hessian (cost curvature folded with the integrator
-Hessian) is intentionally NOT emitted — grid has no analytic 2nd-order
-integrator and adding one would violate "additive". It is left as a labeled
-TODO at each relevant site.
+Hessian) is intentionally NOT folded into the COST layer — Gauss-Newton is the
+ratified choice here. The analytic integrator Hessian itself DOES exist as the
+separate opt-in `integrator_hessian` / `plant_step_hessian` surface (s_d2AB,
+both bases); a consumer wanting the exact plant Hessian composes that surface.
 
 Barriers (log-barrier, per GATO jointBarrier):
     b(x)  = -mu * ( log(x - lower) + log(upper - x) )
@@ -347,8 +348,9 @@ def gen_plant_step_gradient(self, with_value=False):
     cost layer is the Gauss-Newton outer product of the COST gradient, assembled
     in the cost hessian functions below. The true second-order integrator
     Hessian (d^2 x_{k+1} / d(x,u)^2, a 2n x 3n x 3n tensor) is NOT emitted here.
-    // TODO(plant-2nd-order): grid has no analytic 2nd-order integrator; a true
-    // plant Hessian would require one. Left out deliberately (additive-only).
+    // NOTE(plant-2nd-order): the analytic integrator Hessian exists as the
+    // opt-in plant_step_hessian surface (s_d2AB); the cost layer deliberately
+    // stays Gauss-Newton (ratified) rather than composing it here.
     """
     suffix = "_and_value" if with_value else ""
     fname = "plant_step_gradient" + suffix

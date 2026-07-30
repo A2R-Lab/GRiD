@@ -1460,7 +1460,7 @@ class GRiDCodeGenerator:
         fdsva_so_t_count = _fdsva_so_arenas[self.fdsva_so_spill_tier_3way[0]]
         self.fdsva_so_t_count_per_tier = tuple(_fdsva_so_arenas[i] for i in self.fdsva_so_spill_tier_3way)
 
-        # ----- F1: plant_step_hessian shared-mem tier selection (fixed-base only) -----
+        # ----- F1: plant_step_hessian shared-mem tier selection (both bases) -----
         # The hessian kernel composes fdsva_so_device and stages its 18*nv^3 output
         # band s_d2AB. Two tiers (mirrors _PLANT_HESSIAN_PICK_FLAGS in _plant.py):
         #   tier 0 (full smem): base + s_d2AB(18nv^3) + s_df2+s_idsva_so(8nv^3) + pool

@@ -1430,8 +1430,11 @@ def gen_init_topology_helpers(self):
 
 def gen_topology_helpers_pointers_for_cpp(self, inds = None, updated_var_names = None, NO_GRAD_FLAG = False, OFFSET = True):
     """
-    This function needs to be rewritten for floating base --- Repurcussions extend to all algorithms that support
-    floating base, so those algorithms must be modified to support edits. 'OFFSET' input added for now
+    Floating-base correct as-is: the 'OFFSET' input shifts the helper-pointer
+    indexing for the floating root, and every floating-supporting algorithm
+    threads it. (A stale "needs to be rewritten for floating base" note lived
+    here long after the OFFSET plumbing landed — registry item C3, cleared
+    2026-07-30.)
     """
     var_names = dict(jid_name = "jid", s_topology_helpers_name = "s_topology_helpers")
     if updated_var_names is not None:
