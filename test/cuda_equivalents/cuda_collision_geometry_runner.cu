@@ -18,6 +18,7 @@ using T = double;
 using grid_collision::Capsule;
 using grid_collision::Cuboid;
 using grid_collision::Environment;
+using grid_collision::Plane;
 using grid_collision::Sphere;
 
 #define CK(x) do{ cudaError_t e=(x); if(e){ printf("CUDA ERR %s @ %d: %s\n",#x,__LINE__,cudaGetErrorString(e)); return 2; } }while(0)
@@ -44,10 +45,38 @@ __global__ void cb_kernel(const S *cfg, int n, S *gap) {          // 19 floats/c
     gap[i] = grid_collision::grid_cc_sphere_cuboid<S>(box, c[15], c[16], c[17], c[18]);
 }
 
+template <typename S>
+__global__ void cc_kernel(const S *cfg, int n, S *gap) {          // 14 floats/config: capA(7)+capB(7)
+    int i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= n) return;
+    const S *c = cfg + 14 * i;
+    Capsule<S> A{c[0], c[1], c[2], c[3], c[4], c[5], c[6]};
+    Capsule<S> B{c[7], c[8], c[9], c[10], c[11], c[12], c[13]};
+    gap[i] = grid_collision::grid_cc_capsule_capsule<S>(A, B);
+}
+template <typename S>
+__global__ void cp_kernel(const S *cfg, int n, S *gap) {          // 11 floats/config: plane(4)+cap(7)
+    int i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= n) return;
+    const S *c = cfg + 11 * i;
+    Plane<S> p{c[0], c[1], c[2], c[3]};
+    Capsule<S> cap{c[4], c[5], c[6], c[7], c[8], c[9], c[10]};
+    gap[i] = grid_collision::grid_cc_capsule_plane<S>(p, cap);
+}
+template <typename S>
+__global__ void cx_kernel(const S *cfg, int n, S *gap) {          // 22 floats/config: box(15)+cap(7)
+    int i = blockIdx.x * blockDim.x + threadIdx.x; if (i >= n) return;
+    const S *c = cfg + 22 * i;
+    Cuboid<S> box{c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9], c[10], c[11], c[12], c[13], c[14]};
+    Capsule<S> cap{c[15], c[16], c[17], c[18], c[19], c[20], c[21]};
+    gap[i] = grid_collision::grid_cc_capsule_cuboid<S>(box, cap);
+}
+
 // ---- host mirrors (same header, host path) ----
 static T host_ss(const T *c){ return grid_collision::grid_cc_sphere_sphere<T>(c[0],c[1],c[2],c[3],c[4],c[5],c[6],c[7]); }
 static T host_sc(const T *c){ Capsule<T> cap{c[0],c[1],c[2],c[3],c[4],c[5],c[6]}; return grid_collision::grid_cc_sphere_capsule<T>(cap,c[7],c[8],c[9],c[10]); }
 static T host_cb(const T *c){ Cuboid<T> b{c[0],c[1],c[2],c[3],c[4],c[5],c[6],c[7],c[8],c[9],c[10],c[11],c[12],c[13],c[14]}; return grid_collision::grid_cc_sphere_cuboid<T>(b,c[15],c[16],c[17],c[18]); }
+static T host_cc(const T *c){ Capsule<T> A{c[0],c[1],c[2],c[3],c[4],c[5],c[6]}, B{c[7],c[8],c[9],c[10],c[11],c[12],c[13]}; return grid_collision::grid_cc_capsule_capsule<T>(A,B); }
+static T host_cp(const T *c){ Plane<T> p{c[0],c[1],c[2],c[3]}; Capsule<T> cap{c[4],c[5],c[6],c[7],c[8],c[9],c[10]}; return grid_collision::grid_cc_capsule_plane<T>(p,cap); }
+static T host_cx(const T *c){ Cuboid<T> b{c[0],c[1],c[2],c[3],c[4],c[5],c[6],c[7],c[8],c[9],c[10],c[11],c[12],c[13],c[14]}; Capsule<T> cap{c[15],c[16],c[17],c[18],c[19],c[20],c[21]}; return grid_collision::grid_cc_capsule_cuboid<T>(b,cap); }
 
 // push an axis*sign rotation frame (columns of a rotation) for cuboid tests
 static void push_box(std::vector<T>&v, T cx,T cy,T cz, T yaw,T pitch,
@@ -60,6 +89,19 @@ static void push_box(std::vector<T>&v, T cx,T cy,T cz, T yaw,T pitch,
     T box[15]={cx,cy,cz, ux,uy,uz,hu, vx,vy,vz,hv, wx,wy,wz,hw};
     for(int i=0;i<15;++i) v.push_back(box[i]);
     v.push_back(px); v.push_back(py); v.push_back(pz); v.push_back(pr);
+}
+
+// same rotation math as push_box, but a CAPSULE probe (box 15 + capsule 7 = 22)
+static void push_box_cap(std::vector<T>&v, T cx,T cy,T cz, T yaw,T pitch,
+                         T hu,T hv,T hw, T ax,T ay,T az, T bx,T by,T bz, T cr){
+    T cy_=cos(yaw), sy_=sin(yaw), cp=cos(pitch), sp=sin(pitch);
+    T ux= cy_*cp, uy= sy_*cp, uz=-sp;
+    T vx=-sy_,    vy= cy_,     vz= 0;
+    T wx= cy_*sp, wy= sy_*sp,  wz= cp;
+    T box[15]={cx,cy,cz, ux,uy,uz,hu, vx,vy,vz,hv, wx,wy,wz,hw};
+    for(int i=0;i<15;++i) v.push_back(box[i]);
+    T cap[7]={ax,ay,az,bx,by,bz,cr};
+    for(int i=0;i<7;++i) v.push_back(cap[i]);
 }
 
 template <typename S>
@@ -107,11 +149,48 @@ int main(){
     push_box(cb, 1,1,1, 0.6,0.3,    0.4,0.3,0.5,  1.0,1.0,1.0,0.25);// ROTATED box, center inside
     int n_cb = cb.size()/19;
 
+    // ---------------- capsule_capsule: parallel / skew / clamp / degenerate ----------------
+    std::vector<T> cc; auto CC=[&](T a1x,T a1y,T a1z,T b1x,T b1y,T b1z,T r1,
+                                   T a2x,T a2y,T a2z,T b2x,T b2y,T b2z,T r2){
+        T a[14]={a1x,a1y,a1z,b1x,b1y,b1z,r1,a2x,a2y,a2z,b2x,b2y,b2z,r2};
+        for(int i=0;i<14;++i) cc.push_back(a[i]); };
+    CC(-1,0,0, 1,0,0, 0.2,  -1,0.3,0, 1,0.3,0, 0.2);   // parallel, d=0.3 < 0.4 -> collision
+    CC(-1,0,0, 1,0,0, 0.1,   0,-1,0.5, 0,1,0.5, 0.1);  // skew crossing above, d=0.5 free
+    CC(-1,0,0, 1,0,0, 0.15,  0,-1,0.2, 0,1,0.2, 0.1);  // skew crossing, d=0.2 < 0.25 collision
+    CC(-1,0,0, 1,0,0, 0.2,   2,0.1,0, 3,0.5,0, 0.15);  // endpoint-endpoint clamp (t=1 vs t=0)
+    CC( 0,0,0, 0,0,0, 0.3,   0.4,0,0, 0.4,0,0, 0.2);   // both degenerate -> sphere-sphere, collision
+    CC( 0,0,1, 0,0,1, 0.1,  -1,0,0, 1,0,0, 0.2);       // one degenerate, d=1.0 free
+    CC( 0,0,0, 2,0,0, 0.3,   0.5,0.2,0, 1.5,0.2,0, 0.2); // parallel overlap, deep collision
+    int n_cc = cc.size()/14;
+
+    // ---------------- capsule_plane: clear / dipping / endpoint-below / tilted ----------------
+    std::vector<T> cpl; auto CP=[&](T nx,T ny,T nz,T d, T ax,T ay,T az,T bx,T by,T bz,T r){
+        T a[11]={nx,ny,nz,d,ax,ay,az,bx,by,bz,r}; for(int i=0;i<11;++i) cpl.push_back(a[i]); };
+    CP(0,0,1, 0,   0,0,0.5,  1,0,0.8,  0.2);           // both endpoints clear -> free
+    CP(0,0,1, 0,   0,0,0.1,  1,0,1.0,  0.2);           // low endpoint within r -> collision
+    CP(0,0,1, 0,   0,0,-0.3, 1,0,0.5,  0.1);           // endpoint below plane -> -r^2
+    CP(0.6,0,0.8, 0.2,  1,0,1,  2,0.5,1.5,  0.25);     // tilted plane, free
+    int n_cp = cpl.size()/11;
+
+    // ---------------- capsule_cuboid: crossing / parallel-face / edge / degenerate / rotated ----
+    std::vector<T> cx;
+    push_box_cap(cx, 0,0,0, 0,0,       0.5,0.5,0.5,  -1,0,0,   1,0,0,    0.1);  // pierces box -> -r^2
+    push_box_cap(cx, 0,0,0, 0,0,       0.5,0.5,0.5,  -1,0,0.8, 1,0,0.8,  0.2);  // parallel above face, d=0.3
+    push_box_cap(cx, 0,0,0, 0,0,       0.5,0.5,0.5,   0.8,0.8,-1, 0.8,0.8,1, 0.1); // along an edge line, d=sqrt(0.18)
+    push_box_cap(cx, 0,0,0, 0,0,       0.5,0.5,0.5,   0,0,0,   0,0,0,    0.2);  // degenerate point inside
+    push_box_cap(cx, 0,0,0, 0,0,       0.5,0.5,0.5,   1.2,0,0, 3,0,0,    0.1);  // clamp t=0 endpoint closest
+    push_box_cap(cx, 1,1,1, 0.6,0.3,   0.4,0.3,0.5,   2,1,0,   2,1,2,    0.15); // rotated box, skew segment
+    push_box_cap(cx, 0,0,0, 0,0,       0.5,0.5,0.5,   1.5,-1,0.2, 0.7,1,0.6, 0.1); // slanted, interior stationary
+    int n_cx = cx.size()/22;
+
     // ---------------- device eval (fp64) ----------------
-    std::vector<T> g_ss,g_sc,g_cb;
+    std::vector<T> g_ss,g_sc,g_cb,g_cc,g_cp,g_cx;
     run<T>(ss,8, n_ss,g_ss,ss_kernel<T>);
     run<T>(sc,11,n_sc,g_sc,sc_kernel<T>);
     run<T>(cb,19,n_cb,g_cb,cb_kernel<T>);
+    run<T>(cc,14,n_cc,g_cc,cc_kernel<T>);
+    run<T>(cpl,11,n_cp,g_cp,cp_kernel<T>);
+    run<T>(cx,22,n_cx,g_cx,cx_kernel<T>);
     CK(cudaGetLastError());
 
     // ---------------- host==device (benign FMA-contraction diff, not bit-exact) ----------------
@@ -119,19 +198,25 @@ int main(){
     for(int i=0;i<n_ss;++i) hd=std::max(hd,std::fabs(host_ss(&ss[8*i]) -g_ss[i]));
     for(int i=0;i<n_sc;++i) hd=std::max(hd,std::fabs(host_sc(&sc[11*i])-g_sc[i]));
     for(int i=0;i<n_cb;++i) hd=std::max(hd,std::fabs(host_cb(&cb[19*i])-g_cb[i]));
+    for(int i=0;i<n_cc;++i) hd=std::max(hd,std::fabs(host_cc(&cc[14*i])-g_cc[i]));
+    for(int i=0;i<n_cp;++i) hd=std::max(hd,std::fabs(host_cp(&cpl[11*i])-g_cp[i]));
+    for(int i=0;i<n_cx;++i) hd=std::max(hd,std::fabs(host_cx(&cx[22*i])-g_cx[i]));
     printf("HOSTDEV maxdiff=%.3e\n", hd);
 
     // ---------------- fp32 lane: same configs, SIGN classification must agree with fp64 ----------
     // (skip knife-edge configs where |fp64 gap| is within fp32 boundary noise ~1e-6 -- the sign is
     //  meaningless there; the numeric oracle covers those exact-touching cases instead.)
-    std::vector<T> f_ss,f_sc,f_cb;
+    std::vector<T> f_ss,f_sc,f_cb,f_cc,f_cp,f_cx;
     run<float>(ss,8, n_ss,f_ss,ss_kernel<float>);
     run<float>(sc,11,n_sc,f_sc,sc_kernel<float>);
     run<float>(cb,19,n_cb,f_cb,cb_kernel<float>);
+    run<float>(cc,14,n_cc,f_cc,cc_kernel<float>);
+    run<float>(cpl,11,n_cp,f_cp,cp_kernel<float>);
+    run<float>(cx,22,n_cx,f_cx,cx_kernel<float>);
     int signdiff=0;
     auto chk=[&](const std::vector<T>&a,const std::vector<T>&b){ for(size_t i=0;i<a.size();++i)
         if(std::fabs(a[i])>1e-6 && (a[i]<0)!=(b[i]<0)) ++signdiff; };
-    chk(g_ss,f_ss); chk(g_sc,f_sc); chk(g_cb,f_cb);
+    chk(g_ss,f_ss); chk(g_sc,f_sc); chk(g_cb,f_cb); chk(g_cc,f_cc); chk(g_cp,f_cp); chk(g_cx,f_cx);
     printf("FP32SIGN mismatches=%d\n", signdiff);
 
     // ---------------- print self-describing configs + fp64 gap ----------------
@@ -144,6 +229,15 @@ int main(){
     for(int i=0;i<n_cb;++i){ const T*c=&cb[19*i];
         printf("CB %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g GAP %.17g\n",
                c[0],c[1],c[2],c[3],c[4],c[5],c[6],c[7],c[8],c[9],c[10],c[11],c[12],c[13],c[14],c[15],c[16],c[17],c[18], g_cb[i]); }
+    for(int i=0;i<n_cc;++i){ const T*c=&cc[14*i];
+        printf("CC %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g GAP %.17g\n",
+               c[0],c[1],c[2],c[3],c[4],c[5],c[6],c[7],c[8],c[9],c[10],c[11],c[12],c[13], g_cc[i]); }
+    for(int i=0;i<n_cp;++i){ const T*c=&cpl[11*i];
+        printf("CP %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g GAP %.17g\n",
+               c[0],c[1],c[2],c[3],c[4],c[5],c[6],c[7],c[8],c[9],c[10], g_cp[i]); }
+    for(int i=0;i<n_cx;++i){ const T*c=&cx[22*i];
+        printf("CX %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g %.17g GAP %.17g\n",
+               c[0],c[1],c[2],c[3],c[4],c[5],c[6],c[7],c[8],c[9],c[10],c[11],c[12],c[13],c[14],c[15],c[16],c[17],c[18],c[19],c[20],c[21], g_cx[i]); }
 
     // ---------------- composition smoke: environment reduction + self-collision + driver --------
     // A tiny scene: one obstacle sphere at origin r=0.3; probes hit/miss it. Self-collision over a

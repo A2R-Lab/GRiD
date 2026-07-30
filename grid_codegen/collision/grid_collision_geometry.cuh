@@ -123,6 +123,139 @@ __host__ __device__ __forceinline__ T grid_cc_sphere_plane(const Plane<T> &p, T 
     return e * e - r * r;
 }
 
+// ------------------------------------------------------------------ capsule-pair SDFs
+// Native-primitive robot geometry (capsule links instead of covering spheres) needs the
+// capsule-vs-{capsule, cuboid, plane} pairs; capsule-vs-sphere is grid_cc_sphere_capsule
+// with the roles already symmetric. Same squared_gap convention (<0 = collision).
+
+// capsule vs capsule: closest squared distance between the two core segments (robust
+// closest-point-of-two-segments, Ericson RTCD 5.1.9 — degenerate/parallel safe), minus
+// the summed-radius square.
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_capsule_capsule(const Capsule<T> &A, const Capsule<T> &B) {
+    T d1x = A.bx - A.ax, d1y = A.by - A.ay, d1z = A.bz - A.az;
+    T d2x = B.bx - B.ax, d2y = B.by - B.ay, d2z = B.bz - B.az;
+    T rx = A.ax - B.ax,  ry = A.ay - B.ay,  rz = A.az - B.az;
+    T a = d1x * d1x + d1y * d1y + d1z * d1z;
+    T e = d2x * d2x + d2y * d2y + d2z * d2z;
+    T f = d2x * rx + d2y * ry + d2z * rz;
+    T s, t;
+    if (a == static_cast<T>(0) && e == static_cast<T>(0)) {
+        s = static_cast<T>(0); t = static_cast<T>(0);
+    } else if (a == static_cast<T>(0)) {
+        s = static_cast<T>(0); t = grid_cc_clamp01<T>(f / e);
+    } else {
+        T c = d1x * rx + d1y * ry + d1z * rz;
+        if (e == static_cast<T>(0)) {
+            t = static_cast<T>(0); s = grid_cc_clamp01<T>(-c / a);
+        } else {
+            T b = d1x * d2x + d1y * d2y + d1z * d2z;
+            T denom = a * e - b * b;
+            s = denom != static_cast<T>(0) ? grid_cc_clamp01<T>((b * f - c * e) / denom)
+                                           : static_cast<T>(0);
+            t = (b * s + f) / e;
+            if (t < static_cast<T>(0)) {
+                t = static_cast<T>(0); s = grid_cc_clamp01<T>(-c / a);
+            } else if (t > static_cast<T>(1)) {
+                t = static_cast<T>(1); s = grid_cc_clamp01<T>((b - c) / a);
+            }
+        }
+    }
+    T px = A.ax + s * d1x, py = A.ay + s * d1y, pz = A.az + s * d1z;
+    T qx = B.ax + t * d2x, qy = B.ay + t * d2y, qz = B.az + t * d2z;
+    T rs = A.r + B.r;
+    return grid_cc_sql2_3<T>(px, py, pz, qx, qy, qz) - rs * rs;
+}
+
+// capsule vs half-space: the core-segment plane distance is LINEAR in the segment parameter,
+// so its minimum sits at an endpoint. Outside-excess like grid_cc_sphere_plane (an endpoint
+// below the plane must read as collision, not a spuriously positive s^2).
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_capsule_plane(const Plane<T> &p, const Capsule<T> &c) {
+    T sa = p.nx * c.ax + p.ny * c.ay + p.nz * c.az - p.d;
+    T sb = p.nx * c.bx + p.ny * c.by + p.nz * c.bz - p.d;
+    T s = sa < sb ? sa : sb;
+    T e = s > static_cast<T>(0) ? s : static_cast<T>(0);
+    return e * e - c.r * c.r;
+}
+
+// box-frame squared point-box distance at segment parameter t (helper for capsule_cuboid)
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_seg_box_d2(const T pa[3], const T d[3], const T h[3], T t) {
+    T acc = static_cast<T>(0);
+    for (int k = 0; k < 3; ++k) {
+        T p = pa[k] + t * d[k];
+        T ex = grid_cc_abs<T>(p) - h[k];
+        if (ex > static_cast<T>(0)) acc += ex * ex;
+    }
+    return acc;
+}
+
+// capsule vs oriented cuboid. In the box frame the squared core-segment/box distance
+//   D2(t) = sum_k max(0, |p_k(t)| - h_k)^2,   p(t) = pa + t (pb - pa),  t in [0,1]
+// is CONVEX piecewise-quadratic: pieces split where a coordinate crosses +-h_k (<= 6
+// interior breakpoints). Exact minimum by finite enumeration: evaluate D2 at every
+// breakpoint/endpoint and, per interval, at its midpoint and at the clamped stationary
+// point of the active-set quadratic (active set read off at the midpoint). Fixed loop
+// bounds, no iteration-to-convergence -> deterministic and host/device identical.
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_capsule_cuboid(const Cuboid<T> &b, const Capsule<T> &c) {
+    // endpoints into the box frame
+    T ax0 = c.ax - b.cx, ay0 = c.ay - b.cy, az0 = c.az - b.cz;
+    T bx0 = c.bx - b.cx, by0 = c.by - b.cy, bz0 = c.bz - b.cz;
+    T pa[3], pb[3], h[3];
+    pa[0] = ax0 * b.ux + ay0 * b.uy + az0 * b.uz;  pb[0] = bx0 * b.ux + by0 * b.uy + bz0 * b.uz;  h[0] = b.hu;
+    pa[1] = ax0 * b.vx + ay0 * b.vy + az0 * b.vz;  pb[1] = bx0 * b.vx + by0 * b.vy + bz0 * b.vz;  h[1] = b.hv;
+    pa[2] = ax0 * b.wx + ay0 * b.wy + az0 * b.wz;  pb[2] = bx0 * b.wx + by0 * b.wy + bz0 * b.wz;  h[2] = b.hw;
+    T d[3] = { pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2] };
+
+    // candidate ts: endpoints + per-axis +-h crossings (clamped set, <= 8)
+    T ts[8]; int n = 0;
+    ts[n++] = static_cast<T>(0);
+    ts[n++] = static_cast<T>(1);
+    for (int k = 0; k < 3; ++k) {
+        if (d[k] != static_cast<T>(0)) {
+            T t1 = (h[k] - pa[k]) / d[k];
+            T t2 = (-h[k] - pa[k]) / d[k];
+            if (t1 > static_cast<T>(0) && t1 < static_cast<T>(1)) ts[n++] = t1;
+            if (t2 > static_cast<T>(0) && t2 < static_cast<T>(1)) ts[n++] = t2;
+        }
+    }
+    // insertion sort (n <= 8; deterministic)
+    for (int i = 1; i < n; ++i) {
+        T key = ts[i]; int j = i - 1;
+        while (j >= 0 && ts[j] > key) { ts[j + 1] = ts[j]; --j; }
+        ts[j + 1] = key;
+    }
+    T best = grid_cc_seg_box_d2<T>(pa, d, h, ts[0]);
+    for (int i = 1; i < n; ++i) {
+        T v = grid_cc_seg_box_d2<T>(pa, d, h, ts[i]);
+        if (v < best) best = v;
+    }
+    for (int i = 0; i + 1 < n; ++i) {
+        T lo = ts[i], hi = ts[i + 1];
+        if (!(hi > lo)) continue;
+        T tm = (lo + hi) * static_cast<T>(0.5);
+        T vm = grid_cc_seg_box_d2<T>(pa, d, h, tm); if (vm < best) best = vm;
+        // active-set quadratic sum_k (ck + ek t)^2 on this interval; stationary point
+        T sce = static_cast<T>(0), see = static_cast<T>(0);
+        for (int k = 0; k < 3; ++k) {
+            T p = pa[k] + tm * d[k];
+            if (grid_cc_abs<T>(p) > h[k]) {
+                T sg = p > static_cast<T>(0) ? static_cast<T>(1) : static_cast<T>(-1);
+                T ck = sg * pa[k] - h[k], ek = sg * d[k];
+                sce += ck * ek; see += ek * ek;
+            }
+        }
+        if (see > static_cast<T>(0)) {
+            T tstar = -sce / see;
+            tstar = tstar < lo ? lo : (tstar > hi ? hi : tstar);
+            T v = grid_cc_seg_box_d2<T>(pa, d, h, tstar); if (v < best) best = v;
+        }
+    }
+    return best - c.r * c.r;
+}
+
 // ------------------------------------------------------------------ environment reduction
 // One sphere vs ALL obstacle lists; early-out on first collision.
 template <typename T>

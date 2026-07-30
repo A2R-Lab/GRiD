@@ -80,10 +80,94 @@ def _cb_oracle(cx, cy, cz, ux, uy, uz, hu, vx, vy, vz, hv, wx, wy, wz, hw, px, p
     return e - pr ** 2
 
 
+def _cc_oracle(a1x, a1y, a1z, b1x, b1y, b1z, r1, a2x, a2y, a2z, b2x, b2y, b2z, r2):
+    """Exact min of |p1(s) - p2(t)|^2 over the unit square (convex QP): the minimum is
+    at the unconstrained stationary point if it lies inside, else on an edge/corner —
+    enumerate the 1-D clamped minimizers of all four edges plus the interior candidate.
+    Independent of the header's Ericson-style branch structure."""
+    a1 = np.array([a1x, a1y, a1z]); d1 = np.array([b1x, b1y, b1z]) - a1
+    a2 = np.array([a2x, a2y, a2z]); d2 = np.array([b2x, b2y, b2z]) - a2
+    r = a1 - a2
+
+    def dist2(s, t):
+        diff = r + s * d1 - t * d2
+        return float(diff @ diff)
+
+    def t_star(s):  # best t for fixed s
+        e = float(d2 @ d2)
+        return min(1.0, max(0.0, float(d2 @ (r + s * d1)) / e)) if e > 0 else 0.0
+
+    def s_star(t):  # best s for fixed t
+        a = float(d1 @ d1)
+        return min(1.0, max(0.0, float(d1 @ (t * d2 - r)) / a)) if a > 0 else 0.0
+
+    candidates = [(0.0, t_star(0.0)), (1.0, t_star(1.0)),
+                  (s_star(0.0), 0.0), (s_star(1.0), 1.0)]
+    A = np.array([[float(d1 @ d1), -float(d1 @ d2)], [-float(d1 @ d2), float(d2 @ d2)]])
+    b = np.array([-float(d1 @ r), float(d2 @ r)])
+    if np.linalg.det(A) > 0:
+        st = np.linalg.solve(A, b)
+        if 0.0 <= st[0] <= 1.0 and 0.0 <= st[1] <= 1.0:
+            candidates.append((float(st[0]), float(st[1])))
+    d2min = min(dist2(s, t) for (s, t) in candidates)
+    return d2min - (r1 + r2) ** 2
+
+
+def _cp_oracle(nx, ny, nz, d, ax, ay, az, bx, by, bz, r):
+    s = min(nx * ax + ny * ay + nz * az - d, nx * bx + ny * by + nz * bz - d)
+    e = max(s, 0.0)
+    return e * e - r * r
+
+
+def _cx_oracle(cx, cy, cz, ux, uy, uz, hu, vx, vy, vz, hv, wx, wy, wz, hw,
+               ax, ay, az, bx, by, bz, cr):
+    """Exact segment-vs-OBB core distance: in the box frame D2(t) is convex
+    piecewise-quadratic; enumerate breakpoints where a coordinate crosses +-h and the
+    clamped stationary point of each interval's active-set quadratic (independent
+    numpy re-derivation of the same exact mathematical structure)."""
+    R = np.array([[ux, uy, uz], [vx, vy, vz], [wx, wy, wz]])
+    h = np.array([hu, hv, hw])
+    pa = R @ (np.array([ax, ay, az]) - np.array([cx, cy, cz]))
+    pb = R @ (np.array([bx, by, bz]) - np.array([cx, cy, cz]))
+    dvec = pb - pa
+
+    def D2(t):
+        p = pa + t * dvec
+        ex = np.maximum(np.abs(p) - h, 0.0)
+        return float(ex @ ex)
+
+    ts = {0.0, 1.0}
+    for k in range(3):
+        if dvec[k] != 0.0:
+            for target in (h[k], -h[k]):
+                t = (target - pa[k]) / dvec[k]
+                if 0.0 < t < 1.0:
+                    ts.add(float(t))
+    ts = sorted(ts)
+    best = min(D2(t) for t in ts)
+    for lo, hi in zip(ts[:-1], ts[1:]):
+        tm = 0.5 * (lo + hi)
+        best = min(best, D2(tm))
+        p = pa + tm * dvec
+        active = np.abs(p) > h
+        if active.any():
+            sg = np.sign(p[active])
+            c = sg * pa[active] - h[active]
+            e = sg * dvec[active]
+            see = float(e @ e)
+            if see > 0.0:
+                tstar = min(hi, max(lo, -float(c @ e) / see))
+                best = min(best, D2(tstar))
+    return best - cr * cr
+
+
 _ORACLE = {
     "SS": (8, _ss_oracle),
     "SC": (11, _sc_oracle),
     "CB": (19, _cb_oracle),
+    "CC": (14, _cc_oracle),
+    "CP": (11, _cp_oracle),
+    "CX": (22, _cx_oracle),
 }
 
 
@@ -109,7 +193,7 @@ def test_collision_geometry(tmp_path):
     compo = next(l for l in lines if l.startswith("COMPO"))
     assert compo == "COMPO env_hit=1 env_miss=0 self_hit=1 self_free=0", f"composition wrong: {compo}"
 
-    n_checked = {"SS": 0, "SC": 0, "CB": 0}
+    n_checked = {"SS": 0, "SC": 0, "CB": 0, "CC": 0, "CP": 0, "CX": 0}
     for line in lines:
         tag = line[:2]
         if tag not in _ORACLE:
@@ -130,5 +214,6 @@ def test_collision_geometry(tmp_path):
         n_checked[tag] += 1
 
     assert n_checked["SS"] >= 5 and n_checked["SC"] >= 6 and n_checked["CB"] >= 7, n_checked
+    assert n_checked["CC"] >= 7 and n_checked["CP"] >= 4 and n_checked["CX"] >= 7, n_checked
     assert result.stdout.strip().endswith("RESULT: PASS"), result.stdout
     print(f"collision_geometry: {n_checked} SDF configs vs NumPy oracle OK")
