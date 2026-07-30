@@ -67,6 +67,9 @@ def _compile_runner(build_dir):
         "-DGRID_CUDA_FLOATING_BASE=0",
         "-DGRID_RUNNER_SKIP_GRADIENTS=1",
         "-DGRID_CUDA_LINALG_BACKEND=GRID_LINALG_GLASS",
+        # runner support headers (grid_runner_select.cuh) live next to the
+        # runner SOURCE; the generated grid.cuh is found first in build_dir.
+        "-I", str(RUNNER_SOURCE.parent),
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         "-gencode", f"arch=compute_{arch},code=compute_{arch}",
         "-o", str(exe), str(runner_copy),
@@ -109,11 +112,15 @@ def _check(failures, label, cuda, ref, atol=2e-4, rtol=2e-4):
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 @pytest.mark.robot_smoke
-@pytest.mark.parametrize("fixture", ["planar_arm.urdf", "translation_arm.urdf"])
+@pytest.mark.parametrize(
+    "fixture", ["planar_arm.urdf", "translation_arm.urdf", "skew_planar_arm.urdf"]
+)
 def test_cuda_decomposed_joint_matches_reference(tmp_path, fixture):
     """CUDA id / crba for a decomposed planar/translation robot must match the
     RBDReference numpy reference (itself pin-validated). Proves the parse-time
-    dummy-link chain emits + runs correctly end-to-end."""
+    dummy-link chain emits + runs correctly end-to-end. skew_planar_arm has a
+    NON-cardinal plane normal, so its sub-joints route the Tier-B skew-axis
+    path (dense S) instead of Tier-A cardinal machinery."""
     robot = _parse(fixture)
     assert robot is not None
     ref = RBDReference(robot)
