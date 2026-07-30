@@ -317,7 +317,13 @@ void run() {
     std::vector<T> h_qd(grid::NUM_VEL);
     std::vector<T> h_u(grid::NUM_VEL);
     std::vector<T> h_q_qd(grid::NUM_JOINTS + grid::NUM_VEL);
-    std::vector<T> h_q_qd_u(grid::NUM_JOINTS + 2 * grid::NUM_VEL);
+    // canonical nq-wide-slot layout [q | qd | u], each slot NUM_JOINTS wide (qd/u
+    // use NUM_VEL of it, pad zero) — matches the generated kernels' unpack
+    // (s_qd = &buf[NUM_JOINTS], s_tau = &buf[2*NUM_JOINTS]) and the binding's
+    // packing. The old tight NUM_JOINTS+2*NUM_VEL pack sheared qd/u by one slot
+    // on a floating base (fixed-base coincides: nq == nv), which went unseen
+    // while the floating suite compared only the zero sample.
+    std::vector<T> h_q_qd_u(3 * grid::NUM_JOINTS);
     std::vector<T> h_vec(grid::NUM_VEL);
     std::vector<T> h_mat(grid::NUM_VEL * grid::NUM_VEL);
     std::vector<T> h_grad(grid::NUM_VEL * 2 * grid::NUM_VEL);
@@ -352,13 +358,13 @@ void run() {
     for (int i = 0; i < grid::NUM_VEL; ++i) {
         h_q_qd[grid::NUM_JOINTS + i] = h_qd[i];
         h_q_qd_u[grid::NUM_JOINTS + i] = h_qd[i];
-        h_q_qd_u[grid::NUM_JOINTS + grid::NUM_VEL + i] = h_u[i];
+        h_q_qd_u[2 * grid::NUM_JOINTS + i] = h_u[i];
     }
     gpuErrchk(cudaMalloc((void**)&d_q, grid::NUM_JOINTS * sizeof(T)));
     gpuErrchk(cudaMalloc((void**)&d_qd, grid::NUM_VEL * sizeof(T)));
     gpuErrchk(cudaMalloc((void**)&d_u, grid::NUM_VEL * sizeof(T)));
     gpuErrchk(cudaMalloc((void**)&d_q_qd, (grid::NUM_JOINTS + grid::NUM_VEL) * sizeof(T)));
-    gpuErrchk(cudaMalloc((void**)&d_q_qd_u, (grid::NUM_JOINTS + 2 * grid::NUM_VEL) * sizeof(T)));
+    gpuErrchk(cudaMalloc((void**)&d_q_qd_u, 3 * grid::NUM_JOINTS * sizeof(T)));
     gpuErrchk(cudaMalloc((void**)&d_zero, grid::NUM_VEL * sizeof(T)));
     gpuErrchk(cudaMalloc((void**)&d_vec, grid::NUM_VEL * sizeof(T)));
     gpuErrchk(cudaMalloc((void**)&d_mat, grid::NUM_JOINTS * grid::NUM_JOINTS * sizeof(T)));
@@ -480,7 +486,7 @@ void run() {
             d_vec,
             hd_data->d_workspace,
             d_q_qd_u,
-            grid::NUM_JOINTS + 2 * grid::NUM_VEL,
+            3 * grid::NUM_JOINTS,
             /*d_f_ext=*/nullptr,
             d_robot_model,
             gravity,
@@ -618,7 +624,7 @@ void run() {
             d_grad,
             hd_data->d_workspace,
             d_q_qd_u,
-            grid::NUM_JOINTS + 2 * grid::NUM_VEL,
+            3 * grid::NUM_JOINTS,
             /*d_f_ext=*/nullptr,
             d_robot_model,
             gravity,
@@ -668,7 +674,7 @@ void run() {
 #if RUN_ABA
         maybe_poison_smem();
         grid::aba_kernel<T><<<1, g_num_threads, grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
-            d_vec, hd_data->d_workspace, d_q_qd_u, grid::NUM_JOINTS + 2 * grid::NUM_VEL,
+            d_vec, hd_data->d_workspace, d_q_qd_u, 3 * grid::NUM_JOINTS,
             d_f_ext_active, d_robot_model, gravity, 1
         );
         gpuErrchk(cudaPeekAtLastError());
@@ -695,7 +701,7 @@ void run() {
 #if RUN_FORWARD_DYNAMICS_GRADIENT
         maybe_poison_smem();
         grid::forward_dynamics_gradient_kernel<T><<<1, g_num_threads, grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(
-            d_grad, hd_data->d_workspace, d_q_qd_u, grid::NUM_JOINTS + 2 * grid::NUM_VEL,
+            d_grad, hd_data->d_workspace, d_q_qd_u, 3 * grid::NUM_JOINTS,
             d_f_ext_active, d_robot_model, gravity, 1
         );
         gpuErrchk(cudaPeekAtLastError());

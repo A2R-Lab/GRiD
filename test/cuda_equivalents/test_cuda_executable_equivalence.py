@@ -1096,7 +1096,17 @@ def _sample_name_selection(base_mode: str) -> SampleSelection:
     if base_mode == "floating":
         raw = os.environ.get("GRID_CUDA_FLOATING_SAMPLE_NAMES")
         if not raw:
-            return SampleSelection({"zero"}, False, False)
+            # zero-ONLY coverage hid a real runner bug for weeks (the floating
+            # q_qd_u pack sheared qd/u by one slot — invisible at the zero
+            # state, ~100% wrong on any energetic one; caught + fixed
+            # 2026-07-30). Keep a deterministic non-zero set in the default so
+            # a tau/qd-dependent break can never hide behind the zero state
+            # again: velocity_only (qd path), mixed_sign (tau path),
+            # floating_quat_mixed (non-identity base quaternion).
+            return SampleSelection(
+                {"zero", "velocity_only", "mixed_sign", "floating_quat_mixed"},
+                False, False,
+            )
         return SampleSelection(_parse_sample_names(raw), True, True)
     return SampleSelection(None, False, False)
 

@@ -987,6 +987,20 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
 
 ## 7. Test-infra gotchas
 
+- **Zero-only sample coverage hides input-LAYOUT bugs (2026-07-30, the floating q_qd_u shear).**
+  The equivalence runner packed the floating `q_qd_u` buffer TIGHT (`nq + 2*nv`, stride 40) while
+  every generated kernel unpacks canonical nq-wide slots (`s_qd = &buf[nq]`, `s_tau = &buf[2*nq]`,
+  stride `3*nq`) — qd/u sheared one slot, ~100% wrong output on any energetic state. It survived
+  for weeks because the floating suite's default sample set was `{zero}` (a shear of zeros is
+  zeros), and fixed-base coincides (`nq == nv` → tight == slot layout). Lessons: (1) any harness
+  that PACKS a multi-segment input buffer must be validated against a sample where EVERY segment
+  is nonzero and distinct — zero/identity states satisfy any layout; (2) when a suite gates a
+  whole base-mode to one sample "for time", the un-run samples are an ACTIVE blind spot — record
+  it as debt (this one is now fixed: default floating set = zero + velocity_only + mixed_sign +
+  floating_quat_mixed); (3) a kernel that is right on `zero` and ~100% wrong (not noise-wrong) on
+  energetic states with error scaling by input magnitude is an input-layout/stride suspect BEFORE
+  it is a math suspect — diff the harness's pack offsets against the kernel's unpack offsets first.
+
 - **GPU is SHARED-OK for CORRECTNESS, ISOLATED-only for TIMING (orchestration rule).** Equivalence /
   Gate-A / thread-invariance / batch runs are correctness checks — run MANY concurrently (sized to
   cores + RAM; an nvcc compile peaks ~5 GB, so cap concurrency by free RAM, not just core count). Only
