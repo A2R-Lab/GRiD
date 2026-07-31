@@ -545,15 +545,26 @@ def main() -> None:
     # --compile-only: the hub's BUILD phase. Build the needed exes and exit; a later run cache-hits
     # every one (content stamp), so measurement is pure timing on a quiet GPU.
     if args.compile_only:
+        # Exit NONZERO if any requested algo failed to build: even gated algos
+        # compile a do-nothing stub exe, so a missing exe is always a real compile
+        # failure. (Silently returning 0 here let a broken A/B arm report a clean
+        # prebuild on 2026-07-31 — the failure only surfaced as missing exes.)
+        missing: list[str] = []
         if args.mode == "timing":
-            _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier=args.tier,
-                           cgroup_cap_gb=args.cgroup_cap_gb)
+            exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier=args.tier,
+                                  cgroup_cap_gb=args.cgroup_cap_gb)
+            missing = [a for a in algos if a not in exes]
             what = f"tier {args.tier or 'shared'}"
         else:  # autotune: pre-build every tier so the measure run compiles nothing
             for tier in tiers:
-                _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier,
-                               cgroup_cap_gb=args.cgroup_cap_gb)
+                exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier,
+                                      cgroup_cap_gb=args.cgroup_cap_gb)
+                missing += [f"{a}({tier})" for a in algos if a not in exes]
             what = f"tiers {','.join(tiers)}"
+        if missing:
+            print(f"[per-algo] --compile-only: {len(missing)} algo(s) FAILED to build: {', '.join(missing)}",
+                  file=sys.stderr)
+            sys.exit(1)
         print(f"[per-algo] --compile-only: exes built for {what}; skipping timing")
         return
 
