@@ -104,40 +104,21 @@ def gen_lie_group_helpers(self):
         "    glass::thread::gemv<T,3,3>(static_cast<T>(1), A, v, static_cast<T>(0), out);",
         "}",
         "",
-        # ---- SE(3) V matrix:  p_delta = V(phi) @ rho ----
+        # ---- SO(3)/SE(3) 3x3 Lie leaves: delegate to the tested GLASS thread ops
+        # (identical Rodrigues coefficients AND the same 1e-8 small-angle
+        # threshold — see external/GLASS/src/base/lie/so3.cuh rodrigues_coefs;
+        # the SE(3) "V matrix" IS so3_left_jacobian). grid_* names kept so every
+        # composition (Q block, dIntegrate, spherical wrappers) is untouched. ----
         "template <typename T> __device__ inline void grid_so3_V_matrix(const T phi[3], T V[9]) {",
-        "    T S[9]; grid_so3_skew(phi, S);",
-        "    T S2[9]; grid_mat3_mul(S, S, S2);",
-        "    T theta = sqrt(phi[0]*phi[0] + phi[1]*phi[1] + phi[2]*phi[2]);",
-        "    T a, b;",
-        "    if (theta < static_cast<T>(1e-8)) { a = static_cast<T>(0.5); b = static_cast<T>(1.0/6.0); }",
-        "    else { a = (static_cast<T>(1) - cos(theta)) / (theta*theta); b = (theta - sin(theta)) / (theta*theta*theta); }",
-        "    #pragma unroll",
-        "    for (int i = 0; i < 9; ++i) V[i] = (i % 4 == 0 ? static_cast<T>(1) : static_cast<T>(0)) + a*S[i] + b*S2[i];",
+        "    glass::thread::so3_left_jacobian<T>(phi, V);",
         "}",
         "",
-        # ---- SO(3) right Jacobian J_r(phi) ----
         "template <typename T> __device__ inline void grid_so3_right_jacobian(const T phi[3], T J[9]) {",
-        "    T S[9]; grid_so3_skew(phi, S);",
-        "    T S2[9]; grid_mat3_mul(S, S, S2);",
-        "    T theta = sqrt(phi[0]*phi[0] + phi[1]*phi[1] + phi[2]*phi[2]);",
-        "    T a, b;",
-        "    if (theta < static_cast<T>(1e-8)) { a = static_cast<T>(0.5); b = static_cast<T>(1.0/6.0); }",
-        "    else { a = (static_cast<T>(1) - cos(theta)) / (theta*theta); b = (theta - sin(theta)) / (theta*theta*theta); }",
-        "    #pragma unroll",
-        "    for (int i = 0; i < 9; ++i) J[i] = (i % 4 == 0 ? static_cast<T>(1) : static_cast<T>(0)) - a*S[i] + b*S2[i];",
+        "    glass::thread::so3_right_jacobian<T>(phi, J);",
         "}",
         "",
-        # ---- SO(3) exponential: R = exp([phi]_x) ----
         "template <typename T> __device__ inline void grid_so3_exp(const T phi[3], T R[9]) {",
-        "    T S[9]; grid_so3_skew(phi, S);",
-        "    T S2[9]; grid_mat3_mul(S, S, S2);",
-        "    T theta = sqrt(phi[0]*phi[0] + phi[1]*phi[1] + phi[2]*phi[2]);",
-        "    T a, b;",
-        "    if (theta < static_cast<T>(1e-8)) { a = static_cast<T>(1); b = static_cast<T>(0.5); }",
-        "    else { a = sin(theta) / theta; b = (static_cast<T>(1) - cos(theta)) / (theta*theta); }",
-        "    #pragma unroll",
-        "    for (int i = 0; i < 9; ++i) R[i] = (i % 4 == 0 ? static_cast<T>(1) : static_cast<T>(0)) + a*S[i] + b*S2[i];",
+        "    glass::thread::so3_exp<T>(phi, R);",
         "}",
         "",
         # ---- SE(3) Q coupling block (matches Pinocchio sign convention; see RBDReference._se3_Q_block) ----
@@ -468,11 +449,12 @@ def gen_spherical_dintegrate_helpers(self):
         grid_dIntegrate_q_so3(omega_dt, J9) = exp(-omega_dt)   (ARG_q)
         grid_dIntegrate_v_so3(omega_dt, J9) = J_r(omega_dt)    (ARG_v)
     Output J9 is ROW-major (matches the 6x6 helpers' transpose-read convention,
-    so the dAB assembly indexes both the same way). The SO(3) primitives are
-    emitted here too (verbatim twins of the floating bundle's) because the
-    fixed-base spherical path deliberately skips gen_lie_group_helpers to keep
-    the header lean; a floating robot never calls this (its bundle already has
-    the primitives, and floating+spherical integrator codegen is refused).
+    so the dAB assembly indexes both the same way). The SO(3) leaves are
+    emitted here too (GLASS delegations, same as the floating bundle's) because
+    the fixed-base spherical path deliberately skips gen_lie_group_helpers to
+    keep the header lean; a floating robot never calls this (its bundle already
+    has the leaves; floating+spherical integrator codegen is structurally
+    excluded — all call sites predicate on base mode).
     Idempotent via _sph_dint_helpers_emitted."""
     if getattr(self, "_sph_dint_helpers_emitted", False):
         return
@@ -487,26 +469,14 @@ def gen_spherical_dintegrate_helpers(self):
         "    glass::thread::gemm<T,3,3,3>(static_cast<T>(1), A, B, static_cast<T>(0), C);",
         "}",
         "",
+        # GLASS delegations (identical coefficients + 1e-8 threshold; matches the
+        # floating Lie bundle's leaves).
         "template <typename T> __device__ inline void grid_so3_right_jacobian(const T phi[3], T J[9]) {",
-        "    T S[9]; grid_so3_skew(phi, S);",
-        "    T S2[9]; grid_mat3_mul(S, S, S2);",
-        "    T theta = sqrt(phi[0]*phi[0] + phi[1]*phi[1] + phi[2]*phi[2]);",
-        "    T a, b;",
-        "    if (theta < static_cast<T>(1e-8)) { a = static_cast<T>(0.5); b = static_cast<T>(1.0/6.0); }",
-        "    else { a = (static_cast<T>(1) - cos(theta)) / (theta*theta); b = (theta - sin(theta)) / (theta*theta*theta); }",
-        "    #pragma unroll",
-        "    for (int i = 0; i < 9; ++i) J[i] = (i % 4 == 0 ? static_cast<T>(1) : static_cast<T>(0)) - a*S[i] + b*S2[i];",
+        "    glass::thread::so3_right_jacobian<T>(phi, J);",
         "}",
         "",
         "template <typename T> __device__ inline void grid_so3_exp(const T phi[3], T R[9]) {",
-        "    T S[9]; grid_so3_skew(phi, S);",
-        "    T S2[9]; grid_mat3_mul(S, S, S2);",
-        "    T theta = sqrt(phi[0]*phi[0] + phi[1]*phi[1] + phi[2]*phi[2]);",
-        "    T a, b;",
-        "    if (theta < static_cast<T>(1e-8)) { a = static_cast<T>(1); b = static_cast<T>(0.5); }",
-        "    else { a = sin(theta) / theta; b = (static_cast<T>(1) - cos(theta)) / (theta*theta); }",
-        "    #pragma unroll",
-        "    for (int i = 0; i < 9; ++i) R[i] = (i % 4 == 0 ? static_cast<T>(1) : static_cast<T>(0)) + a*S[i] + b*S2[i];",
+        "    glass::thread::so3_exp<T>(phi, R);",
         "}",
         "",
         # ---- spherical dIntegrate ARG_q block: exp(-omega_dt), row-major out ----
