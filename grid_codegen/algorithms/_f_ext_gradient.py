@@ -926,11 +926,9 @@ def gen_f_ext_gradient(self):
     # gen_f_ext_gradient runs BEFORE gen_integrator in gen_all_code. The floating
     # integrator/integrator_gradient still need the SE(3) Lie-group helpers, and
     # ee_pose_hessian (the only other early emitter) may not be requested, so emit
-    # them here if floating and not already emitted (gen_integrator then skips its
-    # own emit via the same _lie_helpers_emitted flag, avoiding a C++ redefinition).
-    if self.robot.floating_base and not getattr(self, "_lie_helpers_emitted", False):
+    # them here on floating (gen_lie_group_helpers is idempotent).
+    if self.robot.floating_base:
         self.gen_lie_group_helpers()
-        self._lie_helpers_emitted = True
     self.gen_f_ext_gradient_jacobianT_inner()
     self.gen_f_ext_gradient_device()
     # A.3 (-dJ^T/dq) GPU device emit: the mixed second-order block, now emitted for

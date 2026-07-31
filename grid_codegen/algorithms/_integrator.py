@@ -70,7 +70,14 @@ def gen_lie_group_helpers(self):
     free-flyer prefix, and the 6x6 dIntegrate Adjoint / right-Jacobian
     blocks). xyzw quaternion convention; v_dt = [v_lin*dt; omega*dt] in
     Pinocchio order (linear first), body frame.
+
+    Idempotent via _lie_helpers_emitted (defines the same C++ symbols the
+    spherical dIntegrate bundle guards against): safe to call from every
+    consumer without an external check.
     """
+    if getattr(self, "_lie_helpers_emitted", False):
+        return
+    self._lie_helpers_emitted = True
     self.gen_add_func_doc("Floating-base Lie-group helpers (xyzw quaternion, Pinocchio v order).", [], [], None)
     self.gen_add_code_lines([
         # Quaternion primitives live in the vendored GLASS lie/quat.cuh
@@ -1211,15 +1218,14 @@ def gen_integrator(self):
     # Emit finish + inner (templated on IT), then EULER-typed device/kernel/host.
     # For floating-base, also emit SE(3) Lie-group helpers used by the
     # q-update Lie retract (the fixed-base path doesn't reference them).
-    # The d2ee kinematic codegen may also emit these helpers; only emit here
-    # if they weren't already emitted (avoid C++ redefinition).
-    if self.robot.floating_base and not getattr(self, "_lie_helpers_emitted", False):
+    # gen_lie_group_helpers is idempotent, so this is safe whether or not the
+    # d2ee kinematic codegen already emitted them.
+    if self.robot.floating_base:
         # Floating-base: emit the full SE(3) Lie bundle (the q-update Lie retract
         # + dIntegrate/d2Integrate blocks). For a floating robot that ALSO has a
         # spherical joint, gen_lie_group_helpers additionally emits the spherical
         # SO(3) wrapper (gated inside it on robot_has_spherical()).
         self.gen_lie_group_helpers()
-        self._lie_helpers_emitted = True
     elif (not self.robot.floating_base) and self.robot.robot_has_spherical() \
             and not getattr(self, "_lie_helpers_emitted", False):
         # Fixed-base spherical robot: it never references the SE(3) bundle, only

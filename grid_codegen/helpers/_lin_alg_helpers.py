@@ -338,23 +338,3 @@ def gen_matmul_trans(self):
     self.gen_add_end_function()
 
 
-def gen_outer_product(self):
-    """
-    This function generates the cuda for the outerProduct
-    function.
-    """
-    self.gen_add_func_doc("Compute the outer product between two vectors: dest = ab^T", \
-                          ["Function assumes it is called by a single thread."], \
-                          ['a - first vector', \
-                           'b - second vector', \
-                           'dest - destination matrix', \
-                           'aLength - length of a', \
-                           'bLength - length of b', \
-                           'idx - index of resulting matrix to be computed by this thread'])
-    self.gen_add_code_line("template <typename T>")
-    self.gen_add_code_line("__device__")
-    self.gen_add_code_line("void outerProduct(T *a, T *b, T *dest, int aLength, int bLength, int idx) {", True)
-    self.gen_add_code_line("int row = idx / bLength;")
-    self.gen_add_code_line("int col = idx % bLength;")
-    self.gen_add_code_line("if (row < aLength && col < bLength) dest[col * aLength + row] = a[row] * b[col];")
-    self.gen_add_end_function()

@@ -121,7 +121,7 @@ class GRiDCodeGenerator:
                          gen_get_Xhom_size, gen_load_update_XmatsHom_helpers, gen_load_update_XmatsHom_helpers_function_call, gen_XmatsHom_helpers_temp_shared_memory_code, gen_load_topology_helpers, \
                          gen_topology_sparsity_helpers_python, gen_init_topology_helpers, gen_topology_helpers_pointers_for_cpp, \
                          gen_topology_S_sign_for_cpp, gen_insert_helpers_function_call, gen_insert_helpers_func_def_params, gen_init_robotModel, gen_free_robotModel, gen_joint_limits_size, gen_init_joint_limits, \
-                         gen_grid_linalg_backend_helpers, gen_linalg_smem_setup, gen_invert_matrix, gen_matmul, gen_matmul_trans, gen_crm_mul, gen_crm, gen_mxS_general, gen_outer_product, custom_is_constant, \
+                         gen_grid_linalg_backend_helpers, gen_linalg_smem_setup, gen_invert_matrix, gen_matmul, gen_matmul_trans, gen_crm_mul, gen_crm, gen_mxS_general, custom_is_constant, \
                          gen_mjx_input_convert, gen_mjx_quat_reorder, gen_mjx_base_rotate, gen_mjx_base_rotate_rows, gen_mjx_symmetrize_full, gen_mjx_accel_out, gen_mjx_congruence, gen_mjx_column_reframe, gen_mjx_retract, \
                          robot_has_mimic_joints, _v_slot_cpp, _alpha_for_jid, _alpha_prefix_cpp, _id_S_desc
 
@@ -3624,8 +3624,7 @@ class GRiDCodeGenerator:
             self.gen_mxS_general()
         self.gen_invert_matrix()
         self.gen_matmul()
-        self.gen_matmul_trans() 
-        self.gen_outer_product()
+        self.gen_matmul_trans()
         # then generate the robot specific transformation and inertia matricies
         self.gen_init_topology_helpers()
         self.gen_init_XImats(include_base_inertia, include_homogenous_transforms)
@@ -3684,7 +3683,6 @@ class GRiDCodeGenerator:
         if include_any_kinematics:
             if self.robot.floating_base and "end_effector_pose_hessian" in algorithms:
                 self.gen_lie_group_helpers()
-                self._lie_helpers_emitted = True
             self.gen_eepose_and_derivatives(fixed_target_name = fixed_target_name,
                                             include_pose = "end_effector_pose" in algorithms,
                                             include_gradient = "end_effector_pose_gradient" in algorithms,
@@ -3868,9 +3866,8 @@ class GRiDCodeGenerator:
                 self.gen_add_code_line("#define GRID_HAS_FRAME_JACOBIAN_DOT 1")
                 # Floating-base Jdot integrates q on the SE(3) group; emit the Lie
                 # helpers if no other kinematics path already did.
-                if self.robot.floating_base and not getattr(self, "_lie_helpers_emitted", False):
+                if self.robot.floating_base:
                     self.gen_lie_group_helpers()
-                    self._lie_helpers_emitted = True
                 self.gen_frame_jacobian_dot()
             # Lambda (osc_inertia) is emitted for mimic robots too. It composes
             # Minv on device via minv_inner, whose mimic path routes
