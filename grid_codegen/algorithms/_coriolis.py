@@ -130,9 +130,10 @@ def _coriolis_metadata(self):
     # ---- C-assembly job table: one job per (i_col, target_col) cell ----
     # kind 0 = subtree term  Sw[i_col]^T dFdv[t_col]
     # kind 1 = ancestor term (oYc[i].Sw[i_col])^T dJ[t_col] + (Sw[i_col]^T Bc[i]) Sw[t_col]
-    # Each job writes a DISTINCT (row=true_vel[i_col], col=true_vel[t_col]) C cell
-    # scaled by alpha[i_col]*alpha[t_col] then atomicAdd-folded (mimic columns can
-    # share a reduced v-slot, so accumulate). job = (i_col, t_col, body_i, kind).
+    # Each job writes a (row=true_vel[i_col], col=true_vel[t_col]) C cell scaled by
+    # alpha[i_col]*alpha[t_col]. Non-mimic: cells are DISTINCT per job. Mimic: cells
+    # collide (reduced v-slots) -> jobs re-baked cell-major below + summed one
+    # thread per cell in fixed order. job = (i_col, t_col, body_i, kind).
     jobs = []  # (i_col, t_col, body_i_for_composite, kind)
     for i in range(NB):
         ci0, ci1 = body_col_start[i], body_col_start[i + 1]
@@ -148,12 +149,36 @@ def _coriolis_metadata(self):
             for ic in range(ci0, ci1):
                 for tc in range(cj0, cj1):
                     jobs.append((ic, tc, i, 1))
+    # Mimic robots: several jobs can land on ONE reduced C cell (true_vel is
+    # non-injective). The old emission atomicAdd-folded them (warp-order sums =
+    # run-to-run nondeterministic). Deterministic form (bc6c75a accumulator-major
+    # idiom): re-bake the job table DESTINATION-CELL-major (stable sort, original
+    # enumeration order preserved within a cell) + cell boundary tables; the fan
+    # then runs one thread per C cell summing its jobs in fixed ascending order.
+    # Non-mimic: cells are already distinct per job — table order untouched
+    # (byte-identical emission).
+    cells = None
+    if self.robot_has_mimic_joints():
+        order = sorted(range(len(jobs)),
+                       key=lambda k: (col_true_vel[jobs[k][0]], col_true_vel[jobs[k][1]], k))
+        jobs = [jobs[k] for k in order]
+        cell_row, cell_col, cell_start = [], [], []
+        prev = None
+        for k, jb in enumerate(jobs):
+            cell = (col_true_vel[jb[0]], col_true_vel[jb[1]])
+            if cell != prev:
+                cell_row.append(cell[0]); cell_col.append(cell[1]); cell_start.append(k)
+                prev = cell
+        cell_start.append(len(jobs))
+        cells = {"row": cell_row, "col": cell_col, "start": cell_start}
+
     job_icol = [jb[0] for jb in jobs]
     job_tcol = [jb[1] for jb in jobs]
     job_body = [jb[2] for jb in jobs]
     job_kind = [jb[3] for jb in jobs]
 
     return {
+        "cells": cells,
         "NB": NB,
         "n_int": n_int,
         "parent": parent,
@@ -250,6 +275,16 @@ def gen_coriolis_matrix_inner(self):
         f"static const int cor_job_body[] = {{ {_coriolis_int_array(md['job_body'])} }};",
         f"static const int cor_job_kind[] = {{ {_coriolis_int_array(md['job_kind'])} }};",
     ])
+    if HAS_MIMIC:
+        # Destination-cell tables for the deterministic C-assembly fan (jobs are
+        # baked cell-major; see _coriolis_metadata). Mimic-only -> cardinal robots
+        # emit no extra table (byte-identical).
+        cells = md["cells"]
+        self.gen_add_code_lines([
+            f"static const int cor_cell_row[] = {{ {_coriolis_int_array(cells['row'])} }};",
+            f"static const int cor_cell_col[] = {{ {_coriolis_int_array(cells['col'])} }};",
+            f"static const int cor_cell_start[] = {{ {_coriolis_int_array(cells['start'])} }};",
+        ])
     if md["has_skew"]:
         # Tier-B (skew) only: dense per-column S table + per-column skew flag.
         # Gated on has_skew so cardinal robots emit no extra table -> byte-identical.
@@ -420,32 +455,47 @@ def gen_coriolis_matrix_inner(self):
     self.gen_add_end_control_flow()  # thread-0
     self.gen_add_sync()
 
-    # ---- C assembly: P2 fan over the baked job table (disjoint i_col contributions;
-    #      mimic columns may share a reduced v-slot -> atomicAdd). ----
-    self.gen_add_code_line("// C assembly: fan over baked (i_col, t_col, body, kind) jobs")
-    self.gen_add_parallel_loop("job", str(md["njobs"]))
-    self.gen_add_code_line("int ic = cor_job_icol[job]; int tc = cor_job_tcol[job]; int bi = cor_job_body[job]; int kind = cor_job_kind[job];")
-    self.gen_add_code_line("int rrow = cor_col_true_vel[ic]; int ccol = cor_col_true_vel[tc];")
-    self.gen_add_code_line("T coeff = cor_col_alpha[ic] * cor_col_alpha[tc];")
-    self.gen_add_code_line("T val;")
-    self.gen_add_code_line("if (kind == 0) {", True)
-    self.gen_add_code_line("// subtree: Sw[ic]^T dFdv[tc]")
-    self.gen_add_code_line("val = static_cast<T>(0); for (int r = 0; r < 6; ++r) val += s_Sw[ic*6 + r]*s_dFdv[tc*6 + r];")
-    self.gen_add_end_control_flow()
-    self.gen_add_code_line("else {", True)
-    self.gen_add_code_line("// ancestor: (oYc[bi] Sw[ic])^T dJ[tc] + (Sw[ic]^T Bc[bi]) Sw[tc]")
-    self.gen_add_code_line("T ag[6]; for (int row = 0; row < 6; ++row) { T a = static_cast<T>(0); for (int kk = 0; kk < 6; ++kk) a += s_oYc[bi*36 + row + 6*kk]*s_Sw[ic*6 + kk]; ag[row] = a; }")
-    self.gen_add_code_line("T mt[6]; for (int colk = 0; colk < 6; ++colk) { T a = static_cast<T>(0); for (int kk = 0; kk < 6; ++kk) a += s_Sw[ic*6 + kk]*s_Bc[bi*36 + kk + 6*colk]; mt[colk] = a; }")
-    self.gen_add_code_line("T t1 = static_cast<T>(0); T t2 = static_cast<T>(0);")
-    self.gen_add_code_line("for (int r = 0; r < 6; ++r) { t1 += ag[r]*s_dJ[tc*6 + r]; t2 += mt[r]*s_Sw[tc*6 + r]; }")
-    self.gen_add_code_line("val = t1 + t2;")
-    self.gen_add_end_control_flow()
+    # ---- C assembly: P2 fan over the baked job table. Non-mimic: every job hits a
+    #      DISTINCT C cell -> one thread per job. Mimic: reduced v-slots collide, so
+    #      the job table is baked DESTINATION-CELL-major (see _coriolis_metadata) and
+    #      the fan runs one thread per C cell, summing its jobs in fixed ascending
+    #      order (deterministic; bc6c75a accumulator-major idiom — no atomics). ----
+    def _emit_job_val(with_dest):
+        self.gen_add_code_line("int ic = cor_job_icol[job]; int tc = cor_job_tcol[job]; int bi = cor_job_body[job]; int kind = cor_job_kind[job];")
+        if with_dest:  # non-mimic keeps the original line order (byte-identity)
+            self.gen_add_code_line("int rrow = cor_col_true_vel[ic]; int ccol = cor_col_true_vel[tc];")
+        self.gen_add_code_line("T coeff = cor_col_alpha[ic] * cor_col_alpha[tc];")
+        self.gen_add_code_line("T val;")
+        self.gen_add_code_line("if (kind == 0) {", True)
+        self.gen_add_code_line("// subtree: Sw[ic]^T dFdv[tc]")
+        self.gen_add_code_line("val = static_cast<T>(0); for (int r = 0; r < 6; ++r) val += s_Sw[ic*6 + r]*s_dFdv[tc*6 + r];")
+        self.gen_add_end_control_flow()
+        self.gen_add_code_line("else {", True)
+        self.gen_add_code_line("// ancestor: (oYc[bi] Sw[ic])^T dJ[tc] + (Sw[ic]^T Bc[bi]) Sw[tc]")
+        self.gen_add_code_line("T ag[6]; for (int row = 0; row < 6; ++row) { T a = static_cast<T>(0); for (int kk = 0; kk < 6; ++kk) a += s_oYc[bi*36 + row + 6*kk]*s_Sw[ic*6 + kk]; ag[row] = a; }")
+        self.gen_add_code_line("T mt[6]; for (int colk = 0; colk < 6; ++colk) { T a = static_cast<T>(0); for (int kk = 0; kk < 6; ++kk) a += s_Sw[ic*6 + kk]*s_Bc[bi*36 + kk + 6*colk]; mt[colk] = a; }")
+        self.gen_add_code_line("T t1 = static_cast<T>(0); T t2 = static_cast<T>(0);")
+        self.gen_add_code_line("for (int r = 0; r < 6; ++r) { t1 += ag[r]*s_dJ[tc*6 + r]; t2 += mt[r]*s_Sw[tc*6 + r]; }")
+        self.gen_add_code_line("val = t1 + t2;")
+        self.gen_add_end_control_flow()
     if HAS_MIMIC:
-        # mimic columns can share a reduced v-slot -> accumulate with atomicAdd.
-        self.gen_add_code_line("atomicAdd(&s_coriolis[rrow*" + str(nv) + " + ccol], coeff * val);")
+        cells = md["cells"]
+        ncells = len(cells["row"])
+        self.gen_add_code_line("// C assembly: one thread per C cell; cell-sorted jobs summed in fixed ascending order (deterministic)")
+        self.gen_add_parallel_loop("cell", str(ncells))
+        self.gen_add_code_line("T acc = static_cast<T>(0);")
+        self.gen_add_code_line("for (int job = cor_cell_start[cell]; job < cor_cell_start[cell + 1]; ++job) {", True)
+        _emit_job_val(with_dest=False)
+        self.gen_add_code_line("acc += coeff * val;")
+        self.gen_add_end_control_flow()  # job loop
+        self.gen_add_code_line("s_coriolis[cor_cell_row[cell]*" + str(nv) + " + cor_cell_col[cell]] += acc;")
+        self.gen_add_end_control_flow()  # cell loop
     else:
+        self.gen_add_code_line("// C assembly: fan over baked (i_col, t_col, body, kind) jobs")
+        self.gen_add_parallel_loop("job", str(md["njobs"]))
+        _emit_job_val(with_dest=True)
         self.gen_add_code_line("s_coriolis[rrow*" + str(nv) + " + ccol] += coeff * val;")
-    self.gen_add_end_control_flow()  # job loop
+        self.gen_add_end_control_flow()  # job loop
     self.gen_add_sync()
     self.gen_add_end_function()
 

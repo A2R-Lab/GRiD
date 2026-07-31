@@ -179,6 +179,17 @@ def test_cuda_coriolis_matrix_matches_reference(robot_id, base_mode, tmp_path):
                     )
             prev = C_cuda
 
+            # run-to-run determinism: same exe, same stdin, same thread count must
+            # be BYTE-identical (catches warp-order accumulation, e.g. the pre-2026-07-31
+            # mimic C-assembly atomicAdd fold). Checked at the highest-contention count.
+            if nthreads == _THREAD_COUNTS[-1]:
+                stdout_repeat = _run_runner(executable, _sample_to_stdin(sample), compile_cmd, num_threads=nthreads)
+                if stdout_repeat != stdout:
+                    failures.append(
+                        f"{robot_id} @ {sample.name} (threads={nthreads}): run-to-run "
+                        f"nondeterminism (stdout differs on identical re-run)"
+                    )
+
             # identity (against the CUDA C): C qd + g == nonlinear_effects
             id_resid = float(np.max(np.abs(C_cuda @ qd + g_ref - nle_ref)))
             id_scale = max(1.0, float(np.max(np.abs(nle_ref))) if nle_ref.size else 1.0)
