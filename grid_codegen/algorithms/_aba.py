@@ -1037,29 +1037,34 @@ def gen_aba_inner(self):
                 self.gen_add_code_line("s_cold[98 * " + str(n) + " + 6 * jid6 + row + 6*col] = dot_prod<T,6,1,1>(&s_XImats[6*jid6+6*row], &s_temp[36 * "+str(n)+"+jid6*6+6*col]);")
                 self.gen_add_end_control_flow()
                 self.gen_add_sync()
-                # update IA of the parent
-                # NOTE (Inc6): this fixed-base branched path folds shared-parent
-                # child IA into the parent via atomicAdd (order-dependent → last-ULP
-                # run-to-run nondeterminism, same class as the crba/minv/id_gradient
-                # floating folds fixed in Inc6). It is NOT exercised by the current
-                # equivalence matrix (go2-fixed's only repeated-parent level is 0,
-                # which the `bfs_level != 0` guard skips; fr3's mimic fingers collapse
-                # to a single codegen joint; iiwa14 is a chain), so it cannot be
-                # GPU-verified yet. Left on atomicAdd + tracked as a same-class
-                # follow-up (with idsva_so / dccrba / coriolis-mimic / id_gradient
-                # fixed-base sparsity) to convert to the deterministic parent-major
-                # fixed-order sum once a robot that exercises it is in the matrix.
-                self.gen_add_code_line("// IA[parent] += temp[k]*X[k]")
-                self.gen_add_parallel_loop("ind", str(36 * len(inds)))
-                self.gen_add_code_line("int row = ind % 6; int col = (ind / 6) %6;")
-                select_var_vals = [("int", "jid", [str(jid) for jid in inds])]
-                self.gen_add_multi_threaded_select("ind", "<", [str(36*(i+1)) for i in range(len(inds))], select_var_vals)
-                self.gen_add_code_line("int jid6 = 6 * jid;")
-                self.gen_add_code_line("T prodtemp = static_cast<T>(0);")
-                self.gen_add_code_line("prodtemp =  dot_prod<T,6,6,1>(&s_cold[98 * " + str(n) + " + 6 * jid6 + row], &s_XImats[6*jid6+6*col]);")
-                self.gen_add_code_line("atomicAdd(&s_temp[36 * " + parent_ind_cpp +" + row + 6*col], prodtemp);")
+                # update IA of the parent — shared parents collide, so iterate
+                # PARENT-cell-major (Inc6/bc6c75a idiom, mirrors _crba.py): one
+                # thread owns each unique-parent cell and sums its child slots'
+                # contributions in FIXED ascending slot order. Race-free, bit-
+                # deterministic, no atomics (the old slot-major atomicAdd summed
+                # in warp-scheduling order → last-ULP run-to-run drift).
+                unique_parents = sorted(set(self.robot.get_parent_id(j) for j in inds))
+                nup = len(unique_parents)
+                self.gen_add_code_line("// IA[parent] += temp[k]*X[k] (shared parents → deterministic parent-major fixed-order sum)")
+                self.gen_add_code_line("{", True)  # per-level scope for the baked tables
+                self.gen_bake_const_array("s_aba_jid_lvl", inds, "int")
+                self.gen_bake_const_array("s_aba_par_lvl", [self.robot.get_parent_id(j) for j in inds], "int")
+                self.gen_bake_const_array("s_aba_upar_lvl", unique_parents, "int")
+                self.gen_add_parallel_loop("el", str(36 * nup))
+                self.gen_add_code_line("int up = el / 36;")
+                self.gen_add_code_line("int rc = el % 36;")
+                self.gen_add_code_line("int row = rc % 6;")
+                self.gen_add_code_line("int col = rc / 6;")
+                self.gen_add_code_line("int par_l = s_aba_upar_lvl[up];")
+                self.gen_add_code_line("T acc = static_cast<T>(0);")
+                self.gen_add_code_line(f"for (int slot = 0; slot < {len(inds)}; slot++) {{ if (s_aba_par_lvl[slot] != par_l) continue;")
+                self.gen_add_code_line(f"    const T *tempS = &s_cold[98 * {n} + 36*s_aba_jid_lvl[slot]]; const T *Xj = &s_XImats[36*s_aba_jid_lvl[slot]];")
+                self.gen_add_code_line("    T contrib = static_cast<T>(0); for (int p = 0; p < 6; p++) { contrib += tempS[row + 6*p] * Xj[p + 6*col]; }")
+                self.gen_add_code_line("    acc += contrib; }")
+                self.gen_add_code_line("s_temp[36 * par_l + row + 6*col] += acc;")
                 self.gen_add_end_control_flow()
                 self.gen_add_sync()
+                self.gen_add_end_control_flow()  # close the per-level scope
             else:
                 # GEMM path: X^T*Ia*X per jid (single jid or all-distinct parents)
                 for jid_val in inds:

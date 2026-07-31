@@ -1931,9 +1931,11 @@ def _run_cuda_equivalence_case(
         # setprecision(10) (2-3 digits beyond float precision), so a byte-identical
         # stdout is a genuine ULP-level check. Gate at the MAX_PERF sentinel
         # (num_threads == 0 -> the robot's launch-bounds cap, the highest-contention
-        # point where the drift surfaced at 288/352 threads) on floating robots (the
-        # only ones with shared-parent folds; fixed-base already pass by construction).
-        if base_mode == "floating" and num_threads == 0:
+        # point where the drift surfaced at 288/352 threads). Runs for BOTH base
+        # modes since 2026-07-31: fixed-base BRANCHED robots (baxter/g1/h1_2) have
+        # shared-parent folds too (aba IA fold, id_grad sparsity fold) — converted
+        # to deterministic cell-major sums the same day; this gate keeps them honest.
+        if num_threads == 0:
             stdout_repeat = _run_runner(
                 executable, _sample_to_stdin(sample), compile_cmd, num_threads=num_threads
             )

@@ -965,6 +965,56 @@ def gen_inverse_dynamics_gradient_inner(self):
             self.gen_add_sync()
             self.gen_add_end_control_flow()  # close the per-level {} scope
             continue
+        if (not self.robot.floating_base) and len(inds) > 1 and self.robot.has_repeated_parents(inds):
+            # Fixed-base shared parents (branched humanoids: baxter/g1/h1_2 torso
+            # levels): sibling children COLLIDE on the parent's shared-ancestor df
+            # columns. Old emission atomicAdd-folded them (warp order → last-ULP
+            # run-to-run drift). Deterministic form (bc6c75a cell-major idiom):
+            # enumerate every (child slot, child col_du) contribution's DESTINATION
+            # df cell at codegen time by mirroring the emitted sparsity arithmetic
+            #   dst_col = running_sum_df[parent] + col_du + (col_du >= own)*(jid-parent-1)
+            # then fan one thread per (dq/dqd, dest cell, row), summing that cell's
+            # contributions in fixed ascending (slot, col_du) order.
+            _, _, _, _, df_cols_num, running_sum_df_num, df_col_own_num = \
+                self.gen_topology_sparsity_helpers_python()
+            pairs_by_cell = {}
+            for jid in inds:  # ascending id order == fixed sum order
+                par = self.robot.get_parent_id(jid)
+                own = df_col_own_num[jid]
+                corr = jid - par - 1
+                for col_du in range(df_cols_num[jid]):
+                    dst = running_sum_df_num[par] + col_du + (corr if col_du >= own else 0)
+                    pairs_by_cell.setdefault(dst, []).append(
+                        (jid, running_sum_df_num[jid] + col_du, 1 if col_du == own else 0))
+            cell_dst = sorted(pairs_by_cell)
+            ncells = len(cell_dst)
+            cell_start, pair_jid, pair_src, pair_own = [0], [], [], []
+            for dst in cell_dst:
+                for (pj, ps, po) in pairs_by_cell[dst]:
+                    pair_jid.append(pj); pair_src.append(ps); pair_own.append(po)
+                cell_start.append(len(pair_jid))
+            self.gen_add_code_line("// df_lambda/du += X^T * df/du + {Xmx(f), 0} (fixed-base shared parents → deterministic cell-major fixed-order sum)")
+            self.gen_add_code_line("{", True)  # per-level scope for the baked tables
+            self.gen_bake_const_array("s_idg_cell_dst", cell_dst, "int")
+            self.gen_bake_const_array("s_idg_cell_start", cell_start, "int")
+            self.gen_bake_const_array("s_idg_pair_jid", pair_jid, "int")
+            self.gen_bake_const_array("s_idg_pair_src", pair_src, "int")
+            self.gen_bake_const_array("s_idg_pair_own", pair_own, "int")
+            self.gen_add_parallel_loop("ind", str(6 * 2 * ncells))
+            self.gen_add_code_line(f"bool dq_flag = ind < {6 * ncells};")
+            self.gen_add_code_line(f"int loc = ind % {6 * ncells}; int cell = loc / 6; int row = loc % 6;")
+            self.gen_add_code_line("int du_base = dq_flag * " + str(Offset_df_dq) + " + !dq_flag * " + str(Offset_df_dqd) + ";")
+            self.gen_add_code_line("T acc = static_cast<T>(0);")
+            self.gen_add_code_line("for (int pp = s_idg_cell_start[cell]; pp < s_idg_cell_start[cell + 1]; pp++) {", True)
+            self.gen_add_code_line("int jid = s_idg_pair_jid[pp];")
+            self.gen_add_code_line("acc += dot_prod<T,6,1,1>(&s_XImats[36*jid + 6*row], &s_temp[du_base + 6*s_idg_pair_src[pp]])")
+            self.gen_add_code_line("     + dq_flag * s_idg_pair_own[pp] * s_temp[" + str(Offset_MxXv) + " + 6*jid + row];")
+            self.gen_add_end_control_flow()  # pair loop
+            self.gen_add_code_line("s_temp[du_base + 6*s_idg_cell_dst[cell] + row] += acc;")
+            self.gen_add_end_control_flow()  # parallel loop
+            self.gen_add_sync()
+            self.gen_add_end_control_flow()  # close the per-level {} scope
+            continue
         if self.robot.floating_base:
             # dq_flag is deferred (emitted below after extra setup), so pass None.
             jid, _ = self._emit_fb_bfs_level_indexing(inds, n)
@@ -1004,12 +1054,11 @@ def gen_inverse_dynamics_gradient_inner(self):
             self.gen_add_code_line("T *dst = &s_temp[du_col_offset + 6*" + df_col_offset_for_parent_cpp + " + dst_adjust + row];")
             self.gen_add_code_lines(["T update_val = dot_prod<T,6,1,1>(&s_XImats[36*" + jid + " + 6*row],&s_temp[du_col_offset + 6*" + df_col_offset_for_jid_cpp + "])",
                                     "              + dq_flag * (col_du == " + df_col_that_is_jid_cpp + ") * s_temp[" + str(Offset_MxXv) + " + 6*" + jid + " + row];"])
-        # check for repeated parent and add atomics
-        if self.robot.has_repeated_parents(inds):
-            self.gen_add_code_line("// Atomics required for shared parent")
-            self.gen_add_code_line("atomicAdd(dst,update_val);")
-        else:
-            self.gen_add_code_line("*dst += update_val;")
+        # repeated-parent levels never reach here (deterministic cell-major
+        # branches above handle floating AND fixed) → destinations are unique.
+        assert not self.robot.has_repeated_parents(inds) or len(inds) <= 1, \
+            "id_grad: repeated-parent level fell through to the non-deterministic path"
+        self.gen_add_code_line("*dst += update_val;")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
 
