@@ -1244,6 +1244,23 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   install-extras, runtime_inertia were ALL already implemented — the work was VALIDATION (run the test) + closing narrow gaps,
   not building. Always grep/run-the-test before authoring a "missing" feature.
 
+### 7.x Worktree A/B arms fail SILENTLY three ways (2026-07-31, the night-2 prebuild)
+Building an old-commit arm for an interleaved A/B via `git worktree` has three traps that
+compose into a "clean" prebuild with ZERO binaries in one arm (rcA=0, no error lines):
+1. **`git worktree add` does not populate submodules** → codegen dies on missing GLASS.
+   Always `git -C $WT submodule update --init external/...` after creating one.
+2. **Relative paths resolve against the WORKTREE root** in the worktree's harness (its
+   `run.py` prepends its own repo root): a relative `--build-dir` bakes a relative
+   `GRID_HEADER_FILE` into nvcc, which then can't find the header. Pass ABSOLUTE dirs.
+3. **`per_algo_bench --compile-only` (pre-af27345) exited 0 on failed compiles** — the
+   BUILD-phase philosophy ("failures surface in the measure phase") is wrong for A/B
+   prebuilds, where the measure phase would time a one-armed pair and produce
+   plausible-looking garbage. Fixed at HEAD (af27345: nonzero exit + missing list), but
+   OLD worktree arms keep the silent behavior forever → orchestration scripts must ALSO
+   verify expected exe COUNTS per build dir and hard-abort the timing leg on a shortfall.
+Detection heuristic: a build phase that "succeeds" suspiciously fast + an empty
+`ls build_dir/*.exe`. The exe count is the ground truth, not the exit code.
+
 ---
 
 *Linked from HANDOFF.md. Companion: `docs/idsva_so_inner_refactor_notes.md` (SO internals + resume hints).*
