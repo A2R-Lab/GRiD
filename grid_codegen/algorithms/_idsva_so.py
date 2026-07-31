@@ -2714,31 +2714,49 @@ def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
         NB = num_bodies
         fold_vslot = [self._v_slot_cpp(b) for b in range(NB)]
         fold_alpha = [self._alpha_for_jid(b) for b in range(NB)]
+        # GATHER form (deterministic, 2026-07-31): one thread per PUBLIC cell sums
+        # its preimage internal cells in fixed ascending (ii,jj,kk) order. The old
+        # scatter (one thread per internal cell + atomicAdd on colliding mimic
+        # v-slots) summed in warp order → last-ULP run-to-run drift. Preimage of
+        # public (a,b,c) = group[a] x group[b] x group[c] where group[v] = internal
+        # bodies mapping to reduced v-slot v; every public cell is written exactly
+        # once, so the zeroing pass is gone too.
+        groups = {}
+        for b in range(NB):
+            groups.setdefault(fold_vslot[b], []).append(b)
+        assert sorted(groups) == list(range(NV)), \
+            "idsva_so mimic fold: v-slot groups must cover 0..NV-1"
+        grp_start, grp_body = [0], []
+        for v in range(NV):
+            grp_body += groups[v]  # ascending body ids (fixed sum order)
+            grp_start.append(len(grp_body))
         self.gen_add_sync()
-        self.gen_add_code_line("// Mimic fold: reduce internal NB^3 sweep to public NV^3 output")
-        self.gen_add_code_line(
-            "static const int so_fold_vslot[] = { " + ", ".join(map(str, fold_vslot)) + " };")
+        self.gen_add_code_line("// Mimic fold: gather internal NB^3 sweep into public NV^3 (one thread per public cell, fixed-order preimage sums)")
         self.gen_add_code_line(
             "static const T so_fold_alpha[] = { " + ", ".join(
                 "static_cast<T>(" + repr(a) + ")" for a in fold_alpha) + " };")
-        # Zero the public NV^3 output (4 blocks).
-        self.gen_add_code_line(f"glass::set_const<T, 4*{NV**3}>(static_cast<T>(0), s_idsva_so_public);")
-        # Scatter-accumulate. One thread per internal cell per block; the destination
-        # public cell is uniquely determined by (v(i),v(j),v(k)). Multiple internal
-        # cells can map to the SAME public cell (mimic siblings), so we must use an
-        # atomic accumulate to avoid lost updates across the block's threads.
-        self.gen_add_parallel_loop('idx', f'4*{NB**3}')
-        self.gen_add_code_line(f'int blk = idx / {NB**3};')
-        self.gen_add_code_line(f'int rem = idx % {NB**3};')
-        self.gen_add_code_line(f'int ii = rem / {NB*NB};')
-        self.gen_add_code_line(f'int jj = (rem / {NB}) % {NB};')
-        self.gen_add_code_line(f'int kk = rem % {NB};')
-        self.gen_add_code_line("T val = s_idsva_so_internal[idx];")
-        self.gen_add_code_line("if (val != static_cast<T>(0)) {", True)
-        self.gen_add_code_line("T w = so_fold_alpha[ii] * so_fold_alpha[jj] * so_fold_alpha[kk];")
-        self.gen_add_code_line(f"int dst = blk*{NV**3} + so_fold_vslot[ii]*{NV*NV} + so_fold_vslot[jj]*{NV} + so_fold_vslot[kk];")
-        self.gen_add_code_line("atomicAdd(&s_idsva_so_public[dst], w * val);")
+        self.gen_add_code_line(
+            "static const int so_grp_start[] = { " + ", ".join(map(str, grp_start)) + " };")
+        self.gen_add_code_line(
+            "static const int so_grp_body[] = { " + ", ".join(map(str, grp_body)) + " };")
+        self.gen_add_parallel_loop('idx', f'4*{NV**3}')
+        self.gen_add_code_line(f'int blk = idx / {NV**3};')
+        self.gen_add_code_line(f'int rem = idx % {NV**3};')
+        self.gen_add_code_line(f'int va = rem / {NV*NV};')
+        self.gen_add_code_line(f'int vb = (rem / {NV}) % {NV};')
+        self.gen_add_code_line(f'int vc = rem % {NV};')
+        self.gen_add_code_line("T acc = static_cast<T>(0);")
+        self.gen_add_code_line("for (int pi = so_grp_start[va]; pi < so_grp_start[va + 1]; pi++) {", True)
+        self.gen_add_code_line("int ii = so_grp_body[pi]; T wa = so_fold_alpha[ii];")
+        self.gen_add_code_line("for (int pj = so_grp_start[vb]; pj < so_grp_start[vb + 1]; pj++) {", True)
+        self.gen_add_code_line("int jj = so_grp_body[pj]; T wab = wa * so_fold_alpha[jj];")
+        self.gen_add_code_line("for (int pk = so_grp_start[vc]; pk < so_grp_start[vc + 1]; pk++) {", True)
+        self.gen_add_code_line("int kk = so_grp_body[pk];")
+        self.gen_add_code_line(f"acc += wab * so_fold_alpha[kk] * s_idsva_so_internal[blk*{NB**3} + ii*{NB*NB} + jj*{NB} + kk];")
         self.gen_add_end_control_flow()
+        self.gen_add_end_control_flow()
+        self.gen_add_end_control_flow()
+        self.gen_add_code_line("s_idsva_so_public[idx] = acc;")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
 
@@ -3784,27 +3802,45 @@ def gen_idsva_so_world_frame_inner(self, use_qdd_input = False):
 
     if is_mimic:
         # ---- Fold the internal 4*n_int^3 sweep to the reduced 4*NV^3 public output ----
-        # public[true(i), true(j), true(k)] += alpha_i*alpha_j*alpha_k * internal[i,j,k],
-        # summed over internal slots that share reduced slots (mimic siblings + the root's
-        # 6 distinct columns fold identity). This is the oracle's
-        # einsum('ia,ijk,jb,kc->abc', R, T, R, R) with R[i, true(i)] = alpha_i. Each of the
-        # 4 tensor blocks folds independently; collisions (siblings) use atomicAdd.
-        self.gen_add_code_line("// Mimic fold: reduce internal n_int^3 sweep to public NV^3 output.")
-        # Zero the public NV^3 output (4 blocks).
-        self.gen_add_code_line(f"glass::set_const<T, 4*{NV**3}>(static_cast<T>(0), s_idsva_so_public);")
-        # Scatter-accumulate one thread per internal cell per block.
-        self.gen_add_parallel_loop("idx", f"4*{n_int**3}")
-        self.gen_add_code_line(f"int blk = idx / {n_int**3};")
-        self.gen_add_code_line(f"int rem = idx % {n_int**3};")
-        self.gen_add_code_line(f"int ii = rem / {n_int*n_int};")
-        self.gen_add_code_line(f"int jj = (rem / {n_int}) % {n_int};")
-        self.gen_add_code_line(f"int kk = rem % {n_int};")
-        self.gen_add_code_line("T val = s_idsva_so_internal[idx];")
-        self.gen_add_code_line("if (val != static_cast<T>(0)) {", True)
-        self.gen_add_code_line("T w = wf_int_alpha[ii] * wf_int_alpha[jj] * wf_int_alpha[kk];")
-        self.gen_add_code_line(f"int dst = blk*{NV**3} + wf_int_true[ii]*{NV*NV} + wf_int_true[jj]*{NV} + wf_int_true[kk];")
-        self.gen_add_code_line("atomicAdd(&s_idsva_so_public[dst], w * val);")
+        # public[true(i), true(j), true(k)] += alpha_i*alpha_j*alpha_k * internal[i,j,k]
+        # — the oracle's einsum('ia,ijk,jb,kc->abc', R, T, R, R) with R[i, true(i)]
+        # = alpha_i. GATHER form (deterministic, 2026-07-31, twin of the body-frame
+        # fold): one thread per PUBLIC cell sums its preimage internal cells in
+        # fixed ascending order (the old scatter atomicAdd on colliding mimic slots
+        # summed in warp order → last-ULP run-to-run drift). Every public cell is
+        # written exactly once, so the zeroing pass is gone too.
+        wf_groups = {}
+        for s, tv in enumerate(metadata['int_true_vel']):
+            wf_groups.setdefault(tv, []).append(s)
+        assert sorted(wf_groups) == list(range(NV)), \
+            "idsva_so world fold: true-vel groups must cover 0..NV-1"
+        wf_grp_start, wf_grp_slot = [0], []
+        for v in range(NV):
+            wf_grp_slot += wf_groups[v]  # ascending internal slots (fixed sum order)
+            wf_grp_start.append(len(wf_grp_slot))
+        self.gen_add_code_line("// Mimic fold: gather internal n_int^3 sweep into public NV^3 (one thread per public cell, fixed-order preimage sums)")
+        self.gen_add_code_lines([
+            f"static const int wf_grp_start[] = {{ {_idsva_so_int_array(wf_grp_start)} }};",
+            f"static const int wf_grp_slot[] = {{ {_idsva_so_int_array(wf_grp_slot)} }};",
+        ])
+        self.gen_add_parallel_loop("idx", f"4*{NV**3}")
+        self.gen_add_code_line(f"int blk = idx / {NV**3};")
+        self.gen_add_code_line(f"int rem = idx % {NV**3};")
+        self.gen_add_code_line(f"int va = rem / {NV*NV};")
+        self.gen_add_code_line(f"int vb = (rem / {NV}) % {NV};")
+        self.gen_add_code_line(f"int vc = rem % {NV};")
+        self.gen_add_code_line("T acc = static_cast<T>(0);")
+        self.gen_add_code_line("for (int pi = wf_grp_start[va]; pi < wf_grp_start[va + 1]; pi++) {", True)
+        self.gen_add_code_line("int ii = wf_grp_slot[pi]; T wa = wf_int_alpha[ii];")
+        self.gen_add_code_line("for (int pj = wf_grp_start[vb]; pj < wf_grp_start[vb + 1]; pj++) {", True)
+        self.gen_add_code_line("int jj = wf_grp_slot[pj]; T wab = wa * wf_int_alpha[jj];")
+        self.gen_add_code_line("for (int pk = wf_grp_start[vc]; pk < wf_grp_start[vc + 1]; pk++) {", True)
+        self.gen_add_code_line("int kk = wf_grp_slot[pk];")
+        self.gen_add_code_line(f"acc += wab * wf_int_alpha[kk] * s_idsva_so_internal[blk*{n_int**3} + ii*{n_int*n_int} + jj*{n_int} + kk];")
         self.gen_add_end_control_flow()
+        self.gen_add_end_control_flow()
+        self.gen_add_end_control_flow()
+        self.gen_add_code_line("s_idsva_so_public[idx] = acc;")
         self.gen_add_end_control_flow()
         self.gen_add_sync()
 
