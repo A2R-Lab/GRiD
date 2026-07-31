@@ -9,31 +9,21 @@ They appear only in the FIRST-order inverse_dynamics_gradient output, never here
 # Shared block-parallel emit primitives (also used by _fdsva_so). See _mjx_blockpar.
 from ._mjx_blockpar import bpfor as _bpfor, stride_rc as _bp_stride_rloop
 
-import os
-
 
 def _emit_t_outer(self, n_pairs, x_expr, y_expr):
     """Emit one t-slab fill: t[t_idx] = outer(x, y) for every (jid, ancestor) pair.
 
-    Default: the historical per-element loop (one thread per matrix element via
-    outerProduct). GRID_IDSVA_GLASS_OUTER=1 opts into one PAIR per thread via
-    glass::thread::gemm<6,6,1> (an outer-product assign; same column-major layout
-    and the same single multiply per element, so outputs are bit-identical) — 36x
-    fewer index-table lookups but 36 serial stores per thread. A/B candidate gated
-    on the Phase-2 SO sweep; the loser (and this flag) gets deleted afterwards.
+    One PAIR per thread via glass::thread::gemm<6,6,1> (an outer-product assign;
+    column-major, one multiply per element). Chosen over the historical
+    per-element outerProduct loop by the 2026-07-31 interleaved A/B: -3..-6.5%
+    on iiwa14-fixed body_frame/fdsva_so, wash (|d| <= 0.1%) on go2/g1 floating,
+    no regressions (27 cells, 5 reps).
     """
-    if os.environ.get("GRID_IDSVA_GLASS_OUTER", "0") == "1":
-        self.gen_add_parallel_loop('i', f'{n_pairs}')
-        self.gen_add_code_line('int jid = jids[i];')
-        self.gen_add_code_line('int ancestor_j = ancestors_j[i];')
-        self.gen_add_code_line('int t_idx = t_index_map[jid][ancestor_j]*36;')
-        self.gen_add_code_line(f'glass::thread::gemm<T, 6, 6, 1>(static_cast<T>(1), {x_expr}, {y_expr}, &t[t_idx]);')
-    else:
-        self.gen_add_parallel_loop('i', f'{n_pairs}*36')
-        self.gen_add_code_line('int jid = jids[i / 36];')
-        self.gen_add_code_line('int ancestor_j = ancestors_j[i / 36];')
-        self.gen_add_code_line('int t_idx = t_index_map[jid][ancestor_j]*36;')
-        self.gen_add_code_line(f'outerProduct<T>({x_expr}, {y_expr}, &t[t_idx], 6, 6, i%36);')
+    self.gen_add_parallel_loop('i', f'{n_pairs}')
+    self.gen_add_code_line('int jid = jids[i];')
+    self.gen_add_code_line('int ancestor_j = ancestors_j[i];')
+    self.gen_add_code_line('int t_idx = t_index_map[jid][ancestor_j]*36;')
+    self.gen_add_code_line(f'glass::thread::gemm<T, 6, 6, 1>(static_cast<T>(1), {x_expr}, {y_expr}, &t[t_idx]);')
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 

@@ -106,7 +106,12 @@ run_cell() {  # $1=phase-tag $2=algos $3=robots $4=base $5=build_jobs
   local tag="$1" algos="$2" robots="$3" base="$4" bj="$5"
   local out="$OUTROOT/${tag}_${base}"
   mkdir -p "$out"
-  local extra=() cols=(glass pinocchio mjx mujoco_warp)
+  # SWEEP_COLUMNS overrides the column set (e.g. SWEEP_COLUMNS=glass for a
+  # GRiD-only picks sweep when competitor numbers are already captured —
+  # _reuse_competitor_json only reuses within ONE sweep root, so a fresh root
+  # re-times every competitor from scratch, incl. the warp big-floating
+  # hours-trap).
+  local extra=() cols=(${SWEEP_COLUMNS:-glass pinocchio mjx mujoco_warp})
   if [ "$BUILD_ONLY" = "1" ]; then extra=(--build-only); cols=(glass); fi
   echo "=== [$tag/$base]$([ "$BUILD_ONLY" = "1" ] && echo ' BUILD-ONLY') robots=[$robots] build_jobs=$bj  $(date) ==="
   echo "    free -g: $(free -g | awk '/Mem:/{print "used="$3" free="$4" avail="$7}')"
@@ -131,8 +136,9 @@ phase1() {
 }
 
 phase2() {
-  # SO ONLY, serial, RAM-gated. build-jobs <=2; h2_plus forced to 1.
-  local bj=2
+  # SO ONLY, serial, RAM-gated. build-jobs <=2 (PHASE2_BUILD_JOBS overrides,
+  # e.g. =1 for a be-polite pre-build while the box is shared); h2_plus always 1.
+  local bj="${PHASE2_BUILD_JOBS:-2}"
   echo "########## PHASE 2 (SO-only) START $(date)  build_jobs<=$bj ##########"
   run_cell "p2_SO" "$SO_ALGOS" "$FIXED_ROBOTS" fixed    "$bj"
   # floating SO minus h2_plus (which is the ~36 GB single-TU monster — solo @1, last).
@@ -140,7 +146,9 @@ phase2() {
   [ -n "${fl_no_h2// }" ] && run_cell "p2_SO" "$SO_ALGOS" "$fl_no_h2" floating "$bj"
   if echo "$FLOATING_ROBOTS" | grep -qw h2_plus; then
     echo "--- h2_plus SO is the heaviest single compile (~36 GB). build-jobs=1, solo. ---"
-    run_cell "p2_SO" "$SO_ALGOS" "h2_plus"     floating 1
+    # Own dir tag: sharing p2_SO_floating would let this cell's unified json
+    # clobber go2/g1's (observed 2026-07-31 — last writer wins within one dir).
+    run_cell "p2_SO_h2" "$SO_ALGOS" "h2_plus"  floating 1
   fi
   echo "########## PHASE 2 DONE $(date) ##########"
 }
