@@ -203,6 +203,14 @@ def _build_world_frame_case(project_model, tmp_path, label, target_shared_bytes)
 
 def _run_world_frame_sample(executable, compile_cmd, sample):
     stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
+    # Run-to-run determinism (Inc6 class): the mimic NV^3 fold used to atomicAdd
+    # in warp order (fixed 2026-07-31 → fixed-order gather). Byte-identical stdout
+    # on an identical re-run keeps it honest at ULP level.
+    stdout_repeat = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
+    assert stdout_repeat == stdout, (
+        "world-frame SO runner is NON-DETERMINISTIC run-to-run "
+        "(identical input, two launches differ) — warp-order-dependent reduction"
+    )
     return _parse_runner_output(stdout)
 
 

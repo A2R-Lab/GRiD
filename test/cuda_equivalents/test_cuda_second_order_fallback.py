@@ -212,6 +212,14 @@ def _build_second_order_case(
 
 def _run_second_order_sample(executable, compile_cmd, sample):
     stdout = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
+    # Run-to-run determinism (Inc6 class): the mimic NV^3 folds used to atomicAdd
+    # in warp order (fixed 2026-07-31 → fixed-order gather). Byte-identical stdout
+    # on an identical re-run keeps them honest at ULP level.
+    stdout_repeat = _run_runner(executable, _sample_to_stdin(sample), compile_cmd)
+    assert stdout_repeat == stdout, (
+        "second-order runner is NON-DETERMINISTIC run-to-run "
+        "(identical input, two launches differ) — warp-order-dependent reduction"
+    )
     return _parse_runner_output(stdout)
 
 
