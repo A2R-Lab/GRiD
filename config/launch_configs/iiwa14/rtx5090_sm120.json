@@ -95,17 +95,17 @@
       "fdsva_so": {
         "threads": 192,
         "tier": "shared",
-        "us_at_optimal": 81.45
+        "us_at_optimal": 74.91
       },
       "forward_dynamics": {
-        "threads": 160,
+        "threads": 128,
         "tier": "shared",
-        "us_at_optimal": 14.8
+        "us_at_optimal": 14.94
       },
       "forward_dynamics_gradient": {
         "threads": 192,
         "tier": "shared",
-        "us_at_optimal": 29.77
+        "us_at_optimal": 30.24
       },
       "forward_dynamics_parameter_gradient": {
         "threads": 112,
@@ -138,9 +138,9 @@
         "us_at_optimal": 21.96
       },
       "idsva_so": {
-        "threads": 352,
+        "threads": 384,
         "tier": "lite",
-        "us_at_optimal": 43.33
+        "us_at_optimal": 36.06
       },
       "idsva_so_body_frame": {
         "threads": 352,
@@ -149,33 +149,33 @@
       },
       "idsva_so_world_frame": {
         "threads": 64,
-        "tier": "shared",
-        "us_at_optimal": 105.6
+        "tier": "lite",
+        "us_at_optimal": 175.27
       },
       "integrator": {
         "threads": 128,
         "tier": "minimal",
-        "us_at_optimal": 22.07
+        "us_at_optimal": 22.1
       },
       "integrator_gradient": {
         "threads": 192,
-        "tier": "lite",
-        "us_at_optimal": 30.1
+        "tier": "shared",
+        "us_at_optimal": 30.29
       },
       "integrator_with_gradient": {
         "threads": 192,
-        "tier": "shared",
-        "us_at_optimal": 30.52
+        "tier": "minimal",
+        "us_at_optimal": 30.68
       },
       "inverse_dynamics": {
         "threads": 128,
         "tier": "minimal",
-        "us_at_optimal": 10.52
+        "us_at_optimal": 10.59
       },
       "inverse_dynamics_gradient": {
         "threads": 128,
         "tier": "shared",
-        "us_at_optimal": 21.07
+        "us_at_optimal": 21.19
       },
       "inverse_dynamics_regressor": {
         "threads": 128,
@@ -189,8 +189,8 @@
       },
       "minv": {
         "threads": 128,
-        "tier": "shared",
-        "us_at_optimal": 12.01
+        "tier": "lite",
+        "us_at_optimal": 12.13
       },
       "nonlinear_effects": {
         "threads": 128,
@@ -401,5 +401,5 @@
   },
   "gpu": "rtx5090_sm120",
   "gpu_name": "NVIDIA GeForce RTX 5090",
-  "source": "GRiD autotune sweep 2026-07-30"
+  "source": "GRiD autotune sweep 2026-07-31"
 }
