@@ -128,11 +128,14 @@ __host__ __device__ __forceinline__ T grid_cc_sphere_plane(const Plane<T> &p, T 
 // capsule-vs-{capsule, cuboid, plane} pairs; capsule-vs-sphere is grid_cc_sphere_capsule
 // with the roles already symmetric. Same squared_gap convention (<0 = collision).
 
-// capsule vs capsule: closest squared distance between the two core segments (robust
-// closest-point-of-two-segments, Ericson RTCD 5.1.9 — degenerate/parallel safe), minus
-// the summed-radius square.
+// closest points of two segments (Ericson RTCD 5.1.9 — degenerate/parallel safe): writes the
+// clamped parameters s (on A's core a->b) and t (on B's) plus both closest points. Shared by the
+// boolean squared-gap check below and the signed/differentiable capsule variants (which need s
+// for the envelope-theorem composition d(dist)/dq = n^T [(1-s) da/dq + s db/dq]).
 template <typename T>
-__host__ __device__ __forceinline__ T grid_cc_capsule_capsule(const Capsule<T> &A, const Capsule<T> &B) {
+__host__ __device__ __forceinline__ void grid_cc_seg_seg_closest(
+        const Capsule<T> &A, const Capsule<T> &B, T *s_out, T *t_out,
+        T *px, T *py, T *pz, T *qx, T *qy, T *qz) {
     T d1x = A.bx - A.ax, d1y = A.by - A.ay, d1z = A.bz - A.az;
     T d2x = B.bx - B.ax, d2y = B.by - B.ay, d2z = B.bz - B.az;
     T rx = A.ax - B.ax,  ry = A.ay - B.ay,  rz = A.az - B.az;
@@ -161,8 +164,17 @@ __host__ __device__ __forceinline__ T grid_cc_capsule_capsule(const Capsule<T> &
             }
         }
     }
-    T px = A.ax + s * d1x, py = A.ay + s * d1y, pz = A.az + s * d1z;
-    T qx = B.ax + t * d2x, qy = B.ay + t * d2y, qz = B.az + t * d2z;
+    *s_out = s; *t_out = t;
+    *px = A.ax + s * d1x; *py = A.ay + s * d1y; *pz = A.az + s * d1z;
+    *qx = B.ax + t * d2x; *qy = B.ay + t * d2y; *qz = B.az + t * d2z;
+}
+
+// capsule vs capsule: closest squared distance between the two core segments minus the
+// summed-radius square (segment math = grid_cc_seg_seg_closest above).
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_capsule_capsule(const Capsule<T> &A, const Capsule<T> &B) {
+    T s, t, px, py, pz, qx, qy, qz;
+    grid_cc_seg_seg_closest<T>(A, B, &s, &t, &px, &py, &pz, &qx, &qy, &qz);
     T rs = A.r + B.r;
     return grid_cc_sql2_3<T>(px, py, pz, qx, qy, qz) - rs * rs;
 }
@@ -297,6 +309,54 @@ __host__ __device__ __forceinline__ bool grid_cc_self_collision(
     // TODO(perf, W3-D): block/warp-parallelize the range loop (thread-per-range, warp any-reduce
     // early-bail) as the reference does; keep single-block. (The broad->fine link_CC narrowing is
     // now implemented in grid_cc_config_free below via a per-link uint64 hit-mask.)
+}
+
+// ------------------------------------------------------------------ CAPSULE robot rows
+// Native-primitive robot geometry: each robot row is a CAPSULE {a, b, r} whose endpoints ride the
+// batched extractor as TWO consecutive targets, so s_seg_pos[6i..6i+2] = a_i and [6i+3..6i+5] = b_i
+// in world. a == b degenerates to a sphere (seg-seg closest-point math is point-safe), so one row
+// type serves spherized and native links alike. Same squared_gap convention throughout.
+template <typename T>
+__host__ __device__ __forceinline__ Capsule<T> grid_cc_row_capsule(
+        const T *s_seg_pos, const T *s_row_r, int i) {
+    return Capsule<T>{ s_seg_pos[6*i],     s_seg_pos[6*i + 1], s_seg_pos[6*i + 2],
+                       s_seg_pos[6*i + 3], s_seg_pos[6*i + 4], s_seg_pos[6*i + 5], s_row_r[i] };
+}
+
+// One robot capsule row vs ALL obstacle lists; early-out on first collision.
+// (grid_cc_sphere_capsule's roles are symmetric: an env SPHERE vs the robot capsule reuses it.)
+template <typename T>
+__host__ __device__ __forceinline__ bool grid_cc_capsule_in_environment(
+        const Environment<T> &env, const Capsule<T> &c) {
+    for (int i = 0; i < env.n_spheres; ++i) {
+        const Sphere<T> &s = env.spheres[i];
+        if (grid_cc_sphere_capsule<T>(c, s.x, s.y, s.z, s.r) < static_cast<T>(0)) return true;
+    }
+    for (int i = 0; i < env.n_capsules; ++i)
+        if (grid_cc_capsule_capsule<T>(c, env.capsules[i]) < static_cast<T>(0)) return true;
+    for (int i = 0; i < env.n_cuboids; ++i)
+        if (grid_cc_capsule_cuboid<T>(env.cuboids[i], c) < static_cast<T>(0)) return true;
+    for (int i = 0; i < env.n_planes; ++i)
+        if (grid_cc_capsule_plane<T>(env.planes[i], c) < static_cast<T>(0)) return true;
+    return false;
+}
+
+// Self-collision over baked ranges, capsule rows. IDENTICAL range table semantics to the sphere
+// form ({row_i, start_j, end_j}, adjacency pre-excluded at bake time) — only the pair SDF changes.
+template <typename T>
+__host__ __device__ __forceinline__ bool grid_cc_self_collision_capsules(
+        const T *s_seg_pos, const T *s_row_r,
+        const int *self_cc_ranges, int n_ranges) {
+    for (int k = 0; k < n_ranges; ++k) {
+        int i  = self_cc_ranges[3 * k + 0];
+        int j0 = self_cc_ranges[3 * k + 1];
+        int j1 = self_cc_ranges[3 * k + 2];
+        Capsule<T> ci = grid_cc_row_capsule<T>(s_seg_pos, s_row_r, i);
+        for (int j = j0; j <= j1; ++j)
+            if (grid_cc_capsule_capsule<T>(ci, grid_cc_row_capsule<T>(s_seg_pos, s_row_r, j))
+                < static_cast<T>(0)) return true;
+    }
+    return false;
 }
 
 // ================================================================== differentiable path
@@ -493,6 +553,198 @@ __host__ __device__ bool grid_cc_config_free(
     // Differentiable path (GATO/PDDP) reuses these SDFs for d(sdf)/dp = surface normal, composed with
     // the W2a batched gradient -> d(min-dist)/dq. See design_W3. Future >64-frame robots: swap the
     // uint64 hit_mask for a bool[NUM_JOINTS] (the static_assert at the baked table site fires first).
+}
+
+// Broad -> fine driver, CAPSULE fine tier. The broad tier stays covering SPHERES (one per link,
+// derived at bake time to enclose every fine capsule on that link — sphere math keeps the broad
+// full-scan cheap and the covering argument identical), the fine tier is native capsule rows
+// (s_fine_seg = 6 floats/row). Mask semantics identical to grid_cc_config_free above.
+template <typename T>
+__host__ __device__ bool grid_cc_config_free_capsule(
+        const Environment<T> &env,
+        const T *s_broad_pos, const T *s_broad_r, const int *broad_self_ranges, int n_broad_ranges, int n_broad,
+        const int *broad_sphere_link,
+        const T *s_fine_seg,  const T *s_fine_r,  const int *fine_self_ranges,  int n_fine_ranges,  int n_fine,
+        const int *fine_row_link, int *dbg_fine_rechecked = nullptr) {
+    unsigned long long hit_mask = 0ull;
+    for (int k = 0; k < n_broad_ranges; ++k) {
+        int i = broad_self_ranges[3*k], j0 = broad_self_ranges[3*k+1], j1 = broad_self_ranges[3*k+2];
+        T ix = s_broad_pos[3*i], iy = s_broad_pos[3*i+1], iz = s_broad_pos[3*i+2], ir = s_broad_r[i];
+        for (int j = j0; j <= j1; ++j)
+            if (grid_cc_sphere_sphere<T>(ix, iy, iz, ir,
+                    s_broad_pos[3*j], s_broad_pos[3*j+1], s_broad_pos[3*j+2], s_broad_r[j]) < static_cast<T>(0)) {
+                hit_mask |= (1ull << broad_sphere_link[i]);
+                hit_mask |= (1ull << broad_sphere_link[j]);
+            }
+    }
+    for (int i = 0; i < n_broad; ++i)
+        if (grid_cc_sphere_in_environment<T>(env, s_broad_pos[3*i], s_broad_pos[3*i+1], s_broad_pos[3*i+2], s_broad_r[i]))
+            hit_mask |= (1ull << broad_sphere_link[i]);
+
+    if (dbg_fine_rechecked != nullptr) {
+        int survive = 0;
+        for (int i = 0; i < n_fine; ++i)
+            if ((hit_mask >> fine_row_link[i]) & 1ull) ++survive;
+        *dbg_fine_rechecked = survive;
+    }
+    if (hit_mask == 0ull) return true;
+
+    for (int k = 0; k < n_fine_ranges; ++k) {
+        int i = fine_self_ranges[3*k], j0 = fine_self_ranges[3*k+1], j1 = fine_self_ranges[3*k+2];
+        if (((hit_mask >> fine_row_link[i]) & 1ull) == 0ull) continue;
+        Capsule<T> ci = grid_cc_row_capsule<T>(s_fine_seg, s_fine_r, i);
+        for (int j = j0; j <= j1; ++j)
+            if (grid_cc_capsule_capsule<T>(ci, grid_cc_row_capsule<T>(s_fine_seg, s_fine_r, j))
+                < static_cast<T>(0)) return false;
+    }
+    for (int i = 0; i < n_fine; ++i) {
+        if (((hit_mask >> fine_row_link[i]) & 1ull) == 0ull) continue;
+        if (grid_cc_capsule_in_environment<T>(env, grid_cc_row_capsule<T>(s_fine_seg, s_fine_r, i)))
+            return false;
+    }
+    return true;
+}
+
+// ================================================================== differentiable path, CAPSULE rows
+// Signed clearance + unit surface normal + the ROBOT-side core-segment parameter t* of the closest
+// point, per obstacle type. t* is what makes the row differentiable through FK: by the envelope
+// theorem (t* is a minimizer over the segment) the clearance derivative is
+//   d(d)/dq = n^T [ (1-t*) da/dq + t* db/dq ]
+// with da/dq, db/dq the batched endpoint position gradients (the 2N-target multi_target batch).
+// n points from the obstacle toward the robot capsule's closest core point (increasing clearance).
+// Conventions at non-smooth spots (documented, deterministic): penetrating-cuboid depth is reported
+// at the enumerated core minimizer t*; a segment parallel to a plane reports t* = 0.
+
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_capsule_sphere_signed(
+        const Capsule<T> &c, T sx, T sy, T sz, T sr, T *nx, T *ny, T *nz, T *t_out) {
+    T abx = c.bx - c.ax, aby = c.by - c.ay, abz = c.bz - c.az;
+    T apx = sx - c.ax, apy = sy - c.ay, apz = sz - c.az;
+    T denom = abx * abx + aby * aby + abz * abz;
+    T t = denom > static_cast<T>(0) ? (apx * abx + apy * aby + apz * abz) / denom : static_cast<T>(0);
+    t = grid_cc_clamp01<T>(t);
+    T px = c.ax + t * abx, py = c.ay + t * aby, pz = c.az + t * abz;
+    T vx = px - sx, vy = py - sy, vz = pz - sz;              // obstacle -> robot core point
+    T dist = grid_cc_normalize3<T>(vx, vy, vz);
+    *nx = vx; *ny = vy; *nz = vz; *t_out = t;
+    return dist - (c.r + sr);
+}
+
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_capsule_capsule_signed(
+        const Capsule<T> &robot, const Capsule<T> &obs, T *nx, T *ny, T *nz, T *t_out) {
+    T s, t, px, py, pz, qx, qy, qz;
+    grid_cc_seg_seg_closest<T>(robot, obs, &s, &t, &px, &py, &pz, &qx, &qy, &qz);
+    T vx = px - qx, vy = py - qy, vz = pz - qz;              // obstacle core -> robot core
+    T dist = grid_cc_normalize3<T>(vx, vy, vz);
+    *nx = vx; *ny = vy; *nz = vz; *t_out = s;                // s = ROBOT-side parameter
+    return dist - (robot.r + obs.r);
+}
+
+// robot capsule vs cuboid: find the core-segment minimizer t* by the same exact piecewise-quadratic
+// enumeration as grid_cc_capsule_cuboid, then delegate to the sphere-cuboid signed form at p(t*)
+// (exact outside the box; penetrating case reports nearest-face depth at t*, see note above).
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_capsule_cuboid_signed(
+        const Cuboid<T> &b, const Capsule<T> &c, T *nx, T *ny, T *nz, T *t_out) {
+    T ax0 = c.ax - b.cx, ay0 = c.ay - b.cy, az0 = c.az - b.cz;
+    T bx0 = c.bx - b.cx, by0 = c.by - b.cy, bz0 = c.bz - b.cz;
+    T pa[3], pb[3], h[3];
+    pa[0] = ax0 * b.ux + ay0 * b.uy + az0 * b.uz;  pb[0] = bx0 * b.ux + by0 * b.uy + bz0 * b.uz;  h[0] = b.hu;
+    pa[1] = ax0 * b.vx + ay0 * b.vy + az0 * b.vz;  pb[1] = bx0 * b.vx + by0 * b.vy + bz0 * b.vz;  h[1] = b.hv;
+    pa[2] = ax0 * b.wx + ay0 * b.wy + az0 * b.wz;  pb[2] = bx0 * b.wx + by0 * b.wy + bz0 * b.wz;  h[2] = b.hw;
+    T d[3] = { pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2] };
+    T ts[8]; int n = 0;
+    ts[n++] = static_cast<T>(0);
+    ts[n++] = static_cast<T>(1);
+    for (int k = 0; k < 3; ++k) {
+        if (d[k] != static_cast<T>(0)) {
+            T t1 = (h[k] - pa[k]) / d[k];
+            T t2 = (-h[k] - pa[k]) / d[k];
+            if (t1 > static_cast<T>(0) && t1 < static_cast<T>(1)) ts[n++] = t1;
+            if (t2 > static_cast<T>(0) && t2 < static_cast<T>(1)) ts[n++] = t2;
+        }
+    }
+    for (int i = 1; i < n; ++i) {
+        T key = ts[i]; int j = i - 1;
+        while (j >= 0 && ts[j] > key) { ts[j + 1] = ts[j]; --j; }
+        ts[j + 1] = key;
+    }
+    T tbest = ts[0], best = grid_cc_seg_box_d2<T>(pa, d, h, ts[0]);
+    for (int i = 1; i < n; ++i) {
+        T v = grid_cc_seg_box_d2<T>(pa, d, h, ts[i]);
+        if (v < best) { best = v; tbest = ts[i]; }
+    }
+    for (int i = 0; i + 1 < n; ++i) {
+        T lo = ts[i], hi = ts[i + 1];
+        if (!(hi > lo)) continue;
+        T tm = (lo + hi) * static_cast<T>(0.5);
+        T vm = grid_cc_seg_box_d2<T>(pa, d, h, tm);
+        if (vm < best) { best = vm; tbest = tm; }
+        T sce = static_cast<T>(0), see = static_cast<T>(0);
+        for (int k = 0; k < 3; ++k) {
+            T p = pa[k] + tm * d[k];
+            if (grid_cc_abs<T>(p) > h[k]) {
+                T sg = p > static_cast<T>(0) ? static_cast<T>(1) : static_cast<T>(-1);
+                T ck = sg * pa[k] - h[k], ek = sg * d[k];
+                sce += ck * ek; see += ek * ek;
+            }
+        }
+        if (see > static_cast<T>(0)) {
+            T tstar = -sce / see;
+            tstar = tstar < lo ? lo : (tstar > hi ? hi : tstar);
+            T v = grid_cc_seg_box_d2<T>(pa, d, h, tstar);
+            if (v < best) { best = v; tbest = tstar; }
+        }
+    }
+    *t_out = tbest;
+    T px = c.ax + tbest * (c.bx - c.ax);
+    T py = c.ay + tbest * (c.by - c.ay);
+    T pz = c.az + tbest * (c.bz - c.az);
+    return grid_cc_sphere_cuboid_signed<T>(b, px, py, pz, c.r, nx, ny, nz);
+}
+
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_capsule_plane_signed(
+        const Plane<T> &p, const Capsule<T> &c, T *nx, T *ny, T *nz, T *t_out) {
+    T sa = p.nx * c.ax + p.ny * c.ay + p.nz * c.az - p.d;
+    T sb = p.nx * c.bx + p.ny * c.by + p.nz * c.bz - p.d;
+    *nx = p.nx; *ny = p.ny; *nz = p.nz;
+    *t_out = sa <= sb ? static_cast<T>(0) : static_cast<T>(1);   // min endpoint; parallel -> t=0
+    return (sa <= sb ? sa : sb) - c.r;
+}
+
+// Robot capsule row vs the o-th flattened obstacle (spheres | capsules | cuboids | planes).
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_capsule_obstacle_signed(
+        const Environment<T> &env, int o, const Capsule<T> &c, T *nx, T *ny, T *nz, T *t_out) {
+    if (o < env.n_spheres) {
+        const Sphere<T> &s = env.spheres[o];
+        return grid_cc_capsule_sphere_signed<T>(c, s.x, s.y, s.z, s.r, nx, ny, nz, t_out);
+    }
+    o -= env.n_spheres;
+    if (o < env.n_capsules) return grid_cc_capsule_capsule_signed<T>(c, env.capsules[o], nx, ny, nz, t_out);
+    o -= env.n_capsules;
+    if (o < env.n_cuboids)  return grid_cc_capsule_cuboid_signed<T>(env.cuboids[o], c, nx, ny, nz, t_out);
+    o -= env.n_cuboids;
+    return grid_cc_capsule_plane_signed<T>(env.planes[o], c, nx, ny, nz, t_out);
+}
+
+// One capsule row vs the WHOLE environment: nearest signed distance + its normal + robot-side t*.
+// Empty environment -> large positive sentinel, fixed normal, t* = 0. Ties break to the lowest index.
+template <typename T>
+__host__ __device__ __forceinline__ T grid_cc_nearest_obstacle_capsule(
+        const Environment<T> &env, const Capsule<T> &c, T *nx, T *ny, T *nz, T *t_out) {
+    T best = static_cast<T>(1e30);
+    T bnx = static_cast<T>(1), bny = static_cast<T>(0), bnz = static_cast<T>(0), bt = static_cast<T>(0);
+    T tnx, tny, tnz, tt;
+    const int n_obs = grid_cc_num_obstacles<T>(env);
+    for (int o = 0; o < n_obs; ++o) {
+        T d = grid_cc_capsule_obstacle_signed<T>(env, o, c, &tnx, &tny, &tnz, &tt);
+        if (d < best) { best = d; bnx = tnx; bny = tny; bnz = tnz; bt = tt; }
+    }
+    *nx = bnx; *ny = bny; *nz = bnz; *t_out = bt;
+    return best;
 }
 
 }  // namespace grid_collision

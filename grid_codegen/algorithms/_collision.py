@@ -169,6 +169,136 @@ def collision_spec_from_urdf(robot, urdf_path, resolution, mesh_resolution=None,
             "radius": tier["radius"], "self_cc_ranges": tier["self_cc_ranges"]}
 
 
+# --------------------------------------------------------------------------- native rows
+def _rpy_to_R(rpy):
+    """URDF origin rpy (fixed-axis XYZ euler) -> 3x3 rotation, R = Rz(y) @ Ry(p) @ Rx(r)."""
+    r, p, y = rpy
+    cr, sr = np.cos(r), np.sin(r)
+    cp, sp = np.cos(p), np.sin(p)
+    cy, sy = np.cos(y), np.sin(y)
+    Rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
+    Ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
+    Rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
+    return Rz @ Ry @ Rx
+
+
+def parse_native_urdf(path):
+    """Per link, read the URDF's own collision primitives as CAPSULE ROWS (LINK frame):
+      sphere            -> degenerate row (a == b == origin, r)
+      cylinder          -> capsule with the same r and the cylinder's axis segment
+                           (endpoints = origin +- (length/2) * R_rpy @ z). The capsule
+                           CONTAINS the cylinder (every cylinder point is within r of the
+                           axis segment) -> conservative.
+      capsule           -> capsule verbatim (non-standard <capsule radius= length=/> tag,
+                           same local convention as cylinder: axis = local z).
+      box / mesh        -> NOT native; the link is flagged residual=True and keeps its
+                           spherized covering rows (degenerate capsule rows) instead.
+    Returns {link_name: {"rows": [(ax,ay,az,bx,by,bz,r), ...], "residual": bool}} in URDF
+    document order; links with no collision geometry are absent."""
+    root = ET.parse(path).getroot()
+    out = {}
+    for link in root.findall("link"):
+        rows, residual = [], False
+        for col in link.findall("collision"):
+            geom = col.find("geometry")
+            if geom is None:
+                continue
+            origin = col.find("origin")
+            xyz = np.array([float(v) for v in
+                            (origin.get("xyz") if origin is not None and origin.get("xyz") else "0 0 0").split()])
+            rpy = [float(v) for v in
+                   (origin.get("rpy") if origin is not None and origin.get("rpy") else "0 0 0").split()]
+            sph = geom.find("sphere")
+            cyl = geom.find("cylinder")
+            cap = geom.find("capsule")
+            if sph is not None:
+                r = float(sph.get("radius"))
+                rows.append((xyz[0], xyz[1], xyz[2], xyz[0], xyz[1], xyz[2], r))
+            elif cyl is not None or cap is not None:
+                g = cyl if cyl is not None else cap
+                r = float(g.get("radius"))
+                half = 0.5 * float(g.get("length"))
+                axis = _rpy_to_R(rpy) @ np.array([0.0, 0.0, 1.0])
+                a = xyz - half * axis
+                b = xyz + half * axis
+                rows.append((a[0], a[1], a[2], b[0], b[1], b[2], r))
+            else:
+                residual = True  # box/mesh -> spherized covering rows for this link
+        if rows or residual:
+            out[link.get("name")] = {"rows": rows, "residual": residual}
+    return out
+
+
+def _broad_tier_from_rows(robot, anchor, pa, pb, radius):
+    """Derive the broad tier FROM the fine capsule rows: one covering sphere per anchor
+    (frame), centered at the per-axis midpoint of that anchor's endpoint cloud with radius
+    max_e(|e - c| + r_row). This encloses every fine capsule on the link BY CONSTRUCTION
+    (unlike a coarser spherizer pass, whose spheres cover the mesh but not necessarily the
+    capsule CAPS that stick out past a cylinder's end faces) — the covering property the
+    broad->fine mask driver's exactness argument needs. Anchor order = first appearance."""
+    order = []
+    for a in anchor:
+        if a not in order:
+            order.append(a)
+    b_anchor, b_offset, b_radius = [], [], []
+    for a in order:
+        pts, rmax_terms = [], []
+        for i, ai in enumerate(anchor):
+            if ai != a:
+                continue
+            pts.append(np.array(pa[3 * i:3 * i + 3]))
+            pts.append(np.array(pb[3 * i:3 * i + 3]))
+            rmax_terms.extend([radius[i], radius[i]])
+        pts = np.array(pts)
+        c = 0.5 * (pts.min(axis=0) + pts.max(axis=0))
+        r = max(float(np.linalg.norm(p - c)) + rr for p, rr in zip(pts, rmax_terms))
+        b_anchor.append(a)
+        b_offset.extend([float(c[0]), float(c[1]), float(c[2])])
+        b_radius.append(r)
+    return {"name": "broad", "anchor": b_anchor, "offset": b_offset, "radius": b_radius,
+            "self_cc_ranges": build_self_cc_ranges(robot, b_anchor)}
+
+
+def native_collision_spec_from_urdf(robot, urdf_path, resolution=0.05, mesh_resolution=None):
+    """URDF -> NATIVE capsule-row collision spec (opt-in, `--collision-native`):
+    {"tiers": [broad sphere tier, fine CAPSULE tier]}. The fine tier carries "pb" (endpoint-b
+    offsets) alongside "offset" (endpoint a) — "pb" present is what flags a capsule tier all
+    the way down the pipeline. Native primitives (sphere/cylinder/capsule) become one row
+    each; box/mesh links fall back to spherized covering rows (degenerate a==b) at
+    `resolution`. The broad tier is DERIVED from the fine rows (see _broad_tier_from_rows),
+    not a second spherizer pass. FLANGE anchor resolution + self_cc adjacency are shared
+    verbatim with the sphere path."""
+    native = parse_native_urdf(urdf_path)
+    residual_links = [ln for ln, d in native.items() if d["residual"]]
+    residual_spheres = {}
+    if residual_links:
+        from ._spherize import spherize_urdf
+        sph_path = spherize_urdf(urdf_path, resolution, mesh_resolution=mesh_resolution)
+        parsed = parse_spherized_urdf(sph_path)
+        residual_spheres = {ln: parsed.get(ln, []) for ln in residual_links}
+    frames = sphere_anchor_frames(robot, list(native.keys()), urdf_path)
+    anchor, pa, pb, radius = [], [], [], []
+    for link_name, d in native.items():
+        anchor_jid, T = frames[link_name]
+        if anchor_jid < 0:
+            continue  # root/world (pedestal-bolted) rows, matching the sphere path
+        link_rows = list(d["rows"])
+        for (x, y, z, r) in residual_spheres.get(link_name, []):
+            link_rows.append((x, y, z, x, y, z, r))
+        for (ax, ay, az, bx, by, bz, r) in link_rows:
+            a4 = T @ np.array([ax, ay, az, 1.0])
+            b4 = T @ np.array([bx, by, bz, 1.0])
+            anchor.append(int(anchor_jid))
+            pa.extend([float(a4[0]), float(a4[1]), float(a4[2])])
+            pb.extend([float(b4[0]), float(b4[1]), float(b4[2])])
+            radius.append(float(r))
+    assert anchor, "native collision: no rows survived anchor mapping (URDF has no usable collision geometry?)"
+    fine = {"name": "fine", "anchor": anchor, "offset": pa, "pb": pb, "radius": radius,
+            "self_cc_ranges": build_self_cc_ranges(robot, anchor)}
+    broad = _broad_tier_from_rows(robot, anchor, pa, pb, radius)
+    return {"tiers": [broad, fine]}
+
+
 def multi_tier_collision_spec_from_urdf(robot, urdf_path, resolutions, mesh_resolution=None):
     """One-call URDF -> MULTI-tier collision_spec (`{"tiers": [...]}` for gen_all_code). Spherizes
     `urdf_path` once per resolution and binds each to GRiD frames. `resolutions` = iterable of
@@ -242,18 +372,27 @@ def normalize_collision_tiers(collision_spec):
     for i, t in enumerate(raw):
         name = t.get("name", "") if i != last else t.get("name", "")
         suffix = "" if i == last else "_" + t["name"]
-        out.append({
+        norm = {
             "name": name, "suffix": suffix,
             "anchor": list(t["anchor"]), "offset": list(t["offset"]),
             "radius": list(t["radius"]), "self_cc_ranges": list(t["self_cc_ranges"]),
             "n": len(t["anchor"]),
-        })
+        }
+        if "pb" in t:  # capsule tier: "offset" = endpoint a, "pb" = endpoint b (2 targets/row)
+            norm["pb"] = list(t["pb"])
+            assert i == last, "collision: capsule (pb) tiers are only valid as the FINEST tier " \
+                              "(the broad tier stays covering spheres)"
+        out.append(norm)
     return out
 
 
 # --------------------------------------------------------------------------- namespace emitter
 def gen_collision_namespace(self, tiers):
     """Emit the sibling `namespace grid_collision { ... }` block (model = gen_grid_plant).
+
+    Dispatch: a FINEST tier carrying "pb" (endpoint-b offsets) is a native CAPSULE-ROW tier
+    -> the capsule emitter below. Otherwise the original sphere emission runs UNTOUCHED
+    (byte-identical for every existing sphere-collision robot).
 
     Called AFTER the `grid` namespace closes, and ONLY when a collision batch is configured.
     The sphere set(s) ARE the multi_target batch(es), so this requires gen_multi_target_position
@@ -273,6 +412,8 @@ def gen_collision_namespace(self, tiers):
     A single tier (len==1) is the finest -> suffix "" -> byte-identical to the pre-tier emission.
     """
     assert len(tiers) >= 1, "collision: at least one sphere tier required"
+    if "pb" in tiers[-1]:
+        return _gen_collision_namespace_capsule(self, tiers)
     nv = self.robot.get_num_vel()
     fine = tiers[-1]  # finest tier = the public / differentiable batch (suffix "")
     for t in tiers:
@@ -624,6 +765,372 @@ def gen_collision_namespace(self, tiers):
     self.gen_add_code_line("int row = ind % " + str(nv) + "; int col = ind / " + str(nv) + ";")
     self.gen_add_code_line("T h = static_cast<T>(0);")
     self.gen_add_code_line("for (int i = 0; i < NUM_COLLISION_SPHERES; ++i) {", True)
+    self.gen_add_code_line("if ((margin - s_dist[i]) > static_cast<T>(0)) h += weight * s_ddist[i*" + str(nv) + " + row] * s_ddist[i*" + str(nv) + " + col];")
+    self.gen_add_end_control_flow()
+    self.gen_add_code_line("if (ACCUMULATE) { s_hess[ind] += h; } else { s_hess[ind] = h; }")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+    self.gen_add_end_control_flow()  # close namespace grid_collision
+
+
+# --------------------------------------------------------------------------- capsule namespace emitter
+def _gen_collision_namespace_capsule(self, tiers):
+    """Native CAPSULE-ROW twin of the sphere emission above (dispatched when the finest tier
+    carries "pb"). Public shapes: NUM_COLLISION_ROWS rows; the row's two endpoints ride the
+    multi_target batch as targets 2i/2i+1, so the extractor output s_seg_pos is 6*ROWS and
+    grid::NUM_MULTI_TARGETS == 2*NUM_COLLISION_ROWS (static_asserted). Coarser tiers must be
+    covering-SPHERE tiers (enforced in normalize_collision_tiers) and emit exactly like the
+    sphere path; config_free pairs them via grid_cc_config_free_capsule. The differentiable
+    API adds the robot-side closest-point parameter t* per row (s_t) and composes gradients
+    over BOTH endpoints: d(d_i)/dq = n_i^T [(1-t*) da_i/dq + t* db_i/dq] (envelope theorem)."""
+    nv = self.robot.get_num_vel()
+    fine = tiers[-1]
+    for t in tiers:
+        assert len(t["radius"]) == t["n"], "collision: radius count (%d) != row count (%d) [tier %s]" % (
+            len(t["radius"]), t["n"], t["name"])
+    assert fine["suffix"] == "", "collision: finest tier must be unsuffixed (the public batch)"
+    n_rows = fine["n"]
+
+    self.gen_add_code_line("")
+    self.gen_add_code_line('#include "grid_collision_geometry.cuh"  // W3 Component E: SDF primitives (grid_collision::)')
+    self.gen_add_func_doc("Collision namespace (NATIVE capsule rows): baked row data + config_free composed over "
+                          "grid::multi_target_position + the static SDF geometry header")
+    self.gen_add_code_line("namespace " + self.file_namespace + "_collision {", True)
+    self.gen_add_code_line("using " + self.file_namespace + "::TIER_SHARED; using " +
+                           self.file_namespace + "::TIER_LITE; using " + self.file_namespace + "::TIER_MINIMAL;")
+    if len(tiers) > 1:
+        self.gen_add_code_line("static_assert(" + self.file_namespace + "::NUM_JOINTS <= 64, "
+                               "\"link_CC broad-phase mask is a uint64 keyed by frame id; \"")
+        self.gen_add_code_line("              \"robots with >64 frames need the bool[NUM_JOINTS] fallback\");")
+
+    # --- coarse (covering-sphere) tiers: same emission as the sphere path ---
+    for t in tiers[:-1]:
+        sfx = t["suffix"]
+        cap = sfx.upper()
+        n = t["n"]
+        rr = t["self_cc_ranges"]
+        r = len(rr)
+        flat_ranges = ", ".join(str(v) for row in rr for v in row) if r else "0"
+        self.gen_add_code_line("// collision tier '" + t["name"] + "' (" + str(n) + " covering spheres, broad-phase)")
+        self.gen_add_code_lines([
+            "constexpr int NUM_COLLISION_SPHERES" + cap + " = " + str(n) + ";",
+            "constexpr int NUM_COLLISION_SELF_CC_RANGES" + cap + " = " + str(r) + ";",
+            "static_assert(NUM_COLLISION_SPHERES" + cap + " == grid::NUM_MULTI_TARGETS" + cap + ", "
+            "\"collision sphere batch must be the multi_target batch\");",
+            "__device__ const float g_collision_sphere_r" + sfx + "[" + str(max(n, 1)) + "] = {" +
+            ", ".join(_c_float_literal(rad) for rad in (t["radius"] or [0.0])) + "};",
+            "__device__ const int g_collision_self_cc_ranges" + sfx + "[" + str(max(3 * r, 1)) + "] = {" + flat_ranges + "};",
+            "__device__ const int g_collision_sphere_link" + sfx + "[" + str(max(n, 1)) + "] = {" +
+            ", ".join(str(a) for a in (t["anchor"] or [0])) + "};",
+        ])
+        self.gen_add_func_doc("Fill s_r[NUM_COLLISION_SPHERES" + cap + "] with the baked fp32 radii cast to T",
+                              [], ["s_r is caller shared memory of size NUM_COLLISION_SPHERES" + cap], None)
+        self.gen_add_code_line("template <typename T>")
+        self.gen_add_code_line("__device__ __forceinline__")
+        self.gen_add_code_line("void load_collision_radii" + sfx + "(T *s_r) {", True)
+        self.gen_add_parallel_loop("i", "NUM_COLLISION_SPHERES" + cap)
+        self.gen_add_code_line("s_r[i] = static_cast<T>(g_collision_sphere_r" + sfx + "[i]);")
+        self.gen_add_end_control_flow()
+        self.gen_add_end_function()
+
+    # --- fine CAPSULE tier (the public batch) ---
+    rr = fine["self_cc_ranges"]
+    r = len(rr)
+    flat_ranges = ", ".join(str(v) for row in rr for v in row) if r else "0"
+    self.gen_add_code_line("// collision rows: NATIVE capsules {a, b, r}; a == b degenerates to a sphere. Row i's")
+    self.gen_add_code_line("// endpoints are multi_target targets 2i (a) and 2i+1 (b) -> s_seg_pos[6i..6i+5].")
+    self.gen_add_code_lines([
+        "constexpr int NUM_COLLISION_ROWS = " + str(n_rows) + ";",
+        "constexpr int NUM_COLLISION_SELF_CC_RANGES = " + str(r) + ";",
+        "static_assert(2 * NUM_COLLISION_ROWS == grid::NUM_MULTI_TARGETS, "
+        "\"each capsule row contributes TWO multi_target endpoints\");",
+        "__device__ const float g_collision_row_r[" + str(max(n_rows, 1)) + "] = {" +
+        ", ".join(_c_float_literal(rad) for rad in (fine["radius"] or [0.0])) + "};",
+        "__device__ const int g_collision_self_cc_ranges[" + str(max(3 * r, 1)) + "] = {" + flat_ranges + "};",
+    ])
+    if len(tiers) > 1:
+        self.gen_add_code_line(
+            "__device__ const int g_collision_row_link[" + str(max(n_rows, 1)) + "] = {" +
+            ", ".join(str(a) for a in (fine["anchor"] or [0])) + "};")
+    self.gen_add_func_doc("Fill s_r[NUM_COLLISION_ROWS] with the baked fp32 row radii cast to T",
+                          [], ["s_r is caller shared memory of size NUM_COLLISION_ROWS"], None)
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__device__ __forceinline__")
+    self.gen_add_code_line("void load_collision_row_radii(T *s_r) {", True)
+    self.gen_add_parallel_loop("i", "NUM_COLLISION_ROWS")
+    self.gen_add_code_line("s_r[i] = static_cast<T>(g_collision_row_r[i]);")
+    self.gen_add_end_control_flow()
+    self.gen_add_end_function()
+
+    # --- config_free entry point ---
+    if len(tiers) == 1:
+        func_params = [
+            "s_q is the vector of joint positions",
+            "d_robotModel is the initialized model-specific helpers on the GPU",
+            "env is the runtime obstacle set (grid_collision::Environment<T>)",
+            "s_seg_pos is caller scratch of size 6*NUM_COLLISION_ROWS (both endpoints per row)",
+            "s_row_r is caller scratch of size NUM_COLLISION_ROWS (filled here from the baked radii)",
+            "d_workspace is the multi_target FK scratch at TIER_LITE+ (nullptr at TIER_SHARED)"]
+        func_notes = [
+            "Returns true iff the current configuration q is COLLISION-FREE (self + environment).",
+            "Row endpoint world positions via the W1b batched extractor; capsule SDF checks via the static header.",
+            "Every thread computes the same verdict; the self/env range loops are serial (parallelize = W3 perf TODO)."]
+        self.gen_add_func_doc("Collision-free test for configuration q (self + environment, capsule rows)", func_notes, func_params, None)
+        self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
+        self.gen_add_code_line("__device__")
+        self.gen_add_code_line("bool config_free(const T *s_q, const grid::robotModel<T> *d_robotModel, "
+                               "const Environment<T> &env, T *s_seg_pos, T *s_row_r, T *d_workspace = nullptr) {", True)
+        self.gen_add_code_line("grid::multi_target_position_device<T, RESOURCE_TIER>(s_seg_pos, s_q, d_robotModel, d_workspace);")
+        self.gen_add_code_line("load_collision_row_radii<T>(s_row_r);")
+        self.gen_add_sync()
+        self.gen_add_code_line("if (grid_cc_self_collision_capsules<T>(s_seg_pos, s_row_r, g_collision_self_cc_ranges, NUM_COLLISION_SELF_CC_RANGES)) return false;")
+        self.gen_add_code_line("for (int i = 0; i < NUM_COLLISION_ROWS; ++i) {", True)
+        self.gen_add_code_line("if (grid_cc_capsule_in_environment<T>(env, grid_cc_row_capsule<T>(s_seg_pos, s_row_r, i))) return false;")
+        self.gen_add_end_control_flow()
+        self.gen_add_code_line("return true;")
+        self.gen_add_end_function()
+    else:
+        broad = tiers[0]
+        bsfx, bcap = broad["suffix"], broad["suffix"].upper()
+        func_params = [
+            "s_q is the vector of joint positions",
+            "d_robotModel is the initialized model-specific helpers on the GPU",
+            "env is the runtime obstacle set (grid_collision::Environment<T>)",
+            "s_broad_pos is caller scratch of size 3*NUM_COLLISION_SPHERES" + bcap + " (broad-phase sphere positions)",
+            "s_broad_r is caller scratch of size NUM_COLLISION_SPHERES" + bcap + " (filled here from broad baked radii)",
+            "s_seg_pos is caller scratch of size 6*NUM_COLLISION_ROWS (both endpoints per fine row)",
+            "s_row_r is caller scratch of size NUM_COLLISION_ROWS (filled here from fine baked radii)",
+            "d_workspace is the multi_target FK scratch at TIER_LITE+ (nullptr at TIER_SHARED)"]
+        func_notes = [
+            "Returns true iff the current configuration q is COLLISION-FREE (self + environment).",
+            "Broad tier '" + broad["name"] + "' (covering spheres derived from the rows) rejects clear configs; "
+            "only possible collisions run the fine capsule rows. Verdict == fine-only.",
+            "Every thread computes the same verdict; the self/env range loops are serial (parallelize = W3 perf TODO)."]
+        self.gen_add_func_doc("Collision-free test for configuration q (broad spheres -> fine capsule rows)", func_notes, func_params, None)
+        self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
+        self.gen_add_code_line("__device__")
+        self.gen_add_code_line("bool config_free(const T *s_q, const grid::robotModel<T> *d_robotModel, "
+                               "const Environment<T> &env, T *s_broad_pos, T *s_broad_r, "
+                               "T *s_seg_pos, T *s_row_r, T *d_workspace = nullptr, "
+                               "int *dbg_fine_rechecked = nullptr) {", True)
+        self.gen_add_code_line("grid::multi_target_position" + bsfx + "_device<T, RESOURCE_TIER>(s_broad_pos, s_q, d_robotModel, d_workspace);")
+        self.gen_add_code_line("load_collision_radii" + bsfx + "<T>(s_broad_r);")
+        self.gen_add_sync()
+        self.gen_add_code_line("grid::multi_target_position_device<T, RESOURCE_TIER>(s_seg_pos, s_q, d_robotModel, d_workspace);")
+        self.gen_add_code_line("load_collision_row_radii<T>(s_row_r);")
+        self.gen_add_sync()
+        self.gen_add_code_line("return grid_cc_config_free_capsule<T>(env,")
+        self.gen_add_code_line("    s_broad_pos, s_broad_r, g_collision_self_cc_ranges" + bsfx + ", NUM_COLLISION_SELF_CC_RANGES" + bcap + ", NUM_COLLISION_SPHERES" + bcap + ", g_collision_sphere_link" + bsfx + ",")
+        self.gen_add_code_line("    s_seg_pos, s_row_r, g_collision_self_cc_ranges, NUM_COLLISION_SELF_CC_RANGES, NUM_COLLISION_ROWS, g_collision_row_link, dbg_fine_rechecked);")
+        self.gen_add_end_function()
+
+    # ---- differentiable collision PRIMITIVES + cost, capsule rows ----
+    # Same architecture as the sphere path (distance / gradient / pairs / cost value+grad+GN-hess);
+    # the row clearance adds the robot-side closest-point parameter t* (s_t) and the gradient
+    # composes BOTH endpoint position gradients: d(d_i)/dq = n^T [(1-t*) da/dq + t* db/dq].
+    # s_pos_grad is the 2N-target batched gradient; endpoint a of row i is target 2i, b is 2i+1.
+    _cc_state_params = [
+        "s_q is the vector of joint positions",
+        "d_robotModel is the initialized model-specific helpers on the GPU",
+        "env is the runtime obstacle set (grid_collision::Environment<T>)",
+        "s_seg_pos is caller scratch of size 6*NUM_COLLISION_ROWS (both endpoints per row)",
+        "s_row_r is caller scratch of size NUM_COLLISION_ROWS (filled here from the baked radii)",
+        "d_workspace is the multi_target FK scratch at TIER_LITE+ (nullptr at TIER_SHARED)"]
+
+    self.gen_add_func_doc("collision_distance: per-row nearest signed clearance d_i(q) + surface normal + robot-side t* (env only)",
+                          ["d_i = min over environment obstacles of the signed capsule clearance (>0 clear, <0 penetrating).",
+                           "s_t[i] = the core-segment parameter of row i's closest point (the envelope-theorem weight for",
+                           "the endpoint gradients). s_dist[i] = +1e30 sentinel when the environment is empty."],
+                          ["s_dist is the per-row clearance output (size NUM_COLLISION_ROWS)",
+                           "s_normal is the per-row nearest-obstacle unit normal (size 3*NUM_COLLISION_ROWS)",
+                           "s_t is the per-row closest-point segment parameter output (size NUM_COLLISION_ROWS)"] + _cc_state_params, None)
+    self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void collision_distance(T *s_dist, T *s_normal, T *s_t, const T *s_q, const grid::robotModel<T> *d_robotModel, "
+                           "const Environment<T> &env, T *s_seg_pos, T *s_row_r, T *d_workspace = nullptr) {", True)
+    self.gen_add_code_line("grid::multi_target_position_device<T, RESOURCE_TIER>(s_seg_pos, s_q, d_robotModel, d_workspace);")
+    self.gen_add_code_line("load_collision_row_radii<T>(s_row_r);")
+    self.gen_add_sync()
+    self.gen_add_parallel_loop("i", "NUM_COLLISION_ROWS")
+    self.gen_add_code_line("T nx, ny, nz, tt;")
+    self.gen_add_code_line("s_dist[i] = grid_cc_nearest_obstacle_capsule<T>(env, grid_cc_row_capsule<T>(s_seg_pos, s_row_r, i), &nx, &ny, &nz, &tt);")
+    self.gen_add_code_line("s_normal[3*i+0] = nx; s_normal[3*i+1] = ny; s_normal[3*i+2] = nz; s_t[i] = tt;")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+    self.gen_add_func_doc("collision_distance_gradient: per-row clearance Jacobian s_ddist[i*NV+vi] = n_i^T [(1-t*) da_i/dq_vi + t* db_i/dq_vi]",
+                          ["Also returns s_dist/s_t so a consumer has value + Jacobian in one call.",
+                           "Endpoint gradients come from the 2N-target grid::multi_target_position_gradient_device batch.",
+                           "s_ddist layout is per-row-major: row i's NV-gradient is s_ddist[i*NV .. i*NV+NV-1]."],
+                          ["s_dist is the per-row clearance output (size NUM_COLLISION_ROWS)",
+                           "s_ddist is the per-row clearance Jacobian output (size NUM_COLLISION_ROWS*NUM_VEL, row-major)"] +
+                          _cc_state_params +
+                          ["s_normal is caller scratch of size 3*NUM_COLLISION_ROWS (nearest-obstacle normals)",
+                           "s_t is caller scratch of size NUM_COLLISION_ROWS (closest-point segment parameters)",
+                           "s_pos_grad is caller scratch of size 3*NUM_VEL*2*NUM_COLLISION_ROWS (batched endpoint dp/dq)"], None)
+    self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void collision_distance_gradient(T *s_dist, T *s_ddist, const T *s_q, const grid::robotModel<T> *d_robotModel, "
+                           "const Environment<T> &env, T *s_seg_pos, T *s_row_r, T *s_normal, T *s_t, T *s_pos_grad, "
+                           "T *d_workspace = nullptr) {", True)
+    self.gen_add_code_line("collision_distance<T, RESOURCE_TIER>(s_dist, s_normal, s_t, s_q, d_robotModel, env, s_seg_pos, s_row_r, d_workspace);")
+    self.gen_add_code_line("grid::multi_target_position_gradient_device<T, RESOURCE_TIER>(s_pos_grad, s_q, d_robotModel, d_workspace);")
+    self.gen_add_sync()
+    self.gen_add_parallel_loop("ind", "NUM_COLLISION_ROWS * " + str(nv))
+    self.gen_add_code_line("int vi = ind % " + str(nv) + "; int i = ind / " + str(nv) + ";")
+    self.gen_add_code_line("int jba = 3 * (" + str(nv) + " * (2*i) + vi); int jbb = 3 * (" + str(nv) + " * (2*i+1) + vi);")
+    self.gen_add_code_line("T t = s_t[i]; T wa = static_cast<T>(1) - t;")
+    self.gen_add_code_line("T gx = wa*s_pos_grad[jba+0] + t*s_pos_grad[jbb+0];")
+    self.gen_add_code_line("T gy = wa*s_pos_grad[jba+1] + t*s_pos_grad[jbb+1];")
+    self.gen_add_code_line("T gz = wa*s_pos_grad[jba+2] + t*s_pos_grad[jbb+2];")
+    self.gen_add_code_line("s_ddist[i*" + str(nv) + " + vi] = s_normal[3*i+0]*gx + s_normal[3*i+1]*gy + s_normal[3*i+2]*gz;")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+    _cc_pair_note = ("Obstacle o indexes the FLATTENED env: spheres | capsules | cuboids | planes, "
+                     "o in [0, n_obs) with n_obs = grid_cc_num_obstacles(env). Pair index is "
+                     "pair = i*n_obs + o (row-major).")
+
+    self.gen_add_func_doc("collision_distance_pairs: UN-REDUCED signed clearance d_io(q) + normal + t*, for every (row, obstacle) pair",
+                          ["Same SDFs as collision_distance but WITHOUT the min-over-obstacles reduction, which is "
+                           "non-smooth precisely where the nearest obstacle switches. Each pair row is smooth in q.",
+                           _cc_pair_note,
+                           "n_obs == 0 (empty environment) is well-defined: the loop bound is 0 and nothing is written."],
+                          ["s_dist is the per-PAIR clearance output (size NUM_COLLISION_ROWS*n_obs, RUNTIME-sized)",
+                           "s_normal is the per-PAIR unit surface normal (size 3*NUM_COLLISION_ROWS*n_obs, RUNTIME-sized)",
+                           "s_t is the per-PAIR robot-side segment parameter (size NUM_COLLISION_ROWS*n_obs, RUNTIME-sized)"] +
+                          _cc_state_params, None)
+    self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void collision_distance_pairs(T *s_dist, T *s_normal, T *s_t, const T *s_q, const grid::robotModel<T> *d_robotModel, "
+                           "const Environment<T> &env, T *s_seg_pos, T *s_row_r, T *d_workspace = nullptr) {", True)
+    self.gen_add_code_line("grid::multi_target_position_device<T, RESOURCE_TIER>(s_seg_pos, s_q, d_robotModel, d_workspace);")
+    self.gen_add_code_line("load_collision_row_radii<T>(s_row_r);")
+    self.gen_add_sync()
+    self.gen_add_code_line("const int n_obs = grid_cc_num_obstacles<T>(env);")
+    self.gen_add_parallel_loop("ind", "NUM_COLLISION_ROWS * n_obs")
+    self.gen_add_code_line("int o = ind % n_obs; int i = ind / n_obs;")
+    self.gen_add_code_line("T nx, ny, nz, tt;")
+    self.gen_add_code_line("s_dist[ind] = grid_cc_capsule_obstacle_signed<T>(env, o, grid_cc_row_capsule<T>(s_seg_pos, s_row_r, i), &nx, &ny, &nz, &tt);")
+    self.gen_add_code_line("s_normal[3*ind+0] = nx; s_normal[3*ind+1] = ny; s_normal[3*ind+2] = nz; s_t[ind] = tt;")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+    self.gen_add_func_doc("collision_distance_pairs_gradient: per-PAIR clearance Jacobian s_ddist[pair*NV + vi] = n_io^T [(1-t*) da_i/dq_vi + t* db_i/dq_vi]",
+                          ["The un-reduced twin of collision_distance_gradient: one NV-row per (row, obstacle) pair, "
+                           "each smooth in q. Also returns s_dist/s_t so a consumer has value + Jacobian in one call.",
+                           _cc_pair_note,
+                           "s_ddist layout is pair-major: pair (i,o)'s NV-gradient is s_ddist[pair*NV .. pair*NV+NV-1]."],
+                          ["s_dist is the per-PAIR clearance output (size NUM_COLLISION_ROWS*n_obs, RUNTIME-sized)",
+                           "s_ddist is the per-PAIR clearance Jacobian output (size NUM_COLLISION_ROWS*n_obs*NUM_VEL, pair-major, RUNTIME-sized)"] +
+                          _cc_state_params +
+                          ["s_normal is caller scratch of size 3*NUM_COLLISION_ROWS*n_obs (per-pair normals, RUNTIME-sized)",
+                           "s_t is caller scratch of size NUM_COLLISION_ROWS*n_obs (per-pair segment parameters, RUNTIME-sized)",
+                           "s_pos_grad is caller scratch of size 3*NUM_VEL*2*NUM_COLLISION_ROWS (batched endpoint dp/dq)"], None)
+    self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void collision_distance_pairs_gradient(T *s_dist, T *s_ddist, const T *s_q, const grid::robotModel<T> *d_robotModel, "
+                           "const Environment<T> &env, T *s_seg_pos, T *s_row_r, T *s_normal, T *s_t, T *s_pos_grad, "
+                           "T *d_workspace = nullptr) {", True)
+    self.gen_add_code_line("collision_distance_pairs<T, RESOURCE_TIER>(s_dist, s_normal, s_t, s_q, d_robotModel, env, s_seg_pos, s_row_r, d_workspace);")
+    self.gen_add_code_line("grid::multi_target_position_gradient_device<T, RESOURCE_TIER>(s_pos_grad, s_q, d_robotModel, d_workspace);")
+    self.gen_add_sync()
+    self.gen_add_code_line("const int n_obs = grid_cc_num_obstacles<T>(env);")
+    self.gen_add_parallel_loop("ind", "NUM_COLLISION_ROWS * n_obs * " + str(nv))
+    self.gen_add_code_line("int vi = ind % " + str(nv) + "; int pair = ind / " + str(nv) + "; int i = pair / n_obs;")
+    self.gen_add_code_line("int jba = 3 * (" + str(nv) + " * (2*i) + vi); int jbb = 3 * (" + str(nv) + " * (2*i+1) + vi);")
+    self.gen_add_code_line("T t = s_t[pair]; T wa = static_cast<T>(1) - t;")
+    self.gen_add_code_line("T gx = wa*s_pos_grad[jba+0] + t*s_pos_grad[jbb+0];")
+    self.gen_add_code_line("T gy = wa*s_pos_grad[jba+1] + t*s_pos_grad[jbb+1];")
+    self.gen_add_code_line("T gz = wa*s_pos_grad[jba+2] + t*s_pos_grad[jbb+2];")
+    self.gen_add_code_line("s_ddist[ind] = s_normal[3*pair+0]*gx + s_normal[3*pair+1]*gy + s_normal[3*pair+2]*gz;")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+    _cc_cost_scalar_params = [
+        "margin is the safety distance (cost is a hinge on clearance < margin)",
+        "weight is the scalar quadratic penalty weight"]
+
+    self.gen_add_func_doc("collision_cost: value = 1/2 * weight * sum_i max(0, margin - d_i)^2 (environment hinge, capsule rows)",
+                          ["Self-contained (no gradient scratch); every thread returns after the serial reduction.",
+                           "ACCUMULATE=false overwrites s_out[0]; true adds (fuse with other costs)."],
+                          ["s_out is the scalar cost output (s_out[0])"] + _cc_state_params[0:3] + _cc_cost_scalar_params + _cc_state_params[3:], None)
+    self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER, bool ACCUMULATE = false>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void collision_cost(T *s_out, const T *s_q, const grid::robotModel<T> *d_robotModel, "
+                           "const Environment<T> &env, T margin, T weight, "
+                           "T *s_seg_pos, T *s_row_r, T *d_workspace = nullptr) {", True)
+    self.gen_add_code_line("grid::multi_target_position_device<T, RESOURCE_TIER>(s_seg_pos, s_q, d_robotModel, d_workspace);")
+    self.gen_add_code_line("load_collision_row_radii<T>(s_row_r);")
+    self.gen_add_sync()
+    self.gen_add_serial_ops()
+    self.gen_add_code_line("T acc = static_cast<T>(0);")
+    self.gen_add_code_line("for (int i = 0; i < NUM_COLLISION_ROWS; ++i) {", True)
+    self.gen_add_code_line("T nx, ny, nz, tt;")
+    self.gen_add_code_line("T d = grid_cc_nearest_obstacle_capsule<T>(env, grid_cc_row_capsule<T>(s_seg_pos, s_row_r, i), &nx, &ny, &nz, &tt);")
+    self.gen_add_code_line("T viol = margin - d;")
+    self.gen_add_code_line("if (viol > static_cast<T>(0)) acc += static_cast<T>(0.5) * weight * viol * viol;")
+    self.gen_add_end_control_flow()
+    self.gen_add_code_line("if (ACCUMULATE) { s_out[0] += acc; } else { s_out[0] = acc; }")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+    self.gen_add_func_doc("collision_cost_gradient: grad_q[vi] = -sum_i (weight*viol_i) d(d_i)/dq_vi  (viol_i = max(0,margin-d_i))",
+                          ["Gradient over q only (size NUM_VEL = " + str(nv) + "); built on collision_distance_gradient.",
+                           "ACCUMULATE=false overwrites s_grad_q; true adds."],
+                          ["s_grad_q is the q-gradient output (size NUM_VEL)"] + _cc_state_params[0:3] + _cc_cost_scalar_params + _cc_state_params[3:] +
+                          ["s_normal is caller scratch of size 3*NUM_COLLISION_ROWS",
+                           "s_t is caller scratch of size NUM_COLLISION_ROWS",
+                           "s_dist is caller scratch of size NUM_COLLISION_ROWS",
+                           "s_ddist is caller scratch of size NUM_COLLISION_ROWS*NUM_VEL (row-major clearance Jacobian)",
+                           "s_pos_grad is caller scratch of size 3*NUM_VEL*2*NUM_COLLISION_ROWS (batched endpoint dp/dq)"], None)
+    self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER, bool ACCUMULATE = false>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void collision_cost_gradient(T *s_grad_q, const T *s_q, const grid::robotModel<T> *d_robotModel, "
+                           "const Environment<T> &env, T margin, T weight, "
+                           "T *s_seg_pos, T *s_row_r, T *s_normal, T *s_t, T *s_dist, T *s_ddist, T *s_pos_grad, "
+                           "T *d_workspace = nullptr) {", True)
+    self.gen_add_code_line("collision_distance_gradient<T, RESOURCE_TIER>(s_dist, s_ddist, s_q, d_robotModel, env, s_seg_pos, s_row_r, s_normal, s_t, s_pos_grad, d_workspace);")
+    self.gen_add_parallel_loop("vi", str(nv))
+    self.gen_add_code_line("T g = static_cast<T>(0);")
+    self.gen_add_code_line("for (int i = 0; i < NUM_COLLISION_ROWS; ++i) {", True)
+    self.gen_add_code_line("T viol = margin - s_dist[i];")
+    self.gen_add_code_line("if (viol > static_cast<T>(0)) g += (weight * viol) * s_ddist[i*" + str(nv) + " + vi];")
+    self.gen_add_end_control_flow()
+    self.gen_add_code_line("if (ACCUMULATE) { s_grad_q[vi] += -g; } else { s_grad_q[vi] = -g; }")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+    self.gen_add_func_doc("collision_cost_hessian: GN hessian H[vi,vj] = sum_{active i} weight d(d_i)/dq_vi d(d_i)/dq_vj",
+                          ["NUM_VEL x NUM_VEL (= " + str(nv) + "x" + str(nv) + ") column-major; PSD by construction; built on "
+                           "collision_distance_gradient. GN term only (residual-weighted SDF curvature dropped -- the "
+                           "ratified PSD choice; full-Newton collision hessian = labeled TODO).",
+                           "ACCUMULATE=false overwrites; true adds."],
+                          ["s_hess is the NUM_VEL x NUM_VEL column-major hessian output"] + _cc_state_params[0:3] + _cc_cost_scalar_params + _cc_state_params[3:] +
+                          ["s_normal is caller scratch of size 3*NUM_COLLISION_ROWS",
+                           "s_t is caller scratch of size NUM_COLLISION_ROWS",
+                           "s_dist is caller scratch of size NUM_COLLISION_ROWS",
+                           "s_ddist is caller scratch of size NUM_COLLISION_ROWS*NUM_VEL (row-major clearance Jacobian)",
+                           "s_pos_grad is caller scratch of size 3*NUM_VEL*2*NUM_COLLISION_ROWS (batched endpoint dp/dq)"], None)
+    self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER, bool ACCUMULATE = false>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void collision_cost_hessian(T *s_hess, const T *s_q, const grid::robotModel<T> *d_robotModel, "
+                           "const Environment<T> &env, T margin, T weight, "
+                           "T *s_seg_pos, T *s_row_r, T *s_normal, T *s_t, T *s_dist, T *s_ddist, T *s_pos_grad, "
+                           "T *d_workspace = nullptr) {", True)
+    self.gen_add_code_line("collision_distance_gradient<T, RESOURCE_TIER>(s_dist, s_ddist, s_q, d_robotModel, env, s_seg_pos, s_row_r, s_normal, s_t, s_pos_grad, d_workspace);")
+    self.gen_add_parallel_loop("ind", str(nv * nv))
+    self.gen_add_code_line("int row = ind % " + str(nv) + "; int col = ind / " + str(nv) + ";")
+    self.gen_add_code_line("T h = static_cast<T>(0);")
+    self.gen_add_code_line("for (int i = 0; i < NUM_COLLISION_ROWS; ++i) {", True)
     self.gen_add_code_line("if ((margin - s_dist[i]) > static_cast<T>(0)) h += weight * s_ddist[i*" + str(nv) + " + row] * s_ddist[i*" + str(nv) + " + col];")
     self.gen_add_end_control_flow()
     self.gen_add_code_line("if (ACCUMULATE) { s_hess[ind] += h; } else { s_hess[ind] = h; }")

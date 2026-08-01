@@ -55,6 +55,12 @@ def parseInputs(NO_ARG_OPTION=False):
                              "Comma-separate multiple densities for a broad->fine cascade, e.g. "
                              "'0.10,0.05' (config_free uses coarsest to reject + finest to confirm). "
                              "Default 0.05")
+    parser.add_argument("--collision-native", default=False, action="store_true",
+                        help="Use the URDF's own collision primitives as NATIVE capsule rows "
+                             "(sphere -> degenerate row; cylinder -> containing capsule, conservative; "
+                             "box/mesh links keep spherized rows at --collision-res). Emits a "
+                             "broad->fine cascade with covering spheres derived from the rows. "
+                             "Implies -c.")
     args = parser.parse_args()
 
     if args.urdf_path is None:
@@ -73,7 +79,8 @@ def parseInputs(NO_ARG_OPTION=False):
     FLOATING_BASE = args.floating_base
     FILE_NAMESPACE_NAME = args.namespace
     FIXED_TARGET_NAMES = args.fixed_target_names
-    COLLISION = args.collision
+    COLLISION_NATIVE = args.collision_native
+    COLLISION = args.collision or COLLISION_NATIVE
     COLLISION_RES = [float(x) for x in str(args.collision_res).split(",") if x.strip()]
     if FLOATING_BASE:
         DEBUG_MODE = False
@@ -83,10 +90,12 @@ def parseInputs(NO_ARG_OPTION=False):
     print("                    URDF = " + URDF_PATH)
     print("      FIXED_TARGET_NAMES = " + FIXED_TARGET_NAMES)
     print("               FILE_NAME = " + FILE_NAMESPACE_NAME)
-    print("               COLLISION = " + str(COLLISION) + ((" (res=%s)" % ",".join("%g" % r for r in COLLISION_RES)) if COLLISION else ""))
+    print("               COLLISION = " + str(COLLISION) +
+          ((" (NATIVE rows, res=%s)" % ",".join("%g" % r for r in COLLISION_RES)) if COLLISION_NATIVE else
+           (" (res=%s)" % ",".join("%g" % r for r in COLLISION_RES)) if COLLISION else ""))
 
     return (URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE, FIXED_TARGET_NAMES,
-            COLLISION, COLLISION_RES)
+            COLLISION, COLLISION_RES, COLLISION_NATIVE)
 
 
 def validateRobot(robot, NO_ARG_OPTION=False):
@@ -106,14 +115,19 @@ def main():
     from grid_codegen import GRiDCodeGenerator
 
     (URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE, FIXED_TARGET_NAMES,
-     COLLISION, COLLISION_RES) = parseInputs()
+     COLLISION, COLLISION_RES, COLLISION_NATIVE) = parseInputs()
     parser = URDFParser()
     robot = parser.parse(URDF_PATH, floating_base=FLOATING_BASE)
 
     validateRobot(robot)
 
     collision_spec = None
-    if COLLISION:
+    if COLLISION_NATIVE:
+        from grid_codegen.algorithms._collision import native_collision_spec_from_urdf
+        collision_spec = native_collision_spec_from_urdf(robot, URDF_PATH, COLLISION_RES[-1])
+        print("      collision rows = " + ", ".join(
+            "%s:%d" % (t["name"], len(t["anchor"])) for t in collision_spec["tiers"]))
+    elif COLLISION:
         from grid_codegen.algorithms._collision import multi_tier_collision_spec_from_urdf
         collision_spec = multi_tier_collision_spec_from_urdf(robot, URDF_PATH, COLLISION_RES)
         if "tiers" in collision_spec:

@@ -26,6 +26,17 @@ python -m GRiDCodeGenerator.cli path/to/robot.urdf --collision --collision-res 0
   configs on the *coarsest* tier and only confirms possible collisions on the *finest* — same
   verdict as fine-only (covering spheres make the coarse reject conservative), fewer checks on the
   common free case. A single value ⇒ single tier ⇒ byte-identical to before.
+- `--collision-native` (opt-in, implies `-c`) = **NATIVE capsule rows** instead of covering
+  spheres. The URDF's own collision primitives become one row `{a, b, r}` each: sphere → a==b
+  degenerate row; cylinder → the containing capsule (same r + axis segment ⇒ conservative);
+  box/mesh links keep spherized rows at `--collision-res`. FAR fewer rows (iiwa14: 34 fine
+  spheres → 5 capsules) at ~2× the FK transform work per row (two endpoints ride the
+  multi_target batch as targets `2i`/`2i+1`). Emits a broad→fine cascade automatically: the
+  broad tier is one covering sphere per link **derived from the rows** (encloses the capsule
+  caps — a coarser spherizer pass wouldn't). Public constants become `NUM_COLLISION_ROWS` &c.;
+  the differentiable API additionally returns the robot-side closest-point parameter `t*` per
+  row and composes gradients over BOTH endpoints (envelope theorem:
+  `d(d)/dq = nᵀ[(1−t*)·da/dq + t*·db/dq]`). Gate: `test_cuda_collision_native.py`.
 
 Programmatic entry (what the CLI calls):
 

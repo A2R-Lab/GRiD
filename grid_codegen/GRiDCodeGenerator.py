@@ -3745,8 +3745,19 @@ class GRiDCodeGenerator:
                 from .algorithms._collision import normalize_collision_tiers
                 _cc_tiers = normalize_collision_tiers(collision_spec)
                 for _t in _cc_tiers:
-                    _cc_batch = {"n": _t["n"], "anchor": _t["anchor"],
-                                 "offset": _t["offset"], "groups": {"all": (0, _t["n"])}}
+                    if "pb" in _t:
+                        # capsule tier: each row contributes TWO targets (endpoint a then b),
+                        # so row i's world endpoints land at s_out_pos[6i..6i+5].
+                        _off2 = []
+                        for _i in range(_t["n"]):
+                            _off2.extend(_t["offset"][3 * _i:3 * _i + 3])
+                            _off2.extend(_t["pb"][3 * _i:3 * _i + 3])
+                        _cc_batch = {"n": 2 * _t["n"],
+                                     "anchor": [_a for _a in _t["anchor"] for _ in (0, 1)],
+                                     "offset": _off2, "groups": {"all": (0, 2 * _t["n"])}}
+                    else:
+                        _cc_batch = {"n": _t["n"], "anchor": _t["anchor"],
+                                     "offset": _t["offset"], "groups": {"all": (0, _t["n"])}}
                     self.gen_multi_target_position(_cc_batch, suffix=_t["suffix"])
                     if _t["suffix"] == "":  # finest / public tier -> the differentiable path
                         self.gen_multi_target_position_gradient(_cc_batch, suffix="")
