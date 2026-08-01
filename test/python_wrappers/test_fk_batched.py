@@ -17,7 +17,9 @@ What it covers
   * Per-sample agreement of the returned pos+quat pose against the
     `RBDReference.end_effector_pose` oracle (rotation matrix compared, so
     the quaternion sign convention is irrelevant; position compared directly).
-  * Floating-base / mimic robots: the batched inner is intentionally absent
+  * MIMIC robots (fr3): supported since 2026-08-01 (registry A2) — the inner
+    folds mult*q[src]+offset inline; covered by the oracle comparison.
+  * Floating-base robots: the batched inner is intentionally absent
     (the codegen skips it), so `fk_batched` must *raise* rather than crash —
     those robots route through `end_effector_pose`.
 
@@ -115,10 +117,14 @@ def _rpy_to_R(rpy):
 
 # (name, urdf, expected num_pos, serial?) — gen3/go2 lock generalization
 # beyond the iiwa14 hardcoding (different 7R serial arm + branched quadruped).
+# fr3 locks the MIMIC support (registry A2, 2026-08-01): its finger joint 2
+# mimics finger joint 1, so the standalone inner's inline mult*q[src]+offset
+# fold is exercised against the (mimic-aware) RBDReference oracle.
 _ROBOTS = [
     ("iiwa14", "iiwa14.urdf", 7, True),
     ("gen3", "gen3.urdf", 7, True),
     ("go2", "go2.urdf", 12, False),
+    ("fr3", "fr3.urdf", 8, False),
 ]
 
 

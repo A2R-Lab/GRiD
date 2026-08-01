@@ -887,7 +887,7 @@ extern "C" int grid_rbd_fk_batched(
     return 0;
 #else
     (void)q; (void)pose7_out; (void)batch; (void)use_warp;
-    return 3;  // not supported for this robot (floating-base / mimic)
+    return 3;  // not supported for this robot (floating-base / spherical; mimic supported since 2026-08-01)
 #endif
 }
 
