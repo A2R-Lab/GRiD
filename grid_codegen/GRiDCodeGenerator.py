@@ -2246,6 +2246,56 @@ class GRiDCodeGenerator:
                                  "};"])
 
     def gen_init_gridData(self):
+        # 2a (h2_plus OOM): opt-in per-algo ALLOC GATING for the bench's solo exes.
+        # When gen_all_code(emit_alloc_gating=True), every LARGE per-algo output
+        # buffer's alloc gains an extra preprocessor guard
+        #     (!defined(GRID_ALLOC_GATE) || GRID_ALLOC_<ALGO> || ...)
+        # so a consumer compiled WITHOUT -DGRID_ALLOC_GATE still allocates
+        # everything (behavior-identical to the ungated header), while a solo
+        # bench exe passes -DGRID_ALLOC_GATE=1 plus -DGRID_ALLOC_<its algo>=1 and
+        # allocates ONLY the buffers its algo's host wrappers actually touch
+        # (h2_plus nv=81 x 1024 timesteps: d_f_ext_gradient_dq 12.2 GB + the two
+        # SO tensors 8.7 GB each + the 26.6 MB/timestep workspace arena sum past
+        # the card, killing EVERY solo exe at init_gridData). Guard key = the
+        # per_algo_bench PER_ALGO_SPECS key, uppercased, prefixed GRID_ALLOC_.
+        # Small shared buffers (inputs, d_c/d_qdd/d_Minv/d_M, kinematics /
+        # centroidal vectors) stay unconditional: the warmup path runs
+        # inverse_dynamics in every solo exe and cross-wrapper reads touch them.
+        # Default emit_alloc_gating=False emits the header BYTE-IDENTICAL.
+        gating = getattr(self, "emit_alloc_gating", False)
+
+        def _ag_expr(keys):
+            return " || ".join(["!defined(GRID_ALLOC_GATE)"]
+                               + ["GRID_ALLOC_" + k.upper() for k in keys])
+
+        def ag(*keys):
+            # appended to an existing "#if GRID_HAS_X" alloc guard
+            return (" && (" + _ag_expr(keys) + ")") if gating else ""
+
+        def ag_open(*keys):
+            # wraps a currently-unconditional alloc in its own #if block
+            return ["    #if " + _ag_expr(keys)] if gating else []
+
+        def ag_close():
+            return ["    #endif"] if gating else []
+
+        # Algos whose HOST WRAPPERS pass hd_data->d_workspace to a kernel (scan of
+        # the generated wrappers, 2026-08-01). Everything NOT here (inverse_dynamics,
+        # end_effector_pose, frame_jacobian(_dot), ke/pe regressors, the runtime-EE
+        # pair, multi_target pair) never touches the arena, so its solo exe skips
+        # the (potentially multi-GB) workspace alloc entirely.
+        _ws_keys = ("minv", "forward_dynamics", "aba", "crba",
+                    "inverse_dynamics_gradient", "inverse_dynamics_gradient_mjx",
+                    "forward_dynamics_gradient", "forward_dynamics_gradient_mjx",
+                    "f_ext_gradient", "f_ext_gradient_dq",
+                    "inverse_dynamics_regressor", "forward_dynamics_parameter_gradient",
+                    "integrator", "integrator_gradient", "integrator_with_gradient",
+                    "generalized_gravity", "nonlinear_effects",
+                    "com", "ccrba", "energy", "cmm_time_variation", "dccrba",
+                    "coriolis_matrix", "osc_inertia",
+                    "end_effector_pose_gradient", "end_effector_pose_hessian",
+                    "idsva_so", "idsva_so_body_frame", "idsva_so_world_frame",
+                    "idsva_so_world_frame_mjx", "fdsva_so", "fdsva_so_mjx")
         code_lines = (["gridData<T, KIND> *hd_data = (gridData<T, KIND> *)calloc(1, sizeof(gridData<T, KIND>));",
                       "const bool needs_dynamics = KIND == GRID_DATA_ALL || KIND == GRID_DATA_DYNAMICS;",
                       "const bool needs_kinematics = KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS;",
@@ -2272,66 +2322,72 @@ class GRiDCodeGenerator:
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_Minv, NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_qdd, NUM_JOINTS*NUM_TIMESTEPS*sizeof(T)));", \
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_M, NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
-                      "    #if GRID_HAS_INVERSE_DYNAMICS_GRADIENT", \
+                      "    #if GRID_HAS_INVERSE_DYNAMICS_GRADIENT" + ag("inverse_dynamics_gradient", "inverse_dynamics_gradient_mjx"), \
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_dc_du, 2*NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
                       "    #endif", \
-                      "    #if GRID_HAS_FORWARD_DYNAMICS_GRADIENT", \
+                      "    #if GRID_HAS_FORWARD_DYNAMICS_GRADIENT" + ag("forward_dynamics_gradient", "forward_dynamics_gradient_mjx"), \
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_df_du, 2*NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
                       "    #endif", \
                       "    // f_ext gradient column (section A): dtau/dfext, dqdd/dfext are each nv x (6*NB)", \
-                      "    #if GRID_HAS_F_EXT_GRADIENT", \
+                      "    #if GRID_HAS_F_EXT_GRADIENT" + ag("f_ext_gradient"), \
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_dtau_dfext, NUM_VEL*6*NUM_BODIES*NUM_TIMESTEPS*sizeof(T)));", \
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_dqdd_dfext, NUM_VEL*6*NUM_BODIES*NUM_TIMESTEPS*sizeof(T)));", \
-                      "    #endif", \
+                      "    #endif"]
+                      + ag_open("f_ext_gradient") + [
                       "    hd_data->h_dtau_dfext = (T *)malloc(NUM_VEL*6*NUM_BODIES*NUM_TIMESTEPS*sizeof(T));",
-                      "    hd_data->h_dqdd_dfext = (T *)malloc(NUM_VEL*6*NUM_BODIES*NUM_TIMESTEPS*sizeof(T));",
+                      "    hd_data->h_dqdd_dfext = (T *)malloc(NUM_VEL*6*NUM_BODIES*NUM_TIMESTEPS*sizeof(T));"]
+                      + ag_close() + [
                       "    // f_ext A.3: -dJ^T/dq = d(inverse_dynamics_gradient)/dfext, nv*6NB*nv (fixed base only; the largest per-timestep buffer)",
-                      "    #if GRID_HAS_F_EXT_GRADIENT_DQ",
+                      "    #if GRID_HAS_F_EXT_GRADIENT_DQ" + ag("f_ext_gradient_dq"),
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_f_ext_gradient_dq, NUM_VEL*6*NUM_BODIES*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));",
                       "    hd_data->h_f_ext_gradient_dq = (T *)malloc(NUM_VEL*6*NUM_BODIES*NUM_VEL*NUM_TIMESTEPS*sizeof(T));",
                       "    #endif",
                       "    // R2: regressor Y and FD param-gradient dqdd/dpi (each nv x 10*NUM_BODIES)",
-                      "    #if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR",
+                      "    #if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR" + ag("inverse_dynamics_regressor"),
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_Y, NUM_VEL*10*NUM_BODIES*NUM_TIMESTEPS*sizeof(T)));",
                       "    hd_data->h_Y = (T *)malloc(NUM_VEL*10*NUM_BODIES*NUM_TIMESTEPS*sizeof(T));",
                       "    #endif",
-                      "    #if GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT",
+                      "    #if GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT" + ag("forward_dynamics_parameter_gradient"),
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_dqdd_dpi, NUM_VEL*10*NUM_BODIES*NUM_TIMESTEPS*sizeof(T)));",
                       "    hd_data->h_dqdd_dpi = (T *)malloc(NUM_VEL*10*NUM_BODIES*NUM_TIMESTEPS*sizeof(T));",
                       "    #endif"]
                       + [
-                      "    #if GRID_HAS_IDSVA_SO", \
+                      # d_idsva_so is ALSO a kernel input of fdsva_so (the fdsva_so kernel takes
+                      # hd_data->d_idsva_so), so the fdsva keys must keep it allocated too.
+                      "    #if GRID_HAS_IDSVA_SO" + ag("idsva_so", "idsva_so_body_frame", "idsva_so_world_frame", "idsva_so_world_frame_mjx", "fdsva_so", "fdsva_so_mjx"), \
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_idsva_so, SECOND_ORDER_TENSOR_SIZE*NUM_TIMESTEPS*sizeof(T)));", \
                       "    #endif", \
-                      "    #if GRID_HAS_FDSVA_SO", \
+                      "    #if GRID_HAS_FDSVA_SO" + ag("fdsva_so", "fdsva_so_mjx"), \
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_df2, SECOND_ORDER_TENSOR_SIZE*NUM_TIMESTEPS*sizeof(T)));", \
-                      "    #endif", \
+                      "    #endif"]
+                      + ag_open(*_ws_keys) + [
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_workspace, GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS*NUM_TIMESTEPS));", \
                       "    // Phase 3a/b/c/e: L2-pin d_workspace for its lifetime. Spilled buffers", \
                       "    // (Minv-F, FD's Minv-F, ABA's inner scratch, FDSVA_SO's df_du/Minv) are", \
                       "    // recursion-hot — L2 pinning narrows the smem→HBM gap to smem→L2.", \
-                      "    gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS*NUM_TIMESTEPS));", \
+                      "    gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS*NUM_TIMESTEPS));"]
+                      + ag_close() + [
                       "    hd_data->h_c = (T *)malloc(NUM_JOINTS*NUM_TIMESTEPS*sizeof(T));", \
                       "    hd_data->h_Minv = (T *)malloc(NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
                       "    hd_data->h_M = (T *)malloc(NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
                       "    hd_data->h_qdd = (T *)malloc(NUM_JOINTS*NUM_TIMESTEPS*sizeof(T));", \
-                      "    #if GRID_HAS_INVERSE_DYNAMICS_GRADIENT", \
+                      "    #if GRID_HAS_INVERSE_DYNAMICS_GRADIENT" + ag("inverse_dynamics_gradient", "inverse_dynamics_gradient_mjx"), \
                       "    hd_data->h_dc_du = (T *)malloc(2*NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
                       "    #endif", \
-                      "    #if GRID_HAS_FORWARD_DYNAMICS_GRADIENT", \
+                      "    #if GRID_HAS_FORWARD_DYNAMICS_GRADIENT" + ag("forward_dynamics_gradient", "forward_dynamics_gradient_mjx"), \
                       "    hd_data->h_df_du = (T *)malloc(2*NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
                       "    #endif", \
-                      "    #if GRID_HAS_IDSVA_SO", \
+                      "    #if GRID_HAS_IDSVA_SO" + ag("idsva_so", "idsva_so_body_frame", "idsva_so_world_frame", "idsva_so_world_frame_mjx"), \
                       "    hd_data->h_idsva_so = (T *)malloc(SECOND_ORDER_TENSOR_SIZE*NUM_TIMESTEPS*sizeof(T));", \
                       "    #endif", \
-                      "    #if GRID_HAS_FDSVA_SO", \
+                      "    #if GRID_HAS_FDSVA_SO" + ag("fdsva_so", "fdsva_so_mjx"), \
                       "    hd_data->h_df2 = (T *)malloc(SECOND_ORDER_TENSOR_SIZE*NUM_TIMESTEPS*sizeof(T));", \
                       "    #endif", \
                       "    #if GRID_HAS_INTEGRATOR", \
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_x_kp1, 2*NUM_JOINTS*NUM_TIMESTEPS*sizeof(T)));", \
                       "    hd_data->h_x_kp1 = (T *)malloc(2*NUM_JOINTS*NUM_TIMESTEPS*sizeof(T));", \
                       "    #endif", \
-                      "    #if GRID_HAS_INTEGRATOR_GRADIENT", \
+                      "    #if GRID_HAS_INTEGRATOR_GRADIENT" + ag("integrator_gradient", "integrator_with_gradient"), \
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_dAB, 2*NUM_JOINTS*3*NUM_JOINTS*NUM_TIMESTEPS*sizeof(T)));", \
                       "    hd_data->h_dAB = (T *)malloc(2*NUM_JOINTS*3*NUM_JOINTS*NUM_TIMESTEPS*sizeof(T));", \
                       "    #endif", \
@@ -2339,12 +2395,17 @@ class GRiDCodeGenerator:
                       "// kinematics outputs", \
                       "if (needs_kinematics) {", \
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_end_effector_pose, 6*NUM_EES*NUM_TIMESTEPS*sizeof(T)));", \
-                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_end_effector_pose_gradient, 6*NUM_EES*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
-                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_end_effector_pose_hessian, 6*NUM_EES*NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
-                      "    if ((GRID_END_EFFECTOR_POSE_HESSIAN_USES_WORKSPACE_TEMP || GRID_END_EFFECTOR_POSE_GRADIENT_USES_WORKSPACE_TEMP || GRID_DCCRBA_USES_WORKSPACE_TEMP || GRID_OSC_INERTIA_USES_WORKSPACE) && hd_data->d_workspace == nullptr) {gpuErrchk(cudaMalloc((void**)&hd_data->d_workspace, GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS*NUM_TIMESTEPS));}", \
+                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_end_effector_pose_gradient, 6*NUM_EES*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));"]
+                      + ag_open("end_effector_pose_hessian") + [
+                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_end_effector_pose_hessian, 6*NUM_EES*NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));"]
+                      + ag_close() + ag_open(*_ws_keys) + [
+                      "    if ((GRID_END_EFFECTOR_POSE_HESSIAN_USES_WORKSPACE_TEMP || GRID_END_EFFECTOR_POSE_GRADIENT_USES_WORKSPACE_TEMP || GRID_DCCRBA_USES_WORKSPACE_TEMP || GRID_OSC_INERTIA_USES_WORKSPACE) && hd_data->d_workspace == nullptr) {gpuErrchk(cudaMalloc((void**)&hd_data->d_workspace, GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS*NUM_TIMESTEPS));}"]
+                      + ag_close() + [
                       "    hd_data->h_end_effector_pose = (T *)malloc(6*NUM_EES*NUM_TIMESTEPS*sizeof(T));", \
-                      "    hd_data->h_end_effector_pose_gradient = (T *)malloc(6*NUM_EES*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
-                      "    hd_data->h_end_effector_pose_hessian = (T *)malloc(6*NUM_EES*NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
+                      "    hd_data->h_end_effector_pose_gradient = (T *)malloc(6*NUM_EES*NUM_VEL*NUM_TIMESTEPS*sizeof(T));"]
+                      + ag_open("end_effector_pose_hessian") + [
+                      "    hd_data->h_end_effector_pose_hessian = (T *)malloc(6*NUM_EES*NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T));"]
+                      + ag_close() + [
                       # E2/S1: general-frame Jacobian outputs (J / Jdot: 6*NV each ; Lambda: 36)
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_frame_jacobian, 6*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_frame_jacobian_dot, 6*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
@@ -2400,10 +2461,14 @@ class GRiDCodeGenerator:
                       "    // PS5 Coriolis matrix C(q,qd) (nv x nv)", \
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_coriolis, NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
                       "    hd_data->h_coriolis = (T *)malloc(NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
-                      "    // PS5 dCCRBA: dccrba tensor (6*nv*nv) + cmm_time_variation Adot (6*nv)", \
-                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_dccrba, 6*NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
-                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_cmm_time_variation, 6*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));", \
-                      "    hd_data->h_dccrba = (T *)malloc(6*NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
+                      "    // PS5 dCCRBA: dccrba tensor (6*nv*nv) + cmm_time_variation Adot (6*nv)"]
+                      + ag_open("dccrba") + [
+                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_dccrba, 6*NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));"]
+                      + ag_close() + [
+                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_cmm_time_variation, 6*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));"]
+                      + ag_open("dccrba") + [
+                      "    hd_data->h_dccrba = (T *)malloc(6*NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T));"]
+                      + ag_close() + [
                       "    hd_data->h_cmm_time_variation = (T *)malloc(6*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
                       "}", \
                       "return hd_data;"])
@@ -3233,7 +3298,8 @@ class GRiDCodeGenerator:
                      codegen_profile = "all", algorithm_list = None, enable_floating_second_order = True,
                      enable_idsva_so_world_frame = None, runtime_inertia = False, runtime_transform = False,
                      runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
-                     contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None):
+                     contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None,
+                     emit_alloc_gating = False):
         # enable_mujoco_kernels=False builds a PIN-ONLY header: the mjx
         # (MUJOCO_OUTPUT=true) template overloads are still EMITTED (they are
         # templates -- uninstantiated they cost nothing; a bare #include is 2 s /
@@ -3257,6 +3323,11 @@ class GRiDCodeGenerator:
         if enable_mujoco_kernels is None:
             enable_mujoco_kernels = os.environ.get("GRID_ENABLE_MUJOCO_KERNELS", "1") != "0"
         self.enable_mujoco_kernels = enable_mujoco_kernels
+        # 2a: opt-in per-algo alloc gating in init_gridData (see gen_init_gridData).
+        # Default False emits the header BYTE-IDENTICAL to before the feature; the
+        # per-algo bench turns it on so its solo exes can -D away other algos'
+        # (multi-GB at nv=81) buffers.
+        self.emit_alloc_gating = emit_alloc_gating
         # Default-pick the SO variant that wins per the 2026-05 perf sweep
         # (see test/benchmarks/benchmark_multi_version_sm120_5090_full.md
         # § IDSVA_SO_BODY_FRAME vs IDSVA_SO_WORLD_FRAME):

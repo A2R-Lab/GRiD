@@ -185,7 +185,20 @@ def _cgroup_wrap(cmd: list[str], cap_gb: float) -> list[str]:
     ]
 
 
-def _nvcc_cmd(src: Path, exe: Path, header_file: Path, arch: str, tier: str | None = None) -> list[str]:
+def _alloc_gate_flags(algo: str | None) -> list[str]:
+    """2a (h2_plus OOM): per-algo alloc-gating -D flags for a solo exe. The header
+    (generated with emit_alloc_gating=True) guards every LARGE per-algo buffer's
+    init_gridData alloc with (!defined(GRID_ALLOC_GATE) || GRID_ALLOC_<ALGO> || ...),
+    so defining GRID_ALLOC_GATE + only THIS algo's key makes the solo exe allocate
+    only its own buffers (at h2_plus nv=81 the full set sums past the card). The
+    guard keys ARE the PER_ALGO_SPECS keys, uppercased — no per-algo table here."""
+    if algo is None:
+        return []
+    return ["-DGRID_ALLOC_GATE=1", f"-DGRID_ALLOC_{algo.upper()}=1"]
+
+
+def _nvcc_cmd(src: Path, exe: Path, header_file: Path, arch: str, tier: str | None = None,
+              alloc_gate_algo: str | None = None) -> list[str]:
     nvcc = shutil.which("nvcc") or "nvcc"
     cmd = [
         nvcc, "-std=c++17", "-O3", f"-arch=sm_{arch}",
@@ -195,13 +208,14 @@ def _nvcc_cmd(src: Path, exe: Path, header_file: Path, arch: str, tier: str | No
     macro = _TIER_MACRO.get(tier)
     if macro is not None:   # shared == default => no flag (byte-identical to run.py's TIER_SHARED)
         cmd.append(f"-DGRID_DEFAULT_RESOURCE_TIER={macro}")
+    cmd += _alloc_gate_flags(alloc_gate_algo)
     cmd += ["-o", str(exe), str(src)]
     return cmd
 
 
 def _compile_one(algo: str, build_dir: Path, header_file: Path, arch: str,
                  ram_per_compile_gb: float, tier: str | None = None,
-                 cgroup_cap_gb: float = 0.0) -> tuple[str, Path | None, str]:
+                 cgroup_cap_gb: float = 0.0, alloc_gate: bool = False) -> tuple[str, Path | None, str]:
     """Write the algo's self-contained .cu and compile it to an .exe. Returns (algo, exe|None, log).
 
     The .cu is tier-independent (the resource tier is a compile-time -D flag, not source), so the source
@@ -218,14 +232,16 @@ def _compile_one(algo: str, build_dir: Path, header_file: Path, arch: str,
     # instead. This makes the autotune 'shared' tier reuse the timing pass's suffix-less exe (no double
     # ~355s compile), makes a resumed sweep cheap, and can't be fooled by mtime churn. The exe path
     # encodes the tier via `sfx`, so tiers never alias.
+    gate_algo = algo if alloc_gate else None
     key = hashlib.sha1(
-        (src_txt + "\0" + str(_TIER_MACRO.get(tier)) + "\0" + header_file.read_text()).encode()
+        (src_txt + "\0" + str(_TIER_MACRO.get(tier)) + "\0"
+         + " ".join(_alloc_gate_flags(gate_algo)) + "\0" + header_file.read_text()).encode()
     ).hexdigest()
     if exe.exists() and stamp.exists() and stamp.read_text().strip() == key:
         return algo, exe, "cache hit (content stamp match)"
     _wait_for_ram(ram_per_compile_gb, f"compile {algo}{sfx}")
     t0 = time.monotonic()
-    cmd = _cgroup_wrap(_nvcc_cmd(src, exe, header_file, arch, tier), cgroup_cap_gb)
+    cmd = _cgroup_wrap(_nvcc_cmd(src, exe, header_file, arch, tier, alloc_gate_algo=gate_algo), cgroup_cap_gb)
     proc = subprocess.run(cmd, capture_output=True, text=True)
     dt = time.monotonic() - t0
     if proc.returncode != 0:
@@ -264,7 +280,7 @@ def _run_one(algo: str, exe: Path, base: str, timeout_s: float) -> tuple[str, di
 # --------------------------------------------------------------------------- compile / run fan-out
 def _compile_algos(algos: list[str], build_dir: Path, header: Path, arch: str,
                    ram_per_compile_gb: float, jobs: int, tier: str | None = None,
-                   cgroup_cap_gb: float = 0.0) -> dict[str, Path]:
+                   cgroup_cap_gb: float = 0.0, alloc_gate: bool = False) -> dict[str, Path]:
     """Compile each algo's solo exe for `tier`. Returns {algo: exe}.
 
     Two-phase so the compile-heavy SO family can't OOM the box:
@@ -293,12 +309,13 @@ def _compile_algos(algos: list[str], build_dir: Path, header: Path, arch: str,
         print(f"  [compile{label}] {len(so_algos)} SO-family algo(s) SERIAL, {cap_note}: "
               f"{', '.join(so_algos)}")
         for a in so_algos:
-            _record(*_compile_one(a, build_dir, header, arch, ram_per_compile_gb, tier, cgroup_cap_gb))
+            _record(*_compile_one(a, build_dir, header, arch, ram_per_compile_gb, tier, cgroup_cap_gb,
+                                  alloc_gate=alloc_gate))
 
     if light_algos:
         with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
             futs = {pool.submit(_compile_one, a, build_dir, header, arch,
-                                ram_per_compile_gb, tier, cgroup_cap_gb): a
+                                ram_per_compile_gb, tier, cgroup_cap_gb, alloc_gate): a
                     for a in light_algos}
             for fut in concurrent.futures.as_completed(futs):
                 _record(*fut.result())
@@ -331,7 +348,8 @@ def _run_isolated(algos: list[str], exes: dict[str, Path], base: str,
 # --------------------------------------------------------------------------- autotune (tier x threads)
 def _run_autotune(algos: list[str], build_dir: Path, header: Path, arch: str, base: str,
                   ram_per_compile_gb: float, jobs: int, *, thread_grid: tuple[int, ...],
-                  autotune_N: int, tiers: tuple[str, ...], cgroup_cap_gb: float = 0.0) -> dict[str, dict]:
+                  autotune_N: int, tiers: tuple[str, ...], cgroup_cap_gb: float = 0.0,
+                  alloc_gate: bool = False) -> dict[str, dict]:
     """Build each algo's {tier: solo_exe} set and run run.py's picker VERBATIM on it -> schema-2
     algo_picks[algo] (tier_optimal/threads_optimal/us_at_optimal/sweep/sweep_us[/tier_equiv_to]).
 
@@ -348,7 +366,7 @@ def _run_autotune(algos: list[str], build_dir: Path, header: Path, arch: str, ba
     for tier in tiers:
         print(f"[autotune] compiling tier={tier} for {len(algos)} algos...")
         tier_exes[tier] = _compile_algos(algos, build_dir, header, arch, ram_per_compile_gb, jobs, tier,
-                                         cgroup_cap_gb=cgroup_cap_gb)
+                                         cgroup_cap_gb=cgroup_cap_gb, alloc_gate=alloc_gate)
 
     algo_picks: dict[str, dict] = {}
     for algo in algos:
@@ -481,7 +499,14 @@ def main() -> None:
     ap.add_argument("--multi-target-from-collision", action="store_true",
                     help="bake the robot's collision spherization as the multi_target batch, so "
                          "multi_target_position{,_gradient} time against the real (collision-sized) batch")
+    ap.add_argument("--no-alloc-gate", action="store_true",
+                    help="disable per-algo alloc gating (2a): by default each solo exe compiles with "
+                         "-DGRID_ALLOC_GATE + -DGRID_ALLOC_<ALGO> against a header generated with "
+                         "emit_alloc_gating=True, so init_gridData allocates ONLY that algo's large "
+                         "buffers (h2_plus nv=81: the full set OOMs the card in every solo exe). "
+                         "This flag restores the previous allocate-everything behavior.")
     args = ap.parse_args()
+    alloc_gate = not args.no_alloc_gate
 
     build_dir = args.build_dir or (THIS_DIR / "results" / f"per_algo_{args.robot}_{args.base}")
     build_dir.mkdir(parents=True, exist_ok=True)
@@ -518,7 +543,8 @@ def main() -> None:
         runtime_inertia=args.runtime_inertia,
         runtime_transform=args.runtime_transform,
         runtime_joint_dynamics=args.runtime_joint_dynamics,
-        multi_target_from_collision=args.multi_target_from_collision)
+        multi_target_from_collision=args.multi_target_from_collision,
+        emit_alloc_gating=alloc_gate)
 
     # Which algos are in scope for this robot/base (drops non-production + mimic-unsupported).
     has_mimic = gridrun.robot_is_mimic(urdf)
@@ -552,13 +578,13 @@ def main() -> None:
         missing: list[str] = []
         if args.mode == "timing":
             exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier=args.tier,
-                                  cgroup_cap_gb=args.cgroup_cap_gb)
+                                  cgroup_cap_gb=args.cgroup_cap_gb, alloc_gate=alloc_gate)
             missing = [a for a in algos if a not in exes]
             what = f"tier {args.tier or 'shared'}"
         else:  # autotune: pre-build every tier so the measure run compiles nothing
             for tier in tiers:
                 exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier,
-                                      cgroup_cap_gb=args.cgroup_cap_gb)
+                                      cgroup_cap_gb=args.cgroup_cap_gb, alloc_gate=alloc_gate)
                 missing += [f"{a}({tier})" for a in algos if a not in exes]
             what = f"tiers {','.join(tiers)}"
         if missing:
@@ -572,7 +598,7 @@ def main() -> None:
     # --tier selects the resource tier (default None == shared == no -D flag, the original path).
     if args.mode == "timing":
         exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier=args.tier,
-                           cgroup_cap_gb=args.cgroup_cap_gb)
+                           cgroup_cap_gb=args.cgroup_cap_gb, alloc_gate=alloc_gate)
         results, gated, crashed = _run_isolated(algos, exes, args.base, args.per_exe_timeout)
         out = args.output or (build_dir / f"{args.robot}_{args.base}_grid_per_algo.json")
         payload = {
@@ -589,7 +615,7 @@ def main() -> None:
     # tier (suffix-less, no -D flag), so the expensive SO-monster compile is paid once.
     print("[autotune] --- timing pass (grid block) ---")
     exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs,
-                          cgroup_cap_gb=args.cgroup_cap_gb)
+                          cgroup_cap_gb=args.cgroup_cap_gb, alloc_gate=alloc_gate)
     results, gated, crashed = _run_isolated(algos, exes, args.base, args.per_exe_timeout)
     filled = fill_nulls(dict(results))   # ensure the ALL_ALGOS core keys exist as null when un-run
 
@@ -597,7 +623,7 @@ def main() -> None:
     algo_picks = _run_autotune(algos, build_dir, header, arch, args.base,
                                args.ram_per_compile_gb, jobs, thread_grid=thread_grid,
                                cgroup_cap_gb=args.cgroup_cap_gb,
-                               autotune_N=args.autotune_N, tiers=tiers)
+                               autotune_N=args.autotune_N, tiers=tiers, alloc_gate=alloc_gate)
 
     # Assemble the run.py-faithful autotune payload: results[robot][base] = {"grid": filled,
     # "algo_picks": {...}} with a schema-2 autotune_threads metadata block. Column key stays "grid"

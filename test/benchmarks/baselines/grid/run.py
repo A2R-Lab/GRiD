@@ -172,6 +172,7 @@ def generate_header(
     runtime_transform: bool = False,
     runtime_joint_dynamics: bool = False,
     multi_target_from_collision: bool = False,
+    emit_alloc_gating: bool = False,
 ) -> Path:
     """Generate grid.cuh for the given robot/base, using content-hash cache."""
     floating_base = (base == "floating")
@@ -202,6 +203,10 @@ def generate_header(
             "runtime_transform": runtime_transform,
             "runtime_joint_dynamics": runtime_joint_dynamics,
             "multi_target_from_collision": multi_target_from_collision,
+            # 2a: per-algo alloc gating changes init_gridData's emitted guards, so it
+            # MUST key the header cache (a gated exe compiled against an ungated
+            # cached header would silently allocate everything again).
+            "emit_alloc_gating": emit_alloc_gating,
             "profile": bench_algo_list_env or "all+frame_jacobian",
             "homogenous": True,
             "no_licm_barrier": no_licm_barrier_env,
@@ -275,6 +280,7 @@ def generate_header(
             ),
             enable_idsva_so_world_frame=True,
             enable_floating_second_order=True,
+            emit_alloc_gating=emit_alloc_gating,
         )
 
     cached_header.parent.mkdir(parents=True, exist_ok=True)
