@@ -27,6 +27,46 @@ def _emit_t_outer(self, n_pairs, x_expr, y_expr):
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
+def _idsva_so_fold_jobs(groups, alphas, NV, NB):
+    """Flat job list for the mimic einsum fold: for each public cell in
+    lexicographic (va,vb,vc) order, its preimage internal cells in ascending
+    (ii,jj,kk) order — the fixed deterministic sum order. Weights are baked
+    as an index into a tiny distinct-value table (products of mimic
+    multipliers; almost all 1.0).
+
+    Returns (job_start[NV^3+1], job_src[NB^3], job_wid[NB^3], wvals)."""
+    job_start, job_src, job_wid = [0], [], []
+    wvals, windex = [], {}
+    for va in range(NV):
+        for vb in range(NV):
+            for vc in range(NV):
+                for ii in groups[va]:
+                    wa = alphas[ii]
+                    for jj in groups[vb]:
+                        wab = wa * alphas[jj]
+                        for kk in groups[vc]:
+                            w = wab * alphas[kk]
+                            if w not in windex:
+                                windex[w] = len(wvals)
+                                wvals.append(w)
+                            job_src.append(ii * NB * NB + jj * NB + kk)
+                            job_wid.append(windex[w])
+                job_start.append(len(job_src))
+    assert len(job_src) == NB ** 3, "idsva_so mimic fold: job list must cover the full internal tensor"
+    assert len(wvals) <= 256, "idsva_so mimic fold: >256 distinct fold weights (widen so_fold_wid)"
+    return job_start, job_src, job_wid, wvals
+
+
+def _idsva_so_emit_baked_array(self, decl, values, fmt=str, per_line=32):
+    """Emit `decl = { ... };` with the initializer chunked across lines (the
+    fold job tables are ~NB^3 entries — a single joined line would be MBs)."""
+    chunks = [", ".join(fmt(v) for v in values[i:i + per_line])
+              for i in range(0, len(values), per_line)]
+    self.gen_add_code_lines([decl + " = {"]
+                            + [c + "," for c in chunks[:-1]]
+                            + [chunks[-1], "};"])
+
+
 SHARED_MEMORY_JOINT_THRESHOLD = 10 # Max shared memory threshold => Write directly to RAM
 
 # EXP-1 (perf_idsva_so_bigrobot.md): high-DOF FIXED-base robots route to the world-frame
@@ -2721,40 +2761,32 @@ def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
         # public (a,b,c) = group[a] x group[b] x group[c] where group[v] = internal
         # bodies mapping to reduced v-slot v; every public cell is written exactly
         # once, so the zeroing pass is gone too.
+        # FLAT-JOB form (2026-07-31 night-2 fix): the first gather used triple
+        # nested runtime-bound group loops with per-iteration index-table loads —
+        # the dependent table→address→load chain defeated the load pipelining the
+        # old streaming scatter enjoyed (h1_2 regressed +15..+30%). Baking the
+        # preimage as one flat (src, weight-id) job stream per public cell keeps
+        # the identical fixed sum order in a single unrollable loop.
         groups = {}
         for b in range(NB):
             groups.setdefault(fold_vslot[b], []).append(b)
         assert sorted(groups) == list(range(NV)), \
             "idsva_so mimic fold: v-slot groups must cover 0..NV-1"
-        grp_start, grp_body = [0], []
-        for v in range(NV):
-            grp_body += groups[v]  # ascending body ids (fixed sum order)
-            grp_start.append(len(grp_body))
+        job_start, job_src, job_wid, wvals = _idsva_so_fold_jobs(groups, fold_alpha, NV, NB)
         self.gen_add_sync()
-        self.gen_add_code_line("// Mimic fold: gather internal NB^3 sweep into public NV^3 (one thread per public cell, fixed-order preimage sums)")
-        self.gen_add_code_line(
-            "static const T so_fold_alpha[] = { " + ", ".join(
-                "static_cast<T>(" + repr(a) + ")" for a in fold_alpha) + " };")
-        self.gen_add_code_line(
-            "static const int so_grp_start[] = { " + ", ".join(map(str, grp_start)) + " };")
-        self.gen_add_code_line(
-            "static const int so_grp_body[] = { " + ", ".join(map(str, grp_body)) + " };")
+        self.gen_add_code_line("// Mimic fold: gather internal NB^3 sweep into public NV^3 (one thread per public cell, fixed-order flat job stream)")
+        _idsva_so_emit_baked_array(self, "static const T so_fold_wval[]", wvals,
+                                   fmt=lambda a: "static_cast<T>(" + repr(a) + ")")
+        _idsva_so_emit_baked_array(self, "static const int so_fold_start[]", job_start)
+        _idsva_so_emit_baked_array(self, "static const int so_fold_src[]", job_src)
+        _idsva_so_emit_baked_array(self, "static const unsigned char so_fold_wid[]", job_wid)
         self.gen_add_parallel_loop('idx', f'4*{NV**3}')
         self.gen_add_code_line(f'int blk = idx / {NV**3};')
-        self.gen_add_code_line(f'int rem = idx % {NV**3};')
-        self.gen_add_code_line(f'int va = rem / {NV*NV};')
-        self.gen_add_code_line(f'int vb = (rem / {NV}) % {NV};')
-        self.gen_add_code_line(f'int vc = rem % {NV};')
+        self.gen_add_code_line(f'int cell = idx % {NV**3};')
+        self.gen_add_code_line(f'const T *fold_src = &s_idsva_so_internal[blk*{NB**3}];')
         self.gen_add_code_line("T acc = static_cast<T>(0);")
-        self.gen_add_code_line("for (int pi = so_grp_start[va]; pi < so_grp_start[va + 1]; pi++) {", True)
-        self.gen_add_code_line("int ii = so_grp_body[pi]; T wa = so_fold_alpha[ii];")
-        self.gen_add_code_line("for (int pj = so_grp_start[vb]; pj < so_grp_start[vb + 1]; pj++) {", True)
-        self.gen_add_code_line("int jj = so_grp_body[pj]; T wab = wa * so_fold_alpha[jj];")
-        self.gen_add_code_line("for (int pk = so_grp_start[vc]; pk < so_grp_start[vc + 1]; pk++) {", True)
-        self.gen_add_code_line("int kk = so_grp_body[pk];")
-        self.gen_add_code_line(f"acc += wab * so_fold_alpha[kk] * s_idsva_so_internal[blk*{NB**3} + ii*{NB*NB} + jj*{NB} + kk];")
-        self.gen_add_end_control_flow()
-        self.gen_add_end_control_flow()
+        self.gen_add_code_line("for (int j = so_fold_start[cell]; j < so_fold_start[cell + 1]; j++) {", True)
+        self.gen_add_code_line("acc += so_fold_wval[so_fold_wid[j]] * fold_src[so_fold_src[j]];")
         self.gen_add_end_control_flow()
         self.gen_add_code_line("s_idsva_so_public[idx] = acc;")
         self.gen_add_end_control_flow()
@@ -3814,31 +3846,25 @@ def gen_idsva_so_world_frame_inner(self, use_qdd_input = False):
             wf_groups.setdefault(tv, []).append(s)
         assert sorted(wf_groups) == list(range(NV)), \
             "idsva_so world fold: true-vel groups must cover 0..NV-1"
-        wf_grp_start, wf_grp_slot = [0], []
-        for v in range(NV):
-            wf_grp_slot += wf_groups[v]  # ascending internal slots (fixed sum order)
-            wf_grp_start.append(len(wf_grp_slot))
-        self.gen_add_code_line("// Mimic fold: gather internal n_int^3 sweep into public NV^3 (one thread per public cell, fixed-order preimage sums)")
-        self.gen_add_code_lines([
-            f"static const int wf_grp_start[] = {{ {_idsva_so_int_array(wf_grp_start)} }};",
-            f"static const int wf_grp_slot[] = {{ {_idsva_so_int_array(wf_grp_slot)} }};",
-        ])
+        # FLAT-JOB form (2026-07-31 night-2 fix, twin of the body-frame fold):
+        # baked (src, weight-id) job stream per public cell — identical fixed sum
+        # order, single unrollable loop (the nested runtime-bound group loops
+        # regressed h1_2 +20..+27%).
+        job_start, job_src, job_wid, wvals = _idsva_so_fold_jobs(
+            wf_groups, metadata['int_alpha'], NV, n_int)
+        self.gen_add_code_line("// Mimic fold: gather internal n_int^3 sweep into public NV^3 (one thread per public cell, fixed-order flat job stream)")
+        _idsva_so_emit_baked_array(self, "static const T wf_fold_wval[]", wvals,
+                                   fmt=lambda a: "static_cast<T>(" + repr(a) + ")")
+        _idsva_so_emit_baked_array(self, "static const int wf_fold_start[]", job_start)
+        _idsva_so_emit_baked_array(self, "static const int wf_fold_src[]", job_src)
+        _idsva_so_emit_baked_array(self, "static const unsigned char wf_fold_wid[]", job_wid)
         self.gen_add_parallel_loop("idx", f"4*{NV**3}")
         self.gen_add_code_line(f"int blk = idx / {NV**3};")
-        self.gen_add_code_line(f"int rem = idx % {NV**3};")
-        self.gen_add_code_line(f"int va = rem / {NV*NV};")
-        self.gen_add_code_line(f"int vb = (rem / {NV}) % {NV};")
-        self.gen_add_code_line(f"int vc = rem % {NV};")
+        self.gen_add_code_line(f"int cell = idx % {NV**3};")
+        self.gen_add_code_line(f"const T *fold_src = &s_idsva_so_internal[blk*{n_int**3}];")
         self.gen_add_code_line("T acc = static_cast<T>(0);")
-        self.gen_add_code_line("for (int pi = wf_grp_start[va]; pi < wf_grp_start[va + 1]; pi++) {", True)
-        self.gen_add_code_line("int ii = wf_grp_slot[pi]; T wa = wf_int_alpha[ii];")
-        self.gen_add_code_line("for (int pj = wf_grp_start[vb]; pj < wf_grp_start[vb + 1]; pj++) {", True)
-        self.gen_add_code_line("int jj = wf_grp_slot[pj]; T wab = wa * wf_int_alpha[jj];")
-        self.gen_add_code_line("for (int pk = wf_grp_start[vc]; pk < wf_grp_start[vc + 1]; pk++) {", True)
-        self.gen_add_code_line("int kk = wf_grp_slot[pk];")
-        self.gen_add_code_line(f"acc += wab * wf_int_alpha[kk] * s_idsva_so_internal[blk*{n_int**3} + ii*{n_int*n_int} + jj*{n_int} + kk];")
-        self.gen_add_end_control_flow()
-        self.gen_add_end_control_flow()
+        self.gen_add_code_line("for (int j = wf_fold_start[cell]; j < wf_fold_start[cell + 1]; j++) {", True)
+        self.gen_add_code_line("acc += wf_fold_wval[wf_fold_wid[j]] * fold_src[wf_fold_src[j]];")
         self.gen_add_end_control_flow()
         self.gen_add_code_line("s_idsva_so_public[idx] = acc;")
         self.gen_add_end_control_flow()
