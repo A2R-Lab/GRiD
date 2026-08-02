@@ -1709,6 +1709,7 @@ def register_robot(
     runtime_joint_dynamics: bool = False,
     runtime_inertia: bool = False,
     runtime_transform: bool = False,
+    enable_mujoco_kernels: bool = True,
 ) -> JaxRobotHandle:
     """Register a robot for use with JAX.
 
@@ -1740,6 +1741,7 @@ def register_robot(
         runtime_joint_dynamics=runtime_joint_dynamics,  # C5: mutable damping/friction table
         runtime_inertia=runtime_inertia,  # D.4: mutable inertia table (FFI reads the same device global)
         runtime_transform=runtime_transform,  # mutable joint-origin table (shared device global)
+        enable_mujoco_kernels=enable_mujoco_kernels,  # pin-only builds (RAM/compile-time)
         _profile_overlay=None,  # jax's baked default IS the ffi profile — no overlay
     )
     # Pull the cache_key + .so path from the manifest so we can dlopen

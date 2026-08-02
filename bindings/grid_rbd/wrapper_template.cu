@@ -462,14 +462,22 @@ extern "C" int grid_rbd_inverse_dynamics(
     if (qdd_opt) {
         // Host wrapper copies h_qdd→d_qdd (NUM_JOINTS per timestep, contiguous).
         std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
-#if defined(GRID_RBD_WITH_MUJOCO)
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_INVERSE_DYNAMICS)
         grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
 #else
         grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
 #endif
             g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS>(), g_streams);
     } else {
-#if defined(GRID_RBD_WITH_MUJOCO)
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_INVERSE_DYNAMICS)
         grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
 #else
         grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
@@ -545,7 +553,11 @@ extern "C" int grid_rbd_minv(
     const int nv = grid::NUM_VEL;
     pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, nj);  // qd/u unused by minv
 
-#if defined(GRID_RBD_WITH_MUJOCO)
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_MINV)
     grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(
 #else
     grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(
@@ -616,7 +628,11 @@ extern "C" int grid_rbd_forward_dynamics(
     pack_q_qd_u(q, qd, u, batch, nj);
     if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
-#if defined(GRID_RBD_WITH_MUJOCO)
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_FORWARD_DYNAMICS)
     grid::forward_dynamics<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(
 #else
     grid::forward_dynamics<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(
@@ -680,7 +696,11 @@ extern "C" int grid_rbd_aba(
     pack_q_qd_u(q, qd, u, batch, nj);
     if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
-#if defined(GRID_RBD_WITH_MUJOCO)
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_ABA)
     grid::aba<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(
 #else
     grid::aba<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(
@@ -742,7 +762,11 @@ extern "C" int grid_rbd_crba(
     const int nv = grid::NUM_VEL;
     pack_q_qd_u(q, q, nullptr, batch, nj);  // qd/u unused
 
-#if defined(GRID_RBD_WITH_MUJOCO)
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_CRBA)
     grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(
 #else
     grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(
@@ -811,7 +835,11 @@ extern "C" int grid_rbd_end_effector_pose(
     const int nj = grid::NUM_JOINTS;
     pack_q_qd_u(q, q, nullptr, batch, nj);
 
-#if defined(GRID_RBD_WITH_MUJOCO)
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_EE_POSE)
     grid::GRID_RBD_EE_POSE_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
 #else
     grid::GRID_RBD_EE_POSE_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
@@ -909,7 +937,11 @@ extern "C" int grid_rbd_end_effector_pose_gradient(
     const int nv = grid::NUM_VEL;
     pack_q_qd_u(q, q, nullptr, batch, nj);
 
-#if defined(GRID_RBD_WITH_MUJOCO)
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_EE_POSE_GRADIENT)
     grid::GRID_RBD_EE_POSE_GRADIENT_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
 #else
     grid::GRID_RBD_EE_POSE_GRADIENT_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
@@ -972,7 +1004,11 @@ extern "C" int grid_rbd_inverse_dynamics_gradient(
     // the qdd=0 overload.
     if (qdd_opt) {
         std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
-#if defined(GRID_RBD_WITH_MUJOCO)
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_INVERSE_DYNAMICS_GRADIENT)
         grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
 #else
         grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
@@ -980,7 +1016,11 @@ extern "C" int grid_rbd_inverse_dynamics_gradient(
             g_data, g_robot, gravity, batch,
             dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(), g_streams);
     } else {
-#if defined(GRID_RBD_WITH_MUJOCO)
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_INVERSE_DYNAMICS_GRADIENT)
         grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
 #else
         grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
@@ -1059,7 +1099,11 @@ extern "C" int grid_rbd_forward_dynamics_gradient(
     pack_q_qd_u(q, qd, u, batch, nj);
     if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
-#if defined(GRID_RBD_WITH_MUJOCO)
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_FORWARD_DYNAMICS_GRADIENT)
     grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(
 #else
     grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(
@@ -1134,7 +1178,11 @@ extern "C" int grid_rbd_end_effector_pose_hessian(
     const int nv = grid::NUM_VEL;
     pack_q_qd_u(q, q, nullptr, batch, nj);
 
-#if defined(GRID_RBD_WITH_MUJOCO)
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_EE_POSE_HESSIAN)
     grid::GRID_RBD_EE_POSE_HESSIAN_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
 #else
     grid::GRID_RBD_EE_POSE_HESSIAN_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
@@ -1295,7 +1343,11 @@ extern "C" int grid_rbd_fdsva_so(
     const int nj = grid::NUM_JOINTS;
     pack_q_qd_u(q, qd, u, batch, nj);
 
-#if defined(GRID_RBD_WITH_MUJOCO)
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_FDSVA_SO)
     grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(
 #else
     grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(

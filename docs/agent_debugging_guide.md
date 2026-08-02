@@ -581,6 +581,86 @@ launch; only the largest one fails.
 
 ---
 
+### 1w. A CUDA-graph "replay slower than eager" is usually the TIMING LOOP, and the wall clock is the wrong axis when GPU-bound (2026-08-01)
+
+**The overnight torch cell showed graph replay at 0.71–0.94× vs eager — a graph "losing" to
+eager.** Two stacked causes, neither a kernel bug:
+
+- **Harness artifact (the headline number):** the timed loop called `GraphCallable.__call__`,
+  which D→D-copies every input into `static_in` before `graph.replay()` — 3 extra copy launches
+  (~2.5 us GPU + ~8 us CPU dispatch) per iteration that the eager loop never pays, on inputs that
+  never changed. For repeated identical launches the apples-to-apples graph number is
+  **`replay()` only** (update `static_in` in place outside the timed region, symmetric with eager
+  reading the same tensors).
+- **Genuine structural fact:** at B ∈ {64…1024} a GRiD fd kernel is 14–80 us of GPU work vs
+  ~13 us of CPU submission — the loop is **GPU-execution-bound**, so collapsing launch overhead
+  cannot move the wall clock (replay ≈ eager, 0.9–1.0×; even a 140-node 20-step captured rollout
+  is 1.00–1.02×). The graph win is real but lives on the **CPU-submission axis**: enqueue drops
+  ~13 us → ~1.9 us (≈7×), i.e. a freed python thread, not a faster GPU. A single-op capture is
+  also only ~5 graph nodes (pack-memcpys + kernel + copy-out) — `cudaGraphLaunch` fixed cost eats
+  most of what 5 pipelined async enqueues cost anyway.
+- **Tells:** replay-vs-eager ratio ~1.0 that *degrades* when input copies are inside the loop;
+  `torch.profiler` showing kernel self-CUDA time ≈ wall/iter (GPU-bound); submit-only timing
+  (no sync inside the timer) collapsing under the graph while wall does not.
+- **Measure both axes:** wall time (sync at end) AND submission time (sync outside the timer);
+  report the copy-in variant separately. Always assert `torch.equal(eager, replay)` — bit-equal
+  is the expectation, drift means a capture bug.
+
+---
+
+### 1x. Pin-only FLOATING bindings builds broke twice: a dropped kwarg in backend delegation + a signature switch keyed on the wrong macro (2026-08-01)
+
+Found building the first `floating_base=True, enable_mujoco_kernels=False` robot through the
+jax/torch BINDINGS (go2 gpu-resident examples). Two independent bugs:
+
+- **Dropped kwarg in backend delegation:** top-level `grid_rbd.register_robot(backend="jax"/"torch")`
+  forwards to `grid_rbd.{jax,torch}.register_robot(...)` with an EXPLICIT kwarg list — and
+  `enable_mujoco_kernels` wasn't in it, so the flag silently reverted to True and the build got the
+  full mjx twins (different cache key, double compile time; a humanoid would OOM). The numpy backend
+  honored it. **Tell:** two cache entries whose grid.cuh differ by `#define GRID_RBD_WITH_MUJOCO`.
+  When a backend wrapper mirrors a long kwarg list, every new register_robot option must be added in
+  THREE places (top-level → backend fn signature → backend's base call) — grep all delegation sites.
+- **Wrapper signature switch keyed on the mjx-KERNELS gate instead of the emitted SIGNATURE:**
+  grid.cuh emits host launchers as `<..., KIND, MUJOCO_OUTPUT, RESOURCE_TIER>` on FLOATING robots
+  (per-algo exceptions: fdsva_so/fd_gradient drop it on mimic/skew; id_gradient also on spherical) —
+  INDEPENDENT of `enable_mujoco_kernels`. The wrapper's pin call sites chose the 3-vs-4-template-arg
+  form via `#if defined(GRID_RBD_WITH_MUJOCO)` (= enable && floating && !mimic && !skew). On any
+  floating build where those diverge (pin-only floating; floating mimic/skew), the 3-arg form binds
+  the explicit TIER into the `bool MUJOCO_OUTPUT` slot: **TIER=2 → hard nvcc error** ("narrowing
+  conversion of '2' to bool", seen on fdsva_so), **TIER=1 → silently compiles with
+  MUJOCO_OUTPUT=true + default RESOURCE_TIER** (mjx-convention output from the pin entry point).
+  **Fix (no rule duplication — §1m):** `_compile._mjx_signature_flags()` scans the JUST-GENERATED
+  grid.cuh for each host fn's template line and passes `-DGRID_RBD_SIG_MJX_<FN>` iff it carries
+  MUJOCO_OUTPUT; the wrapper's 13 signature switches key on those per-fn flags. Ground truth = the
+  emitted header, so the switch can never drift from codegen's per-algo rules.
+- **Still latent (out of scope 2026-08-01):** a floating SPHERICAL non-mimic robot with mjx enabled
+  — `GRID_RBD_WITH_MUJOCO` is defined but id_gradient's mjx overload/signature is not emitted, so
+  the wrapper's mjx ENTRY POINT for it should fail to compile. Same class, needs the entry-point
+  gates audited against the per-algo `mjx_host` rules.
+
+### 1y. Host-side alloc/memcpy SIZE arithmetic overflows int on big robots — "out of memory" on a nearly-empty card (2026-08-01)
+
+Found smoking the chunked-workspace seam on h2_plus (nv=81) at N=1024: `cudaMalloc` for
+`d_f_ext_gradient_dq` reported OOM with the card nearly empty. The emitted size was
+`NUM_VEL*6*NUM_BODIES*NUM_VEL*NUM_TIMESTEPS*sizeof(T)` — every factor an `int`, and C++ evaluates
+left-to-right, so the ELEMENT COUNT (81·6·76·81·1024 ≈ 3.06e9 > INT_MAX) wrapped NEGATIVE **before**
+`sizeof(T)` entered and promoted it: the negative int converts to a ~1.8e19 `size_t` → instant OOM.
+Same class in `d_idsva_so`/`d_df2` (`SECOND_ORDER_TENSOR_SIZE*NUM_TIMESTEPS` = 2.18e9) and the SO
+wrappers' D2H `cudaMemcpy` sizes. Latent since those emissions existed — every prior h2_plus SO
+"device OOM at init" partially had THIS cause, mislabeled as genuine footprint.
+
+- **Fix pattern: `sizeof(T)` LEADS the product** (`sizeof(T)*A*B*N`) so the arithmetic is `size_t`
+  from the first multiply. One-token reorder, no casts.
+- **Tell:** OOM on an alloc whose hand-computed size fits comfortably; or element count within ~2×
+  of 2^31. Grep audit: any emitted `malloc/cudaMalloc/cudaMemcpy` whose size expression ENDS with
+  `*sizeof(T)` and can exceed 2^31 elements on nv≈80+ robots.
+- **Related, currently safe by construction:** per-timestep grid-stride offsets inside kernels
+  (`k*stride`) stay under INT_MAX because the chunked launches cap k<C (C=512·2.99e6 ≈ 1.53e9);
+  an UNCHUNKED N=1024 launch on an nv=81 robot would overflow there too — if such a config ever
+  becomes reachable, the kernel-side index arithmetic needs the same size_t promotion.
+
+---
+
 ## 2. Debugging methodology (what actually localizes a bug fast)
 
 - **Validate the DEPENDENCY standalone first.** Before assuming "Λ = J·M⁻¹·Jᵀ is broken for mimic,"

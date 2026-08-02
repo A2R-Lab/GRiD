@@ -21,6 +21,7 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -403,6 +404,62 @@ def _torch_build_flags() -> dict | None:
         return None
 
 
+def _mjx_signature_flags(cuh_path: Path) -> list[str]:
+    """Derive the wrapper's host-template SIGNATURE flags from the generated header.
+
+    grid.cuh emits each HOST launcher either as ``<..., KIND, RESOURCE_TIER>``
+    (fixed base — and, per algo, mimic/skew/spherical robots) or as
+    ``<..., KIND, MUJOCO_OUTPUT, RESOURCE_TIER>`` (floating base). The extra
+    template parameter is keyed on FLOATING-ness with PER-ALGO exceptions
+    (fdsva_so/fd_gradient skip it on mimic/skew; id_gradient also on spherical)
+    and does NOT depend on enable_mujoco_kernels — so the wrapper cannot infer
+    the signature from GRID_RBD_WITH_MUJOCO (that macro is the mjx-KERNELS
+    gate: enable_mujoco_kernels AND floating AND non-mimic/skew). Keying the
+    signature switch on it broke every pin-only floating build (TIER landed in
+    the MUJOCO_OUTPUT bool slot: hard error at TIER=2, silently-wrong
+    MUJOCO_OUTPUT=true at TIER=1).
+
+    Ground truth is the emitted header itself: for each host fn the wrapper
+    launches with an explicit RESOURCE_TIER, scan its template line and emit
+    ``-DGRID_RBD_SIG_MJX_<FN>`` iff it carries MUJOCO_OUTPUT. No codegen rule
+    is duplicated here, so the flags can never drift from the header
+    (agent_debugging_guide §1m: dispatcher predicate must match emission gate).
+    """
+    text = cuh_path.read_text()
+    lines = text.splitlines()
+    # The EE launchers are renamed per-target; resolve the actual fn names from
+    # the header's own #define block.
+    ee_defs = dict(re.findall(r"#define (GRID_RBD_EE_POSE\w*) (\w+)", text))
+    fns = {
+        "INVERSE_DYNAMICS": "inverse_dynamics",
+        "MINV": "minv",
+        "FORWARD_DYNAMICS": "forward_dynamics",
+        "ABA": "aba",
+        "CRBA": "crba",
+        "INVERSE_DYNAMICS_GRADIENT": "inverse_dynamics_gradient",
+        "FORWARD_DYNAMICS_GRADIENT": "forward_dynamics_gradient",
+        "FDSVA_SO": "fdsva_so",
+        "EE_POSE": ee_defs.get("GRID_RBD_EE_POSE_FN"),
+        "EE_POSE_GRADIENT": ee_defs.get("GRID_RBD_EE_POSE_GRADIENT_FN"),
+        "EE_POSE_HESSIAN": ee_defs.get("GRID_RBD_EE_POSE_HESSIAN_FN"),
+    }
+    flags: list[str] = []
+    for suffix, fn in fns.items():
+        if not fn:
+            continue  # EE launcher not emitted for this build
+        pat = re.compile(r"\bvoid " + re.escape(fn) + r"\(gridData")
+        for i, line in enumerate(lines):
+            if pat.search(line):
+                # template line sits a couple of lines above (past __host__ etc.)
+                for j in range(i - 1, max(i - 5, -1), -1):
+                    if "template <" in lines[j]:
+                        if "MUJOCO_OUTPUT" in lines[j]:
+                            flags.append(f"-DGRID_RBD_SIG_MJX_{suffix}")
+                        break
+                break
+    return flags
+
+
 def compile_so(
     wrapper_cu: Path,
     out_so: Path,
@@ -569,7 +626,11 @@ def generate_and_compile(
                enable_jax_ffi=True, enable_torch=True,
                runtime_inertia=bool(options.get("runtime_inertia", False)),
                runtime_transform=bool(options.get("runtime_transform", False)),
-               runtime_joint_dynamics=bool(options.get("runtime_joint_dynamics", False)))
+               runtime_joint_dynamics=bool(options.get("runtime_joint_dynamics", False)),
+               # Host-template signature flags, derived from the header just
+               # generated (floating builds carry a MUJOCO_OUTPUT template param
+               # on most host launchers even when enable_mujoco_kernels=False).
+               extra_flags=_mjx_signature_flags(cuh_path))
 
     # Persist meta.json
     meta["cuda_arch"] = cuda_arch

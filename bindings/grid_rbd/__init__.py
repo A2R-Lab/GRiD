@@ -319,7 +319,8 @@ def register_robot(
             cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
             output_convention=output_convention, algorithm_list=algorithm_list,
             use_joint_dynamics=use_joint_dynamics, runtime_inertia=runtime_inertia,
-            runtime_transform=runtime_transform)
+            runtime_transform=runtime_transform,
+            enable_mujoco_kernels=enable_mujoco_kernels)
     if backend == "torch":
         from . import torch as _torch_backend
         return _torch_backend.register_robot(
@@ -328,7 +329,8 @@ def register_robot(
             cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
             output_convention=output_convention, algorithm_list=algorithm_list,
             use_joint_dynamics=use_joint_dynamics, runtime_inertia=runtime_inertia,
-            runtime_transform=runtime_transform)
+            runtime_transform=runtime_transform,
+            enable_mujoco_kernels=enable_mujoco_kernels)
 
     cache_dir = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)

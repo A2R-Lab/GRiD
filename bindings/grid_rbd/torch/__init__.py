@@ -370,6 +370,24 @@ class GraphCallable:
 
     ``static_in`` are the captured input tensors (``.copy_()`` new data in);
     ``static_out`` is the captured output; ``replay()`` re-runs the graph.
+
+    Two usage modes, with different costs:
+
+    * ``replay()`` — re-runs the captured graph on the CURRENT contents of
+      ``static_in`` (write new data into those buffers in place, or reuse the
+      captured inputs). One ``cudaGraphLaunch``: CPU submission cost collapses
+      to ~2 us regardless of how many kernels/memcpys were captured.
+    * ``__call__(*inputs)`` — convenience: copies each input D->D into
+      ``static_in`` first, then replays. The copy-in adds one fused foreach
+      launch (or one per tensor on older torch) of REAL GPU + CPU work per
+      call, so for identical repeated inputs prefer ``replay()``.
+
+    Performance note: a CUDA graph removes CPU launch overhead; it does not
+    speed up the kernels themselves. If the captured op is GPU-execution-bound
+    (large batch and/or a heavy kernel), replay wall time ~= eager wall time
+    and the win is the freed CPU time (submission drops from ~10-15 us of
+    per-op dispatch to ~2 us), which matters when the python thread has other
+    work (RL/training loops) or when many small ops are captured together.
     """
 
     def __init__(self, op, example_inputs, kwargs):
@@ -400,8 +418,14 @@ class GraphCallable:
     def __call__(self, *inputs):
         if len(inputs) != len(self.static_in):
             raise ValueError(f"expected {len(self.static_in)} inputs, got {len(inputs)}")
-        for dst, src in zip(self.static_in, inputs):
-            dst.copy_(src)
+        # Fused copy-in: one dispatcher hop for all inputs (falls back to a
+        # per-tensor loop on torch builds without _foreach_copy_).
+        foreach = getattr(self._torch, "_foreach_copy_", None)
+        if foreach is not None:
+            foreach(self.static_in, list(inputs))
+        else:
+            for dst, src in zip(self.static_in, inputs):
+                dst.copy_(src)
         return self.replay()
 
 
@@ -1382,6 +1406,7 @@ def register_robot(
     runtime_joint_dynamics: bool = False,
     runtime_inertia: bool = False,
     runtime_transform: bool = False,
+    enable_mujoco_kernels: bool = True,
 ) -> TorchRobotHandle:
     """Register a robot for the torch backend (same cache as the plain/JAX
     surfaces). Returns a :py:class:`TorchRobotHandle`.
@@ -1400,6 +1425,7 @@ def register_robot(
         runtime_joint_dynamics=runtime_joint_dynamics,  # C5 mutable damping/friction table
         runtime_inertia=runtime_inertia,  # D.4: mutable inertia table (torch op reads same device global)
         runtime_transform=runtime_transform,  # mutable joint-origin table (shared device global)
+        enable_mujoco_kernels=enable_mujoco_kernels,  # pin-only builds (RAM/compile-time)
         _profile_overlay="torch",  # E6 torch threads overlay
     )
     cache_key, so_path = _lookup(name, cache_dir)
