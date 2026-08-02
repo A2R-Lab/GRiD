@@ -659,6 +659,36 @@ wrappers' D2H `cudaMemcpy` sizes. Latent since those emissions existed — every
   an UNCHUNKED N=1024 launch on an nv=81 robot would overflow there too — if such a config ever
   becomes reachable, the kernel-side index arithmetic needs the same size_t promotion.
 
+### 1z. A launchability PROBE must check the kernel the DISPATCHER actually launches, not a fixed variant (2026-08-02)
+
+h2_plus `idsva_so` reported "SKIPPED (242,816 B shared mem exceeds device cap)" at EVERY tier —
+looked like a hard smem wall. It was the bench's skip probe: `PER_ALGO_SPECS["idsva_so"]`
+checked `IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES` (the floating no-ladder DIAGNOSTIC path),
+but `grid::idsva_so` forwards AT CODEGEN TIME to the WORLD frame on floating/spherical/high-DOF
+robots — which fits (84 KB shared / 23 KB lite+minimal). The cell was never actually blocked.
+- **Tell:** "skipped for resource X" where the probed constant belongs to a DIFFERENT emitted
+  variant than the dispatcher's forward target; the per-tier constants in the generated header
+  (grep `*_DYNAMIC_SHARED_MEM_BYTES`) disagree with the skip message's number.
+- **Fix pattern:** emit the dispatch decision as a header macro
+  (`GRID_IDSVA_SO_DISPATCHES_WORLD_FRAME`, from the same predicate the dispatcher emit uses) and
+  make the probe `#if` on it (undefined → old behavior, so stale headers keep working).
+- **General rule:** any consumer-side gate keyed to "algorithm X" must resolve X the way the
+  PUBLIC entry point does. Same class as §1x (wrapper switch keyed on the wrong macro).
+
+### 1aa. Restricted `algorithm_list` emits a CALLER whose shared HELPER is gated behind an unrequested algorithm (2026-08-02)
+
+`algorithm_list=[idsva_so_body_frame,fdsva_so]` + `enable_floating_second_order=True` emitted the
+floating integrator-hessian SE(3) block (calls `grid_dIntegrate_{q,v}_block` /
+`grid_d2Integrate_block`) but NOT `gen_lie_group_helpers` — every full-profile header gets those
+helpers from ANOTHER consumer (integrator / f_ext_gradient / d2ee / frame_jacobian_dot), so the
+gap only reproduces under a restricted list → nvcc "identifier undefined" deep in grid.cuh.
+- **Fix pattern:** the EMITTER that emits the caller calls the (idempotent) helper emitter itself
+  — `gen_lie_group_helpers` guards with `_lie_helpers_emitted`, so a duplicate call is a no-op
+  and full-profile headers stay byte-identical.
+- **Audit rule:** a helper emitted at ORCHESTRATION level (gen_all_code deciding "algorithm A is
+  in the list so emit helper H") is a latent restricted-list bug for every OTHER emitter that
+  uses H. Idempotent helper emitters called at the point of use are the robust shape.
+
 ---
 
 ## 2. Debugging methodology (what actually localizes a bug fast)
