@@ -387,6 +387,192 @@ def normalize_collision_tiers(collision_spec):
 
 
 # --------------------------------------------------------------------------- namespace emitter
+def _emit_self_collision_rows(self, fine, nv):
+    """SELF-collision distance/gradient rows (GATO ask 2026-08-01,
+    gato_ask_self_collision_rows_2026-08-01.md): the self-pair analogue of the four env
+    emits (collision_distance[_gradient] + pairs twins). Pair list = the SAME baked
+    adjacency-excluded set the boolean config_free self test uses (build_self_cc_ranges:
+    same/parent/child-anchor pairs skipped), flattened to explicit pair arrays (pair-major
+    ABI) + a symmetric CSR (per-sphere partner lists) so the reduced form has a fixed-order,
+    single-writer min per sphere (deterministic, no atomics).
+
+    Sphere-sphere SDF is closed-form: d = |p_i - p_j| - r_i - r_j, n = (p_i - p_j)/|p_i - p_j|
+    (pointing toward sphere i), d(d)/dq_v = n . (dp_i/dq_v - dp_j/dq_v) — BOTH endpoints move,
+    the one structural difference from the env rows (static obstacles). Emitted for the
+    FINEST/public tier only (same rule as the env differentiable family). Capsule-path
+    (native-row) self pairs are a follow-on: they need the segment-segment closest-point
+    params (tA, tB) exposed from grid_cc_capsule_capsule."""
+    _sc_pairs = [(row[0], j) for row in fine["self_cc_ranges"] for j in range(row[1], row[2] + 1)]
+    _sc_np = len(_sc_pairs)
+    _sc_adj = [[] for _ in range(fine["n"])]
+    for (pi, pj) in _sc_pairs:
+        _sc_adj[pi].append(pj)
+        _sc_adj[pj].append(pi)
+    _sc_start = [0]
+    _sc_flat = []
+    for lst in _sc_adj:
+        _sc_flat.extend(lst)
+        _sc_start.append(len(_sc_flat))
+    self.gen_add_code_lines([
+        "// SELF-collision pair set (adjacency-excluded, from the config_free ranges): explicit",
+        "// pairs (pair-major ABI) + symmetric CSR (per-sphere partner lists, reduced form)",
+        "constexpr int NUM_SELF_COLLISION_PAIRS = " + str(_sc_np) + ";",
+        "__device__ const int g_collision_self_pair_i[" + str(max(_sc_np, 1)) + "] = {" +
+        (", ".join(str(p[0]) for p in _sc_pairs) if _sc_np else "0") + "};",
+        "__device__ const int g_collision_self_pair_j[" + str(max(_sc_np, 1)) + "] = {" +
+        (", ".join(str(p[1]) for p in _sc_pairs) if _sc_np else "0") + "};",
+        "__device__ const int g_collision_self_adj_start[" + str(fine["n"] + 1) + "] = {" +
+        ", ".join(str(v) for v in _sc_start) + "};",
+        "__device__ const int g_collision_self_adj[" + str(max(2 * _sc_np, 1)) + "] = {" +
+        (", ".join(str(v) for v in _sc_flat) if _sc_flat else "0") + "};",
+    ])
+
+    _sc_state_params = [
+        "s_q is the vector of joint positions",
+        "d_robotModel is the initialized model-specific helpers on the GPU",
+        "s_sphere_pos is caller scratch of size 3*NUM_COLLISION_SPHERES (sphere world positions)",
+        "s_sphere_r is caller scratch of size NUM_COLLISION_SPHERES (filled here from the baked radii)",
+        "d_workspace is the multi_target FK scratch at TIER_LITE+ (nullptr at TIER_SHARED)"]
+
+    # REDUCED: per-sphere min clearance over its active self-pairs + argmin partner
+    self.gen_add_func_doc("self_collision_distance: per-sphere min signed clearance over its ACTIVE self-pairs + normal + argmin partner",
+                          ["d_i = min over baked non-adjacent partners j of (|p_i - p_j| - r_i - r_j); >0 clear, <0 penetrating.",
+                           "s_dist[i] = +1e30 and s_partner[i] = -1 when sphere i has no active self-pairs.",
+                           "The argmin partner IS the freeze seam: a consumer wanting a smooth step freezes s_partner "
+                           "across its inner loop (same pattern as the env nearest-obstacle argmin).",
+                           "n_i = (p_i - p_j*)/|p_i - p_j*| points TOWARD sphere i; d(d_i)/dq = n_i . (dp_i - dp_j*)/dq."],
+                          ["s_dist is the per-sphere self-clearance output (size NUM_COLLISION_SPHERES)",
+                           "s_normal is the per-sphere argmin-pair unit normal (size 3*NUM_COLLISION_SPHERES)",
+                           "s_partner is the per-sphere argmin partner index, -1 if none (size NUM_COLLISION_SPHERES)"] + _sc_state_params, None)
+    self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void self_collision_distance(T *s_dist, T *s_normal, int *s_partner, const T *s_q, const grid::robotModel<T> *d_robotModel, "
+                           "T *s_sphere_pos, T *s_sphere_r, T *d_workspace = nullptr) {", True)
+    self.gen_add_code_line("grid::multi_target_position_device<T, RESOURCE_TIER>(s_sphere_pos, s_q, d_robotModel, d_workspace);")
+    self.gen_add_code_line("load_collision_radii<T>(s_sphere_r);")
+    self.gen_add_sync()
+    self.gen_add_parallel_loop("i", "NUM_COLLISION_SPHERES")
+    self.gen_add_code_lines([
+        "T best = static_cast<T>(1e30); int bj = -1; T bnx = static_cast<T>(1), bny = static_cast<T>(0), bnz = static_cast<T>(0);",
+        "for (int e = g_collision_self_adj_start[i]; e < g_collision_self_adj_start[i+1]; ++e) {", True,
+        "const int j = g_collision_self_adj[e];",
+        "const T dx = s_sphere_pos[3*i+0] - s_sphere_pos[3*j+0];",
+        "const T dy = s_sphere_pos[3*i+1] - s_sphere_pos[3*j+1];",
+        "const T dz = s_sphere_pos[3*i+2] - s_sphere_pos[3*j+2];",
+        "const T cn = sqrt(dx*dx + dy*dy + dz*dz);",
+        "const T d = cn - s_sphere_r[i] - s_sphere_r[j];",
+        "if (d < best) {", True,
+        "best = d; bj = j;",
+        "// coincident centers: keep the deterministic +x fallback normal",
+        "if (cn > static_cast<T>(1e-12)) { const T inv = static_cast<T>(1)/cn; bnx = dx*inv; bny = dy*inv; bnz = dz*inv; }",
+    ])
+    self.gen_add_end_control_flow()   # if d < best
+    self.gen_add_end_control_flow()   # for e
+    self.gen_add_code_line("s_dist[i] = best; s_partner[i] = bj;")
+    self.gen_add_code_line("s_normal[3*i+0] = bnx; s_normal[3*i+1] = bny; s_normal[3*i+2] = bnz;")
+    self.gen_add_end_control_flow()   # parallel loop
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+    # REDUCED gradient
+    self.gen_add_func_doc("self_collision_distance_gradient: per-sphere self-clearance Jacobian s_ddist[i*NV+vi] = n_i . (dp_i - dp_j*)/dq_vi",
+                          ["Also returns s_dist/s_partner so a consumer has value + Jacobian + freeze seam in one call.",
+                           "BOTH endpoints move (unlike the env rows): the row composes the argmin-pair normal with the "
+                           "difference of the two spheres' W2a batched position-gradient columns.",
+                           "Rows of spheres with no active self-pairs are ZERO (partner -1).",
+                           "s_ddist layout is sphere-major: sphere i's NV-gradient is s_ddist[i*NV .. i*NV+NV-1]."],
+                          ["s_dist is the per-sphere self-clearance output (size NUM_COLLISION_SPHERES)",
+                           "s_ddist is the per-sphere self-clearance Jacobian output (size NUM_COLLISION_SPHERES*NUM_VEL, sphere-major)"] +
+                          _sc_state_params +
+                          ["s_normal is caller scratch of size 3*NUM_COLLISION_SPHERES (argmin-pair normals)",
+                           "s_partner is caller scratch of size NUM_COLLISION_SPHERES (int; argmin partner per sphere)",
+                           "s_pos_grad is caller scratch of size 3*NUM_VEL*NUM_COLLISION_SPHERES (batched dp/dq)"], None)
+    self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void self_collision_distance_gradient(T *s_dist, T *s_ddist, const T *s_q, const grid::robotModel<T> *d_robotModel, "
+                           "T *s_sphere_pos, T *s_sphere_r, T *s_normal, int *s_partner, T *s_pos_grad, "
+                           "T *d_workspace = nullptr) {", True)
+    self.gen_add_code_line("self_collision_distance<T, RESOURCE_TIER>(s_dist, s_normal, s_partner, s_q, d_robotModel, s_sphere_pos, s_sphere_r, d_workspace);")
+    self.gen_add_code_line("grid::multi_target_position_gradient_device<T, RESOURCE_TIER>(s_pos_grad, s_q, d_robotModel, d_workspace);")
+    self.gen_add_sync()
+    self.gen_add_parallel_loop("ind", "NUM_COLLISION_SPHERES * " + str(nv))
+    self.gen_add_code_lines([
+        "int vi = ind % " + str(nv) + "; int i = ind / " + str(nv) + ";",
+        "const int j = s_partner[i];",
+        "T v = static_cast<T>(0);",
+        "if (j >= 0) {", True,
+        "int ib = 3 * (" + str(nv) + " * i + vi); int jb = 3 * (" + str(nv) + " * j + vi);",
+        "v = s_normal[3*i+0]*(s_pos_grad[ib+0]-s_pos_grad[jb+0]) + s_normal[3*i+1]*(s_pos_grad[ib+1]-s_pos_grad[jb+1]) + s_normal[3*i+2]*(s_pos_grad[ib+2]-s_pos_grad[jb+2]);",
+    ])
+    self.gen_add_end_control_flow()   # if j >= 0
+    self.gen_add_code_line("s_ddist[i*" + str(nv) + " + vi] = v;")
+    self.gen_add_end_control_flow()   # parallel loop
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+    # PAIRS: un-reduced, compile-time-sized (the baked pair list, unlike the env's runtime n_obs)
+    self.gen_add_func_doc("self_collision_distance_pairs: UN-REDUCED signed clearance + normal for every baked self-pair",
+                          ["Each pair row is smooth in q (a single fixed sphere pair); the argmin non-smoothness of the "
+                           "reduced form moves into the solver's own active-set/max, same reasoning as the env pairs emit.",
+                           "Pair p = (g_collision_self_pair_i[p], g_collision_self_pair_j[p]); COMPILE-TIME count "
+                           "NUM_SELF_COLLISION_PAIRS (the pair list is baked, unlike the env's runtime obstacle set).",
+                           "n_p points TOWARD sphere i (from j)."],
+                          ["s_dist is the per-PAIR clearance output (size NUM_SELF_COLLISION_PAIRS)",
+                           "s_normal is the per-PAIR unit normal (size 3*NUM_SELF_COLLISION_PAIRS)"] + _sc_state_params, None)
+    self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void self_collision_distance_pairs(T *s_dist, T *s_normal, const T *s_q, const grid::robotModel<T> *d_robotModel, "
+                           "T *s_sphere_pos, T *s_sphere_r, T *d_workspace = nullptr) {", True)
+    self.gen_add_code_line("grid::multi_target_position_device<T, RESOURCE_TIER>(s_sphere_pos, s_q, d_robotModel, d_workspace);")
+    self.gen_add_code_line("load_collision_radii<T>(s_sphere_r);")
+    self.gen_add_sync()
+    self.gen_add_parallel_loop("p", "NUM_SELF_COLLISION_PAIRS")
+    self.gen_add_code_lines([
+        "const int i = g_collision_self_pair_i[p]; const int j = g_collision_self_pair_j[p];",
+        "const T dx = s_sphere_pos[3*i+0] - s_sphere_pos[3*j+0];",
+        "const T dy = s_sphere_pos[3*i+1] - s_sphere_pos[3*j+1];",
+        "const T dz = s_sphere_pos[3*i+2] - s_sphere_pos[3*j+2];",
+        "const T cn = sqrt(dx*dx + dy*dy + dz*dz);",
+        "s_dist[p] = cn - s_sphere_r[i] - s_sphere_r[j];",
+        "// coincident centers: deterministic +x fallback normal",
+        "T nx = static_cast<T>(1), ny = static_cast<T>(0), nz = static_cast<T>(0);",
+        "if (cn > static_cast<T>(1e-12)) { const T inv = static_cast<T>(1)/cn; nx = dx*inv; ny = dy*inv; nz = dz*inv; }",
+        "s_normal[3*p+0] = nx; s_normal[3*p+1] = ny; s_normal[3*p+2] = nz;",
+    ])
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+    # PAIRS gradient
+    self.gen_add_func_doc("self_collision_distance_pairs_gradient: per-PAIR Jacobian s_ddist[p*NV+vi] = n_p . (dp_i - dp_j)/dq_vi",
+                          ["The un-reduced twin of self_collision_distance_gradient: one NV-row per baked self-pair, each "
+                           "smooth in q. Also returns s_dist so a consumer has value + Jacobian in one call.",
+                           "s_ddist layout is pair-major: pair p's NV-gradient is s_ddist[p*NV .. p*NV+NV-1]."],
+                          ["s_dist is the per-PAIR clearance output (size NUM_SELF_COLLISION_PAIRS)",
+                           "s_ddist is the per-PAIR Jacobian output (size NUM_SELF_COLLISION_PAIRS*NUM_VEL, pair-major)"] +
+                          _sc_state_params +
+                          ["s_normal is caller scratch of size 3*NUM_SELF_COLLISION_PAIRS (per-pair normals)",
+                           "s_pos_grad is caller scratch of size 3*NUM_VEL*NUM_COLLISION_SPHERES (batched dp/dq)"], None)
+    self.gen_add_code_line("template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void self_collision_distance_pairs_gradient(T *s_dist, T *s_ddist, const T *s_q, const grid::robotModel<T> *d_robotModel, "
+                           "T *s_sphere_pos, T *s_sphere_r, T *s_normal, T *s_pos_grad, "
+                           "T *d_workspace = nullptr) {", True)
+    self.gen_add_code_line("self_collision_distance_pairs<T, RESOURCE_TIER>(s_dist, s_normal, s_q, d_robotModel, s_sphere_pos, s_sphere_r, d_workspace);")
+    self.gen_add_code_line("grid::multi_target_position_gradient_device<T, RESOURCE_TIER>(s_pos_grad, s_q, d_robotModel, d_workspace);")
+    self.gen_add_sync()
+    self.gen_add_parallel_loop("ind", "NUM_SELF_COLLISION_PAIRS * " + str(nv))
+    self.gen_add_code_lines([
+        "int vi = ind % " + str(nv) + "; int p = ind / " + str(nv) + ";",
+        "const int i = g_collision_self_pair_i[p]; const int j = g_collision_self_pair_j[p];",
+        "int ib = 3 * (" + str(nv) + " * i + vi); int jb = 3 * (" + str(nv) + " * j + vi);",
+        "s_ddist[ind] = s_normal[3*p+0]*(s_pos_grad[ib+0]-s_pos_grad[jb+0]) + s_normal[3*p+1]*(s_pos_grad[ib+1]-s_pos_grad[jb+1]) + s_normal[3*p+2]*(s_pos_grad[ib+2]-s_pos_grad[jb+2]);",
+    ])
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+
 def gen_collision_namespace(self, tiers):
     """Emit the sibling `namespace grid_collision { ... }` block (model = gen_grid_plant).
 
@@ -684,6 +870,8 @@ def gen_collision_namespace(self, tiers):
     self.gen_add_end_control_flow()
     self.gen_add_sync()
     self.gen_add_end_function()
+
+    _emit_self_collision_rows(self, fine, nv)
 
     _cc_cost_scalar_params = [
         "margin is the safety distance (cost is a hinge on clearance < margin)",
