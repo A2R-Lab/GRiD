@@ -32,6 +32,7 @@ import concurrent.futures
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -197,8 +198,100 @@ def _alloc_gate_flags(algo: str | None) -> list[str]:
     return ["-DGRID_ALLOC_GATE=1", f"-DGRID_ALLOC_{algo.upper()}=1"]
 
 
+# Chunked-workspace seam (2a residual: the SO-family workspace at N=1024 exceeds the
+# card on big robots even alloc-gated — h2_plus 26.65 MB/ts -> 27.3 GB). ONLY these
+# algos' host wrappers carry the chunk loop (they sweep the batch in C-sized launches
+# reusing a C-slot workspace arena; outputs stay full-N). The -DGRID_WORKSPACE_CHUNK
+# flag must NEVER reach any other algo's exe: a chunk-unaware wrapper still launches
+# the full batch, whose grid-stride k would index PAST a chunk-sized arena.
+_CHUNK_AWARE_ALGOS = frozenset({
+    "idsva_so", "idsva_so_body_frame", "idsva_so_world_frame",
+    "idsva_so_world_frame_mjx", "fdsva_so", "fdsva_so_mjx", "f_ext_gradient_dq",
+})
+_SOLO_EXE_N = 1024   # run_all_tests<float, 1024> — the compile-time NUM_TIMESTEPS of every solo exe
+
+
+def _chunk_flags(algo: str | None, chunk_by_algo: dict[str, int] | None) -> list[str]:
+    c = int((chunk_by_algo or {}).get(algo or "", 0))
+    return [f"-DGRID_WORKSPACE_CHUNK={c}"] if c > 0 else []
+
+
+def _vram_budget_bytes(margin: float = 0.10) -> int:
+    """Device VRAM budget for the footprint estimator: TOTAL memory minus a margin
+    (total, not free — the timing run owns the night box; a shared-GPU day run only
+    ever does rc-smoke, where an occasional malloc failure is contained anyway)."""
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                             capture_output=True, text=True).stdout.strip().splitlines()[0]
+        return int(float(out) * (1.0 - margin) * 1024 * 1024)
+    except Exception:
+        return int(24e9)   # conservative default if nvidia-smi is unreadable
+
+
+def _estimate_workspace_chunks(header: Path, algos: list[str]) -> dict[str, int]:
+    """--workspace-chunk auto: per chunk-aware algo, decide C from the generated
+    header's own footprint constants vs the device VRAM budget.
+
+    Footprint at the solo exe's N=1024 (all sizes bytes, float):
+      workspace = 4*(GRAD + SO + FDSVA_SPILL elems) * N   (the h2_plus hog)
+      outputs   = 4*out_elems(algo) * N                    (stay FULL-N: chunking never shrinks them)
+      base      = 4*N*(2*nv^2 + 5*nj + 2*nv) + 64 MB      (ungated smalls: q_qd_u/q/c/qdd/Minv/M + slack)
+    Fits at full N -> 0 (no flag: exe + compile cache identical to the unchunked path —
+    that is the 'trigger'). Else the largest power-of-two C that fits. Nothing fits ->
+    loud per-algo report with the arithmetic (the exe then fails at cudaMalloc,
+    contained + attributed like any solo-exe failure)."""
+    txt = header.read_text()
+
+    def _elems(fn_name: str) -> int:
+        m = re.search(re.escape(fn_name) + r"\(\) \{ return sizeof\(T\) \* static_cast<size_t>\((\d+)\)", txt)
+        return int(m.group(1)) if m else 0
+
+    def _const(name: str) -> int:
+        m = re.search(r"const int " + re.escape(name) + r" = (\d+);", txt)
+        return int(m.group(1)) if m else 0
+
+    ws_bytes_ts = 4 * (_elems("GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP")
+                       + _elems("GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP")
+                       + _elems("GRID_FDSVA_SO_SPILL_BYTES_PER_TIMESTEP"))
+    so = _const("SECOND_ORDER_TENSOR_SIZE")
+    nv, nb, nj = _const("NUM_VEL"), _const("NUM_BODIES"), _const("NUM_JOINTS")
+    out_elems_ts = {
+        "idsva_so": so, "idsva_so_body_frame": so, "idsva_so_world_frame": so,
+        "idsva_so_world_frame_mjx": so,
+        "fdsva_so": 2 * so,      # d_df2 out + d_idsva_so input (both SECOND_ORDER_TENSOR_SIZE)
+        "fdsva_so_mjx": 2 * so,
+        "f_ext_gradient_dq": nv * 6 * nb * nv,
+    }
+    N = _SOLO_EXE_N
+    budget = _vram_budget_bytes()
+    base = 4 * N * (2 * nv * nv + 5 * nj + 2 * nv) + (64 << 20)
+    chunks: dict[str, int] = {}
+    for algo in algos:
+        if algo not in _CHUNK_AWARE_ALGOS or algo not in out_elems_ts:
+            continue
+        fixed = 4 * out_elems_ts[algo] * N + base
+        if ws_bytes_ts * N + fixed <= budget:
+            continue   # fits unchunked: no flag, exe/cache identical to before
+        picked = 0
+        for C in (512, 256, 128, 64, 32, 16, 8):
+            if ws_bytes_ts * C + fixed <= budget:
+                picked = C
+                break
+        if picked:
+            chunks[algo] = picked
+            print(f"  [chunk] {algo}: workspace {ws_bytes_ts * N / 1e9:.1f} GB @N={N} exceeds "
+                  f"budget {budget / 1e9:.1f} GB -> GRID_WORKSPACE_CHUNK={picked} "
+                  f"(workspace {ws_bytes_ts * picked / 1e9:.2f} GB + outputs/base {fixed / 1e9:.1f} GB)")
+        else:
+            print(f"  [chunk] {algo}: DOES NOT FIT even at C=8 — outputs/base alone "
+                  f"{fixed / 1e9:.1f} GB vs budget {budget / 1e9:.1f} GB (workspace "
+                  f"{ws_bytes_ts / 1e6:.1f} MB/ts). Exe will fail at cudaMalloc (contained).")
+    return chunks
+
+
 def _nvcc_cmd(src: Path, exe: Path, header_file: Path, arch: str, tier: str | None = None,
-              alloc_gate_algo: str | None = None) -> list[str]:
+              alloc_gate_algo: str | None = None,
+              chunk_by_algo: dict[str, int] | None = None) -> list[str]:
     nvcc = shutil.which("nvcc") or "nvcc"
     cmd = [
         nvcc, "-std=c++17", "-O3", f"-arch=sm_{arch}",
@@ -209,13 +302,18 @@ def _nvcc_cmd(src: Path, exe: Path, header_file: Path, arch: str, tier: str | No
     if macro is not None:   # shared == default => no flag (byte-identical to run.py's TIER_SHARED)
         cmd.append(f"-DGRID_DEFAULT_RESOURCE_TIER={macro}")
     cmd += _alloc_gate_flags(alloc_gate_algo)
+    # chunk flag keys on the ALLOC-GATE algo: the header #errors on
+    # GRID_WORKSPACE_CHUNK>0 without GRID_ALLOC_GATE, and _chunk_flags only ever
+    # yields a flag for _CHUNK_AWARE_ALGOS. Tier-independent (same C at all tiers).
+    cmd += _chunk_flags(alloc_gate_algo, chunk_by_algo)
     cmd += ["-o", str(exe), str(src)]
     return cmd
 
 
 def _compile_one(algo: str, build_dir: Path, header_file: Path, arch: str,
                  ram_per_compile_gb: float, tier: str | None = None,
-                 cgroup_cap_gb: float = 0.0, alloc_gate: bool = False) -> tuple[str, Path | None, str]:
+                 cgroup_cap_gb: float = 0.0, alloc_gate: bool = False,
+                 chunk_by_algo: dict[str, int] | None = None) -> tuple[str, Path | None, str]:
     """Write the algo's self-contained .cu and compile it to an .exe. Returns (algo, exe|None, log).
 
     The .cu is tier-independent (the resource tier is a compile-time -D flag, not source), so the source
@@ -235,13 +333,15 @@ def _compile_one(algo: str, build_dir: Path, header_file: Path, arch: str,
     gate_algo = algo if alloc_gate else None
     key = hashlib.sha1(
         (src_txt + "\0" + str(_TIER_MACRO.get(tier)) + "\0"
-         + " ".join(_alloc_gate_flags(gate_algo)) + "\0" + header_file.read_text()).encode()
+         + " ".join(_alloc_gate_flags(gate_algo)) + "\0"
+         + " ".join(_chunk_flags(gate_algo, chunk_by_algo)) + "\0" + header_file.read_text()).encode()
     ).hexdigest()
     if exe.exists() and stamp.exists() and stamp.read_text().strip() == key:
         return algo, exe, "cache hit (content stamp match)"
     _wait_for_ram(ram_per_compile_gb, f"compile {algo}{sfx}")
     t0 = time.monotonic()
-    cmd = _cgroup_wrap(_nvcc_cmd(src, exe, header_file, arch, tier, alloc_gate_algo=gate_algo), cgroup_cap_gb)
+    cmd = _cgroup_wrap(_nvcc_cmd(src, exe, header_file, arch, tier, alloc_gate_algo=gate_algo,
+                                 chunk_by_algo=chunk_by_algo), cgroup_cap_gb)
     proc = subprocess.run(cmd, capture_output=True, text=True)
     dt = time.monotonic() - t0
     if proc.returncode != 0:
@@ -280,7 +380,8 @@ def _run_one(algo: str, exe: Path, base: str, timeout_s: float) -> tuple[str, di
 # --------------------------------------------------------------------------- compile / run fan-out
 def _compile_algos(algos: list[str], build_dir: Path, header: Path, arch: str,
                    ram_per_compile_gb: float, jobs: int, tier: str | None = None,
-                   cgroup_cap_gb: float = 0.0, alloc_gate: bool = False) -> dict[str, Path]:
+                   cgroup_cap_gb: float = 0.0, alloc_gate: bool = False,
+                   chunk_by_algo: dict[str, int] | None = None) -> dict[str, Path]:
     """Compile each algo's solo exe for `tier`. Returns {algo: exe}.
 
     Two-phase so the compile-heavy SO family can't OOM the box:
@@ -310,12 +411,12 @@ def _compile_algos(algos: list[str], build_dir: Path, header: Path, arch: str,
               f"{', '.join(so_algos)}")
         for a in so_algos:
             _record(*_compile_one(a, build_dir, header, arch, ram_per_compile_gb, tier, cgroup_cap_gb,
-                                  alloc_gate=alloc_gate))
+                                  alloc_gate=alloc_gate, chunk_by_algo=chunk_by_algo))
 
     if light_algos:
         with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
             futs = {pool.submit(_compile_one, a, build_dir, header, arch,
-                                ram_per_compile_gb, tier, cgroup_cap_gb, alloc_gate): a
+                                ram_per_compile_gb, tier, cgroup_cap_gb, alloc_gate, chunk_by_algo): a
                     for a in light_algos}
             for fut in concurrent.futures.as_completed(futs):
                 _record(*fut.result())
@@ -349,7 +450,8 @@ def _run_isolated(algos: list[str], exes: dict[str, Path], base: str,
 def _run_autotune(algos: list[str], build_dir: Path, header: Path, arch: str, base: str,
                   ram_per_compile_gb: float, jobs: int, *, thread_grid: tuple[int, ...],
                   autotune_N: int, tiers: tuple[str, ...], cgroup_cap_gb: float = 0.0,
-                  alloc_gate: bool = False) -> dict[str, dict]:
+                  alloc_gate: bool = False,
+                  chunk_by_algo: dict[str, int] | None = None) -> dict[str, dict]:
     """Build each algo's {tier: solo_exe} set and run run.py's picker VERBATIM on it -> schema-2
     algo_picks[algo] (tier_optimal/threads_optimal/us_at_optimal/sweep/sweep_us[/tier_equiv_to]).
 
@@ -366,7 +468,8 @@ def _run_autotune(algos: list[str], build_dir: Path, header: Path, arch: str, ba
     for tier in tiers:
         print(f"[autotune] compiling tier={tier} for {len(algos)} algos...")
         tier_exes[tier] = _compile_algos(algos, build_dir, header, arch, ram_per_compile_gb, jobs, tier,
-                                         cgroup_cap_gb=cgroup_cap_gb, alloc_gate=alloc_gate)
+                                         cgroup_cap_gb=cgroup_cap_gb, alloc_gate=alloc_gate,
+                                         chunk_by_algo=chunk_by_algo)
 
     algo_picks: dict[str, dict] = {}
     for algo in algos:
@@ -505,6 +608,16 @@ def main() -> None:
                          "emit_alloc_gating=True, so init_gridData allocates ONLY that algo's large "
                          "buffers (h2_plus nv=81: the full set OOMs the card in every solo exe). "
                          "This flag restores the previous allocate-everything behavior.")
+    ap.add_argument("--workspace-chunk", type=str, default="auto",
+                    help="chunked-workspace seam for the SO-family solo exes (2a residual: the "
+                         "workspace arena at N=1024 exceeds the card on big robots even alloc-gated). "
+                         "'auto' (default) = per-algo footprint estimate from the generated header vs "
+                         "device VRAM; fits -> unchunked (no flag, caches undisturbed), else the "
+                         "largest power-of-two C that fits. '0' = never chunk. An integer C = force "
+                         "that chunk for every chunk-aware algo. Chunked exes sweep the batch in "
+                         "C-sized launches reusing a C-slot arena (outputs full-N, bit-identical — "
+                         "gated by test_cuda_workspace_chunk). Requires alloc gating (header #errors "
+                         "otherwise); ignored with --no-alloc-gate.")
     args = ap.parse_args()
     alloc_gate = not args.no_alloc_gate
 
@@ -544,7 +657,10 @@ def main() -> None:
         runtime_transform=args.runtime_transform,
         runtime_joint_dynamics=args.runtime_joint_dynamics,
         multi_target_from_collision=args.multi_target_from_collision,
-        emit_alloc_gating=alloc_gate)
+        emit_alloc_gating=alloc_gate,
+        # chunk-capable wrappers ride the gated header (macro-unset = behavior-identical;
+        # the tripwire ties GRID_WORKSPACE_CHUNK>0 to GRID_ALLOC_GATE)
+        emit_workspace_chunking=alloc_gate)
 
     # Which algos are in scope for this robot/base (drops non-production + mimic-unsupported).
     has_mimic = gridrun.robot_is_mimic(urdf)
@@ -564,6 +680,20 @@ def main() -> None:
     arch = gridrun.detect_cuda_arch()
     print(f"[per-algo] {len(algos)} algos in scope: {', '.join(algos)}")
 
+    # Resolve the per-algo workspace chunk BEFORE any compile (flags key the content stamp).
+    chunk_arg = args.workspace_chunk.strip().lower()
+    if not alloc_gate or chunk_arg == "0":
+        chunk_by_algo: dict[str, int] = {}
+    elif chunk_arg == "auto":
+        chunk_by_algo = _estimate_workspace_chunks(header, algos)
+    else:
+        forced = int(chunk_arg)
+        chunk_by_algo = {a: forced for a in algos if a in _CHUNK_AWARE_ALGOS}
+        print(f"  [chunk] forced GRID_WORKSPACE_CHUNK={forced} for: "
+              f"{', '.join(sorted(chunk_by_algo)) or '(none in scope)'}")
+    if chunk_by_algo:
+        print(f"[per-algo] workspace chunks: {chunk_by_algo}")
+
     jobs = args.compile_jobs or max(1, int(_ram_avail_gb() / args.ram_per_compile_gb))
     print(f"[per-algo] mode={args.mode} | compiling with up to {jobs} parallel job(s) "
           f"(RAM guard {args.ram_per_compile_gb:.0f} GB/compile)")
@@ -578,13 +708,15 @@ def main() -> None:
         missing: list[str] = []
         if args.mode == "timing":
             exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier=args.tier,
-                                  cgroup_cap_gb=args.cgroup_cap_gb, alloc_gate=alloc_gate)
+                                  cgroup_cap_gb=args.cgroup_cap_gb, alloc_gate=alloc_gate,
+                                  chunk_by_algo=chunk_by_algo)
             missing = [a for a in algos if a not in exes]
             what = f"tier {args.tier or 'shared'}"
         else:  # autotune: pre-build every tier so the measure run compiles nothing
             for tier in tiers:
                 exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier,
-                                      cgroup_cap_gb=args.cgroup_cap_gb, alloc_gate=alloc_gate)
+                                      cgroup_cap_gb=args.cgroup_cap_gb, alloc_gate=alloc_gate,
+                                      chunk_by_algo=chunk_by_algo)
                 missing += [f"{a}({tier})" for a in algos if a not in exes]
             what = f"tiers {','.join(tiers)}"
         if missing:
@@ -598,12 +730,15 @@ def main() -> None:
     # --tier selects the resource tier (default None == shared == no -D flag, the original path).
     if args.mode == "timing":
         exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs, tier=args.tier,
-                           cgroup_cap_gb=args.cgroup_cap_gb, alloc_gate=alloc_gate)
+                           cgroup_cap_gb=args.cgroup_cap_gb, alloc_gate=alloc_gate,
+                           chunk_by_algo=chunk_by_algo)
         results, gated, crashed = _run_isolated(algos, exes, args.base, args.per_exe_timeout)
         out = args.output or (build_dir / f"{args.robot}_{args.base}_grid_per_algo.json")
         payload = {
             "metadata": {**build_metadata(include_gpu=True), "robot": args.robot, "base": args.base,
-                         "bench_path": "per_algo_isolated", "resource_tier": args.tier or "shared"},
+                         "bench_path": "per_algo_isolated", "resource_tier": args.tier or "shared",
+                         # A/B triage marker: NEVER silently compare a chunked run to an unchunked one
+                         "workspace_chunks": chunk_by_algo},
             "results": {args.robot: {args.base: {"grid": results}}},
         }
         out.write_text(json.dumps(payload, indent=1))
@@ -615,7 +750,8 @@ def main() -> None:
     # tier (suffix-less, no -D flag), so the expensive SO-monster compile is paid once.
     print("[autotune] --- timing pass (grid block) ---")
     exes = _compile_algos(algos, build_dir, header, arch, args.ram_per_compile_gb, jobs,
-                          cgroup_cap_gb=args.cgroup_cap_gb, alloc_gate=alloc_gate)
+                          cgroup_cap_gb=args.cgroup_cap_gb, alloc_gate=alloc_gate,
+                          chunk_by_algo=chunk_by_algo)
     results, gated, crashed = _run_isolated(algos, exes, args.base, args.per_exe_timeout)
     filled = fill_nulls(dict(results))   # ensure the ALL_ALGOS core keys exist as null when un-run
 
@@ -623,7 +759,8 @@ def main() -> None:
     algo_picks = _run_autotune(algos, build_dir, header, arch, args.base,
                                args.ram_per_compile_gb, jobs, thread_grid=thread_grid,
                                cgroup_cap_gb=args.cgroup_cap_gb,
-                               autotune_N=args.autotune_N, tiers=tiers, alloc_gate=alloc_gate)
+                               autotune_N=args.autotune_N, tiers=tiers, alloc_gate=alloc_gate,
+                               chunk_by_algo=chunk_by_algo)
 
     # Assemble the run.py-faithful autotune payload: results[robot][base] = {"grid": filled,
     # "algo_picks": {...}} with a schema-2 autotune_threads metadata block. Column key stays "grid"
@@ -632,6 +769,8 @@ def main() -> None:
     # autotune consumers glob (build_autotune_matrix / sweep_to_autotune_best).
     meta = {**build_metadata(include_gpu=True), "robot": args.robot, "base": args.base,
             "bench_path": "per_algo_isolated",
+            # A/B triage marker: NEVER silently compare a chunked run to an unchunked one
+            "workspace_chunks": chunk_by_algo,
             "autotune_threads": {"thread_grid": list(thread_grid), "autotune_N": int(args.autotune_N),
                                  "mode": "batch", "tiers": list(tiers), "schema": 2}}
     out = args.output or (build_dir / f"{args.robot}_{args.base}_grid_glass.json")

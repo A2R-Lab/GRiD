@@ -110,7 +110,7 @@ class GRiDCodeGenerator:
                          gen_var_not_in_list, gen_add_multi_threaded_select, gen_kernel_load_inputs, gen_kernel_save_result, \
                          gen_anti_licm_input_reload, gen_anti_licm_output_write, \
                          gen_static_array_ind_2d, gen_static_array_ind_3d, gen_add_debug_print_code_lines, \
-                         gen_mx_func_call_for_cpp, gen_add_shared_memory_helpers, gen_declare_shared_arena, \
+                         gen_mx_func_call_for_cpp, gen_add_shared_memory_helpers, gen_add_workspace_chunked_launch, gen_declare_shared_arena, \
                          gen_shared_arena_t_count, gen_device_wrapper, gen_tier_dispatch, gen_spatial_algebra_helpers, \
                          gen_get_XI_size, gen_init_XImats, gen_get_inertia_params_size, gen_init_inertia_params, gen_set_inertia_params, \
                          gen_get_transform_params_size, gen_init_transform_params, gen_set_transform_params, \
@@ -2279,6 +2279,14 @@ class GRiDCodeGenerator:
         def ag_close():
             return ["    #endif"] if gating else []
 
+        # Chunked-workspace seam: with emit_workspace_chunking the workspace arena
+        # (the N=1024 hog on big robots — outputs are NOT the problem) is sized in
+        # grid_workspace_chunk(NUM_TIMESTEPS) timestep slots instead of NUM_TIMESTEPS.
+        # Macro unset => the helper returns NUM_TIMESTEPS (behavior-identical);
+        # flag off => the literal below is emitted (byte-identical).
+        ws_ts = ("grid_workspace_chunk(NUM_TIMESTEPS)"
+                 if getattr(self, "emit_workspace_chunking", False) else "NUM_TIMESTEPS")
+
         # Algos whose HOST WRAPPERS pass hd_data->d_workspace to a kernel (scan of
         # the generated wrappers, 2026-08-01). Everything NOT here (inverse_dynamics,
         # end_effector_pose, frame_jacobian(_dot), ke/pe regressors, the runtime-EE
@@ -2338,9 +2346,11 @@ class GRiDCodeGenerator:
                       "    hd_data->h_dqdd_dfext = (T *)malloc(NUM_VEL*6*NUM_BODIES*NUM_TIMESTEPS*sizeof(T));"]
                       + ag_close() + [
                       "    // f_ext A.3: -dJ^T/dq = d(inverse_dynamics_gradient)/dfext, nv*6NB*nv (fixed base only; the largest per-timestep buffer)",
+                      "    // sizeof(T) leads so the byte count is size_t throughout: the element count",
+                      "    // alone overflows int on big robots (h2_plus nv=81 @N=1024: 3.06e9 > INT_MAX)",
                       "    #if GRID_HAS_F_EXT_GRADIENT_DQ" + ag("f_ext_gradient_dq"),
-                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_f_ext_gradient_dq, NUM_VEL*6*NUM_BODIES*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));",
-                      "    hd_data->h_f_ext_gradient_dq = (T *)malloc(NUM_VEL*6*NUM_BODIES*NUM_VEL*NUM_TIMESTEPS*sizeof(T));",
+                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_f_ext_gradient_dq, sizeof(T)*NUM_VEL*6*NUM_BODIES*NUM_VEL*NUM_TIMESTEPS));",
+                      "    hd_data->h_f_ext_gradient_dq = (T *)malloc(sizeof(T)*NUM_VEL*6*NUM_BODIES*NUM_VEL*NUM_TIMESTEPS);",
                       "    #endif",
                       "    // R2: regressor Y and FD param-gradient dqdd/dpi (each nv x 10*NUM_BODIES)",
                       "    #if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR" + ag("inverse_dynamics_regressor"),
@@ -2354,18 +2364,20 @@ class GRiDCodeGenerator:
                       + [
                       # d_idsva_so is ALSO a kernel input of fdsva_so (the fdsva_so kernel takes
                       # hd_data->d_idsva_so), so the fdsva keys must keep it allocated too.
+                      # sizeof(T) leads: SECOND_ORDER_TENSOR_SIZE*NUM_TIMESTEPS alone overflows
+                      # int on big robots (h2_plus 2,125,764*1024 = 2.18e9 > INT_MAX).
                       "    #if GRID_HAS_IDSVA_SO" + ag("idsva_so", "idsva_so_body_frame", "idsva_so_world_frame", "idsva_so_world_frame_mjx", "fdsva_so", "fdsva_so_mjx"), \
-                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_idsva_so, SECOND_ORDER_TENSOR_SIZE*NUM_TIMESTEPS*sizeof(T)));", \
+                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_idsva_so, sizeof(T)*SECOND_ORDER_TENSOR_SIZE*NUM_TIMESTEPS));", \
                       "    #endif", \
                       "    #if GRID_HAS_FDSVA_SO" + ag("fdsva_so", "fdsva_so_mjx"), \
-                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_df2, SECOND_ORDER_TENSOR_SIZE*NUM_TIMESTEPS*sizeof(T)));", \
+                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_df2, sizeof(T)*SECOND_ORDER_TENSOR_SIZE*NUM_TIMESTEPS));", \
                       "    #endif"]
                       + ag_open(*_ws_keys) + [
-                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_workspace, GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS*NUM_TIMESTEPS));", \
+                      "    gpuErrchk(cudaMalloc((void**)&hd_data->d_workspace, GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS*" + ws_ts + "));", \
                       "    // Phase 3a/b/c/e: L2-pin d_workspace for its lifetime. Spilled buffers", \
                       "    // (Minv-F, FD's Minv-F, ABA's inner scratch, FDSVA_SO's df_du/Minv) are", \
                       "    // recursion-hot — L2 pinning narrows the smem→HBM gap to smem→L2.", \
-                      "    gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS*NUM_TIMESTEPS));"]
+                      "    gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS*" + ws_ts + "));"]
                       + ag_close() + [
                       "    hd_data->h_c = (T *)malloc(NUM_JOINTS*NUM_TIMESTEPS*sizeof(T));", \
                       "    hd_data->h_Minv = (T *)malloc(NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
@@ -2378,10 +2390,10 @@ class GRiDCodeGenerator:
                       "    hd_data->h_df_du = (T *)malloc(2*NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T));", \
                       "    #endif", \
                       "    #if GRID_HAS_IDSVA_SO" + ag("idsva_so", "idsva_so_body_frame", "idsva_so_world_frame", "idsva_so_world_frame_mjx"), \
-                      "    hd_data->h_idsva_so = (T *)malloc(SECOND_ORDER_TENSOR_SIZE*NUM_TIMESTEPS*sizeof(T));", \
+                      "    hd_data->h_idsva_so = (T *)malloc(sizeof(T)*SECOND_ORDER_TENSOR_SIZE*NUM_TIMESTEPS);", \
                       "    #endif", \
                       "    #if GRID_HAS_FDSVA_SO" + ag("fdsva_so", "fdsva_so_mjx"), \
-                      "    hd_data->h_df2 = (T *)malloc(SECOND_ORDER_TENSOR_SIZE*NUM_TIMESTEPS*sizeof(T));", \
+                      "    hd_data->h_df2 = (T *)malloc(sizeof(T)*SECOND_ORDER_TENSOR_SIZE*NUM_TIMESTEPS);", \
                       "    #endif", \
                       "    #if GRID_HAS_INTEGRATOR", \
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_x_kp1, 2*NUM_JOINTS*NUM_TIMESTEPS*sizeof(T)));", \
@@ -2399,7 +2411,7 @@ class GRiDCodeGenerator:
                       + ag_open("end_effector_pose_hessian") + [
                       "    gpuErrchk(cudaMalloc((void**)&hd_data->d_end_effector_pose_hessian, 6*NUM_EES*NUM_VEL*NUM_VEL*NUM_TIMESTEPS*sizeof(T)));"]
                       + ag_close() + ag_open(*_ws_keys) + [
-                      "    if ((GRID_END_EFFECTOR_POSE_HESSIAN_USES_WORKSPACE_TEMP || GRID_END_EFFECTOR_POSE_GRADIENT_USES_WORKSPACE_TEMP || GRID_DCCRBA_USES_WORKSPACE_TEMP || GRID_OSC_INERTIA_USES_WORKSPACE) && hd_data->d_workspace == nullptr) {gpuErrchk(cudaMalloc((void**)&hd_data->d_workspace, GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS*NUM_TIMESTEPS));}"]
+                      "    if ((GRID_END_EFFECTOR_POSE_HESSIAN_USES_WORKSPACE_TEMP || GRID_END_EFFECTOR_POSE_GRADIENT_USES_WORKSPACE_TEMP || GRID_DCCRBA_USES_WORKSPACE_TEMP || GRID_OSC_INERTIA_USES_WORKSPACE) && hd_data->d_workspace == nullptr) {gpuErrchk(cudaMalloc((void**)&hd_data->d_workspace, GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS*" + ws_ts + "));}"]
                       + ag_close() + [
                       "    hd_data->h_end_effector_pose = (T *)malloc(6*NUM_EES*NUM_TIMESTEPS*sizeof(T));", \
                       "    hd_data->h_end_effector_pose_gradient = (T *)malloc(6*NUM_EES*NUM_VEL*NUM_TIMESTEPS*sizeof(T));"]
@@ -3299,7 +3311,7 @@ class GRiDCodeGenerator:
                      enable_idsva_so_world_frame = None, runtime_inertia = False, runtime_transform = False,
                      runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
                      contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None,
-                     emit_alloc_gating = False):
+                     emit_alloc_gating = False, emit_workspace_chunking = False):
         # enable_mujoco_kernels=False builds a PIN-ONLY header: the mjx
         # (MUJOCO_OUTPUT=true) template overloads are still EMITTED (they are
         # templates -- uninstantiated they cost nothing; a bare #include is 2 s /
@@ -3328,6 +3340,16 @@ class GRiDCodeGenerator:
         # per-algo bench turns it on so its solo exes can -D away other algos'
         # (multi-GB at nv=81) buffers.
         self.emit_alloc_gating = emit_alloc_gating
+        # Chunked (two-phase) batch execution: opt-in emission of the
+        # GRID_WORKSPACE_CHUNK seam — a chunk-sized workspace arena + a chunked
+        # launch loop in the SO-family/f_ext_gradient_dq host wrappers, so big
+        # robots (h2_plus nv=81: 27.3 GB workspace at N=1024) can run full-N cells
+        # with the workspace allocated for only C timesteps. Outputs stay full-N
+        # on device; kernels are untouched (they are grid-stride over a runtime
+        # num_timesteps and index the workspace per-k). Default False emits the
+        # header BYTE-IDENTICAL; with True but the macro UNSET the emitted loop
+        # folds to a single iteration (behavior-identical).
+        self.emit_workspace_chunking = emit_workspace_chunking
         # Default-pick the SO variant that wins per the 2026-05 perf sweep
         # (see test/benchmarks/benchmark_multi_version_sm120_5090_full.md
         # § IDSVA_SO_BODY_FRAME vs IDSVA_SO_WORLD_FRAME):

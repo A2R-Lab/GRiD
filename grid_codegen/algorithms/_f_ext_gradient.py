@@ -633,14 +633,28 @@ def gen_f_ext_gradient_dq_host(self, mode=0):
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"f_ext_gradient_dq\", F_EXT_GRADIENT_DQ_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     # mimic-spill: L2-pin d_workspace when the tier spills the per-sub slab into it
     # (non-mimic robots never spill, so SLAB_IN_SMEM stays true and this is a no-op).
+    chunked = getattr(self, "emit_workspace_chunking", False) and not single_call_timing
+    _feg_dq_ws_ts = "grid_workspace_chunk(num_timesteps)" if chunked else "num_timesteps"
     _feg_dq_ws_bytes = ("GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()" if single_call_timing
-                        else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(num_timesteps)")
+                        else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(" + _feg_dq_ws_ts + ")")
     self.gen_add_code_line("if (!F_EXT_GRADIENT_DQ_SLAB_IN_SMEM<RESOURCE_TIER>() && hd_data->d_workspace != nullptr) {gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, " + _feg_dq_ws_bytes + "));}")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        # chunked-workspace seam (modes 0/2): BOTH USE_COMPRESSED_MEM branch lines
+        # go through one chunk loop; the input ptr differs per branch (d_q vs
+        # d_q_qd_u — identifier-boundary substitution keeps the prefix safe) but
+        # both use the runtime stride_q. gpuErrchkKernel stays OUTSIDE the loop.
+        self.gen_add_workspace_chunked_launch([func_call_mem_adjust, func_call_mem_adjust2],
+            [("hd_data->d_f_ext_gradient_dq", out_each),
+             ("hd_data->d_q_qd_u", "stride_q"),
+             ("hd_data->d_q", "stride_q")])
+        self.gen_add_code_line("gpuErrchkKernel();")
     if not compute_only:
+        # sizeof(T) leads: nv*6*NB*nv*num_timesteps overflows int on big robots
         self.gen_add_code_lines([
             "// finally transfer the result back",
-            "gpuErrchk(cudaMemcpy(hd_data->h_f_ext_gradient_dq,hd_data->d_f_ext_gradient_dq," + out_each + "*" + ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
+            "gpuErrchk(cudaMemcpy(hd_data->h_f_ext_gradient_dq,hd_data->d_f_ext_gradient_dq,sizeof(T)*" + out_each + ("*num_timesteps" if not single_call_timing else "") + ",cudaMemcpyDeviceToHost));",
             "gpuErrchkKernel();"])
     if single_call_timing:
         from ..algo_registry import single_call_printf_line

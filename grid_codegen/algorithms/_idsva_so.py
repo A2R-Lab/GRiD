@@ -3029,12 +3029,20 @@ def gen_idsva_so_body_frame_host(self, mode = 0):
         func_call_code.append("gpuErrchkKernel();")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"idsva_so\", IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        # chunked-workspace seam (modes 0/2): output + input offset per chunk;
+        # d_workspace stays at base (arena reused). Flag-off = passthrough.
+        self.gen_add_workspace_chunked_launch(func_call_code,
+            [("hd_data->d_idsva_so", "SECOND_ORDER_TENSOR_SIZE"),
+             ("hd_data->d_q_qd_u", "stride_q_qd")])
     if not compute_only:
         # then transfer memory back
+        # sizeof(T) leads: SECOND_ORDER_TENSOR_SIZE*num_timesteps overflows int on big robots
         self.gen_add_code_lines(["// finally transfer the result back", \
-                                 "gpuErrchk(cudaMemcpy(hd_data->h_idsva_so,hd_data->d_idsva_so,SECOND_ORDER_TENSOR_SIZE*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
+                                 "gpuErrchk(cudaMemcpy(hd_data->h_idsva_so,hd_data->d_idsva_so,sizeof(T)*SECOND_ORDER_TENSOR_SIZE" + \
+                                    ("*num_timesteps" if not single_call_timing else "") + ",cudaMemcpyDeviceToHost));",
                                  "gpuErrchkKernel();"])
     else:
         # compute_only path needs an explicit sync after the kernel launch
@@ -4882,11 +4890,18 @@ def gen_idsva_so_world_frame_host(self, mode = 0):
         func_call_code.append("gpuErrchkKernel();")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"idsva_so_world_frame\", IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        # chunked-workspace seam (modes 0/2) — see gen_idsva_so_body_frame_host.
+        self.gen_add_workspace_chunked_launch(func_call_code,
+            [("hd_data->d_idsva_so", "SECOND_ORDER_TENSOR_SIZE"),
+             ("hd_data->d_q_qd_u", "stride_q_qd")])
     if not compute_only:
+        # sizeof(T) leads: SECOND_ORDER_TENSOR_SIZE*num_timesteps overflows int on big robots
         self.gen_add_code_lines([
             "// finally transfer the result back",
-            "gpuErrchk(cudaMemcpy(hd_data->h_idsva_so,hd_data->d_idsva_so,SECOND_ORDER_TENSOR_SIZE*" + ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
+            "gpuErrchk(cudaMemcpy(hd_data->h_idsva_so,hd_data->d_idsva_so,sizeof(T)*SECOND_ORDER_TENSOR_SIZE" + ("*num_timesteps" if not single_call_timing else "") + ",cudaMemcpyDeviceToHost));",
             "gpuErrchkKernel();",
         ])
     else:

@@ -869,6 +869,59 @@ def gen_add_shared_memory_helpers(self):
         "}",
         ""
     ])
+    if getattr(self, "emit_workspace_chunking", False):
+        self.gen_add_code_lines([
+            "// Workspace chunking (bench-only, opt-in): at large batch sizes the per-timestep",
+            "// device WORKSPACE (not the outputs) is what overflows device RAM on big robots.",
+            "// GRID_WORKSPACE_CHUNK=C shrinks the workspace arena to C timestep slots; chunk-aware",
+            "// host wrappers then sweep the full batch in C-sized launches, offsetting input/output",
+            "// pointers per chunk while REUSING the same workspace arena (outputs stay full-N on",
+            "// device; kernels are grid-stride over num_timesteps and are untouched). 0/unset =>",
+            "// grid_workspace_chunk() returns num_timesteps and every chunk loop folds to one",
+            "// iteration — behavior-identical to an unchunked build.",
+            "#ifndef GRID_WORKSPACE_CHUNK",
+            "#define GRID_WORKSPACE_CHUNK 0   // 0 = unchunked: one workspace slot per timestep",
+            "#endif",
+            "#if GRID_WORKSPACE_CHUNK > 0 && !defined(GRID_ALLOC_GATE)",
+            "#error \"GRID_WORKSPACE_CHUNK is a solo-exe bench macro: chunk-sized workspace slots are only safe when the exe allocates a single algorithm's buffers, so it requires GRID_ALLOC_GATE (per_algo_bench sets both).\"",
+            "#endif",
+            "__host__ __device__ constexpr int grid_workspace_chunk(int num_timesteps) {",
+            "    return (GRID_WORKSPACE_CHUNK > 0 && GRID_WORKSPACE_CHUNK < num_timesteps) ? GRID_WORKSPACE_CHUNK : num_timesteps;",
+            "}",
+            ""
+        ])
+
+def gen_add_workspace_chunked_launch(self, launch_lines, ptr_strides, count_var = "num_timesteps"):
+    """Emit kernel-launch line(s), optionally wrapped in the workspace chunk loop.
+
+    Flag OFF (default): passthrough — launch_lines emitted verbatim, byte-identical.
+    Flag ON: the lines are wrapped in
+        const int _grid_chunk = grid_workspace_chunk(num_timesteps);
+        for (int _c0 = 0; _c0 < num_timesteps; _c0 += _grid_chunk) { ... }
+    with every (ptr_expr, stride_expr) pair in `ptr_strides` rewritten to
+    `ptr_expr + (size_t)_c0*(stride_expr)` and the kernel's trailing `num_timesteps`
+    arg rewritten to the per-chunk count `_grid_chunk_n` (MANDATORY: kernels are
+    grid-stride over num_timesteps, so k must stay in [0, C) to index the
+    chunk-sized workspace arena). The workspace pointer is deliberately NOT in
+    ptr_strides — the arena is reused at base across chunks. Substitution uses an
+    identifier-boundary regex, so a ptr that is a prefix of another (d_q vs
+    d_q_qd_u) can never corrupt the longer name. Launches are same-stream
+    in-order; the caller's existing single gpuErrchkKernel() after this call
+    syncs the whole sweep (honest wall time)."""
+    if not getattr(self, "emit_workspace_chunking", False):
+        self.gen_add_code_lines(launch_lines)
+        return
+    import re
+    def _sub(line):
+        for ptr, stride in ptr_strides:
+            line = re.sub(re.escape(ptr) + r"(?![A-Za-z0-9_])",
+                          ptr + " + (size_t)_c0*(" + stride + ")", line)
+        return re.sub(r"\b" + re.escape(count_var) + r"\b", "_grid_chunk_n", line)
+    self.gen_add_code_line("const int _grid_chunk = grid_workspace_chunk(" + count_var + ");")
+    self.gen_add_code_line("for (int _c0 = 0; _c0 < " + count_var + "; _c0 += _grid_chunk) {", True)
+    self.gen_add_code_line("const int _grid_chunk_n = _grid_chunk < " + count_var + " - _c0 ? _grid_chunk : " + count_var + " - _c0;")
+    self.gen_add_code_lines([_sub(line) for line in launch_lines])
+    self.gen_add_end_control_flow()
 
 def gen_declare_shared_arena(self, t_buffers, temp_mem_size, include_topology_helpers = True,
                              ximat_name = "s_XImats", ximat_size = 0,

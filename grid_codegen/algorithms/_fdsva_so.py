@@ -902,15 +902,29 @@ def gen_fdsva_so_host(self, mode = 0):
         func_call_code.insert(0,"struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"fdsva_so\", FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
-    workspace_bytes = "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS*" + ("1" if single_call_timing else "num_timesteps")
+    chunked = getattr(self, "emit_workspace_chunking", False) and not single_call_timing
+    ws_ts = "grid_workspace_chunk(num_timesteps)" if chunked else "num_timesteps"
+    workspace_bytes = "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS*" + ("1" if single_call_timing else ws_ts)
     self.gen_add_code_line("if (GRID_FDSVA_SO_USES_WORKSPACE_ANY_TIER) {gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, " + workspace_bytes + "));}")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        # chunked-workspace seam (modes 0/2): d_df2 OUT and d_idsva_so INPUT both
+        # advance by SECOND_ORDER_TENSOR_SIZE per timestep; d_workspace stays at
+        # base (arena reused). The per-launch gpuErrchkKernel stays OUTSIDE the
+        # chunk loop (same-stream in-order; one final sync is honest wall time).
+        self.gen_add_workspace_chunked_launch([func_call],
+            [("hd_data->d_df2", "SECOND_ORDER_TENSOR_SIZE"),
+             ("hd_data->d_idsva_so", "SECOND_ORDER_TENSOR_SIZE"),
+             ("hd_data->d_q_qd_u", "stride_q_qd_qdd")])
+        self.gen_add_code_line("gpuErrchkKernel();")
     self.gen_add_code_line("if (GRID_FDSVA_SO_USES_WORKSPACE_ANY_TIER) {gpuErrchk(grid_end_l2_persisting(0));}")
     if not compute_only:
         # then transfer memory back
+        # sizeof(T) leads: 4*nv^3*num_timesteps overflows int on big robots
         self.gen_add_code_lines(["// finally transfer the result back", \
-                                "gpuErrchk(cudaMemcpy(hd_data->h_df2,hd_data->d_df2," + \
-                                ("num_timesteps*" if not single_call_timing else "") + str(4*n**3) + "*sizeof(T),cudaMemcpyDeviceToHost));",
+                                "gpuErrchk(cudaMemcpy(hd_data->h_df2,hd_data->d_df2,sizeof(T)*" + \
+                                ("num_timesteps*" if not single_call_timing else "") + str(4*n**3) + ",cudaMemcpyDeviceToHost));",
                                 "gpuErrchkKernel();"])
     # finally report out timing if requested
     if single_call_timing:

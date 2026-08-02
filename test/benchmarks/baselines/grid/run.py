@@ -173,6 +173,7 @@ def generate_header(
     runtime_joint_dynamics: bool = False,
     multi_target_from_collision: bool = False,
     emit_alloc_gating: bool = False,
+    emit_workspace_chunking: bool = False,
 ) -> Path:
     """Generate grid.cuh for the given robot/base, using content-hash cache."""
     floating_base = (base == "floating")
@@ -207,6 +208,10 @@ def generate_header(
             # MUST key the header cache (a gated exe compiled against an ungated
             # cached header would silently allocate everything again).
             "emit_alloc_gating": emit_alloc_gating,
+            # chunked-workspace seam: emitting the chunk-capable wrappers changes the
+            # header (macro-unset stays behavior-identical, but the bytes differ), so
+            # it must key the cache like alloc gating does.
+            "emit_workspace_chunking": emit_workspace_chunking,
             "profile": bench_algo_list_env or "all+frame_jacobian",
             "homogenous": True,
             "no_licm_barrier": no_licm_barrier_env,
@@ -281,6 +286,7 @@ def generate_header(
             enable_idsva_so_world_frame=True,
             enable_floating_second_order=True,
             emit_alloc_gating=emit_alloc_gating,
+            emit_workspace_chunking=emit_workspace_chunking,
         )
 
     cached_header.parent.mkdir(parents=True, exist_ok=True)
