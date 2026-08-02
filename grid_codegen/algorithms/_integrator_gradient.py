@@ -2064,6 +2064,16 @@ def gen_integrator_hessian_device(self):
     silently-wrong tensor). SCRATCH_IN_SMEM=true is the SHARED
     (full-smem PERF) tier; the fdsva_so spill flags are threaded through for
     later tier work but default to the all-smem placement."""
+    # The floating body (gen_integrator_hessian_device_floating) FD's the SE(3)
+    # d2Integrate blocks via grid_dIntegrate_{q,v}_block / grid_d2Integrate_block.
+    # Every full-profile header already emits those Lie helpers via another
+    # consumer (integrator / f_ext_gradient / d2ee / frame_jacobian_dot), but a
+    # restricted algorithm_list that pulls only the SO surface (e.g.
+    # idsva_so_body_frame,fdsva_so + enable_floating_second_order) emitted the
+    # CALLER without the helper definitions -> nvcc "identifier undefined".
+    # gen_lie_group_helpers is idempotent, so this is a no-op everywhere else.
+    if self.robot.floating_base:
+        self.gen_lie_group_helpers()
     n = self.robot.get_num_vel()
     nz = 3 * n
     func_params = [

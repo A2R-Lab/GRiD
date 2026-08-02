@@ -521,7 +521,15 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "batch_compute_only": "grid::idsva_so_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
         "batch_label": "IDSVA_SO",
         "gate": "GRID_HAS_IDSVA_SO",
+        # grid::idsva_so forwards at CODEGEN time (world for floating/spherical/
+        # high-DOF fixed) — probe the DISPATCHED kernel's bytes. Probing the body
+        # frame on a floating header false-skips: the floating body frame is a
+        # no-ladder diagnostic (242 KB on h2_plus) the dispatcher never launches,
+        # while the dispatched world frame fits at every tier. Headers predating
+        # the macro fall back to the body probe (identical to the old behavior).
         "shared_mem_skip": "IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES",
+        "shared_mem_skip_dispatch": ("GRID_IDSVA_SO_DISPATCHES_WORLD_FRAME",
+                                     "IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES"),
     },
     "idsva_so_body_frame": {
         "single_call":        "grid::idsva_so_body_frame_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
@@ -912,12 +920,25 @@ def _per_algo_batch_tu_source(algo_key: str) -> str:
     spec = PER_ALGO_SPECS[algo_key]
     skip_block = ""
     if "shared_mem_skip" in spec:
-        skip_block = (
-            f"    if (!grid_kernel_fits_device(grid::{spec['shared_mem_skip']}<float>())) {{\n"
-            f"        printf(\"[N:%d]: {spec['batch_label']} SKIPPED (kernel needs %zu bytes shared mem, exceeds device cap)\\n\",\n"
-            f"               N, grid::{spec['shared_mem_skip']}<float>()); return;\n"
-            f"    }}\n"
-        )
+        def _skip_probe(fn: str) -> str:
+            return (
+                f"    if (!grid_kernel_fits_device(grid::{fn}<float>())) {{\n"
+                f"        printf(\"[N:%d]: {spec['batch_label']} SKIPPED (kernel needs %zu bytes shared mem, exceeds device cap)\\n\",\n"
+                f"               N, grid::{fn}<float>()); return;\n"
+                f"    }}\n"
+            )
+        skip_block = _skip_probe(spec["shared_mem_skip"])
+        if "shared_mem_skip_dispatch" in spec:
+            # Dispatch-aware probe: when the header says the dispatching wrapper
+            # forwards to the alternate kernel, check THAT kernel's bytes instead.
+            macro, alt_fn = spec["shared_mem_skip_dispatch"]
+            skip_block = (
+                f"#if defined({macro}) && {macro}\n"
+                + _skip_probe(alt_fn)
+                + "#else\n"
+                + _skip_probe(spec["shared_mem_skip"])
+                + "#endif\n"
+            )
     body = (
         f"{_gate_open(spec)}"
         f"void measure_{algo_key}_batch_entry(int N, cudaStream_t *streams, grid::robotModel<float> *m, grid::gridData<float> *d){{\n"

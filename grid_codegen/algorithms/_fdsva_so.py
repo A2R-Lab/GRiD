@@ -621,6 +621,14 @@ _FDSVA_SO_PICK_FLAGS = [
     (True,  True,  True,  True,  False, False, False),   # pick 5 (Phase 3e): + s_df_du to global
     (True,  True,  True,  True,  True,  False, False),   # pick 6 (Phase 3e): + s_Minv to global
     (True,  True,  False, False, False, True,  False),   # pick 7: pool->global (whole s_temp via full inner SCRATCH_IN_SMEM=false); df_du/Minv stay in smem (small). Works for BOTH bases because fdsva_so_device hands the placed pool to whichever idsva inner it composes (world for floating, body for fixed) and the inner does the repoint via its own SCRATCH_IN_SMEM=false.
+    # pick 8 (S1): pool->global AND s_df_du->workspace. Only present in a robot's
+    # ladder when even pick 7's BASE overflows the device cap (nv~81 humanoids:
+    # s_df_du 2nv² = 52 KB pushes the base past ~99 KB) — the generator appends
+    # this rung conditionally (see _fdsva_so_tiers in GRiDCodeGenerator.py).
+    # Layout-safe by construction: the pool lives in the SO-temp region
+    # (GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES) while s_df_du sits in the dedicated
+    # FDSVA_SO spill section (GRID_FDSVA_SO_SPILL_OFFSET_BYTES), disjoint bands.
+    (True,  True,  False, True,  False, True,  False),   # pick 8: pool->global + s_df_du->workspace
 ]
 
 def _emit_fdsva_so_kernel_body_for_flags(self, n, NUM_POS, use_global_tensors, use_workspace_temp,

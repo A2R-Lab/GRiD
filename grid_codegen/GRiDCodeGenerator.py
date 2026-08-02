@@ -1451,6 +1451,21 @@ class GRiDCodeGenerator:
             ("pool_global",          fdsva_so_base_t_count,                         True,  True,  False, False, False, True,  False),
         ]
         _fdsva_so_arenas = compose_arena_rungs("fdsva_so", self._arena_ctx)   # Step 3.4 fold
+        # S1 (h2_plus smem triage): on nv~81 humanoids even the guaranteed-fit
+        # pool_global rung overflows the device target — its BASE (s_Minv nv² +
+        # s_df_du 2nv² + inputs + XI) alone is ~104 KB vs the ~99 KB cap, so every
+        # tier clamps to an unlaunchable arena. Extend the ladder with a
+        # pool_global + df_du->workspace rung (s_df_du rides the already-reserved
+        # GRID_FDSVA_SO_SPILL section, pick>=5). In-gen override, NOT in the
+        # registry ladder: the fit predicate needs py_arena_bytes + the device
+        # target, which are not ctx-pure (same reasoning as the floating
+        # body-frame idsva single-value override above). Conditional so every
+        # robot whose pool_global fits keeps a byte-identical ladder.
+        if py_arena_bytes(_fdsva_so_arenas[-1]) > self.cuda_target_shared_mem_bytes:
+            _fdsva_so_tiers.append(
+                ("pool_global_spill_df_du", fdsva_so_base_no_df_du,
+                 True, True, False, True, False, True, False))
+            _fdsva_so_arenas = _fdsva_so_arenas + (fdsva_so_base_no_df_du,)
         self.fdsva_so_spill_tier_3way = select_shared_tier_3way(*_fdsva_so_arenas)
         # arena counts now come from the composer; the 9-tuple STATE FLAGS stay in-gen.
         _chosen = _fdsva_so_tiers[self.fdsva_so_spill_tier_3way[0]]
@@ -3582,6 +3597,15 @@ class GRiDCodeGenerator:
             (not self.robot.floating_base) or getattr(self, "generate_idsva_so_world_frame", False)
         )
         self.gen_add_code_line("#define GRID_HAS_IDSVA_SO " + str(int(has_idsva_so)))
+        # The `grid::idsva_so` dispatcher forwards at CODEGEN time (world frame for
+        # floating / spherical / high-DOF fixed — _idsva_so_use_world_frame). A
+        # consumer probing launchability (e.g. the bench smem-skip guard) must
+        # check the DISPATCHED kernel's smem bytes, not a fixed frame: on floating
+        # the body frame is a no-ladder diagnostic (242 KB on h2_plus) while the
+        # dispatched world frame fits at every tier.
+        self.gen_add_code_line(
+            "#define GRID_IDSVA_SO_DISPATCHES_WORLD_FRAME "
+            + str(int(_idsva_so_use_world_frame(self))))
         # Integrator availability gates. Both value and gradient kernels are
         # emitted whenever requested, for fixed- and floating-base. (Floating
         # gradient is currently Euler-only and inherits the upstream
