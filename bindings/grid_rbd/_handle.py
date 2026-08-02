@@ -1140,8 +1140,10 @@ class RobotHandle:
         frame, where the last four are the unit quaternion (w, x, y, z).
 
         `use_warp=True` runs the warp-cooperative per-sample inner; both
-        variants return identical poses. Only available for fixed-base,
-        non-mimic robots (raises otherwise)."""
+        variants return identical poses. Fixed AND floating base supported
+        (floating q = [x,y,z, qx,qy,qz,qw, joints], pin convention); mimic
+        joints fold inline. Raises only for spherical-joint or >32-joint
+        robots (those route through end_effector_pose)."""
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.fk_batched(q, use_warp)
 

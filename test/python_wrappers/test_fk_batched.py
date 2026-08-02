@@ -245,10 +245,12 @@ def test_fk_batched_layout_distinct_per_sample():
     assert np.allclose(pose7_perm, pose7[perm], atol=1e-5)
 
 
-def test_fk_batched_absent_for_floating_base():
-    """Floating-base robots route through end_effector_pose; the batched FK
-    inner is intentionally absent, so fk_batched must raise (rc=3) — not crash
-    or silently return garbage. end_effector_pose must still work."""
+def test_fk_batched_floating_base_matches_reference():
+    """Floating-base fk_batched (registry A2, 2026-08-02): the standalone FK
+    inner builds the root block from s_q[0..6] (pos + xyzw quat, pin layout)
+    via the same fb->s_q substitution as the canonical loader. Both variants
+    must match the floating RBDReference oracle and each other. (This REPLACES
+    the old absent-for-floating raise test — the feature now exists.)"""
     urdf_path = _ASSETS / "iiwa14.urdf"
     if not urdf_path.exists():
         pytest.skip("iiwa14 fixture not present")
@@ -261,10 +263,36 @@ def test_fk_batched_absent_for_floating_base():
         max_batch_size=_B,
     )
     assert handle.floating_base is True
-    NJ = handle.num_joints
-    q = np.zeros((4, NJ), dtype=np.float32)
-    with pytest.raises(Exception):
-        handle.fk_batched(q, use_warp=False)
-    # Sanity: the standard EE-pose path is present for floating-base.
-    out = handle.end_effector_pose(q)
-    assert out.shape[0] == 4
+    from URDFParser import URDFParser
+    from RBDReference import RBDReference
+    ref = RBDReference(URDFParser().parse(str(urdf_path), floating_base=True))
+
+    nq = handle.num_joints  # == get_num_pos() (7 root + 7 arm = 14)
+    rng = np.random.default_rng(19)
+    q = rng.uniform(-2.0, 2.0, size=(_B, nq)).astype(np.float32)
+    # root quaternion slots [3:7] (xyzw): random unit quaternions
+    quat = rng.normal(size=(_B, 4))
+    quat /= np.linalg.norm(quat, axis=1, keepdims=True)
+    q[:, 3:7] = quat.astype(np.float32)
+
+    pose7_thread = handle.fk_batched(q, use_warp=False)
+    pose7_warp = handle.fk_batched(q, use_warp=True)
+    assert pose7_thread.shape == (_B, 7)
+
+    max_pos_err = 0.0
+    max_rot_err = 0.0
+    for b in range(_B):
+        # thread/warp agreement (double-cover-safe: compare R, not quats)
+        assert np.allclose(pose7_thread[b, :3], pose7_warp[b, :3], atol=_VARIANT_TOL)
+        Rt = _quat_wxyz_to_R(pose7_thread[b, 3:])
+        Rw = _quat_wxyz_to_R(pose7_warp[b, 3:])
+        assert np.max(np.abs(Rt - Rw)) < _VARIANT_TOL
+
+        ee_ref = ref.end_effector_pose(q[b].astype(np.float64))[0].flatten()
+        pos_ref = ee_ref[:3]
+        R_ref = _rpy_to_R(ee_ref[3:6])
+        max_pos_err = max(max_pos_err, float(np.max(np.abs(pose7_thread[b, :3] - pos_ref))))
+        max_rot_err = max(max_rot_err, float(np.max(np.abs(Rt - R_ref))))
+
+    assert max_pos_err < _POS_TOL, f"floating: max position error {max_pos_err:.2e}"
+    assert max_rot_err < _ROT_TOL, f"floating: max rotation error {max_rot_err:.2e}"

@@ -2812,15 +2812,11 @@ def gen_ee_pose_inner_xform_from_q_lines(self, lane_guarded = False):
     import sympy as sp
     NJ = self.robot.get_num_joints()
     Xmats_hom = self.robot.get_Xmats_hom_ordered_by_id(include_fixed_joints = False)
-    fb = self.robot.floating_base
-    if fb:
-        # The standalone (d_robotModel-free) inner does not yet build the floating
-        # root's quaternion block from s_q[0..6]; route floating robots through
-        # end_effector_pose. (Mimic q-folding IS supported: the angle expression
-        # substitutes mult*s_q[src]+offset inline — see _ee_pose_inner_angle_expr.)
-        raise NotImplementedError(
-            "ee_pose_inner_{thread,warp}: floating-base robots are not supported "
-            "by the standalone FK inner; use end_effector_pose for those.")
+    # Floating base IS supported (registry A2, 2026-08-02): the root joint's
+    # 4x4 block carries the x/y/z_fb + q1..q4_fb symbols; the inners emit it
+    # via _ee_pose_root_fb_subst (the same fb->s_q[0..6] substitution the
+    # canonical loader uses), not a sin/cos fold. (Mimic q-folding likewise
+    # supported inline — see _ee_pose_inner_angle_expr.)
     # which joints actually have q-dependent cells (so warp can skip the rest)
     joint_has_q = []
     for jid in range(NJ):
@@ -2828,6 +2824,24 @@ def gen_ee_pose_inner_xform_from_q_lines(self, lane_guarded = False):
         joint_has_q.append(any(not self.custom_is_constant(M[r, c])
                                for r in range(4) for c in range(4)))
     return Xmats_hom, joint_has_q
+
+def _ee_pose_root_fb_subst(str_val):
+    """Floating-root fb-symbol -> s_q slot substitution for the standalone FK
+    inners. Mirrors replace_hom_config_symbols' floating branch in
+    _topology_helpers.gen_load_update_XmatsHom_helpers (same sp.ccode input,
+    same order: squared forms before bare symbols) so the standalone root
+    block is textually identical to the canonical loader's emission."""
+    _fb_syms = ["x_fb", "y_fb", "z_fb", "q1_fb", "q2_fb", "q3_fb", "q4_fb"]
+    for i, sym in enumerate(_fb_syms):
+        str_val = str_val.replace(sym + "**2", "s_q[" + str(i) + "]*s_q[" + str(i) + "]")
+    for i, sym in enumerate(_fb_syms):
+        str_val = str_val.replace(sym, "s_q[" + str(i) + "]")
+    return str_val
+
+def _ee_pose_inner_is_fb_root(self, jid):
+    """True when jid is the floating-base root joint — its X_hom block is built
+    from s_q[0..6] (position + xyzw quaternion), not a sin/cos angle fold."""
+    return self.robot.floating_base and jid == 0
 
 def _ee_pose_inner_angle_expr(self, jid):
     """The C expression for joint jid's LOCAL angle theta in terms of s_q. Non-mimic
@@ -2885,6 +2899,23 @@ def gen_ee_pose_inner_thread(self, fixed_target_name = ""):
     # (= mult*s_q[src] + offset, see _ee_pose_inner_angle_expr).
     for jid in range(NJ):
         if not joint_has_q[jid]:
+            continue
+        if _ee_pose_inner_is_fb_root(self, jid):
+            # Floating root: position s_q[0..2] + xyzw quaternion s_q[3..6],
+            # substituted into the symbolic block (no sin/cos fold).
+            self.gen_add_code_line("// X_hom[0] floating root from s_q[0..6] (pos + xyzw quat)")
+            self.gen_add_code_line("{", True)
+            M = Xmats_hom[jid]
+            for col in range(4):
+                for row in range(4):
+                    val = M[row, col]
+                    if self.custom_is_constant(val):
+                        continue
+                    str_val = _ee_pose_root_fb_subst(sp.ccode(val))
+                    cell = self.gen_static_array_ind_3d(jid, col, row, ind_stride=16, col_stride=4)
+                    self.gen_add_code_line("s_XmatsHom[16*" + str(jid) + " + " + str(cell - 16*jid) +
+                                           "] = static_cast<T>(" + str_val + ");")
+            self.gen_add_end_control_flow()
             continue
         ang = _ee_pose_inner_angle_expr(self, jid)
         is_folded = not ang.startswith("s_q[")
@@ -2991,6 +3022,13 @@ def gen_update_XmatHom_joint(self):
     for jid in range(NJ):
         if not joint_has_q[jid]:
             continue
+        if _ee_pose_inner_is_fb_root(self, jid):
+            # The floating root has no single perturbation angle (7-dim pose,
+            # not a theta) — coordinate-descent callers perturb ACTUATED joints
+            # only, so the root falls through to default (copy the pre-loaded
+            # block unchanged). Its cells also carry fb symbols the theta
+            # replace below could never fold.
+            continue
         self.gen_add_code_line("case " + str(jid) + ": {", True)
         M = Xmats_hom[jid]
         for col in range(4):
@@ -3057,6 +3095,21 @@ def gen_ee_pose_inner_warp(self, fixed_target_name = ""):
     q_joints = [jid for jid in range(NJ) if joint_has_q[jid]]
     self.gen_add_code_line("// refresh q-dependent X_hom cells: lane j owns joint j")
     for jid in q_joints:
+        if _ee_pose_inner_is_fb_root(self, jid):
+            # Floating root: same fb->s_q[0..6] substitution as the thread inner.
+            self.gen_add_code_line("if (lane == " + str(jid) + ") {", True)
+            M = Xmats_hom[jid]
+            for col in range(4):
+                for row in range(4):
+                    val = M[row, col]
+                    if self.custom_is_constant(val):
+                        continue
+                    str_val = _ee_pose_root_fb_subst(sp.ccode(val))
+                    cell = self.gen_static_array_ind_3d(jid, col, row, ind_stride=16, col_stride=4)
+                    self.gen_add_code_line("s_XmatsHom[16*" + str(jid) + " + " + str(cell - 16*jid) +
+                                           "] = static_cast<T>(" + str_val + ");")
+            self.gen_add_end_control_flow()
+            continue
         ang = _ee_pose_inner_angle_expr(self, jid)
         is_folded = not ang.startswith("s_q[")
         self.gen_add_code_line("if (lane == " + str(jid) + ") {", True)
@@ -3316,14 +3369,17 @@ def gen_eepose_and_derivatives(self, fixed_target_name = "",
 
     if include_pose or include_gradient or include_hessian:
         # standalone warp/thread FK inners + batched convenience path.
-        # MIMIC robots are now supported (registry A2, 2026-08-01): the inner folds
-        # each mimic angle inline as mult*s_q[src]+offset (_ee_pose_inner_angle_expr)
-        # — no load_update scratch needed. Still skipped for floating-base (the
-        # standalone inner lacks the quaternion root block; it raises) and spherical
-        # (sin/cos of a quaternion q-slot would be silently wrong) — those route
-        # through end_effector_pose instead. The warp inner's lane==jid ownership
-        # caps at 32 joints; guard so a >32-joint robot falls back cleanly.
-        if (not self.robot.floating_base and not self.robot.robot_has_spherical()
+        # MIMIC robots are supported (registry A2, 2026-08-01): the inner folds
+        # each mimic angle inline as mult*s_q[src]+offset (_ee_pose_inner_angle_expr).
+        # FLOATING-base robots are supported (registry A2, 2026-08-02): the root
+        # block is built from s_q[0..6] via _ee_pose_root_fb_subst (the same
+        # fb->s_q substitution as the canonical loader); update_XmatHom_joint
+        # skips the root case (no single perturbation angle). Still skipped for
+        # spherical (sin/cos of a quaternion q-slot would be silently wrong) —
+        # those route through end_effector_pose instead. The warp inner's
+        # lane==jid ownership caps at 32 joints; guard so a >32-joint robot
+        # falls back cleanly.
+        if (not self.robot.robot_has_spherical()
                 and self.robot.get_num_joints() <= 32):
             self.gen_ee_pose_inner_thread(fixed_target_name = fixed_target_name)
             self.gen_update_XmatHom_joint()
