@@ -19,7 +19,13 @@ def gen_get_Xhom_size(self):
     # non-mimic robots NB == nq, so this is byte-identical to the legacy 16*n.
     NB = self.robot.get_num_bodies()
     body_count = NB if not self.robot.floating_base else n
-    dXhom_size = 16*body_count # kinematic targets are fixed so don't include (gradient is 0)
+    # dXhom is written PER-Q-SLOT by _global_hom_derivative_matrices_by_q (n =
+    # num_pos entries). For every non-spherical robot n <= body_count (mimic:
+    # NB > nq; plain: NB == nq; floating: body_count == n), so max() is
+    # byte-identical there. A fixed-base robot with a SPHERICAL joint has
+    # nq > NB (the 4-wide quaternion block), so budget by n to keep the
+    # per-q writers in bounds.
+    dXhom_size = 16*max(body_count, n) # kinematic targets are fixed so don't include (gradient is 0)
     d2Xhom_size = 16*(n*n if self.robot.floating_base else NB) # floating root has dense local quaternion second derivatives
     return Xhom_size, dXhom_size, d2Xhom_size
 
@@ -55,7 +61,15 @@ def _global_hom_second_derivative_matrices(self):
         for jid in range(self.robot.get_num_joints()):
             qinds = _qinds_to_list(self, self.robot.get_joint_index_q(jid))
             if qinds:
-                owners[jid] = qinds[0]
+                # owners must be JOINT ids: the consumer feeds them to
+                # replace_hom_config_symbols, which calls joint_is_spherical(ind)
+                # / get_joint_index_q(ind) / the mimic s_temp[ind] fold — all
+                # jid-indexed. The previous qinds[0] was only correct where
+                # qind == jid (every plain fixed-base robot -> byte-identical);
+                # on a spherical (nq > NJ) or mimic (NJ > nq) model it routed
+                # the wrong joint's q substitution into the (unused-at-runtime)
+                # d2Xhom loader table.
+                owners[jid] = jid
         return mats, owners
 
     mats = [sp.zeros(4, 4) for _ in range(n*n)]

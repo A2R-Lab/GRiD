@@ -3438,13 +3438,23 @@ class GRiDCodeGenerator:
                              # integrator gradient slice (2026-07-30): per-joint SO(3)
                              # dIntegrate blocks; single-stage IT only (multi-stage RK
                              # static_asserts in the device — follow-on slice).
-                             "integrator_gradient", "integrator_with_gradient"}
+                             "integrator_gradient", "integrator_with_gradient",
+                             # ee pose gradient/hessian slice (2026-08-02): the
+                             # geometric-Jacobian gradient inner and the analytic
+                             # chain-composition hessian inner are S-column driven,
+                             # so a spherical joint's 3 tangent columns (d/dv, local
+                             # body-frame omega, pinocchio JointModelSpherical order)
+                             # flow through the same per-(ee, S-col) fill jobs and
+                             # intra-joint rev-rev pair blocks the floating root
+                             # uses. Requires the URDFParser forward hom composition
+                             # (origin ∘ exp(q), pinocchio placement convention).
+                             "end_effector_pose_gradient", "end_effector_pose_hessian"}
             _unported = sorted(a for a in algorithms if a not in _SPHERICAL_OK)
             if _unported:
                 raise NotImplementedError(
                     "Spherical (ball) joint CUDA codegen currently supports "
                     "inverse_dynamics + crba + minv + forward_dynamics + "
-                    f"end_effector_pose + frame_jacobian + integrator + "
+                    f"end_effector_pose + its gradient/hessian + frame_jacobian + integrator + "
                     f"integrator_gradient/with_gradient (single-stage IT) + "
                     f"inverse_dynamics_gradient + forward_dynamics_gradient + aba + "
                     f"idsva_so + fdsva_so; requested unsupported algorithm(s) "

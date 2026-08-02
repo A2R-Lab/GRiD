@@ -1092,6 +1092,20 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   (`da_dq[:,c,ii]`, ii∈0..5) — crashed on NB≤6 models and only avoided it on NB≥7 (e.g. go2) because the
   floating root's own `dv_dq` is identically zero so the term was structurally a no-op. Fixed: the floating
   root contributes nothing to that term (validated byte-identical on go2/other floating robots vs pin).
+- **Spatial-vs-hom transform CONVENTION DRIFT for multi-DOF joints (FIXED 2026-08-02, spherical ee
+  grad/hess arc).** `URDFParser.Joint` composed the multi-DOF (floating/planar/spherical) HOMOGENEOUS
+  transform as `hom_free * origin` while the SPATIAL `Xmat_sp = X_free * X_origin` (Featherstone
+  parent→child) corresponds to hom = `origin ∘ free` (pinocchio `M_placement * exp(q)`). Net effect: a
+  mid-chain ball joint's hom ROTATED ABOUT ITS PARENT'S ORIGIN, not its own anchor — EE world POSITION
+  diverged from pinocchio whenever the ball's `<origin xyz>` ≠ 0 while ROTATIONS matched exactly, and
+  the whole DYNAMICS suite stayed green (it consumes only the spatial X). Detection recipe that caught
+  it: FD the pose ON THE MANIFOLD (`integrate` retraction) against the geometric-Jacobian gradient —
+  the position rows disagreed by a constant lever-arm RATIO (1.75×) with perfect angular rows, i.e.
+  "right axis, wrong fixed point". Also beware `origin.Xmat_sp_hom_fixed`: it is a MIXED object
+  (TRANSPOSED frame rotation E + forward translation), not a composable forward hom — build
+  `[[E.T, p],[0,1]]` explicitly before composing. Lesson: any joint type whose hom and spatial
+  transforms are built by separate code paths needs BOTH a dynamics-vs-pin AND a hom-FK-vs-pin gate;
+  dynamics green proves nothing about the hom chain.
 
 ---
 
