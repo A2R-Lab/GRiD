@@ -114,16 +114,29 @@ def gen_f_ext_contact_inner_temp_mem_size(self):
     return 16 * _eepose_xworld_slot_count(self)
 
 
-def _emit_contact_tables(self, cs):
-    # baked contact set (all via gen_bake_const_array -> `static const`, off-stack §1v)
-    self.gen_add_code_line("// baked contact set: body id + LOCAL frame origin offset per contact")
-    self.gen_bake_const_array("fc_body", cs["jid"], "int")
-    self.gen_bake_const_array("fc_offset", cs["offset"], "T")
-    self.gen_add_code_line("// body-grouped: one writer per output slot, fixed-order sums, NO atomics (determinism)")
-    self.gen_bake_const_array("fc_uniq", cs["uniq"], "int")
-    self.gen_bake_const_array("fc_start", cs["start"], "int")
-    self.gen_bake_const_array("fc_count", cs["count"], "int")
-    self.gen_bake_const_array("fc_ids", cs["ids"], "int")
+def _emit_contact_tables(self, cs, used=("body", "offset", "uniq", "start", "count", "ids")):
+    # baked contact set (all via gen_bake_const_array -> `static const`, off-stack §1v).
+    # `used` lists the tables THIS consumer actually reads: baking an unread
+    # `static const` fires nvcc #177-D (declared-but-never-referenced) in every
+    # consumer TU that instantiates the function (GATO ride-along nit,
+    # 2026-08-01) — the grouped tables belong to the value/dq inners, fc_body
+    # to the per-contact dfc inner.
+    if "body" in used or "offset" in used:
+        self.gen_add_code_line("// baked contact set: body id + LOCAL frame origin offset per contact")
+    if "body" in used:
+        self.gen_bake_const_array("fc_body", cs["jid"], "int")
+    if "offset" in used:
+        self.gen_bake_const_array("fc_offset", cs["offset"], "T")
+    if any(k in used for k in ("uniq", "start", "count", "ids")):
+        self.gen_add_code_line("// body-grouped: one writer per output slot, fixed-order sums, NO atomics (determinism)")
+    if "uniq" in used:
+        self.gen_bake_const_array("fc_uniq", cs["uniq"], "int")
+    if "start" in used:
+        self.gen_bake_const_array("fc_start", cs["start"], "int")
+    if "count" in used:
+        self.gen_bake_const_array("fc_count", cs["count"], "int")
+    if "ids" in used:
+        self.gen_bake_const_array("fc_ids", cs["ids"], "int")
 
 
 def _emit_gh(self, fc_expr="s_f_c"):
@@ -189,7 +202,7 @@ def gen_f_ext_body_inner(self, contacts):
         header_lines=["//", "// Build world transforms for every joint via BFS-level chain-up", "//"],
         fixed_anchors=None)
 
-    _emit_contact_tables(self, cs)
+    _emit_contact_tables(self, cs, used=("offset", "uniq", "start", "count", "ids"))
 
     # zero the WHOLE output first: bodies with no contact must read 0.
     self.gen_add_code_line("// zero every slot: bodies with no contact contribute nothing")
@@ -270,7 +283,7 @@ def gen_f_ext_body_jacobian_dq_inner(self, contacts):
         header_lines=["//", "// Build world transforms for every joint via BFS-level chain-up", "//"],
         fixed_anchors=None)
 
-    _emit_contact_tables(self, cs)
+    _emit_contact_tables(self, cs, used=("offset", "uniq", "start", "count", "ids"))
 
     self.gen_add_code_line("// zero every slot: bodies with no contact have zero sensitivity")
     self.gen_add_code_line("glass::set_const<T, " + str(6 * NB * nv) + ">(static_cast<T>(0), s_dfext_dq);")
@@ -415,7 +428,7 @@ def gen_f_ext_body_jacobian_dfc_inner(self, contacts):
         header_lines=["//", "// Build world transforms for every joint via BFS-level chain-up", "//"],
         fixed_anchors=None)
 
-    _emit_contact_tables(self, cs)
+    _emit_contact_tables(self, cs, used=("body", "offset"))
 
     self.gen_add_code_line("// zero: only the (body of contact c) rows are nonzero for column block c")
     self.gen_add_code_line("glass::set_const<T, " + str(NR * 6 * n) + ">(static_cast<T>(0), s_dfext_dfc);")

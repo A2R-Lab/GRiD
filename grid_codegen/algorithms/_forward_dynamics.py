@@ -48,8 +48,9 @@ def gen_forward_dynamics_finish(self):
                    "s_c is the bias vector", \
                    "s_Minv is the inverse mass matrix"]
     func_def = "void forward_dynamics_finish(T *s_qdd, const T *s_u, const T *s_c, const T *s_Minv) {"
-    func_notes = ["Assumes s_Minv and s_c are already computed", 
-                  "Does not internally sync the thread group, so it should be called after all threads have finished computing their values"]
+    func_notes = ["Assumes s_Minv and s_c are already computed",
+                  "Does not internally sync the thread group, so it should be called after all threads have finished computing their values",
+                  "CALLER CONTRACT (post): also does not sync AFTER its s_qdd writes -- a hand-composed caller MUST __syncthreads() before any thread READS s_qdd or reuses the s_c/s_Minv storage (GRiD's own generated compositions do; racecheck flags the missing sync as a fd_finish-write vs downstream-read hazard, e.g. vs inverse_dynamics_inner_vaf)"]
     self.gen_add_func_doc("Finish the forward dynamics computation with qdd = Minv*(u-c)",func_notes,func_params,None)
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
