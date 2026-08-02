@@ -58,8 +58,18 @@ def _gen_and_compile(proj, build_dir, floating_base):
     )
     import contextlib
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
+        # SPLIT codegen: exactly the families the monolith runner exercises with
+        # f_ext inputs (core dynamics + gradients + ee family). Skips the SO/
+        # integrator/centroidal/regressor emitters — they dominate full-profile
+        # codegen time and this runner never references them.
         codegen.gen_all_code(
-            include_homogenous_transforms=True, output_path=str(header)
+            include_homogenous_transforms=True, output_path=str(header),
+            algorithm_list=[
+                "inverse_dynamics", "inverse_dynamics_gradient",
+                "forward_dynamics", "forward_dynamics_gradient",
+                "minv", "aba", "crba",
+                "end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
+            ],
         )
     nvcc = shutil.which("nvcc") or "/usr/local/cuda/bin/nvcc"
     if not Path(nvcc).exists():
@@ -67,6 +77,11 @@ def _gen_and_compile(proj, build_dir, floating_base):
     arch = _detect_cuda_arch()
     runner_copy = build_dir / RUNNER_SOURCE.name
     shutil.copyfile(RUNNER_SOURCE, runner_copy)
+    # The runner #includes "grid_runner_select.cuh" (split scaffold, monolith-inert);
+    # copy it next to the runner copy so the isolated-dir compile resolves it —
+    # same as the flagship harness does.
+    shutil.copyfile(RUNNER_SOURCE.with_name("grid_runner_select.cuh"),
+                    build_dir / "grid_runner_select.cuh")
     exe = build_dir / "cuda_fext_runner.exe"
     cmd = [
         nvcc, "-std=c++11", "-O0",

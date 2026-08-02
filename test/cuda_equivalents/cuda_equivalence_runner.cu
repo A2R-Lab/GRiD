@@ -792,14 +792,14 @@ void run() {
     print_matrix_col_major(
         "inverse_dynamics_gradient_q",
         hd_data->h_dc_du,
-        grid::NUM_JOINTS,
-        grid::NUM_JOINTS
+        grid::NUM_VEL,
+        grid::NUM_VEL
     );
     print_matrix_col_major(
         "inverse_dynamics_gradient_qd",
-        &hd_data->h_dc_du[grid::NUM_JOINTS * grid::NUM_JOINTS],
-        grid::NUM_JOINTS,
-        grid::NUM_JOINTS
+        &hd_data->h_dc_du[grid::NUM_VEL * grid::NUM_VEL],
+        grid::NUM_VEL,
+        grid::NUM_VEL
     );
 #endif
 
@@ -811,14 +811,14 @@ void run() {
     print_matrix_col_major(
         "forward_dynamics_gradient_q",
         hd_data->h_df_du,
-        grid::NUM_JOINTS,
-        grid::NUM_JOINTS
+        grid::NUM_VEL,
+        grid::NUM_VEL
     );
     print_matrix_col_major(
         "forward_dynamics_gradient_qd",
-        &hd_data->h_df_du[grid::NUM_JOINTS * grid::NUM_JOINTS],
-        grid::NUM_JOINTS,
-        grid::NUM_JOINTS
+        &hd_data->h_df_du[grid::NUM_VEL * grid::NUM_VEL],
+        grid::NUM_VEL,
+        grid::NUM_VEL
     );
 #endif
 #endif
@@ -915,10 +915,10 @@ void run() {
         );
         gpuErrchk(cudaPeekAtLastError());
         print_matrix_col_major("inverse_dynamics_gradient_q_fext",
-            hd_data->h_dc_du, grid::NUM_JOINTS, grid::NUM_JOINTS);
+            hd_data->h_dc_du, grid::NUM_VEL, grid::NUM_VEL);
         print_matrix_col_major("inverse_dynamics_gradient_qd_fext",
-            &hd_data->h_dc_du[grid::NUM_JOINTS * grid::NUM_JOINTS],
-            grid::NUM_JOINTS, grid::NUM_JOINTS);
+            &hd_data->h_dc_du[grid::NUM_VEL * grid::NUM_VEL],
+            grid::NUM_VEL, grid::NUM_VEL);
 #endif
 
 #if RUN_FORWARD_DYNAMICS_GRADIENT
@@ -927,10 +927,10 @@ void run() {
         );
         gpuErrchk(cudaPeekAtLastError());
         print_matrix_col_major("forward_dynamics_gradient_q_fext",
-            hd_data->h_df_du, grid::NUM_JOINTS, grid::NUM_JOINTS);
+            hd_data->h_df_du, grid::NUM_VEL, grid::NUM_VEL);
         print_matrix_col_major("forward_dynamics_gradient_qd_fext",
-            &hd_data->h_df_du[grid::NUM_JOINTS * grid::NUM_JOINTS],
-            grid::NUM_JOINTS, grid::NUM_JOINTS);
+            &hd_data->h_df_du[grid::NUM_VEL * grid::NUM_VEL],
+            grid::NUM_VEL, grid::NUM_VEL);
 #endif
 #endif
     }

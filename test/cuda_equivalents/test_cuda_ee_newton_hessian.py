@@ -53,7 +53,9 @@ def _generate_header(project_model, build_dir):
     header = build_dir / "grid.cuh"
     codegen = GRiDCodeGenerator(project_model.robot, FILE_NAMESPACE="grid")
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        codegen.gen_all_code(codegen_profile="all", output_path=str(header))
+        # SPLIT codegen: full-Newton ee_pos_cost_hessian needs the analytic d2ee,
+        # i.e. the "kinematics-derivatives" profile (pose + gradient + hessian).
+        codegen.gen_all_code(codegen_profile="kinematics-derivatives", output_path=str(header))
     return header
 
 

@@ -133,6 +133,10 @@ def _compile_runner(build_dir, floating=False):
         pytest.skip("nvcc not found; install CUDA Toolkit to run CUDA equivalence tests.")
     runner_copy = build_dir / RUNNER_SOURCE.name
     shutil.copyfile(RUNNER_SOURCE, runner_copy)
+    # The runner #includes "grid_runner_select.cuh" (split scaffold, monolith-inert);
+    # copy it next to the runner copy so the isolated-dir compile resolves it.
+    shutil.copyfile(RUNNER_SOURCE.with_name("grid_runner_select.cuh"),
+                    build_dir / "grid_runner_select.cuh")
     arch = _detect_cuda_arch()
     exe = build_dir / "cuda_continuous_joint_runner.exe"
     cmd = [

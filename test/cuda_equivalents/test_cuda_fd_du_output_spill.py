@@ -88,14 +88,24 @@ def _gen_header(robot, build_dir, target):
     return cg.forward_dynamics_gradient_spill_tier_3way[0], cg
 
 
-def _compile(build_dir, arch):
+def _compile(build_dir, arch, floating):
     nvcc = shutil.which("nvcc") or "/usr/local/cuda/bin/nvcc"
     if shutil.which("nvcc") is None and not Path(nvcc).exists():
         pytest.skip("nvcc not found; install CUDA Toolkit to run CUDA tests.")
     shutil.copyfile(_RUNNER, build_dir / "runner.cu")
+    # The runner #includes "grid_runner_select.cuh" (split scaffold, monolith-inert);
+    # copy it next to the runner copy so the isolated-dir compile resolves it.
+    shutil.copyfile(_RUNNER.with_name("grid_runner_select.cuh"),
+                    build_dir / "grid_runner_select.cuh")
     glass = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
     exe = build_dir / "runner.exe"
+    # GRID_CUDA_FLOATING_BASE selects the runner's floating section, whose fd_grad
+    # dumps are NUM_VEL-framed. Without it a floating header runs the FIXED-base
+    # section, whose NUM_JOINTS^2 framing over-reads the 2*NV*NV-written h_df_du
+    # (nq>nv) into unwritten allocation tail — nondeterministic garbage in the
+    # "qd" block whenever the fresh allocation isn't zero.
     cmd = [nvcc, "-std=c++17", "-O0", "-gencode", f"arch=compute_{arch},code=sm_{arch}",
+           f"-DGRID_CUDA_FLOATING_BASE={1 if floating else 0}",
            "-DGRID_RUNNER_SKIP_GRADIENTS=0", "-DGRID_RUNNER_SKIP_EEPOSE_GRADIENTS=1",
            f"-I{glass}", f"-I{build_dir}", "-o", str(exe), str(build_dir / "runner.cu")]
     res = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
@@ -143,7 +153,7 @@ def test_cuda_fd_du_output_spill_matches_full(tmp_path, robot_id, base_mode):
     full_dir.mkdir()
     full_pick, cg_full = _gen_header(robot, full_dir, 98304)
     assert full_pick == 0, f"expected fd_du full rung (pick 0) at the default target, got {full_pick}"
-    full_exe = _compile(full_dir, arch)
+    full_exe = _compile(full_dir, arch, base_mode == "floating")
 
     # OUTPUT-SPILL build: force the rung by codegen'ing one byte below the emergency
     # arena (the 4 arenas decrease with spill: full > selective > emergency > output).
@@ -158,7 +168,7 @@ def test_cuda_fd_du_output_spill_matches_full(tmp_path, robot_id, base_mode):
     htxt = (spill_dir / "grid.cuh").read_text()
     assert "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]); s_Minv" in htxt, \
         "output-spill repoint not emitted in the forced header"
-    spill_exe = _compile(spill_dir, arch)
+    spill_exe = _compile(spill_dir, arch, base_mode == "floating")
 
     rng = np.random.default_rng(_stable_seed(robot_id))
     for trial in range(3):

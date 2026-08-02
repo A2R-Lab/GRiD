@@ -1097,6 +1097,36 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
 
 ## 7. Test-infra gotchas
 
+- **A runner's support-header include silently kills every test that compiles it from an
+  isolated dir (2026-08-02, `grid_runner_select.cuh`).** The 07-28 split scaffold added an
+  UNGUARDED `#include "grid_runner_select.cuh"` to `cuda_equivalence_runner.cu`; the flagship
+  harness copies the selector next to its runner copy, but three OTHER tests (fext,
+  continuous_joint, fd_du_output_spill) copy only the runner into a tmp build dir → quote-include
+  searches the includer's dir (NOT cwd, NOT the source tree) → fatal missing-include → those
+  tests were compile-dead for five days and nobody noticed because no FULL `-m cuda_equivalence`
+  pass ran in the window (night scripts run benches; day gates ran targeted tests). Lessons:
+  (1) when adding a support header to a shared runner, grep for EVERY test that copies that
+  runner and give each the copy (or add `-I` to the source dir); (2) a suite that hasn't run
+  END-TO-END since a change to shared test infra has an unbounded blind spot — after touching
+  shared runners/conftest, run the full marker suite once, not just the neighbor test.
+
+- **NUM_JOINTS-framed dumps of NUM_VEL-strided buffers read unwritten memory on floating robots
+  — and pass while fresh allocations happen to be zero (2026-08-02, fd_du go2 flake).** The
+  monolith runner's FIXED-base section printed id/fd gradients as `NUM_JOINTS^2` blocks with the
+  qd half at offset `NJ*NJ`, over a buffer the kernels write `2*NV*NV`-strided. Fixed non-mimic
+  robots (nq==nv) are exactly right; but `test_cuda_fd_du_output_spill` compiled the runner
+  WITHOUT `-DGRID_CUDA_FLOATING_BASE=1` for its go2-floating case, so the floating header ran
+  the fixed section: the "qd" block (offset 361 > written extent 324) read allocation tail —
+  zeros on a fresh GPU (weeks of green), garbage under memory pressure (today's 63/361 flake,
+  run-to-run NONdeterministic in BOTH arms). Diagnostics that localized it fast: (a) run each
+  exe TWICE — uninit reads are run-to-run nonidentical, real rung divergence is deterministic;
+  (b) look at the VALUES — denormals/1e8 garbage vs the reference's exact ±0.0 means uninit
+  read, not arithmetic; (c) map flat mismatch indices to (row, col) — a clean "last rows only"
+  pattern is a framing/stride bug, not math. Fixes: the test passes the floating define, and the
+  fixed-path prints are now NV-framed (byte-identical for every robot that legitimately reaches
+  them). The bug predated 07-20 — a bisect chasing "what broke it" was chasing memory-pressure
+  weather; characterize the failure mode BEFORE bisecting.
+
 - **Zero-only sample coverage hides input-LAYOUT bugs (2026-07-30, the floating q_qd_u shear).**
   The equivalence runner packed the floating `q_qd_u` buffer TIGHT (`nq + 2*nv`, stride 40) while
   every generated kernel unpacks canonical nq-wide slots (`s_qd = &buf[nq]`, `s_tau = &buf[2*nq]`,

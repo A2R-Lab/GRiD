@@ -54,7 +54,9 @@ def _generate_header(project_model, build_dir):
     header = build_dir / "grid.cuh"
     codegen = GRiDCodeGenerator(project_model.robot, FILE_NAMESPACE="grid")
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        codegen.gen_all_code(codegen_profile="all", output_path=str(header))
+        # SPLIT codegen: grid_plant's ee_pos_cost family gates on the ee pose/
+        # gradient/hessian keys — exactly the "kinematics-derivatives" profile.
+        codegen.gen_all_code(codegen_profile="kinematics-derivatives", output_path=str(header))
     return header
 
 

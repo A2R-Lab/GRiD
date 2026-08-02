@@ -47,8 +47,10 @@ def test_collision_two_tier_matches_fine(tmp_path):
         build_dir = tmp_path / "collision_two_tier"
         build_dir.mkdir()
         header = build_dir / "grid.cuh"
+        # SPLIT codegen: collision emission is collision_spec-driven; the list only
+        # needs one ee key to satisfy the include_any_kinematics gate.
         GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(
-            codegen_profile="all", output_path=str(header), collision_spec=spec)
+            codegen_profile="kinematics", output_path=str(header), collision_spec=spec)
 
     nvcc = shutil.which("nvcc")
     if nvcc is None:

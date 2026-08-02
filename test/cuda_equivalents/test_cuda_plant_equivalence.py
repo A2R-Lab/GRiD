@@ -145,6 +145,10 @@ def _generate_header(project_model, build_dir):
     header = build_dir / "grid.cuh"
     codegen = GRiDCodeGenerator(project_model.robot, FILE_NAMESPACE="grid")
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
+        # Full profile is JUSTIFIED here (unlike the other aux suites, which use
+        # split codegen): plant_step_hessian consumes fdsva_so + integrator, the
+        # cost families consume the full ee/centroidal surfaces — restricting
+        # would drop the very compositions this suite validates.
         codegen.gen_all_code(codegen_profile="all", output_path=str(header))
     return header
 

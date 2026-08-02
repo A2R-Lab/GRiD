@@ -61,9 +61,9 @@ RUNNER_SOURCE = Path(__file__).with_name("cuda_f_ext_gradient_runner.cu")
 _CASES = [("iiwa14", "fixed"), ("go2", "floating"), ("g1", "floating"),
           ("fr3", "fixed"), ("fr3", "floating"), ("h1_2", "floating")]
 
-# Robots whose full default codegen profile would hit a still-refused mimic
-# gradient (integrator gradients); generate them with the f-ext-gradient profile.
-_MIMIC_FEG_PROFILE = {"fr3", "h1_2"}
+# (All robots now generate with the "f-ext-gradient" profile — the runner only
+# exercises that surface, and the restricted profile also sidesteps the
+# still-refused mimic integrator gradients that used to force fr3/h1_2 onto it.)
 
 
 def _build_adapters(robot_id, base_mode):
@@ -134,8 +134,10 @@ def test_cuda_f_ext_gradient_equivalence(robot_id, base_mode, tmp_path):
     sample = build_dynamics_samples(proj)[1]
     q = sample.q
 
-    profile = "f-ext-gradient" if robot_id in _MIMIC_FEG_PROFILE else "all"
-    exe = _gen_and_compile(proj, tmp_path, floating, codegen_profile=profile)
+    # SPLIT codegen for ALL robots (was mimic-only): the runner exercises only the
+    # f_ext_gradient(+_dq) surface, and the "f-ext-gradient" profile pulls its
+    # id/minv deps — full-profile codegen bought nothing here.
+    exe = _gen_and_compile(proj, tmp_path, floating, codegen_profile="f-ext-gradient")
 
     # Mimic robots: GRiD/RBDReference expose a per-BODY f_ext column for ALL NB
     # bodies (the mimic body is a real physical link that can receive an external

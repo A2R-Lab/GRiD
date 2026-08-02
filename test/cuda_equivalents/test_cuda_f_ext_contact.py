@@ -56,8 +56,13 @@ def test_f_ext_contact_frame_map_fd(tmp_path):
         build_dir = tmp_path / "f_ext_contact"
         build_dir.mkdir()
         header = build_dir / "grid.cuh"
+        # SPLIT codegen: contact emission is contact_frames-driven inside the
+        # kinematics region (needs one ee key); the runner also calls
+        # f_ext_gradient_device and grid_integrate_floating_q ("integrator" pulls
+        # the SE(3) lie helpers on this floating base).
         GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(
-            codegen_profile="all", output_path=str(header), contact_frames=frames)
+            algorithm_list=["f_ext_gradient", "end_effector_pose", "integrator"],
+            output_path=str(header), contact_frames=frames)
 
     assert len(frames) == 4, f"expected 4 go2 foot frames, resolved {len(frames)}"
 

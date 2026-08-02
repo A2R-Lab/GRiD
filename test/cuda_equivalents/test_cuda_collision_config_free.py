@@ -81,7 +81,9 @@ def _gen_header(robot, build_dir, spec):
     header = build_dir / "grid.cuh"
     codegen = GRiDCodeGenerator(robot, FILE_NAMESPACE="grid")
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        codegen.gen_all_code(codegen_profile="all", output_path=str(header), collision_spec=spec)
+        # SPLIT codegen: collision emission is collision_spec-driven; the list only
+        # needs one ee key to satisfy the include_any_kinematics gate.
+        codegen.gen_all_code(codegen_profile="kinematics", output_path=str(header), collision_spec=spec)
     return header
 
 

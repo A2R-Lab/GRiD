@@ -43,8 +43,13 @@ def test_f_ext_contact_runtime_map_fd(tmp_path):
         build_dir = tmp_path / "f_ext_contact_runtime"
         build_dir.mkdir()
         header = build_dir / "grid.cuh"
+        # SPLIT codegen: runtime-contact emission is enable_contact_runtime-driven
+        # inside the kinematics region (needs one ee key); the runner also calls
+        # f_ext_gradient_device and grid_integrate_floating_q ("integrator" pulls
+        # the SE(3) lie helpers on this floating base).
         GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(
-            codegen_profile="all", output_path=str(header), enable_contact_runtime=True)
+            algorithm_list=["f_ext_gradient", "end_effector_pose", "integrator"],
+            output_path=str(header), enable_contact_runtime=True)
 
     tjid = frames[0]["jid"]
     rc = frames[0]["offset"]

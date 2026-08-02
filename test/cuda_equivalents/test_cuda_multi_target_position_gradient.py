@@ -64,8 +64,11 @@ def _generate_header(robot, targets, build_dir):
     header = build_dir / "grid.cuh"
     codegen = GRiDCodeGenerator(robot, FILE_NAMESPACE="grid")
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        codegen.gen_all_code(codegen_profile="all", output_path=str(header),
-                             multi_target_batch=targets)
+        # SPLIT codegen: multi_target emission is driven by multi_target_batch; the
+        # runner calls end_effector_pose_gradient_device + the mt gradient device,
+        # so only the ee pose+gradient keys are needed.
+        codegen.gen_all_code(algorithm_list=["end_effector_pose", "end_effector_pose_gradient"],
+                             output_path=str(header), multi_target_batch=targets)
     return header
 
 
