@@ -125,6 +125,26 @@ def _ast_name_text(node) -> str:
     return ""
 
 
+def _compares_against_string_literal(test_node) -> bool:
+    """True if the expression compares (== != in not-in) against a string literal.
+
+    That is the syntactic shape of identity DISPATCH (`robot_id == "go2"`,
+    `"iiwa14" in urdf_name`). It deliberately does NOT match a value-existence
+    guard (`if not robot_id`) or a path/URI FORM predicate
+    (`filename.startswith("package://")`) — neither selects anything per robot.
+    """
+    for node in ast.walk(test_node):
+        if not isinstance(node, ast.Compare):
+            continue
+        if not any(isinstance(op, (ast.Eq, ast.NotEq, ast.In, ast.NotIn)) for op in node.ops):
+            continue
+        for operand in [node.left, *node.comparators]:
+            for child in ast.walk(operand):
+                if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                    return True
+    return False
+
+
 def _compile_header_consumer(
     tmp_path: Path,
     header: str,
@@ -381,7 +401,15 @@ def test_codegen_does_not_select_algorithms_by_fixture_name_or_filename():
                 test_nodes = list(ast.walk(node.test))
                 names = {_ast_name_text(child).lower() for child in test_nodes}
                 names = {name for name in names if name}
-                if names & filename_branch_names:
+                # Only identity DISPATCH breaks robot-agnostic codegen: a branch that
+                # compares the identity against literal value(s). Merely testing that an
+                # optional value EXISTS (`if not robot_id: return {}` for the per-robot
+                # launch-config lookup) or resolving a mesh path's URI FORM
+                # (`filename.startswith("package://")`) emits the same code for every
+                # robot, so a literal comparison is required before flagging. A per-robot
+                # lookup TABLE stays covered by the fixture_literals scan above, which
+                # flags bare robot-name tokens anywhere in codegen.
+                if (names & filename_branch_names) and _compares_against_string_literal(node.test):
                     filename_conditionals.append((relpath, node.lineno, sorted(names & filename_branch_names)))
 
     assert fixture_literals == []
@@ -407,7 +435,7 @@ def test_floating_header_does_not_require_second_order_kernels(tmp_path, robot_i
     assert constants["NUM_POS"] == constants["NUM_JOINTS"]
     assert constants["SECOND_ORDER_COORDS"] == constants["NUM_VEL"]
     assert constants["SECOND_ORDER_TENSOR_SIZE"] == 4 * constants["NUM_VEL"]**3
-    assert constants["Q_QD_U_STRIDE"] == constants["NUM_POS"] + 2 * constants["NUM_VEL"]
+    assert constants["Q_QD_U_STRIDE"] == 3 * constants["NUM_POS"]
     assert constants["GRID_GENERATES_IDSVA_SO_BODY_FRAME"] == 0
     assert constants["GRID_GENERATES_FDSVA_SO"] == 0
     assert constants["GRID_GENERATES_D2EE"] == 1
@@ -461,7 +489,13 @@ def test_floating_second_order_opt_in_header_compiles(
     assert constants["GRID_GENERATES_FDSVA_SO"] == generates_fdsva
     assert constants["SECOND_ORDER_COORDS"] == constants["NUM_VEL"]
     assert constants["SECOND_ORDER_TENSOR_SIZE"] == 4 * constants["NUM_VEL"]**3
-    assert constants["Q_QD_U_STRIDE"] == constants["NUM_POS"] + 2 * constants["NUM_VEL"]
+    # The per-timestep q|qd|u block packs NUM_POS + 2*NUM_VEL values but the STRIDE is
+    # rounded up to three NUM_POS-sized slots — on a quaternion floating base that is
+    # 2 elements of trailing padding (fixed base: NUM_POS == NUM_VEL, so they coincide,
+    # which is why a tight-packing expectation went unnoticed). 3*NUM_POS is the input
+    # ABI: the device allocation, the host memcpy, and every kernel's stride argument
+    # all use it, and downstream consumers pack h_q_qd_u to it.
+    assert constants["Q_QD_U_STRIDE"] == 3 * constants["NUM_POS"]
     assert "void idsva_so_body_frame(gridData<T, KIND> *hd_data" in header
     if generates_fdsva:
         assert "void fdsva_so(gridData<T, KIND> *hd_data" in header
@@ -484,7 +518,7 @@ def test_floating_second_order_opt_in_header_compiles(
             static_assert(grid::GRID_GENERATES_FDSVA_SO == EXPECTED_FDSVA, "FDSVA-SO flag mismatch");
             static_assert(grid::SECOND_ORDER_COORDS == grid::NUM_VEL, "second-order tensor must be velocity-sized");
             static_assert(grid::SECOND_ORDER_TENSOR_SIZE == 4 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_VEL, "tensor size mismatch");
-            static_assert(grid::Q_QD_U_STRIDE == grid::NUM_POS + 2 * grid::NUM_VEL, "q/qd/u stride mismatch");
+            static_assert(grid::Q_QD_U_STRIDE == 3 * grid::NUM_POS, "q/qd/u stride mismatch");
             return 0;
         }
         """.replace("EXPECTED_FDSVA", str(generates_fdsva)),
