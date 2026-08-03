@@ -7,6 +7,7 @@ Learn about the core concepts and algorithms in GRID.
    :maxdepth: 2
 
    design_principles
+   input_output_abi
    parallelism_patterns
    algorithms/index
    codegen_architecture

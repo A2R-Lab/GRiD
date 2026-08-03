@@ -339,7 +339,10 @@ def gen_inverse_dynamics_regressor_kernel(self, single_call_timing=False):
     # Floating-aware input layout (mirrors the idsva_so / id kernels):
     #   NUM_POS = get_num_pos()  (== quaternion-form NUM_JOINTS for floating base)
     #   nv      = get_num_vel()
-    #   input block per timestep is q(NUM_POS) | qd(nv) | qdd(nv), stride Q_QD_U_STRIDE.
+    #   input block per timestep is THREE NUM_POS-WIDE SLOTS (stride Q_QD_U_STRIDE ==
+    #   3*NUM_POS): q at 0, qd at NUM_POS, qdd at 2*NUM_POS. On a floating base qd/qdd
+    #   carry nv values in their LEADING slots plus one trailing pad -- they are NOT
+    #   packed tightly at nv width (see test_cuda_input_abi.py).
     # s_vaf is sized 18*NUM_POS to match the ID kernel convention (oversized but
     # consistent; the inner indexes it with n=get_num_joints()).
     NUM_POS = self.robot.get_num_pos()

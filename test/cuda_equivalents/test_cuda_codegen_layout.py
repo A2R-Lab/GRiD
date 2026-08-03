@@ -489,12 +489,14 @@ def test_floating_second_order_opt_in_header_compiles(
     assert constants["GRID_GENERATES_FDSVA_SO"] == generates_fdsva
     assert constants["SECOND_ORDER_COORDS"] == constants["NUM_VEL"]
     assert constants["SECOND_ORDER_TENSOR_SIZE"] == 4 * constants["NUM_VEL"]**3
-    # The per-timestep q|qd|u block packs NUM_POS + 2*NUM_VEL values but the STRIDE is
-    # rounded up to three NUM_POS-sized slots — on a quaternion floating base that is
-    # 2 elements of trailing padding (fixed base: NUM_POS == NUM_VEL, so they coincide,
-    # which is why a tight-packing expectation went unnoticed). 3*NUM_POS is the input
-    # ABI: the device allocation, the host memcpy, and every kernel's stride argument
-    # all use it, and downstream consumers pack h_q_qd_u to it.
+    # The per-timestep input block is THREE NUM_POS-WIDE SLOTS, not a tight packing:
+    # every kernel reads s_q = base, s_qd = &base[NUM_POS], s_u = &base[2*NUM_POS]. On a
+    # quaternion floating base qd/u carry nv meaningful values in their LEADING slots
+    # plus one trailing pad each (fixed base: NUM_POS == NUM_VEL, so tight and slotted
+    # coincide — which is why a tight expectation went unnoticed here). A consumer that
+    # packs q|qd|u tightly would write u at NUM_POS+NUM_VEL while the kernels read it at
+    # 2*NUM_POS — silent corruption, so this constant is a real ABI and is pinned here,
+    # in test_cuda_input_abi.py, and by the device allocation / host memcpy / stride arg.
     assert constants["Q_QD_U_STRIDE"] == 3 * constants["NUM_POS"]
     assert "void idsva_so_body_frame(gridData<T, KIND> *hd_data" in header
     if generates_fdsva:
