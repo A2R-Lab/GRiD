@@ -1450,10 +1450,15 @@ def gen_integrator_gradient_host(self, mode=0, compute_x_kp1=False):
         func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"" + base_name + "\", INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
+    if not single_call_timing:
+        self.gen_add_workspace_slot_count()
     workspace_bytes = ("GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()" if single_call_timing
-                       else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(num_timesteps)")
+                       else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(_grid_ws_n)")
     self.gen_add_code_line("if (GRID_INTEGRATOR_GRADIENT_USES_WORKSPACE) {gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, " + workspace_bytes + "));}")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        self.gen_add_workspace_clamped_launch(func_call_code, emit_count = False)
     self.gen_add_code_line("if (GRID_INTEGRATOR_GRADIENT_USES_WORKSPACE) {gpuErrchk(grid_end_l2_persisting(0));}")
     if not compute_only:
         self.gen_add_code_lines([

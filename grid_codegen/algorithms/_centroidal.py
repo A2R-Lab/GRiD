@@ -259,7 +259,10 @@ def gen_id_bias_host(self, gravity_only, mode=0):
         func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"" + name + "\", " + macro + "));")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        self.gen_add_workspace_clamped_launch(func_call_code)
     if not compute_only:
         self.gen_add_code_lines([
             "// finally transfer the result back",
@@ -746,7 +749,7 @@ def _gen_kin_centroidal_kernel(self, name, out_size, has_qd, has_gravity, single
         # GRID_DCCRBA_J_OFFSET_BYTES sub-offset with dccrba/cmm; same 6*nv*NB band).
         self.gen_add_code_line("if constexpr (!" + SMEM + ") {", True)
         if in_loop:
-            self.gen_add_code_line("s_J = reinterpret_cast<T *>(&d_workspace[k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_DCCRBA_J_OFFSET_BYTES<T>()]);")
+            self.gen_add_code_line("s_J = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_DCCRBA_J_OFFSET_BYTES<T>()]);")
         else:
             self.gen_add_code_line("s_J = reinterpret_cast<T *>(&d_workspace[GRID_DCCRBA_J_OFFSET_BYTES<T>()]);")
         self.gen_add_end_control_flow()
@@ -902,11 +905,16 @@ def _gen_kin_centroidal_host(self, name, out_buf, out_size, has_qd, has_gravity,
         func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     # DE-GATE #2: L2-pin d_workspace when the chosen tier spills the Jw band into it.
+    if not single_call_timing:
+        self.gen_add_workspace_slot_count()
     ws_bytes = ("GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()" if single_call_timing
-                else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(num_timesteps)")
+                else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(_grid_ws_n)")
     self.gen_add_code_line("if (!" + name.upper() + "_J_IN_SMEM<RESOURCE_TIER>() && hd_data->d_workspace != nullptr) {gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, " + ws_bytes + "));}")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"" + name + "\", " + macro + "));")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        self.gen_add_workspace_clamped_launch(func_call_code, emit_count = False)
     if not compute_only:
         self.gen_add_code_lines([
             "// finally transfer the result back",

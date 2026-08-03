@@ -963,7 +963,7 @@ def gen_osc_inertia_kernel(self, single_call_timing=False):
             self.gen_mjx_quat_reorder("s_q")
             self.gen_add_end_control_flow()
         self.gen_add_code_line("// compute (slice the per-timestep workspace base for the spill-F tier)")
-        self.gen_add_code_line("osc_inertia_device<T, RESOURCE_TIER>(s_osc_inertia, target_jid, reference_frame, s_q, d_robotModel, &d_workspace[k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]);")
+        self.gen_add_code_line("osc_inertia_device<T, RESOURCE_TIER>(s_osc_inertia, target_jid, reference_frame, s_q, d_robotModel, &d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]);")
         self.gen_add_sync()
         self.gen_kernel_save_result("osc_inertia", "36", stride="36")
         self.gen_add_end_control_flow()
@@ -1038,7 +1038,10 @@ def gen_osc_inertia_host(self, mode=0):
         func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"osc_inertia\", OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        self.gen_add_workspace_clamped_launch(func_call_code)
     if not compute_only:
         self.gen_add_code_lines(["// finally transfer the result back",
                                  "gpuErrchk(cudaMemcpy(hd_data->h_osc_inertia,hd_data->d_osc_inertia,36*" +

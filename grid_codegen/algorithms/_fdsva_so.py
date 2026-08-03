@@ -732,7 +732,7 @@ def _emit_fdsva_so_kernel_body_for_flags(self, n, NUM_POS, use_global_tensors, u
     # and uses the bare-`d_workspace` fd_grad_spill form the timed path used).
     def _emit_fdsva_so_compute_pointers_and_call(timing):
         # per-timestep slot offset prefix into d_workspace (empty for timing reps)
-        ws_k = "" if timing else "k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + "
+        ws_k = "" if timing else "grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + "
         if use_global_tensors:
             if timing:
                 self.gen_add_code_line('T *s_df2 = d_df2;')
@@ -748,7 +748,7 @@ def _emit_fdsva_so_kernel_body_for_flags(self, n, NUM_POS, use_global_tensors, u
             if timing:
                 self.gen_add_code_line('T *d_fd_grad_spill = reinterpret_cast<T *>(d_workspace);')
             else:
-                self.gen_add_code_line('T *d_fd_grad_spill = reinterpret_cast<T *>(&d_workspace[k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]);')
+                self.gen_add_code_line('T *d_fd_grad_spill = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]);')
         if use_workspace_df_du:
             # Phase 3e: s_df_du in L2-pinned workspace, in its own dedicated section
             # past grad + SO (avoids conflict with fd_grad_spill which is at offset 0).
@@ -910,22 +910,15 @@ def gen_fdsva_so_host(self, mode = 0):
         func_call_code.insert(0,"struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"fdsva_so\", FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
-    chunked = getattr(self, "emit_workspace_chunking", False) and not single_call_timing
-    ws_ts = "grid_workspace_chunk(num_timesteps)" if chunked else "num_timesteps"
-    workspace_bytes = "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS*" + ("1" if single_call_timing else ws_ts)
+    if not single_call_timing:
+        self.gen_add_workspace_slot_count()
+    workspace_bytes = "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS*" + ("1" if single_call_timing else "static_cast<size_t>(_grid_ws_n)")
     self.gen_add_code_line("if (GRID_FDSVA_SO_USES_WORKSPACE_ANY_TIER) {gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, " + workspace_bytes + "));}")
     if single_call_timing:
         self.gen_add_code_lines(func_call_code)
     else:
-        # chunked-workspace seam (modes 0/2): d_df2 OUT and d_idsva_so INPUT both
-        # advance by SECOND_ORDER_TENSOR_SIZE per timestep; d_workspace stays at
-        # base (arena reused). The per-launch gpuErrchkKernel stays OUTSIDE the
-        # chunk loop (same-stream in-order; one final sync is honest wall time).
-        self.gen_add_workspace_chunked_launch([func_call],
-            [("hd_data->d_df2", "SECOND_ORDER_TENSOR_SIZE"),
-             ("hd_data->d_idsva_so", "SECOND_ORDER_TENSOR_SIZE"),
-             ("hd_data->d_q_qd_u", "stride_q_qd_qdd")])
-        self.gen_add_code_line("gpuErrchkKernel();")
+        # workspace-slot seam (modes 0/2): grid clamped to the arena slot count.
+        self.gen_add_workspace_clamped_launch(func_call_code, emit_count = False)
     self.gen_add_code_line("if (GRID_FDSVA_SO_USES_WORKSPACE_ANY_TIER) {gpuErrchk(grid_end_l2_persisting(0));}")
     if not compute_only:
         # then transfer memory back

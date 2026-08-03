@@ -2886,7 +2886,7 @@ def _emit_idsva_so_body_frame_kernel_body_for_flags(self, n, NUM_POS, use_qdd_in
     # the same <T, SCRATCH, BC> instantiation it did before (Gate A: byte-identical default).
     tp_in_smem_expr = "false" if tp_in_global else None
     so_off = "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()"
-    ts_off = ("k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " + so_off) if not single_call_timing else so_off
+    ts_off = ("grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " + so_off) if not single_call_timing else so_off
 
     def _emit_spill_ptrs():
         # Whichever spill is active routes through d_temp_spill; the inner consumes it.
@@ -3032,11 +3032,8 @@ def gen_idsva_so_body_frame_host(self, mode = 0):
     if single_call_timing:
         self.gen_add_code_lines(func_call_code)
     else:
-        # chunked-workspace seam (modes 0/2): output + input offset per chunk;
-        # d_workspace stays at base (arena reused). Flag-off = passthrough.
-        self.gen_add_workspace_chunked_launch(func_call_code,
-            [("hd_data->d_idsva_so", "SECOND_ORDER_TENSOR_SIZE"),
-             ("hd_data->d_q_qd_u", "stride_q_qd")])
+        # workspace-slot seam (modes 0/2): grid clamped to the arena slot count.
+        self.gen_add_workspace_clamped_launch(func_call_code)
     if not compute_only:
         # then transfer memory back
         # sizeof(T) leads: SECOND_ORDER_TENSOR_SIZE*num_timesteps overflows int on big robots
@@ -4756,7 +4753,7 @@ def _emit_idsva_so_world_frame_kernel_body_for_flags(self, n, NUM_POS, single_ca
     cold_in_smem_expr = "false" if cold_in_global else "true"
     mjx_expr = "MUJOCO_OUTPUT" if mjx_kernel else None
     so_off = "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()"
-    ts_off = ("k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " + so_off) if not single_call_timing else so_off
+    ts_off = ("grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " + so_off) if not single_call_timing else so_off
     def _emit_mjx_input_and_scratch(ts_expr):
         # mjx scratch = SO-temp region of d_workspace (dead post-assembly). The
         # input-convert mutates s_q/s_qd/s_qdd in place BEFORE the inner builds XImats.
@@ -4893,10 +4890,8 @@ def gen_idsva_so_world_frame_host(self, mode = 0):
     if single_call_timing:
         self.gen_add_code_lines(func_call_code)
     else:
-        # chunked-workspace seam (modes 0/2) — see gen_idsva_so_body_frame_host.
-        self.gen_add_workspace_chunked_launch(func_call_code,
-            [("hd_data->d_idsva_so", "SECOND_ORDER_TENSOR_SIZE"),
-             ("hd_data->d_q_qd_u", "stride_q_qd")])
+        # workspace-slot seam (modes 0/2) — see gen_idsva_so_body_frame_host.
+        self.gen_add_workspace_clamped_launch(func_call_code)
     if not compute_only:
         # sizeof(T) leads: SECOND_ORDER_TENSOR_SIZE*num_timesteps overflows int on big robots
         self.gen_add_code_lines([

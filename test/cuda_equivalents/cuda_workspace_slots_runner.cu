@@ -1,17 +1,21 @@
-// Workspace-chunk bit-identity runner — gate for the chunked (two-phase) batch
-// SO seam (GRID_WORKSPACE_CHUNK). The chunk-aware host wrappers (idsva_so body /
-// world, fdsva_so, f_ext_gradient_dq) sweep the batch in C-sized launches that
-// reuse a chunk-sized workspace arena while outputs stay full-N on device. Since
-// timesteps are independent and buffer addresses never enter the arithmetic, a
-// chunked run must produce outputs BIT-IDENTICAL to an unchunked run.
+// Workspace-slots bit-identity runner — gate for the runtime workspace-slot
+// seam. init_gridData auto-fits gridData.workspace_timestep_slots to remaining
+// device memory (GRID_WORKSPACE_TIMESTEP_SLOTS env overrides), kernels index the
+// workspace arena per-BLOCK (grid_workspace_slot()), and every workspace-using
+// host wrapper clamps its launch grid to the slot count. Since timesteps are
+// independent and per-timestep computation never depends on which block (or how
+// many blocks) executes it, a slot-clamped run must produce outputs BIT-IDENTICAL
+// to an unclamped one.
 //
-// The pytest compiles this file TWICE from the SAME chunk-capable header — once
-// with -DGRID_WORKSPACE_CHUNK=<C> and once with -DGRID_WORKSPACE_CHUNK=0 — using
-// the exact bench flag composition (GRID_ALLOC_GATE + per-algo GRID_ALLOC_*), and
-// asserts the two stdouts are equal. Outputs are printed as raw float bit
-// patterns (hex), so the comparison is exact, not tolerance-based.
+// The pytest compiles this file ONCE and runs it three times — env unset
+// (slots == GRID_BATCH, clamp is a no-op), GRID_WORKSPACE_TIMESTEP_SLOTS=3
+// (grid clamped 32 -> 3 blocks; 3 deliberately does not divide the batch), and
+// =1 (fully serialized single-slot extreme) — asserting all three stdouts are
+// equal. Outputs are raw float bit patterns (hex), so the comparison is exact.
+// The exe launches with a MULTI-block grid (one block per timestep unclamped),
+// so the clamp path genuinely engages under the forced-slot arms.
 //
-// Inputs are generated in-process by a fixed LCG (identical in both arms; no
+// Inputs are generated in-process by a fixed LCG (identical in all arms; no
 // stdin). For a floating base the root quaternion block q[3..6] is normalized so
 // the states are valid; everything downstream is deterministic either way.
 #include <cmath>
@@ -37,17 +41,21 @@ static void dump_bits(const char *name, const T *data, size_t count) {
 }
 
 int main() {
-    const dim3 block_dimms(1, 1, 1);
-    const dim3 thread_dimms(grid::MAX_PERF_LEVEL_THREADS, 1, 1);
     constexpr int B = GRID_BATCH;
+    // multi-block grid: one block per timestep when unclamped, so the forced-slot
+    // arms exercise the wrapper's grid clamp + per-block slot indexing for real
+    const dim3 block_dimms(B, 1, 1);
+    const dim3 thread_dimms(grid::MAX_PERF_LEVEL_THREADS, 1, 1);
     constexpr int NQ = grid::NUM_POS;
     const T gravity = static_cast<T>(9.81);
 
     cudaStream_t *streams = grid::init_grid<T>();
     grid::robotModel<T> *d_robotModel = grid::init_robotModel<T>();
     grid::gridData<T> *hd_data = grid::init_gridData<T, B>();
+    // stderr on purpose: the arms' slot counts DIFFER, and the test compares stdout
+    fprintf(stderr, "workspace_timestep_slots=%d\n", hd_data->workspace_timestep_slots);
 
-    // fixed LCG q/qd/u in [-1, 1]; DISTINCT per batch slot so a chunk-boundary
+    // fixed LCG q/qd/u in [-1, 1]; DISTINCT per batch slot so a slot-mapping
     // off-by-one (wrong slot read/written) cannot alias into a bit-identical pass
     const int stride = 3 * grid::NUM_JOINTS;
     unsigned s = 42u;
@@ -66,8 +74,7 @@ int main() {
     }
 
     // idsva_so FIRST: fills hd_data->d_idsva_so on device, which fdsva_so then
-    // consumes as a (chunk-offset) INPUT — so the fdsva_so leg also proves the
-    // input-side offsetting.
+    // consumes as a full-N INPUT — outputs never shrink under slot clamping.
     grid::idsva_so<T>(hd_data, d_robotModel, gravity, B, block_dimms, thread_dimms, streams);
     gpuErrchk(cudaPeekAtLastError());
     dump_bits("IDSVA_SO", hd_data->h_idsva_so, (size_t)grid::SECOND_ORDER_TENSOR_SIZE * B);

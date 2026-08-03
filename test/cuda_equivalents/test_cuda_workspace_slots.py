@@ -1,19 +1,19 @@
-"""Workspace-chunk bit-identity gate (chunked two-phase batch SO seam).
+"""Workspace-slots bit-identity gate (runtime workspace-slot seam).
 
-The GRID_WORKSPACE_CHUNK seam lets the bench's solo SO exes run huge batches
-with a chunk-sized workspace arena: chunk-aware host wrappers (idsva_so body /
-world, fdsva_so, f_ext_gradient_dq) sweep the batch in C-sized launches,
-offsetting input/output pointers per chunk while reusing the arena; outputs stay
-full-N on device. Timesteps are independent and no buffer address enters the
-arithmetic, so a chunked run must be BIT-identical to an unchunked one — this
-test asserts that rather than assuming it.
+init_gridData auto-fits gridData.workspace_timestep_slots to remaining device
+memory (cudaMemGetInfo; GRID_WORKSPACE_TIMESTEP_SLOTS env override), kernels
+index the workspace arena per-BLOCK (grid_workspace_slot()), and every
+workspace-using host wrapper clamps its launch grid to the slot count. Timesteps
+are independent and per-timestep computation never depends on which block (or
+how many blocks) executes it, so a slot-clamped run must be BIT-identical to an
+unclamped one — this test asserts that rather than assuming it.
 
-Both arms compile from the SAME chunk-capable header (emit_workspace_chunking +
-emit_alloc_gating, the exact composition per_algo_bench uses) and differ ONLY in
--DGRID_WORKSPACE_CHUNK (C=8 vs 0) at GRID_BATCH=32 — so every wrapper takes 4
-full chunks, and the arms disagree loudly if a chunk loop mis-offsets a pointer,
-passes the wrong per-launch count, or lets workspace state leak across chunks.
-The compile also exercises the GRID_ALLOC_GATE tripwire composition.
+ONE exe (compiled with the bench's alloc-gate composition, multi-block launch
+grid) runs three times: env unset (slots == batch, clamp no-op),
+GRID_WORKSPACE_TIMESTEP_SLOTS=3 (grid clamped 32 -> 3 blocks; 3 deliberately
+does not divide the batch), and =1 (single-slot fully-serialized extreme). The
+arms disagree loudly if the per-block slot mapping aliases, the clamp mis-sizes
+the grid, or workspace state leaks between a block's grid-stride timesteps.
 """
 
 from __future__ import annotations
@@ -32,9 +32,9 @@ from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter
 
-RUNNER_SOURCE = Path(__file__).with_name("cuda_workspace_chunk_runner.cu")
+RUNNER_SOURCE = Path(__file__).with_name("cuda_workspace_slots_runner.cu")
 _BATCH = 32
-_CHUNK = 8
+_FORCED_SLOTS = (3, 1)   # non-divisor clamp + single-slot extreme
 # canonical gen_all_code keys ("f_ext_gradient" pulls in the _dq surface;
 # floating-base pulls in idsva_so_world_frame via its enable default)
 _ALGO_KEYS = ["idsva_so_body_frame", "fdsva_so", "f_ext_gradient"]
@@ -44,7 +44,7 @@ _GATE_DEFINES = ["GRID_ALLOC_GATE=1", "GRID_ALLOC_IDSVA_SO=1", "GRID_ALLOC_FDSVA
 
 
 def _robot_modes():
-    raw = os.environ.get("GRID_CUDA_WORKSPACE_CHUNK_ROBOTS", "iiwa14:fixed,go2:floating")
+    raw = os.environ.get("GRID_CUDA_WORKSPACE_SLOTS_ROBOTS", "iiwa14:fixed,go2:floating")
     out = []
     for tok in raw.split(","):
         tok = tok.strip()
@@ -67,11 +67,11 @@ def _generate_header(project_model, build_dir):
     codegen = GRiDCodeGenerator(project_model.robot, FILE_NAMESPACE="grid")
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
         codegen.gen_all_code(algorithm_list=_ALGO_KEYS, output_path=str(header),
-                             emit_alloc_gating=True, emit_workspace_chunking=True)
+                             emit_alloc_gating=True)
     return header
 
 
-def _compile_runner(build_dir, chunk):
+def _compile_runner(build_dir):
     nvcc = shutil.which("nvcc") or "/usr/local/cuda/bin/nvcc"
     if not Path(nvcc).exists() and shutil.which("nvcc") is None:
         pytest.skip("nvcc not found; install CUDA Toolkit to run CUDA tests.")
@@ -79,28 +79,37 @@ def _compile_runner(build_dir, chunk):
     if not runner_copy.exists():
         shutil.copyfile(RUNNER_SOURCE, runner_copy)
     arch = _detect_cuda_arch()
-    executable = build_dir / f"cuda_workspace_chunk_{chunk}.exe"
+    executable = build_dir / "cuda_workspace_slots.exe"
     glass_inc = Path(__file__).resolve().parents[2] / "external" / "GLASS" / "include"
     cmd = [
         nvcc, "-std=c++17", "-O0",
         "-gencode", f"arch=compute_{arch},code=sm_{arch}",
         f"-DGRID_BATCH={_BATCH}",
-        f"-DGRID_WORKSPACE_CHUNK={chunk}",
         f"-I{glass_inc}", "-o", str(executable), str(runner_copy),
     ] + [f"-D{d}" for d in _GATE_DEFINES]
     result = subprocess.run(cmd, cwd=build_dir, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.fail(
-            "CUDA workspace-chunk runner compilation failed.\n"
+            "CUDA workspace-slots runner compilation failed.\n"
             f"Command: {' '.join(cmd)}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     return executable
 
 
-def _run(executable):
-    result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=600)
+def _run(executable, forced_slots=None):
+    env = dict(os.environ)
+    env.pop("GRID_WORKSPACE_TIMESTEP_SLOTS", None)
+    if forced_slots is not None:
+        env["GRID_WORKSPACE_TIMESTEP_SLOTS"] = str(forced_slots)
+    result = subprocess.run([str(executable)], capture_output=True, text=True,
+                            timeout=600, env=env)
     if result.returncode != 0:
-        pytest.fail(f"{executable.name} rc={result.returncode}\nstdout:\n{result.stdout[-4000:]}\nstderr:\n{result.stderr[-4000:]}")
+        pytest.fail(f"{executable.name} (slots={forced_slots}) rc={result.returncode}\n"
+                    f"stdout:\n{result.stdout[-4000:]}\nstderr:\n{result.stderr[-4000:]}")
+    # the exe reports the slot count it actually got (stderr, so stdout stays comparable)
+    want = _BATCH if forced_slots is None else min(forced_slots, _BATCH)
+    assert f"workspace_timestep_slots={want}" in result.stderr, (
+        f"exe reported unexpected slot count (wanted {want}):\n{result.stderr[-500:]}")
     return result.stdout
 
 
@@ -109,33 +118,30 @@ def _run(executable):
 @pytest.mark.robot_smoke
 @pytest.mark.parametrize(("robot_id", "base_mode"), _robot_modes(),
                          ids=lambda v: v if isinstance(v, str) else None)
-def test_cuda_workspace_chunk_bit_identity(tmp_path, robot_id, base_mode):
+def test_cuda_workspace_slots_bit_identity(tmp_path, robot_id, base_mode):
     spec = _robot_spec(robot_id, base_mode)
     try:
         resolved = resolve_robot_spec(spec)
     except RuntimeError as exc:
         pytest.skip(f"Could not resolve manifest {spec.robot_id}: {exc}")
     project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
-    build_dir = tmp_path / f"{robot_id}_{base_mode}_workspace_chunk"
+    build_dir = tmp_path / f"{robot_id}_{base_mode}_workspace_slots"
     build_dir.mkdir()
     _generate_header(project_model, build_dir)
 
-    # sequential compiles on purpose: SO exes are RAM-heavy to build
-    exe_unchunked = _compile_runner(build_dir, 0)
-    exe_chunked = _compile_runner(build_dir, _CHUNK)
+    exe = _compile_runner(build_dir)
 
-    out_unchunked = _run(exe_unchunked)
-    out_chunked = _run(exe_chunked)
-
-    assert "BEGIN IDSVA_SO" in out_unchunked, "runner produced no output blocks"
-    if out_chunked != out_unchunked:
-        # locate the first divergent block for a readable failure
-        diverged = [name for name in ("IDSVA_SO", "FDSVA_SO", "F_EXT_GRADIENT_DQ")
-                    if _block(out_chunked, name) != _block(out_unchunked, name)]
-        pytest.fail(
-            f"chunked (C={_CHUNK}) vs unchunked outputs differ for {robot_id}-{base_mode}: "
-            f"divergent blocks = {diverged or ['<non-block output>']}"
-        )
+    out_unclamped = _run(exe)
+    assert "BEGIN IDSVA_SO" in out_unclamped, "runner produced no output blocks"
+    for forced in _FORCED_SLOTS:
+        out_forced = _run(exe, forced_slots=forced)
+        if out_forced != out_unclamped:
+            diverged = [name for name in ("IDSVA_SO", "FDSVA_SO", "F_EXT_GRADIENT_DQ")
+                        if _block(out_forced, name) != _block(out_unclamped, name)]
+            pytest.fail(
+                f"slot-clamped (slots={forced}) vs unclamped outputs differ for "
+                f"{robot_id}-{base_mode}: divergent blocks = {diverged or ['<non-block output>']}"
+            )
 
 
 def _block(text, name):

@@ -1372,7 +1372,7 @@ def _emit_aba_kernel_body_for_flags(self, nq, nv, n, input_count, level, single_
     # for a floating base (nq>nv) -- the off-by-(nq-nv) tau bug.
     self.gen_add_code_line("T *s_q = s_q_qd_tau; T *s_qd = &s_q_qd_tau[" + str(nq) + "]; T *s_tau = &s_q_qd_tau[" + str(2 * nq) + "];")
     # per-timestep workspace base expr (k-indexed in the batched kernel, slot 0 for single-timing)
-    ws_base = "&d_workspace[k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]" if not single_call_timing else "d_workspace"
+    ws_base = "&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]" if not single_call_timing else "d_workspace"
     if not single_call_timing:
         self.gen_add_parallel_loop("k","NUM_TIMESTEPS",block_level = True)
         self.gen_kernel_load_inputs("q_qd_tau",str(input_count),stride="stride_q_qd")
@@ -1543,7 +1543,10 @@ def gen_aba_host(self, mode = 0):
         func_call_code.insert(0,"struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"aba\", ABA_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        self.gen_add_workspace_clamped_launch(func_call_code)
     if not compute_only:
         # then transfer memory back
         self.gen_add_code_lines(["// finally transfer the result back", \

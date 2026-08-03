@@ -835,7 +835,7 @@ def _emit_crba_kernel_body_for_flags(self, nq, nv, n, input_count, use_workspace
         self.gen_add_parallel_loop("k","NUM_TIMESTEPS",block_level = True)
         self.gen_kernel_load_inputs("q_qd",str(input_count),stride="stride_q_qd")
         if use_workspace_temp:
-            self.gen_add_code_line("T *crba_d_workspace = reinterpret_cast<T *>(&d_workspace[k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]);")
+            self.gen_add_code_line("T *crba_d_workspace = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]);")
             # The whole inner arena spilled to global, so the smem s_temp slot is
             # null. Repoint s_temp at the workspace BEFORE the XImats helper call
             # so its sincos scratch (and the inner) have a valid backing store.
@@ -846,7 +846,7 @@ def _emit_crba_kernel_body_for_flags(self, nq, nv, n, input_count, use_workspace
             # s_M output spill: route the mass matrix to the L2-pinned SO band (offset
             # GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES, the SO section). At rung2 this is disjoint
             # from crba_d_workspace (GRAD section, offset 0) where the inner band lives.
-            self.gen_add_code_line("s_M = reinterpret_cast<T *>(&d_workspace[k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
+            self.gen_add_code_line("s_M = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
         # mjx input convert (quaternion only -> the congruence epilogue's R; M(q)
         # is base-orientation-independent so no qd/accel convert is needed).
         if self.robot.floating_base:
@@ -1005,7 +1005,10 @@ def gen_crba_host(self, mode = 0):
         func_call_code.insert(0,"struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"crba\", CRBA_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        self.gen_add_workspace_clamped_launch(func_call_code)
     if not compute_only:
         # then transfer memory back
         self.gen_add_code_lines(["// finally transfer the result back", \

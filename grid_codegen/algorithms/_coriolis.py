@@ -616,12 +616,12 @@ def _emit_coriolis_matrix_kernel_body_for_flags(self, NUM_POS, nv, in_size, out_
             # whole inner band spilled: the smem s_temp slot is null. Repoint s_temp at the
             # GRAD section BEFORE the XImats helper so its sincos scratch + the inner have a
             # valid backing store. Disjoint from the SO band where s_coriolis lives.
-            self.gen_add_code_line("T *coriolis_d_workspace = reinterpret_cast<T *>(&d_workspace[k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]);")
+            self.gen_add_code_line("T *coriolis_d_workspace = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]);")
             self.gen_add_code_line("s_temp = coriolis_d_workspace;")
         elif coriolis_in_smem:
             self.gen_add_code_line("(void)d_workspace;")
         if not coriolis_in_smem:
-            self.gen_add_code_line("s_coriolis = reinterpret_cast<T *>(&d_workspace[k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
+            self.gen_add_code_line("s_coriolis = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
         # mjx input convert: quaternion wxyz->xyzw AND qd[0:3] = R^T qd[0:3] (the
         # Coriolis matrix reads qd, so the base-linear velocity must be in pin frame)
         # before the XImats build (so X[0] is built from the reordered quaternion).
@@ -755,7 +755,10 @@ def gen_coriolis_matrix_host(self, mode=0):
         func_call_code.append("gpuErrchkKernel();")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"coriolis_matrix\", CORIOLIS_MATRIX_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        self.gen_add_workspace_clamped_launch(func_call_code)
     if not compute_only:
         self.gen_add_code_lines([
             "// finally transfer the result back into the gridData host buffer (hd_data->d_coriolis -> hd_data->h_coriolis)",

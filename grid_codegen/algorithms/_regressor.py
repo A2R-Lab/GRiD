@@ -395,7 +395,7 @@ def gen_inverse_dynamics_regressor_kernel(self, single_call_timing=False):
         # `k` is in scope for the batched path. Verbatim clone of fdpg's _repoint_spilled_Y.
         self.gen_add_code_line("if constexpr (!REGRESSOR_Y_IN_SMEM) {", True)
         if in_timestep_loop:
-            self.gen_add_code_line("s_Y = reinterpret_cast<T *>(&d_workspace[k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
+            self.gen_add_code_line("s_Y = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
         else:
             self.gen_add_code_line("s_Y = reinterpret_cast<T *>(&d_workspace[GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
         self.gen_add_end_control_flow()
@@ -489,11 +489,16 @@ def gen_inverse_dynamics_regressor_host(self, mode=0):
         func_call_code.append("gpuErrchkKernel();")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     # g1-spill: L2-pin d_workspace when the tier spills s_Y into it.
+    if not single_call_timing:
+        self.gen_add_workspace_slot_count()
     ws_bytes = ("GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()" if single_call_timing
-                else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(num_timesteps)")
+                else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(_grid_ws_n)")
     self.gen_add_code_line("if (!INVERSE_DYNAMICS_REGRESSOR_Y_IN_SMEM<RESOURCE_TIER>() && hd_data->d_workspace != nullptr) {gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, " + ws_bytes + "));}")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"inverse_dynamics_regressor\", INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        self.gen_add_workspace_clamped_launch(func_call_code, emit_count = False)
     if not compute_only:
         self.gen_add_code_lines([
             "// finally transfer the result back into the gridData host buffer (hd_data->d_Y -> hd_data->h_Y)",
@@ -755,7 +760,7 @@ def gen_forward_dynamics_parameter_gradient_kernel(self, single_call_timing=Fals
         # the SO kernels). Emitted where `k` is in scope for the batched path.
         self.gen_add_code_line("if constexpr (!REGRESSOR_Y_OUTPUT_IN_SMEM) {", True)
         if in_timestep_loop:
-            self.gen_add_code_line("s_Y = reinterpret_cast<T *>(&d_workspace[k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
+            self.gen_add_code_line("s_Y = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
         else:
             self.gen_add_code_line("s_Y = reinterpret_cast<T *>(&d_workspace[GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
         self.gen_add_end_control_flow()
@@ -844,8 +849,10 @@ def gen_forward_dynamics_parameter_gradient_host(self, mode=0):
         ])
     self.gen_add_code_line("// then call the kernel")
     # g1-spill: L2-pin d_workspace when the default tier spills s_Y into it.
+    if not single_call_timing:
+        self.gen_add_workspace_slot_count()
     ws_bytes = ("GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()" if single_call_timing
-                else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(num_timesteps)")
+                else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(_grid_ws_n)")
     self.gen_add_code_line("if (!FD_PARAMETER_GRADIENT_Y_IN_SMEM<RESOURCE_TIER>() && hd_data->d_workspace != nullptr) {gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, " + ws_bytes + "));}")
     func_call_code = [func_call_start + func_call_end]
     if single_call_timing:
@@ -853,7 +860,10 @@ def gen_forward_dynamics_parameter_gradient_host(self, mode=0):
         func_call_code.append("gpuErrchkKernel();")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"forward_dynamics_parameter_gradient\", FORWARD_DYNAMICS_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        self.gen_add_workspace_clamped_launch(func_call_code, emit_count = False)
     self.gen_add_code_line("gpuErrchkKernel();")
     if not compute_only:
         self.gen_add_code_lines([

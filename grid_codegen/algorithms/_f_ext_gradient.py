@@ -412,7 +412,7 @@ def _emit_f_ext_gradient_dq_body(self, out_ptr_expr, in_timestep_loop, slab_in_s
             self.gen_add_code_line("T *s_dq_slab = s_temp;   // per-sub contribution slab, size " + str(6 * nsub))
             self.gen_add_code_line("(void)d_workspace;")
         else:
-            _ws_base = ("k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " if in_timestep_loop else "") + "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()"
+            _ws_base = ("grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " if in_timestep_loop else "") + "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()"
             self.gen_add_code_line("T *s_dq_slab = reinterpret_cast<T *>(&d_workspace[" + _ws_base + "]);   // spilled slab")
     else:
         self.gen_add_code_line("(void)d_workspace;")
@@ -633,23 +633,16 @@ def gen_f_ext_gradient_dq_host(self, mode=0):
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"f_ext_gradient_dq\", F_EXT_GRADIENT_DQ_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     # mimic-spill: L2-pin d_workspace when the tier spills the per-sub slab into it
     # (non-mimic robots never spill, so SLAB_IN_SMEM stays true and this is a no-op).
-    chunked = getattr(self, "emit_workspace_chunking", False) and not single_call_timing
-    _feg_dq_ws_ts = "grid_workspace_chunk(num_timesteps)" if chunked else "num_timesteps"
+    if not single_call_timing:
+        self.gen_add_workspace_slot_count()
     _feg_dq_ws_bytes = ("GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()" if single_call_timing
-                        else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(" + _feg_dq_ws_ts + ")")
+                        else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(_grid_ws_n)")
     self.gen_add_code_line("if (!F_EXT_GRADIENT_DQ_SLAB_IN_SMEM<RESOURCE_TIER>() && hd_data->d_workspace != nullptr) {gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, " + _feg_dq_ws_bytes + "));}")
     if single_call_timing:
         self.gen_add_code_lines(func_call_code)
     else:
-        # chunked-workspace seam (modes 0/2): BOTH USE_COMPRESSED_MEM branch lines
-        # go through one chunk loop; the input ptr differs per branch (d_q vs
-        # d_q_qd_u — identifier-boundary substitution keeps the prefix safe) but
-        # both use the runtime stride_q. gpuErrchkKernel stays OUTSIDE the loop.
-        self.gen_add_workspace_chunked_launch([func_call_mem_adjust, func_call_mem_adjust2],
-            [("hd_data->d_f_ext_gradient_dq", out_each),
-             ("hd_data->d_q_qd_u", "stride_q"),
-             ("hd_data->d_q", "stride_q")])
-        self.gen_add_code_line("gpuErrchkKernel();")
+        # workspace-slot seam (modes 0/2): grid clamped to the arena slot count.
+        self.gen_add_workspace_clamped_launch(func_call_code, emit_count = False)
     if not compute_only:
         # sizeof(T) leads: nv*6*NB*nv*num_timesteps overflows int on big robots
         self.gen_add_code_lines([
@@ -766,7 +759,7 @@ def _emit_f_ext_gradient_kernel_body_for_flags(self, pick, single_call_timing):
         # repoint spilled output(s) at the L2-pinned d_workspace SO section (per-timestep
         # slot; reused safely -- f_ext_gradient never co-runs with the SO kernels). s_dqdd
         # at the SO base, s_dtau at SO base + out_each (deep rung only).
-        base = ("k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " if in_timestep_loop else "") + "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()"
+        base = ("grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " if in_timestep_loop else "") + "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()"
         if not dqdd_smem:
             self.gen_add_code_line("s_dqdd_dfext = reinterpret_cast<T *>(&d_workspace[" + base + "]);")
         if not dtau_smem:
@@ -786,7 +779,7 @@ def _emit_f_ext_gradient_kernel_body_for_flags(self, pick, single_call_timing):
                 f_in_smem_expr="true")
         else:
             # deep rung: route minv's 6*nv*nv F-region to the GRAD-section minv-F offset.
-            _minv_ws = ("k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " if in_timestep_loop else "") + "GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()"
+            _minv_ws = ("grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " if in_timestep_loop else "") + "GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()"
             self.gen_add_code_line("T *minv_d_workspace = reinterpret_cast<T *>(&d_workspace[" + _minv_ws + "]);")
             self.gen_minv_inner_function_call(
                 updated_var_names={"s_Minv_name": "s_Minv", "s_temp_name": "s_fext_temp", "d_workspace_name": "minv_d_workspace"},
@@ -914,10 +907,15 @@ def gen_f_ext_gradient_host(self, mode=0):
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"f_ext_gradient\", F_EXT_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     # g1-spill: L2-pin d_workspace when the default tier spills s_dqdd_dfext into it.
+    if not single_call_timing:
+        self.gen_add_workspace_slot_count()
     _feg_ws_bytes = ("GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()" if single_call_timing
-                     else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(num_timesteps)")
+                     else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(_grid_ws_n)")
     self.gen_add_code_line("if (!F_EXT_GRADIENT_DQDD_IN_SMEM<RESOURCE_TIER>() && hd_data->d_workspace != nullptr) {gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, " + _feg_ws_bytes + "));}")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        self.gen_add_workspace_clamped_launch(func_call_code, emit_count = False)
     if not compute_only:
         self.gen_add_code_lines([
             "// finally transfer the result back",

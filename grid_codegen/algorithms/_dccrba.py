@@ -631,7 +631,7 @@ def gen_cmm_time_variation_kernel(self, single_call_timing=False):
     def _repoint(in_loop):
         self.gen_add_code_line("if constexpr (!CMM_J_SMEM) {", True)
         if in_loop:
-            self.gen_add_code_line("s_J = reinterpret_cast<T *>(&d_workspace[k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_DCCRBA_J_OFFSET_BYTES<T>()]);")
+            self.gen_add_code_line("s_J = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_DCCRBA_J_OFFSET_BYTES<T>()]);")
         else:
             self.gen_add_code_line("s_J = reinterpret_cast<T *>(&d_workspace[GRID_DCCRBA_J_OFFSET_BYTES<T>()]);")
         self.gen_add_end_control_flow()
@@ -730,11 +730,16 @@ def gen_cmm_time_variation_host(self, mode=0):
         func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     # DE-GATE #2: L2-pin d_workspace when the default tier spills the Jw band into it.
+    if not single_call_timing:
+        self.gen_add_workspace_slot_count()
     ws_bytes = ("GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()" if single_call_timing
-                else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(num_timesteps)")
+                else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(_grid_ws_n)")
     self.gen_add_code_line("if (!CMM_J_IN_SMEM<RESOURCE_TIER>() && hd_data->d_workspace != nullptr) {gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, " + ws_bytes + "));}")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"cmm_time_variation\", " + macro + "));")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        self.gen_add_workspace_clamped_launch(func_call_code, emit_count = False)
     if not compute_only:
         self.gen_add_code_lines([
             "// finally transfer the result back",
@@ -785,7 +790,7 @@ def gen_dccrba_kernel(self, single_call_timing=False):
 
     def _repoint(in_loop):
         if in_loop:
-            base = "&d_workspace[k*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + "
+            base = "&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + "
         else:
             base = "&d_workspace["
         self.gen_add_code_line("if constexpr (!DCCRBA_OUT_IN_SMEM) {", True)
@@ -881,15 +886,20 @@ def gen_dccrba_host(self, mode=0):
         self.gen_add_code_line("int stride_q = NUM_JOINTS;")
     self.gen_add_code_line("// then call the kernel")
     # L2-pin d_workspace when the default tier spills s_dccrba into it.
+    if not single_call_timing:
+        self.gen_add_workspace_slot_count()
     ws_bytes = ("GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()" if single_call_timing
-                else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(num_timesteps)")
+                else "GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*static_cast<size_t>(_grid_ws_n)")
     self.gen_add_code_line("if ((!DCCRBA_OUTPUT_IN_SMEM<RESOURCE_TIER>() || !DCCRBA_J_IN_SMEM<RESOURCE_TIER>()) && hd_data->d_workspace != nullptr) {gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, " + ws_bytes + "));}")
     func_call_code = [func_call, "gpuErrchkKernel();"]
     if single_call_timing:
         func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
         func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"dccrba\", " + macro + "));")
-    self.gen_add_code_lines(func_call_code)
+    if single_call_timing:
+        self.gen_add_code_lines(func_call_code)
+    else:
+        self.gen_add_workspace_clamped_launch(func_call_code, emit_count = False)
     if not compute_only:
         self.gen_add_code_lines([
             "// finally transfer the result back",

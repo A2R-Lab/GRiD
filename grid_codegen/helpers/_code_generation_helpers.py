@@ -869,59 +869,50 @@ def gen_add_shared_memory_helpers(self):
         "}",
         ""
     ])
-    if getattr(self, "emit_workspace_chunking", False):
-        self.gen_add_code_lines([
-            "// Workspace chunking (bench-only, opt-in): at large batch sizes the per-timestep",
-            "// device WORKSPACE (not the outputs) is what overflows device RAM on big robots.",
-            "// GRID_WORKSPACE_CHUNK=C shrinks the workspace arena to C timestep slots; chunk-aware",
-            "// host wrappers then sweep the full batch in C-sized launches, offsetting input/output",
-            "// pointers per chunk while REUSING the same workspace arena (outputs stay full-N on",
-            "// device; kernels are grid-stride over num_timesteps and are untouched). 0/unset =>",
-            "// grid_workspace_chunk() returns num_timesteps and every chunk loop folds to one",
-            "// iteration — behavior-identical to an unchunked build.",
-            "#ifndef GRID_WORKSPACE_CHUNK",
-            "#define GRID_WORKSPACE_CHUNK 0   // 0 = unchunked: one workspace slot per timestep",
-            "#endif",
-            "#if GRID_WORKSPACE_CHUNK > 0 && !defined(GRID_ALLOC_GATE)",
-            "#error \"GRID_WORKSPACE_CHUNK is a solo-exe bench macro: chunk-sized workspace slots are only safe when the exe allocates a single algorithm's buffers, so it requires GRID_ALLOC_GATE (per_algo_bench sets both).\"",
-            "#endif",
-            "__host__ __device__ constexpr int grid_workspace_chunk(int num_timesteps) {",
-            "    return (GRID_WORKSPACE_CHUNK > 0 && GRID_WORKSPACE_CHUNK < num_timesteps) ? GRID_WORKSPACE_CHUNK : num_timesteps;",
-            "}",
-            ""
-        ])
+    self.gen_add_code_lines([
+        "// Workspace slots: at large batch sizes the per-timestep device WORKSPACE (not",
+        "// the outputs) is what overflows device RAM on big robots. init_gridData auto-fits",
+        "// the arena to hd_data->workspace_timestep_slots slots (cudaMemGetInfo; override",
+        "// with the GRID_WORKSPACE_TIMESTEP_SLOTS env var), kernels index the arena by",
+        "// BLOCK slot -- constant per block across its grid-stride timesteps, so a block",
+        "// reuses one slot sequentially and slots never alias across live blocks -- and",
+        "// every workspace-using host wrapper clamps its launch grid to the slot count.",
+        "// Memory-comfortable case: slots == num_timesteps and launches are unchanged.",
+        "__device__ __forceinline__ int grid_workspace_slot() {",
+        "    return blockIdx.x + blockIdx.y*gridDim.x;",
+        "}",
+        ""
+    ])
 
-def gen_add_workspace_chunked_launch(self, launch_lines, ptr_strides, count_var = "num_timesteps"):
-    """Emit kernel-launch line(s), optionally wrapped in the workspace chunk loop.
+def gen_add_workspace_slot_count(self, count_var = "num_timesteps"):
+    """Emit `_grid_ws_n` = the number of workspace slots this call may touch:
+    min(num_timesteps, hd_data->workspace_timestep_slots), with slots==0 (a
+    gridData whose init never allocated the arena) treated as unclamped. Callers
+    use it to size per-call L2 pins and (via gen_add_workspace_clamped_launch)
+    to clamp the launch grid."""
+    self.gen_add_code_line(
+        "const int _grid_ws_n = (hd_data->workspace_timestep_slots > 0 && "
+        "hd_data->workspace_timestep_slots < " + count_var + ") ? "
+        "hd_data->workspace_timestep_slots : " + count_var + ";")
 
-    Flag OFF (default): passthrough — launch_lines emitted verbatim, byte-identical.
-    Flag ON: the lines are wrapped in
-        const int _grid_chunk = grid_workspace_chunk(num_timesteps);
-        for (int _c0 = 0; _c0 < num_timesteps; _c0 += _grid_chunk) { ... }
-    with every (ptr_expr, stride_expr) pair in `ptr_strides` rewritten to
-    `ptr_expr + (size_t)_c0*(stride_expr)` and the kernel's trailing `num_timesteps`
-    arg rewritten to the per-chunk count `_grid_chunk_n` (MANDATORY: kernels are
-    grid-stride over num_timesteps, so k must stay in [0, C) to index the
-    chunk-sized workspace arena). The workspace pointer is deliberately NOT in
-    ptr_strides — the arena is reused at base across chunks. Substitution uses an
-    identifier-boundary regex, so a ptr that is a prefix of another (d_q vs
-    d_q_qd_u) can never corrupt the longer name. Launches are same-stream
-    in-order; the caller's existing single gpuErrchkKernel() after this call
-    syncs the whole sweep (honest wall time)."""
-    if not getattr(self, "emit_workspace_chunking", False):
-        self.gen_add_code_lines(launch_lines)
-        return
-    import re
-    def _sub(line):
-        for ptr, stride in ptr_strides:
-            line = re.sub(re.escape(ptr) + r"(?![A-Za-z0-9_])",
-                          ptr + " + (size_t)_c0*(" + stride + ")", line)
-        return re.sub(r"\b" + re.escape(count_var) + r"\b", "_grid_chunk_n", line)
-    self.gen_add_code_line("const int _grid_chunk = grid_workspace_chunk(" + count_var + ");")
-    self.gen_add_code_line("for (int _c0 = 0; _c0 < " + count_var + "; _c0 += _grid_chunk) {", True)
-    self.gen_add_code_line("const int _grid_chunk_n = _grid_chunk < " + count_var + " - _c0 ? _grid_chunk : " + count_var + " - _c0;")
-    self.gen_add_code_lines([_sub(line) for line in launch_lines])
-    self.gen_add_end_control_flow()
+def gen_add_workspace_clamped_launch(self, launch_lines, emit_count = True, count_var = "num_timesteps"):
+    """Emit batch kernel-launch line(s) with the grid clamped to the workspace
+    slot count. Kernels index the workspace arena per-BLOCK (grid_workspace_slot),
+    so correctness requires gridDim <= workspace_timestep_slots; the grid-stride
+    loop then covers all num_timesteps with fewer concurrent blocks. In the
+    memory-comfortable default (slots == num_timesteps) the clamp is a no-op and
+    the launch shape is exactly the caller's block_dimms. Every launch line's
+    `<<<block_dimms,` is rewritten to `<<<_ws_grid,`; non-launch lines (sync,
+    timing) pass through verbatim. emit_count=False when the caller already
+    emitted _grid_ws_n via gen_add_workspace_slot_count (e.g. for an L2 pin)."""
+    if emit_count:
+        self.gen_add_workspace_slot_count(count_var)
+    subbed = [line.replace("<<<block_dimms,", "<<<_ws_grid,") for line in launch_lines]
+    if subbed == list(launch_lines):
+        raise RuntimeError("gen_add_workspace_clamped_launch: no `<<<block_dimms,` launch found in launch_lines")
+    self.gen_add_code_line("dim3 _ws_grid = block_dimms;")
+    self.gen_add_code_line("if ((int)(_ws_grid.x*_ws_grid.y*_ws_grid.z) > _grid_ws_n) { _ws_grid = dim3(_grid_ws_n,1,1); }")
+    self.gen_add_code_lines(subbed)
 
 def gen_declare_shared_arena(self, t_buffers, temp_mem_size, include_topology_helpers = True,
                              ximat_name = "s_XImats", ximat_size = 0,

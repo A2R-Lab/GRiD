@@ -150,6 +150,11 @@ template <typename T, int MAX_TIMESTEPS, typename DispatcherFn>
 __host__ void run_all_tests_body(bool floating_base, DispatcherFn do_timings,
                                  cudaStream_t *streams, grid::robotModel<T> *d_robotModel){
     grid::gridData<T> *hd_data = grid::init_gridData<T,MAX_TIMESTEPS>();
+    // Report the runtime-auto-fit workspace slot count (== MAX_TIMESTEPS when memory
+    // is comfortable; smaller when init_gridData clamped the arena). The bench parses
+    // this into JSON metadata so a slot-clamped timing cell is never silently compared
+    // against an unclamped one.
+    printf("workspace_timestep_slots=%d\n", hd_data->workspace_timestep_slots);
 
     // load q,qd,u — codegen's NUM_JOINTS already accounts for floating-base position dim;
     // strides match init_gridData allocs (NUM_JOINTS, 2*NUM_JOINTS, 3*NUM_JOINTS). The
