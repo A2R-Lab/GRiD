@@ -1285,6 +1285,24 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   internal codegen change is cache-invisible. `rm -rf .pytest_cache/grid_cuda` to force a fresh emit when
   you NEED to test new codegen; conversely, a proven comment-only change reuses the cache validly (the
   compiled binary is identical) — no wipe needed.
+- **A STRUCTURALLY ZERO reference makes a norm guard vacuous — and only an absolute floor is
+  meaningful** (2026-08-03, fetch fd-gradient-q). The `norm_rtol` escape hatch computes
+  `||diff|| / max(||expected||, 1e-12)`; when the reference matrix is identically zero that ratio
+  explodes (observed `norm_rel = 9.9e8`) and the guard can NEVER bind, so the entrywise `atol` is
+  the only thing holding the test. Fetch's fixed-base model carries a TRANSLATIONAL BASE DOF, so
+  every zero-torque sample free-falls — `qdd = (0,0,-9.81,0...)`, no internal relative
+  acceleration — and that is configuration-INDEPENDENT, making `dqdd/dq` structurally zero. The
+  CUDA float32 residual (5.3e-4) was pure cancellation amplified by `||Minv||_inf ~9e2`
+  (cond(M) ~2e4), and it drifted just past a 5e-4 floor. Diagnostics, in order: (1) `scale=2.1e-14`
+  in the failure message already says the reference is zero — READ IT before assuming a numeric
+  regression; (2) compare the quantity across ALL robots at the same sample (every other robot was
+  O(40-250); fetch alone ~1e-12 — that isolation IS the finding); (3) finite-difference the
+  oracle's OWN forward dynamics to prove the analytic zero is right, not a dropped term;
+  (4) bound the float32 floor as `||Minv||_inf * eps32 * max|dID/dq|` and set `atol` just above it.
+  Because `atol_eff = max(atol, rtol*scale)`, raising `atol` this way canNOT loosen the
+  informative samples — anything with `scale >= atol/rtol` is still governed by `rtol`. Beware the
+  mirror-image trap: a vacuously-zero comparison also PASSES vacuously, so a test that only ever
+  sees a free-fall config validates nothing.
 
 ---
 

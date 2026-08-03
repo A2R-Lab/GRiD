@@ -411,9 +411,20 @@ CUDA_ROBOT_ALGORITHM_TOLERANCES = {
     },
     ("fetch", "forward_dynamics_gradient_q"): {
         "rtol": 2e-4,
-        "atol": 5e-4,
+        "atol": 2e-3,
         "norm_rtol": 1e-4,
-        "note": "Fetch has a negative gripper axis and FD-gradient-q float32 cancellation on zero-torque and velocity-only smoke samples; keep entrywise checks strict unless the full-matrix norm remains very tight.",
+        "note": "Fetch's fixed-base model carries a translational base DOF, so on the "
+                "ZERO-TORQUE samples the whole robot free-falls: qdd = (0,0,-9.81,0...) "
+                "with no internal relative acceleration, and that is CONFIGURATION-"
+                "INDEPENDENT, making dqdd/dq structurally zero (reference max|entry| ~1e-12, "
+                "confirmed against the oracle's own finite difference). Two consequences: "
+                "norm_rtol cannot bind (norm_rel divides by a ~1e-13 reference norm), and "
+                "the only meaningful criterion is absolute. The float32 cancellation floor "
+                "here is ||Minv||_inf * eps32 * max|dID/dq| ~ 1.6e-3 (fetch cond(M) ~2e4, "
+                "||Minv||_inf ~9e2, mass spread 28.99 vs 1.6e-3 on diag(M)), so atol is set "
+                "just above that bound. This does NOT loosen the informative samples: "
+                "atol_eff = max(atol, rtol*scale), and any sample with a non-degenerate "
+                "reference (scale >= 10) is still governed by rtol.",
     },
 }
 
