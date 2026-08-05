@@ -1238,7 +1238,15 @@ extern "C" int grid_rbd_idsva_so(
     // pack qdd there so the second-order tensors use the requested acceleration.
     pack_q_qd_u(q, qd, qdd, batch, nj);
 
-    grid::idsva_so<T>(
+// signature switch (same rule as fdsva_so): floating builds carry MUJOCO_OUTPUT.
+// RESOURCE_TIER must match the tier the autotuned thread count was picked for —
+// the default-tier instantiation with a LITE-tuned count exceeded the default
+// kernel's register-limited thread cap and failed the launch (invalid argument).
+#if defined(GRID_RBD_SIG_MJX_IDSVA_SO)
+    grid::idsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO>::TIER>(
+#else
+    grid::idsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO>::TIER>(
+#endif
         g_data, g_robot, gravity, batch,
         dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_IDSVA_SO>(), g_streams);
 
@@ -1264,7 +1272,7 @@ extern "C" int grid_rbd_idsva_so_mujoco(const T* q, const T* qd, const T* qdd, T
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, qdd, batch, grid::NUM_JOINTS);
-    grid::idsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+    grid::idsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_IDSVA_SO>(), g_streams);
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;  // launch-config failure (e.g. too many registers)
@@ -2116,8 +2124,15 @@ extern "C" int grid_rbd_tool_fext(const T*, const T*, int, const T*, T*, int) { 
 #if GRID_HAS_INTEGRATOR
 template <grid::IntegratorType IT>
 static void launch_integrator_host(int batch, T gravity, T dt) {
-    grid::integrator<T, IT>(g_data, g_robot, /*gravity=*/gravity,
-                            dt, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR>(), g_streams);
+// signature switch (same rule as fdsva_so): floating builds carry MUJOCO_OUTPUT.
+// Tier must match the per-algo autotuned thread count (see idsva_so above).
+#if defined(GRID_RBD_SIG_MJX_INTEGRATOR)
+    grid::integrator<T, IT, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR>::TIER>(
+#else
+    grid::integrator<T, IT, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR>::TIER>(
+#endif
+        g_data, g_robot, /*gravity=*/gravity,
+        dt, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR>(), g_streams);
 }
 #ifdef GRID_RBD_WITH_MUJOCO
 template <grid::IntegratorType IT>

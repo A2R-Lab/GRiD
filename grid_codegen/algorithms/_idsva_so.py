@@ -5009,7 +5009,7 @@ def gen_idsva_so_dispatcher_host(self, mode = 0):
     compute_only = (mode == 2)
 
     frame_suffix = "world_frame" if _idsva_so_use_world_frame(self) else "body_frame"
-    smem_macro = f"IDSVA_SO_{frame_suffix.upper()}_DYNAMIC_SHARED_MEM_BYTES<T>()"
+    smem_macro = f"IDSVA_SO_{frame_suffix.upper()}_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()"
 
     func_def_start = "void idsva_so(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const T gravity, const int num_timesteps,"
     func_def_end =   "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
@@ -5031,14 +5031,17 @@ def gen_idsva_so_dispatcher_host(self, mode = 0):
         None,
     )
     # MUJOCO_OUTPUT (floating non-mimic/skew only — the dispatcher forwards to
-    # world_frame): appended LAST after KIND. The binding calls
-    # grid::idsva_so<T, KIND, /*MUJOCO_OUTPUT=*/true>. Fixed-base (body_frame, no
-    # mjx) keeps the legacy 2-arg template -> byte-identical.
+    # world_frame): appended after KIND. RESOURCE_TIER is LAST on both branches
+    # and forwards to the underlying host wrapper, so a caller can launch the
+    # tier its autotuned thread count was picked for (the bindings pass
+    # launch_cfg<GRID_ALGO_IDSVA_SO>::TIER — a default-tier instantiation with
+    # a LITE-tuned thread count can exceed the default kernel's register-limited
+    # thread cap and fail the launch with cudaErrorInvalidValue).
     mjx_disp = self.robot.floating_base and not (self.robot_has_mimic_joints() or self.robot.robot_has_skew_axis())
     if mjx_disp:
-        self.gen_add_code_line("template <typename T, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false>")
+        self.gen_add_code_line("template <typename T, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
     else:
-        self.gen_add_code_line("template <typename T, gridDataKind KIND = GRID_DATA_ALL>")
+        self.gen_add_code_line("template <typename T, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line(func_def_start)
     self.gen_add_code_line(func_def_end, True)
@@ -5052,8 +5055,8 @@ def gen_idsva_so_dispatcher_host(self, mode = 0):
         # (unified signature; cold buffers spill there at LITE/MINIMAL).
         kernel_name = f"idsva_so_{frame_suffix}_kernel_single_timing"
         # world_frame kernel carries the trailing MUJOCO_OUTPUT (named tier to reach it).
-        kernel_tmpl = (f"{kernel_name}<T, GRID_DEFAULT_RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_disp
-                       else f"{kernel_name}<T>")
+        kernel_tmpl = (f"{kernel_name}<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_disp
+                       else f"{kernel_name}<T, RESOURCE_TIER>")
         kernel_workspace_arg = "hd_data->d_workspace,"
         self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_DYNAMICS, \"idsva_so requires all-data or dynamics gridData\");")
         self.gen_add_code_line("int stride_q_qd = Q_QD_U_STRIDE;")
@@ -5088,8 +5091,10 @@ def gen_idsva_so_dispatcher_host(self, mode = 0):
         forward_args = "hd_data, d_robotModel, gravity, num_timesteps, block_dimms, thread_dimms"
         if not compute_only:
             forward_args += ", streams"
-        # forward MUJOCO_OUTPUT to the world_frame host (floating); fixed-base unchanged.
-        target_tmpl = "<T, KIND, MUJOCO_OUTPUT>" if mjx_disp else "<T, KIND>"
+        # forward MUJOCO_OUTPUT + RESOURCE_TIER to the underlying host wrapper
+        # (world_frame is <T, KIND, MUJOCO_OUTPUT, RESOURCE_TIER>; body_frame is
+        # <T, KIND, RESOURCE_TIER>).
+        target_tmpl = "<T, KIND, MUJOCO_OUTPUT, RESOURCE_TIER>" if mjx_disp else "<T, KIND, RESOURCE_TIER>"
         self.gen_add_code_line(f"{target}{target_tmpl}({forward_args});")
     self.gen_add_end_function()
 

@@ -439,6 +439,8 @@ def _mjx_signature_flags(cuh_path: Path) -> list[str]:
         "INVERSE_DYNAMICS_GRADIENT": "inverse_dynamics_gradient",
         "FORWARD_DYNAMICS_GRADIENT": "forward_dynamics_gradient",
         "FDSVA_SO": "fdsva_so",
+        "IDSVA_SO": "idsva_so",
+        "INTEGRATOR": "integrator",
         "EE_POSE": ee_defs.get("GRID_RBD_EE_POSE_FN"),
         "EE_POSE_GRADIENT": ee_defs.get("GRID_RBD_EE_POSE_GRADIENT_FN"),
         "EE_POSE_HESSIAN": ee_defs.get("GRID_RBD_EE_POSE_HESSIAN_FN"),
