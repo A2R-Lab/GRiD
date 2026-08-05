@@ -155,9 +155,17 @@ def test_set_threads_per_block_default(handle):
     assert handle.threads_per_block == handle.max_perf_level_threads
 
 
-def test_set_threads_per_block_rejects_zero(handle):
-    with pytest.raises((ValueError, RuntimeError)):
-        handle.set_threads_per_block(0)
+def test_set_threads_per_block_zero_resets_to_autotuned_default(handle):
+    """``n == 0`` is the documented RESET, not an error: it clears the global
+    override and returns every algorithm to its per-algo autotuned
+    ``launch_cfg<ALGO>::THREADS`` default (getter sentinel -1). Only negative
+    ``n`` is invalid — see ``set_threads_per_block`` in ``_core.cpp`` and the
+    ``threads_per_block`` property ("Do not assume this is a positive block
+    size")."""
+    handle.set_threads_per_block(64)
+    assert handle.threads_per_block == 64
+    handle.set_threads_per_block(0)
+    assert handle.threads_per_block == -1
 
 
 def test_set_threads_per_block_rejects_negative(handle):

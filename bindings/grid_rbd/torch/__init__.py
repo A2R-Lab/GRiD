@@ -1115,7 +1115,9 @@ class TorchRobotHandle:
         op = self._gated_op(_convention, "end_effector_pose_runtime")
         per_ee = []
         for jid, off in zip(jids, offsets):
-            off_t = torch.as_tensor(off, dtype=q.dtype, device=q.device).reshape(-1)[:3].contiguous()
+            # off is the 16-float col-major X_tool from _normalize_ee_offsets;
+            # the op wants ALL 16 (translation lives at [12..14], not [0..2]).
+            off_t = torch.as_tensor(off, dtype=q.dtype, device=q.device).reshape(-1).contiguous()
             per_ee.append(op(q, int(jid), off_t))  # (B, 6)
         return torch.stack(per_ee, dim=1)  # (B, NUM_EE, 6)
 
@@ -1140,7 +1142,7 @@ class TorchRobotHandle:
         op = self._gated_op(_convention, "end_effector_pose_gradient_runtime")
         per_ee = []
         for jid, off in zip(jids, offsets):
-            off_t = torch.as_tensor(off, dtype=q.dtype, device=q.device).reshape(-1)[:3].contiguous()
+            off_t = torch.as_tensor(off, dtype=q.dtype, device=q.device).reshape(-1).contiguous()
             raw = op(q, int(jid), off_t)  # (B, 6*NV) col-major
             B = raw.shape[0]
             per_ee.append(raw.reshape(B, nv, 6).permute(0, 2, 1))  # (B, 6, NV)

@@ -1402,6 +1402,28 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   install-extras, runtime_inertia were ALL already implemented — the work was VALIDATION (run the test) + closing narrow gaps,
   not building. Always grep/run-the-test before authoring a "missing" feature.
 
+### 7.x Cross-surface ABI drift: widen a kernel input on ONE binding surface, silently break the twins (2026-08-04)
+The tool-welding feature widened the runtime-EE offset from a 3-float point to a 16-float
+col-major SE(3) `X_tool` — kernel + numpy C-ABI were upgraded, but the parallel jax-FFI and
+torch-op surfaces kept 3-float semantics. Result: jax sent `off.reshape(-1)[:3]` of the NEW
+16-float layout = **R_tool column 0** (`[1,0,0]` — not the translation, which lives at
+`[12..14]`), staged onto a shared device buffer whose other 13 entries held whatever the
+numpy surface last wrote; torch handed a 3-element tensor's pointer straight to the kernel's
+16-float parameter = device OOB read (and a process-killing abort mid-suite). Lessons:
+- **An input-layout change must be swept across EVERY surface that packs it** (numpy C-ABI,
+  jax FFI impl + handler-symbol attrs, torch op + TORCH_CHECK, and BOTH Python wrappers) —
+  grep the buffer/parameter name repo-wide before calling the feature done.
+- **The failure signature identifies the mechanism**: position diff bounded by `2|t|` with
+  rotation diff EXACTLY zero = the offset was dropped (stale identity), not misapplied in the
+  wrong frame. Frame bugs perturb rotation too.
+- **Default-value tests cannot catch it**: with `X_tool = I`, writing `[1,0,0]` over the
+  first 3 entries of an identity is a no-op — only a NON-default offset exposes the drift
+  (same shape as the fixed-base-hides-floating-slot-padding class: the degenerate case
+  coincides bit-exactly with the wrong layout).
+- Shared per-.so staging buffers (`d_eepose_runtime_offset`) make the wrong path's output
+  depend on the OTHER surface's last call → order-dependent test outcomes; suspect a shared
+  buffer whenever a failure appears/disappears with test ordering.
+
 ### 7.x Worktree A/B arms fail SILENTLY three ways (2026-07-31, the night-2 prebuild)
 Building an old-commit arm for an interleaved A/B via `git worktree` has three traps that
 compose into a "clean" prebuild with ZERO binaries in one arm (rcA=0, no error lines):

@@ -3511,13 +3511,14 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 
 // ─── runtime-target multi-EE pose / pose-gradient (single-target FFI) ─────────
 // These mirror the numpy C-ABI grid_rbd_end_effector_pose_runtime: a SINGLE target
-// jid + a SINGLE 3-vector offset per call. The Python wrapper resolves names→jids
-// and loops/stacks the EE list (matches _handle.py). The runtime offset is passed
-// as three .Attr<float> (offx/offy/offz) and staged into the shared device buffer
-// g_data->d_eepose_runtime_offset via cudaMemcpyAsync on the stream — attrs (not a
-// Buffer input) so jax/vmap never tries to batch the single 3-vector. The kernel's
-// d_offset is then that contiguous 3-T device pointer. target_jid is an int64 attr
-// (already an absolute jid; the Python layer resolves names→jids, so no -1 default).
+// jid + a SINGLE 16-float col-major 4x4 SE(3) tool transform per call (the kernel's
+// s_Xtool; identity => frame origin, R_tool=I + t => point offset). The Python
+// wrapper resolves names→jids and loops/stacks the EE list (matches _handle.py).
+// The transform is passed as a 16-float array .Attr ("xtool") and staged into the
+// shared device buffer g_data->d_eepose_runtime_offset via cudaMemcpyAsync on the
+// stream — an attr (not a Buffer input) so jax/vmap never tries to batch it.
+// target_jid is an int64 attr (already an absolute jid; the Python layer resolves
+// names→jids, so no -1 default).
 #ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
 // end_effector_pose_runtime(q) → (B, 6) [xyz; rpy] of target_jid at offset point.
 template <bool MUJOCO>
@@ -3525,13 +3526,15 @@ static ffi::Error grid_rbd_jax_end_effector_pose_runtime_impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> q,
     ffi::ResultBuffer<ffi::F32> ee_out,
-    int64_t target_jid, float offx, float offy, float offz)
+    int64_t target_jid, ffi::Span<const float> xtool)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose_runtime: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS;
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("end_effector_pose_runtime: batch > max_batch");
+    if (xtool.size() != 16) return ffi::Error::InvalidArgument(
+        "end_effector_pose_runtime: xtool must be the 16-float col-major 4x4 SE(3) tool transform");
 
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -3539,9 +3542,11 @@ static ffi::Error grid_rbd_jax_end_effector_pose_runtime_impl(
                       q.typed_data(),       row_bytes,
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
 
-    // stage the runtime offset (3 contiguous T) into the shared device buffer.
-    T off[3] = {static_cast<T>(offx), static_cast<T>(offy), static_cast<T>(offz)};
-    cudaMemcpyAsync(g_data->d_eepose_runtime_offset, off, 3 * sizeof(T),
+    // stage the full 16-float X_tool into the shared device buffer (the kernel
+    // reads all 16: translation at [12..14], R_tool in the leading columns).
+    T xt[16];
+    for (int i = 0; i < 16; ++i) xt[i] = static_cast<T>(xtool[i]);
+    cudaMemcpyAsync(g_data->d_eepose_runtime_offset, xt, 16 * sizeof(T),
                     cudaMemcpyHostToDevice, stream);
 
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
@@ -3566,7 +3571,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::F32>>()
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<int64_t>("target_jid")
-        .Attr<float>("offx").Attr<float>("offy").Attr<float>("offz")
+        .Attr<ffi::Span<const float>>("xtool")
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -3577,7 +3582,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::F32>>()
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<int64_t>("target_jid")
-        .Attr<float>("offx").Attr<float>("offy").Attr<float>("offz")
+        .Attr<ffi::Span<const float>>("xtool")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_END_EFFECTOR_POSE_RUNTIME
@@ -3591,13 +3596,15 @@ static ffi::Error grid_rbd_jax_end_effector_pose_gradient_runtime_impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> q,
     ffi::ResultBuffer<ffi::F32> dee_out,
-    int64_t target_jid, float offx, float offy, float offz)
+    int64_t target_jid, ffi::Span<const float> xtool)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose_gradient_runtime: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("end_effector_pose_gradient_runtime: batch > max_batch");
+    if (xtool.size() != 16) return ffi::Error::InvalidArgument(
+        "end_effector_pose_gradient_runtime: xtool must be the 16-float col-major 4x4 SE(3) tool transform");
 
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -3605,8 +3612,9 @@ static ffi::Error grid_rbd_jax_end_effector_pose_gradient_runtime_impl(
                       q.typed_data(),       row_bytes,
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
 
-    T off[3] = {static_cast<T>(offx), static_cast<T>(offy), static_cast<T>(offz)};
-    cudaMemcpyAsync(g_data->d_eepose_runtime_offset, off, 3 * sizeof(T),
+    T xt[16];
+    for (int i = 0; i < 16; ++i) xt[i] = static_cast<T>(xtool[i]);
+    cudaMemcpyAsync(g_data->d_eepose_runtime_offset, xt, 16 * sizeof(T),
                     cudaMemcpyHostToDevice, stream);
 
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
@@ -3631,7 +3639,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::F32>>()
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<int64_t>("target_jid")
-        .Attr<float>("offx").Attr<float>("offy").Attr<float>("offz")
+        .Attr<ffi::Span<const float>>("xtool")
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -3642,7 +3650,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::F32>>()
         .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<int64_t>("target_jid")
-        .Attr<float>("offx").Attr<float>("offy").Attr<float>("offz")
+        .Attr<ffi::Span<const float>>("xtool")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
@@ -5733,19 +5741,21 @@ torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q) {
 #endif  // GRID_HAS_END_EFFECTOR_POSE_HESSIAN
 
 // ─── runtime-target multi-EE pose / pose-gradient (single-target torch ops) ──
-// SINGLE target jid + a SINGLE 3-vector offset per call (the Python wrapper loops
-// the resolved jid list + stacks, mirroring _handle.py). The offset is a 3-element
-// CUDA float Tensor; its data_ptr is ALREADY a contiguous device pointer to 3 T, so
-// it is handed straight to the kernel's d_offset (no host staging). target_jid is an
-// absolute jid (the Python layer resolves names→jids). Gated like the C-ABI wrappers.
+// SINGLE target jid + a SINGLE 16-float col-major 4x4 SE(3) tool transform per call
+// (the Python wrapper loops the resolved jid list + stacks, mirroring _handle.py).
+// The transform is a 16-element CUDA float Tensor; its data_ptr is ALREADY a
+// contiguous device pointer to 16 T, so it is handed straight to the kernel's
+// d_Xtool (no host staging). target_jid is an absolute jid (the Python layer
+// resolves names→jids). Gated like the C-ABI wrappers.
 #ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
 template <bool MUJOCO>
 torch::Tensor torch_end_effector_pose_runtime(torch::Tensor q, int64_t target_jid, torch::Tensor offset) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
     grid_torch_check(q, "end_effector_pose_runtime: q", nj);
-    TORCH_CHECK(offset.is_cuda() && offset.numel() == 3,
-                "end_effector_pose_runtime: offset must be a 3-element CUDA tensor");
+    TORCH_CHECK(offset.is_cuda() && offset.numel() == 16,
+                "end_effector_pose_runtime: offset must be the 16-element CUDA tensor "
+                "holding the col-major 4x4 SE(3) tool transform");
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
@@ -5765,8 +5775,9 @@ torch::Tensor torch_end_effector_pose_gradient_runtime(torch::Tensor q, int64_t 
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "end_effector_pose_gradient_runtime: q", nj);
-    TORCH_CHECK(offset.is_cuda() && offset.numel() == 3,
-                "end_effector_pose_gradient_runtime: offset must be a 3-element CUDA tensor");
+    TORCH_CHECK(offset.is_cuda() && offset.numel() == 16,
+                "end_effector_pose_gradient_runtime: offset must be the 16-element CUDA tensor "
+                "holding the col-major 4x4 SE(3) tool transform");
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);

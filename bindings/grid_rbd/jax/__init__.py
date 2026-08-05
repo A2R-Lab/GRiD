@@ -1275,9 +1275,10 @@ class JaxRobotHandle:
         Mirrors :py:meth:`grid_rbd.RobotHandle.end_effector_pose_runtime`:
         ``ee_joint_names`` (None => all leaf joints, or a str / list of joint
         names) selects the EE frames; ``ee_offsets`` (None => frame origin, or one
-        ``[x,y,z]`` / ``[x,y,z,1]`` per EE) shifts the measurement point. The
-        single-target FFI op is looped over the resolved jid list (``target_jid``
-        + ``off{x,y,z}`` are static FFI attrs) and stacked.
+        ``[x,y,z]`` / ``[x,y,z,1]`` / 4x4 SE(3) tool transform per EE) shifts the
+        measurement point. The single-target FFI op is looped over the resolved
+        jid list (``target_jid`` + the 16-float col-major ``xtool`` are static FFI
+        attrs) and stacked.
 
         Returns ``(..., NUM_EE, 6)``. Forward-only (no autograd).
 
@@ -1294,10 +1295,11 @@ class JaxRobotHandle:
         out_type = self._out(q, 6)
         per_ee = []
         for jid, off in zip(jids, offsets):
-            off = np.asarray(off, dtype=np.float32).reshape(-1)
+            # off is the 16-float col-major X_tool from _normalize_ee_offsets;
+            # pass ALL 16 (translation lives at [12..14], not [0..2]).
+            xtool = np.ascontiguousarray(np.asarray(off, dtype=np.float32).reshape(-1))
             raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
-                q, target_jid=np.int64(int(jid)),
-                offx=np.float32(off[0]), offy=np.float32(off[1]), offz=np.float32(off[2]))
+                q, target_jid=np.int64(int(jid)), xtool=xtool)
             per_ee.append(raw)  # (..., 6)
         return jnp.stack(per_ee, axis=-2)  # (..., NUM_EE, 6)
 
@@ -1327,10 +1329,9 @@ class JaxRobotHandle:
         out_type = self._out(q, 6 * nv)
         per_ee = []
         for jid, off in zip(jids, offsets):
-            off = np.asarray(off, dtype=np.float32).reshape(-1)
+            xtool = np.ascontiguousarray(np.asarray(off, dtype=np.float32).reshape(-1))
             raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
-                q, target_jid=np.int64(int(jid)),
-                offx=np.float32(off[0]), offy=np.float32(off[1]), offz=np.float32(off[2]))
+                q, target_jid=np.int64(int(jid)), xtool=xtool)
             # (..., 6*NV) col-major -> (..., NV, 6) -> (..., 6, NV)
             per_ee.append(raw.reshape(q.shape[:-1] + (nv, 6)).swapaxes(-2, -1))
         return jnp.stack(per_ee, axis=-3)  # (..., NUM_EE, 6, NV)
