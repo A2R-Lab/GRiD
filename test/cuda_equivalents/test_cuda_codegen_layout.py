@@ -521,6 +521,10 @@ def test_floating_second_order_opt_in_header_compiles(
             static_assert(grid::SECOND_ORDER_COORDS == grid::NUM_VEL, "second-order tensor must be velocity-sized");
             static_assert(grid::SECOND_ORDER_TENSOR_SIZE == 4 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_VEL, "tensor size mismatch");
             static_assert(grid::Q_QD_U_STRIDE == 3 * grid::NUM_POS, "q/qd/u stride mismatch");
+            static_assert(grid::GRID_Q_OFFSET == 0 && grid::GRID_QD_OFFSET == grid::NUM_POS
+                          && grid::GRID_U_OFFSET == 2 * grid::NUM_POS
+                          && grid::GRID_QDD_OFFSET == grid::GRID_U_OFFSET,
+                          "published input-slot offset constants mismatch");
             return 0;
         }
         """.replace("EXPECTED_FDSVA", str(generates_fdsva)),

@@ -1649,6 +1649,17 @@ class GRiDCodeGenerator:
                                  "const int SECOND_ORDER_COORDS = " + str(self.robot.get_num_vel()) + ";", \
                                  "const int SECOND_ORDER_TENSOR_SIZE = " + str(4 * self.robot.get_num_vel()**3) + ";", \
                                  "const int Q_QD_U_STRIDE = " + str(3 * self.robot.get_num_pos()) + ";", \
+                                 "// h_q_qd_u / h_q_qd_qdd input ABI (PUBLISHED — docs: user_guide/concepts/input_output_abi):", \
+                                 "// three NUM_POS-wide slots per timestep (stride Q_QD_U_STRIDE = 3*NUM_POS):", \
+                                 "//   q at +GRID_Q_OFFSET | qd at +GRID_QD_OFFSET | u (or qdd) at +GRID_U_OFFSET.", \
+                                 "// qd/u/qdd are passed at nq width; floating base: nv live values in the LEADING", \
+                                 "// slots + one trailing pad each. Matrix/gradient OUTPUTS are nv-wide. Do NOT pack", \
+                                 "// tightly: on a floating base nq > nv, so a tight u lands at nq+nv while kernels", \
+                                 "// read 2*nq — in-bounds and silently wrong. Fixed base (nq == nv) cannot expose this.", \
+                                 "const int GRID_Q_OFFSET = 0;", \
+                                 "const int GRID_QD_OFFSET = " + str(self.robot.get_num_pos()) + ";", \
+                                 "const int GRID_U_OFFSET = " + str(2 * self.robot.get_num_pos()) + ";", \
+                                 "const int GRID_QDD_OFFSET = " + str(2 * self.robot.get_num_pos()) + ";", \
                                  "const int NUM_EES = " + str(self.robot.get_total_leaf_nodes()) + ";", \
                                  "const int TOPOLOGY_HELPERS_COUNT = " + str(topology_count) + ";", \
                                  "const int DYNAMICS_XI_T_COUNT = " + str(XI_size) + ";", \

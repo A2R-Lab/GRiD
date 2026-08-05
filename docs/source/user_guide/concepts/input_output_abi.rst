@@ -28,8 +28,16 @@ The generated kernels slice it exactly that way::
 
    T *s_q = s_q_qd_u; T *s_qd = &s_q_qd_u[NUM_POS]; T *s_u = &s_q_qd_u[2*NUM_POS];
 
-Always derive your offsets from the emitted ``NUM_POS`` / ``Q_QD_U_STRIDE``
-constants rather than hardcoding integers.
+The header also emits the slot offsets as named constants, right next to the
+contract stated as a comment block::
+
+   grid::GRID_Q_OFFSET     // 0
+   grid::GRID_QD_OFFSET    // NUM_POS
+   grid::GRID_U_OFFSET     // 2*NUM_POS
+   grid::GRID_QDD_OFFSET   // == GRID_U_OFFSET (qdd shares slot 2 with u)
+
+Always derive your offsets from these emitted constants (or ``NUM_POS`` /
+``Q_QD_U_STRIDE``) rather than hardcoding integers.
 
 .. warning::
 

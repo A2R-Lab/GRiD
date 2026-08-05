@@ -81,6 +81,14 @@ def test_input_block_is_three_num_pos_slots(tmp_path, robot_id, base_mode):
             f"(NUM_POS={num_pos}, NUM_VEL={num_vel}). A tight packing would put it at "
             f"{num_pos + num_vel} — that is the silent-corruption bug this test exists for.")
 
+    # The named offset constants are the ABI as consumers see it in grid.cuh —
+    # they must agree with the offsets the kernels actually slice at.
+    assert c["GRID_Q_OFFSET"] == 0
+    assert c["GRID_QD_OFFSET"] == num_pos, "GRID_QD_OFFSET must equal NUM_POS (slot 1)"
+    assert c["GRID_U_OFFSET"] == 2 * num_pos, "GRID_U_OFFSET must equal 2*NUM_POS (slot 2)"
+    assert c["GRID_QDD_OFFSET"] == c["GRID_U_OFFSET"], (
+        "qdd shares slot 2 with u (the q|qd|qdd kernels read the same offset)")
+
 
 @pytest.mark.cuda_equivalence
 @pytest.mark.robot_smoke
