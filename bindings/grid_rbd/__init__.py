@@ -332,6 +332,57 @@ def register_robot(
             runtime_transform=runtime_transform,
             enable_mujoco_kernels=enable_mujoco_kernels)
 
+    cache_key, so_path, meta = warm_robot(
+        name, urdf_path, urdf_string=urdf_string, floating_base=floating_base,
+        ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
+        cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
+        dtype=dtype, runtime_inertia=runtime_inertia,
+        runtime_transform=runtime_transform,
+        runtime_joint_dynamics=runtime_joint_dynamics,
+        use_joint_dynamics=use_joint_dynamics, enable_tool=enable_tool,
+        algorithm_list=algorithm_list, enable_mujoco_kernels=enable_mujoco_kernels,
+    )
+    handle = RobotHandle(name, str(so_path), meta, allow_fp64=allow_fp64)
+    # output_convention is a runtime IO setting (no effect on the cached .so), so it
+    # is applied to the handle rather than the cache key. mjx is a no-op on fixed base.
+    handle.output_convention = output_convention
+    # E6 per-algo threads overlay: the numpy/pybind surface defaults to "pybind"; the
+    # jax/torch surfaces pass _profile_overlay=None/"torch" (jax's baked default IS
+    # ffi). No-op until the robot JSON carries a <profile>_bases block.
+    if _profile_overlay:
+        handle.apply_profile_overlay(_profile_overlay)
+    return handle
+
+
+def warm_robot(
+    name: str,
+    urdf_path: str | None = None,
+    *,
+    urdf_string: str | None = None,
+    floating_base: bool = False,
+    ee_joint_names: list[str] | tuple[str, ...] | None = None,
+    max_batch_size: int = 256,
+    cache_dir: str | Path | None = None,
+    force_rebuild: bool = False,
+    cuda_arch: int | None = None,
+    dtype: str = "float32",
+    runtime_inertia: bool = False,
+    runtime_transform: bool = False,
+    runtime_joint_dynamics: bool = False,
+    use_joint_dynamics: bool = False,
+    enable_tool: bool = False,
+    algorithm_list: list[str] | tuple[str, ...] | str | None = None,
+    enable_mujoco_kernels: bool = True,
+) -> tuple[str, Path, dict]:
+    """Generate + compile (or cache-hit) a robot's ``.so`` WITHOUT constructing
+    a handle — no dlopen, no eager ``grid_rbd_init``, no device allocations.
+
+    This is exactly :py:func:`register_robot`'s codegen/cache half (same cache
+    key, same manifest entry); register_robot delegates here and then builds the
+    handle. Returns ``(cache_key, so_path, meta)``. Used by the split-suite
+    driver's compile-warm phase; needs only nvcc (pass ``cuda_arch=`` explicitly
+    to skip the nvidia-smi arch probe).
+    """
     cache_dir = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -463,16 +514,7 @@ def register_robot(
         meta = json.loads((entry_dir / "meta.json").read_text())
 
     manifest_register(cache_dir, name, cache_key, meta)
-    handle = RobotHandle(name, str(so_path), meta, allow_fp64=allow_fp64)
-    # output_convention is a runtime IO setting (no effect on the cached .so), so it
-    # is applied to the handle rather than the cache key. mjx is a no-op on fixed base.
-    handle.output_convention = output_convention
-    # E6 per-algo threads overlay: the numpy/pybind surface defaults to "pybind"; the
-    # jax/torch surfaces pass _profile_overlay=None/"torch" (jax's baked default IS
-    # ffi). No-op until the robot JSON carries a <profile>_bases block.
-    if _profile_overlay:
-        handle.apply_profile_overlay(_profile_overlay)
-    return handle
+    return cache_key, so_path, meta
 
 
 def get_robot(name: str, cache_dir: str | Path | None = None, *,
