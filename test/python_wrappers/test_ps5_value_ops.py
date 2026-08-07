@@ -156,24 +156,27 @@ def test_cmm_time_variation(iiwa):
         assert _max_err(contracted, Adot[i]) < _TOL
 
 
-# ─── mimic availability error path (dccrba / cmm) ────────────────────────────
+# ─── mimic support (dccrba / cmm) ────────────────────────────────────────────
 
-def test_dccrba_cmm_mimic_clean_error():
-    """fr3 is a mimic robot: dccrba / cmm_time_variation are not generated. The
-    binding must raise a CLEAR error (not crash). The whole centroidal value
-    surface (com/ccrba/energy/dccrba/cmm) is mimic-gated, so fr3 may not even
-    register — in that case we skip (the limitation is documented), since the
-    requirement is specifically that dccrba/cmm fail cleanly rather than crash."""
-    if not (_ASSETS / "fr3.urdf").exists():
-        pytest.skip("fr3.urdf fixture not present")
-    try:
-        handle = _register("fr3", "fr3.urdf")
-    except Exception as e:
-        pytest.skip(f"fr3 (mimic) does not register through the binding "
-                    f"(centroidal value surface is mimic-gated at compile): {e!r}")
-    q = np.zeros((1, handle.num_joints), dtype=np.float32)
-    qd = np.zeros((1, handle.num_joints), dtype=np.float32)
-    with pytest.raises(RuntimeError, match="dccrba"):
-        handle.dccrba(q)
-    with pytest.raises(RuntimeError, match="cmm_time_variation"):
-        handle.cmm_time_variation(q, qd)
+def test_dccrba_cmm_mimic_supported():
+    """fr3 is a mimic robot: dccrba / cmm_time_variation ARE generated for it
+    (mimic-alpha-folded columns — see _dccrba.py "MIMIC: SUPPORTED") and must
+    match the mimic-aware oracle. This supersedes the pre-support contract
+    (raise a clean RuntimeError), which went stale the moment mimic centroidal
+    landed — the binding call now succeeds, so the old raises-check failed."""
+    handle = _register("fr3", "fr3.urdf")
+    ref = _reference("fr3.urdf")
+    s = _samples(handle)
+    NV = handle.num_vel
+    D = handle.dccrba(s["q"])
+    assert D.shape == (_B, 6, NV, NV)
+    Adot = handle.cmm_time_variation(s["q"], s["qd"])
+    assert Adot.shape == (_B, 6, NV)
+    for i, (q, qd) in enumerate(zip(s["q"], s["qd"])):
+        D_ref = ref.dccrba(q.astype(np.float64))
+        assert _max_err(D[i], D_ref) < _TOL
+        Adot_ref = ref.cmm_time_variation(q.astype(np.float64), qd.astype(np.float64))
+        assert _max_err(Adot[i], Adot_ref) < _TOL
+        # consistency: Adot == dccrba contracted with qd, same as the iiwa test.
+        contracted = np.einsum("aki,i->ak", D[i], qd.astype(np.float64))
+        assert _max_err(contracted, Adot[i]) < _TOL

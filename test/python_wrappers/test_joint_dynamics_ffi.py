@@ -71,6 +71,14 @@ def _samples(nj, seed=0):
 # (name, urdf) — fixed base, fp32.
 _CASES = [("iiwa14", _IIWA), ("fr3", _FR3)]
 _IDS = ["iiwa14", "fr3"]
+_URDF_BY_NAME = dict(_CASES)
+
+
+def _reference(name, use_joint_dynamics=False):
+    from URDFParser import URDFParser
+    from RBDReference import RBDReference
+    robot = URDFParser().parse(str(_URDF_BY_NAME[name]), floating_base=False)
+    return RBDReference(robot, use_joint_dynamics=use_joint_dynamics)
 
 
 @pytest.fixture(scope="module", params=_CASES, ids=_IDS)
@@ -144,19 +152,43 @@ def test_damped_differs_from_undamped(handles):
     assert _maxabs(hn.forward_dynamics(q, qd, u), hbare.forward_dynamics(q, qd, u)) > 1e-2
 
 
-def test_second_order_unchanged_by_damping(handles):
-    """SO regression: the bias is LINEAR in qd, so its 2nd derivative is 0 ->
-    idsva_so / fdsva_so are byte-for-byte unaffected by use_joint_dynamics. Compares
-    the damped build's SO tensors against the bare build's (same q,qd,qdd)."""
+def test_second_order_damping_contract(handles):
+    """SO contract under use_joint_dynamics — the two algorithms differ ON PURPOSE:
+
+    * idsva_so (INVERSE dynamics SO): the damping torque B*qd is linear in qd in
+      TORQUE space, so every second partial of tau is untouched -> damped and bare
+      builds must agree bit-for-bit (empirically 0.0 diff).
+    * fdsva_so (FORWARD dynamics SO): qdd = Minv(q)(tau - h - B qd) maps the
+      damping term through Minv(q), which is q-dependent at EVERY order — e.g.
+      d2qdd/dq2 gains d2[Minv]/dq2 · (B qd) terms — so damped and bare builds
+      legitimately DIFFER, and the damped build's contract is agreement with the
+      damped ORACLE (RBDReference(use_joint_dynamics=True)), which follows the
+      value path through its derivative layers automatically.
+
+    The pre-2026-08 version asserted equality for BOTH — analytically wrong for
+    fdsva_so; it was masked for weeks by the numpy-surface idsva_so launch-tier
+    crash and failed the moment that was fixed (verified: damped CUDA fdsva_so
+    matches the damped oracle to ~1e-4 relative and is FAR from the bare one)."""
     name, hn, _, _, hbare = handles
     nj = hn.num_joints
     q, qd, u = _samples(nj, seed=4)
-    for algo in ("idsva_so", "fdsva_so"):
-        fn_on = getattr(hn, algo, None)
-        fn_off = getattr(hbare, algo, None)
-        if fn_on is None or fn_off is None:
-            pytest.skip(f"{algo} not on the numpy surface for {name}")
-        # idsva_so(q,qd,qdd); fdsva_so(q,qd,qdd,tau) — both take (q,qd,u)-style triples
-        on = fn_on(q, qd, u)
-        off = fn_off(q, qd, u)
-        assert _maxabs(on, off) < 1e-5, f"{algo}: damping leaked into 2nd order ({_maxabs(on, off):.2e})"
+
+    on = hn.idsva_so(q, qd, u)
+    off = hbare.idsva_so(q, qd, u)
+    assert _maxabs(on, off) < 1e-5, \
+        f"idsva_so: damping leaked into inverse-dynamics 2nd order ({_maxabs(on, off):.2e})"
+
+    fd_on = [np.asarray(t, np.float64) for t in hn.fdsva_so(q, qd, u)]
+    fd_off = [np.asarray(t, np.float64) for t in hbare.fdsva_so(q, qd, u)]
+    assert max(np.abs(a - b).max() for a, b in zip(fd_on, fd_off)) > 1e-2, \
+        "fdsva_so: damped build identical to bare — Minv-mapped damping lost from FD 2nd order"
+
+    ref = _reference(name, use_joint_dynamics=True)
+    for i in range(min(2, q.shape[0])):
+        ref_t = [np.asarray(t, np.float64) for t in
+                 ref.fdsva_so(q[i].astype(np.float64), qd[i].astype(np.float64),
+                              u[i].astype(np.float64))]
+        for k, (c, r) in enumerate(zip(fd_on, ref_t)):
+            rel = np.abs(c[i] - r).max() / max(1.0, np.abs(r).max())
+            assert rel < 1e-3, \
+                f"fdsva_so tensor[{k}] sample {i}: damped CUDA vs damped oracle rel={rel:.2e}"
