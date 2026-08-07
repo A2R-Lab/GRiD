@@ -92,9 +92,15 @@ WARM_MANIFEST: dict[str, list[dict]] = {
     "test_tool": [_r("iiwa14", max_batch_size=8, enable_tool=True)],
 }
 
-# Per-module Phase-B timeout (s). Cold-cache g1 codegen+compile dominates.
+# Per-module Phase-B timeout (s). Cold-cache g1 codegen+compile dominates; the
+# force_rebuild modules recompile in-test every run — test_joint_dynamics does
+# FOUR builds including two float64 ones (slowest compiles in the suite).
 DEFAULT_TIMEOUT = 3600
-TIMEOUTS = {"test_g1_plant_hessian_smoke": 7200}
+TIMEOUTS = {
+    "test_g1_plant_hessian_smoke": 7200,
+    "test_joint_dynamics": 7200,
+    "test_runtime_joint_dynamics": 7200,
+}
 
 
 def discover_modules() -> list[str]:
@@ -204,11 +210,22 @@ def phase_run(modules: list[str], out_dir: Path, receipts: bool,
         t0 = time.monotonic()
         timeout = TIMEOUTS.get(mod, DEFAULT_TIMEOUT)
         with open(log_path, "w") as log:
+            # start_new_session so a timeout kills the WHOLE process group —
+            # otherwise pytest dies but its nvcc/cicc grandchildren survive as
+            # orphans and poison the next module's run (bench-orchestration
+            # trap: "pkill orphans, GPU/CPU EMPTY before the next leg").
+            proc = subprocess.Popen(cmd, cwd=REPO_ROOT, stdout=log,
+                                    stderr=subprocess.STDOUT,
+                                    start_new_session=True)
             try:
-                proc = subprocess.run(cmd, cwd=REPO_ROOT, stdout=log,
-                                      stderr=subprocess.STDOUT, timeout=timeout)
-                rc: int | str = proc.returncode
+                rc: int | str = proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
+                import signal as _signal
+                try:
+                    os.killpg(proc.pid, _signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait()
                 rc = "TIMEOUT"
         dt = time.monotonic() - t0
         junit = parse_junit(xml_path)
