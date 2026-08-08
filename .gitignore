@@ -130,3 +130,5 @@ scratchpad/
 # macOS Finder metadata
 .DS_Store
 **/.DS_Store
+test/.split_suite/
+test/.split-suite-state.json

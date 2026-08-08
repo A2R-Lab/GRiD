@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import ast
 import glob
+import json
 import os
 import subprocess
 import sys
@@ -106,6 +107,66 @@ TIMEOUTS = {
 def discover_modules() -> list[str]:
     mods = sorted(Path(p).stem for p in glob.glob(str(WRAPPERS_DIR / "test_*.py")))
     return mods
+
+
+# ─── change-aware selection ──────────────────────────────────────────────────
+# A module's input fingerprint covers everything that can change its outcome:
+# the module file itself (registration kwargs live in it), the shared conftest,
+# the manifest robots' URDF bytes, the codegen-source + wrapper-template hashes
+# the bindings cache key uses, the grid_rbd version, the CUDA arch, and the
+# nvcc version (the one input the bindings cache key does NOT fold). Skip
+# decisions come from THIS fingerprint (strictly stronger than the receipt's
+# narrow shard fingerprint, which only covers git-tracked test files — GRiD
+# pins codegen/submodules by commit SHA at the receipt level instead).
+STATE_PATH = REPO_ROOT / "test" / ".split-suite-state.json"
+
+
+def _nvcc_version() -> str:
+    try:
+        out = subprocess.run(["nvcc", "--version"], capture_output=True, text=True,
+                             timeout=30).stdout
+        return out.strip().splitlines()[-1] if out else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def module_fingerprint(mod: str) -> str:
+    import hashlib
+    sys.path.insert(0, str(REPO_ROOT))
+    from config import robot_urdf  # noqa: PLC0415
+    from grid_rbd._cache import (  # noqa: PLC0415
+        _codegen_source_hash, _wrapper_template_hash, detect_cuda_arch,
+        package_version)
+
+    h = hashlib.sha256()
+    h.update((WRAPPERS_DIR / f"{mod}.py").read_bytes())
+    h.update((REPO_ROOT / "test" / "conftest.py").read_bytes())
+    for e in WARM_MANIFEST.get(mod, []):
+        try:
+            urdf = robot_urdf(e["robot"])
+            if urdf.exists():
+                h.update(urdf.read_bytes())
+        except Exception:
+            h.update(f"unresolved:{e['robot']}".encode())
+    h.update(_codegen_source_hash().encode())
+    h.update(_wrapper_template_hash().encode())
+    h.update(package_version().encode())
+    h.update(str(detect_cuda_arch()).encode())
+    h.update(_nvcc_version().encode())
+    return h.hexdigest()
+
+
+def load_state() -> dict:
+    if STATE_PATH.exists():
+        try:
+            return json.loads(STATE_PATH.read_text())
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def save_state(state: dict) -> None:
+    STATE_PATH.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
 
 
 def drift_guard(modules: list[str]) -> list[str]:
@@ -206,7 +267,9 @@ def phase_run(modules: list[str], out_dir: Path, receipts: bool,
         if receipts:
             rdir = out_dir / "receipts"
             rdir.mkdir(exist_ok=True)
-            cmd += ["--gpu-proof-enable", f"--gpu-proof-out={rdir / (mod + '.json')}"]
+            cmd += ["--gpu-proof-enable", f"--gpu-proof-out={rdir / (mod + '.json')}",
+                    f"--gpu-proof-shard={mod}",
+                    f"--gpu-proof-shard-fingerprint-paths=test/python_wrappers/{mod}.py"]
         t0 = time.monotonic()
         timeout = TIMEOUTS.get(mod, DEFAULT_TIMEOUT)
         with open(log_path, "w") as log:
@@ -261,8 +324,17 @@ def main() -> int:
     ap.add_argument("--modules", nargs="*", help="subset of module stems to run")
     ap.add_argument("--skip-warm", action="store_true")
     ap.add_argument("--receipts", action="store_true",
-                    help="write per-module gpu-proof shard receipts (merge is a "
-                         "separate step — see pytest-gpu-proof `merge`)")
+                    help="write per-module schema-2 shard receipts and merge them "
+                         "into <out>/gpu-proof.json at the end")
+    ap.add_argument("--receipts-carry-from", default=None, metavar="RECEIPT",
+                    help="with --receipts: carry still-valid shards from this "
+                         "older merged receipt (gpu-proof merge --carry-from)")
+    ap.add_argument("--changed-only", action="store_true",
+                    help="skip modules whose input fingerprint (module file + "
+                         "conftest + URDFs + codegen/template hashes + toolchain) "
+                         "matches the last GREEN run in test/.split-suite-state.json")
+    ap.add_argument("--all", action="store_true",
+                    help="force a full run (explicitly overrides --changed-only)")
     ap.add_argument("--out", default=None, help="output dir (default test/.split_suite/<stamp>)")
     ap.add_argument("pytest_args", nargs="*", default=[],
                     help="extra args passed to every pytest invocation (after --)")
@@ -277,6 +349,23 @@ def main() -> int:
     if unknown:
         print(f"FATAL: unknown module(s): {unknown}", file=sys.stderr)
         return 2
+
+    fingerprints = {}
+    skipped_unchanged: list[str] = []
+    if args.changed_only and not args.all:
+        state = load_state()
+        for mod in modules:
+            fingerprints[mod] = module_fingerprint(mod)
+        skipped_unchanged = [m for m in modules
+                             if state.get(m) == fingerprints[m]]
+        modules = [m for m in modules if m not in skipped_unchanged]
+        print(f"=== --changed-only: {len(skipped_unchanged)} unchanged module(s) "
+              f"skipped, {len(modules)} to run ===")
+        for m in skipped_unchanged:
+            print(f"  UNCHANGED {m}")
+        if not modules and not (args.receipts and args.receipts_carry_from):
+            print("nothing to run — all module fingerprints match the last green run")
+            return 0
 
     for w in drift_guard(modules):
         print(f"WARM-MANIFEST DRIFT: {w}")
@@ -303,8 +392,39 @@ def main() -> int:
         for name in r["failed"]:
             print(f"      FAILED {name}")
     print(f"\n  TOTAL: {tot['tests']} tests, {tot['failures']}F "
-          f"{tot['errors']}E {tot['skipped']}S across {len(results)} modules; "
-          f"{bad} module(s) not clean")
+          f"{tot['errors']}E {tot['skipped']}S across {len(results)} modules"
+          + (f" (+{len(skipped_unchanged)} unchanged-skipped)" if skipped_unchanged else "")
+          + f"; {bad} module(s) not clean")
+
+    # Update the green-state fingerprints for modules that ended clean this run
+    # (so --changed-only can skip them next time). Never recorded for failures.
+    state = load_state()
+    for r in results:
+        if r["kind"] == "OK":
+            mod = r["module"]
+            state[mod] = fingerprints.get(mod) or module_fingerprint(mod)
+    save_state(state)
+
+    # Merge shard receipts into one verifiable artifact.
+    if args.receipts:
+        rdir = out_dir / "receipts"
+        shards = sorted(str(p) for p in rdir.glob("*.json")) if rdir.exists() else []
+        if shards:
+            merged = out_dir / "gpu-proof.json"
+            cmd = [str(REPO_ROOT / ".venv" / "bin" / "gpu-proof"), "merge",
+                   "--out", str(merged), "--repo", str(REPO_ROOT)]
+            if args.receipts_carry_from:
+                cmd += ["--carry-from", args.receipts_carry_from]
+            cmd += shards
+            mrc = subprocess.run(cmd, cwd=REPO_ROOT).returncode
+            print(f"  receipts: merged {len(shards)} shard(s) -> {merged} (rc={mrc})"
+                  + (f" carrying from {args.receipts_carry_from}"
+                     if args.receipts_carry_from else ""))
+            if mrc != 0:
+                bad += 1
+        else:
+            print("  receipts: no shard receipts were produced")
+
     return 1 if bad else 0
 
 
