@@ -192,3 +192,38 @@ def test_second_order_damping_contract(handles):
             rel = np.abs(c[i] - r).max() / max(1.0, np.abs(r).max())
             assert rel < 1e-3, \
                 f"fdsva_so tensor[{k}] sample {i}: damped CUDA vs damped oracle rel={rel:.2e}"
+
+
+def test_nle_coriolis_damping_convention(handles):
+    """Pins the INTENTIONAL value-surface convention under use_joint_dynamics
+    (2026-08-08 audit; both surfaces are consistent BY CONSTRUCTION):
+
+    * nonlinear_effects = ID(q, qd, 0) — an RNEA wrapper on both the CUDA and
+      oracle sides, so it INCLUDES the damping bias when the flag is on.
+    * coriolis_matrix is the pure pin computeCoriolisMatrix recursion — damping
+      never enters (verified bit-identical damped-vs-bare).
+    * Consequence: the identity C(q,qd) qd + g(q) == nle holds on BARE builds;
+      on damped builds the residual IS the damping bias, exactly.
+    """
+    name, hn, _, _, hbare = handles
+    nj = hn.num_joints
+    q, qd, _ = _samples(nj, seed=7)
+    qd64 = qd.astype(np.float64)
+
+    nle_d = np.asarray(hn.nonlinear_effects(q, qd, gravity=-9.81), np.float64)
+    nle_b = np.asarray(hbare.nonlinear_effects(q, qd, gravity=-9.81), np.float64)
+    C_d = np.asarray(hn.coriolis_matrix(q, qd), np.float64)
+    C_b = np.asarray(hbare.coriolis_matrix(q, qd), np.float64)
+    gg = np.asarray(hbare.generalized_gravity(q, gravity=-9.81), np.float64)
+
+    assert np.abs(nle_d - nle_b).max() > 1e-2, \
+        "nle must include the damping bias on the damped build"
+    assert np.abs(C_d - C_b).max() == 0.0, \
+        "coriolis_matrix must be PURE (damping-free) on every build"
+    for i in range(q.shape[0]):
+        resid_bare = np.abs(C_b[i] @ qd64[i] + gg[i] - nle_b[i]).max()
+        assert resid_bare < 1e-4, f"bare identity C qd + g == nle broke ({resid_bare:.2e})"
+        resid_damped = C_d[i] @ qd64[i] + gg[i] - nle_d[i]
+        bias = nle_b[i] - nle_d[i]
+        assert np.abs(resid_damped - bias).max() < 1e-4, \
+            "damped identity residual must equal the damping bias exactly"
