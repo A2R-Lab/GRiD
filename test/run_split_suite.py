@@ -98,6 +98,7 @@ WARM_MANIFEST: dict[str, list[dict]] = {
 # FOUR builds including two float64 ones (slowest compiles in the suite).
 DEFAULT_TIMEOUT = 3600
 TIMEOUTS = {
+    "test_ee_named_target_floating_multileaf": 7200,  # inline robot_descriptions registrations rebuild in-module on any cache invalidation
     "test_g1_plant_hessian_smoke": 7200,
     "test_joint_dynamics": 7200,
     "test_runtime_joint_dynamics": 7200,
