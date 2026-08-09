@@ -1318,6 +1318,50 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   mirror-image trap: a vacuously-zero comparison also PASSES vacuously, so a test that only ever
   sees a free-fall config validates nothing.
 
+### 7.x SIGKILLing a running big-SO exe can WEDGE the NVIDIA driver — and the wedge is silent, sticky, and poisons every later leg (2026-08-09)
+
+The 20260808 night queue: leg A1's `timeout` killed `per_algo_bench` mid-run while a
+`solo_batch_f_ext_gradient*` exe (h2_plus, nv=81, ~31 GB device arena) was inside a
+kernel/teardown. The exe became a ZOMBIE whose driver-side context cleanup never
+completed: 31 GB stayed allocated, and from then on ANY process touching the driver
+(`nvidia-smi`, the next leg's mjx/XLA init, even gnome-shell/VSCode's GPU process)
+entered uninterruptible D-state. Symptoms to recognize:
+- a timing leg with a **0-byte log for hours** (it's blocked in CUDA init, not slow);
+- `gpu_guard`-style `nvidia-smi` probes reporting **0% util but ~full memory.used**
+  right after a killed leg — that line IS the alarm; do not start the next leg on it;
+- `nvidia-smi` itself hanging (D-state) — at that point `timeout`/`kill -9` cannot
+  help (D-state ignores signals) and every further GPU probe adds another unkillable
+  process. **Stop touching the GPU; only a reboot (user's call) clears it.**
+Prevention: (1) don't wall-clock-kill timing legs in a dedicated window
+(user rule, 2026-08-09 — one finished leg beats none); (2) if a leg must be stopped,
+signal the PYTHON orchestrator with SIGINT/SIGTERM and give the exe time to exit its
+sync + frees — never SIGKILL a process with tens of GB of live device allocations;
+(3) inter-leg guards must VERIFY memory returned to baseline and FAIL LOUDLY instead
+of proceeding (the A2 leg "passed" in 60 s on a card with 31 GB held — its numbers
+are suspect, not bankable); (4) treat "util 0% + memory high + no owning process" as
+a wedged-teardown signature, not as idle.
+
+### 7.x Compile-RAM crash discipline for big-robot bench builds (salvaged from the 2026-07-23 one-off scripts before deletion)
+
+Two desktop-crashing OOMs taught the g1-floating build schedule; the durable rules
+(the dated `run_g1_*`/`probe_*` scripts that carried them are deleted — this entry
+is their tombstone):
+- `--ram-per-compile-gb` is only a PRE-ADMISSION check — it cannot throttle a
+  compile that balloons after admission. **Both crashes came from trusting it.**
+  The real guard is a hard cgroup cap applied by the caller
+  (`systemd-run --user -p MemoryMax=...`), which lets the kernel kill a ballooning
+  cicc instead of taking the desktop down.
+- `run_multi_version --build-jobs 1` SKIPS the RAM-managed build phase entirely
+  (that exact combination crashed the box at 01:59) — to serialize big compiles,
+  drive `per_algo_bench --compile-jobs 1` directly instead.
+- Schedule shape that works: non-SO algos parallel (small TUs), SO monsters
+  strictly serial (24-36 GB each observed on g1-floating; worst non-SO single
+  compile 17 GB), and no `set -e` in the night script so a late failure can't
+  discard earlier banked exes (everything is content-cached and resumable).
+- 2026-08-08 addendum: `GRID_ENABLE_MUJOCO_KERNELS=0` (pin-only) shrinks the same
+  h2_plus SO-family compiles to ~1 min each — always build pin-only for timing
+  cells; the mjx twins are what made these "monster" compiles.
+
 ---
 
 ## 8. Process meta-lessons
