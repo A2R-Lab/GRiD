@@ -311,6 +311,14 @@ def register_robot(
     # FFI handlers are per-CORE-algo gated (#if GRID_HAS_<ALGO>), so a reduced profile
     # builds only the requested cores on those surfaces too, and the backend wrappers
     # map a missing-symbol AttributeError to the same clean subset error numpy raises.
+    if backend in ("jax", "torch") and allow_fp64:
+        # allow_fp64 is the legacy numpy-surface fp32-compute/fp64-io upcast; the
+        # jax/torch surfaces take framework arrays whose dtype the caller controls,
+        # so silently ignoring it would misreport precision. Real fp64 for these
+        # backends arrives with the dtype='float64' template un-gating.
+        raise NotImplementedError(
+            f"allow_fp64 is not supported on the {backend!r} backend (numpy-only "
+            "legacy upcast); pass fp32 arrays, or use backend='numpy'.")
     if backend == "jax":
         from . import jax as _jax_backend
         return _jax_backend.register_robot(
@@ -318,8 +326,10 @@ def register_robot(
             ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
             cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
             output_convention=output_convention, algorithm_list=algorithm_list,
-            use_joint_dynamics=use_joint_dynamics, runtime_inertia=runtime_inertia,
-            runtime_transform=runtime_transform,
+            use_joint_dynamics=use_joint_dynamics,
+            runtime_joint_dynamics=runtime_joint_dynamics,
+            runtime_inertia=runtime_inertia,
+            runtime_transform=runtime_transform, enable_tool=enable_tool,
             enable_mujoco_kernels=enable_mujoco_kernels)
     if backend == "torch":
         from . import torch as _torch_backend
@@ -328,8 +338,10 @@ def register_robot(
             ee_joint_names=ee_joint_names, max_batch_size=max_batch_size,
             cache_dir=cache_dir, force_rebuild=force_rebuild, cuda_arch=cuda_arch,
             output_convention=output_convention, algorithm_list=algorithm_list,
-            use_joint_dynamics=use_joint_dynamics, runtime_inertia=runtime_inertia,
-            runtime_transform=runtime_transform,
+            use_joint_dynamics=use_joint_dynamics,
+            runtime_joint_dynamics=runtime_joint_dynamics,
+            runtime_inertia=runtime_inertia,
+            runtime_transform=runtime_transform, enable_tool=enable_tool,
             enable_mujoco_kernels=enable_mujoco_kernels)
 
     cache_key, so_path, meta = warm_robot(
