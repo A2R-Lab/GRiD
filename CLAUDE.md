@@ -59,6 +59,13 @@ Markers: `pinocchio_equivalence`, `cuda_equivalence`, `python_wrappers`, `floati
 `gpu-proof.json` receipt (see `test/run_gpu_proof.sh`) that CPU-only CI verifies — so GPU correctness
 can gate merges without paid GPU CI.
 
+Prefer the crash-isolated split driver for full `python_wrappers` passes:
+`test/run_split_suite.py` (compile-warm phase + one pytest subprocess per module +
+junitxml aggregate — one module's abort can't eat the rest; `--changed-only` skips
+modules whose input fingerprint matches the last green run). `SPLIT=1
+test/run_gpu_proof.sh` produces the same repo-root receipt via per-module schema-2
+shards (+ a `cuda_equivalents` shard) merged and re-signed.
+
 ## Durable engineering conventions
 
 - **Single-block per kernel/robot, always** — no multi-block / cooperative groups. Big-robot
