@@ -132,3 +132,6 @@ scratchpad/
 **/.DS_Store
 test/.split_suite/
 test/.split-suite-state.json
+# dated one-off night scripts are scratch (durable harness scripts are tracked)
+test/benchmarks/run_overnight_2*.sh
+test/benchmarks/probe_*.sh

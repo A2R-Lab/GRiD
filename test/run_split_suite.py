@@ -291,10 +291,21 @@ def phase_run(modules: list[str], out_dir: Path, receipts: bool,
                 proc.wait()
                 rc = "TIMEOUT"
         dt = time.monotonic() - t0
+        # VRAM watermark AFTER the module's process exits: per-module isolation
+        # means memory.used should return to the desktop baseline every time.
+        # A rising floor here = leaked device allocations surviving process
+        # exit (the driver-wedge signature) — the accumulation-probe dataset.
+        try:
+            vram = subprocess.run(
+                ["nvidia-smi", "--query-gpu=memory.used",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=15).stdout.strip().split("\n")[0]
+        except Exception:
+            vram = "?"
         junit = parse_junit(xml_path)
         if junit is None:
             kind = "CASUALTY" if rc != 0 else "NO-XML"
-            results.append(dict(module=mod, rc=rc, secs=dt, kind=kind,
+            results.append(dict(module=mod, rc=rc, secs=dt, kind=kind, vram=vram,
                                 tests=0, failures=0, errors=0, skipped=0, failed=[]))
         else:
             t, f, e, s, failed = junit
@@ -308,13 +319,13 @@ def phase_run(modules: list[str], out_dir: Path, receipts: bool,
                 kind = "FLOOR-SKIP"
             else:
                 kind = "RC!=0"
-            results.append(dict(module=mod, rc=rc, secs=dt, kind=kind,
+            results.append(dict(module=mod, rc=rc, secs=dt, kind=kind, vram=vram,
                                 tests=t, failures=f, errors=e, skipped=s,
                                 failed=failed))
         r = results[-1]
         print(f"[{datetime.now():%H:%M:%S}] {mod}: {r['kind']} "
               f"({r['tests']} tests, {r['failures']}F/{r['errors']}E/"
-              f"{r['skipped']}S, rc={rc}, {dt:.0f}s)", flush=True)
+              f"{r['skipped']}S, rc={rc}, {dt:.0f}s, vram={r['vram']}MiB)", flush=True)
     return results
 
 
