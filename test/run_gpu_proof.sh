@@ -73,13 +73,18 @@ if [[ "${SPLIT:-0}" = "1" ]]; then
     # Shard 1..N: python_wrappers, one shard per module (crash-isolated). The
     # driver merges its own shards into $OUT_DIR/gpu-proof.json. rc captured
     # explicitly — a pipe or early exec would mask which leg failed.
+    # NOTE: SCOPE's -k is NOT forwarded here. -k matches test IDs, and many
+    # wrapper modules are iiwa14-based without a robot name in their IDs, so a
+    # robot -k silently deselects whole modules (12/25 under curated,
+    # 2026-08-09). The wrapper side is the cheap crash-isolated side — it
+    # always runs in full; SCOPE narrows only the cuda_equivalents shard.
     CARRY_ARGS=()
     if [[ -n "${SPLIT_CARRY_FROM:-}" ]]; then
         CARRY_ARGS=(--receipts-carry-from "$SPLIT_CARRY_FROM")
     fi
     rc_wrappers=0
     "$PYTHON" test/run_split_suite.py --receipts "${CARRY_ARGS[@]}" \
-        --out "$OUT_DIR" -- "${K_ARGS[@]}" ${PYTEST_ARGS:-} || rc_wrappers=$?
+        --out "$OUT_DIR" -- ${PYTEST_ARGS:-} || rc_wrappers=$?
 
     # Shard N+1: cuda_equivalents as a single shard (its runners are already
     # per-exe subprocess-isolated; one shard keeps the receipt's coverage equal
