@@ -311,6 +311,11 @@ def phase_run(modules: list[str], out_dir: Path, receipts: bool,
             t, f, e, s, failed = junit
             if rc == 0:
                 kind = "OK"
+            elif rc == 5 and t == 0 and f + e == 0:
+                # pytest exit 5 = "no tests collected": every test in the module
+                # was deselected by a -k scope filter. Benign — a narrowed run
+                # (SCOPE=smoke/curated) must not read as a failing module.
+                kind = "DESELECTED"
             elif f + e > 0:
                 kind = "FAILURES"
             elif s > 0:
@@ -395,8 +400,8 @@ def main() -> int:
     for r in results:
         for k in tot:
             tot[k] += r[k]
-        flag = "" if r["kind"] in ("OK", "FLOOR-SKIP") else "  <-- "
-        if r["kind"] not in ("OK", "FLOOR-SKIP"):
+        flag = "" if r["kind"] in ("OK", "FLOOR-SKIP", "DESELECTED") else "  <-- "
+        if r["kind"] not in ("OK", "FLOOR-SKIP", "DESELECTED"):
             bad += 1
         print(f"  {r['module']:42s} {r['kind']:10s} rc={r['rc']!s:>7} "
               f"{r['tests']:4d}T {r['failures']}F {r['errors']}E {r['skipped']}S{flag}")
