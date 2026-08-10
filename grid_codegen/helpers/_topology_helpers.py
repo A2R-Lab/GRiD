@@ -1685,10 +1685,28 @@ def gen_joint_limits_size(self):
 def gen_init_joint_limits(self):
     n = self.robot.get_num_pos()
 
-    limits_q_order = []
+    # Walk joints tracking each one's TRUE q-offset. The old code kept only
+    # revolute joints and wrote limits at the FILTERED index — on a floating
+    # robot the leg limits landed on the base q-slots (0..6) and the tail
+    # stayed uninitialized malloc (silent wrong-memory; GATO BUG 5, 2026-08-09).
+    # Slots without a limited joint (floating base 0..6, spherical quaternions,
+    # continuous, unlimited) default to +/-inf.
+    limits_by_qslot = {}
+    q_cursor = 0
     for j in self.robot.get_joints_ordered_by_id():
         jt = j.get_type() if hasattr(j, "get_type") else j.jtype
-        if jt == "revolute":
+        if getattr(j, "is_mimic", False):
+            continue  # mimics share the target joint's coordinate: no own q slot
+        if jt == "floating":
+            q_cursor += 7  # base pose block [xyz + quaternion], no limits
+            continue
+        if jt == "spherical":
+            q_cursor += 4  # quaternion block, no scalar limits
+            continue
+        if jt == "fixed":
+            continue
+        # revolute / prismatic / continuous each own exactly one q slot
+        if jt in ("revolute", "prismatic"):
             lims = j.get_joint_limits() if hasattr(j, "get_joint_limits") else getattr(j, "joint_limits", [])
             if lims and len(lims) >= 2:
                 lo, hi = lims[0], lims[1]
@@ -1696,7 +1714,11 @@ def gen_init_joint_limits(self):
                 lo, hi = -float("inf"), float("inf")
             if lo is None: lo = -float("inf")
             if hi is None: hi =  float("inf")
-            limits_q_order.append((lo, hi))
+            limits_by_qslot[q_cursor] = (lo, hi)
+        q_cursor += 1
+    assert q_cursor == n, (
+        f"joint-limits q walk covered {q_cursor} slots but nq={n} — "
+        f"a joint type is missing from the walk")
 
     self.gen_add_func_doc(
         "Initializes joint limits (lower/upper) in GPU memory",
@@ -1711,7 +1733,8 @@ def gen_init_joint_limits(self):
     total_size = self.gen_joint_limits_size()
     self.gen_add_code_line(f"T *h_joint_limits = (T*)malloc({total_size}*sizeof(T));")
 
-    for i, (lo, hi) in enumerate(limits_q_order):
+    for i in range(n):
+        lo, hi = limits_by_qslot.get(i, (-float("inf"), float("inf")))
         lo_str = ("-std::numeric_limits<T>::infinity()" if (lo is None or lo == -float('inf'))
                   else f"static_cast<T>({lo})")
         hi_str = (" std::numeric_limits<T>::infinity()" if (hi is None or hi ==  float('inf'))

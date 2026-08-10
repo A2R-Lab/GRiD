@@ -23,7 +23,8 @@ from RBDReference.equivalents.reference_backend import build_project_adapter
 
 CONST_RE = re.compile(r"const int (?P<name>[A-Z0-9_]+) = (?P<value>-?[0-9]+);")
 
-CODEGEN_ROOT = Path(__file__).resolve().parents[2] / "grid_codegen"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CODEGEN_ROOT = REPO_ROOT / "grid_codegen"
 
 
 @contextlib.contextmanager
@@ -933,3 +934,67 @@ def test_algorithm_list_override_expands_dependencies(tmp_path):
     assert "void dynamics_gradients(gridData<T, KIND> *hd_data" in header
     assert "void all_dynamics(gridData<T, KIND> *hd_data" in header
     assert "void end_effector_pose(gridData<T, KIND> *hd_data" not in header
+
+
+@pytest.mark.cuda_equivalence
+def test_joint_limits_land_at_true_q_offsets(tmp_path):
+    """BUG 5 (GATO, 2026-08-09): gen_init_joint_limits kept only revolute joints
+    and wrote each limit at the FILTERED index, not the joint's q-offset — on a
+    floating robot the leg limits landed on the base q-slots (0..6) and the tail
+    stayed uninitialized malloc. Pin the emitted rows against the URDF's own
+    <limit> tags at the TRUE q layout for a fixed arm and a floating quadruped."""
+    import re
+    import xml.etree.ElementTree as _ET
+
+    def emitted_rows(header, n):
+        rows = {}
+        for m in re.finditer(r"h_joint_limits\[(\d+)\] = (.+?);", header):
+            rows[int(m.group(1))] = m.group(2).strip()
+        assert set(rows) == set(range(2 * n)), "every q slot must be initialized (lower AND upper)"
+        return rows
+
+    def urdf_limits_in_doc_order(urdf_path):
+        root = _ET.parse(urdf_path).getroot()
+        out = []
+        for j in root.iter("joint"):
+            jt = j.get("type")
+            if jt in ("fixed", None):
+                continue
+            if j.find("mimic") is not None:
+                continue  # no own q slot
+            lim = j.find("limit")
+            if jt in ("revolute", "prismatic") and lim is not None:
+                out.append((float(lim.get("lower")), float(lim.get("upper"))))
+            else:
+                out.append(None)  # continuous / unlimited -> +/-inf slot
+        return out
+
+    def num(s):
+        assert "infinity" not in s, f"expected a finite limit, got {s}"
+        return float(re.search(r"static_cast<T>\((.+)\)", s).group(1))
+
+    # iiwa14 fixed: 7 revolute limits at slots 0..6 exactly (regression guard for
+    # the fixed-base case, which the old code got right).
+    header = _generate_header(tmp_path, "iiwa14", "fixed", algorithm_list="inverse_dynamics")
+    limits = urdf_limits_in_doc_order(REPO_ROOT / "config" / "robot_assets" / "iiwa14.urdf")
+    n = 7
+    rows = emitted_rows(header, n)
+    for i, lim in enumerate(limits):
+        assert lim is not None
+        assert abs(num(rows[i]) - lim[0]) < 1e-9, f"slot {i} lower"
+        assert abs(num(rows[i + n]) - lim[1]) < 1e-9, f"slot {i} upper"
+
+    # go2 floating: slots 0..6 (base pose incl quaternion) must be +/-inf, and the
+    # 12 leg limits land at slots 7..18 in joint order.
+    header = _generate_header(tmp_path, "go2", "floating", algorithm_list="inverse_dynamics")
+    limits = urdf_limits_in_doc_order(REPO_ROOT / "config" / "robot_assets" / "go2.urdf")
+    assert len(limits) == 12
+    n = 19
+    rows = emitted_rows(header, n)
+    for i in range(7):
+        assert "infinity" in rows[i] and "infinity" in rows[i + n], f"base slot {i} must be unlimited"
+    for k, lim in enumerate(limits):
+        i = 7 + k
+        assert lim is not None
+        assert abs(num(rows[i]) - lim[0]) < 1e-9, f"slot {i} lower"
+        assert abs(num(rows[i + n]) - lim[1]) < 1e-9, f"slot {i} upper"
