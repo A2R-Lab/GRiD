@@ -127,17 +127,20 @@ def _apply_host_thread_clamp_pass(code_str):
     prev_expr = None
     prev_var = None
     rewritten = 0
+    skipped = 0
     for ln in lines:
         if "<<<" in ln and "thread_dimms" in ln and not ln.lstrip().startswith("//"):
             expr = _extract_kernel_expr(ln.split("<<<")[0])
             if expr is None:
                 warnings.warn(f"host-thread-clamp pass: unparseable launch line left unclamped: {ln.strip()[:100]}")
                 out.append(ln)
+                skipped += 1
                 prev_expr = None
                 continue
             if expr.split("<")[0] in _overloaded:
                 # &name<targs> is ambiguous across parameter-list overloads
                 out.append(ln)
+                skipped += 1
                 prev_expr = None
                 continue
             stripped = ln.lstrip()
@@ -157,8 +160,11 @@ def _apply_host_thread_clamp_pass(code_str):
                 if ln.strip() and not ln.lstrip().startswith("else"):
                     prev_expr = None
             out.append(ln)
-    if rewritten == 0:
-        raise RuntimeError("host-thread-clamp pass: no thread_dimms launches found (emitter drift?)")
+    if rewritten == 0 and skipped == 0 and "thread_dimms" in code_str:
+        # thread_dimms exists but no launch line matched: the emitter's launch shape
+        # drifted out from under this pass. A header with NO thread_dimms at all is a
+        # legitimate restricted-profile regen (no host wrappers emitted) — pass through.
+        raise RuntimeError("host-thread-clamp pass: thread_dimms present but no launches matched (emitter drift?)")
     return "\n".join(out)
 
 
