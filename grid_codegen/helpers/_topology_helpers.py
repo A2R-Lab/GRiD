@@ -1735,9 +1735,11 @@ def gen_init_joint_limits(self):
 
     for i in range(n):
         lo, hi = limits_by_qslot.get(i, (-float("inf"), float("inf")))
-        lo_str = ("-std::numeric_limits<T>::infinity()" if (lo is None or lo == -float('inf'))
+        # INFINITY from <math.h> (already in the emitted include block) -- grid.cuh
+        # deliberately has no <limits>, and equivalence runner TUs compile it standalone.
+        lo_str = ("static_cast<T>(-INFINITY)" if (lo is None or lo == -float('inf'))
                   else f"static_cast<T>({lo})")
-        hi_str = (" std::numeric_limits<T>::infinity()" if (hi is None or hi ==  float('inf'))
+        hi_str = ("static_cast<T>( INFINITY)" if (hi is None or hi ==  float('inf'))
                   else f"static_cast<T>({hi})")
         self.gen_add_code_line(f"h_joint_limits[{i}] = {lo_str};")
         self.gen_add_code_line(f"h_joint_limits[{i + n}] = {hi_str};")

@@ -970,7 +970,7 @@ def test_joint_limits_land_at_true_q_offsets(tmp_path):
         return out
 
     def num(s):
-        assert "infinity" not in s, f"expected a finite limit, got {s}"
+        assert "INFINITY" not in s.upper(), f"expected a finite limit, got {s}"
         return float(re.search(r"static_cast<T>\((.+)\)", s).group(1))
 
     # iiwa14 fixed: 7 revolute limits at slots 0..6 exactly (regression guard for
@@ -992,12 +992,28 @@ def test_joint_limits_land_at_true_q_offsets(tmp_path):
     n = 19
     rows = emitted_rows(header, n)
     for i in range(7):
-        assert "infinity" in rows[i] and "infinity" in rows[i + n], f"base slot {i} must be unlimited"
+        assert "INFINITY" in rows[i] and "INFINITY" in rows[i + n], f"base slot {i} must be unlimited"
     for k, lim in enumerate(limits):
         i = 7 + k
         assert lim is not None
         assert abs(num(rows[i]) - lim[0]) < 1e-9, f"slot {i} lower"
         assert abs(num(rows[i + n]) - lim[1]) < 1e-9, f"slot {i} upper"
+
+    # COMPILE the go2 restricted header: the +/-inf rows only ever EMIT on robots
+    # with unlimited slots, so a text-only check let an uncompilable spelling
+    # (std::numeric_limits with no <limits> include) reach the suite once already.
+    nvcc = shutil.which("nvcc")
+    if nvcc is None:
+        pytest.skip("nvcc not on PATH")
+    tu = tmp_path / "limits_tu.cu"
+    tu.write_text('#include "go2_floating_default.cuh"\n'
+                  'template float* grid::init_joint_limits<float>();\n'
+                  'int main() { return 0; }\n')
+    arch = os.environ.get("GRID_CUDA_ARCH", "sm_120")
+    proc = subprocess.run([nvcc, "-std=c++17", f"-arch={arch}", f"-I{tmp_path}",
+                           "-c", str(tu), "-o", str(tu.with_suffix(".o"))],
+                          capture_output=True, text=True, timeout=1200)
+    assert proc.returncode == 0, f"go2 limits TU failed to compile:\n{proc.stderr[-3000:]}"
 
 
 @pytest.mark.cuda_equivalence

@@ -1511,6 +1511,13 @@ launch lines matched" is the real drift signal. Corollary: gate transform passes
 least one RESTRICTED-profile regen, not just full-profile byte-identity — the failure
 mode lives exactly where the full-profile gate can't see. (Mapped from a dots-only
 suite log via the `--collect-only` order-replay trick, §triage.)
+Second escape from the SAME wave, same lesson inverted: an emission that only fires
+on SOME robots (±inf limit defaults — only robots with unlimited slots) compiled on
+the one robot the gate compiled (iiwa14, full limit tags → zero inf rows) and broke
+everywhere else (`std::numeric_limits` with no `<limits>` in grid.cuh). Text-grep
+gates don't catch uncompilable spellings; compile gates must cover a robot that
+actually EMITS the new lines. grid.cuh deliberately has C-header includes only —
+prefer `INFINITY`/math.h forms over `std::` in emitted code.
 
 ---
 
