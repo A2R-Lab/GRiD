@@ -1499,6 +1499,19 @@ compose into a "clean" prebuild with ZERO binaries in one arm (rcA=0, no error l
 Detection heuristic: a build phase that "succeeds" suspiciously fast + an empty
 `ls build_dir/*.exe`. The exe count is the ground truth, not the exit code.
 
+### 7.y Post-emission transform passes: "must have matched" invariants break restricted profiles (2026-08-10)
+A codegen pass that rewrites emitted text (e.g. the host-thread-clamp pass) needs a
+drift tripwire — but `raise if rewrites == 0` is the WRONG invariant. Restricted
+`algorithm_list` regens (the 13 aux equivalence tests, plant-only headers) legitimately
+emit ZERO of the pattern, so the global invariant turned every narrow-profile test into
+a hard failure while all full-profile gates stayed green. Correct postcondition is
+per-site accounting: every matched site is either rewritten or CONSCIOUSLY skipped
+(`rewritten + skipped == total`), and "pattern token present in the file but zero
+launch lines matched" is the real drift signal. Corollary: gate transform passes on at
+least one RESTRICTED-profile regen, not just full-profile byte-identity — the failure
+mode lives exactly where the full-profile gate can't see. (Mapped from a dots-only
+suite log via the `--collect-only` order-replay trick, §triage.)
+
 ---
 
 *Linked from HANDOFF.md. Companion: `docs/idsva_so_inner_refactor_notes.md` (SO internals + resume hints).*
