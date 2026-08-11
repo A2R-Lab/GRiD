@@ -1524,6 +1524,30 @@ resolves in the GLASS checkout but not in the emitted, self-contained grid.cuh.
 Any new glass:: reference in an emitter needs (a) the vendor-list entry (ordered
 after its dependencies) and (b) a compile gate on a header that emits the call.
 
+### 7.y2 Copy-on-streams[0] + launch-on-default-stream = input race under NONBLOCKING streams (2026-08-11)
+Root cause of the ps5 ordering-dependent failure (fr3 dccrba: module-run fails
+1.33 / solo passes / EVERY sanitizer passes with 0 findings). Every generated
+host wrapper does `cudaMemcpyAsync(d_q, h_q, ..., streams[0])` then launches the
+kernel on the DEFAULT stream — an ordering that is only safe via legacy
+default-stream implicit sync, which `cudaStreamNonBlocking` (in init_grid since
+the original codebase) explicitly disables. The race hid for years because:
+(a) large pageable copies take the driver's synchronous path, (b) a process's
+FIRST launch is slow (module load) so the copy wins, (c) all sanitizers
+serialize. A WARM process making the FIRST call on a SECOND robot's handle with
+a TINY copy (144 B) loses the race deterministically → kernel computes a
+structurally-valid answer for a GARBAGE q. Diagnostic signature that finally
+cracked it: wrong values that are (1) no rearrangement/permutation of the
+correct tensor, (2) zero exactly in q-independent slices, (3) "cured" by every
+sanitizer, (4) dependent on prior in-process GPU activity. Fix: create streams
+with `cudaStreamDefault` (blocking) — one emitter line; the whole
+copy->launch->copy pattern then inherits legacy ordering. ⚠Bench numbers are
+not silently comparable across this change (stricter sync). ⚠Suspected same
+mechanism behind the h2_plus f_ext Xid-31 OOB-write wedge under concurrent
+load (garbage inputs -> wild indices); the supervised 2-process repro is the
+confirmation experiment. Rule: any async producer op must share a stream (or
+an event) with its consumer — grep new wrappers for `<<<` launches whose
+inputs were last touched on a different stream.
+
 ### 7.z Bindings .so cache poisoning: disk-hash key, loaded-module emission (2026-08-11)
 `register_robot` keys the compile cache by hashing the ON-DISK `grid_codegen/`
 tree (`_cache.py`), but the code it compiles is emitted by the ALREADY-IMPORTED

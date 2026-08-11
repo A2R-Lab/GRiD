@@ -3232,7 +3232,7 @@ class GRiDCodeGenerator:
                       "gpuErrchk(cudaDeviceGetStreamPriorityRange(&minPriority, &maxPriority));",
                       "for(int i=0; i<" + str(MAX_STREAMS) + "; i++){",
                       "    int adjusted_max = maxPriority - i; priority = adjusted_max > minPriority ? adjusted_max : minPriority;",
-                      "    gpuErrchk(cudaStreamCreateWithPriority(&(streams[i]),cudaStreamNonBlocking,priority));",
+                      "    gpuErrchk(cudaStreamCreateWithPriority(&(streams[i]),cudaStreamDefault,priority));  // BLOCKING streams: every generated host wrapper copies inputs on streams[0] and launches kernels on the DEFAULT stream — legacy default-stream sync is the ordering guarantee (nonblocking streams made that copy->launch pair a data race; ps5 fr3 first-call repro 2026-08-11)",
                       "}", "return streams;"])
         self.gen_add_end_function()
 
@@ -3250,7 +3250,7 @@ class GRiDCodeGenerator:
                       "gpuErrchk(cudaDeviceGetStreamPriorityRange(&minPriority, &maxPriority));",
                       "for(int i=0; i<" + str(MAX_STREAMS) + "; i++){",
                       "    int adjusted_max = maxPriority - i; priority = adjusted_max > minPriority ? adjusted_max : minPriority;",
-                      "    gpuErrchk(cudaStreamCreateWithPriority(&(streams[i]),cudaStreamNonBlocking,priority));",
+                      "    gpuErrchk(cudaStreamCreateWithPriority(&(streams[i]),cudaStreamDefault,priority));  // BLOCKING streams: every generated host wrapper copies inputs on streams[0] and launches kernels on the DEFAULT stream — legacy default-stream sync is the ordering guarantee (nonblocking streams made that copy->launch pair a data race; ps5 fr3 first-call repro 2026-08-11)",
                       "}", "return streams;"]
         self.gen_add_code_lines(init_lines)
         self.gen_add_end_function()
