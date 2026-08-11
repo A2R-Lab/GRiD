@@ -82,6 +82,12 @@ def gen_end_effector_pose_inner(self, fixed_target_name = ""):
     self.gen_add_code_line("// Keep chaining until reaching the root (starting from the leaves)")
     self.gen_add_code_line("//")
     parent = -1
+    # BUG7 (GATO 2026-08-11): the extraction offset must be the parity of the LAST
+    # LEVEL THAT WROTE the ping-pong buffer, not of the loop variable after the
+    # walk. A chain that reaches the root early (go2 imu: depth 1 of 4) used to
+    # leave its live transform stranded in the other half while the extractor read
+    # a stale leaf copy => base-relative pose. Tracked explicitly below.
+    last_written_level = 0
     for bfs_level in range(n_bfs_levels + (0 if fixed_target_name == "" else 1)): # at most bfs levels of parents to chain (unless with fixed target can be one larger)
         # if serial chain manipulator then this is easy
         if self.robot.is_serial_chain():
@@ -110,6 +116,7 @@ def gen_end_effector_pose_inner(self, fixed_target_name = ""):
                                        "(&s_Xhom[16*" + str(parent) + " + row], &s_temp[" + str(tempSrcOffset) + " + 4*col]);")
                 self.gen_add_end_control_flow()
                 self.gen_add_sync()
+                last_written_level = bfs_level
                 # update parent for next loop (if there is one)
                 parent = self.robot.get_parent_id(parent)
         else:
@@ -158,6 +165,11 @@ def gen_end_effector_pose_inner(self, fixed_target_name = ""):
                     return -1 if link is None else link.get_parent_id()
                 for i in range(bfs_level):
                     curr_parents = [_parent_or_root(jid) for jid in curr_parents]
+                # BUG7: rooted columns stay rooted, so once EVERY chain has hit the
+                # root the remaining levels are a dead suffix — emit nothing and
+                # leave the live buffer (and its tracked parity) where it is.
+                if all(jid == -1 for jid in curr_parents):
+                    break
                 # need to swap dst and start each time
                 even = bfs_level % 2
                 tempDstOffset = 16*num_ees*(even)
@@ -168,17 +180,23 @@ def gen_end_effector_pose_inner(self, fixed_target_name = ""):
                 select_var_vals = [("int", "parent_jid", [str(jid) for jid in curr_parents])]
                 self.gen_add_multi_threaded_select("ind", "<", [str(16*(i+1)) for i in range(num_ees)], select_var_vals)
                 if (-1 in curr_parents):
-                    self.gen_add_code_line("if(parent_jid == -1){continue;}")
+                    # BUG7: an early-rooted column must CARRY its live transform
+                    # across the ping-pong (ind%16 == 4*col + row, so src element
+                    # = tempSrcOffset + ind), else the extractor's single final
+                    # parity reads its stale half.
+                    self.gen_add_code_line("if(parent_jid == -1){s_temp[ind + " + str(tempDstOffset) + "] = " + \
+                                           "s_temp[ind + " + str(tempSrcOffset) + "]; continue;}")
                 self.gen_add_code_line("s_temp[ind + " + str(tempDstOffset) + "] = dot_prod<T,4,4,1>" + \
                                        "(&s_Xhom[16*parent_jid + row], &s_temp[" + str(tempSrcOffset) + " + eeOffset + 4*col]);")
                 self.gen_add_end_control_flow()
                 self.gen_add_sync()
+                last_written_level = bfs_level
     
     self.gen_add_code_line("//")
     self.gen_add_code_line("// Now extract the end_effector_pose from the Tansforms")
     self.gen_add_code_line("// TODO: ADD OFFSETS")
     self.gen_add_code_line("//")
-    tempOffset = 16*num_ees*(bfs_level % 2)
+    tempOffset = 16*num_ees*(last_written_level % 2)
     # xyz position is easy (end_effector_pose_xyz1 = Xmat_hom * offset) where offset = [x,y,z,1]
     self.gen_add_parallel_loop("ind",str(3*num_ees))
     self.gen_add_code_line("// xyz is easy")
