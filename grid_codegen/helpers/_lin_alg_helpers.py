@@ -43,6 +43,7 @@ _GLASS_BASE_FILES = [
     "src/base/spatial/cross.cuh",     # Featherstone spatial 6-D cross products (motion/force cross + fused applies + dual). Uses beta_blend/ThreadBarrier from barrier.cuh (vendored first). Backs crm/fx/icrf spatial helpers.
     "src/base/lie/quat.cuh",          # Hamilton quaternion algebra (xyzw): exp/mul/normalize/to_rot/retract. Standalone (defines QuatLayout + quat_detail). MUST precede so3.cuh (which uses quat_detail rot_to_quat/quat_log/copy_out). Backs the floating-base integrator Lie prefix.
     "src/base/lie/so3.cuh",           # SO(3) maps + Jacobians (col-major): skew/exp/log/right_jacobian/left_jacobian(=SE(3) "V matrix"). Uses quat_detail from quat.cuh (vendored first).
+    "src/base/lie/se3.cuh",           # SE(3) retract + difference (boxminus, pinocchio convention) on the [p(3); quat(4)] pose block. Uses quat_detail + so3_left_jacobian_core (both vendored first). Backs grid_difference_floating_q (GATO ASK4).
 ]
 
 
