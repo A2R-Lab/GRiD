@@ -1524,6 +1524,23 @@ resolves in the GLASS checkout but not in the emitted, self-contained grid.cuh.
 Any new glass:: reference in an emitter needs (a) the vendor-list entry (ordered
 after its dependencies) and (b) a compile gate on a header that emits the call.
 
+### 7.z Bindings .so cache poisoning: disk-hash key, loaded-module emission (2026-08-11)
+`register_robot` keys the compile cache by hashing the ON-DISK `grid_codegen/`
+tree (`_cache.py`), but the code it compiles is emitted by the ALREADY-IMPORTED
+modules. A long-running pytest session (15h equivalence pass) imported codegen at
+00:13; a codegen commit landed at 12:38; wrapper tests registering robots after
+that wrote store entries whose KEY says post-commit but whose CONTENT is
+pre-commit emission. A later "verification" run at the new tip then cache-hits a
+poisoned entry and proves nothing — detectable only because an 11.7s wall time
+was too fast to contain the expected rebuild. Rules: (a) treat a suspiciously
+fast post-codegen-change wrapper run as a cache hit to INVESTIGATE, not a pass
+(wall-clock is the tell, same spirit as §7.x's exe-count rule); (b) after
+committing codegen changes while any long pytest session is alive, purge store
+entries newer than the commit (`stat -c %Y` vs `git show -s --format=%ct`).
+Root fix (backlogged): key the cache on the EMITTED bytes (generate first,
+hash the generated header + template + flags) — content-addressed emission is
+immune to the loaded-vs-disk skew by construction.
+
 ---
 
 *Linked from HANDOFF.md. Companion: `docs/idsva_so_inner_refactor_notes.md` (SO internals + resume hints).*
