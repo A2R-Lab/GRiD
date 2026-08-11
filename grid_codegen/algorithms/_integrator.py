@@ -198,6 +198,25 @@ def gen_lie_group_helpers(self):
         "    for (int i = 0; i < (NUM_POS - 7); ++i) q_new[7 + i] = q[7 + i] + v_dt[6 + i];",
         "}",
         "",
+        # ---- Lie-group q difference (boxminus): the exact inverse of the retract above ----
+        # GATO ASK 4 (2026-08-09): the SQP defect c_k = q_{k+1} [-] integrate(q_k, u_k),
+        # initial-state gaps, and merit integrator-error all need this; math half lives in
+        # GLASS se3_difference (@78329b6, pinocchio-difference convention, canonical |phi|<=pi
+        # branch), this is the wiring half. Tangent output uses the SAME user-facing
+        # ordering the retract consumes: [v_lin(3); omega(3); joints...] (nv wide).
+        "template <typename T, int NUM_POS> __device__ inline void grid_difference_floating_q(",
+        "    const T *q_from, const T *q_to, T *dv) {",
+        "    // Pose prefix [x,y,z, qx,qy,qz,qw]: glass thread-serial boxminus (xyzw default",
+        "    // layout matches the project q layout; see grid_integrate_floating_q above).",
+        "    T rho[3]; T phi[3];",
+        "    glass::thread::se3_difference<T>(q_from, q_to, rho, phi);",
+        "    #pragma unroll",
+        "    for (int i = 0; i < 3; ++i) { dv[i] = rho[i]; dv[3 + i] = phi[i]; }",
+        "    // remaining (revolute joints): Euler difference. q[7:nq] -> dv[6:nv].",
+        "    #pragma unroll",
+        "    for (int i = 0; i < (NUM_POS - 7); ++i) dv[6 + i] = q_to[7 + i] - q_from[7 + i];",
+        "}",
+        "",
         # ---- dIntegrate top-left 6x6 block for ARG_q (SE(3) Adjoint of exp(-v_dt)) ----
         # Written in PINOCCHIO order [v_lin; omega] (matches pin.dIntegrate output).
         "template <typename T> __device__ inline void grid_dIntegrate_q_block(const T *v_dt, T J[36]) {",
