@@ -998,3 +998,66 @@ def test_joint_limits_land_at_true_q_offsets(tmp_path):
         assert lim is not None
         assert abs(num(rows[i]) - lim[0]) < 1e-9, f"slot {i} lower"
         assert abs(num(rows[i + n]) - lim[1]) < 1e-9, f"slot {i} upper"
+
+
+@pytest.mark.cuda_equivalence
+def test_tracking_cost_fc_overloads_emit_and_compile(tmp_path):
+    """GATO ASK 1: with contact frames baked, grid_plant emits CONTROL_SIZE-wide
+    fc overloads of the tracking-cost preset (value + gradient + hessian) with
+    runtime fc_cost + nullable fc_ref; without contact frames the header is
+    bitwise free of them (the FC_SIZE==0 contract). Compile-checks a TU that
+    instantiates all three against the generated header."""
+    import subprocess as _sp
+    import shutil as _sh
+    from URDFParser import URDFParser as _P
+    from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator as _G
+    from grid_codegen.algorithms._f_ext_contact import contact_frames_from_urdf as _cf
+
+    urdf = str(REPO_ROOT / "config" / "robot_assets" / "iiwa14.urdf")
+    algos = ["end_effector_pose", "end_effector_pose_gradient", "f_ext_gradient"]
+
+    with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
+        robot = _P().parse(urdf, floating_base=False)
+        frames = _cf(robot, ["iiwa_joint_ee"])
+        fc_header = tmp_path / "fc" / "grid.cuh"
+        fc_header.parent.mkdir()
+        _G(robot, FILE_NAMESPACE="grid").gen_all_code(
+            algorithm_list=algos, output_path=str(fc_header), contact_frames=frames)
+        robot2 = _P().parse(urdf, floating_base=False)
+        plain_header = tmp_path / "plain" / "grid.cuh"
+        plain_header.parent.mkdir()
+        _G(robot2, FILE_NAMESPACE="grid").gen_all_code(
+            algorithm_list=algos, output_path=str(plain_header))
+
+    fc_text = fc_header.read_text()
+    assert "GRID_PLANT_HAS_TRACKING_COST_FC" in fc_text
+    assert "GRID_PLANT_CONTROL_SIZE = 13;" in fc_text  # NU=7 + 6*1 frame
+    for fn in ("tracking_cost_fc", "tracking_cost_gradient_fc", "tracking_cost_hessian_fc"):
+        assert f"void {fn}(" in fc_text, fn
+        assert fn not in plain_header.read_text(), f"{fn} leaked into a no-contact build"
+
+    nvcc = _sh.which("nvcc")
+    if nvcc is None:
+        pytest.skip("nvcc not on PATH")
+    tu = fc_header.parent / "fc_tu.cu"
+    tu.write_text(r'''
+#include "grid.cuh"
+using T = float;
+__global__ void fc_probe(T *out, const T *x, const T *u, const grid::robotModel<T> *m) {
+    __shared__ T s_scratch[4096]; __shared__ T s_ee[6]; __shared__ T s_eeg[6*7];
+    __shared__ T s_qk[14]; __shared__ T s_rk[13]; __shared__ T s_Qk[14*14]; __shared__ T s_Rk[13*13];
+    __shared__ T s_Rnu[7*7]; __shared__ T buf[14];
+    grid_plant::tracking_cost_fc<T, 0, false>(out, x, u, buf, buf, buf, buf, buf, buf,
+        buf, buf, (T)1, buf, buf, (T)1, buf, buf, (T)1, (T)0.5, nullptr, s_ee, s_scratch, m);
+    grid_plant::tracking_cost_gradient_fc<T, 0, true>(s_qk, s_rk, x, u, buf, buf, buf, buf, buf, buf,
+        buf, buf, (T)1, buf, buf, (T)1, buf, buf, (T)1, (T)0.5, nullptr, s_ee, s_eeg, s_scratch, m);
+    grid_plant::tracking_cost_hessian_fc<T, 0, false>(s_Qk, s_Rk, x, u, buf, buf, buf,
+        buf, buf, (T)1, buf, buf, (T)1, buf, buf, (T)1, (T)0.5, s_Rnu, s_eeg, s_scratch, m);
+}
+int main() { return 0; }
+''')
+    arch = os.environ.get("GRID_CUDA_ARCH", "sm_120")
+    proc = _sp.run([nvcc, "-std=c++17", f"-arch={arch}", f"-I{fc_header.parent}",
+                    "-c", str(tu), "-o", str(tu.with_suffix(".o"))],
+                   capture_output=True, text=True, timeout=1200)
+    assert proc.returncode == 0, f"fc TU failed to compile:\n{proc.stderr[-3000:]}"

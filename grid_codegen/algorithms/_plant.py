@@ -1305,6 +1305,122 @@ def gen_tracking_cost_preset(self):
     self.gen_add_code_line("joint_torque_barrier_hessian<T, " + NU + ", 0, 0>(s_Rk, s_u, s_u_lower, s_u_upper, mu_u);")
     self.gen_add_end_function()
 
+    # ---- fc-aware overloads (GATO ASK 1, 2026-08-09): emitted ONLY when contact
+    # frames are baked, so FC_SIZE==0 builds stay preprocessor/bitwise identical.
+    # Forces-as-controls: the control vector widens to CONTROL_SIZE = NU+FC with
+    # the contact wrenches [n; f] per baked frame in the TAIL of s_u. The fc term
+    # is 0.5*fc_cost*|fc - fc_ref|^2 (s_fc_ref == nullptr -> zero reference, the
+    # pure regularization, bitwise). Terminal knots: pass fc_cost = 0 (the same
+    # weight-selection contract as every other preset term).
+    n_contacts = getattr(self, "_contact_frames_n", 0)
+    if n_contacts:
+        FC = str(6 * n_contacts)
+        NUFC = str(nu + 6 * n_contacts)
+        self.gen_add_code_line("#define GRID_PLANT_HAS_TRACKING_COST_FC 1")
+        self.gen_add_code_line("const int GRID_PLANT_CONTROL_SIZE = " + NUFC + ";  // NU + 6*NUM_CONTACT_FRAMES")
+
+        self.gen_add_func_doc(
+            "tracking_cost_fc: tracking_cost + the forces-as-controls regularization "
+            "0.5*fc_cost*|fc - fc_ref|^2 over the fc tail of a CONTROL_SIZE-wide s_u",
+            ["s_u is CONTROL_SIZE = NU+" + FC + " wide: [actuated(NU); fc(" + FC + ")], wrench order [n; f] per baked frame.",
+             "s_fc_ref (" + FC + ") may be nullptr -> zero reference (pure regularization, bitwise).",
+             "Terminal knot: pass fc_cost = 0 (weight-selection contract; matches the u-reg drop).",
+             "All other parameters exactly as tracking_cost."],
+            [], None)
+        self.gen_add_code_line("template <typename T, int EE = 0, bool ACCUMULATE = false>")
+        self.gen_add_code_line("__device__")
+        self.gen_add_code_line(
+            "void tracking_cost_fc(T *s_out, const T *s_x, const T *s_u, "
+            "const T *s_x_des, const T *s_u_des, const T *s_ee_des, "
+            "const T *s_Q, const T *s_R, const T *s_W, "
+            "const T *s_q_lower, const T *s_q_upper, const T mu_q, "
+            "const T *s_qd_lower, const T *s_qd_upper, const T mu_qd, "
+            "const T *s_u_lower, const T *s_u_upper, const T mu_u, "
+            "const T fc_cost, const T *s_fc_ref, "
+            "T *s_end_effector_pose, T *s_scratch, const grid::robotModel<T> *d_robotModel) {", True)
+        self.gen_add_code_line("tracking_cost<T, EE, ACCUMULATE>(s_out, s_x, s_u, s_x_des, s_u_des, s_ee_des, "
+                               "s_Q, s_R, s_W, s_q_lower, s_q_upper, mu_q, s_qd_lower, s_qd_upper, mu_qd, "
+                               "s_u_lower, s_u_upper, mu_u, s_end_effector_pose, s_scratch, d_robotModel);")
+        self.gen_add_sync()
+        self.gen_add_code_line("if (threadIdx.x == 0 && threadIdx.y == 0) {", True)
+        self.gen_add_code_line("T _fc_acc = static_cast<T>(0);")
+        self.gen_add_code_line("for (int j = 0; j < " + FC + "; ++j) {", True)
+        self.gen_add_code_line("T _e = s_u[" + NU + " + j] - (s_fc_ref ? s_fc_ref[j] : static_cast<T>(0));")
+        self.gen_add_code_line("_fc_acc += _e * _e;")
+        self.gen_add_end_control_flow()
+        self.gen_add_code_line("s_out[0] += static_cast<T>(0.5) * fc_cost * _fc_acc;")
+        self.gen_add_end_control_flow()
+        self.gen_add_end_function()
+
+        self.gen_add_func_doc(
+            "tracking_cost_gradient_fc: tracking_cost_gradient with a CONTROL_SIZE-wide input block",
+            ["s_rk is CONTROL_SIZE = NU+" + FC + " wide: actuated rows exactly as tracking_cost_gradient, "
+             "fc rows = fc_cost*(fc - fc_ref).",
+             "ACCUMULATE=false overwrites the fc rows; true adds. s_fc_ref nullptr -> zero reference."],
+            [], None)
+        self.gen_add_code_line("template <typename T, int EE = 0, bool ACCUMULATE = false>")
+        self.gen_add_code_line("__device__")
+        self.gen_add_code_line(
+            "void tracking_cost_gradient_fc(T *s_qk, T *s_rk, const T *s_x, const T *s_u, "
+            "const T *s_x_des, const T *s_u_des, const T *s_ee_des, "
+            "const T *s_Q, const T *s_R, const T *s_W, "
+            "const T *s_q_lower, const T *s_q_upper, const T mu_q, "
+            "const T *s_qd_lower, const T *s_qd_upper, const T mu_qd, "
+            "const T *s_u_lower, const T *s_u_upper, const T mu_u, "
+            "const T fc_cost, const T *s_fc_ref, "
+            "T *s_end_effector_pose, T *s_end_effector_pose_gradient, T *s_scratch, "
+            "const grid::robotModel<T> *d_robotModel) {", True)
+        self.gen_add_code_line("tracking_cost_gradient<T, EE, ACCUMULATE>(s_qk, s_rk, s_x, s_u, s_x_des, s_u_des, s_ee_des, "
+                               "s_Q, s_R, s_W, s_q_lower, s_q_upper, mu_q, s_qd_lower, s_qd_upper, mu_qd, "
+                               "s_u_lower, s_u_upper, mu_u, s_end_effector_pose, s_end_effector_pose_gradient, s_scratch, d_robotModel);")
+        self.gen_add_sync()
+        self.gen_add_code_line("for (int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < " + FC + "; ind += blockDim.x*blockDim.y) {", True)
+        self.gen_add_code_line("T _g = fc_cost * (s_u[" + NU + " + ind] - (s_fc_ref ? s_fc_ref[ind] : static_cast<T>(0)));")
+        self.gen_add_code_line("if (ACCUMULATE) { s_rk[" + NU + " + ind] += _g; } else { s_rk[" + NU + " + ind] = _g; }")
+        self.gen_add_end_control_flow()
+        self.gen_add_end_function()
+
+        self.gen_add_func_doc(
+            "tracking_cost_hessian_fc: tracking_cost_hessian with a CONTROL_SIZE-wide input block",
+            ["s_Rk is CONTROL_SIZE*CONTROL_SIZE (" + NUFC + "x" + NUFC + ", col-major): actuated NUxNU block "
+             "exactly as tracking_cost_hessian, fc diagonal = fc_cost, all cross terms 0.",
+             "s_R_nu_scratch must hold NU*NU (" + NU + "*" + NU + "): the base input-hessian is composed there "
+             "then scattered to the widened strides (value/grad/hess single-source contract).",
+             "ACCUMULATE=false overwrites s_Rk; true adds into it."],
+            [], None)
+        self.gen_add_code_line("template <typename T, int EE = 0, bool ACCUMULATE = false>")
+        self.gen_add_code_line("__device__")
+        self.gen_add_code_line(
+            "void tracking_cost_hessian_fc(T *s_Qk, T *s_Rk, const T *s_x, const T *s_u, "
+            "const T *s_Q, const T *s_R, const T *s_W, "
+            "const T *s_q_lower, const T *s_q_upper, const T mu_q, "
+            "const T *s_qd_lower, const T *s_qd_upper, const T mu_qd, "
+            "const T *s_u_lower, const T *s_u_upper, const T mu_u, "
+            "const T fc_cost, "
+            "T *s_R_nu_scratch, T *s_end_effector_pose_gradient, T *s_scratch, "
+            "const grid::robotModel<T> *d_robotModel) {", True)
+        self.gen_add_code_line("// base composite: state block direct (honors ACCUMULATE), input block")
+        self.gen_add_code_line("// into the NU-wide scratch — which must compose FRESH regardless (the")
+        self.gen_add_code_line("// caller's ACCUMULATE is applied by the scatter below, not by the scratch).")
+        self.gen_add_code_line("if (ACCUMULATE) {", True)
+        self.gen_add_code_line("for (int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < " + NU + "*" + NU + "; ind += blockDim.x*blockDim.y) { s_R_nu_scratch[ind] = static_cast<T>(0); }")
+        self.gen_add_code_line("__syncthreads();")
+        self.gen_add_end_control_flow()
+        self.gen_add_code_line("tracking_cost_hessian<T, EE, ACCUMULATE>(s_Qk, s_R_nu_scratch, s_x, s_u, "
+                               "s_Q, s_R, s_W, s_q_lower, s_q_upper, mu_q, s_qd_lower, s_qd_upper, mu_qd, "
+                               "s_u_lower, s_u_upper, mu_u, s_end_effector_pose_gradient, s_scratch, d_robotModel);")
+        self.gen_add_sync()
+        self.gen_add_code_line("// scatter to CONTROL_SIZE strides: actuated block verbatim, fc diag = fc_cost, cross 0")
+        self.gen_add_code_line("for (int ind = threadIdx.x + threadIdx.y*blockDim.x; ind < " + NUFC + "*" + NUFC + "; ind += blockDim.x*blockDim.y) {", True)
+        self.gen_add_code_line("int _r = ind % " + NUFC + "; int _c = ind / " + NUFC + ";")
+        self.gen_add_code_line("T _v;")
+        self.gen_add_code_line("if (_r < " + NU + " && _c < " + NU + ") { _v = s_R_nu_scratch[_r + " + NU + "*_c]; }")
+        self.gen_add_code_line("else if (_r == _c) { _v = fc_cost; }")
+        self.gen_add_code_line("else { _v = static_cast<T>(0); }")
+        self.gen_add_code_line("if (ACCUMULATE) { s_Rk[ind] += _v; } else { s_Rk[ind] = _v; }")
+        self.gen_add_end_control_flow()
+        self.gen_add_end_function()
+
 
 # ---------------------------------------------------------------------------
 # Log-barriers (joint position / velocity / torque). Explicit bound pointers.

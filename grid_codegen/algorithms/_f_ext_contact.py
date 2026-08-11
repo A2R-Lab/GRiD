@@ -757,6 +757,9 @@ def gen_f_ext_contact(self, contacts):
     if not contacts:
         return
     cs = build_contact_set(self, contacts)
+    # visible to gen_grid_plant (runs later): gates the fc-aware tracking-cost
+    # preset overloads (GATO ASK 1) on contact frames actually being baked.
+    self._contact_frames_n = cs["n"]
     self.gen_add_code_line("")
     self.gen_add_code_line("// ---- contact frames (GATO ask 1 C.2): world-aligned contact wrench -> joint-local f_ext")
     for c in contacts:
