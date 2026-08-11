@@ -1518,6 +1518,11 @@ everywhere else (`std::numeric_limits` with no `<limits>` in grid.cuh). Text-gre
 gates don't catch uncompilable spellings; compile gates must cover a robot that
 actually EMITS the new lines. grid.cuh deliberately has C-header includes only —
 prefer `INFINITY`/math.h forms over `std::` in emitted code.
+Third escape, same family: emitting a CALL to a new `glass::` primitive without
+adding its source file to the `_lin_alg_helpers.py` vendoring list — the name
+resolves in the GLASS checkout but not in the emitted, self-contained grid.cuh.
+Any new glass:: reference in an emitter needs (a) the vendor-list entry (ordered
+after its dependencies) and (b) a compile gate on a header that emits the call.
 
 ---
 
