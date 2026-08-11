@@ -362,6 +362,7 @@ extern "C" int grid_rbd_set_inertia_params(const T* h_params) {
     if (!g_robot) { int rc = grid_rbd_init(); if (rc) return rc; }
     grid::set_inertia_params<T>(g_robot, h_params);
     cudaError_t err = cudaDeviceSynchronize();
+    if (err == cudaSuccess) err = grid_consume_last_error();  // NO_EXIT sticky (launch-time failures)
     return (err == cudaSuccess) ? 0 : (int)err;
 }
 extern "C" int grid_rbd_inertia_params_size() { return 10 * grid::NUM_BODIES; }
@@ -382,6 +383,7 @@ extern "C" int grid_rbd_set_transform_params(const T* h_params) {
     if (!g_robot) { int rc = grid_rbd_init(); if (rc) return rc; }
     grid::set_transform_params<T>(g_robot, h_params);
     cudaError_t err = cudaDeviceSynchronize();
+    if (err == cudaSuccess) err = grid_consume_last_error();  // NO_EXIT sticky (launch-time failures)
     return (err == cudaSuccess) ? 0 : (int)err;
 }
 extern "C" int grid_rbd_transform_params_size() { return 6 * grid::NUM_JOINTS; }
@@ -402,6 +404,7 @@ extern "C" int grid_rbd_set_joint_dynamics_params(const T* h_params) {
     if (!g_robot) { int rc = grid_rbd_init(); if (rc) return rc; }
     grid::set_joint_dynamics_params<T>(g_robot, h_params);
     cudaError_t err = cudaDeviceSynchronize();
+    if (err == cudaSuccess) err = grid_consume_last_error();  // NO_EXIT sticky (launch-time failures)
     return (err == cudaSuccess) ? 0 : (int)err;
 }
 extern "C" int grid_rbd_joint_dynamics_params_size() { return 2 * grid::NUM_VEL; }
@@ -512,6 +515,11 @@ extern "C" int grid_rbd_inverse_dynamics(
     }
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
@@ -557,6 +565,11 @@ extern "C" int grid_rbd_inverse_dynamics_mujoco(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
@@ -591,6 +604,11 @@ extern "C" int grid_rbd_minv(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_MINV>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
 
     // The minv kernel writes Minv as nv x nv (NUM_VEL*NUM_VEL = 324 for floating)
@@ -631,6 +649,11 @@ extern "C" int grid_rbd_minv_mujoco(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_MINV>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
 
     cudaMemcpy(minv_out, g_data->d_Minv, (size_t)batch * nv * nv * sizeof(T),
@@ -666,6 +689,11 @@ extern "C" int grid_rbd_forward_dynamics(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
@@ -699,6 +727,11 @@ extern "C" int grid_rbd_forward_dynamics_mujoco(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
@@ -735,6 +768,11 @@ extern "C" int grid_rbd_aba(
                  dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_ABA>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
@@ -766,6 +804,11 @@ extern "C" int grid_rbd_aba_mujoco(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_ABA>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
@@ -801,6 +844,11 @@ extern "C" int grid_rbd_crba(
                   dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_CRBA>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
 
     // The crba kernel writes M as nv x nv (NUM_VEL*NUM_VEL = 324 for floating)
@@ -840,6 +888,11 @@ extern "C" int grid_rbd_crba_mujoco(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_CRBA>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
 
     cudaMemcpy(m_out, g_data->d_M, (size_t)batch * nv * nv * sizeof(T),
@@ -873,6 +926,11 @@ extern "C" int grid_rbd_end_effector_pose(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(ee_out, g_data->h_end_effector_pose, batch * 6 * GRID_RBD_NUM_EES * sizeof(T));
@@ -896,6 +954,11 @@ extern "C" int grid_rbd_end_effector_pose_mujoco(const T* q, T* ee_out, int batc
                             /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(ee_out, g_data->h_end_effector_pose, (size_t)batch * 6 * GRID_RBD_NUM_EES * sizeof(T));
     return 0;
@@ -935,6 +998,11 @@ extern "C" int grid_rbd_fk_batched(
                                                         (int)grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>().x);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
 
     cudaMemcpy(pose7_out, d_pose7, sizeof(T) * batch * 7, cudaMemcpyDeviceToHost);
@@ -975,6 +1043,11 @@ extern "C" int grid_rbd_end_effector_pose_gradient(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(dee_out, g_data->h_end_effector_pose_gradient,
@@ -999,6 +1072,11 @@ extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(const T* q, T* dee_out
                                      /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(dee_out, g_data->h_end_effector_pose_gradient,
                 (size_t)batch * 6 * GRID_RBD_NUM_EES * grid::NUM_VEL * sizeof(T));
@@ -1056,6 +1134,11 @@ extern "C" int grid_rbd_inverse_dynamics_gradient(
     }
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
@@ -1099,6 +1182,11 @@ extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
@@ -1138,6 +1226,11 @@ extern "C" int grid_rbd_forward_dynamics_gradient(
         dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
@@ -1176,6 +1269,11 @@ extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     reset_f_ext(f_ext, batch);
     if (e != cudaSuccess) return 100 + (int)e;
 
@@ -1216,6 +1314,11 @@ extern "C" int grid_rbd_end_effector_pose_hessian(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(d2ee_out, g_data->h_end_effector_pose_hessian,
@@ -1240,6 +1343,11 @@ extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(const T* q, T* d2ee_out
                                     /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(d2ee_out, g_data->h_end_effector_pose_hessian,
                 (size_t)batch * 6 * GRID_RBD_NUM_EES * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
@@ -1277,6 +1385,11 @@ extern "C" int grid_rbd_idsva_so(
         dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_IDSVA_SO>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(out, g_data->h_idsva_so,
@@ -1303,6 +1416,11 @@ extern "C" int grid_rbd_idsva_so_mujoco(const T* q, const T* qd, const T* qdd, T
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;  // launch-config failure (e.g. too many registers)
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_idsva_so,
                 batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
@@ -1327,6 +1445,11 @@ extern "C" int grid_rbd_inverse_dynamics_regressor(
         g_data, g_robot, gravity, batch,
         dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_Y,
                 (size_t)batch * grid::NUM_VEL * 10 * grid::NUM_BODIES * sizeof(T));
@@ -1357,6 +1480,11 @@ extern "C" int grid_rbd_inverse_dynamics_regressor_mujoco(
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_Y,
                 (size_t)batch * grid::NUM_VEL * 10 * grid::NUM_BODIES * sizeof(T));
@@ -1390,6 +1518,11 @@ extern "C" int grid_rbd_fdsva_so(
         dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FDSVA_SO>(), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(out, g_data->h_df2,
@@ -1416,6 +1549,11 @@ extern "C" int grid_rbd_fdsva_so_mujoco(const T* q, const T* qd, const T* u, T* 
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_df2,
                 batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
@@ -1466,6 +1604,11 @@ extern "C" int grid_rbd_com(const T* q, T* out, int batch) {
     pack_q(q, batch, grid::NUM_JOINTS);
     grid::com<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_com, (size_t)batch * (3 + 3 * grid::NUM_VEL) * sizeof(T));
     return 0;
@@ -1483,8 +1626,14 @@ extern "C" int grid_rbd_ccrba(const T* q, const T* qd, T* out, int batch) {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::ccrba<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
+    grid::ccrba<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1),
+        grid_clamp_threads_for(grid::ccrba_kernel<T>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>()), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_ccrba, (size_t)batch * (6 * grid::NUM_VEL + 6) * sizeof(T));
     return 0;
@@ -1504,6 +1653,11 @@ extern "C" int grid_rbd_energy(const T* q, const T* qd, T* out, int batch, T gra
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::energy<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_energy, (size_t)batch * 3 * sizeof(T));
     return 0;
@@ -1526,6 +1680,11 @@ extern "C" int grid_rbd_com_mujoco(const T* q, T* out, int batch) {
               /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_com, (size_t)batch * (3 + 3 * grid::NUM_VEL) * sizeof(T));
     return 0;
@@ -1545,6 +1704,11 @@ extern "C" int grid_rbd_ccrba_mujoco(const T* q, const T* qd, T* out, int batch)
                 /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_ccrba, (size_t)batch * (6 * grid::NUM_VEL + 6) * sizeof(T));
     return 0;
@@ -1564,6 +1728,11 @@ extern "C" int grid_rbd_energy_mujoco(const T* q, const T* qd, T* out, int batch
                  /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_energy, (size_t)batch * 3 * sizeof(T));
     return 0;
@@ -1578,6 +1747,11 @@ extern "C" int grid_rbd_generalized_gravity(const T* q, T* out, int batch, T gra
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd unused (zeroed internally)
     grid::generalized_gravity<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1599,6 +1773,11 @@ extern "C" int grid_rbd_generalized_gravity_mujoco(const T* q, T* out, int batch
                               /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1613,6 +1792,11 @@ extern "C" int grid_rbd_nonlinear_effects(const T* q, const T* qd, T* out, int b
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::nonlinear_effects<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1635,6 +1819,11 @@ extern "C" int grid_rbd_nonlinear_effects_mujoco(const T* q, const T* qd, T* out
                             /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1651,6 +1840,11 @@ extern "C" int grid_rbd_coriolis_matrix(const T* q, const T* qd, T* out, int bat
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::coriolis_matrix<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_coriolis, (size_t)batch * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1672,6 +1866,11 @@ extern "C" int grid_rbd_coriolis_matrix_mujoco(const T* q, const T* qd, T* out, 
                           /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_coriolis, (size_t)batch * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1687,6 +1886,11 @@ extern "C" int grid_rbd_kinetic_energy_regressor(const T* q, const T* qd, T* out
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::kinetic_energy_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_ke_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
     return 0;
@@ -1706,6 +1910,11 @@ extern "C" int grid_rbd_potential_energy_regressor(const T* q, T* out, int batch
     pack_q(q, batch, grid::NUM_JOINTS);
     grid::potential_energy_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_pe_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
     return 0;
@@ -1729,6 +1938,11 @@ extern "C" int grid_rbd_kinetic_energy_regressor_mujoco(const T* q, const T* qd,
                                    /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_ke_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
     return 0;
@@ -1747,6 +1961,11 @@ extern "C" int grid_rbd_potential_energy_regressor_mujoco(const T* q, T* out, in
                                      /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_pe_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
     return 0;
@@ -1765,8 +1984,14 @@ extern "C" int grid_rbd_dccrba(const T* q, T* out, int batch) {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q(q, batch, grid::NUM_JOINTS);
-    grid::dccrba<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
+    grid::dccrba<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1),
+        grid_clamp_threads_for(grid::dccrba_kernel<T>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>()), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_dccrba, (size_t)batch * 6 * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1788,6 +2013,11 @@ extern "C" int grid_rbd_dccrba_mujoco(const T* q, T* out, int batch) {
     grid::dccrba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                  /*MUJOCO_OUTPUT=*/true>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_dccrba, (size_t)batch * 6 * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1802,8 +2032,14 @@ extern "C" int grid_rbd_cmm_time_variation(const T* q, const T* qd, T* out, int 
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::cmm_time_variation<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
+    grid::cmm_time_variation<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1),
+        grid_clamp_threads_for(grid::cmm_time_variation_kernel<T>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>()), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_cmm_time_variation, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1825,6 +2061,11 @@ extern "C" int grid_rbd_cmm_time_variation_mujoco(const T* q, const T* qd, T* ou
                              /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_cmm_time_variation, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1845,6 +2086,11 @@ extern "C" int grid_rbd_frame_jacobian(const T* q, T* out, int batch,
     grid::frame_jacobian<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams,
                             target_jid, reference_frame);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_frame_jacobian, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1867,6 +2113,11 @@ extern "C" int grid_rbd_frame_jacobian_dot(const T* q, const T* qd, T* out, int 
     grid::frame_jacobian_dot<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams,
                                 target_jid, reference_frame);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_frame_jacobian_dot, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1885,6 +2136,11 @@ extern "C" int grid_rbd_osc_inertia(const T* q, T* out, int batch) {
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
     grid::osc_inertia<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_osc_inertia, (size_t)batch * 36 * sizeof(T));
     return 0;
@@ -1911,6 +2167,11 @@ extern "C" int grid_rbd_frame_jacobian_mujoco(const T* q, T* out, int batch,
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams,
         target_jid, reference_frame);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_frame_jacobian, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1926,6 +2187,11 @@ extern "C" int grid_rbd_frame_jacobian_dot_mujoco(const T* q, const T* qd, T* ou
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams,
         target_jid, reference_frame);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_frame_jacobian_dot, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1939,6 +2205,11 @@ extern "C" int grid_rbd_osc_inertia_mujoco(const T* q, T* out, int batch) {
                       /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_osc_inertia, (size_t)batch * 36 * sizeof(T));
     return 0;
@@ -1965,6 +2236,11 @@ extern "C" int grid_rbd_end_effector_pose_runtime(const T* q, T* out, int batch,
     grid::end_effector_pose_runtime<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(),
                                        g_streams, target_jid);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_eePose, (size_t)batch * 6 * sizeof(T));
     return 0;
@@ -1993,6 +2269,11 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime(const T* q, T* out, i
     grid::end_effector_pose_gradient_runtime<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1),
                                                 grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams, target_jid);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_eePoseGrad, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -2023,6 +2304,11 @@ extern "C" int grid_rbd_end_effector_pose_runtime_mujoco(const T* q, T* out, int
                                     /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams, target_jid);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_eePose, (size_t)batch * 6 * sizeof(T));
     return 0;
@@ -2052,6 +2338,11 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime_mujoco(const T* q, T*
                                              /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams, target_jid);
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     std::memcpy(out, g_data->h_eePoseGrad, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -2117,6 +2408,11 @@ extern "C" int grid_rbd_tool_fext(const T* q, const T* wrench, int jid, const T*
         reinterpret_cast<T*>(g_data->d_workspace), g_data->d_f_ext);
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     cudaFree(d_wrench); cudaFree(d_rc);
     if (e != cudaSuccess) return 100 + (int)e;
     if (cudaMemcpy(out, g_data->d_f_ext, (size_t)6 * grid::NUM_BODIES * batch * sizeof(T),
@@ -2222,6 +2518,11 @@ extern "C" int grid_rbd_integrator(
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(x_kp1_out, g_data->h_x_kp1,
@@ -2252,6 +2553,11 @@ extern "C" int grid_rbd_integrator_mujoco(
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
 
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
 
     std::memcpy(x_kp1_out, g_data->h_x_kp1,
@@ -2278,6 +2584,11 @@ extern "C" int grid_rbd_integrator_gradient(
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
 
     const int nv = grid::NUM_VEL;
@@ -2308,6 +2619,11 @@ extern "C" int grid_rbd_integrator_gradient_mujoco(
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     const int nv = grid::NUM_VEL;
     std::memcpy(dAB_out, g_data->h_dAB,
@@ -2419,6 +2735,11 @@ static int plant_quadratic_cost_impl(
         { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
     }
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
     cudaMemcpy(grad, g_plant.d_grad, batch * N * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2459,6 +2780,11 @@ extern "C" int grid_rbd_quadratic_state_cost_mujoco(
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
     cudaMemcpy(grad, g_plant.d_grad, batch * N * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2500,6 +2826,11 @@ static int plant_barrier_impl(
     }
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,       g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
     cudaMemcpy(grad,      g_plant.d_grad, batch * N * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2557,6 +2888,11 @@ extern "C" int grid_plant_step(
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(x_kp1, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
@@ -2591,6 +2927,11 @@ extern "C" int grid_plant_step_mujoco(
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(x_kp1, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
@@ -2628,6 +2969,11 @@ extern "C" int grid_plant_ee_pos_cost(
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
     cudaMemcpy(grad, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2664,6 +3010,11 @@ extern "C" int grid_plant_com_cost(
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
     cudaMemcpy(grad, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2705,6 +3056,11 @@ extern "C" int grid_plant_momentum_cost(
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
     cudaMemcpy(grad, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2739,6 +3095,11 @@ extern "C" int grid_rbd_ee_pos_cost_mujoco(
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
     cudaMemcpy(grad, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2772,6 +3133,11 @@ extern "C" int grid_rbd_com_cost_mujoco(
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
     cudaMemcpy(grad, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2809,6 +3175,11 @@ extern "C" int grid_rbd_momentum_cost_mujoco(
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(out,  g_plant.d_out,  batch * sizeof(T), cudaMemcpyDeviceToHost);
     cudaMemcpy(grad, g_plant.d_grad, batch * nx * sizeof(T), cudaMemcpyDeviceToHost);
@@ -2856,6 +3227,11 @@ extern "C" int grid_plant_step_gradient(
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(dAB, g_plant.d_grad, batch * dab * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
@@ -2894,6 +3270,11 @@ extern "C" int grid_plant_step_gradient_mujoco(
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(dAB, g_plant.d_grad, batch * (2 * nv * 3 * nv) * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
@@ -2956,6 +3337,11 @@ extern "C" int grid_plant_step_hessian(
     GRID_RBD_IT_DISPATCH_HESSIAN(it, launch_plant_step_hessian, batch, (T)gravity, (T)dt);
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(d2AB, g_plant.d_d2AB, batch * d2ab * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;
@@ -3002,6 +3388,11 @@ extern "C" int grid_plant_step_hessian_mujoco(
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
     if (e != cudaSuccess) return 100 + (int)e;
     cudaMemcpy(d2AB, g_plant.d_d2AB, batch * d2ab * sizeof(T), cudaMemcpyDeviceToHost);
     return 0;

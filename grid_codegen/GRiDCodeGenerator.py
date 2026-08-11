@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import warnings
 import numpy as np
 
@@ -46,6 +47,121 @@ LAUNCH_CONFIG_TIER_SYMBOL = {
 _ALGO_TO_SYMBOL = build_launch_config_algo_to_symbol()
 
 
+_HOST_CLAMP_HELPER = """\
+    // Clamp a requested launch thread count against the LAUNCHED kernel's own
+    // cudaFuncAttributes cap (register pressure / __launch_bounds__). A request
+    // above the cap is otherwise silently rejected at launch time: the stream
+    // stays empty, sync succeeds, and the output buffer keeps stale contents.
+    // Applied by codegen to every host-wrapper launch that takes thread_dimms.
+    __host__ inline dim3 grid_host_clamp_threads(const void *kernel_fn, dim3 requested) {
+        cudaFuncAttributes _attr;
+        if (cudaFuncGetAttributes(&_attr, kernel_fn) != cudaSuccess) {
+            cudaGetLastError();  // swallow -- fall back to the requested dims
+            return requested;
+        }
+        unsigned _cap = (_attr.maxThreadsPerBlock > 0) ? (unsigned)_attr.maxThreadsPerBlock : requested.x;
+        if (requested.x > _cap) requested.x = _cap;
+        return requested;
+    }
+"""
+
+
+def _extract_kernel_expr(before_launch):
+    """Given the text of a line up to (not including) `<<<`, return the trailing
+    kernel expression `name<targs>` (balanced <>), or None if unparseable."""
+    s = before_launch.rstrip()
+    if not s.endswith(">"):
+        # untemplated kernel launch: trailing identifier
+        m = re.search(r"([A-Za-z_]\w*)$", s)
+        return m.group(1) if m else None
+    depth = 0
+    i = len(s) - 1
+    while i >= 0:
+        c = s[i]
+        if c == ">":
+            depth += 1
+        elif c == "<":
+            depth -= 1
+            if depth == 0:
+                break
+        i -= 1
+    if depth != 0 or i <= 0:
+        return None
+    m = re.search(r"([A-Za-z_]\w*)\s*$", s[:i])
+    return (m.group(1) + s[i:]) if m else None
+
+
+def _apply_host_thread_clamp_pass(code_str):
+    lines = code_str.split("\n")
+    # Overloaded kernels (same name, different parameter lists — e.g. the
+    # qdd-flag variants) make `&name<targs>` ambiguous; detect them by counting
+    # __global__ definitions per name and leave those launches unclamped.
+    _kernel_defs = {}
+    for _i, _ln in enumerate(lines):
+        if "__global__" not in _ln or _ln.lstrip().startswith("//"):
+            continue
+        for _j in range(_i, min(_i + 4, len(lines))):  # __global__ / __launch_bounds__ / void name(
+            _m = re.search(r"\bvoid\s+([A-Za-z_]\w*)\s*\(", lines[_j])
+            if _m:
+                _kernel_defs[_m.group(1)] = _kernel_defs.get(_m.group(1), 0) + 1
+                break
+    _overloaded = {name for name, cnt in _kernel_defs.items() if cnt > 1}
+    # inject the helper right after the grid_workspace_slot() block (early in
+    # namespace grid, before every host wrapper)
+    out = []
+    injected = False
+    for ln in lines:
+        out.append(ln)
+        if not injected and "return blockIdx.x + blockIdx.y*gridDim.x;" in ln:
+            pass  # helper goes after the CLOSING brace, handled below
+        if not injected and ln.strip() == "}" and len(out) >= 2 and \
+                "return blockIdx.x + blockIdx.y*gridDim.x;" in out[-2]:
+            out.append(_HOST_CLAMP_HELPER)
+            injected = True
+    if not injected:
+        raise RuntimeError("host-thread-clamp pass: grid_workspace_slot anchor not found")
+    lines = out
+
+    out = []
+    var_n = 0
+    prev_expr = None
+    prev_var = None
+    rewritten = 0
+    for ln in lines:
+        if "<<<" in ln and "thread_dimms" in ln and not ln.lstrip().startswith("//"):
+            expr = _extract_kernel_expr(ln.split("<<<")[0])
+            if expr is None:
+                warnings.warn(f"host-thread-clamp pass: unparseable launch line left unclamped: {ln.strip()[:100]}")
+                out.append(ln)
+                prev_expr = None
+                continue
+            if expr.split("<")[0] in _overloaded:
+                # &name<targs> is ambiguous across parameter-list overloads
+                out.append(ln)
+                prev_expr = None
+                continue
+            stripped = ln.lstrip()
+            indent = ln[:len(ln) - len(stripped)]
+            if stripped.startswith("else") and expr == prev_expr and prev_var is not None:
+                var = prev_var  # sibling branch launches the same instantiation
+            else:
+                var_n += 1
+                var = f"_grid_thr_clamped_{var_n}"
+                out.append(f"{indent}dim3 {var} = grid_host_clamp_threads((const void*)&{expr}, thread_dimms);")
+            out.append(ln.replace("thread_dimms", var))
+            rewritten += 1
+            prev_expr, prev_var = expr, var
+        else:
+            if "<<<" not in ln:
+                # only a directly-adjacent else-branch may reuse the clamp var
+                if ln.strip() and not ln.lstrip().startswith("else"):
+                    prev_expr = None
+            out.append(ln)
+    if rewritten == 0:
+        raise RuntimeError("host-thread-clamp pass: no thread_dimms launches found (emitter drift?)")
+    return "\n".join(out)
+
+
 def _launch_configs_dir():
     """Absolute path to the repo's config/launch_configs/ dir (sibling of GRiDCodeGenerator)."""
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "launch_configs")
@@ -72,6 +188,23 @@ def load_launch_config(robot_id, floating_base, gpu = LAUNCH_CONFIG_DEFAULT_GPU,
     if not robot_id:
         return {}
     path = os.path.join(_launch_configs_dir(), str(robot_id), str(gpu) + ".json")
+    if not os.path.exists(path):
+        # The URDF <robot name=...> often differs from the canonical config dir
+        # ("KUKAiiwa14" vs iiwa14/, "indy" vs indy7/) — such a miss silently fell
+        # back to the conservative tier/threads for EVERY algo even though a
+        # tuned table exists (GATO FYI, 2026-08-09). Match case-insensitively:
+        # a config dir contained in the robot name, or one the name starts, and
+        # take the longest (most specific) hit. No hit -> untuned fallback.
+        try:
+            rid = str(robot_id).lower()
+            cands = [d for d in os.listdir(_launch_configs_dir())
+                     if os.path.isdir(os.path.join(_launch_configs_dir(), d))
+                     and (d.lower() in rid or d.lower().startswith(rid))]
+            if cands:
+                best = max(cands, key=len)
+                path = os.path.join(_launch_configs_dir(), best, str(gpu) + ".json")
+        except OSError:
+            pass
     try:
         with open(path) as f:
             doc = json.load(f)
@@ -4148,6 +4281,15 @@ class GRiDCodeGenerator:
         if collision_spec is not None:
             from .algorithms._collision import normalize_collision_tiers
             self.gen_collision_namespace(normalize_collision_tiers(collision_spec))
+        # Host-side thread-count clamp pass (2026-08-10): every host-wrapper
+        # kernel launch that takes the caller's `thread_dimms` gets it clamped
+        # against the LAUNCHED kernel's own cudaFuncAttributes cap first. A
+        # caller passing a thread count above the kernel's register/launch_bounds
+        # cap used to get a silently-rejected launch (empty stream, stale output
+        # buffers — the fr3 cmm_time_variation zeros, same class as the plant
+        # 2026-06-19 incident). One pass fixes all ~170 launch sites for every
+        # consumer (bindings, GATO/MPCGPU-style direct callers, bench exes).
+        self.code_str = _apply_host_thread_clamp_pass(self.code_str)
         # then output to a file
         if output_path is None:
             output_path = self.file_namespace + ".cuh"
