@@ -1568,3 +1568,25 @@ immune to the loaded-vs-disk skew by construction.
 ---
 
 *Linked from HANDOFF.md. Companion: `docs/idsva_so_inner_refactor_notes.md` (SO internals + resume hints).*
+
+### 7.z2 Lie-chart second derivatives: the dN(0) chart-slope term is easy to drop (2026-08-11)
+
+Building the tangent-space Newton hessian of a manifold cost
+`g(delta) = cost(integrate(q, delta))` by chain-ruling through
+`e(delta) = difference(q_des, integrate(q, delta))`:
+the FIRST derivative at delta=0 is just `J_diff = dIntegrate(q_des, e, 'v')^-1`
+(the chart factor `N(delta) = dIntegrate(q, delta, 'v')` is identity at 0), so
+any gradient FD gate passes. But the SECOND derivative differentiates BOTH
+factors of `de/ddelta = M(e)^-1 N(delta)`: the `-J (dM) J` term through e AND
+`J^T`-composed `dN(0)` — and `dN(0) != 0` even though `N(0) = I` (it is the
+right-Jacobian slope, `dJ_r/dphi_k|_0 = -1/2 skew(e_k)`; in RBDReference,
+`d2Integrate(q, 0, 'v', 'v')`). Dropping it produced a hessian wrong by O(1)
+(max err 1.48 on go2) while the gradient was FD-perfect.
+Rules: (a) a gradient-level FD gate proves NOTHING about a chart hessian —
+gate the hessian against 4-point second-order VALUE differences taken in the
+SAME chart (perturb delta at the evaluation point, never FD the gradient
+across charts); (b) any identity of the form `M(e(delta)) J(delta) = I` you
+derived at a point should be re-checked away from that point before
+differentiating it — here the correct identity is `M J = N(delta)`.
+Landed use: `quadratic_state_cost_tangent` (RBDReference/_plant.py), gates in
+tests/test_tangent_state_cost.py. The CUDA ASK3 preset must carry both terms.
