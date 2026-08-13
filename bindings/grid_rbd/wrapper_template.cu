@@ -3423,13 +3423,20 @@ extern "C" int grid_plant_step_hessian_mujoco(
 // involvement, no implicit serialization with non-JAX streams. JAX's
 // scheduler owns the work.
 
-// fp64 (Phase 8): JAX/torch surfaces are fp32-only by design (their handlers
-// use ffi::F32 / float32 tensors). Suppress the whole block in an fp64 .so so
-// it never ABI-mismatches T=double. fp64 is a numpy-handle / inline-CUDA feature.
-#if defined(GRID_RBD_WITH_JAX) && !defined(GRID_WRAPPER_T_DOUBLE)
+// fp64 (Wave 2a): the JAX surface follows the .so's element type T — buffers are
+// GRID_FFI_T (F32/F64) and the gravity/dt attrs are T (the fp32-attr rounding cap
+// documented in _core.cpp:49-57 applies here too; mu stays float by contract).
+#if defined(GRID_RBD_WITH_JAX)
 
 #include "xla/ffi/api/ffi.h"
 namespace ffi = xla::ffi;
+
+// The FFI buffer element dtype tracks the .so's T (fp64 Wave 2a).
+#ifdef GRID_WRAPPER_T_DOUBLE
+#define GRID_FFI_T ffi::F64
+#else
+#define GRID_FFI_T ffi::F32
+#endif
 
 #if GRID_HAS_INVERSE_DYNAMICS
 // inverse_dynamics(q, qd, qdd, f_ext) → c   — fully device-resident path.
@@ -3447,12 +3454,12 @@ namespace ffi = xla::ffi;
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_inverse_dynamics_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,         // shape (B, NJ), device-resident
-    ffi::Buffer<ffi::F32> qd,        // shape (B, NJ), device-resident
-    ffi::Buffer<ffi::F32> qdd,       // shape (B, NJ), device-resident
-    ffi::Buffer<ffi::F32> f_ext,     // shape (B, 6*NUM_BODIES), device-resident
-    ffi::ResultBuffer<ffi::F32> c,   // shape (B, NJ), device-resident
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,         // shape (B, NJ), device-resident
+    ffi::Buffer<GRID_FFI_T> qd,        // shape (B, NJ), device-resident
+    ffi::Buffer<GRID_FFI_T> qdd,       // shape (B, NJ), device-resident
+    ffi::Buffer<GRID_FFI_T> f_ext,     // shape (B, 6*NUM_BODIES), device-resident
+    ffi::ResultBuffer<GRID_FFI_T> c,   // shape (B, NJ), device-resident
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) {
         return ffi::Error::Internal("grid_rbd_init failed");
@@ -3516,12 +3523,12 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_inverse_dynamics_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()  // q
-        .Arg<ffi::Buffer<ffi::F32>>()  // qd
-        .Arg<ffi::Buffer<ffi::F32>>()  // qdd
-        .Arg<ffi::Buffer<ffi::F32>>()  // f_ext
-        .Ret<ffi::Buffer<ffi::F32>>()  // c
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // q
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // qd
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // qdd
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // f_ext
+        .Ret<ffi::Buffer<GRID_FFI_T>>()  // c
+        .Attr<T>("gravity")
 );
 
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -3533,12 +3540,12 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_inverse_dynamics_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()  // q
-        .Arg<ffi::Buffer<ffi::F32>>()  // qd
-        .Arg<ffi::Buffer<ffi::F32>>()  // qdd
-        .Arg<ffi::Buffer<ffi::F32>>()  // f_ext
-        .Ret<ffi::Buffer<ffi::F32>>()  // c
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // q
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // qd
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // qdd
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // f_ext
+        .Ret<ffi::Buffer<GRID_FFI_T>>()  // c
+        .Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_INVERSE_DYNAMICS
@@ -3564,8 +3571,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_minv_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::ResultBuffer<ffi::F32> minv_out)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::ResultBuffer<GRID_FFI_T> minv_out)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "minv: q", grid::NUM_JOINTS);
@@ -3605,8 +3612,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_minv_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -3616,8 +3623,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_minv_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_MINV
@@ -3628,12 +3635,12 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_forward_dynamics_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::Buffer<ffi::F32> qd,
-    ffi::Buffer<ffi::F32> u,
-    ffi::Buffer<ffi::F32> f_ext,
-    ffi::ResultBuffer<ffi::F32> qdd_out,
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::Buffer<GRID_FFI_T> u,
+    ffi::Buffer<GRID_FFI_T> f_ext,
+    ffi::ResultBuffer<GRID_FFI_T> qdd_out,
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "fd: q", grid::NUM_JOINTS);
@@ -3677,10 +3684,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_forward_dynamics_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Arg<ffi::Buffer<ffi::F32>>()  // f_ext
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // f_ext
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -3690,10 +3697,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_forward_dynamics_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Arg<ffi::Buffer<ffi::F32>>()  // f_ext
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // f_ext
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_FORWARD_DYNAMICS
@@ -3704,12 +3711,12 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_aba_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::Buffer<ffi::F32> qd,
-    ffi::Buffer<ffi::F32> u,
-    ffi::Buffer<ffi::F32> f_ext,
-    ffi::ResultBuffer<ffi::F32> qdd_out,
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::Buffer<GRID_FFI_T> u,
+    ffi::Buffer<GRID_FFI_T> f_ext,
+    ffi::ResultBuffer<GRID_FFI_T> qdd_out,
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "aba: q", grid::NUM_JOINTS);
@@ -3753,10 +3760,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_aba_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Arg<ffi::Buffer<ffi::F32>>()  // f_ext
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // f_ext
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -3766,10 +3773,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_aba_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Arg<ffi::Buffer<ffi::F32>>()  // f_ext
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // f_ext
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_ABA
@@ -3780,9 +3787,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_crba_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::ResultBuffer<ffi::F32> m_out,
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::ResultBuffer<GRID_FFI_T> m_out,
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "crba: q", grid::NUM_JOINTS);
@@ -3822,9 +3829,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_crba_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -3834,9 +3841,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_crba_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_CRBA
@@ -3847,8 +3854,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_end_effector_pose_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::ResultBuffer<ffi::F32> ee_out)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::ResultBuffer<GRID_FFI_T> ee_out)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose: q", grid::NUM_JOINTS);
@@ -3882,8 +3889,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_end_effector_pose_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -3893,8 +3900,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_end_effector_pose_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_END_EFFECTOR_POSE
@@ -3908,8 +3915,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_end_effector_pose_gradient_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::ResultBuffer<ffi::F32> dee_out)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::ResultBuffer<GRID_FFI_T> dee_out)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose_gradient: q", grid::NUM_JOINTS);
@@ -3944,8 +3951,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_end_effector_pose_gradient_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -3955,8 +3962,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_end_effector_pose_gradient_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT
@@ -3977,8 +3984,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_end_effector_pose_runtime_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::ResultBuffer<ffi::F32> ee_out,
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::ResultBuffer<GRID_FFI_T> ee_out,
     int64_t target_jid, ffi::Span<const float> xtool)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
@@ -4022,8 +4029,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_end_effector_pose_runtime_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
         .Attr<int64_t>("target_jid")
         .Attr<ffi::Span<const float>>("xtool")
 );
@@ -4033,8 +4040,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_end_effector_pose_runtime_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
         .Attr<int64_t>("target_jid")
         .Attr<ffi::Span<const float>>("xtool")
 );
@@ -4048,8 +4055,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_end_effector_pose_gradient_runtime_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::ResultBuffer<ffi::F32> dee_out,
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::ResultBuffer<GRID_FFI_T> dee_out,
     int64_t target_jid, ffi::Span<const float> xtool)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
@@ -4091,8 +4098,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_end_effector_pose_gradient_runtime_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
         .Attr<int64_t>("target_jid")
         .Attr<ffi::Span<const float>>("xtool")
 );
@@ -4102,8 +4109,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_end_effector_pose_gradient_runtime_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
         .Attr<int64_t>("target_jid")
         .Attr<ffi::Span<const float>>("xtool")
 );
@@ -4117,8 +4124,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_end_effector_pose_hessian_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::ResultBuffer<ffi::F32> d2ee_out)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::ResultBuffer<GRID_FFI_T> d2ee_out)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose_hessian: q", grid::NUM_JOINTS);
@@ -4153,8 +4160,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_end_effector_pose_hessian_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -4164,8 +4171,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_end_effector_pose_hessian_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_END_EFFECTOR_POSE_HESSIAN
@@ -4186,11 +4193,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_inverse_dynamics_gradient_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::Buffer<ffi::F32> qd,
-    ffi::Buffer<ffi::F32> qdd,
-    ffi::ResultBuffer<ffi::F32> dc_du_out,
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::Buffer<GRID_FFI_T> qdd,
+    ffi::ResultBuffer<GRID_FFI_T> dc_du_out,
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "inverse_dynamics_gradient: q", grid::NUM_JOINTS);
@@ -4237,11 +4244,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_inverse_dynamics_gradient_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()  // q
-        .Arg<ffi::Buffer<ffi::F32>>()  // qd
-        .Arg<ffi::Buffer<ffi::F32>>()  // qdd
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // q
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // qd
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // qdd
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -4251,11 +4258,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_inverse_dynamics_gradient_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()  // q
-        .Arg<ffi::Buffer<ffi::F32>>()  // qd
-        .Arg<ffi::Buffer<ffi::F32>>()  // qdd
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // q
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // qd
+        .Arg<ffi::Buffer<GRID_FFI_T>>()  // qdd
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_INVERSE_DYNAMICS_GRADIENT
@@ -4268,11 +4275,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_forward_dynamics_gradient_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::Buffer<ffi::F32> qd,
-    ffi::Buffer<ffi::F32> u,
-    ffi::ResultBuffer<ffi::F32> df_du_out,
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::Buffer<GRID_FFI_T> u,
+    ffi::ResultBuffer<GRID_FFI_T> df_du_out,
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "forward_dynamics_gradient: q", grid::NUM_JOINTS);
@@ -4317,9 +4324,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_forward_dynamics_gradient_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -4329,9 +4336,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_forward_dynamics_gradient_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_FORWARD_DYNAMICS_GRADIENT
@@ -4348,11 +4355,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_idsva_so_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::Buffer<ffi::F32> qd,
-    ffi::Buffer<ffi::F32> qdd,
-    ffi::ResultBuffer<ffi::F32> out,
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::Buffer<GRID_FFI_T> qdd,
+    ffi::ResultBuffer<GRID_FFI_T> out,
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "idsva_so: q", grid::NUM_JOINTS);
@@ -4408,9 +4415,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_idsva_so_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -4420,9 +4427,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_idsva_so_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_IDSVA_SO
@@ -4434,11 +4441,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_fdsva_so_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::Buffer<ffi::F32> qd,
-    ffi::Buffer<ffi::F32> u,
-    ffi::ResultBuffer<ffi::F32> out,
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::Buffer<GRID_FFI_T> u,
+    ffi::ResultBuffer<GRID_FFI_T> out,
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "fdsva_so: q", grid::NUM_JOINTS);
@@ -4483,9 +4490,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_fdsva_so_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -4495,9 +4502,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_fdsva_so_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_FDSVA_SO
@@ -4522,11 +4529,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_inverse_dynamics_regressor_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::Buffer<ffi::F32> qd,
-    ffi::Buffer<ffi::F32> qdd,
-    ffi::ResultBuffer<ffi::F32> Y_out,
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::Buffer<GRID_FFI_T> qdd,
+    ffi::ResultBuffer<GRID_FFI_T> Y_out,
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "inverse_dynamics_regressor: q", grid::NUM_JOINTS);
@@ -4567,9 +4574,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_inverse_dynamics_regressor_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -4579,9 +4586,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_inverse_dynamics_regressor_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
@@ -4594,11 +4601,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 // takes d_workspace (the s_Y regressor scratch spills there at LITE/MINIMAL).
 static ffi::Error grid_rbd_jax_forward_dynamics_parameter_gradient_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::Buffer<ffi::F32> qd,
-    ffi::Buffer<ffi::F32> u,
-    ffi::ResultBuffer<ffi::F32> dqdd_dpi_out,
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::Buffer<GRID_FFI_T> u,
+    ffi::ResultBuffer<GRID_FFI_T> dqdd_dpi_out,
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "forward_dynamics_parameter_gradient: q", grid::NUM_JOINTS);
@@ -4639,9 +4646,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_forward_dynamics_parameter_gradient_impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #endif  // GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
 
@@ -4651,7 +4658,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 // are launched directly on the JAX stream.
 #if GRID_HAS_INTEGRATOR
 template <grid::IntegratorType IT, bool MUJOCO>
-static void launch_integrator_kernel_jax(cudaStream_t stream, int batch, float dt, float gravity) {
+static void launch_integrator_kernel_jax(cudaStream_t stream, int batch, T dt, T gravity) {
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::integrator_kernel<T, IT, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
         grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR>(),
@@ -4662,7 +4669,7 @@ static void launch_integrator_kernel_jax(cudaStream_t stream, int batch, float d
 #endif  // GRID_HAS_INTEGRATOR
 #if GRID_HAS_INTEGRATOR_GRADIENT
 template <grid::IntegratorType IT, bool MUJOCO>
-static void launch_integrator_grad_kernel_jax(cudaStream_t stream, int batch, float dt, float gravity) {
+static void launch_integrator_grad_kernel_jax(cudaStream_t stream, int batch, T dt, T gravity) {
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::integrator_gradient_kernel<T, IT, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
         grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR_GRADIENT>(),
@@ -4708,9 +4715,9 @@ static void launch_integrator_grad_kernel_jax(cudaStream_t stream, int batch, fl
 
 // q/qd/u D→D pack into the singleton's d_q_qd_u (layout [q,qd,u] per timestep).
 static void grid_rbd_jax_pack_qqdu(cudaStream_t stream, int batch, int nj,
-                                   ffi::Buffer<ffi::F32>& q,
-                                   ffi::Buffer<ffi::F32>& qd,
-                                   ffi::Buffer<ffi::F32>& u) {
+                                   ffi::Buffer<GRID_FFI_T>& q,
+                                   ffi::Buffer<GRID_FFI_T>& qd,
+                                   ffi::Buffer<GRID_FFI_T>& u) {
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],     dst_pitch, q.typed_data(),  row_bytes,
@@ -4726,9 +4733,9 @@ static void grid_rbd_jax_pack_qqdu(cudaStream_t stream, int batch, int nj,
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_integrator_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q, ffi::Buffer<ffi::F32> qd, ffi::Buffer<ffi::F32> u,
-    ffi::ResultBuffer<ffi::F32> x_kp1_out,
-    float dt, int64_t it, float gravity)
+    ffi::Buffer<GRID_FFI_T> q, ffi::Buffer<GRID_FFI_T> qd, ffi::Buffer<GRID_FFI_T> u,
+    ffi::ResultBuffer<GRID_FFI_T> x_kp1_out,
+    T dt, int64_t it, T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "integrator: q", grid::NUM_JOINTS);
@@ -4751,9 +4758,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_integrator_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("dt").Attr<int64_t>("it").Attr<T>("gravity")
 );
 
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -4763,9 +4770,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_integrator_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("dt").Attr<int64_t>("it").Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_INTEGRATOR
@@ -4775,9 +4782,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_integrator_gradient_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q, ffi::Buffer<ffi::F32> qd, ffi::Buffer<ffi::F32> u,
-    ffi::ResultBuffer<ffi::F32> dAB_out,
-    float dt, int64_t it, float gravity)
+    ffi::Buffer<GRID_FFI_T> q, ffi::Buffer<GRID_FFI_T> qd, ffi::Buffer<GRID_FFI_T> u,
+    ffi::ResultBuffer<GRID_FFI_T> dAB_out,
+    T dt, int64_t it, T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "integrator_gradient: q", grid::NUM_JOINTS);
@@ -4806,9 +4813,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_integrator_gradient_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("dt").Attr<int64_t>("it").Attr<T>("gravity")
 );
 
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -4818,9 +4825,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_integrator_gradient_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("dt").Attr<int64_t>("it").Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_INTEGRATOR_GRADIENT
@@ -4844,9 +4851,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool STATE, bool MUJOCO = false>
 static ffi::Error grid_rbd_jax_plant_quadratic_cost_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> var, ffi::Buffer<ffi::F32> des, ffi::Buffer<ffi::F32> w,
-    ffi::ResultBuffer<ffi::F32> out, ffi::ResultBuffer<ffi::F32> grad,
-    ffi::ResultBuffer<ffi::F32> hess)
+    ffi::Buffer<GRID_FFI_T> var, ffi::Buffer<GRID_FFI_T> des, ffi::Buffer<GRID_FFI_T> w,
+    ffi::ResultBuffer<GRID_FFI_T> out, ffi::ResultBuffer<GRID_FFI_T> grad,
+    ffi::ResultBuffer<GRID_FFI_T> hess)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");
@@ -4879,15 +4886,15 @@ static ffi::Error grid_rbd_jax_plant_quadratic_cost_impl(
 }
 
 static ffi::Error grid_rbd_jax_plant_quadratic_state_cost_impl(
-    cudaStream_t stream, ffi::Buffer<ffi::F32> var, ffi::Buffer<ffi::F32> des,
-    ffi::Buffer<ffi::F32> w, ffi::ResultBuffer<ffi::F32> out,
-    ffi::ResultBuffer<ffi::F32> grad, ffi::ResultBuffer<ffi::F32> hess) {
+    cudaStream_t stream, ffi::Buffer<GRID_FFI_T> var, ffi::Buffer<GRID_FFI_T> des,
+    ffi::Buffer<GRID_FFI_T> w, ffi::ResultBuffer<GRID_FFI_T> out,
+    ffi::ResultBuffer<GRID_FFI_T> grad, ffi::ResultBuffer<GRID_FFI_T> hess) {
     return grid_rbd_jax_plant_quadratic_cost_impl<true>(stream, var, des, w, out, grad, hess);
 }
 static ffi::Error grid_rbd_jax_plant_quadratic_input_cost_impl(
-    cudaStream_t stream, ffi::Buffer<ffi::F32> var, ffi::Buffer<ffi::F32> des,
-    ffi::Buffer<ffi::F32> w, ffi::ResultBuffer<ffi::F32> out,
-    ffi::ResultBuffer<ffi::F32> grad, ffi::ResultBuffer<ffi::F32> hess) {
+    cudaStream_t stream, ffi::Buffer<GRID_FFI_T> var, ffi::Buffer<GRID_FFI_T> des,
+    ffi::Buffer<GRID_FFI_T> w, ffi::ResultBuffer<GRID_FFI_T> out,
+    ffi::ResultBuffer<GRID_FFI_T> grad, ffi::ResultBuffer<GRID_FFI_T> hess) {
     return grid_rbd_jax_plant_quadratic_cost_impl<false>(stream, var, des, w, out, grad, hess);
 }
 
@@ -4895,8 +4902,8 @@ static ffi::Error grid_rbd_jax_plant_quadratic_input_cost_impl(
     XLA_FFI_DEFINE_HANDLER_SYMBOL(name, impl,                                      \
         ffi::Ffi::Bind()                                                          \
             .Ctx<ffi::PlatformStream<cudaStream_t>>()                            \
-            .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>() \
-            .Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>())
+            .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>() \
+            .Ret<ffi::Buffer<GRID_FFI_T>>().Ret<ffi::Buffer<GRID_FFI_T>>().Ret<ffi::Buffer<GRID_FFI_T>>())
 
 GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_quadratic_state_cost,
                              grid_rbd_jax_plant_quadratic_state_cost_impl);
@@ -4906,9 +4913,9 @@ GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_quadratic_input_cost,
 // MuJoCo-convention state cost (floating only): value invariant, grad covector-rotated,
 // GN hess congruence (MUJOCO_OUTPUT=true). Input cost has no mjx variant (frame-invariant).
 static ffi::Error grid_rbd_jax_plant_quadratic_state_cost_mujoco_impl(
-    cudaStream_t stream, ffi::Buffer<ffi::F32> var, ffi::Buffer<ffi::F32> des,
-    ffi::Buffer<ffi::F32> w, ffi::ResultBuffer<ffi::F32> out,
-    ffi::ResultBuffer<ffi::F32> grad, ffi::ResultBuffer<ffi::F32> hess) {
+    cudaStream_t stream, ffi::Buffer<GRID_FFI_T> var, ffi::Buffer<GRID_FFI_T> des,
+    ffi::Buffer<GRID_FFI_T> w, ffi::ResultBuffer<GRID_FFI_T> out,
+    ffi::ResultBuffer<GRID_FFI_T> grad, ffi::ResultBuffer<GRID_FFI_T> hess) {
     return grid_rbd_jax_plant_quadratic_cost_impl<true, true>(stream, var, des, w, out, grad, hess);
 }
 GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_quadratic_state_cost_mujoco,
@@ -4920,9 +4927,9 @@ GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_quadratic_state_cost_mujoco,
 template <int WHICH>  // 0=position, 1=velocity, 2=torque
 static ffi::Error grid_rbd_jax_plant_barrier_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> var, ffi::Buffer<ffi::F32> lower, ffi::Buffer<ffi::F32> upper,
-    ffi::ResultBuffer<ffi::F32> out, ffi::ResultBuffer<ffi::F32> grad,
-    ffi::ResultBuffer<ffi::F32> hess_diag, float mu)
+    ffi::Buffer<GRID_FFI_T> var, ffi::Buffer<GRID_FFI_T> lower, ffi::Buffer<GRID_FFI_T> upper,
+    ffi::ResultBuffer<GRID_FFI_T> out, ffi::ResultBuffer<GRID_FFI_T> grad,
+    ffi::ResultBuffer<GRID_FFI_T> hess_diag, float mu)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");
@@ -4956,18 +4963,18 @@ static ffi::Error grid_rbd_jax_plant_barrier_impl(
 }
 
 static ffi::Error grid_rbd_jax_plant_joint_position_barrier_impl(
-    cudaStream_t s, ffi::Buffer<ffi::F32> v, ffi::Buffer<ffi::F32> lo, ffi::Buffer<ffi::F32> hi,
-    ffi::ResultBuffer<ffi::F32> o, ffi::ResultBuffer<ffi::F32> g, ffi::ResultBuffer<ffi::F32> h, float mu) {
+    cudaStream_t s, ffi::Buffer<GRID_FFI_T> v, ffi::Buffer<GRID_FFI_T> lo, ffi::Buffer<GRID_FFI_T> hi,
+    ffi::ResultBuffer<GRID_FFI_T> o, ffi::ResultBuffer<GRID_FFI_T> g, ffi::ResultBuffer<GRID_FFI_T> h, float mu) {
     return grid_rbd_jax_plant_barrier_impl<0>(s, v, lo, hi, o, g, h, mu);
 }
 static ffi::Error grid_rbd_jax_plant_joint_velocity_barrier_impl(
-    cudaStream_t s, ffi::Buffer<ffi::F32> v, ffi::Buffer<ffi::F32> lo, ffi::Buffer<ffi::F32> hi,
-    ffi::ResultBuffer<ffi::F32> o, ffi::ResultBuffer<ffi::F32> g, ffi::ResultBuffer<ffi::F32> h, float mu) {
+    cudaStream_t s, ffi::Buffer<GRID_FFI_T> v, ffi::Buffer<GRID_FFI_T> lo, ffi::Buffer<GRID_FFI_T> hi,
+    ffi::ResultBuffer<GRID_FFI_T> o, ffi::ResultBuffer<GRID_FFI_T> g, ffi::ResultBuffer<GRID_FFI_T> h, float mu) {
     return grid_rbd_jax_plant_barrier_impl<1>(s, v, lo, hi, o, g, h, mu);
 }
 static ffi::Error grid_rbd_jax_plant_joint_torque_barrier_impl(
-    cudaStream_t s, ffi::Buffer<ffi::F32> v, ffi::Buffer<ffi::F32> lo, ffi::Buffer<ffi::F32> hi,
-    ffi::ResultBuffer<ffi::F32> o, ffi::ResultBuffer<ffi::F32> g, ffi::ResultBuffer<ffi::F32> h, float mu) {
+    cudaStream_t s, ffi::Buffer<GRID_FFI_T> v, ffi::Buffer<GRID_FFI_T> lo, ffi::Buffer<GRID_FFI_T> hi,
+    ffi::ResultBuffer<GRID_FFI_T> o, ffi::ResultBuffer<GRID_FFI_T> g, ffi::ResultBuffer<GRID_FFI_T> h, float mu) {
     return grid_rbd_jax_plant_barrier_impl<2>(s, v, lo, hi, o, g, h, mu);
 }
 
@@ -4975,8 +4982,8 @@ static ffi::Error grid_rbd_jax_plant_joint_torque_barrier_impl(
     XLA_FFI_DEFINE_HANDLER_SYMBOL(name, impl,                                      \
         ffi::Ffi::Bind()                                                          \
             .Ctx<ffi::PlatformStream<cudaStream_t>>()                            \
-            .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>() \
-            .Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>() \
+            .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>() \
+            .Ret<ffi::Buffer<GRID_FFI_T>>().Ret<ffi::Buffer<GRID_FFI_T>>().Ret<ffi::Buffer<GRID_FFI_T>>() \
             .Attr<float>("mu"))
 
 GRID_RBD_JAX_PLANT_BARRIER_BIND(grid_rbd_jax_plant_joint_position_barrier,
@@ -4990,7 +4997,7 @@ GRID_RBD_JAX_PLANT_BARRIER_BIND(grid_rbd_jax_plant_joint_torque_barrier,
 // plant_step(x, u; dt, it) → x_kp1  (B, NX). Reuses g_plant.d_grad as x_kp1
 // (size NX), matching the C-ABI launch_plant_step.
 template <grid::IntegratorType IT, bool MUJOCO>
-static void launch_plant_step_jax(cudaStream_t stream, int batch, float gravity, float dt) {
+static void launch_plant_step_jax(cudaStream_t stream, int batch, T gravity, T dt) {
     const int nx = grid::NUM_POS + grid::NUM_VEL;
     dim3 grid_dim = grid_rbd_grid_for(batch);
     const size_t smem = grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>();
@@ -5006,9 +5013,9 @@ static void launch_plant_step_jax(cudaStream_t stream, int batch, float gravity,
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_plant_step_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> x, ffi::Buffer<ffi::F32> u,
-    ffi::ResultBuffer<ffi::F32> x_kp1,
-    float dt, int64_t it, float gravity)
+    ffi::Buffer<GRID_FFI_T> x, ffi::Buffer<GRID_FFI_T> u,
+    ffi::ResultBuffer<GRID_FFI_T> x_kp1,
+    T dt, int64_t it, T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");
@@ -5032,9 +5039,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_plant_step_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("dt").Attr<int64_t>("it").Attr<T>("gravity")
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -5042,9 +5049,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_plant_step_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("dt").Attr<int64_t>("it").Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_STEP
@@ -5053,7 +5060,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 // plant_step_gradient(x, u; dt, it) → dAB  (B, 2*NV*3*NV col-major). Reuses
 // g_plant.d_grad as the dAB output (size 2*NV*3*NV), matching the C-ABI.
 template <grid::IntegratorType IT, bool MUJOCO>
-static void launch_plant_step_gradient_jax(cudaStream_t stream, int batch, float gravity, float dt) {
+static void launch_plant_step_gradient_jax(cudaStream_t stream, int batch, T gravity, T dt) {
     const int nx = grid::NUM_POS + grid::NUM_VEL;
     const int nv = grid::NUM_VEL;
     dim3 grid_dim = grid_rbd_grid_for(batch);
@@ -5070,9 +5077,9 @@ static void launch_plant_step_gradient_jax(cudaStream_t stream, int batch, float
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_plant_step_gradient_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> x, ffi::Buffer<ffi::F32> u,
-    ffi::ResultBuffer<ffi::F32> dAB,
-    float dt, int64_t it, float gravity)
+    ffi::Buffer<GRID_FFI_T> x, ffi::Buffer<GRID_FFI_T> u,
+    ffi::ResultBuffer<GRID_FFI_T> dAB,
+    T dt, int64_t it, T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");
@@ -5102,9 +5109,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_plant_step_gradient_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("dt").Attr<int64_t>("it").Attr<T>("gravity")
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -5112,9 +5119,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_plant_step_gradient_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("dt").Attr<int64_t>("it").Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("dt").Attr<int64_t>("it").Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_STEP_GRADIENT
@@ -5125,9 +5132,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_plant_ee_pos_cost_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q, ffi::Buffer<ffi::F32> p_des, ffi::Buffer<ffi::F32> W,
-    ffi::ResultBuffer<ffi::F32> out, ffi::ResultBuffer<ffi::F32> grad,
-    ffi::ResultBuffer<ffi::F32> hess)
+    ffi::Buffer<GRID_FFI_T> q, ffi::Buffer<GRID_FFI_T> p_des, ffi::Buffer<GRID_FFI_T> W,
+    ffi::ResultBuffer<GRID_FFI_T> out, ffi::ResultBuffer<GRID_FFI_T> grad,
+    ffi::ResultBuffer<GRID_FFI_T> hess)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");
@@ -5169,9 +5176,9 @@ GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_ee_pos_cost_mujoco,
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_plant_com_cost_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q, ffi::Buffer<ffi::F32> p_des, ffi::Buffer<ffi::F32> W,
-    ffi::ResultBuffer<ffi::F32> out, ffi::ResultBuffer<ffi::F32> grad,
-    ffi::ResultBuffer<ffi::F32> hess)
+    ffi::Buffer<GRID_FFI_T> q, ffi::Buffer<GRID_FFI_T> p_des, ffi::Buffer<GRID_FFI_T> W,
+    ffi::ResultBuffer<GRID_FFI_T> out, ffi::ResultBuffer<GRID_FFI_T> grad,
+    ffi::ResultBuffer<GRID_FFI_T> hess)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");
@@ -5214,10 +5221,10 @@ GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_com_cost_mujoco,
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_plant_momentum_cost_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q, ffi::Buffer<ffi::F32> qd,
-    ffi::Buffer<ffi::F32> h_des, ffi::Buffer<ffi::F32> W,
-    ffi::ResultBuffer<ffi::F32> out, ffi::ResultBuffer<ffi::F32> grad,
-    ffi::ResultBuffer<ffi::F32> hess)
+    ffi::Buffer<GRID_FFI_T> q, ffi::Buffer<GRID_FFI_T> qd,
+    ffi::Buffer<GRID_FFI_T> h_des, ffi::Buffer<GRID_FFI_T> W,
+    ffi::ResultBuffer<GRID_FFI_T> out, ffi::ResultBuffer<GRID_FFI_T> grad,
+    ffi::ResultBuffer<GRID_FFI_T> hess)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");
@@ -5254,9 +5261,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_plant_momentum_cost_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>().Ret<ffi::Buffer<GRID_FFI_T>>().Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -5264,9 +5271,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_plant_momentum_cost_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>().Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>().Ret<ffi::Buffer<GRID_FFI_T>>().Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_MOMENTUM_COST
@@ -5299,9 +5306,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_generalized_gravity_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::ResultBuffer<ffi::F32> out,
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::ResultBuffer<GRID_FFI_T> out,
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "generalized_gravity: q", grid::NUM_JOINTS);
@@ -5326,9 +5333,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_generalized_gravity_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -5336,9 +5343,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_generalized_gravity_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_GENERALIZED_GRAVITY
@@ -5349,10 +5356,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_nonlinear_effects_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::Buffer<ffi::F32> qd,
-    ffi::ResultBuffer<ffi::F32> out,
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::ResultBuffer<GRID_FFI_T> out,
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "nonlinear_effects: q", grid::NUM_JOINTS);
@@ -5377,9 +5384,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_nonlinear_effects_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -5387,9 +5394,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_nonlinear_effects_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_NONLINEAR_EFFECTS
@@ -5400,10 +5407,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_coriolis_matrix_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::Buffer<ffi::F32> qd,
-    ffi::ResultBuffer<ffi::F32> out,
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::ResultBuffer<GRID_FFI_T> out,
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "coriolis_matrix: q", grid::NUM_JOINTS);
@@ -5428,9 +5435,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_coriolis_matrix_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -5438,9 +5445,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_coriolis_matrix_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_CORIOLIS_MATRIX
@@ -5451,10 +5458,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_kinetic_energy_regressor_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::Buffer<ffi::F32> qd,
-    ffi::ResultBuffer<ffi::F32> out,
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::ResultBuffer<GRID_FFI_T> out,
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "kinetic_energy_regressor: q", grid::NUM_JOINTS);
@@ -5479,9 +5486,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_kinetic_energy_regressor_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -5489,9 +5496,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_kinetic_energy_regressor_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_KINETIC_ENERGY_REGRESSOR
@@ -5502,9 +5509,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_potential_energy_regressor_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::ResultBuffer<ffi::F32> out,
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::ResultBuffer<GRID_FFI_T> out,
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "potential_energy_regressor: q", grid::NUM_JOINTS);
@@ -5528,9 +5535,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_potential_energy_regressor_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -5538,9 +5545,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_potential_energy_regressor_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
@@ -5553,10 +5560,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_energy_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::Buffer<ffi::F32> qd,
-    ffi::ResultBuffer<ffi::F32> out,
-    float gravity)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::ResultBuffer<GRID_FFI_T> out,
+    T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "energy: q", grid::NUM_JOINTS);
@@ -5581,9 +5588,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_energy_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -5591,9 +5598,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_energy_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
-        .Attr<float>("gravity")
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
+        .Attr<T>("gravity")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_ENERGY
@@ -5605,8 +5612,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_com_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::ResultBuffer<ffi::F32> out)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::ResultBuffer<GRID_FFI_T> out)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "com: q", grid::NUM_JOINTS);
@@ -5630,8 +5637,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_com_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -5639,8 +5646,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_com_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_COM
@@ -5652,9 +5659,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_ccrba_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::Buffer<ffi::F32> qd,
-    ffi::ResultBuffer<ffi::F32> out)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::ResultBuffer<GRID_FFI_T> out)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "ccrba: q", grid::NUM_JOINTS);
@@ -5679,8 +5686,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_ccrba_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -5688,8 +5695,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_ccrba_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_CCRBA
@@ -5700,9 +5707,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_cmm_time_variation_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::Buffer<ffi::F32> qd,
-    ffi::ResultBuffer<ffi::F32> out)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::ResultBuffer<GRID_FFI_T> out)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "cmm_time_variation: q", grid::NUM_JOINTS);
@@ -5727,8 +5734,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_cmm_time_variation_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -5736,8 +5743,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_cmm_time_variation_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_CMM_TIME_VARIATION
@@ -5748,8 +5755,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_dccrba_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::ResultBuffer<ffi::F32> out)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::ResultBuffer<GRID_FFI_T> out)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "dccrba: q", grid::NUM_JOINTS);
@@ -5773,8 +5780,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_dccrba_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -5782,8 +5789,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_dccrba_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_DCCRBA
@@ -5804,8 +5811,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_frame_jacobian_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::ResultBuffer<ffi::F32> out,
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::ResultBuffer<GRID_FFI_T> out,
     int64_t target_jid, int64_t reference_frame)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
@@ -5831,8 +5838,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_frame_jacobian_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
         .Attr<int64_t>("target_jid").Attr<int64_t>("reference_frame")
 );
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -5841,8 +5848,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_frame_jacobian_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
         .Attr<int64_t>("target_jid").Attr<int64_t>("reference_frame")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
@@ -5852,9 +5859,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_frame_jacobian_dot_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::Buffer<ffi::F32> qd,
-    ffi::ResultBuffer<ffi::F32> out,
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::Buffer<GRID_FFI_T> qd,
+    ffi::ResultBuffer<GRID_FFI_T> out,
     int64_t target_jid, int64_t reference_frame)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
@@ -5881,8 +5888,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_frame_jacobian_dot_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
         .Attr<int64_t>("target_jid").Attr<int64_t>("reference_frame")
 );
 #ifdef GRID_RBD_WITH_MUJOCO
@@ -5891,8 +5898,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_frame_jacobian_dot_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>().Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
         .Attr<int64_t>("target_jid").Attr<int64_t>("reference_frame")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
@@ -5902,8 +5909,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_osc_inertia_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,
-    ffi::ResultBuffer<ffi::F32> out)
+    ffi::Buffer<GRID_FFI_T> q,
+    ffi::ResultBuffer<GRID_FFI_T> out)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
     GRID_RBD_FFI_VALIDATE_2D(q, "osc_inertia: q", grid::NUM_JOINTS);
@@ -5927,8 +5934,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_osc_inertia_impl<false>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #ifdef GRID_RBD_WITH_MUJOCO
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -5936,8 +5943,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     grid_rbd_jax_osc_inertia_impl<true>,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()
-        .Ret<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<GRID_FFI_T>>()
+        .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_FRAME_JACOBIAN
@@ -5966,8 +5973,18 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 // Registered under a per-robot op namespace keyed by the cache_key
 // (-DGRID_RBD_TORCH_KEY=<hex>) so two robots in one process don't collide.
 
-// fp64: torch surface is fp32-only too (see the JAX note above) — suppress in an fp64 .so.
-#if defined(GRID_RBD_WITH_TORCH) && !defined(GRID_WRAPPER_T_DOUBLE)
+// fp64 (Wave 2a): the torch surface follows the .so's element type T — tensor dtype
+// checks/allocs use GRID_TORCH_DTYPE and pointers are data_ptr<T>.
+#if defined(GRID_RBD_WITH_TORCH)
+
+// The tensor dtype tracks the .so's T (fp64 Wave 2a).
+#ifdef GRID_WRAPPER_T_DOUBLE
+#define GRID_TORCH_DTYPE torch::kFloat64
+#define GRID_TORCH_DTYPE_NAME "float64"
+#else
+#define GRID_TORCH_DTYPE torch::kFloat32
+#define GRID_TORCH_DTYPE_NAME "float32"
+#endif
 
 // Use the Python-free C++ frontend (torch/library.h) rather than
 // torch/extension.h, which pulls in <Python.h>. We register ops via the
@@ -5985,7 +6002,7 @@ namespace {
 static inline void grid_torch_check(const torch::Tensor& t, const char* name, int last_dim) {
     TORCH_CHECK(t.is_cuda(), name, ": must be a CUDA tensor");
     TORCH_CHECK(t.is_contiguous(), name, ": must be contiguous");
-    TORCH_CHECK(t.scalar_type() == torch::kFloat32, name, ": must be float32");
+    TORCH_CHECK(t.scalar_type() == GRID_TORCH_DTYPE, name, ": must be " GRID_TORCH_DTYPE_NAME " (the robot .so dtype)");
     TORCH_CHECK(t.dim() == 2, name, ": must be 2D (B, ", last_dim, ")");
     TORCH_CHECK(t.size(1) == last_dim, name, ": last dim != ", last_dim);
 }
@@ -5997,7 +6014,7 @@ static inline int grid_torch_batch(const torch::Tensor& q) {
 }
 
 static inline torch::Tensor grid_torch_empty(int rows, int cols, const torch::Tensor& like) {
-    auto opts = torch::TensorOptions().dtype(torch::kFloat32).device(like.device());
+    auto opts = torch::TensorOptions().dtype(GRID_TORCH_DTYPE).device(like.device());
     return torch::empty({rows, cols}, opts);
 }
 
@@ -6008,9 +6025,9 @@ static inline void grid_torch_pack(cudaStream_t stream, int batch, int nj,
                                    const torch::Tensor* u) {
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
-    if (q)  cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],      dst_pitch, q->data_ptr<float>(),  row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
-    if (qd) cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj],     dst_pitch, qd->data_ptr<float>(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
-    if (u)  cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj],   dst_pitch, u->data_ptr<float>(),  row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    if (q)  cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],      dst_pitch, q->data_ptr<T>(),  row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    if (qd) cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj],     dst_pitch, qd->data_ptr<T>(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    if (u)  cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj],   dst_pitch, u->data_ptr<T>(),  row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
 }
 
 static inline void grid_torch_init_or_throw() {
@@ -6030,7 +6047,7 @@ static inline void grid_torch_f_ext_apply(cudaStream_t stream, int batch,
     const torch::Tensor& fe = f_ext.value();
     const int row = 6 * grid::NUM_BODIES;
     grid_torch_check(fe, "f_ext", row);
-    cudaMemcpyAsync(g_data->d_f_ext, fe.data_ptr<float>(),
+    cudaMemcpyAsync(g_data->d_f_ext, fe.data_ptr<T>(),
                     (size_t)batch * row * sizeof(T), cudaMemcpyDeviceToDevice, stream);
 }
 
@@ -6064,7 +6081,7 @@ torch::Tensor torch_inverse_dynamics(torch::Tensor q, torch::Tensor qd, double g
     if (qdd.has_value()) {
         const torch::Tensor& a = qdd.value();
         grid_torch_check(a, "inverse_dynamics: qdd", nj);
-        cudaMemcpyAsync(g_data->d_qdd, a.data_ptr<float>(),
+        cudaMemcpyAsync(g_data->d_qdd, a.data_ptr<T>(),
                         (size_t)batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
         grid::inverse_dynamics_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS>(), grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_c, g_data->d_q_qd_u, stride, g_data->d_qdd, g_data->d_f_ext, g_robot, (T)gravity, batch);
@@ -6083,7 +6100,7 @@ torch::Tensor torch_inverse_dynamics(torch::Tensor q, torch::Tensor qd, double g
             g_data->d_c, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
         TORCH_CHECK(cudaGetLastError() == cudaSuccess, "inverse_dynamics_kernel launch failed");
     }
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_c, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_c, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
@@ -6106,7 +6123,7 @@ torch::Tensor torch_minv(torch::Tensor q) {
     grid::minv_kernel<T, grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_MINV>(), grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(), stream>>>(
         g_data->d_Minv, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "minv_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_Minv, batch * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_Minv, batch * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_MINV
@@ -6127,7 +6144,7 @@ torch::Tensor torch_forward_dynamics(torch::Tensor q, torch::Tensor qd, torch::T
     grid::forward_dynamics_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS>(), grid::FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(), stream>>>(
         g_data->d_qdd, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "forward_dynamics_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_qdd, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_qdd, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
@@ -6149,7 +6166,7 @@ torch::Tensor torch_aba(torch::Tensor q, torch::Tensor qd, torch::Tensor u, doub
     grid::aba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_ABA>(), grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(), stream>>>(
         g_data->d_qdd, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "aba_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_qdd, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_qdd, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
@@ -6172,7 +6189,7 @@ torch::Tensor torch_crba(torch::Tensor q, double gravity) {
     grid::crba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_CRBA>(), grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(), stream>>>(
         g_data->d_M, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "crba_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_M, batch * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_M, batch * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_CRBA
@@ -6191,7 +6208,7 @@ torch::Tensor torch_end_effector_pose(torch::Tensor q) {
     grid::GRID_RBD_EE_POSE_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE>(), grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_end_effector_pose, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "GRID_RBD_EE_POSE_KERNEL launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_end_effector_pose, batch * 6 * nee * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_end_effector_pose, batch * 6 * nee * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_END_EFFECTOR_POSE
@@ -6210,7 +6227,7 @@ torch::Tensor torch_end_effector_pose_gradient(torch::Tensor q) {
     grid::GRID_RBD_EE_POSE_GRADIENT_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(), grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(), stream>>>(
         g_data->d_end_effector_pose_gradient, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "GRID_RBD_EE_POSE_GRADIENT_KERNEL launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_end_effector_pose_gradient, batch * 6 * nee * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_end_effector_pose_gradient, batch * 6 * nee * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT
@@ -6229,7 +6246,7 @@ torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q) {
     grid::GRID_RBD_EE_POSE_HESSIAN_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(), grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(), stream>>>(
         g_data->d_end_effector_pose_hessian, g_data->d_end_effector_pose_gradient, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "GRID_RBD_EE_POSE_HESSIAN_KERNEL launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_end_effector_pose_hessian, batch * 6 * nee * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_end_effector_pose_hessian, batch * 6 * nee * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_END_EFFECTOR_POSE_HESSIAN
@@ -6253,13 +6270,13 @@ torch::Tensor torch_end_effector_pose_runtime(torch::Tensor q, int64_t target_ji
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
-    auto off = offset.to(torch::kFloat32).contiguous();
+    auto off = offset.to(GRID_TORCH_DTYPE).contiguous();
     auto out = grid_torch_empty(batch, 6, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::end_effector_pose_runtime_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::END_EFFECTOR_POSE_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
-        g_data->d_eePose, g_data->d_q_qd_u, stride, (int)target_jid, off.data_ptr<float>(), g_robot, batch);
+        g_data->d_eePose, g_data->d_q_qd_u, stride, (int)target_jid, off.data_ptr<T>(), g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "end_effector_pose_runtime_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_eePose, batch * 6 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_eePose, batch * 6 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_END_EFFECTOR_POSE_RUNTIME
@@ -6276,13 +6293,13 @@ torch::Tensor torch_end_effector_pose_gradient_runtime(torch::Tensor q, int64_t 
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
-    auto off = offset.to(torch::kFloat32).contiguous();
+    auto off = offset.to(GRID_TORCH_DTYPE).contiguous();
     auto out = grid_torch_empty(batch, 6 * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::end_effector_pose_gradient_runtime_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::END_EFFECTOR_POSE_GRADIENT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
-        g_data->d_eePoseGrad, g_data->d_q_qd_u, stride, (int)target_jid, off.data_ptr<float>(), g_robot, batch);
+        g_data->d_eePoseGrad, g_data->d_q_qd_u, stride, (int)target_jid, off.data_ptr<T>(), g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "end_effector_pose_gradient_runtime_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_eePoseGrad, batch * 6 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_eePoseGrad, batch * 6 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
@@ -6313,7 +6330,7 @@ torch::Tensor torch_inverse_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
     if (qdd.has_value()) {
         const torch::Tensor& a = qdd.value();
         grid_torch_check(a, "inverse_dynamics_gradient: qdd", nj);
-        cudaMemcpyAsync(g_data->d_qdd, a.data_ptr<float>(),
+        cudaMemcpyAsync(g_data->d_qdd, a.data_ptr<T>(),
                         (size_t)batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
         grid::inverse_dynamics_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(), grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(), stream>>>(
             g_data->d_dc_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_qdd, g_data->d_f_ext, g_robot, (T)gravity, batch);
@@ -6331,7 +6348,7 @@ torch::Tensor torch_inverse_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
             g_data->d_dc_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
         TORCH_CHECK(cudaGetLastError() == cudaSuccess, "inverse_dynamics_gradient_kernel launch failed");
     }
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_dc_du, batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_dc_du, batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
@@ -6356,7 +6373,7 @@ torch::Tensor torch_forward_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
     grid::forward_dynamics_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(), grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(), stream>>>(
         g_data->d_df_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "forward_dynamics_gradient_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_df_du, batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_df_du, batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     grid_torch_f_ext_reset(stream, batch, f_ext);
     return out;
 }
@@ -6390,7 +6407,7 @@ torch::Tensor torch_idsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor qd
         g_data->d_idsva_so, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "idsva_so_body_frame_kernel launch failed");
 #endif
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_idsva_so, batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_idsva_so, batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_IDSVA_SO
@@ -6409,7 +6426,7 @@ torch::Tensor torch_fdsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor u,
     grid::fdsva_so_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_FDSVA_SO>(), grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(), stream>>>(
         g_data->d_df2, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_idsva_so, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "fdsva_so_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_df2, batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_df2, batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_FDSVA_SO
@@ -6439,7 +6456,7 @@ torch::Tensor torch_inverse_dynamics_regressor(torch::Tensor q, torch::Tensor qd
     grid::inverse_dynamics_regressor_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_Y, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "inverse_dynamics_regressor_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_Y, (size_t)batch * out_size * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_Y, (size_t)batch * out_size * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
@@ -6460,7 +6477,7 @@ torch::Tensor torch_forward_dynamics_parameter_gradient(torch::Tensor q, torch::
     grid::forward_dynamics_parameter_gradient_kernel<T><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::FORWARD_DYNAMICS_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_dqdd_dpi, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "forward_dynamics_parameter_gradient_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_dqdd_dpi, (size_t)batch * out_size * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_dqdd_dpi, (size_t)batch * out_size * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT
@@ -6526,7 +6543,7 @@ torch::Tensor torch_integrator(torch::Tensor q, torch::Tensor qd, torch::Tensor 
     auto out = grid_torch_empty(batch, grid::NUM_POS + grid::NUM_VEL, q);
     GRID_RBD_IT_DISPATCH_TORCH_MJX((int)it, torch_launch_integrator, MUJOCO, stream, batch, dt, gravity);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "integrator_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_x_kp1, batch * (grid::NUM_POS + grid::NUM_VEL) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_x_kp1, batch * (grid::NUM_POS + grid::NUM_VEL) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_INTEGRATOR
@@ -6548,7 +6565,7 @@ torch::Tensor torch_integrator_gradient(torch::Tensor q, torch::Tensor qd, torch
         GRID_RBD_IT_DISPATCH_TORCH_MJX((int)it, torch_launch_integrator_grad, false, stream, batch, dt, gravity);
     }
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "integrator_grad_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_dAB, batch * (2 * nv) * (3 * nv) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_dAB, batch * (2 * nv) * (3 * nv) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_INTEGRATOR_GRADIENT
@@ -6571,14 +6588,14 @@ static inline void grid_torch_plant_init() {
 static inline void grid_torch_check_n(const torch::Tensor& t, const char* name, int n) {
     TORCH_CHECK(t.is_cuda(), name, ": must be a CUDA tensor");
     TORCH_CHECK(t.is_contiguous(), name, ": must be contiguous");
-    TORCH_CHECK(t.scalar_type() == torch::kFloat32, name, ": must be float32");
+    TORCH_CHECK(t.scalar_type() == GRID_TORCH_DTYPE, name, ": must be " GRID_TORCH_DTYPE_NAME " (the robot .so dtype)");
     TORCH_CHECK(t.dim() == 2, name, ": must be 2D (B, ", n, ")");
     TORCH_CHECK(t.size(1) == n, name, ": last dim != ", n);
 }
 
 // quadratic cost (state or input). var/des/w are (B, N). Returns (value, grad, hess).
 // STATE=true selects the state kernel (N = NX) else the input kernel (N = NV).
-// Non-template on `state` (runtime bool) so the torch::Tensor .data_ptr<float>()
+// Non-template on `state` (runtime bool) so the torch::Tensor .data_ptr<T>()
 // member-template calls parse unambiguously under nvcc's host pass; MUJOCO is a
 // compile-time template flag threaded into the STATE kernel launch (the only mjx
 // path — input cost is frame-invariant and always pinocchio).
@@ -6592,9 +6609,9 @@ static std::vector<torch::Tensor> torch_plant_quadratic_cost(
     grid_torch_check_n(w,   "quadratic_cost: w",   N);
     int batch = grid_torch_batch(var);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    cudaMemcpyAsync(g_plant.d_in_a, var.data_ptr<float>(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(g_plant.d_in_b, des.data_ptr<float>(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(g_plant.d_in_c, w.data_ptr<float>(),   (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_a, var.data_ptr<T>(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, des.data_ptr<T>(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c, w.data_ptr<T>(),   (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     auto out  = grid_torch_empty(batch, 1, var);
     auto grad = grid_torch_empty(batch, N, var);
     auto hess = grid_torch_empty(batch, N * N, var);
@@ -6606,9 +6623,9 @@ static std::vector<torch::Tensor> torch_plant_quadratic_cost(
         grid_plant::quadratic_input_cost_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, stream>>>(
             g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "quadratic_cost_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),         cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(grad.data_ptr<float>(), g_plant.d_grad, (size_t)batch * N * sizeof(T),     cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(hess.data_ptr<float>(), g_plant.d_hess, (size_t)batch * N * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(),  g_plant.d_out,  (size_t)batch * sizeof(T),         cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(grad.data_ptr<T>(), g_plant.d_grad, (size_t)batch * N * sizeof(T),     cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(hess.data_ptr<T>(), g_plant.d_hess, (size_t)batch * N * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return {out, grad, hess};
 }
 
@@ -6631,9 +6648,9 @@ static std::vector<torch::Tensor> torch_plant_barrier(
     grid_torch_check_n(upper, "barrier: upper", N);
     int batch = grid_torch_batch(var);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    cudaMemcpyAsync(g_plant.d_in_a, var.data_ptr<float>(),   (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(g_plant.d_in_b, lower.data_ptr<float>(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(g_plant.d_in_c, upper.data_ptr<float>(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_a, var.data_ptr<T>(),   (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, lower.data_ptr<T>(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c, upper.data_ptr<T>(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     auto out  = grid_torch_empty(batch, 1, var);
     auto grad = grid_torch_empty(batch, N, var);
     auto hdiag = grid_torch_empty(batch, N, var);
@@ -6648,9 +6665,9 @@ static std::vector<torch::Tensor> torch_plant_barrier(
         grid_plant::joint_torque_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, stream>>>(
             g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "joint_barrier_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(),   g_plant.d_out,  (size_t)batch * sizeof(T),     cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(grad.data_ptr<float>(),  g_plant.d_grad, (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(hdiag.data_ptr<float>(), g_plant.d_hess, (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(),   g_plant.d_out,  (size_t)batch * sizeof(T),     cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(grad.data_ptr<T>(),  g_plant.d_grad, (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(hdiag.data_ptr<T>(), g_plant.d_hess, (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return {out, grad, hdiag};
 }
 
@@ -6686,12 +6703,12 @@ torch::Tensor torch_plant_step(torch::Tensor x, torch::Tensor u, double dt, int6
     grid_torch_check_n(u, "plant_step: u", nv);
     int batch = grid_torch_batch(x);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    cudaMemcpyAsync(g_plant.d_in_a, x.data_ptr<float>(), (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(g_plant.d_in_b, u.data_ptr<float>(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_a, x.data_ptr<T>(), (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, u.data_ptr<T>(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     auto out = grid_torch_empty(batch, nx, x);
     GRID_RBD_IT_DISPATCH_TORCH_MJX((int)it, torch_launch_plant_step, MUJOCO, stream, batch, gravity, dt);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "plant_step_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_PLANT_HAS_STEP
@@ -6719,8 +6736,8 @@ torch::Tensor torch_plant_step_gradient(torch::Tensor x, torch::Tensor u, double
     grid_torch_check_n(u, "plant_step_gradient: u", nv);
     int batch = grid_torch_batch(x);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    cudaMemcpyAsync(g_plant.d_in_a, x.data_ptr<float>(), (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(g_plant.d_in_b, u.data_ptr<float>(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_a, x.data_ptr<T>(), (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, u.data_ptr<T>(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     auto out = grid_torch_empty(batch, dab, x);
     // mjx gradient is single-stage (euler/si) only; pin supports all integrator types.
     if constexpr (MUJOCO) {
@@ -6729,7 +6746,7 @@ torch::Tensor torch_plant_step_gradient(torch::Tensor x, torch::Tensor u, double
         GRID_RBD_IT_DISPATCH_TORCH_MJX((int)it, torch_launch_plant_step_gradient, false, stream, batch, gravity, dt);
     }
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "plant_step_gradient_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_plant.d_grad, (size_t)batch * dab * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_plant.d_grad, (size_t)batch * dab * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_PLANT_HAS_STEP_GRADIENT
@@ -6744,9 +6761,9 @@ std::vector<torch::Tensor> torch_ee_pos_cost(torch::Tensor q, torch::Tensor p_de
     grid_torch_check_n(W, "ee_pos_cost: W", 3);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    cudaMemcpyAsync(g_plant.d_in_a, q.data_ptr<float>(),     (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(g_plant.d_in_b, p_des.data_ptr<float>(), (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(g_plant.d_in_c, W.data_ptr<float>(),     (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_a, q.data_ptr<T>(),     (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, p_des.data_ptr<T>(), (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c, W.data_ptr<T>(),     (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     auto out  = grid_torch_empty(batch, 1, q);
     auto grad = grid_torch_empty(batch, nx, q);
     auto hess = grid_torch_empty(batch, nx * nx, q);
@@ -6757,9 +6774,9 @@ std::vector<torch::Tensor> torch_ee_pos_cost(torch::Tensor q, torch::Tensor p_de
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
         g_plant.d_end_effector_pose, g_plant.d_end_effector_pose_gradient, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "ee_pos_cost launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(grad.data_ptr<float>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(hess.data_ptr<float>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(grad.data_ptr<T>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(hess.data_ptr<T>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return {out, grad, hess};
 }
 #endif  // GRID_PLANT_HAS_EE_COST
@@ -6774,9 +6791,9 @@ std::vector<torch::Tensor> torch_com_cost(torch::Tensor q, torch::Tensor p_des, 
     grid_torch_check_n(W, "com_cost: W", 3);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    cudaMemcpyAsync(g_plant.d_in_a, q.data_ptr<float>(),     (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(g_plant.d_in_b, p_des.data_ptr<float>(), (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(g_plant.d_in_c, W.data_ptr<float>(),     (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_a, q.data_ptr<T>(),     (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, p_des.data_ptr<T>(), (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c, W.data_ptr<T>(),     (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     auto out  = grid_torch_empty(batch, 1, q);
     auto grad = grid_torch_empty(batch, nx, q);
     auto hess = grid_torch_empty(batch, nx * nx, q);
@@ -6787,9 +6804,9 @@ std::vector<torch::Tensor> torch_com_cost(torch::Tensor q, torch::Tensor p_des, 
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
         g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "com_cost launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(grad.data_ptr<float>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(hess.data_ptr<float>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(grad.data_ptr<T>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(hess.data_ptr<T>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return {out, grad, hess};
 }
 #endif  // GRID_PLANT_HAS_COM_COST
@@ -6805,10 +6822,10 @@ std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Tensor qd
     grid_torch_check_n(W, "momentum_cost: W", 6);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    cudaMemcpyAsync(g_plant.d_in_a, q.data_ptr<float>(),  (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(g_plant.d_in_b, qd.data_ptr<float>(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(g_plant.d_in_c,                  h_des.data_ptr<float>(), (size_t)batch * 6 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(g_plant.d_in_c + (size_t)batch * 6, W.data_ptr<float>(),  (size_t)batch * 6 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_a, q.data_ptr<T>(),  (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_b, qd.data_ptr<T>(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c,                  h_des.data_ptr<T>(), (size_t)batch * 6 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(g_plant.d_in_c + (size_t)batch * 6, W.data_ptr<T>(),  (size_t)batch * 6 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     auto out  = grid_torch_empty(batch, 1, q);
     auto grad = grid_torch_empty(batch, nx, q);
     auto hess = grid_torch_empty(batch, nx * nx, q);
@@ -6820,9 +6837,9 @@ std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Tensor qd
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b,
         g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "momentum_cost_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(grad.data_ptr<float>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
-    cudaMemcpyAsync(hess.data_ptr<float>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(),  g_plant.d_out,  (size_t)batch * sizeof(T),           cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(grad.data_ptr<T>(), g_plant.d_grad, (size_t)batch * nx * sizeof(T),      cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(hess.data_ptr<T>(), g_plant.d_hess, (size_t)batch * nx * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return {out, grad, hess};
 }
 #endif  // GRID_PLANT_HAS_MOMENTUM_COST
@@ -6850,7 +6867,7 @@ torch::Tensor torch_generalized_gravity(torch::Tensor q, double gravity) {
     grid::generalized_gravity_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_c, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "generalized_gravity_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_c, batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_c, batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_GENERALIZED_GRAVITY
@@ -6869,7 +6886,7 @@ torch::Tensor torch_nonlinear_effects(torch::Tensor q, torch::Tensor qd, double 
     grid::nonlinear_effects_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_c, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "nonlinear_effects_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_c, batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_c, batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_NONLINEAR_EFFECTS
@@ -6888,7 +6905,7 @@ torch::Tensor torch_coriolis_matrix(torch::Tensor q, torch::Tensor qd, double gr
     grid::coriolis_matrix_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::CORIOLIS_MATRIX_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_coriolis, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "coriolis_matrix_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_coriolis, batch * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_coriolis, batch * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_CORIOLIS_MATRIX
@@ -6907,7 +6924,7 @@ torch::Tensor torch_kinetic_energy_regressor(torch::Tensor q, torch::Tensor qd, 
     grid::kinetic_energy_regressor_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::KINETIC_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_ke_regressor, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "kinetic_energy_regressor_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_ke_regressor, batch * 10 * nb * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_ke_regressor, batch * 10 * nb * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_KINETIC_ENERGY_REGRESSOR
@@ -6926,7 +6943,7 @@ torch::Tensor torch_potential_energy_regressor(torch::Tensor q, double gravity) 
     grid::potential_energy_regressor_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::POTENTIAL_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_pe_regressor, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "potential_energy_regressor_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_pe_regressor, batch * 10 * nb * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_pe_regressor, batch * 10 * nb * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
@@ -6945,7 +6962,7 @@ torch::Tensor torch_energy(torch::Tensor q, torch::Tensor qd, double gravity) {
     grid::energy_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::ENERGY_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_energy, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "energy_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_energy, batch * 3 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_energy, batch * 3 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_ENERGY
@@ -6965,7 +6982,7 @@ torch::Tensor torch_com(torch::Tensor q) {
     grid::com_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_com, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "com_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_com, batch * (3 + 3 * nv) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_com, batch * (3 + 3 * nv) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_COM
@@ -6985,7 +7002,7 @@ torch::Tensor torch_ccrba(torch::Tensor q, torch::Tensor qd) {
     grid::ccrba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_ccrba, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "ccrba_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_ccrba, batch * (6 * nv + 6) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_ccrba, batch * (6 * nv + 6) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_CCRBA
@@ -7004,7 +7021,7 @@ torch::Tensor torch_cmm_time_variation(torch::Tensor q, torch::Tensor qd) {
     grid::cmm_time_variation_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::CMM_TIME_VARIATION_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER>(), stream>>>(
         g_data->d_cmm_time_variation, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "cmm_time_variation_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_cmm_time_variation, batch * 6 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_cmm_time_variation, batch * 6 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_CMM_TIME_VARIATION
@@ -7023,7 +7040,7 @@ torch::Tensor torch_dccrba(torch::Tensor q) {
     grid::dccrba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::DCCRBA_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER>(), stream>>>(
         g_data->d_dccrba, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "dccrba_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_dccrba, batch * 6 * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_dccrba, batch * 6 * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_DCCRBA
@@ -7045,7 +7062,7 @@ torch::Tensor torch_frame_jacobian(torch::Tensor q, int64_t target_jid, int64_t 
     grid::frame_jacobian_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::FRAME_JACOBIAN_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_frame_jacobian, g_data->d_q_qd_u, stride, (int)target_jid, (int)reference_frame, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "frame_jacobian_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_frame_jacobian, batch * 6 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_frame_jacobian, batch * 6 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 
@@ -7062,7 +7079,7 @@ torch::Tensor torch_frame_jacobian_dot(torch::Tensor q, torch::Tensor qd, int64_
     grid::frame_jacobian_dot_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_frame_jacobian_dot, g_data->d_q_qd_u, stride, (int)target_jid, (int)reference_frame, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "frame_jacobian_dot_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_frame_jacobian_dot, batch * 6 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_frame_jacobian_dot, batch * 6 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 
@@ -7079,7 +7096,7 @@ torch::Tensor torch_osc_inertia(torch::Tensor q) {
     grid::osc_inertia_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_osc_inertia, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "osc_inertia_kernel launch failed");
-    cudaMemcpyAsync(out.data_ptr<float>(), g_data->d_osc_inertia, batch * 36 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_osc_inertia, batch * 36 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
 #endif  // GRID_HAS_FRAME_JACOBIAN

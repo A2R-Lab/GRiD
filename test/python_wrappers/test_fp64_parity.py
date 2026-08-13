@@ -154,3 +154,80 @@ def test_fp64_materially_tighter_than_fp32(h64, h32, ref, samples64):
     contrast("forward_dynamics",
              h64.forward_dynamics(q64, qd64, u64), h32.forward_dynamics(q32, qd32, u32),
              lambda i: ref.forward_dynamics(q64[i], qd64[i], u64[i]))
+
+
+# ─── Wave 2a: fp64 on the torch / jax surfaces ──────────────────────────────
+# The fp64 .so now carries fp64 jax (GRID_FFI_T=F64, .Attr<T> gravity/dt) and
+# torch (GRID_TORCH_DTYPE=kFloat64, data_ptr<T>) surfaces. Gate BOTH the same
+# way the numpy tier is gated: tight vs the float64 oracle AND materially
+# tighter than fp32 — the jax contrast test specifically catches the
+# fp32-attr gravity rounding cap (_core.cpp:49-57 class of bug).
+
+
+@pytest.fixture(scope="module")
+def h64_torch():
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("torch reports no CUDA device")
+    import grid_rbd
+    return grid_rbd.register_robot(
+        name="iiwa14_fp64_torch_pytest", urdf_path=str(_URDF),
+        floating_base=False, dtype="float64", max_batch_size=8, backend="torch")
+
+
+@pytest.fixture(scope="module")
+def h64_jax():
+    jax = pytest.importorskip("jax")
+    jax.config.update("jax_enable_x64", True)
+    import grid_rbd
+    return grid_rbd.register_robot(
+        name="iiwa14_fp64_jax_pytest", urdf_path=str(_URDF),
+        floating_base=False, dtype="float64", max_batch_size=8, backend="jax")
+
+
+def test_fp64_torch_dtype_and_tight(h64_torch, ref, samples64):
+    import torch
+    q64, qd64, u64 = samples64["q"], samples64["qd"], samples64["u"]
+    assert h64_torch.dtype == "float64"
+    q = torch.tensor(q64, dtype=torch.float64, device="cuda")
+    qd = torch.tensor(qd64, dtype=torch.float64, device="cuda")
+    u = torch.tensor(u64, dtype=torch.float64, device="cuda")
+    out = h64_torch.inverse_dynamics(q, qd, gravity=-9.81)
+    assert out.dtype == torch.float64
+    got = out.cpu().numpy()
+    for i in range(len(q64)):
+        c_ref, *_ = ref.inverse_dynamics(q64[i], qd64[i], GRAVITY=-9.81)
+        assert _rel(got[i], c_ref) < _FP64_REL["inverse_dynamics"], \
+            f"torch fp64 id[{i}]: rel {_rel(got[i], c_ref):.2e}"
+    # fp32 tensors must be REJECTED by the op dtype check (no silent downcast).
+    with pytest.raises(RuntimeError, match="float64"):
+        h64_torch.inverse_dynamics(q.float(), qd.float(), gravity=-9.81)
+    fd = h64_torch.forward_dynamics(q, qd, u, gravity=-9.81)
+    assert fd.dtype == torch.float64
+    got_fd = fd.cpu().numpy()
+    for i in range(len(q64)):
+        exp = np.asarray(ref.forward_dynamics(q64[i], qd64[i], u64[i]),
+                         dtype=np.float64).reshape(-1)
+        assert _rel(got_fd[i], exp) < _FP64_REL["forward_dynamics"], \
+            f"torch fp64 fd[{i}]: rel {_rel(got_fd[i], exp):.2e}"
+
+
+def test_fp64_jax_dtype_and_tight(h64_jax, ref, samples64):
+    import jax.numpy as jnp
+    q64, qd64, u64 = samples64["q"], samples64["qd"], samples64["u"]
+    assert h64_jax.dtype == "float64"
+    q, qd, u = jnp.asarray(q64), jnp.asarray(qd64), jnp.asarray(u64)  # x64 on -> float64
+    out = np.asarray(h64_jax.inverse_dynamics(q, qd, gravity=-9.81))
+    assert out.dtype == np.float64
+    for i in range(len(q64)):
+        c_ref, *_ = ref.inverse_dynamics(q64[i], qd64[i], GRAVITY=-9.81)
+        # This is the assertion that catches an fp32 gravity attr (caps at ~4e-8).
+        assert _rel(out[i], c_ref) < _FP64_REL["inverse_dynamics"], \
+            f"jax fp64 id[{i}]: rel {_rel(out[i], c_ref):.2e}"
+    fd = np.asarray(h64_jax.forward_dynamics(q, qd, u, gravity=-9.81))
+    assert fd.dtype == np.float64
+    for i in range(len(q64)):
+        exp = np.asarray(ref.forward_dynamics(q64[i], qd64[i], u64[i]),
+                         dtype=np.float64).reshape(-1)
+        assert _rel(fd[i], exp) < _FP64_REL["forward_dynamics"], \
+            f"jax fp64 fd[{i}]: rel {_rel(fd[i], exp):.2e}"

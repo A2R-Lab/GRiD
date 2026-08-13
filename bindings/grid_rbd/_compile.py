@@ -504,15 +504,13 @@ def compile_so(
     if glass_root:
         cmd.extend([f"-I{glass_root}", f"-I{glass_root / 'src'}"])
 
-    # fp64 (Phase 8): flip the wrapper's `using T` to double. The grid.cuh must
-    # have been generated with the matching dtype="double" codegen knob (so its
-    # spill tiers are sized for sizeof(double)). JAX/torch FFI blocks are
-    # suppressed in the wrapper for fp64 (#if !GRID_WRAPPER_T_DOUBLE), so we also
-    # skip their -D flags below to avoid pulling their includes pointlessly.
+    # fp64: flip the wrapper's `using T` to double. The grid.cuh must have been
+    # generated with the matching dtype="double" codegen knob (so its spill tiers
+    # are sized for sizeof(double)). Wave 2a: the jax/torch sections now follow T
+    # (GRID_FFI_T / GRID_TORCH_DTYPE / data_ptr<T>), so their -D flags stay on —
+    # an fp64 .so carries fp64 jax+torch surfaces.
     if t_double:
         cmd.append("-DGRID_WRAPPER_T_DOUBLE")
-        enable_jax_ffi = False
-        enable_torch = False
 
     # D.4 / Phase 5: runtime-mutable inertia. The grid.cuh must have been
     # generated with runtime_inertia=True (so grid::set_inertia_params exists);

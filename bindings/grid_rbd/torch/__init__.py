@@ -591,7 +591,7 @@ class TorchRobotHandle:
     @property
     def dtype(self) -> str:
         """Compute precision of the underlying .so (``"float32"`` / ``"float64"``).
-        The torch surface is strictly fp32; this mirrors the base handle's report."""
+        Tensors passed to the ops must match this dtype (checked in the op)."""
         return self._base.dtype
 
     # ─── runtime-mutable inertia (D.4 / sysID) ───────────────────────────
@@ -1410,9 +1410,14 @@ def register_robot(
     runtime_transform: bool = False,
     enable_tool: bool = False,
     enable_mujoco_kernels: bool = True,
+    dtype: str = "float32",
 ) -> TorchRobotHandle:
     """Register a robot for the torch backend (same cache as the plain/JAX
     surfaces). Returns a :py:class:`TorchRobotHandle`.
+
+    ``dtype="float64"`` (Wave 2a) builds/loads the fp64 .so — the torch ops then
+    take and return float64 CUDA tensors (fp32 tensors are rejected by the op's
+    dtype check, and vice versa for the default fp32 build).
 
     ``algorithm_list`` (subset build) is supported: only the requested cores + their
     transitive deps are compiled into the torch op surface; calling a method that
@@ -1430,6 +1435,7 @@ def register_robot(
         runtime_transform=runtime_transform,  # mutable joint-origin table (shared device global)
         enable_tool=enable_tool,  # tool welding: attach_tool/detach_tool/tool_fext surface
         enable_mujoco_kernels=enable_mujoco_kernels,  # pin-only builds (RAM/compile-time)
+        dtype=dtype,  # Wave 2a: fp64 .so carries an fp64 torch surface
         _profile_overlay="torch",  # E6 torch threads overlay
     )
     cache_key, so_path = _lookup(name, cache_dir)

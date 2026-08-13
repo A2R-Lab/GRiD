@@ -285,6 +285,10 @@ class JaxRobotHandle:
                 f"output_convention must be 'pinocchio' or 'mujoco'; got {output_convention!r}")
         self._output_convention = output_convention
         self._mjx_view = None
+        # Wave 2a: the element dtype tracks the .so (fp64 build => float64 arrays
+        # + float64 gravity/dt attrs, matching the C++ GRID_FFI_T / .Attr<T>).
+        # mu / xtool stay np.float32 by C++ contract (Span<const float> / float mu).
+        self._np_dt = np.float64 if base.dtype == "float64" else np.float32
 
     # ─── metadata (delegated) ────────────────────────────────────────────
     @property
@@ -304,7 +308,7 @@ class JaxRobotHandle:
     @property
     def dtype(self) -> str:
         """Compute precision of the underlying .so (``"float32"`` / ``"float64"``).
-        The jax surface is strictly fp32; this mirrors the base handle's report."""
+        Arrays passed to the methods are cast to this dtype (fp64 needs jax x64)."""
         return self._base.dtype
 
     # ─── runtime-mutable inertia (D.4 / sysID) ───────────────────────────
@@ -483,7 +487,7 @@ class JaxRobotHandle:
     # ─── small helpers ───────────────────────────────────────────────────
 
     def _prep_2d(self, name: str, *arrays):
-        """Cast to float32 jax arrays, validate (B, NJ), enforce same batch.
+        """Cast to the handle dtype (fp32, or fp64 for a dtype="float64" build), validate (B, NJ), enforce same batch.
 
         Also accepts the per-sample ``(NJ,)`` (1D) shape so the ops compose
         with ``jax.vmap``: under a vmap the mapped slice is 1D, and the FFI
@@ -492,7 +496,7 @@ class JaxRobotHandle:
         return ``B = None`` (the batch only materializes inside the vmap).
         """
         import jax.numpy as jnp
-        cast = [jnp.asarray(a, dtype=jnp.float32) for a in arrays]
+        cast = [jnp.asarray(a, dtype=self._np_dt) for a in arrays]
         for i, a in enumerate(cast):
             if a.ndim not in (1, 2) or a.shape[-1] != self.num_joints:
                 raise ValueError(
@@ -515,8 +519,7 @@ class JaxRobotHandle:
                 f"{name}: batch={B} > max_batch={self.max_batch}")
         return cast, B
 
-    @staticmethod
-    def _out(lead_from, *trailing):
+    def _out(self, lead_from, *trailing):
         """Build a ShapeDtypeStruct whose leading dims mirror ``lead_from``
         (the prepped input) and whose trailing dims are ``trailing``.
 
@@ -527,7 +530,7 @@ class JaxRobotHandle:
         import jax
         import jax.numpy as jnp
         lead = lead_from.shape[:-1]  # drop the NJ axis
-        return jax.ShapeDtypeStruct(lead + tuple(trailing), jnp.float32)
+        return jax.ShapeDtypeStruct(lead + tuple(trailing), self._np_dt)
 
     # ─── differentiable-op registry (lazy, per-handle) ───────────────────
     #
@@ -599,7 +602,7 @@ class JaxRobotHandle:
         def fd(gravity, q, qd, u, f_ext):
             t = _t("forward_dynamics", "grid_rbd_jax_forward_dynamics")
             return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
-                q, qd, u, f_ext, gravity=np.float32(gravity))
+                q, qd, u, f_ext, gravity=self._np_dt(gravity))
 
         def fd_fwd(gravity, q, qd, u, f_ext):
             return fd(gravity, q, qd, u, f_ext), (q, qd, u)
@@ -614,12 +617,12 @@ class JaxRobotHandle:
             # and pad the resulting nv-wide input cotangent back to nj. FIXED base
             # nv == nj so _slice_nv / _pad_nj are byte-identical no-ops.
             flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
-                q, qd, u, gravity=np.float32(gravity))
+                q, qd, u, gravity=self._np_dt(gravity))
             # GRiD writes (2, NV, NV) column-major; transpose to row-major (out, in).
             blocks = flat.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
             df_dq, df_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
             mflat = jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(
-                q, gravity=np.float32(gravity))
+                q, gravity=self._np_dt(gravity))
             m = mflat.reshape(q.shape[:-1] + (nv, nv))
             # ∂qdd/∂u = Minv. pin minv writes the lower triangle (symmetrize);
             # the mjx minv_mujoco kernel writes a FULL DENSE symmetric matrix (the
@@ -650,7 +653,7 @@ class JaxRobotHandle:
         def idyn(gravity, q, qd, qdd, f_ext):
             t = _t("inverse_dynamics", "grid_rbd_jax_inverse_dynamics")
             return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
-                q, qd, qdd, f_ext, gravity=np.float32(gravity))
+                q, qd, qdd, f_ext, gravity=self._np_dt(gravity))
 
         def id_fwd(gravity, q, qd, qdd, f_ext):
             return idyn(gravity, q, qd, qdd, f_ext), (q, qd, qdd)
@@ -661,7 +664,7 @@ class JaxRobotHandle:
             # Jacobian is nv x 2nv (tangent); the torque VALUE/cotangent is nj-wide
             # — slice leading nv, contract, pad back to nj (no-op for fixed base).
             flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
-                q, qd, qdd, gravity=np.float32(gravity))
+                q, qd, qdd, gravity=self._np_dt(gravity))
             blocks = flat.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
             dc_dq, dc_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
             ctv = _slice_nv(ct)
@@ -718,7 +721,7 @@ class JaxRobotHandle:
             z = jnp.zeros_like(q)
             zfe = jnp.zeros(q.shape[:-1] + (6 * nb,), dtype=q.dtype)
             return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
-                q, qd, z, zfe, gravity=np.float32(gravity))
+                q, qd, z, zfe, gravity=self._np_dt(gravity))
 
         def id_pi_fwd(gravity, q, qd, params):
             return idyn_pi(gravity, q, qd, params), (q, qd)
@@ -731,7 +734,7 @@ class JaxRobotHandle:
             zq = jnp.zeros_like(q)
             # Jacobian + regressor rows are nv-wide; the c cotangent is nj-wide.
             flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
-                q, qd, zq, gravity=np.float32(gravity))
+                q, qd, zq, gravity=self._np_dt(gravity))
             blocks = flat.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
             dc_dq, dc_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
             ctv = _slice_nv(ct)
@@ -741,7 +744,7 @@ class JaxRobotHandle:
             tr = _t("inverse_dynamics_regressor", "grid_rbd_jax_inverse_dynamics_regressor")
             qdd0 = jnp.zeros_like(q)
             Yflat = jax.ffi.ffi_call(tr, self._out(q, nv * npar), vmap_method=VM)(
-                q, qd, qdd0, gravity=np.float32(gravity))
+                q, qd, qdd0, gravity=self._np_dt(gravity))
             Y = Yflat.reshape(q.shape[:-1] + (nv, npar))  # row-major (NV, 10NB)
             gpi = jnp.einsum('...o,...op->...p', ctv, Y)
             return (gq, gqd, gpi)
@@ -760,7 +763,7 @@ class JaxRobotHandle:
             # force → pass zeros.
             zfe = jnp.zeros(q.shape[:-1] + (6 * nb,), dtype=q.dtype)
             return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
-                q, qd, u, zfe, gravity=np.float32(gravity))
+                q, qd, u, zfe, gravity=self._np_dt(gravity))
 
         def fd_pi_fwd(gravity, q, qd, u, params):
             return fd_pi(gravity, q, qd, u, params), (q, qd, u)
@@ -771,11 +774,11 @@ class JaxRobotHandle:
             tm = _t("minv", "grid_rbd_jax_minv")
             # Jacobian / Minv / param-gradient rows are nv-wide; qdd cotangent nj-wide.
             flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
-                q, qd, u, gravity=np.float32(gravity))
+                q, qd, u, gravity=self._np_dt(gravity))
             blocks = flat.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
             df_dq, df_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
             mflat = jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(
-                q, gravity=np.float32(gravity))
+                q, gravity=self._np_dt(gravity))
             m = mflat.reshape(q.shape[:-1] + (nv, nv))
             eye = jnp.eye(nv, dtype=m.dtype)
             minv = m + jnp.swapaxes(m, -1, -2) - m * eye
@@ -787,7 +790,7 @@ class JaxRobotHandle:
             tp = _t("forward_dynamics_parameter_gradient",
                     "grid_rbd_jax_forward_dynamics_parameter_gradient")
             Gflat = jax.ffi.ffi_call(tp, self._out(q, nv * npar), vmap_method=VM)(
-                q, qd, u, gravity=np.float32(gravity))
+                q, qd, u, gravity=self._np_dt(gravity))
             G = Gflat.reshape(q.shape[:-1] + (nv, npar))  # row-major (NV, 10NB)
             gpi = jnp.einsum('...o,...op->...p', ctv, G)
             return (gq, gqd, gu, gpi)
@@ -810,7 +813,7 @@ class JaxRobotHandle:
         n = 6 * self.num_bodies
         if f_ext is None:
             return jnp.zeros(like.shape[:-1] + (n,), dtype=like.dtype)
-        fe = jnp.asarray(f_ext, dtype=jnp.float32)
+        fe = jnp.asarray(f_ext, dtype=self._np_dt)
         if fe.shape[-1] != n:
             raise ValueError(f"f_ext last dim must be 6*num_bodies = {n}; got {fe.shape}")
         return fe
@@ -904,7 +907,7 @@ class JaxRobotHandle:
         """
         (q, qd), B = self._prep_2d("inverse_dynamics_wrt_params", q, qd)
         import jax.numpy as jnp
-        params = jnp.asarray(params, dtype=jnp.float32)
+        params = jnp.asarray(params, dtype=self._np_dt)
         return self._differentiable()["inverse_dynamics_wrt_params"](gravity, q, qd, params)
 
     def forward_dynamics_wrt_params(self, q, qd, u, params, *, gravity: float = -9.81):
@@ -921,7 +924,7 @@ class JaxRobotHandle:
         """
         (q, qd, u), B = self._prep_2d("forward_dynamics_wrt_params", q, qd, u)
         import jax.numpy as jnp
-        params = jnp.asarray(params, dtype=jnp.float32)
+        params = jnp.asarray(params, dtype=self._np_dt)
         return self._differentiable()["forward_dynamics_wrt_params"](gravity, q, qd, u, params)
 
     def inverse_dynamics_regressor(self, q, qd, qdd=None, *, gravity: float = -9.81,
@@ -939,11 +942,11 @@ class JaxRobotHandle:
         target = self._mt(_convention,
             "inverse_dynamics_regressor", "grid_rbd_jax_inverse_dynamics_regressor")
         if qdd is None:
-            qdd = jnp.zeros_like(jnp.asarray(q, dtype=jnp.float32))
+            qdd = jnp.zeros_like(jnp.asarray(q, dtype=self._np_dt))
         (q, qd, qdd), B = self._prep_2d("inverse_dynamics_regressor", q, qd, qdd)
         nv, npar = self.num_vel, 10 * self.num_bodies
         flat = jax.ffi.ffi_call(target, self._out(q, nv * npar), vmap_method="broadcast_all")(
-            q, qd, qdd, gravity=np.float32(gravity))
+            q, qd, qdd, gravity=self._np_dt(gravity))
         return flat.reshape(q.shape[:-1] + (nv, npar))
 
     def forward_dynamics_parameter_gradient(self, q, qd, u, *, gravity: float = -9.81):
@@ -959,7 +962,7 @@ class JaxRobotHandle:
         (q, qd, u), B = self._prep_2d("forward_dynamics_parameter_gradient", q, qd, u)
         nv, npar = self.num_vel, 10 * self.num_bodies
         flat = jax.ffi.ffi_call(target, self._out(q, nv * npar), vmap_method="broadcast_all")(
-            q, qd, u, gravity=np.float32(gravity))
+            q, qd, u, gravity=self._np_dt(gravity))
         return flat.reshape(q.shape[:-1] + (nv, npar))
 
     def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None):
@@ -978,7 +981,7 @@ class JaxRobotHandle:
         fe = self._f_ext_or_zeros(q, f_ext)
         out_type = self._out(q, self.num_joints)
         return jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
-            q, qd, u, fe, gravity=np.float32(gravity))
+            q, qd, u, fe, gravity=self._np_dt(gravity))
 
     def crba(self, q, *, gravity: float = -9.81, _convention=None):
         """Mass matrix M(q) via composite rigid body algorithm. Returns (B, NV, NV).
@@ -995,7 +998,7 @@ class JaxRobotHandle:
         (q,), B = self._prep_2d("crba", q)
         nv = self.num_vel
         flat = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(
-            q, gravity=np.float32(gravity))
+            q, gravity=self._np_dt(gravity))
         return flat.reshape(q.shape[:-1] + (nv, nv))
 
     # ─── centroidal / energy / kinematics value methods (numpy-handle parity) ──
@@ -1018,7 +1021,7 @@ class JaxRobotHandle:
         (q,), B = self._prep_2d("generalized_gravity", q)
         nv = self.num_vel
         return jax.ffi.ffi_call(target, self._out(q, nv), vmap_method="broadcast_all")(
-            q, gravity=np.float32(gravity))
+            q, gravity=self._np_dt(gravity))
 
     def nonlinear_effects(self, q, qd, *, gravity: float = -9.81, _convention=None):
         """Nonlinear (bias) effects c(q,qd) = RNEA(q, qd, 0). Returns (B, NV).
@@ -1031,7 +1034,7 @@ class JaxRobotHandle:
         (q, qd), B = self._prep_2d("nonlinear_effects", q, qd)
         nv = self.num_vel
         return jax.ffi.ffi_call(target, self._out(q, nv), vmap_method="broadcast_all")(
-            q, qd, gravity=np.float32(gravity))
+            q, qd, gravity=self._np_dt(gravity))
 
     def energy(self, q, qd, *, gravity: float = -9.81, _convention=None):
         """Kinetic / potential / mechanical energy. Returns (B, 3) = [KE, PE, KE+PE].
@@ -1043,7 +1046,7 @@ class JaxRobotHandle:
         target = self._mt(_convention, "energy", "grid_rbd_jax_energy")
         (q, qd), B = self._prep_2d("energy", q, qd)
         return jax.ffi.ffi_call(target, self._out(q, 3), vmap_method="broadcast_all")(
-            q, qd, gravity=np.float32(gravity))
+            q, qd, gravity=self._np_dt(gravity))
 
     def com(self, q, *, _convention=None):
         """Center-of-mass world position p_com and CoM Jacobian J_com.
@@ -1125,7 +1128,7 @@ class JaxRobotHandle:
         (q, qd), B = self._prep_2d("coriolis_matrix", q, qd)
         nv = self.num_vel
         raw = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(
-            q, qd, gravity=np.float32(gravity))
+            q, qd, gravity=self._np_dt(gravity))
         return raw.reshape(q.shape[:-1] + (nv, nv))  # row-major
 
     def kinetic_energy_regressor(self, q, qd, *, gravity: float = -9.81, _convention=None):
@@ -1141,7 +1144,7 @@ class JaxRobotHandle:
         (q, qd), B = self._prep_2d("kinetic_energy_regressor", q, qd)
         npar = 10 * self.num_bodies
         return jax.ffi.ffi_call(target, self._out(q, npar), vmap_method="broadcast_all")(
-            q, qd, gravity=np.float32(gravity))
+            q, qd, gravity=self._np_dt(gravity))
 
     def potential_energy_regressor(self, q, *, gravity: float = -9.81, _convention=None):
         """Potential-energy regressor y_PE, length ``10*num_bodies``, with
@@ -1156,7 +1159,7 @@ class JaxRobotHandle:
         (q,), B = self._prep_2d("potential_energy_regressor", q)
         npar = 10 * self.num_bodies
         return jax.ffi.ffi_call(target, self._out(q, npar), vmap_method="broadcast_all")(
-            q, gravity=np.float32(gravity))
+            q, gravity=self._np_dt(gravity))
 
     def frame_jacobian(self, q, *, target_jid=None, reference_frame=None, _convention=None):
         """Geometric Jacobian (6 x NV, ``[linear; angular]``) of a frame.
@@ -1364,7 +1367,7 @@ class JaxRobotHandle:
         nv = self.num_vel
         out_type = self._out(q, 2 * nv * nv)
         raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
-            q, qd, qdd_b, gravity=np.float32(gravity))
+            q, qd, qdd_b, gravity=self._np_dt(gravity))
         blocks = raw.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
         return jnp.concatenate([blocks[..., 0, :, :], blocks[..., 1, :, :]], axis=-1)
 
@@ -1385,7 +1388,7 @@ class JaxRobotHandle:
         nv = self.num_vel
         out_type = self._out(q, 2 * nv * nv)
         raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
-            q, qd, u, gravity=np.float32(gravity))
+            q, qd, u, gravity=self._np_dt(gravity))
         blocks = raw.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
         return jnp.concatenate([blocks[..., 0, :, :], blocks[..., 1, :, :]], axis=-1)
 
@@ -1408,12 +1411,12 @@ class JaxRobotHandle:
         import numpy as np
         target = self._mt(_convention, "idsva_so", "grid_rbd_jax_idsva_so")
         if qdd is None:
-            qdd = jnp.zeros_like(jnp.asarray(q, dtype=jnp.float32))
+            qdd = jnp.zeros_like(jnp.asarray(q, dtype=self._np_dt))
         (q, qd, qdd), B = self._prep_2d("idsva_so", q, qd, qdd)
         nv = self.num_vel
         out_type = self._out(q, 4 * nv ** 3)
         flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
-            q, qd, qdd, gravity=np.float32(gravity))
+            q, qd, qdd, gravity=self._np_dt(gravity))
         lead = q.shape[:-1]
         return SecondOrderID(*(
             flat[..., i * nv ** 3:(i + 1) * nv ** 3].reshape(lead + (nv, nv, nv))
@@ -1442,7 +1445,7 @@ class JaxRobotHandle:
         nv = self.num_vel
         out_type = self._out(q, 4 * nv ** 3)
         flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
-            q, qd, u, gravity=np.float32(gravity))
+            q, qd, u, gravity=self._np_dt(gravity))
         lead = q.shape[:-1]
         return SecondOrderFD(*(
             flat[..., i * nv ** 3:(i + 1) * nv ** 3].reshape(lead + (nv, nv, nv))
@@ -1465,10 +1468,10 @@ class JaxRobotHandle:
         from .._handle import _integrator_code
         target = self._mt(_convention, "integrator", "grid_rbd_jax_integrator")
         (q, qd, u), B = self._prep_2d("integrator", q, qd, u)
-        out_type = jax.ShapeDtypeStruct((B, self.num_joints + self.num_vel), jnp.float32)
+        out_type = jax.ShapeDtypeStruct((B, self.num_joints + self.num_vel), self._np_dt)
         return jax.ffi.ffi_call(target, out_type)(
-            q, qd, u, dt=np.float32(dt), it=np.int64(_integrator_code(integrator_type)),
-            gravity=np.float32(gravity))
+            q, qd, u, dt=self._np_dt(dt), it=np.int64(_integrator_code(integrator_type)),
+            gravity=self._np_dt(gravity))
 
     def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81,
                             _convention=None):
@@ -1485,10 +1488,10 @@ class JaxRobotHandle:
             "integrator_gradient", "grid_rbd_jax_integrator_gradient")
         (q, qd, u), B = self._prep_2d("integrator_gradient", q, qd, u)
         nv = self.num_vel
-        out_type = jax.ShapeDtypeStruct((B, 2 * nv * 3 * nv), jnp.float32)
+        out_type = jax.ShapeDtypeStruct((B, 2 * nv * 3 * nv), self._np_dt)
         flat = jax.ffi.ffi_call(target, out_type)(
-            q, qd, u, dt=np.float32(dt), it=np.int64(_integrator_code(integrator_type)),
-            gravity=np.float32(gravity))
+            q, qd, u, dt=self._np_dt(dt), it=np.int64(_integrator_code(integrator_type)),
+            gravity=self._np_dt(gravity))
         # h_dAB is (2*NV x 3*NV) column-major per timestep; recover row-major.
         return flat.reshape(B, 3 * nv, 2 * nv).transpose(0, 2, 1)
 
@@ -1506,11 +1509,11 @@ class JaxRobotHandle:
     # match the numpy surface.
 
     def _prep_plant(self, name, **arrays):
-        """Cast to float32 jax arrays, enforce 2D + same batch + max_batch.
+        """Cast to the handle dtype, enforce 2D + same batch + max_batch.
         Unlike _prep_2d this allows arbitrary last dims (the plant inputs are
         not all (B, NJ))."""
         import jax.numpy as jnp
-        cast = {k: jnp.asarray(v, dtype=jnp.float32) for k, v in arrays.items()}
+        cast = {k: jnp.asarray(v, dtype=self._np_dt) for k, v in arrays.items()}
         first = next(iter(cast.values()))
         if first.ndim != 2:
             raise ValueError(f"{name}: inputs must be 2D (B, N)")
@@ -1526,9 +1529,9 @@ class JaxRobotHandle:
         import jax
         import jax.numpy as jnp
         return (
-            jax.ShapeDtypeStruct((B, 1), jnp.float32),
-            jax.ShapeDtypeStruct((B, n_grad), jnp.float32),
-            jax.ShapeDtypeStruct((B, n_hess), jnp.float32),
+            jax.ShapeDtypeStruct((B, 1), self._np_dt),
+            jax.ShapeDtypeStruct((B, n_grad), self._np_dt),
+            jax.ShapeDtypeStruct((B, n_hess), self._np_dt),
         )
 
     def quadratic_state_cost(self, x, x_des, Q, *, _convention=None):
@@ -1567,9 +1570,9 @@ class JaxRobotHandle:
         target = _register_method_target(self._so_path, self._cache_key, name, symbol)
         cast, B = self._prep_plant(name, var=var, lower=lower, upper=upper)
         out_types = (
-            jax.ShapeDtypeStruct((B, 1), jnp.float32),
-            jax.ShapeDtypeStruct((B, n), jnp.float32),
-            jax.ShapeDtypeStruct((B, n), jnp.float32),
+            jax.ShapeDtypeStruct((B, 1), self._np_dt),
+            jax.ShapeDtypeStruct((B, n), self._np_dt),
+            jax.ShapeDtypeStruct((B, n), self._np_dt),
         )
         out, grad, hdiag = jax.ffi.ffi_call(target, out_types)(
             cast["var"], cast["lower"], cast["upper"], mu=np.float32(mu))
@@ -1607,10 +1610,10 @@ class JaxRobotHandle:
         target = self._mt(_convention, "plant_step", "grid_rbd_jax_plant_step")
         cast, B = self._prep_plant("plant_step", x=x, u=u)
         nx = self.num_joints + self.num_vel
-        out_type = jax.ShapeDtypeStruct((B, nx), jnp.float32)
+        out_type = jax.ShapeDtypeStruct((B, nx), self._np_dt)
         return jax.ffi.ffi_call(target, out_type)(
-            cast["x"], cast["u"], dt=np.float32(dt),
-            it=np.int64(_integrator_code(integrator_type)), gravity=np.float32(gravity))
+            cast["x"], cast["u"], dt=self._np_dt(dt),
+            it=np.int64(_integrator_code(integrator_type)), gravity=self._np_dt(gravity))
 
     def plant_step_gradient(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81,
                             _convention=None):
@@ -1627,10 +1630,10 @@ class JaxRobotHandle:
             "plant_step_gradient", "grid_rbd_jax_plant_step_gradient")
         cast, B = self._prep_plant("plant_step_gradient", x=x, u=u)
         nv = self.num_vel
-        out_type = jax.ShapeDtypeStruct((B, 2 * nv * 3 * nv), jnp.float32)
+        out_type = jax.ShapeDtypeStruct((B, 2 * nv * 3 * nv), self._np_dt)
         flat = jax.ffi.ffi_call(target, out_type)(
-            cast["x"], cast["u"], dt=np.float32(dt),
-            it=np.int64(_integrator_code(integrator_type)), gravity=np.float32(gravity))
+            cast["x"], cast["u"], dt=self._np_dt(dt),
+            it=np.int64(_integrator_code(integrator_type)), gravity=self._np_dt(gravity))
         # (2*NV x 3*NV) column-major per timestep; recover row-major.
         return flat.reshape(B, 3 * nv, 2 * nv).transpose(0, 2, 1)
 
@@ -1712,8 +1715,13 @@ def register_robot(
     runtime_transform: bool = False,
     enable_tool: bool = False,
     enable_mujoco_kernels: bool = True,
+    dtype: str = "float32",
 ) -> JaxRobotHandle:
     """Register a robot for use with JAX.
+
+    ``dtype="float64"`` (Wave 2a) builds/loads the fp64 .so — methods then take
+    and return float64 jax arrays. Requires ``jax.config.update("jax_enable_x64",
+    True)`` (checked here; without it jax would silently downcast inputs).
 
     Compiles + caches the same per-robot ``.so`` that
     :py:func:`grid_rbd.register_robot` uses (cache hit if already
@@ -1728,6 +1736,13 @@ def register_robot(
     Returns a :py:class:`JaxRobotHandle`.
     """
     _require_jax()  # fail early with install guidance if jax is missing
+    if dtype == "float64":
+        import jax as _jax
+        if not _jax.config.jax_enable_x64:
+            raise RuntimeError(
+                "dtype='float64' on the jax backend requires x64 mode: call "
+                "jax.config.update('jax_enable_x64', True) before register_robot "
+                "(without it jax silently downcasts float64 arrays to float32).")
     base = _grid_rbd.register_robot(
         name=name,
         urdf_path=urdf_path,
@@ -1744,7 +1759,8 @@ def register_robot(
         runtime_inertia=runtime_inertia,  # D.4: mutable inertia table (FFI reads the same device global)
         runtime_transform=runtime_transform,  # mutable joint-origin table (shared device global)
         enable_tool=enable_tool,  # tool welding: attach_tool/detach_tool/tool_fext surface
-        enable_mujoco_kernels=enable_mujoco_kernels,  # pin-only builds (RAM/compile-time)
+        enable_mujoco_kernels=enable_mujoco_kernels,
+        dtype=dtype,  # pin-only builds (RAM/compile-time)
         _profile_overlay=None,  # jax's baked default IS the ffi profile — no overlay
     )
     # Pull the cache_key + .so path from the manifest so we can dlopen

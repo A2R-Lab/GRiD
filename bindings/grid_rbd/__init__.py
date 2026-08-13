@@ -145,8 +145,9 @@ def register_robot(
     occupancy; some big-robot second-order kernels that already max-spill at fp32
     may not fit the device opt-in cap at fp64 — those kernels are left
     unregistered and raise a clear runtime error when called (no new gating).
-    The jax/torch backends are strictly fp32 (``dtype="float64"`` is rejected for
-    them). ``allow_fp64`` is the LEGACY fp32-compute upcast convenience (compute
+    Wave 2a: ``dtype="float64"`` works on ALL backends — the fp64 .so carries
+    fp64 jax and torch surfaces (framework arrays must then be float64).
+    ``allow_fp64`` is the LEGACY fp32-compute upcast convenience (compute
     in fp32, cast i/o to fp64); prefer ``dtype="float64"`` for real double
     precision. ``allow_fp64`` is ignored when ``dtype="float64"``.
 
@@ -281,10 +282,8 @@ def register_robot(
             "Pass enable_mujoco_kernels=True, or use output_convention='pinocchio'.")
     if dtype not in ("float32", "float64"):
         raise ValueError(f"dtype must be 'float32' or 'float64'; got {dtype!r}")
-    if dtype == "float64" and backend != "numpy":
-        raise ValueError(
-            f"dtype='float64' is only supported for the numpy backend; the "
-            f"{backend!r} backend is strictly fp32 (Phase 8). Use backend='numpy'.")
+    # Wave 2a: dtype="float64" is supported on ALL backends — the fp64 .so now
+    # carries fp64 jax (GRID_FFI_T) and torch (GRID_TORCH_DTYPE) surfaces.
     # runtime_inertia / runtime_transform are supported on ALL backends: the jax
     # FFI + torch custom-op kernels read the SAME device-resident mutable table the
     # numpy runner pokes (a single dlopen'd .so → one d_inertia_params /
@@ -314,11 +313,12 @@ def register_robot(
     if backend in ("jax", "torch") and allow_fp64:
         # allow_fp64 is the legacy numpy-surface fp32-compute/fp64-io upcast; the
         # jax/torch surfaces take framework arrays whose dtype the caller controls,
-        # so silently ignoring it would misreport precision. Real fp64 for these
-        # backends arrives with the dtype='float64' template un-gating.
+        # so silently ignoring it would misreport precision. For real double
+        # precision on these backends use dtype="float64" (a true fp64 .so).
         raise NotImplementedError(
             f"allow_fp64 is not supported on the {backend!r} backend (numpy-only "
-            "legacy upcast); pass fp32 arrays, or use backend='numpy'.")
+            "legacy upcast); use dtype='float64' for a true fp64 build, or "
+            "backend='numpy'.")
     if backend == "jax":
         from . import jax as _jax_backend
         return _jax_backend.register_robot(
@@ -330,7 +330,7 @@ def register_robot(
             runtime_joint_dynamics=runtime_joint_dynamics,
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform, enable_tool=enable_tool,
-            enable_mujoco_kernels=enable_mujoco_kernels)
+            enable_mujoco_kernels=enable_mujoco_kernels, dtype=dtype)
     if backend == "torch":
         from . import torch as _torch_backend
         return _torch_backend.register_robot(
@@ -342,7 +342,7 @@ def register_robot(
             runtime_joint_dynamics=runtime_joint_dynamics,
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform, enable_tool=enable_tool,
-            enable_mujoco_kernels=enable_mujoco_kernels)
+            enable_mujoco_kernels=enable_mujoco_kernels, dtype=dtype)
 
     cache_key, so_path, meta = warm_robot(
         name, urdf_path, urdf_string=urdf_string, floating_base=floating_base,
