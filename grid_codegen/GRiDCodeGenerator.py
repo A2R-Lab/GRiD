@@ -249,7 +249,7 @@ class GRiDCodeGenerator:
                          gen_var_not_in_list, gen_add_multi_threaded_select, gen_kernel_load_inputs, gen_kernel_save_result, \
                          gen_anti_licm_input_reload, gen_anti_licm_output_write, \
                          gen_static_array_ind_2d, gen_static_array_ind_3d, gen_add_debug_print_code_lines, \
-                         gen_mx_func_call_for_cpp, gen_add_shared_memory_helpers, gen_add_workspace_slot_count, gen_add_workspace_clamped_launch, gen_declare_shared_arena, \
+                         gen_mx_func_call_for_cpp, gen_add_shared_memory_helpers, gen_add_workspace_slot_count, gen_add_workspace_clamped_launch, gen_declare_shared_arena, _resolve_arena_layout, gen_arena_carve_struct, \
                          gen_shared_arena_t_count, gen_device_wrapper, gen_tier_dispatch, gen_spatial_algebra_helpers, \
                          gen_get_XI_size, gen_init_XImats, gen_get_inertia_params_size, gen_init_inertia_params, gen_set_inertia_params, \
                          gen_get_transform_params_size, gen_init_transform_params, gen_set_transform_params, \
@@ -331,6 +331,7 @@ class GRiDCodeGenerator:
                             gen_spherical_dintegrate_helpers, \
                             gen_integrator_inner_function_call, gen_integrator_inner, gen_integrator_device, \
                             gen_integrator_kernel, gen_integrator_host, gen_integrator, gen_lie_group_helpers, \
+                            gen_integrator_arena_carve_struct, gen_integrator_du_arena_carve_struct, \
                             gen_integrator_gradient_inner_temp_mem_size, gen_integrator_gradient_dAB_assembly, \
                             gen_integrator_gradient_inner_python, gen_integrator_gradient_multistage, \
                             gen_integrator_gradient_device, gen_integrator_gradient_device_function_call, \
@@ -4117,8 +4118,13 @@ class GRiDCodeGenerator:
             self.gen_crba()
         if "integrator" in algorithms:
             self.gen_integrator()
+            # GATO ASK6: namespace-scope carve struct mirroring the integrator
+            # kernel's TIER_SHARED arena (additive; external-caller surface).
+            self.gen_integrator_arena_carve_struct()
         if ("integrator_gradient" in algorithms) or ("integrator_with_gradient" in algorithms):
             self.gen_integrator_gradient()
+            # GATO ASK6: the du-kernel twin (with-x_kp1 shape, TIER_SHARED rung).
+            self.gen_integrator_du_arena_carve_struct()
         if not self.robot.floating_base or enable_floating_second_order:
             if "idsva_so_body_frame" in algorithms:
                 self.gen_idsva_so_body_frame()

@@ -3451,6 +3451,10 @@ def gen_ee_target_aliases(self, include_pose = True, include_gradient = True, in
         "// " + ("" if named else "NOTE: this frame DROPS any terminal fixed joint's <origin>. Regenerate with "
                                   "fixed_target_names=<joint> to track the true TCP."),
         "const int NUM_TARGET_EES = " + str(num_ees) + ";",
+        # GATO ASK6 step 4: stamp the resolved fixed-target frame name so a
+        # consumer can introspect WHICH frame the target aliases resolve to
+        # (empty string = no named target baked -> generic last-moving-joint).
+        "#define GRID_EE_FIXED_TARGET_NAME \"" + getattr(self, "_ee_target_name", "") + "\"",
         ""])
 
     if include_pose:

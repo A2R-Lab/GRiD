@@ -571,15 +571,20 @@ def gen_XImats_helpers_temp_shared_memory_code(self, temp_mem_size = 0, include_
     # the launched smem agree. Baked path keeps temp_mem_size byte-identical (no
     # growth, no Xfixed block). The Xfixed write at offset 2*num_pos still lands
     # inside [0, inner+36*NB) since inner >= 2*num_pos.
-    if getattr(self, "runtime_transform", False) and not include_homogenous_transforms:
-        temp_mem_size = int(temp_mem_size or 0) + 36 * self.robot.get_num_joints()
-    self.gen_declare_shared_arena(extra_t_buffers, temp_mem_size,
-                                  include_topology_helpers = (not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n)))),
+    layout = self._resolve_arena_layout(
+        extra_t_buffers, temp_mem_size,
+        include_topology_helpers = (not self.robot.is_serial_chain() or not self.robot.are_Ss_identical(list(range(n)))),
+        ximat_size = XI_size,
+        include_linalg_scratch = include_linalg_scratch,
+        linalg_scratch_bytes = linalg_scratch_bytes,
+        apply_runtime_transform_band = (getattr(self, "runtime_transform", False) and not include_homogenous_transforms))
+    self.gen_declare_shared_arena(layout.t_buffers, layout.temp_mem_size,
+                                  include_topology_helpers = (layout.topology_count > 0),
                                   ximat_name = "s_XImats",
-                                  ximat_size = XI_size,
+                                  ximat_size = layout.ximat_size,
                                   temp_name = "s_temp",
                                   topology_name = "s_topology_helpers",
-                                  extra_byte_regions = [("s_linalg_smem", linalg_scratch_bytes)] if include_linalg_scratch else None,
+                                  extra_byte_regions = (layout.extra_byte_regions or None),
                                   tier_workspace_expr = tier_workspace_expr)
 
 def _emit_mimic_q_fold(self):
@@ -1087,18 +1092,24 @@ def gen_XmatsHom_helpers_temp_shared_memory_code(self, temp_mem_size = 0, includ
         hom_buffers.append(("s_dXmatsHom", dXhom_size))
     if include_hessians and include_d2xhom_shared:
         hom_buffers.append(("s_d2XmatsHom", d2Xhom_size))
-    self.gen_declare_shared_arena(extra_t_buffers + hom_buffers, temp_mem_size,
-                                  # Always declare s_topology_helpers (nullptr for serial chains with
-                                  # identical Ss) so the uniform load_update_XmatsHom_helpers signature
-                                  # always has the arg in scope. Mirrors load_update_XImats_helpers.
-                                  include_topology_helpers = True,
+    # Always declare s_topology_helpers (nullptr for serial chains with
+    # identical Ss) so the uniform load_update_XmatsHom_helpers signature
+    # always has the arg in scope. Mirrors load_update_XImats_helpers.
+    layout = self._resolve_arena_layout(
+        extra_t_buffers + hom_buffers, temp_mem_size,
+        include_topology_helpers = True,
+        ximat_size = 0,
+        include_linalg_scratch = include_linalg_scratch,
+        linalg_scratch_bytes = linalg_scratch_bytes)
+    self.gen_declare_shared_arena(layout.t_buffers, layout.temp_mem_size,
+                                  include_topology_helpers = (layout.topology_count > 0),
                                   ximat_name = "",
-                                  ximat_size = 0,
+                                  ximat_size = layout.ximat_size,
                                   temp_name = "s_temp",
                                   topology_name = "s_topology_helpers",
-                                  extra_byte_regions = [("s_linalg_smem", linalg_scratch_bytes)] if include_linalg_scratch else None,
-                                  arena_base_expr = arena_base_expr,
-                                  tier_workspace_expr = tier_workspace_expr)
+                                  extra_byte_regions = (layout.extra_byte_regions or None),
+                                  tier_workspace_expr = tier_workspace_expr,
+                                  arena_base_expr = arena_base_expr)
 
 def gen_load_topology_helpers(self):
     """Emit a standalone ``load_topology_helpers(s_topology_helpers, d_robotModel)``

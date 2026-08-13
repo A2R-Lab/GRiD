@@ -548,3 +548,64 @@ def test_cuda_plant_centroidal_costs_match_reference(tmp_path, robot_id, base_mo
             f"{tag} momentum grad q-block not exactly zero"
         close(out["momentum_cost_hess"].reshape(nx, nx, order="F"), mom_hess,
               f"{tag} momentum GN hess (A^T W A; bottom-right qd-block)")
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+@pytest.mark.robot_smoke
+@pytest.mark.floating_base
+def test_cuda_tangent_state_cost_matches_reference(tmp_path):
+    """GATO ASK3: quadratic_state_cost_tangent (value / gradient / GN hessian /
+    full-Newton hessian) vs the RBDReference oracle twin.
+
+    The runner builds x_des ON DEVICE (q_des = integrate(q, fixed delta) — a
+    valid quaternion by construction) and dumps it, so the oracle is evaluated
+    at the exact same float-rounded reference state; the integrate chart itself
+    is covered by the integrator equivalence suite. The Newton hessian carries
+    BOTH curvature terms (guide §7.z2) — the value-FD-gated oracle is the
+    authority."""
+    robot_id, base_mode = "go2", "floating"
+    spec = _robot_spec(robot_id, base_mode)
+    try:
+        resolved = resolve_robot_spec(spec)
+    except RuntimeError as exc:
+        pytest.skip(f"Could not resolve manifest {spec.robot_id}: {exc}")
+    project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
+    ref = project_model.reference
+    build_dir = tmp_path / f"{robot_id}_{base_mode}_tangent"
+    build_dir.mkdir()
+    _generate_header(project_model, build_dir)
+    executable, cmd = _compile_runner(build_dir)
+
+    nq, nv = project_model.nq, project_model.nv
+    tn = 2 * nv
+    samples = _build_cuda_samples(project_model, random_count=3, include_corner_samples=True)
+    rtol, atol = 2e-3, 2e-3
+
+    def close(actual, expected, msg):
+        expected = np.asarray(expected, dtype=np.float64)
+        scale = float(np.max(np.abs(expected))) if expected.size else 0.0
+        np.testing.assert_allclose(
+            np.asarray(actual, dtype=np.float64), expected,
+            rtol=rtol, atol=max(atol, rtol * scale), err_msg=msg,
+        )
+
+    Q2 = 1.0 + 0.5 * np.arange(tn, dtype=np.float64)
+    for sample in samples:
+        q, qd = np.asarray(sample.q, np.float64), np.asarray(sample.qd, np.float64)
+        u = np.asarray(sample.qdd, np.float64)
+        out = _run(executable, cmd, q, qd, u, _DT)
+        tag = f"{robot_id}:{base_mode} @ {sample.name} (tangent)"
+        if "tangent_cost_skipped" in out:
+            pytest.skip("tangent preset not emitted for this robot/config")
+        x = np.concatenate([q, qd])
+        x_des = np.asarray(out["tangent_cost_x_des"], dtype=np.float64).reshape(-1)
+        v_gn, g_ref, h_gn = ref.quadratic_state_cost_tangent(x, x_des, Q2, gauss_newton=True)
+        _, _, h_nw = ref.quadratic_state_cost_tangent(x, x_des, Q2, gauss_newton=False)
+        close(out["tangent_cost_value"].reshape(-1)[0], v_gn, f"{tag} value")
+        close(out["tangent_cost_grad"].reshape(-1), g_ref, f"{tag} grad (exact J_diff)")
+        close(out["tangent_cost_hess_gn"].reshape(tn, tn, order="F"), h_gn, f"{tag} GN hess")
+        close(out["tangent_cost_hess_newton"].reshape(tn, tn, order="F"), h_nw,
+              f"{tag} Newton hess (BOTH curvature terms, guide 7.z2)")
+        # Newton != GN away from e = 0 — guard against a silently-dead curvature path.
+        assert np.max(np.abs(h_nw - h_gn)) > 1e-6, f"{tag}: Newton == GN (curvature path dead?)"

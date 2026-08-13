@@ -458,6 +458,51 @@ __global__ void tracking_preset_kernel(const T *g_q, const T *g_qd, const T *g_u
 }
 #endif  // GRID_PLANT_HAS_TRACKING_COST
 
+// ---- tangent (log-map) state cost check (floating-base preset; GATO ASK3) ----
+// x_des is built ON DEVICE from the input state: q_des = integrate(q, delta) with a
+// fixed deterministic tangent delta (guaranteed-valid quaternion by construction),
+// qd_des = qd + pattern. x_des is ALSO dumped so the Python side evaluates the oracle
+// at the exact same (float-rounded) reference state — the integrate chart itself is
+// already covered by the integrator equivalence suite.
+#ifdef GRID_PLANT_HAS_TANGENT_STATE_COST
+template <typename T>
+__global__ void tangent_cost_kernel(const T *g_q, const T *g_qd,
+                                    T *o_val, T *o_grad, T *o_hess_gn, T *o_hess_newton,
+                                    T *o_xdes) {
+    constexpr int TN = 2 * NV;
+    constexpr int SCR = (NV + 294 > 3 * NV) ? (NV + 294) : (3 * NV);
+    __shared__ T s_x[NX]; __shared__ T s_xdes[NX];
+    __shared__ T s_Q2[TN]; __shared__ T s_delta[NV];
+    __shared__ T s_scratch[SCR];
+    __shared__ T s_out[1]; __shared__ T s_grad[TN];
+    __shared__ T s_hgn[TN * TN]; __shared__ T s_hnw[TN * TN];
+    for (int i = threadIdx.x; i < NQ; i += blockDim.x) s_x[i] = g_q[i];
+    for (int i = threadIdx.x; i < NV; i += blockDim.x) s_x[NQ + i] = g_qd[i];
+    for (int i = threadIdx.x; i < NV; i += blockDim.x)
+        s_delta[i] = static_cast<T>(0.05) * static_cast<T>((i % 3) + 1) * ((i % 2) ? static_cast<T>(-1) : static_cast<T>(1));
+    for (int i = threadIdx.x; i < TN; i += blockDim.x)
+        s_Q2[i] = static_cast<T>(1) + static_cast<T>(0.5) * static_cast<T>(i);
+    __syncthreads();
+    if (threadIdx.x == 0 && threadIdx.y == 0) {
+        grid::grid_integrate_floating_q<T, NQ>(s_x, s_delta, s_xdes);
+        for (int i = 0; i < NV; ++i) s_xdes[NQ + i] = s_x[NQ + i] + static_cast<T>(0.03) * static_cast<T>(i + 1);
+    }
+    __syncthreads();
+    grid_plant::quadratic_state_cost_tangent<T>(s_out, s_x, s_xdes, s_Q2, s_scratch);
+    __syncthreads();
+    grid_plant::quadratic_state_cost_tangent_gradient<T>(s_grad, s_x, s_xdes, s_Q2, s_scratch);
+    __syncthreads();
+    grid_plant::quadratic_state_cost_tangent_hessian<T, false, true>(s_hgn, s_x, s_xdes, s_Q2, s_scratch);
+    __syncthreads();
+    grid_plant::quadratic_state_cost_tangent_hessian<T, false, false>(s_hnw, s_x, s_xdes, s_Q2, s_scratch);
+    __syncthreads();
+    if (threadIdx.x == 0 && threadIdx.y == 0) o_val[0] = s_out[0];
+    for (int i = threadIdx.x; i < TN; i += blockDim.x) o_grad[i] = s_grad[i];
+    for (int i = threadIdx.x; i < TN * TN; i += blockDim.x) { o_hess_gn[i] = s_hgn[i]; o_hess_newton[i] = s_hnw[i]; }
+    for (int i = threadIdx.x; i < NX; i += blockDim.x) o_xdes[i] = s_xdes[i];
+}
+#endif  // GRID_PLANT_HAS_TANGENT_STATE_COST
+
 template <typename T>
 T *dmalloc(int count) { T *p; cudaMalloc(&p, count * sizeof(T)); return p; }
 template <typename T>
@@ -564,6 +609,15 @@ void run() {
     cudaFuncSetAttribute(tracking_preset_kernel<T>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)plant_dyn);
     tracking_preset_kernel<T><<<1, nthreads, plant_dyn>>>(g_q, g_qd, g_u, d_robotModel,
         o_tpv, o_tpqk, o_tprk, o_tpQk, o_tpRk, o_trv, o_trqk, o_trrk, o_trQk, o_trRk);
+    gpuErrchkKernel();
+#endif
+
+#ifdef GRID_PLANT_HAS_TANGENT_STATE_COST
+    // Tangent (log-map) state cost — static __shared__ only, no dynamic arena.
+    T *o_tcv = dmalloc<T>(1), *o_tcg = dmalloc<T>(2 * NV);
+    T *o_tch_gn = dmalloc<T>(4 * NV * NV), *o_tch_nw = dmalloc<T>(4 * NV * NV);
+    T *o_tc_xdes = dmalloc<T>(NX);
+    tangent_cost_kernel<T><<<1, nthreads>>>(g_q, g_qd, o_tcv, o_tcg, o_tch_gn, o_tch_nw, o_tc_xdes);
     gpuErrchkKernel();
 #endif
 
@@ -682,6 +736,17 @@ void run() {
     // Row-major flat (1 x D2AB_CNT); reshaped to (2*NV, 3*NV, 3*NV) C-order in Python.
     dcopy_out("plant_d2AB_euler", o_h2_eu, 1, D2AB_CNT);
     dcopy_out("plant_d2AB_si_euler", o_h2_si, 1, D2AB_CNT);
+#endif
+#ifdef GRID_PLANT_HAS_TANGENT_STATE_COST
+    dcopy_out("tangent_cost_value", o_tcv, 1, 1);
+    dcopy_out("tangent_cost_grad", o_tcg, 1, 2 * NV);
+    dcopy_out("tangent_cost_hess_gn", o_tch_gn, 2 * NV, 2 * NV);
+    dcopy_out("tangent_cost_hess_newton", o_tch_nw, 2 * NV, 2 * NV);
+    dcopy_out("tangent_cost_x_des", o_tc_xdes, 1, NX);
+#else
+    // Fixed-base (or spherical-floating) robots do not emit the tangent preset;
+    // parseable sentinel so the Python tangent test pytest.skips the cell.
+    std::cout << "BEGIN tangent_cost_skipped 1 1\n1\nEND tangent_cost_skipped\n";
 #endif
 
     grid::close_grid<T>(streams, d_robotModel, hd_data);

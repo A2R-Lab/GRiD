@@ -995,6 +995,50 @@ def gen_integrator_device(self):
         extra_t_buffers = extra_t_buffers, include_linalg_scratch = True)
 
 
+def _integrator_kernel_extra_t_buffers(self, nq, nv):
+    """The integrator kernel's shared-arena T-slot list. Single source of truth
+    shared by _emit_integrator_kernel_body_for_flags and the integrator_arena
+    carve struct (gen_integrator_arena_carve_struct) so the two cannot drift.
+    Mirrors GCG's integrator t-count comment block byte-for-byte."""
+    max_stages = _max_stages_in_use()
+    # Canonical INPUT packing (mirrors id/crba/aba/forward_dynamics): q, qd, u each
+    # occupy a NUM_JOINTS(=nq)-wide slot at stride 3*nq; slice qd at nq, u at 2*nq.
+    input_count = 3 * nq
+    return [
+        ("s_q_qd_u", input_count),
+        ("s_qdd", nv),
+        ("s_stage_qdd", (max_stages - 1) * nv),
+        ("s_stage_point", (max_stages - 1) * (nq + nv)),
+        ("s_x_kp1", nq + nv),  # next state [q (nq); qd (nv)]
+    ]
+
+
+def gen_integrator_arena_carve_struct(self):
+    """Emit the namespace-scope `integrator_arena<T>` carve struct (GATO ASK6):
+    external callers allocate INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T, TIER_SHARED>()
+    bytes and carve() the exact TIER_SHARED sub-buffer layout the integrator
+    kernel uses."""
+    nq = self.robot.get_num_pos()
+    nv = self.robot.get_num_vel()
+    spill_minv_F = bool(getattr(self, "integrator_spill_tier_3way", (0, 0, 0))[0])
+    temp = self.gen_forward_dynamics_inner_temp_mem_size(minv_f_in_smem=not spill_minv_F)
+    layout = self._resolve_arena_layout(
+        _integrator_kernel_extra_t_buffers(self, nq, nv), temp,
+        include_topology_helpers = (not self.robot.is_serial_chain()
+                                    or not self.robot.are_Ss_identical(list(range(nq)))),
+        ximat_size = self.gen_get_XI_size(False, False),
+        include_linalg_scratch = True,
+        linalg_scratch_bytes = "GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()",
+        apply_runtime_transform_band = getattr(self, "runtime_transform", False))
+    self.gen_arena_carve_struct(
+        "integrator_arena", layout,
+        "INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T, TIER_SHARED>()",
+        expected_t_count = self.integrator_t_count_per_tier[0],
+        doc = "integrator_arena: carve struct mirroring the integrator kernel's TIER_SHARED "
+              "shared-arena layout; allocate INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T, TIER_SHARED>() "
+              "bytes (e.g. an external solver's own smem block) and call carve(base).")
+
+
 def _emit_integrator_kernel_body_for_flags(self, nq, nv, spill_minv_F, single_call_timing):
     """Emit integrator_kernel body for one tier's Minv-F spill flag.
     spill_minv_F=False: the FD inner's Minv F-region lives in smem (s_temp);
@@ -1012,13 +1056,7 @@ def _emit_integrator_kernel_body_for_flags(self, nq, nv, spill_minv_F, single_ca
     # mis-sliced u -- the floating B=1 + batch input bug. The OUTPUT state x_kp1 is
     # genuinely nq+nv wide (q is nq, qd is nv), so out_count stays nq+nv.
     input_count = 3 * nq
-    extra_t_buffers = [
-        ("s_q_qd_u", input_count),
-        ("s_qdd", nv),
-        ("s_stage_qdd", (max_stages - 1) * nv),
-        ("s_stage_point", (max_stages - 1) * (nq + nv)),
-        ("s_x_kp1", nq + nv),  # next state [q (nq); qd (nv)]
-    ]
+    extra_t_buffers = _integrator_kernel_extra_t_buffers(self, nq, nv)
     self.gen_XImats_helpers_temp_shared_memory_code(shared_mem_size, extra_t_buffers=extra_t_buffers, include_linalg_scratch=True)
     self.gen_add_code_line(
         "T *s_q = s_q_qd_u; T *s_qd = &s_q_qd_u[" + str(nq) + "]; T *s_u = &s_q_qd_u[" + str(2 * nq) + "];"

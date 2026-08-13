@@ -1,4 +1,5 @@
 import os
+from typing import NamedTuple
 
 # GRID_NO_LICM_BARRIER=1 suppresses the anti-LICM machinery (volatile input
 # reload, rep-stomp, output->input feedback, syncthreads-protected output write)
@@ -914,6 +915,41 @@ def gen_add_workspace_clamped_launch(self, launch_lines, emit_count = True, coun
     self.gen_add_code_line("if ((int)(_ws_grid.x*_ws_grid.y*_ws_grid.z) > _grid_ws_n) { _ws_grid = dim3(_grid_ws_n,1,1); }")
     self.gen_add_code_lines(subbed)
 
+class ArenaLayout(NamedTuple):
+    """The FINAL resolved inputs a shared-arena emission receives.
+
+    Produced only by _resolve_arena_layout so the kernel arena
+    (gen_declare_shared_arena) and the namespace-scope carve struct
+    (gen_arena_carve_struct) are guaranteed to walk the same layout."""
+    t_buffers: list
+    temp_mem_size: int
+    topology_count: int
+    extra_byte_regions: list
+    ximat_size: int
+
+
+def _resolve_arena_layout(self, extra_t_buffers, temp_mem_size,
+                          include_topology_helpers, ximat_size,
+                          include_linalg_scratch, linalg_scratch_bytes,
+                          apply_runtime_transform_band = False):
+    """Resolve the FINAL (t_buffers, temp_mem_size, topology_count,
+    extra_byte_regions, ximat_size) that gen_declare_shared_arena receives.
+
+    apply_runtime_transform_band folds the XImats-flavor runtime_transform
+    +36*NB temp reserve (see gen_XImats_helpers_temp_shared_memory_code's
+    comment for the full rationale); callers pass the same condition they
+    previously applied inline. Single source of truth shared with
+    gen_arena_carve_struct."""
+    t_buffers = list(extra_t_buffers) if extra_t_buffers is not None else []
+    if apply_runtime_transform_band:
+        temp_mem_size = int(temp_mem_size or 0) + 36 * self.robot.get_num_joints()
+    topology_count = self.gen_topology_helpers_size() if include_topology_helpers else 0
+    extra_byte_regions = ([("s_linalg_smem", linalg_scratch_bytes)]
+                          if include_linalg_scratch else [])
+    return ArenaLayout(t_buffers, temp_mem_size, topology_count,
+                       extra_byte_regions, ximat_size)
+
+
 def gen_declare_shared_arena(self, t_buffers, temp_mem_size, include_topology_helpers = True,
                              ximat_name = "s_XImats", ximat_size = 0,
                              temp_name = "s_temp", topology_name = "s_topology_helpers",
@@ -1044,6 +1080,90 @@ def gen_declare_shared_arena(self, t_buffers, temp_mem_size, include_topology_he
         self.gen_add_code_line("assert(s_arena_offset == grid_shared_arena_bytes<T>(" + str(t_region_count) + ", " + str(topology_count) + ", " + extra_byte_expr + "));")
     self.gen_add_code_line("#endif")
     self.gen_add_code_line("(void)s_arena_offset;")
+
+def gen_arena_carve_struct(self, struct_name, layout, sizer_expr,
+                           expected_t_count = None,
+                           ximat_name = "s_XImats", temp_name = "s_temp",
+                           topology_name = "s_topology_helpers", doc = None,
+                           helper_ns = ""):
+    """Emit a NAMESPACE-scope carve struct mirroring one kernel's shared-arena
+    layout (TIER_SHARED shape only, no tier branch), so an external caller
+    (e.g. GATO's BSQP) can allocate <sizer_expr> bytes and carve the exact
+    sub-buffer layout the kernel/device path expects — without depending on
+    the arena internals.
+
+    `layout` MUST come from _resolve_arena_layout (the same call the kernel's
+    arena emission uses) so the two walks cannot drift. carve() replays
+    gen_declare_shared_arena's exact sequence: per-T-slot align alignof(T),
+    ximats, temp, align alignof(int) topology, align-16 byte regions.
+
+    The device-side assert is `total <= sizer_expr` (the allocation-safety
+    contract; the sizer rounds its final total up to 16 bytes so equality is
+    not the invariant). Exactness is enforced HERE at emission time instead:
+    pass expected_t_count = the t-count baked into the sizer and codegen fails
+    loudly on any mismatch."""
+    fixed_t_count = sum(int(c) for _, c in layout.t_buffers if isinstance(c, int))
+    if any(not isinstance(c, int) for _, c in layout.t_buffers):
+        raise RuntimeError("gen_arena_carve_struct(" + struct_name + "): expr-string t_buffer "
+                           "counts are not supported (tier-routed slots have no single "
+                           "TIER_SHARED shape)")
+    total_t_count = fixed_t_count + int(layout.ximat_size or 0) + int(layout.temp_mem_size or 0)
+    if expected_t_count is not None and total_t_count != int(expected_t_count):
+        raise RuntimeError("gen_arena_carve_struct(" + struct_name + "): resolved t-count "
+                           + str(total_t_count) + " != sizer t-count " + str(int(expected_t_count))
+                           + " — carve layout would not match the launched smem")
+    if doc:
+        self.gen_add_func_doc(doc, [], [], None)
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("struct " + struct_name + " {", True)
+    for name, _count in layout.t_buffers:
+        self.gen_add_code_line("T *" + name + ";")
+    if layout.ximat_size:
+        self.gen_add_code_line("T *" + ximat_name + ";")
+    self.gen_add_code_line("T *" + temp_name + ";")
+    self.gen_add_code_line("int *" + topology_name + ";")
+    for name, _count in layout.extra_byte_regions:
+        self.gen_add_code_line("unsigned char *" + name + ";")
+    self.gen_add_code_line("static __device__ " + struct_name + "<T> carve(void *base) {", True)
+    self.gen_add_code_line("unsigned char *s_arena = reinterpret_cast<unsigned char *>(base);")
+    self.gen_add_code_line("size_t s_arena_offset = 0;")
+    self.gen_add_code_line(struct_name + "<T> a;")
+    for name, count in layout.t_buffers:
+        self.gen_add_code_line("s_arena_offset = " + helper_ns + "grid_align_up(s_arena_offset, alignof(T));")
+        self.gen_add_code_line("a." + name + " = " + helper_ns + "grid_arena_ptr<T>(s_arena, s_arena_offset);")
+        self.gen_add_code_line("s_arena_offset += sizeof(T) * static_cast<size_t>(" + str(count) + ");")
+    if layout.ximat_size:
+        self.gen_add_code_line("s_arena_offset = " + helper_ns + "grid_align_up(s_arena_offset, alignof(T));")
+        self.gen_add_code_line("a." + ximat_name + " = " + helper_ns + "grid_arena_ptr<T>(s_arena, s_arena_offset);")
+        self.gen_add_code_line("s_arena_offset += sizeof(T) * static_cast<size_t>(" + str(int(layout.ximat_size)) + ");")
+    if int(layout.temp_mem_size or 0) != 0:
+        self.gen_add_code_line("s_arena_offset = " + helper_ns + "grid_align_up(s_arena_offset, alignof(T));")
+        self.gen_add_code_line("a." + temp_name + " = " + helper_ns + "grid_arena_ptr<T>(s_arena, s_arena_offset);")
+        self.gen_add_code_line("s_arena_offset += sizeof(T) * static_cast<size_t>(" + str(int(layout.temp_mem_size)) + ");")
+    else:
+        self.gen_add_code_line("a." + temp_name + " = nullptr;")
+    if layout.topology_count > 0:
+        self.gen_add_code_line("s_arena_offset = " + helper_ns + "grid_align_up(s_arena_offset, alignof(int));")
+        self.gen_add_code_line("a." + topology_name + " = " + helper_ns + "grid_arena_ptr<int>(s_arena, s_arena_offset);")
+        self.gen_add_code_line("s_arena_offset += sizeof(int) * static_cast<size_t>(" + str(layout.topology_count) + ");")
+    else:
+        self.gen_add_code_line("a." + topology_name + " = nullptr;")
+    for name, count in layout.extra_byte_regions:
+        self.gen_add_code_line("a." + name + " = nullptr;")
+        self.gen_add_code_line("if (static_cast<size_t>(" + str(count) + ") > 0) {", True)
+        self.gen_add_code_line("s_arena_offset = " + helper_ns + "grid_align_up(s_arena_offset, static_cast<size_t>(16));")
+        self.gen_add_code_line("a." + name + " = " + helper_ns + "grid_arena_ptr<unsigned char>(s_arena, s_arena_offset);")
+        self.gen_add_code_line("s_arena_offset += static_cast<size_t>(" + str(count) + ");")
+        self.gen_add_end_control_flow()
+    self.gen_add_code_line("#ifdef GRID_CUDA_DEBUG_LAYOUT")
+    self.gen_add_code_line("assert(s_arena_offset <= " + sizer_expr + ");")
+    self.gen_add_code_line("#endif")
+    self.gen_add_code_line("(void)s_arena_offset;")
+    self.gen_add_code_line("return a;")
+    self.gen_add_end_control_flow()  # closes carve()
+    self.indent_level -= 1
+    self.gen_add_code_line("};\n")   # closes the struct (mirror gen_add_end_function spacing)
+
 
 def gen_shared_arena_t_count(self, t_buffers, temp_mem_size, helper_size):
     count = helper_size

@@ -1077,3 +1077,62 @@ int main() { return 0; }
                     "-c", str(tu), "-o", str(tu.with_suffix(".o"))],
                    capture_output=True, text=True, timeout=1200)
     assert proc.returncode == 0, f"fc TU failed to compile:\n{proc.stderr[-3000:]}"
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.developer_only
+def test_arena_carve_structs_compile(tmp_path):
+    """GATO ASK6: the namespace-scope carve structs (grid::integrator_arena /
+    grid::integrator_du_arena / grid_plant::plant_step_gradient_arena) are
+    emitted, carve() compiles as device code, and members carry the
+    kernel-layout types (drift in a member name/type fails this compile).
+
+    The EXACT layout tie — carve walk == the sizer's baked t-count — is
+    enforced at EMISSION time (gen_arena_carve_struct's expected_t_count
+    raises during codegen on any drift), so this gate's job is the C++
+    surface, not the arithmetic. The GRID_EE_FIXED_TARGET_NAME stamp
+    (ASK6 step 4) is asserted both in the header text and via #ifndef."""
+    # end_effector_pose pulls in the EE target-alias surface, whose emission
+    # carries the GRID_EE_FIXED_TARGET_NAME stamp (the stamp is deliberately
+    # absent from EE-less headers — it describes the alias family).
+    header = _generate_header(tmp_path, "iiwa14", "fixed",
+                              algorithm_list="integrator,integrator_with_gradient,end_effector_pose")
+    assert "struct integrator_arena {" in header
+    assert "struct integrator_du_arena {" in header
+    assert "struct plant_step_gradient_arena {" in header
+    assert '#define GRID_EE_FIXED_TARGET_NAME ""' in header
+    assert "void end_effector_pose_target_inner(" in header
+    source = r'''
+#include "grid.cuh"
+
+#ifndef GRID_EE_FIXED_TARGET_NAME
+#error "GRID_EE_FIXED_TARGET_NAME must be stamped by gen_ee_target_aliases"
+#endif
+
+__global__ void carve_probe(unsigned char *out) {
+    extern __shared__ __align__(16) unsigned char smem[];
+    auto ia = grid::integrator_arena<float>::carve(smem);
+    auto da = grid::integrator_du_arena<float>::carve(smem);
+    auto pa = grid_plant::plant_step_gradient_arena<float>::carve(smem);
+    // Type-checked member access: name/type drift fails to compile.
+    float *f = ia.s_q_qd_u; f = ia.s_qdd; f = ia.s_stage_qdd; f = ia.s_stage_point;
+    f = ia.s_x_kp1; f = ia.s_XImats; f = ia.s_temp;
+    int *ti = ia.s_topology_helpers;
+    unsigned char *lb = ia.s_linalg_smem;
+    f = da.s_q_qd_u; f = da.s_dAB; f = da.s_df_du; f = da.s_dc_du; f = da.s_vaf;
+    f = da.s_Minv; f = da.s_qdd; f = da.s_q_orig; f = da.s_qd_orig;
+    f = da.s_stage_grad_qdd; f = da.s_D_qdd_stage;
+    f = da.s_dInt_q_6x6; f = da.s_dInt_v_6x6; f = da.s_x_kp1;
+    f = pa.s_x; f = pa.s_u; f = pa.s_dAB; f = pa.s_D_qdd_stage; f = pa.s_temp;
+    out[0] = static_cast<unsigned char>((f != nullptr) + (ti != nullptr) + (lb != nullptr));
+}
+
+int main() {
+    // The launch reservations the carve contract pairs with, host-visible.
+    size_t a = grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<float, grid::TIER_SHARED>();
+    size_t b = grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<float, grid::TIER_SHARED>();
+    return (a > 0 && b > 0) ? 0 : 1;
+}
+'''
+    _compile_header_consumer(tmp_path, header, source, "arena_carve_structs",
+                             cxx_standard="-std=c++17")

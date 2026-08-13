@@ -519,11 +519,19 @@ def _gen_quadratic_cost_family(self, which):
     mjx_qarg = ", const T *s_q" if mjx else ""
 
     # ---- value: cost = 1/2 sum W_i (var_i - des_i)^2, accumulated into s_out[0] ----
+    notes = ["Block-cooperative: each thread accumulates its strided terms into s_scratch, then a serial reduction writes s_out[0].",
+             "ACCUMULATE=false overwrites s_out[0]; ACCUMULATE=true ADDS into it (for summing cost terms into one scalar).",
+             "s_scratch must hold at least " + N + " elements."]
+    if which == "state" and self.robot.floating_base:
+        # GATO ASK3: raw x-space subtraction on a FLOATING base differences the
+        # quaternion COMPONENTS — not a chart/tangent error; its grad/hess are
+        # not the derivatives a manifold Newton/SQP consumes.
+        notes.append("FLOATING BASE WARNING: r = x - x_des subtracts raw quaternion components — NOT a "
+                     "tangent-space error. For manifold-correct tracking derivatives use "
+                     "quadratic_state_cost_tangent (log-map error, exact J_diff, tangent-sized outputs).")
     self.gen_add_func_doc(
         base + ": value = 1/2 * sum_i " + w + "[i] * (" + var + "[i] - " + des + "[i])^2",
-        ["Block-cooperative: each thread accumulates its strided terms into s_scratch, then a serial reduction writes s_out[0].",
-         "ACCUMULATE=false overwrites s_out[0]; ACCUMULATE=true ADDS into it (for summing cost terms into one scalar).",
-         "s_scratch must hold at least " + N + " elements."],
+        notes,
         ["s_out is the scalar cost output (s_out[0])",
          var + " is the current value (size " + size_doc + ")",
          des + " is the desired/target value (size " + size_doc + ")",
@@ -620,6 +628,205 @@ def _gen_quadratic_cost_family(self, which):
     self.gen_add_end_function()
 
 
+def gen_quadratic_state_cost_tangent(self):
+    """GATO ASK3: tangent-space (log-map) quadratic state cost for FLOATING-base
+    tracking — the CUDA twin of RBDReference.quadratic_state_cost_tangent.
+
+    Error is TANGENT-width 2*NV: e = [difference(q_des, q); qd - qd_des], with
+    difference = the SE(3) boxminus (grid_difference_floating_q). Outputs are
+    TANGENT-sized (grad 2*NV, hess 2*NV x 2*NV col-major) — the chart
+    derivatives of delta -> cost(integrate(q, delta_q), qd + delta_v) at
+    delta = 0, i.e. exactly the KKT blocks a manifold Newton/SQP consumes.
+    The q-block uses the EXACT J_diff = inv(dIntegrate(q_des, e, 'v')):
+    blockdiag(inv(J6), I) with J6 = [[Jr, Q],[0, Jr]] row-major inverted in
+    closed form ([[Ai, -Ai Q Ai],[0, Ai]]).
+
+    Hessian is templated GAUSS_NEWTON (default TRUE — the ratified PSD choice
+    for this preset; the sealed ASK3 decision). GAUSS_NEWTON=false adds the
+    EXACT curvature, which has TWO terms (guide §7.z2 — dropping the second
+    gives an O(1)-wrong hessian with a perfect gradient):
+      -J (dM) J   via d2Integrate at (q_des, e), contracted with grad_q, PLUS
+      the chart-slope term grad_q · d2Integrate(q, 0) (N(0)=I but dN(0)!=0).
+    Pin convention only (no MUJOCO_OUTPUT twin)."""
+    nq = self.robot.get_num_pos()
+    nv = self.robot.get_num_vel()
+    tn = 2 * nv
+    NV, TN = str(nv), str(tn)
+    setup_scratch = nv + 72          # eq (nv) + J6 (36) + Jinv6 (36)
+    newton_scratch = nv + 72 + 6 + 216   # + g6 (6) + one 6x6x6 tensor buffer
+
+    # ---- shared serial setup: eq + J6 + Jinv6 into caller scratch ----
+    self.gen_add_func_doc(
+        "quadratic_state_cost_tangent_setup: serial helper — fills s_scratch with "
+        "[eq (NV) | J6 (36, row-major) | Jinv6 (36, row-major)] and syncs",
+        ["eq = difference(q_des, q) (SE(3) boxminus prefix + Euler joints); J6 = the "
+         "dIntegrate ARG_v 6x6 at eq; Jinv6 = its exact block-triangular inverse.",
+         "Serial (thread 0) + one sync; callers read the buffers afterwards."],
+        ["s_x / s_x_des are [q (NUM_POS); qd (NUM_VEL)] states",
+         "s_scratch holds >= " + str(setup_scratch) + " elements of T"],
+        None)
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void quadratic_state_cost_tangent_setup(const T *s_x, const T *s_x_des, T *s_scratch) {", True)
+    self.gen_add_code_line("T *s_eq = s_scratch; T *s_J = &s_scratch[" + NV + "]; T *s_Ji = &s_scratch[" + NV + " + 36];")
+    self.gen_add_serial_ops()
+    self.gen_add_code_line("grid::grid_difference_floating_q<T, " + str(nq) + ">(s_x_des, s_x, s_eq);")
+    self.gen_add_code_line("grid::grid_dIntegrate_v_block<T>(s_eq, s_J);")
+    self.gen_add_code_lines([
+        "// invert J6 = [[A, B], [0, A]] (row-major): Jinv = [[Ai, -Ai B Ai], [0, Ai]]",
+        "T a00=s_J[0], a01=s_J[1], a02=s_J[2], a10=s_J[6], a11=s_J[7], a12=s_J[8], a20=s_J[12], a21=s_J[13], a22=s_J[14];",
+        "T det = a00*(a11*a22 - a12*a21) - a01*(a10*a22 - a12*a20) + a02*(a10*a21 - a11*a20);",
+        "T idet = static_cast<T>(1) / det;",
+        "T Ai[9];",
+        "Ai[0] = (a11*a22 - a12*a21)*idet; Ai[1] = (a02*a21 - a01*a22)*idet; Ai[2] = (a01*a12 - a02*a11)*idet;",
+        "Ai[3] = (a12*a20 - a10*a22)*idet; Ai[4] = (a00*a22 - a02*a20)*idet; Ai[5] = (a02*a10 - a00*a12)*idet;",
+        "Ai[6] = (a10*a21 - a11*a20)*idet; Ai[7] = (a01*a20 - a00*a21)*idet; Ai[8] = (a00*a11 - a01*a10)*idet;",
+        "T B[9], AiB[9], C[9];",
+        "#pragma unroll",
+        "for (int i = 0; i < 3; ++i) { B[3*i] = s_J[6*i + 3]; B[3*i+1] = s_J[6*i + 4]; B[3*i+2] = s_J[6*i + 5]; }",
+        "#pragma unroll",
+        "for (int i = 0; i < 9; ++i) { int r = i / 3, cc = i % 3; T acc = static_cast<T>(0);",
+        "    for (int k = 0; k < 3; ++k) acc += Ai[3*r+k]*B[3*k+cc]; AiB[i] = acc; }",
+        "#pragma unroll",
+        "for (int i = 0; i < 9; ++i) { int r = i / 3, cc = i % 3; T acc = static_cast<T>(0);",
+        "    for (int k = 0; k < 3; ++k) acc += AiB[3*r+k]*Ai[3*k+cc]; C[i] = acc; }",
+        "#pragma unroll",
+        "for (int i = 0; i < 9; ++i) { int r = i / 3, cc = i % 3;",
+        "    s_Ji[6*r + cc] = Ai[i]; s_Ji[6*r + 3 + cc] = -C[i];",
+        "    s_Ji[6*(3+r) + cc] = static_cast<T>(0); s_Ji[6*(3+r) + 3 + cc] = Ai[i]; }",
+    ])
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+    # ---- value ----
+    self.gen_add_func_doc(
+        "quadratic_state_cost_tangent: value = 1/2 * (eq^T diag(Qq) eq + ev^T diag(Qv) ev), "
+        "eq = difference(q_des, q) (log-map), ev = qd - qd_des",
+        ["TANGENT error (2*NV wide); s_Q is the DIAGONAL weight vector of size 2*NV (NOT NUM_POS+NUM_VEL).",
+         "ACCUMULATE=false overwrites s_out[0]; true adds.",
+         "s_scratch must hold >= " + str(3 * nv) + " elements of T."],
+        ["s_out is the scalar cost output (s_out[0])",
+         "s_x / s_x_des are [q (NUM_POS); qd (NUM_VEL)] states",
+         "s_Q is the diagonal tangent weight vector (size 2*NV = " + TN + ")",
+         "s_scratch is shared scratch"],
+        None)
+    self.gen_add_code_line("template <typename T, bool ACCUMULATE = false>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void quadratic_state_cost_tangent(T *s_out, const T *s_x, const T *s_x_des, const T *s_Q, T *s_scratch) {", True)
+    self.gen_add_serial_ops()
+    self.gen_add_code_line("grid::grid_difference_floating_q<T, " + str(nq) + ">(s_x_des, s_x, s_scratch);")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_parallel_loop("i", TN)
+    self.gen_add_code_line("T e = (i < " + NV + ") ? s_scratch[i] : (s_x[" + str(nq) + " + i - " + NV + "] - s_x_des[" + str(nq) + " + i - " + NV + "]);")
+    self.gen_add_code_line("s_scratch[" + NV + " + i] = static_cast<T>(0.5) * s_Q[i] * e * e;")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_serial_ops()
+    self.gen_add_code_line("T acc = static_cast<T>(0);")
+    self.gen_add_code_line("for (int i = 0; i < " + TN + "; ++i) acc += s_scratch[" + NV + " + i];")
+    self.gen_add_code_line("if (ACCUMULATE) { s_out[0] += acc; } else { s_out[0] = acc; }")
+    self.gen_add_end_control_flow()
+    self.gen_add_end_function()
+
+    # ---- gradient ----
+    self.gen_add_func_doc(
+        "quadratic_state_cost_tangent_gradient: g = [Jq^T (Qq .* eq) ; Qv .* ev] (TANGENT-sized, 2*NV)",
+        ["EXACT J_diff: the top-left 6x6 of Jq is inv(dIntegrate(q_des, eq, 'v')); joints are identity.",
+         "ACCUMULATE=false overwrites s_grad; true adds.",
+         "s_scratch must hold >= " + str(setup_scratch) + " elements of T."],
+        ["s_grad is the tangent gradient output (size 2*NV = " + TN + ")",
+         "s_x / s_x_des / s_Q / s_scratch as in quadratic_state_cost_tangent"],
+        None)
+    self.gen_add_code_line("template <typename T, bool ACCUMULATE = false>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void quadratic_state_cost_tangent_gradient(T *s_grad, const T *s_x, const T *s_x_des, const T *s_Q, T *s_scratch) {", True)
+    self.gen_add_code_line("quadratic_state_cost_tangent_setup<T>(s_x, s_x_des, s_scratch);")
+    self.gen_add_code_line("const T *s_eq = s_scratch; const T *s_Ji = &s_scratch[" + NV + " + 36];")
+    self.gen_add_parallel_loop("i", TN)
+    self.gen_add_code_line("T g;")
+    self.gen_add_code_line("if (i < 6) { g = static_cast<T>(0);")
+    self.gen_add_code_line("    for (int r = 0; r < 6; ++r) g += s_Ji[6*r + i] * s_Q[r] * s_eq[r]; }")
+    self.gen_add_code_line("else if (i < " + NV + ") { g = s_Q[i] * s_eq[i]; }")
+    self.gen_add_code_line("else { g = s_Q[i] * (s_x[" + str(nq) + " + i - " + NV + "] - s_x_des[" + str(nq) + " + i - " + NV + "]); }")
+    self.gen_add_code_line("if (ACCUMULATE) { s_grad[i] += g; } else { s_grad[i] = g; }")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+    # ---- hessian ----
+    self.gen_add_func_doc(
+        "quadratic_state_cost_tangent_hessian: H = [[Jq^T diag(Qq) Jq, 0], [0, diag(Qv)]] "
+        "(+ exact curvature when GAUSS_NEWTON=false); TANGENT-sized 2*NV x 2*NV, column-major",
+        ["GAUSS_NEWTON default TRUE (the ratified PSD preset choice). GAUSS_NEWTON=false adds the "
+         "EXACT curvature — TWO terms (guide §7.z2): -J(dM)J via d2Integrate(q_des, eq) contracted "
+         "with grad_q, PLUS the chart-slope grad_q . d2Integrate(q, 0). Both live in the top-left "
+         "6x6 (joint charts are linear). Not necessarily PSD away from the solution.",
+         "ACCUMULATE=false overwrites the whole 2*NV x 2*NV block; true adds.",
+         "s_scratch must hold >= " + str(setup_scratch) + " (GN) / " + str(newton_scratch) + " (Newton) elements of T."],
+        ["s_hess is the tangent hessian output (size " + TN + "*" + TN + ", column-major)",
+         "s_x / s_x_des / s_Q / s_scratch as in quadratic_state_cost_tangent"],
+        None)
+    self.gen_add_code_line("template <typename T, bool ACCUMULATE = false, bool GAUSS_NEWTON = true>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void quadratic_state_cost_tangent_hessian(T *s_hess, const T *s_x, const T *s_x_des, const T *s_Q, T *s_scratch) {", True)
+    self.gen_add_code_line("quadratic_state_cost_tangent_setup<T>(s_x, s_x_des, s_scratch);")
+    self.gen_add_code_line("const T *s_eq = s_scratch; const T *s_Ji = &s_scratch[" + NV + " + 36];")
+    self.gen_add_parallel_loop("ind", str(tn * tn))
+    self.gen_add_code_line("int row = ind % " + TN + ";")
+    self.gen_add_code_line("int col = ind / " + TN + ";")
+    self.gen_add_code_line("T h = static_cast<T>(0);")
+    self.gen_add_code_line("if (row < 6 && col < 6) {")
+    self.gen_add_code_line("    for (int b = 0; b < 6; ++b) h += s_Ji[6*b + row] * s_Q[b] * s_Ji[6*b + col]; }")
+    self.gen_add_code_line("else if (row == col) { h = s_Q[row]; }")
+    self.gen_add_code_line("if (ACCUMULATE) { s_hess[ind] += h; } else { s_hess[ind] = h; }")
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_code_line("if constexpr (!GAUSS_NEWTON) {", True)
+    self.gen_add_serial_ops()
+    self.gen_add_code_lines([
+        "T *s_g6 = &s_scratch[" + NV + " + 72]; T *s_T2 = &s_scratch[" + NV + " + 78];",
+        "#pragma unroll",
+        "for (int b = 0; b < 6; ++b) { T acc = static_cast<T>(0);",
+        "    for (int r = 0; r < 6; ++r) acc += s_Ji[6*r + b] * s_Q[r] * s_eq[r]; s_g6[b] = acc; }",
+        "// term 1: -J (dM) J through e — d2Integrate at (q_des, eq), contracted with grad_q.",
+        "grid::grid_d2Integrate_block<T, false>(s_eq, s_T2);",
+        "for (int i = 0; i < 6; ++i) { for (int k = 0; k < 6; ++k) {",
+        "    T acc = static_cast<T>(0);",
+        "    for (int b = 0; b < 6; ++b) for (int c = 0; c < 6; ++c) for (int m = 0; m < 6; ++m)",
+        "        acc += s_g6[b] * s_T2[36*b + 6*c + m] * s_Ji[6*c + i] * s_Ji[6*m + k];",
+        "    s_hess[k*" + TN + " + i] -= acc; } }",
+        "// term 2 (guide §7.z2 chart slope): + grad_q . d2Integrate(q, 0) — N(0)=I but dN(0)!=0.",
+        "T zero6[6] = {static_cast<T>(0), static_cast<T>(0), static_cast<T>(0), static_cast<T>(0), static_cast<T>(0), static_cast<T>(0)};",
+        "grid::grid_d2Integrate_block<T, false>(zero6, s_T2);",
+        "for (int i = 0; i < 6; ++i) { for (int k = 0; k < 6; ++k) {",
+        "    T acc = static_cast<T>(0);",
+        "    for (int b = 0; b < 6; ++b) acc += s_g6[b] * s_T2[36*b + 6*i + k];",
+        "    s_hess[k*" + TN + " + i] += acc; } }",
+    ])
+    self.gen_add_end_control_flow()
+    self.gen_add_sync()
+    self.gen_add_end_control_flow()
+    self.gen_add_end_function()
+
+    # ---- fused ----
+    self.gen_add_func_doc(
+        "quadratic_state_cost_tangent_value_grad_hess: fused value + gradient + hessian",
+        ["Convenience fusion; same conventions and ACCUMULATE/GAUSS_NEWTON semantics as the three functions above."],
+        ["s_out / s_grad / s_hess are the three outputs",
+         "s_x / s_x_des / s_Q / s_scratch as above (scratch sized for the hessian path)"],
+        None)
+    self.gen_add_code_line("template <typename T, bool ACCUMULATE = false, bool GAUSS_NEWTON = true>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void quadratic_state_cost_tangent_value_grad_hess(T *s_out, T *s_grad, T *s_hess, "
+                           "const T *s_x, const T *s_x_des, const T *s_Q, T *s_scratch) {", True)
+    self.gen_add_code_line("quadratic_state_cost_tangent<T, ACCUMULATE>(s_out, s_x, s_x_des, s_Q, s_scratch);")
+    self.gen_add_code_line("quadratic_state_cost_tangent_gradient<T, ACCUMULATE>(s_grad, s_x, s_x_des, s_Q, s_scratch);")
+    self.gen_add_code_line("quadratic_state_cost_tangent_hessian<T, ACCUMULATE, GAUSS_NEWTON>(s_hess, s_x, s_x_des, s_Q, s_scratch);")
+    self.gen_add_end_function()
+
+
 def gen_quadratic_state_cost(self):
     _gen_quadratic_cost_family(self, "state")
 
@@ -631,6 +838,84 @@ def gen_quadratic_input_cost(self):
 # ---------------------------------------------------------------------------
 # End-effector position cost (value, gradient wrt x=[q;qd], GN hessian J_p^T W J_p).
 # ---------------------------------------------------------------------------
+
+def gen_ee_raw_evaluators(self, with_gradient = True):
+    """GATO ASK2: raw caller-scratch EE-pose evaluators, NO cost coupling.
+
+    Consumers (constraint row-group layers: EE-position rows, cone frames) need
+    pose/Jacobian from another kernel's block WITHOUT the cost math and WITHOUT
+    hand-carving the cost internals' arena. These are exactly the cost family's
+    evaluation halves: lay out the XmatsHom arena from caller s_scratch, load
+    transforms once, run the *_inner(s), sync. Same target resolution as the
+    cost family (named fixed target when baked, else the generic family)."""
+    nv = self.robot.get_num_vel()
+    _tgt = getattr(self, "_ee_target_name", "")
+    num_ees = 1 if _tgt else self.robot.get_total_leaf_nodes()
+
+    # ---- ee_pos: the 6*NUM_EE pose (position = rows 0..2 of each EE block) ----
+    self.gen_add_func_doc(
+        "ee_pos: RAW end-effector pose evaluator (no cost coupling; GATO ASK2)",
+        ["Caller-scratch INNER: lays out the EE-pose scratch from s_scratch and calls "
+         "grid::end_effector_pose_inner directly, so it is callable from another kernel's "
+         "block without aliasing that kernel's dynamic-smem arena.",
+         "Fills ALL " + str(num_ees) + " EE block(s); position is rows 0..2 of each 6-row block.",
+         "s_scratch must hold >= END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_COUNT elements of T, 16B aligned."],
+        ["s_end_effector_pose is the 6*NUM_EE pose output",
+         "s_q is the joint position vector (size NUM_POS)",
+         "s_scratch is caller shared scratch",
+         "d_robotModel is the GPU model helpers"],
+        None)
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void ee_pos(T *s_end_effector_pose, const T *s_q, "
+                           "T *s_scratch, const grid::robotModel<T> *d_robotModel) {", True)
+    self.gen_add_code_line("using namespace grid;")
+    _ee_scratch = self.gen_end_effector_pose_inner_temp_mem_size(_tgt)
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(_ee_scratch, include_linalg_scratch = True,
+                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()",
+                                                      arena_base_expr = "s_scratch")
+    self.gen_load_update_XmatsHom_helpers_function_call()
+    self.gen_end_effector_pose_inner_function_call(fixed_target_name = _tgt)
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+    if not with_gradient:
+        self.gen_add_code_line("// [grid_plant] ee_pos_gradient skipped: requires 'end_effector_pose_gradient' — not generated.")
+        return
+
+    # ---- ee_pos_gradient: pose + full 6 x NV geometric Jacobian per EE ----
+    self.gen_add_func_doc(
+        "ee_pos_gradient: RAW end-effector pose + Jacobian evaluator (no cost coupling; GATO ASK2)",
+        ["Caller-scratch INNER: ONE XmatsHom load feeds BOTH end_effector_pose_inner and "
+         "end_effector_pose_gradient_inner (const s_Xhom shared; geometric-Jacobian path, "
+         "s_dXhom = nullptr) — same single-load structure as ee_pos_cost_gradient.",
+         "Jacobian layout: s_end_effector_pose_gradient[6*" + str(nv) + "*ee + 6*vi + row] "
+         "(position rows 0..2, orientation rows 3..5; tangent d/dv convention).",
+         "s_scratch must hold >= END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_COUNT elements of T, 16B aligned."],
+        ["s_end_effector_pose is the 6*NUM_EE pose output",
+         "s_end_effector_pose_gradient is the 6*NUM_VEL*NUM_EE Jacobian output",
+         "s_q is the joint position vector (size NUM_POS)",
+         "s_scratch is caller shared scratch",
+         "d_robotModel is the GPU model helpers"],
+        None)
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void ee_pos_gradient(T *s_end_effector_pose, T *s_end_effector_pose_gradient, "
+                           "const T *s_q, T *s_scratch, const grid::robotModel<T> *d_robotModel) {", True)
+    self.gen_add_code_line("using namespace grid;")
+    _ee_scratch = max(self.gen_end_effector_pose_inner_temp_mem_size(_tgt),
+                      self.gen_end_effector_pose_gradient_inner_temp_mem_size(_tgt))
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(_ee_scratch, include_linalg_scratch = True,
+                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()",
+                                                      arena_base_expr = "s_scratch")
+    self.gen_load_update_XmatsHom_helpers_function_call()
+    self.gen_end_effector_pose_inner_function_call(fixed_target_name = _tgt)
+    self.gen_add_sync()
+    self.gen_end_effector_pose_gradient_inner_function_call(fixed_target_name = _tgt,
+                                                            updated_var_names = {"s_dXhom_name": "nullptr"})
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
 
 def gen_ee_pos_cost(self, with_d2ee = False):
     """ee_pos_cost family. p(q) = grid::end_effector_pose (rows 0..2 of the 6-pose);
@@ -1636,6 +1921,66 @@ def gen_plant_step_kernel(self):
     self.gen_add_end_function()
 
 
+def _plant_step_gradient_extra_t_buffers(self):
+    """The plant_step_gradient kernel's shared-arena T-slot list (PERF/full-smem
+    shape; every band in smem). Single source of truth shared by
+    gen_plant_step_gradient_kernel and the plant_step_gradient_arena carve
+    struct so the two cannot drift."""
+    n = self.robot.get_num_vel()
+    fb = 1 if self.robot.floating_base else 0
+    nx = self.robot.get_num_pos() + self.robot.get_num_vel()
+    from ._integrator import _max_stages_in_use
+    max_stages = _max_stages_in_use()
+    d_qdd_count = max_stages * n * 3 * n
+    vaf_cnt = 18 * (self.robot.get_num_joints() if self.robot_has_mimic_joints() else n)
+    return [
+        ("s_x", nx),
+        ("s_u", n),
+        ("s_dAB", 2 * n * 3 * n),
+        ("s_df_du", n * 2 * n),
+        ("s_dc_du", n * 2 * n),
+        ("s_vaf", vaf_cnt),
+        ("s_Minv", n * n),
+        ("s_qdd", n),
+        ("s_q_orig", n + fb),
+        ("s_qd_orig", n),
+        ("s_stage_grad_qdd", max_stages * n),
+        ("s_D_qdd_stage", d_qdd_count),
+        ("s_dInt_q_6x6", 36),
+        ("s_dInt_v_6x6", 36),
+    ]
+
+
+def gen_plant_step_gradient_arena_carve_struct(self):
+    """Emit the namespace-scope `plant_step_gradient_arena<T>` carve struct
+    (GATO ASK6): the full-smem sub-buffer layout plant_step_gradient_kernel
+    carves — the struct's members ARE plant_step_gradient's caller-placed
+    buffer arguments, so an external kernel can allocate
+    grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, TIER_SHARED>() bytes (the
+    same reservation the kernel launches with), carve(), and forward. No exact
+    t-count tie exists for this surface (it reserves the du sizer, which may be
+    a spilled rung on big robots while this layout is always full-smem), so the
+    carve assert is the <= allocation-safety form only."""
+    layout = self._resolve_arena_layout(
+        _plant_step_gradient_extra_t_buffers(self),
+        self.gen_integrator_gradient_inner_temp_mem_size(),
+        include_topology_helpers = (not self.robot.is_serial_chain()
+                                    or not self.robot.are_Ss_identical(list(range(self.robot.get_num_pos())))),
+        ximat_size = self.gen_get_XI_size(False, False),
+        include_linalg_scratch = True,
+        linalg_scratch_bytes = "grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()",
+        apply_runtime_transform_band = getattr(self, "runtime_transform", False))
+    self.gen_arena_carve_struct(
+        "plant_step_gradient_arena", layout,
+        "grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, grid::TIER_SHARED>()",
+        expected_t_count = None,
+        helper_ns = "grid::",  # emitted in namespace grid_plant; the arena helpers live in grid::
+        doc = "plant_step_gradient_arena: carve struct mirroring plant_step_gradient_kernel's "
+              "full-smem scratch layout; members map 1:1 onto plant_step_gradient's caller-placed "
+              "buffer arguments. Allocate INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, TIER_SHARED>() "
+              "bytes and call carve(base).")
+
+
 def gen_plant_step_gradient_kernel(self):
     """`plant_step_gradient_kernel` — one block/timestep [A|B] = s_dAB.
 
@@ -1691,22 +2036,7 @@ def gen_plant_step_gradient_kernel(self):
     # integrator_gradient_kernel _emit_body(dqdd_in_smem=True, dab_in_smem=True,
     # inner_level=0) layout). s_x (= s_q;s_qd) + s_u are staged from global; the
     # FD-grad bands, the dAB output, and the multi-stage scratch all live here.
-    extra_t_buffers = [
-        ("s_x", nx),
-        ("s_u", n),
-        ("s_dAB", 2 * n * 3 * n),
-        ("s_df_du", n * 2 * n),
-        ("s_dc_du", n * 2 * n),
-        ("s_vaf", vaf_cnt),
-        ("s_Minv", n * n),
-        ("s_qdd", n),
-        ("s_q_orig", n + fb),
-        ("s_qd_orig", n),
-        ("s_stage_grad_qdd", max_stages * n),
-        ("s_D_qdd_stage", d_qdd_count),
-        ("s_dInt_q_6x6", 36),
-        ("s_dInt_v_6x6", 36),
-    ]
+    extra_t_buffers = _plant_step_gradient_extra_t_buffers(self)
     self.gen_XImats_helpers_temp_shared_memory_code(
         inner_temp_full, extra_t_buffers=extra_t_buffers, include_linalg_scratch=True)
     self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
@@ -2260,6 +2590,9 @@ def gen_plant_kernels(self, algorithms):
         self.gen_add_code_line("#define GRID_PLANT_HAS_STEP 1")
     if ("integrator_gradient" in algorithms) or ("integrator_with_gradient" in algorithms):
         gen_plant_step_gradient_kernel(self)
+        # GATO ASK6: carve struct for external callers of plant_step_gradient
+        # (members map 1:1 onto its caller-placed buffer args).
+        gen_plant_step_gradient_arena_carve_struct(self)
         self.gen_add_code_line("#define GRID_PLANT_HAS_STEP_GRADIENT 1")
     # F1: plant_step_hessian composes grid::integrator_hessian_device (needs
     # `fdsva_so`) AND is templated on `grid::IntegratorType` (emitted only by
@@ -2310,6 +2643,20 @@ def gen_grid_plant(self, algorithms):
     self.gen_quadratic_state_cost()
     self.gen_quadratic_input_cost()
 
+    # GATO ASK3: tangent-space (log-map) state cost preset — floating base only
+    # (fixed base reduces exactly to quadratic_state_cost). Needs the grid:: Lie
+    # helper bundle (difference / dIntegrate_v / d2Integrate blocks); a floating
+    # robot with spherical joints additionally needs per-joint SO(3) chart blocks
+    # in J_diff — a follow-up, so skip with a note rather than emit wrong math.
+    if self.robot.floating_base:
+        if getattr(self, "_lie_helpers_emitted", False) and not self.robot.robot_has_spherical():
+            gen_quadratic_state_cost_tangent(self)
+            self.gen_add_code_line("#define GRID_PLANT_HAS_TANGENT_STATE_COST 1")
+        elif self.robot.robot_has_spherical():
+            self.gen_add_code_line("// [grid_plant] quadratic_state_cost_tangent skipped: floating base WITH spherical joints needs per-joint SO(3) chart blocks in J_diff (follow-up).")
+        else:
+            self.gen_add_code_line("// [grid_plant] quadratic_state_cost_tangent skipped: requires the grid:: Lie helper bundle (emit an algorithm that pulls in gen_lie_group_helpers, e.g. 'integrator').")
+
     # Barriers have no grid:: dep — always emit.
     self.gen_plant_barriers()
 
@@ -2338,6 +2685,12 @@ def gen_grid_plant(self, algorithms):
     # Newton) hessian path additionally needs the analytic d2ee
     # ('end_effector_pose_hessian'); without it only GAUSS_NEWTON=true instantiates.
     ee_cost_ok = ("end_effector_pose" in algorithms) and ("end_effector_pose_gradient" in algorithms)
+    # GATO ASK2: raw caller-scratch evaluators (no cost coupling). ee_pos needs only
+    # the pose family; ee_pos_gradient additionally needs the gradient family.
+    if "end_effector_pose" in algorithms:
+        gen_ee_raw_evaluators(self, with_gradient = ("end_effector_pose_gradient" in algorithms))
+    else:
+        self.gen_add_code_line("// [grid_plant] ee_pos / ee_pos_gradient (raw) skipped: requires 'end_effector_pose' — not generated.")
     if ee_cost_ok:
         self.gen_ee_pos_cost(with_d2ee = ("end_effector_pose_hessian" in algorithms))
     else:

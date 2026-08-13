@@ -1160,6 +1160,102 @@ def gen_integrator_gradient_device(self, compute_x_kp1=False):
     self.gen_add_end_function()
 
 
+def _integrator_du_extra_t_buffers(self, nq, n, fb, dqdd_in_smem, dab_in_smem, compute_x_kp1):
+    """The integrator-gradient ("du") kernel's shared-arena T-slot list for one
+    rung's placement flags. Single source of truth shared by the kernel emitter
+    (_emit_body in gen_integrator_gradient_kernel) and the integrator_du_arena
+    carve struct so the two cannot drift. `n` is NUM_VEL, `nq` NUM_POS."""
+    max_stages = _max_stages_in_use()
+    d_qdd_count = max_stages * n * 3 * n
+    # s_vaf is body-indexed (NB bodies, stride 6). For a MIMIC robot (fixed
+    # base) NB > nv, so the composed FD-grad inner's ID sub-inner writes
+    # 18*NB entries — size it 18*NB to keep those writes from overflowing
+    # into the adjacent s_Minv/s_qdd buffers (mirrors forward_dynamics_gradient's kernel sizing
+    # in _forward_dynamics_gradient.py). Non-mimic keeps 18*n (byte-identical;
+    # floating nv > NB).
+    vaf_cnt = 18 * (self.robot.get_num_joints() if self.robot_has_mimic_joints() else n)
+    # Canonical per-timestep INPUT packing (mirrors id/crba/aba/forward_dynamics):
+    # q, qd, u each in a NUM_JOINTS(=nq)-wide slot at stride 3*nq; slice qd at nq,
+    # u at 2*nq. For a FIXED base nq==nv -> 3*nq == 3*nv+fb byte-identical; for a
+    # FLOATING base nq=nv+1 the old nv-strided u offset (2*nv+fb) under-read by
+    # nq-nv and mis-sliced u -- the floating B=1 + batch input bug. The dAB OUTPUT
+    # is genuinely tangent-space: 2*nv x 3*nv real values, per-timestep stride
+    # 2*nv*3*nv (the d_dAB buffer + binding transfer are 2*nv*3*nv-sized), so the
+    # save stride stays 2*nv*3*nv. The x_kp1 output is [q (nq); qd (nv)] = nq+nv.
+    input_count = 3 * nq
+    extra_t_buffers = [("s_q_qd_u", input_count)]
+    if dab_in_smem:
+        extra_t_buffers.append(("s_dAB", 2 * n * 3 * n))
+    extra_t_buffers += [
+        ("s_df_du", n * 2 * n),
+        ("s_dc_du", n * 2 * n),
+        ("s_vaf", vaf_cnt),
+        ("s_Minv", n * n),
+        ("s_qdd", n),
+        # Multi-stage scratch — allocated for every IT (single-stage just doesn't use it).
+        # s_q_orig holds the full nq pose (floating-base adds the quaternion slot).
+        ("s_q_orig", n + fb),
+        ("s_qd_orig", n),
+        ("s_stage_grad_qdd", max_stages * n),
+    ]
+    if dqdd_in_smem:
+        extra_t_buffers.append(("s_D_qdd_stage", d_qdd_count))
+    # Floating-base: the 6x6 SE(3) dIntegrate blocks. Fixed-base spherical:
+    # repurposed as 9-floats-per-spherical-joint SO(3) block storage (grown
+    # only past 4 spherical joints, so existing robots stay byte-identical).
+    # Plain fixed-base: unused (historical 36 kept for byte-identity).
+    dint_floats = 36
+    if (not fb) and self.robot.robot_has_spherical():
+        dint_floats = max(36, 9 * len(_sph_grad_blocks(self)))
+    extra_t_buffers += [
+        ("s_dInt_q_6x6", dint_floats),
+        ("s_dInt_v_6x6", dint_floats),
+    ]
+    if compute_x_kp1:
+        extra_t_buffers.append(("s_x_kp1", 2 * n + fb))  # = nq + nv
+    return extra_t_buffers
+
+
+def gen_integrator_du_arena_carve_struct(self):
+    """Emit the namespace-scope `integrator_du_arena<T>` carve struct (GATO ASK6):
+    mirrors the integrator_with_gradient kernel's TIER_SHARED shared-arena layout
+    (the with-x_kp1 superset shape) at the TIER_SHARED spill rung this robot's
+    codegen picked — including which buffers left smem (s_D_qdd_stage / s_dAB)
+    and the FD-grad inner pool level. Allocate
+    INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, TIER_SHARED>() bytes and carve()."""
+    nq = self.robot.get_num_pos()
+    n = self.robot.get_num_vel()
+    fb = self.robot.floating_base
+    dqdd_in_smem = getattr(self, "integrator_gradient_dqdd_in_smem_per_tier", (True, True, True))[0]
+    dab_in_smem = getattr(self, "integrator_gradient_dab_in_smem_per_tier", (True, True, True))[0]
+    inner_level = getattr(self, "integrator_gradient_inner_level_per_tier", (0, 0, 0))[0]
+    inner_temp_full = self.gen_integrator_gradient_inner_temp_mem_size()
+    inner_temp_selective = (inner_temp_full if self.robot_has_mimic_joints()
+                            else max(self.gen_minv_inner_temp_mem_size(),
+                                     self.gen_inverse_dynamics_gradient_temp_layout()["selective_shared_count"]))
+    inner_temp_size = (inner_temp_full if inner_level == 0
+                       else (inner_temp_selective if inner_level == 1 else 0))
+    layout = self._resolve_arena_layout(
+        _integrator_du_extra_t_buffers(self, nq, n, fb, dqdd_in_smem, dab_in_smem,
+                                       compute_x_kp1 = True),
+        inner_temp_size,
+        include_topology_helpers = (not self.robot.is_serial_chain()
+                                    or not self.robot.are_Ss_identical(list(range(nq)))),
+        ximat_size = self.gen_get_XI_size(False, False),
+        include_linalg_scratch = True,
+        linalg_scratch_bytes = "GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()",
+        apply_runtime_transform_band = getattr(self, "runtime_transform", False))
+    self.gen_arena_carve_struct(
+        "integrator_du_arena", layout,
+        "INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, TIER_SHARED>()",
+        expected_t_count = self.integrator_gradient_t_count_per_tier[0],
+        doc = "integrator_du_arena: carve struct mirroring the integrator_with_gradient kernel's "
+              "TIER_SHARED shared-arena layout (with-x_kp1 shape, at this robot's TIER_SHARED "
+              "spill rung); allocate INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, TIER_SHARED>() "
+              "bytes and call carve(base). Buffers spilled at this rung are ABSENT from the "
+              "struct — pass workspace-band pointers for those (see the du kernel's slicing).")
+
+
 def gen_integrator_gradient_kernel(self, compute_x_kp1=False, single_call_timing=False):
     n = self.robot.get_num_vel()
     nq = self.robot.get_num_pos()
@@ -1215,6 +1311,7 @@ def gen_integrator_gradient_kernel(self, compute_x_kp1=False, single_call_timing
     fb = self.robot.floating_base
     max_stages = _max_stages_in_use()
     d_qdd_count = max_stages * n * 3 * n
+    input_count = 3 * nq  # canonical q|qd|u slot packing (see _integrator_du_extra_t_buffers)
 
     def _emit_body(dqdd_in_smem, dab_in_smem, inner_level):
         # Surgical per-tier body. The 3 distinct buffers spill independently to
@@ -1234,52 +1331,8 @@ def gen_integrator_gradient_kernel(self, compute_x_kp1=False, single_call_timing
         # only slices the band base pointers + passes the per-rung flags as literals.
         inner_temp_size = (inner_temp_full if inner_level == 0
                            else (inner_temp_selective if inner_level == 1 else 0))
-        # s_vaf is body-indexed (NB bodies, stride 6). For a MIMIC robot (fixed
-        # base) NB > nv, so the composed FD-grad inner's ID sub-inner writes
-        # 18*NB entries — size it 18*NB to keep those writes from overflowing
-        # into the adjacent s_Minv/s_qdd buffers (mirrors forward_dynamics_gradient's kernel sizing
-        # in _forward_dynamics_gradient.py). Non-mimic keeps 18*n (byte-identical;
-        # floating nv > NB).
-        vaf_cnt = 18 * (self.robot.get_num_joints() if self.robot_has_mimic_joints() else n)
-        # Canonical per-timestep INPUT packing (mirrors id/crba/aba/forward_dynamics):
-        # q, qd, u each in a NUM_JOINTS(=nq)-wide slot at stride 3*nq; slice qd at nq,
-        # u at 2*nq. For a FIXED base nq==nv -> 3*nq == 3*nv+fb byte-identical; for a
-        # FLOATING base nq=nv+1 the old nv-strided u offset (2*nv+fb) under-read by
-        # nq-nv and mis-sliced u -- the floating B=1 + batch input bug. The dAB OUTPUT
-        # is genuinely tangent-space: 2*nv x 3*nv real values, per-timestep stride
-        # 2*nv*3*nv (the d_dAB buffer + binding transfer are 2*nv*3*nv-sized), so the
-        # save stride stays 2*nv*3*nv. The x_kp1 output is [q (nq); qd (nv)] = nq+nv.
-        input_count = 3 * nq
-        extra_t_buffers = [("s_q_qd_u", input_count)]
-        if dab_in_smem:
-            extra_t_buffers.append(("s_dAB", 2 * n * 3 * n))
-        extra_t_buffers += [
-            ("s_df_du", n * 2 * n),
-            ("s_dc_du", n * 2 * n),
-            ("s_vaf", vaf_cnt),
-            ("s_Minv", n * n),
-            ("s_qdd", n),
-            # Multi-stage scratch — allocated for every IT (single-stage just doesn't use it).
-            # s_q_orig holds the full nq pose (floating-base adds the quaternion slot).
-            ("s_q_orig", n + fb),
-            ("s_qd_orig", n),
-            ("s_stage_grad_qdd", max_stages * n),
-        ]
-        if dqdd_in_smem:
-            extra_t_buffers.append(("s_D_qdd_stage", d_qdd_count))
-        # Floating-base: the 6x6 SE(3) dIntegrate blocks. Fixed-base spherical:
-        # repurposed as 9-floats-per-spherical-joint SO(3) block storage (grown
-        # only past 4 spherical joints, so existing robots stay byte-identical).
-        # Plain fixed-base: unused (historical 36 kept for byte-identity).
-        dint_floats = 36
-        if (not fb) and self.robot.robot_has_spherical():
-            dint_floats = max(36, 9 * len(_sph_grad_blocks(self)))
-        extra_t_buffers += [
-            ("s_dInt_q_6x6", dint_floats),
-            ("s_dInt_v_6x6", dint_floats),
-        ]
-        if compute_x_kp1:
-            extra_t_buffers.append(("s_x_kp1", 2 * n + fb))  # = nq + nv
+        extra_t_buffers = _integrator_du_extra_t_buffers(self, nq, n, fb,
+                                                         dqdd_in_smem, dab_in_smem, compute_x_kp1)
         self.gen_XImats_helpers_temp_shared_memory_code(
             inner_temp_size, extra_t_buffers=extra_t_buffers, include_linalg_scratch=True,
         )
