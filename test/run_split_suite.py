@@ -64,6 +64,25 @@ def _r(robot, **kw):
 WARM_MANIFEST: dict[str, list[dict]] = {
     "test_centroidal_energy_frame": [_r("iiwa14", max_batch_size=8),
                                      _r("go2", max_batch_size=8)],
+    # 08-13: was warm-exempt ("inline registrations") — the 08-12 night pass cold-
+    # built all 5 robots IN-MODULE and blew the 7200s cap mid-test-11 (10/12
+    # already passed; solo rerun green). The registrations resolve through the
+    # same config URDFs, so they ARE warmable; mb values are the module's exact
+    # len(samples) (floating=21, fixed=18) — cache-key material, keep in sync.
+    "test_ee_named_target_floating_multileaf": [
+        _r("iiwa14", max_batch_size=21, floating_base=True,
+           ee_joint_names=["iiwa_joint_ee"], enable_mujoco_kernels=False),
+        _r("go2", max_batch_size=21, floating_base=True,
+           ee_joint_names=["imu_joint"], enable_mujoco_kernels=False),
+        _r("baxter", max_batch_size=21, floating_base=True,
+           ee_joint_names=["right_hand_camera_axis"], enable_mujoco_kernels=False),
+        _r("go2", max_batch_size=21, floating_base=True,
+           enable_mujoco_kernels=False),
+        _r("baxter", max_batch_size=21, floating_base=True,
+           enable_mujoco_kernels=False),
+        _r("iiwa14", max_batch_size=18,
+           ee_joint_names=["iiwa_joint_ee"], enable_mujoco_kernels=False),
+    ],
     "test_fk_batched": [_r("iiwa14", max_batch_size=64),
                         _r("gen3", max_batch_size=64),
                         _r("go2", max_batch_size=64),
@@ -93,16 +112,13 @@ WARM_MANIFEST: dict[str, list[dict]] = {
     "test_tool": [_r("iiwa14", max_batch_size=8, enable_tool=True)],
 }
 
-# Per-module Phase-B timeout (s). Cold-cache g1 codegen+compile dominates; the
-# force_rebuild modules recompile in-test every run — test_joint_dynamics does
-# FOUR builds including two float64 ones (slowest compiles in the suite).
-DEFAULT_TIMEOUT = 3600
-TIMEOUTS = {
-    "test_ee_named_target_floating_multileaf": 7200,  # inline robot_descriptions registrations rebuild in-module on any cache invalidation
-    "test_g1_plant_hessian_smoke": 7200,
-    "test_joint_dynamics": 7200,
-    "test_runtime_joint_dynamics": 7200,
-}
+# 08-13: wall-clock caps RETIRED (they killed a healthy cold-building module on
+# the 08-12 night pass). Phase B now uses PROGRESS-AWARE hang detection — see
+# _wait_progress_aware: kill only after GRID_SPLIT_STALL_SECS (default 900) with
+# neither log growth nor a live compiler child; an absolute cap is opt-in via
+# GRID_SPLIT_HARD_TIMEOUT. Historical expected COLD durations, for triage only:
+# g1_plant_hessian / joint_dynamics / runtime_joint_dynamics ~1-2h (multi-build,
+# incl. float64); ee_named_target_floating_multileaf ~2h (5 in-module builds).
 
 
 def discover_modules() -> list[str]:
@@ -193,7 +209,7 @@ def drift_guard(modules: list[str]) -> list[str]:
         warmed = len(WARM_MANIFEST.get(mod, []))
         force_rebuild = "force_rebuild=True" in src
         if warmed == 0 and calls > 0 and not force_rebuild and mod not in (
-                "test_any_thread_count", "test_ee_named_target_floating_multileaf",
+                "test_any_thread_count",
                 "test_subset_build", "test_subset_build_jax", "test_subset_build_torch"):
             warnings.append(
                 f"{mod}: {calls} register_robot site(s), none warmed and not "
@@ -257,6 +273,70 @@ def parse_junit(xml_path: Path):
     return t, f, e, s, failed
 
 
+def _compiler_child_alive(pgid: int) -> bool:
+    """True if the module's process group has a live compiler child. Cold .so
+    builds are stdout-silent for 30-60+ min while nvcc/cicc/ptxas grind — that
+    IS progress; a GPU-hung test has neither output growth nor compiler kids."""
+    try:
+        out = subprocess.run(["ps", "-eo", "pgid=,comm="], capture_output=True,
+                             text=True, timeout=10).stdout
+    except Exception:
+        return False
+    tgt = str(pgid)
+    names = ("nvcc", "cicc", "ptxas", "fatbinary", "cudafe", "nvlink")
+    for line in out.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[0].strip() == tgt and any(n in parts[1] for n in names):
+            return True
+    return False
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    import signal as _signal
+    try:
+        os.killpg(proc.pid, _signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    proc.wait()
+
+
+def _wait_progress_aware(proc: subprocess.Popen, mod: str, log_path: Path):
+    """Hang detection by PROGRESS, not wall clock (the no-leg-timeouts rule —
+    the 08-12 night pass killed a healthy module mid-test at a 7200s cap while
+    it was legitimately cold-building 5 robots).
+
+    Progress = the module's log grew OR its process group has a live compiler
+    child. Kill (rc="STALL") only after GRID_SPLIT_STALL_SECS (default 900)
+    with NEITHER. An absolute wall-clock cap is OPT-IN via
+    GRID_SPLIT_HARD_TIMEOUT seconds (unset/0 = none)."""
+    stall_limit = int(os.environ.get("GRID_SPLIT_STALL_SECS", "900"))
+    hard = int(os.environ.get("GRID_SPLIT_HARD_TIMEOUT", "0"))
+    t0 = time.monotonic()
+    last_progress = t0
+    last_size = -1
+    while True:
+        try:
+            return proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            pass
+        now = time.monotonic()
+        try:
+            size = log_path.stat().st_size
+        except OSError:
+            size = -1
+        if size != last_size:
+            last_size = size
+            last_progress = now
+        elif _compiler_child_alive(proc.pid):
+            last_progress = now
+        if (now - last_progress) > stall_limit:
+            _kill_group(proc)
+            return "STALL"
+        if hard and (now - t0) > hard:
+            _kill_group(proc)
+            return "TIMEOUT"
+
+
 def phase_run(modules: list[str], out_dir: Path, receipts: bool,
               extra_args: list[str]) -> list[dict]:
     results = []
@@ -272,25 +352,15 @@ def phase_run(modules: list[str], out_dir: Path, receipts: bool,
                     f"--gpu-proof-shard={mod}",
                     f"--gpu-proof-shard-fingerprint-paths=test/python_wrappers/{mod}.py"]
         t0 = time.monotonic()
-        timeout = TIMEOUTS.get(mod, DEFAULT_TIMEOUT)
         with open(log_path, "w") as log:
-            # start_new_session so a timeout kills the WHOLE process group —
+            # start_new_session so a kill takes the WHOLE process group —
             # otherwise pytest dies but its nvcc/cicc grandchildren survive as
             # orphans and poison the next module's run (bench-orchestration
             # trap: "pkill orphans, GPU/CPU EMPTY before the next leg").
             proc = subprocess.Popen(cmd, cwd=REPO_ROOT, stdout=log,
                                     stderr=subprocess.STDOUT,
                                     start_new_session=True)
-            try:
-                rc: int | str = proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                import signal as _signal
-                try:
-                    os.killpg(proc.pid, _signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                proc.wait()
-                rc = "TIMEOUT"
+            rc: int | str = _wait_progress_aware(proc, mod, log_path)
         dt = time.monotonic() - t0
         # VRAM watermark AFTER the module's process exits: per-module isolation
         # means memory.used should return to the desktop baseline every time.
