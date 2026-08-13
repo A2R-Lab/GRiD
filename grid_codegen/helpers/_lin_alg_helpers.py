@@ -148,9 +148,8 @@ def gen_grid_linalg_backend_helpers(self):
 
     self.gen_add_func_doc("Linear algebra wrappers (SIMT GLASS)")
     self.gen_add_code_lines([
-        "// SIMT-only linalg. cuBLASDx was removed in v2.0; the",
-        "// `glass_nvidia_smem` parameter on each wrapper is retained for",
-        "// caller compatibility and is always ignored. The stub",
+        "// SIMT-only linalg. The `glass_nvidia_smem` parameter on each wrapper is",
+        "// retained for caller compatibility and is always ignored; the stub",
         "// `GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()` below returns 0 so",
         "// shared-memory arena calculations continue to compile unchanged.",
         "",

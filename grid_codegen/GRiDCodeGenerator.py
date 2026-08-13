@@ -722,8 +722,6 @@ class GRiDCodeGenerator:
         self.gen_add_code_line("#include <cuda_runtime.h>")
         self.gen_add_code_lines([
             "",
-            "// SIMT GLASS is the only linalg backend (cuBLASDx was removed in v2.0;",
-            "// see docs/source/user_guide/concepts/cublasdx_removal_design.rst).",
             "#if defined(__has_include)",
             "#if __has_include(<cub/cub.cuh>)",
             "#define GRID_CUB_HEADER_AVAILABLE 1",
