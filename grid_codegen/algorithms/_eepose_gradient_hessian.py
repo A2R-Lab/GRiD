@@ -193,8 +193,9 @@ def gen_end_effector_pose_inner(self, fixed_target_name = ""):
                 last_written_level = bfs_level
     
     self.gen_add_code_line("//")
-    self.gen_add_code_line("// Now extract the end_effector_pose from the Tansforms")
-    self.gen_add_code_line("// TODO: ADD OFFSETS")
+    self.gen_add_code_line("// Now extract the end_effector_pose from the transforms.")
+    self.gen_add_code_line("// (This generic family evaluates the last MOVING joint; a terminal fixed")
+    self.gen_add_code_line("// joint's <origin> is tracked by the named fixed-target family instead.)")
     self.gen_add_code_line("//")
     tempOffset = 16*num_ees*(last_written_level % 2)
     # xyz position is easy (end_effector_pose_xyz1 = Xmat_hom * offset) where offset = [x,y,z,1]

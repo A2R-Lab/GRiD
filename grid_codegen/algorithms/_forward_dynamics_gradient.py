@@ -11,7 +11,8 @@ def gen_forward_dynamics_gradient_inner_python(self, use_qdd_Minv_input = False,
                                                d_f_ext_name = "d_f_ext"):
     n = self.robot.get_num_vel()
     if not use_qdd_Minv_input:
-        self.gen_add_code_line("//TODO: there is a slightly faster way as s_v does not change -- thus no recompute needed")
+        # Perf note (not emitted): s_v does not change across the Minv + ID
+        # steps, so a fused path could skip its recompute — untried, low-pri.
         # Inner-controlled placement: minv_inner slices its own F-region
         # from the tail of s_temp (FD_DU keeps Minv-F in smem; its surgical spill
         # is the inverse_dynamics_gradient da_df band, handled separately). After Minv returns, the
