@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Split-compile / split-run driver for the python_wrappers suite.
+"""Split-compile / split-run driver for the python_wrappers + cuda_equivalents suites.
 
 Why this exists: the monolithic ``pytest -m python_wrappers`` run dlopens every
 robot ``.so`` (plus torch AND jax) into one interpreter, and the generated host
@@ -16,11 +16,24 @@ every failure after it (three times in the week of 2026-08-03). This driver:
       overall exit code (nonzero iff any failure/casualty).
 
 Usage (from the repo root):
-  .venv/bin/python test/run_split_suite.py                 # full split suite
+  .venv/bin/python test/run_split_suite.py                 # full wrappers split suite
   .venv/bin/python test/run_split_suite.py --modules test_tool test_iiwa14_smoke
   .venv/bin/python test/run_split_suite.py --skip-warm     # straight to Phase B
-  .venv/bin/python test/run_split_suite.py --receipts      # + per-module gpu-proof
-                                                           #   shard receipts
+  .venv/bin/python test/run_split_suite.py --receipts      # + per-shard gpu-proof
+                                                           #   receipts
+  .venv/bin/python test/run_split_suite.py --domains wrappers,cuda --receipts
+                                                           # + granular cuda shards
+  .venv/bin/python test/run_split_suite.py --resume test/.split_suite/<dir>
+                                                           # continue an interrupted run
+
+Granular cuda shards (--domains ...,cuda): test/cuda_equivalents used to run as
+ONE monolithic pytest (~15h cold, 2026-08-16). The driver now partitions its
+gpu_proof tests into shards bounded by --shard-budget-mins (default 120) using
+EXPLICIT node-id lists (never -k), runs each as its own crash-isolated pytest,
+and bounds pause latency to one shard: touch <out>/PAUSE to stop cleanly
+between shards, Ctrl-C/SIGTERM to stop within one, then --resume to continue —
+completed shards are never re-run (ledger: <out>/results.json) and their shard
+receipts merge together at the end.
 
 Notes:
 - Modules are DISCOVERED by glob (``test/python_wrappers/test_*.py``); the warm
@@ -43,12 +56,36 @@ import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WRAPPERS_DIR = REPO_ROOT / "test" / "python_wrappers"
+CUDA_DIR = REPO_ROOT / "test" / "cuda_equivalents"
 PYTHON = str(REPO_ROOT / ".venv" / "bin" / "python")
+DURATIONS_PATH = REPO_ROOT / "test" / ".split_suite" / "durations.json"
+# Result kinds the summary treats as clean (and --resume will not re-run).
+CLEAN_KINDS = ("OK", "FLOOR-SKIP", "DESELECTED")
+
+
+@dataclass
+class ShardSpec:
+    """One crash-isolated pytest invocation.
+
+    wrappers domain: one module file per shard (name = module stem — keeps
+    shard names, receipts, and the --changed-only state file byte-compatible
+    with the module-based driver).
+    cuda domain: an explicit node-id list (targets), bounded by the shard
+    budget. Targets are passed as argv elements, NEVER through a shell string
+    — two codegen_layout node ids embed raw CUDA source (spaces/quotes/escapes).
+    """
+    name: str
+    domain: str                 # "wrappers" | "cuda"
+    targets: list               # pytest targets: [module path] or [node ids...]
+    fingerprint_paths: list     # narrow receipt fingerprint paths (comma-free)
+    est_secs: float = 0.0
+    apply_marker: bool = False  # add -m gpu_proof (cuda shards)
 
 # ─── warm manifest ───────────────────────────────────────────────────────────
 # module -> list of warm_robot kwarg dicts (cache-key-relevant kwargs only).
@@ -124,6 +161,235 @@ WARM_MANIFEST: dict[str, list[dict]] = {
 def discover_modules() -> list[str]:
     mods = sorted(Path(p).stem for p in glob.glob(str(WRAPPERS_DIR / "test_*.py")))
     return mods
+
+
+# ─── cuda_equivalents granular partition ─────────────────────────────────────
+# Atom = the smallest node-id group never split across shards:
+#   * test_cuda_executable_equivalence (720 tests = 72% of the suite):
+#     (robot, base, cell) — its 4 thread-count variants share exactly ONE
+#     header+exe compile (neither cache key folds num_threads), so splitting
+#     them would pay the compile twice;
+#   * test_cuda_second_order_fallback: (robot, base) — SO codegen dominates
+#     (g1/h1_2 are hours cold);
+#   * integrator / kinematics_thread_invariance: (robot);
+#   * every other module: whole-module. That automatically keeps the tree's
+#     only module-scoped compile fixture (spherical_integrator_gradient) whole,
+#     and never param-parses the two codegen_layout ids that embed raw CUDA
+#     source (their module isn't in ATOM_PARAM_TOKENS).
+# Robot is always the first '-'-token inside [...] (no robot id contains '-').
+_FLAGSHIP = "test_cuda_executable_equivalence"
+ATOM_PARAM_TOKENS = {
+    _FLAGSHIP: 3,
+    "test_cuda_second_order_fallback": 2,
+    "test_cuda_integrator_equivalence": 1,
+    "test_cuda_kinematics_thread_invariance": 1,
+}
+
+# Conservative COLD estimates (seconds) — only used for node ids that have no
+# measured entry in test/.split_suite/durations.json (rolling, written after
+# every green --receipts run). Over-estimating just splits shards finer; an
+# atom estimated over budget gets its OWN shard and is logged — never split
+# (would duplicate its compile), never silently capped.
+DEFAULT_MODULE_EST_SECS = {
+    "test_cuda_codegen_layout": 5400.0,
+    "test_cuda_plant_equivalence": 3600.0,
+    "test_cuda_spherical_fdsva_so_equivalence": 2700.0,
+    "test_cuda_spherical_equivalence": 2400.0,
+    "test_cuda_spherical_so_equivalence": 1800.0,
+    "test_cuda_idsva_so_world_frame": 1800.0,
+    "test_smem_poison": 1800.0,  # nested pytest over ~20 flagship iiwa14 cells
+}
+
+
+def _default_atom_est(key: tuple, n_ids: int) -> float:
+    mod = key[0]
+    if mod == _FLAGSHIP:
+        robot = key[1] if len(key) > 1 else ""
+        base = 480.0
+        if robot in ("g1", "h1_2"):
+            base *= 2.5
+        elif robot in ("baxter", "fetch"):
+            base *= 1.5
+        return base
+    if mod == "test_cuda_second_order_fallback":
+        robot = key[1] if len(key) > 1 else ""
+        return 5400.0 if robot in ("g1", "h1_2") else 1800.0
+    if mod in ATOM_PARAM_TOKENS:
+        return 150.0 * n_ids
+    return DEFAULT_MODULE_EST_SECS.get(mod, 240.0 + 90.0 * n_ids)
+
+
+def load_durations() -> dict:
+    if DURATIONS_PATH.exists():
+        try:
+            return json.loads(DURATIONS_PATH.read_text())
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def _atom_est(members: list[str], durations: dict, key: tuple) -> float:
+    known = [durations.get(i) for i in members]
+    if known and all(isinstance(v, (int, float)) for v in known):
+        # Measured (warm-run) durations + headroom; +10s covers per-test
+        # cache-stat / process overhead the receipt's duration_s misses.
+        return sum(known) * 1.15 + 10.0
+    return _default_atom_est(key, len(members))
+
+
+def _atom_key(nid: str) -> tuple:
+    mod = Path(nid.split("::", 1)[0]).stem
+    ntok = ATOM_PARAM_TOKENS.get(mod, 0)
+    if not ntok or "[" not in nid:
+        return (mod,)
+    params = nid.split("[", 1)[1].rstrip("]")
+    return (mod, *params.split("-")[:ntok])
+
+
+def collect_cuda_node_ids(cuda_k: str | None) -> list[str]:
+    """Full gpu_proof collection (optionally SCOPE-narrowed at COLLECTION time,
+    so shard receipts attest exactly the narrowed scope — a valid narrower
+    receipt, with no per-shard -k deselection noise at run time)."""
+    cmd = [PYTHON, "-m", "pytest", "test/cuda_equivalents", "-m", "gpu_proof",
+           "--collect-only", "-q", "-p", "no:cacheprovider"]
+    if cuda_k:
+        cmd += ["-k", cuda_k]
+    r = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True,
+                       timeout=900)
+    ids = [ln for ln in r.stdout.splitlines()
+           if ln.startswith("test/cuda_equivalents/") and "::" in ln]
+    if r.returncode not in (0, 5) or (r.returncode == 0 and not ids):
+        raise RuntimeError(
+            f"cuda collect-only failed (rc={r.returncode}):\n"
+            f"{r.stdout[-2000:]}\n{r.stderr[-2000:]}")
+    return ids
+
+
+def _shard_fingerprint_paths(member_mods: set[str]) -> list[str]:
+    """Member module files + their same-stem runner .cu (test_cuda_X.py ↔
+    cuda_X_runner.cu convention) — finer than the whole-directory fingerprint
+    the monolithic shard used. Paths must stay comma-free (plugin flag is
+    comma-joined)."""
+    paths = []
+    for mod in sorted(member_mods):
+        paths.append(f"test/cuda_equivalents/{mod}.py")
+        runner = mod.removeprefix("test_") + "_runner.cu"
+        if (CUDA_DIR / runner).exists():
+            paths.append(f"test/cuda_equivalents/{runner}")
+    if _FLAGSHIP in member_mods:
+        for extra in ("cuda_equivalence_runner.cu", "grid_runner_select.cuh"):
+            if (CUDA_DIR / extra).exists():
+                paths.append(f"test/cuda_equivalents/{extra}")
+    return paths
+
+
+def pack_cuda_shards(ids: list[str], durations: dict,
+                     budget_secs: float) -> list[ShardSpec]:
+    atoms: dict[tuple, list[str]] = {}
+    for nid in ids:  # collection order → same-module atoms stay adjacent
+        atoms.setdefault(_atom_key(nid), []).append(nid)
+
+    shards: list[ShardSpec] = []
+    cur_ids: list[str] = []
+    cur_mods: set[str] = set()
+    cur_tags: list[str] = []
+    cur_est = 0.0
+
+    def _close() -> None:
+        nonlocal cur_ids, cur_mods, cur_tags, cur_est
+        if not cur_ids:
+            return
+        hint = "_".join(dict.fromkeys(cur_tags))[:32] or "misc"
+        shards.append(ShardSpec(
+            name=f"cuda_{len(shards):02d}_{hint}", domain="cuda",
+            targets=list(cur_ids),
+            fingerprint_paths=_shard_fingerprint_paths(cur_mods),
+            est_secs=cur_est, apply_marker=True))
+        cur_ids, cur_mods, cur_tags, cur_est = [], set(), [], 0.0
+
+    for key, members in atoms.items():
+        est = _atom_est(members, durations, key)
+        if cur_ids and cur_est + est > budget_secs:
+            _close()
+        cur_ids += members
+        cur_mods.add(key[0])
+        cur_tags.append(key[1] if key[0] == _FLAGSHIP and len(key) > 1
+                        else key[0].removeprefix("test_cuda_")
+                        .removeprefix("test_")[:18])
+        cur_est += est
+        if cur_est > budget_secs:  # single over-budget atom → own shard
+            _close()
+    _close()
+
+    # COMPLETENESS GATE: the packed union must be set-equal to collection.
+    # (pytest-gpu-proof's verifier re-checks exact partition downstream, but
+    # failing here beats failing after hours of GPU time.)
+    packed = sorted(i for s in shards for i in s.targets)
+    if packed != sorted(ids):
+        raise RuntimeError(
+            f"cuda partition not set-equal to collection "
+            f"({len(packed)} packed vs {len(ids)} collected)")
+    return shards
+
+
+def build_cuda_shards(cuda_k: str | None,
+                      budget_secs: float) -> tuple[list[ShardSpec], list[str]]:
+    ids = collect_cuda_node_ids(cuda_k)
+    if not ids:
+        return [], []
+    return pack_cuda_shards(ids, load_durations(), budget_secs), ids
+
+
+def load_prior_results(out_dir: Path, spec_names: set[str]) -> list[dict]:
+    """--resume: keep only CLEAN rows for shards that still exist; everything
+    else (failures, casualties, vanished shards) re-runs."""
+    path = out_dir / "results.json"
+    if not path.exists():
+        return []
+    try:
+        prior = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return []
+    return [dict(r, fresh=False) for r in prior
+            if r.get("kind") in CLEAN_KINDS and r.get("shard") in spec_names]
+
+
+def save_partition(out_dir: Path, shards: list[ShardSpec]) -> None:
+    """Persist the cuda partition so --resume re-runs the SAME shards even if
+    durations/estimates have changed since the run started."""
+    data = [dict(name=s.name, domain=s.domain, targets=s.targets,
+                 fingerprint_paths=s.fingerprint_paths, est_secs=s.est_secs,
+                 apply_marker=s.apply_marker) for s in shards]
+    (out_dir / "partition.json").write_text(json.dumps(data, indent=2) + "\n")
+
+
+def load_partition(out_dir: Path) -> list[ShardSpec] | None:
+    p = out_dir / "partition.json"
+    if not p.exists():
+        return None
+    return [ShardSpec(**d) for d in json.loads(p.read_text())]
+
+
+def update_durations(merged_receipt: Path) -> None:
+    """Roll per-node duration_s from a successfully merged receipt into the
+    durations map — the bin-packer's calibration data for the NEXT run."""
+    try:
+        data = json.loads(merged_receipt.read_text())
+    except (OSError, json.JSONDecodeError):
+        return
+    durations = load_durations()
+    n = 0
+    for t in data.get("tests", []):
+        nid, dur = t.get("node_id"), t.get("duration_s")
+        if isinstance(nid, str) and isinstance(dur, (int, float)):
+            durations[nid] = dur
+            n += 1
+    if n:
+        DURATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        DURATIONS_PATH.write_text(
+            json.dumps(durations, indent=2, sort_keys=True) + "\n")
+        print(f"  durations: recorded {n} node duration(s) -> "
+              f"{DURATIONS_PATH.relative_to(REPO_ROOT)}")
 
 
 # ─── change-aware selection ──────────────────────────────────────────────────
@@ -337,32 +603,67 @@ def _wait_progress_aware(proc: subprocess.Popen, mod: str, log_path: Path):
             return "TIMEOUT"
 
 
-def phase_run(modules: list[str], out_dir: Path, receipts: bool,
-              extra_args: list[str]) -> list[dict]:
-    results = []
-    for mod in modules:
-        xml_path = out_dir / f"{mod}.xml"
-        log_path = out_dir / f"{mod}.log"
-        cmd = [PYTHON, "-m", "pytest", f"test/python_wrappers/{mod}.py",
-               "-q", "-rf", f"--junitxml={xml_path}"] + extra_args
+def _write_ledger(out_dir: Path, results: list[dict]) -> None:
+    """Incremental per-shard ledger — the --resume source of truth. Rewritten
+    (atomic replace) after EVERY shard so an interrupt/pause never loses
+    completed work; an in-flight shard is simply absent (= re-runs)."""
+    tmp = out_dir / "results.json.tmp"
+    tmp.write_text(json.dumps(results, indent=2) + "\n")
+    os.replace(tmp, out_dir / "results.json")
+
+
+def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
+              extra_args: list[str],
+              prior_results: list[dict]) -> tuple[list[dict], bool]:
+    """Returns (results incl. prior clean rows, paused)."""
+    results = list(prior_results)
+    for spec in shards:
+        if (out_dir / "PAUSE").exists():
+            print(f"[{datetime.now():%H:%M:%S}] PAUSE file present — stopping "
+                  f"cleanly before {spec.name} (rm it, then --resume {out_dir})",
+                  flush=True)
+            return results, True
+        xml_path = out_dir / f"{spec.name}.xml"
+        log_path = out_dir / f"{spec.name}.log"
+        cmd = [PYTHON, "-m", "pytest", *spec.targets,
+               "-q", "-rf", f"--junitxml={xml_path}"]
+        if spec.apply_marker:
+            cmd += ["-m", "gpu_proof"]
+        cmd += extra_args
         if receipts:
             rdir = out_dir / "receipts"
             rdir.mkdir(exist_ok=True)
-            cmd += ["--gpu-proof-enable", f"--gpu-proof-out={rdir / (mod + '.json')}",
-                    f"--gpu-proof-shard={mod}",
-                    f"--gpu-proof-shard-fingerprint-paths=test/python_wrappers/{mod}.py"]
+            cmd += ["--gpu-proof-enable",
+                    f"--gpu-proof-out={rdir / (spec.name + '.json')}",
+                    f"--gpu-proof-shard={spec.name}",
+                    "--gpu-proof-shard-fingerprint-paths="
+                    + ",".join(spec.fingerprint_paths)]
+        env = os.environ.copy()
+        if spec.domain == "cuda":
+            # The cuda suite's artifact-cache default is CWD-relative — pin it
+            # absolute so every shard (incl. nested pytest processes) shares
+            # ONE warm cache. NOTE the cache writers have no file locking:
+            # shards must stay SERIAL (they are — one GPU, one at a time).
+            env.setdefault("GRID_CUDA_CACHE_DIR",
+                           str(REPO_ROOT / ".pytest_cache" / "grid_cuda"))
         t0 = time.monotonic()
         with open(log_path, "w") as log:
             # start_new_session so a kill takes the WHOLE process group —
             # otherwise pytest dies but its nvcc/cicc grandchildren survive as
-            # orphans and poison the next module's run (bench-orchestration
+            # orphans and poison the next shard's run (bench-orchestration
             # trap: "pkill orphans, GPU/CPU EMPTY before the next leg").
             proc = subprocess.Popen(cmd, cwd=REPO_ROOT, stdout=log,
                                     stderr=subprocess.STDOUT,
-                                    start_new_session=True)
-            rc: int | str = _wait_progress_aware(proc, mod, log_path)
+                                    start_new_session=True, env=env)
+            try:
+                rc: int | str = _wait_progress_aware(proc, spec.name, log_path)
+            except (KeyboardInterrupt, SystemExit):
+                # In-flight shard = incomplete: kill its whole group and leave
+                # it OUT of the ledger so --resume re-runs it from scratch.
+                _kill_group(proc)
+                raise
         dt = time.monotonic() - t0
-        # VRAM watermark AFTER the module's process exits: per-module isolation
+        # VRAM watermark AFTER the shard's process exits: per-shard isolation
         # means memory.used should return to the desktop baseline every time.
         # A rising floor here = leaked device allocations surviving process
         # exit (the driver-wedge signature) — the accumulation-probe dataset.
@@ -376,17 +677,22 @@ def phase_run(modules: list[str], out_dir: Path, receipts: bool,
         junit = parse_junit(xml_path)
         if junit is None:
             kind = "CASUALTY" if rc != 0 else "NO-XML"
-            results.append(dict(module=mod, rc=rc, secs=dt, kind=kind, vram=vram,
-                                tests=0, failures=0, errors=0, skipped=0, failed=[]))
+            row = dict(shard=spec.name, domain=spec.domain, rc=rc, secs=dt,
+                       kind=kind, vram=vram, tests=0, failures=0, errors=0,
+                       skipped=0, failed=[], fresh=True)
         else:
             t, f, e, s, failed = junit
             if rc == 0:
                 kind = "OK"
             elif rc == 5 and t == 0 and f + e == 0:
-                # pytest exit 5 = "no tests collected": every test in the module
-                # was deselected by a -k scope filter. Benign — a narrowed run
-                # (SCOPE=smoke/curated) must not read as a failing module.
-                kind = "DESELECTED"
+                # pytest exit 5 = "no tests collected". For a wrappers module
+                # that is a benign -k deselection (SCOPE narrowing). For a
+                # cuda shard the targets are EXPLICIT node ids — all of them
+                # vanishing means the partition is stale vs the tree (e.g. a
+                # --resume across test edits): loud, never clean...unless the
+                # caller really did pass a -k through the pytest passthrough.
+                benign = spec.domain == "wrappers" or "-k" in extra_args
+                kind = "DESELECTED" if benign else "STALE-IDS"
             elif f + e > 0:
                 kind = "FAILURES"
             elif s > 0:
@@ -395,43 +701,92 @@ def phase_run(modules: list[str], out_dir: Path, receipts: bool,
                 kind = "FLOOR-SKIP"
             else:
                 kind = "RC!=0"
-            results.append(dict(module=mod, rc=rc, secs=dt, kind=kind, vram=vram,
-                                tests=t, failures=f, errors=e, skipped=s,
-                                failed=failed))
-        r = results[-1]
-        print(f"[{datetime.now():%H:%M:%S}] {mod}: {r['kind']} "
-              f"({r['tests']} tests, {r['failures']}F/{r['errors']}E/"
-              f"{r['skipped']}S, rc={rc}, {dt:.0f}s, vram={r['vram']}MiB)", flush=True)
-    return results
+            row = dict(shard=spec.name, domain=spec.domain, rc=rc, secs=dt,
+                       kind=kind, vram=vram, tests=t, failures=f, errors=e,
+                       skipped=s, failed=failed, fresh=True)
+        results.append(row)
+        _write_ledger(out_dir, results)
+        est = (f", est {spec.est_secs / 60:.0f}min vs {dt / 60:.0f}min"
+               if spec.domain == "cuda" and spec.est_secs else "")
+        print(f"[{datetime.now():%H:%M:%S}] {spec.name}: {row['kind']} "
+              f"({row['tests']} tests, {row['failures']}F/{row['errors']}E/"
+              f"{row['skipped']}S, rc={rc}, {dt:.0f}s{est}, "
+              f"vram={row['vram']}MiB)", flush=True)
+    return results, False
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--modules", nargs="*", help="subset of module stems to run")
+    ap.add_argument("--modules", nargs="*", help="subset of wrapper module stems to run")
     ap.add_argument("--skip-warm", action="store_true")
     ap.add_argument("--receipts", action="store_true",
-                    help="write per-module schema-2 shard receipts and merge them "
+                    help="write per-shard schema-2 receipts and merge them "
                          "into <out>/gpu-proof.json at the end")
     ap.add_argument("--receipts-carry-from", default=None, metavar="RECEIPT",
                     help="with --receipts: carry still-valid shards from this "
                          "older merged receipt (gpu-proof merge --carry-from)")
     ap.add_argument("--changed-only", action="store_true",
-                    help="skip modules whose input fingerprint (module file + "
-                         "conftest + URDFs + codegen/template hashes + toolchain) "
-                         "matches the last GREEN run in test/.split-suite-state.json")
+                    help="skip WRAPPER modules whose input fingerprint (module "
+                         "file + conftest + URDFs + codegen/template hashes + "
+                         "toolchain) matches the last GREEN run in "
+                         "test/.split-suite-state.json (cuda shards always run "
+                         "— their composition is duration-dependent)")
     ap.add_argument("--all", action="store_true",
                     help="force a full run (explicitly overrides --changed-only)")
+    ap.add_argument("--domains", default="wrappers",
+                    help="comma list of test domains to run: wrappers,cuda "
+                         "(default wrappers — byte-compatible with the "
+                         "module-based driver)")
+    ap.add_argument("--cuda-k", default=None, metavar="EXPR",
+                    help="-k narrowing applied to the cuda COLLECTION (shards "
+                         "then attest exactly the narrowed scope; wrapper "
+                         "shards never take -k — see run_gpu_proof.sh)")
+    ap.add_argument("--shard-budget-mins", type=float,
+                    default=float(os.environ.get(
+                        "GRID_SPLIT_SHARD_BUDGET_MINS", "120")),
+                    help="target max ESTIMATED minutes per cuda shard "
+                         "(default 120; a single atom over budget gets its "
+                         "own shard)")
+    ap.add_argument("--resume", default=None, metavar="OUTDIR",
+                    help="resume an interrupted/paused run: reuse OUTDIR's "
+                         "partition.json, skip shards its results.json records "
+                         "as clean, re-run the rest, merge everything")
     ap.add_argument("--out", default=None, help="output dir (default test/.split_suite/<stamp>)")
     ap.add_argument("pytest_args", nargs="*", default=[],
                     help="extra args passed to every pytest invocation (after --)")
     args = ap.parse_args()
 
-    out_dir = Path(args.out) if args.out else (
-        REPO_ROOT / "test" / ".split_suite" / datetime.now().strftime("%Y%m%d_%H%M%S"))
-    out_dir.mkdir(parents=True, exist_ok=True)
+    domains = [d.strip() for d in args.domains.split(",") if d.strip()]
+    bad_domains = [d for d in domains if d not in ("wrappers", "cuda")]
+    if bad_domains:
+        print(f"FATAL: unknown domain(s): {bad_domains}", file=sys.stderr)
+        return 2
+    run_wrappers = "wrappers" in domains
+    run_cuda = "cuda" in domains
 
-    modules = args.modules or discover_modules()
+    if run_cuda and "random" in os.environ.get("GRID_CUDA_THREAD_COUNTS", ""):
+        print("FATAL: GRID_CUDA_THREAD_COUNTS contains 'random' — node ids "
+              "would be nondeterministic and the cuda partition unsound",
+              file=sys.stderr)
+        return 2
+
+    if args.resume:
+        out_dir = Path(args.resume)
+        if not (out_dir / "results.json").exists() and \
+                not (out_dir / "partition.json").exists():
+            print(f"FATAL: --resume {out_dir}: no results.json/partition.json "
+                  f"to resume from", file=sys.stderr)
+            return 2
+    else:
+        out_dir = Path(args.out) if args.out else (
+            REPO_ROOT / "test" / ".split_suite"
+            / datetime.now().strftime("%Y%m%d_%H%M%S"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # A stale PAUSE sentinel must not instantly stop the (re)start.
+    (out_dir / "PAUSE").unlink(missing_ok=True)
+
+    modules = (args.modules or discover_modules()) if run_wrappers else []
     unknown = [m for m in (args.modules or []) if not (WRAPPERS_DIR / f"{m}.py").exists()]
     if unknown:
         print(f"FATAL: unknown module(s): {unknown}", file=sys.stderr)
@@ -439,7 +794,7 @@ def main() -> int:
 
     fingerprints = {}
     skipped_unchanged: list[str] = []
-    if args.changed_only and not args.all:
+    if run_wrappers and args.changed_only and not args.all:
         state = load_state()
         for mod in modules:
             fingerprints[mod] = module_fingerprint(mod)
@@ -450,20 +805,67 @@ def main() -> int:
               f"skipped, {len(modules)} to run ===")
         for m in skipped_unchanged:
             print(f"  UNCHANGED {m}")
-        if not modules and not (args.receipts and args.receipts_carry_from):
+        if not modules and not run_cuda and \
+                not (args.receipts and args.receipts_carry_from):
             print("nothing to run — all module fingerprints match the last green run")
             return 0
 
-    for w in drift_guard(modules):
-        print(f"WARM-MANIFEST DRIFT: {w}")
+    specs: list[ShardSpec] = []
+    if run_wrappers:
+        for w in drift_guard(modules):
+            print(f"WARM-MANIFEST DRIFT: {w}")
+        if not args.skip_warm:
+            print(f"=== Phase A: compile-warm ({len(WARM_MANIFEST)} modules' robots) ===")
+            for desc, status, secs, detail in phase_warm(out_dir):
+                print(f"  {status:12s} {secs:7.1f}s  {desc}  {detail}")
+        specs += [ShardSpec(name=mod, domain="wrappers",
+                            targets=[f"test/python_wrappers/{mod}.py"],
+                            fingerprint_paths=[f"test/python_wrappers/{mod}.py"])
+                  for mod in modules]
 
-    if not args.skip_warm:
-        print(f"=== Phase A: compile-warm ({len(WARM_MANIFEST)} modules' robots) ===")
-        for desc, status, secs, detail in phase_warm(out_dir):
-            print(f"  {status:12s} {secs:7.1f}s  {desc}  {detail}")
+    if run_cuda:
+        cuda_shards = load_partition(out_dir) if args.resume else None
+        if cuda_shards is None:
+            budget = args.shard_budget_mins * 60.0
+            cuda_shards, cuda_ids = build_cuda_shards(args.cuda_k, budget)
+            save_partition(out_dir, cuda_shards)
+            print(f"=== cuda partition: {len(cuda_ids)} node ids -> "
+                  f"{len(cuda_shards)} shard(s) "
+                  f"(budget {args.shard_budget_mins:.0f} min) ===")
+            for s in cuda_shards:
+                over = ("  <-- over budget (single unsplittable atom)"
+                        if s.est_secs > budget else "")
+                print(f"  {s.name:42s} {len(s.targets):4d} ids  "
+                      f"est {s.est_secs / 60:6.1f} min{over}")
+        else:
+            print(f"=== cuda partition: reusing {len(cuda_shards)} shard(s) "
+                  f"from {out_dir / 'partition.json'} ===")
+        specs += cuda_shards
 
-    print(f"=== Phase B: per-module runs -> {out_dir} ===")
-    results = phase_run(modules, out_dir, args.receipts, args.pytest_args)
+    prior: list[dict] = []
+    if args.resume:
+        prior = load_prior_results(out_dir, {s.name for s in specs})
+        if prior:
+            print(f"=== --resume: {len(prior)} clean shard(s) kept, "
+                  f"{len(specs) - len(prior)} to run ===")
+    prior_clean = {r["shard"] for r in prior}
+    to_run = [s for s in specs if s.name not in prior_clean]
+
+    import signal
+
+    def _sigterm(_sig, _frm):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _sigterm)
+
+    print(f"=== Phase B: per-shard runs -> {out_dir} ===")
+    try:
+        results, paused = phase_run(to_run, out_dir, args.receipts,
+                                    args.pytest_args, prior)
+    except KeyboardInterrupt:
+        print(f"\nINTERRUPTED — completed shards are in {out_dir}/results.json; "
+              f"continue with --resume {out_dir}", flush=True)
+        return 130
 
     print("\n=== SPLIT SUITE SUMMARY ===")
     tot = dict(tests=0, failures=0, errors=0, skipped=0)
@@ -471,28 +873,41 @@ def main() -> int:
     for r in results:
         for k in tot:
             tot[k] += r[k]
-        flag = "" if r["kind"] in ("OK", "FLOOR-SKIP", "DESELECTED") else "  <-- "
-        if r["kind"] not in ("OK", "FLOOR-SKIP", "DESELECTED"):
+        clean = r["kind"] in CLEAN_KINDS
+        flag = "" if clean else "  <-- "
+        if not clean:
             bad += 1
-        print(f"  {r['module']:42s} {r['kind']:10s} rc={r['rc']!s:>7} "
-              f"{r['tests']:4d}T {r['failures']}F {r['errors']}E {r['skipped']}S{flag}")
+        carried = "" if r.get("fresh", True) else " (prior run)"
+        print(f"  {r['shard']:42s} {r['kind']:10s} rc={r['rc']!s:>7} "
+              f"{r['tests']:4d}T {r['failures']}F {r['errors']}E "
+              f"{r['skipped']}S{flag}{carried}")
         for name in r["failed"]:
             print(f"      FAILED {name}")
     print(f"\n  TOTAL: {tot['tests']} tests, {tot['failures']}F "
-          f"{tot['errors']}E {tot['skipped']}S across {len(results)} modules"
+          f"{tot['errors']}E {tot['skipped']}S across {len(results)} shards"
           + (f" (+{len(skipped_unchanged)} unchanged-skipped)" if skipped_unchanged else "")
-          + f"; {bad} module(s) not clean")
+          + f"; {bad} shard(s) not clean")
 
-    # Update the green-state fingerprints for modules that ended clean this run
-    # (so --changed-only can skip them next time). Never recorded for failures.
+    # Update the green-state fingerprints for WRAPPER modules that ended clean
+    # THIS run (--changed-only skip data; never for failures, never for prior
+    # rows — their fingerprints belong to the run that produced them).
     state = load_state()
     for r in results:
-        if r["kind"] == "OK":
-            mod = r["module"]
+        if r["kind"] == "OK" and r.get("domain") == "wrappers" \
+                and r.get("fresh", True):
+            mod = r["shard"]
             state[mod] = fingerprints.get(mod) or module_fingerprint(mod)
     save_state(state)
 
-    # Merge shard receipts into one verifiable artifact.
+    if paused:
+        print(f"PAUSED — continue with --resume {out_dir} "
+              f"(receipts merge deferred to the completing run)")
+        return 3
+
+    # Merge shard receipts into one verifiable artifact. On --resume this
+    # re-globs receipts/, folding prior clean shards' receipts back in;
+    # cross-commit staleness is machine-guarded (shards disagreeing on the
+    # commit SHA refuse to merge).
     if args.receipts:
         rdir = out_dir / "receipts"
         shards = sorted(str(p) for p in rdir.glob("*.json")) if rdir.exists() else []
@@ -509,6 +924,8 @@ def main() -> int:
                      if args.receipts_carry_from else ""))
             if mrc != 0:
                 bad += 1
+            elif bad == 0:
+                update_durations(merged)
         else:
             print("  receipts: no shard receipts were produced")
 

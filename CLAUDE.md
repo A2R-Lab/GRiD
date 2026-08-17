@@ -59,12 +59,19 @@ Markers: `pinocchio_equivalence`, `cuda_equivalence`, `python_wrappers`, `floati
 `gpu-proof.json` receipt (see `test/run_gpu_proof.sh`) that CPU-only CI verifies — so GPU correctness
 can gate merges without paid GPU CI.
 
-Prefer the crash-isolated split driver for full `python_wrappers` passes:
-`test/run_split_suite.py` (compile-warm phase + one pytest subprocess per module +
-junitxml aggregate — one module's abort can't eat the rest; `--changed-only` skips
-modules whose input fingerprint matches the last green run). `SPLIT=1
-test/run_gpu_proof.sh` produces the same repo-root receipt via per-module schema-2
-shards (+ a `cuda_equivalents` shard) merged and re-signed.
+Prefer the crash-isolated split driver for full GPU passes:
+`test/run_split_suite.py` runs `python_wrappers` as per-module shards (compile-warm
+phase + one pytest subprocess per module — one module's abort can't eat the rest;
+`--changed-only` skips modules whose input fingerprint matches the last green run)
+and, with `--domains wrappers,cuda`, partitions `cuda_equivalents` into granular
+node-id shards bounded to ~2h each (bin-packed from rolling measured durations;
+never `-k` — explicit node-id lists with a set-equality completeness gate). Runs
+are pausable: `touch <out>/PAUSE` stops cleanly between shards, Ctrl-C/SIGTERM
+stops within one, and `--resume <out>` continues without re-running completed
+shards. `SPLIT=1 test/run_gpu_proof.sh` drives both domains and merges + re-signs
+all shard receipts into the same repo-root `gpu-proof.json` the monolithic path
+writes (`SPLIT_RESUME=<out>` to continue an interrupted pass). CPU-only gates for
+the partition logic live in `test/test_split_partition.py`.
 
 ## Durable engineering conventions
 

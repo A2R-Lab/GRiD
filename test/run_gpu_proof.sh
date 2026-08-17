@@ -25,17 +25,24 @@
 # receipt. (The plugin is the pytest-gpu-proof PyPI package now, installed via
 # install/requirements-dev.txt — no vendored submodule to collect.)
 #
-# SPLIT=1 — crash-isolated receipt path (schema-2 shards). python_wrappers runs
-# through test/run_split_suite.py (per-module pytest subprocesses: one module's
-# SIGABRT/exit() can no longer eat the rest of the suite's outcomes), each module
-# emitting a shard receipt; cuda_equivalents (already subprocess-isolated
-# internally) runs as ONE extra shard; everything merges + re-signs into the same
-# repo-root gpu-proof.json the monolithic path writes, so CI verify is unchanged.
+# SPLIT=1 — crash-isolated, PAUSABLE receipt path (schema-2 shards), one
+# driver invocation covering BOTH suites: python_wrappers as per-module shards
+# AND cuda_equivalents as GRANULAR node-id shards bounded to ~2h each (bin-
+# packed by test/run_split_suite.py; rolling durations calibrate the packing).
+# Everything merges + re-signs into the same repo-root gpu-proof.json the
+# monolithic path writes, so CI verify is unchanged.
 #   SPLIT=1 test/run_gpu_proof.sh
+#   SPLIT=1 SPLIT_RESUME=test/.split_suite/receipt_<stamp> test/run_gpu_proof.sh
+#     (continue an interrupted/paused run — completed shards are never re-run)
 #   SPLIT=1 SPLIT_CARRY_FROM=old-gpu-proof.json test/run_gpu_proof.sh
 #     (carry unchanged modules' shards from an older receipt — verifier accepts
 #      carried shards only under a policy with allow_carried: true)
-# SCOPE tiers apply to both paths (forwarded as -k to every shard invocation).
+# To pause a running SPLIT pass: `touch <out_dir>/PAUSE` (stops cleanly between
+# shards, ≤ one shard's latency), or SIGINT/SIGTERM the driver (stops within
+# the shard); resume with SPLIT_RESUME.
+# SCOPE narrows only the cuda side (via --cuda-k at COLLECTION time — the
+# wrapper modules are iiwa14-based without robot names in their test IDs, so a
+# robot -k would silently deselect whole modules; 12/25 under curated, 2026-08-09).
 set -euo pipefail
 
 # SCOPE -> a -k expression narrowing the gpu_proof test set. Empty = full suite.
@@ -68,46 +75,38 @@ if [[ -n "$SCOPE_K" ]]; then K_ARGS=(-k "$SCOPE_K"); fi
 echo "[run_gpu_proof] SCOPE=$SCOPE  SPLIT=${SPLIT:-0}  ${SCOPE_K:+(-k \"$SCOPE_K\")}  ${PYTEST_ARGS:+PYTEST_ARGS=$PYTEST_ARGS}"
 
 if [[ "${SPLIT:-0}" = "1" ]]; then
-    OUT_DIR="test/.split_suite/receipt_$(date +%Y%m%d_%H%M%S)"
-
-    # Shard 1..N: python_wrappers, one shard per module (crash-isolated). The
-    # driver merges its own shards into $OUT_DIR/gpu-proof.json. rc captured
-    # explicitly — a pipe or early exec would mask which leg failed.
-    # NOTE: SCOPE's -k is NOT forwarded here. -k matches test IDs, and many
-    # wrapper modules are iiwa14-based without a robot name in their IDs, so a
-    # robot -k silently deselects whole modules (12/25 under curated,
-    # 2026-08-09). The wrapper side is the cheap crash-isolated side — it
-    # always runs in full; SCOPE narrows only the cuda_equivalents shard.
+    # ONE driver invocation covers both domains: per-module wrapper shards +
+    # granular cuda node-id shards (≤ ~2h each). The driver merges ALL shard
+    # receipts into $OUT_DIR/gpu-proof.json itself; rc captured explicitly —
+    # a pipe or early exec would mask which shard failed.
+    if [[ -n "${SPLIT_RESUME:-}" ]]; then
+        OUT_DIR="$SPLIT_RESUME"
+        RESUME_ARGS=(--resume "$OUT_DIR")
+    else
+        OUT_DIR="test/.split_suite/receipt_$(date +%Y%m%d_%H%M%S)"
+        RESUME_ARGS=()
+    fi
     CARRY_ARGS=()
     if [[ -n "${SPLIT_CARRY_FROM:-}" ]]; then
         CARRY_ARGS=(--receipts-carry-from "$SPLIT_CARRY_FROM")
     fi
-    rc_wrappers=0
-    "$PYTHON" test/run_split_suite.py --receipts "${CARRY_ARGS[@]}" \
-        --out "$OUT_DIR" -- ${PYTEST_ARGS:-} || rc_wrappers=$?
+    CUDA_K_ARGS=()
+    if [[ -n "$SCOPE_K" ]]; then CUDA_K_ARGS=(--cuda-k "$SCOPE_K"); fi
 
-    # Shard N+1: cuda_equivalents as a single shard (its runners are already
-    # per-exe subprocess-isolated; one shard keeps the receipt's coverage equal
-    # to the monolithic path — a SPLIT receipt must never attest LESS).
-    rc_cuda=0
-    "$PYTHON" -m pytest test/cuda_equivalents -m gpu_proof "${K_ARGS[@]}" \
-        --gpu-proof-enable \
-        --gpu-proof-out="$OUT_DIR/receipts/cuda_equivalents.json" \
-        --gpu-proof-shard=cuda_equivalents \
-        --gpu-proof-shard-fingerprint-paths=test/cuda_equivalents \
-        ${PYTEST_ARGS:-} || rc_cuda=$?
+    rc=0
+    "$PYTHON" test/run_split_suite.py --receipts --domains wrappers,cuda \
+        "${CUDA_K_ARGS[@]}" "${CARRY_ARGS[@]}" "${RESUME_ARGS[@]}" \
+        --out "$OUT_DIR" -- ${PYTEST_ARGS:-} || rc=$?
 
-    if [[ $rc_wrappers -ne 0 || $rc_cuda -ne 0 ]]; then
-        echo "ERROR: SPLIT legs failed (python_wrappers rc=$rc_wrappers, cuda_equivalents rc=$rc_cuda);" >&2
-        echo "       shards left in $OUT_DIR for triage — NOT merging a failing receipt." >&2
+    if [[ $rc -ne 0 ]]; then
+        echo "SPLIT driver rc=$rc (3=paused, 130=interrupted, 1=shard failures);" >&2
+        echo "  shards/ledger in $OUT_DIR — continue with:" >&2
+        echo "  SPLIT=1 SPLIT_RESUME=$OUT_DIR test/run_gpu_proof.sh" >&2
         exit 1
     fi
 
-    # Final merge + re-sign into the repo-root receipt CI reads.
-    GPU_PROOF="$(dirname "$PYTHON")/gpu-proof"
-    "$GPU_PROOF" merge \
-        --out gpu-proof.json --repo . \
-        "$OUT_DIR/gpu-proof.json" "$OUT_DIR/receipts/cuda_equivalents.json"
+    # The driver already merged + re-signed; publish to the repo-root path CI reads.
+    cp "$OUT_DIR/gpu-proof.json" gpu-proof.json
     echo "[run_gpu_proof] SPLIT receipt written to gpu-proof.json (shards in $OUT_DIR)"
     exit 0
 fi
