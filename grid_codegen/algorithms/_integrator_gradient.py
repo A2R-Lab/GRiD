@@ -1193,8 +1193,10 @@ def _integrator_du_extra_t_buffers(self, nq, n, fb, dqdd_in_smem, dab_in_smem, c
         ("s_Minv", n * n),
         ("s_qdd", n),
         # Multi-stage scratch — allocated for every IT (single-stage just doesn't use it).
-        # s_q_orig holds the full nq pose (floating-base adds the quaternion slot).
-        ("s_q_orig", n + fb),
+        # s_q_orig holds the full nq pose — nq, NOT n+fb (equal for plain fixed
+        # base and floating, but short by nq-nv on fixed-base spherical; same
+        # under-sizing class as s_x_kp1 below).
+        ("s_q_orig", nq),
         ("s_qd_orig", n),
         ("s_stage_grad_qdd", max_stages * n),
     ]
@@ -1212,7 +1214,11 @@ def _integrator_du_extra_t_buffers(self, nq, n, fb, dqdd_in_smem, dab_in_smem, c
         ("s_dInt_v_6x6", dint_floats),
     ]
     if compute_x_kp1:
-        extra_t_buffers.append(("s_x_kp1", 2 * n + fb))  # = nq + nv
+        # [q (nq); qd (nv)] — must be nq+nv, NOT 2*nv+fb: those agree for plain
+        # fixed base (nq==nv) and floating (nq-nv==fb==1) but under-size the
+        # buffer by (nq-nv) on FIXED-base spherical robots (quaternion joints,
+        # fb==0), overrunning the next arena buffer with the q-retract tail.
+        extra_t_buffers.append(("s_x_kp1", nq + n))
     return extra_t_buffers
 
 

@@ -689,6 +689,25 @@ gap only reproduces under a restricted list → nvcc "identifier undefined" deep
   in the list so emit helper H") is a latent restricted-list bug for every OTHER emitter that
   uses H. Idempotent helper emitters called at the point of use are the robust shape.
 
+### 1ab. `n+fb` (or `2n+fb`) as a stand-in for a POSITION-space width silently under-sizes fixed-base spherical buffers (2026-08-18)
+
+Caught by the first full granular gpu-proof pass: `gen_arena_carve_struct(integrator_du_arena)`
+failed its emission-time exactness check (resolved t-count 1047 != sizer 1049) on the spherical
+fixtures only. Two buffers in `_integrator_du_extra_t_buffers` sized position-space storage with
+velocity-space arithmetic: `s_q_orig` as `n+fb` and `s_x_kp1` as `2n+fb`. Those equal `nq` /
+`nq+nv` for plain fixed base (nq==nv) AND floating (nq-nv==1==fb) — the only two shapes the
+9-robot flagship set exercises — but a FIXED-base spherical robot has nq-nv = #spherical-joints
+with fb==0, so each buffer came up short by nq-nv and the q-retract tail would overrun the next
+arena buffer (the kernel emitter shares the same list). Sibling of the §7 "nq==nv makes
+tight==slotted, fixed-base proves nothing" input-ABI trap, now on the SMEM-arena side.
+- **Fix pattern:** size q-shaped storage with `nq` (and next-state with `nq+nv`) directly; never
+  reconstruct it from nv+fb. Byte-identical for all non-spherical robots by the identities above.
+- **Audit rule:** grep emitters for `+ fb` / `+ NUM_POS - NUM_VEL`-flavored arithmetic feeding a
+  buffer that holds q or [q; qd]; each is a latent fixed-base-spherical bug.
+- **Meta:** the carve struct's `expected_t_count` emission-time equality check (GATO ASK6) is what
+  surfaced this — a `total <= sizer` slack check would have hidden the kernel-side under-sizing
+  forever. Prefer exact-count invariants over upper bounds when two walks must agree.
+
 ---
 
 ## 2. Debugging methodology (what actually localizes a bug fast)
