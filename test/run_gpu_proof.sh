@@ -94,7 +94,10 @@ if [[ "${SPLIT:-0}" = "1" ]]; then
     if [[ -n "$SCOPE_K" ]]; then CUDA_K_ARGS=(--cuda-k "$SCOPE_K"); fi
 
     rc=0
-    "$PYTHON" test/run_split_suite.py --receipts --domains wrappers,cuda \
+    # -u: unbuffered — the driver's section headers otherwise sit in a pipe
+    # buffer until the first per-shard line flushes, making a healthy run look
+    # hung to anyone tailing the log.
+    "$PYTHON" -u test/run_split_suite.py --receipts --domains wrappers,cuda \
         "${CUDA_K_ARGS[@]}" "${CARRY_ARGS[@]}" "${RESUME_ARGS[@]}" \
         --out "$OUT_DIR" -- ${PYTEST_ARGS:-} || rc=$?
 
