@@ -483,37 +483,68 @@ def drift_guard(modules: list[str]) -> list[str]:
     return warnings
 
 
-def phase_warm(out_dir: Path) -> list[tuple[str, str, float, str]]:
-    """Returns rows (robot-desc, status, seconds, detail)."""
+def _warm_desc(entry: dict) -> str:
+    kw = dict(entry)
+    robot = kw.pop("robot")
+    return robot + "".join(
+        f",{k}={v}" for k, v in sorted(kw.items()) if k != "max_batch_size"
+    ) + f",mb={kw.get('max_batch_size', 256)}"
+
+
+def warm_entries() -> list[tuple[str, dict]]:
+    """Deduped Phase A warm targets as (desc, warm_robot-kwargs)."""
+    seen: set[str] = set()
+    out: list[tuple[str, dict]] = []
+    for _mod, entries in sorted(WARM_MANIFEST.items()):
+        for e in entries:
+            desc = _warm_desc(e)
+            if desc in seen:
+                continue
+            seen.add(desc)
+            out.append((desc, dict(e)))
+    return out
+
+
+def _warm_one_entry(desc: str, entry: dict) -> tuple[str, float, str]:
+    """One warm_robot call. Returns (status, secs, detail)."""
     sys.path.insert(0, str(REPO_ROOT))
     from config import robot_urdf  # noqa: PLC0415
     import grid_rbd  # noqa: PLC0415
 
+    kw = dict(entry)
+    robot = kw.pop("robot")
+    t0 = time.monotonic()
+    try:
+        urdf = robot_urdf(robot)
+        if not urdf.exists():
+            return "SKIP", 0.0, f"no urdf: {urdf}"
+        key, _so_path, _meta = grid_rbd.warm_robot(
+            name=f"__split_warm_{robot}", urdf_path=str(urdf), **kw)
+        dt = time.monotonic() - t0
+        return ("HIT" if dt < 5.0 else "BUILT"), dt, key[:12]
+    except Exception as exc:  # a warm failure must never stop Phase B
+        return "COMPILE-FAIL", time.monotonic() - t0, repr(exc)[:200]
+
+
+def warm_one_worker(spec_path: str) -> int:
+    """``--warm-one`` subprocess mode: run ONE warm entry under the RAM-aware
+    pool (test/compile_sched.py wraps this process with /usr/bin/time -v) and
+    write its outcome JSON where the parent expects it."""
+    spec = json.loads(Path(spec_path).read_text())
+    status, secs, detail = _warm_one_entry(spec["desc"], spec["entry"])
+    Path(spec["result_path"]).write_text(json.dumps(
+        {"desc": spec["desc"], "status": status, "secs": secs, "detail": detail}))
+    print(f"{status} {spec['desc']} {detail}", flush=True)
+    return 0 if status in ("HIT", "BUILT", "SKIP") else 1
+
+
+def phase_warm(out_dir: Path) -> list[tuple[str, str, float, str]]:
+    """Serial fallback (GRID_SPLIT_COMPILE_JOBS=0). Returns
+    (robot-desc, status, seconds, detail) rows."""
     rows = []
-    seen: set[str] = set()
-    for mod, entries in sorted(WARM_MANIFEST.items()):
-        for e in entries:
-            kw = dict(e)
-            robot = kw.pop("robot")
-            desc = robot + "".join(
-                f",{k}={v}" for k, v in sorted(kw.items()) if k != "max_batch_size"
-            ) + f",mb={kw.get('max_batch_size', 256)}"
-            if desc in seen:
-                continue
-            seen.add(desc)
-            t0 = time.monotonic()
-            try:
-                urdf = robot_urdf(robot)
-                if not urdf.exists():
-                    rows.append((desc, "SKIP", 0.0, f"no urdf: {urdf}"))
-                    continue
-                key, so_path, _meta = grid_rbd.warm_robot(
-                    name=f"__split_warm_{robot}", urdf_path=str(urdf), **kw)
-                dt = time.monotonic() - t0
-                status = "HIT" if dt < 5.0 else "BUILT"
-                rows.append((desc, status, dt, key[:12]))
-            except Exception as exc:  # a warm failure must never stop Phase B
-                rows.append((desc, "COMPILE-FAIL", time.monotonic() - t0, repr(exc)[:200]))
+    for desc, entry in warm_entries():
+        status, secs, detail = _warm_one_entry(desc, entry)
+        rows.append((desc, status, secs, detail))
     return rows
 
 
@@ -612,12 +643,157 @@ def _write_ledger(out_dir: Path, results: list[dict]) -> None:
     os.replace(tmp, out_dir / "results.json")
 
 
+CUDA_CACHE_DIR_DEFAULT = str(REPO_ROOT / ".pytest_cache" / "grid_cuda")
+# Host-RAM floor once GPU shards are running (jax/torch shards need real RAM
+# on top of the compile pool's own floor).
+GPU_PHASE_FLOOR_KB = 14 * 1024 * 1024
+
+
+def build_compile_pool(out_dir: Path, *, warm: bool, cuda_shards: list,
+                       modules: list[str], max_jobs: int):
+    """Build the RAM-aware compile pool covering BOTH compile populations
+    (Phase A wrapper .so warm + cuda flagship header/exe pre-warm) and the
+    shard-name -> prerequisite-job-names map that lets GPU shard execution
+    OVERLAP the remaining compiles: a shard only waits for ITS OWN compile
+    jobs, and the pool is the ONLY writer of a cache key until that wait
+    completes (the unlocked cache writers are never raced).
+
+    Returns (pool, jobs, prereqs) — pool/jobs empty-safe (None, [], {}).
+    """
+    import compile_sched  # noqa: PLC0415  (test/ is on sys.path for scripts)
+
+    cdir = out_dir / "compile"
+    cdir.mkdir(exist_ok=True)
+    jobs: list = []
+    prereqs: dict[str, list[str]] = {}
+
+    desc_to_job: dict[str, str] = {}
+    if warm:
+        for i, (desc, entry) in enumerate(warm_entries()):
+            name = f"warm{i:02d}_{entry['robot']}"
+            spec_path = cdir / f"{name}.spec.json"
+            spec_path.write_text(json.dumps({
+                "desc": desc, "entry": entry,
+                "result_path": str(cdir / f"{name}.result.json")}))
+            jobs.append(compile_sched.Job(
+                name=name,
+                argv=[PYTHON, str(REPO_ROOT / "test" / "run_split_suite.py"),
+                      "--warm-one", str(spec_path)],
+                ledger_key=f"warm:{desc}",
+                log_path=str(cdir / f"{name}.log")))
+            desc_to_job[desc] = name
+        for mod in modules:
+            names = []
+            for e in WARM_MANIFEST.get(mod, []):
+                jn = desc_to_job.get(_warm_desc(e))
+                if jn:
+                    names.append(jn)
+            if names:
+                prereqs[mod] = sorted(set(names))
+
+    if cuda_shards and os.environ.get("GRID_SPLIT_PREWARM", "1") != "0":
+        import prewarm_cuda_flagship as pw  # noqa: PLC0415
+        flagship_ids = [t for s in cuda_shards for t in s.targets
+                        if "test_cuda_executable_equivalence" in t]
+        if flagship_ids:
+            cache_env = {"GRID_CUDA_CACHE_DIR":
+                         os.environ.get("GRID_CUDA_CACHE_DIR", CUDA_CACHE_DIR_DEFAULT)}
+            ids_file = cdir / "flagship_ids.txt"
+            ids_file.write_text("\n".join(flagship_ids))
+            plan_path = cdir / "prewarm_plan.json"
+            env = os.environ.copy()
+            env.update(cache_env)
+            prc = subprocess.run(
+                [PYTHON, str(REPO_ROOT / "test" / "prewarm_cuda_flagship.py"),
+                 "--plan", "--node-ids", str(ids_file), "--out", str(plan_path)],
+                cwd=REPO_ROOT, env=env).returncode
+            if prc != 0:
+                print(f"  prewarm: --plan failed rc={prc}; cuda shards will "
+                      f"compile inline (slower, still correct)", flush=True)
+            else:
+                plan = json.loads(plan_path.read_text())
+                for jname in sorted(plan["jobs"]):
+                    jobs.append(compile_sched.Job(
+                        name=jname,
+                        argv=[PYTHON,
+                              str(REPO_ROOT / "test" / "prewarm_cuda_flagship.py"),
+                              "--worker", str(plan_path), "--job", jname],
+                        ledger_key=jname,
+                        env=cache_env,
+                        log_path=str(cdir / f"{jname}.log")))
+                atom_to_job = plan.get("atom_to_job", {})
+                for s in cuda_shards:
+                    names = set()
+                    for robot, base, cell in pw._parse_atoms(list(s.targets)):
+                        jn = atom_to_job.get(f"{robot}|{base}|{cell}")
+                        if jn:
+                            names.add(jn)
+                    if names:
+                        prereqs[s.name] = sorted(
+                            set(prereqs.get(s.name, [])) | names)
+
+    if not jobs:
+        return None, [], {}
+    ledger = compile_sched.Ledger(
+        REPO_ROOT / "test" / ".split_suite" / "compile_rss.json")
+    pool = compile_sched.RamScheduler(ledger, max_jobs=max_jobs, label="pool")
+    return pool, jobs, prereqs
+
+
+def report_pool(pool, out_dir: Path) -> int:
+    """Print pool outcomes; feed the peak-RSS ledger from REAL builds only
+    (cache-HIT invocations must not shrink future predictions). Returns the
+    count of failed compile jobs (informational — a failed pre-warm's shard
+    still runs and reports properly via pytest)."""
+    if pool is None:
+        return 0
+    cdir = out_dir / "compile"
+    failed = 0
+    for name, res in sorted(pool.results.items()):
+        detail = ""
+        rp = cdir / f"{name}.result.json"
+        if rp.exists():  # wrapper warm job: result JSON carries HIT/BUILT
+            try:
+                r = json.loads(rp.read_text())
+                detail = f"{r['status']} {r['detail']}"
+                real_build = r["status"] == "BUILT"
+            except (ValueError, KeyError):
+                real_build = False
+        else:  # prewarm job: a real build leaves the module's compile line in the log
+            try:
+                log_text = (cdir / f"{name}.log").read_text(errors="replace")
+            except OSError:
+                log_text = res.stdout_tail
+            real_build = "compiling runner" in log_text or "cache miss" in log_text
+        if res.rc not in (0,):
+            failed += 1
+            print(f"  POOL-FAIL {name}: rc={res.rc} {detail} "
+                  f"(log: {cdir / (name + '.log')})")
+        if real_build and res.peak_kb > 0:
+            job_key = (f"warm:{json.loads((cdir / f'{name}.spec.json').read_text())['desc']}"
+                       if (cdir / f"{name}.spec.json").exists() else name)
+            pool.ledger.record(job_key, res.peak_kb)
+    return failed
+
+
 def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
               extra_args: list[str],
-              prior_results: list[dict]) -> tuple[list[dict], bool]:
+              prior_results: list[dict],
+              pool=None, prereqs: dict | None = None) -> tuple[list[dict], bool]:
     """Returns (results incl. prior clean rows, paused)."""
     results = list(prior_results)
+    if pool is not None:
+        # GPU shards need host RAM too — tighten the pool's live floor for the
+        # rest of the run (admissions only; running compiles finish).
+        pool.raise_floor(GPU_PHASE_FLOOR_KB)
     for spec in shards:
+        if pool is not None and prereqs:
+            need = [n for n in prereqs.get(spec.name, [])
+                    if n in pool.done_events and not pool.done_events[n].is_set()]
+            if need:
+                print(f"[{datetime.now():%H:%M:%S}] {spec.name}: waiting on "
+                      f"{len(need)} compile job(s) …", flush=True)
+                pool.wait(need)
         if (out_dir / "PAUSE").exists():
             print(f"[{datetime.now():%H:%M:%S}] PAUSE file present — stopping "
                   f"cleanly before {spec.name} (rm it, then --resume {out_dir})",
@@ -644,8 +820,7 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
             # absolute so every shard (incl. nested pytest processes) shares
             # ONE warm cache. NOTE the cache writers have no file locking:
             # shards must stay SERIAL (they are — one GPU, one at a time).
-            env.setdefault("GRID_CUDA_CACHE_DIR",
-                           str(REPO_ROOT / ".pytest_cache" / "grid_cuda"))
+            env.setdefault("GRID_CUDA_CACHE_DIR", CUDA_CACHE_DIR_DEFAULT)
         t0 = time.monotonic()
         with open(log_path, "w") as log:
             # start_new_session so a kill takes the WHOLE process group —
@@ -753,9 +928,14 @@ def main() -> int:
                          "partition.json, skip shards its results.json records "
                          "as clean, re-run the rest, merge everything")
     ap.add_argument("--out", default=None, help="output dir (default test/.split_suite/<stamp>)")
+    ap.add_argument("--warm-one", default=None, metavar="SPEC_JSON",
+                    help=argparse.SUPPRESS)  # internal pool-worker mode
     ap.add_argument("pytest_args", nargs="*", default=[],
                     help="extra args passed to every pytest invocation (after --)")
     args = ap.parse_args()
+
+    if args.warm_one:
+        return warm_one_worker(args.warm_one)
 
     domains = [d.strip() for d in args.domains.split(",") if d.strip()]
     bad_domains = [d for d in domains if d not in ("wrappers", "cuda")]
@@ -810,12 +990,18 @@ def main() -> int:
             print("nothing to run — all module fingerprints match the last green run")
             return 0
 
+    # RAM-aware parallel compile pool (2026-08-18): Phase A wrapper warm +
+    # cuda flagship pre-warm run as admission-controlled parallel workers that
+    # OVERLAP GPU shard execution — a shard waits only for its own compile
+    # jobs. GRID_SPLIT_COMPILE_JOBS=0 restores the serial inline path.
+    pool_jobs_n = int(os.environ.get("GRID_SPLIT_COMPILE_JOBS", "5") or "0")
+
     specs: list[ShardSpec] = []
     if run_wrappers:
         for w in drift_guard(modules):
             print(f"WARM-MANIFEST DRIFT: {w}")
-        if not args.skip_warm:
-            print(f"=== Phase A: compile-warm ({len(WARM_MANIFEST)} modules' robots) ===")
+        if not args.skip_warm and pool_jobs_n == 0:
+            print(f"=== Phase A: compile-warm ({len(WARM_MANIFEST)} modules' robots, serial) ===")
             for desc, status, secs, detail in phase_warm(out_dir):
                 print(f"  {status:12s} {secs:7.1f}s  {desc}  {detail}")
         specs += [ShardSpec(name=mod, domain="wrappers",
@@ -851,6 +1037,23 @@ def main() -> int:
     prior_clean = {r["shard"] for r in prior}
     to_run = [s for s in specs if s.name not in prior_clean]
 
+    pool = None
+    prereqs: dict[str, list[str]] = {}
+    if pool_jobs_n > 0:
+        cuda_specs = [s for s in to_run if s.domain == "cuda"]
+        pool, pool_jobs, prereqs = build_compile_pool(
+            out_dir,
+            warm=run_wrappers and not args.skip_warm,
+            cuda_shards=cuda_specs,
+            modules=[s.name for s in to_run if s.domain == "wrappers"],
+            max_jobs=pool_jobs_n)
+        if pool is not None:
+            print(f"=== compile pool: {len(pool_jobs)} job(s), "
+                  f"{pool_jobs_n} slots, budget "
+                  f"{pool.budget_kb // (1024 * 1024)} GiB "
+                  f"(overlaps GPU shard execution) ===")
+            pool.run_async(pool_jobs)
+
     import signal
 
     def _sigterm(_sig, _frm):
@@ -861,11 +1064,27 @@ def main() -> int:
     print(f"=== Phase B: per-shard runs -> {out_dir} ===")
     try:
         results, paused = phase_run(to_run, out_dir, args.receipts,
-                                    args.pytest_args, prior)
+                                    args.pytest_args, prior,
+                                    pool=pool, prereqs=prereqs)
     except KeyboardInterrupt:
+        if pool is not None:
+            pool.kill_all()
         print(f"\nINTERRUPTED — completed shards are in {out_dir}/results.json; "
               f"continue with --resume {out_dir}", flush=True)
         return 130
+    finally:
+        # Normal completion: every job was some shard's prereq, so the pool is
+        # drained. PAUSE / resume-with-clean-shards can leave queued or running
+        # workers — kill them (their caches re-warm on the next run; PAUSE must
+        # actually free the box, and orphaned compilers must never outlive us).
+        if pool is not None:
+            pool.kill_all()
+
+    if pool is not None:
+        pool_failed = report_pool(pool, out_dir)
+        if pool_failed:
+            print(f"  compile pool: {pool_failed} job(s) failed — affected "
+                  f"shards compiled inline or reported the failure themselves")
 
     print("\n=== SPLIT SUITE SUMMARY ===")
     tot = dict(tests=0, failures=0, errors=0, skipped=0)

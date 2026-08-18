@@ -223,7 +223,10 @@ def load_manifest(cache_dir: Path) -> dict[str, Any]:
 def save_manifest(cache_dir: Path, manifest: dict[str, Any]) -> None:
     cache_dir.mkdir(parents=True, exist_ok=True)
     path = manifest_path(cache_dir)
-    tmp = path.with_suffix(".json.tmp")
+    # pid-unique tmp: parallel writers (the split driver's RAM-aware compile
+    # pool warms robots concurrently) must never interleave in one tmp file —
+    # each rename then publishes a complete manifest (last-writer-wins).
+    tmp = path.with_suffix(f".json.{os.getpid()}.tmp")
     with tmp.open("w") as f:
         json.dump(manifest, f, indent=2)
     tmp.replace(path)  # atomic on POSIX

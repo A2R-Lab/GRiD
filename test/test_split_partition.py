@@ -140,3 +140,112 @@ def test_live_collection_partition_is_complete():
     for s in shards:
         assert s.fingerprint_paths, s.name
         assert all("," not in p for p in s.fingerprint_paths), s.name
+
+
+# ─── RAM-aware compile pool gates (2026-08-18) ───────────────────────────────
+import compile_sched  # noqa: E402
+import prewarm_cuda_flagship as pw  # noqa: E402
+
+
+def test_prewarm_atom_parse():
+    """Node-id -> (robot, base, cell) atoms; non-flagship ids ignored; the
+    flagship test-name prefix pair maps both bases; the threads token drops."""
+    ids = [
+        _fid("iiwa14", "fixed", "crba", 32).replace(
+            "test_x", "test_fixed_base_generated_cuda_matches_python_reference"),
+        _fid("go2", "floating", "end_effector_pose_hessian", "suggested").replace(
+            "test_x", "test_floating_base_generated_cuda_matches_python_reference"),
+        f"{_P}/test_cuda_dccrba.py::test_cuda_dccrba_matches_reference[go2-floating]",
+    ]
+    atoms = pw._parse_atoms(ids)
+    assert atoms == {
+        ("iiwa14", "fixed", "crba"),
+        ("go2", "floating", "end_effector_pose_hessian"),
+    }
+
+
+def test_scheduler_admission_and_groups(tmp_path):
+    """max_jobs + group serialization + ledger roundtrip on dummy commands."""
+    ledger = compile_sched.Ledger(tmp_path / "rss.json")
+    ledger.record("k1", 123456)
+    # reload roundtrip + max-over-history (smaller peak never lowers)
+    ledger2 = compile_sched.Ledger(tmp_path / "rss.json")
+    assert ledger2.data == {"k1": 123456}
+    ledger2.record("k1", 5)
+    assert ledger2.data["k1"] == 123456
+    assert ledger2.predict_kb("k1", 999, 2.0) == 246912
+    assert ledger2.predict_kb("unknown", 1000, 1.5) == 1500
+
+    marker = tmp_path / "serial_marker"
+    script = (
+        "import sys, time, pathlib\n"
+        "m = pathlib.Path(sys.argv[1])\n"
+        "assert not m.exists(), 'group serialization violated'\n"
+        "m.touch(); time.sleep(0.4); m.unlink()\n"
+    )
+    jobs = []
+    for i in range(3):
+        jobs.append(compile_sched.Job(
+            name=f"g{i}",
+            argv=[sys.executable, "-c", script, str(marker)],
+            ledger_key=f"g{i}",
+            group="serial-group",
+            log_path=str(tmp_path / f"g{i}.log")))
+    jobs.append(compile_sched.Job(
+        name="free", argv=[sys.executable, "-c", "print('ok')"],
+        ledger_key="free", log_path=str(tmp_path / "free.log")))
+    sched = compile_sched.RamScheduler(
+        ledger, max_jobs=4, floor_kb=0, default_peak_kb=1, label="test")
+    results = sched.run(jobs)
+    assert {r.rc for r in results.values()} == {0}, {
+        n: (r.rc, r.stdout_tail) for n, r in results.items()}
+    # peaks parsed from /usr/bin/time for every job
+    assert all(r.peak_kb > 0 for r in results.values())
+
+
+def test_scheduler_stop_resolves_pending(tmp_path):
+    """stop() drains: unlaunched jobs resolve rc=-1 so waiters never hang."""
+    ledger = compile_sched.Ledger(tmp_path / "rss.json")
+    sched = compile_sched.RamScheduler(
+        ledger, max_jobs=1, floor_kb=0, default_peak_kb=1, label="test")
+    jobs = [
+        compile_sched.Job(name="slow",
+                          argv=[sys.executable, "-c", "import time; time.sleep(1.5)"],
+                          ledger_key="slow", log_path=str(tmp_path / "slow.log")),
+        compile_sched.Job(name="never",
+                          argv=[sys.executable, "-c", "print('no')"],
+                          ledger_key="never", log_path=str(tmp_path / "never.log")),
+    ]
+    t = sched.run_async(jobs)
+    import time as _t
+    _t.sleep(0.3)
+    sched.stop()
+    t.join(timeout=10)
+    assert not t.is_alive()
+    assert sched.results["slow"].rc == 0
+    assert sched.results["never"].rc == -1
+
+
+def test_prewarm_plan_iiwa14_live():
+    """Integration (CPU, no nvcc): the plan for iiwa14 flagship ids builds via
+    the test module's own machinery — selection filtering applies, atoms map to
+    jobs, and job names are filesystem-safe."""
+    ids = []
+    for base in ("fixed", "floating"):
+        tname = (f"test_{base}_base_generated_cuda_matches_python_reference")
+        for cell in ("crba", "end_effector_pose_hessian"):
+            ids.append(f"{_P}/{FLAGSHIP}.py::{tname}[iiwa14-{base}-{cell}-threads32]")
+    plan = pw.build_plan(ids)
+    assert plan["dropped"] == []
+    names = set(plan["jobs"])
+    # fixed crba + fixed ee-hessian always in selection; floating ee-hessian is
+    # NOT in the default floating flagship selection (benign always-skip) so it
+    # must NOT be pre-warmed; floating crba is.
+    assert "prewarm_iiwa14_fixed_crba" in names
+    assert "prewarm_iiwa14_fixed_end_effector_pose_hessian" in names
+    assert "prewarm_iiwa14_floating_crba" in names
+    assert "prewarm_iiwa14_floating_end_effector_pose_hessian" not in names
+    for name, job in plan["jobs"].items():
+        assert name == name.strip() and "/" not in name and " " not in name
+        assert job["cells"]
+    assert all(v in names for v in plan["atom_to_job"].values())

@@ -72,6 +72,17 @@ shards. `SPLIT=1 test/run_gpu_proof.sh` drives both domains and merges + re-sign
 all shard receipts into the same repo-root `gpu-proof.json` the monolithic path
 writes (`SPLIT_RESUME=<out>` to continue an interrupted pass). CPU-only gates for
 the partition logic live in `test/test_split_partition.py`.
+Compiles run through a RAM-aware parallel pool (`test/compile_sched.py`): Phase A
+wrapper `.so` warms and cuda flagship header/exe pre-warms
+(`test/prewarm_cuda_flagship.py` — imports the test module's own compile chain so
+cache keys match by construction) execute as admission-controlled parallel
+workers (predicted peak RSS from a rolling `/usr/bin/time -v` ledger at
+`test/.split_suite/compile_rss.json`, conservative default + margin + MemAvailable
+floor) and OVERLAP GPU shard execution — a shard only waits for its own compile
+jobs, so the pool is the sole writer of a cache key until that shard starts (the
+unlocked cache writers are never raced; a mimic robot's cells share one header and
+fold into one serial job). `GRID_SPLIT_COMPILE_JOBS` sizes the pool (default 5;
+`0` = legacy serial inline warm).
 
 ## Durable engineering conventions
 
