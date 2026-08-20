@@ -584,23 +584,36 @@ def compile_so(
     _log.info("grid_rbd: built %s (build log: %s)", out_so.name, log_path)
 
 
-def generate_and_compile(
+def generate_sources(
     urdf_path: Path,
     options: dict[str, Any],
     target_dir: Path,
-    cuda_arch: int,
-    max_batch: int = 256,
 ) -> dict[str, Any]:
-    """End-to-end: produce grid.cuh + wrapper.cu + robot.so in target_dir.
+    """The cheap CPU half: produce grid.cuh + wrapper.cu in target_dir.
 
+    Split out of generate_and_compile (2026-08-19) so the two-stage
+    content-addressed store can hash the generated sources and skip the nvcc
+    half entirely when an identical build already exists.
     Returns the meta dict (num_joints/num_vel/num_ees/floating_base).
     """
     target_dir.mkdir(parents=True, exist_ok=True)
+    meta = generate_grid_cuh(urdf_path, options, target_dir / "grid.cuh")
+    copy_wrapper_template(target_dir)
+    return meta
 
+
+def compile_sources(
+    target_dir: Path,
+    meta: dict[str, Any],
+    options: dict[str, Any],
+    cuda_arch: int,
+    max_batch: int = 256,
+    torch_op_key: str | None = None,
+) -> dict[str, Any]:
+    """The nvcc half: compile target_dir's grid.cuh + wrapper.cu → robot.so
+    and persist meta.json. Returns the completed meta dict."""
     cuh_path = target_dir / "grid.cuh"
-    meta = generate_grid_cuh(urdf_path, options, cuh_path)
-
-    wrapper_cu = copy_wrapper_template(target_dir)
+    wrapper_cu = target_dir / "wrapper.cu"
 
     # GLASS submodule path — only used in editable installs. sdist installs
     # ship the GLASS headers inside the package data (TODO).
@@ -610,10 +623,13 @@ def generate_and_compile(
         glass_root = root / "external" / "GLASS"
 
     so_path = target_dir / "robot.so"
-    # The torch op-library namespace is keyed by the cache_key (== entry dir
-    # name) so two robots registered in one process don't collide on op names.
-    # Prefix with 'k' to guarantee a valid C identifier (hex may start 0-9).
-    torch_op_key = "k" + target_dir.name[:12]
+    # The torch op-library namespace is keyed by the cache_key (== the entry's
+    # store-dir name; the two-stage flow passes it explicitly since it compiles
+    # in a staging dir before publishing to store/<content_key>). Two robots
+    # registered in one process therefore never collide on op names. Prefix
+    # with 'k' to guarantee a valid C identifier (hex may start 0-9).
+    if torch_op_key is None:
+        torch_op_key = "k" + target_dir.name[:12]
     t_double = options.get("dtype") == "float64"
     # Subset-build: the JAX / torch FFI handler blocks are now per-CORE-algo gated
     # (each `grid::*_kernel`-calling handler + its def/impl sits inside
@@ -646,3 +662,21 @@ def generate_and_compile(
     (target_dir / "meta.json").write_text(json.dumps(meta, indent=2))
 
     return meta
+
+
+def generate_and_compile(
+    urdf_path: Path,
+    options: dict[str, Any],
+    target_dir: Path,
+    cuda_arch: int,
+    max_batch: int = 256,
+) -> dict[str, Any]:
+    """End-to-end: produce grid.cuh + wrapper.cu + robot.so in target_dir.
+
+    Returns the meta dict (num_joints/num_vel/num_ees/floating_base).
+    (Compat wrapper; the two-stage store in warm_robot calls the halves
+    directly so it can content-key between them.)
+    """
+    meta = generate_sources(urdf_path, options, target_dir)
+    return compile_sources(target_dir, meta, options,
+                           cuda_arch=cuda_arch, max_batch=max_batch)
