@@ -83,6 +83,13 @@ jobs, so the pool is the sole writer of a cache key until that shard starts (the
 unlocked cache writers are never raced; a mimic robot's cells share one header and
 fold into one serial job). `GRID_SPLIT_COMPILE_JOBS` sizes the pool (default 5;
 `0` = legacy serial inline warm).
+Receipt refresh after a push that touches fingerprinted test files:
+`SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh` re-runs ONLY the shards whose
+narrow fingerprints changed vs the committed `gpu-proof.json` and carries the
+rest (`gpu-proof merge --carry-from`; the everyday policy accepts carried
+shards). Releases use `test/gpu-proof-policy-release.yaml` (refuses carried
+shards), so a release receipt still requires one fresh full `SPLIT=1` pass.
+`GRID_SPLIT_REFRESH_DRY=1` prints the stale/carried plan without running.
 
 ## Durable engineering conventions
 

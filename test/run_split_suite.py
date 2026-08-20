@@ -340,6 +340,76 @@ def build_cuda_shards(cuda_k: str | None,
     return pack_cuda_shards(ids, load_durations(), budget_secs), ids
 
 
+def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
+                 wrapper_mods_now: list[str], durations: dict,
+                 budget_secs: float, fingerprint_digest_fn):
+    """Shard-level receipt refresh (user decision 2026-08-20): re-run ONLY the
+    shards whose narrow fingerprints changed vs `old_receipt`; the rest are
+    carried by `gpu-proof merge --carry-from` (policy allow_carried gates
+    acceptance — the everyday policy allows it, the release policy refuses it).
+
+    Returns (stale_names, carried_names, wrapper_mods_to_run, cuda_fresh_shards).
+    `fingerprint_digest_fn(paths) -> digest` must be pytest-gpu-proof's OWN
+    compute_fingerprint (imported, not reimplemented) so the staleness decision
+    can never drift from what carry_forward/verify recompute downstream.
+
+    Safety shape: fresh cuda shards are packed from {current collection} minus
+    {carryable shards' node ids}; a carryable shard whose ids vanished from the
+    collection is impossible via file edits (removing a test edits its module,
+    which is in the fingerprint) — if it happens anyway (env drift), we refuse
+    loudly rather than emit an incomplete receipt. Fresh shard names are
+    de-conflicted from carried names (a fresh shard would silently SHADOW a
+    same-named carried shard in carry_forward, orphaning its node ids)."""
+    from dataclasses import replace as _dc_replace  # noqa: PLC0415
+
+    shards = old_receipt.get("shards") or []
+    if not shards:
+        raise RuntimeError(
+            "--refresh-from: receipt has no schema-2 shards[] — cannot "
+            "shard-refresh a monolithic receipt; run a full SPLIT=1 pass")
+
+    def _is_wrapper(s: dict) -> bool:
+        ids = s.get("node_ids") or []
+        return bool(ids) and str(ids[0]).startswith("test/python_wrappers/")
+
+    carried, stale = [], []
+    for s in shards:
+        fp = s.get("fingerprint") or {}
+        now = fingerprint_digest_fn(fp.get("included_paths") or [])
+        (carried if now == fp.get("digest") else stale).append(s)
+
+    old_wrapper_names = {s["name"] for s in shards if _is_wrapper(s)}
+    stale_wrapper_names = {s["name"] for s in stale if _is_wrapper(s)}
+    # Stale wrapper shard whose module still exists → re-run it; a module NEW
+    # since the old receipt runs too; a deleted module simply drops out.
+    wrapper_to_run = [m for m in wrapper_mods_now
+                      if m in stale_wrapper_names or m not in old_wrapper_names]
+
+    carried_cuda_ids = {i for s in carried if not _is_wrapper(s)
+                        for i in (s.get("node_ids") or [])}
+    missing = carried_cuda_ids - set(cuda_ids_now)
+    if missing:
+        raise RuntimeError(
+            f"--refresh-from: {len(missing)} node id(s) in fingerprint-clean "
+            f"shards are no longer collectable (e.g. {sorted(missing)[0]!r}) — "
+            f"collection changed without a fingerprint change; a refresh "
+            f"cannot preserve completeness. Run a full SPLIT=1 pass.")
+    fresh_ids = [i for i in cuda_ids_now if i not in carried_cuda_ids]
+    cuda_fresh = (pack_cuda_shards(fresh_ids, durations, budget_secs)
+                  if fresh_ids else [])
+    taken = {s["name"] for s in carried} | set(wrapper_mods_now)
+    deconflicted = []
+    for sp in cuda_fresh:
+        nm = sp.name
+        while nm in taken:
+            nm += "_r"
+        taken.add(nm)
+        deconflicted.append(sp if nm == sp.name else _dc_replace(sp, name=nm))
+    return ([s["name"] for s in stale],
+            [s["name"] for s in carried],
+            wrapper_to_run, deconflicted)
+
+
 def load_prior_results(out_dir: Path, spec_names: set[str]) -> list[dict]:
     """--resume: keep only CLEAN rows for shards that still exist; everything
     else (failures, casualties, vanished shards) re-runs."""
@@ -927,6 +997,13 @@ def main() -> int:
                     help="resume an interrupted/paused run: reuse OUTDIR's "
                          "partition.json, skip shards its results.json records "
                          "as clean, re-run the rest, merge everything")
+    ap.add_argument("--refresh-from", default=None, metavar="RECEIPT",
+                    help="shard-level receipt refresh: re-run ONLY the shards "
+                         "whose narrow fingerprints changed vs RECEIPT and "
+                         "carry the rest (gpu-proof merge --carry-from; the "
+                         "everyday policy allows carried shards, the release "
+                         "policy refuses them). Implies --receipts, both "
+                         "domains, full scope.")
     ap.add_argument("--out", default=None, help="output dir (default test/.split_suite/<stamp>)")
     ap.add_argument("--warm-one", default=None, metavar="SPEC_JSON",
                     help=argparse.SUPPRESS)  # internal pool-worker mode
@@ -944,6 +1021,23 @@ def main() -> int:
         return 2
     run_wrappers = "wrappers" in domains
     run_cuda = "cuda" in domains
+
+    if args.refresh_from:
+        # Refresh is a FULL-receipt operation: any narrowing would make the
+        # fresh side attest less than the shards it replaces.
+        if args.cuda_k or args.modules or args.changed_only or \
+                args.receipts_carry_from:
+            print("FATAL: --refresh-from is incompatible with --cuda-k / "
+                  "--modules / --changed-only / --receipts-carry-from",
+                  file=sys.stderr)
+            return 2
+        if not Path(args.refresh_from).exists():
+            print(f"FATAL: --refresh-from {args.refresh_from}: no such receipt",
+                  file=sys.stderr)
+            return 2
+        args.receipts = True
+        args.receipts_carry_from = args.refresh_from
+        run_wrappers = run_cuda = True
 
     if run_cuda and "random" in os.environ.get("GRID_CUDA_THREAD_COUNTS", ""):
         print("FATAL: GRID_CUDA_THREAD_COUNTS contains 'random' — node ids "
@@ -966,7 +1060,52 @@ def main() -> int:
     # A stale PAUSE sentinel must not instantly stop the (re)start.
     (out_dir / "PAUSE").unlink(missing_ok=True)
 
-    modules = (args.modules or discover_modules()) if run_wrappers else []
+    # Resuming a refresh run: reuse the SAVED plan verbatim (re-planning could
+    # disagree with the persisted partition if the tree moved; receipts refuse
+    # cross-commit merges anyway, so the saved plan is the only sound one).
+    refresh_plan_path = out_dir / "refresh_plan.json"
+    refresh_resume_mods: list[str] | None = None
+    if args.resume and refresh_plan_path.exists() and not args.refresh_from:
+        _rp = json.loads(refresh_plan_path.read_text())
+        args.refresh_from = _rp["refresh_from"]
+        args.receipts = True
+        args.receipts_carry_from = _rp["refresh_from"]
+        refresh_resume_mods = list(_rp["wrapper_mods"])
+        run_wrappers = run_cuda = True
+
+    refresh_cuda_shards: list[ShardSpec] | None = None
+    if args.refresh_from:
+        if refresh_resume_mods is not None:
+            modules = refresh_resume_mods
+            refresh_cuda_shards = load_partition(out_dir) or []
+            print(f"=== refresh resume: {len(modules)} wrapper module(s) + "
+                  f"{len(refresh_cuda_shards)} cuda shard(s) from the saved plan ===")
+        else:
+            from pytest_gpu_proof.fingerprint import compute_fingerprint  # noqa: PLC0415
+            old = json.loads(Path(args.refresh_from).read_text())
+            stale_names, carried_names, modules, refresh_cuda_shards = \
+                plan_refresh(
+                    old, collect_cuda_node_ids(None), discover_modules(),
+                    load_durations(), args.shard_budget_mins * 60.0,
+                    lambda paths: compute_fingerprint(
+                        paths, root=str(REPO_ROOT))["digest"])
+            print(f"=== refresh vs {args.refresh_from}: {len(stale_names)} "
+                  f"stale / {len(carried_names)} carried shard(s); re-running "
+                  f"{len(modules)} wrapper module(s) + "
+                  f"{len(refresh_cuda_shards)} fresh cuda shard(s) ===")
+            for n in stale_names:
+                print(f"  STALE {n}")
+            if not modules and not refresh_cuda_shards:
+                print("nothing stale — the receipt already covers this tree")
+                return 0
+            if os.environ.get("GRID_SPLIT_REFRESH_DRY") == "1":
+                print("GRID_SPLIT_REFRESH_DRY=1 — plan printed, not running")
+                return 0
+            refresh_plan_path.write_text(json.dumps(
+                {"refresh_from": args.refresh_from, "wrapper_mods": modules,
+                 "carried": carried_names, "stale": stale_names}, indent=1))
+    else:
+        modules = (args.modules or discover_modules()) if run_wrappers else []
     unknown = [m for m in (args.modules or []) if not (WRAPPERS_DIR / f"{m}.py").exists()]
     if unknown:
         print(f"FATAL: unknown module(s): {unknown}", file=sys.stderr)
@@ -1010,23 +1149,31 @@ def main() -> int:
                   for mod in modules]
 
     if run_cuda:
-        cuda_shards = load_partition(out_dir) if args.resume else None
-        if cuda_shards is None:
-            budget = args.shard_budget_mins * 60.0
-            cuda_shards, cuda_ids = build_cuda_shards(args.cuda_k, budget)
+        if refresh_cuda_shards is not None:
+            cuda_shards = refresh_cuda_shards
             save_partition(out_dir, cuda_shards)
-            print(f"=== cuda partition: {len(cuda_ids)} node ids -> "
-                  f"{len(cuda_shards)} shard(s) "
-                  f"(budget {args.shard_budget_mins:.0f} min) ===")
             for s in cuda_shards:
-                over = ("  <-- over budget (single unsplittable atom)"
-                        if s.est_secs > budget else "")
                 print(f"  {s.name:42s} {len(s.targets):4d} ids  "
-                      f"est {s.est_secs / 60:6.1f} min{over}")
+                      f"est {s.est_secs / 60:6.1f} min")
+            specs += cuda_shards
         else:
-            print(f"=== cuda partition: reusing {len(cuda_shards)} shard(s) "
-                  f"from {out_dir / 'partition.json'} ===")
-        specs += cuda_shards
+            cuda_shards = load_partition(out_dir) if args.resume else None
+            if cuda_shards is None:
+                budget = args.shard_budget_mins * 60.0
+                cuda_shards, cuda_ids = build_cuda_shards(args.cuda_k, budget)
+                save_partition(out_dir, cuda_shards)
+                print(f"=== cuda partition: {len(cuda_ids)} node ids -> "
+                      f"{len(cuda_shards)} shard(s) "
+                      f"(budget {args.shard_budget_mins:.0f} min) ===")
+                for s in cuda_shards:
+                    over = ("  <-- over budget (single unsplittable atom)"
+                            if s.est_secs > budget else "")
+                    print(f"  {s.name:42s} {len(s.targets):4d} ids  "
+                          f"est {s.est_secs / 60:6.1f} min{over}")
+            else:
+                print(f"=== cuda partition: reusing {len(cuda_shards)} shard(s) "
+                      f"from {out_dir / 'partition.json'} ===")
+            specs += cuda_shards
 
     prior: list[dict] = []
     if args.resume:

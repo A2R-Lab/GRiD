@@ -10,3 +10,14 @@
 # receipt.
 allow_dirty: false
 max_age_days: 30
+# Shard-level carry-forward (user decision 2026-08-20): a routine push (small
+# bug fix, test tweak) refreshes the receipt by RE-RUNNING only the shards
+# whose narrow fingerprints changed and CARRYING the rest from the previous
+# receipt (SPLIT_REFRESH=1 test/run_gpu_proof.sh — minutes-to-~1h, not the
+# 10-11h full pass). Trust statement of a carried shard: "these tests, whose
+# files are unchanged, passed at an ANCESTOR commit" — cross-cutting changes
+# (codegen/bindings) are NOT re-proven by carry; they are re-proven by the
+# full-pass policy below at RELEASE time (gpu-proof-policy-release.yaml,
+# allow_carried:false). carried_max_age_days bounds how long a shard can ride.
+allow_carried: true
+carried_max_age_days: 30

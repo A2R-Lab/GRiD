@@ -90,6 +90,26 @@ if [[ "${SPLIT:-0}" = "1" ]]; then
     if [[ -n "${SPLIT_CARRY_FROM:-}" ]]; then
         CARRY_ARGS=(--receipts-carry-from "$SPLIT_CARRY_FROM")
     fi
+    # SPLIT_REFRESH=1 (or =<receipt path>): shard-level receipt refresh — only
+    # shards whose test files changed re-run; the rest carry from the previous
+    # receipt (everyday policy accepts carried shards; the RELEASE policy
+    # test/gpu-proof-policy-release.yaml refuses them, so releases still take
+    # one fresh full pass). Requires SCOPE=full (a narrowed refresh would
+    # attest less than the shards it replaces).
+    REFRESH_ARGS=()
+    if [[ -n "${SPLIT_REFRESH:-}" ]]; then
+        if [[ -n "${SPLIT_CARRY_FROM:-}" ]]; then
+            echo "ERROR: SPLIT_REFRESH and SPLIT_CARRY_FROM are mutually exclusive" >&2
+            exit 2
+        fi
+        if [[ -n "$SCOPE_K" ]]; then
+            echo "ERROR: SPLIT_REFRESH requires SCOPE=full" >&2
+            exit 2
+        fi
+        REFRESH_SRC="$SPLIT_REFRESH"
+        [[ "$REFRESH_SRC" == "1" ]] && REFRESH_SRC="gpu-proof.json"
+        REFRESH_ARGS=(--refresh-from "$REFRESH_SRC")
+    fi
     CUDA_K_ARGS=()
     if [[ -n "$SCOPE_K" ]]; then CUDA_K_ARGS=(--cuda-k "$SCOPE_K"); fi
 
@@ -98,7 +118,8 @@ if [[ "${SPLIT:-0}" = "1" ]]; then
     # buffer until the first per-shard line flushes, making a healthy run look
     # hung to anyone tailing the log.
     "$PYTHON" -u test/run_split_suite.py --receipts --domains wrappers,cuda \
-        "${CUDA_K_ARGS[@]}" "${CARRY_ARGS[@]}" "${RESUME_ARGS[@]}" \
+        "${CUDA_K_ARGS[@]}" "${CARRY_ARGS[@]}" "${REFRESH_ARGS[@]}" \
+        "${RESUME_ARGS[@]}" \
         --out "$OUT_DIR" -- ${PYTEST_ARGS:-} || rc=$?
 
     if [[ $rc -ne 0 ]]; then

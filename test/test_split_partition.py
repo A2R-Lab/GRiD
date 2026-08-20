@@ -249,3 +249,72 @@ def test_prewarm_plan_iiwa14_live():
         assert name == name.strip() and "/" not in name and " " not in name
         assert job["cells"]
     assert all(v in names for v in plan["atom_to_job"].values())
+
+
+# ─── shard-level refresh gates (2026-08-20, user-ratified carry policy) ──────
+
+
+def _mk_shard(name, ids, paths, digest):
+    return {"name": name, "node_ids": ids,
+            "fingerprint": {"included_paths": paths, "digest": digest}}
+
+
+def test_plan_refresh_stale_detection_and_repack():
+    fps = {("a.py",): "d1", ("b.py",): "CHANGED", ("test/python_wrappers/test_w1.py",): "w1",
+           ("test/python_wrappers/test_w2.py",): "OLD"}
+    now = {("a.py",): "d1", ("b.py",): "d2", ("test/python_wrappers/test_w1.py",): "w1",
+           ("test/python_wrappers/test_w2.py",): "NEW"}
+    clean_ids = [_fid("iiwa14", "fixed", "crba", t) for t in (1, 32)]
+    stale_ids = [_fid("go2", "floating", "aba", t) for t in (1, 32)]
+    old = {"shards": [
+        _mk_shard("cuda_00_clean", clean_ids, ["a.py"], fps[("a.py",)]),
+        _mk_shard("cuda_01_stale", stale_ids, ["b.py"], fps[("b.py",)]),
+        _mk_shard("test_w1", ["test/python_wrappers/test_w1.py::t"],
+                  ["test/python_wrappers/test_w1.py"], "w1"),
+        _mk_shard("test_w2", ["test/python_wrappers/test_w2.py::t"],
+                  ["test/python_wrappers/test_w2.py"], "OLD"),
+    ]}
+    fn = lambda paths: now[tuple(paths)]
+    current_cuda = clean_ids + stale_ids  # stale shard's tests still exist
+    stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
+        old, current_cuda, ["test_w1", "test_w2", "test_w3_new"], {}, 7200.0, fn)
+    assert set(stale) == {"cuda_01_stale", "test_w2"}
+    assert set(carried) == {"cuda_00_clean", "test_w1"}
+    # stale wrapper re-runs; NEW module runs; clean wrapper carried
+    assert set(wrap_run) == {"test_w2", "test_w3_new"}
+    # fresh cuda covers exactly the non-carried ids
+    fresh_ids = sorted(i for s in cuda_fresh for i in s.targets)
+    assert fresh_ids == sorted(stale_ids)
+    # fresh names never collide with carried names
+    assert not ({s.name for s in cuda_fresh} & set(carried))
+
+
+def test_plan_refresh_name_deconflict_and_missing_ids():
+    ids = [_fid("iiwa14", "fixed", "crba", 1)]
+    old = {"shards": [_mk_shard("cuda_00_crba", ids, ["a.py"], "d1"),
+                      _mk_shard("cuda_00_misc", ["x::y"], ["b.py"], "d2")]}
+    # a.py clean; b.py stale -> its id "x::y" gone from collection is FINE
+    # (stale shards drop; only CARRIED shards' ids must survive)
+    fn = {"a.py": "d1", "b.py": "CHANGED"}.__getitem__
+    fn1 = lambda paths: fn(paths[0])
+    stale, carried, wrap, fresh = rss.plan_refresh(old, ids, [], {}, 7200.0, fn1)
+    assert stale == ["cuda_00_misc"] and carried == ["cuda_00_crba"]
+    assert fresh == [] and wrap == []
+    # CARRIED shard's id missing from collection -> loud refusal
+    with pytest.raises(RuntimeError, match="no longer collectable"):
+        rss.plan_refresh(old, [], [], {}, 7200.0, fn1)
+    # fresh shard packed under a name a carried shard holds -> deconflicted
+    old2 = {"shards": [
+        _mk_shard("cuda_00_dccrba_iiwa14", ids, ["a.py"], "d1"),
+        _mk_shard("cuda_01_stale", [_fid("go2", "floating", "aba", 1)],
+                  ["b.py"], "CHANGED"),
+    ]}
+    _, carried2, _, fresh2 = rss.plan_refresh(
+        old2, ids + [_fid("go2", "floating", "aba", 1)], [], {}, 7200.0, fn1)
+    for sp in fresh2:
+        assert sp.name not in carried2
+
+
+def test_plan_refresh_refuses_monolithic_receipt():
+    with pytest.raises(RuntimeError, match="shards"):
+        rss.plan_refresh({"tests": []}, [], [], {}, 7200.0, lambda p: "")

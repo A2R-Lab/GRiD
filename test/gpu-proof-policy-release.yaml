@@ -1,0 +1,19 @@
+# pytest-gpu-proof RELEASE verification policy for GRiD.
+#
+# The everyday policy (gpu-proof-policy.yaml) accepts CARRIED shards so a
+# routine push goes green in ~minutes-to-an-hour by re-proving only the shards
+# whose test files changed. This policy is the release gate: it refuses carried
+# shards entirely, so a release receipt must come from ONE fresh full
+# `SPLIT=1 test/run_gpu_proof.sh` pass at the release tip — every shard
+# executed at that exact commit, nothing inherited.
+#
+#   .venv/bin/gpu-proof verify --receipt gpu-proof.json --repo . \
+#       --policy test/gpu-proof-policy-release.yaml \
+#       --expected-skips test/gpu-proof-expected-skips.txt
+#
+# allow_dirty:false rationale is identical to the everyday policy: the
+# fingerprint covers the test harness only; the clean tree + commit SHA are
+# what pin the codegen/GLASS/RBDReference submodules actually exercised.
+allow_dirty: false
+max_age_days: 30
+allow_carried: false
