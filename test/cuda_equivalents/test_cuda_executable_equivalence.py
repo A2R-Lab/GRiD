@@ -779,7 +779,6 @@ def _compile_runner(
     build_dir: Path,
     *,
     floating_base: bool = False,
-    header_key: str,
     skip_gradients: bool = False,
     skip_eepose_gradients: bool = False,
     run_tokens=None,
@@ -810,7 +809,14 @@ def _compile_runner(
         {
             "schema": CACHE_SCHEMA_VERSION,
             "kind": "cuda_equivalence_runner",
-            "header_key": header_key,
+            # CONTENT-keyed on the exact header bytes the exe embeds (2026-08-19,
+            # user-ratified): the input-side header cache key folds the whole
+            # grid_codegen tree hash, so keying the exe on it forced a full exe
+            # recompile for EVERY codegen edit — even byte-identical-output ones
+            # (a comment fix cost a ~15h cold pass). The header cache stays
+            # input-keyed (regeneration is the cheap CPU half); the exe — the
+            # expensive nvcc half — re-keys only when its actual input bytes do.
+            "header_content_hash": _hash_file(build_dir / "grid.cuh"),
             "runner_source_hash": _hash_file(RUNNER_SOURCE),
             "select_header_hash": _hash_file(SELECT_HEADER),
             "cuda_arch": arch,
@@ -905,7 +911,7 @@ def _compile_runner(
             json.dumps(
                 {
                     "schema": CACHE_SCHEMA_VERSION,
-                    "header_key": header_key,
+                    "header_content_hash": _hash_file(compile_dir / "grid.cuh"),
                     "arch": arch,
                     "floating_base": bool(floating_base),
                     "l2_persisting": l2_define,
@@ -1905,7 +1911,6 @@ def _run_cuda_equivalence_case(
     executable, compile_cmd = _compile_runner(
         build_dir,
         floating_base=base_mode == "floating",
-        header_key=header_key,
         run_tokens=run_tokens,
         # Mimic gradients: both fixed-base (P3) and floating-base (B1) mimic now
         # emit id_du/fd_du, so the runner always compiles its dynamics-gradient

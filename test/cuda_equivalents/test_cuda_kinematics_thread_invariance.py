@@ -260,7 +260,6 @@ def test_ee_pose_thread_invariance(tmp_path, robot_id, base_mode, batch_size, re
         executable, compile_cmd = _compile_runner(
             build_dir,
             floating_base=base_mode == "floating",
-            header_key=header_key,
             skip_gradients=False,
             skip_eepose_gradients=False,
             config=request.config,

@@ -109,9 +109,9 @@ def test_floating_damped_cuda_matches_damped_oracle(tmp_path):
     executable, compile_cmd = _compile_runner(
         tmp_path,
         floating_base=True,
-        # content-hash key: the damped header must NEVER collide with the
-        # undamped flagship cache entries for the same robot.
-        header_key="jointdyn_floating_" + _hash_file(header),
+        # The runner key is content-hashed from tmp_path/grid.cuh, so the
+        # damped header can never collide with the undamped flagship cache
+        # entries for the same robot (different bytes, different key).
         run_tokens=_RUN_TOKENS,
     )
 

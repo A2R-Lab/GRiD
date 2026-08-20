@@ -180,7 +180,6 @@ def run_job(plan: dict, name: str) -> int:
             mod._compile_runner(
                 build_dir,
                 floating_base=(base == "floating"),
-                header_key=header_key,
                 run_tokens=cell.run_tokens,
                 skip_gradients=False,
                 skip_eepose_gradients=False,
