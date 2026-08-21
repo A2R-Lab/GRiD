@@ -357,9 +357,18 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
     {carryable shards' node ids}; a carryable shard whose ids vanished from the
     collection is impossible via file edits (removing a test edits its module,
     which is in the fingerprint) — if it happens anyway (env drift), we refuse
-    loudly rather than emit an incomplete receipt. Fresh shard names are
-    de-conflicted from carried names (a fresh shard would silently SHADOW a
-    same-named carried shard in carry_forward, orphaning its node ids)."""
+    loudly rather than emit an incomplete receipt.
+
+    NAME RECYCLING (the 2026-08-21 first-run lesson): carry_forward walks EVERY
+    old shard — an old shard is either freshly re-run (same name; fresh wins)
+    or it must fingerprint-match to carry. There is no "superseded" state, so a
+    stale shard's name MUST reappear among the fresh shards or the merge
+    refuses. Fresh cuda coverage is therefore partitioned into EXACTLY the
+    stale cuda shards' names; wholly-new tests (no stale name to recycle) get
+    new names, de-conflicted from carried names (a same-named fresh shard would
+    silently shadow a carried one, orphaning its node ids). A stale WRAPPER
+    shard whose module was deleted has no fresh run to shadow it → refuse
+    (full pass; deleting a test module is release-grade anyway)."""
     from dataclasses import replace as _dc_replace  # noqa: PLC0415
 
     shards = old_receipt.get("shards") or []
@@ -381,7 +390,14 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
     old_wrapper_names = {s["name"] for s in shards if _is_wrapper(s)}
     stale_wrapper_names = {s["name"] for s in stale if _is_wrapper(s)}
     # Stale wrapper shard whose module still exists → re-run it; a module NEW
-    # since the old receipt runs too; a deleted module simply drops out.
+    # since the old receipt runs too. A stale wrapper shard with NO current
+    # module has no fresh namesake to shadow it in carry_forward → refuse.
+    deleted = stale_wrapper_names - set(wrapper_mods_now)
+    if deleted:
+        raise RuntimeError(
+            f"--refresh-from: stale wrapper shard(s) {sorted(deleted)} have no "
+            f"current module — carry_forward has no 'superseded' state, so a "
+            f"deleted module needs a full SPLIT=1 pass.")
     wrapper_to_run = [m for m in wrapper_mods_now
                       if m in stale_wrapper_names or m not in old_wrapper_names]
 
@@ -395,19 +411,64 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
             f"collection changed without a fingerprint change; a refresh "
             f"cannot preserve completeness. Run a full SPLIT=1 pass.")
     fresh_ids = [i for i in cuda_ids_now if i not in carried_cuda_ids]
-    cuda_fresh = (pack_cuda_shards(fresh_ids, durations, budget_secs)
-                  if fresh_ids else [])
-    taken = {s["name"] for s in carried} | set(wrapper_mods_now)
-    deconflicted = []
-    for sp in cuda_fresh:
-        nm = sp.name
-        while nm in taken:
-            nm += "_r"
-        taken.add(nm)
-        deconflicted.append(sp if nm == sp.name else _dc_replace(sp, name=nm))
+    stale_cuda_names = [s["name"] for s in stale if not _is_wrapper(s)]
+
+    cuda_fresh: list[ShardSpec] = []
+    if stale_cuda_names:
+        # Every stale cuda name must be shadowed by a fresh shard: partition
+        # the fresh ids into EXACTLY those names (contiguous atom groups,
+        # est-balanced — same-module atoms stay adjacent like pack_cuda_shards).
+        atoms: dict[tuple, list[str]] = {}
+        for nid in fresh_ids:
+            atoms.setdefault(_atom_key(nid), []).append(nid)
+        atom_rows = [(k, m, _atom_est(m, durations, k)) for k, m in atoms.items()]
+        n_groups = len(stale_cuda_names)
+        if len(atom_rows) < n_groups:
+            raise RuntimeError(
+                f"--refresh-from: only {len(atom_rows)} fresh atom(s) for "
+                f"{n_groups} stale shard name(s) — cannot shadow every stale "
+                f"shard. Run a full SPLIT=1 pass.")
+        total_est = sum(e for _, _, e in atom_rows) or 1.0
+        gi, cur_ids, cur_mods, cur_est = 0, [], set(), 0.0
+        for idx, (key, members, est) in enumerate(atom_rows):
+            cur_ids += members
+            cur_mods.add(key[0])
+            cur_est += est
+            atoms_left = len(atom_rows) - idx - 1
+            groups_left = n_groups - gi - 1
+            if groups_left > 0 and (
+                    cur_est >= total_est / n_groups
+                    or atoms_left == groups_left):
+                cuda_fresh.append(ShardSpec(
+                    name=stale_cuda_names[gi], domain="cuda",
+                    targets=list(cur_ids),
+                    fingerprint_paths=_shard_fingerprint_paths(cur_mods),
+                    est_secs=cur_est, apply_marker=True))
+                gi, cur_ids, cur_mods, cur_est = gi + 1, [], set(), 0.0
+        cuda_fresh.append(ShardSpec(
+            name=stale_cuda_names[gi], domain="cuda", targets=list(cur_ids),
+            fingerprint_paths=_shard_fingerprint_paths(cur_mods),
+            est_secs=cur_est, apply_marker=True))
+        packed = sorted(i for s in cuda_fresh for i in s.targets)
+        if packed != sorted(fresh_ids) or len(cuda_fresh) != n_groups:
+            raise RuntimeError("refresh partition failed its completeness gate")
+    elif fresh_ids:
+        # Wholly-new tests with no stale name to recycle: new shards, names
+        # de-conflicted from carried names (a same-named fresh shard would
+        # shadow a carried one and orphan its node ids).
+        cuda_fresh = pack_cuda_shards(fresh_ids, durations, budget_secs)
+        taken = {s["name"] for s in carried} | set(wrapper_mods_now)
+        deconflicted = []
+        for sp in cuda_fresh:
+            nm = sp.name
+            while nm in taken:
+                nm += "_r"
+            taken.add(nm)
+            deconflicted.append(sp if nm == sp.name else _dc_replace(sp, name=nm))
+        cuda_fresh = deconflicted
     return ([s["name"] for s in stale],
             [s["name"] for s in carried],
-            wrapper_to_run, deconflicted)
+            wrapper_to_run, cuda_fresh)
 
 
 def load_prior_results(out_dir: Path, spec_names: set[str]) -> list[dict]:

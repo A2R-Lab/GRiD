@@ -285,34 +285,43 @@ def test_plan_refresh_stale_detection_and_repack():
     # fresh cuda covers exactly the non-carried ids
     fresh_ids = sorted(i for s in cuda_fresh for i in s.targets)
     assert fresh_ids == sorted(stale_ids)
-    # fresh names never collide with carried names
-    assert not ({s.name for s in cuda_fresh} & set(carried))
+    # NAME RECYCLING: every stale cuda name is shadowed by a fresh shard
+    # (carry_forward has no "superseded" state — an unshadowed stale name
+    # would be refused at merge time; the 2026-08-21 first-run lesson)
+    assert {s.name for s in cuda_fresh} == {"cuda_01_stale"}
 
 
-def test_plan_refresh_name_deconflict_and_missing_ids():
+def test_plan_refresh_edge_cases():
     ids = [_fid("iiwa14", "fixed", "crba", 1)]
-    old = {"shards": [_mk_shard("cuda_00_crba", ids, ["a.py"], "d1"),
-                      _mk_shard("cuda_00_misc", ["x::y"], ["b.py"], "d2")]}
-    # a.py clean; b.py stale -> its id "x::y" gone from collection is FINE
-    # (stale shards drop; only CARRIED shards' ids must survive)
     fn = {"a.py": "d1", "b.py": "CHANGED"}.__getitem__
     fn1 = lambda paths: fn(paths[0])
-    stale, carried, wrap, fresh = rss.plan_refresh(old, ids, [], {}, 7200.0, fn1)
-    assert stale == ["cuda_00_misc"] and carried == ["cuda_00_crba"]
-    assert fresh == [] and wrap == []
+    # stale cuda shard with ZERO fresh atoms to fill its name -> refuse
+    old = {"shards": [_mk_shard("cuda_00_crba", ids, ["a.py"], "d1"),
+                      _mk_shard("cuda_00_misc", ["x::y"], ["b.py"], "d2")]}
+    with pytest.raises(RuntimeError, match="cannot shadow"):
+        rss.plan_refresh(old, ids, [], {}, 7200.0, fn1)
     # CARRIED shard's id missing from collection -> loud refusal
     with pytest.raises(RuntimeError, match="no longer collectable"):
         rss.plan_refresh(old, [], [], {}, 7200.0, fn1)
-    # fresh shard packed under a name a carried shard holds -> deconflicted
-    old2 = {"shards": [
-        _mk_shard("cuda_00_dccrba_iiwa14", ids, ["a.py"], "d1"),
-        _mk_shard("cuda_01_stale", [_fid("go2", "floating", "aba", 1)],
-                  ["b.py"], "CHANGED"),
+    # stale WRAPPER shard whose module was deleted -> refuse (no namesake)
+    old_w = {"shards": [_mk_shard("test_gone",
+                                  ["test/python_wrappers/test_gone.py::t"],
+                                  ["b.py"], "OLD")]}
+    with pytest.raises(RuntimeError, match="deleted module|no current module"):
+        rss.plan_refresh(old_w, [], ["test_other"], {}, 7200.0, fn1)
+    # multiple stale cuda names: fresh partition recycles ALL of them, exactly
+    stale_a = [_fid("go2", "floating", "aba", t) for t in (1, 32)]
+    stale_b = [_fid("g1", "fixed", "minv", t) for t in (1, 32)]
+    old3 = {"shards": [
+        _mk_shard("cuda_05_one", stale_a, ["b.py"], "OLD"),
+        _mk_shard("cuda_09_two", stale_b, ["b.py"], "OLD"),
     ]}
-    _, carried2, _, fresh2 = rss.plan_refresh(
-        old2, ids + [_fid("go2", "floating", "aba", 1)], [], {}, 7200.0, fn1)
-    for sp in fresh2:
-        assert sp.name not in carried2
+    _, carried3, _, fresh3 = rss.plan_refresh(
+        old3, stale_a + stale_b, [], {}, 7200.0, fn1)
+    assert carried3 == []
+    assert {s.name for s in fresh3} == {"cuda_05_one", "cuda_09_two"}
+    assert sorted(i for s in fresh3 for i in s.targets) == sorted(stale_a + stale_b)
+    assert all(s.targets for s in fresh3)
 
 
 def test_plan_refresh_refuses_monolithic_receipt():
