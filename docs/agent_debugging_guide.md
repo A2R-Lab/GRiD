@@ -1360,6 +1360,23 @@ of proceeding (the A2 leg "passed" in 60 s on a card with 31 GB held — its num
 are suspect, not bankable); (4) treat "util 0% + memory high + no owning process" as
 a wedged-teardown signature, not as idle.
 
+**CLOSED 2026-08-21 — h2_plus DE-QUARANTINED.** Root cause was the init-copy
+async race fixed @660e626 (garbage q under concurrent load → wild indices →
+OOB → Xid-31). Supervised repro at the fixed tree (fe55531, exes REBUILT —
+the earlier sanitizer arms had run pre-fix binaries): 20× TWO concurrent plain
+`solo_batch_f_ext_gradient.exe floating` (10 simultaneous + 10 staggered
+starts, covering init-vs-init and init-vs-kernel interleavings) — every
+iteration rc=0/rc=0, memory back to baseline, zero kernel-log events,
+nvidia-smi responsive. f_ext_gradient_dq: solo clean at the fixed tree;
+concurrent dq+fegrad is VRAM-INFEASIBLE at N=1024 on 32 GB (outputs are not
+slot-clamped; the exe refuses with a clean cudaMalloc OOM exit(2) — run dq
+arms SERIALLY, as the night scripts always did). h2_plus timing cells may
+run again; the SIGKILL prevention rules above remain in force regardless
+(they are about teardown, not this bug). Repro protocol + logs:
+test/benchmarks/results/wedge_20260821/run_wedge_repro.sh. Verify Xid claims
+via `journalctl -k` (dmesg is permission-blocked for this user — and beware
+`cmd 2>/dev/null | tail` readability probes: the pipe eats the failure).
+
 ### 7.x Compile-RAM crash discipline for big-robot bench builds (salvaged from the 2026-07-23 one-off scripts before deletion)
 
 Two desktop-crashing OOMs taught the g1-floating build schedule; the durable rules
