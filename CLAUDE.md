@@ -83,13 +83,27 @@ jobs, so the pool is the sole writer of a cache key until that shard starts (the
 unlocked cache writers are never raced; a mimic robot's cells share one header and
 fold into one serial job). `GRID_SPLIT_COMPILE_JOBS` sizes the pool (default 5;
 `0` = legacy serial inline warm).
-Receipt refresh after a push that touches fingerprinted test files:
-`SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh` re-runs ONLY the shards whose
-narrow fingerprints changed vs the committed `gpu-proof.json` and carries the
-rest (`gpu-proof merge --carry-from`; the everyday policy accepts carried
-shards). Releases use `test/gpu-proof-policy-release.yaml` (refuses carried
-shards), so a release receipt still requires one fresh full `SPLIT=1` pass.
-`GRID_SPLIT_REFRESH_DRY=1` prints the stale/carried plan without running.
+**Receipt policies (two-tier, user decision 2026-08-20).** The committed
+`gpu-proof.json` goes stale — and CI's verify-receipt job goes RED — the
+moment a push touches fingerprinted test files (`test/cuda_equivalents/`,
+`test/python_wrappers/`). That red is by design, and the fix is a refresh:
+- **Everyday** (`test/gpu-proof-policy.yaml`, `allow_carried: true`):
+  `SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh` re-runs ONLY the shards
+  whose narrow fingerprints changed vs the committed receipt and CARRIES the
+  rest (`gpu-proof merge --carry-from`); commit the refreshed receipt and CI
+  goes green — minutes-to-hours, not the full pass. A carried shard attests
+  "these tests, whose files are unchanged, passed at an ancestor commit ≤30
+  days old"; cross-cutting codegen/bindings changes are NOT re-proven by
+  carry. `GRID_SPLIT_REFRESH_DRY=1` previews the stale/carried plan.
+- **Release** (`test/gpu-proof-policy-release.yaml`, `allow_carried: false`):
+  refuses carried shards outright, so a release receipt requires ONE fresh
+  full `SPLIT=1` pass at the release tip — every shard executed at that exact
+  commit. Verify with `--policy test/gpu-proof-policy-release.yaml`.
+Internals a maintainer should know: stale shard NAMES are recycled into the
+fresh partition automatically (the carry contract has no "superseded" state),
+a deleted test module forces a full pass, and both compile caches are
+CONTENT-keyed (header/source bytes), so byte-identical codegen edits cost
+seconds of regeneration, never an nvcc rebuild.
 
 ## Durable engineering conventions
 
