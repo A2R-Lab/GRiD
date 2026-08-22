@@ -750,6 +750,20 @@ PER_ALGO_SPECS: dict[str, dict] = {
     },
 }
 
+# Every algo is gated on its GRID_HAS_<ALGO> macro. Headers emit one macro per
+# algo (1 when emitted, 0 when an algorithm_list left it out; an entirely
+# undefined identifier preprocesses to 0, so the gate is safe against any
+# header). Historically the "core" algos carried gate=None and their solo TUs
+# compiled UNGUARDED — correct against full headers, but a restricted
+# algorithm_list header (e.g. the tier sweep's SO-only phase-2 header) made
+# all 14 gate-less TUs fail nvcc (2026-08-22 campaign-1 prebuild). A gated-out
+# solo exe builds as a clean no-op and is recorded as "gated out", never as a
+# build failure.
+for _k, _s in PER_ALGO_SPECS.items():
+    if not _s.get("gate"):
+        _s["gate"] = f"GRID_HAS_{_k.upper()}"
+del _k, _s
+
 
 # Algos whose generated kernel is a NON-PRODUCTION reference path under a given
 # base, and must NOT be benchmarked there (timing them reports fake losses).
