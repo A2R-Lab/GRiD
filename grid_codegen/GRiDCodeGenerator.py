@@ -1712,6 +1712,15 @@ class GRiDCodeGenerator:
         # coriolis whole-band spill: at the deepest rung the inner spatial-recursion
         # scratch redirects to the GRAD section, so it must back the full inner band.
         _coriolis_inner_temp_count = self.gen_coriolis_matrix_inner_temp_mem_size() if any(p >= 2 for p in self.coriolis_matrix_spill_tier_3way) else 0
+        # SO-region band gating locals (see the GRID_WS_SO_REGION_LIVE emission
+        # below): only bench headers (emit_alloc_gating=True) get the gated
+        # form; default emission stays byte-identical.
+        _ws_gating = getattr(self, "emit_alloc_gating", False)
+
+        def _ag_expr(keys):
+            return " || ".join(["!defined(GRID_ALLOC_GATE)"]
+                               + ["GRID_ALLOC_" + k.upper() for k in keys])
+
         grad_spill_workspace_t_count = max(inverse_dynamics_gradient_temp_layout["spill_count"],
                                            inverse_dynamics_gradient_temp_count,
                                            forward_dynamics_gradient_temp_count,
@@ -2186,8 +2195,31 @@ class GRiDCodeGenerator:
                                  "        : grid_shared_arena_bytes<T>(" + str(XI_size) + ", TOPOLOGY_HELPERS_COUNT);",
                                  "}",
                                  "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t IDSVA_SO_DEVICE_INLINE_WORKSPACE_BYTES() { return (TIER == TIER_SHARED) ? static_cast<size_t>(0) : sizeof(T) * static_cast<size_t>(" + str(idsva_so_world_frame_inner_temp_count if self.robot.floating_base else idsva_so_body_frame_inner_temp_count) + "); }",
-                                 "template <typename T> __host__ __device__ inline size_t GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP() { return sizeof(T) * static_cast<size_t>(" + str(grad_spill_workspace_t_count) + "); }",
-                                 "template <typename T> __host__ __device__ inline size_t GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP() { return sizeof(T) * static_cast<size_t>(" + str(so_workspace_t_count) + "); }",
+                                 "template <typename T> __host__ __device__ inline size_t GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP() { return sizeof(T) * static_cast<size_t>(" + str(grad_spill_workspace_t_count) + "); }"] + (
+                                 # SO-REGION band gating (2026-08-23, the "why 30 GB" fix): the SO
+                                 # section of the workspace stride is 25.2 MB/ts on h2_plus while
+                                 # the GRAD section is 1.38 MB/ts — an alloc-gated FIRST-ORDER solo
+                                 # exe (e.g. f_ext_gradient) was still charged the FULL stride, so
+                                 # its arena auto-fit allocated ~27 GB of which ~26 GB backed
+                                 # kernels that never launch (and that near-capacity pressure is
+                                 # what tickles the open-kmod nvidia_uvm chunk crashes — guide
+                                 # §7.x). Under GRID_ALLOC_GATE the SO-region bytes collapse to 0
+                                 # unless an algo whose workspace lives AT/AFTER
+                                 # GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES is alloc-enabled. Offsets
+                                 # are UNCHANGED (SO region still starts at GRAD_BYTES); only the
+                                 # allocated stride shrinks, and only gated bench exes see it —
+                                 # ungated emission stays byte-identical.
+                                 ["#if " + _ag_expr(("idsva_so", "idsva_so_body_frame", "idsva_so_world_frame",
+                                                     "idsva_so_world_frame_mjx", "fdsva_so", "fdsva_so_mjx",
+                                                     "dccrba", "cmm_time_variation",
+                                                     "end_effector_pose_gradient", "osc_inertia")),
+                                  "#define GRID_WS_SO_REGION_LIVE 1",
+                                  "#else",
+                                  "#define GRID_WS_SO_REGION_LIVE 0",
+                                  "#endif",
+                                  "template <typename T> __host__ __device__ inline size_t GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP() { return GRID_WS_SO_REGION_LIVE ? sizeof(T) * static_cast<size_t>(" + str(so_workspace_t_count) + ") : static_cast<size_t>(0); }"]
+                                 if _ws_gating else
+                                 ["template <typename T> __host__ __device__ inline size_t GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP() { return sizeof(T) * static_cast<size_t>(" + str(so_workspace_t_count) + "); }"]) + [
                                  # Phase 3e: sized for MINIMAL tier's spill (max across PERF/LITE/MINIMAL).
                                  # Even if PERF doesn't spill df_du/Minv, MINIMAL might — the workspace
                                  # allocation has to cover MINIMAL's needs at all times.
@@ -2196,7 +2228,7 @@ class GRiDCodeGenerator:
                                  # at or past spill_df_du") is now `p >= 5` to reproduce the EXACT same per-robot
                                  # value (Gate-A byte-identical for cardinals). The 3*NV^2 span backs
                                  # s_df_du(2*NV^2) + s_Minv(NV^2) at GRID_FDSVA_SO_SPILL_OFFSET_BYTES.
-                                 "template <typename T> __host__ __device__ inline size_t GRID_FDSVA_SO_SPILL_BYTES_PER_TIMESTEP() { return sizeof(T) * static_cast<size_t>(" + str(3*nv*nv if any(p >= 5 for p in getattr(self, 'fdsva_so_spill_tier_3way', (0, 0, 0))) else 0) + "); }",
+                                 "template <typename T> __host__ __device__ inline size_t GRID_FDSVA_SO_SPILL_BYTES_PER_TIMESTEP() { return " + ("GRID_WS_SO_REGION_LIVE ? " if _ws_gating else "") + "sizeof(T) * static_cast<size_t>(" + str(3*nv*nv if any(p >= 5 for p in getattr(self, 'fdsva_so_spill_tier_3way', (0, 0, 0))) else 0) + ")" + (" : static_cast<size_t>(0)" if _ws_gating else "") + "; }",
                                  "template <typename T> __host__ __device__ inline size_t GRID_FDSVA_SO_SPILL_OFFSET_BYTES() { return GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP<T>(); }",
                                  "template <typename T> __host__ __device__ inline size_t GRID_WORKSPACE_BYTES_PER_TIMESTEP() { return GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_FDSVA_SO_SPILL_BYTES_PER_TIMESTEP<T>(); }",
                                  "template <typename T> __host__ __device__ inline gridSharedTier GRID_INVERSE_DYNAMICS_GRADIENT_SHARED_TIER() { return static_cast<gridSharedTier>(GRID_INVERSE_DYNAMICS_GRADIENT_SHARED_TIER_VALUE); }",
@@ -2654,7 +2686,17 @@ class GRiDCodeGenerator:
                       "        else if (_ws_per_ts > 0) {", \
                       "            size_t _ws_free = 0, _ws_total = 0;", \
                       "            gpuErrchk(cudaMemGetInfo(&_ws_free, &_ws_total));", \
-                      "            const size_t _ws_budget = _ws_free - _ws_free/10;  // 10% headroom", \
+                      ] + (
+                      # GRID_WORKSPACE_RESERVE_MB (gated emission only): an ABSOLUTE
+                      # device-memory reserve on top of the 10% — near-capacity
+                      # allocation is what tickles the open-kmod nvidia_uvm chunk
+                      # crashes (guide §7.x), so bench runs can keep e.g. 2-4 GB free.
+                      # Default/unset = 0 -> identical arithmetic; ungated emission
+                      # keeps the original line byte-identically.
+                      ["            size_t _ws_reserve = 0; { const char *_r = getenv(\"GRID_WORKSPACE_RESERVE_MB\"); if (_r != nullptr && atoll(_r) > 0) { _ws_reserve = (size_t)atoll(_r) * 1048576ULL; } }",
+                       "            const size_t _ws_budget = (_ws_free > _ws_free/10 + _ws_reserve) ? (_ws_free - _ws_free/10 - _ws_reserve) : 0;  // 10% + absolute reserve headroom"]
+                      if gating else
+                      ["            const size_t _ws_budget = _ws_free - _ws_free/10;  // 10% headroom"]) + [ \
                       "            if (_ws_per_ts*(size_t)NUM_TIMESTEPS > _ws_budget) {", \
                       "                _ws_slots = (int)(_ws_budget/_ws_per_ts);", \
                       "                if (_ws_slots < 1) { _ws_slots = 1; }  // one slot must fit; else the malloc below fails loudly", \
