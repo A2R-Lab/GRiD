@@ -276,10 +276,38 @@ def _run_one(algo: str, exe: Path, base: str, timeout_s: float) -> tuple[str, di
       "crash"  -- nonzero exit (e.g. 188). CONTAINED to this algo + attributed; the sweep continues.
       "timeout"/"error" -- likewise contained.
     """
+    # ⚠NEVER SIGKILL a timing exe (guide §7.x, recurred 2026-08-22): a big-robot
+    # exe holds tens of GB of live device allocations, and subprocess.run's
+    # TimeoutExpired path SIGKILLs — the h2_plus f_ext cell got SIGKILLed at the
+    # 900s default mid-op and its driver context cleanup never completed: a
+    # zombie held ~30 GB for 9+ hours, stalling the whole campaign-1 night
+    # behind a 0%-util GPU until a reboot. timeout_s <= 0 now DISABLES the
+    # wall-clock cap entirely (the standing rule: detect hangs by output
+    # progress, not wall-clock); a positive timeout escalates SIGTERM → wait —
+    # and if the exe ignores that, we mark it "hung" and LEAVE it (a loud stuck
+    # process beats a wedged driver).
     try:
-        proc = subprocess.run([str(exe), base], capture_output=True, text=True, timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        return algo, {}, "timeout", f"TIMEOUT after {timeout_s:.0f}s (isolated -- other algos unaffected)", None
+        if timeout_s and timeout_s > 0:
+            proc = subprocess.Popen([str(exe), base], stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True)
+            try:
+                out, err = proc.communicate(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                proc.terminate()  # SIGTERM: let CUDA teardown run its syncs+frees
+                try:
+                    out, err = proc.communicate(timeout=120.0)
+                    return algo, {}, "timeout", (
+                        f"TIMEOUT after {timeout_s:.0f}s (SIGTERM honored; "
+                        f"isolated -- other algos unaffected)"), None
+                except subprocess.TimeoutExpired:
+                    return algo, {}, "hung", (
+                        f"HUNG: no exit {timeout_s:.0f}s after start + 120s "
+                        f"post-SIGTERM. Process pid={proc.pid} LEFT RUNNING "
+                        f"(SIGKILL would wedge the driver) -- stop the sweep "
+                        f"and investigate."), None
+            proc = subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+        else:
+            proc = subprocess.run([str(exe), base], capture_output=True, text=True)
     except Exception as e:  # noqa: BLE001
         return algo, {}, "error", f"RUN ERROR {e!r}", None
     m = re.search(r"workspace_timestep_slots=(\d+)", proc.stdout)
@@ -500,7 +528,10 @@ def main() -> None:
                          "(0 = off). The SO family compiles serially under this cap so a device compile "
                          "that balloons after admission is OOM-killed in its own scope, not on the box. "
                          "Default 45 on a 62 GB box; no-op where a user systemd manager isn't available.")
-    ap.add_argument("--per-exe-timeout", type=float, default=900.0)
+    # Default 0 = NO wall-clock cap (user rule: timing legs run to completion;
+    # hangs are detected by output progress). A positive value now escalates
+    # SIGTERM→grace→leave-hung, never SIGKILL (see _run_one / guide §7.x).
+    ap.add_argument("--per-exe-timeout", type=float, default=0.0)
     ap.add_argument("--compile-only", action="store_true",
                     help="build the per-(algo[,tier]) exes and exit WITHOUT timing (the hub's build "
                          "phase). A later run cache-hits every exe (content stamp), so measurement is "

@@ -1360,6 +1360,21 @@ of proceeding (the A2 leg "passed" in 60 s on a card with 31 GB held — its num
 are suspect, not bankable); (4) treat "util 0% + memory high + no owning process" as
 a wedged-teardown signature, not as idle.
 
+**RECURRED 2026-08-22 (campaign-1 night-1) — a PYTHON-LEVEL timeout is the same
+SIGKILL.** `per_algo_bench._run_one` used `subprocess.run(timeout=900)`;
+Python's `TimeoutExpired` path SIGKILLs the child. h2_plus's f_ext cell blew
+the 900s default mid-op (~30 GB live) → zombie whose driver context cleanup
+never completed → GPU 0% util with 29.9 GB held by a DEFUNCT pid for 9+ hours,
+the whole night stalled silently behind it. New variant notes: `nvidia-smi`
+stayed RESPONSIVE (softer than the full 2026-08-09 wedge) and the zombie was
+UNREAPABLE even after its parents exited (kernel thread stuck in the driver
+exit path) — reboot required all the same. FIX: per-exe timeout now defaults
+0 = DISABLED (hang detection is output-progress, per the standing rule); a
+positive timeout escalates SIGTERM → 120s grace → mark "hung" and LEAVE the
+process. AUDIT RULE: grep every bench/orchestration harness for
+`subprocess.run(...timeout=` / `communicate(timeout=` around GPU exes — each
+is a latent SIGKILL of a process with live device allocations.
+
 **CLOSED 2026-08-21 — h2_plus DE-QUARANTINED.** Root cause was the init-copy
 async race fixed @660e626 (garbage q under concurrent load → wild indices →
 OOB → Xid-31). Supervised repro at the fixed tree (fe55531, exes REBUILT —
