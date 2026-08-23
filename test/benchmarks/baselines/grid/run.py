@@ -1098,14 +1098,17 @@ def settle_gpu_before_launch(context: str, *, margin_mb: int = 1024,
               f"{context} (lazy vidmem free in flight)", flush=True)
 
 
-def _autotune_batch_iters_for_binary(batch_binary: Path, base: str, threads: int,
+def _autotune_batch_iters_for_binary(batch_binary: Path, base: str,
+                                     threads: int | str,
                                      env_extra: dict[str, str]) -> str:
-    """Run the batch binary with GRID_AUTOTUNE_THREAD_COUNT=threads and return stdout.
+    """Run the batch binary with GRID_AUTOTUNE_THREAD_COUNT=threads (an int, or
+    a comma-joined grid for the in-process sweep) and return stdout.
     Caller is responsible for handling parsing/errors."""
     settle_gpu_before_launch(f"{batch_binary.name} threads={threads}")
     env = os.environ.copy()
     env.update(env_extra)
-    env["GRID_AUTOTUNE_THREAD_COUNT"] = str(int(threads))
+    env["GRID_AUTOTUNE_THREAD_COUNT"] = (
+        threads if isinstance(threads, str) else str(int(threads)))
     floating_arg = "T" if base == "floating" else "F"
     result = subprocess.run(
         [str(batch_binary), floating_arg],
@@ -1126,19 +1129,40 @@ def _target_key_for_mode(mode: str, autotune_N: int) -> str:
     return f"batch_{autotune_N}_compute_only_us"
 
 
+import re as _autotune_re  # run.py deliberately has no top-level `re` import
+
+_AUTOTUNE_SECTION_RE = _autotune_re.compile(
+    r"^==GRID_AUTOTUNE_THREADS (\d+)==$", _autotune_re.M)
+
+
 def _sweep_one_binary(
     binary: Path,
     base: str,
     thread_grid: tuple[int, ...],
     target_key: str,
 ) -> dict[str, dict[int, float]]:
-    """Run `binary` once per thread count in `thread_grid`, parse `target_key`
-    per algo, and return {algo: {threads: us}}. Thread counts already clipped to
-    the tier cap by the caller."""
+    """Time the WHOLE thread grid in ONE exe run (in-process sweep, 2026-08-23):
+    the env carries the comma-joined grid, the exe re-points its timing dimms
+    per config inside one CUDA context, and stdout is split on the
+    ==GRID_AUTOTUNE_THREADS N== markers. One context create/destroy per
+    (binary, grid) instead of per point — rapid big-robot context cycles raced
+    the driver's lazy vidmem free and froze the box twice (guide §7.x).
+    Returns {algo: {threads: us}}. Grid already clipped to the tier cap."""
+    if not thread_grid:
+        return {}
+    stdout = _autotune_batch_iters_for_binary(
+        binary, base, ",".join(str(int(t)) for t in thread_grid), {})
+    marks = list(_AUTOTUNE_SECTION_RE.finditer(stdout))
+    if not marks:
+        raise RuntimeError(
+            f"{binary.name}: no ==GRID_AUTOTUNE_THREADS== markers in output — "
+            f"the binary predates the in-process thread sweep; rebuild it "
+            f"(stale content stamp?) rather than mis-attributing timings.")
     sweeps: dict[str, dict[int, float]] = {}
-    for threads in thread_grid:
-        stdout = _autotune_batch_iters_for_binary(binary, base, threads, {})
-        parsed = parse_grid_output(stdout)
+    for i, m in enumerate(marks):
+        threads = int(m.group(1))
+        section = stdout[m.end(): marks[i + 1].start() if i + 1 < len(marks) else len(stdout)]
+        parsed = parse_grid_output(section)
         for algo, entry in parsed.items():
             if not isinstance(entry, dict):
                 continue
@@ -1148,7 +1172,7 @@ def _sweep_one_binary(
             us = bucket.get("median") or bucket.get("mean")
             if us is None:
                 continue
-            sweeps.setdefault(algo, {})[int(threads)] = float(us)
+            sweeps.setdefault(algo, {})[threads] = float(us)
     return sweeps
 
 

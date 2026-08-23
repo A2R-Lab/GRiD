@@ -40,6 +40,7 @@
 #endif
 #include "../util/experiment_helpers.h"
 #include <cstdlib>   // std::getenv, std::strtol — used by grid_resolve_threads_per_block()
+#include <vector>    // grid_autotune_thread_list (in-process thread sweep)
 
 #define GRAVITY 9.81
 
@@ -67,9 +68,43 @@ inline int grid_resolve_threads_per_block() {
     return grid::MAX_PERF_LEVEL_THREADS;
 }
 
+// Current timing thread count. Resolved once from the env/codegen default and
+// then SETTABLE: the in-process autotune sweep (2026-08-23) re-points it per
+// thread config inside ONE exe run — one CUDA context for the whole grid
+// instead of one context create/destroy per point. Rationale: rapid ~30 GB
+// context cycles race the driver's lazy vidmem free (nvidia_uvm free_chunk
+// NULL-deref froze the box twice — guide §7.x); in-process sweeping removes
+// >10x of those cycles AND keeps GPU clocks uniform across the sweep.
+inline int &grid_timing_threads_ref() {
+    static int current = grid_resolve_threads_per_block();
+    return current;
+}
+
+inline void grid_set_timing_threads(int threads) {
+    if (threads > 0 && threads <= 1024) grid_timing_threads_ref() = threads;
+}
+
 inline dim3 grid_timing_dimms() {
-    static const int cached = grid_resolve_threads_per_block();
-    return dim3(cached, 1, 1);
+    return dim3(grid_timing_threads_ref(), 1, 1);
+}
+
+// GRID_AUTOTUNE_THREAD_COUNT as a COMMA list ("32,64,96") for the in-process
+// sweep. A single integer (the historical form) yields a one-element list;
+// unset/empty yields an empty list (caller keeps the resolved default).
+inline std::vector<int> grid_autotune_thread_list() {
+    std::vector<int> out;
+    const char *env = std::getenv("GRID_AUTOTUNE_THREAD_COUNT");
+    if (env == nullptr || env[0] == '\0') return out;
+    const char *p = env;
+    while (*p != '\0') {
+        char *endp = nullptr;
+        long v = std::strtol(p, &endp, 10);
+        if (endp == p) break;               // no progress: malformed tail
+        if (v > 0 && v <= 1024) out.push_back(static_cast<int>(v));
+        if (*endp == '\0') break;
+        p = (*endp == ',') ? endp + 1 : endp + 1;
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------------------

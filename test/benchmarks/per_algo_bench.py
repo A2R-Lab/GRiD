@@ -80,6 +80,13 @@ def _solo_batch_tu_source(algo_key: str) -> str:
     # If the algo is gated out for this header (GRID_HAS_* == 0), the entry does not exist, so the main
     # must also be gated -- and we still emit a valid, do-nothing main so the exe builds and exits clean
     # (the wrapper then records the algo as "gated out", not as a failure).
+    # In-process thread sweep (2026-08-23): GRID_AUTOTUNE_THREAD_COUNT may be a
+    # COMMA list — one exe run then times EVERY thread config in one CUDA
+    # context (each section prefixed by an ==GRID_AUTOTUNE_THREADS N== marker
+    # for run.py's splitter), instead of one ~30 GB context create/destroy per
+    # point — the churn that raced the driver's lazy vidmem free and froze the
+    # box (guide §7.x). Single-value env keeps the historical behavior
+    # (markered, one section); unset env keeps the codegen default (no marker).
     main = (
         "\n"
         "int main(int argc, const char **argv){\n"
@@ -87,8 +94,16 @@ def _solo_batch_tu_source(algo_key: str) -> str:
         "    run_all_tests<float, 1024>(floating_base, [&](cudaStream_t *streams, grid::robotModel<float> *m, grid::gridData<float> *d){\n"
         "#if !TEST_FOR_EQUIVALENCE\n"
         f"{open_g}"
-        "        for (int N : {16, 32, 64, 128, 256, 1024}) {\n"
-        f"            measure_{algo_key}_batch_entry(N, streams, m, d);\n"
+        "        std::vector<int> _thread_list = grid_autotune_thread_list();\n"
+        "        if (_thread_list.empty()) _thread_list.push_back(0);  // 0 = keep resolved default, no marker\n"
+        "        for (int _th : _thread_list) {\n"
+        "            if (_th > 0) {\n"
+        "                grid_set_timing_threads(_th);\n"
+        "                printf(\"==GRID_AUTOTUNE_THREADS %d==\\n\", _th); fflush(stdout);\n"
+        "            }\n"
+        "            for (int N : {16, 32, 64, 128, 256, 1024}) {\n"
+        f"                measure_{algo_key}_batch_entry(N, streams, m, d);\n"
+        "            }\n"
         "        }\n"
         f"{close_g}"
         "        (void)streams; (void)m; (void)d;\n"
