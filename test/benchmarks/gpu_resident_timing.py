@@ -53,14 +53,27 @@ _TORCH_SUBMIT_RE = re.compile(
 
 
 def _run(cmd: list[str], log_path: Path, timeout_s: int) -> tuple[int, str]:
+    # ⚠NEVER SIGKILL a GPU process (guide §7.x): subprocess.run's TimeoutExpired
+    # path SIGKILLs, and killing a process with live device allocations can
+    # wedge the driver (2026-08-22 recurrence). Escalate SIGTERM → grace; if it
+    # still won't exit, LEAVE it and report — a stuck pid beats a wedged box.
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, cwd=REPO_ROOT)
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s,
-                           cwd=REPO_ROOT)
-        out = r.stdout + "\n" + r.stderr
+        stdout, stderr = proc.communicate(timeout=timeout_s)
+        out = stdout + "\n" + stderr
         log_path.write_text(out)
-        return r.returncode, out
-    except subprocess.TimeoutExpired as e:
-        out = (e.stdout or "") + "\n" + (e.stderr or "") + f"\n!! TIMEOUT after {timeout_s}s"
+        return proc.returncode, out
+    except subprocess.TimeoutExpired:
+        proc.terminate()  # SIGTERM: let CUDA teardown sync + free
+        try:
+            stdout, stderr = proc.communicate(timeout=120)
+            out = (stdout or "") + "\n" + (stderr or "") + \
+                f"\n!! TIMEOUT after {timeout_s}s (SIGTERM honored)"
+        except subprocess.TimeoutExpired:
+            out = (f"!! HUNG: no exit {timeout_s}s after start + 120s post-"
+                   f"SIGTERM; pid={proc.pid} LEFT RUNNING (SIGKILL would wedge "
+                   f"the driver) — stop the run and investigate.")
         log_path.write_text(out)
         return -9, out
 
