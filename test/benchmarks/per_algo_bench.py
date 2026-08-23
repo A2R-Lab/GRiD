@@ -286,6 +286,9 @@ def _run_one(algo: str, exe: Path, base: str, timeout_s: float) -> tuple[str, di
     # progress, not wall-clock); a positive timeout escalates SIGTERM → wait —
     # and if the exe ignores that, we mark it "hung" and LEAVE it (a loud stuck
     # process beats a wedged driver).
+    # Driver-teardown settle gate (see gridrun.settle_gpu_before_launch): never
+    # launch onto a GPU still lazily freeing the previous exe's allocation.
+    gridrun.settle_gpu_before_launch(f"{exe.name} ({algo})")
     try:
         if timeout_s and timeout_s > 0:
             proc = subprocess.Popen([str(exe), base], stdout=subprocess.PIPE,

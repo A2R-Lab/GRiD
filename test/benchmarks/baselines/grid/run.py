@@ -1034,10 +1034,67 @@ def _clip_grid_to_cap(thread_grid: tuple[int, ...], cap: int) -> tuple[int, ...]
 DEFAULT_AUTOTUNE_BATCH_ITERS: int = 50    # outer rep count per (algo, thread count) cell
 
 
+# ─── driver-teardown settle gate (2026-08-23 box-freeze root cause) ─────────
+# Video-memory freeing is LAZY in the NVIDIA open kernel module: when a bench
+# exe exits, its (on h2_plus, ~30 GB) allocation is released by a background
+# driver kthread. A sweep that immediately launches the NEXT exe allocates
+# INTO the still-freeing memory — serial processes, but driver-internal
+# concurrency — and on 610.57.04 that races to a kernel NULL deref in
+# nvidia_uvm free_chunk ("vidmem lazy fre" kthread) → Xid 109/31 → soft
+# lockup → frozen box (campaign-1 night, 2026-08-23 05:38). The gate: before
+# EVERY exe launch, wait until memory.used has returned to the process-start
+# baseline (+margin); never launch onto a GPU that hasn't finished freeing.
+_GPU_SETTLE_BASELINE_MB: int | None = None
+_GPU_SETTLE_ABS_START_MAX_MB = 2048  # a quiet box idles ~230-900 MiB
+
+
+def _gpu_mem_used_mb() -> int | None:
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=15)
+        return int(out.stdout.strip().splitlines()[0])
+    except Exception:
+        return None  # no/hung nvidia-smi (CPU-only box): nothing to gate
+
+
+def settle_gpu_before_launch(context: str, *, margin_mb: int = 1024,
+                             timeout_s: float = 120.0) -> None:
+    """Block until GPU memory.used is back at the process-start baseline
+    (+margin). Raises RuntimeError — STOP THE SWEEP, do not keep launching —
+    if it never settles (the wedged-teardown signature, guide §7.x) or if the
+    process STARTS on a dirty GPU (a fresh process must never adopt a wedged
+    30 GB residue as its 'baseline')."""
+    global _GPU_SETTLE_BASELINE_MB
+    used = _gpu_mem_used_mb()
+    if used is None:
+        return
+    if _GPU_SETTLE_BASELINE_MB is None:
+        if used > _GPU_SETTLE_ABS_START_MAX_MB:
+            raise RuntimeError(
+                f"GPU not at baseline at process start ({used} MiB used > "
+                f"{_GPU_SETTLE_ABS_START_MAX_MB} MiB): previous teardown is "
+                f"stuck or another process holds the card — refusing to time "
+                f"(guide §7.x).")
+        _GPU_SETTLE_BASELINE_MB = used
+        return
+    deadline = time.monotonic() + timeout_s
+    while used is not None and used > _GPU_SETTLE_BASELINE_MB + margin_mb:
+        if time.monotonic() > deadline:
+            raise RuntimeError(
+                f"GPU memory did not settle before {context}: {used} MiB vs "
+                f"baseline {_GPU_SETTLE_BASELINE_MB} MiB (+{margin_mb} margin) "
+                f"after {timeout_s:.0f}s — wedged-teardown signature (guide "
+                f"§7.x); STOP, do not launch more GPU work.")
+        time.sleep(2.0)
+        used = _gpu_mem_used_mb()
+
+
 def _autotune_batch_iters_for_binary(batch_binary: Path, base: str, threads: int,
                                      env_extra: dict[str, str]) -> str:
     """Run the batch binary with GRID_AUTOTUNE_THREAD_COUNT=threads and return stdout.
     Caller is responsible for handling parsing/errors."""
+    settle_gpu_before_launch(f"{batch_binary.name} threads={threads}")
     env = os.environ.copy()
     env.update(env_extra)
     env["GRID_AUTOTUNE_THREAD_COUNT"] = str(int(threads))
