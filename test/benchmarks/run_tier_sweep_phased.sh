@@ -165,15 +165,21 @@ overnight() {
   echo "########## OVERNIGHT (time-cached-first, then compile+time last two) START $(date) ##########"
   # --- [1/2] TIME all already-compiled binaries (cache-hit build -> pure timing) ---
   echo "### [1/2] TIME all cached: no-SO (all) + SO (fixed + ${SO_CACHED_FLOATING}-floating) ###"
-  # h2_plus f_ext DE-QUARANTINED 2026-08-23 PM (user call, after root cause +
-  # fix): both box freezes were the DRIVER's lazy-vidmem-free race under rapid
-  # ~30 GB context churn (nvidia_uvm free_chunk NULL deref — guide §7.x), NOT
-  # a GRiD kernel fault. Defenses now in every launch path: the settle gate
-  # (wait for memory.used baseline before each exe) + the IN-PROCESS thread
-  # sweep (one context per grid, >10x fewer churn cycles). Killer arm
-  # re-validated twice same-day (same winner both methods).
+  # ⚠h2_plus f_ext family QUARANTINED from unattended sweeps (2026-08-23): its
+  # autotune cell crashed the BOX two nights running — 08-22 via the timeout
+  # SIGKILL wedge, and 08-23 ON ITS OWN with the timeout removed: Xid 109 (CTX
+  # SWITCH TIMEOUT) + Xid 31 (MMU FAULT_PTE VIRT_WRITE) from solo_batch_f_ex*
+  # at 05:38, then an nvidia_uvm soft lockup froze the machine until a power
+  # cycle. That is a REAL GPU-side fault somewhere in the h2_plus f_ext kernels
+  # x thread-grid x runtime-slots space — a SUPERVISED daytime investigation
+  # (guide §7.x), never night material. h2_plus therefore sweeps its own no-SO
+  # section without the f_ext pair; all other robots keep the full list.
+  local NOSO_ALGOS_H2="${NOSO_ALGOS//f_ext_gradient_dq,/}"
+  NOSO_ALGOS_H2="${NOSO_ALGOS_H2//f_ext_gradient,/}"
+  local FLOATING_NO_H2="${FLOATING_ROBOTS// h2_plus/}"
   run_cell "ov1_noSO" "$NOSO_ALGOS" "$FIXED_ROBOTS"        fixed    "$BUILD_JOBS"
-  run_cell "ov1_noSO" "$NOSO_ALGOS" "$FLOATING_ROBOTS"     floating "$BUILD_JOBS"
+  run_cell "ov1_noSO" "$NOSO_ALGOS" "$FLOATING_NO_H2"      floating "$BUILD_JOBS"
+  run_cell "ov1b_noSO_h2" "$NOSO_ALGOS_H2" "h2_plus"       floating "$BUILD_JOBS"
   run_cell "ov1_SO"   "$SO_ALGOS"   "$FIXED_ROBOTS"        fixed    2
   run_cell "ov1_SO"   "$SO_ALGOS"   "$SO_CACHED_FLOATING"  floating 2
   # --- [2/2] COMPILE + TIME the last SO robots, one at a time, at the end ---
