@@ -2196,28 +2196,44 @@ class GRiDCodeGenerator:
                                  "}",
                                  "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t IDSVA_SO_DEVICE_INLINE_WORKSPACE_BYTES() { return (TIER == TIER_SHARED) ? static_cast<size_t>(0) : sizeof(T) * static_cast<size_t>(" + str(idsva_so_world_frame_inner_temp_count if self.robot.floating_base else idsva_so_body_frame_inner_temp_count) + "); }",
                                  "template <typename T> __host__ __device__ inline size_t GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP() { return sizeof(T) * static_cast<size_t>(" + str(grad_spill_workspace_t_count) + "); }"] + (
-                                 # SO-REGION band gating (2026-08-23, the "why 30 GB" fix): the SO
-                                 # section of the workspace stride is 25.2 MB/ts on h2_plus while
-                                 # the GRAD section is 1.38 MB/ts — an alloc-gated FIRST-ORDER solo
-                                 # exe (e.g. f_ext_gradient) was still charged the FULL stride, so
-                                 # its arena auto-fit allocated ~27 GB of which ~26 GB backed
-                                 # kernels that never launch (and that near-capacity pressure is
-                                 # what tickles the open-kmod nvidia_uvm chunk crashes — guide
-                                 # §7.x). Under GRID_ALLOC_GATE the SO-region bytes collapse to 0
-                                 # unless an algo whose workspace lives AT/AFTER
-                                 # GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES is alloc-enabled. Offsets
-                                 # are UNCHANGED (SO region still starts at GRAD_BYTES); only the
-                                 # allocated stride shrinks, and only gated bench exes see it —
-                                 # ungated emission stays byte-identical.
-                                 ["#if " + _ag_expr(("idsva_so", "idsva_so_body_frame", "idsva_so_world_frame",
-                                                     "idsva_so_world_frame_mjx", "fdsva_so", "fdsva_so_mjx",
-                                                     "dccrba", "cmm_time_variation",
-                                                     "end_effector_pose_gradient", "osc_inertia")),
-                                  "#define GRID_WS_SO_REGION_LIVE 1",
-                                  "#else",
-                                  "#define GRID_WS_SO_REGION_LIVE 0",
-                                  "#endif",
-                                  "template <typename T> __host__ __device__ inline size_t GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP() { return GRID_WS_SO_REGION_LIVE ? sizeof(T) * static_cast<size_t>(" + str(so_workspace_t_count) + ") : static_cast<size_t>(0); }"]
+                                 # SO-REGION band gating v2 (2026-08-23, the "why 30 GB" fix): the
+                                 # SO section is a UNION region — its size is the max over the
+                                 # per-algo spill terms that overlay it. v1 gated the whole region
+                                 # on a user list and (a) MISSED users whose spill bands live here
+                                 # (f_ext_gradient's out band → OOB write, clean rc=188 crash) and
+                                 # (b) granted any single user the FULL 25.2 MB/ts. v2 emits the
+                                 # max PER TERM, each under its own GRID_ALLOC_ gate, so a gated
+                                 # exe is charged exactly the largest band ITS kernels overlay
+                                 # (h2_plus f_ext_gradient: 0.15 MB/ts, not 25.2). All terms
+                                 # overlay at the same base (offsets unchanged; the kernels never
+                                 # run concurrently). Ungated emission stays byte-identical; a
+                                 # gated header with NO -D flags evaluates every #if true and
+                                 # reproduces the ungated max exactly.
+                                 ["template <typename T> __host__ __device__ inline size_t GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP() {",
+                                  "    size_t _m = 0, _t = 0; (void)_t;"]
+                                 + [line
+                                    for term_count, term_keys in (
+                                        (8 * max(nv**3, 1), ("fdsva_so", "fdsva_so_mjx")),
+                                        (d2ee_workspace_t_count, ("end_effector_pose_hessian",)),
+                                        (end_effector_pose_gradient_workspace_t_count, ("end_effector_pose_gradient",)),
+                                        (idsva_so_body_frame_grav_spill_t_count,
+                                         ("idsva_so", "idsva_so_body_frame", "idsva_so_world_frame", "idsva_so_world_frame_mjx")),
+                                        (idsva_so_spill_ws_t_count,
+                                         ("idsva_so", "idsva_so_body_frame", "idsva_so_world_frame", "idsva_so_world_frame_mjx")),
+                                        (_fpg_spill_ws, ("forward_dynamics_parameter_gradient",)),
+                                        (_idr_spill_ws, ("inverse_dynamics_regressor",)),
+                                        (_feg_spill_ws, ("f_ext_gradient",)),
+                                        (_feg_dq_spill_ws, ("f_ext_gradient_dq",)),
+                                        (_dccrba_spill_ws, ("dccrba",)),
+                                        (_cmm_spill_ws, ("cmm_time_variation",)),
+                                        (_centroidal_spill_ws, ("com", "ccrba", "energy")),
+                                    ) if term_count > 0
+                                    for line in (
+                                        "#if " + _ag_expr(term_keys),
+                                        "    _t = sizeof(T) * static_cast<size_t>(" + str(term_count) + "); if (_t > _m) { _m = _t; }",
+                                        "#endif")]
+                                 + ["    return _m;",
+                                    "}"]
                                  if _ws_gating else
                                  ["template <typename T> __host__ __device__ inline size_t GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP() { return sizeof(T) * static_cast<size_t>(" + str(so_workspace_t_count) + "); }"]) + [
                                  # Phase 3e: sized for MINIMAL tier's spill (max across PERF/LITE/MINIMAL).
@@ -2228,7 +2244,15 @@ class GRiDCodeGenerator:
                                  # at or past spill_df_du") is now `p >= 5` to reproduce the EXACT same per-robot
                                  # value (Gate-A byte-identical for cardinals). The 3*NV^2 span backs
                                  # s_df_du(2*NV^2) + s_Minv(NV^2) at GRID_FDSVA_SO_SPILL_OFFSET_BYTES.
-                                 "template <typename T> __host__ __device__ inline size_t GRID_FDSVA_SO_SPILL_BYTES_PER_TIMESTEP() { return " + ("GRID_WS_SO_REGION_LIVE ? " if _ws_gating else "") + "sizeof(T) * static_cast<size_t>(" + str(3*nv*nv if any(p >= 5 for p in getattr(self, 'fdsva_so_spill_tier_3way', (0, 0, 0))) else 0) + ")" + (" : static_cast<size_t>(0)" if _ws_gating else "") + "; }",
+                                 ] + (lambda _fdsva_spill_line=(
+                                     "template <typename T> __host__ __device__ inline size_t GRID_FDSVA_SO_SPILL_BYTES_PER_TIMESTEP() { return sizeof(T) * static_cast<size_t>("
+                                     + str(3*nv*nv if any(p >= 5 for p in getattr(self, 'fdsva_so_spill_tier_3way', (0, 0, 0))) else 0) + "); }"):
+                                     (["#if " + _ag_expr(("fdsva_so", "fdsva_so_mjx")),
+                                       _fdsva_spill_line,
+                                       "#else",
+                                       "template <typename T> __host__ __device__ inline size_t GRID_FDSVA_SO_SPILL_BYTES_PER_TIMESTEP() { return static_cast<size_t>(0); }",
+                                       "#endif"]
+                                      if _ws_gating else [_fdsva_spill_line]))() + [
                                  "template <typename T> __host__ __device__ inline size_t GRID_FDSVA_SO_SPILL_OFFSET_BYTES() { return GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP<T>(); }",
                                  "template <typename T> __host__ __device__ inline size_t GRID_WORKSPACE_BYTES_PER_TIMESTEP() { return GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_FDSVA_SO_SPILL_BYTES_PER_TIMESTEP<T>(); }",
                                  "template <typename T> __host__ __device__ inline gridSharedTier GRID_INVERSE_DYNAMICS_GRADIENT_SHARED_TIER() { return static_cast<gridSharedTier>(GRID_INVERSE_DYNAMICS_GRADIENT_SHARED_TIER_VALUE); }",
