@@ -1360,6 +1360,31 @@ of proceeding (the A2 leg "passed" in 60 s on a card with 31 GB held — its num
 are suspect, not bankable); (4) treat "util 0% + memory high + no owning process" as
 a wedged-teardown signature, not as idle.
 
+**ROOT CAUSE FOUND 2026-08-23 (second box freeze, NO kill involved): the
+driver's LAZY vidmem free races the next launch.** With the timeout removed,
+the same h2_plus f_ext autotune arm froze the box again — and the kernel log
+shows the true first event: a NULL-pointer Oops in the NVIDIA open kernel
+module's OWN kthread (`vidmem lazy fre`, nvidia_uvm `free_chunk` →
+`uvm_pmm_gpu_process_lazy_free`) at 05:38:11, five seconds BEFORE the Xid
+109/31 — those and the soft lockup are wreckage, not cause. Mechanism: exe #N
+exits and its ~30 GB frees LAZILY in a background driver thread; the sweep
+immediately launches exe #N+1 which allocates into the still-freeing memory —
+serial processes, but DRIVER-INTERNAL concurrency — and 610.57.04 (open
+kmod) races to the NULL deref. Only h2_plus triggers it: ~30 GB/invocation on
+a 32 GB card × dozens of rapid autotune invocations. This also reframes
+08-22's zombie (same teardown subsystem) and largely EXONERATES the GRiD
+kernels (memcheck-clean arms stand; the Xid-31 "OOB write" was post-Oops).
+- **FIX: the settle gate** (`gridrun.settle_gpu_before_launch`, wired into
+  every bench exe launch path): before each launch, wait until memory.used is
+  back at the process-start baseline (+1 GB margin, 120 s cap); refuse loudly
+  on non-settle AND on a dirty-GPU process start (a fresh process must never
+  adopt a wedged residue as baseline).
+- **Audit rule:** any harness that launches GPU exes back-to-back needs the
+  gate; "serial" at the process level is NOT serial in the driver.
+- **System-level:** the NULL deref is an upstream driver bug (open kmod
+  610.57.04) — a driver update / proprietary kmod may remove the race
+  entirely; worth reporting upstream.
+
 **RECURRED 2026-08-22 (campaign-1 night-1) — a PYTHON-LEVEL timeout is the same
 SIGKILL.** `per_algo_bench._run_one` used `subprocess.run(timeout=900)`;
 Python's `TimeoutExpired` path SIGKILLs the child. h2_plus's f_ext cell blew

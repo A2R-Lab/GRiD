@@ -1079,7 +1079,10 @@ def settle_gpu_before_launch(context: str, *, margin_mb: int = 1024,
         _GPU_SETTLE_BASELINE_MB = used
         return
     deadline = time.monotonic() + timeout_s
+    t0 = time.monotonic()
+    waited = False
     while used is not None and used > _GPU_SETTLE_BASELINE_MB + margin_mb:
+        waited = True
         if time.monotonic() > deadline:
             raise RuntimeError(
                 f"GPU memory did not settle before {context}: {used} MiB vs "
@@ -1088,6 +1091,11 @@ def settle_gpu_before_launch(context: str, *, margin_mb: int = 1024,
                 f"§7.x); STOP, do not launch more GPU work.")
         time.sleep(2.0)
         used = _gpu_mem_used_mb()
+    if waited:
+        # Every wait is DIRECT EVIDENCE of the lazy-free overlap the gate
+        # exists to prevent (the un-gated sweep would have launched here).
+        print(f"  [settle] waited {time.monotonic() - t0:.1f}s before "
+              f"{context} (lazy vidmem free in flight)", flush=True)
 
 
 def _autotune_batch_iters_for_binary(batch_binary: Path, base: str, threads: int,
