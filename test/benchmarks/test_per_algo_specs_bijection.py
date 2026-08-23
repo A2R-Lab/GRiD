@@ -54,12 +54,25 @@ def _benchmarkable_keys() -> set[str]:
     return attr_true | BENCHMARKED_ATTRLESS
 
 
+def _variant_base(spec_key: str) -> str | None:
+    """Timing-VARIANT spec keys (B4, @68fedbd): '<base>_mjx' rows time an
+    EXISTING registry algo's kernel through its MUJOCO_OUTPUT template twin —
+    same kernel, different output convention, gated on
+    `GRID_HAS_<BASE> && GRID_RBD_WITH_MUJOCO`. They are deliberately NOT
+    separate registry algorithms (no own KERNEL_ATTR_MANIFEST identity), so
+    the bijection exempts them — but ONLY when their base key is itself a
+    benchmarkable registry key with a spec row (checked below), so an
+    arbitrary orphan spec key still fails loudly."""
+    return spec_key.removesuffix("_mjx") if spec_key.endswith("_mjx") else None
+
+
 def test_per_algo_specs_is_bijective_with_benchmarkable_registry_keys():
     benchmarkable = _benchmarkable_keys()
     spec_keys = set(run.PER_ALGO_SPECS)
+    variants = {k for k in spec_keys if _variant_base(k) is not None}
 
     missing = benchmarkable - spec_keys   # benchmarkable but no row -> silently un-timed
-    extra = spec_keys - benchmarkable     # spec row for a non-benchmarkable key -> build break
+    extra = (spec_keys - variants) - benchmarkable  # non-variant row w/o kernel -> build break
 
     assert not missing, (
         "registry keys with a benchmarkable kernel but NO PER_ALGO_SPECS row "
@@ -67,6 +80,24 @@ def test_per_algo_specs_is_bijective_with_benchmarkable_registry_keys():
     assert not extra, (
         "PER_ALGO_SPECS rows for non-benchmarkable registry keys "
         f"(their bench TU would fail to build): {sorted(extra)}")
+
+
+def test_variant_spec_rows_are_anchored_to_benchmarkable_bases():
+    """Every '<base>_mjx' variant row must anchor to a benchmarkable registry
+    key that ALSO has its own spec row, and must gate on GRID_RBD_WITH_MUJOCO
+    (mjx twins only exist in mujoco-enabled builds)."""
+    benchmarkable = _benchmarkable_keys()
+    for key, spec in run.PER_ALGO_SPECS.items():
+        base = _variant_base(key)
+        if base is None:
+            continue
+        assert base in benchmarkable, (
+            f"variant spec row {key!r}: base {base!r} is not a benchmarkable "
+            f"registry key — the variant times nothing real")
+        assert base in run.PER_ALGO_SPECS, (
+            f"variant spec row {key!r}: base {base!r} has no spec row of its own")
+        assert "GRID_RBD_WITH_MUJOCO" in (spec.get("gate") or ""), (
+            f"variant spec row {key!r} must gate on GRID_RBD_WITH_MUJOCO")
 
 
 def test_spec_exclusions_are_exactly_the_documented_composites():
@@ -81,7 +112,9 @@ def test_spec_exclusions_are_exactly_the_documented_composites():
 
 def test_every_spec_key_is_a_registry_key():
     reg_keys = {e.key for e in ALGO_REGISTRY}
-    orphan = set(run.PER_ALGO_SPECS) - reg_keys
+    # variant rows anchor to a registry key via their base (checked above)
+    orphan = {k for k in set(run.PER_ALGO_SPECS) - reg_keys
+              if _variant_base(k) is None}
     assert not orphan, f"PER_ALGO_SPECS rows with no ALGO_REGISTRY entry: {sorted(orphan)}"
 
 
