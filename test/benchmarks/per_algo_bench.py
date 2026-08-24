@@ -415,7 +415,8 @@ def _run_isolated(algos: list[str], exes: dict[str, Path], base: str,
 def _run_autotune(algos: list[str], build_dir: Path, header: Path, arch: str, base: str,
                   ram_per_compile_gb: float, jobs: int, *, thread_grid: tuple[int, ...],
                   autotune_N: int, tiers: tuple[str, ...], cgroup_cap_gb: float = 0.0,
-                  alloc_gate: bool = False) -> dict[str, dict]:
+                  alloc_gate: bool = False,
+                  checkpoint_path: Path | None = None) -> dict[str, dict]:
     """Build each algo's {tier: solo_exe} set and run run.py's picker VERBATIM on it -> schema-2
     algo_picks[algo] (tier_optimal/threads_optimal/us_at_optimal/sweep/sweep_us[/tier_equiv_to]).
 
@@ -451,6 +452,16 @@ def _run_autotune(algos: list[str], build_dir: Path, header: Path, arch: str, ba
                   + (f" (tier_equiv {p['tier_equiv_to']})" if "tier_equiv_to" in p else ""))
         else:
             print(f"  [autotune] {algo}: no readings at any (tier,threads) -- omitted")
+        # Incremental checkpoint (2026-08-24): a crash on a LATER algo must
+        # never discard the hours of picks already measured (the 08-23 night
+        # timed 19h and wrote nothing because the write only happened at the
+        # end). Atomic-replace after EVERY algo; the caller promotes/removes
+        # it once the full output is written.
+        if checkpoint_path is not None:
+            tmp = checkpoint_path.with_suffix(checkpoint_path.suffix + f".{os.getpid()}.tmp")
+            tmp.write_text(json.dumps({"algo_picks": algo_picks,
+                                       "complete": False}, indent=1, sort_keys=True))
+            tmp.replace(checkpoint_path)
     return algo_picks
 
 
@@ -696,10 +707,13 @@ def main() -> None:
     filled = fill_nulls(dict(results))   # ensure the ALL_ALGOS core keys exist as null when un-run
 
     print("[autotune] --- tier x thread pass (algo_picks) ---")
+    _ckpt_out = Path(args.output) if args.output else (build_dir / f"{args.robot}_{args.base}_grid_glass.json")
+    _ckpt = _ckpt_out.with_suffix(".partial.json")
     algo_picks = _run_autotune(algos, build_dir, header, arch, args.base,
                                args.ram_per_compile_gb, jobs, thread_grid=thread_grid,
                                cgroup_cap_gb=args.cgroup_cap_gb,
-                               autotune_N=args.autotune_N, tiers=tiers, alloc_gate=alloc_gate)
+                               autotune_N=args.autotune_N, tiers=tiers, alloc_gate=alloc_gate,
+                               checkpoint_path=_ckpt)
 
     # Assemble the run.py-faithful autotune payload: results[robot][base] = {"grid": filled,
     # "algo_picks": {...}} with a schema-2 autotune_threads metadata block. Column key stays "grid"
@@ -716,6 +730,7 @@ def main() -> None:
     payload = {"metadata": meta,
                "results": {args.robot: {args.base: {"grid": filled, "algo_picks": algo_picks}}}}
     out.write_text(json.dumps(payload, indent=1))
+    _ckpt.unlink(missing_ok=True)  # the full output supersedes the checkpoint
     _report_run(results, gated, crashed, out)
     print(f"[autotune] {len(algo_picks)} algo_picks written")
 

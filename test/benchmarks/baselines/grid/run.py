@@ -1154,10 +1154,19 @@ def _sweep_one_binary(
         binary, base, ",".join(str(int(t)) for t in thread_grid), {})
     marks = list(_AUTOTUNE_SECTION_RE.finditer(stdout))
     if not marks:
+        # A GATED-OUT exe (its algo absent from this header) legally prints no
+        # markers AND no timing records — that is "no readings", not staleness.
+        # (2026-08-24: treating it as fatal killed per_algo at the FIRST
+        # gated-out algo in every section and lost a full night's picks.)
+        # Only a marker-less output that DOES carry timing records indicates a
+        # pre-in-process-sweep binary, where per-thread attribution would be
+        # silently wrong — that stays fatal.
+        if not any(isinstance(v, dict) and v for v in parse_grid_output(stdout).values()):
+            return {}
         raise RuntimeError(
-            f"{binary.name}: no ==GRID_AUTOTUNE_THREADS== markers in output — "
-            f"the binary predates the in-process thread sweep; rebuild it "
-            f"(stale content stamp?) rather than mis-attributing timings.")
+            f"{binary.name}: timing records WITHOUT ==GRID_AUTOTUNE_THREADS== "
+            f"markers — the binary predates the in-process thread sweep; "
+            f"rebuild it (stale content stamp?) rather than mis-attributing.")
     sweeps: dict[str, dict[int, float]] = {}
     for i, m in enumerate(marks):
         threads = int(m.group(1))
