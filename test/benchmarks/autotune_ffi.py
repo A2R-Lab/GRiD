@@ -203,6 +203,12 @@ def autotune_base(robot, base, n, iters, warmup, want_algos, build_algos=None):
             continue
         fn = jax.jit(method)
         dev = tuple(jnp.asarray(a) for a in _make_np(arity, n, nq, nv, rng, floating))
+        # The one-time JIT launches BEFORE this algo's sweep sets any thread
+        # count, so it inherits the PREVIOUS algo's last-swept count — which
+        # can exceed THIS kernel's compiled launch_bounds ceiling ("launch
+        # failed" at the JIT probe; first hit: baxter forward_dynamics, N=16
+        # leg, 2026-08-25). 32 threads is legal for every kernel.
+        handle.set_threads_per_block(32)
         try:
             jax.block_until_ready(fn(*dev))             # one-time JIT
         except (RuntimeError, AttributeError) as e:
