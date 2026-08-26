@@ -1769,11 +1769,13 @@ class GRiDCodeGenerator:
             _dccrba_spill_ws = self.dccrba_spill_out_ws_count + self.dccrba_spill_J_ws_count
         elif any(p >= 1 for p in self.dccrba_spill_tier_3way):
             _dccrba_spill_ws = self.dccrba_spill_out_ws_count
-        # cmm places its Jw band at GRID_DCCRBA_J_OFFSET_BYTES = SO_TEMP_OFFSET +
-        # 6*nv*nv*sizeof(T) (shared with dccrba's J sub-offset), so the band must span
-        # that offset region (6*nv*nv) plus the Jw band itself, even though cmm never
-        # writes the output region.
-        _cmm_spill_ws = (6 * nv * nv + self.cmm_time_variation_spill_J_ws_count) if any(p >= 1 for p in self.cmm_time_variation_spill_tier_3way) else 0
+        # cmm ALWAYS needs the leading 6*nv*nv region: the two-stage deterministic
+        # contraction stages its qd-scaled partials there (the dccrba OUTPUT
+        # sub-region at SO_TEMP_OFFSET, which cmm never otherwise writes; kernels
+        # never run concurrently so the overlay is free). At the J-spilled tier the
+        # Jw band additionally sits after it at GRID_DCCRBA_J_OFFSET_BYTES =
+        # SO_TEMP_OFFSET + 6*nv*nv*sizeof(T), so the term also spans the band.
+        _cmm_spill_ws = 6 * nv * nv + (self.cmm_time_variation_spill_J_ws_count if any(p >= 1 for p in self.cmm_time_variation_spill_tier_3way) else 0)
         # com/ccrba/energy place their Jw band at the SAME GRID_DCCRBA_J_OFFSET_BYTES
         # sub-offset (SO_TEMP_OFFSET + 6*nv*nv), so the band must span that offset region
         # plus the Jw band itself when any of them spills (same robots cmm spills).

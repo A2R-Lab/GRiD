@@ -2,7 +2,7 @@
 
 Two analytic centroidal-derivative surfaces sharing ONE world-frame sweep:
 
-  cmm_time_variation  Adot = dA(q(t))/dt = sum_m (dA/dq_m) qd_m   (6 x NV, no spill)
+  cmm_time_variation  Adot = dA(q(t))/dt = sum_m (dA/dq_m) qd_m   (6 x NV; 6*NV*NV workspace partials)
   dccrba              dA_dq[:, k, m] = d A[:, k]/d q_m            (6 x NV x NV, spill)
 
 Both are direct transcriptions of the verified numpy oracle
@@ -48,7 +48,9 @@ identical (the alpha table + multiply live entirely inside HAS_MIMIC branches).
 
 SPILL: dccrba's output s_dccrba (6*NV*NV) is the cold/large write-once output ->
 repointed to the L2-pinned d_workspace SO band when DCCRBA_OUTPUT_IN_SMEM<TIER>()
-is false (mirrors the regressor s_Y spill). cmm_time_variation (6*NV) never spills.
+is false (mirrors the regressor s_Y spill). cmm_time_variation's 6*NV output never
+spills, but its two-stage contraction stages 6*NV*NV qd-scaled partials in the
+workspace SO band (dccrba-output sub-region) at ALL tiers.
 """
 
 import numpy as np
@@ -160,10 +162,17 @@ def _dccrba_inner_temp_mem_size(self):
     return _centroidal_inner_temp_mem_size(self, j_in_smem=False) + 6 * md["n_int"]
 
 
-def _emit_dccrba_assembly(self, out_name, contract_qd):
+def _emit_dccrba_assembly(self, out_name, contract_qd, part_name=None):
     """Emit the per-column assembly. `out_name` is the output buffer name.
-    If contract_qd: out is 6*nv (Adot), each m-column scaled by qd[m] and atomic-
-    added. Else: out is 6*nv*nv, column m written at out[row + 6*k + 6*nv*m]."""
+    If contract_qd: out is 6*nv (Adot); with `part_name` (a 6*nv*nv scratch
+    buffer, workspace-backed) the contraction is TWO-STAGE — stage A fans the
+    full (m,k) cell grid (nv*nv threads, same parallelism as the tensor path)
+    writing qd[m]-scaled per-cell columns to `part_name`, stage B fans one
+    thread per column k and folds m in FIXED ascending order (deterministic,
+    thread-count-invariant, no atomics). Without `part_name` the legacy
+    serial-inner-m fold is emitted (nv threads; kept for the composite device
+    wrapper, which has no workspace scratch in scope).
+    Else: out is 6*nv*nv, column m written at out[row + 6*k + 6*nv*m]."""
     md = _dccrba_metadata(self)
     NB = md["NB"]
     nv = md["nv"]
@@ -267,21 +276,30 @@ def _emit_dccrba_assembly(self, out_name, contract_qd):
     #
     # Fan over (m, k) cells = nv*nv threads. Each computes the 6-vector dA0col then
     # applies CoM-shift + reorder, then writes (contract or full).
-    if contract_qd:
-        # Deterministic contraction (Inc6 shared-slot class). The full-tensor path
-        # writes a unique out[:,k,m] cell per (m,k) thread, but the CONTRACTED Adot
-        # sums over m into out[:,k] -- the old code fanned (m,k) and atomicAdd-folded
-        # those m-contributions, whose warp-order sum drifted 1-2 ULP run-to-run. Fan
-        # ONE thread per column k instead, summing m in FIXED ascending order into a
-        # private acc: identical total dA0col work, no atomics, no scratch, thread-count
-        # invariant + bit-deterministic. (Mirrors the crba parent-major fixed-order sum.)
-        self.gen_add_code_line("// P2 fan: one thread per column k; sum m in FIXED order (was atomicAdd over m)")
+    two_stage = contract_qd and part_name is not None
+    if contract_qd and not two_stage:
+        # Deterministic contraction (Inc6 shared-slot class), LEGACY SERIAL fold.
+        # The full-tensor path writes a unique out[:,k,m] cell per (m,k) thread, but
+        # the CONTRACTED Adot sums over m into out[:,k] -- the original code fanned
+        # (m,k) and atomicAdd-folded those m-contributions, whose warp-order sum
+        # drifted 1-2 ULP run-to-run. This variant fans ONE thread per column k,
+        # summing m in FIXED ascending order into a private acc: no atomics, bit-
+        # deterministic, but nv-fold LESS parallel than the tensor path — kept ONLY
+        # for the composite device wrapper (no workspace scratch in scope). The
+        # kernel path uses the two-stage variant below (same determinism, nv*nv fan).
+        self.gen_add_code_line("// P2 fan (serial variant): one thread per column k; sum m in FIXED order")
         self.gen_add_parallel_loop("k", str(nv))
         self.gen_add_code_line("T acc[6]; for (int r=0;r<6;++r) acc[r] = static_cast<T>(0);")
         self.gen_add_code_line(f"for (int m = 0; m < {nv}; ++m) {{", True)
         self.gen_add_code_line("T dA0col[6]; for (int r=0;r<6;++r) dA0col[r] = static_cast<T>(0);")
     else:
-        self.gen_add_code_line("// P2 fan: one thread per (m, k) output cell")
+        if two_stage:
+            # Stage A of the deterministic two-stage contraction: full (m,k) fan
+            # (the tensor path's parallelism), each cell writing its qd[m]-scaled
+            # column to `part_name`; stage B below folds m in fixed order per k.
+            self.gen_add_code_line("// P2 fan stage A: one thread per (m, k) cell -> qd-scaled partials")
+        else:
+            self.gen_add_code_line("// P2 fan: one thread per (m, k) output cell")
         self.gen_add_parallel_loop("cell", str(nv * nv))
         self.gen_add_code_line(f"int m = cell / {nv}; int k = cell % {nv};")
         self.gen_add_code_line("T dA0col[6]; for (int r=0;r<6;++r) dA0col[r] = static_cast<T>(0);")
@@ -350,13 +368,24 @@ def _emit_dccrba_assembly(self, out_name, contract_qd):
     # lin_out = dA0col linear part (unchanged by Xstar/dXstar)
     self.gen_add_code_line("T xl0 = dA0col[3], xl1 = dA0col[4], xl2 = dA0col[5];")
     # reorder [ang;lin] -> [lin;ang]: out rows [0..2]=lin, [3..5]=ang
-    if contract_qd:
+    if contract_qd and not two_stage:
         self.gen_add_code_line("T qm = s_qd[m];")
         self.gen_add_code_line("acc[0] += xl0*qm; acc[1] += xl1*qm; acc[2] += xl2*qm;")
         self.gen_add_code_line("acc[3] += xa0*qm; acc[4] += xa1*qm; acc[5] += xa2*qm;")
         self.gen_add_end_control_flow()  # inner m loop (fixed-order accumulation)
         self.gen_add_code_line(out_name + "[0 + 6*k] = acc[0]; " + out_name + "[1 + 6*k] = acc[1]; " + out_name + "[2 + 6*k] = acc[2];")
         self.gen_add_code_line(out_name + "[3 + 6*k] = acc[3]; " + out_name + "[4 + 6*k] = acc[4]; " + out_name + "[5 + 6*k] = acc[5];")
+    elif two_stage:
+        # qd[m]-scaled per-cell column into the partials buffer (tensor layout:
+        # part[row + 6*k + 6*nv*m]) — stage B does the deterministic fold.
+        self.gen_add_code_line("T qm = s_qd[m];")
+        pbase = f"{part_name}[6*k + {6*nv}*m"
+        self.gen_add_code_line(pbase + " + 0] = xl0*qm;")
+        self.gen_add_code_line(pbase + " + 1] = xl1*qm;")
+        self.gen_add_code_line(pbase + " + 2] = xl2*qm;")
+        self.gen_add_code_line(pbase + " + 3] = xa0*qm;")
+        self.gen_add_code_line(pbase + " + 4] = xa1*qm;")
+        self.gen_add_code_line(pbase + " + 5] = xa2*qm;")
     else:
         # full tensor: out[row + 6*k + 6*nv*m]
         base = f"{out_name}[6*k + {6*nv}*m"
@@ -368,6 +397,20 @@ def _emit_dccrba_assembly(self, out_name, contract_qd):
         self.gen_add_code_line(base + " + 5] = xa2;")
     self.gen_add_end_control_flow()  # cell / k loop
     self.gen_add_sync()
+    if two_stage:
+        # Stage B: deterministic fold — one thread per column k, m in FIXED
+        # ascending order (bit-deterministic + thread-count-invariant; the read
+        # order is data-independent so the sum order never varies).
+        self.gen_add_code_line("// P2 fan stage B: fixed-order fold of the qd-scaled partials over m")
+        self.gen_add_parallel_loop("k", str(nv))
+        self.gen_add_code_line("T acc[6]; for (int r=0;r<6;++r) acc[r] = static_cast<T>(0);")
+        self.gen_add_code_line(f"for (int m = 0; m < {nv}; ++m) {{", True)
+        self.gen_add_code_line(f"for (int r=0;r<6;++r) acc[r] += {part_name}[r + 6*k + {6*nv}*m];")
+        self.gen_add_end_control_flow()
+        self.gen_add_code_line(out_name + "[0 + 6*k] = acc[0]; " + out_name + "[1 + 6*k] = acc[1]; " + out_name + "[2 + 6*k] = acc[2];")
+        self.gen_add_code_line(out_name + "[3 + 6*k] = acc[3]; " + out_name + "[4 + 6*k] = acc[4]; " + out_name + "[5 + 6*k] = acc[5];")
+        self.gen_add_end_control_flow()
+        self.gen_add_sync()
 
 
 # ===========================================================================
@@ -490,7 +533,7 @@ def _emit_dccrba_mjx_output(self, out_name):
 
 
 # ===========================================================================
-# cmm_time_variation (Adot, 6*NV, NO spill)
+# cmm_time_variation (Adot, 6*NV; workspace-backed two-stage contraction)
 # ===========================================================================
 
 def _cmm_time_variation_inner(self):
@@ -504,9 +547,11 @@ def _cmm_time_variation_inner(self):
         "s_temp is scratch of size " + str(_dccrba_inner_temp_mem_size(self)),
         "s_linalg_smem is reserved (unused)",
     ]
+    func_params.insert(6, "s_part is a 6*NUM_VEL*NUM_VEL qd-scaled partials scratch "
+                          "(workspace-backed; the two-stage deterministic fold) = " + str(6 * nv * nv))
     func_def = ("void cmm_time_variation_inner(T *s_adot, T *s_A, T *s_com, T *s_extra, const T *s_q, const T *s_qd, const T *s_Xhom, "
-                "const robotModel<T> *d_robotModel, T *s_temp, T *s_J_ext, unsigned char *s_linalg_smem) {")
-    self.gen_add_func_doc("Compute Adot = dA(q(t))/dt = sum_m (dA/dq_m) qd_m (analytic dCCRBA contraction)",
+                "const robotModel<T> *d_robotModel, T *s_temp, T *s_J_ext, T *s_part, unsigned char *s_linalg_smem) {")
+    self.gen_add_func_doc("Compute Adot = dA(q(t))/dt = sum_m (dA/dq_m) qd_m (analytic dCCRBA contraction, two-stage deterministic fold)",
                           [], func_params, None)
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
@@ -515,6 +560,26 @@ def _cmm_time_variation_inner(self):
     # The Jw sweep band lives EXTERNALLY in s_J_ext (in-smem at L0/L1, d_workspace
     # at the J-spilled tier), so centroidal_inner runs with J_IN_SMEM=false and the
     # shrunk (no-J) s_temp pool. The CoM/CMM math is a pure pointer move (DE-GATE #2).
+    self.gen_add_code_line("centroidal_inner<T, false>(s_A, s_com, s_extra, s_q, s_Xhom, d_robotModel, s_temp, s_J_ext, s_linalg_smem);")
+    self.gen_add_sync()
+    _emit_dccrba_assembly(self, "s_adot", contract_qd=True, part_name="s_part")
+    self.gen_add_end_function()
+
+    # Serial twin for the composite DEVICE wrapper (no workspace scratch in its
+    # scope): the legacy per-k fold. Bit-identical to the two-stage variant by
+    # construction — both compute the same per-(m,k) column with the same
+    # instructions, scale by qd[m], and fold m in the same fixed ascending order;
+    # the only difference is materializing the scaled column through memory,
+    # which does not change fp values. Just nv-fold less parallel.
+    serial_params = [p for p in func_params if not p.startswith("s_part")]
+    serial_def = ("void cmm_time_variation_inner_serial(T *s_adot, T *s_A, T *s_com, T *s_extra, const T *s_q, const T *s_qd, const T *s_Xhom, "
+                  "const robotModel<T> *d_robotModel, T *s_temp, T *s_J_ext, unsigned char *s_linalg_smem) {")
+    self.gen_add_func_doc("Compute Adot (serial per-column fold; composite device-wrapper variant)",
+                          [], serial_params, None)
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line(serial_def, True)
+    self.gen_add_code_line("(void)s_q;")
     self.gen_add_code_line("centroidal_inner<T, false>(s_A, s_com, s_extra, s_q, s_Xhom, d_robotModel, s_temp, s_J_ext, s_linalg_smem);")
     self.gen_add_sync()
     _emit_dccrba_assembly(self, "s_adot", contract_qd=True)
@@ -571,7 +636,7 @@ def gen_cmm_time_variation_device(self):
         _dccrba_inner_temp_mem_size(self), extra_t_buffers=extra, include_linalg_scratch=True,
         linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
     self.gen_load_update_XmatsHom_helpers_function_call()
-    self.gen_add_code_line("cmm_time_variation_inner<T>(s_adot, s_A, s_com, s_extra, s_q, s_qd, s_XmatsHom, d_robotModel, s_temp, s_J, s_linalg_smem);")
+    self.gen_add_code_line("cmm_time_variation_inner_serial<T>(s_adot, s_A, s_com, s_extra, s_q, s_qd, s_XmatsHom, d_robotModel, s_temp, s_J, s_linalg_smem);")
     self.gen_add_sync()
     self.gen_add_end_function()
 
@@ -596,7 +661,7 @@ def gen_dccrba_device(self):
     self.gen_add_end_function()
 
 
-# ----- cmm_time_variation kernel/host (no spill; reuse the generic kin helper) -----
+# ----- cmm_time_variation kernel/host (partials in workspace; reuse the generic kin helper) -----
 
 def gen_cmm_time_variation_kernel(self, single_call_timing=False):
     n = self.robot.get_num_pos()
@@ -626,14 +691,20 @@ def gen_cmm_time_variation_kernel(self, single_call_timing=False):
         _dccrba_inner_temp_mem_size(self), extra_t_buffers=extra, include_linalg_scratch=True,
         linalg_scratch_bytes="GRID_EE_LINALG_SHARED_BYTES<T>()")
     self.gen_add_code_line("T *s_q = s_q_qd; T *s_qd = &s_q_qd[" + str(n) + "];")
-    self.gen_add_code_line("if constexpr (CMM_J_SMEM) { (void)d_workspace; }")
+    self.gen_add_code_line("T *s_part = nullptr;  // 6*NV*NV qd-scaled partials (two-stage fold), workspace-backed at ALL tiers")
 
     def _repoint(in_loop):
-        self.gen_add_code_line("if constexpr (!CMM_J_SMEM) {", True)
+        # Partials: ALWAYS workspace-backed (6*nv*nv would blow the smem arena on
+        # big robots). They live in the dccrba OUTPUT sub-region of the shared SO
+        # band ([SO_TEMP_OFFSET, SO_TEMP_OFFSET + 6*nv*nv*T)) which cmm never
+        # otherwise touches — the J band sits after it at GRID_DCCRBA_J_OFFSET.
         if in_loop:
-            self.gen_add_code_line("s_J = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_DCCRBA_J_OFFSET_BYTES<T>()]);")
+            slot = "grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + "
         else:
-            self.gen_add_code_line("s_J = reinterpret_cast<T *>(&d_workspace[GRID_DCCRBA_J_OFFSET_BYTES<T>()]);")
+            slot = ""
+        self.gen_add_code_line("s_part = reinterpret_cast<T *>(&d_workspace[" + slot + "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
+        self.gen_add_code_line("if constexpr (!CMM_J_SMEM) {", True)
+        self.gen_add_code_line("s_J = reinterpret_cast<T *>(&d_workspace[" + slot + "GRID_DCCRBA_J_OFFSET_BYTES<T>()]);")
         self.gen_add_end_control_flow()
 
     def _compute():
@@ -647,7 +718,7 @@ def gen_cmm_time_variation_kernel(self, single_call_timing=False):
             self.gen_mjx_input_convert(q_name="s_q", qd_name="s_qd")
             self.gen_add_end_control_flow()
         self.gen_load_update_XmatsHom_helpers_function_call()
-        self.gen_add_code_line("cmm_time_variation_inner<T>(s_out, s_A, s_com, s_extra, s_q, s_qd, s_XmatsHom, d_robotModel, s_temp, s_J, s_linalg_smem);")
+        self.gen_add_code_line("cmm_time_variation_inner<T>(s_out, s_A, s_com, s_extra, s_q, s_qd, s_XmatsHom, d_robotModel, s_temp, s_J, s_part, s_linalg_smem);")
         self.gen_add_sync()
         # mjx OUTPUT: Adot (6 x NV col-major at s_out) column-reframes Adot . G^{-1}
         # (base-linear cols . R^T); hdot = Adot qd + A qddot is invariant (the qd
