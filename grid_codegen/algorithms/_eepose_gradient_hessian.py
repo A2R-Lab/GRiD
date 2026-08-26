@@ -160,7 +160,12 @@ def gen_end_effector_pose_inner(self, fixed_target_name = ""):
                     fixed = self.robot.get_fixed_joint_by_id(jid)
                     if fixed is not None:
                         parent_name = fixed.get_parent()
-                        return self.robot.get_joint_by_name(parent_name).get_id() if parent_name != "" else -1
+                        # The parent may be a non-movable ROOT link (root-attached
+                        # fixed target on a fixed base): get_joint_by_name returns
+                        # None -> treat as rooted (-1), same as the resolve path.
+                        pj = (self.robot.get_joint_by_name(parent_name)
+                              if parent_name != "" else None)
+                        return pj.get_id() if pj is not None else -1
                     link = self.robot.get_link_by_id(jid)
                     return -1 if link is None else link.get_parent_id()
                 for i in range(bfs_level):
@@ -490,10 +495,12 @@ def _eepose_resolve_targets(self, fixed_target_name):
                     if parent_name not in ("", "-1") else None)
     parent_jid = parent_joint.get_id() if parent_joint is not None else -1
     if parent_jid == -1:
-        raise NotImplementedError(
-            "gen_end_effector_pose_*: fixed target '" + fixed_target_name +
-            "' attaches to the world root (no movable parent); its pose has no "
-            "joint-velocity dependence so the gradient/hessian are identically zero.")
+        # Root-attached fixed target: the pose has no joint-velocity dependence,
+        # so the gradient/hessian are IDENTICALLY ZERO. Signal it with an empty
+        # chain-source list (the inner emitters detect this and emit a zero-fill
+        # body instead of the chain-up machinery) — mirrors the numpy oracle,
+        # which returns np.zeros for a root-attached EE (RBDReference.py:1675).
+        return [], [anchor_jid], [(anchor_jid, -1)]
     return [parent_jid], [anchor_jid], [(anchor_jid, parent_jid)]
 
 
@@ -744,8 +751,11 @@ def gen_end_effector_pose_gradient_inner(self, fixed_target_name = ""):
     # chain DOFs come from the fixed joint's parent movable joint, the world-frame
     # anchor is the fixed joint id (composed in Step 1b below).
     chain_sources, anchors_list, fixed_anchor = _eepose_resolve_targets(self, fixed_target_name)
+    # Root-attached fixed target (empty chain sources): gradient is identically
+    # zero — one EE slot, no chain machinery; a zero-fill body is emitted below.
+    root_attached = bool(fixed_target_name) and not chain_sources
     all_ees = chain_sources
-    num_ees = len(all_ees)
+    num_ees = 1 if root_attached else len(all_ees)
     chains, anchors, fill_jobs = _eepose_grad_chain_metadata(
         self, all_ees, fixed_target_name, anchor_override=anchors_list)
 
@@ -772,6 +782,17 @@ def gen_end_effector_pose_gradient_inner(self, fixed_target_name = ""):
     self.gen_add_code_line(func_def, True)
     self.gen_add_code_line("if constexpr (!TEMP_IN_SMEM) { s_temp = d_workspace; } else { (void)d_workspace; }")
     self.gen_add_code_line("(void)s_q; (void)s_dXhom; (void)s_linalg_smem;")
+
+    if root_attached:
+        # Zero-fill body: the target welds to the world root, so d(pose)/dv == 0.
+        self.gen_add_code_line("// Root-attached fixed target: pose has no joint dependence -> gradient is identically zero.")
+        self.gen_add_code_line("(void)s_Xhom; (void)s_temp;")
+        self.gen_add_parallel_loop("ind", str(6 * nv * num_ees))
+        self.gen_add_code_line("s_end_effector_pose_gradient[ind] = static_cast<T>(0);")
+        self.gen_add_end_control_flow()
+        self.gen_add_sync()
+        self.gen_add_end_function()
+        return
 
     # scratch layout (matches gen_end_effector_pose_gradient_inner_temp_mem_size)
     off_Xworld = 0
@@ -1334,8 +1355,11 @@ def gen_end_effector_pose_hessian_inner(self, fixed_target_name = ""):
     # DOFs come from the fixed joint's parent movable joint, world-frame anchor is
     # the fixed joint id (its Xworld is composed in Step 1b below).
     chain_sources, anchors_list, fixed_anchor = _eepose_resolve_targets(self, fixed_target_name)
+    # Root-attached fixed target (empty chain sources): hessian AND gradient are
+    # identically zero — one EE slot, zero-fill body emitted below.
+    root_attached = bool(fixed_target_name) and not chain_sources
     all_ees = chain_sources
-    num_ees = len(all_ees)
+    num_ees = 1 if root_attached else len(all_ees)
     chains, anchors, per_ee_dof_info, intra_joint_pairs_per_ee = \
         _eepose_hessian_chain_metadata(self, all_ees, anchor_override=anchors_list)
 
@@ -1376,6 +1400,17 @@ def gen_end_effector_pose_hessian_inner(self, fixed_target_name = ""):
     # s_end_effector_pose_hessian[...] reference below unchanged.
     self.gen_add_code_line("if constexpr (!OUT_IN_SMEM) { s_end_effector_pose_hessian = d_workspace; } else { (void)d_workspace; }")
     self.gen_add_code_line("(void)s_q; (void)d_robotModel; (void)s_linalg_smem;")
+    if root_attached:
+        # Zero-fill body: target welds to the world root -> hessian and gradient == 0.
+        self.gen_add_code_line("// Root-attached fixed target: pose has no joint dependence -> hessian and gradient are identically zero.")
+        self.gen_add_code_line("(void)s_Xhom; (void)s_temp;")
+        self.gen_add_parallel_loop("ind", str(6 * nv * nv * num_ees))
+        self.gen_add_code_line("s_end_effector_pose_hessian[ind] = static_cast<T>(0);")
+        self.gen_add_code_line("if (ind < " + str(6 * nv * num_ees) + ") { s_end_effector_pose_gradient[ind] = static_cast<T>(0); }")
+        self.gen_add_end_control_flow()
+        self.gen_add_sync()
+        self.gen_add_end_function()
+        return
     self.gen_add_code_line("// scratch in s_temp: s_Xworld (16*n_joints) | s_Sworld (16*nv*num_ees) | s_E_sc (4*num_ees)")
     self.gen_add_code_line("T *s_Xworld = &s_temp[" + str(off_Xworld) + "];")
     self.gen_add_code_line("T *s_Sworld = &s_temp[" + str(off_Sworld) + "];  // per-DOF world-frame 4x4 generator (S_i_world)")

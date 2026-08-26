@@ -395,3 +395,65 @@ def test_ee_named_multileaf_thread_invariance(case, request):
                 h, ref_hess,
                 err_msg=f"{_case_id(case)}: ee_pose_hessian diverged at threads={n}",
             )
+
+
+@pytest.mark.cuda_equivalence
+@pytest.mark.robot_smoke
+def test_ee_named_root_attached_zero_gradient_hessian(request):
+    """A named fixed target welded to the world ROOT on a fixed base (go2-fixed
+    'imu_joint': trunk is the root link) has a constant pose, so the gradient and
+    hessian are IDENTICALLY ZERO. Codegen used to refuse this config with
+    NotImplementedError; it now emits a zero-fill inner (2026-08-26). Gates:
+    registration succeeds, pose still matches the oracle (build sanity), and the
+    gradient/hessian outputs are exactly 0.0 (not merely small)."""
+    robot_id, base_mode, ee_joint_name = "go2", "fixed", "imu_joint"
+    spec = _resolve_spec(robot_id, base_mode)
+    try:
+        resolved = resolve_robot_spec(spec)
+    except RuntimeError as exc:
+        pytest.skip(f"Could not resolve manifest {robot_id}-{base_mode}: {exc}")
+    urdf = _urdf_path(resolved)
+
+    project_model = build_project_adapter(spec, resolved, base_mode=base_mode)
+    robot = project_model.robot
+    nv = project_model.nv
+    fixed_names = {fj.name for fj in robot.fixed_joints}
+    if ee_joint_name not in fixed_names:
+        pytest.skip(f"{robot_id}-{base_mode}: '{ee_joint_name}' is not a fixed joint")
+    # The case is only the root-attached one if the target's parent has no
+    # movable joint — guard the fixture assumption rather than silently testing
+    # a different (chain-bearing) configuration.
+    fj = next(f for f in robot.fixed_joints if f.name == ee_joint_name)
+    fj_parent = fj.get_parent()
+    parent_joint = robot.get_joint_by_name(fj_parent) if fj_parent not in ("", "-1") else None
+    if parent_joint is not None:
+        pytest.skip(f"{ee_joint_name} has movable parent {fj_parent!r} on {base_mode} base — "
+                    "not the root-attached case this test pins")
+
+    samples = _build_cuda_samples(project_model, random_count=3, include_corner_samples=True)
+    batch = len(samples)
+    handle = _register(robot_id, base_mode, "named", ee_joint_name, urdf, batch)
+    assert handle.num_ees == 1
+
+    q_batch = np.stack([np.asarray(s.q, dtype=np.float32) for s in samples], axis=0)
+
+    # Build sanity: a root-attached pose is CONSTANT — identical (bitwise) across
+    # every sample regardless of q, and finite. This is the oracle-free twin of
+    # the zero-gradient claim (d pose/dv == 0 <=> pose independent of q).
+    pose = np.asarray(handle.end_effector_pose(q_batch)).reshape(batch, 6)
+    assert np.all(np.isfinite(pose))
+    for si in range(1, batch):
+        np.testing.assert_array_equal(
+            pose[si], pose[0],
+            err_msg="root-attached named-target pose must be q-independent")
+
+    grad = np.asarray(handle.end_effector_pose_gradient(q_batch))
+    hess = np.asarray(handle.end_effector_pose_hessian(q_batch))
+    assert grad.shape == (batch, 6, nv)
+    assert hess.shape == (batch, 6, nv, nv)
+    np.testing.assert_array_equal(
+        grad, np.zeros_like(grad),
+        err_msg="root-attached named-target gradient must be identically zero")
+    np.testing.assert_array_equal(
+        hess, np.zeros_like(hess),
+        err_msg="root-attached named-target hessian must be identically zero")
