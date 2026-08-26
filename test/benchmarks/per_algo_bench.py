@@ -484,8 +484,8 @@ def _repick_from_sweep(pick: dict) -> dict:
 
 def _emit_tier_analysis(robot: str, base: str, algo_picks: dict[str, dict]) -> str:
     """Markdown tier-comparison table from the autotune sweeps: best-achievable us per tier (min over
-    the thread sweep) + lite/minimal-vs-shared ratios. Salvages analyze_tier_sweep.py's ratio table
-    onto the autotune data so that orphan analyzer can be retired."""
+    the thread sweep) + lite/minimal-vs-shared ratios. This is the sole tier-ratio analyzer
+    (it absorbed and retired the old standalone analyze_tier_sweep.py)."""
     def best(by_tier: dict, tier: str):
         s = by_tier.get(tier)
         return min(s.values()) if s else None
