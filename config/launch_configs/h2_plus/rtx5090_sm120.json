@@ -1,4 +1,150 @@
 {
+  "autotune_N": 256,
+  "bases": {
+    "floating": {
+      "aba": {
+        "threads": 384,
+        "tier": "lite",
+        "us_at_optimal": 209.46
+      },
+      "ccrba": {
+        "threads": 256,
+        "tier": "minimal",
+        "us_at_optimal": 1497.97
+      },
+      "cmm_time_variation": {
+        "threads": 256,
+        "tier": "lite",
+        "us_at_optimal": 38125.79
+      },
+      "com": {
+        "threads": 256,
+        "tier": "minimal",
+        "us_at_optimal": 1498.34
+      },
+      "coriolis_matrix": {
+        "threads": 384,
+        "tier": "lite",
+        "us_at_optimal": 504.22
+      },
+      "crba": {
+        "threads": 384,
+        "tier": "lite",
+        "us_at_optimal": 65.9
+      },
+      "dccrba": {
+        "threads": 512,
+        "tier": "minimal",
+        "us_at_optimal": 11374.16
+      },
+      "end_effector_pose": {
+        "threads": 256,
+        "tier": "shared",
+        "us_at_optimal": 35.14
+      },
+      "end_effector_pose_gradient": {
+        "threads": 384,
+        "tier": "lite",
+        "us_at_optimal": 54.5
+      },
+      "energy": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 1511.84
+      },
+      "f_ext_gradient": {
+        "threads": 640,
+        "tier": "lite",
+        "us_at_optimal": 1596.19
+      },
+      "f_ext_gradient_dq": {
+        "threads": 64,
+        "tier": "shared",
+        "us_at_optimal": 2982.29
+      },
+      "fdsva_so": {
+        "threads": 96,
+        "tier": "lite",
+        "us_at_optimal": 499744.38
+      },
+      "forward_dynamics": {
+        "threads": 256,
+        "tier": "lite",
+        "us_at_optimal": 277.43
+      },
+      "forward_dynamics_gradient": {
+        "threads": 768,
+        "tier": "lite",
+        "us_at_optimal": 1637.0
+      },
+      "frame_jacobian": {
+        "threads": 352,
+        "tier": "minimal",
+        "us_at_optimal": 102.71
+      },
+      "frame_jacobian_dot": {
+        "threads": 224,
+        "tier": "lite",
+        "us_at_optimal": 136.64
+      },
+      "generalized_gravity": {
+        "threads": 192,
+        "tier": "lite",
+        "us_at_optimal": 64.45
+      },
+      "idsva_so": {
+        "threads": 112,
+        "tier": "lite",
+        "us_at_optimal": 13693.2
+      },
+      "integrator": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 311.12
+      },
+      "inverse_dynamics": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 63.52
+      },
+      "inverse_dynamics_gradient": {
+        "threads": 768,
+        "tier": "lite",
+        "us_at_optimal": 1088.19
+      },
+      "inverse_dynamics_regressor": {
+        "threads": 512,
+        "tier": "minimal",
+        "us_at_optimal": 245.08
+      },
+      "kinetic_energy_regressor": {
+        "threads": 192,
+        "tier": "lite",
+        "us_at_optimal": 66.22
+      },
+      "minv": {
+        "threads": 256,
+        "tier": "lite",
+        "us_at_optimal": 252.99
+      },
+      "nonlinear_effects": {
+        "threads": 192,
+        "tier": "lite",
+        "us_at_optimal": 64.84
+      },
+      "osc_inertia": {
+        "threads": 256,
+        "tier": "lite",
+        "us_at_optimal": 425.29
+      },
+      "potential_energy_regressor": {
+        "threads": 256,
+        "tier": "shared",
+        "us_at_optimal": 34.81
+      }
+    }
+  },
+  "cuda_arch": "sm_120",
   "ffi_bases": {
     "fixed": {
       "aba": {
@@ -52,7 +198,7 @@
         "tier": "shared"
       },
       "crba": {
-        "threads": 128,
+        "threads": 256,
         "tier": "shared"
       },
       "ee_pose": {
@@ -60,7 +206,7 @@
         "tier": "shared"
       },
       "ee_pose_gradient": {
-        "threads": 128,
+        "threads": 256,
         "tier": "shared"
       },
       "fd": {
@@ -68,7 +214,7 @@
         "tier": "shared"
       },
       "fd_du": {
-        "threads": 128,
+        "threads": 512,
         "tier": "shared"
       },
       "fdsva_so": {
@@ -76,7 +222,7 @@
         "tier": "shared"
       },
       "id": {
-        "threads": 256,
+        "threads": 128,
         "tier": "shared"
       },
       "id_du": {
@@ -100,5 +246,8 @@
     "tier_source": [
       "kernel"
     ]
-  }
+  },
+  "gpu": "rtx5090_sm120",
+  "gpu_name": "NVIDIA GeForce RTX 5090",
+  "source": "GRiD autotune sweep 2026-08-25"
 }
