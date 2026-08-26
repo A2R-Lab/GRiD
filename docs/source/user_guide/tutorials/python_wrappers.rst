@@ -14,6 +14,12 @@ backends share the same content-addressed ``.so`` cache.
 
 Source: ``bindings/`` in the GRiD repo.
 
+.. seealso::
+
+   In a hurry? :doc:`../getting_started/fast_robot_setup` is the quick
+   canonical path — one-call ``load_robot``, cache anatomy, and warm-up
+   recipes.
+
 Install (editable, from a GRiD checkout)
 ----------------------------------------
 
@@ -368,7 +374,6 @@ Coming next
 * Floating-base JAX FFI for ``idsva_so`` (currently routes to the
   body-frame kernel; world-frame fallback for floating-base needs the
   codegen to emit a preprocessor-visible dispatcher).
-* CLI shortcut: ``grid-rbd register iiwa.urdf --name iiwa14``.
 
 See also
 --------

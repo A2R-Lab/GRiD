@@ -82,6 +82,7 @@ If you use GRiD in your research, please cite:
 
    user_guide/landing_page
    user_guide/getting_started/installation
+   user_guide/getting_started/fast_robot_setup
    user_guide/getting_started/library_overview
    user_guide/getting_started/docker_setup
 
