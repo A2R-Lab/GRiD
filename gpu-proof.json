@@ -12,7 +12,7 @@
   },
   "fingerprint": {
     "algorithm": "sha256",
-    "digest": "cd51d36de2660c993154170f92728ff9ded17843baaf30bfd4f874255ac4a3eb",
+    "digest": "3369c1f2ffe6765dfe2b0246d433ba151392dc96d7b54636e2190882abf13946",
     "file_count": 132,
     "included_paths": [
       "test/cuda_equivalents",
@@ -22,15 +22,28 @@
   "mode": "local",
   "repo": {
     "branch": "modernizing-tests",
-    "commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+    "commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
     "dirty": false,
     "github_username": "plancherb1",
     "remote_url": "git@github.com:A2R-Lab/GRiD.git"
   },
   "schema_version": "2",
   "session": {
-    "ended_at": "2026-08-22T04:41:36Z",
+    "ended_at": "2026-08-26T22:34:02Z",
     "node_ids": [
+      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[iiwa14-floating-named-iiwa_joint_ee]",
+      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[go2-floating-named-imu_joint]",
+      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[baxter-floating-named-right_hand_camera_axis]",
+      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[go2-floating-multileaf]",
+      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[baxter-floating-multileaf]",
+      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[iiwa14-fixed-named-iiwa_joint_ee]",
+      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[iiwa14-floating-named-iiwa_joint_ee]",
+      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[go2-floating-named-imu_joint]",
+      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[baxter-floating-named-right_hand_camera_axis]",
+      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[go2-floating-multileaf]",
+      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[baxter-floating-multileaf]",
+      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[iiwa14-fixed-named-iiwa_joint_ee]",
+      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_root_attached_zero_gradient_hessian",
       "test/cuda_equivalents/test_cuda_collision_pairs.py::test_collision_distance_pairs_fd",
       "test/cuda_equivalents/test_cuda_collision_selfcc_rows.py::test_self_collision_rows_fd",
       "test/cuda_equivalents/test_cuda_collision_two_tier.py::test_collision_two_tier_matches_fine",
@@ -1080,18 +1093,6 @@
       "test/python_wrappers/test_centroidal_energy_frame.py::test_frame_jacobian_default_target_explicit_frame[go2]",
       "test/python_wrappers/test_centroidal_energy_frame.py::test_frame_jacobian_dot[go2]",
       "test/python_wrappers/test_centroidal_energy_frame.py::test_osc_inertia[go2]",
-      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[iiwa14-floating-named-iiwa_joint_ee]",
-      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[go2-floating-named-imu_joint]",
-      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[baxter-floating-named-right_hand_camera_axis]",
-      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[go2-floating-multileaf]",
-      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[baxter-floating-multileaf]",
-      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[iiwa14-fixed-named-iiwa_joint_ee]",
-      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[iiwa14-floating-named-iiwa_joint_ee]",
-      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[go2-floating-named-imu_joint]",
-      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[baxter-floating-named-right_hand_camera_axis]",
-      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[go2-floating-multileaf]",
-      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[baxter-floating-multileaf]",
-      "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[iiwa14-fixed-named-iiwa_joint_ee]",
       "test/python_wrappers/test_fk_batched.py::test_fk_batched_matches_reference[iiwa14]",
       "test/python_wrappers/test_fk_batched.py::test_fk_batched_matches_reference[gen3]",
       "test/python_wrappers/test_fk_batched.py::test_fk_batched_matches_reference[go2]",
@@ -1392,158 +1393,50 @@
     ],
     "shards": [
       {
-        "ended_at": "2026-08-21T23:52:04Z",
-        "node_count": 116,
+        "ended_at": "2026-08-26T22:34:02Z",
+        "node_count": 13,
         "signer": "plancherb1",
-        "source": "cuda_02_collision_pairs_collision_selfcc.json",
-        "started_at": "2026-08-21T23:39:14Z"
-      },
-      {
-        "ended_at": "2026-08-22T00:09:02Z",
-        "node_count": 76,
-        "signer": "plancherb1",
-        "source": "cuda_03_iiwa14_go2.json",
-        "started_at": "2026-08-21T23:52:05Z"
-      },
-      {
-        "ended_at": "2026-08-22T00:19:30Z",
-        "node_count": 196,
-        "signer": "plancherb1",
-        "source": "cuda_04_go2_g1.json",
-        "started_at": "2026-08-22T00:09:03Z"
-      },
-      {
-        "ended_at": "2026-08-22T00:24:16Z",
-        "node_count": 352,
-        "signer": "plancherb1",
-        "source": "cuda_05_g1_h1_2.json",
-        "started_at": "2026-08-22T00:19:31Z"
-      },
-      {
-        "ended_at": "2026-08-22T00:39:19Z",
-        "node_count": 31,
-        "signer": "plancherb1",
-        "source": "cuda_06_h1_2.json",
-        "started_at": "2026-08-22T00:24:17Z"
-      },
-      {
-        "ended_at": "2026-08-22T00:47:47Z",
-        "node_count": 18,
-        "signer": "plancherb1",
-        "source": "cuda_07_h1_2_fr3.json",
-        "started_at": "2026-08-22T00:39:20Z"
-      },
-      {
-        "ended_at": "2026-08-22T01:10:15Z",
-        "node_count": 4,
-        "signer": "plancherb1",
-        "source": "cuda_08_fr3_rizon4_gen3.json",
-        "started_at": "2026-08-22T00:47:48Z"
-      },
-      {
-        "ended_at": "2026-08-22T01:30:21Z",
-        "node_count": 4,
-        "signer": "plancherb1",
-        "source": "cuda_09_gen3_fetch.json",
-        "started_at": "2026-08-22T01:10:15Z"
-      },
-      {
-        "ended_at": "2026-08-22T01:47:11Z",
-        "node_count": 4,
-        "signer": "plancherb1",
-        "source": "cuda_10_fetch_baxter.json",
-        "started_at": "2026-08-22T01:30:22Z"
-      },
-      {
-        "ended_at": "2026-08-22T02:45:35Z",
-        "node_count": 4,
-        "signer": "plancherb1",
-        "source": "cuda_11_baxter_iiwa14.json",
-        "started_at": "2026-08-22T01:47:12Z"
-      },
-      {
-        "ended_at": "2026-08-22T03:48:03Z",
-        "node_count": 4,
-        "signer": "plancherb1",
-        "source": "cuda_12_iiwa14_go2.json",
-        "started_at": "2026-08-22T02:45:36Z"
-      },
-      {
-        "ended_at": "2026-08-22T03:52:10Z",
-        "node_count": 1,
-        "signer": "plancherb1",
-        "source": "cuda_13_g1.json",
-        "started_at": "2026-08-22T03:48:04Z"
-      },
-      {
-        "ended_at": "2026-08-22T03:52:21Z",
-        "node_count": 1,
-        "signer": "plancherb1",
-        "source": "cuda_14_g1_h1_2.json",
-        "started_at": "2026-08-22T03:52:11Z"
-      },
-      {
-        "ended_at": "2026-08-22T04:09:44Z",
-        "node_count": 6,
-        "signer": "plancherb1",
-        "source": "cuda_15_h1_2.json",
-        "started_at": "2026-08-22T03:52:22Z"
-      },
-      {
-        "ended_at": "2026-08-22T04:29:24Z",
-        "node_count": 6,
-        "signer": "plancherb1",
-        "source": "cuda_16_h1_2_fr3.json",
-        "started_at": "2026-08-22T04:09:45Z"
-      },
-      {
-        "ended_at": "2026-08-22T04:39:03Z",
-        "node_count": 3,
-        "signer": "plancherb1",
-        "source": "cuda_17_rizon4_gen3.json",
-        "started_at": "2026-08-22T04:29:25Z"
-      },
-      {
-        "ended_at": "2026-08-22T04:39:58Z",
-        "node_count": 2,
-        "signer": "plancherb1",
-        "source": "cuda_18_gen3_fetch.json",
-        "started_at": "2026-08-22T04:39:04Z"
-      },
-      {
-        "ended_at": "2026-08-22T04:40:06Z",
-        "node_count": 2,
-        "signer": "plancherb1",
-        "source": "cuda_19_fetch_baxter.json",
-        "started_at": "2026-08-22T04:39:58Z"
-      },
-      {
-        "ended_at": "2026-08-22T04:40:16Z",
-        "node_count": 2,
-        "signer": "plancherb1",
-        "source": "cuda_20_baxter_f_ext_contact_f_ext_conta.json",
-        "started_at": "2026-08-22T04:40:07Z"
-      },
-      {
-        "ended_at": "2026-08-22T04:41:06Z",
-        "node_count": 2,
-        "signer": "plancherb1",
-        "source": "cuda_21_frame_jacobian_hos_idsva_so_worl.json",
-        "started_at": "2026-08-22T04:40:16Z"
-      },
-      {
-        "ended_at": "2026-08-22T04:41:36Z",
-        "node_count": 3,
-        "signer": "plancherb1",
-        "source": "cuda_22_kinematics_thread__mjx_tier_inva.json",
-        "started_at": "2026-08-22T04:41:07Z"
+        "source": "test_ee_named_target_floating_multileaf.json",
+        "started_at": "2026-08-26T21:11:55Z"
       }
     ],
-    "started_at": "2026-08-21T23:39:14Z"
+    "started_at": "2026-08-26T21:11:55Z"
   },
   "shards": [
     {
       "carried": null,
+      "fingerprint": {
+        "algorithm": "sha256",
+        "digest": "a7125fee8fc12d2fce96194f0250d2545cf858fbea7aaeeb790d5868c481827f",
+        "file_count": 1,
+        "included_paths": [
+          "test/python_wrappers/test_ee_named_target_floating_multileaf.py"
+        ]
+      },
+      "name": "test_ee_named_target_floating_multileaf",
+      "node_ids": [
+        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[iiwa14-floating-named-iiwa_joint_ee]",
+        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[go2-floating-named-imu_joint]",
+        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[baxter-floating-named-right_hand_camera_axis]",
+        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[go2-floating-multileaf]",
+        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[baxter-floating-multileaf]",
+        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[iiwa14-fixed-named-iiwa_joint_ee]",
+        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[iiwa14-floating-named-iiwa_joint_ee]",
+        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[go2-floating-named-imu_joint]",
+        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[baxter-floating-named-right_hand_camera_axis]",
+        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[go2-floating-multileaf]",
+        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[baxter-floating-multileaf]",
+        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[iiwa14-fixed-named-iiwa_joint_ee]",
+        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_root_attached_zero_gradient_hessian"
+      ]
+    },
+    {
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "83ccba40c68e2c40a8c9550dbeb736745229bc9a93b2a7e2e92f025aef39ce93",
@@ -1693,7 +1586,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "57085404d8dfac7f10366b71a943c50a3795f59864f21c3a57ee341ebf71586d",
@@ -1785,7 +1683,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "57085404d8dfac7f10366b71a943c50a3795f59864f21c3a57ee341ebf71586d",
@@ -1997,7 +1900,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "57085404d8dfac7f10366b71a943c50a3795f59864f21c3a57ee341ebf71586d",
@@ -2365,7 +2273,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "607fdf7f0cda3beb8424ab004af5d8a318d3589e29b01cd666e4fe11dbda2cfd",
@@ -2422,7 +2335,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "009b855aa8a4a4ffbe846ec1e05e2338acaa3dcb724331f096ed77d0efdc2e1e",
@@ -2458,7 +2376,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "d07b4e8483abb81085305586123ab0e9a18c479aa46af1f45edd232c72f3d0a7",
@@ -2476,7 +2399,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "d07b4e8483abb81085305586123ab0e9a18c479aa46af1f45edd232c72f3d0a7",
@@ -2494,7 +2422,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "d07b4e8483abb81085305586123ab0e9a18c479aa46af1f45edd232c72f3d0a7",
@@ -2512,7 +2445,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "d07b4e8483abb81085305586123ab0e9a18c479aa46af1f45edd232c72f3d0a7",
@@ -2530,7 +2468,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "d07b4e8483abb81085305586123ab0e9a18c479aa46af1f45edd232c72f3d0a7",
@@ -2548,7 +2491,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "d07b4e8483abb81085305586123ab0e9a18c479aa46af1f45edd232c72f3d0a7",
@@ -2563,7 +2511,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "5aaa04250030186ff9f387467e16ab5cf8c97920c532039b743a5e49a3d8e794",
@@ -2578,7 +2531,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "fe4598d37854bf006d2e8f7b944f31a6949dc0847fae6395fb388ed92c2aa64a",
@@ -2598,7 +2556,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "fe4598d37854bf006d2e8f7b944f31a6949dc0847fae6395fb388ed92c2aa64a",
@@ -2618,7 +2581,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "fe4598d37854bf006d2e8f7b944f31a6949dc0847fae6395fb388ed92c2aa64a",
@@ -2635,7 +2603,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "c3070aff233518c135fb0a6f347c820aba5e374ba82ef208acfa31ccddd8f5b9",
@@ -2652,7 +2625,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "7447b53851f17487e5943e7d4410a881ac765af3c2d3c44a0dc849c592ea6b79",
@@ -2669,7 +2647,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "4c49e9704d7e57e61bdb0b74835c61b1491b379d85babdf6e383281588f9efd2",
@@ -2686,7 +2669,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "45e89637d3a13284b4a677a23d4a25283fbca733389134750c2861d716ce1bc5",
@@ -2702,7 +2690,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "57572a367f047b679345ad5fe28be84acf2225150ce7a6e820c14b2a19ecf732",
@@ -2721,8 +2714,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2755,8 +2748,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2840,8 +2833,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2874,8 +2867,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2895,8 +2888,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2915,8 +2908,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2936,8 +2929,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2957,8 +2950,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2977,8 +2970,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3004,8 +2997,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3066,8 +3059,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3105,8 +3098,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3163,8 +3156,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3202,39 +3195,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
-        "original_signer": "plancherb1"
-      },
-      "fingerprint": {
-        "algorithm": "sha256",
-        "digest": "b5ba57d51f496d38652c79ea18cfe09a5c875267381401756bc4ba4c80ba53b6",
-        "file_count": 1,
-        "included_paths": [
-          "test/python_wrappers/test_ee_named_target_floating_multileaf.py"
-        ]
-      },
-      "name": "test_ee_named_target_floating_multileaf",
-      "node_ids": [
-        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[iiwa14-floating-named-iiwa_joint_ee]",
-        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[go2-floating-named-imu_joint]",
-        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[baxter-floating-named-right_hand_camera_axis]",
-        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[go2-floating-multileaf]",
-        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[baxter-floating-multileaf]",
-        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[iiwa14-fixed-named-iiwa_joint_ee]",
-        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[iiwa14-floating-named-iiwa_joint_ee]",
-        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[go2-floating-named-imu_joint]",
-        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[baxter-floating-named-right_hand_camera_axis]",
-        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[go2-floating-multileaf]",
-        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[baxter-floating-multileaf]",
-        "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[iiwa14-fixed-named-iiwa_joint_ee]"
-      ]
-    },
-    {
-      "carried": {
-        "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3260,8 +3222,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3287,8 +3249,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3308,8 +3270,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3334,8 +3296,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3411,8 +3373,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3441,8 +3403,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3468,8 +3430,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3515,8 +3477,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3559,8 +3521,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3596,8 +3558,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3625,8 +3587,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3684,8 +3646,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3704,8 +3666,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3729,8 +3691,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3758,8 +3720,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3785,8 +3747,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3809,8 +3771,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3841,8 +3803,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3872,8 +3834,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3902,8 +3864,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3927,8 +3889,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "b42a027f196d6b183aac7023c19676a431edbe5b",
-        "original_ended_at": "2026-08-19T12:46:47Z",
+        "original_commit_sha": "1265c85a1cb5a313b575b043b2b6af699e3d1a71",
+        "original_ended_at": "2026-08-22T04:41:36Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3951,9 +3913,87 @@
     "backend": "ssh-local",
     "key_fingerprint": "SHA256:hfyUcDJTDLry3j7nJ9V2X8iEIgNFmFJQKGQirOdyWtY",
     "signer": "plancherb1",
-    "value": "liyFMhnGl+dkNDWjmwSuXUmxbYzZGy29fLCAQZ+LO7RTX7gxoQgPZb+pchCivkYc9TK1aElNhVaYTSQ1h/yiDQ=="
+    "value": "/BOaG4rhSZ6VZGckwV3JAcF1IpB3E6F0vdBHq3aAThgpN0hFI67C6463DFjmQyrrIJdP3YkUZHnyhfty/pAlBQ=="
   },
   "tests": [
+    {
+      "checks": [],
+      "duration_s": 2.4276,
+      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[iiwa14-floating-named-iiwa_joint_ee]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.2564,
+      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[go2-floating-named-imu_joint]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 3.0051,
+      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[baxter-floating-named-right_hand_camera_axis]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 6.5555,
+      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[go2-floating-multileaf]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 7.1127,
+      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[baxter-floating-multileaf]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.342,
+      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[iiwa14-fixed-named-iiwa_joint_ee]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 1165.2162,
+      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[iiwa14-floating-named-iiwa_joint_ee]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 774.7779,
+      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[go2-floating-named-imu_joint]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 834.6775,
+      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[baxter-floating-named-right_hand_camera_axis]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 563.2773,
+      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[go2-floating-multileaf]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 830.0813,
+      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[baxter-floating-multileaf]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 424.4035,
+      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[iiwa14-fixed-named-iiwa_joint_ee]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 313.2155,
+      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_root_attached_zero_gradient_hessian",
+      "outcome": "passed"
+    },
     {
       "checks": [],
       "duration_s": 4.4173,
@@ -10247,78 +10287,6 @@
       "duration_s": 0.0026,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_osc_inertia[go2]",
       "outcome": "skipped"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.4171,
-      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[iiwa14-floating-named-iiwa_joint_ee]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.2298,
-      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[go2-floating-named-imu_joint]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.9895,
-      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[baxter-floating-named-right_hand_camera_axis]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 6.6345,
-      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[go2-floating-multileaf]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 7.1936,
-      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[baxter-floating-multileaf]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.3325,
-      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[iiwa14-fixed-named-iiwa_joint_ee]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 991.7261,
-      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[iiwa14-floating-named-iiwa_joint_ee]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 830.9037,
-      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[go2-floating-named-imu_joint]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 1208.3305,
-      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[baxter-floating-named-right_hand_camera_axis]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 827.9221,
-      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[go2-floating-multileaf]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 1157.2206,
-      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[baxter-floating-multileaf]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 463.4516,
-      "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[iiwa14-fixed-named-iiwa_joint_ee]",
-      "outcome": "passed"
     },
     {
       "checks": [],
