@@ -156,8 +156,17 @@ ALGO_REGISTRY: tuple[AlgoEntry, ...] = (
 #     cudaFuncSetAttribute entry: `idsva_so` (a dispatch alias for the body/world
 #     kernels), `integrator_hessian` (no standalone benchmarked kernel yet), and
 #     `plant` (cost/constraint primitives, no __global__).
-#   - autotune_keys defaults to () — set for the 17 algos that carry a baked
-#     launch_cfg<> (the bench-abbreviated JSON key(s) that map to this grid symbol).
+#   - autotune_keys defaults to () — set for the algos that carry a baked
+#     launch_cfg<> (the bench JSON key(s) that map to this grid symbol). The
+#     original 17 use bench-abbreviated keys ("fd", "id_du", ...); the batch-2
+#     algos (coverage extension, 2026-08-26) use their full symbol as the key.
+#   - launch_cfg_batch orders the emitted GridAlgo enum: batch 1 = the original
+#     17 (their enum indices are an ABI PREFIX that must never shift — an old
+#     cached .so plus a newer python derives overlay indices from this order,
+#     and grid_rbd_set_threads_for on the old .so bounds-rejects only indices
+#     >= its own GRID_ALGO_COUNT); batch 2+ APPEND after. Within a batch,
+#     table order rules. New launch-config algos MUST use the next batch
+#     number, never batch 1.
 
 
 @dataclass(frozen=True)
@@ -167,6 +176,7 @@ class AlgoDescriptor:
     has_kernel_attr: bool = True          # has its own KERNEL_ATTR_MANIFEST entry
     gate_attr: str | None = None          # explicit generate_*/_*_emitted gate, else None
     bytes_macro_stem: str | None = None   # override the default *_DYNAMIC_SHARED_MEM_BYTES stem
+    launch_cfg_batch: int = 1             # GridAlgo enum ordering group (see header note)
 
     @property
     def carries_launch_cfg(self) -> bool:
@@ -196,8 +206,9 @@ ALGO_DESCRIPTORS: tuple[AlgoDescriptor, ...] = (
                    gate_attr="generate_inverse_dynamics_gradient"),
     AlgoDescriptor("forward_dynamics_gradient", autotune_keys=("fd_du",),
                    gate_attr="generate_forward_dynamics_gradient"),
-    AlgoDescriptor("f_ext_gradient"),
-    AlgoDescriptor("f_ext_gradient_dq", gate_attr="_f_ext_gradient_dq_emitted"),
+    AlgoDescriptor("f_ext_gradient", autotune_keys=("f_ext_gradient",), launch_cfg_batch=2),
+    AlgoDescriptor("f_ext_gradient_dq", autotune_keys=("f_ext_gradient_dq",), launch_cfg_batch=2,
+                   gate_attr="_f_ext_gradient_dq_emitted"),
     # C.2 (GATO ask 1): contact-frame wrench -> joint-local f_ext + ∂/∂f_c + ∂/∂q.
     # Opt-in (emitted only when gen_all_code gets contact_frames=). A device-composite
     # like `collision`/`plant`: it emits `f_ext_body{,_jacobian_dq,_jacobian_dfc}_device`
@@ -207,19 +218,20 @@ ALGO_DESCRIPTORS: tuple[AlgoDescriptor, ...] = (
     # KERNEL_ATTR_MANIFEST or the launch-config enum). Correctness is gated by the
     # go2-floating FD-oracle test test/cuda_equivalents/test_cuda_f_ext_contact.py.
     AlgoDescriptor("f_ext_contact", has_kernel_attr=False),
-    AlgoDescriptor("inverse_dynamics_regressor"),
-    AlgoDescriptor("forward_dynamics_parameter_gradient"),
-    AlgoDescriptor("kinetic_energy_regressor"),
-    AlgoDescriptor("potential_energy_regressor"),
+    AlgoDescriptor("inverse_dynamics_regressor", autotune_keys=("inverse_dynamics_regressor",), launch_cfg_batch=2),
+    AlgoDescriptor("forward_dynamics_parameter_gradient",
+                   autotune_keys=("forward_dynamics_parameter_gradient",), launch_cfg_batch=2),
+    AlgoDescriptor("kinetic_energy_regressor", autotune_keys=("kinetic_energy_regressor",), launch_cfg_batch=2),
+    AlgoDescriptor("potential_energy_regressor", autotune_keys=("potential_energy_regressor",), launch_cfg_batch=2),
 
     # Kinematics
     AlgoDescriptor("end_effector_pose", autotune_keys=("ee_pose",)),
     AlgoDescriptor("end_effector_pose_gradient", autotune_keys=("ee_pose_gradient",)),
     AlgoDescriptor("end_effector_pose_hessian", autotune_keys=("ee_pose_hessian",),
                    gate_attr="generate_end_effector_pose_hessian"),
-    AlgoDescriptor("frame_jacobian"),
-    AlgoDescriptor("frame_jacobian_dot"),
-    AlgoDescriptor("osc_inertia"),
+    AlgoDescriptor("frame_jacobian", autotune_keys=("frame_jacobian",), launch_cfg_batch=2),
+    AlgoDescriptor("frame_jacobian_dot", autotune_keys=("frame_jacobian_dot",), launch_cfg_batch=2),
+    AlgoDescriptor("osc_inertia", autotune_keys=("osc_inertia",), launch_cfg_batch=2),
     AlgoDescriptor("end_effector_pose_runtime"),
     AlgoDescriptor("end_effector_pose_gradient_runtime"),
     # W1b.3 batched multi-target (opt-in via multi_target_batch). Real benchmarked
@@ -250,16 +262,16 @@ ALGO_DESCRIPTORS: tuple[AlgoDescriptor, ...] = (
     AlgoDescriptor("integrator_hessian", has_kernel_attr=False),
 
     # Centroidal / Energy / CoM
-    AlgoDescriptor("generalized_gravity",
+    AlgoDescriptor("generalized_gravity", autotune_keys=("generalized_gravity",), launch_cfg_batch=2,
                    bytes_macro_stem="INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES"),
-    AlgoDescriptor("nonlinear_effects",
+    AlgoDescriptor("nonlinear_effects", autotune_keys=("nonlinear_effects",), launch_cfg_batch=2,
                    bytes_macro_stem="INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES"),
-    AlgoDescriptor("energy"),
-    AlgoDescriptor("com"),
-    AlgoDescriptor("ccrba"),
-    AlgoDescriptor("coriolis_matrix"),
-    AlgoDescriptor("dccrba"),
-    AlgoDescriptor("cmm_time_variation"),
+    AlgoDescriptor("energy", autotune_keys=("energy",), launch_cfg_batch=2),
+    AlgoDescriptor("com", autotune_keys=("com",), launch_cfg_batch=2),
+    AlgoDescriptor("ccrba", autotune_keys=("ccrba",), launch_cfg_batch=2),
+    AlgoDescriptor("coriolis_matrix", autotune_keys=("coriolis_matrix",), launch_cfg_batch=2),
+    AlgoDescriptor("dccrba", autotune_keys=("dccrba",), launch_cfg_batch=2),
+    AlgoDescriptor("cmm_time_variation", autotune_keys=("cmm_time_variation",), launch_cfg_batch=2),
 
     # Plant (no standalone kernel)
     AlgoDescriptor("plant", has_kernel_attr=False),
@@ -278,12 +290,23 @@ def descriptor_for(key: str) -> AlgoDescriptor:
         raise KeyError(f"{key!r} not in ALGO_DESCRIPTORS — add it to algo_registry.py") from None
 
 
+def launch_config_descriptors() -> list[AlgoDescriptor]:
+    """The launch-config algos in EMITTED GridAlgo enum order: batch 1 (the
+    original 17, an ABI prefix that must never shift) then batch 2+, table order
+    within a batch. Python's stable sort preserves table order per batch. Both
+    the enum emission (GRiDCodeGenerator.gen_add_launch_config_helpers) and the
+    E6 overlay index derivation (via build_launch_config_algo_to_symbol) MUST
+    use this one ordering — a divergence silently mis-indexes set_threads_for."""
+    return sorted((d for d in ALGO_DESCRIPTORS if d.carries_launch_cfg),
+                  key=lambda d: d.launch_cfg_batch)
+
+
 def build_launch_config_algo_to_symbol() -> dict[str, str]:
     """Reconstruct LAUNCH_CONFIG_ALGO_TO_SYMBOL (bench JSON key -> grid symbol)
-    from the descriptor rows. Parity-checked against the live dict in
-    test/test_algo_descriptor_parity.py; the eventual Step-1 generation will
-    consume this directly."""
-    return {k: d.key for d in ALGO_DESCRIPTORS for k in d.autotune_keys}
+    from the descriptor rows, in launch_config_descriptors() order (dict order
+    drives the E6 overlay enum-index derivation). Parity-checked in
+    test/test_algo_descriptor_parity.py."""
+    return {k: d.key for d in launch_config_descriptors() for k in d.autotune_keys}
 
 
 def build_single_label_map() -> dict[str, str]:

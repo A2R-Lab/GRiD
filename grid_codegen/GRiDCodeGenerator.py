@@ -16,6 +16,7 @@ from .algorithms._idsva_so import _idsva_so_use_world_frame
 # (algo_label, algo_short, gate_attr, bytes_macro) — only the irregular kernel
 # overload SIGNATURES stay as co-located payload data.
 from .algo_registry import (ALGO_DESCRIPTORS, build_launch_config_algo_to_symbol, descriptor_for,
+                            launch_config_descriptors,
                             arena_ctx_from_codegen, compose_arena_full, compose_arena_rungs,
                             ARENA_COMPOSED_KEYS, ARENA_RUNG_KEYS)
 
@@ -760,8 +761,9 @@ class GRiDCodeGenerator:
         # (the canonical grid:: symbols). Emit one enumerator per algo so the
         # table is complete regardless of which algos this robot tuned.
         # Driven from the descriptor table: every algo carrying a baked launch_cfg,
-        # in descriptor order (which is aligned to the launch-config enum order).
-        launch_descriptors = [d for d in ALGO_DESCRIPTORS if d.carries_launch_cfg]
+        # in launch_config_descriptors() order (batch 1 = the original 17 as a
+        # stable ABI prefix, batch 2+ appended — see algo_registry.py).
+        launch_descriptors = launch_config_descriptors()
         algo_symbols = [d.key for d in launch_descriptors]
         enum_names = {d.key: d.enum_name for d in launch_descriptors}
         base_name = "floating" if self.robot.floating_base else "fixed"
@@ -848,8 +850,8 @@ class GRiDCodeGenerator:
         dva_cols_per_partial = self.robot.get_total_ancestor_count() + self.robot.get_num_joints()
         max_threads_in_comp_loop = 6*2*dva_cols_per_partial
         max_perf_level_threads = 32 * int(np.ceil(max_threads_in_comp_loop/32.0))
-        # cap to 512 mirrors the constant we emit further down; expose on self so
-        # _lin_alg_helpers can pin cuBLASDx's BlockDim<TC,1,1> to the same value.
+        # cap to 512 mirrors the constant we emit further down; exposed on self
+        # for helpers that need the same per-robot thread cap.
         self.max_perf_level_threads = min(max_perf_level_threads, 512)
         topology_count = self.gen_topology_helpers_size()
         def py_align_up(offset, alignment):
@@ -1620,9 +1622,9 @@ class GRiDCodeGenerator:
         #   tier 0 (full smem): base + s_d2AB(18nv^3) + s_df2+s_idsva_so(8nv^3) + pool
         #   tier 1 (deep spill): base only in smem; d2AB + fdsva tensors + pool -> global
         # PERF picks the lowest tier whose arena fits cuda_target_shared_mem; LITE
-        # clamps >= PERF; MINIMAL is always the deep-spill tier. Only meaningful on a
-        # fixed base (floating + RK static_assert out in the device fn), but compute
-        # it unconditionally — the kernel/macros are only emitted on fixed-base anyway.
+        # clamps >= PERF; MINIMAL is always the deep-spill tier. Floating base IS
+        # supported (routed to gen_integrator_hessian_device_floating); only
+        # multi-stage RK static_asserts out. Computed unconditionally.
         (_psh_t_full, _psh_t_spill) = compose_arena_rungs("integrator_hessian", self._arena_ctx)   # Step 3.5e fold
         self.plant_step_hessian_spill_tier_3way = select_shared_tier_3way(_psh_t_full, _psh_t_spill)
 

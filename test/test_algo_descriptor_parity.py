@@ -54,17 +54,47 @@ _GOLDEN_ALGO_TO_SYMBOL = {
     "integrator":            "integrator",
     "integrator_gradient":   "integrator_gradient",
     "integrator_with_gradient": "integrator_with_gradient",
+    # ─ batch 2 (coverage extension 2026-08-26): key == full symbol, APPENDED
+    #   after the original 17 so legacy enum indices stay a stable ABI prefix ─
+    "f_ext_gradient":        "f_ext_gradient",
+    "f_ext_gradient_dq":     "f_ext_gradient_dq",
+    "inverse_dynamics_regressor": "inverse_dynamics_regressor",
+    "forward_dynamics_parameter_gradient": "forward_dynamics_parameter_gradient",
+    "kinetic_energy_regressor": "kinetic_energy_regressor",
+    "potential_energy_regressor": "potential_energy_regressor",
+    "frame_jacobian":        "frame_jacobian",
+    "frame_jacobian_dot":    "frame_jacobian_dot",
+    "osc_inertia":           "osc_inertia",
+    "generalized_gravity":   "generalized_gravity",
+    "nonlinear_effects":     "nonlinear_effects",
+    "energy":                "energy",
+    "com":                   "com",
+    "ccrba":                 "ccrba",
+    "coriolis_matrix":       "coriolis_matrix",
+    "dccrba":                "dccrba",
+    "cmm_time_variation":    "cmm_time_variation",
 }
 
 # The emitted `enum GridAlgo` order (byte-identity anchor). Equals the launch-cfg
 # symbols in descriptor order — integrators LAST (after Second-Order), which is why
 # the Integrators AlgoDescriptor block is placed after fdsva_so in algo_registry.py.
 _GOLDEN_LAUNCH_ORDER = (
+    # batch 1 — the original 17: a stable ABI prefix (an old cached .so plus a
+    # newer python derives E6 overlay indices from this order; indices >= the
+    # old .so's GRID_ALGO_COUNT are bounds-rejected, so append-only is safe,
+    # any reorder of this prefix is NOT).
     "inverse_dynamics", "minv", "forward_dynamics", "aba", "crba",
     "inverse_dynamics_gradient", "forward_dynamics_gradient",
     "end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
     "idsva_so", "idsva_so_body_frame", "idsva_so_world_frame", "fdsva_so",
     "integrator", "integrator_gradient", "integrator_with_gradient",
+    # batch 2 — coverage extension (2026-08-26), table order:
+    "f_ext_gradient", "f_ext_gradient_dq",
+    "inverse_dynamics_regressor", "forward_dynamics_parameter_gradient",
+    "kinetic_energy_regressor", "potential_energy_regressor",
+    "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
+    "generalized_gravity", "nonlinear_effects", "energy",
+    "com", "ccrba", "coriolis_matrix", "dccrba", "cmm_time_variation",
 )
 
 
@@ -102,7 +132,8 @@ def test_descriptor_launch_order_is_byte_identity_enum_order():
     """Step-1 byte-identity anchor: the launch-cfg descriptors, IN ORDER, reproduce
     the emitted `enum GridAlgo` order exactly. Guards the Integrators-block placement
     (must stay after Second-Order) so grid.cuh never silently reorders the enum."""
-    launch_order = tuple(d.key for d in ALGO_DESCRIPTORS if d.carries_launch_cfg)
+    from grid_codegen.algo_registry import launch_config_descriptors
+    launch_order = tuple(d.key for d in launch_config_descriptors())
     assert launch_order == _GOLDEN_LAUNCH_ORDER, (
         "descriptor launch order drifted from the emitted GridAlgo enum order.\n"
         f"  got:    {launch_order}\n"
