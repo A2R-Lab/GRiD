@@ -26,9 +26,20 @@ explained (sharp FFI cliff at the launch_bounds ceiling) — Nsight profiling is
 backlogged. Run this AFTER a C++ autotune (so `bases`/tiers exist) and on the
 SAME GPU you deploy on.
 
+--surface picks WHICH python launch path to sweep (each is a different use case
+with its own optimum, written to its own launch_configs block):
+    jax   -> `ffi_bases`    (jax FFI custom-call, batch-to-land via block_until_ready)
+    torch -> `torch_bases`  (torch op path, batch-to-land via torch.cuda.synchronize)
+    numpy -> `pybind_bases` (synchronous C-ABI host wrapper, H2D+launch+D2H included
+                             — that copy round-trip IS the numpy use case)
+The bindings consume these via codegen profile overlays ("ffi"/"torch"/"pybind" ->
+<profile>_bases, GRiDCodeGenerator.load_launch_config) and the E6 runtime overlay
+(RobotHandle.apply_profile_overlay).
+
 Usage:
     python test/benchmarks/autotune_ffi.py --robot iiwa14 --base fixed
     python test/benchmarks/autotune_ffi.py --robot go2 --base both --n 256
+    python test/benchmarks/autotune_ffi.py --robot iiwa14 --surface torch
 """
 import argparse
 import json
@@ -56,14 +67,55 @@ from grid_codegen.algo_registry import build_launch_config_algo_to_symbol  # noq
 # Built from the descriptor table (single source of truth for {json key -> symbol}).
 SYMBOL_TO_KEY = {sym: key for key, sym in build_launch_config_algo_to_symbol().items()}
 
+# surface -> codegen profile name (= launch_configs block prefix: <profile>_bases).
+SURFACE_PROFILE = {"jax": "ffi", "torch": "torch", "numpy": "pybind"}
 
-def _median_batch_to_land_us(fn, dev_args, iters):
+
+def _surface_adapter(surface):
+    """(to_dev, wrap, call) for one launch surface. `call(fn, dev_args)` runs ONE
+    batched invocation to completion (sync included) — the batch-to-land unit."""
+    if surface == "jax":
+        import jax
+        import jax.numpy as jnp
+
+        def to_dev(args):
+            return tuple(jnp.asarray(a) for a in args)
+
+        def wrap(method):
+            return jax.jit(method)
+
+        def call(fn, dev_args):
+            jax.block_until_ready(fn(*dev_args))
+    elif surface == "torch":
+        import torch
+
+        def to_dev(args):
+            return tuple(torch.as_tensor(a, device="cuda") for a in args)
+
+        def wrap(method):
+            return method
+
+        def call(fn, dev_args):
+            fn(*dev_args)
+            torch.cuda.synchronize()
+    else:  # numpy: the C-ABI host wrapper is synchronous (returns host arrays)
+        def to_dev(args):
+            return args
+
+        def wrap(method):
+            return method
+
+        def call(fn, dev_args):
+            fn(*dev_args)
+    return to_dev, wrap, call
+
+
+def _median_batch_to_land_us(call, fn, dev_args, iters):
     """Median wall-clock us for ONE batched launch of N to fully land (sync)."""
-    import jax
     t = np.empty(iters)
     for i in range(iters):
         s = time.perf_counter()
-        jax.block_until_ready(fn(*dev_args))
+        call(fn, dev_args)
         t[i] = (time.perf_counter() - s) * 1e6
     return float(np.median(t))
 
@@ -87,7 +139,7 @@ def _kernel_real_ceiling(handle, algo_key):
     return cap if cap >= 1 else None
 
 
-def _sweep_algo(handle, fn, dev_args, candidates, iters, warmup, real_ceiling=None):
+def _sweep_algo(handle, fn, dev_args, candidates, iters, warmup, call, real_ceiling=None):
     """Sweep block sizes for the batch-to-land metric.
 
     Returns (curve, best_actual, best_us) where `curve` is keyed on the ACTUAL
@@ -98,7 +150,6 @@ def _sweep_algo(handle, fn, dev_args, candidates, iters, warmup, real_ceiling=No
     §1.2). When `real_ceiling` is known we also SKIP requests above it (they only
     clamp-collapse onto the ceiling point), and we keep the SMALLEST request that maps
     to each actual count (deterministic)."""
-    import jax
     curve, best_t, best_us = {}, None, float("inf")
     seen_actual = set()
     for thr in candidates:
@@ -108,10 +159,15 @@ def _sweep_algo(handle, fn, dev_args, candidates, iters, warmup, real_ceiling=No
             # the redundant point so the curve can't double-count a clamped regime.
             continue
         try:
-            handle.set_threads_per_block(thr)
+            # Request the CLAMPED count, not the raw candidate: the jax FFI path
+            # silently clamps an over-ceiling request, but the torch/numpy launch
+            # paths hard-error on it — requesting `actual` times the at-ceiling
+            # regime on every surface instead of SKIPping it (and is identical to
+            # the old behavior on jax, where thr clamped to actual anyway).
+            handle.set_threads_per_block(actual)
             for _ in range(warmup):
-                jax.block_until_ready(fn(*dev_args))   # warm/compile at this size
-            us = _median_batch_to_land_us(fn, dev_args, iters)
+                call(fn, dev_args)                     # warm/compile at this size
+            us = _median_batch_to_land_us(call, fn, dev_args, iters)
         except Exception as e:                          # too-high smem/threads for a heavy algo
             print(f"      threads={thr:5d}  SKIP ({type(e).__name__})")
             continue
@@ -161,9 +217,9 @@ def _host_tier_for(doc, base, key):
     return entry.get("tier", "shared")
 
 
-def autotune_base(robot, base, n, iters, warmup, want_algos, build_algos=None):
+def autotune_base(robot, base, n, iters, warmup, want_algos, build_algos=None,
+                  surface="jax"):
     import grid_rbd
-    import grid_rbd.jax as grid_jax
 
     floating = base == "floating"
     urdf = get_urdf_path(robot)
@@ -181,15 +237,21 @@ def autotune_base(robot, base, n, iters, warmup, want_algos, build_algos=None):
         # skipped by the sweep loop below.
         precompile_kw["tiers"] = [{"algorithm_list": list(build_algos)}]
     grid_rbd.precompile(name, urdf, floating_base=floating,
-                        max_batch_size=max(256, n), backends=("jax",), **precompile_kw)
-    handle = grid_jax.get_robot(name)
+                        max_batch_size=max(256, n), backends=(surface,), **precompile_kw)
+    if surface == "jax":
+        import grid_rbd.jax as grid_jax
+        handle = grid_jax.get_robot(name)
+    elif surface == "torch":
+        import grid_rbd.torch as grid_torch
+        handle = grid_torch.get_robot(name)
+    else:
+        handle = grid_rbd.get_robot(name)
+    to_dev, wrap, call = _surface_adapter(surface)
     nq, nv = handle.num_joints, handle.num_vel
     max_perf = handle.max_perf_level_threads   # MPLT, for the tier inverse map (E1)
     rng = np.random.default_rng(0)
-    print(f"\n=== {robot}/{base}  nq={nq} nv={nv}  N={n}  (FFI batch-to-land) ===")
+    print(f"\n=== {robot}/{base}  nq={nq} nv={nv}  N={n}  ({surface} batch-to-land) ===")
 
-    import jax
-    import jax.numpy as jnp
     picks = {}
     for algo, arity in ALGOS:
         if want_algos and algo not in want_algos:
@@ -199,10 +261,10 @@ def autotune_base(robot, base, n, iters, warmup, want_algos, build_algos=None):
             continue
         method = getattr(handle, algo, None)
         if method is None:
-            print(f"    {algo:28s} skip (not on jax surface)")
+            print(f"    {algo:28s} skip (not on {surface} surface)")
             continue
-        fn = jax.jit(method)
-        dev = tuple(jnp.asarray(a) for a in _make_np(arity, n, nq, nv, rng, floating))
+        fn = wrap(method)
+        dev = to_dev(_make_np(arity, n, nq, nv, rng, floating))
         # The one-time JIT launches BEFORE this algo's sweep sets any thread
         # count, so it inherits the PREVIOUS algo's last-swept count — which
         # can exceed THIS kernel's compiled launch_bounds ceiling ("launch
@@ -210,7 +272,7 @@ def autotune_base(robot, base, n, iters, warmup, want_algos, build_algos=None):
         # leg, 2026-08-25). 32 threads is legal for every kernel.
         handle.set_threads_per_block(32)
         try:
-            jax.block_until_ready(fn(*dev))             # one-time JIT
+            call(fn, dev)                               # one-time JIT / first launch
         except (RuntimeError, AttributeError) as e:
             # --build-algos subset .so: the jax method exists on the handle but its
             # compiled symbol (grid_rbd_jax_<algo>) was excluded from this build, so
@@ -231,7 +293,7 @@ def autotune_base(robot, base, n, iters, warmup, want_algos, build_algos=None):
         else:
             print(f"    {algo}:  (kernel max_threads UNKNOWN -> infer from sweep)")
         curve, best_t, best_us = _sweep_algo(handle, fn, dev, THREAD_CANDIDATES,
-                                             iters, warmup, real_ceiling=real_ceiling)
+                                             iters, warmup, call, real_ceiling=real_ceiling)
         # (no reset needed: the next algo's sweep sets its own thread count; the
         #  python handle guards n>=1 so we can't pass 0 to reset to the baked -1.)
         if best_t is None:
@@ -275,9 +337,10 @@ def _tier_max_threads(tier, max_perf):
     return max_perf  # shared
 
 
-def write_ffi_config(robot, gpu, base_picks, n, base_maxperf):
+def write_ffi_config(robot, gpu, base_picks, n, base_maxperf, surface="jax"):
     """Merge {base: {key: pick}} into config/launch_configs/<robot>/<gpu>.json under
-    `ffi_bases`, leaving `bases` intact.
+    the surface's `<profile>_bases` block (ffi_bases / torch_bases / pybind_bases),
+    leaving `bases` and every other surface's block intact.
 
     E1 tier contract: the recorded tier is the KERNEL's real compiled tier (from
     cudaFuncGetAttributes, `pick["tier"]`/`tier_source`), NOT a "shared" guess. The
@@ -286,9 +349,10 @@ def write_ffi_config(robot, gpu, base_picks, n, base_maxperf):
     count), so the old blanket clamp is now an ASSERTION — it can no longer silently
     throw a valid pick away. Falls back to the host-tier guess only for a pre-E1 .so
     that lacked the introspection ABI (tier == None)."""
+    profile = SURFACE_PROFILE[surface]
     path = Path(_launch_configs_dir()) / robot / f"{gpu}.json"
     doc = json.loads(path.read_text()) if path.exists() else {}
-    ffi = doc.setdefault("ffi_bases", {})
+    ffi = doc.setdefault(f"{profile}_bases", {})
     tier_sources = set()
     for base, picks in base_picks.items():
         blk = ffi.setdefault(base, {})
@@ -312,16 +376,16 @@ def write_ffi_config(robot, gpu, base_picks, n, base_maxperf):
                           f"(src={src}) — tier/threads INCONSISTENT, clamping + flag")
                     thr = ceiling
             blk[key] = {"tier": tier, "threads": thr}
-    meta = doc.setdefault("ffi_meta", {})
+    meta = doc.setdefault(f"{profile}_meta", {})
     meta["metric"] = "batch_to_land_median_us"
     meta["autotune_N"] = n
     meta["tier_source"] = sorted(tier_sources)   # how each tier was derived (audit)
-    meta["note"] = ("FFI/jax launch-path optimum; tier read from the kernel's REAL "
+    meta["note"] = (f"{surface} launch-path optimum; tier read from the kernel's REAL "
                     "compiled launch_bounds (cudaFuncGetAttributes, E1 tier contract). "
-                    "Regenerated by test/benchmarks/autotune_ffi.py")
+                    "Regenerated by test/benchmarks/autotune_ffi.py --surface " + surface)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
-    print(f"\n  wrote ffi_bases -> {path}  (tier_source={sorted(tier_sources)})")
+    print(f"\n  wrote {profile}_bases -> {path}  (tier_source={sorted(tier_sources)})")
 
 
 def main():
@@ -333,6 +397,9 @@ def main():
     ap.add_argument("--iters", type=int, default=100, help="timed iters per thread count")
     ap.add_argument("--warmup", type=int, default=5)
     ap.add_argument("--gpu", default=LAUNCH_CONFIG_DEFAULT_GPU)
+    ap.add_argument("--surface", default="jax", choices=sorted(SURFACE_PROFILE),
+                    help="launch path to sweep: jax -> ffi_bases, torch -> torch_bases, "
+                         "numpy -> pybind_bases (default jax)")
     ap.add_argument("--algos", nargs="+", default=None, help="subset of algo symbols to SWEEP")
     ap.add_argument("--build-algos", nargs="+", default=None,
                     help="RAM-safe subset to BUILD into the .so (deps auto-pulled). Big robots "
@@ -346,9 +413,10 @@ def main():
     base_picks, base_maxperf = {}, {}
     for base in bases:
         base_picks[base], base_maxperf[base] = autotune_base(
-            args.robot, base, args.n, args.iters, args.warmup, want, build_algos=args.build_algos)
+            args.robot, base, args.n, args.iters, args.warmup, want,
+            build_algos=args.build_algos, surface=args.surface)
 
-    print("\n=== FFI picks (batch-to-land) ===")
+    print(f"\n=== {args.surface} picks (batch-to-land) ===")
     for base, picks in base_picks.items():
         for key, pk in sorted(picks.items()):
             tier = pk.get("tier") or "?"
@@ -356,9 +424,10 @@ def main():
             print(f"  {base:8s} {key:24s} threads={pk['threads']:5d}  {pk['us']:8.2f} us"
                   f"  tier={tier:8s} (max={pk.get('kernel_max_threads','?')}, src={src})")
     if args.dry_run:
-        print("\n  --dry-run: not writing ffi_bases")
+        print(f"\n  --dry-run: not writing {SURFACE_PROFILE[args.surface]}_bases")
         return
-    write_ffi_config(args.robot, args.gpu, base_picks, args.n, base_maxperf)
+    write_ffi_config(args.robot, args.gpu, base_picks, args.n, base_maxperf,
+                     surface=args.surface)
 
 
 if __name__ == "__main__":

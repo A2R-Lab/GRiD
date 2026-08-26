@@ -712,6 +712,12 @@ class TorchRobotHandle:
         its own autotuned per-algo thread count; ``n >= 1`` overrides that."""
         self._base.set_threads_per_block(n)
 
+    def kernel_max_threads(self, algo: str) -> int:
+        """Real compiled ``__launch_bounds__`` ceiling for the short autotune key
+        (E1 tier-contract introspection); ``-1`` when unknown/not-built. Delegates
+        to the base handle — see ``RobotHandle.kernel_max_threads``."""
+        return self._base.kernel_max_threads(algo)
+
     # ─── output convention (mjx parity) ──────────────────────────────────
     @property
     def output_convention(self) -> str:
