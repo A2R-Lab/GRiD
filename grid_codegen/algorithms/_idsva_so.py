@@ -254,7 +254,8 @@ def gen_idsva_so_xdown_plucker_inverse(self, mode):
         self.gen_add_parallel_loop('i','XIMAT_SIZE*NUM_BODIES')
         self.gen_add_code_line('size_t idx = i % XIMAT_SIZE;')
         self.gen_add_code_line('size_t sub_idx = idx % 18;')
-        # TODO fix magic numbers
+        # indices 1,4,8,11 (mod 18) = the negated skew entries of the 3x3 rotation
+        # blocks in the packed 6x6 spatial transform (18 = one 6x3 column pair).
         self.gen_add_code_line('if (idx % 18 == 1 || idx % 18 == 4 || idx % 18 == 8 || idx % 18 == 11) {', True)
         self.gen_add_code_line(f'Xdown[i] = Xup[i+5];')
         self.gen_add_code_line(f'Xdown[i+5] = Xup[i];')
@@ -2895,7 +2896,7 @@ def _emit_idsva_so_body_frame_kernel_body_for_flags(self, n, NUM_POS, use_qdd_in
 
     if not single_call_timing:
         self.gen_add_parallel_loop("k","NUM_TIMESTEPS",block_level = True)
-        if use_qdd_input: # TODO
+        if use_qdd_input:
             self.gen_kernel_load_inputs("q_qd",str(n + NUM_POS),"qdd",str(n),stride="stride_q_qd",stride2=str(n))
         else:
             self.gen_kernel_load_inputs("q_qd_u",str(3*NUM_POS),stride="stride_q_qd_u")
@@ -2909,7 +2910,7 @@ def _emit_idsva_so_body_frame_kernel_body_for_flags(self, n, NUM_POS, use_qdd_in
         if not use_global_output: self.gen_kernel_save_result("idsva_so",str(4*n**3),stride=str(4*n**3))
         self.gen_add_end_control_flow()
     else:
-        if use_qdd_input: # TODO
+        if use_qdd_input:
             self.gen_kernel_load_inputs("q_qd",str(2*n),"qdd",str(n))
         else:
             self.gen_kernel_load_inputs("q_qd_u",str(3*NUM_POS))
@@ -2947,7 +2948,7 @@ def gen_idsva_so_body_frame_kernel(self, use_qdd_input = False, single_call_timi
     func_def_start = "void idsva_so_body_frame_kernel(T *d_idsva_so, unsigned char *d_workspace, const T *d_q_qd_u, const int stride_q_qd_u, "
     func_params.insert(1, "d_workspace is a per-timestep global-memory scratch buffer (gravity shim + LITE/MINIMAL spill rungs)")
     func_def_end = "const robotModel<T> *d_robotModel, const T gravity, const int NUM_TIMESTEPS) {"
-    if use_qdd_input: # TODO
+    if use_qdd_input:
         func_def_start += "const T *d_qdd, "
         func_params.insert(-2,"d_qdd is the vector of joint accelerations")
     func_def = func_def_start + func_def_end
@@ -3015,9 +3016,9 @@ def gen_idsva_so_body_frame_host(self, mode = 0):
                                 "gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q_qd*" + \
                                 ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));", \
                                  "gpuErrchkKernel();"])
-    # TODO then compute but adjust for compressed mem and qdd usage
     self.gen_add_code_line("// then call the kernel")
-    # TODO - qdd=0 optimization
+    # (possible future perf: skip the qdd-dependent terms when qdd is identically
+    #  zero — an opt-in fast path, tracked informally, not scheduled.)
     
     func_call_code = [f'{func_call_start}{func_call_end}']
     # wrap function call in timing (if needed). The sync between the launch

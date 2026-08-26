@@ -2206,8 +2206,9 @@ def gen_plant_step_hessian_kernel(self):
     pass-through over grid::integrator_hessian_device) with the matching
     SCRATCH_IN_SMEM / CONTRACT_IN_SMEM flags. Inputs/outputs are global.
 
-    Scope: EULER / SI-EULER on a FIXED base (floating + RK static_assert out in
-    the composed device fn). x = [q (NUM_POS); qd (NUM_VEL)]; u = control torque
+    Scope: EULER / SI-EULER, fixed AND floating base (floating routes to the
+    SE(3)-retract hessian device fn; only multi-stage RK static_asserts out).
+    x = [q (NUM_POS); qd (NUM_VEL)]; u = control torque
     (NUM_VEL). d_d2AB is the (2*NUM_VEL x 3*NUM_VEL x 3*NUM_VEL) row-major output;
     d_workspace is the generated global spill workspace (nullptr at TIER_SHARED)."""
     n = self.robot.get_num_vel()
