@@ -47,12 +47,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # LAUNCH_CONFIG_ALGO_TO_SYMBOL. Build the long->short reverse map so the bake emits
 # loadable keys (long keys would be silently skipped by load_launch_config).
 sys.path.insert(0, str(REPO_ROOT))
-try:
-    from grid_codegen.GRiDCodeGenerator import LAUNCH_CONFIG_ALGO_TO_SYMBOL
-    SYMBOL_TO_KEY = {sym: key for key, sym in LAUNCH_CONFIG_ALGO_TO_SYMBOL.items()}
-except Exception:  # pragma: no cover - keep tool usable if import path shifts
-    LAUNCH_CONFIG_ALGO_TO_SYMBOL = {}
-    SYMBOL_TO_KEY = {}
+# FATAL on failure — no fallback. A silent except here once degraded the bake to
+# verbatim long-key pass-through (campaign-1: every core-algo pick landed on a key
+# load_launch_config() drops, so the committed bake was inert for the mapped algos
+# while the stale short keys stayed live). If this import breaks, the tool cannot
+# emit loadable keys and must say so loudly.
+from grid_codegen.algo_registry import build_launch_config_algo_to_symbol
+
+LAUNCH_CONFIG_ALGO_TO_SYMBOL = build_launch_config_algo_to_symbol()
+SYMBOL_TO_KEY = {sym: key for key, sym in LAUNCH_CONFIG_ALGO_TO_SYMBOL.items()}
 
 
 def _host() -> str:
@@ -124,9 +127,7 @@ def main() -> None:
             # the autotune_best may carry: an already-short key (e.g. "fd") or the
             # long GRiD symbol (e.g. "forward_dynamics"). Skip anything in neither —
             # load_launch_config() would skip it anyway, so don't bake dead keys.
-            if not LAUNCH_CONFIG_ALGO_TO_SYMBOL:        # import failed: pass through
-                key = algo
-            elif algo in LAUNCH_CONFIG_ALGO_TO_SYMBOL:  # already a short key
+            if algo in LAUNCH_CONFIG_ALGO_TO_SYMBOL:    # already a short key
                 key = algo
             elif algo in SYMBOL_TO_KEY:                 # long symbol -> short
                 key = SYMBOL_TO_KEY[algo]
