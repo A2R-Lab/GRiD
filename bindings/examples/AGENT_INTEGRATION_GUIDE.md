@@ -128,12 +128,13 @@ qdd-aware) · `forward_dynamics_gradient(q,qd,u)`→`(B,NV,2·NV)` · second-ord
 (`joint_position_barrier`, `joint_velocity_barrier`, `joint_torque_barrier`) return
 `(value, grad, hess_diag)`. These are the building blocks for an on-GPU MPC/DDP step.
 
-**numpy-only extras** (not yet on jax/torch): `com`, `ccrba`, `dccrba`, `cmm_time_variation`,
-`coriolis_matrix`, `energy`, `generalized_gravity`, `nonlinear_effects`,
+**Value ops** (all three backends; forward-only on jax/torch): `com`, `ccrba`, `dccrba`,
+`cmm_time_variation`, `coriolis_matrix`, `energy`, `generalized_gravity`, `nonlinear_effects`,
 `{kinetic,potential}_energy_regressor`, `frame_jacobian`/`_dot` (runtime `target_jid` +
 `reference_frame` LOCAL/WORLD/LOCAL_WORLD_ALIGNED), `osc_inertia`, and the runtime-target EE pose
 (`end_effector_pose_runtime`, `..._gradient_runtime` — pick any target frame + offset at call
-time, one compiled robot serves all).
+time, one compiled robot serves all). The canonical per-backend surface list is
+`docs/source/user_guide/tutorials/python_wrappers.rst`.
 
 Properties: `num_joints`, `num_vel`, `num_ees`, `floating_base`, `max_batch`, `output_convention`.
 
@@ -255,7 +256,11 @@ fastest at 128 threads but the FFI path is fastest at ~768 — the same kernel, 
 - [`quickstart_iiwa14.py`](quickstart_iiwa14.py) — register + call every method (numpy).
 - [`jax_gpu_resident.py`](jax_gpu_resident.py) — residency, jit/vmap/grad, `lax.scan` rollout,
   donate, dlpack. The reference for the JAX fast path.
-- [`torch_cuda_graphs.py`](torch_cuda_graphs.py) — CUDA tensors, autograd, CUDA-Graphs replay.
+- [`jax_gpu_resident_go2.py`](jax_gpu_resident_go2.py) — the floating-base twin (go2, nq=19/nv=18):
+  same demos plus GRiD's own `integrator` kernel inside the scan for the on-manifold base retract.
+- [`torch_cuda_graphs.py`](torch_cuda_graphs.py) — CUDA tensors, autograd, CUDA-Graphs replay
+  (the graph win is CPU-submit cost, ~13 us eager vs ~2 us replay; wall time is ~break-even).
+- [`torch_cuda_graphs_go2.py`](torch_cuda_graphs_go2.py) — the floating-base twin.
 - [`derivatives.py`](derivatives.py) — analytic first-order (`inverse/forward_dynamics_gradient`
   = id_du/fd_du, `end_effector_pose_gradient`) + second-order (`idsva_so`/`fdsva_so`) tensors,
   and the `jit`/`vmap`/`grad` autodiff idioms that pull the same Jacobians through a cost.

@@ -6,11 +6,11 @@
 # WHAT IT DOES
 #   1. Detects your GPU (name + compute capability) and derives the GPU key
 #      <model>_<arch>, e.g. rtx5090_sm120.
-#   2. Runs the RAM-SAFE autotune sweep (run.py --autotune-threads) for the
-#      given robot + bases, single-call timing OFF (B8 default; it's hard to
-#      time and needs the rdc shim — batch N=256 timing is what we tune on).
-#      Serial build (GRID_COMPILE_WORKERS=1 --build-jobs 1) so the big-robot SO
-#      monolithic TUs (~24-36 GB cicc each) never OOM the box.
+#   2. Runs the RAM-SAFE autotune sweep (per_algo_bench.py --mode autotune
+#      --stage sweep) for the given robot + bases, single-call timing OFF
+#      (B8 default; it's hard to time and needs the rdc shim — batch N=256
+#      timing is what we tune on). Serial build (--compile-jobs 1, one
+#      per-algo TU at a time) so the big-robot SO TUs never OOM the box.
 #   3. Converts the swept winners into config/launch_configs/<robot>/<gpu>.json in the
 #      documented schema (via config/autotune_to_launch_config.py).
 #   4. Prints next steps: re-codegen + rebuild to pick up the values, and how to
@@ -33,7 +33,7 @@
 # Run on a QUIET GPU — timing must be isolated (close other GPU workloads).
 set -uo pipefail
 
-REPO_ROOT="/home/plancher/Desktop/GRiD"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 export PATH=/usr/local/cuda/bin:$PATH
 

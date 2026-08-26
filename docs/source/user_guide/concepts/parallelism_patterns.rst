@@ -72,7 +72,7 @@ it for the backward pass.
 ----
 
 P2 — Parallel independent columns (gradients / Jacobians / Hessians)
--------------------------------------------------------------------
+---------------------------------------------------------------------
 
 **The pattern.** A gradient ``∂f/∂q`` is a matrix whose **columns are
 independent** (one per input DoF); a Hessian is a tensor whose **(j,k) cells are

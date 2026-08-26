@@ -61,17 +61,18 @@ Install CUDA Dependencies
 Download and Install CUDA
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Note: for Ubuntu 20.04 see https://developer.nvidia.com/cuda-downloads
-for other distros
+Note: the commands below are for Ubuntu 24.04 (``ubuntu2404``) —
+substitute your release in the repo URL, and see
+https://developer.nvidia.com/cuda-downloads for other distros. NVIDIA's
+repos now use the ``cuda-keyring`` package (the old ``apt-key`` method
+was removed in Ubuntu 22.04+):
 
 ::
 
-   wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-ubuntu2004.pin
-   sudo mv cuda-ubuntu2004.pin /etc/apt/preferences.d/cuda-repository-pin-600
-   sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/7fa2af80.pub
-   sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/ /"
+   wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+   sudo dpkg -i cuda-keyring_1.1-1_all.deb
    sudo apt-get update
-   sudo apt-get -y install cuda
+   sudo apt-get -y install cuda-toolkit
 
 Add the following to ``~/.bashrc``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

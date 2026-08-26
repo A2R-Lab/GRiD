@@ -232,7 +232,6 @@ Step-by-step recipe (worked example: ``fdsva_so``)
    .. code:: shell
 
       PATH="/usr/local/cuda/bin:.../bin:$PATH" \
-      PYTHONPATH=$REPO \
       GRID_CUDA_RANDOM_SAMPLES=2 \
       pytest -x -q \
         test/cuda_equivalents/test_cuda_executable_equivalence.py \
@@ -240,7 +239,7 @@ Step-by-step recipe (worked example: ``fdsva_so``)
 
    The runner compares your kernel's output against ``RBDReference.X``
    (the Python truth) for several sample states. Match it to
-   ``rtol = 2e-4`` for float32 at PERF.
+   ``rtol = 2e-4`` for float32 at SHARED.
 
    Also exercise a forced-spill tier to validate the spill path:
 
@@ -248,7 +247,7 @@ Step-by-step recipe (worked example: ``fdsva_so``)
 
       GRID_CUDA_TARGET_SHARED_MEM_BYTES=30000 pytest ...
 
-   PERF validates the math; a forced deep spill validates that the
+   SHARED validates the math; a forced deep spill validates that the
    spilled rung is byte-identical (only the pointer moves) — otherwise
    that rung is shipped untested and will bite later.
 

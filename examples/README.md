@@ -21,7 +21,7 @@ See [`notebooks/README.md`](notebooks/README.md) for the index and setup.
 
 ## `codegen/` — generate `grid.cuh` for your own project
 
-The codegen workflow: drive `GRiDCodeGenerator` directly to emit CUDA from a
+The codegen workflow: drive `grid_codegen` (its `GRiDCodeGenerator` class) directly to emit CUDA from a
 URDF, and print the generated kernels / CPU reference values. This is what you
 reach for when you want the *generated CUDA header itself* — to compile into
 your own MPC/RL/controls binary — rather than calling GRiD through Python.

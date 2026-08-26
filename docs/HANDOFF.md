@@ -692,23 +692,21 @@ of robots beyond the old gate, and NONE were core GRiD dynamics-math bugs:
 - **rizon4 = broken upstream asset (fixed, `0e58f74`)**: resolved URDF has 0 `<inertial>`
   blocks (flexiv xacro emits bare inertia tags) → zero-mass model → crba NaN. Honest
   `_model_inertia_is_degenerate` skip (self-heals if a fixed asset resolves). NOT a GRiD bug.
-- **fr3 finger-2 position — OPEN (intentionally still failing, not masked)**: `fr3_finger_joint2`
-  is a `<mimic>` joint; GRiD doesn't model mimic coupling so finger-2 position (+ derivs)
-  diverge from pinocchio. Orientation matches. A model/convention LIMITATION. DECISION
-  PENDING: add mimic-joint support vs skip mimic-affected leaves.
-- **h1_2 `direct_minv` dynamic-smem crash — OPEN (GRiD robustness)**: at high (session-random)
-  thread counts `cudaFuncSetAttribute(MaxDynamicSharedMemorySize)` hard-fails (`GPUassert:
-  invalid argument`) instead of the graceful "shared-memory request … device supports" guard
-  the other kernels use → FLAKY by thread count. Fix: make direct_minv's kernel-attr
-  registration guard/skip over-cap like the rest. (Distinct from the idsva_so body cap.)
+- **fr3 finger-2 position — CLOSED (2026-08-26 note)**: mimic-joint support landed end-to-end
+  (URDFParser `resolve_mimic_targets` incl. chained mimic, alpha-fold across all algos); fr3
+  is now an active validation robot in the CUDA equivalence suite.
+- **h1_2 `direct_minv` dynamic-smem crash — CLOSED (2026-08-26 note)**: the symbol was renamed
+  to `minv`, and kernel-attr registration is now uniformly guarded (`init_grid_kernel_attrs`
+  checks each algo's smem need vs the device opt-in max before `cudaFuncSetAttribute`, then
+  the graceful runtime guard) — the flaky class is gone.
 See memory `project_grid_broad_coverage_findings.md`.
 
 **BACKLOG / FEATURE REQUEST (user-filed 2026-05-26):** GRiD doesn't support all URDF
 features. Do a single AUDIT of URDF features (`URDFParser` + codegen) vs the spec and add the
-missing ones in ONE clean pass later. First concrete gap = **mimic joints** (fr3); other
-candidates: continuous/planar joints, `<dynamics>` damping/friction, `<limit>`, massless-link
-robustness, `<transmission>`. See memory `project_grid_urdf_feature_support_backlog.md`. NOT
-scheduled — backlog.
+missing ones in ONE clean pass later. (2026-08-26: the audit ran — mimic incl. chained, planar incl. skew normals, and
+`<dynamics>` damping/friction ALL landed; see docs/open-tasks/urdf_feature_matrix.md for the
+current matrix. Remaining candidates: `<limit>` enforcement, `<transmission>`,
+`<safety_controller>`/`<calibration>` metadata.)
 
 **h1_2-floating over-cap crash FIXED (`d4d601f`):** the runner's floating block re-registered
 kernels with UNGUARDED `cudaFuncSetAttribute` (the generated `init_grid` path is guarded; this

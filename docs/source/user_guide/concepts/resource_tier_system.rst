@@ -7,7 +7,7 @@ numerically validated for fdsva_so/Minv/FD/ABA/EE_GRAD. Per-tier surgical
 spill now also lands for **idsva_so (body + world frame)** and the
 **time-integrator value + gradient** kernels — see "Integrator surgical spill"
 below. The global scratch arena is named ``d_workspace`` (device memory);
-earlier revisions of this doc called it ``d_workspace``.
+earlier revisions of this doc called it ``d_global_temp``.
 
 **Audience**: inline-CUDA users (``#include "grid.cuh"`` from their own
 kernel). The Python wrappers (``grid_rbd.RobotHandle``,
@@ -329,8 +329,8 @@ levers from their callees rather than introducing a whole-arena dump.
 stage; its dominant inner buffer is the FD inner's Minv F-region (``6·NV²``).
 It threads the existing ``forward_dynamics_inner<T, MINV_F_IN_SMEM>`` lever:
 
-* Level 0 (PERF on robots that fit): F stays in ``s_temp`` (shared).
-* Level 1 (LITE/MINIMAL, or PERF on h1_2): F spills to ``d_workspace`` while the
+* Level 0 (SHARED on robots that fit): F stays in ``s_temp`` (shared).
+* Level 1 (LITE/MINIMAL, or SHARED on h1_2): F spills to ``d_workspace`` while the
   hot FD path stays in smem. The overflow on h1_2 is only a few KB, so this
   single surgical lever is enough — h1_2 fixed/floating drop from 103/124 KB to
   ~41/46 KB. ``integrator_kernel`` gained ``unsigned char *d_workspace`` as its
@@ -353,16 +353,16 @@ sections):
      - Example tier/robot
    * - 0
      - nothing (full smem)
-     - small robots at PERF
+     - small robots at SHARED
    * - 1
      - ``s_D_qdd_stage`` (``max_stages·NV·3NV``)
-     - g1_fixed PERF
+     - g1_fixed SHARED
    * - 2
-     - + ``s_dAB`` output (``2NV·3NV``) + inverse_dynamics_gradient **selective** (da_df band only;
+     - rung 1 + ``s_dAB`` output (``2NV·3NV``) + inverse_dynamics_gradient **selective** (da_df band only;
        the FD-grad inner stays in smem, just smaller)
-     - g1_floating PERF — hot path stays in smem
+     - g1_floating SHARED — hot path stays in smem
    * - 3
-     - + the **whole** FD-grad inner ``s_temp`` (inverse_dynamics_gradient global_temp)
+     - rung 2 + the **whole** FD-grad inner ``s_temp`` (inverse_dynamics_gradient global_temp)
      - h1_2 fixed/floating — the inner is 160-441 KB, physically can't fit a
        100 KB box, so this is unavoidable
 
@@ -420,7 +420,7 @@ The three tiers:
      - ``min(2*SUGGESTED, 768)``
      - ~85 regs/thread
      - Picks the lowest spill rung that fits the ~48 KB LITE smem target
-       (``cuda_target_lite_shared_mem_bytes``), clamped to be ≥ the PERF
+       (``cuda_target_lite_shared_mem_bytes``), clamped to be ≥ the SHARED
        rung. On robots/algos with multi-rung ladders this is now a
        genuinely intermediate spill level, not an alias of MINIMAL.
    * - ``TIER_MINIMAL``
@@ -445,7 +445,7 @@ caller-provided ``T *d_workspace`` argument:
 
 * ``fdsva_so_inner<T, RESOURCE_TIER>(s_df2, s_idsva_so, s_Minv,
   s_df_du, s_XImats, s_temp, d_workspace, gravity)`` — 4*nv³ inner
-  scratch routes between ``s_temp`` (PERF) and ``d_workspace``
+  scratch routes between ``s_temp`` (SHARED) and ``d_workspace``
   (LITE/MINIMAL).
 * ``forward_dynamics_gradient_device<T, RESOURCE_TIER>(s_df_du,
   s_q, s_qd, [s_qdd, s_Minv | s_u], d_robotModel, gravity,
@@ -518,30 +518,20 @@ through Python would add API surface without clear demand. The
 host wrappers always launch ``*_kernel<T, TIER_SHARED>`` (= current
 behavior).
 
-**Why no LITE smem target between PERF and MINIMAL today?**
-Honest answer: implementation cost. The existing per-algo multi-
-tier spill machinery (``fdsva_so`` has 4 levels,
+**The LITE smem target between SHARED and MINIMAL — now landed.**
+Early revisions of this design shipped without a distinct LITE smem
+target: the per-algo multi-tier spill machinery (``fdsva_so`` 4 levels,
 ``end_effector_pose_hessian``/``inverse_dynamics_gradient``/
-``forward_dynamics_gradient`` have 3, ``idsva_so_body_frame`` has 2) picks **one** spill
-level at codegen time based on ``cuda_target_shared_mem_bytes``. To
-make LITE pick a different level than PERF/MINIMAL we need to
-emit three code paths and have codegen compute three picks per
-algo. That work is deferred to the humanoid follow-up because:
-
-1. On the current robot manifest (DOF ≤ 35), PERF already fits in
-   ≤100 KB and MINIMAL fits in ≤workspace; a binary LITE/MINIMAL
-   collapse is acceptable.
-2. h1_2 (DOF ≥ 50) needs additional spill levels added to the
-   existing machinery anyway — some algos overflow even at the
-   current most-aggressive tier. Tuning new spill levels + tier
-   targets together avoids re-doing the work.
-
-What's in the framework but not yet exercised at LITE-distinct-from-MINIMAL:
-
-* The ``gen_declare_shared_arena(tier_workspace_expr=...)``
-  mechanism in ``grid_codegen/helpers/_code_generation_helpers.py``
-  is binary (PERF in smem / non-PERF in workspace). The follow-up
-  extends it to ternary picks.
+``forward_dynamics_gradient`` 3, ``idsva_so_body_frame`` 2) picked **one**
+spill level at codegen time based on ``cuda_target_shared_mem_bytes``,
+and LITE collapsed onto SHARED/MINIMAL. That follow-up has since landed:
+codegen computes three picks per algo (``select_shared_tier_3way``
+against the ~48 KB ``cuda_target_lite_shared_mem_bytes`` target), emits
+per-tier ``if constexpr`` bodies where the picks diverge, and the
+``gen_declare_shared_arena(tier_workspace_expr=...)`` mechanism in
+``grid_codegen/helpers/_code_generation_helpers.py`` supports the
+ternary picks. See "Humanoid-scale spill" and "LITE 48 KB smem target"
+below for the shipped details.
 
 Humanoid-scale spill (``humanoid-tier-spill``, landed)
 ------------------------------------------------------
@@ -556,9 +546,9 @@ above were the final pieces):
     multi-version bench's ``ROBOTS`` tuple + EE-frame maps in
     ``run_multi_version.py`` and all four baseline runners
     (``baselines/{grid,pinocchio,mjx,frax}/run.py``).
-  - **Per-algo runtime skip**: ``timeGRiD_{single,batch}.cu`` and
-    ``run.py``'s ``PER_ALGO_SPECS`` now wire ``GRID_SKIP_*`` macros for
-    every measured kernel. When ``grid_kernel_fits_device(SHARED_BYTES)``
+  - **Per-algo runtime skip**: ``baselines/grid/run.py``'s
+    ``PER_ALGO_SPECS`` (the single source of truth for each algo's bench
+    call) wires ``GRID_SKIP_*`` macros for every measured kernel. When ``grid_kernel_fits_device(SHARED_BYTES)``
     is false, the measure function prints a parseable ``... SKIPPED``
     line and returns. ``timing_parser.py`` ignores the SKIPPED line and
     ``fill_nulls`` populates the algo with null —
@@ -573,16 +563,16 @@ above were the final pieces):
     added to ``GRiDCodeGenerator.__init__``.
   - ``select_shared_tier_3way(*t_counts)`` returns
     ``(perf_pick, lite_pick, minimal_pick)`` indices into the algorithm's
-    spill-level list. PERF picks the lowest-spill fitting
+    spill-level list. SHARED picks the lowest-spill fitting
     ``cuda_target_shared_mem_bytes`` (~98 KB); LITE picks the lowest-spill
     fitting ``cuda_target_lite_shared_mem_bytes`` (~48 KB), clamped to
-    ``≥`` PERF; MINIMAL is always the most-spill index.
+    ``≥`` SHARED; MINIMAL is always the most-spill index.
   - Five algos now populate ``self.<algo>_spill_tier_3way`` plus
     ``self.<algo>_t_count_per_tier`` (3-tuple of arena t_counts):
     ``inverse_dynamics_gradient``, ``forward_dynamics_gradient``,
     ``end_effector_pose_hessian``, ``fdsva_so``, ``idsva_so_body_frame``.
   - **No emit-path change yet** — existing single-body emission uses
-    the PERF pick (= today's behavior). The picks are available for
+    the SHARED pick (= today's behavior). The picks are available for
     introspection by tests + future per-tier emit work.
 
 **Chunk 3: per-tier ``if constexpr`` emission per algo** (4 of 5 shipped)
@@ -596,7 +586,7 @@ above were the final pieces):
     ``forward_dynamics_gradient``, ``fdsva_so`` (commit
     ``8e5ff50``). Verified via nvcc compile of go2_fixed (FULL 3-way
     divergence on end_effector_pose_hessian + fdsva_so picks) and h1_2_fixed
-    (PERF=1, LITE/MIN=2 divergence on end_effector_pose_hessian +
+    (SHARED=1, LITE/MIN=2 divergence on end_effector_pose_hessian +
     inverse_dynamics_gradient). Smoke test passes on iiwa14 (picks
     collapse).
   - **Deferred**: ``idsva_so_body_frame``. Its current spill machinery is
@@ -709,7 +699,7 @@ you want to opt out, compile with ``-DGRID_CUDA_ENABLE_L2_PERSISTING=0``.
 
 **Phase 3a + 3b + 3c + 3d + 3e shipped — Minv + FD + ABA + END_EFFECTOR_POSE_GRADIENT + FDSVA_SO L4-5 spill landed**
 
-* **Phase 3d (END_EFFECTOR_POSE_GRADIENT)**: mirrors the END_EFFECTOR_POSE_HESSIAN 3-tier spill pattern. PERF
+* **Phase 3d (END_EFFECTOR_POSE_GRADIENT)**: mirrors the END_EFFECTOR_POSE_HESSIAN 3-tier spill pattern. SHARED
   keeps the full inner_temp + s_deePos + dXmatsHom in smem; LITE pushes the
   recursion-hot inner_temp (2*2*16*num_ees*n T = ~52 KB on humanoid-scale)
   to L2-pinned workspace and writes ``s_deePos`` directly into global
@@ -719,15 +709,15 @@ you want to opt out, compile with ``-DGRID_CUDA_ENABLE_L2_PERSISTING=0``.
   is tier-aware. The workspace section reuses the SO offset (END_EFFECTOR_POSE_GRADIENT
   and SO algos don't run concurrently). Per-(robot) picks:
 
-  - iiwa14_fixed/floating: (0, 0, 2) — PERF/LITE alias to full smem;
+  - iiwa14_fixed/floating: (0, 0, 2) — SHARED/LITE alias to full smem;
     MINIMAL spills inner_temp + dxhom
   - go2_fixed/floating: (0, 0, 2) — same
-  - h1_2_fixed/floating: (1, 1, 2) — PERF/LITE both already spill
+  - h1_2_fixed/floating: (1, 1, 2) — SHARED/LITE both already spill
     inner_temp + s_deePos; MINIMAL additionally spills dxhom
 
   Smoke (nvcc -gencode arch=compute_120,code=sm_120, all 9 emitted kernels
   × 3 tiers per robot): iiwa14_fixed/go2_fixed/h1_2_fixed all 27/27 PASS.
-  h1_2_fixed END_EFFECTOR_POSE_GRADIENT compiles clean at 40/40/50 registers (PERF/LITE/MINIMAL).
+  h1_2_fixed END_EFFECTOR_POSE_GRADIENT compiles clean at 40/40/50 registers (SHARED/LITE/MINIMAL).
 
 * **Phase 3e (FDSVA_SO Level 4 + 5)**: extends the existing 4-level spill machinery
   with two new top levels. Level 4 pushes ``s_df_du`` (2*NV²) to a new
@@ -758,7 +748,7 @@ Status (commits ``da831dd`` + ``0795442`` + (3c-tbd)):
   ``max(140*NJ+138, fd_inner_size)`` formula now sees a smaller FD inner
   (post-F-removal). On h1_2_floating ABA's Level 0 arena dropped enough
   that it now fits the 99 KB cap without spill — picks are
-  ``aba=(0, 1, 1)``: PERF/LITE use full smem on most robots, LITE on
+  ``aba=(0, 1, 1)``: SHARED/LITE use full smem on most robots, LITE on
   h1_2_floating spills (~48KB target).
 
 
@@ -773,7 +763,7 @@ Status (commits ``da831dd`` + ``0795442``):
 * ``minv_kernel`` and ``forward_dynamics_kernel`` now both take
   ``unsigned char *d_workspace`` as their new 2nd argument. The per-tier
   ``select_shared_tier_3way`` picks Level 0 vs Level 1 based on the
-  ``cuda_target_shared_mem_bytes`` (PERF, 98 KB), ``cuda_target_lite_shared_mem_bytes``
+  ``cuda_target_shared_mem_bytes`` (SHARED, 98 KB), ``cuda_target_lite_shared_mem_bytes``
   (LITE, 48 KB), and "always max spill" (MINIMAL) targets.
 * ``MINV_DYNAMIC_SHARED_MEM_BYTES<T, TIER>`` and
   ``FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T, TIER>`` are now tier-aware constexprs
@@ -781,7 +771,7 @@ Status (commits ``da831dd`` + ``0795442``):
   every existing single-arg call site).
 * Verified via nvcc compile of h1_2_fixed at all 3 tiers:
 
-  - **h1_2_fixed Minv**: 100 KB → 37 KB smem (PERF picks surgical at h1_2-scale)
+  - **h1_2_fixed Minv**: 100 KB → 37 KB smem (SHARED picks surgical at h1_2-scale)
   - **h1_2_fixed FD**: 106 KB → 37 KB smem
   - 40-64 registers/thread per tier; all three tiers instantiate cleanly.
 
@@ -806,7 +796,7 @@ LITE 48 KB smem target — shipped; value tuning remains
 
 The machinery this section once described as deferred is **landed**:
 ``cuda_target_lite_shared_mem_bytes`` (default 48 KB, env-overridable),
-``select_shared_tier_3way`` picking a per-tier rung against the PERF / LITE /
+``select_shared_tier_3way`` picking a per-tier rung against the SHARED / LITE /
 MINIMAL targets, per-tier ``if constexpr`` emission, the ternary
 ``gen_declare_shared_arena`` arena helper, and the new spill levels that bring
 every previously-overflowing h1_2 kernel (IDSVA_SO, FDSVA_SO, END_EFFECTOR_POSE_GRADIENT,
@@ -847,7 +837,7 @@ run:
 
 **Coverage**
 
-* **GRiD across tiers**: PERF, LITE (post-48KB-target), MINIMAL.
+* **GRiD across tiers**: SHARED, LITE (post-48KB-target), MINIMAL.
   Each tier × each algo × each robot.
 * **Baselines**:
     - Pinocchio (CPU, cppadcodegen-accelerated, multi-threaded — the
@@ -885,10 +875,11 @@ Existing entry points to extend:
 
 **Output artifact**
 
-The result lands as ``test/benchmarks/tier_validation_matrix.md``
-(committed). Same row × column structure as the existing
+The result lands as a dated, committed snapshot
+``test/benchmarks/tier_validation_matrix_<ts>.md`` (e.g.
+``tier_validation_matrix_20260523_2200.md``). Same row × column structure as the existing
 ``benchmark_multi_version_sm120_5090_full.md`` but with GRiD split
-into three tier columns (``grid_perf``, ``grid_lite``,
+into three tier columns (``grid_shared``, ``grid_lite``,
 ``grid_minimal``).
 
 **Threshold tuning** (the reason this is a sweep, not just
@@ -897,9 +888,9 @@ correctness verification):
 * Was 48 KB the right LITE smem target? Maybe 64 KB or 32 KB fits
   the actual perf cliff better. Adjust the codegen target.
 * Are there ``if constexpr`` branches whose perf cost is too high?
-  E.g. on iiwa14 where everything fits PERF, LITE/MINIMAL aliases
+  E.g. on iiwa14 where everything fits SHARED, LITE/MINIMAL aliases
   should be byte-equivalent — verify no regression.
-* Pinocchio absolute baseline: GRiD-PERF / Pinocchio-CPU and
+* Pinocchio absolute baseline: GRiD-SHARED / Pinocchio-CPU and
   GRiD-MINIMAL / Pinocchio-CPU ratios. Even at MINIMAL, GRiD on GPU
   should beat Pinocchio CPU for batch ≥ ~16. If MINIMAL drops below
   Pinocchio at small batches, the downgrade design is too aggressive.

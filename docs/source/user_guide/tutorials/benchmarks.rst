@@ -17,13 +17,12 @@ The full multi-baseline sweep:
 
    .venv/bin/python test/benchmarks/run_benchmarks.py
 
-A single GRiD cell for fast iteration:
+A single GRiD cell for fast iteration (per-exe path: one TU / exe /
+process per algorithm, RAM-safe and crash-isolated):
 
 .. code-block:: shell
 
-   .venv/bin/python test/benchmarks/baselines/grid/run.py \
-       --robot iiwa14 --base fixed \
-       --single-call-iters 50000 --batch-iters 500
+   .venv/bin/python test/benchmarks/per_algo_bench.py --robot iiwa14 --base fixed
 
 A multi-version comparison sweep (multiple GRiD configurations + baselines)
 producing the canonical markdown report:
@@ -92,37 +91,27 @@ compute/transfer inseparable).
 Stability and compile flags
 ---------------------------
 
-A few flags exist for working around hardware/toolchain quirks; the
-defaults are correct on sm_120 (RTX 5090) and likely fine on sm_8x:
+A flag exists for working around hardware/toolchain quirks; the
+default is correct on sm_120 (RTX 5090) and likely fine on sm_8x:
 
-* ``--cicc-opt-level 2`` — forwards ``-Xcicc -O2`` to floating-base
-  GRiD compiles. Workaround for an nvcc cicc -O3 hang seen on sm_8x +
-  CUDA 12.6 with the heavy template-surface bench harness. ptxas stays
-  at -O3. Default OFF (-O3 cicc).
-* ``--ptxas-opt-level 2`` — analogous knob for ptxas, used when nvcc
+* ``--ptxas-opt-level 2`` — drops ptxas from -O3 to -O2, used when nvcc
   ptxas itself crashes (rare).
-* ``--per-algo-tus`` / ``--no-per-algo-tus`` — split the bench's
-  monolithic ``timeGRiD_{single,batch}.cu`` into per-algorithm TUs
-  for parallel nvcc compilation. Currently OFF by default because the
-  per-algo split doesn't actually reduce wall time at the small bench
-  cell sizes (parse-bound rather than compile-bound on
-  ``grid.cuh``); revisit if ``grid.cuh`` ever gets split per-algo too.
 
 Per-host autotuning (recommended for production)
 ------------------------------------------------
 
 For best performance on a given GPU, run the GLASS autotuner once per
 host. It writes a per-host override file under
-``GLASS/bench/tuning/<hostname>.cuh`` (the shipped table is left
+``external/GLASS/bench/tuning/<hostname>.cuh`` (the shipped table is left
 untouched):
 
 .. code-block:: shell
 
-   cd GLASS
+   cd external/GLASS
    python3 bench/autotune.py --sm AUTO
 
 Wall time: ~10–15 minutes. Consume the override on subsequent builds
-with ``-DGLASS_TUNING_TABLE_LOCAL='"GLASS/bench/tuning/<hostname>.cuh"'``.
+with ``-DGLASS_TUNING_TABLE_LOCAL='"external/GLASS/bench/tuning/<hostname>.cuh"'``.
 See :doc:`../getting_started/installation` for details.
 
 .. _autotune-launch-config:
@@ -156,10 +145,10 @@ This:
 #. Detects your GPU (``nvidia-smi`` name + compute capability) and derives
    the GPU key ``<model>_sm<arch>`` (e.g. ``rtx5090_sm120``). If detection
    fails, set ``GPU_KEY=<model>_sm<arch>`` and re-run.
-#. Runs the GRiD autotune sweep (``run.py --autotune-threads``) for that
-   robot + bases. The build is **RAM-safe serial**
-   (``GRID_COMPILE_WORKERS=1 --build-jobs 1``) so the big-robot second-order
-   TUs — which need ~24–36 GB of ``cicc`` each — never OOM the box.
+#. Runs the GRiD autotune sweep (``per_algo_bench.py --mode autotune
+   --stage sweep``) for that robot + bases. The build is **RAM-safe
+   serial** (``--compile-jobs 1``, one per-algo TU at a time) so the
+   big-robot second-order TUs never OOM the box.
 #. Converts the swept winners into ``config/launch_configs/<robot>/<gpu>.json`` in
    the documented schema (``gpu``, ``cuda_arch``, ``gpu_name``,
    ``autotune_N``, ``source``, ``bases``).
@@ -190,6 +179,25 @@ needed — codegen auto-discovers the file. See
 for the full contribution checklist (GPU model, driver / CUDA version,
 robot DoF / base to include in the PR description).
 
+Cheap re-bake: ``refresh_launch_configs.sh``
+--------------------------------------------
+
+``config/refresh_launch_configs.sh`` re-bakes the live
+``config/launch_configs/<robot>/<gpu>.json`` picks from an existing
+tier-sweep **without** the day-long recompile: it harvests the latest
+``results/tier_sweep_phased_*`` sweep (or a ``--sweep-dir`` you pass),
+merges the picks, and bakes the per-robot ``bases`` (optionally
+``ffi_bases`` with ``--with-ffi``), printing a ``git diff`` of
+``config/launch_configs/`` at the end (it never commits).
+
+**Which one when:** ``autotune_robot.sh`` builds a **full monolithic
+per-tier binary**, so big robots (g1 / h2_plus) hit the ~hour
+second-order recompile — use it for a robot/GPU with no prior sweep.
+``refresh_launch_configs.sh`` reuses the cached split (noSO/SO)
+binaries from a phased tier sweep
+(``bash test/benchmarks/run_tier_sweep_phased.sh``), so re-baking after
+a sweep costs no recompile at all.
+
 Pre-GLASS regression check
 --------------------------
 
@@ -204,6 +212,34 @@ to ``--columns`` and the harness will:
 
 The ``pre_glass`` column is fixed-base only — the pre-GLASS bench
 harness predates floating-base support.
+
+GPU-resident pipelines (no-transfer timing)
+-------------------------------------------
+
+GRiD's jax/torch handles can keep an entire control/rollout loop on the GPU —
+inputs, dynamics calls, and downstream math never round-trip through host
+memory. Two example pairs demonstrate and time this
+(``bindings/examples/jax_gpu_resident.py`` / ``torch_cuda_graphs.py`` for the
+iiwa14, and ``..._go2.py`` twins for the floating-base go2), driven by
+``test/benchmarks/gpu_resident_timing.py``.
+
+Measured on the RTX 5090 (sm_120, 2026-08-09,
+``results/overnight_20260809/legC_gpu_resident.json``):
+
+* **JAX resident rollout vs host round-trip** (a ``lax.scan`` rollout calling
+  GRiD's dynamics each step): iiwa14 **24.3x / 14.5x / 7.3x** faster at batch
+  64 / 256 / 1024 (1.5 ms vs 36.6 ms at B=64); go2-floating **6.8x / 6.9x /
+  3.6x** (the floating rollout drives GRiD's own ``integrator`` kernel for the
+  on-manifold base retract inside the scan).
+* **Torch CUDA graphs**: replay wall-time is roughly break-even with eager
+  (0.91-0.99x) — the win is in **CPU submission cost**, ~13 us eager vs ~1.9 us
+  replay (**~6.6x**), which is what matters when the CPU is the bottleneck
+  feeding a real-time control loop. (An earlier "replay slower than eager"
+  reading was a harness artifact — it timed a per-iteration device copy-in;
+  replay-only and copy-in variants are now recorded separately.)
+
+Reproduce with ``.venv/bin/python test/benchmarks/gpu_resident_timing.py``
+(quiet GPU; results land under ``test/benchmarks/results/``).
 
 See also
 --------

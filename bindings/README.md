@@ -27,31 +27,23 @@ JAX FFI, etc.) lives in the
 
 ## Status — v0.5
 
-Methods bound and validated against [`RBDReference`](https://github.com/A2R-Lab/RBDReference)
-at float32 precision:
-
-| Method | Returns | max_err vs RBDReference |
-|---|---|---|
-| `inverse_dynamics(q, qd, qdd=None, gravity=-9.81)` | `(B, NJ)` | 4.9e-6 |
-| `minv(q)` | `(B, NV, NV)` | 1.1e-4 |
-| `forward_dynamics(q, qd, u, gravity=-9.81)` | `(B, NJ)` | 5.7e-5 |
-| `aba(q, qd, u, gravity=-9.81)` | `(B, NJ)` | 5.7e-5 |
-| `crba(q, gravity=-9.81)` | `(B, NV, NV)` | 2.7e-7 |
-| `end_effector_pose(q)` | `(B, 6*NUM_EES)` | 1.4e-7 |
-| `end_effector_pose_gradient(q)` | `(B, 6*NUM_EES, NV)` | 3.1e-7 |
-| `end_effector_pose_hessian(q)` | `(B, 6*NUM_EES, NV, NV)` | 3.1e-7 |
-| `inverse_dynamics_gradient(q, qd, qdd=None, gravity=-9.81)` | `(B, NV, 2*NV)` | 1.6e-5 |
-| `forward_dynamics_gradient(q, qd, u, gravity=-9.81)` | `(B, NV, 2*NV)` | 1.3e-4 |
-| `idsva_so(q, qd, qdd, gravity=-9.81)` | tuple of 4 × `(B, NV, NV, NV)` | 1e-4 |
-| `fdsva_so(q, qd, u, gravity=-9.81)` | tuple of 4 × `(B, NV, NV, NV)` | 1e-4 |
+The full method surface — core dynamics/kinematics, analytical gradients, the
+second-order derivatives, and the centroidal / energy / general-frame value ops
+(`com`, `ccrba`, `dccrba`, `cmm_time_variation`, `coriolis_matrix`, `energy`,
+`generalized_gravity`, `nonlinear_effects`, the KE/PE regressors,
+`frame_jacobian`/`_dot`, `osc_inertia`, and the runtime-target EE pose /
+gradient) — is bound and validated against
+[`RBDReference`](https://github.com/A2R-Lab/RBDReference) at float32 precision,
+and is available on **all three backends** (numpy / jax / torch; the value ops
+are forward-only on jax/torch). The per-method table (shapes, arguments,
+conventions) lives in the
+[Python wrappers docs](https://a2r-lab.github.io/GRiD/user_guide/tutorials/python_wrappers.html)
+(`docs/source/user_guide/tutorials/python_wrappers.rst` in-repo).
 
 Shape legend: `NJ = num_joints (== num_pos == nq)`, `NV = num_vel (tangent /
 velocity space)`. Inputs `q`, `qd`, `qdd`, `u` and the value outputs (`c`, `qdd`)
-are `NJ`-wide (GRiD's kernels consume velocity vectors at the nq stride; for a
-floating base the base 6-dof velocity sits in the leading slots with a padded
-quaternion-offset slot). Matrix/Jacobian outputs are tangent-space (pinocchio
-convention) and `NV`-dimensioned. For a **FIXED base `NV == NJ`**, so every shape
-above is identical to the pre-v0.5 behaviour.
+are `NJ`-wide; matrix/Jacobian outputs are tangent-space (pinocchio convention)
+and `NV`-dimensioned. For a **FIXED base `NV == NJ`**.
 
 > **Breaking change (v0.5) — floating-base only.** `crba`/`minv` now return
 > `(B, NV, NV)` and `inverse_dynamics_gradient`/`forward_dynamics_gradient` return
@@ -74,60 +66,13 @@ above is identical to the pre-v0.5 behaviour.
 > 2026-07-24 on go2-floating: a 64-wide identical-`q` batch returns bit-identical `M`
 > across all slots (`max |M[b]−M[0]| = 0`) and is bit-identical run-to-run.
 
-`register_robot` accepts `ee_joint_names=[...]` to pin specific
-end-effector frames (default: all leaf links), and `allow_fp64=True` for an
-fp64-in/fp64-out convenience cast (compute stays fp32).
-
-`inverse_dynamics` (alias `rnea`) and `forward_dynamics` (alias `fd`) take an
-optional `qdd=`: for `inverse_dynamics`, `qdd=None` ⇒ the bias `c = h − g` and a
-nonzero `qdd` adds the `M·qdd` term. The torch/JAX gradient is qdd-aware (it
-returns the correct ∂τ/∂(q,q̇) including the ∂(M·q̈)/∂q term, not the qdd=0
-Jacobian). The second-order tuples are returned as `SecondOrderID` /
-`SecondOrderFD` NamedTuples (plain positional tuples with named fields).
-
-### Centroidal / energy / general-frame kinematics
-
-Convenience compositions over the same surface (numpy handle only — not yet on
-the JAX/torch backends), validated against the `RBDReference` centroidal /
-energy / frame mixins:
-
-| Method | Returns | max_err vs RBDReference |
-|---|---|---|
-| `com(q)` | `(p_com (B,3), J_com (B,3,NV))` | 1e-4 |
-| `ccrba(q, qd)` | `(A (B,6,NV), h (B,6))` | 1e-4 |
-| `energy(q, qd, gravity=-9.81)` | `(B, 3)` = `[KE, PE, KE+PE]` | 1e-4 |
-| `generalized_gravity(q, gravity=-9.81)` | `(B, NV)` | 1e-5 |
-| `nonlinear_effects(q, qd, gravity=-9.81)` | `(B, NV)` | 1e-5 |
-| `coriolis_matrix(q, qd)` | `(B, NV, NV)` `C(q,q̇)` (`C·q̇ + g = nle`) | 1e-4 |
-| `kinetic_energy_regressor(q, qd)` | `(B, 10*NB)` `y_KE` (`KE = y_KE·π`) | 1e-4 |
-| `potential_energy_regressor(q, gravity=-9.81)` | `(B, 10*NB)` `y_PE` (`PE = y_PE·π`) | 1e-4 |
-| `dccrba(q)` | `(B, 6, NV, NV)` ∂A/∂q tensor | 1e-4 |
-| `cmm_time_variation(q, qd)` | `(B, 6, NV)` Ȧ | 1e-4 |
-| `frame_jacobian(q, target_jid=None, reference_frame=None)` | `(B, 6, NV)` `[lin; ang]` | 1e-5 |
-| `frame_jacobian_dot(q, qd, target_jid=None, reference_frame=None)` | `(B, 6, NV)` | 1e-3 |
-| `osc_inertia(q)` | `(B, 6, 6)` task inertia Λ | 1e-3 |
-| `end_effector_pose_runtime(q, ee_joint_names=None, ee_offsets=None)` | `(B, 6*NUM_EES)` | 1e-5 |
-| `end_effector_pose_gradient_runtime(q, ee_joint_names=None, ee_offsets=None)` | `(B, 6*NUM_EES, NV)` | 1e-5 |
-
-`dccrba` / `cmm_time_variation` run on mimic robots and on big floating-base
-robots (sweep-pool spill); they raise a clear `RuntimeError` only on the rare
-oversized-centroidal-pool case. `end_effector_pose_runtime` /
-`..._gradient_runtime` take the target joint(s) + per-target offset at RUNTIME,
-so one compiled robot serves any leaf/target frame.
-
-`frame_jacobian` / `frame_jacobian_dot` take the target frame at RUNTIME:
-`target_jid` selects the frame's joint id (default: the leaf end-effector joint)
-and `reference_frame` is `LOCAL` (0) / `WORLD` (1) / `LOCAL_WORLD_ALIGNED` (2,
-the default) — passed as the string or the int. `osc_inertia` still targets the
-codegen-baked leaf-EE / LWA frame.
-
 ## JAX FFI (`grid_rbd[jax]`)
 
 The `[jax]` extra (see the [install matrix](#install-editable-from-a-grid-checkout))
-enables the JAX-side bridge, which shares
-the same per-robot `.so` cache. All methods are exposed via
-`jax.ffi.ffi_call` and run device-resident on JAX-supplied CUDA streams
-— no host round-trip — so they slot directly into `jax.jit` graphs:
+enables the JAX-side bridge, which shares the same per-robot `.so` cache.
+Methods are exposed via `jax.ffi.ffi_call` and run device-resident on
+JAX-supplied CUDA streams — no host round-trip — so they slot directly into
+`jax.jit` graphs:
 
 ```python
 import grid_rbd.jax as grid_jax, jax
@@ -138,21 +83,18 @@ def step(q, qd, u):
     return handle.forward_dynamics(q, qd, u)
 ```
 
-The core dynamics / kinematics / SO methods are bound via FFI, with
-autograd-aware `inverse_dynamics` / `forward_dynamics` (qdd-aware),
-`end_effector_pose`, `f_ext` parity, and the inertial-parameter (π) regressor
-VJP path. The newer value ops (`coriolis_matrix`, the energy regressors,
-`dccrba` / `cmm_time_variation`) are on the numpy handle only so far.
+See the [Python wrappers docs](https://a2r-lab.github.io/GRiD/user_guide/tutorials/python_wrappers.html)
+for the JAX surface details (autograd-aware methods, `f_ext` parity, the
+π-regressor VJP path, and the forward-only value ops).
 
 ## PyTorch backend (`backend="torch"`)
 
 The `[torch]` extra (see the [install matrix](#install-editable-from-a-grid-checkout))
-enables the torch backend. `register_robot(..., backend="torch")` returns a `TorchRobotHandle`
-whose methods return `torch.Tensor`. The four differentiable algorithms
-(`inverse_dynamics` / `forward_dynamics` / `aba` / `integrator`) are autograd-aware,
-with analytic backward passes that reuse the existing `*_gradient`
-kernels; the remaining methods are forward-only ops. The `.so` is shared
-with the numpy/JAX surfaces (same content-addressed cache):
+enables the torch backend. `register_robot(..., backend="torch")` returns a
+`TorchRobotHandle` whose methods return `torch.Tensor`; `inverse_dynamics` /
+`forward_dynamics` / `aba` / `integrator` are autograd-aware (analytic backward
+passes), and CUDA-Graphs capture is available via `h.capture(...)`. The `.so`
+is shared with the numpy/JAX surfaces (same content-addressed cache):
 
 ```python
 import grid_rbd, torch
@@ -165,10 +107,6 @@ u  = torch.randn(64, h.num_joints, device="cuda", requires_grad=True)
 
 qdd = h.forward_dynamics(q, qd, u)   # autograd-aware torch.Tensor
 qdd.sum().backward()                 # gradients flow to q, qd, u
-
-# CUDA-Graphs replay for fixed-batch MPC / training:
-g = h.capture("forward_dynamics", q, qd, u)   # off-graph warmup + capture
-qdd = g(q_new, qd_new, u_new)                 # copy_ + replay
 ```
 
 > **GPU/torch compatibility:** the backward VJP contractions run torch's
@@ -178,91 +116,20 @@ qdd = g(q_new, qd_new, u_new)                 # copy_ + replay
 > The `grid` / `grid_plant` kernels themselves are always nvcc-built for
 > the detected arch and are unaffected.
 
-## `grid_plant` cost / barrier / plant-step methods
+## Everything else — see the docs
 
-The handle also exposes the generated `grid_plant` trajectory-optimization
-surface (validated against `RBDReference._PlantMixin`). All take/return 2D
-arrays with axis 0 = batch; cost methods return `(value, grad, hess)` and
-barriers return `(value, grad, hess_diag)`:
+The full reference for the rest of the surface lives in the
+[Python wrappers docs](https://a2r-lab.github.io/GRiD/user_guide/tutorials/python_wrappers.html)
+(`docs/source/user_guide/tutorials/python_wrappers.rst` in-repo):
 
-| Method | Returns |
-|---|---|
-| `quadratic_state_cost(x, x_des, Q)` | `value (B,)`, `grad (B, NX)`, `hess (B, NX, NX)` |
-| `quadratic_input_cost(u, u_des, R)` | `value (B,)`, `grad (B, NV)`, `hess (B, NV, NV)` |
-| `ee_pos_cost(q, p_des, W)` | `value (B,)`, `grad (B, NX)`, GN `hess (B, NX, NX)` |
-| `com_cost(q, p_des, W)` | `value (B,)`, `grad (B, NX)`, GN `hess (B, NX, NX)` (CoM tracking) |
-| `momentum_cost(q, qd, h_des, W)` | `value (B,)`, `grad (B, NX)`, GN `hess (B, NX, NX)` (centroidal-momentum tracking) |
-| `joint_position_barrier(var, lower, upper, mu)` | `value (B,)`, `grad (B, NP)`, `hess_diag (B, NP)` |
-| `joint_velocity_barrier(var, lower, upper, mu)` | as above over `NV` |
-| `joint_torque_barrier(var, lower, upper, mu)` | as above over `NV` |
-| `plant_step(x, u, dt, integrator_type="euler")` | `(B, NX)` next state |
-| `plant_step_gradient(x, u, dt, integrator_type="euler")` | `(B, 2*NV, 3*NV)` `[A\|B]` = `d x_{k+1}/d(x,u)` |
-
-## External forces (`f_ext`)
-
-Per-body external forces are an opt-in feature of the underlying CUDA
-codegen and the `RBDReference` oracle (body-local frame, subtracted from
-the per-body force; an empty/`None` value reproduces the no-force path).
-An `f_ext=` kwarg (shape `(B, 6*num_bodies)`, body-major) is exposed on the
-`RobotHandle` algorithm methods that support it — `inverse_dynamics` /
-`forward_dynamics` / `aba` and the inverse-/forward-dynamics gradients — on
-both the numpy and JAX surfaces.
-
-## Build cost on big floating-base robots (`enable_mujoco_kernels`)
-
-By default GRiD emits **two** variants of each kernel on a floating-base,
-non-mimic robot: the Pinocchio-convention ("pin") kernel and a MuJoCo-convention
-("mjx") twin that applies the `G = blockdiag(R, I)` output basis change. That
-convention change is cheap in principle but was expensive in generated code; the
-second-order mjx epilogues have since been block-parallelized, cutting them
-substantially. Current mjx SASS relative to pin (measured **go2-floating**, `nv=18`):
-
-| Kernel | mjx / pin |
-|---|---|
-| `idsva_so_world_frame` | **2.42x** (was 5.5x rolled / 28x raw) |
-| `fdsva_so` | **1.41x** (was 3.0x) |
-| `inverse_dynamics_gradient`, `forward_dynamics`, `minv`, `crba` | ~1.0x |
-
-The second-order mjx twins are still the largest kernels in a humanoid build, so a
-big-humanoid `.so` is lighter to compile pin-only.
-
-If you do not use the MuJoCo output convention — GATO / PDDP second-order DDP,
-or anything reading Pinocchio-convention derivatives — build **pin-only**:
-
-```python
-handle = grid_rbd.register_robot(
-    name="g1", urdf_path="g1.urdf", floating_base=True,
-    enable_mujoco_kernels=False,     # drop the mjx twins
-)
-```
-
-`enable_mujoco_kernels=False` is mutually exclusive with
-`output_convention="mujoco"` (that convention needs the very kernels it drops);
-passing both raises at `register_robot` rather than failing later with a bare
-rc=3 on each derivative call.
-
-On g1-floating that is the difference between *not building at all* and a ~33 min
-build at ~11 GB peak. Fixed-base and mimic robots (e.g. `h1_2`) never get mjx
-twins, so the flag is a no-op there. It is a **codegen-affecting option**: it
-participates in the `.so` cache key, so flipping it triggers one rebuild.
-
-> The 28x is a known defect in the mjx emitter, not an inherent cost of the
-> convention — tracked for a fix, after which this flag becomes a preference
-> rather than a workaround. `fdsva_so`'s mjx twin is separately known-broken and
-> returns rc=3 ("not built into this .so").
-
-The generator prints a build-time warning naming this flag when it detects a
-large floating-base non-mimic robot, so you find it before the OOM rather than
-after.
-
-**Test suites / codegen sessions** can set `GRID_ENABLE_MUJOCO_KERNELS=0` to make
-pin-only the default for every `gen_all_code` call that does not pass the
-argument explicitly (an explicit argument always wins). GRiD's own CUDA
-equivalence suite does this — it cut a go2-floating second-order cell from 175 s
-to 20 s. The env var deliberately does **not** affect `register_robot` /
-`precompile`: those cache the `.so` under the option dict, and an env var that
-silently changed the build without changing the cache key would hand back a
-stale `.so`.
+* the per-method table (shapes, `qdd=`-aware gradients, `ee_joint_names`,
+  `allow_fp64`),
+* the `grid_plant` cost / barrier / plant-step methods,
+* per-body external forces (`f_ext=`),
+* build cost on big floating-base robots and the `enable_mujoco_kernels`
+  flag (pin-only builds; the flag enters the `.so` cache key only when
+  `False`, so existing caches stay valid),
+* the cache layout and runtime-mutable model parameters.
 
 ## Requirements
 
@@ -279,7 +146,7 @@ opt-in extra on top of the numpy base. Pick the row for the wrapper surface you 
 
 ```bash
 cd path/to/GRiD
-pip install -e "."          # base: numpy handle only
+pip install -e "."          # base: numpy backend only
 pip install -e ".[jax]"     # + JAX FFI surface (grid_rbd.jax)
 pip install -e ".[torch]"   # + torch backend (backend="torch")
 pip install -e ".[all]"     # jax + torch (both backends)

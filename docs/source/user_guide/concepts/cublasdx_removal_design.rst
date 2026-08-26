@@ -1,7 +1,7 @@
 cuBLASDx Removal & Any-Thread-Count Library Functions
 ======================================================
 
-**Status**: design — not yet executed.
+**Status**: executed in v2.0; retained as the historical design record.
 **Archive tag**: ``archive/last-cublasdx`` (commit
 ``5177070``) marks the final state with full ``glass_nvidia``
 (cuBLASDx-backed) support in mainline.
@@ -201,8 +201,8 @@ Bench harness
   ``--cicc-opt-level`` workaround (was for cuBLASDx-induced cicc hangs).
 * :file:`test/benchmarks/generate_report.py` — drop the ``glass_nv``
   column rendering and the ``glass_nv/glass`` ratio.
-* :file:`test/benchmarks/run_benchmarks.py`,
-  :file:`test/benchmarks/run_overnight_sweep.sh` — sweep for stale CLI flags.
+* :file:`test/benchmarks/run_benchmarks.py` and the overnight sweep
+  scripts — sweep for stale CLI flags.
 * Existing reports in ``test/benchmarks/`` (especially
   ``benchmark_multi_version_sm120_5090_full.md``) — **archive, do not
   delete**. They are the final record of glass_nv numbers.
@@ -231,8 +231,8 @@ Install / build system
 
 * :file:`install/base_install.sh`, :file:`install/developer_install.sh` — drop libmathdx
   setup steps if present.
-* :file:`pyproject.toml`, :file:`bindings/pyproject.toml`,
-  :file:`setup.py` (repo root) — drop cuBLASDx-related extras if any.
+* :file:`pyproject.toml`, :file:`setup.py` (repo root) — drop
+  cuBLASDx-related extras if any.
 * GitHub Actions / CI — drop ``--mathdx-root`` or
   ``GRID_CUDA_LINALG_BACKEND`` from any workflow.
 
@@ -295,18 +295,9 @@ Timing
 The ``glass`` column from the existing
 ``benchmark_multi_version_sm120_5090_full.md`` is **the SIMT-only
 path**. The post-rip timings must match it within sweep noise (typically
-±2-3% per cell). Re-run after the codegen + wrapper sub-rip lands:
-
-.. code-block:: bash
-
-   .venv/bin/python test/benchmarks/run_multi_version.py \
-       --columns glass --robots iiwa14 go2 g1 \
-       --bases fixed floating \
-       --single-call-iters 50000 --batch-iters 500 \
-       --output-dir test/benchmarks/results/comparison_post_cublasdx_removal \
-       --report test/benchmarks/benchmark_post_cublasdx_removal.md
-
-Diff against the archived full report:
+±2-3% per cell): re-run the ``glass``-column multi-version sweep
+(``run_multi_version.py --columns glass``) after the codegen + wrapper
+sub-rip lands and diff against the archived full report:
 
 * Per-cell ratio within ±3% across all 24 (robot × base × algorithm) cells.
 * No new SKIPPED cells.
@@ -321,10 +312,9 @@ to cover every algorithm at block sizes
 ``{64, 128, 256, MAX_PERF_LEVEL_THREADS, 512}``. Output must match
 ``glass``-column reference at all block sizes within float32 precision.
 
-Add a microbench at ``test/benchmarks/any_thread_count_microbench.py``
-that times RNEA at each block size for iiwa14, go2, g1, h1_2 and
-reports the perf trajectory. Saved as a committed artifact (not /tmp)
-so future-self can re-run after changes.
+Add a committed (not /tmp) microbench under ``test/benchmarks/`` that
+times RNEA at each block size for iiwa14, go2, g1, h1_2 and reports the
+perf trajectory, so future-self can re-run after changes.
 
 Revert path
 ------------

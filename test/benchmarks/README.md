@@ -1,7 +1,8 @@
 # GRiD Benchmarks
 
 Performance comparison of GRiD vs. Pinocchio vs. MJX across 14 core algorithms,
-for `iiwa14`, `go2`, and `g1` robots in fixed and floating-base configurations.
+for `iiwa14`, `baxter`, `go2`, `g1`, and `h2_plus` robots in fixed and
+floating-base configurations.
 
 The 14 rows are the first-order set (`inverse_dynamics`, `minv`, `forward_dynamics`,
 `aba`, `crba`, `inverse_dynamics_gradient`, `forward_dynamics_gradient`,
@@ -387,6 +388,9 @@ Default cache size is 5 GB — bump if you're caching many builds:
 test/benchmarks/
 ├── README.md                    ← this file
 ├── run_benchmarks.py            ← main coordinator
+├── per_algo_bench.py            ← per-exe GRiD orchestrator (one TU / exe / process per algo)
+├── run_multi_version.py         ← multi-version comparison sweep (columns + baselines)
+├── autotune_ffi.py              ← FFI-lane (bindings) launch-config autotuner
 ├── generate_report.py           ← JSON → benchmark.md
 ├── timing_parser.py             ← shared output parser
 ├── benchmark.md                 ← committed curated snapshot
@@ -397,15 +401,28 @@ test/benchmarks/
 ├── .gitignore
 └── baselines/
     ├── grid/
-    │   ├── run.py               ← GRiD runner
-    │   └── timeGRiD.cu          ← timing kernel (moved + extended)
+    │   ├── run.py               ← GRiD runner library (PER_ALGO_SPECS)
+    │   ├── timeGRiD_bindings.py ← bindings-lane timing script
+    │   └── timeGRiD_common.h    ← shared timing header for the per-algo TUs
     ├── pinocchio/
     │   ├── run.py               ← Pinocchio runner
-    │   ├── timePinocchio.cpp    ← timing program (moved + extended)
+    │   ├── timePinocchio.cpp    ← timing program
     │   └── ReusableThreads/     ← submodule (plancherb1/ReusableThreads)
     ├── mjx/
     │   ├── run.py               ← MJX runner
     │   └── timeMJX.py           ← JAX/MJX timing script
+    ├── frax/
+    │   ├── run.py               ← Frax runner
+    │   └── timeFrax.py
+    ├── bard/
+    │   ├── run.py               ← BARD (PyTorch CPU+GPU) runner
+    │   └── timeBARD.py
+    ├── curobo/
+    │   ├── run.py               ← cuRobo runner
+    │   └── timeCurobo.py
+    ├── mujoco_warp/
+    │   ├── run.py               ← MuJoCo Warp runner
+    │   └── timeMujocoWarp.py
     └── util/
         ├── experiment_helpers.h
         └── getters/

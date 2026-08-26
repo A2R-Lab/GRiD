@@ -82,9 +82,9 @@ floating-base orderings across the current floating robot manifest:
 .venv/bin/python -m pytest external/RBDReference/tests/test_floating_base_conventions.py -q
 ```
 
-The CUDA executable equivalence suite still defaults to the Pinocchio-facing
-floating convention and is currently being expanded from the first floating-base
-smoke slice to broader floating algorithm coverage.
+The CUDA executable equivalence suite defaults to the Pinocchio-facing
+floating convention and is an established suite with broad floating-base
+algorithm coverage (40+ equivalence modules across the robot manifest).
 
 For floating CUDA development, the pytest harness also accepts optional env
 overrides:
@@ -150,7 +150,7 @@ toolkit *and* the `grid_rbd` wrapper together. The base install is minimal;
 pick a backend extra for the surface you want:
 
 ```bash
-pip install -e "."          # base: numpy handle only
+pip install -e "."          # base: numpy backend only
 pip install -e ".[jax]"     # + JAX FFI surface
 pip install -e ".[torch]"   # + torch backend (CUDA wheel matching your GPU arch)
 pip install -e ".[all]"     # jax + torch
@@ -174,9 +174,9 @@ The `torch` backend exposes autograd-aware `inverse_dynamics` / `forward_dynamic
 and the handle also surfaces the `grid_plant` cost/barrier methods. `inverse_dynamics`
 (alias `rnea`) / `forward_dynamics` (alias `fd`) take an optional `qdd=` (the
 autograd gradient is qdd-aware, returning the correct ∂τ/∂(q,q̇) including the
-∂(M·q̈)/∂q term), and the numpy surface adds the new value ops `coriolis_matrix`,
+∂(M·q̈)/∂q term), and all three backends expose the value ops `coriolis_matrix`,
 `kinetic_energy_regressor`, `potential_energy_regressor`, `dccrba`, and
-`cmm_time_variation`. Pass `allow_fp64=True` at `register_robot` for an
+`cmm_time_variation` (forward-only on jax/torch). Pass `allow_fp64=True` at `register_robot` for an
 fp64-in/fp64-out convenience cast (compute stays fp32). See
 [`bindings/README.md`](bindings/README.md) and the
 [Python wrappers docs](docs/source/user_guide/tutorials/python_wrappers.rst).
