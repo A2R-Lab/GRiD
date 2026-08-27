@@ -6,8 +6,9 @@ its C ABI) to numpy/Python conventions, and adds shape validation +
 helpful error messages.
 
 All algorithm methods take and return 2D arrays where axis 0 is the
-batch dimension. Per the wrapper plan, single-call semantics are not
-exposed — batch=1 covers it with negligible overhead.
+batch dimension. Single-sample calls are supported too: ``_accept_1d``
+lets each method accept 1D (unbatched) inputs and return unbatched
+outputs (internally computed as batch=1 with negligible overhead).
 
 Gravity convention
 ------------------
@@ -109,6 +110,7 @@ _INTEGRATOR_CODES = {
     "midpoint": 2,
     "rk3": 3,
     "rk4": 4,
+    "trapezoidal": 5,
 }
 
 
@@ -180,9 +182,10 @@ class _MujocoView:
     concurrently with pinocchio-convention calls on the same handle. On a fixed base
     the convention is a no-op (no free-flyer), so the view simply matches pinocchio.
 
-    Derivative / second-order / other convention-sensitive surfaces are deliberately
-    NOT exposed here while their mjx codegen fusion is in progress (calling them in
-    mujoco mode raises); they appear on this view as each one lands."""
+    Derivative / second-order surfaces ARE supported in mujoco convention on the
+    handle itself (call e.g. ``handle.inverse_dynamics_gradient(...,
+    _convention="mujoco")`` on a .so built with the mjx kernel twins); this view
+    only exposes the value/centroidal/energy set with MuJoCo parameter names."""
 
     __slots__ = ("_h",)
 
@@ -250,7 +253,8 @@ class RobotHandle:
     "float64"``). The legacy ``allow_fp64=True`` is only an fp32-compute upcast
     convenience (compute in fp32, cast i/o to fp64, single-precision accuracy
     caveat); it is off by default and ignored for a true-fp64 handle. The
-    jax/torch handles are strictly fp32.
+    jax/torch handles follow the .so dtype too (``dtype="float64"`` builds carry
+    fp64 jax/torch surfaces; jax additionally needs x64 mode).
 
     Method index (all take/return ``(B, …)`` arrays, batch axis first)::
 
@@ -356,8 +360,9 @@ class RobotHandle:
         methods take and return MuJoCo-convention ``q``/``qd``/``qdd``/``M``/... for
         a FLOATING base; it is a byte-identical no-op for a fixed base. See
         ``external/RBDReference/equivalents/mujoco_convention.md`` for the exact transforms.
-        Currently applies to the VALUE methods (inverse_dynamics, forward_dynamics,
-        aba, crba, minv); gradient/second-order surfaces stay pinocchio-convention."""
+        Applies to the VALUE methods (inverse_dynamics, forward_dynamics, aba,
+        crba, minv, ...) AND to the gradient / second-order / regressor surfaces
+        (served by the mjx kernel twins when the .so is built with them)."""
         return self._output_convention
 
     @output_convention.setter
@@ -1648,10 +1653,10 @@ class RobotHandle:
     #
     # Convenience compositions over the grid:: kinematics/dynamics surface,
     # validated against RBDReference's centroidal / energy / frame mixins. All
-    # take 2D float32 (B, NUM_JOINTS) inputs. The frame_jacobian family targets a
-    # frame fixed at codegen time (the leaf end-effector joint,
-    # LOCAL_WORLD_ALIGNED reference frame); a runtime frame/reference_frame kwarg
-    # is not yet supported on the GPU surface (the host/kernel bake the target).
+    # take 2D float32 (B, NUM_JOINTS) inputs. The frame_jacobian family takes the
+    # target frame at RUNTIME: `target_jid` / `reference_frame` kwargs (defaults:
+    # the leaf end-effector joint, LOCAL_WORLD_ALIGNED) are passed straight to
+    # the GPU surface — no codegen-time baking.
 
     def com(self, q, *, _convention=None):
         """Center-of-mass world position p_com (3,) and CoM Jacobian J_com.

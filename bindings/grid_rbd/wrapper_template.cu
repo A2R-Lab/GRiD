@@ -2187,10 +2187,12 @@ extern "C" int grid_rbd_frame_jacobian(const T* q, T* out, int batch,
 }
 
 // frame_jacobian_dot(q, qd) -> d/dt of the leaf-EE frame Jacobian along v=qd,
-// 6 x NUM_VEL (col-major, [linear;angular]). Gated on GRID_HAS_FRAME_JACOBIAN.
+// 6 x NUM_VEL (col-major, [linear;angular]). Gated on GRID_HAS_FRAME_JACOBIAN_DOT
+// (dot is opt-in on top of frame_jacobian; a frame_jacobian-only build emits no
+// dot symbols).
 extern "C" int grid_rbd_frame_jacobian_dot(const T* q, const T* qd, T* out, int batch,
                                            int target_jid, int reference_frame) {
-#ifdef GRID_HAS_FRAME_JACOBIAN
+#ifdef GRID_HAS_FRAME_JACOBIAN_DOT
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
@@ -2214,9 +2216,11 @@ extern "C" int grid_rbd_frame_jacobian_dot(const T* q, const T* qd, T* out, int 
 }
 
 // osc_inertia(q) -> 6x6 operational-space (task) inertia Lambda = (J Minv J^T)^-1
-// at the leaf-EE frame (LWA), 36 floats per timestep. Gated on GRID_HAS_FRAME_JACOBIAN.
+// at the leaf-EE frame (LWA), 36 floats per timestep. Gated on GRID_HAS_OSC_INERTIA
+// (osc_inertia is opt-in on top of frame_jacobian; a frame_jacobian-only build
+// emits no osc symbols).
 extern "C" int grid_rbd_osc_inertia(const T* q, T* out, int batch) {
-#ifdef GRID_HAS_FRAME_JACOBIAN
+#ifdef GRID_HAS_OSC_INERTIA
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
@@ -2263,6 +2267,7 @@ extern "C" int grid_rbd_frame_jacobian_mujoco(const T* q, T* out, int batch,
     return 0;
 }
 
+#ifdef GRID_HAS_FRAME_JACOBIAN_DOT
 extern "C" int grid_rbd_frame_jacobian_dot_mujoco(const T* q, const T* qd, T* out, int batch,
                                                   int target_jid, int reference_frame) {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
@@ -2282,7 +2287,9 @@ extern "C" int grid_rbd_frame_jacobian_dot_mujoco(const T* q, const T* qd, T* ou
     std::memcpy(out, g_data->h_frame_jacobian_dot, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
 }
+#endif  // GRID_HAS_FRAME_JACOBIAN_DOT
 
+#ifdef GRID_HAS_OSC_INERTIA
 extern "C" int grid_rbd_osc_inertia_mujoco(const T* q, T* out, int batch) {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
@@ -2300,6 +2307,7 @@ extern "C" int grid_rbd_osc_inertia_mujoco(const T* q, T* out, int batch) {
     std::memcpy(out, g_data->h_osc_inertia, (size_t)batch * 36 * sizeof(T));
     return 0;
 }
+#endif  // GRID_HAS_OSC_INERTIA
 #endif  // GRID_HAS_FRAME_JACOBIAN && GRID_RBD_WITH_MUJOCO
 
 // end_effector_pose_runtime(q) -> 6-vector [xyz; rpy] of target_jid at a runtime
@@ -2575,6 +2583,7 @@ static void launch_integrator_grad_host_mujoco(int batch, T gravity, T dt) {
         case 2: FN<grid::IntegratorType::MIDPOINT>(__VA_ARGS__); break;          \
         case 3: FN<grid::IntegratorType::RK3>(__VA_ARGS__); break;               \
         case 4: FN<grid::IntegratorType::RK4>(__VA_ARGS__); break;               \
+        case 5: FN<grid::IntegratorType::TRAPEZOIDAL>(__VA_ARGS__); break;               \
         default: return 3;                                                       \
     }
 
@@ -4772,6 +4781,7 @@ static void launch_integrator_grad_kernel_jax(cudaStream_t stream, int batch, T 
         case 2: FN<grid::IntegratorType::MIDPOINT>(__VA_ARGS__); break;            \
         case 3: FN<grid::IntegratorType::RK3>(__VA_ARGS__); break;                 \
         case 4: FN<grid::IntegratorType::RK4>(__VA_ARGS__); break;                 \
+        case 5: FN<grid::IntegratorType::TRAPEZOIDAL>(__VA_ARGS__); break;                 \
         default: return ffi::Error::InvalidArgument("integrator: bad it code");    \
     }
 
@@ -4785,6 +4795,7 @@ static void launch_integrator_grad_kernel_jax(cudaStream_t stream, int batch, T 
         case 2: FN<grid::IntegratorType::MIDPOINT, MUJOCO_FLAG>(__VA_ARGS__); break;                \
         case 3: FN<grid::IntegratorType::RK3, MUJOCO_FLAG>(__VA_ARGS__); break;                     \
         case 4: FN<grid::IntegratorType::RK4, MUJOCO_FLAG>(__VA_ARGS__); break;                     \
+        case 5: FN<grid::IntegratorType::TRAPEZOIDAL, MUJOCO_FLAG>(__VA_ARGS__); break;                     \
         default: return ffi::Error::InvalidArgument("integrator: bad it code");                     \
     }
 
@@ -5941,6 +5952,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 #endif  // GRID_RBD_WITH_MUJOCO
 
 
+#ifdef GRID_HAS_FRAME_JACOBIAN_DOT
 // frame_jacobian_dot(q, qd) → 6*NV d/dt Jacobian  [no workspace, no gravity, int attrs]
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_frame_jacobian_dot_impl(
@@ -5989,8 +6001,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("target_jid").Attr<int64_t>("reference_frame")
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_FRAME_JACOBIAN_DOT
 
 
+#ifdef GRID_HAS_OSC_INERTIA
 // osc_inertia(q) → 6x6 task inertia Lambda, 36  [d_workspace (tier-spill scratch), no gravity, frame baked at codegen]
 template <bool MUJOCO>
 static ffi::Error grid_rbd_jax_osc_inertia_impl(
@@ -6033,6 +6047,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<GRID_FFI_T>>()
 );
 #endif  // GRID_RBD_WITH_MUJOCO
+#endif  // GRID_HAS_OSC_INERTIA
 #endif  // GRID_HAS_FRAME_JACOBIAN
 
 #endif  // GRID_RBD_WITH_JAX
@@ -6577,6 +6592,7 @@ torch::Tensor torch_forward_dynamics_parameter_gradient(torch::Tensor q, torch::
         case 2: FN<grid::IntegratorType::MIDPOINT>(__VA_ARGS__); break;           \
         case 3: FN<grid::IntegratorType::RK3>(__VA_ARGS__); break;                \
         case 4: FN<grid::IntegratorType::RK4>(__VA_ARGS__); break;                \
+        case 5: FN<grid::IntegratorType::TRAPEZOIDAL>(__VA_ARGS__); break;                \
         default: TORCH_CHECK(false, "integrator: bad integrator-type code");      \
     }
 
@@ -6588,6 +6604,7 @@ torch::Tensor torch_forward_dynamics_parameter_gradient(torch::Tensor q, torch::
         case 2: FN<grid::IntegratorType::MIDPOINT, MUJOCO_FLAG>(__VA_ARGS__); break;            \
         case 3: FN<grid::IntegratorType::RK3, MUJOCO_FLAG>(__VA_ARGS__); break;                 \
         case 4: FN<grid::IntegratorType::RK4, MUJOCO_FLAG>(__VA_ARGS__); break;                 \
+        case 5: FN<grid::IntegratorType::TRAPEZOIDAL, MUJOCO_FLAG>(__VA_ARGS__); break;                 \
         default: TORCH_CHECK(false, "integrator: bad integrator-type code");                    \
     }
 
@@ -7152,6 +7169,7 @@ torch::Tensor torch_frame_jacobian(torch::Tensor q, int64_t target_jid, int64_t 
     return out;
 }
 
+#ifdef GRID_HAS_FRAME_JACOBIAN_DOT
 template <bool MUJOCO>
 torch::Tensor torch_frame_jacobian_dot(torch::Tensor q, torch::Tensor qd, int64_t target_jid, int64_t reference_frame) {
     grid_torch_init_or_throw();
@@ -7168,7 +7186,9 @@ torch::Tensor torch_frame_jacobian_dot(torch::Tensor q, torch::Tensor qd, int64_
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_frame_jacobian_dot, batch * 6 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_FRAME_JACOBIAN_DOT
 
+#ifdef GRID_HAS_OSC_INERTIA
 template <bool MUJOCO>
 torch::Tensor torch_osc_inertia(torch::Tensor q) {
     grid_torch_init_or_throw();
@@ -7185,6 +7205,7 @@ torch::Tensor torch_osc_inertia(torch::Tensor q) {
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_osc_inertia, batch * 36 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     return out;
 }
+#endif  // GRID_HAS_OSC_INERTIA
 #endif  // GRID_HAS_FRAME_JACOBIAN
 
 }  // namespace
@@ -7481,8 +7502,12 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
 #endif
 #ifdef GRID_HAS_FRAME_JACOBIAN
     m.impl("frame_jacobian", torch_frame_jacobian<false>);
+#ifdef GRID_HAS_FRAME_JACOBIAN_DOT
     m.impl("frame_jacobian_dot", torch_frame_jacobian_dot<false>);
+#endif
+#ifdef GRID_HAS_OSC_INERTIA
     m.impl("osc_inertia", torch_osc_inertia<false>);
+#endif
 #endif
 #ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
     m.impl("end_effector_pose_runtime", torch_end_effector_pose_runtime<false>);
@@ -7591,8 +7616,12 @@ GRID_RBD_TORCH_LIBRARY_IMPL(GRID_RBD_TORCH_LIB, CUDA, m) {
 #endif
 #ifdef GRID_HAS_FRAME_JACOBIAN
     m.impl("frame_jacobian_mujoco", torch_frame_jacobian<true>);
+#ifdef GRID_HAS_FRAME_JACOBIAN_DOT
     m.impl("frame_jacobian_dot_mujoco", torch_frame_jacobian_dot<true>);
+#endif
+#ifdef GRID_HAS_OSC_INERTIA
     m.impl("osc_inertia_mujoco", torch_osc_inertia<true>);
+#endif
 #endif
 #ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
     m.impl("end_effector_pose_runtime_mujoco", torch_end_effector_pose_runtime<true>);
