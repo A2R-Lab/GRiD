@@ -75,14 +75,6 @@ def _id_S_desc(self, jid):
         return ("A", self.robot.get_S_index_by_id(jid), self.robot.get_S_sign_by_id(jid))
     return ("B", [float(v) for v in self.robot._get_flat_S_by_id(jid)])
 
-def _alpha_prefix_cpp(self, jid):
-    """Return a C++ multiplicative prefix ``"<alpha> * "`` for body ``jid``,
-    or the empty string when alpha == 1.0 (non-mimic). Used so non-mimic emit
-    is byte-identical (no spurious ``1.0 *``)."""
-    alpha = self._alpha_for_jid(jid)
-    if alpha == 1.0:
-        return ""
-    return "static_cast<T>(" + repr(alpha) + ") * "
 
 def gen_add_code_line(self, new_code_line, add_indent_after = False):
     self.code_str += self.indent_level * "    " + new_code_line + "\n"
@@ -220,8 +212,6 @@ def gen_minv_apply(self, n, out_name, rhs_expr, loop_var = "row", loop_max = Non
     self.gen_add_code_line(out_name + " = " + ("-val;" if negate else "val;"))
     self.gen_add_end_control_flow()
 
-def gen_static_array_ind_2d(self, col, row, col_stride = 6):
-    return col_stride*col + row
 
 def gen_static_array_ind_3d(self, ind, col, row, ind_stride = 36, col_stride = 6):
     return ind_stride*ind + col_stride*col + row
@@ -340,7 +330,7 @@ def gen_mjx_quat_reorder(self, q_name="s_q"):
 def gen_mjx_base_rotate(self, buf, q_name="s_q"):
     """Covector/contravector OUTPUT row map ``out[0:3] = R out[0:3]`` (the
     ``base_rotate`` family: generalized_gravity, inverse_dynamics tau, and -- via
-    the matrix overload, see :func:`gen_mjx_base_rotate_rows` -- the regressors).
+    the regressors' row-major variant `_emit_mjx_base_rotate_rows_rowmajor`).
     Single thread + sync."""
     self.gen_add_code_lines([
         f"// mjx output: base-linear rows of {buf} <- R * rows",
@@ -357,23 +347,6 @@ def gen_mjx_base_rotate(self, buf, q_name="s_q"):
     self.gen_add_sync()
 
 
-def gen_mjx_base_rotate_rows(self, mat, n_rows, n_cols, q_name="s_q"):
-    """Base-linear ROW rotation ``rows0:3 <- R . rows`` for an ``n_rows x n_cols``
-    COLUMN-MAJOR matrix (the row-step of :func:`gen_mjx_congruence`, standalone). For
-    matrix covector outputs whose base-linear rows transform like the ID torque:
-    inverse_dynamics_regressor (``G.Y``) and forward_dynamics_parameter_gradient.
-    Single thread + sync."""
-    self.gen_add_code_lines([
-        f"// mjx output: base-linear rows of {mat} <- R . rows (all {n_cols} cols)",
-        "if (threadIdx.x == 0 && threadIdx.y == 0) {", True,
-    ])
-    self.gen_add_code_lines(_gen_mjx_build_R_lines(q_name))
-    self.gen_add_code_lines([
-        f"for (int c = 0; c < {n_cols}; c++) {{ T m0 = {mat}[0 + {n_rows}*c], m1 = {mat}[1 + {n_rows}*c], m2 = {mat}[2 + {n_rows}*c];"
-        f" {mat}[0 + {n_rows}*c] = R[0]*m0 + R[1]*m1 + R[2]*m2; {mat}[1 + {n_rows}*c] = R[3]*m0 + R[4]*m1 + R[5]*m2; {mat}[2 + {n_rows}*c] = R[6]*m0 + R[7]*m1 + R[8]*m2; }}",
-    ])
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
 
 
 def gen_mjx_symmetrize_full(self, mat, n):
@@ -477,13 +450,6 @@ def gen_mjx_retract(self, q_out, q_in, qd, dt_expr, q_name=None):
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
-def gen_add_debug_print_code_lines(self, print_code_string_arr):
-    self.gen_add_sync()
-    self.gen_add_serial_ops()
-    for code_string in print_code_string_arr:
-        self.gen_add_code_line(code_string)
-    self.gen_add_end_control_flow()
-    self.gen_add_sync()
 
 def gen_var_in_list(self, var_name, option_list):
     if len(option_list) == 1:
@@ -719,8 +685,9 @@ def gen_anti_licm_output_write(self, store_to_name, load_from_name = None):
     """Inside a `for (rep ...)` single_timing loop, write the per-iter output's
     first element to a varying global address. Companion to
     `gen_anti_licm_input_reload`: the input reload prevents LICM in the SIMT
-    path, but cuBLASDx-templated paths can still prove invariance unless
-    we also force a per-iter side effect that depends on the iter's work.
+    path, but aggressively optimized paths can still prove invariance (this
+    originally bit the since-removed cuBLASDx backend) unless we also force
+    a per-iter side effect that depends on the iter's work.
 
     The destination cycles through 1024 slots of d_<store_to_name>, well
     within the MAX_TIMESTEPS=256 × output_size_per_step allocation any
@@ -1165,13 +1132,6 @@ def gen_arena_carve_struct(self, struct_name, layout, sizer_expr,
     self.gen_add_code_line("};\n")   # closes the struct (mirror gen_add_end_function spacing)
 
 
-def gen_shared_arena_t_count(self, t_buffers, temp_mem_size, helper_size):
-    count = helper_size
-    if temp_mem_size is not None:
-        count += int(temp_mem_size)
-    for _, region_count in t_buffers:
-        count += int(region_count)
-    return count
 
 def gen_device_wrapper(self, func_desc, func_def, shared_mem_size, inner_call_fn,
                        template_line = "template <typename T>",

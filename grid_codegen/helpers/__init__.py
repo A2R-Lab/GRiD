@@ -3,7 +3,6 @@ from ._code_generation_helpers import (
     robot_has_mimic_joints,
     _v_slot_cpp,
     _alpha_for_jid,
-    _alpha_prefix_cpp,
     _id_S_desc,
     _resolve_arena_layout,
     gen_arena_carve_struct,

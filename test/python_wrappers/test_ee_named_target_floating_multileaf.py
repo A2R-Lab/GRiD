@@ -121,7 +121,7 @@ pytestmark = [pytest.mark.python_wrappers, pytest.mark.floating_base]
 _DEFAULT_CASES = [
     # NAMED fixed-target, FLOATING base, SERIAL chain (NUM_EES == 1) — WORKS:
     ("iiwa14", "floating", "named", "iiwa_joint_ee"),
-    # NAMED fixed-target, FLOATING base, BRANCHED (NUM_EES == 1) — KNOWN CRASH:
+    # NAMED fixed-target, FLOATING base, BRANCHED (NUM_EES == 1) — WORKS (C4 fix):
     ("go2", "floating", "named", "imu_joint"),
     ("baxter", "floating", "named", "right_hand_camera_axis"),
     # MULTI-LEAF (NUM_EES > 1), FLOATING base (output-stride) — WORKS:
@@ -131,12 +131,6 @@ _DEFAULT_CASES = [
     # already closed — a guard against regressing the path this work extends.
     ("iiwa14", "fixed", "named", "iiwa_joint_ee"),
 ]
-
-
-def _maybe_xfail(case):
-    """No known-gap xfails: the named-floating-branched codegen crash is FIXED
-    (C4, 2026-06-15). All cases are hard pass/fail."""
-    return []
 
 
 def _parse_cases():
@@ -165,12 +159,9 @@ def _case_id(case) -> str:
 
 
 def _case_params():
-    """pytest.param per case, attaching the known-gap xfail marks where they
-    apply. Env-overridden cases are passed through with the same gap policy."""
-    return [
-        pytest.param(case, id=_case_id(case), marks=_maybe_xfail(case))
-        for case in _CASES
-    ]
+    """pytest.param per case. All cases are hard pass/fail (the named-floating-
+    branched codegen crash was fixed 2026-06-15; no known-gap xfails remain)."""
+    return [pytest.param(case, id=_case_id(case)) for case in _CASES]
 
 
 # Float32 cross-precision tolerance (matches the other CUDA smoke tests). The

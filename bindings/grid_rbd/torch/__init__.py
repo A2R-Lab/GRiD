@@ -88,7 +88,7 @@ def _require_torch():
 
 
 def _torch_op_namespace(cache_key: str) -> str:
-    """Mirror _compile.generate_and_compile's torch_op_key = 'k' + key[:12]."""
+    """Mirror _compile.compile_sources's torch_op_key = 'k' + key[:12]."""
     return f"grid_rbd_torch_k{cache_key[:12]}"
 
 

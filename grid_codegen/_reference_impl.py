@@ -607,44 +607,8 @@ def mx5(self, vec, alpha = 1.0):
         vecX[4] = -vec[0,0]*alpha
     return vecX
 
-def mx(self, vec):
-    return -self.fx(vec).transpose()
 
-def fxS(self, S, vec, alpha = 1.0):
-    return -self.mxS(S, vec, alpha)
 
-def fx(self, vec):
-    #   0  -v(2)  v(1)    0  -v(5)  v(4)
-    # v(2)    0  -v(0)  v(5)    0  -v(3)
-    #-v(1)  v(0)    0  -v(4)  v(3)    0
-    #   0     0     0     0  -v(2)  v(1)
-    #   0     0     0   v(2)    0  -v(0)
-    #   0     0     0  -v(1)  v(0)    0
-    result = np.zeros((6,6))
-    result[0,1] = -vec[2]
-    result[0,2] = vec[1]
-    result[0,4] = -vec[5]
-    result[0,5] = vec[4]
-
-    result[1,0] = vec[2]
-    result[1,2] = -vec[0]
-    result[1,3] = vec[5]
-    result[1,5] = -vec[3]
-
-    result[2,0] = -vec[1]
-    result[2,1] = vec[0]
-    result[2,3] = -vec[4]
-    result[2,4] = vec[3]
-
-    result[3,4] = -vec[2]
-    result[3,5] = vec[1]
-
-    result[4,3] = vec[2]
-    result[4,5] = -vec[0]
-
-    result[5,3] = -vec[1]
-    result[5,4] = vec[0]
-    return result
 
 def fxv(self, fxVec, timesVec):
     # Fx(fxVec)*timesVec
@@ -663,19 +627,3 @@ def fxv(self, fxVec, timesVec):
     result[5] =                                                     -fxVec[1] * timesVec[3] + fxVec[0] * timesVec[4]
     return result
 
-def mxv(self, fxVec, timesVec):
-    # Fx(fxVec)*timesVec
-    #   0  -v(2)  v(1)    0     0     0
-    # v(2)    0  -v(0)    0     0     0  
-    #-v(1)  v(0)    0     0     0     0
-    #   0  -v(5)  v(4)    0  -v(2)  v(1)
-    # v(5)    0  -v(3)   v(2)    0  -v(0)
-    #-v(4)  v(3)    0   -v(1)  v(0)    0
-    result = np.zeros((6))
-    result[0] = -fxVec[2] * timesVec[1] + fxVec[1] * timesVec[2]
-    result[1] =  fxVec[2] * timesVec[0] - fxVec[0] * timesVec[2]
-    result[2] = -fxVec[1] * timesVec[0] + fxVec[0] * timesVec[1]
-    result[3] = -fxVec[5] * timesVec[1] + fxVec[4] * timesVec[2] - fxVec[2] * timesVec[4] + fxVec[1] * timesVec[5]
-    result[4] =  fxVec[5] * timesVec[0] - fxVec[3] * timesVec[2] + fxVec[2] * timesVec[3] - fxVec[0] * timesVec[5]
-    result[5] = -fxVec[4] * timesVec[0] + fxVec[3] * timesVec[1] - fxVec[1] * timesVec[3] + fxVec[0] * timesVec[4]
-    return result

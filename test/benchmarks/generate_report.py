@@ -304,10 +304,6 @@ def _multi_version_rows_for_metric(results: dict, algo: str,
     return rows
 
 
-def _multi_version_robot_rows(results: dict, algo: str,
-                              section_robots: list[str]) -> list[str]:
-    """Legacy entry point — kept for backwards compat; calls the N=256 variant."""
-    return _multi_version_rows_for_metric(results, algo, section_robots, "n256")
 
 
 def _generate_multi_version_report(data: dict, output_path: Path) -> None:
@@ -408,25 +404,6 @@ def _generate_multi_version_report(data: dict, output_path: Path) -> None:
     print(f"[generate_report] wrote {output_path}")
 
 
-def _batch_table(results: dict, algo: str, robot: str, base: str) -> list[str]:
-    """Return a detailed batch table (all N) for one robot/base/algo."""
-    grid_e = (results.get(robot, {}).get(base, {}).get("grid") or {}).get(algo)
-    pin_e  = (results.get(robot, {}).get(base, {}).get("pinocchio") or {}).get(algo)
-
-    header = "| N | GRiD w/mem | GRiD compute | Pinocchio |"
-    sep    = "|---|:---:|:---:|:---:|"
-    rows = [header, sep]
-    for n in BATCH_SIZES:
-        gw = _entry_batch(grid_e, n, "with_mem")
-        gc = _entry_batch(grid_e, n, "compute_only")
-        pb = _entry_batch(pin_e, n)
-        rows.append(f"| {n} | {gw} | {gc} | {pb} |")
-    return rows
-
-
-# ---------------------------------------------------------------------------
-# Report generation
-# ---------------------------------------------------------------------------
 
 def generate_report(data: dict, output_path: Path) -> None:
     meta = data.get("metadata", {})

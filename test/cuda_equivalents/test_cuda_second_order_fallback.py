@@ -347,13 +347,6 @@ def _idsva_block_indices_from_env():
     return tuple(IDSVA_BLOCK_NAMES.index(name) for name in expanded)
 
 
-def _select_idsva_blocks(flat_tensor, block_indices, nv):
-    block_size = nv**3
-    parts = [
-        flat_tensor[:, block_index * block_size : (block_index + 1) * block_size]
-        for block_index in block_indices
-    ]
-    return np.concatenate(parts, axis=1)
 
 
 def _assert_idsva_blocks_close(actual, expected, block_indices, nv, *, rtol, atol, err_msg):

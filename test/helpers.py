@@ -8,17 +8,6 @@ import numpy as np
 np.set_printoptions(precision=4, suppress=True, linewidth=100)
 
 
-def printErr(a, b, FULL_DEBUG=False, TOLERANCE=1e-10):
-    err = a - b
-    err = abs(err) > TOLERANCE
-    if err.any():
-        print(err)
-        if FULL_DEBUG:
-            print("Inputs were:")
-            print(a)
-            print(b)
-    else:
-        print("  passed")
 
 
 def rand3_to_quat(u, v, w):

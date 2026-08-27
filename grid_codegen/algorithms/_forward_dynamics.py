@@ -1,10 +1,3 @@
-def gen_forward_dynamics_inner_F_size(self):
-    """Phase 3b: size of Minv's F-region used inside forward_dynamics_inner
-    (6 * NV * NV floats). Now always a separate `s_minv_F` parameter so the
-    caller can keep it in smem (extra t_buffer) or spill it to L2-pinned
-    workspace on humanoid-scale robots."""
-    n = self.robot.get_num_vel()
-    return 6 * n * n
 
 def gen_forward_dynamics_inner_temp_mem_size(self, minv_f_in_smem = True):
         """s_temp arena = s_Minv (n*n, persistent) + max(Minv footprint during

@@ -23,7 +23,7 @@ payload CoM) via the parallel-axis theorem, mirroring URDFParser ``Link.build_sp
 
 import numpy as np
 
-__all__ = ["skew", "payload_inertia_params", "compose_payload_inertia", "params_to_spatial_6x6"]
+__all__ = ["skew", "payload_inertia_params", "compose_payload_inertia"]
 
 
 def skew(v):
@@ -88,15 +88,3 @@ def compose_payload_inertia(baked_params, mass, com=(0.0, 0.0, 0.0), inertia=Non
     if base.shape != (10,):
         raise ValueError(f"baked_params must be a length-10 vector, got shape {base.shape}.")
     return base + payload_inertia_params(mass, com, inertia)
-
-
-def params_to_spatial_6x6(params):
-    """Reconstruct the 6x6 spatial inertia from a 10-param vector (GRiD convention)."""
-    p = np.asarray(params, dtype=np.float64).reshape(-1)
-    m = p[0]
-    h = p[1:4]
-    I_O = _inertia_matrix_from_6(p[4:10])
-    Sh = skew(h)
-    top = np.hstack((I_O, Sh))
-    bottom = np.hstack((Sh.T, m * np.eye(3)))
-    return np.vstack((top, bottom))

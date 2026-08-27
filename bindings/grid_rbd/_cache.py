@@ -1,10 +1,12 @@
-"""Per-host cache for compiled per-robot .so files.
+"""Per-host cache for compiled per-robot .so files (two-stage, content-keyed;
+2026-08-19).
 
 Layout:
     ~/.cache/grid-rbd/
-    ├── manifest.json              # name -> cache_key registry
+    ├── manifest.json              # name -> content-key registry
+    ├── bykey/                     # keymap: stage-1 input-key -> stage-2 content-key
     └── store/
-        ├── <cache_key>/
+        ├── <content_key>/
         │   ├── grid.cuh           # generated header
         │   ├── wrapper.cu         # boilerplate that exposes C ABI
         │   ├── robot.so           # compiled per-robot library
@@ -12,10 +14,17 @@ Layout:
         │   └── build.log
         └── ...
 
-Cache key = sha256(urdf_bytes + canonical_json(options) + grid_rbd_version + cuda_arch).
-CUDA arch is part of the key so a multi-GPU user keeps separate .so files.
+Two keys (see the "two-stage content-addressed store" section below):
+  - STAGE-1 input key = sha256(urdf_bytes + canonical_json(options) +
+    codegen-source-tree hash + grid_rbd_version + cuda_arch). The keymap maps it
+    to a content key so the warm path (unchanged inputs) never regenerates.
+  - STAGE-2 content key = sha256 of exactly what nvcc sees (generated
+    grid.cuh + wrapper.cu bytes + compile-flag drivers + toolchain + ABI tags);
+    store/ dirs live under it. A codegen edit whose emitted bytes are identical
+    re-runs only the cheap CPU generation half — never an nvcc rebuild.
+CUDA arch is part of both keys so a multi-GPU user keeps separate .so files.
 
-The manifest binds a human-friendly `name` to a cache key. Re-registering the
+The manifest binds a human-friendly `name` to a content key. Re-registering the
 same name with a different URDF or options overwrites the binding (the old
 .so file lingers in store/ for manual GC; future v2 will add `grid-rbd gc`).
 """
@@ -24,7 +33,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import platform
 import shutil
 import subprocess
 from pathlib import Path

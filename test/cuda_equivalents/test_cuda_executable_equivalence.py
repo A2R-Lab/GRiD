@@ -171,9 +171,9 @@ MIMIC_SUPPORTED_ALGORITHMS = {
     "minv",
     "forward_dynamics",
     "aba",
-    # P3 (landed, FIXED-BASE): ID/FD gradients via the dense serial reduced-space
+    # P3 (landed): ID/FD gradients via the dense serial reduced-space
     # fold (id_du) + the -Minv*dc_du compose (fd_du). Floating-base mimic
-    # gradients are still refused (skipped via the per-case gate below).
+    # gradients are SUPPORTED too (B1) and compared for both bases.
     "inverse_dynamics_gradient_q",
     "inverse_dynamics_gradient_qd",
     "forward_dynamics_gradient_q",
@@ -184,10 +184,11 @@ MIMIC_SUPPORTED_ALGORITHMS = {
     # velocity slots are singleton column fills, orthogonal to the 1-DoF alpha fold).
     "end_effector_pose_gradient",
     "end_effector_pose_hessian",
-    # B2-SO (landed, FIXED-BASE): second-order idsva_so/fdsva_so via the per-body
+    # B2-SO (landed): second-order idsva_so/fdsva_so via the per-body
     # INTERNAL NUM_BODIES-coordinate sweep into a 4*NB^3 slab + alpha-R fold to the
-    # reduced 4*NV^3 public output. Floating-base mimic SO is still refused (needs a
-    # per-root-DoF 6-DoF subspace fold) and is skipped via the floating set below.
+    # reduced 4*NV^3 public output. Floating-base mimic SO is SUPPORTED too (B2/B4)
+    # but is exercised by dedicated oracle tests, not compared in this suite (see
+    # the note above MIMIC_CODEGEN_ALGORITHM_LIST_FLOATING).
     "idsva_so_body_frame",
     "fdsva_so",
 }
@@ -196,10 +197,10 @@ MIMIC_SUPPORTED_ALGORITHMS = {
 # All gradients once refused for floating-base mimic are now SUPPORTED + compared above:
 # id_du/fd_du (B1), ee pose grad/hessian (B2-ee), and second-order idsva_so (world-frame)
 # + fdsva_so (B2 jk-transpose fix / B4 idsva body-frame fix; correctness exercised by
-# test_cuda_idsva_so_world_frame.py + test_floating_second_order_diagnostic). The ONE
-# remaining mimic refusal — floating-base mimic INTEGRATOR gradients (B3) — is gated at
-# codegen (NotImplementedError) and isn't in FLOATING_CUDA_ALGORITHMS, so this suite never
-# requests it; no skip-set needed here.
+# test_cuda_idsva_so_world_frame.py + test_floating_second_order_diagnostic). Floating-base
+# mimic INTEGRATOR gradients (B3) are supported too (validated in
+# test_cuda_integrator_equivalence.py); they aren't in FLOATING_CUDA_ALGORITHMS, so this
+# suite never requests them; no skip-set needed here.
 
 
 def _robot_has_mimic_joints(project_model) -> bool:
@@ -207,18 +208,17 @@ def _robot_has_mimic_joints(project_model) -> bool:
         getattr(j, "is_mimic", False) for j in project_model.robot.joints
     )
 
-# Codegen algorithm selection for MIMIC robots (fr3, h1_2). Their GRADIENT
-# algorithms are refused at codegen time (G0 footgun guard: mimic gradients are
-# not folded yet — deferred to T3-finisher — and the old silent-zero stub was
-# removed). gen_all_code("all") therefore raises NotImplementedError for them,
-# so we codegen only the non-gradient surface this suite actually compares for
-# mimic robots (MIMIC_SUPPORTED_ALGORITHMS): inverse_dynamics / crba /
-# end_effector_pose / minv / forward_dynamics / aba. As each mimic-gradient phase lands,
-# extend both this list and MIMIC_SUPPORTED_ALGORITHMS together.
+# Codegen algorithm selection for MIMIC robots (fr3, h1_2). Mimic gradients are
+# now FULLY SUPPORTED at codegen (the old G0 footgun guard / NotImplementedError
+# refusals are gone), so this reduced base list is a historical scoping choice,
+# not a support limit: it names the non-gradient surface this suite compares for
+# mimic robots (MIMIC_SUPPORTED_ALGORITHMS core): inverse_dynamics / crba /
+# end_effector_pose / minv / forward_dynamics / aba. The fixed/floating variants
+# below extend it with the gradient/SO surfaces actually compared.
 MIMIC_CODEGEN_ALGORITHM_LIST = ["inverse_dynamics", "crba", "end_effector_pose", "minv", "forward_dynamics", "aba"]
-# Fixed-base mimic additionally supports the ID/FD gradients (T3-finisher P3) and
-# the ee pose gradient/hessian (B2-ee P4). Floating-base mimic gradients are still
-# refused, so floating uses the base list.
+# Fixed-base mimic additionally codegens the ID/FD gradients (T3-finisher P3),
+# the ee pose gradient/hessian (B2-ee P4), and second-order (B2-SO). Floating-base
+# mimic gradients are supported too — see MIMIC_CODEGEN_ALGORITHM_LIST_FLOATING.
 MIMIC_CODEGEN_ALGORITHM_LIST_FIXED = MIMIC_CODEGEN_ALGORITHM_LIST + [
     "inverse_dynamics_gradient", "forward_dynamics_gradient", "end_effector_pose_gradient", "end_effector_pose_hessian",
     # B2-SO: fixed-base mimic second-order (idsva_so body frame + fdsva_so).
@@ -1561,15 +1561,6 @@ def _ee_row_info(algorithm: str, expected_flat: np.ndarray, n_leaves: int):
         # component is the SLOWEST axis (block of nq*nq per component).
         component = leaf_local // (per_leaf // 6)
     return leaf_idx, component
-
-
-def _ee_orientation_mask(algorithm: str, expected_flat: np.ndarray, n_leaves: int):
-    """Boolean mask (flat) selecting the rpy orientation entries of an
-    end_effector_pose* output. None if not applicable."""
-    leaf_idx, component = _ee_row_info(algorithm, expected_flat.reshape(-1), n_leaves)
-    if leaf_idx is None:
-        return None
-    return (component >= 3) & (component <= 5)
 
 
 def _wrap_to_pi(values):

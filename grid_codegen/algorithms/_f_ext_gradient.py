@@ -271,12 +271,6 @@ def gen_f_ext_gradient_jacobianT_inner(self):
     self.gen_add_end_function()
 
 
-def gen_f_ext_gradient_output_size(self):
-    """Number of T elements in EACH of the two first-order f_ext-grad outputs:
-    dtau_dfext and dqdd_dfext are nv x (6*NB)."""
-    NB = self.robot.get_num_bodies()
-    nv = self.robot.get_num_vel()
-    return nv * 6 * NB
 
 
 def _f_ext_gradient_dq_jobs(self):

@@ -616,9 +616,6 @@ def _dccrba_full_inner(self):
 
 # ----- device wrappers (kinematics / XmatsHom domain, like com/ccrba) -----
 
-def _centroidal_out_extra(self):
-    nv = self.robot.get_num_vel()
-    return [("s_A", 6 * nv), ("s_com", 3), ("s_extra", 4)]
 
 
 def gen_cmm_time_variation_device(self):

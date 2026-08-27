@@ -71,9 +71,9 @@ _REGRESSOR_BASIS = _regressor_basis_nonzeros()
 
 
 def _emit_mjx_base_rotate_rows_rowmajor(self, mat, n_rows, n_cols, q_name="s_q"):
-    """ROW-MAJOR analogue of the shared `gen_mjx_base_rotate_rows` helper.
+    """ROW-MAJOR base-linear row rotate for the regressors.
 
-    The shared helper rotates the base-linear ROWS 0:3 of a COLUMN-MAJOR matrix
+    The column-major siblings rotate the base-linear ROWS 0:3 of a matrix
     (`mat[r + n_rows*c]`). The regressor `s_Y` is ROW-MAJOR (`mat[row*n_cols + c]`,
     row = DOF, col = param), so its base-linear rows 0,1,2 live at offsets
     `0*n_cols`, `1*n_cols`, `2*n_cols` with the column index stepping by 1 -- a
@@ -307,10 +307,6 @@ def gen_inverse_dynamics_regressor_inner(self):
     self.gen_add_end_function()
 
 
-def gen_inverse_dynamics_regressor_device_temp_mem_size(self):
-    n = self.robot.get_num_pos()
-    return self.gen_inverse_dynamics_regressor_inner_temp_mem_size() + \
-        18 * n + self.gen_topology_helpers_size() + 72 * n
 
 
 def gen_inverse_dynamics_regressor_device(self):
@@ -668,11 +664,6 @@ def gen_forward_dynamics_parameter_gradient_inner(self):
     self.gen_add_end_function()
 
 
-def gen_forward_dynamics_parameter_gradient_device_temp_mem_size(self):
-    n = self.robot.get_num_pos()
-    nv = self.robot.get_num_vel()
-    return self.gen_forward_dynamics_parameter_gradient_inner_temp_mem_size() + \
-        18 * n + self.gen_topology_helpers_size() + 72 * n
 
 
 def gen_forward_dynamics_parameter_gradient_device(self):

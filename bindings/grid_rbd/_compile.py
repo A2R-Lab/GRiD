@@ -1,15 +1,18 @@
-"""Codegen + compile pipeline.
+"""Codegen + compile pipeline (two content-keyed stages).
 
-`generate_and_compile(urdf_path, options, target_dir)` does:
-
+`generate_sources(urdf_path, options, target_dir)`:
   1. Parse URDF with URDFParser.
   2. Run GRiDCodeGenerator.gen_all_code() to produce grid.cuh.
   3. Copy the robot-agnostic wrapper.cu boilerplate into target_dir.
+
+`compile_sources(target_dir, meta, options, ...)`:
   4. Invoke nvcc to compile (grid.cuh included by wrapper.cu) into robot.so.
   5. Write a meta.json next to robot.so capturing the per-robot constants
      (NUM_JOINTS / NUM_VEL / NUM_EES / floating_base) so the Python side
      can populate RobotHandle without re-importing the .so.
 
+warm_robot's two-stage store calls the halves directly so it can content-key
+between them (codegen inputs -> grid.cuh key; source bytes -> .so key).
 Errors raised by any step propagate as RuntimeError with the build.log
 attached.
 """
@@ -591,7 +594,7 @@ def generate_sources(
 ) -> dict[str, Any]:
     """The cheap CPU half: produce grid.cuh + wrapper.cu in target_dir.
 
-    Split out of generate_and_compile (2026-08-19) so the two-stage
+    Split into its own stage (2026-08-19) so the two-stage
     content-addressed store can hash the generated sources and skip the nvcc
     half entirely when an identical build already exists.
     Returns the meta dict (num_joints/num_vel/num_ees/floating_base).
@@ -640,7 +643,8 @@ def compile_sources(
     # algorithm_list" subset error the numpy rc=3 path raises. JAX/torch are
     # therefore enabled by DEP AVAILABILITY only (compile_so adds the -D flags iff
     # the include dir / build flags are present), NOT by whether a subset was
-    # requested. The fp32-only path is unchanged (t_double still disables both).
+    # requested. t_double no longer disables them: the jax/torch sections follow T
+    # (Wave 2a), so an fp64 .so carries fp64 jax+torch surfaces.
     compile_so(wrapper_cu, so_path, cuda_arch=cuda_arch,
                max_batch=max_batch, glass_root=glass_root,
                torch_op_key=torch_op_key, t_double=t_double,
@@ -662,21 +666,3 @@ def compile_sources(
     (target_dir / "meta.json").write_text(json.dumps(meta, indent=2))
 
     return meta
-
-
-def generate_and_compile(
-    urdf_path: Path,
-    options: dict[str, Any],
-    target_dir: Path,
-    cuda_arch: int,
-    max_batch: int = 256,
-) -> dict[str, Any]:
-    """End-to-end: produce grid.cuh + wrapper.cu + robot.so in target_dir.
-
-    Returns the meta dict (num_joints/num_vel/num_ees/floating_base).
-    (Compat wrapper; the two-stage store in warm_robot calls the halves
-    directly so it can content-key between them.)
-    """
-    meta = generate_sources(urdf_path, options, target_dir)
-    return compile_sources(target_dir, meta, options,
-                           cuda_arch=cuda_arch, max_batch=max_batch)

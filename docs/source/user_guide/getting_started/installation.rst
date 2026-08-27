@@ -48,7 +48,7 @@ You can also install manually with:
 
 .. code-block:: shell
 
-   pip3 install -r install/requirements.txt
+   pip3 install -e .
 
 Install CUDA Dependencies
 ~~~~~~~~~~~~~~~~~~~~~~~~~

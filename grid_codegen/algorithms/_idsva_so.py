@@ -526,16 +526,6 @@ def gen_floating_gravity_d2tau_dq_shared_count(self):
     return int(dX_count + a_count + da_count + f_count + df_count + scratch_count)
 
 
-def gen_floating_gravity_d2tau_dq_temp_mem_size(self):
-    """Total floats the gravity-Hessian helper needs (shared + spill).
-
-    The kernel emitter splits this into a shared-memory portion (the smaller arrays
-    plus scratch) and a `d_workspace` spill portion (d2X / d2a / d2f) so larger
-    floating-base robots still fit. See `gen_floating_gravity_d2tau_dq_shared_count`
-    and `gen_floating_gravity_d2tau_dq_spill_count`.
-    """
-    return int(gen_floating_gravity_d2tau_dq_shared_count(self)
-               + gen_floating_gravity_d2tau_dq_spill_count(self))
 
 def gen_floating_gravity_d2tau_dq_lie_inline(self):
     """Emit (inline) the floating-base gravity-Hessian addition into `d2tau_dq2`.

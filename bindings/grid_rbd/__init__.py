@@ -36,7 +36,7 @@ from ._cache import (
     manifest_register,
     store_dir,
 )
-from ._compile import compile_sources, generate_and_compile, generate_sources
+from ._compile import compile_sources, generate_sources
 from ._handle import RobotHandle, SecondOrderID, SecondOrderFD
 
 

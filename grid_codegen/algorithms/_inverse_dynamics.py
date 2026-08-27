@@ -791,18 +791,6 @@ def gen_inverse_dynamics_inner(self, compute_c = False, use_qdd_input = False):
         self.gen_inverse_dynamics_joint_dynamics_bias()
     self.gen_add_end_function()
 
-def gen_inverse_dynamics_device_temp_mem_size(self, compute_c = False):
-    n = self.robot.get_num_pos()
-    # s_vaf and the XImats scratch are indexed by RAW body id (jid in
-    # [0, get_num_joints())) inside the inner, so for mimic robots (where
-    # get_num_joints() > get_num_pos()) they must be sized by the body count or
-    # the f-block writes for the extra mimic bodies overflow into the next arena
-    # region (s_XImats), corrupting the low-jid X matrices. Non-mimic robots have
-    # get_num_joints() == get_num_pos() (fixed) or the legacy value was already
-    # >= the body count (floating), so gate on mimic to stay byte-identical.
-    nb = self.robot.get_num_joints() if self.robot_has_mimic_joints() else n
-    wrapper_size = (18*nb if compute_c else 0) + self.gen_topology_helpers_size() + 72*nb # for XImats
-    return self.gen_inverse_dynamics_inner_temp_mem_size() + wrapper_size
 
 def gen_inverse_dynamics_device(self, compute_c = False, use_qdd_input = False):
     n = self.robot.get_num_pos()

@@ -943,7 +943,6 @@ def gen_crba_kernel(self, single_call_timing = False):
 def gen_crba_host(self, mode = 0):
 
 
-    #old version that works for iiwa but not for hyq
     single_call_timing = True if mode == 1 else False
     compute_only = True if mode == 2 else False
     # define function def and params

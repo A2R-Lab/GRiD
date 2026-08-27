@@ -2,7 +2,7 @@
 // dispatches numpy arrays through its C ABI.
 //
 // The per-robot .so is built at register_robot() time by
-// grid_rbd._compile.generate_and_compile() from a generated grid.cuh plus
+// grid_rbd._compile.compile_sources() from a generated grid.cuh plus
 // the robot-agnostic wrapper.cu (see grid_rbd/wrapper_template.cu). It
 // exports `extern "C"` symbols like:
 //

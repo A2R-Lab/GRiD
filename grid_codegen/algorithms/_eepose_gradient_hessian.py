@@ -1,7 +1,8 @@
 """
-End Effector Posiitons
+End effector pose, gradient, and hessian codegen.
 
-TODO: fix throughout this document for fixed_joint support for branched trees and for multiple fixed at once
+Fixed-joint targets are supported (including on branched trees and multiple
+fixed targets at once) via the ``fixed_target_name`` variants.
 """
 def gen_end_effector_pose_inner_temp_mem_size(self, fixed_target_name = ""):
     num_ees = self.robot.get_total_leaf_nodes() if fixed_target_name == "" else 1
@@ -218,11 +219,6 @@ def gen_end_effector_pose_inner(self, fixed_target_name = ""):
     self.gen_add_sync()
     self.gen_add_end_function()
 
-def gen_end_effector_pose_device_temp_mem_size(self, fixed_target_name = ""):
-    n = self.robot.get_num_pos()
-    XHom_size, dXhom_size, d2Xhom_size = self.gen_get_Xhom_size()
-    wrapper_size = self.gen_topology_helpers_size() + XHom_size # for Xhom
-    return self.gen_end_effector_pose_inner_temp_mem_size(fixed_target_name) + wrapper_size
 
 def gen_end_effector_pose_device(self, fixed_target_name = ""):
     n = self.robot.get_num_pos()
@@ -2022,95 +2018,13 @@ def gen_end_effector_pose_hessian_inner(self, fixed_target_name = ""):
     self.gen_add_end_function()
 
 
-def _emit_d2M_cross_joint_block(self, prox_base, dist_base,
-                                 ee_idx, vi, vj, nv, num_ees, si_base, sj_base):
-    """Emit explicit per-pair scalar code for d2M = S_prox * S_dist * X_ee in a
-    cross-joint pair (chain ordering a < b after prox/dist resolution).
-
-    Writes:
-      - rows 0..2 of s_end_effector_pose_hessian[(ee, vi, vj)]   = (d2M @ ee_offset)[:3] with
-        ee_offset = [0, 0, 0, 1] -> just column 3 of d2M.
-      - rows 3..5 of s_end_effector_pose_hessian[(ee, vi, vj)]   = H_w[:, vi, vj] =
-        skew_inv(d2R @ R_chain^T - [Jw_i]_x @ [Jw_j]_x)
-        with d2R_R^T = (S_prox * S_dist)[:3, :3]
-        and [Jw_i]_x = S_i_world[:3, :3]
-        and [Jw_j]_x = S_j_world[:3, :3]
-
-    Caller has already declared and set: pex, pey, pez (X_ee column 3 in world).
-    """
-    # Read S_prox and S_dist top 3 rows (column-major: S[r + 4*c]).
-    # S has zero bottom row so we only need rows 0..2.
-    self.gen_add_code_line("// Read S_prox (chain proximal) rows 0..2")
-    for c in range(4):
-        for r in range(3):
-            self.gen_add_code_line("T P" + str(r) + str(c) + " = s_Sworld[" + str(prox_base + r + 4*c) + "];")
-    self.gen_add_code_line("// Read S_dist (chain distal) rows 0..2")
-    for c in range(4):
-        for r in range(3):
-            self.gen_add_code_line("T D" + str(r) + str(c) + " = s_Sworld[" + str(dist_base + r + 4*c) + "];")
-    # Compute M = S_prox * S_dist  (4x4, but bottom row of result is 0).
-    # M[r, c] = sum_k P[r, k] * D[k, c]; since P[3, :] = 0 and D[3, :] = 0,
-    # we only need top 3 rows of M, and for each (r, c) we sum k = 0..2.
-    # M[r, c] = P[r, 0]*D[0, c] + P[r, 1]*D[1, c] + P[r, 2]*D[2, c]
-    self.gen_add_code_line("// M = S_prox * S_dist (top 3 rows, all 4 cols)")
-    for r in range(3):
-        for c in range(4):
-            self.gen_add_code_line(
-                "T M" + str(r) + str(c) + " = P" + str(r) + "0*D0" + str(c) +
-                " + P" + str(r) + "1*D1" + str(c) +
-                " + P" + str(r) + "2*D2" + str(c) + ";")
-    # d2M = M * X_ee. Top-left 3x3 of d2M = M[:3, :3] * X_ee[:3, :3] (since
-    # M[:3, 3] only enters column 3 of d2M times X_ee[3, :3] which is 0).
-    # Column 3 of d2M[:3] = M[:3, :3] * X_ee[:3, 3] + M[:3, 3] * X_ee[3, 3]
-    #                     = M[:3, :3] * p_ee + M[:3, 3].
-    # We only need column 3 (for H_xyz) — the top-left 3x3 of d2R_R^T cancels
-    # to M[:3, :3] anyway (since R_chain^T = X_ee[:3,:3]^T cancels with the
-    # X_ee[:3, :3] factor on the right).
-    self.gen_add_code_line("// H_xyz[:, vi, vj] = (S_prox*S_dist*X_ee)[:3, 3] = M[:3,:3] * p_ee + M[:3, 3]")
-    self.gen_add_code_line("T Hxyz_x = M00*pex + M01*pey + M02*pez + M03;")
-    self.gen_add_code_line("T Hxyz_y = M10*pex + M11*pey + M12*pez + M13;")
-    self.gen_add_code_line("T Hxyz_z = M20*pex + M21*pey + M22*pez + M23;")
-    # d2R @ R_chain^T = M[:3, :3]. Need [Jw_i]_x and [Jw_j]_x = S_i_world[:3,:3] and
-    # S_j_world[:3,:3]. Note: the "prox"/"dist" assignment may have swapped i↔j,
-    # but H_w is the same value either way (the formula skew_inv(d2R_R^T - [Jwi]_x [Jwj]_x)
-    # uses the original i,j indexing). So we read S_i_world, S_j_world directly via si_base/sj_base.
-    self.gen_add_code_line("// Read [Jw_i]_x (S_i_world top-left)")
-    for c in range(3):
-        for r in range(3):
-            self.gen_add_code_line("T Si" + str(r) + str(c) + " = s_Sworld[" + str(si_base + r + 4*c) + "];")
-    self.gen_add_code_line("// Read [Jw_j]_x (S_j_world top-left)")
-    for c in range(3):
-        for r in range(3):
-            self.gen_add_code_line("T Sj" + str(r) + str(c) + " = s_Sworld[" + str(sj_base + r + 4*c) + "];")
-    # Compute SiSj = S_i_world[:3,:3] * S_j_world[:3,:3]
-    self.gen_add_code_line("// SiSj = [Jw_i]_x @ [Jw_j]_x")
-    for r in range(3):
-        for c in range(3):
-            self.gen_add_code_line(
-                "T SiSj" + str(r) + str(c) + " = Si" + str(r) + "0*Sj0" + str(c) +
-                " + Si" + str(r) + "1*Sj1" + str(c) +
-                " + Si" + str(r) + "2*Sj2" + str(c) + ";")
-    # H_w_skew = M[:3,:3] - SiSj  (note: M[:3,:3] is d2R @ R_chain^T = top-left 3x3 of S_prox*S_dist).
-    # skew_inv(A) = 0.5 * (A[2,1] - A[1,2], A[0,2] - A[2,0], A[1,0] - A[0,1])
-    self.gen_add_code_line("// H_w[:, vi, vj] = skew_inv(M[:3,:3] - SiSj)")
-    self.gen_add_code_line("T HW_x = static_cast<T>(0.5) * ((M21 - SiSj21) - (M12 - SiSj12));")
-    self.gen_add_code_line("T HW_y = static_cast<T>(0.5) * ((M02 - SiSj02) - (M20 - SiSj20));")
-    self.gen_add_code_line("T HW_z = static_cast<T>(0.5) * ((M10 - SiSj10) - (M01 - SiSj01));")
-    # Write into s_end_effector_pose_hessian: idx = ee*6*nv*nv + c*nv*nv + vi*nv + vj
-    base = "(" + str(ee_idx * 6 * nv * nv) + " + " + str(vi * nv + vj) + ")"
-    self.gen_add_code_line("s_end_effector_pose_hessian[" + base + " + 0 * " + str(nv*nv) + "] = Hxyz_x;")
-    self.gen_add_code_line("s_end_effector_pose_hessian[" + base + " + 1 * " + str(nv*nv) + "] = Hxyz_y;")
-    self.gen_add_code_line("s_end_effector_pose_hessian[" + base + " + 2 * " + str(nv*nv) + "] = Hxyz_z;")
-    self.gen_add_code_line("s_end_effector_pose_hessian[" + base + " + 3 * " + str(nv*nv) + "] = HW_x;")
-    self.gen_add_code_line("s_end_effector_pose_hessian[" + base + " + 4 * " + str(nv*nv) + "] = HW_y;")
-    self.gen_add_code_line("s_end_effector_pose_hessian[" + base + " + 5 * " + str(nv*nv) + "] = HW_z;")
 
 
 def _emit_d2M_cross_joint_table_body(self, nv):
     """Data-driven cross-joint d2M body shared by EVERY cross-joint cell.
 
-    Numerically identical to `_emit_d2M_cross_joint_block` (same scalar ops, same
-    float association), except the six per-cell offsets are read at runtime from
+    Numerically identical to the retired inlined-per-cell emitter (same scalar ops,
+    same float association), except the six per-cell offsets are read at runtime from
     the baked `s_d2ee_cross_tab` table indexed by the loop counter `d2m_cell`,
     instead of being inlined as compile-time constants. This replaces the
     O(n_cross) `if==k` ladder of inlined bodies with ONE body -> the nvcc

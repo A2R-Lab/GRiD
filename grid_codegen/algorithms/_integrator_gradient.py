@@ -1575,9 +1575,9 @@ def gen_integrator_hessian_device_floating(self):
         the free-flyer 6x6(x6) corner; revolute rows/cols of dInt_v are identity
         (so t3's m-sum picks up the i-th D2qdd block directly for i>=6).
 
-    All d2Int / dInt SE(3) blocks are finite-differenced in DOUBLE (see
-    grid_d2Integrate_block) then stored as T, so a float32 kernel matches the
-    float64 oracle. The blocks are computed ONCE block-cooperatively into the
+    All d2Int / dInt SE(3) blocks are ANALYTIC closed forms (see
+    grid_d2Integrate_block / grid_dIntegrate_v_block; dInt_v is evaluated in
+    DOUBLE then stored as T). The blocks are computed ONCE block-cooperatively into the
     post-fdsva_so s_temp pool, then a single fully-parallel sweep over the
     2*nv*3*nv*3*nv output cells reads them (each thread owns one output cell)."""
     n = self.robot.get_num_vel()
@@ -1613,9 +1613,9 @@ def gen_integrator_hessian_device_floating(self):
     self.gen_add_code_line("for (int m = 0; m < 6; ++m) s_w[m] = si ? (dt * (s_qd[m] + dt * s_qdd[m])) : (dt * s_qd[m]);")
     self.gen_add_end_control_flow()
     self.gen_add_sync()
-    # Compute the SE(3) blocks once, block-cooperatively. dInt_v (6x6) is one
-    # thread; the two 6x6x6 d2Int tensors are FD'd in double (each thread owns
-    # the full direction-k stencil over the 6 free-flyer directions).
+    # Compute the SE(3) blocks once, serially. dInt_v (6x6) is evaluated in
+    # double; the two 6x6x6 d2Int tensors use the ANALYTIC closed form
+    # grid_d2Integrate_block (no finite differencing).
     self.gen_add_serial_ops()
     self.gen_add_code_line("double w_d[6]; for (int m = 0; m < 6; ++m) w_d[m] = static_cast<double>(s_w[m]);")
     self.gen_add_code_line("double dIv_d[36]; grid_dIntegrate_v_block<double>(w_d, dIv_d);")
@@ -2077,29 +2077,6 @@ def _integ_hess_colblock(self, n, half, off, dst, ddst, Pv, Pd, with_cross):
     return lines
 
 
-def gen_integrator_hessian_device_function_call(self,
-                                                scratch_in_smem_expr="true",
-                                                fd_grad_use_spill_expr="false",
-                                                contract_in_smem_expr="true",
-                                                d_workspace_pool_name="nullptr",
-                                                d_fd_grad_spill_name="nullptr",
-                                                s_fdsva_temp_name="nullptr",
-                                                d_mjx_ws_name="nullptr",
-                                                mujoco_output_expr=None):
-    """Emit the call to `integrator_hessian_device`. Arg order MUST match the def
-    in gen_integrator_hessian_device. The fdsva_so spill/pool regions default to
-    nullptr (unused under the SHARED tier's all-smem placement). d_mjx_ws is the
-    mjx-epilogue scratch band (floating MUJOCO_OUTPUT only); mujoco_output_expr (if
-    not None) appends the trailing MUJOCO_OUTPUT template flag."""
-    mjx_tmpl = ("" if mujoco_output_expr is None else ", " + mujoco_output_expr)
-    tmpl = ("<T, IT, " + scratch_in_smem_expr + ", " + fd_grad_use_spill_expr
-            + ", " + contract_in_smem_expr + mjx_tmpl + ">")
-    start = ("integrator_hessian_device" + tmpl
-             + "(s_d2AB, s_df2, s_idsva_so, s_Minv, s_df_du, s_qdd, s_q, s_qd, s_u, ")
-    middle = self.gen_insert_helpers_function_call()
-    end = ("s_temp, " + d_workspace_pool_name + ", " + d_fd_grad_spill_name + ", "
-           + s_fdsva_temp_name + ", " + d_mjx_ws_name + ", d_robotModel, gravity, dt);")
-    self.gen_add_code_line(start + middle + end)
 
 
 def gen_integrator_hessian_device(self):

@@ -395,19 +395,6 @@ def gen_forward_dynamics_gradient_device(self, use_qdd_Minv_input = False):
         self.gen_add_end_control_flow()
     self.gen_add_end_function()
 
-def gen_forward_dynamics_gradient_kernel_max_temp_mem_size(self):
-    n = self.robot.get_num_vel()
-    nq = self.robot.get_num_pos()
-    vaf_cnt = 18 * (self.robot.get_num_joints() if self.robot_has_mimic_joints() else n)
-    # Mirror the kernel body's extra_t_buffers (the non-qdd variant is the
-    # largest input buffer): s_q_qd_u uses the canonical 3*nq slot (NUM_JOINTS-
-    # wide q/qd/u), the gradient bands are tangent-space (nv). For a FIXED base
-    # nq==nv so 3*nq == old 3*n byte-identical; for a FLOATING base the +2*(nq-nv)
-    # here grows the dynamic-smem launch param to fit the wider input slot (else
-    # the kernel's s_q_qd_u load overflows the arena -> illegal __shared__ write).
-    base_size = 3*nq + n*2*n + n*2*n + vaf_cnt + n + n*n + n
-    temp_mem_size = self.gen_forward_dynamics_gradient_inner_temp_mem_size()
-    return base_size + temp_mem_size
 
 _FD_DU_PICK_FLAGS = [
     # (use_selective_spill, use_global_temp, use_output_spill)

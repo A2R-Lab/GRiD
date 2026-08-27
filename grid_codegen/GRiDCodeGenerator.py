@@ -249,9 +249,9 @@ class GRiDCodeGenerator:
                          gen_add_func_doc, gen_add_serial_ops, gen_add_parallel_loop, gen_minv_apply, gen_add_sync, gen_var_in_list, \
                          gen_var_not_in_list, gen_add_multi_threaded_select, gen_kernel_load_inputs, gen_kernel_save_result, \
                          gen_anti_licm_input_reload, gen_anti_licm_output_write, \
-                         gen_static_array_ind_2d, gen_static_array_ind_3d, gen_add_debug_print_code_lines, \
+                         gen_static_array_ind_3d, \
                          gen_mx_func_call_for_cpp, gen_add_shared_memory_helpers, gen_add_workspace_slot_count, gen_add_workspace_clamped_launch, gen_declare_shared_arena, _resolve_arena_layout, gen_arena_carve_struct, \
-                         gen_shared_arena_t_count, gen_device_wrapper, gen_tier_dispatch, gen_spatial_algebra_helpers, \
+                         gen_device_wrapper, gen_tier_dispatch, gen_spatial_algebra_helpers, \
                          gen_get_XI_size, gen_init_XImats, gen_get_inertia_params_size, gen_init_inertia_params, gen_set_inertia_params, \
                          gen_get_transform_params_size, gen_init_transform_params, gen_set_transform_params, \
                          _joint_dynamics_folded_by_vslot, gen_get_joint_dynamics_params_size, \
@@ -262,16 +262,16 @@ class GRiDCodeGenerator:
                          gen_topology_sparsity_helpers_python, gen_init_topology_helpers, gen_topology_helpers_pointers_for_cpp, \
                          gen_topology_S_sign_for_cpp, gen_insert_helpers_function_call, gen_insert_helpers_func_def_params, gen_init_robotModel, gen_free_robotModel, gen_joint_limits_size, gen_init_joint_limits, \
                          gen_grid_linalg_backend_helpers, gen_linalg_smem_setup, gen_invert_matrix, gen_matmul, gen_matmul_trans, gen_crm_mul, gen_crm, gen_mxS_general, custom_is_constant, \
-                         gen_mjx_input_convert, gen_mjx_quat_reorder, gen_mjx_base_rotate, gen_mjx_base_rotate_rows, gen_mjx_symmetrize_full, gen_mjx_accel_out, gen_mjx_congruence, gen_mjx_column_reframe, gen_mjx_retract, \
-                         robot_has_mimic_joints, _v_slot_cpp, _alpha_for_jid, _alpha_prefix_cpp, _id_S_desc
+                         gen_mjx_input_convert, gen_mjx_quat_reorder, gen_mjx_base_rotate, gen_mjx_symmetrize_full, gen_mjx_accel_out, gen_mjx_congruence, gen_mjx_column_reframe, gen_mjx_retract, \
+                         robot_has_mimic_joints, _v_slot_cpp, _alpha_for_jid, _id_S_desc
 
     # then import all of the algorithms
     from .algorithms import gen_inverse_dynamics_inner_temp_mem_size, gen_inverse_dynamics_inner_function_call, \
-                            gen_inverse_dynamics_device_temp_mem_size, gen_inverse_dynamics_inner, gen_inverse_dynamics_device, \
+                            gen_inverse_dynamics_inner, gen_inverse_dynamics_device, \
                             gen_inverse_dynamics_joint_dynamics_bias, \
                             gen_inverse_dynamics_kernel, gen_inverse_dynamics_host, gen_inverse_dynamics, \
                             gen_inverse_dynamics_regressor_inner_temp_mem_size, gen_inverse_dynamics_regressor_inner_function_call, \
-                            gen_inverse_dynamics_regressor_inner, gen_inverse_dynamics_regressor_device_temp_mem_size, \
+                            gen_inverse_dynamics_regressor_inner, \
                             gen_inverse_dynamics_regressor_device, gen_inverse_dynamics_regressor_kernel, \
                             gen_inverse_dynamics_regressor_host, gen_inverse_dynamics_regressor, \
                             gen_kinetic_energy_regressor_inner_temp_mem_size, gen_kinetic_energy_regressor_inner_function_call, \
@@ -281,29 +281,29 @@ class GRiDCodeGenerator:
                             gen_potential_energy_regressor_device, gen_potential_energy_regressor_kernel, \
                             gen_potential_energy_regressor_host, gen_potential_energy_regressor, \
                             gen_forward_dynamics_parameter_gradient_inner_temp_mem_size, gen_forward_dynamics_parameter_gradient_inner_function_call, \
-                            gen_forward_dynamics_parameter_gradient_inner, gen_forward_dynamics_parameter_gradient_device_temp_mem_size, \
+                            gen_forward_dynamics_parameter_gradient_inner, \
                             gen_forward_dynamics_parameter_gradient_device, gen_forward_dynamics_parameter_gradient_kernel, \
                             gen_forward_dynamics_parameter_gradient_host, gen_forward_dynamics_parameter_gradient, \
                             gen_minv_inner_temp_mem_size, gen_minv_inner_F_size, gen_minv_inner_no_F_size, gen_minv_inner_function_call, gen_minv_inner, \
                             gen_minv_device, gen_minv_kernel, gen_minv_host, gen_minv, \
-                            gen_forward_dynamics_inner_temp_mem_size, gen_forward_dynamics_inner_F_size, gen_forward_dynamics_finish_function_call, gen_forward_dynamics_finish, \
+                            gen_forward_dynamics_inner_temp_mem_size, gen_forward_dynamics_finish_function_call, gen_forward_dynamics_finish, \
                             gen_forward_dynamics_inner_function_call, gen_forward_dynamics_inner, gen_forward_dynamics_device, \
                             gen_forward_dynamics_kernel, gen_forward_dynamics_host, gen_forward_dynamics, \
                             gen_inverse_dynamics_gradient_inner_temp_mem_size, gen_inverse_dynamics_gradient_temp_layout, _emit_fb_bfs_level_indexing, \
-                            gen_inverse_dynamics_gradient_kernel_max_temp_mem_size, \
+                            \
                             gen_inverse_dynamics_gradient_inner_function_call, gen_inverse_dynamics_gradient_inner, \
                             gen_inverse_dynamics_gradient_device, gen_inverse_dynamics_gradient_device_function_call, \
                             gen_inverse_dynamics_gradient_kernel, gen_inverse_dynamics_gradient_host, gen_inverse_dynamics_gradient, \
-                            gen_forward_dynamics_gradient_inner_temp_mem_size, gen_forward_dynamics_gradient_kernel_max_temp_mem_size, \
+                            gen_forward_dynamics_gradient_inner_temp_mem_size, \
                             gen_forward_dynamics_gradient_inner_python, gen_forward_dynamics_gradient_kernel, \
                             gen_forward_dynamics_gradient_device, gen_forward_dynamics_gradient_device_function_call, \
                             gen_forward_dynamics_gradient_host, gen_forward_dynamics_gradient, \
                             gen_f_ext_gradient_inner_temp_mem_size, gen_f_ext_gradient_inner_function_call, \
-                            gen_f_ext_gradient_jacobianT_inner, gen_f_ext_gradient_output_size, gen_f_ext_gradient_device, \
+                            gen_f_ext_gradient_jacobianT_inner, gen_f_ext_gradient_device, \
                             gen_f_ext_gradient_dq_kernel, gen_f_ext_gradient_dq_host, gen_f_ext_gradient_dq_num_jobs, \
                             gen_f_ext_gradient_kernel, gen_f_ext_gradient_host, gen_f_ext_gradient, \
                             gen_end_effector_pose_inner_temp_mem_size, gen_end_effector_pose_inner_function_call, gen_end_effector_pose_inner, \
-                            gen_end_effector_pose_device_temp_mem_size, gen_end_effector_pose_device, gen_end_effector_pose_kernel, \
+                            gen_end_effector_pose_device, gen_end_effector_pose_kernel, \
                             gen_end_effector_pose_host, gen_end_effector_pose_gradient_inner_temp_mem_size, gen_end_effector_pose_gradient_inner_function_call, \
                             gen_end_effector_pose_gradient_inner, gen_end_effector_pose_gradient_device, gen_end_effector_pose_gradient_kernel, \
                             gen_end_effector_pose_gradient_host, gen_end_effector_pose_hessian_output_count, gen_end_effector_pose_hessian_inner_temp_mem_size, gen_end_effector_pose_hessian_inner_function_call, \
@@ -323,7 +323,7 @@ class GRiDCodeGenerator:
                             gen_idsva_so_world_frame_inner_function_call, gen_idsva_so_world_frame_kernel, \
                             gen_idsva_so_world_frame_host, gen_idsva_so_world_frame, \
                             gen_idsva_so_device, gen_idsva_so_dispatcher_host, gen_idsva_so_dispatcher, \
-                            gen_floating_gravity_d2tau_dq_temp_mem_size, gen_floating_gravity_d2tau_dq_shared_count, \
+                            gen_floating_gravity_d2tau_dq_shared_count, \
                             gen_floating_gravity_d2tau_dq_spill_count, gen_floating_gravity_d2tau_dq_lie_inline, \
                             gen_fdsva_so, gen_fdsva_so_contract_temp_mem_size, gen_fdsva_so_fd_gradient_inline_temp_mem_size, gen_fdsva_so_fd_gradient_inline_temp_mem_size_spilled, gen_fdsva_so_fd_gradient_inline, gen_fdsva_so_contract_function_call, gen_fdsva_so_contract, \
                             gen_fdsva_so_device, gen_fdsva_so_device_function_call, gen_fdsva_so_kernel, gen_fdsva_so_host, \
@@ -337,7 +337,7 @@ class GRiDCodeGenerator:
                             gen_integrator_gradient_inner_python, gen_integrator_gradient_multistage, \
                             gen_integrator_gradient_device, gen_integrator_gradient_device_function_call, \
                             gen_integrator_gradient_kernel, gen_integrator_gradient_host, gen_integrator_gradient, \
-                            gen_integrator_hessian_device, gen_integrator_hessian_device_function_call, \
+                            gen_integrator_hessian_device, \
                             gen_plant_step, gen_plant_step_gradient, gen_plant_step_hessian, gen_plant_step_hessian_kernel, gen_quadratic_state_cost, gen_quadratic_input_cost, \
                             gen_ee_pos_cost, gen_plant_barriers, gen_grid_plant, \
                             gen_plant_step_kernel, gen_quadratic_cost_kernel, gen_ee_pos_cost_kernel, gen_plant_kernels, \
@@ -374,7 +374,7 @@ class GRiDCodeGenerator:
 
     # finally import the test code
     from ._reference_impl import test_rnea_fpass, test_rnea_bpass, test_rnea, test_minv_bpass, test_minv_fpass, test_densify_Minv, test_minv, test_rnea_grad_inner, \
-                      test_rnea_grad, test_fd_grad, mx0, mx1, mx2, mx3, mx4, mx5, mx, mxS, mxv, fx, fxS, fxv
+                      test_rnea_grad, test_fd_grad, mx0, mx1, mx2, mx3, mx4, mx5, mxS, fxv
 
     # initialize the object
     def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, USE_DYNAMIC_SHARED_MEM = True, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False):
@@ -890,9 +890,6 @@ class GRiDCodeGenerator:
         # joint-torque regressor (E1): kernel smem = XI + s_q_qd_qdd(NUM_POS+2nv)
         # + s_Y (nv x 10*NUM_BODIES) + s_vaf(18*NUM_POS) + RNEA forward scratch.
         # n == get_num_pos() here. Additive.
-        regressor_t_count = (n + 2*nv) + nv*10*self.robot.get_num_bodies() + 18*n \
-            + self.gen_inverse_dynamics_regressor_inner_temp_mem_size() + XI_size + rt_xfixed_reserve
-        self.regressor_t_count = regressor_t_count
         # g1-spill: 2-rung s_Y output-spill ladder (mirror fdpg :795-802). The s_Y output
         # (nv*10*NB, ~277KB on h2_plus -> unlaunchable) routes to the L2-pinned d_workspace
         # SO section at any tier whose full arena overflows the target, keeping s_vaf +
@@ -917,8 +914,6 @@ class GRiDCodeGenerator:
         # output -> SO band). On h2_plus the inner band (18330 t ~73KB) dominates and the full
         # arena is ~121KB (UNLAUNCHABLE); the output-spill rung is ~95KB (PERF-launchable) and the
         # whole-band rung ~22KB (LITE/MINIMAL).
-        _coriolis_inner   = self.gen_coriolis_matrix_inner_temp_mem_size()
-        _coriolis_no_out  = (n + nv) + XI_size + rt_xfixed_reserve            # input + XI, no s_coriolis
         (_coriolis_t_full, _coriolis_t_output_spill, _coriolis_t_workspace) = \
             compose_arena_rungs("coriolis_matrix", self._arena_ctx)   # Step 3.3 fold
         self.coriolis_matrix_spill_tier_3way = select_shared_tier_3way(_coriolis_t_full, _coriolis_t_output_spill, _coriolis_t_workspace)
@@ -926,14 +921,12 @@ class GRiDCodeGenerator:
         self.coriolis_matrix_use_workspace_temp = self.coriolis_matrix_spill_tier_3way[0] == 2
         self.coriolis_matrix_t_count_per_tier = tuple(
             (_coriolis_t_full, _coriolis_t_output_spill, _coriolis_t_workspace)[i] for i in self.coriolis_matrix_spill_tier_3way)
-        self.coriolis_matrix_t_count = self.coriolis_matrix_t_count_per_tier[0]
         # PS5 dCCRBA (kinematics / XmatsHom domain). The shared inner pool is the
         # SHRUNK (no-J) centroidal_inner pool + 6*n_int per-unit phi band
         # (== _dccrba_inner_temp_mem_size). The Jw sweep band (6*nv*NB) is carved as a
         # SEPARATE tier-routed buffer s_J (in-smem at L0/L1, d_workspace at the
         # J-spilled tier) -- DE-GATE #2: this is the cold/large quadratic buffer whose
         # spill de-gates big floating robots (g1/h1_2-floating).
-        _dccrba_inner_temp = self._dccrba_inner_temp_mem_size()
         _dccrba_sJ = self._dccrba_sweep_J_count()   # 6*nv*NB
         # cmm_time_variation (Adot, 6*nv output). 2-rung ladder (the only lever is the
         # Jw band; its tiny 6*nv output never spills): L0 keeps s_J in smem, L1 spills
@@ -961,10 +954,6 @@ class GRiDCodeGenerator:
         # FD param gradient: kernel smem = XI + s_q_qd_u(NUM_POS+2nv) + s_dqdd_dpi
         # + s_Minv(nv*nv) + s_Y(nv x 10*NB) + s_qdd(nv) + s_vaf(18*NUM_POS) + s_c(nv)
         # + the (max) inner forward scratch. n == get_num_pos() here. Additive.
-        forward_dynamics_parameter_gradient_t_count = (n + 2*nv) + nv*10*self.robot.get_num_bodies() \
-            + nv*nv + nv*10*self.robot.get_num_bodies() + nv + 18*n + nv \
-            + self.gen_forward_dynamics_parameter_gradient_inner_temp_mem_size() + XI_size + rt_xfixed_reserve
-        self.forward_dynamics_parameter_gradient_t_count = forward_dynamics_parameter_gradient_t_count
         # FD-param-gradient g1-spill: 2-level surgical ladder. Level 0 keeps every
         # buffer in smem (current behavior on robots that fit). Level 1 spills the
         # s_Y regressor scratch (nv*10*NB, write-once / consumed-once in the final
@@ -984,9 +973,6 @@ class GRiDCodeGenerator:
         _n_pos = self.robot.get_num_pos()
         _NB = self.robot.get_num_bodies()
         _feg_out = nv * 6 * _NB
-        _feg_temp = nv*nv + max(self.gen_f_ext_gradient_inner_temp_mem_size(),
-                                self.gen_minv_inner_temp_mem_size())
-        f_ext_gradient_t_count = _n_pos + 2*_feg_out + _feg_temp + XI_size + rt_xfixed_reserve
         # f_ext-gradient (first-order) g1/h2_plus-spill: 3-rung surgical ladder.
         #   rung 0 (full): both outputs (s_dtau_dfext, s_dqdd_dfext) + minv-F in smem.
         #   rung 1 (out-spill): spill s_dqdd_dfext (the SECOND output, written write-once
@@ -1243,12 +1229,12 @@ class GRiDCodeGenerator:
         self.forward_dynamics_gradient_t_count_per_tier = tuple(_forward_dynamics_gradient_arenas[i] for i in self.forward_dynamics_gradient_spill_tier_3way)
         # §1e: the aba kernel body reserves a 3*nq-wide per-timestep input slot
         # ("s_q_qd_tau", 3*nq in _emit_aba_kernel_body_for_flags; n == get_num_pos()
-        # == nq here); the matching ABA_DYNAMIC_SHARED_MEM_BYTES arena count must use
-        # the SAME 3*n, not n+2*nv. For a fixed-base cardinal robot nq==nv==n so
-        # 3*n == n+2*nv (byte-identical), but on a spherical/floating (nq>nv) base the
-        # n+2*nv form under-sizes the launch smem by 3*(nq-nv) floats -> the aba batch
-        # kernel OOBs in load_update_XImats_helpers. Mirrors the fd/minv 3*n input slots.
-        aba_input_t_count = 3 * n
+        # == nq here); the matching ABA_DYNAMIC_SHARED_MEM_BYTES arena count (now
+        # composed in algo_registry's arena ctx) must use the SAME 3*n, not n+2*nv:
+        # for a fixed-base cardinal robot nq==nv==n so 3*n == n+2*nv, but on a
+        # spherical/floating (nq>nv) base the n+2*nv form under-sizes the launch smem
+        # by 3*(nq-nv) floats -> the aba batch kernel OOBs in
+        # load_update_XImats_helpers. Mirrors the fd/minv 3*n input slots.
         crba_input_t_count = n + nv
         # ABA surgical-spill ladder, 3 rungs. The 140*NJ+138 inner scratch band
         # keeps its hot recursion in smem and spills only the cold sub-band when
@@ -1284,8 +1270,6 @@ class GRiDCodeGenerator:
         # s_M routes to the L2-pinned SO band exactly like dccrba's output. The surgical
         # rung keeps the hot band resident at LITE (vs the blunt whole-band spill it replaces),
         # raising occupancy on big floating robots (h2_plus crba LITE ~47.6KB -> ~34KB).
-        _crba_inner   = self.gen_crba_inner_temp_mem_size()
-        _crba_no_M    = crba_input_t_count + XI_size + rt_xfixed_reserve   # input + XI, no s_M
         (_crba_t_count_full, _crba_t_count_output_spill, _crba_t_count_workspace) = \
             compose_arena_rungs("crba", self._arena_ctx)   # Step 3.2 fold
         self.crba_spill_tier_3way = select_shared_tier_3way(_crba_t_count_full, _crba_t_count_output_spill, _crba_t_count_workspace)
@@ -1324,7 +1308,7 @@ class GRiDCodeGenerator:
         self.end_effector_pose_gradient_spill_tier_3way = select_shared_tier_3way(*_end_effector_pose_gradient_arenas)
         self.end_effector_pose_gradient_spill_tier = self.end_effector_pose_gradient_spill_tier_3way[0]
         self.end_effector_pose_gradient_use_workspace_temp = self.end_effector_pose_gradient_spill_tier >= 1
-        self.end_effector_pose_gradient_use_workspace_dxhom = False  # dXhom never in smem; mirror d2ee_use_workspace_d2xhom=False
+        self.end_effector_pose_gradient_use_workspace_dxhom = False  # dXhom never in smem (the FD inner never uses dXhom)
         dee_t_count = _end_effector_pose_gradient_arenas[self.end_effector_pose_gradient_spill_tier]
         self.end_effector_pose_gradient_t_count_per_tier = tuple(_end_effector_pose_gradient_arenas[i] for i in self.end_effector_pose_gradient_spill_tier_3way)
         # D2EE (FD-on-d/dv-Jacobian): two spill levels (the nv^2 output is the only
@@ -1336,8 +1320,6 @@ class GRiDCodeGenerator:
         d2ee_grad_count = 6 * nv * _d2ee_num_ees
         # full smem: q + grad + d2ee_output + inner_temp + Xhom
         d2ee_full_t_count   = n + d2ee_grad_count + d2ee_output_count + d2ee_inner_temp_count + XHom_size
-        # output spilled: drop d2ee_output from smem (still need q + grad + inner_temp + Xhom)
-        d2ee_spill_t_count  = n + d2ee_grad_count                     + d2ee_inner_temp_count + XHom_size
         _d2ee_arenas = compose_arena_rungs("end_effector_pose_hessian", self._arena_ctx)   # Step 3.5e fold
         if "end_effector_pose_hessian" in getattr(self, "generated_algorithms", set()):
             self.d2ee_spill_tier_3way = select_shared_tier_3way(*_d2ee_arenas)
@@ -1345,11 +1327,6 @@ class GRiDCodeGenerator:
             self.d2ee_spill_tier_3way = (0, 0, 0)
         self.d2ee_spill_tier = self.d2ee_spill_tier_3way[0]
         self.d2ee_use_workspace_output = self.d2ee_spill_tier >= 1
-        # Legacy aliases (older surfaces / tests still read these names; both now
-        # mean "output spilled to workspace"). d2xhom flag is permanently false:
-        # the FD inner never uses d2Xhom.
-        self.d2ee_use_workspace_temp = self.d2ee_use_workspace_output
-        self.d2ee_use_workspace_d2xhom = False
         d2ee_t_count = _d2ee_arenas[self.d2ee_spill_tier]
         self.d2ee_t_count_per_tier = tuple(_d2ee_arenas[i] for i in self.d2ee_spill_tier_3way)
         # G2 centroidal quick-wins smem t-counts (no tier spill — new, low perf
@@ -1485,7 +1462,6 @@ class GRiDCodeGenerator:
         self.idsva_so_world_frame_spill_tier_3way = select_shared_tier_3way(*_idsva_so_world_arenas)
         self.idsva_so_world_frame_t_count_per_tier = tuple(_idsva_so_world_arenas[i] for i in self.idsva_so_world_frame_spill_tier_3way)
         self.idsva_so_world_frame_use_global_output = _idsva_so_world_tiers[self.idsva_so_world_frame_spill_tier_3way[0]][2]
-        idsva_so_world_frame_t_count = self.idsva_so_world_frame_t_count_per_tier[0]
         # d_workspace floats needed per timestep by the idsva_so spill rungs (for so_workspace sizing).
         # Body rungs: 4=output_temp (whole inner arena), 3=output_tp (36*len(jids_a) ancestor-pair
         # scratch), 2=output_bc (36*NB cold slab); 0/1 spill nothing into d_workspace.

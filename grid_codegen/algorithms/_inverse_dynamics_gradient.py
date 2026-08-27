@@ -1587,14 +1587,6 @@ def gen_inverse_dynamics_gradient_device(self, use_qdd_input = False):
         self.gen_add_end_control_flow()
     self.gen_add_end_function()
 
-def gen_inverse_dynamics_gradient_kernel_max_temp_mem_size(self):
-    n = self.robot.get_num_vel()
-    # s_vaf is 18*NB (body-indexed) for mimic robots; 18*n otherwise (non-mimic
-    # floating has nv > NB so 18*n is the safe/byte-identical size).
-    vaf_cnt = 18 * (self.robot.get_num_joints() if self.robot_has_mimic_joints() else n)
-    base_size = 2*n + n*2*n + vaf_cnt + n
-    temp_mem_size = self.gen_inverse_dynamics_gradient_inner_temp_mem_size()
-    return base_size + temp_mem_size
 
 _INVERSE_DYNAMICS_GRADIENT_PICK_FLAGS = [
     # (use_selective_spill, use_global_temp)
