@@ -25,6 +25,15 @@ import subprocess
 
 import pytest
 
+# XLA's default allocator PREALLOCATES 75% of GPU memory at first backend init
+# (24.6 GiB on a 32 GiB card, measured 2026-08-27) — in a monolithic in-process
+# run that pool plus torch's caching allocator was the entire "accumulation
+# SIGABRT" late-suite abort (close-tracker A/B proved handles were irrelevant:
+# both arms died at ~28.0 GiB). Must be set before the first jax import
+# anywhere in the process; conftest import is the earliest hook we own.
+# setdefault so an explicit caller choice still wins.
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
 _GPU_PROOF_SOURCE_MARKERS = ("cuda_equivalence", "python_wrappers")
 
 # Skip reasons that CANNOT legitimately fire on a capable box — they mean the toolchain, the model
