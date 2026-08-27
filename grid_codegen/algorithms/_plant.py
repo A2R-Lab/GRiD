@@ -35,7 +35,7 @@ by the caller). An `isfinite` guard skips any side whose bound is +/-inf, so an
 unbounded joint contributes EXACTLY zero to value/gradient/hessian.
 """
 
-from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines
+from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_repoint_line
 from grid_codegen.algorithms._centroidal import (
     _gen_centroidal_call, _centroidal_inner_temp_mem_size, _centroidal_device_extra,
 )
@@ -2154,7 +2154,7 @@ def _emit_plant_step_hessian_kernel_body_for_flags(self, n, nx, d2ab_count,
     #   [.. + mjx_ws)      : d_mjx_ws (floating mjx epilogue scratch) — ALWAYS carved
     #                        for floating so the SHARED tier (no other spill) still has it
     if needs_workspace:
-        self.gen_add_code_line("T *d_ws = reinterpret_cast<T *>(&d_workspace[k*PLANT_HESSIAN_WORKSPACE_BYTES_PER_TIMESTEP<T>()]);")
+        self.gen_add_code_line(gen_workspace_repoint_line("d_ws", "k*PLANT_HESSIAN_WORKSPACE_BYTES_PER_TIMESTEP<T>()", declare=True))
         self.gen_add_code_line("size_t ws_off = 0;")
     if spill_d2AB:
         self.gen_add_code_line("T *s_d2AB = &d_ws[ws_off]; ws_off += " + str(d2ab_count) + ";")

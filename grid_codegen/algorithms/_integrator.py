@@ -11,6 +11,7 @@ template parameter. Only `EULER` is wired up here; the `_dispatch` helper
 below is structured so adding semi-implicit Euler / Midpoint / RK3 / RK4
 later is purely additive (one extra `if constexpr (IT == ...)` branch).
 """
+from grid_codegen.helpers._code_generation_helpers import gen_workspace_repoint_line, wrap_host_single_call_timing
 
 
 # integrator name <-> codegen-side string constant
@@ -1067,7 +1068,7 @@ def _emit_integrator_kernel_body_for_flags(self, nq, nv, spill_minv_F, single_ca
         self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
         self.gen_kernel_load_inputs("q_qd_u",str(input_count),stride="stride_q_qd_u")
         if spill_minv_F:
-            self.gen_add_code_line("T *int_d_workspace = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("int_d_workspace", "GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()", batch_indexed=True, declare=True))
         else:
             self.gen_add_code_line("(void)d_workspace;")
         # mjx input convert (RETRACT family): reorder ONLY the input base
@@ -1115,7 +1116,7 @@ def _emit_integrator_kernel_body_for_flags(self, nq, nv, spill_minv_F, single_ca
     else:
         self.gen_kernel_load_inputs("q_qd_u",str(input_count))
         if spill_minv_F:
-            self.gen_add_code_line("T *int_d_workspace = reinterpret_cast<T *>(&d_workspace[GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("int_d_workspace", "GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()", declare=True))
         else:
             self.gen_add_code_line("(void)d_workspace;")
         self.gen_add_code_line("// compute with NUM_TIMESTEPS as NUM_REPS for timing")
@@ -1219,8 +1220,7 @@ def gen_integrator_host(self, mode=0):
     self.gen_add_code_line("// then call the kernel")
     func_call_code = [func_call_start + func_call_end, "gpuErrchkKernel();"]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"integrator\", INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     # Pin the spilled Minv-F section in L2 when any tier spills it.
     if not single_call_timing:

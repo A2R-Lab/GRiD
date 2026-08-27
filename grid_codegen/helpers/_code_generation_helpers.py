@@ -260,6 +260,107 @@ def _gen_mjx_build_R_lines(q_name="s_q"):
     ]
 
 
+# ----------------------------------------------------------------------------
+# d_workspace spill-repoint emitters
+# ----------------------------------------------------------------------------
+# Every spilled buffer repoint in the kernels is one of two byte-shapes:
+#   reinterpret_cast<T *>(&d_workspace[INDEX])   (indexed into the workspace)
+#   reinterpret_cast<T *>(d_workspace)           (bare base pointer, INDEX == 0)
+# where INDEX is optionally prefixed by the per-timestep batch slot
+# ``grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()`` (batched
+# kernel paths, where ``k`` is in scope) joined to a byte-offset macro
+# expression with `` + ``. These two emitters are the single source of that
+# string shape; call sites pass only the variation axes.
+
+_WORKSPACE_SLOT_EXPR = "grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()"
+
+
+def gen_workspace_cast_expr(offset_expr=None, batch_indexed=False):
+    """Return the ``reinterpret_cast<T *>`` d_workspace EXPRESSION (no assignment)
+    for a spilled buffer. ``offset_expr`` is the byte-offset macro expression (or
+    None); ``batch_indexed`` prefixes the per-timestep slot term. With neither,
+    the bare-base-pointer form is returned."""
+    parts = ([_WORKSPACE_SLOT_EXPR] if batch_indexed else []) + \
+            ([offset_expr] if offset_expr else [])
+    if parts:
+        return "reinterpret_cast<T *>(&d_workspace[" + " + ".join(parts) + "])"
+    return "reinterpret_cast<T *>(d_workspace)"
+
+
+def gen_workspace_repoint_line(var, offset_expr=None, batch_indexed=False, declare=False):
+    """Return the single spill-repoint STATEMENT line
+    ``[T *]var = reinterpret_cast<T *>(...);`` (see gen_workspace_cast_expr for
+    the cast shape; ``declare`` prefixes the ``T *`` declaration)."""
+    return ("T *" if declare else "") + var + " = " + \
+        gen_workspace_cast_expr(offset_expr, batch_indexed) + ";"
+
+
+# ----------------------------------------------------------------------------
+# gen_*_host shared scaffold fragments
+# ----------------------------------------------------------------------------
+# Every gen_*_host wrapper shares the same copy-pasted skeleton: the mode
+# decode, the _single_timing/_compute_only name mangles, the standard doc
+# parameter list, the USE_COMPRESSED_MEM q_qd input transfer, and the
+# single-call timing wrap. These helpers are the single source of those
+# fragments; hosts with genuinely different shapes keep their own inline copy.
+
+def host_mode_flags(mode):
+    """Decode a gen_*_host ``mode`` argument: returns the standard
+    (single_call_timing, compute_only) pair (mode 1 / mode 2)."""
+    single_call_timing = True if mode == 1 else False
+    compute_only = True if mode == 2 else False
+    return single_call_timing, compute_only
+
+
+def host_std_func_params(with_gravity=True):
+    """The standard gen_*_host doc-comment parameter list (fresh list per call).
+    ``with_gravity=False`` drops the gravity line (kinematics-only hosts)."""
+    func_params = ["hd_data is the packaged input and output pointers",
+                   "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)"]
+    if with_gravity:
+        func_params.append("gravity is the gravity constant,")
+    func_params += ["num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)",
+                    "streams are pointers to CUDA streams for async memory transfers (if needed)"]
+    return func_params
+
+
+def mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only):
+    """Apply the standard host-wrapper name mangles to the (start, end) def
+    strings: ``_single_timing`` re-indents the tail; ``_compute_only``
+    additionally drops the trailing ``cudaStream_t *streams`` parameter."""
+    if single_call_timing:
+        func_def_start = func_def_start.replace("(", "_single_timing(")
+        func_def_end = "              " + func_def_end
+    if compute_only:
+        func_def_start = func_def_start.replace("(", "_compute_only(")
+        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    return func_def_start, func_def_end
+
+
+def host_q_qd_input_transfer_lines(single_call_timing):
+    """The standard USE_COMPRESSED_MEM q_qd host->device input transfer block
+    (comment + stride decl + the two async memcpy branches)."""
+    nt = "num_timesteps*" if not single_call_timing else ""
+    return ["// start code with memory transfer",
+            "int stride_q_qd;",
+            "if (USE_COMPRESSED_MEM) {stride_q_qd = 2*NUM_JOINTS; " +
+            "gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd,hd_data->h_q_qd,stride_q_qd*" +
+            nt + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}",
+            "else {stride_q_qd = 3*NUM_JOINTS; " +
+            "gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q_qd*" +
+            nt + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}"]
+
+
+def wrap_host_single_call_timing(func_call_code, kernel_errcheck=False):
+    """Wrap the host launch-line list in the single-call timing scaffold, IN
+    PLACE: clock_gettime start prepended, [optional gpuErrchkKernel,] clock_
+    gettime end appended. Call only under ``if single_call_timing:``."""
+    func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
+    if kernel_errcheck:
+        func_call_code.append("gpuErrchkKernel();")
+    func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+
+
 def gen_mjx_input_convert(self, q_name="s_q", qd_name="s_qd", qdd_name=None, u_name=None):
     """Convert the mjx-frame INPUTS to the pin frame, in place, before the kernel
     body runs. Emitted right after `gen_kernel_load_inputs` + sync, BEFORE the

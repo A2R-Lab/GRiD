@@ -26,6 +26,8 @@ per-column independence is left for a future perf pass.
 
 import numpy as np
 
+from grid_codegen.helpers._code_generation_helpers import gen_workspace_repoint_line, host_mode_flags, mangle_host_func_defs, wrap_host_single_call_timing
+
 
 __all__ = [
     "gen_frame_jacobian_inner",
@@ -335,8 +337,7 @@ def gen_frame_jacobian_host(self, mode=0):
     host params with defaults (leaf-EE joint / LOCAL_WORLD_ALIGNED) so a caller
     that omits them gets the historical fixed-target behavior; both are forwarded
     to the kernel's runtime frame params."""
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
     default_tjid = self.robot.get_leaf_nodes()[0]
     func_params = ["hd_data is the packaged input and output pointers",
                    "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)",
@@ -398,8 +399,7 @@ def gen_frame_jacobian_host(self, mode=0):
     func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q", "hd_data->d_q_qd_u") + "}"
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"frame_jacobian\", FRAME_JACOBIAN_DYNAMIC_SHARED_MEM_BYTES<T>()));")
     self.gen_add_code_lines(func_call_code)
     if not compute_only:
@@ -714,8 +714,7 @@ def gen_frame_jacobian_dot_host(self, mode=0):
     q|qd|u memory (Jdot needs qd, which the compressed q-only layout lacks).
     target_jid / reference_frame are trailing defaulted host params (leaf-EE /
     LWA) forwarded to the kernel's runtime frame params."""
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
     default_tjid = self.robot.get_leaf_nodes()[0]
     func_params = ["hd_data is the packaged input and output pointers",
                    "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)",
@@ -769,8 +768,7 @@ def gen_frame_jacobian_dot_host(self, mode=0):
     self.gen_add_code_line("// then call the kernel")
     func_call_code = [func_call, "gpuErrchkKernel();"]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"frame_jacobian_dot\", FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES<T>()));")
     self.gen_add_code_lines(func_call_code)
     if not compute_only:
@@ -860,7 +858,7 @@ def gen_osc_inertia_device(self):
     # spill-F: route s_F to the L2-pinned minv-F workspace offset (d_workspace is the
     # per-timestep base, sliced by the kernel). Disjoint from any concurrent kernel —
     # osc_inertia is a standalone kinematics launch.
-    self.gen_add_code_line("if constexpr (!OSC_F_SMEM) { s_F = reinterpret_cast<T *>(&d_workspace[GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()]); } else { (void)d_workspace; }")
+    self.gen_add_code_line("if constexpr (!OSC_F_SMEM) { " + gen_workspace_repoint_line("s_F", "GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()") + " } else { (void)d_workspace; }")
 
     # ---- Step 1: spatial transforms -> minv_inner -> SYMMETRIC_UPPER Minv ----
     self.gen_load_update_XImats_helpers_function_call()
@@ -983,20 +981,14 @@ def gen_osc_inertia_host(self, mode=0):
     """Emit osc_inertia host launcher (3 modes). Kinematic (q-only input):
     SELF-CONTAINED Minv compose, so the q-only / q|qd|u memory split mirrors
     frame_jacobian."""
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
     func_params = ["hd_data is the packaged input and output pointers",
                    "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)",
                    "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)",
                    "streams are pointers to CUDA streams for async memory transfers (if needed)"]
     func_def_start = "void osc_inertia(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
     func_def_end = "                            const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     self.gen_add_func_doc("Compute the operational-space (task) inertia", [], func_params, None)
     # MUJOCO_OUTPUT (floating only) host flag, LAST: forwarded to the kernel launch
     # (naming the tier positionally to reach the trailing flag). osc_inertia is
@@ -1035,8 +1027,7 @@ def gen_osc_inertia_host(self, mode=0):
     func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q", "hd_data->d_q_qd_u") + "}"
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"osc_inertia\", OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     if single_call_timing:
         self.gen_add_code_lines(func_call_code)

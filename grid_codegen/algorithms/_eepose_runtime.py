@@ -23,6 +23,7 @@ the analytic geometric Jacobian to float64 rounding.
 Single-target kernels (like frame_jacobian); the Python binding loops them over a
 jid list for the multi-EE list API. Output 6 / 6*nv floats -> NO spill ladder.
 """
+from grid_codegen.helpers._code_generation_helpers import wrap_host_single_call_timing
 
 import numpy as np
 
@@ -286,8 +287,7 @@ def _gen_runtime_host(self, base_name, out_field, out_count, single_call_timing=
     func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q,", "hd_data->d_q_qd_u,") + "}"
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"" + base_name + "\", " + smem + "));")
     self.gen_add_code_lines(func_call_code)
     if not compute_only:

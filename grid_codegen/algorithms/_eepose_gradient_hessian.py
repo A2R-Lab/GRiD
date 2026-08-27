@@ -4,6 +4,9 @@ End effector pose, gradient, and hessian codegen.
 Fixed-joint targets are supported (including on branched trees and multiple
 fixed targets at once) via the ``fixed_target_name`` variants.
 """
+from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+
+
 def gen_end_effector_pose_inner_temp_mem_size(self, fixed_target_name = ""):
     num_ees = self.robot.get_total_leaf_nodes() if fixed_target_name == "" else 1
     return 2*16*num_ees
@@ -324,24 +327,15 @@ def gen_end_effector_pose_kernel(self, single_call_timing = False, fixed_target_
 
 def gen_end_effector_pose_host(self, mode = 0, fixed_target_name = ""):
     # default is to do the full kernel call -- options are for single timing or compute only kernel wrapper
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
 
     # define function def and params
-    func_params = ["hd_data is the packaged input and output pointers", \
-                   "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)", \
-                   "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)", \
-                   "streams are pointers to CUDA streams for async memory transfers (if needed)"]
+    func_params = host_std_func_params(with_gravity=False)
     func_notes = []
     func_def_start = "void end_effector_pose" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + \
                             "(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
     func_def_end =   "                            const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     # then generate the code
     self.gen_add_func_doc("Compute the End Effector Pose",\
                           func_notes,func_params,None)
@@ -391,8 +385,7 @@ def gen_end_effector_pose_host(self, mode = 0, fixed_target_name = ""):
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     # wrap function call in timing (if needed)
     if single_call_timing:
-        func_call_code.insert(0,"struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"end_effector_pose\", END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>()));")
     self.gen_add_code_lines(func_call_code)
     if not compute_only:
@@ -977,10 +970,10 @@ def _emit_eepose_grad_kernel_body_for_flags(self, n, num_ees, fixed_target_name,
             self.gen_mjx_quat_reorder("s_q")
             self.gen_add_end_control_flow()
         if use_workspace_dxhom:
-            self.gen_add_code_line("T *s_dXmatsHom = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_END_EFFECTOR_POSE_GRADIENT_WORKSPACE_DXHOM_OFFSET_BYTES<T>()]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("s_dXmatsHom", "GRID_END_EFFECTOR_POSE_GRADIENT_WORKSPACE_DXHOM_OFFSET_BYTES<T>()", batch_indexed=True, declare=True))
         if use_workspace_temp:
             self.gen_add_code_line("T *s_end_effector_pose_gradient = &d_end_effector_pose_gradient[k*" + str(6*nv*num_ees) + "];")
-            self.gen_add_code_line("T *s_eegrad_temp = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " + eegrad_temp_off + "]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("s_eegrad_temp", eegrad_temp_off, batch_indexed=True, declare=True))
             # Whole inner arena spilled -> smem s_temp is null. Repoint it at the
             # spilled workspace so the XmatsHom helper's sincos scratch is backed.
             self.gen_add_code_line("s_temp = s_eegrad_temp;")
@@ -1013,10 +1006,10 @@ def _emit_eepose_grad_kernel_body_for_flags(self, n, num_ees, fixed_target_name,
             self.gen_mjx_quat_reorder("s_q")
             self.gen_add_end_control_flow()
         if use_workspace_dxhom:
-            self.gen_add_code_line("T *s_dXmatsHom = reinterpret_cast<T *>(&d_workspace[GRID_END_EFFECTOR_POSE_GRADIENT_WORKSPACE_DXHOM_OFFSET_BYTES<T>()]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("s_dXmatsHom", "GRID_END_EFFECTOR_POSE_GRADIENT_WORKSPACE_DXHOM_OFFSET_BYTES<T>()", declare=True))
         if use_workspace_temp:
             self.gen_add_code_line("T *s_end_effector_pose_gradient = d_end_effector_pose_gradient;")
-            self.gen_add_code_line("T *s_eegrad_temp = reinterpret_cast<T *>(&d_workspace[" + eegrad_temp_off + "]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("s_eegrad_temp", eegrad_temp_off, declare=True))
             # See note above: repoint the null smem s_temp at the spilled workspace.
             self.gen_add_code_line("s_temp = s_eegrad_temp;")
         self.gen_add_code_line("// compute with NUM_TIMESTEPS as NUM_REPS for timing")
@@ -1079,23 +1072,14 @@ def gen_end_effector_pose_gradient_kernel(self, single_call_timing = False, fixe
 
 def gen_end_effector_pose_gradient_host(self, mode = 0, fixed_target_name = ""):
     # default is to do the full kernel call -- options are for single timing or compute only kernel wrapper
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
 
     # define function def and params
-    func_params = ["hd_data is the packaged input and output pointers", \
-                   "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)", \
-                   "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)", \
-                   "streams are pointers to CUDA streams for async memory transfers (if needed)"]
+    func_params = host_std_func_params(with_gravity=False)
     func_notes = []
     func_def_start = "void end_effector_pose_gradient" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
     func_def_end =   "                            const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     # then generate the code
     self.gen_add_func_doc("Computes the Gradient of the End Effector Pose with respect to joint position",\
                           func_notes,func_params,None)
@@ -1144,8 +1128,7 @@ def gen_end_effector_pose_gradient_host(self, mode = 0, fixed_target_name = ""):
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     # wrap function call in timing (if needed)
     if single_call_timing:
-        func_call_code.insert(0,"struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"end_effector_pose_gradient\", END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     if not single_call_timing:
         self.gen_add_workspace_slot_count()
@@ -2418,15 +2401,7 @@ def _emit_d2ee_mjx_epilogue(self, hess_buf, grad_buf, nv, num_ees):
     # mujoco_convention.rotation_from_quat_xyzw exactly (mirrors id-grad / fd-grad).
     # Re-materialized at the TOP of each parallel-loop body (a few dozen flops,
     # ZERO aliasing risk -- no shared scratch). Byte-identical to the prior build.
-    R_LINES = [
-        "T qx = s_q[3], qy = s_q[4], qz = s_q[5], qw = s_q[6];",
-        "T xx = qx*qx, yy = qy*qy, zz = qz*qz;",
-        "T xy = qx*qy, xz = qx*qz, yz = qy*qz, wx = qw*qx, wy = qw*qy, wz = qw*qz;",
-        "T R[9];",
-        "R[0] = static_cast<T>(1) - static_cast<T>(2)*(yy+zz); R[1] = static_cast<T>(2)*(xy-wz);                    R[2] = static_cast<T>(2)*(xz+wy);",
-        "R[3] = static_cast<T>(2)*(xy+wz);                    R[4] = static_cast<T>(1) - static_cast<T>(2)*(xx+zz); R[5] = static_cast<T>(2)*(yz-wx);",
-        "R[6] = static_cast<T>(2)*(xz-wy);                    R[7] = static_cast<T>(2)*(yz+wx);                    R[8] = static_cast<T>(1) - static_cast<T>(2)*(xx+yy);",
-    ]
+    R_LINES = _gen_mjx_build_R_lines("s_q")
     self.gen_add_code_line("// mjx output: EE-pose Hessian convention transform (double col-reframe + sym frame term)")
     # The independent axis is the flattened (ee, out-row) slab index s in
     # [0, 6*num_ees): ee = s / 6, c = s % 6. Each slab is one nv x nv Hessian
@@ -2680,23 +2655,14 @@ def gen_end_effector_pose_hessian_kernel(self, single_call_timing = False, fixed
 
 def gen_end_effector_pose_hessian_host(self, mode = 0, fixed_target_name = ""):
     # default is to do the full kernel call -- options are for single timing or compute only kernel wrapper
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
 
     # define function def and params
-    func_params = ["hd_data is the packaged input and output pointers", \
-                   "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)", \
-                   "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)", \
-                   "streams are pointers to CUDA streams for async memory transfers (if needed)"]
+    func_params = host_std_func_params(with_gravity=False)
     func_notes = []
     func_def_start = "void end_effector_pose_hessian" + ("" if fixed_target_name == "" else "_" + fixed_target_name) + "(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
     func_def_end =   "                            const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     # then generate the code
     self.gen_add_func_doc("Computes the Hessian (and Jacobian) of the End Effector Pose with respect to generalized velocity (d^2/dv^2 tangent, pinocchio convention)",\
                           func_notes,func_params,None)
@@ -2745,8 +2711,7 @@ def gen_end_effector_pose_hessian_host(self, mode = 0, fixed_target_name = ""):
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     # wrap function call in timing (if needed)
     if single_call_timing:
-        func_call_code.insert(0,"struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("if (END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>() > GRID_CUDA_TARGET_SHARED_MEM_BYTES) {fprintf(stderr,\"GRID end_effector_pose_hessian shared-memory request %zu exceeds compile target %d; regenerate with a deeper Hessian spill fallback or a higher GRID_CUDA_TARGET_SHARED_MEM_BYTES.\\n\", END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>(), GRID_CUDA_TARGET_SHARED_MEM_BYTES); gpuErrchk(cudaErrorInvalidConfiguration);}")
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"end_effector_pose_hessian\", END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     # No L2 persistence: at LITE/MINIMAL the end_effector_pose_hessian spill target IS the output

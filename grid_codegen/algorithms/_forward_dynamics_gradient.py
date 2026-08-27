@@ -1,3 +1,6 @@
+from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_cast_expr, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+
+
 def gen_forward_dynamics_gradient_inner_temp_mem_size(self, use_qdd_Minv_input = False):
     n = self.robot.get_num_vel()
     minv_temp = self.gen_minv_inner_temp_mem_size()
@@ -130,13 +133,7 @@ def _emit_forward_dynamics_gradient_mjx_output(self):
     #   reordered by the input epilogue) -- mirrors mujoco_convention.rotation_from
     #   _quat_xyzw / the _gen_mjx_build_R_lines helper exactly.
     _LOAD = [
-        "T qx = s_q[3], qy = s_q[4], qz = s_q[5], qw = s_q[6];",
-        "T xx = qx*qx, yy = qy*qy, zz = qz*qz;",
-        "T xy = qx*qy, xz = qx*qz, yz = qy*qz, wx = qw*qx, wy = qw*qy, wz = qw*qz;",
-        "T R[9];",
-        "R[0] = static_cast<T>(1) - static_cast<T>(2)*(yy+zz); R[1] = static_cast<T>(2)*(xy-wz);                    R[2] = static_cast<T>(2)*(xz+wy);",
-        "R[3] = static_cast<T>(2)*(xy+wz);                    R[4] = static_cast<T>(1) - static_cast<T>(2)*(xx+zz); R[5] = static_cast<T>(2)*(yz-wx);",
-        "R[6] = static_cast<T>(2)*(xz-wy);                    R[7] = static_cast<T>(2)*(yz+wx);                    R[8] = static_cast<T>(1) - static_cast<T>(2)*(xx+yy);",
+        *_gen_mjx_build_R_lines("s_q"),
         # Minv (nv x nv): in-flight from minv_inner (the -Minv*dc/du step). NOTE
         # minv_inner stores Minv SYMMETRIC_UPPER (only the upper triangle is
         # populated; the -Minv*dc/du apply mirror-indexes it). The Minv[:,0:3]
@@ -474,18 +471,18 @@ def _emit_forward_dynamics_gradient_kernel_body_for_flags(self, nq, nv, use_sele
         if use_selective_spill or use_global_temp:
             self.gen_add_code_line("T *d_df_du_k = &d_df_du[k*" + str(nv*2*nv) + "];")
         if use_selective_spill:
-            self.gen_add_code_line("d_temp_spill = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("d_temp_spill", batch_indexed=True))
         if use_output_spill:
             # s_dc_du (2*nv*nv) + s_Minv (nv*nv) -> L2-pinned SO band, disjoint from the
             # inner pool which lives in the GRAD section (offset 0) under use_global_temp.
-            self.gen_add_code_line("s_dc_du = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]); s_Minv = &s_dc_du[" + str(2*nv*nv) + "];")
+            self.gen_add_code_line(gen_workspace_repoint_line("s_dc_du", "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()", batch_indexed=True) + " s_Minv = &s_dc_du[" + str(2*nv*nv) + "];")
         self.gen_add_code_line("// compute — the orchestration inner owns its s_temp pool placement")
         self.gen_forward_dynamics_gradient_device_function_call(
             use_qdd_Minv_input,
             scratch_in_smem_expr = ("false" if use_global_temp else "true"),
             use_da_df_spill_expr = ("true" if use_selective_spill else "false"),
             s_df_du_name = ("d_df_du_k" if (use_global_temp or use_selective_spill) else "s_temp"),
-            d_workspace_pool_name = ("reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()])" if use_global_temp else "nullptr"),
+            d_workspace_pool_name = (gen_workspace_cast_expr(batch_indexed=True) if use_global_temp else "nullptr"),
             d_temp_spill_name = ("d_temp_spill" if use_selective_spill else "nullptr"),
             mujoco_output_expr = ("MUJOCO_OUTPUT" if mjx_kernel else None))
         if not (use_global_temp or use_selective_spill):
@@ -499,10 +496,10 @@ def _emit_forward_dynamics_gradient_kernel_body_for_flags(self, nq, nv, use_sele
         if use_selective_spill or use_global_temp:
             self.gen_add_code_line("T *d_df_du_k = d_df_du;")
         if use_selective_spill:
-            self.gen_add_code_line("d_temp_spill = reinterpret_cast<T *>(d_workspace);")
+            self.gen_add_code_line(gen_workspace_repoint_line("d_temp_spill"))
         if use_output_spill:
             # s_dc_du/s_Minv -> L2-pinned SO band (single-timing: no per-k stride).
-            self.gen_add_code_line("s_dc_du = reinterpret_cast<T *>(&d_workspace[GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]); s_Minv = &s_dc_du[" + str(2*nv*nv) + "];")
+            self.gen_add_code_line(gen_workspace_repoint_line("s_dc_du", "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()") + " s_Minv = &s_dc_du[" + str(2*nv*nv) + "];")
         self.gen_add_code_line("// compute with NUM_TIMESTEPS as NUM_REPS for timing")
         self.gen_add_code_line("for (int rep = 0; rep < NUM_TIMESTEPS; rep++){", True)
         if use_qdd_Minv_input:
@@ -518,7 +515,7 @@ def _emit_forward_dynamics_gradient_kernel_body_for_flags(self, nq, nv, use_sele
             scratch_in_smem_expr = ("false" if use_global_temp else "true"),
             use_da_df_spill_expr = ("true" if use_selective_spill else "false"),
             s_df_du_name = ("d_df_du_k" if (use_global_temp or use_selective_spill) else "s_temp"),
-            d_workspace_pool_name = ("reinterpret_cast<T *>(d_workspace)" if use_global_temp else "nullptr"),
+            d_workspace_pool_name = (gen_workspace_cast_expr() if use_global_temp else "nullptr"),
             d_temp_spill_name = ("d_temp_spill" if use_selective_spill else "nullptr"),
             mujoco_output_expr = ("MUJOCO_OUTPUT" if mjx_kernel else None))
         self.gen_add_code_line(
@@ -579,24 +576,14 @@ def gen_forward_dynamics_gradient_kernel(self, use_qdd_Minv_input = False, singl
 
 def gen_forward_dynamics_gradient_host(self, mode = 0):
     # default is to do the full kernel call -- options are for single timing or compute only kernel wrapper
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
 
     # define function def and params
-    func_params = ["hd_data is the packaged input and output pointers", \
-                   "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)", \
-                   "gravity is the gravity constant,", \
-                   "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)", \
-                   "streams are pointers to CUDA streams for async memory transfers (if needed)"]
+    func_params = host_std_func_params()
     func_notes = []
     func_def_start = "void forward_dynamics_gradient(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const T gravity, const int num_timesteps,"
     func_def_end =   "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     # then generate the code
     self.gen_add_func_doc("Compute the RNEA (Recursive Newton-Euler Algorithm)",\
                           func_notes,func_params,None)
@@ -645,8 +632,7 @@ def gen_forward_dynamics_gradient_host(self, mode = 0):
     func_call_code = ["if (USE_QDD_MINV_FLAG) {" + func_call_with_qdd_minv + "}", "else {" + func_call + "}", "gpuErrchkKernel();"]
     # wrap function call in timing (if needed)
     if single_call_timing:
-        func_call_code.insert(0,"struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"forward_dynamics_gradient\", FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     if not single_call_timing:
         self.gen_add_workspace_slot_count()

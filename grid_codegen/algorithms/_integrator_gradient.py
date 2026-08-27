@@ -22,6 +22,7 @@ extra parallel loop using `s_qdd` and `s_q`/`s_qd`).
 """
 
 from ._integrator import _integrator_type_token, _max_stages_in_use
+from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_cast_expr, gen_workspace_repoint_line, wrap_host_single_call_timing
 
 
 # Per-integrator Butcher coefficients used by the multi-stage gradient.
@@ -520,13 +521,7 @@ def _emit_integrator_gradient_mjx_output(self, integrator_type, s_mjx_scratch="s
     # _HELP re-materializes R + base source vectors at the top of every parallel body.
     _HELP = [
         # R (row-major R[3*i+j]) from the xyzw base quaternion s_q[3..6].
-        "T qx = s_q[3], qy = s_q[4], qz = s_q[5], qw = s_q[6];",
-        "T xx = qx*qx, yy = qy*qy, zz = qz*qz;",
-        "T xy = qx*qy, xz = qx*qz, yz = qy*qz, wx = qw*qx, wy = qw*qy, wz = qw*qz;",
-        "T R[9];",
-        "R[0] = static_cast<T>(1) - static_cast<T>(2)*(yy+zz); R[1] = static_cast<T>(2)*(xy-wz);                    R[2] = static_cast<T>(2)*(xz+wy);",
-        "R[3] = static_cast<T>(2)*(xy+wz);                    R[4] = static_cast<T>(1) - static_cast<T>(2)*(xx+zz); R[5] = static_cast<T>(2)*(yz-wx);",
-        "R[6] = static_cast<T>(2)*(xz-wy);                    R[7] = static_cast<T>(2)*(yz+wx);                    R[8] = static_cast<T>(1) - static_cast<T>(2)*(xx+yy);",
+        *_gen_mjx_build_R_lines("s_q"),
         "T vlin[3] = {s_qd[0], s_qd[1], s_qd[2]};",
         "T ulin[3] = {s_u[0],  s_u[1],  s_u[2]};",
         "// qd_{k+1,pin}[lin] = (qd + dt*qdd)[lin] (for the g_dot velocity-output term)",
@@ -1363,21 +1358,21 @@ def gen_integrator_gradient_kernel(self, compute_x_kp1=False, single_call_timing
             # passes that pool base via d_workspace_pool_name below.
             if not dqdd_in_smem:
                 self.gen_add_code_line(
-                    "T *s_D_qdd_stage = reinterpret_cast<T *>(&d_workspace[" + slot_expr + "]);"
+                    gen_workspace_repoint_line("s_D_qdd_stage", slot_expr, declare=True)
                 )
             if not dab_in_smem:
                 self.gen_add_code_line(
-                    "T *s_dAB = reinterpret_cast<T *>(&d_workspace[" + slot_expr + " + GRID_INTEGRATOR_GRADIENT_DAB_OFFSET_BYTES<T>()]);"
+                    gen_workspace_repoint_line("s_dAB", slot_expr + " + GRID_INTEGRATOR_GRADIENT_DAB_OFFSET_BYTES<T>()", declare=True)
                 )
             if inner_level == 1:
                 self.gen_add_code_line(
-                    "d_temp_spill = reinterpret_cast<T *>(&d_workspace[" + slot_expr + " + GRID_INTEGRATOR_GRADIENT_INNER_OFFSET_BYTES<T>()]);"
+                    gen_workspace_repoint_line("d_temp_spill", slot_expr + " + GRID_INTEGRATOR_GRADIENT_INNER_OFFSET_BYTES<T>()")
                 )
 
         def _emit_device_call(slot_expr):
             # The FD-grad inner pool base (only consumed by the inner when
             # SCRATCH_IN_SMEM=false; nullptr otherwise).
-            pool_name = ("reinterpret_cast<T *>(&d_workspace[" + slot_expr + " + GRID_INTEGRATOR_GRADIENT_INNER_OFFSET_BYTES<T>()])"
+            pool_name = (gen_workspace_cast_expr(slot_expr + " + GRID_INTEGRATOR_GRADIENT_INNER_OFFSET_BYTES<T>()")
                          if inner_level == 2 else "nullptr")
             spill_name = "d_temp_spill" if inner_level == 1 else "nullptr"
             self.gen_integrator_gradient_device_function_call(
@@ -1506,8 +1501,7 @@ def gen_integrator_gradient_host(self, mode=0, compute_x_kp1=False):
     self.gen_add_code_line("// then call the kernel")
     func_call_code = [func_call_start + func_call_end, "gpuErrchkKernel();"]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"" + base_name + "\", INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     if not single_call_timing:
         self.gen_add_workspace_slot_count()
@@ -1797,13 +1791,7 @@ def _emit_integrator_hessian_mjx_perk(self, n):
     self.gen_add_code_lines([
         "const bool si_mjx = si;",
         # R (row-major R[3r+c]) from the xyzw base quaternion s_q[3..6].
-        "T qx = s_q[3], qy = s_q[4], qz = s_q[5], qw = s_q[6];",
-        "T xx = qx*qx, yy = qy*qy, zz = qz*qz;",
-        "T xy = qx*qy, xz = qx*qz, yz = qy*qz, wx = qw*qx, wy = qw*qy, wz = qw*qz;",
-        "T R[9];",
-        "R[0] = static_cast<T>(1) - static_cast<T>(2)*(yy+zz); R[1] = static_cast<T>(2)*(xy-wz);                    R[2] = static_cast<T>(2)*(xz+wy);",
-        "R[3] = static_cast<T>(2)*(xy+wz);                    R[4] = static_cast<T>(1) - static_cast<T>(2)*(xx+zz); R[5] = static_cast<T>(2)*(yz-wx);",
-        "R[6] = static_cast<T>(2)*(xz-wy);                    R[7] = static_cast<T>(2)*(yz+wx);                    R[8] = static_cast<T>(1) - static_cast<T>(2)*(xx+yy);",
+        *_gen_mjx_build_R_lines("s_q"),
         # recovered fd gradient: Bottom = [dt*J_qq | I+dt*J_qv | dt*Minv].
         # We read the pin dAB bottom blocks directly (col-major) when contracting.
         "T v_lin[3] = {s_qd[0], s_qd[1], s_qd[2]};",

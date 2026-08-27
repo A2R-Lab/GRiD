@@ -28,6 +28,8 @@ Families emitted (each: device + kernel(timing + batch) + host(0/1/2)):
 
 import numpy as np
 
+from grid_codegen.helpers._code_generation_helpers import gen_workspace_repoint_line, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
+
 
 __all__ = [
     "gen_id_bias_device", "gen_id_bias_kernel", "gen_id_bias_host", "gen_id_bias",
@@ -218,12 +220,7 @@ def gen_id_bias_host(self, gravity_only, mode=0):
     func_def_start = ("void " + name + "(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, "
                       "const T gravity, const int num_timesteps,")
     func_def_end = "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     self.gen_add_func_doc("Compute " + name + " (RNEA bias)", [], [], None)
     # MUJOCO_OUTPUT (floating-base both bias kernels) host template flag:
     # forwarded to the kernel launch. The kernel template is <T, RESOURCE_TIER, MUJOCO_OUTPUT>
@@ -243,12 +240,7 @@ def gen_id_bias_host(self, gravity_only, mode=0):
     func_call = (kname + "<<<block_dimms,thread_dimms," + macro + ">>>(hd_data->d_c,hd_data->d_workspace,"
                  "hd_data->d_q_qd,stride_q_qd,d_robotModel,gravity,num_timesteps);")
     if not compute_only:
-        self.gen_add_code_lines([
-            "// start code with memory transfer", "int stride_q_qd;",
-            "if (USE_COMPRESSED_MEM) {stride_q_qd = 2*NUM_JOINTS; gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd,hd_data->h_q_qd,stride_q_qd*" +
-            ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}",
-            "else {stride_q_qd = 3*NUM_JOINTS; gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q_qd*" +
-            ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}"])
+        self.gen_add_code_lines(host_q_qd_input_transfer_lines(single_call_timing))
     else:
         self.gen_add_code_line("int stride_q_qd = USE_COMPRESSED_MEM ? 2*NUM_JOINTS : 3*NUM_JOINTS;")
     self.gen_add_code_line("// then call the kernel")
@@ -256,8 +248,7 @@ def gen_id_bias_host(self, gravity_only, mode=0):
     func_call_mem2 = "else                    {" + func_call.replace("hd_data->d_q_qd", "hd_data->d_q_qd_u") + "}"
     func_call_code = [func_call_mem, func_call_mem2, "gpuErrchkKernel();"]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"" + name + "\", " + macro + "));")
     if single_call_timing:
         self.gen_add_code_lines(func_call_code)
@@ -748,10 +739,7 @@ def _gen_kin_centroidal_kernel(self, name, out_size, has_qd, has_gravity, single
         # J-spilled tier: point s_J at the L2-pinned d_workspace SO band (shared
         # GRID_DCCRBA_J_OFFSET_BYTES sub-offset with dccrba/cmm; same 6*nv*NB band).
         self.gen_add_code_line("if constexpr (!" + SMEM + ") {", True)
-        if in_loop:
-            self.gen_add_code_line("s_J = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_DCCRBA_J_OFFSET_BYTES<T>()]);")
-        else:
-            self.gen_add_code_line("s_J = reinterpret_cast<T *>(&d_workspace[GRID_DCCRBA_J_OFFSET_BYTES<T>()]);")
+        self.gen_add_code_line(gen_workspace_repoint_line("s_J", "GRID_DCCRBA_J_OFFSET_BYTES<T>()", batch_indexed=in_loop))
         self.gen_add_end_control_flow()
 
     def _compute():
@@ -850,12 +838,7 @@ def _gen_kin_centroidal_host(self, name, out_buf, out_size, has_qd, has_gravity,
     func_def_start = ("void " + name + "(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, " + grav_param +
                       "const int num_timesteps,")
     func_def_end = "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     self.gen_add_func_doc("Compute " + name, [], [], None)
     # MUJOCO_OUTPUT (floating only) host flag, LAST: forwarded to the kernel launch
     # naming the tier positionally (<T, GRID_DEFAULT_RESOURCE_TIER, MUJOCO_OUTPUT>) to
@@ -878,12 +861,7 @@ def _gen_kin_centroidal_host(self, name, out_buf, out_size, has_qd, has_gravity,
                  ",stride_" + in_name + ",d_robotModel," + grav_arg + "num_timesteps);")
     if not compute_only:
         if has_qd:
-            self.gen_add_code_lines([
-                "// start code with memory transfer", "int stride_q_qd;",
-                "if (USE_COMPRESSED_MEM) {stride_q_qd = 2*NUM_JOINTS; gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd,hd_data->h_q_qd,stride_q_qd*" +
-                ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}",
-                "else {stride_q_qd = 3*NUM_JOINTS; gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q_qd*" +
-                ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}"])
+            self.gen_add_code_lines(host_q_qd_input_transfer_lines(single_call_timing))
         else:
             self.gen_add_code_lines([
                 "// start code with memory transfer", "int stride_q = NUM_JOINTS;",
@@ -902,8 +880,7 @@ def _gen_kin_centroidal_host(self, name, out_buf, out_size, has_qd, has_gravity,
     else:
         func_call_code = [func_call, "gpuErrchkKernel();"]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     # DE-GATE #2: L2-pin d_workspace when the chosen tier spills the Jw band into it.
     if not single_call_timing:
         self.gen_add_workspace_slot_count()

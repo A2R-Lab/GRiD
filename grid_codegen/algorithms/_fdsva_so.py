@@ -9,6 +9,7 @@ fdsva_so already composes — never here.
 
 # Shared block-parallel emit primitives (also used by _idsva_so). See _mjx_blockpar.
 from ._mjx_blockpar import bpfor as _bpfor, bpctrl as _bpctrl, stride_rc as _fbp
+from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 
 MEMORY_THRESHOLD = 8 # Max num joints for shared mem allocation of result
 
@@ -443,13 +444,7 @@ def _emit_fdsva_so_mjx_locals_lines(self, nv, nv3):
     return [
         # R (row-major R[3*i+j]) from the xyzw base quaternion s_q[3..6] — matches
         # the idsva_so epilogue / mujoco_convention.rotation_from_quat_xyzw exactly.
-        "T qx = s_q[3], qy = s_q[4], qz = s_q[5], qw = s_q[6];",
-        "T xx = qx*qx, yy = qy*qy, zz = qz*qz;",
-        "T xy = qx*qy, xz = qx*qz, yz = qy*qz, wx = qw*qx, wy = qw*qy, wz = qw*qz;",
-        "T R[9];",
-        "R[0] = static_cast<T>(1) - static_cast<T>(2)*(yy+zz); R[1] = static_cast<T>(2)*(xy-wz);                    R[2] = static_cast<T>(2)*(xz+wy);",
-        "R[3] = static_cast<T>(2)*(xy+wz);                    R[4] = static_cast<T>(1) - static_cast<T>(2)*(xx+zz); R[5] = static_cast<T>(2)*(yz-wx);",
-        "R[6] = static_cast<T>(2)*(xz-wy);                    R[7] = static_cast<T>(2)*(yz+wx);                    R[8] = static_cast<T>(1) - static_cast<T>(2)*(xx+yy);",
+        *_gen_mjx_build_R_lines("s_q"),
         "T v_lin[3]   = {s_qd[0], s_qd[1], s_qd[2]};",
         "T omega[3]   = {s_qd[3], s_qd[4], s_qd[5]};",
         "T u_lin[3]   = {s_u[0], s_u[1], s_u[2]};",
@@ -731,8 +726,6 @@ def _emit_fdsva_so_kernel_body_for_flags(self, n, NUM_POS, use_global_tensors, u
     # parameterized by `timing` (drops the k-offset + the d_df2/d_idsva_so k-slice
     # and uses the bare-`d_workspace` fd_grad_spill form the timed path used).
     def _emit_fdsva_so_compute_pointers_and_call(timing):
-        # per-timestep slot offset prefix into d_workspace (empty for timing reps)
-        ws_k = "" if timing else "grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + "
         if use_global_tensors:
             if timing:
                 self.gen_add_code_line('T *s_df2 = d_df2;')
@@ -741,28 +734,25 @@ def _emit_fdsva_so_kernel_body_for_flags(self, n, NUM_POS, use_global_tensors, u
                 self.gen_add_code_line(f'T *s_df2 = &d_df2[k*{4*n**3}];')
                 self.gen_add_code_line(f'T *s_idsva_so = &d_idsva_so[k*{4*n**3}];')
         if use_workspace_temp:
-            self.gen_add_code_line('T *s_fdsva_temp = reinterpret_cast<T *>(&d_workspace[' + ws_k + 'GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);')
+            self.gen_add_code_line(gen_workspace_repoint_line("s_fdsva_temp", "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()", batch_indexed=not timing, declare=True))
         if fd_grad_use_spill:
             # spill band sits at offset 0 of this timestep's slot; timed reps reuse
             # slot 0 so the index collapses to the bare base pointer.
-            if timing:
-                self.gen_add_code_line('T *d_fd_grad_spill = reinterpret_cast<T *>(d_workspace);')
-            else:
-                self.gen_add_code_line('T *d_fd_grad_spill = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]);')
+            self.gen_add_code_line(gen_workspace_repoint_line("d_fd_grad_spill", batch_indexed=not timing, declare=True))
         if use_workspace_df_du:
             # Phase 3e: s_df_du in L2-pinned workspace, in its own dedicated section
             # past grad + SO (avoids conflict with fd_grad_spill which is at offset 0).
-            self.gen_add_code_line('T *s_df_du = reinterpret_cast<T *>(&d_workspace[' + ws_k + 'GRID_FDSVA_SO_SPILL_OFFSET_BYTES<T>()]);')
+            self.gen_add_code_line(gen_workspace_repoint_line("s_df_du", "GRID_FDSVA_SO_SPILL_OFFSET_BYTES<T>()", batch_indexed=not timing, declare=True))
         if use_workspace_Minv:
             # Phase 3e: s_Minv lives just past s_df_du in the FDSVA_SO spill section.
-            self.gen_add_code_line('T *s_Minv = reinterpret_cast<T *>(&d_workspace[' + ws_k + 'GRID_FDSVA_SO_SPILL_OFFSET_BYTES<T>() + ' + str(2*n*n) + '*sizeof(T)]);')
+            self.gen_add_code_line(gen_workspace_repoint_line("s_Minv", "GRID_FDSVA_SO_SPILL_OFFSET_BYTES<T>() + " + str(2*n*n) + "*sizeof(T)", batch_indexed=not timing, declare=True))
         # MUJOCO_OUTPUT: carve d_mjx_scratch from the SO-temp region of d_workspace.
         # That region holds the contract scratch (s_fdsva_temp), which is DEAD by the
         # time the epilogue runs, so the reuse is safe and DISJOINT from the fd_grad /
         # s_df_du / s_Minv spill bands the epilogue must not read. Mirrors idsva_so.
         if mjx_kernel:
             self.gen_add_code_line("T *d_mjx_scratch = nullptr; (void)d_mjx_scratch;")
-            self.gen_add_code_line("if constexpr (MUJOCO_OUTPUT) { d_mjx_scratch = reinterpret_cast<T *>(&d_workspace[" + ws_k + "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]); }")
+            self.gen_add_code_line("if constexpr (MUJOCO_OUTPUT) { " + gen_workspace_repoint_line("d_mjx_scratch", "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()", batch_indexed=not timing) + " }")
         # A4: surgical cold rung — the WORLD idsva inner's cold trio (48*NB floats) spills
         # to the SO-temp region of d_workspace (GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES). DISJOINT
         # by construction at THIS rung: use_workspace_temp is False (contract stays in smem -> no
@@ -771,7 +761,7 @@ def _emit_fdsva_so_kernel_body_for_flags(self, n, NUM_POS, use_global_tensors, u
         # walk AND the contract runs entirely in smem after — no aliasing. (Mirrors the standalone
         # idsva_so world cold rung, which carves the same region; the two kernels never co-run.)
         if idsva_cold_in_global:
-            self.gen_add_code_line('T *d_idsva_cold_spill = reinterpret_cast<T *>(&d_workspace[' + ws_k + 'GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);')
+            self.gen_add_code_line(gen_workspace_repoint_line("d_idsva_cold_spill", "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()", batch_indexed=not timing, declare=True))
         if not timing:
             self.gen_add_code_line("// compute — the orchestration inner owns its s_temp pool placement")
             # Pool->global reuses the (non-concurrent) fdsva SO-temp region; the
@@ -854,24 +844,14 @@ def gen_fdsva_so_host(self, mode = 0):
     # NUM_VEL is the SO tensor dimension. See gen_fdsva_so_kernel for details.
     n = self.robot.get_num_vel()
     # default is to do the full kernel call -- options are for single timing or compute only kernel wrapper
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
 
     # define function def and params
-    func_params = ["hd_data is the packaged input and output pointers", \
-                   "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)", \
-                   "gravity is the gravity constant,", \
-                   "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)", \
-                   "streams are pointers to CUDA streams for async memory transfers (if needed)"]
+    func_params = host_std_func_params()
     func_notes = []
     func_def_start = "void fdsva_so(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const T gravity, const int num_timesteps,"
     func_def_end =   "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     # then generate the code
     self.gen_add_func_doc("Compute the FDSVA_SO (Second Order of Forward Dynamics with Spacial Vector Algebra)",\
                           func_notes,func_params,None)
@@ -907,8 +887,7 @@ def gen_fdsva_so_host(self, mode = 0):
     func_call_code = [func_call, "gpuErrchkKernel();"]
     # wrap function call in timing (if needed)
     if single_call_timing:
-        func_call_code.insert(0,"struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"fdsva_so\", FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     if not single_call_timing:
         self.gen_add_workspace_slot_count()

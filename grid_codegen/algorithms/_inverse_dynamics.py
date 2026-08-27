@@ -1,3 +1,6 @@
+from grid_codegen.helpers._code_generation_helpers import host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+
+
 def _id_S_row_coeff(S_desc, row):
     """C++ coefficient string for S[row] of a 1-DoF joint, or None if S[row]==0.
 
@@ -924,24 +927,14 @@ def gen_inverse_dynamics_kernel(self, use_qdd_input = False, single_call_timing 
 
 def gen_inverse_dynamics_host(self, mode = 0):
     # default is to do the full kernel call -- options are for single timing or compute only kernel wrapper
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
 
     # define function def and params
-    func_params = ["hd_data is the packaged input and output pointers", \
-                   "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)", \
-                   "gravity is the gravity constant,", \
-                   "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)", \
-                   "streams are pointers to CUDA streams for async memory transfers (if needed)"]
+    func_params = host_std_func_params()
     func_notes = []
     func_def_start = "void inverse_dynamics(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const T gravity, const int num_timesteps,"
     func_def_end =   "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     # then generate the code
     self.gen_add_func_doc("Compute the RNEA (Recursive Newton-Euler Algorithm)",\
                           func_notes,func_params,None)
@@ -968,15 +961,8 @@ def gen_inverse_dynamics_host(self, mode = 0):
         func_call_qdd_start = func_call_qdd_start.replace("inverse_dynamics_kernel<","inverse_dynamics_kernel_single_timing<")
     if not compute_only:
         # start code with memory transfer
-        self.gen_add_code_lines(["// start code with memory transfer", \
-                                 "int stride_q_qd;", \
-                                 "if (USE_COMPRESSED_MEM) {stride_q_qd = 2*NUM_JOINTS; " + \
-                                    "gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd,hd_data->h_q_qd,stride_q_qd*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}", \
-                                 "else {stride_q_qd = 3*NUM_JOINTS; " + \
-                                    "gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q_qd*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}", \
-                                 "if (USE_QDD_FLAG) {gpuErrchk(cudaMemcpyAsync(hd_data->d_qdd,hd_data->h_qdd,NUM_JOINTS*" + \
+        self.gen_add_code_lines(host_q_qd_input_transfer_lines(single_call_timing) + \
+                                ["if (USE_QDD_FLAG) {gpuErrchk(cudaMemcpyAsync(hd_data->d_qdd,hd_data->h_qdd,NUM_JOINTS*" + \
                                     ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[1]));}", \
                                  "gpuErrchkKernel();"])
     else:
@@ -995,8 +981,7 @@ def gen_inverse_dynamics_host(self, mode = 0):
                       "else {", func_call_mem_adjust, func_call_mem_adjust2, "}", "gpuErrchkKernel();"]
     # wrap function call in timing (if needed)
     if single_call_timing:
-        func_call_code.insert(0,"struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"inverse_dynamics\", INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>()));")
     self.gen_add_code_lines(func_call_code)
     if not compute_only:

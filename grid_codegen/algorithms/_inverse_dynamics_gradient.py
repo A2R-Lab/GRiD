@@ -1,3 +1,6 @@
+from grid_codegen.helpers._code_generation_helpers import gen_workspace_cast_expr, gen_workspace_repoint_line, host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+
+
 def _idg_Svec_cpp(S_vec):
     """C++ brace-init for a dense 6-vector motion subspace column (Tier-B skew
     emit in the dense serial ID-gradient inner)."""
@@ -1641,13 +1644,13 @@ def _emit_inverse_dynamics_gradient_kernel_body_for_flags(self, NUM_POS, n, use_
         # the s_temp pool placement (the whole-pool global-temp repoint is its
         # SCRATCH_IN_SMEM=false path). Per-rung flags are passed as literals.
         if use_selective_spill:
-            self.gen_add_code_line("d_temp_spill = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("d_temp_spill", batch_indexed=True))
         self.gen_add_code_line("// compute — the orchestration inner owns its s_temp pool placement")
         self.gen_inverse_dynamics_gradient_device_function_call(
             use_qdd_input,
             scratch_in_smem_expr = ("false" if use_global_temp else "true"),
             use_da_df_spill_expr = ("true" if use_selective_spill else "false"),
-            d_workspace_pool_name = ("reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()])" if use_global_temp else "nullptr"),
+            d_workspace_pool_name = (gen_workspace_cast_expr(batch_indexed=True) if use_global_temp else "nullptr"),
             d_temp_spill_name = ("d_temp_spill" if use_selective_spill else "nullptr"),
             mujoco_output_expr = ("MUJOCO_OUTPUT" if mjx_kernel else None))
         self.gen_add_sync()
@@ -1659,7 +1662,7 @@ def _emit_inverse_dynamics_gradient_kernel_body_for_flags(self, NUM_POS, n, use_
         else:
             self.gen_kernel_load_inputs("q_qd",str(n + NUM_POS))
         if use_selective_spill:
-            self.gen_add_code_line("d_temp_spill = reinterpret_cast<T *>(d_workspace);")
+            self.gen_add_code_line(gen_workspace_repoint_line("d_temp_spill"))
         self.gen_add_code_line("// compute with NUM_TIMESTEPS as NUM_REPS for timing")
         self.gen_add_code_line("for (int rep = 0; rep < NUM_TIMESTEPS; rep++){", True)
         if use_qdd_input:
@@ -1674,7 +1677,7 @@ def _emit_inverse_dynamics_gradient_kernel_body_for_flags(self, NUM_POS, n, use_
             use_qdd_input,
             scratch_in_smem_expr = ("false" if use_global_temp else "true"),
             use_da_df_spill_expr = ("true" if use_selective_spill else "false"),
-            d_workspace_pool_name = ("reinterpret_cast<T *>(d_workspace)" if use_global_temp else "nullptr"),
+            d_workspace_pool_name = (gen_workspace_cast_expr() if use_global_temp else "nullptr"),
             d_temp_spill_name = ("d_temp_spill" if use_selective_spill else "nullptr"),
             mujoco_output_expr = ("MUJOCO_OUTPUT" if mjx_kernel else None))
         self.gen_anti_licm_output_write("dc_du")
@@ -1726,24 +1729,14 @@ def gen_inverse_dynamics_gradient_kernel(self, use_qdd_input = False, single_cal
 
 def gen_inverse_dynamics_gradient_host(self, mode = 0):
     # default is to do the full kernel call -- options are for single timing or compute only kernel wrapper
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
 
     # define function def and params
-    func_params = ["hd_data is the packaged input and output pointers", \
-                   "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)", \
-                   "gravity is the gravity constant,", \
-                   "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)", \
-                   "streams are pointers to CUDA streams for async memory transfers (if needed)"]
+    func_params = host_std_func_params()
     func_notes = []
     func_def_start = "void inverse_dynamics_gradient(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const T gravity, const int num_timesteps,"
     func_def_end =   "                               const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     # then generate the code
     self.gen_add_func_doc("Compute the RNEA (Recursive Newton-Euler Algorithm)",\
                           func_notes,func_params,None)
@@ -1772,15 +1765,8 @@ def gen_inverse_dynamics_gradient_host(self, mode = 0):
         func_call_qdd_start = func_call_qdd_start.replace("inverse_dynamics_gradient_kernel<","inverse_dynamics_gradient_kernel_single_timing<")
     if not compute_only:
         # start code with memory transfer
-        self.gen_add_code_lines(["// start code with memory transfer", \
-                                 "int stride_q_qd;", \
-                                 "if (USE_COMPRESSED_MEM) {stride_q_qd = 2*NUM_JOINTS; " + \
-                                    "gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd,hd_data->h_q_qd,stride_q_qd*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}", \
-                                 "else {stride_q_qd = 3*NUM_JOINTS; " + \
-                                    "gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q_qd*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}", \
-                                 "if (USE_QDD_FLAG) {gpuErrchk(cudaMemcpyAsync(hd_data->d_qdd,hd_data->h_qdd,NUM_JOINTS*" + \
+        self.gen_add_code_lines(host_q_qd_input_transfer_lines(single_call_timing) + \
+                                ["if (USE_QDD_FLAG) {gpuErrchk(cudaMemcpyAsync(hd_data->d_qdd,hd_data->h_qdd,NUM_JOINTS*" + \
                                     ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[1]));}", \
                                  "gpuErrchkKernel();"])
     else:
@@ -1800,8 +1786,7 @@ def gen_inverse_dynamics_gradient_host(self, mode = 0):
                       "else {", func_call_mem_adjust, func_call_mem_adjust2, "}", "gpuErrchkKernel();"]
     # wrap function call in timing (if needed)
     if single_call_timing:
-        func_call_code.insert(0,"struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"inverse_dynamics_gradient\", INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     if not single_call_timing:
         self.gen_add_workspace_slot_count()

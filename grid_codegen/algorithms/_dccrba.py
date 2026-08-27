@@ -56,6 +56,7 @@ workspace SO band (dccrba-output sub-region) at ALL tiers.
 import numpy as np
 
 from ._coriolis import _emit_crm_cm, _emit_crf_cm, _coriolis_int_array as _dccrba_int_array
+from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
 from ._centroidal import _centroidal_inner_temp_mem_size
 
 
@@ -453,15 +454,7 @@ def _emit_dccrba_mjx_output(self, out_name):
     # rotation_from_quat_xyzw. Re-materialized register-local at the top of each
     # parallel-loop body (loop-invariant; recompute is cheaper than any shared stage
     # and carries no aliasing risk -- see the fdsva_so dead-scratch hazard).
-    _BUILD_R = [
-        "T qx = s_q[3], qy = s_q[4], qz = s_q[5], qw = s_q[6];",
-        "T xx = qx*qx, yy = qy*qy, zz = qz*qz;",
-        "T xy = qx*qy, xz = qx*qz, yz = qy*qz, wx = qw*qx, wy = qw*qy, wz = qw*qz;",
-        "T R[9];",
-        "R[0] = static_cast<T>(1) - static_cast<T>(2)*(yy+zz); R[1] = static_cast<T>(2)*(xy-wz);                    R[2] = static_cast<T>(2)*(xz+wy);",
-        "R[3] = static_cast<T>(2)*(xy+wz);                    R[4] = static_cast<T>(1) - static_cast<T>(2)*(xx+zz); R[5] = static_cast<T>(2)*(yz-wx);",
-        "R[6] = static_cast<T>(2)*(xz-wy);                    R[7] = static_cast<T>(2)*(yz+wx);                    R[8] = static_cast<T>(1) - static_cast<T>(2)*(xx+yy);",
-    ]
+    _BUILD_R = _gen_mjx_build_R_lines("s_q")
     self.gen_add_code_lines([
         "// mjx output-convention transform of the dccrba tensor dA_dq[i + 6*k + 6*NV*m]",
         "// (double G^{-1} reframe of the qd-col k and q-tangent m base-linear indices",
@@ -695,13 +688,9 @@ def gen_cmm_time_variation_kernel(self, single_call_timing=False):
         # big robots). They live in the dccrba OUTPUT sub-region of the shared SO
         # band ([SO_TEMP_OFFSET, SO_TEMP_OFFSET + 6*nv*nv*T)) which cmm never
         # otherwise touches — the J band sits after it at GRID_DCCRBA_J_OFFSET.
-        if in_loop:
-            slot = "grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + "
-        else:
-            slot = ""
-        self.gen_add_code_line("s_part = reinterpret_cast<T *>(&d_workspace[" + slot + "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
+        self.gen_add_code_line(gen_workspace_repoint_line("s_part", "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()", batch_indexed=in_loop))
         self.gen_add_code_line("if constexpr (!CMM_J_SMEM) {", True)
-        self.gen_add_code_line("s_J = reinterpret_cast<T *>(&d_workspace[" + slot + "GRID_DCCRBA_J_OFFSET_BYTES<T>()]);")
+        self.gen_add_code_line(gen_workspace_repoint_line("s_J", "GRID_DCCRBA_J_OFFSET_BYTES<T>()", batch_indexed=in_loop))
         self.gen_add_end_control_flow()
 
     def _compute():
@@ -756,12 +745,7 @@ def gen_cmm_time_variation_host(self, mode=0):
     func_def_start = ("void cmm_time_variation(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, "
                       "const int num_timesteps,")
     func_def_end = "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     self.gen_add_func_doc("Compute cmm_time_variation (Adot)", [], [], None)
     # MUJOCO_OUTPUT (floating only) host flag, LAST: forwarded to the kernel launch
     # naming the tier positionally (<T, GRID_DEFAULT_RESOURCE_TIER, MUJOCO_OUTPUT>) to
@@ -782,12 +766,7 @@ def gen_cmm_time_variation_host(self, mode=0):
         kname = "cmm_time_variation_kernel" + ("_single_timing<T, RESOURCE_TIER>" if single_call_timing else "<T, RESOURCE_TIER>")
     func_call = (kname + "<<<block_dimms,thread_dimms," + macro + ">>>(hd_data->d_cmm_time_variation,hd_data->d_workspace,hd_data->d_q_qd,stride_q_qd,d_robotModel,num_timesteps);")
     if not compute_only:
-        self.gen_add_code_lines([
-            "// start code with memory transfer", "int stride_q_qd;",
-            "if (USE_COMPRESSED_MEM) {stride_q_qd = 2*NUM_JOINTS; gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd,hd_data->h_q_qd,stride_q_qd*" +
-            ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}",
-            "else {stride_q_qd = 3*NUM_JOINTS; gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q_qd*" +
-            ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}"])
+        self.gen_add_code_lines(host_q_qd_input_transfer_lines(single_call_timing))
     else:
         self.gen_add_code_line("int stride_q_qd = USE_COMPRESSED_MEM ? 2*NUM_JOINTS : 3*NUM_JOINTS;")
     self.gen_add_code_line("// then call the kernel")
@@ -795,8 +774,7 @@ def gen_cmm_time_variation_host(self, mode=0):
     func_call_mem2 = "else                    {" + func_call.replace("hd_data->d_q_qd", "hd_data->d_q_qd_u") + "}"
     func_call_code = [func_call_mem, func_call_mem2, "gpuErrchkKernel();"]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     # DE-GATE #2: L2-pin d_workspace when the default tier spills the Jw band into it.
     if not single_call_timing:
         self.gen_add_workspace_slot_count()
@@ -916,12 +894,7 @@ def gen_dccrba_host(self, mode=0):
     func_def_start = ("void dccrba(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, "
                       "const int num_timesteps,")
     func_def_end = "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     self.gen_add_func_doc("Compute the dCCRBA tensor dA_dq[:,k,m]", [], [], None)
     # MUJOCO_OUTPUT (floating only) host flag, LAST: forwarded to the kernel launch
     # naming the tier positionally (<T, GRID_DEFAULT_RESOURCE_TIER, MUJOCO_OUTPUT>) to
@@ -961,8 +934,7 @@ def gen_dccrba_host(self, mode=0):
     self.gen_add_code_line("if ((!DCCRBA_OUTPUT_IN_SMEM<RESOURCE_TIER>() || !DCCRBA_J_IN_SMEM<RESOURCE_TIER>()) && hd_data->d_workspace != nullptr) {gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, " + ws_bytes + "));}")
     func_call_code = [func_call, "gpuErrchkKernel();"]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"dccrba\", " + macro + "));")
     if single_call_timing:
         self.gen_add_code_lines(func_call_code)

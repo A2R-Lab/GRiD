@@ -29,6 +29,7 @@ minv s_Minv). dJ^T/dq is the ANALYTIC closed form of the -J^T q-derivative
 col_{m,j}) via the Featherstone identity dX[m]/dq_m = -crm(S_m)X[m]); the q-dot
 block is identically zero (J^T is q-only) and is not stored.
 """
+from grid_codegen.helpers._code_generation_helpers import gen_workspace_repoint_line, mangle_host_func_defs, wrap_host_single_call_timing
 
 
 def _f_ext_gradient_chain_jobs(self):
@@ -406,8 +407,7 @@ def _emit_f_ext_gradient_dq_body(self, out_ptr_expr, in_timestep_loop, slab_in_s
             self.gen_add_code_line("T *s_dq_slab = s_temp;   // per-sub contribution slab, size " + str(6 * nsub))
             self.gen_add_code_line("(void)d_workspace;")
         else:
-            _ws_base = ("grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " if in_timestep_loop else "") + "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()"
-            self.gen_add_code_line("T *s_dq_slab = reinterpret_cast<T *>(&d_workspace[" + _ws_base + "]);   // spilled slab")
+            self.gen_add_code_line(gen_workspace_repoint_line("s_dq_slab", "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()", batch_indexed=in_timestep_loop, declare=True) + "   // spilled slab")
     else:
         self.gen_add_code_line("(void)d_workspace;")
     self.gen_add_code_line("T *s_xi_scratch = &s_temp[" + str(slab) + "];")
@@ -589,12 +589,7 @@ def gen_f_ext_gradient_dq_host(self, mode=0):
     func_def_start = ("void f_ext_gradient_dq(gridData<T, KIND> *hd_data, "
                       "const robotModel<T> *d_robotModel, const int num_timesteps,")
     func_def_end = "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     self.gen_add_func_doc("Compute -dJ^T/dq = d(inverse_dynamics_gradient)/dfext (host wrapper, analytic)", [], func_params, None)
     self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
     self.gen_add_code_line("__host__")
@@ -622,8 +617,7 @@ def gen_f_ext_gradient_dq_host(self, mode=0):
     func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q", "hd_data->d_q_qd_u") + "}"
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"f_ext_gradient_dq\", F_EXT_GRADIENT_DQ_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     # mimic-spill: L2-pin d_workspace when the tier spills the per-sub slab into it
     # (non-mimic robots never spill, so SLAB_IN_SMEM stays true and this is a no-op).
@@ -753,11 +747,10 @@ def _emit_f_ext_gradient_kernel_body_for_flags(self, pick, single_call_timing):
         # repoint spilled output(s) at the L2-pinned d_workspace SO section (per-timestep
         # slot; reused safely -- f_ext_gradient never co-runs with the SO kernels). s_dqdd
         # at the SO base, s_dtau at SO base + out_each (deep rung only).
-        base = ("grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " if in_timestep_loop else "") + "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()"
         if not dqdd_smem:
-            self.gen_add_code_line("s_dqdd_dfext = reinterpret_cast<T *>(&d_workspace[" + base + "]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("s_dqdd_dfext", "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()", batch_indexed=in_timestep_loop))
         if not dtau_smem:
-            self.gen_add_code_line("s_dtau_dfext = reinterpret_cast<T *>(&d_workspace[" + base + " + " + str(out_each) + "*sizeof(T)]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("s_dtau_dfext", "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>() + " + str(out_each) + "*sizeof(T)", batch_indexed=in_timestep_loop))
 
     def _body(in_timestep_loop):
         self.gen_add_code_line("T *s_Minv = s_temp;")
@@ -773,8 +766,7 @@ def _emit_f_ext_gradient_kernel_body_for_flags(self, pick, single_call_timing):
                 f_in_smem_expr="true")
         else:
             # deep rung: route minv's 6*nv*nv F-region to the GRAD-section minv-F offset.
-            _minv_ws = ("grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + " if in_timestep_loop else "") + "GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()"
-            self.gen_add_code_line("T *minv_d_workspace = reinterpret_cast<T *>(&d_workspace[" + _minv_ws + "]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("minv_d_workspace", "GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()", batch_indexed=in_timestep_loop, declare=True))
             self.gen_minv_inner_function_call(
                 updated_var_names={"s_Minv_name": "s_Minv", "s_temp_name": "s_fext_temp", "d_workspace_name": "minv_d_workspace"},
                 f_in_smem_expr="false")
@@ -860,12 +852,7 @@ def gen_f_ext_gradient_host(self, mode=0):
     func_def_start = ("void f_ext_gradient(gridData<T, KIND> *hd_data, "
                       "const robotModel<T> *d_robotModel, const int num_timesteps,")
     func_def_end = "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     self.gen_add_func_doc("Compute the f_ext gradient (host wrapper)", [], func_params, None)
     self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
     self.gen_add_code_line("__host__")
@@ -897,8 +884,7 @@ def gen_f_ext_gradient_host(self, mode=0):
     func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q", "hd_data->d_q_qd_u") + "}"
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"f_ext_gradient\", F_EXT_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     # g1-spill: L2-pin d_workspace when the default tier spills s_dqdd_dfext into it.
     if not single_call_timing:

@@ -38,6 +38,8 @@ The output is shaped nv x 10*NB. R2: it is a gridData field (hd_data->d_Y, sized
 back into hd_data->h_Y (uniform `(hd_data, model, ...)` host signature).
 """
 
+from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
+
 # The 10 basis spatial-inertia derivatives dI/dpi_k in GRiD [angular; linear]
 # 6x6 order, for pi = [m, hx, hy, hz, Ixx, Ixy, Ixz, Iyy, Iyz, Izz].
 #   I(pi) = [[ I_O,        skew(h) ],
@@ -86,13 +88,7 @@ def _emit_mjx_base_rotate_rows_rowmajor(self, mat, n_rows, n_cols, q_name="s_q")
     self.gen_add_code_lines([
         "// mjx output: base-linear rows of " + mat + " <- R . rows (row-major nv x " + str(n_cols) + ")",
         "if (threadIdx.x == 0 && threadIdx.y == 0) {", True,
-        "T qx = " + q + "[3], qy = " + q + "[4], qz = " + q + "[5], qw = " + q + "[6];",
-        "T xx = qx*qx, yy = qy*qy, zz = qz*qz;",
-        "T xy = qx*qy, xz = qx*qz, yz = qy*qz, wx = qw*qx, wy = qw*qy, wz = qw*qz;",
-        "T R[9];",
-        "R[0] = static_cast<T>(1) - static_cast<T>(2)*(yy+zz); R[1] = static_cast<T>(2)*(xy-wz);                    R[2] = static_cast<T>(2)*(xz+wy);",
-        "R[3] = static_cast<T>(2)*(xy+wz);                    R[4] = static_cast<T>(1) - static_cast<T>(2)*(xx+zz); R[5] = static_cast<T>(2)*(yz-wx);",
-        "R[6] = static_cast<T>(2)*(xz-wy);                    R[7] = static_cast<T>(2)*(yz+wx);                    R[8] = static_cast<T>(1) - static_cast<T>(2)*(xx+yy);",
+        *_gen_mjx_build_R_lines(q),
         "for (int c = 0; c < " + str(n_cols) + "; c++) {"
         " T m0 = " + mat + "[c], m1 = " + mat + "[" + str(n_cols) + " + c], m2 = " + mat + "[" + str(2 * n_cols) + " + c];"
         " " + mat + "[c] = R[0]*m0 + R[1]*m1 + R[2]*m2;"
@@ -393,10 +389,7 @@ def gen_inverse_dynamics_regressor_kernel(self, single_call_timing=False):
         # slot; the regressor never runs concurrently with the SO kernels). Emitted where
         # `k` is in scope for the batched path. Verbatim clone of fdpg's _repoint_spilled_Y.
         self.gen_add_code_line("if constexpr (!REGRESSOR_Y_IN_SMEM) {", True)
-        if in_timestep_loop:
-            self.gen_add_code_line("s_Y = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
-        else:
-            self.gen_add_code_line("s_Y = reinterpret_cast<T *>(&d_workspace[GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
+        self.gen_add_code_line(gen_workspace_repoint_line("s_Y", "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()", batch_indexed=in_timestep_loop))
         self.gen_add_end_control_flow()
     if not single_call_timing:
         self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
@@ -432,8 +425,7 @@ def gen_inverse_dynamics_regressor_kernel(self, single_call_timing=False):
 
 
 def gen_inverse_dynamics_regressor_host(self, mode=0):
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
     n = self.robot.get_num_pos()
     NB = self.robot.get_num_bodies()
     nv = self.robot.get_num_vel()
@@ -447,12 +439,7 @@ def gen_inverse_dynamics_regressor_host(self, mode=0):
     ]
     func_def_start = "void inverse_dynamics_regressor(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const T gravity, const int num_timesteps,"
     func_def_end = "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     # MUJOCO_OUTPUT (floating only) host template flag, forwarded to the kernel
     # launch (names RESOURCE_TIER positionally to reach the trailing flag). Added
     # LAST so existing positional call sites don't rebind.
@@ -484,9 +471,7 @@ def gen_inverse_dynamics_regressor_host(self, mode=0):
     self.gen_add_code_line("// then call the kernel")
     func_call_code = [func_call_start + func_call_end]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("gpuErrchkKernel();")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code, kernel_errcheck=True)
     # g1-spill: L2-pin d_workspace when the tier spills s_Y into it.
     if not single_call_timing:
         self.gen_add_workspace_slot_count()
@@ -753,10 +738,7 @@ def gen_forward_dynamics_parameter_gradient_kernel(self, single_call_timing=Fals
         # (per-timestep slot; reused safely -- fd_param never runs concurrently with
         # the SO kernels). Emitted where `k` is in scope for the batched path.
         self.gen_add_code_line("if constexpr (!REGRESSOR_Y_OUTPUT_IN_SMEM) {", True)
-        if in_timestep_loop:
-            self.gen_add_code_line("s_Y = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
-        else:
-            self.gen_add_code_line("s_Y = reinterpret_cast<T *>(&d_workspace[GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
+        self.gen_add_code_line(gen_workspace_repoint_line("s_Y", "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()", batch_indexed=in_timestep_loop))
         self.gen_add_end_control_flow()
 
     if not single_call_timing:
@@ -793,8 +775,7 @@ def gen_forward_dynamics_parameter_gradient_kernel(self, single_call_timing=Fals
 
 
 def gen_forward_dynamics_parameter_gradient_host(self, mode=0):
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
     nv = self.robot.get_num_vel()
     NB = self.robot.get_num_bodies()
     out_size = nv * 10 * NB
@@ -807,12 +788,7 @@ def gen_forward_dynamics_parameter_gradient_host(self, mode=0):
     ]
     func_def_start = "void forward_dynamics_parameter_gradient(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const T gravity, const int num_timesteps,"
     func_def_end = "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     # MUJOCO_OUTPUT (floating only) host template flag, forwarded to the kernel
     # launch (names RESOURCE_TIER positionally to reach the trailing flag). Added
     # LAST so existing positional call sites don't rebind.
@@ -850,9 +826,7 @@ def gen_forward_dynamics_parameter_gradient_host(self, mode=0):
     self.gen_add_code_line("if (!FD_PARAMETER_GRADIENT_Y_IN_SMEM<RESOURCE_TIER>() && hd_data->d_workspace != nullptr) {gpuErrchk(grid_begin_l2_persisting(0, hd_data->d_workspace, " + ws_bytes + "));}")
     func_call_code = [func_call_start + func_call_end]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("gpuErrchkKernel();")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code, kernel_errcheck=True)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"forward_dynamics_parameter_gradient\", FORWARD_DYNAMICS_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     if single_call_timing:
         self.gen_add_code_lines(func_call_code)
@@ -1087,8 +1061,7 @@ def gen_kinetic_energy_regressor_kernel(self, single_call_timing=False):
 
 
 def gen_kinetic_energy_regressor_host(self, mode=0):
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
     NB = self.robot.get_num_bodies()
     out_size = 10 * NB
     func_params = [
@@ -1100,12 +1073,7 @@ def gen_kinetic_energy_regressor_host(self, mode=0):
     ]
     func_def_start = "void kinetic_energy_regressor(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const T gravity, const int num_timesteps,"
     func_def_end = "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     # MUJOCO_OUTPUT (floating only) host template flag, forwarded to the kernel
     # launch (names RESOURCE_TIER positionally to reach the trailing flag). KE is
     # invariant -> only the kernel's input-convert changes; no host post-process.
@@ -1125,12 +1093,7 @@ def gen_kinetic_energy_regressor_host(self, mode=0):
     if single_call_timing:
         func_call_start = func_call_start.replace("kinetic_energy_regressor_kernel<", "kinetic_energy_regressor_kernel_single_timing<")
     if not compute_only:
-        self.gen_add_code_lines([
-            "// start code with memory transfer", "int stride_q_qd;",
-            "if (USE_COMPRESSED_MEM) {stride_q_qd = 2*NUM_JOINTS; gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd,hd_data->h_q_qd,stride_q_qd*" +
-            ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}",
-            "else {stride_q_qd = 3*NUM_JOINTS; gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q_qd*" +
-            ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}"])
+        self.gen_add_code_lines(host_q_qd_input_transfer_lines(single_call_timing))
     else:
         self.gen_add_code_line("int stride_q_qd = USE_COMPRESSED_MEM ? 2*NUM_JOINTS : 3*NUM_JOINTS;")
     self.gen_add_code_line("// then call the kernel")
@@ -1138,9 +1101,7 @@ def gen_kinetic_energy_regressor_host(self, mode=0):
     func_call_mem2 = "else                    {" + (func_call_start + func_call_end).replace("hd_data->d_q_qd", "hd_data->d_q_qd_u") + "}"
     func_call_code = [func_call_mem, func_call_mem2]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("gpuErrchkKernel();")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code, kernel_errcheck=True)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"kinetic_energy_regressor\", KINETIC_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>()));")
     self.gen_add_code_lines(func_call_code)
     if not compute_only:
@@ -1345,8 +1306,7 @@ def gen_potential_energy_regressor_kernel(self, single_call_timing=False):
 
 
 def gen_potential_energy_regressor_host(self, mode=0):
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
     NB = self.robot.get_num_bodies()
     out_size = 10 * NB
     func_params = [
@@ -1358,12 +1318,7 @@ def gen_potential_energy_regressor_host(self, mode=0):
     ]
     func_def_start = "void potential_energy_regressor(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const T gravity, const int num_timesteps,"
     func_def_end = "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     # MUJOCO_OUTPUT (floating only) host template flag, forwarded to the kernel
     # launch (names RESOURCE_TIER positionally to reach the trailing flag). PE is
     # invariant -> only the kernel's quat-reorder changes; no host post-process.
@@ -1392,9 +1347,7 @@ def gen_potential_energy_regressor_host(self, mode=0):
     self.gen_add_code_line("// then call the kernel")
     func_call_code = [func_call_start + func_call_end]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("gpuErrchkKernel();")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code, kernel_errcheck=True)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"potential_energy_regressor\", POTENTIAL_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>()));")
     self.gen_add_code_lines(func_call_code)
     if not compute_only:

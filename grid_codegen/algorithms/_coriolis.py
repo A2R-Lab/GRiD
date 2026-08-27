@@ -49,6 +49,8 @@ nv x nv output fits smem at FULL for every shipped robot so it is currently unus
 
 import numpy as np
 
+from grid_codegen.helpers._code_generation_helpers import gen_workspace_repoint_line, host_mode_flags, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
+
 
 def _coriolis_unit_axis(column):
     """Return (row, sign) of the unit entry of a single CARDINAL S column, or
@@ -616,12 +618,12 @@ def _emit_coriolis_matrix_kernel_body_for_flags(self, NUM_POS, nv, in_size, out_
             # whole inner band spilled: the smem s_temp slot is null. Repoint s_temp at the
             # GRAD section BEFORE the XImats helper so its sincos scratch + the inner have a
             # valid backing store. Disjoint from the SO band where s_coriolis lives.
-            self.gen_add_code_line("T *coriolis_d_workspace = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("coriolis_d_workspace", batch_indexed=True, declare=True))
             self.gen_add_code_line("s_temp = coriolis_d_workspace;")
         elif coriolis_in_smem:
             self.gen_add_code_line("(void)d_workspace;")
         if not coriolis_in_smem:
-            self.gen_add_code_line("s_coriolis = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("s_coriolis", "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()", batch_indexed=True))
         # mjx input convert: quaternion wxyz->xyzw AND qd[0:3] = R^T qd[0:3] (the
         # Coriolis matrix reads qd, so the base-linear velocity must be in pin frame)
         # before the XImats build (so X[0] is built from the reordered quaternion).
@@ -646,12 +648,12 @@ def _emit_coriolis_matrix_kernel_body_for_flags(self, NUM_POS, nv, in_size, out_
     else:
         self.gen_kernel_load_inputs("q_qd", str(in_size))
         if use_workspace_temp:
-            self.gen_add_code_line("T *coriolis_d_workspace = reinterpret_cast<T *>(d_workspace);")
+            self.gen_add_code_line(gen_workspace_repoint_line("coriolis_d_workspace", declare=True))
             self.gen_add_code_line("s_temp = coriolis_d_workspace;")
         elif coriolis_in_smem:
             self.gen_add_code_line("(void)d_workspace;")
         if not coriolis_in_smem:
-            self.gen_add_code_line("s_coriolis = reinterpret_cast<T *>(&d_workspace[GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("s_coriolis", "GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>()"))
         self.gen_add_code_line("// compute with NUM_TIMESTEPS as NUM_REPS for timing")
         self.gen_add_code_line("for (int rep = 0; rep < NUM_TIMESTEPS; rep++){", True)
         self.gen_load_update_XImats_helpers_function_call()
@@ -700,8 +702,7 @@ def gen_coriolis_matrix_kernel(self, single_call_timing=False):
 
 
 def gen_coriolis_matrix_host(self, mode=0):
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
     nv = self.robot.get_num_vel()
     out_size = nv * nv
     func_params = [
@@ -713,12 +714,7 @@ def gen_coriolis_matrix_host(self, mode=0):
     ]
     func_def_start = "void coriolis_matrix(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const T gravity, const int num_timesteps,"
     func_def_end = "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     self.gen_add_func_doc("Compute the Coriolis matrix C(q, qd)", [], func_params, None)
     # MUJOCO_OUTPUT (floating only) host flag, LAST: forwarded to the kernel launch
     # (naming the tier positionally to reach the trailing flag). Default false ->
@@ -738,12 +734,7 @@ def gen_coriolis_matrix_host(self, mode=0):
     if single_call_timing:
         func_call_start = func_call_start.replace("coriolis_matrix_kernel<", "coriolis_matrix_kernel_single_timing<")
     if not compute_only:
-        self.gen_add_code_lines([
-            "// start code with memory transfer", "int stride_q_qd;",
-            "if (USE_COMPRESSED_MEM) {stride_q_qd = 2*NUM_JOINTS; gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd,hd_data->h_q_qd,stride_q_qd*" +
-            ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}",
-            "else {stride_q_qd = 3*NUM_JOINTS; gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q_qd*" +
-            ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}"])
+        self.gen_add_code_lines(host_q_qd_input_transfer_lines(single_call_timing))
     else:
         self.gen_add_code_line("int stride_q_qd = USE_COMPRESSED_MEM ? 2*NUM_JOINTS : 3*NUM_JOINTS;")
     self.gen_add_code_line("// then call the kernel")
@@ -751,9 +742,7 @@ def gen_coriolis_matrix_host(self, mode=0):
     func_call_mem2 = "else                    {" + (func_call_start + func_call_end).replace("hd_data->d_q_qd", "hd_data->d_q_qd_u") + "}"
     func_call_code = [func_call_mem, func_call_mem2]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("gpuErrchkKernel();")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code, kernel_errcheck=True)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"coriolis_matrix\", CORIOLIS_MATRIX_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     if single_call_timing:
         self.gen_add_code_lines(func_call_code)

@@ -1,3 +1,6 @@
+from grid_codegen.helpers._code_generation_helpers import gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+
+
 def _minv_Svec_cpp(robot, jid):
     """C++ brace-init for body ``jid``'s dense 6-vector motion subspace (Tier-B
     skew emit)."""
@@ -703,7 +706,7 @@ def _emit_minv_kernel_body_for_flags(self, n, NV, spill_F, single_call_timing):
         self.gen_kernel_load_inputs("q",str(n_pos),stride="stride_q")
         if spill_F:
             # L2-pinned workspace slot for Minv-F (inner picks it via F_IN_SMEM=false).
-            self.gen_add_code_line("T *minv_d_workspace = reinterpret_cast<T *>(&d_workspace[grid_workspace_slot()*GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("minv_d_workspace", "GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()", batch_indexed=True, declare=True))
         else:
             self.gen_add_code_line("(void)d_workspace;")
         # mjx input convert (quaternion only -> the congruence epilogue's R; Minv(q)
@@ -733,7 +736,7 @@ def _emit_minv_kernel_body_for_flags(self, n, NV, spill_F, single_call_timing):
     else:
         self.gen_kernel_load_inputs("q",str(n_pos))
         if spill_F:
-            self.gen_add_code_line("T *minv_d_workspace = reinterpret_cast<T *>(&d_workspace[GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("minv_d_workspace", "GRID_MINV_F_WORKSPACE_OFFSET_BYTES<T>()", declare=True))
         else:
             self.gen_add_code_line("(void)d_workspace;")
         self.gen_add_code_line("// compute with NUM_TIMESTEPS as NUM_REPS for timing")
@@ -778,23 +781,14 @@ def gen_minv_kernel(self, single_call_timing = False):
 
 def gen_minv_host(self, mode = 0):
     # default is to do the full kernel call -- options are for single timing or compute only kernel wrapper
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
 
     # define function def and params
-    func_params = ["hd_data is the packaged input and output pointers", \
-                   "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)", \
-                   "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)", \
-                   "streams are pointers to CUDA streams for async memory transfers (if needed)"]
+    func_params = host_std_func_params(with_gravity=False)
     func_notes = []
     func_def_start = "void minv(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
     func_def_end =   "                 const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     # then generate the code
     self.gen_add_func_doc("Compute the inverse of the mass matrix",func_notes,func_params,None)
     # MUJOCO_OUTPUT (floating only) host flag, LAST: forwarded to the kernel launch
@@ -834,8 +828,7 @@ def gen_minv_host(self, mode = 0):
     func_call_code = [func_call, func_call2, "gpuErrchkKernel();"]
     # wrap function call in timing (if needed)
     if single_call_timing:
-        func_call_code.insert(0,"struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"minv\", MINV_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     if single_call_timing:
         self.gen_add_code_lines(func_call_code)

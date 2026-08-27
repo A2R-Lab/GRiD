@@ -20,6 +20,7 @@ by ONE shared FK (all link world transforms) + a cheap parallel-over-targets
 extraction driven by a baked (anchor, offset) table — same table-driven idiom as the
 W1a hessian collapse. Subsumes backlog D (multi-named-EE-target).
 """
+from grid_codegen.helpers._code_generation_helpers import host_mode_flags, mangle_host_func_defs, wrap_host_single_call_timing
 
 
 # ---------------------------------------------------------------------------
@@ -497,20 +498,14 @@ def gen_multi_target_position_kernel(self, batch, single_call_timing=False):
 
 
 def gen_multi_target_position_host(self, mode=0):
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
     func_params = ["hd_data is the packaged input and output pointers",
                    "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)",
                    "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)",
                    "streams are pointers to CUDA streams for async memory transfers (if needed)"]
     func_def_start = "void multi_target_position(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
     func_def_end = "                            const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     self.gen_add_func_doc("Compute batched multi-target world positions", [], func_params, None)
     self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
     self.gen_add_code_line("__host__")
@@ -540,8 +535,7 @@ def gen_multi_target_position_host(self, mode=0):
     func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q", "hd_data->d_q_qd_u") + "}"
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"multi_target_position\", MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES<T>()));")
     self.gen_add_code_lines(func_call_code)
     if not compute_only:
@@ -598,20 +592,14 @@ def gen_multi_target_position_gradient_kernel(self, batch, single_call_timing=Fa
 
 
 def gen_multi_target_position_gradient_host(self, mode=0):
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
     func_params = ["hd_data is the packaged input and output pointers",
                    "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)",
                    "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)",
                    "streams are pointers to CUDA streams for async memory transfers (if needed)"]
     func_def_start = "void multi_target_position_gradient(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const int num_timesteps,"
     func_def_end = "                            const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     self.gen_add_func_doc("Compute batched multi-target world-position gradient", [], func_params, None)
     self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
     self.gen_add_code_line("__host__")
@@ -641,8 +629,7 @@ def gen_multi_target_position_gradient_host(self, mode=0):
     func_call_mem_adjust2 = "else                    {" + func_call.replace("hd_data->d_q", "hd_data->d_q_qd_u") + "}"
     func_call_code = [func_call_mem_adjust, func_call_mem_adjust2, "gpuErrchkKernel();"]
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"multi_target_position_gradient\", MULTI_TARGET_POSITION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()));")
     self.gen_add_code_lines(func_call_code)
     if not compute_only:

@@ -8,6 +8,7 @@ They appear only in the FIRST-order inverse_dynamics_gradient output, never here
 
 # Shared block-parallel emit primitives (also used by _fdsva_so). See _mjx_blockpar.
 from ._mjx_blockpar import bpfor as _bpfor, stride_rc as _bp_stride_rloop
+from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 
 
 def _emit_t_outer(self, n_pairs, x_expr, y_expr):
@@ -2882,7 +2883,7 @@ def _emit_idsva_so_body_frame_kernel_body_for_flags(self, n, NUM_POS, use_qdd_in
     def _emit_spill_ptrs():
         # Whichever spill is active routes through d_temp_spill; the inner consumes it.
         if self.robot.floating_base or bc_in_global or s_temp_in_global or tp_in_global:
-            self.gen_add_code_line(f"d_temp_spill = reinterpret_cast<T *>(&d_workspace[{ts_off}]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("d_temp_spill", ts_off))
 
     if not single_call_timing:
         self.gen_add_parallel_loop("k","NUM_TIMESTEPS",block_level = True)
@@ -2967,24 +2968,14 @@ def gen_idsva_so_body_frame_kernel(self, use_qdd_input = False, single_call_timi
 
 def gen_idsva_so_body_frame_host(self, mode = 0):
     # default is to do the full kernel call -- options are for single timing or compute only kernel wrapper
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
 
     # define function def and params
-    func_params = ["hd_data is the packaged input and output pointers", \
-                   "d_robotModel is the pointer to the initialized model specific helpers on the GPU (XImats, topology_helpers, etc.)", \
-                   "gravity is the gravity constant,", \
-                   "num_timesteps is the length of the trajectory points we need to compute over (or overloaded as test_iters for timing)", \
-                   "streams are pointers to CUDA streams for async memory transfers (if needed)"]
+    func_params = host_std_func_params()
     func_notes = []
     func_def_start = "void idsva_so_body_frame(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const T gravity, const int num_timesteps,"
     func_def_end =   "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     # then generate the code
     self.gen_add_func_doc("Compute IDSVA-SO (Inverse Dynamics - Spatial Vector Algebra - Second Order)",\
                           func_notes,func_params,None)
@@ -3016,9 +3007,7 @@ def gen_idsva_so_body_frame_host(self, mode = 0):
     # without it the timer captures only host-side launch overhead, not
     # actual kernel work. Other algorithms (FD/ABA/etc.) already do this.
     if single_call_timing:
-        func_call_code.insert(0,"struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("gpuErrchkKernel();")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code, kernel_errcheck=True)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"idsva_so\", IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     if single_call_timing:
         self.gen_add_code_lines(func_call_code)
@@ -3891,13 +3880,7 @@ def _emit_idsva_so_mjx_locals_lines(nv3, fb):
     return [
         # R (row-major R[3*i+j]) from the xyzw base quaternion s_q[3..6] — matches
         # mujoco_convention.rotation_from_quat_xyzw / _gen_mjx_build_R_lines exactly.
-        "T qx = s_q[3], qy = s_q[4], qz = s_q[5], qw = s_q[6];",
-        "T xx = qx*qx, yy = qy*qy, zz = qz*qz;",
-        "T xy = qx*qy, xz = qx*qz, yz = qy*qz, wx = qw*qx, wy = qw*qy, wz = qw*qz;",
-        "T R[9];",
-        "R[0] = static_cast<T>(1) - static_cast<T>(2)*(yy+zz); R[1] = static_cast<T>(2)*(xy-wz);                    R[2] = static_cast<T>(2)*(xz+wy);",
-        "R[3] = static_cast<T>(2)*(xy+wz);                    R[4] = static_cast<T>(1) - static_cast<T>(2)*(xx+zz); R[5] = static_cast<T>(2)*(yz-wx);",
-        "R[6] = static_cast<T>(2)*(xz-wy);                    R[7] = static_cast<T>(2)*(yz+wx);                    R[8] = static_cast<T>(1) - static_cast<T>(2)*(xx+yy);",
+        *_gen_mjx_build_R_lines("s_q"),
         "T v_lin[3]   = {s_qd[0], s_qd[1], s_qd[2]};",
         "T omega[3]   = {s_qd[3], s_qd[4], s_qd[5]};",
         "T qdd_lin[3] = {s_qdd[0], s_qdd[1], s_qdd[2]};",
@@ -4752,14 +4735,14 @@ def _emit_idsva_so_world_frame_kernel_body_for_flags(self, n, NUM_POS, single_ca
         # input-convert mutates s_q/s_qd/s_qdd in place BEFORE the inner builds XImats.
         if mjx_kernel:
             self.gen_add_code_line("if constexpr (MUJOCO_OUTPUT) {", True)
-            self.gen_add_code_line(f"d_mjx_scratch = reinterpret_cast<T *>(&d_workspace[{ts_expr}]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("d_mjx_scratch", ts_expr))
             self.gen_mjx_input_convert(q_name="s_q", qd_name="s_qd", qdd_name="s_qdd")
             self.gen_add_end_control_flow()
     if not single_call_timing:
         self.gen_add_parallel_loop("k", "NUM_TIMESTEPS", block_level=True)
         self.gen_kernel_load_inputs("q_qd_u",str(3*NUM_POS),stride="stride_q_qd_u")
         if needs_workspace:
-            self.gen_add_code_line(f"d_temp_spill = reinterpret_cast<T *>(&d_workspace[{ts_off}]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("d_temp_spill", ts_off))
         _emit_mjx_input_and_scratch(ts_off)
         if use_global_output:
             self.gen_add_code_line(f"T *s_idsva_so = &d_idsva_so[k*{4*n**3}];")
@@ -4770,9 +4753,9 @@ def _emit_idsva_so_world_frame_kernel_body_for_flags(self, n, NUM_POS, single_ca
     else:
         self.gen_kernel_load_inputs("q_qd_u",str(3*NUM_POS))
         if needs_workspace:
-            self.gen_add_code_line(f"d_temp_spill = reinterpret_cast<T *>(&d_workspace[{ts_off}]);")
+            self.gen_add_code_line(gen_workspace_repoint_line("d_temp_spill", ts_off))
         if mjx_kernel:
-            self.gen_add_code_line("if constexpr (MUJOCO_OUTPUT) { d_mjx_scratch = reinterpret_cast<T *>(&d_workspace[" + so_off + "]); }")
+            self.gen_add_code_line("if constexpr (MUJOCO_OUTPUT) { " + gen_workspace_repoint_line("d_mjx_scratch", so_off) + " }")
         self.gen_add_code_line("// compute with NUM_TIMESTEPS as NUM_REPS for timing")
         self.gen_add_code_line("for (int rep = 0; rep < NUM_TIMESTEPS; rep++){", True)
         self.gen_anti_licm_input_reload("q_qd_u", str(3*NUM_POS))
@@ -4827,8 +4810,7 @@ def gen_idsva_so_world_frame_kernel(self, single_call_timing = False):
 
 
 def gen_idsva_so_world_frame_host(self, mode = 0):
-    single_call_timing = True if mode == 1 else False
-    compute_only = True if mode == 2 else False
+    single_call_timing, compute_only = host_mode_flags(mode)
     func_params = [
         "hd_data is the packaged input and output pointers",
         "d_robotModel is the pointer to the initialized model specific helpers on the GPU",
@@ -4838,12 +4820,7 @@ def gen_idsva_so_world_frame_host(self, mode = 0):
     ]
     func_def_start = "void idsva_so_world_frame(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const T gravity, const int num_timesteps,"
     func_def_end =   "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
     self.gen_add_func_doc("Compute IDSVA-SO via the world-frame single-pass formulation", [], func_params, None)
     # MUJOCO_OUTPUT (floating non-mimic/skew): host template flag appended LAST;
     # forwarded positionally to the kernel (which names the tier to reach it).
@@ -4876,9 +4853,7 @@ def gen_idsva_so_world_frame_host(self, mode = 0):
     # compute_only needs a sync so callers' batch timers see actual
     # kernel-completion time (not just async-launch overhead).
     if single_call_timing:
-        func_call_code.insert(0, "struct timespec start, end; clock_gettime(CLOCK_MONOTONIC,&start);")
-        func_call_code.append("gpuErrchkKernel();")
-        func_call_code.append("clock_gettime(CLOCK_MONOTONIC,&end);")
+        wrap_host_single_call_timing(func_call_code, kernel_errcheck=True)
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"idsva_so_world_frame\", IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()));")
     if single_call_timing:
         self.gen_add_code_lines(func_call_code)
@@ -5006,12 +4981,7 @@ def gen_idsva_so_dispatcher_host(self, mode = 0):
 
     func_def_start = "void idsva_so(gridData<T, KIND> *hd_data, const robotModel<T> *d_robotModel, const T gravity, const int num_timesteps,"
     func_def_end =   "                      const dim3 block_dimms, const dim3 thread_dimms, cudaStream_t *streams) {"
-    if single_call_timing:
-        func_def_start = func_def_start.replace("(", "_single_timing(")
-        func_def_end = "              " + func_def_end
-    if compute_only:
-        func_def_start = func_def_start.replace("(", "_compute_only(")
-        func_def_end = "             " + func_def_end.replace(", cudaStream_t *streams", "")
+    func_def_start, func_def_end = mangle_host_func_defs(func_def_start, func_def_end, single_call_timing, compute_only)
 
     self.gen_add_func_doc(
         f"Dispatching IDSVA-SO wrapper (forwards to {frame_suffix} at codegen time)",
