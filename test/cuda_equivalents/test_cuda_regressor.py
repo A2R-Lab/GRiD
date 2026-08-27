@@ -79,12 +79,12 @@ def _generate_header(project_model, build_dir: Path) -> Path:
         project_model.robot, DEBUG_MODE=False, NEED_PRINT_MAT=False, FILE_NAMESPACE="grid"
     )
     with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
-        # Use the mimic-safe "regressor" profile ({id, regressor}) rather than the
-        # default "all": the regressor is NOT a refused mimic-gradient algorithm,
-        # but "all" pulls in gradient algos (f_ext_gradient/fdsva_so/idsva_so/...) whose
-        # mimic codegen is guarded by a NotImplementedError footgun (would emit
-        # silently-zeroed output). fr3 (mimic) only codegens under a non-gradient
-        # profile; the regressor + its RNEA forward dep ("id") are both present here.
+        # Use the focused "regressor" profile ({id, regressor}) rather than the
+        # default "all": this suite only compares the regressor, and "all" would
+        # pull in the whole gradient/SO surface for nothing but compile time.
+        # (Historically "all" was also refused for mimic fr3 by the old G0 guard;
+        # mimic gradients are fully supported now, so the narrow profile is purely
+        # a speed choice.) The regressor + its RNEA forward dep ("id") are here.
         codegen.gen_all_code(
             include_homogenous_transforms=True,
             output_path=str(header_path),

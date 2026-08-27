@@ -55,15 +55,15 @@ RUNNER_SOURCE = Path(__file__).with_name("cuda_f_ext_gradient_runner.cu")
 # into that shared slot -- the per-sub SLAB + deterministic serial reduce path. h1_2's
 # slab (nsub ~ 3.4k -> ~81 KB) exceeds the smem cap, so it exercises the MIMIC-SLAB
 # SPILL to the L2-pinned d_workspace SO band (the only case that does); fr3's fits in
-# smem. (The full default profile pulls in the still-refused integrator gradients for
-# mimic robots, so fr3 / h1_2 are codegen'd with the 'f-ext-gradient' profile
-# {id, minv, f_ext_grad}; non-mimic cases use 'all'.)
+# smem. (All cases are codegen'd with the 'f-ext-gradient' profile
+# {id, minv, f_ext_grad}; mimic integrator gradients are fully supported now, so
+# the narrow profile is purely a compile-time choice, not a workaround.)
 _CASES = [("iiwa14", "fixed"), ("go2", "floating"), ("g1", "floating"),
           ("fr3", "fixed"), ("fr3", "floating"), ("h1_2", "floating")]
 
 # (All robots now generate with the "f-ext-gradient" profile — the runner only
-# exercises that surface, and the restricted profile also sidesteps the
-# still-refused mimic integrator gradients that used to force fr3/h1_2 onto it.)
+# exercises that surface. Historically the restricted profile also sidestepped the
+# then-refused mimic integrator gradients; those are fully supported now.)
 
 
 def _build_adapters(robot_id, base_mode):

@@ -58,12 +58,12 @@ INTEGRATOR_ITS = ["EULER", "RK4"]
 def generate(robot_label: str, urdf: Path, floating: bool, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "grid.cuh"
-    # Mimic robots (e.g. h1_2) have their GRADIENT algorithms refused at codegen
-    # time (G0 footgun guard: no silent-zero mimic gradients; deferred to
-    # T3-finisher). gen_all_code("all") would raise NotImplementedError for them,
-    # so codegen the non-gradient tier-bearing surface instead — this still
-    # exercises the fd/minv/aba/crba/integrator per-tier spill ladders, which is
-    # what this smoke gates. Non-mimic robots keep the full "all" surface.
+    # Mimic robots (e.g. h1_2) codegen a restricted algorithm list here. That
+    # restriction is HISTORICAL (it dates from the old G0 footgun guard that
+    # refused mimic gradients; mimic gradients are fully supported now) and is
+    # kept purely for codegen/compile speed — it still exercises the
+    # fd/minv/aba/crba/integrator per-tier spill ladders, which is what this
+    # smoke gates. Non-mimic robots keep the full "all" surface.
     code = f"""
 import sys
 sys.path.insert(0, "{REPO_ROOT}")

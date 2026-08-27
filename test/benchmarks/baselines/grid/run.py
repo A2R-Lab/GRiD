@@ -597,17 +597,14 @@ PER_ALGO_SPECS: dict[str, dict] = {
     #   - com: kinematics-domain, NO gravity / NO qd. ccrba: NO gravity (uses qd).
     #     energy: takes the gravity arg (uses qd). Output sizes: com=3+3*NUM_VEL,
     #     ccrba=6*NUM_VEL+6, energy=3.  See _centroidal.py:_gen_kin_centroidal_host.
-    # NOTE: com/ccrba/energy are SKIPPED at codegen for MIMIC robots (their
-    # per-body Jacobian fold is not mimic-reduced) — for a mimic robot these
-    # grid:: symbols are absent and the TU would fail to compile. There is no
-    # GRID_HAS_* preprocessor macro emitted for these families to #if-gate on,
-    # so the bench DROPS them in Python for mimic robots (MIMIC_UNSUPPORTED_ALGOS,
-    # filtered by _algo_keys_in_registry_order via the data-driven has_mimic flag
-    # from robot_is_mimic()). Mimic status of the sweep robots (checked on the
-    # exact loaded URDF): iiwa14=NO, go2=NO, g1=NO, h1_2=YES (12 <mimic> finger
-    # joints) — i.e. h1_2 IS mimic, so for h1_2 these three rows are skipped.
+    # NOTE: com/ccrba/energy now emit for MIMIC robots too (the per-body
+    # Jacobian / dccrba folds are alpha-reduced, mirroring the mimic-aware
+    # oracle), and GRID_HAS_COM / GRID_HAS_CCRBA / GRID_HAS_ENERGY macros are
+    # emitted. The old mimic drop (MIMIC_UNSUPPORTED_ALGOS) was stale and was
+    # EMPTIED 2026-07-14 — see the note above MIMIC_UNSUPPORTED_ALGOS below —
+    # so these three rows are benchmarked on all robots, mimic included.
     # (generalized_gravity / nonlinear_effects always emit — they reuse the
-    # mimic-aware RNEA inner — and are never dropped.)
+    # mimic-aware RNEA inner.)
     "generalized_gravity": {
         "single_call":        "grid::generalized_gravity_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
         "batch_with_mem":     "grid::generalized_gravity<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
@@ -808,8 +805,7 @@ REDUNDANT_WITH_DISPATCHER_BY_BASE: dict[str, frozenset[str]] = {
     "fixed": frozenset({"idsva_so_body_frame"}),
 }
 
-# Algos the codegen SKIPS for mimic robots, so their grid:: symbols are absent
-# and the matching bench TU would fail to compile/link. com/ccrba/energy are the
+# Algos the bench would drop for mimic robots because codegen skips them.
 # (Was MIMIC_UNSUPPORTED_ALGOS = {com, ccrba, energy}.) EMPTIED 2026-07-14: the drop was STALE. Its two
 # justifications were both false — (1) gen_centroidal_quickwins now states "Mimic robots are SUPPORTED"
 # (the per-body Jacobian + dccrba per-unit phi are alpha-folded, mirroring the mimic-aware oracle), the

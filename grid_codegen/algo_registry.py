@@ -137,12 +137,13 @@ ALGO_REGISTRY: tuple[AlgoEntry, ...] = (
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Per-algo DESCRIPTOR table (item M, Step 0). One row per algorithm capturing the
-# launch-config + kernel-attribute METADATA that is otherwise scattered across
-# GRiDCodeGenerator.py. This step generates NOTHING — it is the parity safety net
-# (test/test_algo_descriptor_parity.py asserts the table reproduces the live
-# LAUNCH_CONFIG_ALGO_TO_SYMBOL dict and the KERNEL_ATTR_MANIFEST metadata exactly).
-# Later steps (per docs/open-tasks/design_descriptor_table_spec.md) extend the
-# schema with the arena/spill closures and DRIVE those sites from these rows.
+# launch-config + kernel-attribute METADATA that was otherwise scattered across
+# GRiDCodeGenerator.py. This table now DRIVES emission: the GridAlgo enum /
+# launch-config symbol map (build_launch_config_algo_to_symbol) and the
+# kernel-attribute registration are derived from these rows, and the arena/spill
+# closures below (Step 3) drive gen_add_constants_helpers via
+# compose_arena_full / compose_arena_rungs. test/test_algo_descriptor_parity.py
+# remains the drift safety net.
 #
 # Only the IRREGULAR fields are stored per row; everything regular is derived:
 #   - bytes_macro defaults to "<KEY.upper()>_DYNAMIC_SHARED_MEM_BYTES" — overridden
@@ -370,7 +371,8 @@ def single_call_printf_line(key: str) -> str:
 # RISKIEST step (a wrong arena silently under-sizes shared memory), so it lands
 # strictly one algo per commit behind a byte-diff + CUDA-equivalence gate.
 #
-# Step 3.0 (this landing) GENERATES NOTHING. It lands:
+# Step 3 is LIVE: gen_add_constants_helpers now composes its arena t_counts from
+# these closures (compose_arena_full / compose_arena_rungs). The pieces:
 #   - the `ArenaRegion` / `SpillRung` schema the per-algo folds will populate,
 #   - an `ArenaCtx` snapshot of the sizing primitives + inner-temp helper results,
 #   - a per-algo `arena_full_fn` closure that recomputes the FULL (least-spill /
@@ -380,11 +382,11 @@ def single_call_printf_line(key: str) -> str:
 # imperative `GRiDCodeGenerator._arena_full_t_counts[key]` on the matrix robots —
 # the Step-0-style safety net that de-risks driving the arena sites from the table.
 #
-# The 3 SO-DISPATCH algos (idsva_so_body_frame / idsva_so_world_frame / fdsva_so)
-# have per_base_override + workspace_bytes_fn + dispatch aliases that are inseparable
-# from their multi-rung emission, so their closures land WITH their generation flip
-# in commits 3.4/3.5 — they are captured in `_arena_full_t_counts` but intentionally
-# excluded from `ARENA_COMPOSED_KEYS` here.
+# Of the SO-dispatch algos, fdsva_so and idsva_so_world_frame ARE composed here
+# (they appear in `_ARENA_FULL_FNS` / `ARENA_COMPOSED_KEYS`). Only
+# idsva_so_body_frame's FULL arena stays in-gen: its floating path is a
+# picker-dependent single-value override (grav_full_spill) inseparable from the
+# smem budget (see the note above `idsva_so_world_frame` in `_ARENA_FULL_FNS`).
 # ─────────────────────────────────────────────────────────────────────────────
 
 

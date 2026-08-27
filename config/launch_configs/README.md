@@ -34,6 +34,12 @@ config/launch_configs/<robot>/<gpu>.json
 `tier` ∈ {`shared`, `lite`, `minimal`}; `threads` is the optimal threads-per-block (single block). `us_at_optimal`
 is the measured per-problem µs at N=`autotune_N` (informational).
 
+A config may additionally carry **per-surface thread-pick overlays**: `ffi_bases` (jax FFI),
+`pybind_bases` (numpy/pybind11), and `torch_bases` — same `{fixed|floating: {algo: {tier, threads}}}`
+shape as `bases`, recorded by `test/benchmarks/autotune_ffi.py --surface {jax,numpy,torch}` (with
+matching `ffi_meta`/`pybind_meta`/`torch_meta` provenance blocks). Each surface's bindings default
+from its overlay when present, falling back to `bases`.
+
 ## Generate a config for YOUR robot / GPU
 ```
 bash config/autotune_robot.sh <robot> [fixed floating]

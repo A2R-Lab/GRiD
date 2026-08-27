@@ -2,8 +2,10 @@
 """Convert an ``autotune_best_<host>.json`` slice into a
 ``config/launch_configs/<robot>/<gpu_key>.json`` override (the A1 launch-config schema).
 
-The autotune sweep (``run.py --autotune-threads``, driven by
-``config/autotune_robot.sh``) writes the canonical per-host artifact
+The autotune producers (``test/benchmarks/autotune_ffi.py`` and the tier-sweep
+tooling — ``per_algo_bench.py --mode autotune`` driven by
+``config/autotune_robot.sh``, plus ``config/sweep_to_autotune_best.py``) write
+the canonical per-host artifact
 ``test/benchmarks/results/autotune_best_<host>.json``::
 
     {"metadata": {hostname, gpu_name, cuda_arch}, "best": {robot: {base: {algo: {tier, threads, us}}}}}

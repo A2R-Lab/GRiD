@@ -23,7 +23,7 @@ import pytest
 def _missing():
     reasons = []
     if importlib.util.find_spec("grid_rbd") is None:
-        reasons.append("grid_rbd not installed (pip install bindings/)")
+        reasons.append("grid_rbd not installed (pip install -e .)")
     if importlib.util.find_spec("nbval") is None:
         reasons.append("nbval not installed (pip install -r install/requirements-dev.txt)")
     if shutil.which("nvcc") is None:

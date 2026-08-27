@@ -19,5 +19,6 @@ will acknowledge the report and work with you on a fix and disclosure timeline.
 
 ## Supported versions
 
-GRiD is developed on the `main` line and has not been formally released; fixes
-land on the current development branch.
+GRiD is developed on the `main` line (currently versioned 0.5.0 in
+`pyproject.toml`); only the latest release/development tip is supported —
+fixes land on the current development branch.

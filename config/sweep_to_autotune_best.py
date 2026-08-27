@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Build a CLEAN ``autotune_best_<host>.json`` from one tier-sweep output dir.
 
-Why this exists: ``run.py --autotune-threads`` incrementally updates a shared
+Why this exists: the incremental autotune producers (today
+``test/benchmarks/autotune_ffi.py`` and the tier-sweep tooling, e.g.
+``per_algo_bench.py --mode autotune`` / ``run_tier_sweep_phased.sh``; the retired
+``run.py --autotune-threads`` before them) update a shared
 ``results/autotune_best_<host>.json`` (read-modify-write), so over many runs it
 accumulates STALE per-robot entries and mixed key conventions. For a trustworthy
 launch-config bake you want exactly ONE run's picks. This reads every

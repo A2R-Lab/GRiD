@@ -219,10 +219,10 @@ def _compile_header_consumer(
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 def test_fixed_default_header_keeps_gradient_paths_all_shared(tmp_path):
-    # iiwa14 (non-mimic fixed-base) exercises the full gradient/SO surface. fr3
-    # is a MIMIC robot whose gradient codegen is now refused (G0 footgun guard;
-    # mimic gradients deferred to T3-finisher), so it can no longer emit the
-    # gradient spill-tier constants this test asserts.
+    # iiwa14 (non-mimic fixed-base) exercises the full gradient/SO surface.
+    # (Historically fr3 was used here, but mimic gradient codegen was refused at
+    # the time; mimic gradients are fully supported now — iiwa14 simply remains
+    # the sentinel for these gradient spill-tier constants.)
     header = _generate_header(tmp_path, "iiwa14", "fixed")
     constants = _constants(header)
 
@@ -242,8 +242,8 @@ def test_fixed_default_header_keeps_gradient_paths_all_shared(tmp_path):
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 def test_fixed_forced_low_shared_header_selects_fallbacks(tmp_path):
-    # iiwa14 (non-mimic) — fr3's gradient/SO codegen is refused under the G0
-    # mimic-gradient guard, so it can't exercise the forced-low-shared fallbacks.
+    # iiwa14 (non-mimic) — kept as the sentinel from when fr3's gradient/SO
+    # codegen was refused; mimic gradients are fully supported now.
     header = _generate_header(tmp_path, "iiwa14", "fixed", target_shared_bytes=10000)
     constants = _constants(header)
 
@@ -575,8 +575,8 @@ def test_d2ee_spill_tiers_are_size_and_base_selected(robot_id, base_mode, expect
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 def test_generated_header_includes_grid_data_variants_and_no_rnea_alias(tmp_path):
-    # iiwa14 (non-mimic): the default "all" profile emits gradients, which is
-    # refused for mimic fr3 under the G0 guard. The gridData surface asserted
+    # iiwa14: kept as the sentinel from when mimic gradient codegen was refused
+    # (mimic gradients are fully supported now). The gridData surface asserted
     # here is robot-agnostic.
     header = _generate_header(tmp_path, "iiwa14", "fixed")
 
@@ -702,8 +702,8 @@ int main() { return 0; }
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 def test_dynamics_grid_data_variant_wrappers_compile(tmp_path):
-    # iiwa14 (non-mimic): the "dynamics" profile includes gradient algos, which
-    # are refused for mimic fr3 under the G0 guard. The DYNAMICS gridData-variant
+    # iiwa14: kept as the sentinel from when mimic gradient codegen was refused
+    # (mimic gradients are fully supported now). The DYNAMICS gridData-variant
     # wrapper surface asserted below is robot-agnostic.
     header = _generate_header(tmp_path, "iiwa14", "fixed", codegen_profile="dynamics")
     source = r'''
@@ -761,9 +761,9 @@ int main() {
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 def test_fixed_kinematics_derivative_wrappers_compile(tmp_path):
-    # iiwa14 (non-mimic): kinematics-derivatives includes ee_pose_gradient/hessian,
-    # which the G0 guard refuses for mimic fr3. The wrapper surface is robot-agnostic
-    # (the floating variant below already uses iiwa14).
+    # iiwa14: kept as the sentinel from when mimic ee_pose_gradient/hessian codegen
+    # was refused (mimic gradients are fully supported now). The wrapper surface is
+    # robot-agnostic (the floating variant below already uses iiwa14).
     header = _generate_header(tmp_path, "iiwa14", "fixed", codegen_profile="kinematics-derivatives")
     source = r'''
 #include "grid.cuh"
@@ -869,9 +869,9 @@ def test_grid_data_variant_invalid_wrappers_fail_to_compile(
     source,
     expected_error,
 ):
-    # iiwa14 (non-mimic): needs the full "all" header (gridData variant wrappers),
-    # which the G0 guard refuses for mimic fr3. The KIND-mismatch negative-compile
-    # checks are robot-agnostic.
+    # iiwa14: kept as the sentinel from when the full "all" header was refused for
+    # mimic fr3 (mimic gradients are fully supported now). The KIND-mismatch
+    # negative-compile checks are robot-agnostic.
     header = _generate_header(tmp_path, "iiwa14", "fixed")
     _compile_header_consumer(
         tmp_path,
@@ -919,9 +919,9 @@ def test_kinematics_profile_generates_kinematics_hosts_only(tmp_path):
 @pytest.mark.cuda_equivalence
 @pytest.mark.developer_only
 def test_algorithm_list_override_expands_dependencies(tmp_path):
-    # iiwa14 (non-mimic): this asserts the fd-gradient dependency expansion emits
-    # gradient wrappers, which the G0 guard refuses for mimic fr3. The
-    # algorithm_list expansion logic under test is robot-agnostic.
+    # iiwa14: kept as the sentinel from when mimic gradient wrapper codegen was
+    # refused (mimic gradients are fully supported now). The algorithm_list
+    # expansion logic under test is robot-agnostic.
     header = _generate_header(tmp_path, "iiwa14", "fixed", algorithm_list="forward_dynamics_gradient")
 
     assert "Generated algorithms:" in header

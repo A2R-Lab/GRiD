@@ -176,7 +176,7 @@ Next steps:
   1. Re-run codegen + rebuild so the host launchers pick up your tuned values
      (codegen bakes config/launch_configs/<robot>/<gpu>.json into grid_launch_config.cuh):
 
-         python3 -m grid_codegen ...   # your usual codegen for $ROBOT
+         grid-generate <urdf> ...      # your usual codegen for $ROBOT
          # then rebuild your GRiD / bindings as usual
 
   2. (Optional, please do!) PR the JSON to crowdsource the matrix:

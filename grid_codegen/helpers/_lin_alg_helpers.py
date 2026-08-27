@@ -256,8 +256,8 @@ def gen_invert_matrix(self):
         invert_matrix(dimA, A, Ainv, s_temp)
     On return: A := A^-1 (in-place — old code also overwrote A to identity,
     which no caller depended on); Ainv := A^-1 (alias of A's inverse).
-    Callers that wrote a pre-init to Ainv = I before calling are now
-    paying redundant work; clean those up in a follow-up commit.
+    (The legacy callers' redundant Ainv = I pre-init has since been
+    cleaned up.)
     s_temp must hold at least (3*dimA) elements; the legacy callers reserve
     4*dimA so there is headroom.
     """

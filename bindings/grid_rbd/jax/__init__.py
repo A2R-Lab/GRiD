@@ -29,7 +29,10 @@ Surface (parity with the plain ``RobotHandle``):
   ``end_effector_pose_hessian``, ``end_effector_pose_runtime``,
   ``end_effector_pose_gradient_runtime``,
   ``inverse_dynamics_gradient``, ``forward_dynamics_gradient``,
-  ``idsva_so``, ``fdsva_so``, plus the grid_plant cost / barrier / plant-step
+  ``idsva_so``, ``fdsva_so``,
+  ``inverse_dynamics_regressor``, ``forward_dynamics_parameter_gradient``,
+  ``inverse_dynamics_wrt_params``, ``forward_dynamics_wrt_params``,
+  ``integrator``, ``integrator_gradient``, plus the grid_plant cost / barrier / plant-step
   surface (``plant_step``, ``plant_step_gradient``, ``quadratic_state_cost``,
   ``quadratic_input_cost``, ``ee_pos_cost``, ``joint_position_barrier``,
   ``joint_velocity_barrier``, ``joint_torque_barrier``, ``com_cost``,
