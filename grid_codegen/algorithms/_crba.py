@@ -813,7 +813,7 @@ def gen_crba_device(self):
         func_notes = func_notes, func_params = func_params,
         include_linalg_scratch = True, skip_floating_base_X = True)
 
-def _emit_crba_kernel_body_for_flags(self, nq, nv, n, input_count, use_workspace_temp, m_in_smem, single_call_timing):
+def _emit_crba_kernel_body_for_flags(self, nq, nv, input_count, use_workspace_temp, m_in_smem, single_call_timing):
     """Emit crba_kernel body for one tier's spill flags.
     use_workspace_temp=False: inner band in smem; True: inner band -> L2-pinned workspace.
     m_in_smem=True: s_M output in smem; False: s_M -> the L2-pinned SO band (dccrba-style)."""
@@ -936,7 +936,7 @@ def gen_crba_kernel(self, single_call_timing = False):
     # rung0-only robots emit one byte-identical body (Gate A).
     picks = getattr(self, "crba_spill_tier_3way", (0, 0, 0))
     self.gen_tier_dispatch(picks, lambda pick:
-        _emit_crba_kernel_body_for_flags(self, nq, nv, n, input_count,
+        _emit_crba_kernel_body_for_flags(self, nq, nv, input_count,
             use_workspace_temp=(pick == 2), m_in_smem=(pick == 0), single_call_timing=single_call_timing))
     self.gen_add_end_function()
 

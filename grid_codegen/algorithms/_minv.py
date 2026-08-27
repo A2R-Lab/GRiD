@@ -49,7 +49,7 @@ def gen_minv_inner_function_call(self, updated_var_names = None,
     minv_code = minv_code_start + minv_code_middle + minv_code_end
     self.gen_add_code_line(minv_code)
 
-def _gen_minv_inner_via_crba(self, n, no_F_size, label):
+def _gen_minv_inner_via_crba(self, n, label):
     """Emit the inv(CRBA(q)) Minv path: M = crba_inner(q); Minv = inv(M).
 
     Shared by the mimic path (per-body (S,U,d) ABA recursion does not superpose:
@@ -153,7 +153,7 @@ def gen_minv_inner(self):
         # reduced mass matrix via crba_inner and invert it (NV x NV). s_F is large
         # (6*NV*NV) and unused on this path, so we carve M + the CRBA scratch band
         # out of it; the inverse is written straight into s_Minv.
-        _gen_minv_inner_via_crba(self, n, no_F_size, "mimic")
+        _gen_minv_inner_via_crba(self, n, "mimic")
         return
     if self.robot.robot_has_spherical():
         # Tier-C SPHERICAL: the per-body ABA minv recursion (scalar U/Dinv/F) does
@@ -161,7 +161,7 @@ def gen_minv_inner(self):
         # the reduced CRBA M directly (crba_inner already emits the multi-column
         # spherical M=S^T IC S). RBDReference.minv's ABA bpass raises on spherical
         # for the same reason, so the verified oracle here is inv(crba(q)).
-        _gen_minv_inner_via_crba(self, n, no_F_size, "spherical")
+        _gen_minv_inner_via_crba(self, n, "spherical")
         return
     FOffset = 0   # within s_F
     IAOffset = 0  # within s_temp

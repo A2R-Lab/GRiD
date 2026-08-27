@@ -2092,7 +2092,7 @@ _PLANT_HESSIAN_PICK_FLAGS = [
 ]
 
 
-def _emit_plant_step_hessian_kernel_body_for_flags(self, n, nx, nz, d2ab_count,
+def _emit_plant_step_hessian_kernel_body_for_flags(self, n, nx, d2ab_count,
                                                    spill_d2AB, spill_tensors, spill_fdsva_pool):
     """Emit the plant_step_hessian_kernel body for one tier's spill flags.
 
@@ -2267,7 +2267,7 @@ def gen_plant_step_hessian_kernel(self):
     def _emit_body(pick):
         spill_d2AB, spill_tensors, spill_fdsva_pool = _PLANT_HESSIAN_PICK_FLAGS[pick]
         _emit_plant_step_hessian_kernel_body_for_flags(
-            self, n, nx, nz, d2ab_count, spill_d2AB, spill_tensors, spill_fdsva_pool)
+            self, n, nx, d2ab_count, spill_d2AB, spill_tensors, spill_fdsva_pool)
 
     self.gen_tier_dispatch(picks, _emit_body)
     self.gen_add_end_function()

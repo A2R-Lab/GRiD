@@ -496,7 +496,7 @@ def gen_multi_target_position_kernel(self, batch, single_call_timing=False):
     self.gen_add_end_function()
 
 
-def gen_multi_target_position_host(self, batch, mode=0):
+def gen_multi_target_position_host(self, mode=0):
     single_call_timing = True if mode == 1 else False
     compute_only = True if mode == 2 else False
     func_params = ["hd_data is the packaged input and output pointers",
@@ -597,7 +597,7 @@ def gen_multi_target_position_gradient_kernel(self, batch, single_call_timing=Fa
     self.gen_add_end_function()
 
 
-def gen_multi_target_position_gradient_host(self, batch, mode=0):
+def gen_multi_target_position_gradient_host(self, mode=0):
     single_call_timing = True if mode == 1 else False
     compute_only = True if mode == 2 else False
     func_params = ["hd_data is the packaged input and output pointers",
@@ -662,14 +662,14 @@ def gen_multi_target_position_bench(self, batch):
     (NOT the per-tier collision batches, which stay device-composite)."""
     self.gen_multi_target_position_kernel(batch, single_call_timing=False)
     self.gen_multi_target_position_kernel(batch, single_call_timing=True)
-    self.gen_multi_target_position_host(batch, mode=0)
-    self.gen_multi_target_position_host(batch, mode=1)
-    self.gen_multi_target_position_host(batch, mode=2)
+    self.gen_multi_target_position_host(mode=0)
+    self.gen_multi_target_position_host(mode=1)
+    self.gen_multi_target_position_host(mode=2)
     self.gen_multi_target_position_gradient_kernel(batch, single_call_timing=False)
     self.gen_multi_target_position_gradient_kernel(batch, single_call_timing=True)
-    self.gen_multi_target_position_gradient_host(batch, mode=0)
-    self.gen_multi_target_position_gradient_host(batch, mode=1)
-    self.gen_multi_target_position_gradient_host(batch, mode=2)
+    self.gen_multi_target_position_gradient_host(mode=0)
+    self.gen_multi_target_position_gradient_host(mode=1)
+    self.gen_multi_target_position_gradient_host(mode=2)
 
 
 # ---------------------------------------------------------------------------

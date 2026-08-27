@@ -1058,7 +1058,7 @@ def gen_floating_gravity_d2tau_dq_lie_inline(self):
     self.gen_add_code_lines = _orig_gen_add_code_lines
     self.gen_add_sync()
 
-def gen_idsva_so_body_frame_inner_function_call(self, use_qdd_input = False, updated_var_names = None, bc_in_smem_expr = None, scratch_in_smem_expr = None, tp_in_smem_expr = None):
+def gen_idsva_so_body_frame_inner_function_call(self, updated_var_names = None, bc_in_smem_expr = None, scratch_in_smem_expr = None, tp_in_smem_expr = None):
     var_names = dict( \
         s_idsva_so_name = "s_idsva_so", \
         s_q_name = "s_q", \
@@ -1264,7 +1264,7 @@ def gen_idsva_so_body_frame_reference_order_output_repair(self):
 # It is ~entirely single-threaded — the largest serial surface in this file, but zero
 # production impact. Retained as a reference; the SO audit decides keep-vs-retire.
 # ============================================================================
-def gen_idsva_so_body_frame_floating_reference_inner(self, use_qdd_input = False):
+def gen_idsva_so_body_frame_floating_reference_inner(self):
     """
     Emits a floating-base diagnostic IDSVA-SO path with explicit body/velocity
     split memory. Fixed-base keeps the optimized generator path below.
@@ -1747,7 +1747,7 @@ def gen_idsva_so_body_frame_floating_reference_inner(self, use_qdd_input = False
     self.gen_add_sync()
     self.gen_add_end_function()
 
-def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
+def gen_idsva_so_body_frame_inner(self):
     """
     Generates the inner device function to compute the second order idsva.
 
@@ -1772,7 +1772,7 @@ def gen_idsva_so_body_frame_inner(self, use_qdd_input = False):
     The inner loads/updates s_XImats from s_q internally, so it takes d_robotModel.
     """
     if self.robot.floating_base:
-        self.gen_idsva_so_body_frame_floating_reference_inner(use_qdd_input)
+        self.gen_idsva_so_body_frame_floating_reference_inner()
         return
 
     NV = self.robot.get_num_vel()
@@ -3100,7 +3100,7 @@ def gen_idsva_so_world_frame_temp_mem_size(self):
     return int(4 * 36 * NB + 3 * 6 * NB + 4 * 6 * n_int + 10 * 36 + 12 * 6 + 6 + 9 * 6 + internal_slab)
 
 
-def gen_idsva_so_world_frame_inner(self, use_qdd_input = False):
+def gen_idsva_so_world_frame_inner(self):
     """Emit `idsva_so_world_frame_inner` — a clean world-frame IDSVA-SO.
 
     Mirrors `RBDReference.idsva_so_world_frame`:
@@ -3879,7 +3879,7 @@ def gen_idsva_so_world_frame_inner(self, use_qdd_input = False):
     self.gen_add_end_function()
 
 
-def _emit_idsva_so_mjx_locals_lines(nv, nv3, fb):
+def _emit_idsva_so_mjx_locals_lines(nv3, fb):
     """Register-/stack-local recompute of the loop-invariant helpers, emitted at
     the TOP of every parallel-loop body so the verbatim formula lines downstream
     keep working unchanged. SAFE by construction: R is rebuilt from the base
@@ -4064,7 +4064,7 @@ def _emit_idsva_so_mjx_precompute_sensitivities(self, nv):
     self.gen_add_code_line("// --- GLASS all-k sensitivity precompute (tensor_vec_contract, replaces 6*nv^3 unroll) ---")
     self.gen_add_code_line("{", True)
     # R + base source vectors (register-local; same recompute the slab uses).
-    self.gen_add_code_lines(_emit_idsva_so_mjx_locals_lines(nv, nv3, _fb))
+    self.gen_add_code_lines(_emit_idsva_so_mjx_locals_lines(nv3, _fb))
     N = str(nv)
     # #pragma unroll 1: the tensor_vec_contract block ops ARE the (rolled) fix; the
     # k-loop around them must stay rolled too, else nvcc unrolls it nv-fold and
@@ -4148,7 +4148,7 @@ def _emit_idsva_so_mjx_blockpar_assembly(self, nv):
     self.gen_add_code_line("for (int k = 0; k < " + N + "; k++) {", True)
     # Per-thread register locals (R + base source vectors + tensor ptrs) — same as the
     # thread-per-k body; every thread recomputes them (cheap, deterministic).
-    self.gen_add_code_lines(_emit_idsva_so_mjx_locals_lines(n, nv3, _fb))
+    self.gen_add_code_lines(_emit_idsva_so_mjx_locals_lines(nv3, _fb))
     self.gen_add_code_lines([
         "T *d_dtdq  = D_dtdq_all  + k*" + str(nv2) + ";",
         "T *d_dtdqd = D_dtdqd_all + k*" + str(nv2) + ";",
@@ -4519,9 +4519,11 @@ def _emit_javd_block(n, src_M, dest):
     """dest[:,0+a] += M[:,0:3]@(-(d_om x R^T e_a) - (omega x Rd^T e_a)) ;
        dest[:,3+a] += M[:,0:3]@(-(e_a x d_v)). d_v=jvk[0:3], d_om=jvk[3:6]."""
     N = str(n)
-    sm = "s_M[r + " + N + "*0]"
-    sm1 = "s_M[r + " + N + "*1]"
-    sm2 = "s_M[r + " + N + "*2]"
+    # honor the same _SM_-vs-named-buffer dispatch as the three sibling blocks
+    # (the sole caller passes "_SM_" today, so this is output-identical).
+    sm = "s_M[r + " + N + "*0]" if src_M == "_SM_" else src_M + "[0*" + N + "+r]"
+    sm1 = "s_M[r + " + N + "*1]" if src_M == "_SM_" else src_M + "[1*" + N + "+r]"
+    sm2 = "s_M[r + " + N + "*2]" if src_M == "_SM_" else src_M + "[2*" + N + "+r]"
     return [
         "for (int a = 0; a < 3; a++) {",
         "  T dv0 = jvk[0], dv1 = jvk[1], dv2 = jvk[2];",
@@ -4558,7 +4560,7 @@ def _emit_idsva_so_mjx_dM_blockpar(self, n):
     # Step1+2: whole block, one k at a time.
     self.gen_add_code_line("#pragma unroll 1")
     self.gen_add_code_line("for (int k = 0; k < " + N + "; k++) {", True)
-    self.gen_add_code_lines(_emit_idsva_so_mjx_locals_lines(n, nv3, _fb))
+    self.gen_add_code_lines(_emit_idsva_so_mjx_locals_lines(nv3, _fb))
     # Step1: tmp[i,l] (q-tangent reframe) -> s_work1 col-major [l*nv+i]. Over rows i.
     self.gen_add_code_lines([
         _bpfor("i", n),
@@ -4592,7 +4594,7 @@ def _emit_idsva_so_mjx_dM_blockpar(self, n):
     self.gen_add_code_line("// Step3: base-rot frame term added to columns kk=3+c")
     self.gen_add_code_line("#pragma unroll 1")
     self.gen_add_code_line("for (int c = 0; c < 3; c++) {", True)
-    self.gen_add_code_lines(_emit_idsva_so_mjx_locals_lines(n, nv3, _fb))
+    self.gen_add_code_lines(_emit_idsva_so_mjx_locals_lines(nv3, _fb))
     self.gen_add_code_lines([
         "int kk = 3 + c;",
         "T Rdc[9]; for (int ii=0; ii<9; ii++) Rdc[ii]=static_cast<T>(0);",
@@ -4916,7 +4918,7 @@ def gen_idsva_so_world_frame(self):
     self.gen_idsva_so_world_frame_host(2)
 
 
-def gen_idsva_so_device(self, use_qdd_input = True):
+def gen_idsva_so_device(self):
     """Emit `idsva_so_device` — a __device__ entry that picks the perf-winning
     frame at codegen time: body_frame_inner for fixed-base, world_frame_inner
     for floating-base (mirrors the host-level idsva_so dispatcher; same body /

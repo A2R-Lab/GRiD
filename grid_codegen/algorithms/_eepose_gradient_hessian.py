@@ -500,7 +500,7 @@ def _eepose_resolve_targets(self, fixed_target_name):
     return [parent_jid], [anchor_jid], [(anchor_jid, parent_jid)]
 
 
-def _eepose_grad_chain_metadata(self, all_ees, fixed_target_name, anchor_override=None):
+def _eepose_grad_chain_metadata(self, all_ees, anchor_override=None):
     """Bake out per-ee chain-joint fill jobs for the geometric-Jacobian rewrite.
 
     For each end-effector returns:
@@ -753,7 +753,7 @@ def gen_end_effector_pose_gradient_inner(self, fixed_target_name = ""):
     all_ees = chain_sources
     num_ees = 1 if root_attached else len(all_ees)
     chains, anchors, fill_jobs = _eepose_grad_chain_metadata(
-        self, all_ees, fixed_target_name, anchor_override=anchors_list)
+        self, all_ees, anchor_override=anchors_list)
 
     # function header
     func_params = ["s_end_effector_pose_gradient is a pointer to shared memory of size 6*NUM_VEL*NUM_EE where NUM_VEL = " + str(nv) + " and NUM_EE = " + str(num_ees), \
@@ -1804,7 +1804,7 @@ def gen_end_effector_pose_hessian_inner(self, fixed_target_name = ""):
                                 bi=vi_to_blocks[vi], bj=vi_to_blocks[vj],
                                 sib=si_base, sjb=sj_base:
                             _emit_d2M_mimic_vslot_pair_block(
-                                self, ee_idx, ee_jid, vi, vj, nv, num_ees,
+                                self, ee_idx, ee_jid, vi, vj, nv,
                                 bi, bj, sib, sjb))))
                     continue
                 # Determine ordering: a = di['chain_pos'], b = dj['chain_pos']
@@ -2211,7 +2211,7 @@ def _emit_d2M_same_joint_table_body(self, nv):
     self.gen_add_code_line("s_end_effector_pose_hessian[out_base + 5 * " + str(nn) + "] = HW_z;")
 
 
-def _emit_d2M_mimic_vslot_pair_block(self, ee_idx, ee_jid, vi, vj, nv, num_ees,
+def _emit_d2M_mimic_vslot_pair_block(self, ee_idx, ee_jid, vi, vj, nv,
                                      blocks_i, blocks_j, si_base, sj_base):
     """Emit the d2(pose)/dv2 cell for a MIMIC-shared v-slot pair (vi, vj).
 
@@ -2770,7 +2770,7 @@ def gen_end_effector_pose_hessian_host(self, mode = 0, fixed_target_name = ""):
         self.gen_add_code_line(single_call_printf_line("end_effector_pose_hessian"))
     self.gen_add_end_function()
 
-def gen_ee_pose_inner_xform_from_q_lines(self, lane_guarded = False):
+def gen_ee_pose_inner_xform_from_q_lines(self):
     # Robot-general per-joint homogeneous-transform refresh from s_q.
     #
     # Emits the q-DEPENDENT cells of every joint's 4x4 s_XmatsHom block,
@@ -2843,7 +2843,7 @@ def _ee_pose_inner_angle_expr(self, jid):
         qslot = qslot[0]
     return "s_q[" + str(qslot) + "]"
 
-def gen_ee_pose_inner_thread(self, fixed_target_name = ""):
+def gen_ee_pose_inner_thread(self):
     import sympy as sp
     NJ = self.robot.get_num_joints()
     parents = [self.robot.get_parent_id(jid) for jid in range(NJ)]
@@ -3032,7 +3032,7 @@ def gen_ee_pose_inner_parent_lookup(self, parents):
     arr = "{" + ",".join(str(p) for p in parents) + "}"
     return "((const int[]) " + arr + ")[j]"
 
-def gen_ee_pose_inner_warp(self, fixed_target_name = ""):
+def gen_ee_pose_inner_warp(self):
     import sympy as sp
     NJ = self.robot.get_num_joints()
     parents = [self.robot.get_parent_id(jid) for jid in range(NJ)]
@@ -3357,9 +3357,9 @@ def gen_eepose_and_derivatives(self, fixed_target_name = "",
         # falls back cleanly.
         if (not self.robot.robot_has_spherical()
                 and self.robot.get_num_joints() <= 32):
-            self.gen_ee_pose_inner_thread(fixed_target_name = fixed_target_name)
+            self.gen_ee_pose_inner_thread()
             self.gen_update_XmatHom_joint()
-            self.gen_ee_pose_inner_warp(fixed_target_name = fixed_target_name)
+            self.gen_ee_pose_inner_warp()
             self.gen_ee_pose_fk_batched_kernel()
             self.gen_ee_pose_fk_batched_host()
 

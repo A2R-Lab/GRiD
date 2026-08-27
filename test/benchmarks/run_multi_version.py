@@ -235,20 +235,13 @@ def setup_pre_glass_worktree(path: Path) -> Path:
 # ---------------------------------------------------------------------------
 def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
                   output: Path, ee_frame: str, no_recompile: bool,
-                  no_rdc: bool = False, no_licm_barrier: bool = False,
-                  single_call_iters: int | None = None,
-                  batch_iters: int | None = None,
-                  ptxas_opt_level: int | None = None,
-                  split_compile: int | None = None,
-                  ofast_compile: str | None = None,
                   tier: str | None = None,
                   build_dir: Path | None = None,
                   compile_only: bool = False,
                   compile_workers: int | None = None,
                   autotune_threads: bool = False,
                   autotune_thread_grid: str | None = None,
-                  autotune_N: int | None = None,
-                  single_timing: bool = False) -> list[str]:
+                  autotune_N: int | None = None) -> list[str]:
     cmd = [
         sys.executable,
         str(harness_repo_root / "test" / "benchmarks" / "baselines" / "grid" / "run.py"),
@@ -263,20 +256,6 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
         cmd += ["--compile-workers", str(compile_workers)]
     if no_recompile:
         cmd.append("--no-recompile")
-    if no_rdc:
-        cmd.append("--no-rdc")
-    if no_licm_barrier:
-        cmd.append("--no-licm-barrier")
-    if single_call_iters is not None:
-        cmd += ["--single-call-iters", str(single_call_iters)]
-    if batch_iters is not None:
-        cmd += ["--batch-iters", str(batch_iters)]
-    if ptxas_opt_level is not None:
-        cmd += ["--ptxas-opt-level", str(ptxas_opt_level)]
-    if split_compile is not None:
-        cmd += ["--split-compile", str(split_compile)]
-    if ofast_compile is not None:
-        cmd += ["--ofast-compile", ofast_compile]
     if tier is not None:
         cmd += ["--tier", tier]
     if autotune_threads:
@@ -285,12 +264,6 @@ def _grid_run_cmd(harness_repo_root: Path, robot: str, base: str,
             cmd += ["--autotune-thread-grid", autotune_thread_grid]
         if autotune_N is not None:
             cmd += ["--autotune-N", str(autotune_N)]
-    # Single-CALL timing is opt-in/default-off (B8): the -rdc=true single build
-    # fatally errors (ptxas regcount) on big floating robots and wastes ~50
-    # min/tier. Only pass --single-timing when the orchestrator was asked for it;
-    # the autotune matrix uses batch-only timing, unaffected.
-    if single_timing:
-        cmd.append("--single-timing")
     return cmd
 
 
@@ -333,17 +306,10 @@ def _wrapper_run_cmd(robot: str, base: str, output: Path, *,
 def run_grid_column(column: str, robot: str, base: str, *,
                     output_dir: Path, worktree_path: Path,
                     no_recompile: bool,
-                    no_rdc: bool = False, no_licm_barrier: bool = False,
-                    single_call_iters: int | None = None,
-                    batch_iters: int | None = None,
-                    ptxas_opt_level: int | None = None,
-                    split_compile: int | None = None,
-                    ofast_compile: str | None = None,
                     tier: str | None = None,
                     autotune_threads: bool = False,
                     autotune_thread_grid: str | None = None,
-                    autotune_N: int | None = None,
-                    single_timing: bool = False) -> Path | None:
+                    autotune_N: int | None = None) -> Path | None:
     """Run the appropriate GRiD harness for `column`. Returns output JSON path or None."""
     ee_frame = EE_FRAMES_GRID.get(robot, "")
     baseline_key = COLUMN_TO_BASELINE_KEY[column]
@@ -629,10 +595,7 @@ def _auto_build_jobs() -> int:
 
 
 def _build_grid_binaries(grid_columns, robots, bases, tiers, *, build_jobs,
-                         worktree_path, output_dir, skip_set, no_rdc,
-                         no_licm_barrier, single_call_iters, batch_iters,
-                         ptxas_opt_level, split_compile, ofast_compile,
-                         single_timing=False) -> None:
+                         worktree_path, output_dir, skip_set) -> None:
     """Parallel BUILD phase: compile + cache every GRiD (column,robot,base,tier)
     binary across `build_jobs` workers, WITHOUT timing. The serial measure phase
     re-runs each with --no-recompile (instant content-keyed cache hit), so timing
@@ -732,32 +695,6 @@ def main() -> None:
                         help=f"Where per-column JSONs land (default: {RESULTS_DIR})")
     parser.add_argument("--no-recompile", action="store_true",
                         help="Forward --no-recompile to inner harnesses")
-    parser.add_argument("--no-rdc", action="store_true",
-                        help="Drop -rdc=true from the GRiD compile line. Use when ptxas hangs "
-                             "on floating-base kernels (older toolkits). Batch timings unaffected; "
-                             "single-call timings may LICM-elide.")
-    parser.add_argument("--no-licm-barrier", action="store_true",
-                        help="Strongest hammer for ptxas hangs: suppress the anti-LICM "
-                             "machinery in codegen (volatile reload + __noinline__ barrier). "
-                             "Try this if --no-rdc alone doesn't fix the hang. "
-                             "Batch timings unaffected; single-call may LICM-elide.")
-    parser.add_argument("--ptxas-opt-level", type=int, default=None,
-                        choices=[0, 1, 2, 3],
-                        help="Pass `-Xptxas -O<n>` to GRiD floating-base compiles only. "
-                             "SM_86-SPECIFIC WORKAROUND: on sm_86 / CUDA 12.6, ptxas -O3 "
-                             "wedges at 100%% CPU on heavy floating-base kernels. -O2 typically "
-                             "completes in a few minutes. Not needed on Blackwell (sm_120). "
-                             "Default: nvcc default (-O3 to ptxas).")
-    parser.add_argument("--split-compile", type=int, default=None,
-                        help="Pass `--split-compile=N` to nvcc (12.x). Parallelizes cicc "
-                             "optimization passes (0 = all CPU cores). ~2× faster compile.\n"
-                             "*** DEFEATS ANTI-LICM at all N>=2 *** — single-call and batch "
-                             "compute-only timings collapse to ~0us / launch overhead. Use "
-                             "ONLY for non-timing dev iteration, never for measurement runs.")
-    parser.add_argument("--ofast-compile", choices=["min", "mid", "max"], default=None,
-                        help="Pass `-Ofc=<level>` to nvcc (12.x). Fast-compile mode for "
-                             "device code. Trades device-code runtime perf for compile "
-                             "time — opt-in dev knob, NOT for perf measurement runs.")
     parser.add_argument("--single-call-iters", type=int, default=None,
                         help="Override SINGLE_CALL_ITERS_GLOBAL for GRiD/Pinocchio "
                              "(default 10000). Inner-kernel rep count for single-call timings.")
@@ -818,14 +755,6 @@ def main() -> None:
     parser.add_argument("--autotune-N", type=int, default=None,
                         help="Batch size to autotune on (default: 256). The winner is the thread "
                              "count that minimizes batch_<N>_compute_only µs/sample.")
-    parser.add_argument("--single-timing", action="store_true",
-                        default=(os.environ.get("GRID_BENCH_SINGLE_TIMING", "0") not in ("0", "", "false", "False")),
-                        help="OPT-IN (default OFF): forward --single-timing to the GRiD glass "
-                             "column so it ALSO builds + runs the single-CALL latency binary. Off "
-                             "by default because the -rdc=true single build fatally errors (ptxas "
-                             "regcount) on big floating robots (g1/h2_plus) and wastes ~50 min/tier; "
-                             "batch throughput timing (the autotune matrix) is unaffected and "
-                             "always runs. Also settable via env GRID_BENCH_SINGLE_TIMING=1.")
     args = parser.parse_args()
 
     if args.fixed_only:
@@ -875,11 +804,6 @@ def main() -> None:
             grid_columns, args.robots, args.bases, args.tiers,
             build_jobs=build_jobs, worktree_path=args.worktree_path,
             output_dir=args.output_dir, skip_set=skip_set,
-            no_rdc=args.no_rdc, no_licm_barrier=args.no_licm_barrier,
-            single_call_iters=args.single_call_iters, batch_iters=args.batch_iters,
-            ptxas_opt_level=args.ptxas_opt_level, split_compile=args.split_compile,
-            ofast_compile=args.ofast_compile,
-            single_timing=args.single_timing,
         )
         # Measure phase pulls from the warm cache; never compile during timing.
         measure_no_recompile = True
@@ -963,17 +887,10 @@ def main() -> None:
                             column, robot, base,
                             output_dir=args.output_dir, worktree_path=args.worktree_path,
                             no_recompile=args.no_recompile or measure_no_recompile,
-                            no_rdc=args.no_rdc, no_licm_barrier=args.no_licm_barrier,
-                            single_call_iters=args.single_call_iters,
-                            batch_iters=args.batch_iters,
-                            ptxas_opt_level=args.ptxas_opt_level,
-                            split_compile=args.split_compile,
-                            ofast_compile=args.ofast_compile,
                             tier=tier,
                             autotune_threads=do_autotune,
                             autotune_thread_grid=args.autotune_thread_grid,
                             autotune_N=args.autotune_N,
-                            single_timing=args.single_timing,
                         )
                         if p is not None:
                             produced.append(p)

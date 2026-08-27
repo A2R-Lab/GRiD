@@ -433,7 +433,7 @@ def gen_mjx_column_reframe(self, mat, n_rows, n_cols, q_name="s_q"):
     self.gen_add_sync()
 
 
-def gen_mjx_retract(self, q_out, q_in, qd, dt_expr, q_name=None):
+def gen_mjx_retract(self, q_out, q_in, qd, dt_expr):
     """mjx free-joint retract for the integrator: the base POSITION takes a GLOBAL
     additive step ``q_out[0:3] = q_in[0:3] + dt * qd[0:3]`` (vs pin's SE(3) V(phi)
     coupling, which is O(dt^2) wrong for MuJoCo). The base quaternion and all

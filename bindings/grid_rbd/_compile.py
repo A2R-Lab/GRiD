@@ -152,8 +152,9 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # stem often EXCEEDS (iiwa14_primitive_collision, g1_29dof). Resolve the stem to its
     # launch_configs key (exact, else longest-prefix) so codegen bakes the autotuned
     # per-algo {tier,threads}; without this it MISSED and fell back to conservative
-    # defaults. An explicit launch_config_robot option overrides (e.g. custom robot ids).
-    launch_config_robot = options.get("launch_config_robot") or _resolve_launch_config_robot(urdf_path)
+    # defaults. (No options override exists: warm_robot builds options from an
+    # allowlist — thread a kwarg through it first if custom ids ever need one.)
+    launch_config_robot = _resolve_launch_config_robot(urdf_path)
     # The binding IS the jax/torch FFI launch path, whose per-algo thread optimum
     # differs from the C++/host one (the SAME kernel: e.g. iiwa14 fd host-best=128 but
     # FFI-best=768 for batch-to-land). Bake the "ffi" profile (ffi_bases, autotune_ffi.py)
