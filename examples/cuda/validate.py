@@ -5,7 +5,7 @@ Pipes the deterministic inputs through RBDReference.inverse_dynamics (the same
 q/qd/qdd hard-coded in inverse_dynamics_kernel_example.cu) and diffs against the
 labelled blocks the compiled example prints on stdin.
 
-    PYTHONPATH=. .venv/bin/python examples/cuda/validate.py < example_output.txt
+    .venv/bin/python examples/cuda/validate.py < example_output.txt
 """
 from __future__ import annotations
 

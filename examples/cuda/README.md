@@ -52,8 +52,7 @@ GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(
 
 `algorithm_list` restricts codegen to the kernels you need (smaller header,
 faster `nvcc`). `gen_iiwa14_header.py` is exactly this, behind a `--output` flag.
-Run it with `PYTHONPATH=.` from the repo root so `URDFParser` /
-`GRiDCodeGenerator` import.
+Run it from the repo root (the editable install provides the imports).
 
 ### 1. Include it
 

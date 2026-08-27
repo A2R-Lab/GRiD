@@ -15,9 +15,12 @@ np.set_printoptions(precision=4, suppress=True, linewidth=100)
 # ---------------------------------------------------------------------------
 
 def printUsage(NO_ARG_OPTION=False):
-    print("Usage is: script.py PATH_TO_URDF (-t FIXED_TARGET_NAMES) (-n FILE_NAMESPACE_NAME) (-d) (-f)")
+    print("Usage is: script.py PATH_TO_URDF (-t FIXED_TARGET_NAMES) (-n FILE_NAMESPACE_NAME) (-d) (-f) (-c) (--collision-res RES) (--collision-native)")
     print("                    where -d indicates full debug mode")
     print("                    where -f indicates floating base")
+    print("                    where -c spherizes collision geometry and emits grid_collision (config_free)")
+    print("                    where --collision-res sets the sphere spacing (comma-separated for a broad->fine cascade)")
+    print("                    where --collision-native uses the URDF's native collision primitives (implies -c)")
     if NO_ARG_OPTION:
         print("Alternative usage assuming grid.cuh is already generated: script.py")
 
@@ -28,7 +31,7 @@ def fileExists(FILE_PATH):
 
 def validateFile(FILE_PATH, NO_ARG_OPTION=False):
     if not fileExists(FILE_PATH):
-        print("[!Error] grid.cuh does not exist")
+        print("[!Error] file not found: %s" % FILE_PATH)
         printUsage(NO_ARG_OPTION)
         sys.exit(1)
 

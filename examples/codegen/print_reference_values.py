@@ -8,17 +8,25 @@ Usage:
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import numpy as np
 
 from URDFParser import URDFParser
 from RBDReference import RBDReference
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.cli import parseInputs, validateRobot
+
+# The repo's test/ package must shadow the stdlib `test` package regardless of
+# how this script is invoked (test/helpers.py is not part of the installed dist).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from test.helpers import initializeValues
 
 
 def main():
-    URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE, FIXED_TARGET_NAMES, _, _ = parseInputs()
+    (URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE, FIXED_TARGET_NAMES,
+     _collision, _collision_res, _collision_native) = parseInputs()
 
     parser = URDFParser()
     robot = parser.parse(URDF_PATH, floating_base=FLOATING_BASE)

@@ -2,9 +2,9 @@
 """Generate the inverse_dynamics-only GRiD header used by the CUDA examples.
 
 This is the literal one-line codegen invocation the examples document, wrapped in
-a tiny CLI. Run from the repo root (so URDFParser / GRiDCodeGenerator import):
+a tiny CLI. Run from the repo root:
 
-    PYTHONPATH=. .venv/bin/python examples/cuda/gen_iiwa14_header.py \
+    .venv/bin/python examples/cuda/gen_iiwa14_header.py \
         --output examples/cuda/grid.cuh
 """
 from __future__ import annotations

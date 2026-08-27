@@ -6,7 +6,7 @@ CUDA equivalence harness uses (the four NVxNVxNV blocks back-to-back, C-order):
     [ d2tau_dq | d2tau_dqd | d2tau_dvdq | dM_dq ]
 and diffs block by block against RBDReference.equivalents.
 
-    PYTHONPATH=. .venv/bin/python examples/cuda/validate_so.py < so_output.txt
+    .venv/bin/python examples/cuda/validate_so.py < so_output.txt
 """
 from __future__ import annotations
 
