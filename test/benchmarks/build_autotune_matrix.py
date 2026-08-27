@@ -89,6 +89,16 @@ def _glass_commit() -> str | None:
             return r.stdout.strip()
     except OSError:
         pass
+    # Mirror test_cuda_executable_equivalence._glass_commit's fallback (the
+    # canonical impl): on an exported tree without git, identify GLASS by its
+    # vendored base sources instead of returning null provenance.
+    import hashlib
+    base = glass_dir / "src" / "base"
+    if base.exists():
+        h = hashlib.sha256()
+        for f in sorted(base.rglob("*.cuh")):
+            h.update(f.read_bytes())
+        return "tree:" + h.hexdigest()[:16]
     return None
 
 

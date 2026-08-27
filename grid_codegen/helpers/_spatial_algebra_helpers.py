@@ -3,7 +3,7 @@ def gen_mx_func_call_for_cpp(self, inds = None, PEQ_FLAG = False, SCALE_FLAG = F
     if updated_var_names is not None:
         for key,value in updated_var_names.items():
             var_names[key] = value
-            n = self.robot.get_num_pos()
+    n = self.robot.get_num_pos()
     if inds == None:
         inds = list(range(n))
     IDENTICAL_S_FLAG_INDS = self.robot.are_Ss_identical(inds)
