@@ -582,23 +582,23 @@ def gen_init_close_grid(self):
     self.gen_add_code_line("void close_grid(cudaStream_t *streams, robotModel<T> *d_robotModel, gridData<T, KIND> *hd_data){", True)
     self.gen_add_code_lines(["free_robotModel(d_robotModel); // frees nested d_XImats/d_topology_helpers(+runtime tables)+struct (bare cudaFree would leak the nested arrays)", \
                              "gpuErrchk(cudaFree(hd_data->d_q_qd_u)); gpuErrchk(cudaFree(hd_data->d_q_qd)); gpuErrchk(cudaFree(hd_data->d_q));", \
-                             "gpuErrchk(cudaFree(hd_data->d_f_ext)); free(hd_data->h_f_ext);", \
+                             "gpuErrchk(cudaFree(hd_data->d_f_ext)); grid_host_free(hd_data->h_f_ext);", \
                              "gpuErrchk(cudaFree(hd_data->d_c)); gpuErrchk(cudaFree(hd_data->d_Minv)); gpuErrchk(cudaFree(hd_data->d_qdd)); gpuErrchk(cudaFree(hd_data->d_M));", \
                              "gpuErrchk(cudaFree(hd_data->d_dc_du)); gpuErrchk(cudaFree(hd_data->d_df_du));", \
                              "gpuErrchk(cudaFree(hd_data->d_dtau_dfext)); gpuErrchk(cudaFree(hd_data->d_dqdd_dfext));",
-                             "free(hd_data->h_dtau_dfext); free(hd_data->h_dqdd_dfext);",
-                             "gpuErrchk(cudaFree(hd_data->d_f_ext_gradient_dq)); free(hd_data->h_f_ext_gradient_dq);",
+                             "grid_host_free(hd_data->h_dtau_dfext); grid_host_free(hd_data->h_dqdd_dfext);",
+                             "gpuErrchk(cudaFree(hd_data->d_f_ext_gradient_dq)); grid_host_free(hd_data->h_f_ext_gradient_dq);",
                              # R2: regressor Y + FD param-gradient dqdd/dpi outputs
                              "gpuErrchk(cudaFree(hd_data->d_Y)); gpuErrchk(cudaFree(hd_data->d_dqdd_dpi));",
-                             "free(hd_data->h_Y); free(hd_data->h_dqdd_dpi);",
+                             "grid_host_free(hd_data->h_Y); grid_host_free(hd_data->h_dqdd_dpi);",
                              # PS5 energy regressors
                              "gpuErrchk(cudaFree(hd_data->d_ke_regressor)); gpuErrchk(cudaFree(hd_data->d_pe_regressor));",
-                             "free(hd_data->h_ke_regressor); free(hd_data->h_pe_regressor);",
+                             "grid_host_free(hd_data->h_ke_regressor); grid_host_free(hd_data->h_pe_regressor);",
                              # PS5 Coriolis matrix
-                             "gpuErrchk(cudaFree(hd_data->d_coriolis)); free(hd_data->h_coriolis);",
+                             "gpuErrchk(cudaFree(hd_data->d_coriolis)); grid_host_free(hd_data->h_coriolis);",
                              # PS5 dCCRBA
                              "gpuErrchk(cudaFree(hd_data->d_dccrba)); gpuErrchk(cudaFree(hd_data->d_cmm_time_variation));",
-                             "free(hd_data->h_dccrba); free(hd_data->h_cmm_time_variation);"]
+                             "grid_host_free(hd_data->h_dccrba); grid_host_free(hd_data->h_cmm_time_variation);"]
                              + [
                              "gpuErrchk(cudaFree(hd_data->d_end_effector_pose)); gpuErrchk(cudaFree(hd_data->d_end_effector_pose_gradient)); gpuErrchk(cudaFree(hd_data->d_end_effector_pose_hessian));", \
                              # Phase 3a/b/c/e: end the L2 persisting window opened at init.
@@ -608,23 +608,23 @@ def gen_init_close_grid(self):
                              "gpuErrchk(cudaFree(hd_data->d_idsva_so));", \
                              # fdsva_so - d2fd_dq2, d2fd_cross, d2fd_dqd2, d2fd_dtaudq
                              "gpuErrchk(cudaFree(hd_data->d_df2));", \
-                             "free(hd_data->h_idsva_so); free(hd_data->h_df2);", \
-                             "free(hd_data->h_q_qd_u); free(hd_data->h_q_qd); free(hd_data->h_q);", \
-                             "free(hd_data->h_c); free(hd_data->h_Minv); free(hd_data->h_qdd); free(hd_data->h_M);", \
-                             "free(hd_data->h_dc_du); free(hd_data->h_df_du);",\
-                             "free(hd_data->h_end_effector_pose); free(hd_data->h_end_effector_pose_gradient); free(hd_data->h_end_effector_pose_hessian);", \
+                             "grid_host_free(hd_data->h_idsva_so); grid_host_free(hd_data->h_df2);", \
+                             "grid_host_free(hd_data->h_q_qd_u); grid_host_free(hd_data->h_q_qd); grid_host_free(hd_data->h_q);", \
+                             "grid_host_free(hd_data->h_c); grid_host_free(hd_data->h_Minv); grid_host_free(hd_data->h_qdd); grid_host_free(hd_data->h_M);", \
+                             "grid_host_free(hd_data->h_dc_du); grid_host_free(hd_data->h_df_du);",\
+                             "grid_host_free(hd_data->h_end_effector_pose); grid_host_free(hd_data->h_end_effector_pose_gradient); grid_host_free(hd_data->h_end_effector_pose_hessian);", \
                              # E2/S1: general-frame Jacobian outputs (frame_jacobian / frame_jacobian_dot / osc_inertia)
                              "gpuErrchk(cudaFree(hd_data->d_frame_jacobian)); gpuErrchk(cudaFree(hd_data->d_frame_jacobian_dot)); gpuErrchk(cudaFree(hd_data->d_osc_inertia));", \
-                             "free(hd_data->h_frame_jacobian); free(hd_data->h_frame_jacobian_dot); free(hd_data->h_osc_inertia);", \
+                             "grid_host_free(hd_data->h_frame_jacobian); grid_host_free(hd_data->h_frame_jacobian_dot); grid_host_free(hd_data->h_osc_inertia);", \
                              "gpuErrchk(cudaFree(hd_data->d_eePose)); gpuErrchk(cudaFree(hd_data->d_eePoseGrad)); gpuErrchk(cudaFree(hd_data->d_eepose_runtime_offset));", \
-                             "free(hd_data->h_eePose); free(hd_data->h_eePoseGrad);"] \
+                             "grid_host_free(hd_data->h_eePose); grid_host_free(hd_data->h_eePoseGrad);"] \
                              # W1b.3 batched multi-target (opt-in; Python-conditional, mirrors the alloc)
                              + ([
                              "gpuErrchk(cudaFree(hd_data->d_multi_target_position)); gpuErrchk(cudaFree(hd_data->d_multi_target_position_gradient));",
-                             "free(hd_data->h_multi_target_position); free(hd_data->h_multi_target_position_gradient);",
+                             "grid_host_free(hd_data->h_multi_target_position); grid_host_free(hd_data->h_multi_target_position_gradient);",
                              ] if getattr(self, "_has_multi_target_position", False) else []) \
                              + [
                              "gpuErrchk(cudaFree(hd_data->d_x_kp1)); gpuErrchk(cudaFree(hd_data->d_dAB));", \
-                             "free(hd_data->h_x_kp1); free(hd_data->h_dAB);", \
+                             "grid_host_free(hd_data->h_x_kp1); grid_host_free(hd_data->h_dAB);", \
                              "for(int i=0; i<" + str(MAX_STREAMS) + "; i++){gpuErrchk(cudaStreamDestroy(streams[i]));} free(streams);"])
     self.gen_add_end_function()
