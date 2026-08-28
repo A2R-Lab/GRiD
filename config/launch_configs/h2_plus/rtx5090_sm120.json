@@ -239,6 +239,61 @@
       }
     }
   },
+  "ffi_bases_by_n": {
+    "16": {
+      "floating": {
+        "aba": {
+          "threads": 128,
+          "tier": "shared"
+        },
+        "crba": {
+          "threads": 384,
+          "tier": "shared"
+        },
+        "ee_pose": {
+          "threads": 384,
+          "tier": "shared"
+        },
+        "ee_pose_gradient": {
+          "threads": 256,
+          "tier": "shared"
+        },
+        "fd": {
+          "threads": 384,
+          "tier": "shared"
+        },
+        "fd_du": {
+          "threads": 512,
+          "tier": "shared"
+        },
+        "fdsva_so": {
+          "threads": 256,
+          "tier": "shared"
+        },
+        "id": {
+          "threads": 128,
+          "tier": "shared"
+        },
+        "id_du": {
+          "threads": 384,
+          "tier": "shared"
+        },
+        "idsva_so": {
+          "threads": 128,
+          "tier": "shared"
+        },
+        "minv": {
+          "threads": 128,
+          "tier": "shared"
+        }
+      }
+    }
+  },
+  "ffi_by_n_meta": {
+    "16": {
+      "source": "night4 tail chain dry-run 2026-08-28"
+    }
+  },
   "ffi_meta": {
     "autotune_N": 256,
     "metric": "batch_to_land_median_us",

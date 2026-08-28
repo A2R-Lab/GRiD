@@ -1766,6 +1766,9 @@ def register_robot(
         dtype=dtype,  # pin-only builds (RAM/compile-time)
         _profile_overlay=None,  # jax's baked default IS the ffi profile — no overlay
     )
+    # E6 batch-switch: arm the small-batch regime from ffi_bases_by_n (no-op
+    # when the config has no by-n block or the .so predates the switch).
+    base.apply_batch_overlay("ffi")
     # Pull the cache_key + .so path from the manifest so we can dlopen
     # to register JAX FFI symbols.
     from grid_rbd._cache import default_cache_dir, manifest_lookup, store_dir
@@ -1792,6 +1795,7 @@ def get_robot(
     via the handle's ``output_convention`` property."""
     _require_jax()  # fail early with install guidance if jax is missing
     base = _grid_rbd.get_robot(name, cache_dir=cache_dir, _profile_overlay=None)  # jax baked default = ffi
+    base.apply_batch_overlay("ffi")  # E6 batch-switch (no-op without a by-n block)
     from grid_rbd._cache import default_cache_dir, manifest_lookup, store_dir
     cd = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     entry = manifest_lookup(cd, name)

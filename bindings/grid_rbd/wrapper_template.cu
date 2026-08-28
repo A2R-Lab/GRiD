@@ -91,10 +91,23 @@ static int g_threads_override = -1;
 // override (g_threads_override) still wins when set (explicit user intent via
 // set_threads_per_block). Applied at handle init via apply_profile_overlay(profile).
 static int g_threads_per_algo[grid::GRID_ALGO_COUNT];
+// Batch-regime overlay (E6 batch-switch): a SECOND per-algo thread count used
+// when the CURRENT call's batch is <= that algo's threshold. Stateless per
+// call — the regime is a pure threshold compare on the batch argument, so
+// there is no hysteresis and CUDA-graph capture (which freezes one batch) sees
+// one stable pick. threshold <= 0 disables the switch for that algo. The
+// small-batch dataset is profile-tuned (ffi today); precedence stays
+// global override > small-batch pick > per-algo overlay > baked launch_cfg.
+static int g_threads_per_algo_small[grid::GRID_ALGO_COUNT];
+static int g_batch_threshold_per_algo[grid::GRID_ALGO_COUNT];
 static bool g_threads_per_algo_init = false;
 static inline void grid_rbd_threads_per_algo_init() {
     if (g_threads_per_algo_init) return;
-    for (int i = 0; i < grid::GRID_ALGO_COUNT; ++i) g_threads_per_algo[i] = -1;
+    for (int i = 0; i < grid::GRID_ALGO_COUNT; ++i) {
+        g_threads_per_algo[i] = -1;
+        g_threads_per_algo_small[i] = -1;
+        g_batch_threshold_per_algo[i] = 0;
+    }
     g_threads_per_algo_init = true;
 }
 
@@ -115,17 +128,31 @@ static inline void grid_rbd_threads_per_algo_init() {
 // All OTHER algos thread the tier through both the jax/torch direct launch AND the
 // numpy/pybind C-ABI host-wrapper call (Transform A + the C-ABI tier wiring).
 template <int ALGO>
-static inline dim3 grid_rbd_launch_threads() {
-    // Priority: explicit global override > per-algo profile overlay > baked launch_cfg.
+static inline dim3 grid_rbd_launch_threads_n(int batch) {
+    // Priority: explicit global override > small-batch regime pick > per-algo
+    // profile overlay > baked launch_cfg. The small-batch pick fires only when
+    // this call's batch is <= the algo's threshold (stateless per call).
     if (g_threads_override >= 1) return dim3((unsigned)g_threads_override, 1, 1);
     grid_rbd_threads_per_algo_init();
     // ALGO == GRID_ALGO_COUNT (plant / no-entry path) hits the primary launch_cfg
     // template; constexpr-exclude it so the per-algo array is never indexed OOB.
     if constexpr (ALGO >= 0 && ALGO < grid::GRID_ALGO_COUNT) {
+        if (g_batch_threshold_per_algo[ALGO] >= 1 && batch >= 1
+            && batch <= g_batch_threshold_per_algo[ALGO]
+            && g_threads_per_algo_small[ALGO] >= 1) {
+            return dim3((unsigned)g_threads_per_algo_small[ALGO], 1, 1);
+        }
         if (g_threads_per_algo[ALGO] >= 1) return dim3((unsigned)g_threads_per_algo[ALGO], 1, 1);
     }
     int n = grid::launch_cfg<ALGO>::THREADS;
     return dim3((unsigned)n, 1, 1);
+}
+
+// Batch-free spelling: always the LARGE-batch pick (kept for call sites with
+// no batch in scope; a batch of INT_MAX can never be <= a threshold).
+template <int ALGO>
+static inline dim3 grid_rbd_launch_threads() {
+    return grid_rbd_launch_threads_n<ALGO>(0x7fffffff);
 }
 
 // Clamp a requested thread count to a specific kernel's register-limited maxThreadsPerBlock.
@@ -233,6 +260,35 @@ extern "C" int grid_rbd_set_threads_for(int algo, int n) {
     if (algo < 0 || algo >= grid::GRID_ALGO_COUNT || n < 0) return 1;
     grid_rbd_threads_per_algo_init();
     g_threads_per_algo[algo] = (n == 0) ? -1 : n;
+    return 0;
+}
+
+// Batch-regime overlay setter (E6 batch-switch): when a call's batch is
+// <= threshold, that algo launches with n_small threads instead of its
+// per-algo overlay / baked default. threshold == 0 clears the switch for
+// that algo (n_small ignored). Applied at handle init from the launch-config
+// <profile>_bases_by_n block; process-global like the other overlays.
+extern "C" int grid_rbd_set_threads_for_n(int algo, int threshold, int n_small) {
+    if (algo < 0 || algo >= grid::GRID_ALGO_COUNT || threshold < 0) return 1;
+    grid_rbd_threads_per_algo_init();
+    if (threshold == 0) {
+        g_batch_threshold_per_algo[algo] = 0;
+        g_threads_per_algo_small[algo] = -1;
+        return 0;
+    }
+    if (n_small < 1) return 1;
+    g_batch_threshold_per_algo[algo] = threshold;
+    g_threads_per_algo_small[algo] = n_small;
+    return 0;
+}
+
+// Introspection for tests / launch_info: the switch state for one algo.
+// Returns 0 and fills (threshold, n_small); threshold 0 = no switch armed.
+extern "C" int grid_rbd_get_batch_switch(int algo, int *threshold, int *n_small) {
+    if (algo < 0 || algo >= grid::GRID_ALGO_COUNT || !threshold || !n_small) return 1;
+    grid_rbd_threads_per_algo_init();
+    *threshold = g_batch_threshold_per_algo[algo];
+    *n_small = g_threads_per_algo_small[algo];
     return 0;
 }
 
@@ -592,7 +648,7 @@ extern "C" int grid_rbd_inverse_dynamics(
 #else
         grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
 #endif
-            g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS>(), g_streams);
+            g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS>(batch), g_streams);
     } else {
 // signature switch: the host template carries MUJOCO_OUTPUT on floating
 // builds regardless of enable_mujoco_kernels — keyed on the per-fn
@@ -603,7 +659,7 @@ extern "C" int grid_rbd_inverse_dynamics(
 #else
         grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
 #endif
-            g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS>(), g_streams);
+            g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS>(batch), g_streams);
     }
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -654,7 +710,7 @@ extern "C" int grid_rbd_inverse_dynamics_mujoco(
     std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
     grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false,
                            /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS>(), g_streams);
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS>(batch), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
     // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
@@ -693,7 +749,7 @@ extern "C" int grid_rbd_minv(
 #else
     grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(
 #endif
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_MINV>(), g_streams);
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_MINV>(batch), g_streams);
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
@@ -732,7 +788,7 @@ extern "C" int grid_rbd_minv_mujoco(
 
     grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_MINV>(), g_streams);
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_MINV>(batch), g_streams);
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
@@ -766,7 +822,7 @@ extern "C" int grid_rbd_forward_dynamics(
 #else
     grid::forward_dynamics<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(
 #endif
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS>(), g_streams);
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS>(batch), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
     // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
@@ -804,7 +860,7 @@ extern "C" int grid_rbd_forward_dynamics_mujoco(
     if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
     grid::forward_dynamics<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS>(), g_streams);
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS>(batch), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
     // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
@@ -845,7 +901,7 @@ extern "C" int grid_rbd_aba(
     grid::aba<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(
 #endif
         g_data, g_robot, gravity, batch,
-                 dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_ABA>(), g_streams);
+                 dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_ABA>(batch), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
     // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
@@ -881,7 +937,7 @@ extern "C" int grid_rbd_aba_mujoco(
     if (int rc = apply_f_ext(f_ext, batch)) return rc;
 
     grid::aba<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_ABA>(), g_streams);
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_ABA>(batch), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
     // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
@@ -921,7 +977,7 @@ extern "C" int grid_rbd_crba(
     grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(
 #endif
         g_data, g_robot, gravity, batch,
-                  dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_CRBA>(), g_streams);
+                  dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CRBA>(batch), g_streams);
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
@@ -959,7 +1015,7 @@ extern "C" int grid_rbd_crba_mujoco(
 
     grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_CRBA>(), g_streams);
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CRBA>(batch), g_streams);
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
@@ -991,7 +1047,7 @@ extern "C" int grid_rbd_end_effector_pose(
 #else
     grid::GRID_RBD_EE_POSE_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
 #endif
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE>(), g_streams);
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE>(batch), g_streams);
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
@@ -1014,7 +1070,7 @@ extern "C" int grid_rbd_end_effector_pose_mujoco(const T* q, T* ee_out, int batc
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
     grid::GRID_RBD_EE_POSE_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                             /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE>(), g_streams);
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(ee_out, g_data->h_end_effector_pose, (size_t)batch * 6 * GRID_RBD_NUM_EES * sizeof(T));
     return 0;
@@ -1048,10 +1104,10 @@ extern "C" int grid_rbd_fk_batched(
 
     if (use_warp)
         grid::ee_pose_fk_batched<T, /*USE_WARP=*/true >(d_pose7, d_q_fk, batch, g_robot,
-                                                        (int)grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>().x < 32 ? 32 : (int)grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>().x);
+                                                        (int)grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch).x < 32 ? 32 : (int)grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch).x);
     else
         grid::ee_pose_fk_batched<T, /*USE_WARP=*/false>(d_pose7, d_q_fk, batch, g_robot,
-                                                        (int)grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>().x);
+                                                        (int)grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch).x);
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
@@ -1090,7 +1146,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient(
 #else
     grid::GRID_RBD_EE_POSE_GRADIENT_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
 #endif
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(), g_streams);
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(batch), g_streams);
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
@@ -1114,7 +1170,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(const T* q, T* dee_out
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
     grid::GRID_RBD_EE_POSE_GRADIENT_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                                      /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(), g_streams);
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(dee_out, g_data->h_end_effector_pose_gradient,
                 (size_t)batch * 6 * GRID_RBD_NUM_EES * grid::NUM_VEL * sizeof(T));
@@ -1156,7 +1212,7 @@ extern "C" int grid_rbd_inverse_dynamics_gradient(
         grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
 #endif
             g_data, g_robot, gravity, batch,
-            dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(), g_streams);
+            dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(batch), g_streams);
     } else {
 // signature switch: the host template carries MUJOCO_OUTPUT on floating
 // builds regardless of enable_mujoco_kernels — keyed on the per-fn
@@ -1168,7 +1224,7 @@ extern "C" int grid_rbd_inverse_dynamics_gradient(
         grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
 #endif
             g_data, g_robot, gravity, batch,
-            dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(), g_streams);
+            dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(batch), g_streams);
     }
 
     cudaError_t e = cudaDeviceSynchronize();
@@ -1217,7 +1273,7 @@ extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(
     std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
     grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false,
                                     /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(), g_streams);
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(batch), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
     // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
@@ -1261,7 +1317,7 @@ extern "C" int grid_rbd_forward_dynamics_gradient(
     grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(
 #endif
         g_data, g_robot, gravity, batch,
-        dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(), g_streams);
+        dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(batch), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
     // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
@@ -1304,7 +1360,7 @@ extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(
 
     grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                                     /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(), g_streams);
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(batch), g_streams);
 
     cudaError_t e = cudaDeviceSynchronize();
     // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
@@ -1349,7 +1405,7 @@ extern "C" int grid_rbd_end_effector_pose_hessian(
 #else
     grid::GRID_RBD_EE_POSE_HESSIAN_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
 #endif
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(), g_streams);
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(batch), g_streams);
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
@@ -1373,7 +1429,7 @@ extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(const T* q, T* d2ee_out
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
     grid::GRID_RBD_EE_POSE_HESSIAN_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                                     /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(), g_streams);
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(d2ee_out, g_data->h_end_effector_pose_hessian,
                 (size_t)batch * 6 * GRID_RBD_NUM_EES * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
@@ -1408,7 +1464,7 @@ extern "C" int grid_rbd_idsva_so(
     grid::idsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO>::TIER>(
 #endif
         g_data, g_robot, gravity, batch,
-        dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_IDSVA_SO>(), g_streams);
+        dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_IDSVA_SO>(batch), g_streams);
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
@@ -1432,7 +1488,7 @@ extern "C" int grid_rbd_idsva_so_mujoco(const T* q, const T* qd, const T* qdd, T
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, qdd, batch, grid::NUM_JOINTS);
     grid::idsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_IDSVA_SO>(), g_streams);
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_IDSVA_SO>(batch), g_streams);
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;  // launch-config failure (e.g. too many registers)
     if (int rc = grid_rbd_sync_consume()) return rc;
@@ -1457,7 +1513,7 @@ extern "C" int grid_rbd_inverse_dynamics_regressor(
     pack_q_qd_u(q, qd, qdd, batch, nj);
     grid::inverse_dynamics_regressor<T>(
         g_data, g_robot, gravity, batch,
-        dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>(), g_streams);
+        dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_Y,
                 (size_t)batch * grid::NUM_VEL * 10 * grid::NUM_BODIES * sizeof(T));
@@ -1484,7 +1540,7 @@ extern "C" int grid_rbd_inverse_dynamics_regressor_mujoco(
     grid::inverse_dynamics_regressor<T, /*USE_COMPRESSED_MEM=*/false, grid::GRID_DATA_ALL,
                                      /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, gravity, batch,
-        dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>(), g_streams);
+        dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>(batch), g_streams);
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     if (int rc = grid_rbd_sync_consume()) return rc;
@@ -1517,7 +1573,7 @@ extern "C" int grid_rbd_fdsva_so(
     grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(
 #endif
         g_data, g_robot, gravity, batch,
-        dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FDSVA_SO>(), g_streams);
+        dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FDSVA_SO>(batch), g_streams);
 
     if (int rc = grid_rbd_sync_consume()) return rc;
 
@@ -1541,7 +1597,7 @@ extern "C" int grid_rbd_fdsva_so_mujoco(const T* q, const T* qd, const T* u, T* 
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);
     grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FDSVA_SO>(), g_streams);
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FDSVA_SO>(batch), g_streams);
     cudaError_t le = cudaGetLastError();
     if (le != cudaSuccess) return 200 + (int)le;
     if (int rc = grid_rbd_sync_consume()) return rc;
@@ -1592,7 +1648,7 @@ extern "C" int grid_rbd_com(const T* q, T* out, int batch) {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q(q, batch, grid::NUM_JOINTS);
-    grid::com<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COM>(), g_streams);
+    grid::com<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COM>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_com, (size_t)batch * (3 + 3 * grid::NUM_VEL) * sizeof(T));
     return 0;
@@ -1611,7 +1667,7 @@ extern "C" int grid_rbd_ccrba(const T* q, const T* qd, T* out, int batch) {
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::ccrba<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1),
-        grid_clamp_threads_for(grid::ccrba_kernel<T>, grid_rbd_launch_threads<grid::GRID_ALGO_CCRBA>()), g_streams);
+        grid_clamp_threads_for(grid::ccrba_kernel<T>, grid_rbd_launch_threads_n<grid::GRID_ALGO_CCRBA>(batch)), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_ccrba, (size_t)batch * (6 * grid::NUM_VEL + 6) * sizeof(T));
     return 0;
@@ -1629,7 +1685,7 @@ extern "C" int grid_rbd_energy(const T* q, const T* qd, T* out, int batch, T gra
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::energy<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_ENERGY>(), g_streams);
+    grid::energy<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_ENERGY>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_energy, (size_t)batch * 3 * sizeof(T));
     return 0;
@@ -1650,7 +1706,7 @@ extern "C" int grid_rbd_com_mujoco(const T* q, T* out, int batch) {
     pack_q(q, batch, grid::NUM_JOINTS);
     grid::com<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
               /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_COM>::TIER>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COM>(), g_streams);
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COM>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_com, (size_t)batch * (3 + 3 * grid::NUM_VEL) * sizeof(T));
     return 0;
@@ -1668,7 +1724,7 @@ extern "C" int grid_rbd_ccrba_mujoco(const T* q, const T* qd, T* out, int batch)
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::ccrba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                 /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CCRBA>::TIER>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_CCRBA>(), g_streams);
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CCRBA>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_ccrba, (size_t)batch * (6 * grid::NUM_VEL + 6) * sizeof(T));
     return 0;
@@ -1686,7 +1742,7 @@ extern "C" int grid_rbd_energy_mujoco(const T* q, const T* qd, T* out, int batch
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::energy<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                  /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ENERGY>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_ENERGY>(), g_streams);
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_ENERGY>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_energy, (size_t)batch * 3 * sizeof(T));
     return 0;
@@ -1699,7 +1755,7 @@ extern "C" int grid_rbd_generalized_gravity(const T* q, T* out, int batch, T gra
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd unused (zeroed internally)
-    grid::generalized_gravity<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_GENERALIZED_GRAVITY>(), g_streams);
+    grid::generalized_gravity<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_GENERALIZED_GRAVITY>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1719,7 +1775,7 @@ extern "C" int grid_rbd_generalized_gravity_mujoco(const T* q, T* out, int batch
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd unused (zeroed internally)
     grid::generalized_gravity<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                               /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_GENERALIZED_GRAVITY>(), g_streams);
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_GENERALIZED_GRAVITY>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1732,7 +1788,7 @@ extern "C" int grid_rbd_nonlinear_effects(const T* q, const T* qd, T* out, int b
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::nonlinear_effects<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_NONLINEAR_EFFECTS>(), g_streams);
+    grid::nonlinear_effects<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_NONLINEAR_EFFECTS>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1753,7 +1809,7 @@ extern "C" int grid_rbd_nonlinear_effects_mujoco(const T* q, const T* qd, T* out
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::nonlinear_effects<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                             /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_NONLINEAR_EFFECTS>(), g_streams);
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_NONLINEAR_EFFECTS>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1768,7 +1824,7 @@ extern "C" int grid_rbd_coriolis_matrix(const T* q, const T* qd, T* out, int bat
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::coriolis_matrix<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_CORIOLIS_MATRIX>(), g_streams);
+    grid::coriolis_matrix<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CORIOLIS_MATRIX>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_coriolis, (size_t)batch * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1788,7 +1844,7 @@ extern "C" int grid_rbd_coriolis_matrix_mujoco(const T* q, const T* qd, T* out, 
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::coriolis_matrix<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                           /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_CORIOLIS_MATRIX>(), g_streams);
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CORIOLIS_MATRIX>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_coriolis, (size_t)batch * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1802,7 +1858,7 @@ extern "C" int grid_rbd_kinetic_energy_regressor(const T* q, const T* qd, T* out
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::kinetic_energy_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>(), g_streams);
+    grid::kinetic_energy_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_ke_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
     return 0;
@@ -1820,7 +1876,7 @@ extern "C" int grid_rbd_potential_energy_regressor(const T* q, T* out, int batch
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q(q, batch, grid::NUM_JOINTS);
-    grid::potential_energy_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>(), g_streams);
+    grid::potential_energy_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_pe_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
     return 0;
@@ -1842,7 +1898,7 @@ extern "C" int grid_rbd_kinetic_energy_regressor_mujoco(const T* q, const T* qd,
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::kinetic_energy_regressor<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                                    /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>(), g_streams);
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_ke_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
     return 0;
@@ -1859,7 +1915,7 @@ extern "C" int grid_rbd_potential_energy_regressor_mujoco(const T* q, T* out, in
     pack_q(q, batch, grid::NUM_JOINTS);
     grid::potential_energy_regressor<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                                      /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>(), g_streams);
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_pe_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
     return 0;
@@ -1879,7 +1935,7 @@ extern "C" int grid_rbd_dccrba(const T* q, T* out, int batch) {
     if (batch > kMaxBatch) return 2;
     pack_q(q, batch, grid::NUM_JOINTS);
     grid::dccrba<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1),
-        grid_clamp_threads_for(grid::dccrba_kernel<T>, grid_rbd_launch_threads<grid::GRID_ALGO_DCCRBA>()), g_streams);
+        grid_clamp_threads_for(grid::dccrba_kernel<T>, grid_rbd_launch_threads_n<grid::GRID_ALGO_DCCRBA>(batch)), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_dccrba, (size_t)batch * 6 * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1899,7 +1955,7 @@ extern "C" int grid_rbd_dccrba_mujoco(const T* q, T* out, int batch) {
     if (batch > kMaxBatch) return 2;
     pack_q(q, batch, grid::NUM_JOINTS);
     grid::dccrba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                 /*MUJOCO_OUTPUT=*/true>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_DCCRBA>(), g_streams);
+                 /*MUJOCO_OUTPUT=*/true>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_DCCRBA>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_dccrba, (size_t)batch * 6 * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1915,7 +1971,7 @@ extern "C" int grid_rbd_cmm_time_variation(const T* q, const T* qd, T* out, int 
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::cmm_time_variation<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1),
-        grid_clamp_threads_for(grid::cmm_time_variation_kernel<T>, grid_rbd_launch_threads<grid::GRID_ALGO_CMM_TIME_VARIATION>()), g_streams);
+        grid_clamp_threads_for(grid::cmm_time_variation_kernel<T>, grid_rbd_launch_threads_n<grid::GRID_ALGO_CMM_TIME_VARIATION>(batch)), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_cmm_time_variation, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1935,7 +1991,7 @@ extern "C" int grid_rbd_cmm_time_variation_mujoco(const T* q, const T* qd, T* ou
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::cmm_time_variation<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                              /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_CMM_TIME_VARIATION>(), g_streams);
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CMM_TIME_VARIATION>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_cmm_time_variation, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -1953,7 +2009,7 @@ extern "C" int grid_rbd_frame_jacobian(const T* q, T* out, int batch,
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
     // -1 per arg => "use default" (leaf-EE / LWA); the host resolves each
     // INDEPENDENTLY, so a default target with an explicit frame is honored.
-    grid::frame_jacobian<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FRAME_JACOBIAN>(), g_streams,
+    grid::frame_jacobian<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN>(batch), g_streams,
                             target_jid, reference_frame);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_frame_jacobian, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
@@ -1976,7 +2032,7 @@ extern "C" int grid_rbd_frame_jacobian_dot(const T* q, const T* qd, T* out, int 
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     // -1 per arg => "use default" (leaf-EE / LWA), resolved INDEPENDENTLY by the
     // host so a default target with an explicit frame is honored.
-    grid::frame_jacobian_dot<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(), g_streams,
+    grid::frame_jacobian_dot<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(batch), g_streams,
                                 target_jid, reference_frame);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_frame_jacobian_dot, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
@@ -1996,7 +2052,7 @@ extern "C" int grid_rbd_osc_inertia(const T* q, T* out, int batch) {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
-    grid::osc_inertia<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_OSC_INERTIA>(), g_streams);
+    grid::osc_inertia<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_OSC_INERTIA>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_osc_inertia, (size_t)batch * 36 * sizeof(T));
     return 0;
@@ -2020,7 +2076,7 @@ extern "C" int grid_rbd_frame_jacobian_mujoco(const T* q, T* out, int batch,
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
     grid::frame_jacobian<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                          /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FRAME_JACOBIAN>(), g_streams,
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN>(batch), g_streams,
         target_jid, reference_frame);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_frame_jacobian, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
@@ -2035,7 +2091,7 @@ extern "C" int grid_rbd_frame_jacobian_dot_mujoco(const T* q, const T* qd, T* ou
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::frame_jacobian_dot<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                              /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(), g_streams,
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(batch), g_streams,
         target_jid, reference_frame);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_frame_jacobian_dot, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
@@ -2050,7 +2106,7 @@ extern "C" int grid_rbd_osc_inertia_mujoco(const T* q, T* out, int batch) {
     pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
     grid::osc_inertia<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
                       /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_OSC_INERTIA>(), g_streams);
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_OSC_INERTIA>(batch), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_osc_inertia, (size_t)batch * 36 * sizeof(T));
     return 0;
@@ -2075,7 +2131,7 @@ extern "C" int grid_rbd_end_effector_pose_runtime(const T* q, T* out, int batch,
     if (offset) { for (int i = 0; i < 16; ++i) Xtool[i] = offset[i]; }
     if (cudaMemcpy(g_data->d_eepose_runtime_offset, Xtool, 16*sizeof(T),
                    cudaMemcpyHostToDevice) != cudaSuccess) return 101;
-    grid::end_effector_pose_runtime<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(),
+    grid::end_effector_pose_runtime<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch),
                                        g_streams, target_jid);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_eePose, (size_t)batch * 6 * sizeof(T));
@@ -2103,7 +2159,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime(const T* q, T* out, i
     if (cudaMemcpy(g_data->d_eepose_runtime_offset, Xtool, 16*sizeof(T),
                    cudaMemcpyHostToDevice) != cudaSuccess) return 101;
     grid::end_effector_pose_gradient_runtime<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1),
-                                                grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams, target_jid);
+                                                grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), g_streams, target_jid);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_eePoseGrad, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -2132,7 +2188,7 @@ extern "C" int grid_rbd_end_effector_pose_runtime_mujoco(const T* q, T* out, int
                    cudaMemcpyHostToDevice) != cudaSuccess) return 101;
     grid::end_effector_pose_runtime<T, /*USE_COMPRESSED_MEM=*/false, grid::GRID_DATA_ALL,
                                     /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams, target_jid);
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), g_streams, target_jid);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_eePose, (size_t)batch * 6 * sizeof(T));
     return 0;
@@ -2160,7 +2216,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime_mujoco(const T* q, T*
                    cudaMemcpyHostToDevice) != cudaSuccess) return 101;
     grid::end_effector_pose_gradient_runtime<T, /*USE_COMPRESSED_MEM=*/false, grid::GRID_DATA_ALL,
                                              /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), g_streams, target_jid);
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), g_streams, target_jid);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_eePoseGrad, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
     return 0;
@@ -2221,7 +2277,7 @@ extern "C" int grid_rbd_tool_fext(const T* q, const T* wrench, int jid, const T*
     if (s2 > smem) smem = s2;
     smem += 4096;
     cudaFuncSetAttribute(grid_rbd_tool_fext_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
-    grid_rbd_tool_fext_kernel<<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), smem>>>(
+    grid_rbd_tool_fext_kernel<<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), smem>>>(
         g_data->d_q_qd_u, stride_q, jid, d_rc, d_wrench, g_robot,
         reinterpret_cast<T*>(g_data->d_workspace), g_data->d_f_ext);
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
@@ -2273,14 +2329,14 @@ static void launch_integrator_host(int batch, T gravity, T dt) {
     grid::integrator<T, IT, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR>::TIER>(
 #endif
         g_data, g_robot, /*gravity=*/gravity,
-        dt, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR>(), g_streams);
+        dt, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INTEGRATOR>(batch), g_streams);
 }
 #ifdef GRID_RBD_WITH_MUJOCO
 template <grid::IntegratorType IT>
 static void launch_integrator_host_mujoco(int batch, T gravity, T dt) {
     grid::integrator<T, IT, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR>::TIER>(
         g_data, g_robot, /*gravity=*/gravity,
-        dt, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR>(), g_streams);
+        dt, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INTEGRATOR>(batch), g_streams);
 }
 #endif
 #endif  // GRID_HAS_INTEGRATOR
@@ -2288,14 +2344,14 @@ static void launch_integrator_host_mujoco(int batch, T gravity, T dt) {
 template <grid::IntegratorType IT>
 static void launch_integrator_grad_host(int batch, T gravity, T dt) {
     grid::integrator_gradient<T, IT>(g_data, g_robot, /*gravity=*/gravity,
-                                     dt, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR_GRADIENT>(), g_streams);
+                                     dt, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INTEGRATOR_GRADIENT>(batch), g_streams);
 }
 #ifdef GRID_RBD_WITH_MUJOCO
 template <grid::IntegratorType IT>
 static void launch_integrator_grad_host_mujoco(int batch, T gravity, T dt) {
     grid::integrator_gradient<T, IT, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR_GRADIENT>::TIER>(
         g_data, g_robot, /*gravity=*/gravity,
-        dt, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR_GRADIENT>(), g_streams);
+        dt, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INTEGRATOR_GRADIENT>(batch), g_streams);
 }
 #endif
 #endif  // GRID_HAS_INTEGRATOR_GRADIENT
@@ -2537,12 +2593,12 @@ static int plant_quadratic_cost_impl(
     cudaMemcpy(g_plant.d_in_c, w,   batch * N * sizeof(T), cudaMemcpyHostToDevice);
     dim3 grid_dim = grid_rbd_grid_for(batch);
     if (STATE) {
-        grid_plant::quadratic_state_cost_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, g_streams[0]>>>(
+        grid_plant::quadratic_state_cost_kernel<T><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), 0, g_streams[0]>>>(
             g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
             g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, batch);
         { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
     } else {
-        grid_plant::quadratic_input_cost_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, g_streams[0]>>>(
+        grid_plant::quadratic_input_cost_kernel<T><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), 0, g_streams[0]>>>(
             g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
             g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, batch);
         { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
@@ -2580,7 +2636,7 @@ extern "C" int grid_rbd_quadratic_state_cost_mujoco(
     cudaMemcpy(g_plant.d_in_b, x_des, batch * N * sizeof(T), cudaMemcpyHostToDevice);
     cudaMemcpy(g_plant.d_in_c, Q,     batch * N * sizeof(T), cudaMemcpyHostToDevice);
     dim3 grid_dim = grid_rbd_grid_for(batch);
-    dim3 thr = grid_clamp_threads_for(grid_plant::quadratic_state_cost_kernel<T, true>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::quadratic_state_cost_kernel<T, true>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::quadratic_state_cost_kernel<T, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr, 0, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, batch);
@@ -2613,15 +2669,15 @@ static int plant_barrier_impl(
     dim3 grid_dim = grid_rbd_grid_for(batch);
     switch (which) {
         case PlantBarrier::POSITION:
-            grid_plant::joint_position_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, g_streams[0]>>>(
+            grid_plant::joint_position_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), 0, g_streams[0]>>>(
                 g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
                 g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch); break;
         case PlantBarrier::VELOCITY:
-            grid_plant::joint_velocity_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, g_streams[0]>>>(
+            grid_plant::joint_velocity_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), 0, g_streams[0]>>>(
                 g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
                 g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch); break;
         case PlantBarrier::TORQUE:
-            grid_plant::joint_torque_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, g_streams[0]>>>(
+            grid_plant::joint_torque_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), 0, g_streams[0]>>>(
                 g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
                 g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch); break;
     }
@@ -2662,7 +2718,7 @@ static void launch_plant_step(int batch, T gravity, T dt) {
     // smem opt-in too (arena can exceed 48 KB on a big floating robot -> rc=201).
     const size_t smem = grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(grid_plant::plant_step_kernel<T, IT>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
-    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_kernel<T, IT>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_kernel<T, IT>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::plant_step_kernel<T, IT><<<grid_dim, thr,
         smem, g_streams[0]>>>(
             g_plant.d_grad /*reuse as d_x_kp1, size NX*/, g_plant.d_in_a, g_plant.d_in_b,
@@ -2695,7 +2751,7 @@ static void launch_plant_step_mujoco(int batch, T gravity, T dt) {
     dim3 grid_dim = grid_rbd_grid_for(batch);
     const size_t smem = grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(grid_plant::plant_step_kernel<T, IT, true>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
-    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_kernel<T, IT, true>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_kernel<T, IT, true>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::plant_step_kernel<T, IT, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr,
         smem, g_streams[0]>>>(
             g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
@@ -2740,7 +2796,7 @@ extern "C" int grid_plant_ee_pos_cost(
     dim3 grid_dim = grid_rbd_grid_for(batch);
     // clamp to the kernel's launch cap + surface launch errors (else a register-OOR
     // launch is silently rejected -> stale-zero d_grad base block).
-    dim3 thr = grid_clamp_threads_for(grid_plant::ee_pos_cost_kernel<T, 0>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::ee_pos_cost_kernel<T, 0>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::ee_pos_cost_kernel<T, 0><<<grid_dim, thr, smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
@@ -2775,7 +2831,7 @@ extern "C" int grid_plant_com_cost(
     // com_cost_kernel can be register-heavy; clamp to its launch cap (else the
     // launch is silently rejected -> stale-zero d_grad). cudaGetLastError surfaces
     // any launch-config/resource rejection as rc=200+e instead of silent zeros.
-    dim3 thr = grid_clamp_threads_for(grid_plant::com_cost_kernel<T, false>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::com_cost_kernel<T, false>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::com_cost_kernel<T><<<grid_dim, thr, smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
@@ -2814,7 +2870,7 @@ extern "C" int grid_plant_momentum_cost(
     size_t smem = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim = grid_rbd_grid_for(batch);
     // momentum_cost is register-heavy (~140 regs/thread): clamp to its launch cap.
-    dim3 thr = grid_clamp_threads_for(grid_plant::momentum_cost_kernel<T, false>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::momentum_cost_kernel<T, false>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::momentum_cost_kernel<T><<<grid_dim, thr, smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b,
@@ -2848,7 +2904,7 @@ extern "C" int grid_rbd_ee_pos_cost_mujoco(
     cudaMemcpy(g_plant.d_in_c, W,     batch * 3  * sizeof(T), cudaMemcpyHostToDevice);
     size_t smem = grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim = grid_rbd_grid_for(batch);
-    dim3 thr = grid_clamp_threads_for(grid_plant::ee_pos_cost_kernel<T, 0, true>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::ee_pos_cost_kernel<T, 0, true>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::ee_pos_cost_kernel<T, /*EE=*/0, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr, smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
@@ -2880,7 +2936,7 @@ extern "C" int grid_rbd_com_cost_mujoco(
     size_t smem = grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim = grid_rbd_grid_for(batch);
     // clamp to the kernel's launch cap + surface launch errors (mirror the pin path).
-    dim3 thr = grid_clamp_threads_for(grid_plant::com_cost_kernel<T, true>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::com_cost_kernel<T, true>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::com_cost_kernel<T, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr, smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
@@ -2915,7 +2971,7 @@ extern "C" int grid_rbd_momentum_cost_mujoco(
     size_t smem = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim = grid_rbd_grid_for(batch);
     // momentum_cost is register-heavy (~140 regs/thread): clamp to its launch cap.
-    dim3 thr = grid_clamp_threads_for(grid_plant::momentum_cost_kernel<T, true>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::momentum_cost_kernel<T, true>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::momentum_cost_kernel<T, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr, smem, g_streams[0]>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b,
@@ -2943,7 +2999,7 @@ static void launch_plant_step_gradient(int batch, T gravity, T dt) {
     const int nv = grid::NUM_VEL;
     dim3 grid_dim = grid_rbd_grid_for(batch);
     // clamp to the kernel's launch cap (register-heavy; mirror the mjx twin).
-    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     // the dAB output band + fdsva-grad scratch arena exceeds the 48 KB static-smem
     // default -> raise the per-kernel dynamic-smem cap (else cudaErrorInvalidValue/rc=201).
     const size_t smem = grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>();
@@ -2981,7 +3037,7 @@ static void launch_plant_step_gradient_mujoco(int batch, T gravity, T dt) {
     const int nx = grid::NUM_POS + grid::NUM_VEL;
     const int nv = grid::NUM_VEL;
     dim3 grid_dim = grid_rbd_grid_for(batch);
-    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT, true>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT, true>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     // raise the per-kernel dynamic-smem cap (arena > 48 KB; else rc=201).
     const size_t smem = grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(grid_plant::plant_step_gradient_kernel<T, IT, true>,
@@ -3032,7 +3088,7 @@ static void launch_plant_step_hessian(int batch, T gravity, T dt) {
     cudaFuncSetAttribute(grid_plant::plant_step_hessian_kernel<T, IT>,
                          cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
     dim3 grid_dim = grid_rbd_grid_for(batch);
-    grid_plant::plant_step_hessian_kernel<T, IT><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), smem, g_streams[0]>>>(
+    grid_plant::plant_step_hessian_kernel<T, IT><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), smem, g_streams[0]>>>(
         g_plant.d_d2AB, g_plant.d_d2AB_workspace, g_plant.d_in_a, g_plant.d_in_b, nx, nv, g_robot, gravity, dt, batch);
 }
 
@@ -3082,7 +3138,7 @@ static void launch_plant_step_hessian_mujoco(int batch, T gravity, T dt) {
                          cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
     dim3 grid_dim = grid_rbd_grid_for(batch);
     dim3 thr = grid_clamp_threads_for(
-        grid_plant::plant_step_hessian_kernel<T, IT, grid::GRID_DEFAULT_RESOURCE_TIER, true>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+        grid_plant::plant_step_hessian_kernel<T, IT, grid::GRID_DEFAULT_RESOURCE_TIER, true>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::plant_step_hessian_kernel<T, IT, grid::GRID_DEFAULT_RESOURCE_TIER, /*MUJOCO_OUTPUT=*/true><<<grid_dim, thr, smem, g_streams[0]>>>(
         g_plant.d_d2AB, g_plant.d_d2AB_workspace, g_plant.d_in_a, g_plant.d_in_b, nx, nv, g_robot, gravity, dt, batch);
 }
@@ -3256,7 +3312,7 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_impl(
     // the acceleration from d_qdd; signature adds d_qdd after stride).
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::inverse_dynamics_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS>(batch),
         grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
             g_data->d_c, g_data->d_q_qd_u, stride_q_qd, g_data->d_qdd,
@@ -3319,7 +3375,7 @@ static ffi::Error grid_rbd_jax_minv_impl(
 
     constexpr int stride_q_qd_u = 3 * grid::NUM_JOINTS;
     grid::minv_kernel<T, grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_MINV>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_MINV>(batch),
         grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(),
         stream>>>(
             g_data->d_Minv, g_data->d_workspace,
@@ -3381,7 +3437,7 @@ static ffi::Error grid_rbd_jax_forward_dynamics_impl(
 
     constexpr int stride_q_qd_u = 3 * grid::NUM_JOINTS;
     grid::forward_dynamics_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS>(batch),
         grid::FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(),
         stream>>>(
             g_data->d_qdd, g_data->d_workspace,
@@ -3439,7 +3495,7 @@ static ffi::Error grid_rbd_jax_aba_impl(
 
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::aba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_ABA>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_ABA>(batch),
         grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(),
         stream>>>(
             g_data->d_qdd, g_data->d_workspace,
@@ -3486,7 +3542,7 @@ static ffi::Error grid_rbd_jax_crba_impl(
 
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::crba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_CRBA>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_CRBA>(batch),
         grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(),
         stream>>>(
             g_data->d_M, g_data->d_workspace,
@@ -3535,7 +3591,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_impl(
 
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
     grid::GRID_RBD_EE_POSE_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE>(batch),
         grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
             g_data->d_end_effector_pose, g_data->d_q_qd_u, stride_q,
@@ -3583,7 +3639,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_gradient_impl(
 
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
     grid::GRID_RBD_EE_POSE_GRADIENT_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(batch),
         grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(),
         stream>>>(
             g_data->d_end_effector_pose_gradient, g_data->d_workspace, g_data->d_q_qd_u, stride_q,
@@ -3647,7 +3703,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_runtime_impl(
 
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
     grid::end_effector_pose_runtime_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch),
         grid::END_EFFECTOR_POSE_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
             g_data->d_eePose, g_data->d_q_qd_u, stride_q,
@@ -3716,7 +3772,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_gradient_runtime_impl(
 
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
     grid::end_effector_pose_gradient_runtime_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch),
         grid::END_EFFECTOR_POSE_GRADIENT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
             g_data->d_eePoseGrad, g_data->d_q_qd_u, stride_q,
@@ -3778,7 +3834,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_hessian_impl(
 
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
     grid::GRID_RBD_EE_POSE_HESSIAN_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(batch),
         grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(),
         stream>>>(
             g_data->d_end_effector_pose_hessian, g_data->d_end_effector_pose_gradient, g_data->d_workspace,
@@ -3844,7 +3900,7 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_gradient_impl(
 
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::inverse_dynamics_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(batch),
         grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(),
         stream>>>(
             g_data->d_dc_du, g_data->d_workspace,
@@ -3904,7 +3960,7 @@ static ffi::Error grid_rbd_jax_forward_dynamics_gradient_impl(
 
     constexpr int stride_q_qd_u = 3 * grid::NUM_JOINTS;
     grid::forward_dynamics_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(batch),
         grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(),
         stream>>>(
             g_data->d_df_du, g_data->d_workspace,
@@ -3971,7 +4027,7 @@ static ffi::Error grid_rbd_jax_idsva_so_impl(
     // kernel (pinocchio-only — mjx is floating-base-only, asserted in the #else).
 #ifdef GRID_RBD_WITH_MUJOCO
     grid::idsva_so_world_frame_kernel<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>(batch),
         grid::IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>::TIER>(),
         stream>>>(
             g_data->d_idsva_so, g_data->d_workspace,
@@ -3981,7 +4037,7 @@ static ffi::Error grid_rbd_jax_idsva_so_impl(
 #else
     static_assert(!MUJOCO, "mjx idsva_so is floating-base only");
     grid::idsva_so_body_frame_kernel<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_BODY_FRAME>::TIER><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_IDSVA_SO_BODY_FRAME>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_IDSVA_SO_BODY_FRAME>(batch),
         grid::IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_BODY_FRAME>::TIER>(),
         stream>>>(
             g_data->d_idsva_so, g_data->d_workspace,
@@ -4041,7 +4097,7 @@ static ffi::Error grid_rbd_jax_fdsva_so_impl(
     // is the known SKIPPED cell). A compile error here would mean the codegen
     // was invoked with second_order=False, which the grid-rbd wrappers never do.
     grid::fdsva_so_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_FDSVA_SO>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FDSVA_SO>(batch),
         grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(),
         stream>>>(
             g_data->d_df2, g_data->d_workspace,
@@ -4110,7 +4166,7 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_regressor_impl(
     constexpr int stride_q_qd_qdd = 3 * grid::NUM_JOINTS;
     const int out_size = grid::NUM_VEL * 10 * grid::NUM_BODIES;
     grid::inverse_dynamics_regressor_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>(batch),
         grid::INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
             g_data->d_Y, g_data->d_workspace, g_data->d_q_qd_u, stride_q_qd_qdd,
@@ -4166,7 +4222,7 @@ static ffi::Error grid_rbd_jax_forward_dynamics_parameter_gradient_impl(
     constexpr int stride_q_qd_u = 3 * grid::NUM_JOINTS;
     const int out_size = grid::NUM_VEL * 10 * grid::NUM_BODIES;
     grid::forward_dynamics_parameter_gradient_kernel<T><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS_PARAMETER_GRADIENT>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS_PARAMETER_GRADIENT>(batch),
         grid::FORWARD_DYNAMICS_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(),
         stream>>>(
             g_data->d_dqdd_dpi, g_data->d_workspace, g_data->d_q_qd_u, stride_q_qd_u,
@@ -4191,7 +4247,7 @@ template <grid::IntegratorType IT, bool MUJOCO>
 static void launch_integrator_kernel_jax(cudaStream_t stream, int batch, T dt, T gravity) {
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::integrator_kernel<T, IT, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INTEGRATOR>(batch),
         grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR>::TIER>(), stream>>>(
             g_data->d_x_kp1, g_data->d_workspace, g_data->d_q_qd_u, stride,
             g_robot, g_data->d_f_ext, /*gravity=*/static_cast<T>(gravity), static_cast<T>(dt), batch);
@@ -4202,7 +4258,7 @@ template <grid::IntegratorType IT, bool MUJOCO>
 static void launch_integrator_grad_kernel_jax(cudaStream_t stream, int batch, T dt, T gravity) {
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::integrator_gradient_kernel<T, IT, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR_GRADIENT>(),
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INTEGRATOR_GRADIENT>(batch),
         grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR_GRADIENT>::TIER>(), stream>>>(
             g_data->d_dAB, g_data->d_workspace, g_data->d_q_qd_u, stride,
             g_robot, g_data->d_f_ext, /*gravity=*/static_cast<T>(gravity), static_cast<T>(dt), batch);
@@ -4349,12 +4405,12 @@ static ffi::Error grid_rbd_jax_plant_quadratic_cost_impl(
     dim3 grid_dim = grid_rbd_grid_for(batch);
     if (STATE) {
         // mjx (MUJOCO=true) is STATE-only: the state cost reframes (input cost stays pin).
-        grid_plant::quadratic_state_cost_kernel<T, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, stream>>>(
+        grid_plant::quadratic_state_cost_kernel<T, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), 0, stream>>>(
             g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
             g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, batch);
         if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("quadratic_state_cost_kernel launch failed");
     } else {
-        grid_plant::quadratic_input_cost_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, stream>>>(
+        grid_plant::quadratic_input_cost_kernel<T><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), 0, stream>>>(
             g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
             g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, batch);
         if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("quadratic_input_cost_kernel launch failed");
@@ -4424,15 +4480,15 @@ static ffi::Error grid_rbd_jax_plant_barrier_impl(
     cudaMemcpyAsync(g_plant.d_in_c, upper.typed_data(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     dim3 grid_dim = grid_rbd_grid_for(batch);
     if (WHICH == 0)
-        grid_plant::joint_position_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, stream>>>(
+        grid_plant::joint_position_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), 0, stream>>>(
             g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
             g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch);
     else if (WHICH == 1)
-        grid_plant::joint_velocity_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, stream>>>(
+        grid_plant::joint_velocity_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), 0, stream>>>(
             g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
             g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch);
     else
-        grid_plant::joint_torque_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, stream>>>(
+        grid_plant::joint_torque_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), 0, stream>>>(
             g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
             g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch);
     if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("joint_barrier_kernel launch failed");
@@ -4482,7 +4538,7 @@ static void launch_plant_step_jax(cudaStream_t stream, int batch, T gravity, T d
     dim3 grid_dim = grid_rbd_grid_for(batch);
     const size_t smem = grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(grid_plant::plant_step_kernel<T, IT, MUJOCO>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
-    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_kernel<T, IT, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_kernel<T, IT, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::plant_step_kernel<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr,
         smem, stream>>>(
             g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
@@ -4530,7 +4586,7 @@ static void launch_plant_step_gradient_jax(cudaStream_t stream, int batch, T gra
     dim3 grid_dim = grid_rbd_grid_for(batch);
     const size_t smem = grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(grid_plant::plant_step_gradient_kernel<T, IT, MUJOCO>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
-    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::plant_step_gradient_kernel<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr,
         smem, stream>>>(
             g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
@@ -4598,7 +4654,7 @@ static ffi::Error grid_rbd_jax_plant_ee_pos_cost_impl(
     cudaMemcpyAsync(g_plant.d_in_c, W.typed_data(),     (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     size_t smem = grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim = grid_rbd_grid_for(batch);
-    dim3 thr = grid_clamp_threads_for(grid_plant::ee_pos_cost_kernel<T, 0, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::ee_pos_cost_kernel<T, 0, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::ee_pos_cost_kernel<T, /*EE=*/0, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
@@ -4642,7 +4698,7 @@ static ffi::Error grid_rbd_jax_plant_com_cost_impl(
     cudaMemcpyAsync(g_plant.d_in_c, W.typed_data(),     (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     size_t smem = grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim = grid_rbd_grid_for(batch);
-    dim3 thr = grid_clamp_threads_for(grid_plant::com_cost_kernel<T, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::com_cost_kernel<T, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::com_cost_kernel<T, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
@@ -4691,7 +4747,7 @@ static ffi::Error grid_rbd_jax_plant_momentum_cost_impl(
     size_t smem = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim = grid_rbd_grid_for(batch);
     // momentum_cost is register-heavy (~140 regs/thread): clamp to its launch cap.
-    dim3 thr = grid_clamp_threads_for(grid_plant::momentum_cost_kernel<T, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::momentum_cost_kernel<T, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::momentum_cost_kernel<T, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess,
         g_plant.d_in_a, g_plant.d_in_b,
@@ -4769,7 +4825,7 @@ static ffi::Error grid_rbd_jax_generalized_gravity_impl(
                       q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::generalized_gravity_kernel<T, grid::launch_cfg<grid::GRID_ALGO_GENERALIZED_GRAVITY>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_GENERALIZED_GRAVITY>(), grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_GENERALIZED_GRAVITY>(batch), grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_c, g_data->d_workspace, g_data->d_q_qd_u, stride_q_qd, g_robot, /*gravity=*/gravity, batch);
     if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("generalized_gravity_kernel launch failed");
     cudaMemcpyAsync(out->typed_data(), g_data->d_c, batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -4804,7 +4860,7 @@ static ffi::Error grid_rbd_jax_nonlinear_effects_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch, qd.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::nonlinear_effects_kernel<T, grid::launch_cfg<grid::GRID_ALGO_NONLINEAR_EFFECTS>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_NONLINEAR_EFFECTS>(), grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_NONLINEAR_EFFECTS>(batch), grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_c, g_data->d_workspace, g_data->d_q_qd_u, stride_q_qd, g_robot, /*gravity=*/gravity, batch);
     if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("nonlinear_effects_kernel launch failed");
     cudaMemcpyAsync(out->typed_data(), g_data->d_c, batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -4839,7 +4895,7 @@ static ffi::Error grid_rbd_jax_coriolis_matrix_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch, qd.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::coriolis_matrix_kernel<T, grid::launch_cfg<grid::GRID_ALGO_CORIOLIS_MATRIX>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_CORIOLIS_MATRIX>(), grid::CORIOLIS_MATRIX_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_CORIOLIS_MATRIX>(batch), grid::CORIOLIS_MATRIX_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_coriolis, g_data->d_workspace, g_data->d_q_qd_u, stride_q_qd, g_robot, /*gravity=*/gravity, batch);
     if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("coriolis_matrix_kernel launch failed");
     cudaMemcpyAsync(out->typed_data(), g_data->d_coriolis, batch * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -4874,7 +4930,7 @@ static ffi::Error grid_rbd_jax_kinetic_energy_regressor_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch, qd.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::kinetic_energy_regressor_kernel<T, grid::launch_cfg<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>(), grid::KINETIC_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>(batch), grid::KINETIC_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_ke_regressor, g_data->d_q_qd_u, stride_q_qd, g_robot, /*gravity=*/gravity, batch);
     if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("kinetic_energy_regressor_kernel launch failed");
     cudaMemcpyAsync(out->typed_data(), g_data->d_ke_regressor, batch * 10 * nb * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -4907,7 +4963,7 @@ static ffi::Error grid_rbd_jax_potential_energy_regressor_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
     grid::potential_energy_regressor_kernel<T, grid::launch_cfg<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>(), grid::POTENTIAL_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>(batch), grid::POTENTIAL_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_pe_regressor, g_data->d_q_qd_u, stride_q, g_robot, /*gravity=*/gravity, batch);
     if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("potential_energy_regressor_kernel launch failed");
     cudaMemcpyAsync(out->typed_data(), g_data->d_pe_regressor, batch * 10 * nb * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -4944,7 +5000,7 @@ static ffi::Error grid_rbd_jax_energy_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch, qd.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::energy_kernel<T, grid::launch_cfg<grid::GRID_ALGO_ENERGY>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_ENERGY>(), grid::ENERGY_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_ENERGY>(batch), grid::ENERGY_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_energy, g_data->d_workspace, g_data->d_q_qd_u, stride_q_qd, g_robot, /*gravity=*/gravity, batch);
     if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("energy_kernel launch failed");
     cudaMemcpyAsync(out->typed_data(), g_data->d_energy, batch * 3 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -4977,7 +5033,7 @@ static ffi::Error grid_rbd_jax_com_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
     grid::com_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COM>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COM>(), grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_COM>(batch), grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_com, g_data->d_workspace, g_data->d_q_qd_u, stride_q, g_robot, batch);
     if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("com_kernel launch failed");
     cudaMemcpyAsync(out->typed_data(), g_data->d_com, batch * (3 + 3 * nv) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5012,7 +5068,7 @@ static ffi::Error grid_rbd_jax_ccrba_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch, qd.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::ccrba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_CCRBA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_CCRBA>(), grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_CCRBA>(batch), grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_ccrba, g_data->d_workspace, g_data->d_q_qd_u, stride_q_qd, g_robot, batch);
     if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("ccrba_kernel launch failed");
     cudaMemcpyAsync(out->typed_data(), g_data->d_ccrba, batch * (6 * nv + 6) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5046,7 +5102,7 @@ static ffi::Error grid_rbd_jax_cmm_time_variation_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch, qd.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::cmm_time_variation_kernel<T, grid::launch_cfg<grid::GRID_ALGO_CMM_TIME_VARIATION>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_CMM_TIME_VARIATION>(), grid::CMM_TIME_VARIATION_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_CMM_TIME_VARIATION>::TIER>(), stream>>>(
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_CMM_TIME_VARIATION>(batch), grid::CMM_TIME_VARIATION_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_CMM_TIME_VARIATION>::TIER>(), stream>>>(
             g_data->d_cmm_time_variation, g_data->d_workspace, g_data->d_q_qd_u, stride_q_qd, g_robot, batch);
     if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("cmm_time_variation_kernel launch failed");
     cudaMemcpyAsync(out->typed_data(), g_data->d_cmm_time_variation, batch * 6 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5078,7 +5134,7 @@ static ffi::Error grid_rbd_jax_dccrba_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
     grid::dccrba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_DCCRBA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_DCCRBA>(), grid::DCCRBA_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_DCCRBA>::TIER>(), stream>>>(
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_DCCRBA>(batch), grid::DCCRBA_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_DCCRBA>::TIER>(), stream>>>(
             g_data->d_dccrba, g_data->d_workspace, g_data->d_q_qd_u, stride_q, g_robot, batch);
     if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("dccrba_kernel launch failed");
     cudaMemcpyAsync(out->typed_data(), g_data->d_dccrba, batch * 6 * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5121,7 +5177,7 @@ static ffi::Error grid_rbd_jax_frame_jacobian_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
     grid::frame_jacobian_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FRAME_JACOBIAN>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_FRAME_JACOBIAN>(), grid::FRAME_JACOBIAN_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN>(batch), grid::FRAME_JACOBIAN_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_frame_jacobian, g_data->d_q_qd_u, stride_q,
             (int)target_jid, (int)reference_frame, g_robot, batch);
     if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("frame_jacobian_kernel launch failed");
@@ -5172,7 +5228,7 @@ static ffi::Error grid_rbd_jax_frame_jacobian_dot_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch, qd.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     constexpr int stride_q_qd = 3 * grid::NUM_JOINTS;
     grid::frame_jacobian_dot_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(), grid::FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(batch), grid::FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_frame_jacobian_dot, g_data->d_q_qd_u, stride_q_qd,
             (int)target_jid, (int)reference_frame, g_robot, batch);
     if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("frame_jacobian_dot_kernel launch failed");
@@ -5221,7 +5277,7 @@ static ffi::Error grid_rbd_jax_osc_inertia_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     constexpr int stride_q = 3 * grid::NUM_JOINTS;
     grid::osc_inertia_kernel<T, grid::launch_cfg<grid::GRID_ALGO_OSC_INERTIA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
-        grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_OSC_INERTIA>(), grid::OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_OSC_INERTIA>(batch), grid::OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_osc_inertia, g_data->d_workspace, g_data->d_q_qd_u, stride_q, g_robot, batch);
     if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("osc_inertia_kernel launch failed");
     cudaMemcpyAsync(out->typed_data(), g_data->d_osc_inertia, batch * 36 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5369,7 +5425,7 @@ torch::Tensor torch_inverse_dynamics(torch::Tensor q, torch::Tensor qd, double g
         grid_torch_check(a, "inverse_dynamics: qdd", nj);
         cudaMemcpyAsync(g_data->d_qdd, a.data_ptr<T>(),
                         (size_t)batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-        grid::inverse_dynamics_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS>(), grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        grid::inverse_dynamics_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS>(batch), grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_c, g_data->d_q_qd_u, stride, g_data->d_qdd, g_data->d_f_ext, g_robot, (T)gravity, batch);
         TORCH_CHECK(cudaGetLastError() == cudaSuccess, "inverse_dynamics_kernel launch failed");
     } else if constexpr (MUJOCO) {
@@ -5378,11 +5434,11 @@ torch::Tensor torch_inverse_dynamics(torch::Tensor q, torch::Tensor qd, double g
         // MUJOCO-capable qdd overload (the kernel converts the mjx qacc=0 input to the
         // correct pin acceleration) — matching the JAX handler, which always passes qdd.
         cudaMemsetAsync(g_data->d_qdd, 0, (size_t)batch * nj * sizeof(T), stream);
-        grid::inverse_dynamics_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER, /*MUJOCO_OUTPUT=*/true><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS>(), grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        grid::inverse_dynamics_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER, /*MUJOCO_OUTPUT=*/true><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS>(batch), grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_c, g_data->d_q_qd_u, stride, g_data->d_qdd, g_data->d_f_ext, g_robot, (T)gravity, batch);
         TORCH_CHECK(cudaGetLastError() == cudaSuccess, "inverse_dynamics_kernel launch failed");
     } else {
-        grid::inverse_dynamics_kernel<T><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS>(), grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        grid::inverse_dynamics_kernel<T><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS>(batch), grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_c, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
         TORCH_CHECK(cudaGetLastError() == cudaSuccess, "inverse_dynamics_kernel launch failed");
     }
@@ -5406,7 +5462,7 @@ torch::Tensor torch_minv(torch::Tensor q) {
     // Size the output + copy at nv*nv (unified with numpy/JAX). FIXED base: nv == nj.
     auto out = grid_torch_empty(batch, nv * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::minv_kernel<T, grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_MINV>(), grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(), stream>>>(
+    grid::minv_kernel<T, grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_MINV>(batch), grid::MINV_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(), stream>>>(
         g_data->d_Minv, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "minv_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_Minv, batch * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5427,7 +5483,7 @@ torch::Tensor torch_forward_dynamics(torch::Tensor q, torch::Tensor qd, torch::T
     grid_torch_f_ext_apply(stream, batch, f_ext);
     auto out = grid_torch_empty(batch, nj, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::forward_dynamics_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS>(), grid::FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(), stream>>>(
+    grid::forward_dynamics_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS>(batch), grid::FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(), stream>>>(
         g_data->d_qdd, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "forward_dynamics_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_qdd, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5449,7 +5505,7 @@ torch::Tensor torch_aba(torch::Tensor q, torch::Tensor qd, torch::Tensor u, doub
     grid_torch_f_ext_apply(stream, batch, f_ext);
     auto out = grid_torch_empty(batch, nj, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::aba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_ABA>(), grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(), stream>>>(
+    grid::aba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_ABA>(batch), grid::ABA_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(), stream>>>(
         g_data->d_qdd, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "aba_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_qdd, batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5472,7 +5528,7 @@ torch::Tensor torch_crba(torch::Tensor q, double gravity) {
     // output + copy at nv*nv (unified with numpy/JAX). FIXED base: nv == nj.
     auto out = grid_torch_empty(batch, nv * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::crba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_CRBA>(), grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(), stream>>>(
+    grid::crba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_CRBA>(batch), grid::CRBA_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(), stream>>>(
         g_data->d_M, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "crba_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_M, batch * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5491,7 +5547,7 @@ torch::Tensor torch_end_effector_pose(torch::Tensor q) {
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, 6 * nee, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::GRID_RBD_EE_POSE_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE>(), grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::GRID_RBD_EE_POSE_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE>(batch), grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_end_effector_pose, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "GRID_RBD_EE_POSE_KERNEL launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_end_effector_pose, batch * 6 * nee * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5510,7 +5566,7 @@ torch::Tensor torch_end_effector_pose_gradient(torch::Tensor q) {
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, 6 * nee * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::GRID_RBD_EE_POSE_GRADIENT_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(), grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(), stream>>>(
+    grid::GRID_RBD_EE_POSE_GRADIENT_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(batch), grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(), stream>>>(
         g_data->d_end_effector_pose_gradient, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "GRID_RBD_EE_POSE_GRADIENT_KERNEL launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_end_effector_pose_gradient, batch * 6 * nee * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5529,7 +5585,7 @@ torch::Tensor torch_end_effector_pose_hessian(torch::Tensor q) {
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, 6 * nee * nv * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::GRID_RBD_EE_POSE_HESSIAN_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(), grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(), stream>>>(
+    grid::GRID_RBD_EE_POSE_HESSIAN_KERNEL<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(batch), grid::END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(), stream>>>(
         g_data->d_end_effector_pose_hessian, g_data->d_end_effector_pose_gradient, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "GRID_RBD_EE_POSE_HESSIAN_KERNEL launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_end_effector_pose_hessian, batch * 6 * nee * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5559,7 +5615,7 @@ torch::Tensor torch_end_effector_pose_runtime(torch::Tensor q, int64_t target_ji
     auto off = offset.to(GRID_TORCH_DTYPE).contiguous();
     auto out = grid_torch_empty(batch, 6, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::end_effector_pose_runtime_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::END_EFFECTOR_POSE_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::end_effector_pose_runtime_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), grid::END_EFFECTOR_POSE_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_eePose, g_data->d_q_qd_u, stride, (int)target_jid, off.data_ptr<T>(), g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "end_effector_pose_runtime_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_eePose, batch * 6 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5582,7 +5638,7 @@ torch::Tensor torch_end_effector_pose_gradient_runtime(torch::Tensor q, int64_t 
     auto off = offset.to(GRID_TORCH_DTYPE).contiguous();
     auto out = grid_torch_empty(batch, 6 * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::end_effector_pose_gradient_runtime_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), grid::END_EFFECTOR_POSE_GRADIENT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::end_effector_pose_gradient_runtime_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COUNT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), grid::END_EFFECTOR_POSE_GRADIENT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_eePoseGrad, g_data->d_q_qd_u, stride, (int)target_jid, off.data_ptr<T>(), g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "end_effector_pose_gradient_runtime_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_eePoseGrad, batch * 6 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5618,7 +5674,7 @@ torch::Tensor torch_inverse_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
         grid_torch_check(a, "inverse_dynamics_gradient: qdd", nj);
         cudaMemcpyAsync(g_data->d_qdd, a.data_ptr<T>(),
                         (size_t)batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
-        grid::inverse_dynamics_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(), grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(), stream>>>(
+        grid::inverse_dynamics_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(batch), grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(), stream>>>(
             g_data->d_dc_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_qdd, g_data->d_f_ext, g_robot, (T)gravity, batch);
         TORCH_CHECK(cudaGetLastError() == cudaSuccess, "inverse_dynamics_gradient_kernel launch failed");
     } else if constexpr (MUJOCO) {
@@ -5626,11 +5682,11 @@ torch::Tensor torch_inverse_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
         // use the MUJOCO-capable qdd overload (matches the JAX handler, which always
         // passes qdd).
         cudaMemsetAsync(g_data->d_qdd, 0, (size_t)batch * nj * sizeof(T), stream);
-        grid::inverse_dynamics_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/true><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(), grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(), stream>>>(
+        grid::inverse_dynamics_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/true><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(batch), grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(), stream>>>(
             g_data->d_dc_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_qdd, g_data->d_f_ext, g_robot, (T)gravity, batch);
         TORCH_CHECK(cudaGetLastError() == cudaSuccess, "inverse_dynamics_gradient_kernel launch failed");
     } else {
-        grid::inverse_dynamics_gradient_kernel<T><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(), grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+        grid::inverse_dynamics_gradient_kernel<T><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(batch), grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
             g_data->d_dc_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
         TORCH_CHECK(cudaGetLastError() == cudaSuccess, "inverse_dynamics_gradient_kernel launch failed");
     }
@@ -5656,7 +5712,7 @@ torch::Tensor torch_forward_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
     // Size + copy at 2*nv*nv (unified with numpy/JAX). FIXED base: nv == nj.
     auto out = grid_torch_empty(batch, 2 * nv * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::forward_dynamics_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(), grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(), stream>>>(
+    grid::forward_dynamics_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(batch), grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(), stream>>>(
         g_data->d_df_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "forward_dynamics_gradient_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_df_du, batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5684,12 +5740,12 @@ torch::Tensor torch_idsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor qd
     // the world-frame kernel (which carries MUJOCO_OUTPUT); fixed-base .so call the
     // body-frame kernel (pinocchio-only — mjx is floating-base-only).
 #ifdef GRID_RBD_WITH_MUJOCO
-    grid::idsva_so_world_frame_kernel<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>(), grid::IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>::TIER>(), stream>>>(
+    grid::idsva_so_world_frame_kernel<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>(batch), grid::IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>::TIER>(), stream>>>(
         g_data->d_idsva_so, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "idsva_so_world_frame_kernel launch failed");
 #else
     static_assert(!MUJOCO, "mjx idsva_so is floating-base only");
-    grid::idsva_so_body_frame_kernel<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_BODY_FRAME>::TIER><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_IDSVA_SO_BODY_FRAME>(), grid::IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_BODY_FRAME>::TIER>(), stream>>>(
+    grid::idsva_so_body_frame_kernel<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_BODY_FRAME>::TIER><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_IDSVA_SO_BODY_FRAME>(batch), grid::IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_BODY_FRAME>::TIER>(), stream>>>(
         g_data->d_idsva_so, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "idsva_so_body_frame_kernel launch failed");
 #endif
@@ -5709,7 +5765,7 @@ torch::Tensor torch_fdsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor u,
     grid_torch_pack(stream, batch, nj, &q, &qd, &u);
     auto out = grid_torch_empty(batch, grid::SECOND_ORDER_TENSOR_SIZE, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::fdsva_so_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_FDSVA_SO>(), grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(), stream>>>(
+    grid::fdsva_so_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FDSVA_SO>(batch), grid::FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(), stream>>>(
         g_data->d_df2, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_idsva_so, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "fdsva_so_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_df2, batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5739,7 +5795,7 @@ torch::Tensor torch_inverse_dynamics_regressor(torch::Tensor q, torch::Tensor qd
     const int out_size = grid::NUM_VEL * 10 * grid::NUM_BODIES;
     auto out = grid_torch_empty(batch, out_size, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::inverse_dynamics_regressor_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>(), grid::INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::inverse_dynamics_regressor_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>(batch), grid::INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_Y, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "inverse_dynamics_regressor_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_Y, (size_t)batch * out_size * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5760,7 +5816,7 @@ torch::Tensor torch_forward_dynamics_parameter_gradient(torch::Tensor q, torch::
     const int out_size = grid::NUM_VEL * 10 * grid::NUM_BODIES;
     auto out = grid_torch_empty(batch, out_size, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::forward_dynamics_parameter_gradient_kernel<T><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_FORWARD_DYNAMICS_PARAMETER_GRADIENT>(), grid::FORWARD_DYNAMICS_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::forward_dynamics_parameter_gradient_kernel<T><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS_PARAMETER_GRADIENT>(batch), grid::FORWARD_DYNAMICS_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_dqdd_dpi, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "forward_dynamics_parameter_gradient_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_dqdd_dpi, (size_t)batch * out_size * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5784,7 +5840,7 @@ torch::Tensor torch_forward_dynamics_parameter_gradient(torch::Tensor q, torch::
 template <grid::IntegratorType IT, bool MUJOCO>
 static void torch_launch_integrator(cudaStream_t stream, int batch, double dt, double gravity) {
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::integrator_kernel<T, IT, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR>(), grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR>::TIER>(), stream>>>(
+    grid::integrator_kernel<T, IT, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INTEGRATOR>(batch), grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR>::TIER>(), stream>>>(
         g_data->d_x_kp1, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, g_data->d_f_ext, (T)gravity, (T)dt, batch);
 }
 #endif  // GRID_HAS_INTEGRATOR
@@ -5792,7 +5848,7 @@ static void torch_launch_integrator(cudaStream_t stream, int batch, double dt, d
 template <grid::IntegratorType IT, bool MUJOCO>
 static void torch_launch_integrator_grad(cudaStream_t stream, int batch, double dt, double gravity) {
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::integrator_gradient_kernel<T, IT, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_INTEGRATOR_GRADIENT>(), grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR_GRADIENT>::TIER>(), stream>>>(
+    grid::integrator_gradient_kernel<T, IT, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INTEGRATOR_GRADIENT>(batch), grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INTEGRATOR_GRADIENT>::TIER>(), stream>>>(
         g_data->d_dAB, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, g_data->d_f_ext, (T)gravity, (T)dt, batch);
 }
 #endif  // GRID_HAS_INTEGRATOR_GRADIENT
@@ -5883,10 +5939,10 @@ static std::vector<torch::Tensor> torch_plant_quadratic_cost(
     auto hess = grid_torch_empty(batch, N * N, var);
     dim3 grid_dim = grid_rbd_grid_for(batch);
     if (state)
-        grid_plant::quadratic_state_cost_kernel<T, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, stream>>>(
+        grid_plant::quadratic_state_cost_kernel<T, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), 0, stream>>>(
             g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, batch);
     else
-        grid_plant::quadratic_input_cost_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, stream>>>(
+        grid_plant::quadratic_input_cost_kernel<T><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), 0, stream>>>(
             g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "quadratic_cost_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(),  g_plant.d_out,  (size_t)batch * sizeof(T),         cudaMemcpyDeviceToDevice, stream);
@@ -5922,13 +5978,13 @@ static std::vector<torch::Tensor> torch_plant_barrier(
     auto hdiag = grid_torch_empty(batch, N, var);
     dim3 grid_dim = grid_rbd_grid_for(batch);
     if (which == 0)
-        grid_plant::joint_position_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, stream>>>(
+        grid_plant::joint_position_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), 0, stream>>>(
             g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch);
     else if (which == 1)
-        grid_plant::joint_velocity_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, stream>>>(
+        grid_plant::joint_velocity_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), 0, stream>>>(
             g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch);
     else
-        grid_plant::joint_torque_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>(), 0, stream>>>(
+        grid_plant::joint_torque_barrier_kernel<T><<<grid_dim, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), 0, stream>>>(
             g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c, (T)mu, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "joint_barrier_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(),   g_plant.d_out,  (size_t)batch * sizeof(T),     cudaMemcpyDeviceToDevice, stream);
@@ -5954,7 +6010,7 @@ static void torch_launch_plant_step(cudaStream_t stream, int batch, double gravi
     dim3 grid_dim = grid_rbd_grid_for(batch);
     const size_t smem = grid::INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(grid_plant::plant_step_kernel<T, IT, MUJOCO>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
-    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_kernel<T, IT, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_kernel<T, IT, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::plant_step_kernel<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr,
         smem, stream>>>(
             g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
@@ -5986,7 +6042,7 @@ static void torch_launch_plant_step_gradient(cudaStream_t stream, int batch, dou
     dim3 grid_dim = grid_rbd_grid_for(batch);
     const size_t smem = grid::INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(grid_plant::plant_step_gradient_kernel<T, IT, MUJOCO>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
-    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::plant_step_gradient_kernel<T, IT, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::plant_step_gradient_kernel<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr,
         smem, stream>>>(
             g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,
@@ -6035,7 +6091,7 @@ std::vector<torch::Tensor> torch_ee_pos_cost(torch::Tensor q, torch::Tensor p_de
     auto hess = grid_torch_empty(batch, nx * nx, q);
     size_t smem = grid::END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim = grid_rbd_grid_for(batch);
-    dim3 thr = grid_clamp_threads_for(grid_plant::ee_pos_cost_kernel<T, 0, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::ee_pos_cost_kernel<T, 0, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::ee_pos_cost_kernel<T, 0, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
         g_plant.d_end_effector_pose, g_plant.d_end_effector_pose_gradient, g_robot, batch);
@@ -6065,7 +6121,7 @@ std::vector<torch::Tensor> torch_com_cost(torch::Tensor q, torch::Tensor p_des, 
     auto hess = grid_torch_empty(batch, nx * nx, q);
     size_t smem = grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim = grid_rbd_grid_for(batch);
-    dim3 thr = grid_clamp_threads_for(grid_plant::com_cost_kernel<T, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::com_cost_kernel<T, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::com_cost_kernel<T, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b, g_plant.d_in_c,
         g_robot, batch);
@@ -6098,7 +6154,7 @@ std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Tensor qd
     size_t smem = grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>();
     dim3 grid_dim = grid_rbd_grid_for(batch);
     // momentum_cost is register-heavy (~140 regs/thread): clamp to its launch cap.
-    dim3 thr = grid_clamp_threads_for(grid_plant::momentum_cost_kernel<T, MUJOCO>, grid_rbd_launch_threads<grid::GRID_ALGO_COUNT>());
+    dim3 thr = grid_clamp_threads_for(grid_plant::momentum_cost_kernel<T, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));
     grid_plant::momentum_cost_kernel<T, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr, smem, stream>>>(
         g_plant.d_out, g_plant.d_grad, g_plant.d_hess, g_plant.d_in_a, g_plant.d_in_b,
         g_plant.d_in_c, g_plant.d_in_c + (size_t)batch * 6, g_robot, batch);
@@ -6130,7 +6186,7 @@ torch::Tensor torch_generalized_gravity(torch::Tensor q, double gravity) {
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::generalized_gravity_kernel<T, grid::launch_cfg<grid::GRID_ALGO_GENERALIZED_GRAVITY>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_GENERALIZED_GRAVITY>(), grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::generalized_gravity_kernel<T, grid::launch_cfg<grid::GRID_ALGO_GENERALIZED_GRAVITY>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_GENERALIZED_GRAVITY>(batch), grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_c, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "generalized_gravity_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_c, batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6149,7 +6205,7 @@ torch::Tensor torch_nonlinear_effects(torch::Tensor q, torch::Tensor qd, double 
     grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
     auto out = grid_torch_empty(batch, nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::nonlinear_effects_kernel<T, grid::launch_cfg<grid::GRID_ALGO_NONLINEAR_EFFECTS>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_NONLINEAR_EFFECTS>(), grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::nonlinear_effects_kernel<T, grid::launch_cfg<grid::GRID_ALGO_NONLINEAR_EFFECTS>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_NONLINEAR_EFFECTS>(batch), grid::INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_c, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "nonlinear_effects_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_c, batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6168,7 +6224,7 @@ torch::Tensor torch_coriolis_matrix(torch::Tensor q, torch::Tensor qd, double gr
     grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
     auto out = grid_torch_empty(batch, nv * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::coriolis_matrix_kernel<T, grid::launch_cfg<grid::GRID_ALGO_CORIOLIS_MATRIX>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_CORIOLIS_MATRIX>(), grid::CORIOLIS_MATRIX_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::coriolis_matrix_kernel<T, grid::launch_cfg<grid::GRID_ALGO_CORIOLIS_MATRIX>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_CORIOLIS_MATRIX>(batch), grid::CORIOLIS_MATRIX_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_coriolis, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "coriolis_matrix_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_coriolis, batch * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6187,7 +6243,7 @@ torch::Tensor torch_kinetic_energy_regressor(torch::Tensor q, torch::Tensor qd, 
     grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
     auto out = grid_torch_empty(batch, 10 * nb, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::kinetic_energy_regressor_kernel<T, grid::launch_cfg<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>(), grid::KINETIC_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::kinetic_energy_regressor_kernel<T, grid::launch_cfg<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>(batch), grid::KINETIC_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_ke_regressor, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "kinetic_energy_regressor_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_ke_regressor, batch * 10 * nb * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6206,7 +6262,7 @@ torch::Tensor torch_potential_energy_regressor(torch::Tensor q, double gravity) 
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, 10 * nb, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::potential_energy_regressor_kernel<T, grid::launch_cfg<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>(), grid::POTENTIAL_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::potential_energy_regressor_kernel<T, grid::launch_cfg<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>(batch), grid::POTENTIAL_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_pe_regressor, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "potential_energy_regressor_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_pe_regressor, batch * 10 * nb * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6225,7 +6281,7 @@ torch::Tensor torch_energy(torch::Tensor q, torch::Tensor qd, double gravity) {
     grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
     auto out = grid_torch_empty(batch, 3, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::energy_kernel<T, grid::launch_cfg<grid::GRID_ALGO_ENERGY>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_ENERGY>(), grid::ENERGY_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::energy_kernel<T, grid::launch_cfg<grid::GRID_ALGO_ENERGY>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_ENERGY>(batch), grid::ENERGY_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_energy, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "energy_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_energy, batch * 3 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6245,7 +6301,7 @@ torch::Tensor torch_com(torch::Tensor q) {
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, 3 + 3 * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::com_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COM>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_COM>(), grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::com_kernel<T, grid::launch_cfg<grid::GRID_ALGO_COM>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_COM>(batch), grid::COM_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_com, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "com_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_com, batch * (3 + 3 * nv) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6265,7 +6321,7 @@ torch::Tensor torch_ccrba(torch::Tensor q, torch::Tensor qd) {
     grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
     auto out = grid_torch_empty(batch, 6 * nv + 6, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::ccrba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_CCRBA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_CCRBA>(), grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::ccrba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_CCRBA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_CCRBA>(batch), grid::CCRBA_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_ccrba, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "ccrba_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_ccrba, batch * (6 * nv + 6) * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6284,7 +6340,7 @@ torch::Tensor torch_cmm_time_variation(torch::Tensor q, torch::Tensor qd) {
     grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
     auto out = grid_torch_empty(batch, 6 * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::cmm_time_variation_kernel<T, grid::launch_cfg<grid::GRID_ALGO_CMM_TIME_VARIATION>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_CMM_TIME_VARIATION>(), grid::CMM_TIME_VARIATION_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_CMM_TIME_VARIATION>::TIER>(), stream>>>(
+    grid::cmm_time_variation_kernel<T, grid::launch_cfg<grid::GRID_ALGO_CMM_TIME_VARIATION>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_CMM_TIME_VARIATION>(batch), grid::CMM_TIME_VARIATION_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_CMM_TIME_VARIATION>::TIER>(), stream>>>(
         g_data->d_cmm_time_variation, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "cmm_time_variation_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_cmm_time_variation, batch * 6 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6303,7 +6359,7 @@ torch::Tensor torch_dccrba(torch::Tensor q) {
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, 6 * nv * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::dccrba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_DCCRBA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_DCCRBA>(), grid::DCCRBA_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_DCCRBA>::TIER>(), stream>>>(
+    grid::dccrba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_DCCRBA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_DCCRBA>(batch), grid::DCCRBA_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_DCCRBA>::TIER>(), stream>>>(
         g_data->d_dccrba, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "dccrba_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_dccrba, batch * 6 * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6325,7 +6381,7 @@ torch::Tensor torch_frame_jacobian(torch::Tensor q, int64_t target_jid, int64_t 
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, 6 * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::frame_jacobian_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FRAME_JACOBIAN>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_FRAME_JACOBIAN>(), grid::FRAME_JACOBIAN_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::frame_jacobian_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FRAME_JACOBIAN>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN>(batch), grid::FRAME_JACOBIAN_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_frame_jacobian, g_data->d_q_qd_u, stride, (int)target_jid, (int)reference_frame, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "frame_jacobian_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_frame_jacobian, batch * 6 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6343,7 +6399,7 @@ torch::Tensor torch_frame_jacobian_dot(torch::Tensor q, torch::Tensor qd, int64_
     grid_torch_pack(stream, batch, nj, &q, &qd, nullptr);
     auto out = grid_torch_empty(batch, 6 * nv, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::frame_jacobian_dot_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(), grid::FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::frame_jacobian_dot_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(batch), grid::FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_frame_jacobian_dot, g_data->d_q_qd_u, stride, (int)target_jid, (int)reference_frame, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "frame_jacobian_dot_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_frame_jacobian_dot, batch * 6 * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6362,7 +6418,7 @@ torch::Tensor torch_osc_inertia(torch::Tensor q) {
     grid_torch_pack(stream, batch, nj, &q, nullptr, nullptr);
     auto out = grid_torch_empty(batch, 36, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    grid::osc_inertia_kernel<T, grid::launch_cfg<grid::GRID_ALGO_OSC_INERTIA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads<grid::GRID_ALGO_OSC_INERTIA>(), grid::OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
+    grid::osc_inertia_kernel<T, grid::launch_cfg<grid::GRID_ALGO_OSC_INERTIA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_OSC_INERTIA>(batch), grid::OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
         g_data->d_osc_inertia, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, batch);
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "osc_inertia_kernel launch failed");
     cudaMemcpyAsync(out.data_ptr<T>(), g_data->d_osc_inertia, batch * 36 * sizeof(T), cudaMemcpyDeviceToDevice, stream);

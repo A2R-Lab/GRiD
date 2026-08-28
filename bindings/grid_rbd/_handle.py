@@ -842,6 +842,74 @@ class RobotHandle:
             n += 1
         return n
 
+    def apply_batch_overlay(self, profile: str = "ffi") -> int:
+        """Arm the E6 batch-switch from this profile's ``<profile>_bases_by_n``
+        block: for each algo with a small-batch winner recorded there, calls with
+        batch <= the threshold launch at that winner's thread count instead of the
+        large-batch default. The pick is a stateless per-call threshold compare in
+        the .so (no hysteresis; CUDA-graph capture sees one stable pick since a
+        graph freezes its batch).
+
+        Bucket keys are the sweep batch sizes (today just ``"16"``); the threshold
+        is ``<profile>_by_n_threshold`` when present, else the geometric midpoint
+        of the smallest bucket and the bake batch (16/256 -> 64). Same safety
+        rules as apply_profile_overlay: enum-index derivation from the descriptor
+        table, algo_count drift refusal, and SKIP on any entry whose tier differs
+        from the baked ffi tier. Returns the number of algos armed; 0 if the .so
+        predates the switch or no by-n block exists.
+        """
+        if not getattr(self._runner, "has_batch_switch", lambda: False)():
+            return 0
+        from grid_codegen.GRiDCodeGenerator import (
+            LAUNCH_CONFIG_TIER_SYMBOL,
+            LAUNCH_CONFIG_DEFAULT_GPU, load_launch_config, _launch_configs_dir)
+        from grid_codegen.algo_registry import build_launch_config_algo_to_symbol
+        algo_to_symbol = build_launch_config_algo_to_symbol()
+        import json, os
+        robot_key = self._meta.get("launch_config_robot")
+        if not robot_key:
+            return 0
+        gpu = self._meta.get("launch_config_gpu", LAUNCH_CONFIG_DEFAULT_GPU)
+        floating = self.floating_base
+        base = "floating" if floating else "fixed"
+        path = os.path.join(_launch_configs_dir(), str(robot_key), str(gpu) + ".json")
+        try:
+            with open(path) as f:
+                doc = json.load(f)
+        except (OSError, ValueError):
+            return 0
+        by_n = doc.get(str(profile) + "_bases_by_n") or {}
+        buckets = sorted(int(k) for k in by_n.keys() if str(k).isdigit())
+        if not buckets:
+            return 0
+        bucket = buckets[0]  # the small-batch regime (one bucket today)
+        prof = (by_n.get(str(bucket)) or {}).get(base) or {}
+        if not prof:
+            return 0
+        thr = doc.get(str(profile) + "_by_n_threshold")
+        if not isinstance(thr, int) or thr < 1:
+            bake_n = doc.get("autotune_N") if isinstance(doc.get("autotune_N"), int) else 256
+            thr = max(bucket, int((bucket * bake_n) ** 0.5))  # 16/256 -> 64
+        enum_syms = list(dict.fromkeys(algo_to_symbol.values()))
+        algo_index = {sym: i for i, sym in enumerate(enum_syms)}
+        n_algo = self._runner.algo_count()
+        if n_algo and n_algo != len(enum_syms):
+            return 0
+        baked = load_launch_config(robot_key, floating, gpu, profile="ffi")
+        n = 0
+        for key, cfg in prof.items():
+            sym = algo_to_symbol.get(key)
+            idx = algo_index.get(sym)
+            tier_sym = LAUNCH_CONFIG_TIER_SYMBOL.get(str(cfg.get("tier", "")).lower())
+            threads = cfg.get("threads")
+            if idx is None or tier_sym is None or not isinstance(threads, int) or threads < 1:
+                continue
+            if tier_sym != (baked.get(sym) or {}).get("tier"):
+                continue  # tier mismatch -> needs a profile build, not an overlay
+            self._runner.set_threads_for_n(idx, int(thr), int(threads))
+            n += 1
+        return n
+
     # ─── algorithms ──────────────────────────────────────────────────────────
     #
     # All methods take 2D float32 arrays of shape (B, num_joints) for the q/qd/qdd

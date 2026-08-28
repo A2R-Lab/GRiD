@@ -61,6 +61,8 @@ struct CAbi {
     using fn_int_i_t        = int (*)(int);
     using fn_int_s_t        = int (*)(const char*);   // kernel_max_threads(algo)
     using fn_int_ii_t       = int (*)(int, int);      // set_threads_for(algo, n)
+    using fn_int_iii_t      = int (*)(int, int, int); // set_threads_for_n(algo, threshold, n_small)
+    using fn_int_ipp_t      = int (*)(int, int*, int*); // get_batch_switch(algo, &threshold, &n_small)
     using fn_dyn_t         = int (*)(const CT*, const CT*, const CT*,
                                       CT*, int, CT, const CT*);
     using fn_minv_t         = int (*)(const CT*, CT*, int);
@@ -112,6 +114,8 @@ class RunnerT {
     using fn_int_i_t = typename CAbi<CT>::fn_int_i_t;
     using fn_int_s_t = typename CAbi<CT>::fn_int_s_t;
     using fn_int_ii_t = typename CAbi<CT>::fn_int_ii_t;
+    using fn_int_iii_t = typename CAbi<CT>::fn_int_iii_t;
+    using fn_int_ipp_t = typename CAbi<CT>::fn_int_ipp_t;
     using fn_dyn_t = typename CAbi<CT>::fn_dyn_t;
     using fn_minv_t = typename CAbi<CT>::fn_minv_t;
     using fn_fd_t = typename CAbi<CT>::fn_fd_t;
@@ -168,6 +172,8 @@ public:
         // graceful no-op (has_per_algo_threads() == false).
         fn_set_threads_for_  = reinterpret_cast<fn_int_ii_t>(opt_sym("grid_rbd_set_threads_for"));
         fn_algo_count_       = reinterpret_cast<fn_int_v_t>(opt_sym("grid_rbd_algo_count"));
+        fn_set_threads_for_n_ = reinterpret_cast<fn_int_iii_t>(opt_sym("grid_rbd_set_threads_for_n"));
+        fn_get_batch_switch_ = reinterpret_cast<fn_int_ipp_t>(opt_sym("grid_rbd_get_batch_switch"));
         fn_init_             = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_init"));
         fn_close_            = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_close"));
 
@@ -344,6 +350,27 @@ public:
     }
     int algo_count() const { return fn_algo_count_ ? fn_algo_count_() : 0; }
     bool has_per_algo_threads() const { return fn_set_threads_for_ != nullptr; }
+    // E6 batch-switch: when a call's batch <= threshold, launch `algo` with
+    // n_small threads (threshold==0 clears the switch for that algo).
+    void set_threads_for_n(int algo, int threshold, int n_small) {
+        if (!fn_set_threads_for_n_)
+            throw std::runtime_error("set_threads_for_n: this .so predates the "
+                "batch-regime overlay (rebuild to use the batch switch)");
+        int rc = fn_set_threads_for_n_(algo, threshold, n_small);
+        if (rc != 0) throw std::runtime_error(
+            "grid_rbd_set_threads_for_n failed: rc=" + std::to_string(rc));
+    }
+    py::tuple get_batch_switch(int algo) const {
+        if (!fn_get_batch_switch_)
+            throw std::runtime_error("get_batch_switch: this .so predates the "
+                "batch-regime overlay");
+        int threshold = 0, n_small = -1;
+        int rc = fn_get_batch_switch_(algo, &threshold, &n_small);
+        if (rc != 0) throw std::runtime_error(
+            "grid_rbd_get_batch_switch failed: rc=" + std::to_string(rc));
+        return py::make_tuple(threshold, n_small);
+    }
+    bool has_batch_switch() const { return fn_set_threads_for_n_ != nullptr; }
     int threads_per_block() const { return fn_threads_per_block_(); }
     void set_threads_per_block(int n) {
         // Override the per-block thread count for all subsequent kernel
@@ -2146,6 +2173,8 @@ private:
     fn_int_s_t fn_kernel_max_threads_     = nullptr;
     fn_int_ii_t fn_set_threads_for_       = nullptr;
     fn_int_v_t fn_algo_count_             = nullptr;
+    fn_int_iii_t fn_set_threads_for_n_    = nullptr;
+    fn_int_ipp_t fn_get_batch_switch_     = nullptr;
     fn_int_v_t fn_init_       = nullptr;
     fn_int_v_t fn_close_      = nullptr;
     fn_dyn_t  fn_inverse_dynamics_           = nullptr;
@@ -2286,6 +2315,15 @@ static void register_runner(py::module_& m, const char* cls_name) {
             "GridAlgo enum size (per-algo overlay index bound); 0 if the .so predates it.")
         .def("has_per_algo_threads", &R::has_per_algo_threads,
             "True if the .so exposes the E6 per-algo threads overlay (set_threads_for).")
+        .def("set_threads_for_n", &R::set_threads_for_n,
+            py::arg("algo"), py::arg("threshold"), py::arg("n_small"),
+            "E6 batch-switch: launch `algo` with n_small threads whenever a call's "
+            "batch is <= threshold (threshold=0 clears). Stateless per call; the "
+            "global override and the switch both beat the per-algo overlay.")
+        .def("get_batch_switch", &R::get_batch_switch, py::arg("algo"),
+            "(threshold, n_small) for the batch-switch on `algo`; threshold 0 = unarmed.")
+        .def("has_batch_switch", &R::has_batch_switch,
+            "True if the .so exposes the E6 batch-regime overlay (set_threads_for_n).")
         .def("inverse_dynamics", &R::inverse_dynamics,
              py::arg("q"), py::arg("qd"),
              py::arg("qdd") = py::none(),
