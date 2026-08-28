@@ -241,6 +241,85 @@ Measured on the RTX 5090 (sm_120, 2026-08-09,
 Reproduce with ``.venv/bin/python test/benchmarks/gpu_resident_timing.py``
 (quiet GPU; results land under ``test/benchmarks/results/``).
 
+Second-order derivatives: the transfer question
+-----------------------------------------------
+
+Second-order derivative outputs scale as **nv³ per timestep** (g1's
+``idsva_so`` at N=256 is a 175.6 MB result batch), so for these algorithms
+the device→host copy — not the kernel — is the dominant with-memory cost.
+On the g1 ``idsva_so`` N=256 cell the measured transfer delta was 13.2 ms
+of a 15.2 ms with-mem total (**87 %**) with pageable host buffers, and is
+still ~80 % of the (much smaller) total after pinning.
+
+Two fixes ship for this:
+
+* **Pinned host staging** — ``grid_host_alloc`` (``cudaMallocHost``)
+  replaced pageable ``malloc`` for every ``gridData`` host buffer, raising
+  effective D2H bandwidth on large payloads from 13.3 to ~21 GB/s (the
+  box's PCIe-lane ceiling). That alone flipped **8 with-mem cells** vs
+  Pinocchio (CPU, 24 threads) (11 losses + 2 ties → 5 losses + 8 wins); the
+  per-cell before/after table is the "W2a re-capture" section of
+  ``test/benchmarks/results/competitive_render_20260826/competitive_analysis.md``.
+* **Not copying at all** — keep the tensor on the GPU (next section).
+
+Staying resident (jax)
+----------------------
+
+The ``grid_rbd`` jax FFI path is device-in / device-out: under ``jit`` /
+``lax.scan`` composition the nv³ tensor is produced on-device and consumed
+by the next pipeline stage (a Hessian-vector product, a DDP backward pass)
+with **zero host transfer**. Layer-3 timings (jax FFI, medians of 30 iters
+after warmup, RTX 5090,
+``test/benchmarks/results/night4_20260827/so_resident_results.json``), in
+total-batch µs — *resident* = device-in/device-out, *out_host* = outputs
+pulled to host, *roundtrip* = numpy-in → numpy-out:
+
+============ ============= ==== ========== ============ =============
+robot        op            B    resident   out_host     roundtrip
+============ ============= ==== ========== ============ =============
+iiwa14       idsva_so      16   515        643          790
+iiwa14       fdsva_so      16   526        657          799
+iiwa14       idsva_so      256  519        807          990
+iiwa14       fdsva_so      256  529        831          997
+go2          idsva_so      16   784        1081         1140
+go2          fdsva_so      16   1018       1333         1474
+go2          idsva_so      256  990        4783         4999
+go2          fdsva_so      256  1412       4861         5137
+g1           idsva_so      16   2003       3529         3801
+g1           fdsva_so      16   5893       8310         8417
+g1           idsva_so      256  2866       35024        34551
+g1           fdsva_so      256  13949      45340        46514
+============ ============= ==== ========== ============ =============
+
+Reading the table:
+
+* The resident column carries a **~0.4–0.5 ms fixed per-call FFI dispatch
+  overhead** (visible as the iiwa14 floor: kernel compute is ~43–72 µs,
+  resident is ~515–530 µs). It is a per-*call* cost, so it amortizes when
+  the call sits inside a jitted ``scan``/rollout rather than being invoked
+  from python once per step.
+* The resident-vs-out_host gap is pure output transfer, and it grows with
+  nv³·B exactly as predicted: negligible for iiwa14, ~3.8 ms for go2
+  ``idsva_so`` at N=256, ~32 ms for g1.
+* The honest headline for the largest tensor: g1 ``idsva_so`` N=256
+  **resident 2.87 ms vs Pinocchio (CPU, 24 threads) 2.38 ms total** — near
+  parity on wall time, while the result is already on the GPU for the
+  next pipeline stage instead of in host memory. If the consumer is on
+  the GPU, resident wins outright; if the result must land in host
+  memory, CPU codegen remains the right tool for this cell.
+
+.. note::
+
+   **Why the with-mem comparison is asymmetric by construction.** A CPU
+   baseline pays no output copy — its results are *born* in host memory,
+   so its with-mem time equals its compute time. The GPU with-mem column
+   therefore carries the entire PCIe cost on top of compute. The
+   three-layer reporting contract (compute-only / C++ with-mem /
+   through-bindings; see ``test/benchmarks/BENCHMARK_METHODOLOGY.md``)
+   exists precisely to keep that visible: layer 1 is the GPU-resident
+   design point, layer 2 isolates transfer, layer 3 is what an adopter
+   pays through the python bindings.
+
 See also
 --------
 
