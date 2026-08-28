@@ -106,7 +106,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         takes_dt_it=True, it_dispatch="FULL",
         pre_launch_check=True,
         out_buffer="h_x_kp1", out_copy="memcpy_h",
-        out_size_expr="grid::NUM_POS + grid::NUM_VEL",
+        out_size_expr="(grid::NUM_POS + grid::NUM_VEL)",
         has_mjx_twin=True,
     ),
     "f_ext_contact": AbiSpec(
@@ -453,7 +453,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         pack_mode="pack_q",                                    # compressed h_q layout
         has_resource_tier=False,                               # pin plain <T>; twin ADDS tier [D2]
         out_buffer="h_com", out_copy="memcpy_h",
-        out_size_expr="3+3*grid::NUM_VEL",
+        out_size_expr="(3 + 3 * grid::NUM_VEL)",
         has_mjx_twin=True,
     ),
     "ccrba": AbiSpec(
@@ -465,7 +465,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         clamp_kernel="grid::ccrba_kernel<T>",                  # pin only [D3]
         has_resource_tier=False,                               # pin plain <T>; twin ADDS tier [D2]
         out_buffer="h_ccrba", out_copy="memcpy_h",
-        out_size_expr="6*grid::NUM_VEL+6",
+        out_size_expr="(6 * grid::NUM_VEL + 6)",
         has_mjx_twin=True,
     ),
     "dccrba": AbiSpec(
