@@ -331,7 +331,7 @@ def gen_multi_target_position_gradient_inner(self, batch, suffix=""):
         header_lines=["//", "// Step 1: build world transforms for every joint via BFS-level chain-up", "//"],
         fixed_anchors=None)
     # Phase A steps 2+3+3b: geometric Jacobian per DISTINCT anchor (shared with ee-pose gradient)
-    _chains, anchors, fill_jobs = _eepose_grad_chain_metadata(self, distinct_anchors, "", anchor_override=None)
+    _chains, anchors, fill_jobs = _eepose_grad_chain_metadata(self, distinct_anchors, anchor_override=None)
     single_jobs, multi_groups, has_mimic = group_jacobian_jobs(self, fill_jobs, anchors)
     emit_geometric_jacobian_jvjw(self, nv, n_anchor, single_jobs, multi_groups, has_mimic)
 
