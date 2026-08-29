@@ -12,8 +12,8 @@
   },
   "fingerprint": {
     "algorithm": "sha256",
-    "digest": "f41e1cf4dc118a6c724ca4a02e0427ca5f44405f3a27df4c624db892b8715cbf",
-    "file_count": 132,
+    "digest": "a2d1356acbdc3f6b1f8ccc3e751e54310dc90754e0202c5f501ff047809652e1",
+    "file_count": 133,
     "included_paths": [
       "test/cuda_equivalents",
       "test/python_wrappers"
@@ -22,15 +22,20 @@
   "mode": "local",
   "repo": {
     "branch": "modernizing-tests",
-    "commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+    "commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
     "dirty": false,
     "github_username": "plancherb1",
     "remote_url": "git@github.com:A2R-Lab/GRiD.git"
   },
   "schema_version": "2",
   "session": {
-    "ended_at": "2026-08-28T06:28:26Z",
+    "ended_at": "2026-08-29T02:00:23Z",
     "node_ids": [
+      "test/python_wrappers/test_batch_switch.py::test_so_exposes_batch_switch",
+      "test/python_wrappers/test_batch_switch.py::test_set_readback_clear",
+      "test/python_wrappers/test_batch_switch.py::test_values_identical_across_regimes",
+      "test/python_wrappers/test_batch_switch.py::test_global_override_beats_switch",
+      "test/python_wrappers/test_batch_switch.py::test_apply_batch_overlay_from_config",
       "test/cuda_equivalents/test_cuda_floating_values_equivalence.py::test_floating_value_only_matches_python_reference[go2-floating]",
       "test/cuda_equivalents/test_cuda_floating_values_equivalence.py::test_floating_value_only_matches_python_reference[g1-floating]",
       "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[iiwa14-fixed]",
@@ -1393,109 +1398,42 @@
     ],
     "shards": [
       {
-        "ended_at": "2026-08-28T05:24:11Z",
-        "node_count": 11,
+        "ended_at": "2026-08-29T02:00:23Z",
+        "node_count": 5,
         "signer": "plancherb1",
-        "source": "cuda_01_codegen_layout_collision_config_.json",
-        "started_at": "2026-08-28T04:23:25Z"
-      },
-      {
-        "ended_at": "2026-08-28T03:32:33Z",
-        "node_count": 122,
-        "signer": "plancherb1",
-        "source": "cuda_02_collision_pairs_collision_selfcc.json",
-        "started_at": "2026-08-28T03:18:54Z"
-      },
-      {
-        "ended_at": "2026-08-28T03:52:46Z",
-        "node_count": 128,
-        "signer": "plancherb1",
-        "source": "cuda_03_iiwa14_go2.json",
-        "started_at": "2026-08-28T03:32:34Z"
-      },
-      {
-        "ended_at": "2026-08-28T04:02:12Z",
-        "node_count": 188,
-        "signer": "plancherb1",
-        "source": "cuda_04_go2_g1.json",
-        "started_at": "2026-08-28T03:52:47Z"
-      },
-      {
-        "ended_at": "2026-08-28T04:06:42Z",
-        "node_count": 328,
-        "signer": "plancherb1",
-        "source": "cuda_05_g1_h1_2.json",
-        "started_at": "2026-08-28T04:02:13Z"
-      },
-      {
-        "ended_at": "2026-08-28T04:23:24Z",
-        "node_count": 61,
-        "signer": "plancherb1",
-        "source": "cuda_06_h1_2.json",
-        "started_at": "2026-08-28T04:06:43Z"
-      },
-      {
-        "ended_at": "2026-08-28T05:40:58Z",
-        "node_count": 6,
-        "signer": "plancherb1",
-        "source": "cuda_23_plant_equivalence_regressor_seco.json",
-        "started_at": "2026-08-28T05:24:12Z"
-      },
-      {
-        "ended_at": "2026-08-28T06:23:04Z",
-        "node_count": 2,
-        "signer": "plancherb1",
-        "source": "cuda_24_second_order_fallb.json",
-        "started_at": "2026-08-28T05:40:59Z"
-      },
-      {
-        "ended_at": "2026-08-28T06:23:43Z",
-        "node_count": 2,
-        "signer": "plancherb1",
-        "source": "cuda_25_second_order_fallb.json",
-        "started_at": "2026-08-28T06:23:05Z"
-      },
-      {
-        "ended_at": "2026-08-28T06:24:11Z",
-        "node_count": 1,
-        "signer": "plancherb1",
-        "source": "cuda_26_second_order_fallb.json",
-        "started_at": "2026-08-28T06:23:44Z"
-      },
-      {
-        "ended_at": "2026-08-28T06:25:04Z",
-        "node_count": 1,
-        "signer": "plancherb1",
-        "source": "cuda_27_second_order_fallb.json",
-        "started_at": "2026-08-28T06:24:12Z"
-      },
-      {
-        "ended_at": "2026-08-28T06:27:24Z",
-        "node_count": 1,
-        "signer": "plancherb1",
-        "source": "cuda_28_second_order_fallb.json",
-        "started_at": "2026-08-28T06:25:05Z"
-      },
-      {
-        "ended_at": "2026-08-28T06:28:26Z",
-        "node_count": 6,
-        "signer": "plancherb1",
-        "source": "cuda_29_second_order_fallb_spherical_eep.json",
-        "started_at": "2026-08-28T06:27:25Z"
-      },
-      {
-        "ended_at": "2026-08-28T03:18:51Z",
-        "node_count": 13,
-        "signer": "plancherb1",
-        "source": "test_ee_named_target_floating_multileaf.json",
-        "started_at": "2026-08-28T03:15:26Z"
+        "source": "test_batch_switch.json",
+        "started_at": "2026-08-29T01:59:59Z"
       }
     ],
-    "started_at": "2026-08-28T03:15:26Z"
+    "started_at": "2026-08-29T01:59:59Z"
   },
   "shards": [
     {
       "carried": null,
+      "fingerprint": {
+        "algorithm": "sha256",
+        "digest": "94337da0242baf5490cc73981a22b75a0c1540a73b6646ab71bcc1ceaf5197ee",
+        "file_count": 1,
+        "included_paths": [
+          "test/python_wrappers/test_batch_switch.py"
+        ]
+      },
+      "name": "test_batch_switch",
+      "node_ids": [
+        "test/python_wrappers/test_batch_switch.py::test_so_exposes_batch_switch",
+        "test/python_wrappers/test_batch_switch.py::test_set_readback_clear",
+        "test/python_wrappers/test_batch_switch.py::test_values_identical_across_regimes",
+        "test/python_wrappers/test_batch_switch.py::test_global_override_beats_switch",
+        "test/python_wrappers/test_batch_switch.py::test_apply_batch_overlay_from_config"
+      ]
+    },
+    {
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "33a46de3c1c723d6683bd874c28738f5a77fba79049845eab6815fb91862e369",
@@ -1521,7 +1459,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "317f4c4f1da2a48309d2d7f2dce656ad7997fc8efbc430c478cd15d850b7d424",
@@ -1686,7 +1629,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "371d62705a556d140a520652f7d9f283156a25ba2d2d31dad69457e1ec6a3b18",
@@ -1830,7 +1778,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "371d62705a556d140a520652f7d9f283156a25ba2d2d31dad69457e1ec6a3b18",
@@ -2034,7 +1987,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "371d62705a556d140a520652f7d9f283156a25ba2d2d31dad69457e1ec6a3b18",
@@ -2378,7 +2336,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "7290dec9097322f4d8f47f3bb0bcf73581c228590374da68156d4b6f56d43fdc",
@@ -2464,7 +2427,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "683ef72319b6e6e9713a06cee66efee5afaf26d103ed410bab64b28040c205e5",
@@ -2485,7 +2453,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "2f92d86079cba94489f4ef6e1d93a233e9dd5ff8faacd7923f2bb4e077c5c527",
@@ -2501,7 +2474,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "2f92d86079cba94489f4ef6e1d93a233e9dd5ff8faacd7923f2bb4e077c5c527",
@@ -2517,7 +2495,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "2f92d86079cba94489f4ef6e1d93a233e9dd5ff8faacd7923f2bb4e077c5c527",
@@ -2532,7 +2515,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "2f92d86079cba94489f4ef6e1d93a233e9dd5ff8faacd7923f2bb4e077c5c527",
@@ -2547,7 +2535,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "2f92d86079cba94489f4ef6e1d93a233e9dd5ff8faacd7923f2bb4e077c5c527",
@@ -2562,7 +2555,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "d90f0f2f775f03400419f7bb18ecae7886a27550a738d7cb1ef649c85be95706",
@@ -2582,7 +2580,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "c1287e82e79a25f509199d95190196805426b675c303a5b0a66ba3f4a58be37f",
@@ -2611,8 +2614,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2652,8 +2655,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2675,8 +2678,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2698,8 +2701,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2721,8 +2724,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2744,8 +2747,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2767,8 +2770,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2787,8 +2790,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2807,8 +2810,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2832,8 +2835,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2857,8 +2860,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2879,8 +2882,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2901,8 +2904,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2923,8 +2926,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2945,8 +2948,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2966,8 +2969,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2988,8 +2991,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3022,8 +3025,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3084,8 +3087,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3123,8 +3126,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3181,8 +3184,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3220,8 +3223,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3247,8 +3250,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3274,8 +3277,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3295,8 +3298,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3321,8 +3324,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3398,8 +3401,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3428,8 +3431,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3455,8 +3458,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3502,8 +3505,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3546,8 +3549,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3583,8 +3586,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3612,8 +3615,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3671,8 +3674,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3691,8 +3694,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3716,8 +3719,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3745,8 +3748,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3772,8 +3775,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3796,8 +3799,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3828,8 +3831,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3859,8 +3862,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3889,8 +3892,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3914,8 +3917,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "9b547c07db8c8bfa22d21aaf9e373ebc33c0f50f",
-        "original_ended_at": "2026-08-26T22:34:02Z",
+        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
+        "original_ended_at": "2026-08-28T06:28:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3938,9 +3941,39 @@
     "backend": "ssh-local",
     "key_fingerprint": "SHA256:hfyUcDJTDLry3j7nJ9V2X8iEIgNFmFJQKGQirOdyWtY",
     "signer": "plancherb1",
-    "value": "hngla7bXR4ZGd48yhw6jpuQy5RaK1bHFMU1B7tuK4vtupxCP5VVrSVYegFq/OC8heiM9rp+7ULXN8EBC5CCaAA=="
+    "value": "nrktWqXqMKSK4WL1nSbAIZGa3y6S3YFaCc3QCubmOYeo6VXg72Z7SwPiY2Ab1Df1/03+6JUG2AmsZzw8YHFfAg=="
   },
   "tests": [
+    {
+      "checks": [],
+      "duration_s": 0.0001,
+      "node_id": "test/python_wrappers/test_batch_switch.py::test_so_exposes_batch_switch",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0001,
+      "node_id": "test/python_wrappers/test_batch_switch.py::test_set_readback_clear",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0024,
+      "node_id": "test/python_wrappers/test_batch_switch.py::test_values_identical_across_regimes",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0002,
+      "node_id": "test/python_wrappers/test_batch_switch.py::test_global_override_beats_switch",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0007,
+      "node_id": "test/python_wrappers/test_batch_switch.py::test_apply_batch_overlay_from_config",
+      "outcome": "passed"
+    },
     {
       "checks": [],
       "duration_s": 7.0231,
