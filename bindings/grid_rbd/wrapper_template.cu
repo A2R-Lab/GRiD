@@ -619,65 +619,6 @@ static inline void reset_f_ext(const T* f_ext, int batch) {
 // (NOT the u-slot of d_q_qd_u) and, when USE_QDD_FLAG=true, copies h_qdd→d_qdd
 // itself. So we fill g_data->h_qdd from the caller's qdd and instantiate the
 // USE_QDD_FLAG=true overload; a null qdd keeps the (faster) qdd=0 overload.
-extern "C" int grid_rbd_inverse_dynamics(
-    const T* q, const T* qd, const T* qdd_opt,
-    T* c_out,
-    int batch, T gravity, const T* f_ext)
-{
-#if GRID_HAS_INVERSE_DYNAMICS
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;  // caller should chunk
-
-    const int nj = grid::NUM_JOINTS;
-    pack_q_qd_u(q, qd, nullptr, batch, nj);
-    if (int rc = apply_f_ext(f_ext, batch)) return rc;
-
-    // The non-mjx host wrapper carries a MUJOCO_OUTPUT template param ONLY for a
-    // floating non-mimic/skew robot (exactly when GRID_RBD_WITH_MUJOCO is defined),
-    // so the RESOURCE_TIER position shifts by one. Gate the trailing template args
-    // on that same macro to reach the per-algo autotuned tier on every robot shape.
-    if (qdd_opt) {
-        // Host wrapper copies h_qdd→d_qdd (NUM_JOINTS per timestep, contiguous).
-        std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
-// signature switch: the host template carries MUJOCO_OUTPUT on floating
-// builds regardless of enable_mujoco_kernels — keyed on the per-fn
-// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
-// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
-#if defined(GRID_RBD_SIG_MJX_INVERSE_DYNAMICS)
-        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
-#else
-        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
-#endif
-            g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS>(batch), g_streams);
-    } else {
-// signature switch: the host template carries MUJOCO_OUTPUT on floating
-// builds regardless of enable_mujoco_kernels — keyed on the per-fn
-// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
-// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
-#if defined(GRID_RBD_SIG_MJX_INVERSE_DYNAMICS)
-        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
-#else
-        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
-#endif
-            g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS>(batch), g_streams);
-    }
-
-    cudaError_t e = cudaDeviceSynchronize();
-    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
-    // recorded in the sticky slot (the stream stays empty, so the sync above
-    // returns success — the silent stale-buffer class). Consume it here so the
-    // caller gets a loud rc instead of plausible garbage.
-    if (e == cudaSuccess) e = grid_consume_last_error();
-    reset_f_ext(f_ext, batch);
-    if (e != cudaSuccess) return 100 + (int)e;
-
-    std::memcpy(c_out, g_data->h_c, batch * nj * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)qd; (void)qdd_opt; (void)c_out; (void)batch; (void)gravity; (void)f_ext;
-    return 3;  // inverse_dynamics not built into this .so (subset codegen profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_INVERSE_DYNAMICS
 // MuJoCo-convention inverse dynamics (floating base only). Identical signature to
@@ -727,46 +668,6 @@ extern "C" int grid_rbd_inverse_dynamics_mujoco(
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INVERSE_DYNAMICS
 
 // Direct mass-matrix inverse: Minv(q)
-extern "C" int grid_rbd_minv(
-    const T* q,
-    T* minv_out,
-    int batch)
-{
-#if GRID_HAS_MINV
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    const int nv = grid::NUM_VEL;
-    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, nj);  // qd/u unused by minv
-
-// signature switch: the host template carries MUJOCO_OUTPUT on floating
-// builds regardless of enable_mujoco_kernels — keyed on the per-fn
-// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
-// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
-#if defined(GRID_RBD_SIG_MJX_MINV)
-    grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(
-#else
-    grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(
-#endif
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_MINV>(batch), g_streams);
-
-    if (int rc = grid_rbd_sync_consume()) return rc;
-
-    // The minv kernel writes Minv as nv x nv (NUM_VEL*NUM_VEL = 324 for floating)
-    // per timestep, but the generated grid::minv host wrapper copies d_Minv->h_Minv
-    // with an nj*nj (NUM_JOINTS*NUM_JOINTS) stride, which over-reads each 324-block
-    // and corrupts h_Minv[1:] for batch>1. Copy straight from the (correctly
-    // nv*nv-strided) device buffer instead, sizing the public output nv x nv.
-    // For a FIXED base nv == nj, so this is byte-identical to the old path.
-    cudaMemcpy(minv_out, g_data->d_Minv, (size_t)batch * nv * nv * sizeof(T),
-               cudaMemcpyDeviceToHost);
-    return 0;
-#else
-    (void)q; (void)minv_out; (void)batch;
-    return 3;  // minv not built into this .so (subset codegen profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_MINV
 // MuJoCo-convention direct mass-matrix inverse (floating base only): the kernel
@@ -800,46 +701,6 @@ extern "C" int grid_rbd_minv_mujoco(
 
 // Forward dynamics: qdd = Minv(q)·(τ − c(q,qd))
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
-extern "C" int grid_rbd_forward_dynamics(
-    const T* q, const T* qd, const T* u,
-    T* qdd_out,
-    int batch, T gravity, const T* f_ext)
-{
-#if GRID_HAS_FORWARD_DYNAMICS
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    pack_q_qd_u(q, qd, u, batch, nj);
-    if (int rc = apply_f_ext(f_ext, batch)) return rc;
-
-// signature switch: the host template carries MUJOCO_OUTPUT on floating
-// builds regardless of enable_mujoco_kernels — keyed on the per-fn
-// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
-// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
-#if defined(GRID_RBD_SIG_MJX_FORWARD_DYNAMICS)
-    grid::forward_dynamics<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(
-#else
-    grid::forward_dynamics<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(
-#endif
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS>(batch), g_streams);
-
-    cudaError_t e = cudaDeviceSynchronize();
-    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
-    // recorded in the sticky slot (the stream stays empty, so the sync above
-    // returns success — the silent stale-buffer class). Consume it here so the
-    // caller gets a loud rc instead of plausible garbage.
-    if (e == cudaSuccess) e = grid_consume_last_error();
-    reset_f_ext(f_ext, batch);
-    if (e != cudaSuccess) return 100 + (int)e;
-
-    std::memcpy(qdd_out, g_data->h_qdd, batch * nj * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)qd; (void)u; (void)qdd_out; (void)batch; (void)gravity; (void)f_ext;
-    return 3;  // forward_dynamics not built into this .so (subset codegen profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FORWARD_DYNAMICS
 // MuJoCo-convention forward dynamics (floating base only). q/qd/u are MuJoCo-native;
@@ -878,47 +739,6 @@ extern "C" int grid_rbd_forward_dynamics_mujoco(
 
 // Articulated body algorithm: qdd = aba(q, qd, u)
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
-extern "C" int grid_rbd_aba(
-    const T* q, const T* qd, const T* u,
-    T* qdd_out,
-    int batch, T gravity, const T* f_ext)
-{
-#if GRID_HAS_ABA
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    pack_q_qd_u(q, qd, u, batch, nj);
-    if (int rc = apply_f_ext(f_ext, batch)) return rc;
-
-// signature switch: the host template carries MUJOCO_OUTPUT on floating
-// builds regardless of enable_mujoco_kernels — keyed on the per-fn
-// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
-// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
-#if defined(GRID_RBD_SIG_MJX_ABA)
-    grid::aba<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(
-#else
-    grid::aba<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(
-#endif
-        g_data, g_robot, gravity, batch,
-                 dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_ABA>(batch), g_streams);
-
-    cudaError_t e = cudaDeviceSynchronize();
-    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
-    // recorded in the sticky slot (the stream stays empty, so the sync above
-    // returns success — the silent stale-buffer class). Consume it here so the
-    // caller gets a loud rc instead of plausible garbage.
-    if (e == cudaSuccess) e = grid_consume_last_error();
-    reset_f_ext(f_ext, batch);
-    if (e != cudaSuccess) return 100 + (int)e;
-
-    std::memcpy(qdd_out, g_data->h_qdd, batch * nj * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)qd; (void)u; (void)qdd_out; (void)batch; (void)gravity; (void)f_ext;
-    return 3;  // aba not built into this .so (subset codegen profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_ABA
 // MuJoCo-convention ABA (floating base only). Same accel_out convention as
@@ -954,47 +774,6 @@ extern "C" int grid_rbd_aba_mujoco(
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_ABA
 
 // Composite rigid body algorithm: M = crba(q)
-extern "C" int grid_rbd_crba(
-    const T* q,
-    T* m_out,
-    int batch, T gravity)
-{
-#if GRID_HAS_CRBA
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    const int nv = grid::NUM_VEL;
-    pack_q_qd_u(q, q, nullptr, batch, nj);  // qd/u unused
-
-// signature switch: the host template carries MUJOCO_OUTPUT on floating
-// builds regardless of enable_mujoco_kernels — keyed on the per-fn
-// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
-// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
-#if defined(GRID_RBD_SIG_MJX_CRBA)
-    grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(
-#else
-    grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(
-#endif
-        g_data, g_robot, gravity, batch,
-                  dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CRBA>(batch), g_streams);
-
-    if (int rc = grid_rbd_sync_consume()) return rc;
-
-    // The crba kernel writes M as nv x nv (NUM_VEL*NUM_VEL = 324 for floating)
-    // per timestep. (The generated grid::crba host wrapper already copies
-    // d_M->h_M at the correct nv*nv stride, but the public copy-out used the
-    // nj*nj stride, over-reading and corrupting m_out[1:] for batch>1.) Copy
-    // straight from the device buffer at nv*nv to be unambiguous and to match
-    // the kernel; FIXED base has nv == nj so this is byte-identical.
-    cudaMemcpy(m_out, g_data->d_M, (size_t)batch * nv * nv * sizeof(T),
-               cudaMemcpyDeviceToHost);
-    return 0;
-#else
-    (void)q; (void)m_out; (void)batch; (void)gravity;
-    return 3;  // crba not built into this .so (subset codegen profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_CRBA
 // MuJoCo-convention mass matrix (floating base only): M_mjx = G M_pin G^T, the
@@ -1026,38 +805,6 @@ extern "C" int grid_rbd_crba_mujoco(
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_CRBA
 
 // End-effector pose: 6×NUM_EES per timestep (xyz + rpy).
-extern "C" int grid_rbd_end_effector_pose(
-    const T* q,
-    T* ee_out,
-    int batch)
-{
-#if GRID_HAS_END_EFFECTOR_POSE
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    pack_q_qd_u(q, q, nullptr, batch, nj);
-
-// signature switch: the host template carries MUJOCO_OUTPUT on floating
-// builds regardless of enable_mujoco_kernels — keyed on the per-fn
-// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
-// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
-#if defined(GRID_RBD_SIG_MJX_EE_POSE)
-    grid::GRID_RBD_EE_POSE_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
-#else
-    grid::GRID_RBD_EE_POSE_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
-#endif
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE>(batch), g_streams);
-
-    if (int rc = grid_rbd_sync_consume()) return rc;
-
-    std::memcpy(ee_out, g_data->h_end_effector_pose, batch * 6 * GRID_RBD_NUM_EES * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)ee_out; (void)batch;
-    return 3;  // end_effector_pose not built into this .so (subset codegen profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_END_EFFECTOR_POSE
 // MuJoCo-convention end_effector_pose(q) -> 6*NUM_EES per timestep. The pose is
@@ -1124,40 +871,6 @@ extern "C" int grid_rbd_fk_batched(
 // Jacobian columns rather than the older non-standard quaternion-derivative
 // columns (the v-tangent dimension is nv = 6 + n_joints vs the old nq = 7 +
 // n_joints). Fixed-base shape unchanged (nq == nv).
-extern "C" int grid_rbd_end_effector_pose_gradient(
-    const T* q,
-    T* dee_out,
-    int batch)
-{
-#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    const int nv = grid::NUM_VEL;
-    pack_q_qd_u(q, q, nullptr, batch, nj);
-
-// signature switch: the host template carries MUJOCO_OUTPUT on floating
-// builds regardless of enable_mujoco_kernels — keyed on the per-fn
-// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
-// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
-#if defined(GRID_RBD_SIG_MJX_EE_POSE_GRADIENT)
-    grid::GRID_RBD_EE_POSE_GRADIENT_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
-#else
-    grid::GRID_RBD_EE_POSE_GRADIENT_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
-#endif
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(batch), g_streams);
-
-    if (int rc = grid_rbd_sync_consume()) return rc;
-
-    std::memcpy(dee_out, g_data->h_end_effector_pose_gradient,
-                batch * 6 * GRID_RBD_NUM_EES * nv * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)dee_out; (void)batch;
-    return 3;  // end_effector_pose_gradient not built into this .so (subset profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_END_EFFECTOR_POSE_GRADIENT
 // MuJoCo-convention end_effector_pose Jacobian (q) -> 6*NUM_EES*NUM_VEL per
@@ -1183,73 +896,6 @@ extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(const T* q, T* dee_out
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
 // f_ext enters RNEA additively (affine), so dc/d(q,qd) is unchanged for a
 // CONSTANT f_ext; this just keeps the bias consistent with grid_rbd_inverse_dynamics.
-extern "C" int grid_rbd_inverse_dynamics_gradient(
-    const T* q, const T* qd, const T* qdd_opt,
-    T* dc_du_out,
-    int batch, T gravity, const T* f_ext)
-{
-#if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    pack_q_qd_u(q, qd, nullptr, batch, nj);
-    if (int rc = apply_f_ext(f_ext, batch)) return rc;
-
-    // qdd dependence: ∂c/∂(q,qd) DOES depend on qdd (via the M·qdd term's
-    // derivatives). Same separate-d_qdd convention as grid_rbd_inverse_dynamics:
-    // the host wrapper copies h_qdd→d_qdd when USE_QDD_FLAG=true. Null qdd keeps
-    // the qdd=0 overload.
-    if (qdd_opt) {
-        std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
-// signature switch: the host template carries MUJOCO_OUTPUT on floating
-// builds regardless of enable_mujoco_kernels — keyed on the per-fn
-// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
-// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
-#if defined(GRID_RBD_SIG_MJX_INVERSE_DYNAMICS_GRADIENT)
-        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
-#else
-        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
-#endif
-            g_data, g_robot, gravity, batch,
-            dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(batch), g_streams);
-    } else {
-// signature switch: the host template carries MUJOCO_OUTPUT on floating
-// builds regardless of enable_mujoco_kernels — keyed on the per-fn
-// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
-// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
-#if defined(GRID_RBD_SIG_MJX_INVERSE_DYNAMICS_GRADIENT)
-        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
-#else
-        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
-#endif
-            g_data, g_robot, gravity, batch,
-            dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(batch), g_streams);
-    }
-
-    cudaError_t e = cudaDeviceSynchronize();
-    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
-    // recorded in the sticky slot (the stream stays empty, so the sync above
-    // returns success — the silent stale-buffer class). Consume it here so the
-    // caller gets a loud rc instead of plausible garbage.
-    if (e == cudaSuccess) e = grid_consume_last_error();
-    reset_f_ext(f_ext, batch);
-    if (e != cudaSuccess) return 100 + (int)e;
-
-    // dc_du is nv x 2nv (2*NUM_VEL*NUM_VEL = 648 for floating) per timestep — the
-    // gradient kernel writes nv-dimensioned rows/cols. The generated host wrapper
-    // copies d_dc_du->h_dc_du at an nj*2nj stride (poisoning h_dc_du[1:] for
-    // batch>1); copy straight from the device buffer at 2*nv*nv. FIXED base:
-    // nv == nj, byte-identical to the old path.
-    const int nv = grid::NUM_VEL;
-    cudaMemcpy(dc_du_out, g_data->d_dc_du,
-               (size_t)batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToHost);
-    return 0;
-#else
-    (void)q; (void)qd; (void)qdd_opt; (void)dc_du_out; (void)batch; (void)gravity; (void)f_ext;
-    return 3;  // inverse_dynamics_gradient not built into this .so (subset profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_INVERSE_DYNAMICS_GRADIENT
 // MuJoCo-convention inverse-dynamics gradient (floating base only). q/qd/qdd are
@@ -1294,52 +940,6 @@ extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(
 // ∂qdd/∂(q, qd): output shape (batch, NV, 2*NV) (tangent-space; FIXED base
 // NV == NJ, FLOATING base NV < NJ).
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
-extern "C" int grid_rbd_forward_dynamics_gradient(
-    const T* q, const T* qd, const T* u,
-    T* df_du_out,
-    int batch, T gravity, const T* f_ext)
-{
-#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    pack_q_qd_u(q, qd, u, batch, nj);
-    if (int rc = apply_f_ext(f_ext, batch)) return rc;
-
-// signature switch: the host template carries MUJOCO_OUTPUT on floating
-// builds regardless of enable_mujoco_kernels — keyed on the per-fn
-// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
-// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
-#if defined(GRID_RBD_SIG_MJX_FORWARD_DYNAMICS_GRADIENT)
-    grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(
-#else
-    grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(
-#endif
-        g_data, g_robot, gravity, batch,
-        dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(batch), g_streams);
-
-    cudaError_t e = cudaDeviceSynchronize();
-    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
-    // recorded in the sticky slot (the stream stays empty, so the sync above
-    // returns success — the silent stale-buffer class). Consume it here so the
-    // caller gets a loud rc instead of plausible garbage.
-    if (e == cudaSuccess) e = grid_consume_last_error();
-    reset_f_ext(f_ext, batch);
-    if (e != cudaSuccess) return 100 + (int)e;
-
-    // df_du is nv x 2nv (2*NUM_VEL*NUM_VEL = 648 for floating) per timestep; same
-    // nq-vs-nv stride bug as inverse_dynamics_gradient. Copy straight from the
-    // (correctly 2*nv*nv-strided) device buffer. FIXED base: nv == nj, unchanged.
-    const int nv = grid::NUM_VEL;
-    cudaMemcpy(df_du_out, g_data->d_df_du,
-               (size_t)batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToHost);
-    return 0;
-#else
-    (void)q; (void)qd; (void)u; (void)df_du_out; (void)batch; (void)gravity; (void)f_ext;
-    return 3;  // forward_dynamics_gradient not built into this .so (subset profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FORWARD_DYNAMICS_GRADIENT
 // MuJoCo-convention forward-dynamics gradient (floating base only). q/qd/u are
@@ -1383,40 +983,6 @@ extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(
 // end_effector_pose_gradient; we only copy end_effector_pose_hessian out. If the caller wants both they should
 // call end_effector_pose_gradient separately (the kernels are fast enough
 // that doing the work twice is fine for a small convenience).
-extern "C" int grid_rbd_end_effector_pose_hessian(
-    const T* q,
-    T* d2ee_out,
-    int batch)
-{
-#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    const int nv = grid::NUM_VEL;
-    pack_q_qd_u(q, q, nullptr, batch, nj);
-
-// signature switch: the host template carries MUJOCO_OUTPUT on floating
-// builds regardless of enable_mujoco_kernels — keyed on the per-fn
-// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
-// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
-#if defined(GRID_RBD_SIG_MJX_EE_POSE_HESSIAN)
-    grid::GRID_RBD_EE_POSE_HESSIAN_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
-#else
-    grid::GRID_RBD_EE_POSE_HESSIAN_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
-#endif
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(batch), g_streams);
-
-    if (int rc = grid_rbd_sync_consume()) return rc;
-
-    std::memcpy(d2ee_out, g_data->h_end_effector_pose_hessian,
-                batch * 6 * GRID_RBD_NUM_EES * nv * nv * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)d2ee_out; (void)batch;
-    return 3;  // end_effector_pose_hessian not built into this .so (subset profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_END_EFFECTOR_POSE_HESSIAN
 // MuJoCo-convention end_effector_pose Hessian (q) -> 6*NUM_EES*NV*NV per timestep.
@@ -1441,41 +1007,6 @@ extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(const T* q, T* d2ee_out
 // shape SECOND_ORDER_TENSOR_SIZE = 4 * NV^3 per timestep (four NV^3 blocks:
 // d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq). The Python side slices into the
 // four named tensors.
-extern "C" int grid_rbd_idsva_so(
-    const T* q, const T* qd, const T* qdd,
-    T* out, int batch, T gravity)
-{
-#if GRID_HAS_IDSVA_SO
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    // idsva_so reads the joint acceleration from the u-slot of d_q_qd_u (s_qdd);
-    // pack qdd there so the second-order tensors use the requested acceleration.
-    pack_q_qd_u(q, qd, qdd, batch, nj);
-
-// signature switch (same rule as fdsva_so): floating builds carry MUJOCO_OUTPUT.
-// RESOURCE_TIER must match the tier the autotuned thread count was picked for —
-// the default-tier instantiation with a LITE-tuned count exceeded the default
-// kernel's register-limited thread cap and failed the launch (invalid argument).
-#if defined(GRID_RBD_SIG_MJX_IDSVA_SO)
-    grid::idsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO>::TIER>(
-#else
-    grid::idsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO>::TIER>(
-#endif
-        g_data, g_robot, gravity, batch,
-        dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_IDSVA_SO>(batch), g_streams);
-
-    if (int rc = grid_rbd_sync_consume()) return rc;
-
-    std::memcpy(out, g_data->h_idsva_so,
-                batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)qd; (void)qdd; (void)out; (void)batch; (void)gravity;
-    return 3;  // idsva_so not built into this .so (subset codegen profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_IDSVA_SO
 // MuJoCo-convention idsva_so(q, qd, qdd) -> 4*NV^3 (floating base only). q/qd/qdd are
@@ -1552,39 +1083,6 @@ extern "C" int grid_rbd_inverse_dynamics_regressor_mujoco(
 
 // Second-order forward dynamics. Output is 4 * NV^3 per timestep
 // (d2qdd_dq, d2qdd_dqd, d2qdd_dudq — interpretation per Singh/Wensing).
-extern "C" int grid_rbd_fdsva_so(
-    const T* q, const T* qd, const T* u,
-    T* out, int batch, T gravity)
-{
-#if GRID_HAS_FDSVA_SO
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    pack_q_qd_u(q, qd, u, batch, nj);
-
-// signature switch: the host template carries MUJOCO_OUTPUT on floating
-// builds regardless of enable_mujoco_kernels — keyed on the per-fn
-// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
-// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
-#if defined(GRID_RBD_SIG_MJX_FDSVA_SO)
-    grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(
-#else
-    grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(
-#endif
-        g_data, g_robot, gravity, batch,
-        dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FDSVA_SO>(batch), g_streams);
-
-    if (int rc = grid_rbd_sync_consume()) return rc;
-
-    std::memcpy(out, g_data->h_df2,
-                batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)qd; (void)u; (void)out; (void)batch; (void)gravity;
-    return 3;  // fdsva_so not built into this .so (subset codegen profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FDSVA_SO
 // MuJoCo-convention fdsva_so(q, qd, u) -> 4*NV^3 (floating base only). q/qd/u raw mjx
@@ -1844,6 +1342,403 @@ extern "C" int grid_rbd_osc_inertia(const T* q, T* out, int batch) {
 #else
     (void)q; (void)out; (void)batch;
     return 3;  // osc_inertia not built
+#endif
+}
+
+extern "C" int grid_rbd_minv(const T* q, T* minv_out, int batch) {
+#if GRID_HAS_MINV
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_MINV)
+    grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(
+#else
+    grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(
+#endif
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_MINV>(batch), g_streams);
+
+    if (int rc = grid_rbd_sync_consume()) return rc;
+
+    // Device-direct copy at the nv*nv kernel stride (same nj-stride staging issue
+    // as crba).
+    cudaMemcpy(minv_out, g_data->d_Minv, (size_t)batch * grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+#else
+    (void)q; (void)minv_out; (void)batch;
+    return 3;  // minv not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_crba(const T* q, T* m_out, int batch, T gravity) {
+#if GRID_HAS_CRBA
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_CRBA)
+    grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(
+#else
+    grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(
+#endif
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CRBA>(batch), g_streams);
+
+    if (int rc = grid_rbd_sync_consume()) return rc;
+
+    // Device-direct copy at the nv*nv kernel stride: the generated host wrapper's
+    // h_M staging used the nj*nj stride (over-read for floating; see the nj-stride
+    // host-wrapper item). FIXED base has nv == nj so this is byte-identical.
+    cudaMemcpy(m_out, g_data->d_M, (size_t)batch * grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+#else
+    (void)q; (void)m_out; (void)batch; (void)gravity;
+    return 3;  // crba not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_end_effector_pose(const T* q, T* ee_out, int batch) {
+#if GRID_HAS_END_EFFECTOR_POSE
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_EE_POSE)
+    grid::GRID_RBD_EE_POSE_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
+#else
+    grid::GRID_RBD_EE_POSE_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
+#endif
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE>(batch), g_streams);
+
+    if (int rc = grid_rbd_sync_consume()) return rc;
+
+    std::memcpy(ee_out, g_data->h_end_effector_pose, (size_t)batch * 6*GRID_RBD_NUM_EES * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)ee_out; (void)batch;
+    return 3;  // end_effector_pose not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_end_effector_pose_gradient(const T* q, T* dee_out, int batch) {
+#if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_EE_POSE_GRADIENT)
+    grid::GRID_RBD_EE_POSE_GRADIENT_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
+#else
+    grid::GRID_RBD_EE_POSE_GRADIENT_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
+#endif
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(batch), g_streams);
+
+    if (int rc = grid_rbd_sync_consume()) return rc;
+
+    std::memcpy(dee_out, g_data->h_end_effector_pose_gradient, (size_t)batch * 6*GRID_RBD_NUM_EES*grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)dee_out; (void)batch;
+    return 3;  // end_effector_pose_gradient not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_end_effector_pose_hessian(const T* q, T* d2ee_out, int batch) {
+#if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_EE_POSE_HESSIAN)
+    grid::GRID_RBD_EE_POSE_HESSIAN_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
+#else
+    grid::GRID_RBD_EE_POSE_HESSIAN_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
+#endif
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(batch), g_streams);
+
+    if (int rc = grid_rbd_sync_consume()) return rc;
+
+    std::memcpy(d2ee_out, g_data->h_end_effector_pose_hessian, (size_t)batch * 6*GRID_RBD_NUM_EES*grid::NUM_VEL*grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)d2ee_out; (void)batch;
+    return 3;  // end_effector_pose_hessian not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_idsva_so(const T* q, const T* qd, const T* qdd, T* out, int batch, T gravity) {
+#if GRID_HAS_IDSVA_SO
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    // idsva_so reads the joint acceleration from the u-slot of d_q_qd_u (s_qdd);
+    // pack qdd there so the second-order tensors use the requested acceleration.
+    pack_q_qd_u(q, qd, qdd, batch, grid::NUM_JOINTS);
+
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+// RESOURCE_TIER must match the tier the autotuned thread count was picked for —
+// the default-tier instantiation with a LITE-tuned count exceeded the default
+// kernel's register-limited thread cap and failed the launch (invalid argument).
+#if defined(GRID_RBD_SIG_MJX_IDSVA_SO)
+    grid::idsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO>::TIER>(
+#else
+    grid::idsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO>::TIER>(
+#endif
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_IDSVA_SO>(batch), g_streams);
+
+    if (int rc = grid_rbd_sync_consume()) return rc;
+
+    std::memcpy(out, g_data->h_idsva_so, (size_t)batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)qd; (void)qdd; (void)out; (void)batch; (void)gravity;
+    return 3;  // idsva_so not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_fdsva_so(const T* q, const T* qd, const T* u, T* out, int batch, T gravity) {
+#if GRID_HAS_FDSVA_SO
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);
+
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+// RESOURCE_TIER must match the autotuned tier (see idsva_so note).
+#if defined(GRID_RBD_SIG_MJX_FDSVA_SO)
+    grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(
+#else
+    grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(
+#endif
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FDSVA_SO>(batch), g_streams);
+
+    if (int rc = grid_rbd_sync_consume()) return rc;
+
+    std::memcpy(out, g_data->h_df2, (size_t)batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)qd; (void)u; (void)out; (void)batch; (void)gravity;
+    return 3;  // fdsva_so not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_forward_dynamics(const T* q, const T* qd, const T* u, T* qdd_out, int batch, T gravity, const T* f_ext) {
+#if GRID_HAS_FORWARD_DYNAMICS
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
+
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_FORWARD_DYNAMICS)
+    grid::forward_dynamics<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(
+#else
+    grid::forward_dynamics<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(
+#endif
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS>(batch), g_streams);
+
+    cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
+    reset_f_ext(f_ext, batch);
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    std::memcpy(qdd_out, g_data->h_qdd, (size_t)batch * grid::NUM_JOINTS * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)qd; (void)u; (void)qdd_out; (void)batch; (void)gravity; (void)f_ext;
+    return 3;  // forward_dynamics not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_aba(const T* q, const T* qd, const T* u, T* qdd_out, int batch, T gravity, const T* f_ext) {
+#if GRID_HAS_ABA
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
+
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_ABA)
+    grid::aba<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(
+#else
+    grid::aba<T, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(
+#endif
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_ABA>(batch), g_streams);
+
+    cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
+    reset_f_ext(f_ext, batch);
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    std::memcpy(qdd_out, g_data->h_qdd, (size_t)batch * grid::NUM_JOINTS * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)qd; (void)u; (void)qdd_out; (void)batch; (void)gravity; (void)f_ext;
+    return 3;  // aba not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_inverse_dynamics(const T* q, const T* qd, const T* qdd_opt, T* c_out, int batch, T gravity, const T* f_ext) {
+#if GRID_HAS_INVERSE_DYNAMICS
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
+
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+    if (qdd_opt) {
+        // Host wrapper copies h_qdd->d_qdd (NUM_JOINTS per timestep, contiguous).
+        std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * grid::NUM_JOINTS * sizeof(T));
+#if defined(GRID_RBD_SIG_MJX_INVERSE_DYNAMICS)
+        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
+#else
+        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
+#endif
+            g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS>(batch), g_streams);
+    } else {
+#if defined(GRID_RBD_SIG_MJX_INVERSE_DYNAMICS)
+        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
+#else
+        grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
+#endif
+            g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS>(batch), g_streams);
+    }
+
+    cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
+    reset_f_ext(f_ext, batch);
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    std::memcpy(c_out, g_data->h_c, (size_t)batch * grid::NUM_JOINTS * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)qd; (void)qdd_opt; (void)c_out; (void)batch; (void)gravity; (void)f_ext;
+    return 3;  // inverse_dynamics not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_inverse_dynamics_gradient(const T* q, const T* qd, const T* qdd_opt, T* dc_du_out, int batch, T gravity, const T* f_ext) {
+#if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
+
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+    if (qdd_opt) {
+        // Host wrapper copies h_qdd->d_qdd (NUM_JOINTS per timestep, contiguous).
+        std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * grid::NUM_JOINTS * sizeof(T));
+#if defined(GRID_RBD_SIG_MJX_INVERSE_DYNAMICS_GRADIENT)
+        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
+#else
+        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
+#endif
+            g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(batch), g_streams);
+    } else {
+#if defined(GRID_RBD_SIG_MJX_INVERSE_DYNAMICS_GRADIENT)
+        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
+#else
+        grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/false, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
+#endif
+            g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(batch), g_streams);
+    }
+
+    cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
+    reset_f_ext(f_ext, batch);
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    cudaMemcpy(dc_du_out, g_data->d_dc_du, (size_t)batch * 2*grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+#else
+    (void)q; (void)qd; (void)qdd_opt; (void)dc_du_out; (void)batch; (void)gravity; (void)f_ext;
+    return 3;  // inverse_dynamics_gradient not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_forward_dynamics_gradient(const T* q, const T* qd, const T* u, T* df_du_out, int batch, T gravity, const T* f_ext) {
+#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
+
+// signature switch: the host template carries MUJOCO_OUTPUT on floating
+// builds regardless of enable_mujoco_kernels — keyed on the per-fn
+// GRID_RBD_SIG_MJX_* flag _compile.py derives from the generated header
+// (NOT on GRID_RBD_WITH_MUJOCO, the mjx-KERNELS gate).
+#if defined(GRID_RBD_SIG_MJX_FORWARD_DYNAMICS_GRADIENT)
+    grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/false, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(
+#else
+    grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(
+#endif
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(batch), g_streams);
+
+    cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
+    reset_f_ext(f_ext, batch);
+    if (e != cudaSuccess) return 100 + (int)e;
+
+    cudaMemcpy(df_du_out, g_data->d_df_du, (size_t)batch * 2*grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+#else
+    (void)q; (void)qd; (void)u; (void)df_du_out; (void)batch; (void)gravity; (void)f_ext;
+    return 3;  // forward_dynamics_gradient not built into this .so (subset profile)
 #endif
 }
 

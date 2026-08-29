@@ -56,6 +56,7 @@ class AbiSpec:
     launch_algo: str | None = None            # GRID_ALGO_* name; None -> from key; "GRID_ALGO_COUNT" = untuned
     clamp_kernel: str | None = None           # grid_clamp_threads_for target, when used
     has_resource_tier: bool = True            # host call passes launch_cfg<..>::TIER
+    template_shape: str = "plain"             # "plain" (tight <T>) | "std5" (COMPRESSED+KIND[+MJX]+TIER) | "so4" (KIND[+MJX]+TIER)
     pre_launch_check: bool = False            # the pre-launch sticky-error 200+ block
     # ── output ──────────────────────────────────────────────────────────
     out_buffer: str | None = None             # gridData member (h_c / d_M / ...)
@@ -80,7 +81,8 @@ ABI_SPECS: dict[str, AbiSpec] = {
         pack_mode="q_q_null",
         takes_gravity=True,       # accepted-but-unused by the algorithm
         sig_mjx_macro="GRID_RBD_SIG_MJX_CRBA",
-        out_buffer="d_M", out_copy="cudaMemcpy_d", out_size_expr="nv*nv",
+        template_shape="std5",
+        out_buffer="d_M", out_copy="cudaMemcpy_d", out_size_expr="grid::NUM_VEL*grid::NUM_VEL",
         has_mjx_twin=True,
     ),
     "inverse_dynamics": AbiSpec(
@@ -93,7 +95,8 @@ ABI_SPECS: dict[str, AbiSpec] = {
         f_ext_mode="optional",
         takes_gravity=True,
         sig_mjx_macro="GRID_RBD_SIG_MJX_INVERSE_DYNAMICS",
-        out_buffer="h_c", out_copy="memcpy_h", out_size_expr="nj",
+        template_shape="qdd6",
+        out_buffer="h_c", out_copy="memcpy_h", out_size_expr="grid::NUM_JOINTS",
         has_mjx_twin=True, mjx_requires_qdd=True,
     ),
     "integrator": AbiSpec(
@@ -131,9 +134,10 @@ ABI_SPECS: dict[str, AbiSpec] = {
     "minv": AbiSpec(
         "minv",
         inputs=(("q", "const T*"), ("minv_out", "T*"), ("batch", "int")),
+        template_shape="std5",
         pack_mode="q_q_null",     # pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr) — qd/u unused
         sig_mjx_macro="GRID_RBD_SIG_MJX_MINV",
-        out_buffer="d_Minv", out_copy="cudaMemcpy_d", out_size_expr="nv*nv",
+        out_buffer="d_Minv", out_copy="cudaMemcpy_d", out_size_expr="grid::NUM_VEL*grid::NUM_VEL",
         has_mjx_twin=True,
         # NOTE: no gravity param at all (unlike crba, which accepts-but-ignores one).
     ),
@@ -148,7 +152,8 @@ ABI_SPECS: dict[str, AbiSpec] = {
         f_ext_mode="optional",
         takes_gravity=True,
         sig_mjx_macro="GRID_RBD_SIG_MJX_FORWARD_DYNAMICS",
-        out_buffer="h_qdd", out_copy="memcpy_h", out_size_expr="nj",
+        template_shape="so4",
+        out_buffer="h_qdd", out_copy="memcpy_h", out_size_expr="grid::NUM_JOINTS",
         has_mjx_twin=True,
         # Twin note (no field): _mujoco path only valid for null f_ext (kernel does
         # not reframe f_ext); enforced by the python dispatch, NOT by a return-4 here.
@@ -164,7 +169,8 @@ ABI_SPECS: dict[str, AbiSpec] = {
         f_ext_mode="optional",
         takes_gravity=True,
         sig_mjx_macro="GRID_RBD_SIG_MJX_ABA",
-        out_buffer="h_qdd", out_copy="memcpy_h", out_size_expr="nj",
+        template_shape="so4",
+        out_buffer="h_qdd", out_copy="memcpy_h", out_size_expr="grid::NUM_JOINTS",
         has_mjx_twin=True,
     ),
 
@@ -179,8 +185,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         f_ext_mode="optional",
         takes_gravity=True,
         sig_mjx_macro="GRID_RBD_SIG_MJX_INVERSE_DYNAMICS_GRADIENT",
+        template_shape="qdd6",
         out_buffer="d_dc_du", out_copy="cudaMemcpy_d",
-        out_size_expr="2*nv*nv",  # code: (size_t)batch * 2 * nv * nv * sizeof(T)
+        out_size_expr="2*grid::NUM_VEL*grid::NUM_VEL",  # code: (size_t)batch * 2 * nv * nv * sizeof(T)
         has_mjx_twin=True, mjx_requires_qdd=True,
     ),
 
@@ -196,7 +203,8 @@ ABI_SPECS: dict[str, AbiSpec] = {
         f_ext_mode="optional",
         takes_gravity=True,
         sig_mjx_macro="GRID_RBD_SIG_MJX_FORWARD_DYNAMICS_GRADIENT",
-        out_buffer="d_df_du", out_copy="cudaMemcpy_d", out_size_expr="2*nv*nv",
+        template_shape="fdgrad5",
+        out_buffer="d_df_du", out_copy="cudaMemcpy_d", out_size_expr="2*grid::NUM_VEL*grid::NUM_VEL",
         has_mjx_twin=True,
     ),
 
@@ -209,6 +217,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         qdd_route="u_slot",       # qdd is REQUIRED positional (no null fork, no return-4)
         takes_gravity=True,
         sig_mjx_macro="GRID_RBD_SIG_MJX_IDSVA_SO",
+        template_shape="so4",
         out_buffer="h_idsva_so", out_copy="memcpy_h",
         out_size_expr="grid::SECOND_ORDER_TENSOR_SIZE",
         has_mjx_twin=True,
@@ -226,6 +235,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         pack_mode="q_qd_u",
         takes_gravity=True,
         sig_mjx_macro="GRID_RBD_SIG_MJX_FDSVA_SO",
+        template_shape="so4",
         out_buffer="h_df2", out_copy="memcpy_h",
         out_size_expr="grid::SECOND_ORDER_TENSOR_SIZE",
         has_mjx_twin=True,
@@ -325,6 +335,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         "end_effector_pose",
         grid_symbol="grid::GRID_RBD_EE_POSE_FN",              # [D7] macro callee
         sig_mjx_macro="GRID_RBD_SIG_MJX_EE_POSE",
+        template_shape="std5",
         inputs=(("q", "const T*"), ("ee_out", "T*"), ("batch", "int")),
         pack_mode="q_q_null",
         out_buffer="h_end_effector_pose", out_copy="memcpy_h",
@@ -335,20 +346,22 @@ ABI_SPECS: dict[str, AbiSpec] = {
         "end_effector_pose_gradient",
         grid_symbol="grid::GRID_RBD_EE_POSE_GRADIENT_FN",     # [D7]
         sig_mjx_macro="GRID_RBD_SIG_MJX_EE_POSE_GRADIENT",
+        template_shape="std5",
         inputs=(("q", "const T*"), ("dee_out", "T*"), ("batch", "int")),
         pack_mode="q_q_null",
         out_buffer="h_end_effector_pose_gradient", out_copy="memcpy_h",
-        out_size_expr="6*GRID_RBD_NUM_EES*nv",
+        out_size_expr="6*GRID_RBD_NUM_EES*grid::NUM_VEL",
         has_mjx_twin=True,
     ),
     "end_effector_pose_hessian": AbiSpec(
         "end_effector_pose_hessian",
         grid_symbol="grid::GRID_RBD_EE_POSE_HESSIAN_FN",      # [D7]
         sig_mjx_macro="GRID_RBD_SIG_MJX_EE_POSE_HESSIAN",
+        template_shape="std5",
         inputs=(("q", "const T*"), ("d2ee_out", "T*"), ("batch", "int")),
         pack_mode="q_q_null",
         out_buffer="h_end_effector_pose_hessian", out_copy="memcpy_h",
-        out_size_expr="6*GRID_RBD_NUM_EES*nv*nv",
+        out_size_expr="6*GRID_RBD_NUM_EES*grid::NUM_VEL*grid::NUM_VEL",
         has_mjx_twin=True,
     ),
 
