@@ -48,7 +48,34 @@ GENERATED_KEYS: tuple[str, ...] = (
     # both branches — comment-only canonicalization).
     "forward_dynamics", "aba", "inverse_dynamics",
     "inverse_dynamics_gradient", "forward_dynamics_gradient",
+    # increment 3: IT-dispatch bodies (integrator family — launch via the
+    # GRID_RBD_IT_DISPATCH macro into the template <IntegratorType> launchers,
+    # post-dispatch 200+e consume), the regressor (pure tight style), and the
+    # runtime-EE pair (XTOOL_STAGING feature). Only tool_fext + fk_batched
+    # remain hand-written (bespoke by design).
+    "integrator", "integrator_gradient", "inverse_dynamics_regressor",
+    "end_effector_pose_runtime", "end_effector_pose_gradient_runtime",
 )
+
+# IT-dispatch rows: the C-ABI body forwards to a hand-written host launcher
+# (above the block) that owns the <IntegratorType> template switch.
+IT_LAUNCHER: dict[str, str] = {
+    "integrator": "launch_integrator_host",
+    "integrator_gradient": "launch_integrator_grad_host",
+}
+
+# Runtime-EE rows stage the 4x4 col-major SE(3) tool transform to the device
+# before launch (identity when offset==nullptr => frame origin).
+XTOOL_STAGING: frozenset[str] = frozenset(
+    {"end_effector_pose_runtime", "end_effector_pose_gradient_runtime"})
+XTOOL_BLOCK = (
+    "    // stage the runtime offset (frame origin when offset==nullptr):\n"
+    "    // offset is the 4x4 col-major SE(3) tool/tip transform (16 floats); identity => frame origin.\n"
+    "    T Xtool[16] = {static_cast<T>(1),0,0,0, 0,static_cast<T>(1),0,0,\n"
+    "                   0,0,static_cast<T>(1),0, 0,0,0,static_cast<T>(1)};\n"
+    "    if (offset) { for (int i = 0; i < 16; ++i) Xtool[i] = offset[i]; }\n"
+    "    if (cudaMemcpy(g_data->d_eepose_runtime_offset, Xtool, 16*sizeof(T),\n"
+    "                   cudaMemcpyHostToDevice) != cudaSuccess) return 101;")
 
 BEGIN = "// ── BEGIN GENERATED C-ABI BODIES (grid_codegen/wrapper_body_gen.py — do not hand-edit) ──"
 END = "// ── END GENERATED C-ABI BODIES ──"
@@ -135,17 +162,24 @@ def gen_body(spec: AbiSpec) -> str:
     if spec.key in PRE_PACK_COMMENTS:
         L.append(PRE_PACK_COMMENTS[spec.key])
     L.append(_PACK[spec.pack_mode])
+    if spec.key in XTOOL_STAGING:
+        L.append(XTOOL_BLOCK)
     if spec.template_shape != "plain":
         return _gen_expanded(spec, L)
     if spec.key in BODY_COMMENTS:
         L.append(BODY_COMMENTS[spec.key])
-    grav = "gravity, " if spec.takes_gravity else ""
-    trail = "".join(", " + a for a in spec.trailing_runtime_args)
-    dims = f"grid_rbd_launch_threads_n<grid::{launch}>(batch)"
-    if spec.clamp_kernel:
-        dims = f"grid_clamp_threads_for({spec.clamp_kernel}, {dims})"
-    L.append(f"    {sym}<T>(g_data, g_robot, {grav}batch, "
-             f"dim3((unsigned)batch, 1, 1), {dims}, g_streams{trail});")
+    if spec.it_dispatch:
+        L.append(f"    GRID_RBD_IT_DISPATCH(it, {IT_LAUNCHER[spec.key]}, batch, gravity, dt);")
+    else:
+        grav = "gravity, " if spec.takes_gravity else ""
+        trail = "".join(", " + a for a in spec.trailing_runtime_args)
+        dims = f"grid_rbd_launch_threads_n<grid::{launch}>(batch)"
+        if spec.clamp_kernel:
+            dims = f"grid_clamp_threads_for({spec.clamp_kernel}, {dims})"
+        L.append(f"    {sym}<T>(g_data, g_robot, {grav}batch, "
+                 f"dim3((unsigned)batch, 1, 1), {dims}, g_streams{trail});")
+    if spec.pre_launch_check:
+        L.append("    { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }")
     L.append("    if (int rc = grid_rbd_sync_consume()) return rc;")
     size = _paren(spec.out_size_expr)
     if spec.out_copy == "memcpy_h":

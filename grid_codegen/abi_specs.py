@@ -253,7 +253,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         takes_gravity=True,
         has_resource_tier=False,  # host call is bare grid::inverse_dynamics_regressor<T>(...)
         out_buffer="h_Y", out_copy="memcpy_h",
-        out_size_expr="grid::NUM_VEL*10*grid::NUM_BODIES",
+        out_size_expr="grid::NUM_VEL * 10 * grid::NUM_BODIES",
         has_mjx_twin=True, mjx_omits_tier=True,  # twin: <T,false,GRID_DATA_ALL,true>, no TIER
         # No GRID_RBD_SIG_MJX_* fork in either body (sig_mjx_macro=None).
         # VOCAB GAP (no field): mjx-twin-only 200+ post-launch check
@@ -275,7 +275,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
                                   # GRID_RBD_SIG_MJX_INTEGRATOR)
         pre_launch_check=True,    # { cudaGetLastError() -> return 200+e } after dispatch
         out_buffer="h_dAB", out_copy="memcpy_h",
-        out_size_expr="(2*nv)*(3*nv)",  # code: batch * (2 * nv) * (3 * nv) * sizeof(T)
+        out_size_expr="(2 * grid::NUM_VEL) * (3 * grid::NUM_VEL)",
         has_mjx_twin=True,
         mjx_it_dispatch="HESSIAN",  # twin dispatches GRID_RBD_IT_DISPATCH_HESSIAN
                                     # (EULER / SEMI_IMPLICIT_EULER only)
@@ -520,7 +520,8 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_eePose", out_copy="memcpy_h",
         out_size_expr="6",
         has_mjx_twin=True,                                     # [D6] twin nested in #ifdef GRID_RBD_WITH_MUJOCO, own #ifdef+stub inside
-        body_override=True,                                    # [D5] 16-float Xtool identity/copy + cudaMemcpy->d_eepose_runtime_offset, rc=101
+        # Xtool staging (16-float identity/copy + cudaMemcpy->d_eepose_runtime_offset,
+        # rc=101) is emitted by the XTOOL_STAGING feature in wrapper_body_gen.py.
     ),
     "end_effector_pose_gradient_runtime": AbiSpec(
         "end_effector_pose_gradient_runtime",
@@ -535,7 +536,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_eePoseGrad", out_copy="memcpy_h",
         out_size_expr="6*grid::NUM_VEL",
         has_mjx_twin=True,
-        body_override=True,                                    # [D5] same Xtool staging as the pose variant
+        # Same XTOOL_STAGING emission as the pose variant.
     ),
 }
 

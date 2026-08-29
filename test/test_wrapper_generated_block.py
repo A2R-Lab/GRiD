@@ -24,15 +24,16 @@ def test_generated_block_matches_emitter():
 
 def test_generated_keys_within_emitter_scope():
     """Invariant: no generated row may carry the features the emitter does
-    not model yet (qdd forks, f_ext epilogues, IT dispatch, bespoke bodies).
-    Sig-forks ARE modeled (increment 2a) but only via the known template
-    shapes; a "plain" row must not carry a sig fork."""
+    not model yet (bespoke bodies; f_ext "produces"). Sig-forks (2a), qdd
+    forks + f_ext epilogues (2b), and IT dispatch + Xtool staging (3) ARE
+    modeled — an IT-dispatch row must name its launcher in IT_LAUNCHER."""
     from grid_codegen.abi_specs import ABI_SPECS
     for key in g.GENERATED_KEYS:
         s = ABI_SPECS[key]
         assert not s.body_override, key
         assert s.qdd_route in ("none", "u_slot", "flag_fork"), key
-        assert not s.takes_dt_it, key
+        if s.takes_dt_it:
+            assert s.it_dispatch and key in g.IT_LAUNCHER, key
         assert s.f_ext_mode in ("none", "optional"), key
         assert s.template_shape in ("plain", "std5", "so4", "qdd6", "fdgrad5"), key
         if s.template_shape == "plain":
