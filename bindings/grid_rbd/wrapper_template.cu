@@ -1643,6 +1643,71 @@ static inline void pack_q(const T* q, int batch, int num_joints) {
 // centroidal_inner Jacobian fold is alpha-reduced; validated on fr3/h1_2 by
 // cuda_centroidal_mimic_smoke_runner.cu). rc=3 only when a reduced codegen
 // profile didn't generate com for this robot.
+// ── BEGIN GENERATED C-ABI BODIES (grid_codegen/wrapper_body_gen.py — do not hand-edit) ──
+// Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen
+// Table: grid_codegen/abi_specs.py (ABI_SPECS); drift-gated by
+// test/test_wrapper_generated_block.py. Mjx twins stay hand-written.
+
+extern "C" int grid_rbd_nonlinear_effects(const T* q, const T* qd, T* out, int batch, T gravity) {
+#if GRID_HAS_NONLINEAR_EFFECTS
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::nonlinear_effects<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_NONLINEAR_EFFECTS>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)qd; (void)out; (void)batch; (void)gravity;
+    return 3;  // nonlinear_effects not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_generalized_gravity(const T* q, T* out, int batch, T gravity) {
+#if GRID_HAS_GENERALIZED_GRAVITY
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+    grid::generalized_gravity<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_GENERALIZED_GRAVITY>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)out; (void)batch; (void)gravity;
+    return 3;  // generalized_gravity not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_coriolis_matrix(const T* q, const T* qd, T* out, int batch, T gravity) {
+#if GRID_HAS_CORIOLIS_MATRIX
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::coriolis_matrix<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CORIOLIS_MATRIX>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_coriolis, (size_t)batch * grid::NUM_VEL*grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)qd; (void)out; (void)batch; (void)gravity;
+    return 3;  // coriolis_matrix not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_energy(const T* q, const T* qd, T* out, int batch, T gravity) {
+#ifdef GRID_HAS_ENERGY
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::energy<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_ENERGY>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_energy, (size_t)batch * 3 * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)qd; (void)out; (void)batch; (void)gravity;
+    return 3;  // energy not generated for this robot (reduced codegen profile)
+#endif
+}
+
 extern "C" int grid_rbd_com(const T* q, T* out, int batch) {
 #ifdef GRID_HAS_COM
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
@@ -1658,16 +1723,12 @@ extern "C" int grid_rbd_com(const T* q, T* out, int batch) {
 #endif
 }
 
-// ccrba(q, qd) -> [A(6 x NV); h(6)] per timestep, total 6*NUM_VEL + 6 floats.
-// Gated on GRID_HAS_CCRBA (emitted for mimic too, alpha-folded); rc=3 only when a
-// reduced codegen profile didn't generate ccrba for this robot.
 extern "C" int grid_rbd_ccrba(const T* q, const T* qd, T* out, int batch) {
 #ifdef GRID_HAS_CCRBA
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::ccrba<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1),
-        grid_clamp_threads_for(grid::ccrba_kernel<T>, grid_rbd_launch_threads_n<grid::GRID_ALGO_CCRBA>(batch)), g_streams);
+    grid::ccrba<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_clamp_threads_for(grid::ccrba_kernel<T>, grid_rbd_launch_threads_n<grid::GRID_ALGO_CCRBA>(batch)), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
     std::memcpy(out, g_data->h_ccrba, (size_t)batch * (6 * grid::NUM_VEL + 6) * sizeof(T));
     return 0;
@@ -1677,23 +1738,125 @@ extern "C" int grid_rbd_ccrba(const T* q, const T* qd, T* out, int batch) {
 #endif
 }
 
-// energy(q, qd) -> [KE, PE, KE+PE] per timestep, total 3 floats. Takes gravity.
-// Gated on GRID_HAS_ENERGY (emitted for mimic too, alpha-folded); rc=3 only when a
-// reduced codegen profile didn't generate energy for this robot.
-extern "C" int grid_rbd_energy(const T* q, const T* qd, T* out, int batch, T gravity) {
-#ifdef GRID_HAS_ENERGY
+extern "C" int grid_rbd_dccrba(const T* q, T* out, int batch) {
+#ifdef GRID_HAS_DCCRBA
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q(q, batch, grid::NUM_JOINTS);
+    grid::dccrba<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_clamp_threads_for(grid::dccrba_kernel<T>, grid_rbd_launch_threads_n<grid::GRID_ALGO_DCCRBA>(batch)), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_dccrba, (size_t)batch * 6*grid::NUM_VEL*grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)out; (void)batch;
+    return 3;  // dccrba not generated for this robot (reduced codegen profile)
+#endif
+}
+
+extern "C" int grid_rbd_cmm_time_variation(const T* q, const T* qd, T* out, int batch) {
+#ifdef GRID_HAS_CMM_TIME_VARIATION
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::energy<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_ENERGY>(batch), g_streams);
+    grid::cmm_time_variation<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_clamp_threads_for(grid::cmm_time_variation_kernel<T>, grid_rbd_launch_threads_n<grid::GRID_ALGO_CMM_TIME_VARIATION>(batch)), g_streams);
     if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_energy, (size_t)batch * 3 * sizeof(T));
+    std::memcpy(out, g_data->h_cmm_time_variation, (size_t)batch * 6*grid::NUM_VEL * sizeof(T));
     return 0;
 #else
     (void)q; (void)qd; (void)out; (void)batch;
-    return 3;  // energy not generated for this robot (reduced codegen profile)
+    return 3;  // cmm_time_variation not generated for this robot (mimic)
 #endif
 }
+
+extern "C" int grid_rbd_kinetic_energy_regressor(const T* q, const T* qd, T* out, int batch, T gravity) {
+#if GRID_HAS_KINETIC_ENERGY_REGRESSOR
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::kinetic_energy_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_ke_regressor, (size_t)batch * 10*grid::NUM_BODIES * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)qd; (void)out; (void)batch; (void)gravity;
+    return 3;  // kinetic_energy_regressor not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_potential_energy_regressor(const T* q, T* out, int batch, T gravity) {
+#if GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q(q, batch, grid::NUM_JOINTS);
+    grid::potential_energy_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_pe_regressor, (size_t)batch * 10*grid::NUM_BODIES * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)out; (void)batch; (void)gravity;
+    return 3;  // potential_energy_regressor not built into this .so (subset profile)
+#endif
+}
+
+extern "C" int grid_rbd_frame_jacobian(const T* q, T* out, int batch, int target_jid, int reference_frame) {
+#ifdef GRID_HAS_FRAME_JACOBIAN
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+    // -1 per arg => "use default" (leaf-EE / LWA); the host resolves each
+    // INDEPENDENTLY, so a default target with an explicit frame is honored.
+    grid::frame_jacobian<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN>(batch), g_streams, target_jid, reference_frame);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_frame_jacobian, (size_t)batch * 6*grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)out; (void)batch; (void)target_jid; (void)reference_frame;
+    return 3;  // frame_jacobian not generated for this .so
+#endif
+}
+
+extern "C" int grid_rbd_frame_jacobian_dot(const T* q, const T* qd, T* out, int batch, int target_jid, int reference_frame) {
+#ifdef GRID_HAS_FRAME_JACOBIAN_DOT
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    // -1 per arg => "use default" (leaf-EE / LWA); the host resolves each
+    // INDEPENDENTLY, so a default target with an explicit frame is honored.
+    grid::frame_jacobian_dot<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(batch), g_streams, target_jid, reference_frame);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_frame_jacobian_dot, (size_t)batch * 6*grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)qd; (void)out; (void)batch; (void)target_jid; (void)reference_frame;
+    return 3;  // frame_jacobian_dot not built
+#endif
+}
+
+extern "C" int grid_rbd_osc_inertia(const T* q, T* out, int batch) {
+#ifdef GRID_HAS_OSC_INERTIA
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+    grid::osc_inertia<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_OSC_INERTIA>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_osc_inertia, (size_t)batch * 36 * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)out; (void)batch;
+    return 3;  // osc_inertia not built
+#endif
+}
+
+// ── END GENERATED C-ABI BODIES ──
+
+
+// ccrba(q, qd) -> [A(6 x NV); h(6)] per timestep, total 6*NUM_VEL + 6 floats.
+// Gated on GRID_HAS_CCRBA (emitted for mimic too, alpha-folded); rc=3 only when a
+// reduced codegen profile didn't generate ccrba for this robot.
+
+// energy(q, qd) -> [KE, PE, KE+PE] per timestep, total 3 floats. Takes gravity.
+// Gated on GRID_HAS_ENERGY (emitted for mimic too, alpha-folded); rc=3 only when a
+// reduced codegen profile didn't generate energy for this robot.
 
 #if defined(GRID_HAS_COM) && defined(GRID_RBD_WITH_MUJOCO)
 // MuJoCo-convention com(q) -> [p_com(3); J_com(3 x NV)] per timestep. p_com is
@@ -1750,20 +1913,6 @@ extern "C" int grid_rbd_energy_mujoco(const T* q, const T* qd, T* out, int batch
 #endif  // GRID_HAS_ENERGY && GRID_RBD_WITH_MUJOCO
 
 // generalized_gravity(q) -> g(q) = RNEA(q,0,0) per timestep, NUM_VEL floats. Takes gravity.
-extern "C" int grid_rbd_generalized_gravity(const T* q, T* out, int batch, T gravity) {
-#if GRID_HAS_GENERALIZED_GRAVITY
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd unused (zeroed internally)
-    grid::generalized_gravity<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_GENERALIZED_GRAVITY>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)out; (void)batch; (void)gravity;
-    return 3;  // generalized_gravity not built into this .so (subset profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_GENERALIZED_GRAVITY
 // MuJoCo-convention generalized_gravity(q) -> g(q) (floating base only). q is raw
@@ -1783,20 +1932,6 @@ extern "C" int grid_rbd_generalized_gravity_mujoco(const T* q, T* out, int batch
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_GENERALIZED_GRAVITY
 
 // nonlinear_effects(q, qd) -> c(q,qd) = RNEA(q,qd,0) per timestep, NUM_VEL floats. Takes gravity.
-extern "C" int grid_rbd_nonlinear_effects(const T* q, const T* qd, T* out, int batch, T gravity) {
-#if GRID_HAS_NONLINEAR_EFFECTS
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::nonlinear_effects<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_NONLINEAR_EFFECTS>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)qd; (void)out; (void)batch; (void)gravity;
-    return 3;  // nonlinear_effects not built into this .so (subset profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_NONLINEAR_EFFECTS
 // MuJoCo-convention nonlinear_effects(q, qd) -> c(q,qd) (floating base only). q is
@@ -1819,20 +1954,6 @@ extern "C" int grid_rbd_nonlinear_effects_mujoco(const T* q, const T* qd, T* out
 // coriolis_matrix(q, qd) -> nv x nv Coriolis matrix C(q,qd), row-major
 // (C[row*nv + col]). Always emitted with the "all" profile (mimic-safe:
 // alpha-folded column assembly), so it is bound UNGATED like com/ccrba.
-extern "C" int grid_rbd_coriolis_matrix(const T* q, const T* qd, T* out, int batch, T gravity) {
-#if GRID_HAS_CORIOLIS_MATRIX
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::coriolis_matrix<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CORIOLIS_MATRIX>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_coriolis, (size_t)batch * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)qd; (void)out; (void)batch; (void)gravity;
-    return 3;  // coriolis_matrix not built into this .so (subset profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_CORIOLIS_MATRIX
 // MuJoCo-convention Coriolis matrix (floating base only): C_mjx = G C_pin G^T, a
@@ -1853,38 +1974,10 @@ extern "C" int grid_rbd_coriolis_matrix_mujoco(const T* q, const T* qd, T* out, 
 
 // kinetic_energy_regressor(q, qd) -> length 10*NUM_BODIES regressor y_KE
 // (KE = y_KE . pi). Always emitted with the "all" profile (mimic-safe), ungated.
-extern "C" int grid_rbd_kinetic_energy_regressor(const T* q, const T* qd, T* out, int batch, T gravity) {
-#if GRID_HAS_KINETIC_ENERGY_REGRESSOR
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::kinetic_energy_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_ke_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)qd; (void)out; (void)batch; (void)gravity;
-    return 3;  // kinetic_energy_regressor not built into this .so (subset profile)
-#endif
-}
 
 // potential_energy_regressor(q) -> length 10*NUM_BODIES regressor y_PE
 // (PE = y_PE . pi). Always emitted with the "all" profile (mimic-safe), ungated.
 // Reads the COMPRESSED input layout (h_q / d_q) like com.
-extern "C" int grid_rbd_potential_energy_regressor(const T* q, T* out, int batch, T gravity) {
-#if GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q(q, batch, grid::NUM_JOINTS);
-    grid::potential_energy_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_pe_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)out; (void)batch; (void)gravity;
-    return 3;  // potential_energy_regressor not built into this .so (subset profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_KINETIC_ENERGY_REGRESSOR
 // MuJoCo-convention kinetic_energy_regressor(q, qd) -> length 10*NUM_BODIES y_KE.
@@ -1929,21 +2022,6 @@ extern "C" int grid_rbd_potential_energy_regressor_mujoco(const T* q, T* out, in
 // didn't generate dccrba. For big floating robots whose kernel arena overflows the
 // smem cap the host wrapper's grid_check_dynamic_shared_memory_bytes raises a clear
 // rc!=0 at launch (the big-floating spill ladder de-gated g1/h1_2; commit c4b3900).
-extern "C" int grid_rbd_dccrba(const T* q, T* out, int batch) {
-#ifdef GRID_HAS_DCCRBA
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q(q, batch, grid::NUM_JOINTS);
-    grid::dccrba<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1),
-        grid_clamp_threads_for(grid::dccrba_kernel<T>, grid_rbd_launch_threads_n<grid::GRID_ALGO_DCCRBA>(batch)), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_dccrba, (size_t)batch * 6 * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)out; (void)batch;
-    return 3;  // dccrba not generated for this robot (reduced codegen profile)
-#endif
-}
 
 #if defined(GRID_RBD_WITH_MUJOCO) && defined(GRID_HAS_DCCRBA)
 // MuJoCo-convention dccrba(q) -> 6*NV*NV dA/dq tensor (floating base only). q is raw
@@ -1965,21 +2043,6 @@ extern "C" int grid_rbd_dccrba_mujoco(const T* q, T* out, int batch) {
 // cmm_time_variation(q, qd) -> 6*NUM_VEL centroidal-momentum-matrix time
 // variation Adot (per timestep). Gated on GRID_HAS_CMM_TIME_VARIATION (emitted for
 // mimic too, alpha-folded); returns rc=3 only when a reduced profile didn't generate it.
-extern "C" int grid_rbd_cmm_time_variation(const T* q, const T* qd, T* out, int batch) {
-#ifdef GRID_HAS_CMM_TIME_VARIATION
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::cmm_time_variation<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1),
-        grid_clamp_threads_for(grid::cmm_time_variation_kernel<T>, grid_rbd_launch_threads_n<grid::GRID_ALGO_CMM_TIME_VARIATION>(batch)), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_cmm_time_variation, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)qd; (void)out; (void)batch;
-    return 3;  // cmm_time_variation not generated for this robot (mimic)
-#endif
-}
 
 #if defined(GRID_HAS_CMM_TIME_VARIATION) && defined(GRID_RBD_WITH_MUJOCO)
 // MuJoCo-convention cmm_time_variation(q, qd) -> 6*NUM_VEL Adot (per timestep).
@@ -2001,66 +2064,16 @@ extern "C" int grid_rbd_cmm_time_variation_mujoco(const T* q, const T* qd, T* ou
 // frame_jacobian(q) -> 6 x NUM_VEL geometric Jacobian (col-major, [linear;angular])
 // at the leaf-EE frame, LOCAL_WORLD_ALIGNED. Gated on GRID_HAS_FRAME_JACOBIAN
 // (the frame_jacobian family is opt-in codegen; only present when requested).
-extern "C" int grid_rbd_frame_jacobian(const T* q, T* out, int batch,
-                                       int target_jid, int reference_frame) {
-#ifdef GRID_HAS_FRAME_JACOBIAN
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
-    // -1 per arg => "use default" (leaf-EE / LWA); the host resolves each
-    // INDEPENDENTLY, so a default target with an explicit frame is honored.
-    grid::frame_jacobian<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN>(batch), g_streams,
-                            target_jid, reference_frame);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_frame_jacobian, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)out; (void)batch; (void)target_jid; (void)reference_frame;
-    return 3;  // frame_jacobian not generated for this .so
-#endif
-}
 
 // frame_jacobian_dot(q, qd) -> d/dt of the leaf-EE frame Jacobian along v=qd,
 // 6 x NUM_VEL (col-major, [linear;angular]). Gated on GRID_HAS_FRAME_JACOBIAN_DOT
 // (dot is opt-in on top of frame_jacobian; a frame_jacobian-only build emits no
 // dot symbols).
-extern "C" int grid_rbd_frame_jacobian_dot(const T* q, const T* qd, T* out, int batch,
-                                           int target_jid, int reference_frame) {
-#ifdef GRID_HAS_FRAME_JACOBIAN_DOT
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    // -1 per arg => "use default" (leaf-EE / LWA), resolved INDEPENDENTLY by the
-    // host so a default target with an explicit frame is honored.
-    grid::frame_jacobian_dot<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(batch), g_streams,
-                                target_jid, reference_frame);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_frame_jacobian_dot, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)qd; (void)out; (void)batch; (void)target_jid; (void)reference_frame;
-    return 3;
-#endif
-}
 
 // osc_inertia(q) -> 6x6 operational-space (task) inertia Lambda = (J Minv J^T)^-1
 // at the leaf-EE frame (LWA), 36 floats per timestep. Gated on GRID_HAS_OSC_INERTIA
 // (osc_inertia is opt-in on top of frame_jacobian; a frame_jacobian-only build
 // emits no osc symbols).
-extern "C" int grid_rbd_osc_inertia(const T* q, T* out, int batch) {
-#ifdef GRID_HAS_OSC_INERTIA
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
-    grid::osc_inertia<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_OSC_INERTIA>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_osc_inertia, (size_t)batch * 36 * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)out; (void)batch;
-    return 3;
-#endif
-}
 
 #if defined(GRID_HAS_FRAME_JACOBIAN) && defined(GRID_RBD_WITH_MUJOCO)
 // MuJoCo-convention frame_jacobian family (floating base only). The geometric
