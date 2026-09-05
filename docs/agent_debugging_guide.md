@@ -1666,3 +1666,26 @@ derived at a point should be re-checked away from that point before
 differentiating it — here the correct identity is `M J = N(delta)`.
 Landed use: `quadratic_state_cost_tangent` (RBDReference/_plant.py), gates in
 tests/test_tangent_state_cost.py. The CUDA ASK3 preset must carry both terms.
+
+### 7.z3 FFI "kernel launch failed" masks THREE distinct causes (2026-09-05, h1_2 autotune)
+
+The jax/torch FFI handlers report every post-launch `cudaGetLastError() != cudaSuccess`
+as `"<name>_kernel launch failed"` — but that sticky error can be (a) a real launch-config
+error, (b) an error from the handler's OWN pre-launch async memcpys, or (c) **launch-time
+`cudaErrorMemoryAllocation`**: the runtime could not allocate the kernel's local-memory
+pool because VRAM was exhausted. Cause (c) was the h1_2 story: XLA preallocates 75% of
+VRAM at backend init, and `test/conftest.py`'s `XLA_PYTHON_CLIENT_PREALLOCATE=false`
+guard only covers pytest — every STANDALONE driver ran unguarded, so heavy kernels
+(fd/minv/fdgrad on a 46-joint humanoid) failed at launch while light ones (id) passed,
+mimicking a per-kernel smem bug. Now guarded at the top of
+`test/benchmarks/baselines/grid/timeGRiD_bindings.py` (imported by the drivers before jax).
+
+Triage recipe for FFI "launch failed":
+1. Run the SAME call on the numpy/pybind surface in the SAME process — it goes through the
+   generated host wrapper with `gpuErrchk` file:line + rc=100+cudaError, naming the real
+   error (rc=102 = memory allocation). Fastest isolator.
+2. If pybind passes standalone but fails alongside jax → VRAM pressure (prealloc class).
+3. If ALL surfaces fail at 32 threads → check `<ALGO>_DYNAMIC_SHARED_MEM_BYTES` in the
+   generated header vs `sharedMemPerBlockOptin` (99KB on sm_120). h1_2's
+   IDSVA_SO_BODY_FRAME bakes 782,584 floats ≈ 3.0MB at EVERY tier — unlaunchable on any
+   GPU, the legitimate hardware-limit skip class (real fix = SO memory wave-2).
