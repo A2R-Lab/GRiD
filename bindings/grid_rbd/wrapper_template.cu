@@ -332,6 +332,10 @@ static int grid_kernel_ceiling(const void* fp) {
 extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
     if (!algo) return -1;
     using RM = const grid::robotModel<T>*;
+// ── BEGIN GENERATED KERNEL_MAX_THREADS BRANCHES (grid_codegen/wrapper_body_gen.py — do not hand-edit) ──
+// Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen
+// Rows: CEIL_ROWS (keys crosschecked against the descriptor table's
+// autotune_keys by test/test_abi_spec_crosscheck.py).
 #if GRID_HAS_INVERSE_DYNAMICS
     if (std::strcmp(algo, "id") == 0)
         return GRID_KERNEL_CEIL(inverse_dynamics_kernel, GRID_ALGO_INVERSE_DYNAMICS,
@@ -488,6 +492,7 @@ extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
         return GRID_KERNEL_CEIL(cmm_time_variation_kernel, GRID_ALGO_CMM_TIME_VARIATION,
                                 void(*)(T*, unsigned char*, const T*, const int, RM, const int));
 #endif
+// ── END GENERATED KERNEL_MAX_THREADS BRANCHES ──
     return -1;  // unknown / not-built algo key
 }
 #undef GRID_KERNEL_CEIL

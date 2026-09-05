@@ -80,6 +80,117 @@ XTOOL_BLOCK = (
 BEGIN = "// ── BEGIN GENERATED C-ABI BODIES (grid_codegen/wrapper_body_gen.py — do not hand-edit) ──"
 END = "// ── END GENERATED C-ABI BODIES ──"
 
+# ── kernel_max_threads branch table (P1 incr-4a) ─────────────────────────────
+# The grid_rbd_kernel_max_threads switch is generated between these markers.
+# Row data: (autotune_key, algo_short) in the emitted (= historical) order;
+# gate/kernel/enum derive uniformly from algo_short, and the overload cast
+# comes from _kernel_attrs.KERNEL_OVERLOADS (the LAST non-single_timing entry
+# — for the qdd-forked kernels that is the no-qdd overload; both share
+# __launch_bounds__ so either reports the same ceiling), reformatted to the
+# switch's compact spelling. The idsva_so frame dispatcher and the batch-2
+# divider comment are positioned literals.
+CEIL_BEGIN = ("// ── BEGIN GENERATED KERNEL_MAX_THREADS BRANCHES "
+              "(grid_codegen/wrapper_body_gen.py — do not hand-edit) ──")
+CEIL_END = "// ── END GENERATED KERNEL_MAX_THREADS BRANCHES ──"
+
+_CEIL_DISPATCH = "__idsva_so_dispatch__"
+_CEIL_DIVIDER = "__divider__"
+CEIL_ROWS: tuple[tuple[str, str], ...] = (
+    ("id", "inverse_dynamics"),
+    ("minv", "minv"),
+    ("fd", "forward_dynamics"),
+    ("aba", "aba"),
+    ("crba", "crba"),
+    ("id_du", "inverse_dynamics_gradient"),
+    ("fd_du", "forward_dynamics_gradient"),
+    ("ee_pose", "end_effector_pose"),
+    ("ee_pose_gradient", "end_effector_pose_gradient"),
+    ("ee_pose_hessian", "end_effector_pose_hessian"),
+    ("idsva_so", _CEIL_DISPATCH),
+    ("fdsva_so", "fdsva_so"),
+    ("", _CEIL_DIVIDER),
+    ("f_ext_gradient", "f_ext_gradient"),
+    ("f_ext_gradient_dq", "f_ext_gradient_dq"),
+    ("inverse_dynamics_regressor", "inverse_dynamics_regressor"),
+    ("forward_dynamics_parameter_gradient", "forward_dynamics_parameter_gradient"),
+    ("kinetic_energy_regressor", "kinetic_energy_regressor"),
+    ("potential_energy_regressor", "potential_energy_regressor"),
+    ("frame_jacobian", "frame_jacobian"),
+    ("frame_jacobian_dot", "frame_jacobian_dot"),
+    ("osc_inertia", "osc_inertia"),
+    ("generalized_gravity", "generalized_gravity"),
+    ("nonlinear_effects", "nonlinear_effects"),
+    ("energy", "energy"),
+    ("com", "com"),
+    ("ccrba", "ccrba"),
+    ("coriolis_matrix", "coriolis_matrix"),
+    ("dccrba", "dccrba"),
+    ("cmm_time_variation", "cmm_time_variation"),
+)
+# The EE kernels are baked behind static/runtime selector macros — the branch
+# takes the macro's address so it queries whichever kernel this .so baked.
+CEIL_KERNEL_OVERRIDE: dict[str, str] = {
+    "end_effector_pose": "GRID_RBD_EE_POSE_KERNEL",
+    "end_effector_pose_gradient": "GRID_RBD_EE_POSE_GRADIENT_KERNEL",
+    "end_effector_pose_hessian": "GRID_RBD_EE_POSE_HESSIAN_KERNEL",
+}
+_CEIL_DISPATCH_BLOCK = """\
+    if (std::strcmp(algo, "idsva_so") == 0) {
+        // Dispatcher: the codegen emits EXACTLY ONE concrete frame kernel per robot
+        // (world for floating/spherical, body for cardinal fixed). Query whichever
+        // variant is present, at its frame-specific tier. Frame-specific ceilings can
+        // differ (different register footprints) — correct, we want the one that runs.
+#if GRID_HAS_IDSVA_SO_WORLD_FRAME
+        return GRID_KERNEL_CEIL(idsva_so_world_frame_kernel, GRID_ALGO_IDSVA_SO_WORLD_FRAME,
+                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
+#elif GRID_HAS_IDSVA_SO_BODY_FRAME
+        return GRID_KERNEL_CEIL(idsva_so_body_frame_kernel, GRID_ALGO_IDSVA_SO_BODY_FRAME,
+                                void(*)(T*, unsigned char*, const T*, const int, RM, const T, const int));
+#else
+        return -1;
+#endif
+    }"""
+_CEIL_DIVIDER_LINE = ("    // ─ batch-2 coverage extension (2026-08-26): "
+                      "keys are the FULL symbol names ─")
+
+
+def _ceil_sig(short: str) -> str:
+    """The branch's compact cast: the LAST non-single_timing overload for this
+    kernel from KERNEL_OVERLOADS, reformatted (robotModel first — it contains
+    'T *'; then the pointer-spacing collapses)."""
+    from ._kernel_attrs import KERNEL_OVERLOADS
+    cands = [sig for name, sig in KERNEL_OVERLOADS[short]
+             if not name.startswith(short + "_kernel_single_timing")]
+    sig = cands[-1]
+    sig = sig.replace("void (*)", "void(*)")
+    sig = sig.replace("const robotModel<T> *", "RM")
+    sig = sig.replace("unsigned char *", "unsigned char*")
+    return sig.replace("T *", "T*")
+
+
+def gen_ceil_block() -> str:
+    parts = [CEIL_BEGIN,
+             "// Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen",
+             "// Rows: CEIL_ROWS (keys crosschecked against the descriptor table's",
+             "// autotune_keys by test/test_abi_spec_crosscheck.py)."]
+    for key, short in CEIL_ROWS:
+        if short == _CEIL_DISPATCH:
+            parts.append(_CEIL_DISPATCH_BLOCK)
+            continue
+        if short == _CEIL_DIVIDER:
+            parts.append(_CEIL_DIVIDER_LINE)
+            continue
+        kern = CEIL_KERNEL_OVERRIDE.get(short, short + "_kernel")
+        up = short.upper()
+        parts.append(f"""\
+#if GRID_HAS_{up}
+    if (std::strcmp(algo, "{key}") == 0)
+        return GRID_KERNEL_CEIL({kern}, GRID_ALGO_{up},
+                                {_ceil_sig(short)});
+#endif""")
+    parts.append(CEIL_END)
+    return "\n".join(parts) + "\n"
+
 # Load-bearing per-body comments preserved from the hand-written originals.
 # The standard signature-switch comment (verbatim from the hand originals).
 SIG_COMMENT = (
@@ -299,25 +410,36 @@ def template_path() -> Path:
     return Path(__file__).resolve().parents[1] / "bindings" / "grid_rbd" / "wrapper_template.cu"
 
 
+# Every generated region of the template: (begin marker, end marker, generator).
+REGIONS = (
+    (BEGIN, END, gen_block),
+    (CEIL_BEGIN, CEIL_END, gen_ceil_block),
+)
+
+
 def main() -> int:
     check = "--check" in sys.argv
     p = template_path()
     src = p.read_text()
-    if BEGIN not in src or END not in src:
-        print("markers not found in wrapper_template.cu", file=sys.stderr)
-        return 2
-    head, rest = src.split(BEGIN, 1)
-    _old, tail = rest.split(END, 1)
-    new = head + gen_block().rstrip("\n") + tail
+    new = src
+    for begin, end, gen in REGIONS:
+        if begin not in new or end not in new:
+            print(f"markers not found in wrapper_template.cu: {begin[:60]}...",
+                  file=sys.stderr)
+            return 2
+        head, rest = new.split(begin, 1)
+        _old, tail = rest.split(end, 1)
+        new = head + gen().rstrip("\n") + tail
     if check:
         if new != src:
             print("GENERATED BLOCK DRIFT: rerun python -m grid_codegen.wrapper_body_gen",
                   file=sys.stderr)
             return 1
-        print("generated block up to date")
+        print("generated blocks up to date")
         return 0
     p.write_text(new)
-    print(f"rewrote generated block ({len(GENERATED_KEYS)} bodies)")
+    print(f"rewrote generated regions ({len(GENERATED_KEYS)} bodies + "
+          f"{len(CEIL_ROWS)} ceiling branches)")
     return 0
 
 
