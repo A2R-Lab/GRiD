@@ -36,6 +36,15 @@ from pathlib import Path
 
 import numpy as np
 
+# XLA's default allocator PREALLOCATES 75% of GPU memory at first backend init
+# (test/conftest.py carries the same guard for pytest runs; standalone drivers
+# import THIS module before jax, so this is their earliest hook). Without it,
+# big-humanoid kernels fail AT LAUNCH with cudaErrorMemoryAllocation — the
+# runtime can't allocate the local-memory pool once XLA holds 24+ GiB
+# (h1_2 forward_dynamics "launch failed", autotune leg 2026-09-05).
+# setdefault so an explicit caller choice still wins.
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+
 THIS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = THIS_DIR.parents[3]
 sys.path.insert(0, str(REPO_ROOT))

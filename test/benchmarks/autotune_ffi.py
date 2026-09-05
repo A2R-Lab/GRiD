@@ -282,6 +282,21 @@ def autotune_base(robot, base, n, iters, warmup, want_algos, build_algos=None,
             if "not built" in str(e) or "undefined symbol" in str(e):
                 print(f"    {algo:28s} skip (not in subset .so)")
                 continue
+            # 32 threads is the minimal legal config, so a "launch failed" HERE means
+            # the kernel cannot launch at ANY count on this GPU — the hardware-limit
+            # class the equivalence suite skips as "shared-memory request > cap"
+            # (first hit: h1_2 idsva_so_body_frame, 3.0MB smem at every tier vs the
+            # 99KB sm_120 opt-in cap, 2026-09-05). Skip LOUDLY and keep tuning: one
+            # unlaunchable algo must not lose the write for every algo that runs.
+            # (VRAM-pressure launch failures are excluded upstream: the harness module
+            # disables XLA preallocation before backend init.)
+            if "launch failed" in str(e):
+                print(f"    !! {algo}: UNLAUNCHABLE on this GPU at the 32-thread "
+                      f"probe ({str(e)[:100]})")
+                print(f"    !! {algo}: skipped — no {SURFACE_PROFILE[surface]}_bases "
+                      f"entry will be written for it; if this algo is expected to "
+                      f"run on this robot/GPU, investigate before trusting this tune")
+                continue
             raise
         # E1 tier-contract fix: read the kernel's REAL compiled launch_bounds ceiling
         # (cudaFuncGetAttributes maxThreadsPerBlock) BEFORE the sweep, so we (a) never
