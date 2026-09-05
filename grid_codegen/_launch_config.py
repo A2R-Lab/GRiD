@@ -110,6 +110,18 @@ def load_launch_config(robot_id, floating_base, gpu = LAUNCH_CONFIG_DEFAULT_GPU,
     return out
 
 
+def baked_launch_cfg(codegen):
+    """The launch-config table THIS codegen run bakes, with the same robot/
+    profile resolution gen_add_launch_config_helpers uses — the single load
+    path, so the launch_cfg<> specializations and the kernel-attribute
+    registrations (B2: divergent-tier opt-ins) can never disagree.
+    Returns {symbol: {"tier": "TIER_*", "threads": n}}."""
+    robot_id = (codegen.launch_config_robot if codegen.launch_config_robot is not None
+                else codegen.robot.get_name())
+    profile = getattr(codegen, "launch_config_profile", "host")
+    return load_launch_config(robot_id, codegen.robot.floating_base, profile=profile)
+
+
 def gen_add_launch_config_helpers(self):
     """Emit the A1b baked launch-config table (single source of truth).
 
@@ -124,9 +136,9 @@ def gen_add_launch_config_helpers(self):
     HOST launchers / bindings read grid::launch_cfg<ALGO>::{TIER,THREADS} to
     default their launch config, fixing the FFI thread-default pathology at
     the C++ root. Explicit caller-supplied threads still override."""
+    cfg = baked_launch_cfg(self)
     robot_id = self.launch_config_robot if self.launch_config_robot is not None else self.robot.get_name()
     profile = getattr(self, "launch_config_profile", "host")
-    cfg = load_launch_config(robot_id, self.robot.floating_base, profile=profile)
     # Stable, declaration-ordered list of every algo that COULD carry a config
     # (the canonical grid:: symbols). Emit one enumerator per algo so the
     # table is complete regardless of which algos this robot tuned.

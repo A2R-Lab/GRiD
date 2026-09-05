@@ -4,6 +4,74 @@ attr fns, init_grid/close_grid/streams). H4 move from GRiDCodeGenerator.py
 (2026-08-27, verbatim). The names are class-bound on GRiDCodeGenerator (tests
 read GRiDCodeGenerator.KERNEL_ATTR_MANIFEST etc.)."""
 from .algo_registry import ALGO_DESCRIPTORS, descriptor_for
+from ._launch_config import baked_launch_cfg
+
+
+# ── B2: divergent-tier registration support ──────────────────────────────────
+# cudaFuncSetAttribute is PER TEMPLATE INSTANTIATION. The manifest below spells
+# kernels at the DEFAULT tier (`<T>` / mjx `<T, GRID_DEFAULT_RESOURCE_TIER,
+# true>`), but the bindings/host launchers instantiate at
+# launch_cfg<GRID_ALGO_*>::TIER — a DIFFERENT kernel whenever the baked tier
+# diverges from the default. That instantiation was silently unregistered: a
+# >48KB divergent-tier kernel failed at launch (cudaErrorInvalidValue) while
+# its default-tier sibling worked. Fix: for every algo whose BAKED entry
+# (same load path as the launch_cfg<> specializations) carries a non-default
+# tier, ALSO register the divergent-tier instantiation, sized by the
+# tier-correct bytes. Robots with no divergent bake emit byte-identical text.
+#
+# These smem macros are `template <typename T>` only — their algos have ONE
+# arena, so smem is tier-INVARIANT and the `<T>()` spelling stays exact for
+# any tier (audited 2026-09-05; the kernels themselves are still
+# tier-templated — the tier only moves launch_bounds/registers there).
+TIER_BLIND_BYTES_MACROS = frozenset({
+    "INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>()",
+    "END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>()",
+    "KINETIC_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>()",
+    "POTENTIAL_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>()",
+    "INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>()",
+    "FRAME_JACOBIAN_DYNAMIC_SHARED_MEM_BYTES<T>()",
+    "FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES<T>()",
+    "END_EFFECTOR_POSE_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>()",
+    "END_EFFECTOR_POSE_GRADIENT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>()",
+})
+
+
+def _tier_variant_kernel(kernel_name: str, tier_sym: str) -> str:
+    """The divergent-tier spelling of a manifest kernel name. mjx names carry
+    an explicit GRID_DEFAULT_RESOURCE_TIER token (replaced); pin names rely on
+    the defaulted tier param, which is always the NEXT template arg after the
+    ones spelled (T, or T + IntegratorType — audited: every manifest kernel
+    takes RESOURCE_TIER immediately after T / after IT)."""
+    if "GRID_DEFAULT_RESOURCE_TIER" in kernel_name:
+        return kernel_name.replace("GRID_DEFAULT_RESOURCE_TIER", tier_sym)
+    assert kernel_name.endswith(">"), kernel_name
+    return kernel_name[:-1] + ", " + tier_sym + ">"
+
+
+def _tier_variant_bytes(bytes_macro: str, tier_sym: str) -> str:
+    """The tier-correct smem request for the divergent-tier registration."""
+    if bytes_macro in TIER_BLIND_BYTES_MACROS:
+        return bytes_macro
+    assert bytes_macro.endswith("<T>()"), bytes_macro
+    return bytes_macro[:-3] + ", " + tier_sym + ">()"
+
+
+def _tier_variant_attr_lines(label, bytes_macro, kernels, tier_sym, alias_start):
+    """The extra registration block for one divergent-tier algo entry.
+    Returns (lines, next_alias). Mirrors the default-tier block's shape."""
+    vb = _tier_variant_bytes(bytes_macro, tier_sym)
+    lines = [f"// {label}: baked launch_cfg tier {tier_sym} != default — the launchers",
+             "// instantiate THAT kernel, so it needs its own dynamic-smem opt-in.",
+             f"if ({vb} <= _grid_smem_max) {{",
+             f"    gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"{label}@{tier_sym}\", {vb}));"]
+    alias_counter = alias_start
+    for kernel_name, signature in kernels:
+        alias = f"_grid_kern_alias_{alias_counter}"
+        alias_counter += 1
+        lines.append(f"    auto {alias} = static_cast<{signature}>(&{_tier_variant_kernel(kernel_name, tier_sym)});")
+        lines.append(f"    gpuErrchk(cudaFuncSetAttribute({alias}, cudaFuncAttributeMaxDynamicSharedMemorySize, {vb}));")
+    lines.append("}")
+    return lines, alias_counter
 
 
 
@@ -405,6 +473,12 @@ def gen_init_close_grid(self):
                   "size_t _grid_smem_max = 0; gpuErrchk(grid_get_max_dynamic_shared_memory_bytes(&_grid_smem_max));"]
     generated_set = getattr(self, "generated_algorithms", None)
     alias_counter = 0
+    # B2: algos whose BAKED launch_cfg tier diverges from the default get a
+    # second registration at that tier (see the module-top note). Same load
+    # path as the launch_cfg<> specializations, so the two can never disagree.
+    # GRID_DEFAULT_RESOURCE_TIER is TIER_SHARED by policy (_constants_arena).
+    divergent_tiers = {sym: e["tier"] for sym, e in baked_launch_cfg(self).items()
+                       if e["tier"] != "TIER_SHARED"}
     # mjx (floating MUJOCO_OUTPUT) emits a SECOND __global__ instantiation of every
     # mjx-capable kernel with the trailing MUJOCO_OUTPUT=true template flag. Those are
     # DISTINCT device functions, so cudaFuncSetAttribute must run for them too — else a
@@ -473,6 +547,11 @@ def gen_init_close_grid(self):
             attr_lines.append(f"    auto {alias} = static_cast<{signature}>(&{kernel_name});")
             attr_lines.append(f"    gpuErrchk(cudaFuncSetAttribute({alias}, cudaFuncAttributeMaxDynamicSharedMemorySize, {bytes_macro}));")
         attr_lines.append("}")
+        if algo_short in divergent_tiers:
+            extra, alias_counter = _tier_variant_attr_lines(
+                algo_label, bytes_macro, kernels, divergent_tiers[algo_short],
+                alias_counter)
+            attr_lines.extend(extra)
     self.gen_add_code_lines(attr_lines)
     self.gen_add_end_function()
 
@@ -528,6 +607,11 @@ def gen_init_close_grid(self):
                     per_lines.append(f"    auto {alias} = static_cast<{signature}>(&{kernel_name});")
                     per_lines.append(f"    gpuErrchk(cudaFuncSetAttribute({alias}, cudaFuncAttributeMaxDynamicSharedMemorySize, {entry_bytes}));")
                 per_lines.append("}")
+                if short in divergent_tiers:  # B2: mirror the aggregate
+                    extra, per_alias = _tier_variant_attr_lines(
+                        entry_label, entry_bytes, entry_kernels,
+                        divergent_tiers[short], per_alias)
+                    per_lines.extend(extra)
             self.gen_add_code_lines(per_lines)
             self.gen_add_end_function()
 
