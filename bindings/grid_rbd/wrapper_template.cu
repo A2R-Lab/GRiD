@@ -625,209 +625,17 @@ static inline void reset_f_ext(const T* f_ext, int batch) {
 // itself. So we fill g_data->h_qdd from the caller's qdd and instantiate the
 // USE_QDD_FLAG=true overload; a null qdd keeps the (faster) qdd=0 overload.
 
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_INVERSE_DYNAMICS
-// MuJoCo-convention inverse dynamics (floating base only). Identical signature to
-// grid_rbd_inverse_dynamics, but q/qd/qdd are MuJoCo-native (quat wxyz, free-joint
-// velocity [v_lin GLOBAL; omega LOCAL]) and the returned tau is in the mjx frame.
-//
-// The mjx output convention is baked into the KERNEL via the compile-time
-// MUJOCO_OUTPUT=true template arg: the kernel converts the inputs mjx->pin on load
-// (quat reorder + base velocity/acceleration reframe) and rotates the base-linear
-// tau rows back to the mjx frame before saving — so NO host-side pre/post-process is
-// needed (this is the fast path that replaces pin-kernel + _mujoco.py rotation).
-//
-// qdd is REQUIRED: the qdd=0 "bias" path cannot represent mjx (mjx qacc=0 implies a
-// nonzero pin acceleration -omega x v — the nonlinear_effects accel-coupling), so a
-// null qdd returns rc=4. Callers wanting the mjx bias use nonlinear_effects instead.
-extern "C" int grid_rbd_inverse_dynamics_mujoco(
-    const T* q, const T* qd, const T* qdd_opt,
-    T* c_out,
-    int batch, T gravity, const T* f_ext)
-{
-    if (!qdd_opt) return 4;  // mjx requires an explicit qdd (see note above)
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    pack_q_qd_u(q, qd, nullptr, batch, nj);
-    if (int rc = apply_f_ext(f_ext, batch)) return rc;
-
-    // Host wrapper copies h_qdd->d_qdd (NUM_JOINTS per timestep, contiguous).
-    std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
-    grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false,
-                           /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS>(batch), g_streams);
-
-    cudaError_t e = cudaDeviceSynchronize();
-    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
-    // recorded in the sticky slot (the stream stays empty, so the sync above
-    // returns success — the silent stale-buffer class). Consume it here so the
-    // caller gets a loud rc instead of plausible garbage.
-    if (e == cudaSuccess) e = grid_consume_last_error();
-    reset_f_ext(f_ext, batch);
-    if (e != cudaSuccess) return 100 + (int)e;
-
-    std::memcpy(c_out, g_data->h_c, batch * nj * sizeof(T));
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INVERSE_DYNAMICS
-
 // Direct mass-matrix inverse: Minv(q)
-
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_MINV
-// MuJoCo-convention direct mass-matrix inverse (floating base only): the kernel
-// reorders the quaternion and applies the congruence Minv_mjx = G^-T Minv_pin G^-1
-// on the base block (MUJOCO_OUTPUT=true). The native kernel writes a FULL DENSE
-// SYMMETRIC mjx Minv (both triangles), so NO host symmetrize and NO host
-// minv_pin_to_mjx post-process are needed.
-extern "C" int grid_rbd_minv_mujoco(
-    const T* q,
-    T* minv_out,
-    int batch)
-{
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    const int nv = grid::NUM_VEL;
-    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, nj);  // qd/u unused by minv
-
-    grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-               /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_MINV>(batch), g_streams);
-
-    if (int rc = grid_rbd_sync_consume()) return rc;
-
-    cudaMemcpy(minv_out, g_data->d_Minv, (size_t)batch * nv * nv * sizeof(T),
-               cudaMemcpyDeviceToHost);
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_MINV
 
 // Forward dynamics: qdd = Minv(q)·(τ − c(q,qd))
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
 
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FORWARD_DYNAMICS
-// MuJoCo-convention forward dynamics (floating base only). q/qd/u are MuJoCo-native;
-// the kernel converts inputs mjx->pin on load and maps the output acceleration
-// qdd[0:3] = R(qdd_pin + omega x v) back to the mjx frame (MUJOCO_OUTPUT=true) — no
-// host pre/post-process. f_ext is not reframed by the kernel input-convert, so the
-// _handle dispatch only takes this path when f_ext is null.
-extern "C" int grid_rbd_forward_dynamics_mujoco(
-    const T* q, const T* qd, const T* u,
-    T* qdd_out,
-    int batch, T gravity, const T* f_ext)
-{
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    pack_q_qd_u(q, qd, u, batch, nj);
-    if (int rc = apply_f_ext(f_ext, batch)) return rc;
-
-    grid::forward_dynamics<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS>(batch), g_streams);
-
-    cudaError_t e = cudaDeviceSynchronize();
-    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
-    // recorded in the sticky slot (the stream stays empty, so the sync above
-    // returns success — the silent stale-buffer class). Consume it here so the
-    // caller gets a loud rc instead of plausible garbage.
-    if (e == cudaSuccess) e = grid_consume_last_error();
-    reset_f_ext(f_ext, batch);
-    if (e != cudaSuccess) return 100 + (int)e;
-
-    std::memcpy(qdd_out, g_data->h_qdd, batch * nj * sizeof(T));
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FORWARD_DYNAMICS
-
 // Articulated body algorithm: qdd = aba(q, qd, u)
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
 
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_ABA
-// MuJoCo-convention ABA (floating base only). Same accel_out convention as
-// forward_dynamics: q/qd/u raw mjx in, mjx-frame qdd out (MUJOCO_OUTPUT=true). f_ext
-// not reframed -> the _handle dispatch only uses this path when f_ext is null.
-extern "C" int grid_rbd_aba_mujoco(
-    const T* q, const T* qd, const T* u,
-    T* qdd_out,
-    int batch, T gravity, const T* f_ext)
-{
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    pack_q_qd_u(q, qd, u, batch, nj);
-    if (int rc = apply_f_ext(f_ext, batch)) return rc;
-
-    grid::aba<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_ABA>(batch), g_streams);
-
-    cudaError_t e = cudaDeviceSynchronize();
-    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
-    // recorded in the sticky slot (the stream stays empty, so the sync above
-    // returns success — the silent stale-buffer class). Consume it here so the
-    // caller gets a loud rc instead of plausible garbage.
-    if (e == cudaSuccess) e = grid_consume_last_error();
-    reset_f_ext(f_ext, batch);
-    if (e != cudaSuccess) return 100 + (int)e;
-
-    std::memcpy(qdd_out, g_data->h_qdd, batch * nj * sizeof(T));
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_ABA
-
 // Composite rigid body algorithm: M = crba(q)
 
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_CRBA
-// MuJoCo-convention mass matrix (floating base only): M_mjx = G M_pin G^T, the
-// congruence baked into the kernel (MUJOCO_OUTPUT=true). q is MuJoCo-native (quat
-// wxyz); the kernel reorders the quaternion and applies the congruence on the base
-// block before saving, so NO host pre/post-process is needed.
-extern "C" int grid_rbd_crba_mujoco(
-    const T* q,
-    T* m_out,
-    int batch, T gravity)
-{
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    const int nv = grid::NUM_VEL;
-    pack_q_qd_u(q, q, nullptr, batch, nj);  // qd/u unused
-
-    grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-               /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CRBA>(batch), g_streams);
-
-    if (int rc = grid_rbd_sync_consume()) return rc;
-
-    cudaMemcpy(m_out, g_data->d_M, (size_t)batch * nv * nv * sizeof(T),
-               cudaMemcpyDeviceToHost);
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_CRBA
-
 // End-effector pose: 6×NUM_EES per timestep (xyz + rpy).
-
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_END_EFFECTOR_POSE
-// MuJoCo-convention end_effector_pose(q) -> 6*NUM_EES per timestep. The pose is
-// frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts the mjx-native q
-// (quaternion reorder, like osc_inertia). Output byte-equal to feeding the pin
-// kernel the pin-converted q.
-extern "C" int grid_rbd_end_effector_pose_mujoco(const T* q, T* ee_out, int batch) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
-    grid::GRID_RBD_EE_POSE_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                            /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(ee_out, g_data->h_end_effector_pose, (size_t)batch * 6 * GRID_RBD_NUM_EES * sizeof(T));
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_END_EFFECTOR_POSE
 
 // Batched forward kinematics (large-batch, one block/warp per sample):
 //   q layout:     (batch, NUM_POS)            -> q[b*NUM_POS + j]
@@ -877,111 +685,15 @@ extern "C" int grid_rbd_fk_batched(
 // columns (the v-tangent dimension is nv = 6 + n_joints vs the old nq = 7 +
 // n_joints). Fixed-base shape unchanged (nq == nv).
 
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_END_EFFECTOR_POSE_GRADIENT
-// MuJoCo-convention end_effector_pose Jacobian (q) -> 6*NUM_EES*NUM_VEL per
-// timestep. Column-reframe: q raw mjx in (kernel reorders the quaternion) and the
-// kernel (MUJOCO_OUTPUT=true) reframes the base-linear Jacobian columns before
-// saving (the column reframe acts on the NV axis cols 0:3).
-extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(const T* q, T* dee_out, int batch) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
-    grid::GRID_RBD_EE_POSE_GRADIENT_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                                     /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(dee_out, g_data->h_end_effector_pose_gradient,
-                (size_t)batch * 6 * GRID_RBD_NUM_EES * grid::NUM_VEL * sizeof(T));
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_END_EFFECTOR_POSE_GRADIENT
-
 // ∂c/∂(q, qd): output shape (batch, NV, 2*NV) — concatenated [dc_dq | dc_dqd]
 // (tangent-space; FIXED base NV == NJ, FLOATING base NV < NJ).
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
 // f_ext enters RNEA additively (affine), so dc/d(q,qd) is unchanged for a
 // CONSTANT f_ext; this just keeps the bias consistent with grid_rbd_inverse_dynamics.
 
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_INVERSE_DYNAMICS_GRADIENT
-// MuJoCo-convention inverse-dynamics gradient (floating base only). q/qd/qdd are
-// MuJoCo-native; the kernel converts inputs mjx->pin on load and applies the full
-// gradient convention transform (reframe + base-row rotate + ω×v couplings, with M
-// from an in-kernel crba reuse) so the returned dc/d(q,qd) is the mjx-frame gradient.
-// REQUIRES qdd (the mjx gradient is the with-qdd surface; a null qdd returns rc=4).
-extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(
-    const T* q, const T* qd, const T* qdd_opt,
-    T* dc_du_out,
-    int batch, T gravity, const T* f_ext)
-{
-    if (!qdd_opt) return 4;  // mjx gradient requires an explicit qdd
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    pack_q_qd_u(q, qd, nullptr, batch, nj);
-    if (int rc = apply_f_ext(f_ext, batch)) return rc;
-
-    std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * nj * sizeof(T));
-    grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false,
-                                    /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(batch), g_streams);
-
-    cudaError_t e = cudaDeviceSynchronize();
-    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
-    // recorded in the sticky slot (the stream stays empty, so the sync above
-    // returns success — the silent stale-buffer class). Consume it here so the
-    // caller gets a loud rc instead of plausible garbage.
-    if (e == cudaSuccess) e = grid_consume_last_error();
-    reset_f_ext(f_ext, batch);
-    if (e != cudaSuccess) return 100 + (int)e;
-
-    const int nv = grid::NUM_VEL;
-    cudaMemcpy(dc_du_out, g_data->d_dc_du,
-               (size_t)batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToHost);
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INVERSE_DYNAMICS_GRADIENT
-
 // ∂qdd/∂(q, qd): output shape (batch, NV, 2*NV) (tangent-space; FIXED base
 // NV == NJ, FLOATING base NV < NJ).
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
-
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FORWARD_DYNAMICS_GRADIENT
-// MuJoCo-convention forward-dynamics gradient (floating base only). q/qd/u are
-// MuJoCo-native; qdd is computed internally. The kernel converts inputs mjx->pin on
-// load and applies the full gradient convention transform (reframe + base-row rotate
-// + ω×v couplings) so the returned df/d(q,qd) is the mjx-frame gradient.
-extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(
-    const T* q, const T* qd, const T* u,
-    T* df_du_out,
-    int batch, T gravity, const T* f_ext)
-{
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    pack_q_qd_u(q, qd, u, batch, nj);
-    if (int rc = apply_f_ext(f_ext, batch)) return rc;
-
-    grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                                    /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(batch), g_streams);
-
-    cudaError_t e = cudaDeviceSynchronize();
-    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
-    // recorded in the sticky slot (the stream stays empty, so the sync above
-    // returns success — the silent stale-buffer class). Consume it here so the
-    // caller gets a loud rc instead of plausible garbage.
-    if (e == cudaSuccess) e = grid_consume_last_error();
-    reset_f_ext(f_ext, batch);
-    if (e != cudaSuccess) return 100 + (int)e;
-
-    const int nv = grid::NUM_VEL;
-    cudaMemcpy(df_du_out, g_data->d_df_du,
-               (size_t)batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToHost);
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FORWARD_DYNAMICS_GRADIENT
 
 // End-effector pose Hessian: 6×NUM_EES×NV×NV per timestep (d^2/dv^2 tangent).
 // Calls grid::end_effector_pose_hessian which fills BOTH end_effector_pose_hessian AND
@@ -989,100 +701,13 @@ extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(
 // call end_effector_pose_gradient separately (the kernels are fast enough
 // that doing the work twice is fine for a small convenience).
 
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_END_EFFECTOR_POSE_HESSIAN
-// MuJoCo-convention end_effector_pose Hessian (q) -> 6*NUM_EES*NV*NV per timestep.
-// q is raw mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true)
-// double-column-reframes the Hessian (J·G^{-1} on both tangent indices) and adds the
-// symmetrized base-rotation frame term before saving. Output is invariant-shaped.
-extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(const T* q, T* d2ee_out, int batch) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
-    grid::GRID_RBD_EE_POSE_HESSIAN_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                                    /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(d2ee_out, g_data->h_end_effector_pose_hessian,
-                (size_t)batch * 6 * GRID_RBD_NUM_EES * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_END_EFFECTOR_POSE_HESSIAN
-
 // Second-order inverse dynamics. Output is the concatenated SO tensor of
 // shape SECOND_ORDER_TENSOR_SIZE = 4 * NV^3 per timestep (four NV^3 blocks:
 // d2tau_dq, d2tau_dqd, d2tau_cross, dM_dq). The Python side slices into the
 // four named tensors.
 
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_IDSVA_SO
-// MuJoCo-convention idsva_so(q, qd, qdd) -> 4*NV^3 (floating base only). q/qd/qdd are
-// raw mjx (kernel input-converts); the kernel (MUJOCO_OUTPUT=true) transforms all four
-// 2nd-order tensors to the mjx frame (explicit-analytic SO transform + dM_dq closed
-// form), reusing the id/crba/id-grad inners. The mjx kernel is register-heavy; the
-// post-launch error check surfaces a silent launch-config failure as rc!=0.
-extern "C" int grid_rbd_idsva_so_mujoco(const T* q, const T* qd, const T* qdd, T* out, int batch, T gravity) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, qd, qdd, batch, grid::NUM_JOINTS);
-    grid::idsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_IDSVA_SO>(batch), g_streams);
-    cudaError_t le = cudaGetLastError();
-    if (le != cudaSuccess) return 200 + (int)le;  // launch-config failure (e.g. too many registers)
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_idsva_so,
-                batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_IDSVA_SO
-
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
-// MuJoCo-convention inverse_dynamics_regressor (floating base only). q/qd/qdd are raw
-// mjx (kernel input-converts); the regressor ROWS are tangent-indexed generalized
-// forces, so the base-LINEAR rows (0:3) rotate by R (Y_mjx[0:3] = R Y_pin[0:3]) -- the
-// same base-row rotate as id_tau. Baked via the MUJOCO_OUTPUT=true template flag.
-extern "C" int grid_rbd_inverse_dynamics_regressor_mujoco(
-    const T* q, const T* qd, const T* qdd,
-    T* out, int batch, T gravity)
-{
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    const int nj = grid::NUM_JOINTS;
-    pack_q_qd_u(q, qd, qdd, batch, nj);
-    grid::inverse_dynamics_regressor<T, /*USE_COMPRESSED_MEM=*/false, grid::GRID_DATA_ALL,
-                                     /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, gravity, batch,
-        dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>(batch), g_streams);
-    cudaError_t le = cudaGetLastError();
-    if (le != cudaSuccess) return 200 + (int)le;
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_Y,
-                (size_t)batch * grid::NUM_VEL * 10 * grid::NUM_BODIES * sizeof(T));
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
-
 // Second-order forward dynamics. Output is 4 * NV^3 per timestep
 // (d2qdd_dq, d2qdd_dqd, d2qdd_dudq — interpretation per Singh/Wensing).
-
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FDSVA_SO
-// MuJoCo-convention fdsva_so(q, qd, u) -> 4*NV^3 (floating base only). q/qd/u raw mjx
-// (kernel input-converts); the kernel (MUJOCO_OUTPUT=true) transforms all four
-// 2nd-order forward-dynamics tensors to the mjx frame (explicit-analytic SO transform,
-// contravector output-map). Register-heavy; post-launch error check surfaces a silent
-// launch-config failure as rc!=0.
-extern "C" int grid_rbd_fdsva_so_mujoco(const T* q, const T* qd, const T* u, T* out, int batch, T gravity) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);
-    grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FDSVA_SO>(batch), g_streams);
-    cudaError_t le = cudaGetLastError();
-    if (le != cudaSuccess) return 200 + (int)le;
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_df2,
-                batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FDSVA_SO
 
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1130,119 +755,13 @@ static inline void pack_q(const T* q, int batch, int num_joints) {
 // Gated on GRID_HAS_ENERGY (emitted for mimic too, alpha-folded); rc=3 only when a
 // reduced codegen profile didn't generate energy for this robot.
 
-#if defined(GRID_HAS_COM) && defined(GRID_RBD_WITH_MUJOCO)
-// MuJoCo-convention com(q) -> [p_com(3); J_com(3 x NV)] per timestep. p_com is
-// INVARIANT; the J_com columns are reframed by the kernel (MUJOCO_OUTPUT=true): q
-// is MuJoCo-native (quat wxyz) and the kernel reorders the quaternion + applies the
-// column reframe before saving, so NO host pre/post-process is needed.
-extern "C" int grid_rbd_com_mujoco(const T* q, T* out, int batch) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q(q, batch, grid::NUM_JOINTS);
-    grid::com<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-              /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_COM>::TIER>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COM>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_com, (size_t)batch * (3 + 3 * grid::NUM_VEL) * sizeof(T));
-    return 0;
-}
-#endif  // GRID_HAS_COM && GRID_RBD_WITH_MUJOCO
-
-#if defined(GRID_HAS_CCRBA) && defined(GRID_RBD_WITH_MUJOCO)
-// MuJoCo-convention ccrba(q, qd) -> [A(6 x NV); h(6)] per timestep. The centroidal
-// momentum h is INVARIANT; the A columns are reframed by the kernel
-// (MUJOCO_OUTPUT=true). q/qd raw mjx in (kernel reorders the quaternion + reframes
-// qd), so NO host pre/post-process is needed.
-extern "C" int grid_rbd_ccrba_mujoco(const T* q, const T* qd, T* out, int batch) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::ccrba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CCRBA>::TIER>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CCRBA>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_ccrba, (size_t)batch * (6 * grid::NUM_VEL + 6) * sizeof(T));
-    return 0;
-}
-#endif  // GRID_HAS_CCRBA && GRID_RBD_WITH_MUJOCO
-
-#if defined(GRID_HAS_ENERGY) && defined(GRID_RBD_WITH_MUJOCO)
-// MuJoCo-convention energy(q, qd) -> [KE, PE, KE+PE] per timestep. The energies are
-// frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) just converts the mjx-native
-// inputs (quaternion reorder + qd reframe) so the energy is built correctly. Output
-// is byte-equal to feeding the pin kernel the pin-converted q/qd.
-extern "C" int grid_rbd_energy_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::energy<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                 /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ENERGY>::TIER>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_ENERGY>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_energy, (size_t)batch * 3 * sizeof(T));
-    return 0;
-}
-#endif  // GRID_HAS_ENERGY && GRID_RBD_WITH_MUJOCO
-
 // generalized_gravity(q) -> g(q) = RNEA(q,0,0) per timestep, NUM_VEL floats. Takes gravity.
 
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_GENERALIZED_GRAVITY
-// MuJoCo-convention generalized_gravity(q) -> g(q) (floating base only). q is raw
-// mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true) base-rotates
-// the gravity output so the returned g is mjx-frame. Output is NUM_VEL invariant-shaped.
-extern "C" int grid_rbd_generalized_gravity_mujoco(const T* q, T* out, int batch, T gravity) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd unused (zeroed internally)
-    grid::generalized_gravity<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                              /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_GENERALIZED_GRAVITY>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_GENERALIZED_GRAVITY
-
 // nonlinear_effects(q, qd) -> c(q,qd) = RNEA(q,qd,0) per timestep, NUM_VEL floats. Takes gravity.
-
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_NONLINEAR_EFFECTS
-// MuJoCo-convention nonlinear_effects(q, qd) -> c(q,qd) (floating base only). q is
-// raw mjx (kernel reorders the quaternion). The kernel (MUJOCO_OUTPUT=true) injects
-// the accel-couple delta_a (base-linear = -(omega x v_lin)) via a zeroed s_qdd then
-// base-rotates the bias output, so the returned c is the mjx-frame qfrc_bias.
-extern "C" int grid_rbd_nonlinear_effects_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::nonlinear_effects<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                            /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_NONLINEAR_EFFECTS>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_NONLINEAR_EFFECTS
 
 // coriolis_matrix(q, qd) -> nv x nv Coriolis matrix C(q,qd), row-major
 // (C[row*nv + col]). Always emitted with the "all" profile (mimic-safe:
 // alpha-folded column assembly), so it is bound UNGATED like com/ccrba.
-
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_CORIOLIS_MATRIX
-// MuJoCo-convention Coriolis matrix (floating base only): C_mjx = G C_pin G^T, a
-// congruence baked into the kernel (MUJOCO_OUTPUT=true). q/qd raw mjx in (kernel
-// reorders the quaternion + reframes qd), mjx-frame C out (nv x nv row-major).
-extern "C" int grid_rbd_coriolis_matrix_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::coriolis_matrix<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                          /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CORIOLIS_MATRIX>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_coriolis, (size_t)batch * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_CORIOLIS_MATRIX
 
 // kinetic_energy_regressor(q, qd) -> length 10*NUM_BODIES regressor y_KE
 // (KE = y_KE . pi). Always emitted with the "all" profile (mimic-safe), ungated.
@@ -1250,42 +769,6 @@ extern "C" int grid_rbd_coriolis_matrix_mujoco(const T* q, const T* qd, T* out, 
 // potential_energy_regressor(q) -> length 10*NUM_BODIES regressor y_PE
 // (PE = y_PE . pi). Always emitted with the "all" profile (mimic-safe), ungated.
 // Reads the COMPRESSED input layout (h_q / d_q) like com.
-
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_KINETIC_ENERGY_REGRESSOR
-// MuJoCo-convention kinetic_energy_regressor(q, qd) -> length 10*NUM_BODIES y_KE.
-// The regressor is frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts
-// the mjx-native inputs (quaternion reorder + qd reframe). Output is byte-equal to
-// feeding the pin kernel the pin-converted q/qd. (The MUJOCO_OUTPUT instantiation
-// only exists for floating, hence the GRID_RBD_WITH_MUJOCO gate.)
-extern "C" int grid_rbd_kinetic_energy_regressor_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::kinetic_energy_regressor<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                                   /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_ke_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_KINETIC_ENERGY_REGRESSOR
-
-#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
-// MuJoCo-convention potential_energy_regressor(q) -> length 10*NUM_BODIES y_PE.
-// Frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts the mjx-native q
-// (quaternion reorder). Output byte-equal to feeding the pin kernel pin-converted q.
-extern "C" int grid_rbd_potential_energy_regressor_mujoco(const T* q, T* out, int batch, T gravity) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q(q, batch, grid::NUM_JOINTS);
-    grid::potential_energy_regressor<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                                     /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_pe_regressor, (size_t)batch * 10 * grid::NUM_BODIES * sizeof(T));
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
 
 // dccrba(q) -> 6*NUM_VEL*NUM_VEL dCCRBA tensor dA/dq (per timestep, as the kernel
 // writes it). Reads the COMPRESSED input layout (h_q / d_q). Gated on
@@ -1295,43 +778,9 @@ extern "C" int grid_rbd_potential_energy_regressor_mujoco(const T* q, T* out, in
 // smem cap the host wrapper's grid_check_dynamic_shared_memory_bytes raises a clear
 // rc!=0 at launch (the big-floating spill ladder de-gated g1/h1_2; commit c4b3900).
 
-#if defined(GRID_RBD_WITH_MUJOCO) && defined(GRID_HAS_DCCRBA)
-// MuJoCo-convention dccrba(q) -> 6*NV*NV dA/dq tensor (floating base only). q is raw
-// mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true) double-reframes
-// the qd-column and q-tangent indices by G^{-1} and adds the base-rotation frame term
-// (using the in-kernel CMM value) before saving.
-extern "C" int grid_rbd_dccrba_mujoco(const T* q, T* out, int batch) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q(q, batch, grid::NUM_JOINTS);
-    grid::dccrba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                 /*MUJOCO_OUTPUT=*/true>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_DCCRBA>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_dccrba, (size_t)batch * 6 * grid::NUM_VEL * grid::NUM_VEL * sizeof(T));
-    return 0;
-}
-#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_DCCRBA
-
 // cmm_time_variation(q, qd) -> 6*NUM_VEL centroidal-momentum-matrix time
 // variation Adot (per timestep). Gated on GRID_HAS_CMM_TIME_VARIATION (emitted for
 // mimic too, alpha-folded); returns rc=3 only when a reduced profile didn't generate it.
-
-#if defined(GRID_HAS_CMM_TIME_VARIATION) && defined(GRID_RBD_WITH_MUJOCO)
-// MuJoCo-convention cmm_time_variation(q, qd) -> 6*NUM_VEL Adot (per timestep).
-// Column-reframe: q/qd raw mjx in (kernel reorders the quaternion + reframes qd)
-// and the kernel (MUJOCO_OUTPUT=true) reframes the Adot columns before saving.
-extern "C" int grid_rbd_cmm_time_variation_mujoco(const T* q, const T* qd, T* out, int batch) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::cmm_time_variation<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                             /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CMM_TIME_VARIATION>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_cmm_time_variation, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
-    return 0;
-}
-#endif  // GRID_HAS_CMM_TIME_VARIATION && GRID_RBD_WITH_MUJOCO
 
 // frame_jacobian(q) -> 6 x NUM_VEL geometric Jacobian (col-major, [linear;angular])
 // at the leaf-EE frame, LOCAL_WORLD_ALIGNED. Gated on GRID_HAS_FRAME_JACOBIAN
@@ -1346,116 +795,6 @@ extern "C" int grid_rbd_cmm_time_variation_mujoco(const T* q, const T* qd, T* ou
 // at the leaf-EE frame (LWA), 36 floats per timestep. Gated on GRID_HAS_OSC_INERTIA
 // (osc_inertia is opt-in on top of frame_jacobian; a frame_jacobian-only build
 // emits no osc symbols).
-
-#if defined(GRID_HAS_FRAME_JACOBIAN) && defined(GRID_RBD_WITH_MUJOCO)
-// MuJoCo-convention frame_jacobian family (floating base only). The geometric
-// Jacobian / its time-derivative are column-reframed J_mjx = J_pin G^{-1} in the
-// kernel (MUJOCO_OUTPUT=true). osc_inertia's value Lambda is frame-INVARIANT, but
-// its q input still needs the quaternion reordered (wxyz->xyzw) so the internal
-// J/Minv build correctly — the mjx kernel does that, so a raw-mjx q is handled here
-// rather than silently mis-built by the pin kernel. All take raw mjx inputs.
-extern "C" int grid_rbd_frame_jacobian_mujoco(const T* q, T* out, int batch,
-                                              int target_jid, int reference_frame) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
-    grid::frame_jacobian<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                         /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN>(batch), g_streams,
-        target_jid, reference_frame);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_frame_jacobian, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
-    return 0;
-}
-
-#ifdef GRID_HAS_FRAME_JACOBIAN_DOT
-extern "C" int grid_rbd_frame_jacobian_dot_mujoco(const T* q, const T* qd, T* out, int batch,
-                                                  int target_jid, int reference_frame) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
-    grid::frame_jacobian_dot<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                             /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(batch), g_streams,
-        target_jid, reference_frame);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_frame_jacobian_dot, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
-    return 0;
-}
-#endif  // GRID_HAS_FRAME_JACOBIAN_DOT
-
-#ifdef GRID_HAS_OSC_INERTIA
-extern "C" int grid_rbd_osc_inertia_mujoco(const T* q, T* out, int batch) {
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);
-    grid::osc_inertia<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL,
-                      /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_OSC_INERTIA>(batch), g_streams);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_osc_inertia, (size_t)batch * 36 * sizeof(T));
-    return 0;
-}
-#endif  // GRID_HAS_OSC_INERTIA
-#endif  // GRID_HAS_FRAME_JACOBIAN && GRID_RBD_WITH_MUJOCO
-
-#ifdef GRID_RBD_WITH_MUJOCO
-// MuJoCo-convention end_effector_pose_runtime (floating base only). The kernel
-// input-converts q (quat reorder) on load; the pose VALUE is frame-INVARIANT (the
-// 6-vector [xyz; rpy] is the same world frame), so this matches the pin pose with
-// the mjx-reordered quaternion. Baked via the MUJOCO_OUTPUT=true host/kernel flag.
-extern "C" int grid_rbd_end_effector_pose_runtime_mujoco(const T* q, T* out, int batch,
-                                                         int target_jid, const T* offset) {
-#ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd/u unused
-    // offset is now the 4x4 col-major SE(3) tool/tip transform (16 floats); identity => frame origin.
-    T Xtool[16] = {static_cast<T>(1),0,0,0, 0,static_cast<T>(1),0,0,
-                   0,0,static_cast<T>(1),0, 0,0,0,static_cast<T>(1)};
-    if (offset) { for (int i = 0; i < 16; ++i) Xtool[i] = offset[i]; }
-    if (cudaMemcpy(g_data->d_eepose_runtime_offset, Xtool, 16*sizeof(T),
-                   cudaMemcpyHostToDevice) != cudaSuccess) return 101;
-    grid::end_effector_pose_runtime<T, /*USE_COMPRESSED_MEM=*/false, grid::GRID_DATA_ALL,
-                                    /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), g_streams, target_jid);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_eePose, (size_t)batch * 6 * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)out; (void)batch; (void)target_jid; (void)offset;
-    return 3;
-#endif
-}
-
-// MuJoCo-convention end_effector_pose_gradient_runtime (floating base only). The
-// pose value is invariant, but the gradient is COLUMN-reframed: the base-linear
-// columns reframe by R^T (mjx base-linear velocity is global). Baked via
-// MUJOCO_OUTPUT=true. Output 6 x NUM_VEL col-major, like the pin variant.
-extern "C" int grid_rbd_end_effector_pose_gradient_runtime_mujoco(const T* q, T* out, int batch,
-                                                                  int target_jid, const T* offset) {
-#ifdef GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
-    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
-    if (batch > kMaxBatch) return 2;
-    pack_q_qd_u(q, q, nullptr, batch, grid::NUM_JOINTS);  // qd/u unused
-    // offset is now the 4x4 col-major SE(3) tool/tip transform (16 floats); identity => frame origin.
-    T Xtool[16] = {static_cast<T>(1),0,0,0, 0,static_cast<T>(1),0,0,
-                   0,0,static_cast<T>(1),0, 0,0,0,static_cast<T>(1)};
-    if (offset) { for (int i = 0; i < 16; ++i) Xtool[i] = offset[i]; }
-    if (cudaMemcpy(g_data->d_eepose_runtime_offset, Xtool, 16*sizeof(T),
-                   cudaMemcpyHostToDevice) != cudaSuccess) return 101;
-    grid::end_effector_pose_gradient_runtime<T, /*USE_COMPRESSED_MEM=*/false, grid::GRID_DATA_ALL,
-                                             /*MUJOCO_OUTPUT=*/true>(
-        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), g_streams, target_jid);
-    if (int rc = grid_rbd_sync_consume()) return rc;
-    std::memcpy(out, g_data->h_eePoseGrad, (size_t)batch * 6 * grid::NUM_VEL * sizeof(T));
-    return 0;
-#else
-    (void)q; (void)out; (void)batch; (void)target_jid; (void)offset;
-    return 3;
-#endif
-}
-#endif  // GRID_RBD_WITH_MUJOCO
 
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1634,7 +973,7 @@ static void launch_integrator_grad_host_mujoco(int batch, T gravity, T dt) {
 // ── BEGIN GENERATED C-ABI BODIES (grid_codegen/wrapper_body_gen.py — do not hand-edit) ──
 // Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen
 // Table: grid_codegen/abi_specs.py (ABI_SPECS); drift-gated by
-// test/test_wrapper_generated_block.py. Mjx twins stay hand-written.
+// test/test_wrapper_generated_block.py.
 
 extern "C" int grid_rbd_nonlinear_effects(const T* q, const T* qd, T* out, int batch, T gravity) {
 #if GRID_HAS_NONLINEAR_EFFECTS
@@ -2325,28 +1664,501 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime(const T* q, T* out, i
 
 // ── END GENERATED C-ABI BODIES ──
 
+// ── BEGIN GENERATED MJX TWIN BODIES (grid_codegen/wrapper_body_gen.py — do not hand-edit) ──
+// Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen
+// Table: grid_codegen/abi_specs.py (mjx_* fields); docs verbatim from
+// grid_codegen/wrapper_mjx_docs.py. The 4 plant cost twins stay hand-written.
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_NONLINEAR_EFFECTS
+// MuJoCo-convention nonlinear_effects(q, qd) -> c(q,qd) (floating base only). q is
+// raw mjx (kernel reorders the quaternion). The kernel (MUJOCO_OUTPUT=true) injects
+// the accel-couple delta_a (base-linear = -(omega x v_lin)) via a zeroed s_qdd then
+// base-rotates the bias output, so the returned c is the mjx-frame qfrc_bias.
+extern "C" int grid_rbd_nonlinear_effects_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::nonlinear_effects<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_NONLINEAR_EFFECTS>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_NONLINEAR_EFFECTS
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_GENERALIZED_GRAVITY
+// MuJoCo-convention generalized_gravity(q) -> g(q) (floating base only). q is raw
+// mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true) base-rotates
+// the gravity output so the returned g is mjx-frame. Output is NUM_VEL invariant-shaped.
+extern "C" int grid_rbd_generalized_gravity_mujoco(const T* q, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+    grid::generalized_gravity<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_GENERALIZED_GRAVITY>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_c, (size_t)batch * grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_GENERALIZED_GRAVITY
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_CORIOLIS_MATRIX
+// MuJoCo-convention Coriolis matrix (floating base only): C_mjx = G C_pin G^T, a
+// congruence baked into the kernel (MUJOCO_OUTPUT=true). q/qd raw mjx in (kernel
+// reorders the quaternion + reframes qd), mjx-frame C out (nv x nv row-major).
+extern "C" int grid_rbd_coriolis_matrix_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::coriolis_matrix<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CORIOLIS_MATRIX>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_coriolis, (size_t)batch * grid::NUM_VEL*grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_CORIOLIS_MATRIX
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_ENERGY
+// MuJoCo-convention energy(q, qd) -> [KE, PE, KE+PE] per timestep. The energies are
+// frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) just converts the mjx-native
+// inputs (quaternion reorder + qd reframe) so the energy is built correctly. Output
+// is byte-equal to feeding the pin kernel the pin-converted q/qd.
+extern "C" int grid_rbd_energy_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::energy<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ENERGY>::TIER>(
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_ENERGY>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_energy, (size_t)batch * 3 * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_ENERGY
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_COM
+// MuJoCo-convention com(q) -> [p_com(3); J_com(3 x NV)] per timestep. p_com is
+// INVARIANT; the J_com columns are reframed by the kernel (MUJOCO_OUTPUT=true): q
+// is MuJoCo-native (quat wxyz) and the kernel reorders the quaternion + applies the
+// column reframe before saving, so NO host pre/post-process is needed.
+extern "C" int grid_rbd_com_mujoco(const T* q, T* out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q(q, batch, grid::NUM_JOINTS);
+    grid::com<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_COM>::TIER>(
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COM>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_com, (size_t)batch * (3 + 3 * grid::NUM_VEL) * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_COM
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_CCRBA
+// MuJoCo-convention ccrba(q, qd) -> [A(6 x NV); h(6)] per timestep. The centroidal
+// momentum h is INVARIANT; the A columns are reframed by the kernel
+// (MUJOCO_OUTPUT=true). q/qd raw mjx in (kernel reorders the quaternion + reframes
+// qd), so NO host pre/post-process is needed.
+extern "C" int grid_rbd_ccrba_mujoco(const T* q, const T* qd, T* out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::ccrba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CCRBA>::TIER>(
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CCRBA>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_ccrba, (size_t)batch * (6 * grid::NUM_VEL + 6) * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_CCRBA
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_DCCRBA
+// MuJoCo-convention dccrba(q) -> 6*NV*NV dA/dq tensor (floating base only). q is raw
+// mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true) double-reframes
+// the qd-column and q-tangent indices by G^{-1} and adds the base-rotation frame term
+// (using the in-kernel CMM value) before saving.
+extern "C" int grid_rbd_dccrba_mujoco(const T* q, T* out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q(q, batch, grid::NUM_JOINTS);
+    grid::dccrba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_DCCRBA>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_dccrba, (size_t)batch * 6*grid::NUM_VEL*grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_DCCRBA
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_CMM_TIME_VARIATION
+// MuJoCo-convention cmm_time_variation(q, qd) -> 6*NUM_VEL Adot (per timestep).
+// Column-reframe: q/qd raw mjx in (kernel reorders the quaternion + reframes qd)
+// and the kernel (MUJOCO_OUTPUT=true) reframes the Adot columns before saving.
+extern "C" int grid_rbd_cmm_time_variation_mujoco(const T* q, const T* qd, T* out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::cmm_time_variation<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CMM_TIME_VARIATION>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_cmm_time_variation, (size_t)batch * 6*grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_CMM_TIME_VARIATION
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_KINETIC_ENERGY_REGRESSOR
+// MuJoCo-convention kinetic_energy_regressor(q, qd) -> length 10*NUM_BODIES y_KE.
+// The regressor is frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts
+// the mjx-native inputs (quaternion reorder + qd reframe). Output is byte-equal to
+// feeding the pin kernel the pin-converted q/qd. (The MUJOCO_OUTPUT instantiation
+// only exists for floating, hence the GRID_RBD_WITH_MUJOCO gate.)
+extern "C" int grid_rbd_kinetic_energy_regressor_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::kinetic_energy_regressor<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_ke_regressor, (size_t)batch * 10*grid::NUM_BODIES * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_KINETIC_ENERGY_REGRESSOR
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
+// MuJoCo-convention potential_energy_regressor(q) -> length 10*NUM_BODIES y_PE.
+// Frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts the mjx-native q
+// (quaternion reorder). Output byte-equal to feeding the pin kernel pin-converted q.
+extern "C" int grid_rbd_potential_energy_regressor_mujoco(const T* q, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q(q, batch, grid::NUM_JOINTS);
+    grid::potential_energy_regressor<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_pe_regressor, (size_t)batch * 10*grid::NUM_BODIES * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FRAME_JACOBIAN
+// MuJoCo-convention frame_jacobian family (floating base only). The geometric
+// Jacobian / its time-derivative are column-reframed J_mjx = J_pin G^{-1} in the
+// kernel (MUJOCO_OUTPUT=true). osc_inertia's value Lambda is frame-INVARIANT, but
+// its q input still needs the quaternion reordered (wxyz->xyzw) so the internal
+// J/Minv build correctly — the mjx kernel does that, so a raw-mjx q is handled here
+// rather than silently mis-built by the pin kernel. All take raw mjx inputs.
+extern "C" int grid_rbd_frame_jacobian_mujoco(const T* q, T* out, int batch, int target_jid, int reference_frame) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+    grid::frame_jacobian<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN>(batch), g_streams, target_jid, reference_frame);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_frame_jacobian, (size_t)batch * 6*grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FRAME_JACOBIAN
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FRAME_JACOBIAN_DOT
+extern "C" int grid_rbd_frame_jacobian_dot_mujoco(const T* q, const T* qd, T* out, int batch, int target_jid, int reference_frame) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    grid::frame_jacobian_dot<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(batch), g_streams, target_jid, reference_frame);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_frame_jacobian_dot, (size_t)batch * 6*grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FRAME_JACOBIAN_DOT
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_OSC_INERTIA
+extern "C" int grid_rbd_osc_inertia_mujoco(const T* q, T* out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+    grid::osc_inertia<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_OSC_INERTIA>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_osc_inertia, (size_t)batch * 36 * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_OSC_INERTIA
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_MINV
+// MuJoCo-convention direct mass-matrix inverse (floating base only): the kernel
+// reorders the quaternion and applies the congruence Minv_mjx = G^-T Minv_pin G^-1
+// on the base block (MUJOCO_OUTPUT=true). The native kernel writes a FULL DENSE
+// SYMMETRIC mjx Minv (both triangles), so NO host symmetrize and NO host
+// minv_pin_to_mjx post-process are needed.
+extern "C" int grid_rbd_minv_mujoco(const T* q, T* minv_out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+    grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_MINV>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    cudaMemcpy(minv_out, g_data->d_Minv, (size_t)batch * grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_MINV
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_CRBA
+// MuJoCo-convention mass matrix (floating base only): M_mjx = G M_pin G^T, the
+// congruence baked into the kernel (MUJOCO_OUTPUT=true). q is MuJoCo-native (quat
+// wxyz); the kernel reorders the quaternion and applies the congruence on the base
+// block before saving, so NO host pre/post-process is needed.
+extern "C" int grid_rbd_crba_mujoco(const T* q, T* m_out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+    grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CRBA>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    cudaMemcpy(m_out, g_data->d_M, (size_t)batch * grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_CRBA
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_END_EFFECTOR_POSE
+// MuJoCo-convention end_effector_pose(q) -> 6*NUM_EES per timestep. The pose is
+// frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts the mjx-native q
+// (quaternion reorder, like osc_inertia). Output byte-equal to feeding the pin
+// kernel the pin-converted q.
+extern "C" int grid_rbd_end_effector_pose_mujoco(const T* q, T* ee_out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+    grid::GRID_RBD_EE_POSE_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(ee_out, g_data->h_end_effector_pose, (size_t)batch * 6*GRID_RBD_NUM_EES * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_END_EFFECTOR_POSE
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_END_EFFECTOR_POSE_GRADIENT
+// MuJoCo-convention end_effector_pose Jacobian (q) -> 6*NUM_EES*NUM_VEL per
+// timestep. Column-reframe: q raw mjx in (kernel reorders the quaternion) and the
+// kernel (MUJOCO_OUTPUT=true) reframes the base-linear Jacobian columns before
+// saving (the column reframe acts on the NV axis cols 0:3).
+extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(const T* q, T* dee_out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+    grid::GRID_RBD_EE_POSE_GRADIENT_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(dee_out, g_data->h_end_effector_pose_gradient, (size_t)batch * 6*GRID_RBD_NUM_EES*grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_END_EFFECTOR_POSE_GRADIENT
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_END_EFFECTOR_POSE_HESSIAN
+// MuJoCo-convention end_effector_pose Hessian (q) -> 6*NUM_EES*NV*NV per timestep.
+// q is raw mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true)
+// double-column-reframes the Hessian (J·G^{-1} on both tangent indices) and adds the
+// symmetrized base-rotation frame term before saving. Output is invariant-shaped.
+extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(const T* q, T* d2ee_out, int batch) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+    grid::GRID_RBD_EE_POSE_HESSIAN_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>(batch), g_streams);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(d2ee_out, g_data->h_end_effector_pose_hessian, (size_t)batch * 6*GRID_RBD_NUM_EES*grid::NUM_VEL*grid::NUM_VEL * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_END_EFFECTOR_POSE_HESSIAN
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_IDSVA_SO
+// MuJoCo-convention idsva_so(q, qd, qdd) -> 4*NV^3 (floating base only). q/qd/qdd are
+// raw mjx (kernel input-converts); the kernel (MUJOCO_OUTPUT=true) transforms all four
+// 2nd-order tensors to the mjx frame (explicit-analytic SO transform + dM_dq closed
+// form), reusing the id/crba/id-grad inners. The mjx kernel is register-heavy; the
+// post-launch error check surfaces a silent launch-config failure as rc!=0.
+extern "C" int grid_rbd_idsva_so_mujoco(const T* q, const T* qd, const T* qdd, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, qdd, batch, grid::NUM_JOINTS);
+    grid::idsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO>::TIER>(
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_IDSVA_SO>(batch), g_streams);
+    { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_idsva_so, (size_t)batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_IDSVA_SO
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FDSVA_SO
+// MuJoCo-convention fdsva_so(q, qd, u) -> 4*NV^3 (floating base only). q/qd/u raw mjx
+// (kernel input-converts); the kernel (MUJOCO_OUTPUT=true) transforms all four
+// 2nd-order forward-dynamics tensors to the mjx frame (explicit-analytic SO transform,
+// contravector output-map). Register-heavy; post-launch error check surfaces a silent
+// launch-config failure as rc!=0.
+extern "C" int grid_rbd_fdsva_so_mujoco(const T* q, const T* qd, const T* u, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);
+    grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FDSVA_SO>(batch), g_streams);
+    { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_df2, (size_t)batch * grid::SECOND_ORDER_TENSOR_SIZE * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FDSVA_SO
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FORWARD_DYNAMICS
+// MuJoCo-convention forward dynamics (floating base only). q/qd/u are MuJoCo-native;
+// the kernel converts inputs mjx->pin on load and maps the output acceleration
+// qdd[0:3] = R(qdd_pin + omega x v) back to the mjx frame (MUJOCO_OUTPUT=true) — no
+// host pre/post-process. f_ext is not reframed by the kernel input-convert, so the
+// _handle dispatch only takes this path when f_ext is null.
+extern "C" int grid_rbd_forward_dynamics_mujoco(const T* q, const T* qd, const T* u, T* qdd_out, int batch, T gravity, const T* f_ext) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
+    grid::forward_dynamics<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER>(
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS>(batch), g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
+    reset_f_ext(f_ext, batch);
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(qdd_out, g_data->h_qdd, (size_t)batch * grid::NUM_JOINTS * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FORWARD_DYNAMICS
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_ABA
+// MuJoCo-convention ABA (floating base only). Same accel_out convention as
+// forward_dynamics: q/qd/u raw mjx in, mjx-frame qdd out (MUJOCO_OUTPUT=true). f_ext
+// not reframed -> the _handle dispatch only uses this path when f_ext is null.
+extern "C" int grid_rbd_aba_mujoco(const T* q, const T* qd, const T* u, T* qdd_out, int batch, T gravity, const T* f_ext) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
+    grid::aba<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER>(
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_ABA>(batch), g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
+    reset_f_ext(f_ext, batch);
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(qdd_out, g_data->h_qdd, (size_t)batch * grid::NUM_JOINTS * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_ABA
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_INVERSE_DYNAMICS
+// MuJoCo-convention inverse dynamics (floating base only). Identical signature to
+// grid_rbd_inverse_dynamics, but q/qd/qdd are MuJoCo-native (quat wxyz, free-joint
+// velocity [v_lin GLOBAL; omega LOCAL]) and the returned tau is in the mjx frame.
+//
+// The mjx output convention is baked into the KERNEL via the compile-time
+// MUJOCO_OUTPUT=true template arg: the kernel converts the inputs mjx->pin on load
+// (quat reorder + base velocity/acceleration reframe) and rotates the base-linear
+// tau rows back to the mjx frame before saving — so NO host-side pre/post-process is
+// needed (this is the fast path that replaces pin-kernel + _mujoco.py rotation).
+//
+// qdd is REQUIRED: the qdd=0 "bias" path cannot represent mjx (mjx qacc=0 implies a
+// nonzero pin acceleration -omega x v — the nonlinear_effects accel-coupling), so a
+// null qdd returns rc=4. Callers wanting the mjx bias use nonlinear_effects instead.
+extern "C" int grid_rbd_inverse_dynamics_mujoco(const T* q, const T* qd, const T* qdd_opt, T* c_out, int batch, T gravity, const T* f_ext) {
+    if (!qdd_opt) return 4;  // mjx requires an explicit qdd
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
+    // Host wrapper copies h_qdd->d_qdd (NUM_JOINTS per timestep, contiguous).
+    std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * grid::NUM_JOINTS * sizeof(T));
+    grid::inverse_dynamics<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER>(
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS>(batch), g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
+    reset_f_ext(f_ext, batch);
+    if (e != cudaSuccess) return 100 + (int)e;
+    std::memcpy(c_out, g_data->h_c, (size_t)batch * grid::NUM_JOINTS * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INVERSE_DYNAMICS
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_INVERSE_DYNAMICS_GRADIENT
+// MuJoCo-convention inverse-dynamics gradient (floating base only). q/qd/qdd are
+// MuJoCo-native; the kernel converts inputs mjx->pin on load and applies the full
+// gradient convention transform (reframe + base-row rotate + ω×v couplings, with M
+// from an in-kernel crba reuse) so the returned dc/d(q,qd) is the mjx-frame gradient.
+// REQUIRES qdd (the mjx gradient is the with-qdd surface; a null qdd returns rc=4).
+extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(const T* q, const T* qd, const T* qdd_opt, T* dc_du_out, int batch, T gravity, const T* f_ext) {
+    if (!qdd_opt) return 4;  // mjx requires an explicit qdd
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
+    // Host wrapper copies h_qdd->d_qdd (NUM_JOINTS per timestep, contiguous).
+    std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * grid::NUM_JOINTS * sizeof(T));
+    grid::inverse_dynamics_gradient<T, /*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(batch), g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
+    reset_f_ext(f_ext, batch);
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(dc_du_out, g_data->d_dc_du, (size_t)batch * 2*grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INVERSE_DYNAMICS_GRADIENT
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+// MuJoCo-convention forward-dynamics gradient (floating base only). q/qd/u are
+// MuJoCo-native; qdd is computed internally. The kernel converts inputs mjx->pin on
+// load and applies the full gradient convention transform (reframe + base-row rotate
+// + ω×v couplings) so the returned df/d(q,qd) is the mjx-frame gradient.
+extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(const T* q, const T* qd, const T* u, T* df_du_out, int batch, T gravity, const T* f_ext) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);
+    if (int rc = apply_f_ext(f_ext, batch)) return rc;
+    grid::forward_dynamics_gradient<T, /*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(batch), g_streams);
+    cudaError_t e = cudaDeviceSynchronize();
+    // NO_EXIT builds: a LAUNCH-time failure inside a generated host wrapper is
+    // recorded in the sticky slot (the stream stays empty, so the sync above
+    // returns success — the silent stale-buffer class). Consume it here so the
+    // caller gets a loud rc instead of plausible garbage.
+    if (e == cudaSuccess) e = grid_consume_last_error();
+    reset_f_ext(f_ext, batch);
+    if (e != cudaSuccess) return 100 + (int)e;
+    cudaMemcpy(df_du_out, g_data->d_df_du, (size_t)batch * 2*grid::NUM_VEL*grid::NUM_VEL * sizeof(T), cudaMemcpyDeviceToHost);
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_INTEGRATOR
 // MuJoCo-convention integrator (floating base only): the free-joint base POSITION
 // takes a GLOBAL additive step (mjx retract) instead of pin's SE(3) V(phi); the
 // base quaternion + joints integrate normally. q/qd raw mjx in (q wxyz, qd global),
 // x_kp1 raw mjx out (q wxyz). Baked into the kernel (MUJOCO_OUTPUT=true).
-extern "C" int grid_rbd_integrator_mujoco(
-    const T* q, const T* qd, const T* u,
-    T* x_kp1_out, int batch, T gravity, T dt, int it)
-{
+extern "C" int grid_rbd_integrator_mujoco(const T* q, const T* qd, const T* u, T* x_kp1_out, int batch, T gravity, T dt, int it) {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
-
-    const int nj = grid::NUM_JOINTS;
-    pack_q_qd_u(q, qd, u, batch, nj);
-
+    pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);
     GRID_RBD_IT_DISPATCH(it, launch_integrator_host_mujoco, batch, gravity, dt);
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
-
     if (int rc = grid_rbd_sync_consume()) return rc;
-
-    std::memcpy(x_kp1_out, g_data->h_x_kp1,
-                batch * (grid::NUM_POS + grid::NUM_VEL) * sizeof(T));
+    std::memcpy(x_kp1_out, g_data->h_x_kp1, (size_t)batch * (grid::NUM_POS + grid::NUM_VEL) * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INTEGRATOR
@@ -2357,22 +2169,95 @@ extern "C" int grid_rbd_integrator_mujoco(
 // transforms the discrete state-transition Jacobian to the mjx tangent (global-add
 // retract rows + G velocity reframe + input-conversion column couplings). EULER/SI-EULER
 // only (multistage static_asserts out). Register-heavy; post-launch error check.
-extern "C" int grid_rbd_integrator_gradient_mujoco(
-    const T* q, const T* qd, const T* u,
-    T* dAB_out, int batch, T gravity, T dt, int it)
-{
+extern "C" int grid_rbd_integrator_gradient_mujoco(const T* q, const T* qd, const T* u, T* dAB_out, int batch, T gravity, T dt, int it) {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);
     GRID_RBD_IT_DISPATCH_HESSIAN(it, launch_integrator_grad_host_mujoco, batch, gravity, dt);
     { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
     if (int rc = grid_rbd_sync_consume()) return rc;
-    const int nv = grid::NUM_VEL;
-    std::memcpy(dAB_out, g_data->h_dAB,
-                batch * (2 * nv) * (3 * nv) * sizeof(T));
+    std::memcpy(dAB_out, g_data->h_dAB, (size_t)batch * (2 * grid::NUM_VEL) * (3 * grid::NUM_VEL) * sizeof(T));
     return 0;
 }
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INTEGRATOR_GRADIENT
+
+#if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
+// MuJoCo-convention inverse_dynamics_regressor (floating base only). q/qd/qdd are raw
+// mjx (kernel input-converts); the regressor ROWS are tangent-indexed generalized
+// forces, so the base-LINEAR rows (0:3) rotate by R (Y_mjx[0:3] = R Y_pin[0:3]) -- the
+// same base-row rotate as id_tau. Baked via the MUJOCO_OUTPUT=true template flag.
+extern "C" int grid_rbd_inverse_dynamics_regressor_mujoco(const T* q, const T* qd, const T* qdd, T* out, int batch, T gravity) {
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, qd, qdd, batch, grid::NUM_JOINTS);
+    grid::inverse_dynamics_regressor<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>(batch), g_streams);
+    { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_Y, (size_t)batch * grid::NUM_VEL * 10 * grid::NUM_BODIES * sizeof(T));
+    return 0;
+}
+#endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
+
+#ifdef GRID_RBD_WITH_MUJOCO
+// MuJoCo-convention end_effector_pose_runtime (floating base only). The kernel
+// input-converts q (quat reorder) on load; the pose VALUE is frame-INVARIANT (the
+// 6-vector [xyz; rpy] is the same world frame), so this matches the pin pose with
+// the mjx-reordered quaternion. Baked via the MUJOCO_OUTPUT=true host/kernel flag.
+extern "C" int grid_rbd_end_effector_pose_runtime_mujoco(const T* q, T* out, int batch, int target_jid, const T* offset) {
+#ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+    // stage the runtime offset (frame origin when offset==nullptr):
+    // offset is the 4x4 col-major SE(3) tool/tip transform (16 floats); identity => frame origin.
+    T Xtool[16] = {static_cast<T>(1),0,0,0, 0,static_cast<T>(1),0,0,
+                   0,0,static_cast<T>(1),0, 0,0,0,static_cast<T>(1)};
+    if (offset) { for (int i = 0; i < 16; ++i) Xtool[i] = offset[i]; }
+    if (cudaMemcpy(g_data->d_eepose_runtime_offset, Xtool, 16*sizeof(T),
+                   cudaMemcpyHostToDevice) != cudaSuccess) return 101;
+    grid::end_effector_pose_runtime<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), g_streams, target_jid);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_eePose, (size_t)batch * 6 * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)out; (void)batch; (void)target_jid; (void)offset;
+    return 3;
+#endif
+}
+#endif  // GRID_RBD_WITH_MUJOCO
+
+#ifdef GRID_RBD_WITH_MUJOCO
+// MuJoCo-convention end_effector_pose_gradient_runtime (floating base only). The
+// pose value is invariant, but the gradient is COLUMN-reframed: the base-linear
+// columns reframe by R^T (mjx base-linear velocity is global). Baked via
+// MUJOCO_OUTPUT=true. Output 6 x NUM_VEL col-major, like the pin variant.
+extern "C" int grid_rbd_end_effector_pose_gradient_runtime_mujoco(const T* q, T* out, int batch, int target_jid, const T* offset) {
+#ifdef GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
+    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }
+    if (batch > kMaxBatch) return 2;
+    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
+    // stage the runtime offset (frame origin when offset==nullptr):
+    // offset is the 4x4 col-major SE(3) tool/tip transform (16 floats); identity => frame origin.
+    T Xtool[16] = {static_cast<T>(1),0,0,0, 0,static_cast<T>(1),0,0,
+                   0,0,static_cast<T>(1),0, 0,0,0,static_cast<T>(1)};
+    if (offset) { for (int i = 0; i < 16; ++i) Xtool[i] = offset[i]; }
+    if (cudaMemcpy(g_data->d_eepose_runtime_offset, Xtool, 16*sizeof(T),
+                   cudaMemcpyHostToDevice) != cudaSuccess) return 101;
+    grid::end_effector_pose_gradient_runtime<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
+        g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), g_streams, target_jid);
+    if (int rc = grid_rbd_sync_consume()) return rc;
+    std::memcpy(out, g_data->h_eePoseGrad, (size_t)batch * 6*grid::NUM_VEL * sizeof(T));
+    return 0;
+#else
+    (void)q; (void)out; (void)batch; (void)target_jid; (void)offset;
+    return 3;
+#endif
+}
+#endif  // GRID_RBD_WITH_MUJOCO
+
+// ── END GENERATED MJX TWIN BODIES ──
 
 
 // ────────────────────────────────────────────────────────────────────────────

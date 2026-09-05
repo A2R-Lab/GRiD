@@ -18,8 +18,10 @@ Emitter rules worth knowing:
 - out_size_expr is ALWAYS emitted parenthesized — additive expressions are
   precedence-load-bearing inside `batch * <expr> * sizeof(T)` (a stripped
   paren here was the bug class the offline harness caught).
-- mjx twins are NOT generated in this increment (their tier/gate variance is
-  D2/D6 in abi_specs.py) — twins stay hand-written below the block.
+- Three generated regions (REGIONS): the C-ABI bodies, the kernel_max_threads
+  branch table (incr-4a), and the mjx twin bodies (incr-4b — 30 twins from the
+  same spec rows; the 4 plant cost twins and tool_fext/fk_batched stay
+  hand-written by design).
 """
 from __future__ import annotations
 
@@ -398,11 +400,142 @@ def gen_block() -> str:
     parts = [BEGIN,
              "// Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen",
              "// Table: grid_codegen/abi_specs.py (ABI_SPECS); drift-gated by",
-             "// test/test_wrapper_generated_block.py. Mjx twins stay hand-written.",
+             "// test/test_wrapper_generated_block.py.",
              ""]
     for key in GENERATED_KEYS:
         parts.append(gen_body(ABI_SPECS[key]))
     parts.append(END)
+    return "\n".join(parts) + "\n"
+
+
+# ── mjx twin bodies (P1 incr-4b) ─────────────────────────────────────────────
+# The grid_rbd_<stem>_mujoco C-ABI twins, generated from the SAME spec rows as
+# their pin siblings plus the mjx_* fields. Twin-vs-pin deltas the emitter
+# models: the GRID_RBD_WITH_MUJOCO gate is OUTSIDE the function (symbol absent
+# on a non-mjx build — the python surface probes by symbol presence), the host
+# template always carries /*MUJOCO_OUTPUT=*/true (no SIG_MJX fork — the twin
+# only compiles where the mjx signature exists), qdd-required rows replace the
+# pin flag-fork with an rc=4 prologue + unconditional qdd path, mjx_omits_tier
+# rows launch the DEFAULT-tier instantiation (ported hand behavior — such
+# twins never pass launch_cfg tier), and the runtime-EE pair keeps its inner
+# HAS-gate + rc=3 stub so the symbol exists on every mjx build.
+MJX_BEGIN = ("// ── BEGIN GENERATED MJX TWIN BODIES "
+             "(grid_codegen/wrapper_body_gen.py — do not hand-edit) ──")
+MJX_END = "// ── END GENERATED MJX TWIN BODIES ──"
+
+MJX_KEYS: tuple[str, ...] = tuple(
+    k for k in GENERATED_KEYS if ABI_SPECS[k].has_mjx_twin)
+
+# Twins whose function keeps an INNER gate + rc=3 stub (symbol present on any
+# mjx build). Everyone else gates the whole function away.
+MJX_INNER_GATE: frozenset[str] = XTOOL_STAGING
+
+_MJX_QDD_REQ = "    if (!qdd_opt) return 4;  // mjx requires an explicit qdd"
+_MJX_QDD_COPY = (
+    "    // Host wrapper copies h_qdd->d_qdd (NUM_JOINTS per timestep, contiguous).\n"
+    "    std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * grid::NUM_JOINTS * sizeof(T));")
+_POST_LAUNCH = "    { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }"
+
+
+def _mjx_mid(spec: AbiSpec) -> str:
+    if spec.template_shape == "qdd6":
+        return "/*USE_QDD_FLAG=*/true, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL"
+    if spec.template_shape == "fdgrad5":
+        return "/*USE_QDD_MINV_FLAG=*/false, /*KIND=*/grid::GRID_DATA_ALL"
+    if spec.template_shape == "so4":
+        return "/*KIND=*/grid::GRID_DATA_ALL"
+    # std5 — and every "plain" pin row's twin, which calls the expanded
+    # template form (the tight <T> spelling has no MUJOCO_OUTPUT slot).
+    return "/*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL"
+
+
+def gen_mjx_body(spec: AbiSpec) -> str:
+    from .wrapper_mjx_docs import MJX_DOC
+    stem = spec.abi_stem or spec.key
+    gate = spec.gate_macro or ("GRID_HAS_" + spec.key.upper())
+    launch = spec.launch_algo or ("GRID_ALGO_" + spec.key.upper())
+    sym = spec.grid_symbol or ("grid::" + spec.key)
+    pnames = [n for n, _t in spec.inputs]
+    out_name = next(n for n in pnames if n.endswith("out") or n == "out")
+    sig = ", ".join(f"{t} {n}" for (n, t) in spec.inputs)
+    inner = spec.key in MJX_INNER_GATE
+
+    L = []
+    if inner:
+        L.append("#ifdef GRID_RBD_WITH_MUJOCO")
+    else:
+        L.append(f"#if defined(GRID_RBD_WITH_MUJOCO) && {gate}")
+    if stem in MJX_DOC:
+        L.append(MJX_DOC[stem])
+    L.append(f'extern "C" int grid_rbd_{stem}_mujoco({sig}) {{')
+    if inner:
+        L.append(f"#{spec.gate_form} {gate}")
+    if spec.mjx_requires_qdd:
+        L.append(_MJX_QDD_REQ)
+    L.append("    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }")
+    L.append("    if (batch > kMaxBatch) return 2;")
+    L.append(_PACK[spec.pack_mode])
+    if spec.key in XTOOL_STAGING:
+        L.append(XTOOL_BLOCK)
+    if spec.f_ext_mode == "optional":
+        L.append("    if (int rc = apply_f_ext(f_ext, batch)) return rc;")
+    if spec.mjx_requires_qdd:
+        L.append(_MJX_QDD_COPY)
+
+    if spec.it_dispatch or spec.mjx_it_dispatch:
+        macro = ("GRID_RBD_IT_DISPATCH_HESSIAN" if spec.mjx_it_dispatch == "HESSIAN"
+                 else "GRID_RBD_IT_DISPATCH")
+        L.append(f"    {macro}(it, {IT_LAUNCHER[spec.key]}_mujoco, batch, gravity, dt);")
+    else:
+        grav = "gravity, " if spec.takes_gravity else ""
+        trail = "".join(", " + a for a in spec.trailing_runtime_args)
+        tier = ("" if spec.mjx_omits_tier
+                else f", /*RESOURCE_TIER=*/grid::launch_cfg<grid::{launch}>::TIER")
+        L.append(f"    {sym}<T, {_mjx_mid(spec)}, /*MUJOCO_OUTPUT=*/true{tier}>(")
+        L.append(f"        g_data, g_robot, {grav}batch, dim3((unsigned)batch, 1, 1), "
+                 f"grid_rbd_launch_threads_n<grid::{launch}>(batch), g_streams{trail});")
+    if spec.pre_launch_check or spec.mjx_post_launch_check:
+        L.append(_POST_LAUNCH)
+
+    if spec.f_ext_mode == "optional":
+        L.append("    cudaError_t e = cudaDeviceSynchronize();")
+        L.append(NO_EXIT_COMMENT)
+        L.append("    if (e == cudaSuccess) e = grid_consume_last_error();")
+        L.append("    reset_f_ext(f_ext, batch);")
+        L.append("    if (e != cudaSuccess) return 100 + (int)e;")
+    else:
+        L.append("    if (int rc = grid_rbd_sync_consume()) return rc;")
+
+    size = _size_c(spec.out_size_expr)
+    if spec.out_copy == "memcpy_h":
+        L.append(f"    std::memcpy({out_name}, g_data->{spec.out_buffer}, "
+                 f"(size_t)batch * {size} * sizeof(T));")
+    else:
+        L.append(f"    cudaMemcpy({out_name}, g_data->{spec.out_buffer}, "
+                 f"(size_t)batch * {size} * sizeof(T), cudaMemcpyDeviceToHost);")
+    L.append("    return 0;")
+    if inner:
+        L += ["#else",
+              "    " + " ".join(f"(void){n};" for n in pnames),
+              "    return 3;",
+              "#endif"]
+    L.append("}")
+    if inner:
+        L.append("#endif  // GRID_RBD_WITH_MUJOCO")
+    else:
+        L.append(f"#endif  // GRID_RBD_WITH_MUJOCO && {gate}")
+    return "\n".join(L) + "\n"
+
+
+def gen_mjx_block() -> str:
+    parts = [MJX_BEGIN,
+             "// Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen",
+             "// Table: grid_codegen/abi_specs.py (mjx_* fields); docs verbatim from",
+             "// grid_codegen/wrapper_mjx_docs.py. The 4 plant cost twins stay hand-written.",
+             ""]
+    for key in MJX_KEYS:
+        parts.append(gen_mjx_body(ABI_SPECS[key]))
+    parts.append(MJX_END)
     return "\n".join(parts) + "\n"
 
 
@@ -414,6 +547,7 @@ def template_path() -> Path:
 REGIONS = (
     (BEGIN, END, gen_block),
     (CEIL_BEGIN, CEIL_END, gen_ceil_block),
+    (MJX_BEGIN, MJX_END, gen_mjx_block),
 )
 
 

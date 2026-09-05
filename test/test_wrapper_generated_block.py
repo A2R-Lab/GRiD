@@ -23,6 +23,29 @@ def test_generated_block_matches_emitter():
             ".venv/bin/python -m grid_codegen.wrapper_body_gen")
 
 
+def test_mjx_twin_scope():
+    """Invariant for the generated mjx twin region: every twin row is within
+    the emitter's modeled variance, twin docs cover every row that had one,
+    and only the runtime-EE pair keeps the inner-gate + stub form."""
+    from grid_codegen.abi_specs import ABI_SPECS
+    from grid_codegen.wrapper_mjx_docs import MJX_DOC
+    assert len(g.MJX_KEYS) == 30
+    for key in g.MJX_KEYS:
+        s = ABI_SPECS[key]
+        assert s.has_mjx_twin and not s.body_override, key
+        assert s.template_shape in ("plain", "std5", "so4", "qdd6", "fdgrad5"), key
+        assert s.mjx_it_dispatch in (None, "HESSIAN"), key
+        if s.it_dispatch or s.mjx_it_dispatch:
+            assert key in g.IT_LAUNCHER, key
+        if s.mjx_requires_qdd:
+            assert ("qdd_opt", "const T*") in s.inputs, key
+    assert g.MJX_INNER_GATE == frozenset(
+        {"end_effector_pose_runtime", "end_effector_pose_gradient_runtime"})
+    # docs are keyed by abi stem; no orphaned doc entries
+    stems = {ABI_SPECS[k].abi_stem or k for k in g.MJX_KEYS}
+    assert set(MJX_DOC) <= stems, set(MJX_DOC) - stems
+
+
 def test_ceil_rows_match_registry():
     """Referee for the kernel_max_threads branch table: each row's autotune key
     is the descriptor table's key for that algo, the gate/enum derive from the

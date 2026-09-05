@@ -67,6 +67,7 @@ class AbiSpec:
     mjx_omits_tier: bool = False
     mjx_requires_qdd: bool = False            # `if (!qdd_opt) return 4;`
     mjx_it_dispatch: str | None = None        # twin's IT dispatch when it differs
+    mjx_post_launch_check: bool = False       # twin's 200+e cudaGetLastError block
     # ── escape hatch ────────────────────────────────────────────────────
     body_override: bool = False
 
@@ -220,7 +221,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         template_shape="so4",
         out_buffer="h_idsva_so", out_copy="memcpy_h",
         out_size_expr="grid::SECOND_ORDER_TENSOR_SIZE",
-        has_mjx_twin=True,
+        has_mjx_twin=True, mjx_post_launch_check=True,
         # VOCAB GAP (no field): the MJX TWIN ONLY has the post-launch
         # `cudaGetLastError() -> return 200+e` check (register-heavy kernel,
         # wrapper_template.cu:1492-1493); the pin body has no 200+ block, so
@@ -238,7 +239,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         template_shape="so4",
         out_buffer="h_df2", out_copy="memcpy_h",
         out_size_expr="grid::SECOND_ORDER_TENSOR_SIZE",
-        has_mjx_twin=True,
+        has_mjx_twin=True, mjx_post_launch_check=True,
         # VOCAB GAP (no field): mjx-twin-only 200+ post-launch check
         # (wrapper_template.cu:1601-1602); pin body has none.
     ),
@@ -254,7 +255,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_resource_tier=False,  # host call is bare grid::inverse_dynamics_regressor<T>(...)
         out_buffer="h_Y", out_copy="memcpy_h",
         out_size_expr="grid::NUM_VEL * 10 * grid::NUM_BODIES",
-        has_mjx_twin=True, mjx_omits_tier=True,  # twin: <T,false,GRID_DATA_ALL,true>, no TIER
+        has_mjx_twin=True, mjx_omits_tier=True, mjx_post_launch_check=True,  # twin: <T,false,GRID_DATA_ALL,true>, no TIER
         # No GRID_RBD_SIG_MJX_* fork in either body (sig_mjx_macro=None).
         # VOCAB GAP (no field): mjx-twin-only 200+ post-launch check
         # (wrapper_template.cu:1544-1545).
@@ -395,7 +396,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_resource_tier=False,                               # plain grid::frame_jacobian<T>
         out_buffer="h_frame_jacobian", out_copy="memcpy_h",
         out_size_expr="6*grid::NUM_VEL",
-        has_mjx_twin=True,                                     # [D6] nested twin block
+        has_mjx_twin=True, mjx_omits_tier=True,  # [D6] nested twin block
     ),
     "frame_jacobian_dot": AbiSpec(
         "frame_jacobian_dot",
@@ -408,7 +409,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_resource_tier=False,
         out_buffer="h_frame_jacobian_dot", out_copy="memcpy_h",
         out_size_expr="6*grid::NUM_VEL",
-        has_mjx_twin=True,                                     # [D6] inner #ifdef in FJ twin block
+        has_mjx_twin=True, mjx_omits_tier=True,  # [D6] inner #ifdef in FJ twin block
     ),
     "osc_inertia": AbiSpec(
         "osc_inertia",
@@ -419,7 +420,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_resource_tier=False,
         out_buffer="h_osc_inertia", out_copy="memcpy_h",
         out_size_expr="36",
-        has_mjx_twin=True,                                     # frame bakes at codegen; no trailing args
+        has_mjx_twin=True, mjx_omits_tier=True,  # frame bakes at codegen; no trailing args
     ),
 
     # ── RNEA-derived centroidal/bias quantities ───────────────────────────────
@@ -432,7 +433,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_resource_tier=False,                               # plain grid::generalized_gravity<T>
         out_buffer="h_c", out_copy="memcpy_h",
         out_size_expr="grid::NUM_VEL",
-        has_mjx_twin=True,                                     # twin <T,false,GRID_DATA_ALL,true>, no tier
+        has_mjx_twin=True, mjx_omits_tier=True,  # twin <T,false,GRID_DATA_ALL,true>, no tier
     ),
     "nonlinear_effects": AbiSpec(
         "nonlinear_effects",
@@ -443,7 +444,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_resource_tier=False,
         out_buffer="h_c", out_copy="memcpy_h",
         out_size_expr="grid::NUM_VEL",
-        has_mjx_twin=True,
+        has_mjx_twin=True, mjx_omits_tier=True,
     ),
     "coriolis_matrix": AbiSpec(
         "coriolis_matrix",
@@ -454,7 +455,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_resource_tier=False,
         out_buffer="h_coriolis", out_copy="memcpy_h",
         out_size_expr="grid::NUM_VEL*grid::NUM_VEL",
-        has_mjx_twin=True,
+        has_mjx_twin=True, mjx_omits_tier=True,
     ),
 
     # ── centroidal (compressed pack_q on com/dccrba; clamped launches) ────────
@@ -491,7 +492,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_resource_tier=False,
         out_buffer="h_dccrba", out_copy="memcpy_h",
         out_size_expr="6*grid::NUM_VEL*grid::NUM_VEL",
-        has_mjx_twin=True,
+        has_mjx_twin=True, mjx_omits_tier=True,
     ),
     "cmm_time_variation": AbiSpec(
         "cmm_time_variation",
@@ -503,7 +504,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_resource_tier=False,
         out_buffer="h_cmm_time_variation", out_copy="memcpy_h",
         out_size_expr="6*grid::NUM_VEL",
-        has_mjx_twin=True,
+        has_mjx_twin=True, mjx_omits_tier=True,
     ),
 
     # ── runtime-target EE pose (Xtool staging → body_override [D5]) ───────────
@@ -519,7 +520,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_resource_tier=False,
         out_buffer="h_eePose", out_copy="memcpy_h",
         out_size_expr="6",
-        has_mjx_twin=True,                                     # [D6] twin nested in #ifdef GRID_RBD_WITH_MUJOCO, own #ifdef+stub inside
+        has_mjx_twin=True, mjx_omits_tier=True,  # [D6] twin nested in #ifdef GRID_RBD_WITH_MUJOCO, own #ifdef+stub inside
         # Xtool staging (16-float identity/copy + cudaMemcpy->d_eepose_runtime_offset,
         # rc=101) is emitted by the XTOOL_STAGING feature in wrapper_body_gen.py.
     ),
@@ -535,7 +536,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_resource_tier=False,
         out_buffer="h_eePoseGrad", out_copy="memcpy_h",
         out_size_expr="6*grid::NUM_VEL",
-        has_mjx_twin=True,
+        has_mjx_twin=True, mjx_omits_tier=True,
         # Same XTOOL_STAGING emission as the pose variant.
     ),
 }
