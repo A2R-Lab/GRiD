@@ -109,6 +109,11 @@ ABI_SPECS: dict[str, AbiSpec] = {
         takes_gravity=True,
         takes_dt_it=True, it_dispatch="FULL",
         pre_launch_check=True,
+        # Consumed by the hand-written launch_integrator_host sig fork (NOT by
+        # the generated body — plain/IT rows emit no fork) and by _compile.py's
+        # SIG_MJX flag derivation. Was missing until 2026-09-06 (H6): the
+        # _compile dict and this table disagreed about the same header.
+        sig_mjx_macro="GRID_RBD_SIG_MJX_INTEGRATOR",
         out_buffer="h_x_kp1", out_copy="memcpy_h",
         out_size_expr="(grid::NUM_POS + grid::NUM_VEL)",
         has_mjx_twin=True,

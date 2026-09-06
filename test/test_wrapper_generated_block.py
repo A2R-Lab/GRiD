@@ -85,6 +85,8 @@ def test_generated_keys_within_emitter_scope():
         assert s.f_ext_mode in ("none", "optional"), key
         assert s.template_shape in ("plain", "std5", "so4", "qdd6", "fdgrad5"), key
         if s.template_shape == "plain":
-            assert s.sig_mjx_macro is None, key
+            # IT-dispatch rows may carry a sig macro (consumed by the
+            # hand-written launcher's fork, not by the generated body).
+            assert s.sig_mjx_macro is None or s.takes_dt_it, key
         else:
             assert s.sig_mjx_macro, key

@@ -57,21 +57,32 @@ BATCH_SIZES = [16, 32, 64, 128, 256, 1024]
 TEST_ITERS = int(os.environ.get("BENCH_TEST_ITERS", "500"))
 N_WARMUP_PASSES = 5
 
-# Core algos shared with the competitor set, plus GRiD's gradient/SO headline kernels.
-# (qpos, qvel, qacc/qfrc) arg arity is encoded so we build the right inputs per algo.
-ALGOS = [
-    ("inverse_dynamics",          ("q", "v", "a")),
-    ("forward_dynamics",          ("q", "v", "u")),
-    ("inverse_dynamics_gradient", ("q", "v", "a")),
-    ("forward_dynamics_gradient", ("q", "v", "u")),
-    ("crba",                      ("q",)),
-    ("minv",                      ("q",)),
-    ("aba",                       ("q", "v", "u")),
-    ("idsva_so",                  ("q", "v", "a")),
-    ("fdsva_so",                  ("q", "v", "u")),
-    ("end_effector_pose",         ("q",)),
-    ("end_effector_pose_gradient", ("q",)),
+# Core algos shared with the competitor set, plus GRiD's gradient/SO headline
+# kernels. The bench ROSTER (which algos to time) is policy and stays literal;
+# each algo's (qpos, qvel, qacc/qfrc) arg arity derives from its AbiSpec row
+# (H6 — the same table that generates the wrapper bodies), so the bench can
+# never build inputs the C-ABI doesn't take. Golden-pinned by
+# test/test_bench_algo_arity.py.
+_BENCH_ROSTER = [
+    "inverse_dynamics", "forward_dynamics", "inverse_dynamics_gradient",
+    "forward_dynamics_gradient", "crba", "minv", "aba", "idsva_so",
+    "fdsva_so", "end_effector_pose", "end_effector_pose_gradient",
 ]
+_ARITY_OF = {"q": "q", "qd": "v", "u": "u", "qdd": "a", "qdd_opt": "a"}
+
+
+def _spec_arity(key):
+    """Leading DOF-buffer params of the algo's C-ABI, as bench arity codes."""
+    from grid_codegen.abi_specs import ABI_SPECS
+    out = []
+    for name, ctype in ABI_SPECS[key].inputs:
+        if ctype != "const T*" or name == "f_ext":
+            break
+        out.append(_ARITY_OF[name])
+    return tuple(out)
+
+
+ALGOS = [(k, _spec_arity(k)) for k in _BENCH_ROSTER]
 
 
 def _stats(times_us: np.ndarray) -> dict:

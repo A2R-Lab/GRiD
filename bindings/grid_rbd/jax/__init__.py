@@ -624,8 +624,10 @@ class JaxRobotHandle:
             # GRiD writes (2, NV, NV) column-major; transpose to row-major (out, in).
             blocks = flat.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
             df_dq, df_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
-            mflat = jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(
-                q, gravity=self._np_dt(gravity))
+            # minv is gravity-independent and its FFI binding declares NO gravity
+            # attr (BIND_1IN) — do not pass one (H6 drift fix; XLA happened to
+            # tolerate the undeclared attr, but the call was lying about a dep).
+            mflat = jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(q)
             m = mflat.reshape(q.shape[:-1] + (nv, nv))
             # ∂qdd/∂u = Minv. pin minv writes the lower triangle (symmetrize);
             # the mjx minv_mujoco kernel writes a FULL DENSE symmetric matrix (the
@@ -780,8 +782,10 @@ class JaxRobotHandle:
                 q, qd, u, gravity=self._np_dt(gravity))
             blocks = flat.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
             df_dq, df_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
-            mflat = jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(
-                q, gravity=self._np_dt(gravity))
+            # minv is gravity-independent and its FFI binding declares NO gravity
+            # attr (BIND_1IN) — do not pass one (H6 drift fix; XLA happened to
+            # tolerate the undeclared attr, but the call was lying about a dep).
+            mflat = jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(q)
             m = mflat.reshape(q.shape[:-1] + (nv, nv))
             eye = jnp.eye(nv, dtype=m.dtype)
             minv = m + jnp.swapaxes(m, -1, -2) - m * eye

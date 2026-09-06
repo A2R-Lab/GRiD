@@ -434,21 +434,19 @@ def _mjx_signature_flags(cuh_path: Path) -> list[str]:
     # The EE launchers are renamed per-target; resolve the actual fn names from
     # the header's own #define block.
     ee_defs = dict(re.findall(r"#define (GRID_RBD_EE_POSE\w*) (\w+)", text))
-    fns = {
-        "INVERSE_DYNAMICS": "inverse_dynamics",
-        "MINV": "minv",
-        "FORWARD_DYNAMICS": "forward_dynamics",
-        "ABA": "aba",
-        "CRBA": "crba",
-        "INVERSE_DYNAMICS_GRADIENT": "inverse_dynamics_gradient",
-        "FORWARD_DYNAMICS_GRADIENT": "forward_dynamics_gradient",
-        "FDSVA_SO": "fdsva_so",
-        "IDSVA_SO": "idsva_so",
-        "INTEGRATOR": "integrator",
-        "EE_POSE": ee_defs.get("GRID_RBD_EE_POSE_FN"),
-        "EE_POSE_GRADIENT": ee_defs.get("GRID_RBD_EE_POSE_GRADIENT_FN"),
-        "EE_POSE_HESSIAN": ee_defs.get("GRID_RBD_EE_POSE_HESSIAN_FN"),
-    }
+    # H6: the {SIG suffix -> host launcher fn} pairs derive from ABI_SPECS
+    # (sig_mjx_macro + grid_symbol) — the table that also drives the wrapper's
+    # generated bodies, so this scan and the C code can't disagree about which
+    # launchers carry the MUJOCO_OUTPUT slot. EE launchers are per-target
+    # macros; resolve their concrete fn from the header's own #define block.
+    from grid_codegen.abi_specs import ABI_SPECS
+    fns = {}
+    for spec in ABI_SPECS.values():
+        if not spec.sig_mjx_macro:
+            continue
+        suffix = spec.sig_mjx_macro.removeprefix("GRID_RBD_SIG_MJX_")
+        sym = (spec.grid_symbol or ("grid::" + spec.key)).removeprefix("grid::")
+        fns[suffix] = ee_defs.get(sym) if sym.startswith("GRID_RBD_") else sym
     flags: list[str] = []
     for suffix, fn in fns.items():
         if not fn:

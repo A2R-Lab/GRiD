@@ -134,7 +134,10 @@ def test_body_fields(key):
     spec = ABI_SPECS[key]
     body = _body(_stem(spec))
     if spec.sig_mjx_macro:
-        assert spec.sig_mjx_macro in body, f"{key}: sig_mjx_macro not in body"
+        # IT-dispatch bodies forward to a hand-written launcher that owns the
+        # sig fork — the macro then lives in the launcher, not the body.
+        where = _SRC if spec.it_dispatch else body
+        assert spec.sig_mjx_macro in where, f"{key}: sig_mjx_macro not found"
     if spec.body_override:
         return  # bespoke body: identity checks only
     nb = _norm(body)
@@ -179,3 +182,16 @@ def test_specs_join_registry():
     reg = {d.key for d in ALGO_DESCRIPTORS}
     extras = sorted(set(ABI_SPECS) - reg - {"fk_batched"})
     assert not extras, f"spec keys not in registry: {extras}"
+
+
+def test_sig_mjx_macros_bidirectional():
+    """REVERSE direction (H6): every GRID_RBD_SIG_MJX_* the template consumes
+    must be carried by exactly one spec row — a macro used in C but absent
+    from the table is how the _compile.py fns dict and ABI_SPECS silently
+    disagreed about the integrator until 2026-09-06."""
+    used = set(re.findall(r"GRID_RBD_SIG_MJX_[A-Z_0-9]+", _SRC))
+    carried = {s.sig_mjx_macro for s in ABI_SPECS.values() if s.sig_mjx_macro}
+    missing = sorted(used - carried)
+    assert not missing, f"template uses sig macros with no spec row: {missing}"
+    orphaned = sorted(carried - used)
+    assert not orphaned, f"spec rows carry unused sig macros: {orphaned}"
