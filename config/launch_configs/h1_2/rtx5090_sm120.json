@@ -144,5 +144,394 @@
   },
   "gpu": "rtx5090_sm120",
   "gpu_name": "NVIDIA GeForce RTX 5090",
+  "matrix": {
+    "floating": {
+      "aba": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 236.61
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 281.64
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 402.85
+          }
+        }
+      },
+      "crba": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 702.85
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 756.8
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 566.02
+          }
+        }
+      },
+      "ee_pose": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 59.76
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 384
+          },
+          "us_at_optimal": {
+            "ffi": 59.81
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 68.85
+          }
+        }
+      },
+      "ee_pose_gradient": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 384
+          },
+          "us_at_optimal": {
+            "ffi": 76.5
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 74.86
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 65.38
+          }
+        }
+      },
+      "fd": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 1139.31
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 512
+          },
+          "us_at_optimal": {
+            "ffi": 720.3
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 1140.51
+          }
+        }
+      },
+      "fd_du": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 1124.3
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 1674.4
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 1140.23
+          }
+        }
+      },
+      "fdsva_so": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 51930.0
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 384
+          },
+          "us_at_optimal": {
+            "ffi": 51533.93
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 52723.29
+          }
+        }
+      },
+      "id": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 97.76
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 98.57
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 104.95
+          }
+        }
+      },
+      "id_du": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 511.43
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 665.01
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 695.85
+          }
+        }
+      },
+      "minv": {
+        "lite": {
+          "batch_N": 256,
+          "max_threads": 768,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 128
+          },
+          "us_at_optimal": {
+            "ffi": 1081.23
+          }
+        },
+        "minimal": {
+          "batch_N": 256,
+          "max_threads": 1024,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 256
+          },
+          "us_at_optimal": {
+            "ffi": 729.13
+          }
+        },
+        "shared": {
+          "batch_N": 256,
+          "max_threads": 512,
+          "max_threads_source": "kernel",
+          "min_smem": null,
+          "suggested_threads": {
+            "ffi": 384
+          },
+          "us_at_optimal": {
+            "ffi": 897.32
+          }
+        }
+      }
+    }
+  },
+  "matrix_meta": {
+    "autotune_N": 256,
+    "metric": "batch_to_land_median_us",
+    "note": "per-tier probe sweep (E5 schema); regenerated by test/benchmarks/autotune_tier_matrix.py"
+  },
   "source": "GRiD autotune sweep 2026-06-13"
 }
