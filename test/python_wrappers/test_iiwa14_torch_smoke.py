@@ -158,7 +158,12 @@ def test_param_op_forward_parity_vs_jax(th, jh, samples):
 def _fd_vjp_err(fn_apply, args_np, eps=1e-3):
     leafs = [_t(a).requires_grad_(True) for a in args_np]
     out = fn_apply(*leafs)
-    gout = torch.randn_like(out)
+    # Deterministic cotangent: torch's GLOBAL rng seeded the old randn_like,
+    # so the FD-vs-analytic error varied with process rng state and grazed
+    # _GTOL run-to-run (2.11e-2 vs 2e-2, night-7 receipt pass 2026-09-08).
+    # A dedicated generator pins the draw without touching global state.
+    gen = torch.Generator(device=out.device).manual_seed(20260908)
+    gout = torch.empty_like(out).normal_(generator=gen)
     (out * gout).sum().backward()
     ana = [l.grad.detach().cpu().numpy().copy() for l in leafs]
     gout_np = gout.cpu().numpy()
