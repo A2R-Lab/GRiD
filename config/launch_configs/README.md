@@ -40,6 +40,18 @@ shape as `bases`, recorded by `test/benchmarks/autotune_ffi.py --surface {jax,nu
 matching `ffi_meta`/`pybind_meta`/`torch_meta` provenance blocks). Each surface's bindings default
 from its overlay when present, falling back to `bases`.
 
+Two further blocks (written by newer tools; absent on older configs):
+
+- **`matrix`** — the per-tier autotune matrix (E5), written by
+  `test/benchmarks/autotune_tier_matrix.py --write`:
+  `matrix.<fixed|floating>.<algo>.<shared|lite|minimal> = {batch_N, max_threads,
+  max_threads_source, min_smem, suggested_threads.<profile>, us_at_optimal.<profile>}`.
+  Forced-tier probe data for tier-policy design; NOT read by the codegen bake.
+- **`ffi_bases_by_n` + `ffi_by_n_meta`** — the E6 batch-switch table: per-algo
+  small-batch overrides `{algo: {n_threshold, threads[, tier]}}` applied at
+  runtime by `apply_batch_overlay` (entries whose tier differs from the baked
+  tier are skipped — batch regimes share the baked tier).
+
 ## Generate a config for YOUR robot / GPU
 ```
 bash config/autotune_robot.sh <robot> [fixed floating]
@@ -57,4 +69,5 @@ values. (See the **"Autotune launch config for your robot / GPU"** section of
    auto-discovers the file.
 
 Currently seeded: **baxter, g1, go2, h1_2, h2_plus, iiwa14** on `rtx5090_sm120`. Note that
-**h1_2 is retired** from the swept robot set (replaced by H2+); its legacy config is retained.
+  (h1_2 was re-tuned 2026-09-05 — fresh floating ffi_bases + per-tier matrix
+  cells; treat its config as current, not legacy.)

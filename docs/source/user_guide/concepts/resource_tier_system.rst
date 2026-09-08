@@ -11,7 +11,11 @@ earlier revisions of this doc called it ``d_global_temp``.
 
 **Audience**: inline-CUDA users (``#include "grid.cuh"`` from their own
 kernel). The Python wrappers (``grid_rbd.RobotHandle``,
-``grid_rbd.jax.JaxRobotHandle``) always use ``TIER_SHARED`` by design.
+``grid_rbd.jax.JaxRobotHandle``) launch each kernel at its PER-ALGO BAKED
+tier — ``grid::launch_cfg<GRID_ALGO_*>::TIER``, autotuned into
+``config/launch_configs/<robot>/<gpu>.json`` and baked at codegen. On a
+tuned robot many algos run at ``TIER_LITE``/``TIER_MINIMAL``; an untuned
+robot (or algo) falls back to ``TIER_SHARED``.
 
 
 Who this is for (read this first)
@@ -36,7 +40,8 @@ memory myself." Pick the rung that matches how much control you need:
      - You manage…
    * - Just the answer, from Python
      - ``grid_rbd.RobotHandle`` / ``grid_rbd.jax.JaxRobotHandle``
-     - Nothing. Arrays in, arrays out. Always ``TIER_SHARED``.
+     - Nothing. Arrays in, arrays out. Tier comes from the per-algo baked
+       launch config (``TIER_SHARED`` fallback when untuned).
    * - The answer, from C++/CUDA host code
      - ``grid::<algo>(hd_data, ...)`` **host** wrapper
      - Nothing on-device. The wrapper does H2D/D2H copies, picks
@@ -510,13 +515,18 @@ Numerical equivalence: the math is identical at every tier;
 (s_temp vs d_workspace). One body per algo, with up to two
 pointer-routing branches. Less code duplication, fewer drift bugs.
 
-**Why is JAX/Python locked to TIER_SHARED?**
-The Python wrapper persona is "sealed product, never touches
-nvcc". They aren't fighting outer-kernel register/smem pressure
-because they don't have an outer kernel. Exposing tier switching
-through Python would add API surface without clear demand. The
-host wrappers always launch ``*_kernel<T, TIER_SHARED>`` (= current
-behavior).
+**How does the Python surface pick a tier?** (Earlier revisions of this
+doc said Python was "locked to TIER_SHARED" — no longer true.) The Python
+wrapper persona is still "sealed product, never touches nvcc": there is no
+runtime tier knob. Instead, the tier is a PER-ALGO BAKED choice — the
+autotuners write {tier, threads} into ``config/launch_configs/`` and the
+codegen bakes it as ``grid::launch_cfg<GRID_ALGO_*>::TIER``, which every
+binding launch site (numpy/pybind host-wrapper calls AND the jax/torch
+direct kernel launches) instantiates. Divergent-tier instantiations get
+their own dynamic-smem registration in ``init_grid_kernel_attrs`` (the B2
+fix, 2026-09-05) — a distinct ``__global__`` per tier is the reason that
+registration exists. Untuned robots/algos fall back to ``TIER_SHARED``
+via the primary ``launch_cfg`` template, which preserves the old behavior.
 
 **The LITE smem target between SHARED and MINIMAL — now landed.**
 Early revisions of this design shipped without a distinct LITE smem

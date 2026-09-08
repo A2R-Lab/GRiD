@@ -67,10 +67,17 @@ Plus, you'll add one ``AlgoDescriptor`` row to ``algo_registry.py`` — the
 descriptor table is the single source of truth for per-algo metadata, and
 that one row drives the ``GridAlgo`` enum, the launch-config symbol map, and
 the ``KERNEL_ATTR_MANIFEST`` / mjx manifest heads (previously these were
-scattered hand-maintained dicts). You'll also add a
-``gen_X_inner_temp_mem_size`` reference to ``GRiDCodeGenerator.py`` (top-level
-imports + per-robot scratch tier selection). See
-:doc:`../concepts/codegen_architecture` for the descriptor table.
+scattered hand-maintained dicts). If the algorithm gets a Python binding you
+ALSO add one ``AbiSpec`` row to ``grid_codegen/abi_specs.py`` and regenerate
+the wrapper's generated regions (``.venv/bin/python -m
+grid_codegen.wrapper_body_gen``) — the C-ABI bodies, the kernel_max_threads
+branch table, and the mjx twins are all EMITTED from that table between
+``BEGIN/END GENERATED`` markers in ``wrapper_template.cu``; never hand-edit
+inside them (the ``--check`` drift gate in
+``test/test_wrapper_generated_block.py`` fails CI if you do). The arena/tier
+math lives in ``grid_codegen/_constants_arena.py`` (the 2026-08-27 monolith
+split moved it out of ``GRiDCodeGenerator.py``). See
+:doc:`../concepts/codegen_architecture` for both tables.
 
 Step-by-step recipe (worked example: ``fdsva_so``)
 --------------------------------------------------
@@ -199,17 +206,17 @@ Step-by-step recipe (worked example: ``fdsva_so``)
 
    .. code:: python
 
-      # Inside GRiDCodeGenerator.py, in the per-robot tier table build:
+      # Inside _constants_arena.py, in the per-robot tier table build:
       fdsva_so_inner_idsva_so_temp_count = ...   # sub-algorithm scratch
       fdsva_so_contract_temp_count = self.gen_fdsva_so_contract_temp_mem_size()
 
-      # 3-way selection: PERF / LITE / MINIMAL → choose a rung (0..N-1).
+      # 3-way selection: SHARED / LITE / MINIMAL → choose a rung (0..N-1).
       rung_arenas = [...]   # list of (rung_name, bytes_needed, flag_tuple)
       self.fdsva_so_spill_tier_3way = self.select_shared_tier_3way(*rung_arenas)
 
    ``select_shared_tier_3way`` picks the lowest-byte rung that fits the
-   per-tier target. ``PERF`` falls through to the most-spilled rung if
-   nothing fits — that's the whole point: big robots spill at PERF too.
+   per-tier target. ``SHARED`` falls through to the most-spilled rung if
+   nothing fits — that's the whole point: big robots spill at SHARED too.
 
 #. **Add the host wrapper + descriptor-table row**
 
@@ -273,10 +280,10 @@ Common pitfalls
   smem ``s_temp`` slot is ``nullptr``; the ``XImats`` / ``XmatsHom``
   load helper dereferences it for sincos scratch. Always repoint
   ``s_temp`` to ``d_workspace`` BEFORE the first helper call.
-* **Single-valued PERF-pick macro as a per-rung flag.** Macros like
-  ``GRID_X_USES_SPILL`` equal the *PERF* pick. Using one as the inner's
+* **Single-valued SHARED-pick macro as a per-rung flag.** Macros like
+  ``GRID_X_USES_SPILL`` equal the *SHARED* pick. Using one as the inner's
   template arg under ``if constexpr (RESOURCE_TIER == ...)`` gives the
-  non-PERF tier the wrong flag → it tries to write the full band into a
+  non-SHARED tier the wrong flag → it tries to write the full band into a
   selective-sized arena → smem OOB on big robots. Pass the actual
   per-rung value as a literal.
 * **Single-thread Gauss-Jordan inverse.** This was a real performance
@@ -323,9 +330,13 @@ Open a PR against the codegen submodule with:
 
 #. The new ``_X.py`` algorithm file.
 #. The ``algo_registry.py`` entry.
-#. Any top-level ``GRiDCodeGenerator.py`` edits (imports, tier selection).
+#. Any top-level ``GRiDCodeGenerator.py`` / ``_constants_arena.py`` edits
+   (imports, tier selection).
+#. The ``abi_specs.py`` row + regenerated wrapper regions (if the algorithm
+   is bound to Python) — ``python -m grid_codegen.wrapper_body_gen --check``
+   must pass.
 #. A CUDA equivalence test that exercises iiwa14 fixed and floating at
-   PERF and at a forced spilled tier.
+   SHARED and at a forced spilled tier.
 #. A bench entry in ``run.py`` if you want the algorithm timed in the
    standard sweep.
 #. Documentation updates (algorithm description in
@@ -333,6 +344,6 @@ Open a PR against the codegen submodule with:
 
 The reviewers will mostly look at: does the inner own its placement?
 Does the kernel size match the per-tier macro? Does the CUDA test pass
-at PERF *and* at a forced spilled tier? If all three are green, the
+at SHARED *and* at a forced spilled tier? If all three are green, the
 algorithm is on the spill ladder for free and tier-aware composing
 kernels can build on it directly.

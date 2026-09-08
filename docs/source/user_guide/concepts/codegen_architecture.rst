@@ -239,6 +239,34 @@ kernel's launch-sizing macro against the regions the kernel actually carves. To
 change an algorithm's arena, edit its closure in ``algo_registry.py`` — do NOT
 hand-edit ``t_count`` expressions in the generator.
 
+The binding surface: generated from ``abi_specs.py``
+-----------------------------------------------------
+
+The descriptor table has a sibling: ``grid_codegen/abi_specs.py`` (the
+``ABI_SPECS`` rows) transcribes every C-ABI body of the Python binding —
+signature, packing, qdd/f_ext routing, launch template shape, output
+buffer/size, mjx-twin variance — and ``grid_codegen/wrapper_body_gen.py``
+EMITS three checked-in generated regions of
+``bindings/grid_rbd/wrapper_template.cu`` from those rows:
+
+1. the ``extern "C"`` algorithm bodies (30+ functions),
+2. the ``grid_rbd_kernel_max_threads`` introspection branch table,
+3. all 30 ``grid_rbd_<algo>_mujoco`` twin bodies.
+
+The regions live between ``BEGIN/END GENERATED`` markers **in the checked-in
+file** — never hand-edit inside them. To change a generated body, edit the
+spec row (or the emitter) and regenerate::
+
+    .venv/bin/python -m grid_codegen.wrapper_body_gen          # rewrite
+    .venv/bin/python -m grid_codegen.wrapper_body_gen --check  # CI drift gate
+
+``test/test_wrapper_generated_block.py`` runs ``--check`` in CI, and
+``test/test_abi_spec_crosscheck.py`` validates every spec field against the
+template text — so a hand-edit inside a marker region, or a stale block after
+a table edit, fails a plain ``pytest -q``. Only ``tool_fext``, ``fk_batched``,
+the four plant cost twins, and the plant/FFI/torch/pybind sections remain
+hand-written (bespoke by design).
+
 See also
 --------
 

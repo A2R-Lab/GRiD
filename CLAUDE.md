@@ -15,7 +15,11 @@ numpy oracle in `RBDReference` (validated against Pinocchio) and the generated C
 
 ## Layout
 
-- `grid_codegen/` — the code-generation engine (the heart of GRiD); emits `grid.cuh`. Includes
+- `grid_codegen/` — the code-generation engine (the heart of GRiD); emits `grid.cuh` AND the three
+  checked-in generated regions of `bindings/grid_rbd/wrapper_template.cu` (C-ABI bodies,
+  kernel_max_threads table, mjx twins — driven by `abi_specs.py` via `wrapper_body_gen.py`;
+  regenerate with `.venv/bin/python -m grid_codegen.wrapper_body_gen`, never hand-edit inside
+  the BEGIN/END markers). Includes
   `grid_codegen/collision/` (collision-geometry SDF header + spherized assets for two-tier `config_free`).
 - `external/` — the peer-product submodules `GLASS/`, `RBDReference/`, `URDFParser/` (GPU linear
   algebra, Pinocchio-validated reference dynamics, URDF parsing). **Four separate peer products** with
