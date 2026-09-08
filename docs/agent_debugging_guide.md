@@ -258,6 +258,18 @@ to world, the inner is CALLED, but never DEFINED → `error: identifier "idsva_s
   predicate and the floating-only gate happen to agree. **Always compile at least ONE high-DOF FIXED robot
   (g1-fixed) when touching idsva_so/fdsva_so frame selection** — that's where dispatch and emission diverge.
 - Relevant to the perf-cleanup idsva_so agents (11a/11b): they rework exactly this body/world emission.
+- **2026-09-08 recurrence, WRAPPER flavor (the "h1_2 idsva_so unlaunchable" myth):** the jax FFI + torch
+  handlers for `idsva_so` picked body- vs world-frame via `#ifdef GRID_RBD_WITH_MUJOCO` — the mjx-TWINS
+  gate (floating AND non-mimic AND non-skew), NOT the dispatch predicate. A floating MIMIC robot (h1_2)
+  has no `WITH_MUJOCO`, so the handlers launched the 3.0MB body-frame no-ladder diagnostic → launch fail
+  at every thread count → the 09-05 autotune verdict "genuinely unlaunchable" (the DISPATCHED world frame
+  needs 15KB and runs fine — proven by the numpy path, which goes through `grid::idsva_so` itself). The
+  same wrong gate silently ran body-frame on high-DOF FIXED robots (g1-fixed: 98KB body vs the intended
+  33KB world). Fix: both handlers now fork on `GRID_IDSVA_SO_DISPATCHES_WORLD_FRAME` (the macro codegen
+  emits FROM the dispatch predicate), with the MUJOCO_OUTPUT template param forked separately on
+  `GRID_RBD_SIG_MJX_IDSVA_SO` (floating-mimic world kernels carry the param; high-DOF-fixed ones don't).
+  **Tell:** numpy path works, FFI/torch path "launch failed", error names a kernel the dispatcher
+  wouldn't pick. **Rule addendum:** `WITH_MUJOCO` gates TWIN existence, never frame/variant selection.
 
 ### 1n. Consumer NaN from direct `*_inner` calls is USUALLY caller wiring, not codegen (triage before "fixing")
 **A consumer (GATO) filed "iiwa14 7-DoF `forward_dynamics` → NaN for every input, indy7 6-DoF fine, DoF-specific,

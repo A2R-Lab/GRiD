@@ -3740,9 +3740,9 @@ GRID_RBD_JAX_BIND_3IN_GRAV(grid_rbd_jax_forward_dynamics_gradient_mujoco, grid_r
 
 #if GRID_HAS_IDSVA_SO
 // idsva_so(q, qd, qdd) → packed (B, SECOND_ORDER_TENSOR_SIZE)
-// The codegen-time dispatcher picks body- vs world-frame; we dispatch here at
-// compile time using the GRID_GENERATES_* macros so a per-robot .so calls
-// whichever kernel was emitted. qdd is packed into the acceleration (u) slot of
+// The codegen-time dispatcher picks body- vs world-frame; we mirror that pick
+// at compile time via GRID_IDSVA_SO_DISPATCHES_WORLD_FRAME so a per-robot .so
+// calls the kernel grid::idsva_so itself would. qdd is packed into the acceleration (u) slot of
 // d_q_qd_u, which the kernel reads as s_qdd — mirroring the numpy
 // pack_q_qd_u(q, qd, qdd). The Python surface passes explicit zeros when the
 // caller omits qdd, so the result never depends on a stale device buffer.
@@ -3774,10 +3774,17 @@ static ffi::Error grid_rbd_jax_idsva_so_impl(
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
 
     constexpr int stride_q_qd_u = 3 * grid::NUM_JOINTS;
-    // Compile-time frame dispatch: floating-base .so call the world-frame kernel
-    // (which carries the MUJOCO_OUTPUT flag); fixed-base .so call the body-frame
-    // kernel (pinocchio-only — mjx is floating-base-only, asserted in the #else).
-#ifdef GRID_RBD_WITH_MUJOCO
+    // Compile-time frame dispatch — mirrors grid::idsva_so's own codegen rule
+    // (GRID_IDSVA_SO_DISPATCHES_WORLD_FRAME: world for floating / spherical /
+    // high-DOF fixed, body for cardinal fixed). ⚠NOT the mjx-twins gate: a
+    // floating MIMIC robot (h1_2) has no GRID_RBD_WITH_MUJOCO yet still
+    // dispatches world — keying this on WITH_MUJOCO launched the 3MB body-frame
+    // no-ladder diagnostic there (unlaunchable at any tier; agent guide §1m).
+    // The MUJOCO_OUTPUT template param exists only where the host template
+    // carries it (GRID_RBD_SIG_MJX_IDSVA_SO — floating bases), so the
+    // world-frame spelling forks on that flag.
+#if GRID_IDSVA_SO_DISPATCHES_WORLD_FRAME
+#ifdef GRID_RBD_SIG_MJX_IDSVA_SO
     grid::idsva_so_world_frame_kernel<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
         grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>(batch),
         grid::IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>::TIER>(),
@@ -3785,6 +3792,16 @@ static ffi::Error grid_rbd_jax_idsva_so_impl(
             g_data->d_idsva_so, g_data->d_workspace,
             g_data->d_q_qd_u, stride_q_qd_u,
             g_robot, /*gravity=*/gravity, batch);
+#else
+    static_assert(!MUJOCO, "mjx idsva_so is floating-base only");
+    grid::idsva_so_world_frame_kernel<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>::TIER><<<
+        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>(batch),
+        grid::IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>::TIER>(),
+        stream>>>(
+            g_data->d_idsva_so, g_data->d_workspace,
+            g_data->d_q_qd_u, stride_q_qd_u,
+            g_robot, /*gravity=*/gravity, batch);
+#endif
     if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("idsva_so_world_frame_kernel launch failed");
 #else
     static_assert(!MUJOCO, "mjx idsva_so is floating-base only");
@@ -5488,12 +5505,20 @@ torch::Tensor torch_idsva_so(torch::Tensor q, torch::Tensor qd, torch::Tensor qd
     grid_torch_pack(stream, batch, nj, &q, &qd, &qdd);
     auto out = grid_torch_empty(batch, grid::SECOND_ORDER_TENSOR_SIZE, q);
     constexpr int stride = 3 * grid::NUM_JOINTS;
-    // Compile-time frame dispatch (mirrors the JAX handler): floating-base .so call
-    // the world-frame kernel (which carries MUJOCO_OUTPUT); fixed-base .so call the
-    // body-frame kernel (pinocchio-only — mjx is floating-base-only).
-#ifdef GRID_RBD_WITH_MUJOCO
+    // Compile-time frame dispatch — mirrors the JAX handler / grid::idsva_so:
+    // GRID_IDSVA_SO_DISPATCHES_WORLD_FRAME (world for floating / spherical /
+    // high-DOF fixed), NOT the mjx-twins gate (a floating MIMIC robot has no
+    // GRID_RBD_WITH_MUJOCO yet dispatches world; agent guide §1m). The
+    // MUJOCO_OUTPUT param exists only where GRID_RBD_SIG_MJX_IDSVA_SO says so.
+#if GRID_IDSVA_SO_DISPATCHES_WORLD_FRAME
+#ifdef GRID_RBD_SIG_MJX_IDSVA_SO
     grid::idsva_so_world_frame_kernel<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>(batch), grid::IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>::TIER>(), stream>>>(
         g_data->d_idsva_so, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
+#else
+    static_assert(!MUJOCO, "mjx idsva_so is floating-base only");
+    grid::idsva_so_world_frame_kernel<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>::TIER><<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>(batch), grid::IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO_WORLD_FRAME>::TIER>(), stream>>>(
+        g_data->d_idsva_so, g_data->d_workspace, g_data->d_q_qd_u, stride, g_robot, (T)gravity, batch);
+#endif
     TORCH_CHECK(cudaGetLastError() == cudaSuccess, "idsva_so_world_frame_kernel launch failed");
 #else
     static_assert(!MUJOCO, "mjx idsva_so is floating-base only");
