@@ -67,6 +67,15 @@ class AbiSpec:
     mjx_requires_qdd: bool = False            # `if (!qdd_opt) return 4;`
     mjx_it_dispatch: str | None = None        # twin's IT dispatch when it differs
     mjx_post_launch_check: bool = False       # twin's 200+e cudaGetLastError block
+    # ── python (pybind _core.cpp) surface — C4 arc, one field/many consumers ──
+    # py_out_dims: trailing per-batch-item out dims as the VERBATIM C++ exprs the
+    # pybind method allocates ({batch, *py_out_dims}); the jax/torch reshape
+    # collapse derives python dims from the same tuple by token substitution
+    # (num_joints_->nj, num_vel_->nv, num_ees_->nee, num_bodies_->nb,
+    # second_order_tensor_size->so_size).
+    py_out_dims: tuple[str, ...] | None = None
+    py_rc3_msg: str | None = None             # _core's rc==3 message (differs from the wrapper stub)
+    py_twin_guard: str | None = None          # the *_mujoco method's null-fn guard message
     # ── escape hatch ────────────────────────────────────────────────────
     body_override: bool = False
 
@@ -84,6 +93,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         template_shape="std5",
         out_buffer="d_M", out_copy="cudaMemcpy_d", out_size_expr="grid::NUM_VEL*grid::NUM_VEL",
         has_mjx_twin=True,
+        py_out_dims=('num_vel_', 'num_vel_'),
+        py_rc3_msg="crba not built into this robot .so — add 'crba' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='crba_mujoco unavailable: this .so has no mjx CRBA kernel (only floating-base robots export grid_rbd_crba_mujoco)',
     ),
     "inverse_dynamics": AbiSpec(
         "inverse_dynamics",
@@ -98,6 +110,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         template_shape="qdd6",
         out_buffer="h_c", out_copy="memcpy_h", out_size_expr="grid::NUM_JOINTS",
         has_mjx_twin=True, mjx_requires_qdd=True,
+        py_out_dims=('num_joints_',),
+        py_rc3_msg="inverse_dynamics not built into this robot .so — add 'inverse_dynamics' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='inverse_dynamics_mujoco unavailable: this .so has no mjx ID kernel (only floating-base robots export grid_rbd_inverse_dynamics_mujoco)',
     ),
     "integrator": AbiSpec(
         "integrator",
@@ -116,6 +131,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_x_kp1", out_copy="memcpy_h",
         out_size_expr="(grid::NUM_POS + grid::NUM_VEL)",
         has_mjx_twin=True,
+        py_out_dims=('num_joints_ + num_vel_',),
+        py_rc3_msg="integrator not built into this robot .so — add 'integrator' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='integrator_mujoco unavailable: floating-base .so only',
     ),
     "f_ext_contact": AbiSpec(
         "f_ext_contact",
@@ -143,6 +161,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="d_Minv", out_copy="cudaMemcpy_d", out_size_expr="grid::NUM_VEL*grid::NUM_VEL",
         has_mjx_twin=True,
         # NOTE: no gravity param at all (unlike crba, which accepts-but-ignores one).
+        py_out_dims=('num_vel_', 'num_vel_'),
+        py_rc3_msg="minv not built into this robot .so — add 'minv' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='minv_mujoco unavailable: this .so has no mjx Minv kernel (only floating-base robots export grid_rbd_minv_mujoco)',
     ),
 
     "forward_dynamics": AbiSpec(
@@ -159,6 +180,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_mjx_twin=True,
         # Twin note (no field): _mujoco path only valid for null f_ext (kernel does
         # not reframe f_ext); enforced by the python dispatch, NOT by a return-4 here.
+        py_out_dims=('num_joints_',),
+        py_rc3_msg="forward_dynamics not built into this robot .so — add 'forward_dynamics' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='forward_dynamics_mujoco unavailable: floating-base .so only',
     ),
 
     "aba": AbiSpec(
@@ -173,6 +197,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         template_shape="so4",
         out_buffer="h_qdd", out_copy="memcpy_h", out_size_expr="grid::NUM_JOINTS",
         has_mjx_twin=True,
+        py_out_dims=('num_joints_',),
+        py_rc3_msg="aba not built into this robot .so — add 'aba' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='aba_mujoco unavailable: floating-base .so only',
     ),
 
     "inverse_dynamics_gradient": AbiSpec(
@@ -189,6 +216,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="d_dc_du", out_copy="cudaMemcpy_d",
         out_size_expr="2*grid::NUM_VEL*grid::NUM_VEL",  # code: (size_t)batch * 2 * nv * nv * sizeof(T)
         has_mjx_twin=True, mjx_requires_qdd=True,
+        py_out_dims=('num_vel_', '2 * num_vel_'),
+        py_rc3_msg="inverse_dynamics_gradient not built into this robot .so — add 'inverse_dynamics_gradient' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='inverse_dynamics_gradient_mujoco unavailable: floating-base .so only',
     ),
 
     "forward_dynamics_gradient": AbiSpec(
@@ -205,6 +235,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         template_shape="fdgrad5",
         out_buffer="d_df_du", out_copy="cudaMemcpy_d", out_size_expr="2*grid::NUM_VEL*grid::NUM_VEL",
         has_mjx_twin=True,
+        py_out_dims=('num_vel_', '2 * num_vel_'),
+        py_rc3_msg="forward_dynamics_gradient not built into this robot .so — add 'forward_dynamics_gradient' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='forward_dynamics_gradient_mujoco unavailable: floating-base .so only',
     ),
 
     "idsva_so": AbiSpec(
@@ -222,6 +255,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         # VOCAB GAP (no field): the MJX TWIN ONLY has the post-launch
         # `cudaGetLastError() -> return 200+e` check (register-heavy kernel,
         # pre_launch_check stays False.
+        py_out_dims=('second_order_tensor_size',),
+        py_rc3_msg="idsva_so not built into this robot .so — add 'idsva_so_body_frame' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='idsva_so_mujoco unavailable: floating-base .so only',
     ),
 
     "fdsva_so": AbiSpec(
@@ -237,6 +273,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_mjx_twin=True, mjx_post_launch_check=True,
         # VOCAB GAP (no field): mjx-twin-only 200+ post-launch check
         # (wrapper_template.cu:1601-1602); pin body has none.
+        py_out_dims=('second_order_tensor_size',),
+        py_rc3_msg="fdsva_so not built into this robot .so — add 'fdsva_so' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='fdsva_so_mujoco unavailable: floating-base .so only',
     ),
 
     "inverse_dynamics_regressor": AbiSpec(
@@ -252,6 +291,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         # No GRID_RBD_SIG_MJX_* fork in either body (sig_mjx_macro=None).
         # VOCAB GAP (no field): mjx-twin-only 200+ post-launch check
         # (wrapper_template.cu:1544-1545).
+        py_out_dims=('num_vel_ * 10 * num_bodies_',),
+        py_rc3_msg="inverse_dynamics_regressor not built into this robot .so — add 'inverse_dynamics_regressor' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='inverse_dynamics_regressor_mujoco unavailable: floating-base .so only',
     ),
 
     "integrator_gradient": AbiSpec(
@@ -273,6 +315,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
                                     # (EULER / SEMI_IMPLICIT_EULER only)
         # Twin host helper launch_integrator_grad_host_mujoco DOES pass TIER +
         # MUJOCO_OUTPUT=true (mjx_omits_tier=False).
+        py_out_dims=('2 * num_vel_ * 3 * num_vel_',),
+        py_rc3_msg="integrator_gradient not built into this robot .so — add 'integrator_gradient' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='integrator_gradient_mujoco unavailable: floating-base .so only',
     ),
 
     "kinetic_energy_regressor": AbiSpec(
@@ -284,6 +329,8 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_ke_regressor", out_copy="memcpy_h",
         out_size_expr="10*grid::NUM_BODIES",
         has_mjx_twin=True, mjx_omits_tier=True,
+        py_out_dims=('10 * num_bodies_',),
+        py_twin_guard='kinetic_energy_regressor_mujoco unavailable: floating-base .so only (re-register with force_rebuild=True)',
     ),
 
     "potential_energy_regressor": AbiSpec(
@@ -295,6 +342,8 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_pe_regressor", out_copy="memcpy_h",
         out_size_expr="10*grid::NUM_BODIES",
         has_mjx_twin=True, mjx_omits_tier=True,
+        py_out_dims=('10 * num_bodies_',),
+        py_twin_guard='potential_energy_regressor_mujoco unavailable: floating-base .so only (re-register with force_rebuild=True)',
     ),
 
     "energy": AbiSpec(
@@ -312,6 +361,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         # mjx_omits_tier=False is literally true of the twin, but no field records
         # that the twin ADDS a tier the main body lacks.
         # Also: the rc=3 stub voids only (q, qd, out, batch) — gravity un-voided.
+        py_out_dims=('3',),
+        py_rc3_msg='energy not available for this robot: it is not generated for mimic robots (the per-body Jacobian fold is not yet mimic-reduced)',
+        py_twin_guard='energy_mujoco unavailable: floating-base .so with energy only (re-register with force_rebuild=True)',
     ),
 
     # ── kinematics/centroidal/runtime half (agent-transcribed 2026-08-28) ─
@@ -327,6 +379,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_end_effector_pose", out_copy="memcpy_h",
         out_size_expr="6*GRID_RBD_NUM_EES",
         has_mjx_twin=True,                                     # twin keeps explicit TIER
+        py_out_dims=('6 * num_ees_',),
+        py_rc3_msg="end_effector_pose not built into this robot .so — add 'end_effector_pose' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='end_effector_pose_mujoco unavailable: floating-base .so only',
     ),
     "end_effector_pose_gradient": AbiSpec(
         "end_effector_pose_gradient",
@@ -338,6 +393,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_end_effector_pose_gradient", out_copy="memcpy_h",
         out_size_expr="6*GRID_RBD_NUM_EES*grid::NUM_VEL",
         has_mjx_twin=True,
+        py_out_dims=('6 * num_ees_', 'num_vel_'),
+        py_rc3_msg="end_effector_pose_gradient not built into this robot .so — add 'end_effector_pose_gradient' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='end_effector_pose_gradient_mujoco unavailable: floating-base .so only',
     ),
     "end_effector_pose_hessian": AbiSpec(
         "end_effector_pose_hessian",
@@ -349,6 +407,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_end_effector_pose_hessian", out_copy="memcpy_h",
         out_size_expr="6*GRID_RBD_NUM_EES*grid::NUM_VEL*grid::NUM_VEL",
         has_mjx_twin=True,
+        py_out_dims=('6 * num_ees_', 'num_vel_', 'num_vel_'),
+        py_rc3_msg="end_effector_pose_hessian not built into this robot .so — add 'end_effector_pose_hessian' to algorithm_list in register_robot() and rebuild",
+        py_twin_guard='end_effector_pose_hessian_mujoco unavailable: floating-base .so only',
     ),
 
     # ── batched FK (no registry row yet — flagged in the report) ──────────────
@@ -366,6 +427,8 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_size_expr="7",
         body_override=True,   # static cudaMalloc scratch + use_warp template fork
                               # (USE_WARP=true clamps threads.x to >=32) + no g_data launch shape
+        py_out_dims=('7',),
+        py_rc3_msg='fk_batched: not supported for this robot (floating-base / mimic)',
     ),
 
     # ── frame_jacobian family (opt-in codegen; runtime frame trailing args) ───
@@ -380,6 +443,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_frame_jacobian", out_copy="memcpy_h",
         out_size_expr="6*grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,  # [D6] nested twin block
+        py_out_dims=('6 * num_vel_',),
+        py_rc3_msg='frame_jacobian not generated for this robot .so',
+        py_twin_guard='frame_jacobian_mujoco unavailable: floating-base .so with frame_jacobian only',
     ),
     "frame_jacobian_dot": AbiSpec(
         "frame_jacobian_dot",
@@ -392,6 +458,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_frame_jacobian_dot", out_copy="memcpy_h",
         out_size_expr="6*grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,  # [D6] inner #ifdef in FJ twin block
+        py_out_dims=('6 * num_vel_',),
+        py_rc3_msg='frame_jacobian_dot not generated for this robot .so',
+        py_twin_guard='frame_jacobian_dot_mujoco unavailable: floating-base .so with frame_jacobian only',
     ),
     "osc_inertia": AbiSpec(
         "osc_inertia",
@@ -402,6 +471,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_osc_inertia", out_copy="memcpy_h",
         out_size_expr="36",
         has_mjx_twin=True, mjx_omits_tier=True,  # frame bakes at codegen; no trailing args
+        py_out_dims=('36',),
+        py_rc3_msg='osc_inertia not generated for this robot .so',
+        py_twin_guard='osc_inertia_mujoco unavailable: floating-base .so with frame_jacobian only',
     ),
 
     # ── RNEA-derived centroidal/bias quantities ───────────────────────────────
@@ -414,6 +486,8 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_c", out_copy="memcpy_h",
         out_size_expr="grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,  # twin <T,false,GRID_DATA_ALL,true>, no tier
+        py_out_dims=('num_vel_',),
+        py_twin_guard='generalized_gravity_mujoco unavailable: floating-base .so only',
     ),
     "nonlinear_effects": AbiSpec(
         "nonlinear_effects",
@@ -424,6 +498,8 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_c", out_copy="memcpy_h",
         out_size_expr="grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,
+        py_out_dims=('num_vel_',),
+        py_twin_guard='nonlinear_effects_mujoco unavailable: floating-base .so only',
     ),
     "coriolis_matrix": AbiSpec(
         "coriolis_matrix",
@@ -434,6 +510,8 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_coriolis", out_copy="memcpy_h",
         out_size_expr="grid::NUM_VEL*grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,
+        py_out_dims=('num_vel_ * num_vel_',),
+        py_twin_guard='coriolis_matrix_mujoco unavailable: floating-base .so only',
     ),
 
     # ── centroidal (compressed pack_q on com/dccrba; clamped launches) ────────
@@ -446,6 +524,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_com", out_copy="memcpy_h",
         out_size_expr="(3 + 3 * grid::NUM_VEL)",
         has_mjx_twin=True,
+        py_out_dims=('3 + 3 * num_vel_',),
+        py_rc3_msg='com not available for this robot: it is not generated for mimic robots (the per-body Jacobian fold is not yet mimic-reduced)',
+        py_twin_guard='com_mujoco unavailable: floating-base .so with com only (re-register with force_rebuild=True)',
     ),
     "ccrba": AbiSpec(
         "ccrba",
@@ -457,6 +538,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_ccrba", out_copy="memcpy_h",
         out_size_expr="(6 * grid::NUM_VEL + 6)",
         has_mjx_twin=True,
+        py_out_dims=('6 * num_vel_ + 6',),
+        py_rc3_msg='ccrba not available for this robot: it is not generated for mimic robots (the per-body Jacobian fold is not yet mimic-reduced)',
+        py_twin_guard='ccrba_mujoco unavailable: floating-base .so with ccrba only (re-register with force_rebuild=True)',
     ),
     "dccrba": AbiSpec(
         "dccrba",
@@ -468,6 +552,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_dccrba", out_copy="memcpy_h",
         out_size_expr="6*grid::NUM_VEL*grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,
+        py_out_dims=('6 * num_vel_ * num_vel_',),
+        py_rc3_msg='dccrba not available for this robot: it is not generated for mimic robots (the per-body Jacobian fold is not yet mimic-reduced)',
+        py_twin_guard='dccrba_mujoco unavailable: floating-base non-mimic .so only',
     ),
     "cmm_time_variation": AbiSpec(
         "cmm_time_variation",
@@ -479,6 +566,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_buffer="h_cmm_time_variation", out_copy="memcpy_h",
         out_size_expr="6*grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,
+        py_out_dims=('6 * num_vel_',),
+        py_rc3_msg='cmm_time_variation not available for this robot: it is not generated for mimic robots (the per-body Jacobian fold is not yet mimic-reduced)',
+        py_twin_guard='cmm_time_variation_mujoco unavailable: floating-base .so only',
     ),
 
     # ── runtime-target EE pose (Xtool staging → body_override [D5]) ───────────
@@ -496,6 +586,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_mjx_twin=True, mjx_omits_tier=True,  # [D6] twin nested in #ifdef GRID_RBD_WITH_MUJOCO, own #ifdef+stub inside
         # Xtool staging (16-float identity/copy + cudaMemcpy->d_eepose_runtime_offset,
         # rc=101) is emitted by the XTOOL_STAGING feature in wrapper_body_gen.py.
+        py_out_dims=('6',),
+        py_rc3_msg='end_effector_pose_runtime not generated for this robot .so',
+        py_twin_guard='end_effector_pose_runtime_mujoco unavailable: floating-base .so only',
     ),
     "end_effector_pose_gradient_runtime": AbiSpec(
         "end_effector_pose_gradient_runtime",
@@ -510,6 +603,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_size_expr="6*grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,
         # Same XTOOL_STAGING emission as the pose variant.
+        py_out_dims=('6 * num_vel_',),
+        py_rc3_msg='end_effector_pose_gradient_runtime not generated for this robot .so',
+        py_twin_guard='end_effector_pose_gradient_runtime_mujoco unavailable: floating-base .so only',
     ),
 }
 
