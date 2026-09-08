@@ -143,7 +143,37 @@ class MujocoDerivativeViewMixin:
 class BaseDelegateMixin:
     """jax/torch handle surface that pure-delegates to the underlying numpy
     ``RobotHandle`` (``self._base``): tool welding, runtime parameter tables,
-    thread-count control, and metadata shared by every backend of one .so."""
+    thread-count control, metadata, and the shared output-convention contract."""
+
+    @property
+    def output_convention(self) -> str:
+        """Default IO convention for this handle: ``"pinocchio"`` or ``"mujoco"``.
+        Settable. ``"mujoco"`` on a FIXED base is a deliberate no-op (no
+        free-flyer, so mjx == pinocchio — same uniform-interface semantics as the
+        numpy handle); on a FLOATING base it needs a .so built with the mjx
+        kernel twins. Per-call overrides use the thread-safe ``.mujoco`` view."""
+        return self._output_convention
+
+    @output_convention.setter
+    def output_convention(self, value: str) -> None:
+        if value not in ("pinocchio", "mujoco"):
+            raise ValueError(
+                f"output_convention must be 'pinocchio' or 'mujoco'; got {value!r}")
+        if (value == "mujoco" and self.floating_base
+                and not getattr(self._base._runner, "has_inverse_dynamics_mujoco", False)):
+            raise ValueError(
+                "output_convention='mujoco' needs a floating-base .so built with "
+                "the mjx kernel twins (this one was built with "
+                "enable_mujoco_kernels=False, or the robot is mimic/skew) — "
+                "re-register with enable_mujoco_kernels=True.")
+        self._output_convention = value
+
+    def _mjx_active(self, convention=None) -> bool:
+        """True when mjx-convention IO should actually engage: the resolved
+        convention is ``"mujoco"`` AND the robot is floating-base (a fixed base
+        has no free-flyer, so mjx coincides with pinocchio and the flag is a
+        no-op — mirrors the numpy handle's ``_mjx_active``)."""
+        return self._resolve_convention(convention) == "mujoco" and self.floating_base
 
     def attach_tool(self, joint, *, mass, com=(0.0, 0.0, 0.0), inertia=None,
                     tip_transform=None):

@@ -461,10 +461,9 @@ class TorchRobotHandle(BaseDelegateMixin):
         # Per-convention registry of autograd Functions, built lazily. mjx mode
         # binds every op to its _mujoco variant (floating-base only).
         self._fns_cache: dict[str, dict] = {}
-        if output_convention not in ("pinocchio", "mujoco"):
-            raise ValueError(
-                f"output_convention must be 'pinocchio' or 'mujoco'; got {output_convention!r}")
-        self._output_convention = output_convention
+        # Route through the BaseDelegateMixin setter: validates the value AND,
+        # on a floating base, mjx-twin presence (fixed base: "mujoco" = no-op).
+        self.output_convention = output_convention
         self._mjx_view = None
 
     # ─── metadata (delegated) ────────────────────────────────────────────
@@ -484,23 +483,8 @@ class TorchRobotHandle(BaseDelegateMixin):
     def max_batch(self) -> int:   return self._base.max_batch
 
     # ─── output convention (mjx parity) ──────────────────────────────────
-    @property
-    def output_convention(self) -> str:
-        """Default IO convention for this handle: ``"pinocchio"`` or ``"mujoco"``.
-        Settable. ``"mujoco"`` requires a floating base (mjx and pinocchio coincide
-        on a fixed base). Per-call overrides use the thread-safe ``.mujoco`` view."""
-        return self._output_convention
-
-    @output_convention.setter
-    def output_convention(self, value: str) -> None:
-        if value not in ("pinocchio", "mujoco"):
-            raise ValueError(
-                f"output_convention must be 'pinocchio' or 'mujoco'; got {value!r}")
-        if value == "mujoco" and not self.floating_base:
-            raise ValueError(
-                "output_convention='mujoco' requires a floating-base robot "
-                f"({self.name} is fixed-base)")
-        self._output_convention = value
+    # output_convention property/setter + _mjx_active come from BaseDelegateMixin
+    # (numpy semantics: "mujoco" on a fixed base is a uniform-interface no-op).
 
     def _resolve_convention(self, convention):
         """None → the handle default; else the explicit per-call convention."""
@@ -514,14 +498,12 @@ class TorchRobotHandle(BaseDelegateMixin):
         if conv not in ("pinocchio", "mujoco"):
             raise ValueError(
                 f"output_convention must be 'pinocchio' or 'mujoco'; got {conv!r}")
-        if conv == "mujoco" and not self.floating_base:
-            raise ValueError(
-                "output_convention='mujoco' requires a floating-base robot "
-                f"({self.name} is fixed-base; mjx and pinocchio coincide there)")
         cache = self._fns_cache
         if conv not in cache:
+            # mjx closures only when ACTIVE (floating base) — on a fixed base the
+            # pin closures ARE the mjx closures (the conventions coincide).
             cache[conv] = _make_autograd(self._ns, self._base.num_vel,
-                                         mujoco=(conv == "mujoco"))
+                                         mujoco=self._mjx_active(conv))
         return cache[conv]
 
     @property
@@ -531,16 +513,11 @@ class TorchRobotHandle(BaseDelegateMixin):
 
     def _op(self, conv, name):
         """Resolve a DIRECT (non-autograd) CORE op, dispatching to the ``_mujoco``
-        variant when the resolved convention is mujoco. mjx requires a floating
-        base (the _mujoco symbol is #ifdef'd out of fixed .so). A core op missing
+        variant when the mjx convention is ACTIVE (resolved "mujoco" AND floating
+        base — fixed base: the pin op is the correct no-op). A core op missing
         on a SUBSET build maps to the clean "not built — add to algorithm_list"
         error (via _resolve_core_op)."""
-        c = self._resolve_convention(conv)
-        if c == "mujoco":
-            if not self.floating_base:
-                raise ValueError(
-                    "output_convention='mujoco' requires a floating-base robot "
-                    f"({self.name} is fixed-base)")
+        if self._mjx_active(conv):
             return _resolve_core_op(self._ops, name + "_mujoco")
         return _resolve_core_op(self._ops, name)
 
@@ -552,12 +529,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         handle. These are #ifdef-gated (emitted-when-present), distinct from the
         core subset gating, so resolve the raw op directly and keep the dedicated
         'not generated' message."""
-        c = self._resolve_convention(conv)
-        if c == "mujoco" and not self.floating_base:
-            raise ValueError(
-                "output_convention='mujoco' requires a floating-base robot "
-                f"({self.name} is fixed-base)")
-        resolved = (name + "_mujoco") if c == "mujoco" else name
+        resolved = (name + "_mujoco") if self._mjx_active(conv) else name
         try:
             return getattr(self._ops, resolved)
         except AttributeError as e:
@@ -670,7 +642,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         conv = self._resolve_convention(_convention)
         nv = self.num_vel
         m = self._op(conv, "minv")(q).reshape(-1, nv, nv)
-        if conv == "mujoco":
+        if self._mjx_active(conv):
             return m  # mjx kernel writes a full dense symmetric matrix
         eye = torch.eye(nv, dtype=m.dtype, device=m.device)
         return m + m.transpose(1, 2) - m * eye

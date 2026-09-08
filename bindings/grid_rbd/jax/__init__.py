@@ -178,10 +178,9 @@ class JaxRobotHandle(BaseDelegateMixin):
         self._base = base
         self._cache_key = cache_key
         self._so_path = Path(so_path)
-        if output_convention not in ("pinocchio", "mujoco"):
-            raise ValueError(
-                f"output_convention must be 'pinocchio' or 'mujoco'; got {output_convention!r}")
-        self._output_convention = output_convention
+        # Route through the BaseDelegateMixin setter: validates the value AND,
+        # on a floating base, mjx-twin presence (fixed base: "mujoco" = no-op).
+        self.output_convention = output_convention
         self._mjx_view = None
         # Wave 2a: the element dtype tracks the .so (fp64 build => float64 arrays
         # + float64 gravity/dt attrs, matching the C++ GRID_FFI_T / .Attr<T>).
@@ -205,23 +204,8 @@ class JaxRobotHandle(BaseDelegateMixin):
     def max_batch(self) -> int:   return self._base.max_batch
 
     # ─── output convention (mjx parity) ──────────────────────────────────
-    @property
-    def output_convention(self) -> str:
-        """Default IO convention for this handle: ``"pinocchio"`` or ``"mujoco"``.
-        Settable. ``"mujoco"`` requires a floating base (mjx and pinocchio coincide
-        on a fixed base). Per-call overrides use the thread-safe ``.mujoco`` view."""
-        return self._output_convention
-
-    @output_convention.setter
-    def output_convention(self, value: str) -> None:
-        if value not in ("pinocchio", "mujoco"):
-            raise ValueError(
-                f"output_convention must be 'pinocchio' or 'mujoco'; got {value!r}")
-        if value == "mujoco" and not self.floating_base:
-            raise ValueError(
-                "output_convention='mujoco' requires a floating-base robot "
-                f"({self.name} is fixed-base)")
-        self._output_convention = value
+    # output_convention property/setter + _mjx_active come from BaseDelegateMixin
+    # (numpy semantics: "mujoco" on a fixed base is a uniform-interface no-op).
 
     def _resolve_convention(self, convention):
         """None → the handle default; else the explicit per-call convention."""
@@ -229,13 +213,10 @@ class JaxRobotHandle(BaseDelegateMixin):
 
     def _mt(self, convention, method, symbol):
         """Register (and return) the FFI target for a DIRECT (non-custom_vjp) method,
-        dispatching to the ``_mujoco`` variant when the resolved convention is mujoco.
-        mjx requires a floating base (the _mujoco symbol is #ifdef'd out of fixed .so)."""
-        if self._resolve_convention(convention) == "mujoco":
-            if not self.floating_base:
-                raise ValueError(
-                    f"output_convention='mujoco' requires a floating-base robot "
-                    f"({self.name} is fixed-base)")
+        dispatching to the ``_mujoco`` variant when the mjx convention is ACTIVE
+        (resolved "mujoco" AND floating base — on a fixed base mjx coincides with
+        pinocchio, so the pin target is the correct no-op)."""
+        if self._mjx_active(convention):
             method, symbol = method + "_mujoco", symbol + "_mujoco"
         return _register_method_target(self._so_path, self._cache_key, method, symbol)
 
@@ -322,11 +303,9 @@ class JaxRobotHandle(BaseDelegateMixin):
         if convention not in ("pinocchio", "mujoco"):
             raise ValueError(
                 f"output_convention must be 'pinocchio' or 'mujoco'; got {convention!r}")
-        mjx = (convention == "mujoco")
-        if mjx and not self.floating_base:
-            raise ValueError(
-                "output_convention='mujoco' requires a floating-base robot "
-                f"({self.name} is fixed-base; mjx and pinocchio coincide there)")
+        # mjx engages only on a floating base (fixed base: pin closures ARE the
+        # mjx closures — the conventions coincide, uniform-interface no-op).
+        mjx = (convention == "mujoco") and self.floating_base
         cache = getattr(self, "_diff_cache", None)
         if cache is None:
             cache = self._diff_cache = {}
@@ -635,7 +614,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         nv = self.num_vel
         flat = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(q)
         m = flat.reshape(q.shape[:-1] + (nv, nv))
-        if conv == "mujoco":
+        if self._mjx_active(_convention):
             return m  # mjx kernel writes a full dense symmetric matrix
         # pin kernel fills the lower triangle; symmetrize as M + Mᵀ − diag(M).
         eye = jnp.eye(nv, dtype=m.dtype)

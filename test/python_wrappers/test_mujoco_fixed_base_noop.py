@@ -55,3 +55,40 @@ def test_fixed_base_mujoco_convention_is_noop():
     tau_pin = np.asarray(h_mjx.inverse_dynamics(q, qd, _convention="pinocchio"))
     assert np.array_equal(tau_mjx_default, tau_pin), "fixed-base mujoco default != pinocchio"
     assert np.array_equal(tau_view, tau_pin), "fixed-base handle.mujoco view != pinocchio"
+
+
+@pytest.mark.skipif(not _has_cuda(), reason="needs nvcc + CUDA GPU")
+@pytest.mark.skipif(not _IIWA.exists(), reason="iiwa14 urdf missing")
+def test_fixed_base_mujoco_convention_is_noop_jax_torch():
+    """The SAME uniform interface on the jax/torch surfaces (BaseDelegateMixin
+    setter semantics): output_convention="mujoco" on a fixed base is accepted
+    (previously a ValueError — clean-break unification to the numpy semantics)
+    and every call is a pin-identical no-op, including the .mujoco view."""
+    jax_mod = pytest.importorskip("grid_rbd.jax", reason="grid_rbd.jax import failed")
+    torch_mod = pytest.importorskip("grid_rbd.torch", reason="grid_rbd.torch import failed")
+    import torch
+
+    common = dict(urdf_path=str(_IIWA), floating_base=False,
+                  algorithm_list=["inverse_dynamics"], max_batch_size=8)
+    rng = np.random.default_rng(1)
+
+    hj = jax_mod.register_robot(name="iiwa14_fixed_mjx_noop_jax",
+                                output_convention="mujoco", **common)
+    assert hj.output_convention == "mujoco" and not hj.floating_base
+    q = rng.standard_normal((4, hj.num_joints)).astype(np.float32)
+    qd = rng.standard_normal((4, hj.num_joints)).astype(np.float32)
+    tau_mjx = np.asarray(hj.inverse_dynamics(q, qd))
+    tau_view = np.asarray(hj.mujoco.inverse_dynamics(q, qd))
+    tau_pin = np.asarray(hj.inverse_dynamics(q, qd, _convention="pinocchio"))
+    assert np.array_equal(tau_mjx, tau_pin), "jax fixed-base mujoco default != pinocchio"
+    assert np.array_equal(tau_view, tau_pin), "jax fixed-base .mujoco view != pinocchio"
+
+    ht = torch_mod.register_robot(name="iiwa14_fixed_mjx_noop_torch",
+                                  output_convention="mujoco", **common)
+    assert ht.output_convention == "mujoco" and not ht.floating_base
+    qt = torch.from_numpy(q).cuda(); qdt = torch.from_numpy(qd).cuda()
+    t_mjx = ht.inverse_dynamics(qt, qdt).cpu().numpy()
+    t_view = ht.mujoco.inverse_dynamics(qt, qdt).cpu().numpy()
+    t_pin = ht.inverse_dynamics(qt, qdt, _convention="pinocchio").cpu().numpy()
+    assert np.array_equal(t_mjx, t_pin), "torch fixed-base mujoco default != pinocchio"
+    assert np.array_equal(t_view, t_pin), "torch fixed-base .mujoco view != pinocchio"
