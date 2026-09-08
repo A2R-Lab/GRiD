@@ -55,7 +55,6 @@ class AbiSpec:
     # ── launch ──────────────────────────────────────────────────────────
     launch_algo: str | None = None            # GRID_ALGO_* name; None -> from key; "GRID_ALGO_COUNT" = untuned
     clamp_kernel: str | None = None           # grid_clamp_threads_for target, when used
-    has_resource_tier: bool = True            # host call passes launch_cfg<..>::TIER
     template_shape: str = "plain"             # "plain" (tight <T>) | "std5" (COMPRESSED+KIND[+MJX]+TIER) | "so4" (KIND[+MJX]+TIER)
     pre_launch_check: bool = False            # the pre-launch sticky-error 200+ block
     # ── output ──────────────────────────────────────────────────────────
@@ -127,7 +126,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         pack_mode="custom",
         f_ext_mode="produces",
         launch_algo="GRID_ALGO_COUNT",
-        has_resource_tier=False,
         pre_launch_check=True,
         out_buffer="d_f_ext", out_copy="cudaMemcpy_d",
         out_size_expr="6*NUM_BODIES",
@@ -136,7 +134,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
 
     # ── dynamics/derivatives half (agent-transcribed 2026-08-28) ──────
 
-    # wrapper_template.cu:730  (twin :777)
     "minv": AbiSpec(
         "minv",
         inputs=(("q", "const T*"), ("minv_out", "T*"), ("batch", "int")),
@@ -148,7 +145,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         # NOTE: no gravity param at all (unlike crba, which accepts-but-ignores one).
     ),
 
-    # wrapper_template.cu:803  (twin :850)
     "forward_dynamics": AbiSpec(
         "forward_dynamics",
         inputs=(("q", "const T*"), ("qd", "const T*"), ("u", "const T*"),
@@ -165,7 +161,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         # not reframe f_ext); enforced by the python dispatch, NOT by a return-4 here.
     ),
 
-    # wrapper_template.cu:881  (twin :927)
     "aba": AbiSpec(
         "aba",
         inputs=(("q", "const T*"), ("qd", "const T*"), ("u", "const T*"),
@@ -180,7 +175,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_mjx_twin=True,
     ),
 
-    # wrapper_template.cu:1186  (twin :1260)
     "inverse_dynamics_gradient": AbiSpec(
         "inverse_dynamics_gradient",
         inputs=(("q", "const T*"), ("qd", "const T*"), ("qdd_opt", "const T*"),
@@ -197,7 +191,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_mjx_twin=True, mjx_requires_qdd=True,
     ),
 
-    # wrapper_template.cu:1297  (twin :1349)
     "forward_dynamics_gradient": AbiSpec(
         "forward_dynamics_gradient",
         inputs=(("q", "const T*"), ("qd", "const T*"), ("u", "const T*"),
@@ -214,7 +207,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_mjx_twin=True,
     ),
 
-    # wrapper_template.cu:1444  (twin :1486)
     "idsva_so": AbiSpec(
         "idsva_so",
         inputs=(("q", "const T*"), ("qd", "const T*"), ("qdd", "const T*"),
@@ -229,11 +221,9 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_mjx_twin=True, mjx_post_launch_check=True,
         # VOCAB GAP (no field): the MJX TWIN ONLY has the post-launch
         # `cudaGetLastError() -> return 200+e` check (register-heavy kernel,
-        # wrapper_template.cu:1492-1493); the pin body has no 200+ block, so
         # pre_launch_check stays False.
     ),
 
-    # wrapper_template.cu:1555  (twin :1595)
     "fdsva_so": AbiSpec(
         "fdsva_so",
         inputs=(("q", "const T*"), ("qd", "const T*"), ("u", "const T*"),
@@ -249,7 +239,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         # (wrapper_template.cu:1601-1602); pin body has none.
     ),
 
-    # wrapper_template.cu:1505  (twin :1532)
     "inverse_dynamics_regressor": AbiSpec(
         "inverse_dynamics_regressor",
         inputs=(("q", "const T*"), ("qd", "const T*"), ("qdd", "const T*"),
@@ -257,7 +246,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         pack_mode="qdd_u_slot",   # qdd rides the u-slot (like idsva_so)
         qdd_route="u_slot",
         takes_gravity=True,
-        has_resource_tier=False,  # host call is bare grid::inverse_dynamics_regressor<T>(...)
         out_buffer="h_Y", out_copy="memcpy_h",
         out_size_expr="grid::NUM_VEL * 10 * grid::NUM_BODIES",
         has_mjx_twin=True, mjx_omits_tier=True, mjx_post_launch_check=True,  # twin: <T,false,GRID_DATA_ALL,true>, no TIER
@@ -266,7 +254,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         # (wrapper_template.cu:1544-1545).
     ),
 
-    # wrapper_template.cu:2456  (twin :2487)
     "integrator_gradient": AbiSpec(
         "integrator_gradient",
         inputs=(("q", "const T*"), ("qd", "const T*"), ("u", "const T*"),
@@ -275,7 +262,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         pack_mode="q_qd_u",
         takes_gravity=True,
         takes_dt_it=True, it_dispatch="FULL",   # GRID_RBD_IT_DISPATCH cases 0-5
-        has_resource_tier=False,  # launch_integrator_grad_host: grid::integrator_gradient<T, IT>
                                   # (no TIER, no SIG_MJX fork — UNLIKE the integrator's
                                   # launcher, which passes TIER and forks on
                                   # GRID_RBD_SIG_MJX_INTEGRATOR)
@@ -289,33 +275,28 @@ ABI_SPECS: dict[str, AbiSpec] = {
         # MUJOCO_OUTPUT=true (mjx_omits_tier=False).
     ),
 
-    # wrapper_template.cu:1856  (twin :1895)
     "kinetic_energy_regressor": AbiSpec(
         "kinetic_energy_regressor",
         inputs=(("q", "const T*"), ("qd", "const T*"), ("out", "T*"),
                 ("batch", "int"), ("gravity", "T")),
         pack_mode="q_qd_null",
         takes_gravity=True,       # accepted + forwarded (KE regressor is gravity-independent)
-        has_resource_tier=False,  # bare grid::kinetic_energy_regressor<T>(...)
         out_buffer="h_ke_regressor", out_copy="memcpy_h",
         out_size_expr="10*grid::NUM_BODIES",
         has_mjx_twin=True, mjx_omits_tier=True,
     ),
 
-    # wrapper_template.cu:1874  (twin :1912)
     "potential_energy_regressor": AbiSpec(
         "potential_energy_regressor",
         inputs=(("q", "const T*"), ("out", "T*"), ("batch", "int"),
                 ("gravity", "T")),
         pack_mode="pack_q",       # COMPRESSED input layout (h_q / d_q), like com
         takes_gravity=True,
-        has_resource_tier=False,  # bare grid::potential_energy_regressor<T>(...)
         out_buffer="h_pe_regressor", out_copy="memcpy_h",
         out_size_expr="10*grid::NUM_BODIES",
         has_mjx_twin=True, mjx_omits_tier=True,
     ),
 
-    # wrapper_template.cu:1683  (twin :1739)
     "energy": AbiSpec(
         "energy",
         gate_form="ifdef",        # `#ifdef GRID_HAS_ENERGY` (macro is the default name)
@@ -324,7 +305,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
                 ("batch", "int"), ("gravity", "T")),
         pack_mode="q_qd_null",
         takes_gravity=True,
-        has_resource_tier=False,  # pin body: bare grid::energy<T>(...)
         out_buffer="h_energy", out_copy="memcpy_h", out_size_expr="3",
         has_mjx_twin=True,
         # VOCAB GAP (no field): INVERTED tier asymmetry — the pin host call omits
@@ -381,7 +361,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
                 ("batch", "int"), ("use_warp", "int")),
         pack_mode="custom",                                    # cudaMemcpy q -> static d_q_fk (stride NUM_POS)
         launch_algo="GRID_ALGO_COUNT",
-        has_resource_tier=False,
         out_buffer="d_pose7",                                  # [D4] static scratch, not gridData
         out_copy="cudaMemcpy_d",
         out_size_expr="7",
@@ -398,7 +377,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
                 ("target_jid", "int"), ("reference_frame", "int")),
         pack_mode="q_q_null",
         trailing_runtime_args=("target_jid", "reference_frame"),
-        has_resource_tier=False,                               # plain grid::frame_jacobian<T>
         out_buffer="h_frame_jacobian", out_copy="memcpy_h",
         out_size_expr="6*grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,  # [D6] nested twin block
@@ -411,7 +389,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
                 ("batch", "int"), ("target_jid", "int"), ("reference_frame", "int")),
         pack_mode="q_qd_null",
         trailing_runtime_args=("target_jid", "reference_frame"),
-        has_resource_tier=False,
         out_buffer="h_frame_jacobian_dot", out_copy="memcpy_h",
         out_size_expr="6*grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,  # [D6] inner #ifdef in FJ twin block
@@ -422,7 +399,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         not_built_msg="bare",
         inputs=(("q", "const T*"), ("out", "T*"), ("batch", "int")),
         pack_mode="q_q_null",
-        has_resource_tier=False,
         out_buffer="h_osc_inertia", out_copy="memcpy_h",
         out_size_expr="36",
         has_mjx_twin=True, mjx_omits_tier=True,  # frame bakes at codegen; no trailing args
@@ -435,7 +411,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         inputs=(("q", "const T*"), ("out", "T*"), ("batch", "int"), ("gravity", "T")),
         pack_mode="q_q_null",                                  # qd unused (zeroed internally)
         takes_gravity=True,
-        has_resource_tier=False,                               # plain grid::generalized_gravity<T>
         out_buffer="h_c", out_copy="memcpy_h",
         out_size_expr="grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,  # twin <T,false,GRID_DATA_ALL,true>, no tier
@@ -446,7 +421,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
                 ("batch", "int"), ("gravity", "T")),
         pack_mode="q_qd_null",
         takes_gravity=True,
-        has_resource_tier=False,
         out_buffer="h_c", out_copy="memcpy_h",
         out_size_expr="grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,
@@ -457,7 +431,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
                 ("batch", "int"), ("gravity", "T")),
         pack_mode="q_qd_null",
         takes_gravity=True,
-        has_resource_tier=False,
         out_buffer="h_coriolis", out_copy="memcpy_h",
         out_size_expr="grid::NUM_VEL*grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,
@@ -470,7 +443,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         not_built_msg="reduced",
         inputs=(("q", "const T*"), ("out", "T*"), ("batch", "int")),
         pack_mode="pack_q",                                    # compressed h_q layout
-        has_resource_tier=False,                               # pin plain <T>; twin ADDS tier [D2]
         out_buffer="h_com", out_copy="memcpy_h",
         out_size_expr="(3 + 3 * grid::NUM_VEL)",
         has_mjx_twin=True,
@@ -482,7 +454,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         inputs=(("q", "const T*"), ("qd", "const T*"), ("out", "T*"), ("batch", "int")),
         pack_mode="q_qd_null",
         clamp_kernel="grid::ccrba_kernel<T>",                  # pin only [D3]
-        has_resource_tier=False,                               # pin plain <T>; twin ADDS tier [D2]
         out_buffer="h_ccrba", out_copy="memcpy_h",
         out_size_expr="(6 * grid::NUM_VEL + 6)",
         has_mjx_twin=True,
@@ -494,7 +465,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         inputs=(("q", "const T*"), ("out", "T*"), ("batch", "int")),
         pack_mode="pack_q",                                    # compressed h_q layout
         clamp_kernel="grid::dccrba_kernel<T>",                 # pin only [D3]
-        has_resource_tier=False,
         out_buffer="h_dccrba", out_copy="memcpy_h",
         out_size_expr="6*grid::NUM_VEL*grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,
@@ -506,7 +476,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         inputs=(("q", "const T*"), ("qd", "const T*"), ("out", "T*"), ("batch", "int")),
         pack_mode="q_qd_null",
         clamp_kernel="grid::cmm_time_variation_kernel<T>",     # pin only [D3]
-        has_resource_tier=False,
         out_buffer="h_cmm_time_variation", out_copy="memcpy_h",
         out_size_expr="6*grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,
@@ -522,7 +491,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         pack_mode="q_q_null",                                  # qd/u unused
         trailing_runtime_args=("target_jid",),                 # offset goes via device staging, not the call
         launch_algo="GRID_ALGO_COUNT",                         # untuned
-        has_resource_tier=False,
         out_buffer="h_eePose", out_copy="memcpy_h",
         out_size_expr="6",
         has_mjx_twin=True, mjx_omits_tier=True,  # [D6] twin nested in #ifdef GRID_RBD_WITH_MUJOCO, own #ifdef+stub inside
@@ -538,7 +506,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         pack_mode="q_q_null",
         trailing_runtime_args=("target_jid",),
         launch_algo="GRID_ALGO_COUNT",
-        has_resource_tier=False,
         out_buffer="h_eePoseGrad", out_copy="memcpy_h",
         out_size_expr="6*grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,
@@ -564,7 +531,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
 #        both runtime-EE fns) are recorded as "bare".
 #   [D2] mjx ADDS tier (inverse of mjx_omits_tier, no field for it): the pin
 #        launches of com/ccrba use plain grid::com<T>/grid::ccrba<T> (NO explicit
-#        RESOURCE_TIER -> has_resource_tier=False), but their _mujoco twins DO
+#        RESOURCE_TIER — template_shape="plain"), but their _mujoco twins DO
 #        pass /*RESOURCE_TIER=*/grid::launch_cfg<GRID_ALGO_{COM,CCRBA}>::TIER
 #        explicitly. mjx_omits_tier stays False everywhere in this half (no row
 #        has pin-with-explicit-tier + twin-without).

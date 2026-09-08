@@ -64,6 +64,5 @@ This package also includes test functions which allow for code optimizations and
 + ```(c, v, a, f) = GRiDCodeGenerator.test_rnea(q, qd, qdd = None, GRAVITY = -9.81)```
 + ```Minv = GRiDCodeGenerator.test_minv(q, densify_Minv = False)```
 + ```dc_du = GRiDCodeGenerator.test_rnea_grad(q, qd, qdd = None, GRAVITY = -9.81)``` where ```dc_du = np.hstack((dc_dq,dc_dqd))```
-+ ```df_du = GRiDCodeGenerator.test_fd_grad(q, qd, u, GRAVITY = -9.81)``` where ```df_du = np.hstack((df_dq,df_dqd))```
 
 We also include functions that break these algorithms down into there different passes to enable easier testing.

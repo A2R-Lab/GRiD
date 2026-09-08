@@ -493,32 +493,6 @@ def test_rnea_grad(self, q, qd, qdd = None, GRAVITY = -9.81):
     dc_du = np.hstack((dc_dq,dc_dqd))
     return dc_du
 
-def test_fd_grad(self, q, qd, u, GRAVITY = -9.81):
-    n = self.robot.get_num_pos()
-    (c, v, a, f) = self.test_rnea(q, qd, None, GRAVITY)
-    Minv = self.test_minv(q, True)
-    umc = u - c
-    qdd = np.matmul(Minv,umc)
-    (c, v, a, f) = self.test_rnea(q, qd, qdd, GRAVITY)
-    dc_du = self.test_rnea_grad(q, qd, qdd, GRAVITY)
-    df_du = -np.matmul(Minv,dc_du)
-    if self.DEBUG_MODE:
-        print("Minv")
-        print(Minv)
-        print("qdd")
-        print(qdd)
-        print("v")
-        print(v)
-        print("a")
-        print(a)
-        print("f")
-        print(f)
-        print("dc_dq")
-        print(dc_du[:,:n])
-        print("dc_dqd")
-        print(dc_du[:,n:])
-    return df_du
-
 def mxS(self, S, vec, alpha = 1.0):
     if S[0] == 1:
         return self.mx0(vec,alpha)

@@ -112,7 +112,6 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
         compose_arena_rungs("coriolis_matrix", self._arena_ctx)   # Step 3.3 fold
     self.coriolis_matrix_spill_tier_3way = select_shared_tier_3way(_coriolis_t_full, _coriolis_t_output_spill, _coriolis_t_workspace)
     # whole-band spill (inner scratch -> d_workspace) fires only at the deepest rung (index 2).
-    self.coriolis_matrix_use_workspace_temp = self.coriolis_matrix_spill_tier_3way[0] == 2
     self.coriolis_matrix_t_count_per_tier = tuple(
         (_coriolis_t_full, _coriolis_t_output_spill, _coriolis_t_workspace)[i] for i in self.coriolis_matrix_spill_tier_3way)
     # PS5 dCCRBA (kinematics / XmatsHom domain). The shared inner pool is the
@@ -415,7 +414,6 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
     # global-temp (whole inner pool -> d_workspace) is used at BOTH the emergency
     # rung (2) and the output-spill rung (3, which also spills s_dc_du/s_Minv).
     self.forward_dynamics_gradient_use_global_temp = self.forward_dynamics_gradient_spill_tier >= 2
-    self.forward_dynamics_gradient_use_output_spill = self.forward_dynamics_gradient_spill_tier == 3
     inverse_dynamics_gradient_t_count = _inverse_dynamics_gradient_arenas[self.inverse_dynamics_gradient_spill_tier]
     forward_dynamics_gradient_t_count = _forward_dynamics_gradient_arenas[self.forward_dynamics_gradient_spill_tier]
     # Per-tier t_counts exposed for tier-aware constexpr metadata.
@@ -446,7 +444,6 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
     # cannot be byte-identically compacted out of smem).
     _aba_arenas = compose_arena_rungs("aba", self._arena_ctx)   # Step 3.5c fold
     self.aba_spill_tier_3way = select_shared_tier_3way(*_aba_arenas)
-    self.aba_use_workspace_temp = self.aba_spill_tier_3way[0] == 2
     aba_t_count = _aba_arenas[self.aba_spill_tier_3way[0]]
     self.aba_t_count_per_tier = tuple(_aba_arenas[i] for i in self.aba_spill_tier_3way)
     self._aba_inner_cold_count = _aba_inner_cold_count
@@ -468,7 +465,6 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
         compose_arena_rungs("crba", self._arena_ctx)   # Step 3.2 fold
     self.crba_spill_tier_3way = select_shared_tier_3way(_crba_t_count_full, _crba_t_count_output_spill, _crba_t_count_workspace)
     # whole-band spill (inner band -> d_workspace) fires only at the deepest rung (index 2).
-    self.crba_use_workspace_temp = self.crba_spill_tier_3way[0] == 2
     self.crba_t_count_per_tier = tuple(
         (_crba_t_count_full, _crba_t_count_output_spill, _crba_t_count_workspace)[i] for i in self.crba_spill_tier_3way
     )
@@ -655,7 +651,6 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
     _idsva_so_world_arenas = compose_arena_rungs("idsva_so_world_frame", self._arena_ctx)   # Step 3.5 fold
     self.idsva_so_world_frame_spill_tier_3way = select_shared_tier_3way(*_idsva_so_world_arenas)
     self.idsva_so_world_frame_t_count_per_tier = tuple(_idsva_so_world_arenas[i] for i in self.idsva_so_world_frame_spill_tier_3way)
-    self.idsva_so_world_frame_use_global_output = _idsva_so_world_tiers[self.idsva_so_world_frame_spill_tier_3way[0]][2]
     # d_workspace floats needed per timestep by the idsva_so spill rungs (for so_workspace sizing).
     # Body rungs: 4=output_temp (whole inner arena), 3=output_tp (36*len(jids_a) ancestor-pair
     # scratch), 2=output_bc (36*NB cold slab); 0/1 spill nothing into d_workspace.

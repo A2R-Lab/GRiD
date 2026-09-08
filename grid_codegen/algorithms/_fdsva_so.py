@@ -11,7 +11,6 @@ fdsva_so already composes — never here.
 from ._mjx_blockpar import bpfor as _bpfor, bpctrl as _bpctrl, stride_rc as _fbp
 from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 
-MEMORY_THRESHOLD = 8 # Max num joints for shared mem allocation of result
 
 
 def _fdsva_so_use_world_idsva(self):

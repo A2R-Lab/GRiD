@@ -1,8 +1,5 @@
 import os
-import json
-import re
 import warnings
-import numpy as np
 
 # Codegen-time frame-selection predicate shared with the idsva_so dispatcher /
 # device wrapper. The emission gate (enable_idsva_so_world_frame) MUST agree with
@@ -10,16 +7,7 @@ import numpy as np
 # (else high-DOF fixed-base robots route to an undefined idsva_so_world_frame_inner).
 from .algorithms._idsva_so import _idsva_so_use_world_frame
 
-# Per-algo DESCRIPTOR table (item M) — single source of truth for the launch-config
-# enum/symbol metadata that used to live in the two module-level dicts below, and
-# (Step 2) for the KERNEL_ATTR_MANIFEST / mujoco_manifest per-entry HEAD fields
-# (algo_label, algo_short, gate_attr, bytes_macro) — only the irregular kernel
-# overload SIGNATURES stay as co-located payload data.
 from .helpers._host_clamp import _apply_host_thread_clamp_pass
-from .algo_registry import (ALGO_DESCRIPTORS, build_launch_config_algo_to_symbol, descriptor_for,
-                            launch_config_descriptors,
-                            arena_ctx_from_codegen, compose_arena_full, compose_arena_rungs,
-                            ARENA_COMPOSED_KEYS, ARENA_RUNG_KEYS)
 
 # Launch-config bake moved to _launch_config.py (H4); re-exported here because
 # bindings/_compile/_handle/autotune_ffi and the parity goldens import these
@@ -167,10 +155,10 @@ class GRiDCodeGenerator:
 
     # finally import the test code
     from ._reference_impl import test_rnea_fpass, test_rnea_bpass, test_rnea, test_minv_bpass, test_minv_fpass, test_densify_Minv, test_minv, test_rnea_grad_inner, \
-                      test_rnea_grad, test_fd_grad, mx0, mx1, mx2, mx3, mx4, mx5, mxS, fxv
+                      test_rnea_grad, mx0, mx1, mx2, mx3, mx4, mx5, mxS, fxv
 
     # initialize the object
-    def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, USE_DYNAMIC_SHARED_MEM = True, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False):
+    def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False):
         self.robot = robotObj
         # runtime_joint_dynamics: when True, the id/fd/aba/*_gradient bias reads
         # the per-DOF damping/friction coefficients from a mutable device table
@@ -243,8 +231,6 @@ class GRiDCodeGenerator:
         self.indent_level = 0
         self.DEBUG_MODE = DEBUG_MODE
         self.gen_print_mat = DEBUG_MODE or NEED_PRINT_MAT
-        # even if dynamic shared mem is not requested for large robots we need to use it
-        self.use_dynamic_shared_mem_flag = USE_DYNAMIC_SHARED_MEM or (self.robot.get_num_pos() > 12)
         # check for the file/namespace name
         self.file_namespace = FILE_NAMESPACE
         self.cuda_target_shared_mem_bytes = int(os.environ.get("GRID_CUDA_TARGET_SHARED_MEM_BYTES", "98304"))
@@ -261,7 +247,6 @@ class GRiDCodeGenerator:
         # sets the default. ints stay 32-bit regardless (int_count term is *4 below).
         if dtype not in ("float", "double"):
             raise ValueError(f"GRiDCodeGenerator dtype must be 'float' or 'double', got {dtype!r}")
-        self.codegen_dtype = dtype
         _default_t_bytes = "8" if dtype == "double" else "4"
         self.cuda_shared_mem_type_size_bytes = int(os.environ.get("GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES", _default_t_bytes))
 

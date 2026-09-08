@@ -148,12 +148,6 @@ static inline dim3 grid_rbd_launch_threads_n(int batch) {
     return dim3((unsigned)n, 1, 1);
 }
 
-// Batch-free spelling: always the LARGE-batch pick (kept for call sites with
-// no batch in scope; a batch of INT_MAX can never be <= a threshold).
-template <int ALGO>
-static inline dim3 grid_rbd_launch_threads() {
-    return grid_rbd_launch_threads_n<ALGO>(0x7fffffff);
-}
 
 // Clamp a requested thread count to a specific kernel's register-limited maxThreadsPerBlock.
 // Register-heavy kernels (e.g. momentum_cost at ~140 regs/thread => max 384) cannot

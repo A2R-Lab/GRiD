@@ -68,7 +68,6 @@ def _idsva_so_emit_baked_array(self, decl, values, fmt=str, per_line=32):
                             + [chunks[-1], "};"])
 
 
-SHARED_MEMORY_JOINT_THRESHOLD = 10 # Max shared memory threshold => Write directly to RAM
 
 # EXP-1 (perf_idsva_so_bigrobot.md): high-DOF FIXED-base robots route to the world-frame
 # inner too. Measured crossover is between go2 (fixed NV=12, body-frame wins) and g1 (fixed
