@@ -58,6 +58,7 @@ from typing import Any
 
 import grid_rbd as _grid_rbd
 from grid_rbd._handle import RobotHandle, SecondOrderID, SecondOrderFD, _integrator_code
+from .._surface_common import BaseDelegateMixin, MujocoDerivativeViewMixin, MujocoViewBase
 
 
 # ─── op-library registry (process-global, idempotent) ───────────────────────
@@ -432,127 +433,20 @@ class GraphCallable:
 # ─── mjx view ────────────────────────────────────────────────────────────────
 
 
-class _TorchMujocoView:
+class _TorchMujocoView(MujocoDerivativeViewMixin, MujocoViewBase):
     """MuJoCo-native, autograd-aware view over a :class:`TorchRobotHandle`
-    (``handle.mujoco``). Mirrors the jax handle's ``.mujoco`` view: MuJoCo
-    parameter names, the mjx output convention applied PER CALL (forwards an
-    explicit ``_convention="mujoco"``, never mutating the shared default), so it
-    is safe alongside pinocchio-convention calls on the same handle. The
-    differentiable methods (inverse_dynamics/forward_dynamics/aba/integrator)
-    stay autograd-aware (the backward uses the mjx-convention analytic Jacobian)."""
+    (``handle.mujoco``). Method surface shared with the jax view via
+    grid_rbd._surface_common; the differentiable methods (inverse_dynamics/
+    forward_dynamics/aba/integrator) stay autograd-aware (the backward uses the
+    mjx-convention analytic Jacobian)."""
 
-    __slots__ = ("_h",)
-
-    def __init__(self, handle: "TorchRobotHandle") -> None:
-        self._h = handle
-
-    # ── value / dynamics ──────────────────────────────────────────────────
-    def inverse_dynamics(self, qpos, qvel, qacc=None, *, gravity: float = -9.81, f_ext=None):
-        """RNEA in MuJoCo convention: τ = id(qpos, qvel, qacc). Returns mjx-frame τ."""
-        return self._h.inverse_dynamics(qpos, qvel, qacc, gravity=gravity, f_ext=f_ext,
-                                        _convention="mujoco")
-
-    def forward_dynamics(self, qpos, qvel, qfrc, *, gravity: float = -9.81, f_ext=None):
-        """Forward dynamics in MuJoCo convention: qacc = fd(qpos, qvel, qfrc)."""
-        return self._h.forward_dynamics(qpos, qvel, qfrc, gravity=gravity, f_ext=f_ext,
-                                        _convention="mujoco")
-
-    def aba(self, qpos, qvel, qfrc, *, gravity: float = -9.81, f_ext=None):
-        """Articulated-body forward dynamics in MuJoCo convention."""
-        return self._h.aba(qpos, qvel, qfrc, gravity=gravity, f_ext=f_ext, _convention="mujoco")
-
-    def crba(self, qpos, *, gravity: float = -9.81):
-        """Mass matrix M(qpos) in the mjx frame (G M G^T)."""
-        return self._h.crba(qpos, gravity=gravity, _convention="mujoco")
-
-    def minv(self, qpos):
-        """Inverse mass matrix Minv(qpos) in the mjx frame (G^-T Minv G^-1)."""
-        return self._h.minv(qpos, _convention="mujoco")
-
-    # ── kinematics / regressor ────────────────────────────────────────────
-    def end_effector_pose(self, qpos):
-        """End-effector pose from mjx-convention qpos."""
-        return self._h.end_effector_pose(qpos, _convention="mujoco")
-
-    def end_effector_pose_gradient(self, qpos):
-        """EE pose Jacobian reframed to the mjx free-joint tangent (J·G^-1)."""
-        return self._h.end_effector_pose_gradient(qpos, _convention="mujoco")
-
-    def end_effector_pose_hessian(self, qpos):
-        """EE pose Hessian in the mjx convention."""
-        return self._h.end_effector_pose_hessian(qpos, _convention="mujoco")
-
-    def inverse_dynamics_regressor(self, qpos, qvel, qacc=None, *, gravity: float = -9.81):
-        """Joint-torque regressor with base-linear rows in the mjx frame."""
-        return self._h.inverse_dynamics_regressor(qpos, qvel, qacc, gravity=gravity,
-                                                  _convention="mujoco")
-
-    # ── first / second-order derivatives ──────────────────────────────────
-    def inverse_dynamics_gradient(self, qpos, qvel, qacc=None, *, gravity: float = -9.81):
-        """∂τ/∂(q,qd) in the mjx convention."""
-        return self._h.inverse_dynamics_gradient(qpos, qvel, qacc, gravity=gravity,
-                                                 _convention="mujoco")
-
-    def forward_dynamics_gradient(self, qpos, qvel, qfrc, *, gravity: float = -9.81):
-        """∂qacc/∂(q,qd) in the mjx convention."""
-        return self._h.forward_dynamics_gradient(qpos, qvel, qfrc, gravity=gravity,
-                                                 _convention="mujoco")
-
-    def idsva_so(self, qpos, qvel, qacc=None, *, gravity: float = -9.81):
-        """Second-order inverse dynamics (4 tensors) in the mjx convention."""
-        return self._h.idsva_so(qpos, qvel, qacc, gravity=gravity, _convention="mujoco")
-
-    def fdsva_so(self, qpos, qvel, qfrc, *, gravity: float = -9.81):
-        """Second-order forward dynamics (4 tensors) in the mjx convention."""
-        return self._h.fdsva_so(qpos, qvel, qfrc, gravity=gravity, _convention="mujoco")
-
-    # ── integrator / plant ────────────────────────────────────────────────
-    def integrator(self, qpos, qvel, qfrc, dt, *, integrator_type: str = "euler",
-                   gravity: float = -9.81):
-        """One integration step in the mjx convention (global-additive retract)."""
-        return self._h.integrator(qpos, qvel, qfrc, dt, integrator_type=integrator_type,
-                                  gravity=gravity, _convention="mujoco")
-
-    def integrator_gradient(self, qpos, qvel, qfrc, dt, *, integrator_type: str = "euler",
-                            gravity: float = -9.81):
-        """Integrator state-transition Jacobian in the mjx convention."""
-        return self._h.integrator_gradient(qpos, qvel, qfrc, dt, integrator_type=integrator_type,
-                                           gravity=gravity, _convention="mujoco")
-
-    def plant_step(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
-        """Plant step x_{k+1} in the mjx convention."""
-        return self._h.plant_step(x, u, dt, integrator_type=integrator_type, gravity=gravity,
-                                  _convention="mujoco")
-
-    def plant_step_gradient(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81):
-        """Plant-step state-transition Jacobian in the mjx convention."""
-        return self._h.plant_step_gradient(x, u, dt, integrator_type=integrator_type,
-                                           gravity=gravity, _convention="mujoco")
-
-    def quadratic_state_cost(self, x, x_des, Q):
-        """Quadratic state cost (value/grad/GN-hess) in the mjx convention."""
-        return self._h.quadratic_state_cost(x, x_des, Q, _convention="mujoco")
-
-    def ee_pos_cost(self, qpos, p_des, W):
-        """End-effector position tracking cost in the mjx convention."""
-        return self._h.ee_pos_cost(qpos, p_des, W, _convention="mujoco")
-
-    def com_cost(self, qpos, p_des, W):
-        """Center-of-mass tracking cost in the mjx convention."""
-        return self._h.com_cost(qpos, p_des, W, _convention="mujoco")
-
-    def momentum_cost(self, qpos, qvel, h_des, W):
-        """Centroidal-momentum tracking cost in the mjx convention."""
-        return self._h.momentum_cost(qpos, qvel, h_des, W, _convention="mujoco")
-
-    def __repr__(self) -> str:
-        return f"<mujoco view of {self._h!r}>"
+    __slots__ = ()
 
 
 # ─── TorchRobotHandle ───────────────────────────────────────────────────────
 
 
-class TorchRobotHandle:
+class TorchRobotHandle(BaseDelegateMixin):
     """Torch-flavored wrapper. Methods return ``torch.Tensor`` (autograd-aware
     for inverse_dynamics / forward_dynamics / aba / integrator)."""
 
@@ -588,135 +482,6 @@ class TorchRobotHandle:
     def floating_base(self) -> bool: return self._base.floating_base
     @property
     def max_batch(self) -> int:   return self._base.max_batch
-    @property
-    def dtype(self) -> str:
-        """Compute precision of the underlying .so (``"float32"`` / ``"float64"``).
-        Tensors passed to the ops must match this dtype (checked in the op)."""
-        return self._base.dtype
-
-    # ─── runtime-mutable inertia (D.4 / sysID) ───────────────────────────
-    @property
-    def runtime_inertia(self) -> bool:
-        """True if this robot was registered with ``runtime_inertia=True`` (the
-        .so carries a mutable inertia table + :py:meth:`set_inertia_params`)."""
-        return self._base.runtime_inertia
-
-    @property
-    def inertia_params(self):
-        """The BAKED 10-param-per-body inertia table, shape ``(num_bodies, 10)``
-        (``[m, h(3), I_O(6)]`` per body). Fetch, mutate, and pass to
-        :py:meth:`set_inertia_params`. Only on a ``runtime_inertia`` build."""
-        return self._base.inertia_params
-
-    def set_inertia_params(self, params) -> None:
-        """Update the device-resident inertia table at runtime (no recompile).
-        ``params`` is the ``(num_bodies, 10)`` (or flat ``10*num_bodies``) table in
-        the same basis as :py:attr:`inertia_params`. Only valid on a robot
-        registered with ``runtime_inertia=True``."""
-        self._base.set_inertia_params(params)
-
-    # ─── welded tool / payload (attach_tool) ─────────────────────────────
-    def attach_tool(self, joint, *, mass, com=(0.0, 0.0, 0.0), inertia=None,
-                    tip_transform=None):
-        """Weld a rigid tool/payload at runtime (no recompile). Delegates to the base
-        handle: composes the payload inertia into ``joint``'s child link and stores an
-        optional SE(3) ``tip_transform``. See :py:meth:`grid_rbd.RobotHandle.attach_tool`.
-        The inertia change is seen by every surface (numpy/jax/torch share the .so); for
-        the tool-tip frame, pass ``ee_offsets=[tip_transform]`` to
-        :py:meth:`end_effector_pose_runtime`."""
-        return self._base.attach_tool(joint, mass=mass, com=com, inertia=inertia,
-                                      tip_transform=tip_transform)
-
-    def detach_tool(self):
-        """Remove the attached tool (restore baked inertia). See
-        :py:meth:`grid_rbd.RobotHandle.detach_tool`."""
-        self._base.detach_tool()
-
-    @property
-    def tool(self):
-        """The currently attached tool dict or ``None``."""
-        return self._base.tool
-
-    def tool_fext(self, q, wrench, *, joint=None, offset=None):
-        """World-aligned tool-tip wrench -> joint-local f_ext ``(B, 6*num_bodies)``,
-        ready to pass as ``f_ext=`` to the dynamics. Delegates to the base handle
-        (returns a numpy array). See :py:meth:`grid_rbd.RobotHandle.tool_fext`."""
-        return self._base.tool_fext(q, wrench, joint=joint, offset=offset)
-
-    # ─── runtime-mutable joint-frame transform (runtime_transform) ───────
-    @property
-    def runtime_transform(self) -> bool:
-        """True if registered with ``runtime_transform=True`` (mutable joint-origin
-        table + :py:meth:`set_transform_params`). The torch-op kernels read the same
-        device-resident table, so a poke through any surface is seen here."""
-        return self._base.runtime_transform
-
-    @property
-    def transform_params(self):
-        """The BAKED per-joint origin table, shape ``(num_joints, 6)``
-        (``[x, y, z, r, p, y]`` per joint). Fetch, mutate, and pass to
-        :py:meth:`set_transform_params`. Only on a ``runtime_transform`` build."""
-        return self._base.transform_params
-
-    def set_transform_params(self, params) -> None:
-        """Update the device-resident joint-origin table at runtime (no recompile).
-        ``params`` is the ``(num_joints, 6)`` (or flat ``6*num_joints``) table in the
-        same basis as :py:attr:`transform_params`. Only valid on a robot registered
-        with ``runtime_transform=True``."""
-        self._base.set_transform_params(params)
-
-    # ─── runtime-mutable joint dynamics (C5 / sysID) ─────────────────────
-    @property
-    def runtime_joint_dynamics(self) -> bool:
-        """True if registered with ``runtime_joint_dynamics=True`` (mutable
-        damping/friction table + :py:meth:`set_joint_dynamics`). The torch-op kernels
-        read the same device-resident table, so a poke through any surface is seen
-        here."""
-        return self._base.runtime_joint_dynamics
-
-    @property
-    def joint_damping(self):
-        """Baked per-v-slot viscous damping (length nv). Only on a
-        ``runtime_joint_dynamics`` build."""
-        return self._base.joint_damping
-
-    @property
-    def joint_friction(self):
-        """Baked per-v-slot Coulomb friction (length nv). Only on a
-        ``runtime_joint_dynamics`` build."""
-        return self._base.joint_friction
-
-    def set_joint_dynamics(self, damping=None, friction=None) -> None:
-        """Update the device-resident damping/friction table at runtime (no
-        recompile). ``damping``/``friction`` are length-nv (v-slot indexed); an
-        omitted side keeps its baked value. Only on a ``runtime_joint_dynamics``
-        build."""
-        self._base.set_joint_dynamics(damping=damping, friction=friction)
-
-    # ─── kernel launch configuration ─────────────────────────────────────
-    @property
-    def max_perf_level_threads(self) -> int:
-        """Codegen-time thread-count hint (DOF-aware, warp-rounded); the default
-        per-block thread count for kernel launches."""
-        return self._base.max_perf_level_threads
-
-    @property
-    def threads_per_block(self) -> int:
-        """Active global threads-per-block override (``-1`` = per-algo autotuned
-        default baked into ``grid.cuh``; ``>= 1`` = a forced global override)."""
-        return self._base.threads_per_block
-
-    def set_threads_per_block(self, n: int) -> None:
-        """Force a single global per-block thread count for all subsequent kernel
-        launches issued through the underlying .so. By default each algorithm uses
-        its own autotuned per-algo thread count; ``n >= 1`` overrides that."""
-        self._base.set_threads_per_block(n)
-
-    def kernel_max_threads(self, algo: str) -> int:
-        """Real compiled ``__launch_bounds__`` ceiling for the short autotune key
-        (E1 tier-contract introspection); ``-1`` when unknown/not-built. Delegates
-        to the base handle — see ``RobotHandle.kernel_max_threads``."""
-        return self._base.kernel_max_threads(algo)
 
     # ─── output convention (mjx parity) ──────────────────────────────────
     @property
@@ -1372,10 +1137,6 @@ class TorchRobotHandle:
 
     # ─── lifecycle ───────────────────────────────────────────────────────────
 
-    def close(self) -> None:
-        """Release the underlying .so handle (delegates to the base RobotHandle).
-        Idempotent. The process-global torch op-library registration is unaffected."""
-        self._base.close()
 
     def __enter__(self):
         return self

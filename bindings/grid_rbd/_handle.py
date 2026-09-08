@@ -23,6 +23,7 @@ import functools
 from typing import Any, NamedTuple
 
 import numpy as np
+from ._surface_common import MujocoViewBase
 
 
 def _unbatch(out):
@@ -172,7 +173,7 @@ def _resolve_frame_args(meta, target_jid, reference_frame):
     return tj, rf
 
 
-class _MujocoView:
+class _MujocoView(MujocoViewBase):
     """MuJoCo-native view over a :class:`RobotHandle` (``handle.mujoco``).
 
     Exposes only the convention-supported VALUE methods, with MuJoCo parameter
@@ -185,34 +186,11 @@ class _MujocoView:
     Derivative / second-order surfaces ARE supported in mujoco convention on the
     handle itself (call e.g. ``handle.inverse_dynamics_gradient(...,
     _convention="mujoco")`` on a .so built with the mjx kernel twins); this view
-    only exposes the value/centroidal/energy set with MuJoCo parameter names."""
+    only exposes the value/centroidal/energy set with MuJoCo parameter names.
+    The five shared value/dynamics methods live on MujocoViewBase
+    (grid_rbd._surface_common); a subclass adds __slots__ = () to stay slotted."""
 
-    __slots__ = ("_h",)
-
-    def __init__(self, handle: "RobotHandle") -> None:
-        self._h = handle
-
-    def inverse_dynamics(self, qpos, qvel, qacc=None, *, gravity: float = -9.81, f_ext=None):
-        """RNEA in MuJoCo convention: τ = id(qpos, qvel, qacc). Returns mjx-frame τ."""
-        return self._h.inverse_dynamics(qpos, qvel, qacc, gravity=gravity, f_ext=f_ext,
-                                        _convention="mujoco")
-
-    def forward_dynamics(self, qpos, qvel, qfrc, *, gravity: float = -9.81, f_ext=None):
-        """Forward dynamics in MuJoCo convention: qacc = fd(qpos, qvel, qfrc)."""
-        return self._h.forward_dynamics(qpos, qvel, qfrc, gravity=gravity, f_ext=f_ext,
-                                        _convention="mujoco")
-
-    def aba(self, qpos, qvel, qfrc, *, gravity: float = -9.81, f_ext=None):
-        """Articulated-body forward dynamics in MuJoCo convention."""
-        return self._h.aba(qpos, qvel, qfrc, gravity=gravity, f_ext=f_ext, _convention="mujoco")
-
-    def crba(self, qpos, *, gravity: float = -9.81):
-        """Mass matrix M(qpos) in the mjx frame (G M G^T)."""
-        return self._h.crba(qpos, gravity=gravity, _convention="mujoco")
-
-    def minv(self, qpos):
-        """Inverse mass matrix Minv(qpos) in the mjx frame (G Minv G^T)."""
-        return self._h.minv(qpos, _convention="mujoco")
+    __slots__ = ()
 
     def com(self, qpos):
         """CoM position (invariant) + CoM Jacobian (reframed) in the mjx frame."""
@@ -233,9 +211,6 @@ class _MujocoView:
     def potential_energy_regressor(self, qpos, *, gravity: float = -9.81):
         """Potential-energy regressor (frame-invariant) from mjx inputs."""
         return self._h.potential_energy_regressor(qpos, gravity=gravity, _convention="mujoco")
-
-    def __repr__(self) -> str:
-        return f"<mujoco view of {self._h!r}>"
 
 
 class RobotHandle:
@@ -791,47 +766,21 @@ class RobotHandle:
         it wasn't compiled for. Returns the number of algos overlaid. No-op (returns 0)
         if the robot has no ``<profile>_bases``.
         """
-        from grid_codegen.GRiDCodeGenerator import (
-            LAUNCH_CONFIG_TIER_SYMBOL,
-            LAUNCH_CONFIG_DEFAULT_GPU, load_launch_config, _launch_configs_dir)
-        from grid_codegen.algo_registry import build_launch_config_algo_to_symbol
-        # {short json algo key -> grid symbol}, derived from the descriptor table
-        # (the single source of truth that also drives the emitted GridAlgo enum).
-        algo_to_symbol = build_launch_config_algo_to_symbol()
-        import json, os
-        robot_key = self._meta.get("launch_config_robot")
-        if not robot_key:
+        ctx = self._overlay_context()
+        if ctx is None:
             return 0
-        gpu = self._meta.get("launch_config_gpu", LAUNCH_CONFIG_DEFAULT_GPU)
-        floating = self.floating_base
-        base = "floating" if floating else "fixed"
-        path = os.path.join(_launch_configs_dir(), str(robot_key), str(gpu) + ".json")
-        try:
-            with open(path) as f:
-                doc = json.load(f)
-        except (OSError, ValueError):
-            return 0
+        doc, base, algo_to_symbol, algo_index, baked, tier_symbol = ctx
         # PROFILE-ONLY block (NOT load_launch_config — that falls back to host bases;
         # an absent <profile>_bases must mean "no overlay", i.e. keep the baked ffi
         # default, not silently apply host threads). Keyed by the short json algo key.
         prof = (doc.get(str(profile) + "_bases") or {}).get(base) or {}
         if not prof:
             return 0
-        # index of each grid symbol = its position in the GridAlgo enum, emitted from
-        # dict.fromkeys(algo_to_symbol.values()) — the SAME descriptor-table single
-        # source of truth the C-ABI uses. Assert the count matches the .so before indexing.
-        enum_syms = list(dict.fromkeys(algo_to_symbol.values()))
-        algo_index = {sym: i for i, sym in enumerate(enum_syms)}
-        n_algo = self._runner.algo_count()
-        if n_algo and n_algo != len(enum_syms):
-            # codegen/binding drift — refuse to index rather than overlay the wrong algo
-            return 0
-        baked = load_launch_config(robot_key, floating, gpu, profile="ffi")  # the deployed bake {sym:{tier,threads}}
         n = 0
         for key, cfg in prof.items():
             sym = algo_to_symbol.get(key)
             idx = algo_index.get(sym)
-            tier_sym = LAUNCH_CONFIG_TIER_SYMBOL.get(str(cfg.get("tier", "")).lower())
+            tier_sym = tier_symbol.get(str(cfg.get("tier", "")).lower())
             threads = cfg.get("threads")
             if idx is None or tier_sym is None or not isinstance(threads, int) or threads < 1:
                 continue
@@ -840,6 +789,45 @@ class RobotHandle:
             self._runner.set_threads_for(idx, int(threads))
             n += 1
         return n
+
+    def _overlay_context(self):
+        """Shared prologue of the E6 overlay appliers (apply_profile_overlay /
+        apply_batch_overlay): the robot's launch-config JSON, the descriptor-table
+        GridAlgo enum index, and the deployed ffi bake. Returns
+        ``(doc, base, algo_to_symbol, algo_index, baked, tier_symbol)`` or None
+        when no overlay is applicable (no launch_config_robot key, no JSON, or a
+        codegen/binding enum-count drift — refuse to index rather than overlay
+        the wrong algo)."""
+        from grid_codegen.GRiDCodeGenerator import (
+            LAUNCH_CONFIG_TIER_SYMBOL,
+            LAUNCH_CONFIG_DEFAULT_GPU, load_launch_config, _launch_configs_dir)
+        from grid_codegen.algo_registry import build_launch_config_algo_to_symbol
+        import json, os
+        robot_key = self._meta.get("launch_config_robot")
+        if not robot_key:
+            return None
+        gpu = self._meta.get("launch_config_gpu", LAUNCH_CONFIG_DEFAULT_GPU)
+        floating = self.floating_base
+        base = "floating" if floating else "fixed"
+        path = os.path.join(_launch_configs_dir(), str(robot_key), str(gpu) + ".json")
+        try:
+            with open(path) as f:
+                doc = json.load(f)
+        except (OSError, ValueError):
+            return None
+        # {short json algo key -> grid symbol}, derived from the descriptor table;
+        # index of each grid symbol = its position in the GridAlgo enum, emitted
+        # from dict.fromkeys(algo_to_symbol.values()) — the SAME descriptor-table
+        # single source of truth the C-ABI uses. Check the count vs the .so
+        # before indexing.
+        algo_to_symbol = build_launch_config_algo_to_symbol()
+        enum_syms = list(dict.fromkeys(algo_to_symbol.values()))
+        algo_index = {sym: i for i, sym in enumerate(enum_syms)}
+        n_algo = self._runner.algo_count()
+        if n_algo and n_algo != len(enum_syms):
+            return None
+        baked = load_launch_config(robot_key, floating, gpu, profile="ffi")  # {sym:{tier,threads}}
+        return doc, base, algo_to_symbol, algo_index, baked, LAUNCH_CONFIG_TIER_SYMBOL
 
     def apply_batch_overlay(self, profile: str = "ffi") -> int:
         """Arm the E6 batch-switch from this profile's ``<profile>_bases_by_n``
@@ -857,24 +845,10 @@ class RobotHandle:
         from the baked ffi tier. Returns the number of algos armed; 0 if no by-n
         block exists.
         """
-        from grid_codegen.GRiDCodeGenerator import (
-            LAUNCH_CONFIG_TIER_SYMBOL,
-            LAUNCH_CONFIG_DEFAULT_GPU, load_launch_config, _launch_configs_dir)
-        from grid_codegen.algo_registry import build_launch_config_algo_to_symbol
-        algo_to_symbol = build_launch_config_algo_to_symbol()
-        import json, os
-        robot_key = self._meta.get("launch_config_robot")
-        if not robot_key:
+        ctx = self._overlay_context()
+        if ctx is None:
             return 0
-        gpu = self._meta.get("launch_config_gpu", LAUNCH_CONFIG_DEFAULT_GPU)
-        floating = self.floating_base
-        base = "floating" if floating else "fixed"
-        path = os.path.join(_launch_configs_dir(), str(robot_key), str(gpu) + ".json")
-        try:
-            with open(path) as f:
-                doc = json.load(f)
-        except (OSError, ValueError):
-            return 0
+        doc, base, algo_to_symbol, algo_index, baked, tier_symbol = ctx
         by_n = doc.get(str(profile) + "_bases_by_n") or {}
         buckets = sorted(int(k) for k in by_n.keys() if str(k).isdigit())
         if not buckets:
@@ -887,17 +861,11 @@ class RobotHandle:
         if not isinstance(thr, int) or thr < 1:
             bake_n = doc.get("autotune_N") if isinstance(doc.get("autotune_N"), int) else 256
             thr = max(bucket, int((bucket * bake_n) ** 0.5))  # 16/256 -> 64
-        enum_syms = list(dict.fromkeys(algo_to_symbol.values()))
-        algo_index = {sym: i for i, sym in enumerate(enum_syms)}
-        n_algo = self._runner.algo_count()
-        if n_algo and n_algo != len(enum_syms):
-            return 0
-        baked = load_launch_config(robot_key, floating, gpu, profile="ffi")
         n = 0
         for key, cfg in prof.items():
             sym = algo_to_symbol.get(key)
             idx = algo_index.get(sym)
-            tier_sym = LAUNCH_CONFIG_TIER_SYMBOL.get(str(cfg.get("tier", "")).lower())
+            tier_sym = tier_symbol.get(str(cfg.get("tier", "")).lower())
             threads = cfg.get("threads")
             if idx is None or tier_sym is None or not isinstance(threads, int) or threads < 1:
                 continue
