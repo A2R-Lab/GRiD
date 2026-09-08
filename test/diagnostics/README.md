@@ -32,7 +32,7 @@ PYTHONPATH=. .venv/bin/python test/diagnostics/tier_baseline.py
 
 Wall time: ~10-30 min depending on which robots are cached.
 
-### `glass_vs_pre_glass_ptxas.py` — archival
+### `archive/glass_vs_pre_glass_ptxas.py` — archival
 Compares GRiD HEAD (GLASS-vendored SIMT linalg) against the pre-GLASS
 reference at commit `d2c0d18`. Used during the 2026-05 GLASS rollout to
 isolate per-kernel register/spill regressions. Kept as a template for

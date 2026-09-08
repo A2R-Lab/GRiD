@@ -11,7 +11,7 @@ exe/process, RAM-safe + crash-isolated). This file is imported for its reusable 
   * _autotune_pick_winners + the tier/thread sweep + SASS-dedup helpers (the picker, reused VERBATIM)
   * tier caps, thread grids, kernel-symbol helpers
 
-Consumers: per_algo_bench.py, collect_kernel_limits.py, build_autotune_matrix.py, autotune_ffi.py.
+Consumers: per_algo_bench.py, collect_kernel_limits.py, archive/build_autotune_matrix.py (superseded by autotune_tier_matrix.py), autotune_ffi.py.
 The autotune_best merge lives in config/sweep_to_autotune_best.py; the launch-config bake in
 config/autotune_to_launch_config.py.
 """
