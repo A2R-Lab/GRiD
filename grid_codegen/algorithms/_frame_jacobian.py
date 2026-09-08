@@ -26,7 +26,7 @@ per-column independence is left for a future perf pass.
 
 import numpy as np
 
-from grid_codegen.helpers._code_generation_helpers import gen_workspace_repoint_line, host_mode_flags, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, gen_workspace_repoint_line, host_mode_flags, mangle_host_func_defs, wrap_host_single_call_timing
 
 
 __all__ = [
@@ -403,10 +403,7 @@ def gen_frame_jacobian_host(self, mode=0):
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"frame_jacobian\", FRAME_JACOBIAN_DYNAMIC_SHARED_MEM_BYTES<T>()));")
     self.gen_add_code_lines(func_call_code)
     if not compute_only:
-        self.gen_add_code_lines(["// finally transfer the result back",
-                                 "gpuErrchk(cudaMemcpy(hd_data->h_frame_jacobian,hd_data->d_frame_jacobian,6*NUM_VEL*" +
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
-                                 "gpuErrchkKernel();"])
+        gen_emit_host_result_transfer(self, "h_frame_jacobian", "d_frame_jacobian", "6*NUM_VEL*", single_call_timing)
     if single_call_timing:
         from ..algo_registry import single_call_printf_line
         self.gen_add_code_line(single_call_printf_line("frame_jacobian"))
@@ -772,10 +769,7 @@ def gen_frame_jacobian_dot_host(self, mode=0):
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"frame_jacobian_dot\", FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES<T>()));")
     self.gen_add_code_lines(func_call_code)
     if not compute_only:
-        self.gen_add_code_lines(["// finally transfer the result back",
-                                 "gpuErrchk(cudaMemcpy(hd_data->h_frame_jacobian_dot,hd_data->d_frame_jacobian_dot,6*NUM_VEL*" +
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
-                                 "gpuErrchkKernel();"])
+        gen_emit_host_result_transfer(self, "h_frame_jacobian_dot", "d_frame_jacobian_dot", "6*NUM_VEL*", single_call_timing)
     if single_call_timing:
         from ..algo_registry import single_call_printf_line
         self.gen_add_code_line(single_call_printf_line("frame_jacobian_dot"))
@@ -1034,10 +1028,7 @@ def gen_osc_inertia_host(self, mode=0):
     else:
         self.gen_add_workspace_clamped_launch(func_call_code)
     if not compute_only:
-        self.gen_add_code_lines(["// finally transfer the result back",
-                                 "gpuErrchk(cudaMemcpy(hd_data->h_osc_inertia,hd_data->d_osc_inertia,36*" +
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
-                                 "gpuErrchkKernel();"])
+        gen_emit_host_result_transfer(self, "h_osc_inertia", "d_osc_inertia", "36*", single_call_timing)
     if single_call_timing:
         from ..algo_registry import single_call_printf_line
         self.gen_add_code_line(single_call_printf_line("osc_inertia"))

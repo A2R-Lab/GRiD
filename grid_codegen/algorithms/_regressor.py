@@ -38,7 +38,7 @@ The output is shaped nv x 10*NB. R2: it is a gridData field (hd_data->d_Y, sized
 back into hd_data->h_Y (uniform `(hd_data, model, ...)` host signature).
 """
 
-from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import host_q_input_transfer_lines, _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
 
 # The 10 basis spatial-inertia derivatives dI/dpi_k in GRiD [angular; linear]
 # 6x6 order, for pi = [m, hx, hy, hz, Ixx, Ixy, Ixz, Iyy, Iyz, Izz].
@@ -1338,10 +1338,7 @@ def gen_potential_energy_regressor_host(self, mode=0):
     if single_call_timing:
         func_call_start = func_call_start.replace("potential_energy_regressor_kernel<", "potential_energy_regressor_kernel_single_timing<")
     if not compute_only:
-        self.gen_add_code_lines([
-            "// start code with memory transfer", "int stride_q = NUM_JOINTS;",
-            "gpuErrchk(cudaMemcpyAsync(hd_data->d_q,hd_data->h_q,stride_q*" +
-            ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));"])
+        self.gen_add_code_lines(host_q_input_transfer_lines(single_call_timing))
     else:
         self.gen_add_code_line("int stride_q = NUM_JOINTS;")
     self.gen_add_code_line("// then call the kernel")

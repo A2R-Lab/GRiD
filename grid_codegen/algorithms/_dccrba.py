@@ -56,7 +56,7 @@ workspace SO band (dccrba-output sub-region) at ALL tiers.
 import numpy as np
 
 from ._coriolis import _emit_crm_cm, _emit_crf_cm, _coriolis_int_array as _dccrba_int_array
-from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import host_q_input_transfer_lines, gen_emit_host_result_transfer, _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
 from ._centroidal import _centroidal_inner_temp_mem_size
 
 
@@ -787,11 +787,7 @@ def gen_cmm_time_variation_host(self, mode=0):
     else:
         self.gen_add_workspace_clamped_launch(func_call_code, emit_count = False)
     if not compute_only:
-        self.gen_add_code_lines([
-            "// finally transfer the result back",
-            "gpuErrchk(cudaMemcpy(hd_data->h_cmm_time_variation,hd_data->d_cmm_time_variation," + str(out_size) + "*" +
-            ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
-            "gpuErrchkKernel();"])
+        gen_emit_host_result_transfer(self, "h_cmm_time_variation", "d_cmm_time_variation", "" + str(out_size) + "*", single_call_timing)
     if single_call_timing:
         from ..algo_registry import single_call_printf_line
         self.gen_add_code_line(single_call_printf_line("cmm_time_variation"))
@@ -919,10 +915,7 @@ def gen_dccrba_host(self, mode=0):
         kname = "dccrba_kernel" + ("_single_timing<T, RESOURCE_TIER>" if single_call_timing else "<T, RESOURCE_TIER>")
     func_call = (kname + "<<<block_dimms,thread_dimms," + macro + ">>>(hd_data->d_dccrba,hd_data->d_workspace,hd_data->d_q,stride_q,d_robotModel,num_timesteps);")
     if not compute_only:
-        self.gen_add_code_lines([
-            "// start code with memory transfer", "int stride_q = NUM_JOINTS;",
-            "gpuErrchk(cudaMemcpyAsync(hd_data->d_q,hd_data->h_q,stride_q*" +
-            ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));"])
+        self.gen_add_code_lines(host_q_input_transfer_lines(single_call_timing))
     else:
         self.gen_add_code_line("int stride_q = NUM_JOINTS;")
     self.gen_add_code_line("// then call the kernel")
@@ -941,11 +934,7 @@ def gen_dccrba_host(self, mode=0):
     else:
         self.gen_add_workspace_clamped_launch(func_call_code, emit_count = False)
     if not compute_only:
-        self.gen_add_code_lines([
-            "// finally transfer the result back",
-            "gpuErrchk(cudaMemcpy(hd_data->h_dccrba,hd_data->d_dccrba," + str(out_size) + "*" +
-            ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
-            "gpuErrchkKernel();"])
+        gen_emit_host_result_transfer(self, "h_dccrba", "d_dccrba", "" + str(out_size) + "*", single_call_timing)
     if single_call_timing:
         from ..algo_registry import single_call_printf_line
         self.gen_add_code_line(single_call_printf_line("dccrba"))

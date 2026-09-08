@@ -28,7 +28,7 @@ Families emitted (each: device + kernel(timing + batch) + host(0/1/2)):
 
 import numpy as np
 
-from grid_codegen.helpers._code_generation_helpers import gen_workspace_repoint_line, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import host_q_input_transfer_lines, gen_emit_host_result_transfer, gen_workspace_repoint_line, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
 
 
 __all__ = [
@@ -255,11 +255,7 @@ def gen_id_bias_host(self, gravity_only, mode=0):
     else:
         self.gen_add_workspace_clamped_launch(func_call_code)
     if not compute_only:
-        self.gen_add_code_lines([
-            "// finally transfer the result back",
-            "gpuErrchk(cudaMemcpy(hd_data->h_c,hd_data->d_c,NUM_VEL*" +
-            ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
-            "gpuErrchkKernel();"])
+        gen_emit_host_result_transfer(self, "h_c", "d_c", "NUM_VEL*", single_call_timing)
     if single_call_timing:
         from ..algo_registry import single_call_printf_line
         self.gen_add_code_line(single_call_printf_line(name))
@@ -863,10 +859,7 @@ def _gen_kin_centroidal_host(self, name, out_buf, out_size, has_qd, has_gravity,
         if has_qd:
             self.gen_add_code_lines(host_q_qd_input_transfer_lines(single_call_timing))
         else:
-            self.gen_add_code_lines([
-                "// start code with memory transfer", "int stride_q = NUM_JOINTS;",
-                "gpuErrchk(cudaMemcpyAsync(hd_data->d_q,hd_data->h_q,stride_q*" +
-                ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));"])
+            self.gen_add_code_lines(host_q_input_transfer_lines(single_call_timing))
     else:
         if has_qd:
             self.gen_add_code_line("int stride_q_qd = USE_COMPRESSED_MEM ? 2*NUM_JOINTS : 3*NUM_JOINTS;")

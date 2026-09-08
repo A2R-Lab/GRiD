@@ -1,4 +1,4 @@
-from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_cast_expr, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, _gen_mjx_build_R_lines, gen_workspace_cast_expr, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 
 
 def gen_forward_dynamics_gradient_inner_temp_mem_size(self, use_qdd_Minv_input = False):
@@ -649,10 +649,7 @@ def gen_forward_dynamics_gradient_host(self, mode = 0):
         # it 2*NV*NV-strided, so the host copy + h_df_du buffer are 2*NV*NV-strided
         # too. (Previously NUM_JOINTS*2*NUM_JOINTS, which mis-strided h_df_du for a
         # BATCHED floating base, nq>nv; byte-identical for fixed base nq==nv.)
-        self.gen_add_code_lines(["// finally transfer the result back", \
-                                 "gpuErrchk(cudaMemcpy(hd_data->h_df_du,hd_data->d_df_du,2*NUM_VEL*NUM_VEL*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
-                                 "gpuErrchkKernel();"])
+        gen_emit_host_result_transfer(self, "h_df_du", "d_df_du", "2*NUM_VEL*NUM_VEL*", single_call_timing)
     # finally report out timing if requested
     if single_call_timing:
         from ..algo_registry import single_call_printf_line

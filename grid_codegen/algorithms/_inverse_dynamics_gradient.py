@@ -1,4 +1,4 @@
-from grid_codegen.helpers._code_generation_helpers import gen_workspace_cast_expr, gen_workspace_repoint_line, host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, gen_workspace_cast_expr, gen_workspace_repoint_line, host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 
 
 def _idg_Svec_cpp(S_vec):
@@ -1799,10 +1799,7 @@ def gen_inverse_dynamics_gradient_host(self, mode = 0):
     self.gen_add_code_line("if (GRID_INVERSE_DYNAMICS_GRADIENT_USES_WORKSPACE_ANY_TIER) {gpuErrchk(grid_end_l2_persisting(0));}")
     if not compute_only:
         # then transfer memory back
-        self.gen_add_code_lines(["// finally transfer the result back", \
-                                 "gpuErrchk(cudaMemcpy(hd_data->h_dc_du,hd_data->d_dc_du,2*NUM_VEL*NUM_VEL*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
-                                 "gpuErrchkKernel();"])
+        gen_emit_host_result_transfer(self, "h_dc_du", "d_dc_du", "2*NUM_VEL*NUM_VEL*", single_call_timing)
     # finally report out timing if requested
     if single_call_timing:
         from ..algo_registry import single_call_printf_line

@@ -4,7 +4,7 @@ End effector pose, gradient, and hessian codegen.
 Fixed-joint targets are supported (including on branched trees and multiple
 fixed targets at once) via the ``fixed_target_name`` variants.
 """
-from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 
 
 def gen_end_effector_pose_inner_temp_mem_size(self, fixed_target_name = ""):
@@ -390,10 +390,7 @@ def gen_end_effector_pose_host(self, mode = 0, fixed_target_name = ""):
     self.gen_add_code_lines(func_call_code)
     if not compute_only:
         # then transfer memory back
-        self.gen_add_code_lines(["// finally transfer the result back", \
-                                 "gpuErrchk(cudaMemcpy(hd_data->h_end_effector_pose,hd_data->d_end_effector_pose,6*NUM_EES*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
-                                 "gpuErrchkKernel();"])
+        gen_emit_host_result_transfer(self, "h_end_effector_pose", "d_end_effector_pose", "6*NUM_EES*", single_call_timing)
     # finally report out timing if requested
     if single_call_timing:
         from ..algo_registry import single_call_printf_line
@@ -1143,10 +1140,7 @@ def gen_end_effector_pose_gradient_host(self, mode = 0, fixed_target_name = ""):
     self.gen_add_code_line("if (GRID_END_EFFECTOR_POSE_GRADIENT_USES_WORKSPACE_TEMP_ANY) {gpuErrchk(grid_end_l2_persisting(0));}")
     if not compute_only:
         # then transfer memory back
-        self.gen_add_code_lines(["// finally transfer the result back", \
-                                 "gpuErrchk(cudaMemcpy(hd_data->h_end_effector_pose_gradient,hd_data->d_end_effector_pose_gradient,6*NUM_EES*NUM_VEL*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
-                                 "gpuErrchkKernel();"])
+        gen_emit_host_result_transfer(self, "h_end_effector_pose_gradient", "d_end_effector_pose_gradient", "6*NUM_EES*NUM_VEL*", single_call_timing)
     # finally report out timing if requested
     if single_call_timing:
         from ..algo_registry import single_call_printf_line

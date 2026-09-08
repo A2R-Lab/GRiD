@@ -1,7 +1,7 @@
 import numpy as np
 import copy
 
-from grid_codegen.helpers._code_generation_helpers import gen_workspace_repoint_line, host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, gen_workspace_repoint_line, host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 
 # CRBA has a 3-rung ladder: full | s_M->d_workspace (surgical OUTPUT_SPILL of the
 # nv*nv mass matrix, the dominant write-once buffer, read only by the optional mjx
@@ -994,10 +994,7 @@ def gen_crba_host(self, mode = 0):
         self.gen_add_workspace_clamped_launch(func_call_code)
     if not compute_only:
         # then transfer memory back
-        self.gen_add_code_lines(["// finally transfer the result back", \
-                                 "gpuErrchk(cudaMemcpy(hd_data->h_M,hd_data->d_M,NUM_VEL*NUM_VEL*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
-                                 "gpuErrchkKernel();"])
+        gen_emit_host_result_transfer(self, "h_M", "d_M", "NUM_VEL*NUM_VEL*", single_call_timing)
     # finally report out timing if requested
     if single_call_timing:
         from ..algo_registry import single_call_printf_line

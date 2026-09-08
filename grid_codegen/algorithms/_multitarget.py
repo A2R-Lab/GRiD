@@ -20,7 +20,7 @@ by ONE shared FK (all link world transforms) + a cheap parallel-over-targets
 extraction driven by a baked (anchor, offset) table — same table-driven idiom as the
 W1a hessian collapse. Subsumes backlog D (multi-named-EE-target).
 """
-from grid_codegen.helpers._code_generation_helpers import host_mode_flags, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, host_mode_flags, mangle_host_func_defs, wrap_host_single_call_timing
 
 
 # ---------------------------------------------------------------------------
@@ -539,10 +539,7 @@ def gen_multi_target_position_host(self, mode=0):
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"multi_target_position\", MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES<T>()));")
     self.gen_add_code_lines(func_call_code)
     if not compute_only:
-        self.gen_add_code_lines(["// finally transfer the result back",
-                                 "gpuErrchk(cudaMemcpy(hd_data->h_multi_target_position,hd_data->d_multi_target_position,3*NUM_MULTI_TARGETS*" +
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
-                                 "gpuErrchkKernel();"])
+        gen_emit_host_result_transfer(self, "h_multi_target_position", "d_multi_target_position", "3*NUM_MULTI_TARGETS*", single_call_timing)
     if single_call_timing:
         from ..algo_registry import single_call_printf_line
         self.gen_add_code_line(single_call_printf_line("multi_target_position"))
@@ -633,10 +630,7 @@ def gen_multi_target_position_gradient_host(self, mode=0):
     self.gen_add_code_line("gpuErrchk(grid_check_dynamic_shared_memory_bytes(\"multi_target_position_gradient\", MULTI_TARGET_POSITION_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>()));")
     self.gen_add_code_lines(func_call_code)
     if not compute_only:
-        self.gen_add_code_lines(["// finally transfer the result back",
-                                 "gpuErrchk(cudaMemcpy(hd_data->h_multi_target_position_gradient,hd_data->d_multi_target_position_gradient,3*NUM_VEL*NUM_MULTI_TARGETS*" +
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
-                                 "gpuErrchkKernel();"])
+        gen_emit_host_result_transfer(self, "h_multi_target_position_gradient", "d_multi_target_position_gradient", "3*NUM_VEL*NUM_MULTI_TARGETS*", single_call_timing)
     if single_call_timing:
         from ..algo_registry import single_call_printf_line
         self.gen_add_code_line(single_call_printf_line("multi_target_position_gradient"))

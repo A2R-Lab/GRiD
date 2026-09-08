@@ -1,4 +1,4 @@
-from grid_codegen.helpers._code_generation_helpers import host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 
 
 def _id_S_row_coeff(S_desc, row):
@@ -986,10 +986,7 @@ def gen_inverse_dynamics_host(self, mode = 0):
     self.gen_add_code_lines(func_call_code)
     if not compute_only:
         # then transfer memory back
-        self.gen_add_code_lines(["// finally transfer the result back", \
-                                 "gpuErrchk(cudaMemcpy(hd_data->h_c,hd_data->d_c,NUM_JOINTS*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
-                                 "gpuErrchkKernel();"])
+        gen_emit_host_result_transfer(self, "h_c", "d_c", "NUM_JOINTS*", single_call_timing)
     # finally report out timing if requested
     if single_call_timing:
         from ..algo_registry import single_call_printf_line

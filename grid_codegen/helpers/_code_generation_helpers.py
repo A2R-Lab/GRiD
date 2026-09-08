@@ -351,6 +351,28 @@ def host_q_qd_input_transfer_lines(single_call_timing):
             nt + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}"]
 
 
+def host_q_input_transfer_lines(single_call_timing):
+    """The standard q-only host->device input transfer block (comment + stride
+    decl + async memcpy). q-only mirror of host_q_qd_input_transfer_lines."""
+    return ["// start code with memory transfer", "int stride_q = NUM_JOINTS;",
+            "gpuErrchk(cudaMemcpyAsync(hd_data->d_q,hd_data->h_q,stride_q*" +
+            ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));"]
+
+
+def gen_emit_host_result_transfer(self, h_buf, d_buf, size_expr, single_call_timing):
+    """Emit the canonical host D2H result tail: comment + blocking
+    cudaMemcpy(hd_data->h_buf <- hd_data->d_buf, size_expr [num_timesteps*]
+    sizeof(T)) + gpuErrchkKernel(). ``size_expr`` is the per-timestep
+    element-count C expression WITH its trailing ``*`` (e.g. "NUM_VEL*NUM_VEL*").
+    Sites whose emission deliberately deviates (idsva_so's sizeof(T)-first
+    int-overflow ordering, the descriptive-comment regressor/coriolis tails)
+    keep their bespoke blocks — do not force them through this helper."""
+    self.gen_add_code_lines(["// finally transfer the result back",
+                             "gpuErrchk(cudaMemcpy(hd_data->" + h_buf + ",hd_data->" + d_buf + "," + size_expr +
+                             ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyDeviceToHost));",
+                             "gpuErrchkKernel();"])
+
+
 def wrap_host_single_call_timing(func_call_code, kernel_errcheck=False):
     """Wrap the host launch-line list in the single-call timing scaffold, IN
     PLACE: clock_gettime start prepended, [optional gpuErrchkKernel,] clock_
