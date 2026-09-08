@@ -47,7 +47,7 @@ def main():
     print("Next steps:")
     print("  1. Compile a CUDA program against the generated header")
     print("  2. Use examples/codegen/print_grid.py to compile and run the built-in print kernel")
-    print("  3. Use test/cuda_equivalents/run_staged_cuda_checks.py for CUDA equivalence")
+    print("  3. Run `pytest -m cuda_equivalence` (or SPLIT=1 test/run_gpu_proof.sh) for CUDA equivalence")
 
 
 if __name__ == "__main__":

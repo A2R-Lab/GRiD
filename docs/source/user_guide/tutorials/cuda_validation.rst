@@ -21,54 +21,39 @@ Build the HTML docs from the repository root:
 
    .venv/bin/python -m sphinx -W --keep-going -b html docs/source docs/build/html
 
-Staged CUDA Correctness Checks
-------------------------------
+CUDA Correctness Checks (crash-isolated split driver)
+-----------------------------------------------------
 
-Run the staged CUDA checker from the repository root:
-
-.. code-block:: bash
-
-   .venv/bin/python test/cuda_equivalents/run_staged_cuda_checks.py
-
-By default this runs the shorter stages:
-
-* ``toolchain``
-* ``layout``
-* ``fixed``
-* ``fixed-fallback``
-* ``floating``
-* ``floating-stress``
-* ``l2``
-
-Select stages explicitly with repeated ``--stage`` flags:
+The full GPU pass runs through the crash-isolated split driver, which partitions
+the ``cuda_equivalence`` and ``python_wrappers`` suites into bounded shards (one
+module's abort can't eat the rest) and is pausable/resumable:
 
 .. code-block:: bash
 
-   .venv/bin/python test/cuda_equivalents/run_staged_cuda_checks.py \
-     --stage toolchain \
-     --stage layout \
-     --stage fixed \
-     --stage floating-stress
+   # everything, sharded + receipt-signed (the standard full pass):
+   SPLIT=1 test/run_gpu_proof.sh
 
-For an overnight correctness run, include the deterministic corner samples and
-seeded random sweep:
+   # only the shards whose inputs changed vs the committed receipt:
+   SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh
+
+   # the driver directly (no receipt), e.g. wrappers only:
+   .venv/bin/python test/run_split_suite.py --domains wrappers
+   .venv/bin/python test/run_split_suite.py --domains wrappers,cuda --changed-only
+
+``touch <out>/PAUSE`` stops cleanly between shards; ``--resume <out>`` continues
+an interrupted run without re-running completed shards. See ``CLAUDE.md`` and
+``test/run_split_suite.py --help`` for the full contract (RAM-aware compile
+pool, shard bin-packing, receipt merge/carry).
+
+For a quick targeted check, plain pytest still works:
 
 .. code-block:: bash
 
-   GRID_CUDA_PROGRESS=1 \
-   GRID_CUDA_VERBOSE_CACHE=1 \
-   /usr/bin/timeout 10h \
-   .venv/bin/python test/cuda_equivalents/run_staged_cuda_checks.py \
-     --stage toolchain \
-     --stage layout \
-     --stage fixed \
-     --stage fixed-fallback \
-     --stage floating \
-     --stage floating-stress \
-     --stage l2 \
-     --stage corner-samples \
-     --stage long-random \
-     --timeout-per-command 7200
+   .venv/bin/python -m pytest -m cuda_equivalence -q   # CUDA vs numpy oracle
+   .venv/bin/python -m pytest -m python_wrappers -q    # jax/torch handles
+
+(The retired ``run_staged_cuda_checks.py`` stage runner predates the split
+driver; its stages map onto the shard partition + ``--changed-only``.)
 
 GPU-Proof Signed Receipts
 -------------------------
