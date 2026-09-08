@@ -65,15 +65,8 @@ struct CAbi {
     using fn_int_ipp_t      = int (*)(int, int*, int*); // get_batch_switch(algo, &threshold, &n_small)
     using fn_dyn_t         = int (*)(const CT*, const CT*, const CT*,
                                       CT*, int, CT, const CT*);
-    using fn_minv_t         = int (*)(const CT*, CT*, int);
-    using fn_fd_t           = int (*)(const CT*, const CT*, const CT*,
-                                      CT*, int, CT, const CT*);
     using fn_dyn_no_fext_t = int (*)(const CT*, const CT*, const CT*,
                                       CT*, int, CT);
-    using fn_fd_no_fext_t   = int (*)(const CT*, const CT*, const CT*,
-                                      CT*, int, CT);
-    using fn_crba_t         = int (*)(const CT*, CT*, int, CT);
-    using fn_ee_t           = int (*)(const CT*, CT*, int);
     using fn_fk_batched_t   = int (*)(const CT*, CT*, int, int);
     using fn_integrator_t   = int (*)(const CT*, const CT*, const CT*,
                                       CT*, int, CT, CT, int);
@@ -83,14 +76,8 @@ struct CAbi {
                                        CT*, CT*, CT*, int);
     using fn_plant_step_t   = int (*)(const CT*, const CT*, CT*,
                                       int, CT, CT, int);
-    using fn_plant_ee_t     = int (*)(const CT*, const CT*, const CT*,
-                                      CT*, CT*, CT*, int);
     using fn_plant_mom_t    = int (*)(const CT*, const CT*, const CT*, const CT*,
                                       CT*, CT*, CT*, int);
-    using fn_plant_step_grad_t = int (*)(const CT*, const CT*, CT*,
-                                         int, CT, CT, int);
-    using fn_plant_step_hess_t = int (*)(const CT*, const CT*, CT*,
-                                         int, CT, CT, int);
     using fn_q_out_t        = int (*)(const CT*, CT*, int);
     using fn_q_qd_out_t     = int (*)(const CT*, const CT*, CT*, int);
     using fn_frame_jac_t    = int (*)(const CT*, CT*, int, int, int);
@@ -99,9 +86,7 @@ struct CAbi {
     using fn_tool_fext_t    = int (*)(const CT*, const CT*, int, const CT*, CT*, int);  // grid_rbd_tool_fext
     using fn_q_qd_out_grav_t = int (*)(const CT*, const CT*, CT*, int, CT);
     using fn_q_out_grav_t   = int (*)(const CT*, CT*, int, CT);
-    using fn_set_inertia_t  = int (*)(const CT*);   // grid_rbd_set_inertia_params
-    using fn_set_transform_t = int (*)(const CT*);  // grid_rbd_set_transform_params
-    using fn_set_jd_t       = int (*)(const CT*);   // grid_rbd_set_joint_dynamics_params
+    using fn_set_params_t   = int (*)(const CT*);   // set_{inertia,transform,joint_dynamics}_params
 };
 
 
@@ -117,21 +102,13 @@ class RunnerT {
     using fn_int_iii_t = typename CAbi<CT>::fn_int_iii_t;
     using fn_int_ipp_t = typename CAbi<CT>::fn_int_ipp_t;
     using fn_dyn_t = typename CAbi<CT>::fn_dyn_t;
-    using fn_minv_t = typename CAbi<CT>::fn_minv_t;
-    using fn_fd_t = typename CAbi<CT>::fn_fd_t;
     using fn_dyn_no_fext_t = typename CAbi<CT>::fn_dyn_no_fext_t;
-    using fn_fd_no_fext_t = typename CAbi<CT>::fn_fd_no_fext_t;
-    using fn_crba_t = typename CAbi<CT>::fn_crba_t;
-    using fn_ee_t = typename CAbi<CT>::fn_ee_t;
     using fn_fk_batched_t = typename CAbi<CT>::fn_fk_batched_t;
     using fn_integrator_t = typename CAbi<CT>::fn_integrator_t;
     using fn_plant_cost_t = typename CAbi<CT>::fn_plant_cost_t;
     using fn_plant_barrier_t = typename CAbi<CT>::fn_plant_barrier_t;
     using fn_plant_step_t = typename CAbi<CT>::fn_plant_step_t;
-    using fn_plant_ee_t = typename CAbi<CT>::fn_plant_ee_t;
     using fn_plant_mom_t = typename CAbi<CT>::fn_plant_mom_t;
-    using fn_plant_step_grad_t = typename CAbi<CT>::fn_plant_step_grad_t;
-    using fn_plant_step_hess_t = typename CAbi<CT>::fn_plant_step_hess_t;
     using fn_q_out_t = typename CAbi<CT>::fn_q_out_t;
     using fn_q_qd_out_t = typename CAbi<CT>::fn_q_qd_out_t;
     using fn_frame_jac_t = typename CAbi<CT>::fn_frame_jac_t;
@@ -140,9 +117,7 @@ class RunnerT {
     using fn_tool_fext_t = typename CAbi<CT>::fn_tool_fext_t;
     using fn_q_qd_out_grav_t = typename CAbi<CT>::fn_q_qd_out_grav_t;
     using fn_q_out_grav_t = typename CAbi<CT>::fn_q_out_grav_t;
-    using fn_set_inertia_t = typename CAbi<CT>::fn_set_inertia_t;
-    using fn_set_transform_t = typename CAbi<CT>::fn_set_transform_t;
-    using fn_set_jd_t = typename CAbi<CT>::fn_set_jd_t;
+    using fn_set_params_t = typename CAbi<CT>::fn_set_params_t;
     // Per-dtype numpy array alias: an input is force-cast to CT, outputs are CT.
     using arr_t = py::array_t<CT, py::array::c_style | py::array::forcecast>;
 public:
@@ -178,43 +153,43 @@ public:
         // in the wrapper). nullptr on fixed-base / mimic / older .so, in which case
         // the mjx method raises.
         fn_inverse_dynamics_mujoco_      = reinterpret_cast<fn_dyn_t>(opt_sym("grid_rbd_inverse_dynamics_mujoco"));
-        fn_minv_             = reinterpret_cast<fn_minv_t>(require_sym("grid_rbd_minv"));
-        fn_fd_               = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_forward_dynamics"));
-        fn_aba_              = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_aba"));
-        fn_crba_             = reinterpret_cast<fn_crba_t>(require_sym("grid_rbd_crba"));
-        fn_crba_mujoco_      = reinterpret_cast<fn_crba_t>(opt_sym("grid_rbd_crba_mujoco"));  // floating only
+        fn_minv_             = reinterpret_cast<fn_q_out_t>(require_sym("grid_rbd_minv"));
+        fn_fd_               = reinterpret_cast<fn_dyn_t>  (require_sym("grid_rbd_forward_dynamics"));
+        fn_aba_              = reinterpret_cast<fn_dyn_t>  (require_sym("grid_rbd_aba"));
+        fn_crba_             = reinterpret_cast<fn_q_out_grav_t>(require_sym("grid_rbd_crba"));
+        fn_crba_mujoco_      = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_crba_mujoco"));  // floating only
         // floating-base mjx value kernels (optional; present only on a floating .so)
-        fn_fd_mujoco_        = reinterpret_cast<fn_fd_t>(opt_sym("grid_rbd_forward_dynamics_mujoco"));
-        fn_aba_mujoco_       = reinterpret_cast<fn_fd_t>(opt_sym("grid_rbd_aba_mujoco"));
+        fn_fd_mujoco_        = reinterpret_cast<fn_dyn_t>(opt_sym("grid_rbd_forward_dynamics_mujoco"));
+        fn_aba_mujoco_       = reinterpret_cast<fn_dyn_t>(opt_sym("grid_rbd_aba_mujoco"));
         fn_coriolis_matrix_mujoco_ = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_coriolis_matrix_mujoco"));
         fn_frame_jacobian_mujoco_  = reinterpret_cast<fn_frame_jac_t>(opt_sym("grid_rbd_frame_jacobian_mujoco"));
         fn_frame_jacobian_dot_mujoco_ = reinterpret_cast<fn_frame_jac_dot_t>(opt_sym("grid_rbd_frame_jacobian_dot_mujoco"));
         fn_osc_inertia_mujoco_     = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_osc_inertia_mujoco"));
         // floating-base mjx value kernels (optional; present only on a floating .so)
-        fn_minv_mujoco_      = reinterpret_cast<fn_minv_t>(opt_sym("grid_rbd_minv_mujoco"));
+        fn_minv_mujoco_      = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_minv_mujoco"));
         fn_com_mujoco_       = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_com_mujoco"));
         fn_ccrba_mujoco_     = reinterpret_cast<fn_q_qd_out_t>(opt_sym("grid_rbd_ccrba_mujoco"));
         fn_energy_mujoco_    = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_energy_mujoco"));
         fn_kinetic_energy_regressor_mujoco_   = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_kinetic_energy_regressor_mujoco"));
         fn_potential_energy_regressor_mujoco_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_potential_energy_regressor_mujoco"));
-        fn_ee_pose_          = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose"));
-        fn_ee_pose_grad_     = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose_gradient"));
+        fn_ee_pose_          = reinterpret_cast<fn_q_out_t>  (require_sym("grid_rbd_end_effector_pose"));
+        fn_ee_pose_grad_     = reinterpret_cast<fn_q_out_t>  (require_sym("grid_rbd_end_effector_pose_gradient"));
         // floating-base mjx EE kernels (optional; present only on a floating .so)
-        fn_ee_pose_mujoco_      = reinterpret_cast<fn_ee_t>(opt_sym("grid_rbd_end_effector_pose_mujoco"));
-        fn_ee_pose_grad_mujoco_ = reinterpret_cast<fn_ee_t>(opt_sym("grid_rbd_end_effector_pose_gradient_mujoco"));
+        fn_ee_pose_mujoco_      = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_end_effector_pose_mujoco"));
+        fn_ee_pose_grad_mujoco_ = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_end_effector_pose_gradient_mujoco"));
         fn_inverse_dynamics_gradient_        = reinterpret_cast<fn_dyn_t>(require_sym("grid_rbd_inverse_dynamics_gradient"));
         fn_inverse_dynamics_gradient_mujoco_ = reinterpret_cast<fn_dyn_t>(opt_sym("grid_rbd_inverse_dynamics_gradient_mujoco"));  // floating only
-        fn_fd_grad_          = reinterpret_cast<fn_fd_t>  (require_sym("grid_rbd_forward_dynamics_gradient"));
-        fn_fd_grad_mujoco_   = reinterpret_cast<fn_fd_t>  (opt_sym("grid_rbd_forward_dynamics_gradient_mujoco"));  // floating only
+        fn_fd_grad_          = reinterpret_cast<fn_dyn_t>  (require_sym("grid_rbd_forward_dynamics_gradient"));
+        fn_fd_grad_mujoco_   = reinterpret_cast<fn_dyn_t>  (opt_sym("grid_rbd_forward_dynamics_gradient_mujoco"));  // floating only
         // Phase-C extension: hessian + SO. Required for v0.1+ .so files.
-        fn_ee_pose_hessian_  = reinterpret_cast<fn_ee_t>  (require_sym("grid_rbd_end_effector_pose_hessian"));
-        fn_ee_pose_hessian_mujoco_ = reinterpret_cast<fn_ee_t>(opt_sym("grid_rbd_end_effector_pose_hessian_mujoco"));  // floating only
+        fn_ee_pose_hessian_  = reinterpret_cast<fn_q_out_t>  (require_sym("grid_rbd_end_effector_pose_hessian"));
+        fn_ee_pose_hessian_mujoco_ = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_end_effector_pose_hessian_mujoco"));  // floating only
         fn_idsva_so_         = reinterpret_cast<fn_dyn_no_fext_t>(require_sym("grid_rbd_idsva_so"));
         fn_idsva_so_mujoco_  = reinterpret_cast<fn_dyn_no_fext_t>(opt_sym("grid_rbd_idsva_so_mujoco"));  // floating only
         fn_id_regressor_        = reinterpret_cast<fn_dyn_no_fext_t>(require_sym("grid_rbd_inverse_dynamics_regressor"));
         fn_id_regressor_mujoco_ = reinterpret_cast<fn_dyn_no_fext_t>(opt_sym("grid_rbd_inverse_dynamics_regressor_mujoco"));  // floating only
-        fn_fdsva_so_         = reinterpret_cast<fn_fd_no_fext_t>  (require_sym("grid_rbd_fdsva_so"));
-        fn_fdsva_so_mujoco_  = reinterpret_cast<fn_fd_no_fext_t>  (opt_sym("grid_rbd_fdsva_so_mujoco"));  // floating only
+        fn_fdsva_so_         = reinterpret_cast<fn_dyn_no_fext_t>  (require_sym("grid_rbd_fdsva_so"));
+        fn_fdsva_so_mujoco_  = reinterpret_cast<fn_dyn_no_fext_t>  (opt_sym("grid_rbd_fdsva_so_mujoco"));  // floating only
         fn_integrator_       = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator"));
         fn_integrator_mujoco_ = reinterpret_cast<fn_integrator_t>(opt_sym("grid_rbd_integrator_mujoco"));  // floating only
         fn_integrator_grad_  = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator_gradient"));
@@ -231,17 +206,17 @@ public:
         fn_plant_tor_barrier_ = reinterpret_cast<fn_plant_barrier_t>(require_sym("grid_plant_joint_torque_barrier"));
         fn_plant_step_       = reinterpret_cast<fn_plant_step_t>(opt_sym("grid_plant_step"));
         fn_plant_step_mujoco_ = reinterpret_cast<fn_plant_step_t>(opt_sym("grid_plant_step_mujoco"));  // floating only
-        fn_plant_ee_cost_    = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_plant_ee_pos_cost"));
-        fn_plant_com_cost_   = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_plant_com_cost"));
+        fn_plant_ee_cost_    = reinterpret_cast<fn_plant_cost_t>(opt_sym("grid_plant_ee_pos_cost"));
+        fn_plant_com_cost_   = reinterpret_cast<fn_plant_cost_t>(opt_sym("grid_plant_com_cost"));
         fn_plant_mom_cost_   = reinterpret_cast<fn_plant_mom_t>(opt_sym("grid_plant_momentum_cost"));
-        fn_plant_ee_cost_mujoco_  = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_rbd_ee_pos_cost_mujoco"));   // floating only
-        fn_plant_com_cost_mujoco_ = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_rbd_com_cost_mujoco"));      // floating only
+        fn_plant_ee_cost_mujoco_  = reinterpret_cast<fn_plant_cost_t>(opt_sym("grid_rbd_ee_pos_cost_mujoco"));   // floating only
+        fn_plant_com_cost_mujoco_ = reinterpret_cast<fn_plant_cost_t>(opt_sym("grid_rbd_com_cost_mujoco"));      // floating only
         fn_plant_mom_cost_mujoco_ = reinterpret_cast<fn_plant_mom_t>(opt_sym("grid_rbd_momentum_cost_mujoco")); // floating only
         fn_plant_state_cost_mujoco_ = reinterpret_cast<fn_plant_cost_t>(opt_sym("grid_rbd_quadratic_state_cost_mujoco")); // floating only
-        fn_plant_step_grad_  = reinterpret_cast<fn_plant_step_grad_t>(opt_sym("grid_plant_step_gradient"));
-        fn_plant_step_grad_mujoco_ = reinterpret_cast<fn_plant_step_grad_t>(opt_sym("grid_plant_step_gradient_mujoco"));  // floating only
-        fn_plant_step_hess_  = reinterpret_cast<fn_plant_step_hess_t>(opt_sym("grid_plant_step_hessian"));
-        fn_plant_step_hess_mujoco_ = reinterpret_cast<fn_plant_step_hess_t>(opt_sym("grid_plant_step_hessian_mujoco"));  // floating only
+        fn_plant_step_grad_  = reinterpret_cast<fn_plant_step_t>(opt_sym("grid_plant_step_gradient"));
+        fn_plant_step_grad_mujoco_ = reinterpret_cast<fn_plant_step_t>(opt_sym("grid_plant_step_gradient_mujoco"));  // floating only
+        fn_plant_step_hess_  = reinterpret_cast<fn_plant_step_t>(opt_sym("grid_plant_step_hessian"));
+        fn_plant_step_hess_mujoco_ = reinterpret_cast<fn_plant_step_t>(opt_sym("grid_plant_step_hessian_mujoco"));  // floating only
 
         // G2 batched FK (pos+quat) — returns rc=3 on floating-base/mimic robots.
         fn_fk_batched_      = reinterpret_cast<fn_fk_batched_t>(require_sym("grid_rbd_fk_batched"));
@@ -283,17 +258,17 @@ public:
         // D.4 / Phase 5 runtime-mutable inertia — OPTIONAL: present only in a .so
         // built with runtime_inertia=True (compiled with -DGRID_RBD_RUNTIME_INERTIA).
         // set_inertia_params() raises a clear error if this symbol is null.
-        fn_set_inertia_params_ = reinterpret_cast<fn_set_inertia_t>(opt_sym("grid_rbd_set_inertia_params"));
+        fn_set_inertia_params_ = reinterpret_cast<fn_set_params_t>(opt_sym("grid_rbd_set_inertia_params"));
 
         // runtime_transform — OPTIONAL: present only in a .so built with
         // runtime_transform=True (-DGRID_RBD_RUNTIME_TRANSFORM). set_transform_params()
         // raises a clear error if this symbol is null.
-        fn_set_transform_params_ = reinterpret_cast<fn_set_transform_t>(opt_sym("grid_rbd_set_transform_params"));
+        fn_set_transform_params_ = reinterpret_cast<fn_set_params_t>(opt_sym("grid_rbd_set_transform_params"));
 
         // runtime_joint_dynamics — OPTIONAL: present only in a .so built with
         // runtime_joint_dynamics=True (-DGRID_RBD_RUNTIME_JOINT_DYNAMICS).
         // set_joint_dynamics_params() raises a clear error if this symbol is null.
-        fn_set_jd_params_ = reinterpret_cast<fn_set_jd_t>(opt_sym("grid_rbd_set_joint_dynamics_params"));
+        fn_set_jd_params_ = reinterpret_cast<fn_set_params_t>(opt_sym("grid_rbd_set_joint_dynamics_params"));
 
         // Cache constants (avoid the indirect-function-call cost on every read).
         num_joints_ = fn_num_joints_();
@@ -449,15 +424,7 @@ public:
     py::array_t<CT> minv(
         arr_t q)
     {
-        int batch = q.ndim() == 2 ? q.shape(0) : 0;
-        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
-            throw std::invalid_argument(
-                "minv: q must be (batch, " + std::to_string(num_joints_) + ")");
-        }
-        if (batch > max_batch_) {
-            throw std::invalid_argument(
-                "minv: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
-        }
+        int batch = check_q(q, "minv");
         // Minv is nv x nv (tangent-space, pinocchio convention). For a FIXED base
         // nv == nq == num_joints_; for a FLOATING base nv = num_vel_ < num_joints_
         // (the kernel writes NUM_VEL*NUM_VEL, not NUM_JOINTS*NUM_JOINTS).
@@ -524,15 +491,7 @@ public:
         arr_t q,
         CT gravity)
     {
-        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
-            throw std::invalid_argument(
-                "crba: q must be (batch, " + std::to_string(num_joints_) + ")");
-        }
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) {
-            throw std::invalid_argument(
-                "crba: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
-        }
+        int batch = check_q(q, "crba");
         // M is nv x nv (tangent-space, pinocchio convention). FIXED base: nv == nq
         // == num_joints_; FLOATING base: nv = num_vel_ < num_joints_ (the kernel
         // writes NUM_VEL*NUM_VEL).
@@ -559,15 +518,7 @@ public:
                 "crba_mujoco unavailable: this .so has no mjx CRBA kernel "
                 "(only floating-base robots export grid_rbd_crba_mujoco)");
         }
-        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
-            throw std::invalid_argument(
-                "crba_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
-        }
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) {
-            throw std::invalid_argument(
-                "crba_mujoco: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
-        }
+        int batch = check_q(q, "crba_mujoco");
         py::array_t<CT> out({batch, num_vel_, num_vel_});
         int rc = fn_crba_mujoco_(q.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error("grid_rbd_crba_mujoco failed: rc=" + std::to_string(rc));
@@ -667,15 +618,7 @@ public:
         if (!fn_minv_mujoco_) throw std::runtime_error(
             "minv_mujoco unavailable: this .so has no mjx Minv kernel "
             "(only floating-base robots export grid_rbd_minv_mujoco)");
-        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
-            throw std::invalid_argument(
-                "minv_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
-        }
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) {
-            throw std::invalid_argument(
-                "minv_mujoco: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
-        }
+        int batch = check_q(q, "minv_mujoco");
         py::array_t<CT> out({batch, num_vel_, num_vel_});
         int rc = fn_minv_mujoco_(q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error("grid_rbd_minv_mujoco failed: rc=" + std::to_string(rc));
@@ -766,15 +709,7 @@ public:
     py::array_t<CT> end_effector_pose(
         arr_t q)
     {
-        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
-            throw std::invalid_argument(
-                "end_effector_pose: q must be (batch, " + std::to_string(num_joints_) + ")");
-        }
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) {
-            throw std::invalid_argument(
-                "end_effector_pose: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
-        }
+        int batch = check_q(q, "end_effector_pose");
         py::array_t<CT> out({batch, 6 * num_ees_});
         int rc = fn_ee_pose_(q.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error(
@@ -792,15 +727,7 @@ public:
     {
         if (!fn_ee_pose_mujoco_) throw std::runtime_error(
             "end_effector_pose_mujoco unavailable: floating-base .so only");
-        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
-            throw std::invalid_argument(
-                "end_effector_pose_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
-        }
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) {
-            throw std::invalid_argument(
-                "end_effector_pose_mujoco: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
-        }
+        int batch = check_q(q, "end_effector_pose_mujoco");
         py::array_t<CT> out({batch, 6 * num_ees_});
         int rc = fn_ee_pose_mujoco_(q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_mujoco failed: rc=" + std::to_string(rc));
@@ -815,15 +742,7 @@ public:
         arr_t q,
         bool use_warp)
     {
-        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
-            throw std::invalid_argument(
-                "fk_batched: q must be (batch, " + std::to_string(num_joints_) + ")");
-        }
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) {
-            throw std::invalid_argument(
-                "fk_batched: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
-        }
+        int batch = check_q(q, "fk_batched");
         py::array_t<CT> out({batch, 7});
         int rc = fn_fk_batched_(q.data(), out.mutable_data(), batch, use_warp ? 1 : 0);
         if (rc == 3) throw std::runtime_error(
@@ -835,15 +754,7 @@ public:
     py::array_t<CT> end_effector_pose_gradient(
         arr_t q)
     {
-        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
-            throw std::invalid_argument(
-                "end_effector_pose_gradient: q must be (batch, " + std::to_string(num_joints_) + ")");
-        }
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) {
-            throw std::invalid_argument(
-                "end_effector_pose_gradient: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
-        }
+        int batch = check_q(q, "end_effector_pose_gradient");
         // d/dv tangent (pinocchio convention): (batch, 6*NUM_EES, NV)
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_});
         int rc = fn_ee_pose_grad_(q.data(), out.mutable_data(), batch);
@@ -862,15 +773,7 @@ public:
     {
         if (!fn_ee_pose_grad_mujoco_) throw std::runtime_error(
             "end_effector_pose_gradient_mujoco unavailable: floating-base .so only");
-        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
-            throw std::invalid_argument(
-                "end_effector_pose_gradient_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
-        }
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) {
-            throw std::invalid_argument(
-                "end_effector_pose_gradient_mujoco: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
-        }
+        int batch = check_q(q, "end_effector_pose_gradient_mujoco");
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_});
         int rc = fn_ee_pose_grad_mujoco_(q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient_mujoco failed: rc=" + std::to_string(rc));
@@ -885,15 +788,7 @@ public:
     {
         if (!fn_ee_pose_hessian_mujoco_) throw std::runtime_error(
             "end_effector_pose_hessian_mujoco unavailable: floating-base .so only");
-        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
-            throw std::invalid_argument(
-                "end_effector_pose_hessian_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
-        }
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) {
-            throw std::invalid_argument(
-                "end_effector_pose_hessian_mujoco: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
-        }
+        int batch = check_q(q, "end_effector_pose_hessian_mujoco");
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_, num_vel_});
         int rc = fn_ee_pose_hessian_mujoco_(q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_hessian_mujoco failed: rc=" + std::to_string(rc));
@@ -991,15 +886,7 @@ public:
     py::array_t<CT> end_effector_pose_hessian(
         arr_t q)
     {
-        if (q.ndim() != 2 || q.shape(1) != num_joints_) {
-            throw std::invalid_argument(
-                "end_effector_pose_hessian: q must be (batch, " + std::to_string(num_joints_) + ")");
-        }
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) {
-            throw std::invalid_argument(
-                "end_effector_pose_hessian: batch=" + std::to_string(batch) + " > max_batch=" + std::to_string(max_batch_));
-        }
+        int batch = check_q(q, "end_effector_pose_hessian");
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_, num_vel_});
         int rc = fn_ee_pose_hessian_(q.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error(
@@ -1254,10 +1141,7 @@ public:
         int N)
     {
         require_plant((void*)fn, name);
-        if (var.ndim() != 2 || var.shape(1) != N)
-            throw std::invalid_argument(std::string(name) + ": var must be (batch, " + std::to_string(N) + ")");
-        int batch = (int)var.shape(0);
-        if (batch > max_batch_) throw std::invalid_argument(std::string(name) + ": batch > max_batch");
+        int batch = check_2d(var, N, name, "var");
         check_array_2d(des, batch, N, "des");
         check_array_2d(w, batch, N, "weight");
         py::array_t<CT> out({batch});
@@ -1303,10 +1187,7 @@ public:
         float mu, int N)
     {
         require_plant((void*)fn, name);
-        if (var.ndim() != 2 || var.shape(1) != N)
-            throw std::invalid_argument(std::string(name) + ": var must be (batch, " + std::to_string(N) + ")");
-        int batch = (int)var.shape(0);
-        if (batch > max_batch_) throw std::invalid_argument(std::string(name) + ": batch > max_batch");
+        int batch = check_2d(var, N, name, "var");
         check_array_2d(lower, batch, N, "lower");
         check_array_2d(upper, batch, N, "upper");
         py::array_t<CT> out({batch});
@@ -1340,91 +1221,75 @@ public:
     { return plant_barrier(fn_plant_tor_barrier_, "joint_torque_barrier", var, lower, upper, mu, num_vel_); }
 
     // plant_step: x (batch, NX), u (batch, NV) -> x_kp1 (batch, NX).
+    // Shared body for the plant step / step_gradient / step_hessian surfaces
+    // (pin + mjx): validate x (batch, NX) and u (batch, NV), call
+    // fn(x, u, out, batch, gravity, dt, it) into an out of shape (batch,
+    // trailing...). `rc3_msg`, when non-null, maps rc==3 to a clear
+    // integrator-support error (the mjx twins only implement EULER/SI-EULER).
+    py::array_t<CT> plant_step_call(fn_plant_step_t fn, const char* name,
+                                    arr_t x, arr_t u, CT dt, int it, CT gravity,
+                                    std::vector<py::ssize_t> trailing,
+                                    const char* rc3_msg = nullptr)
+    {
+        require_plant((void*)fn, name);
+        int nx = num_joints_ + num_vel_;
+        int batch = check_2d(x, nx, name, "x");
+        check_array_2d(u, batch, num_vel_, "u");
+        trailing.insert(trailing.begin(), batch);
+        py::array_t<CT> out(trailing);
+        int rc = fn(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
+        if (rc == 3 && rc3_msg)
+            throw std::runtime_error(std::string(name) + ": " + rc3_msg);
+        if (rc != 0) throw std::runtime_error(std::string(name) + " failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     py::array_t<CT> plant_step(
         arr_t x,
         arr_t u,
         CT dt, int it, CT gravity)
     {
-        require_plant((void*)fn_plant_step_, "plant_step");
-        int nx = num_joints_ + num_vel_;
-        if (x.ndim() != 2 || x.shape(1) != nx)
-            throw std::invalid_argument("plant_step: x must be (batch, " + std::to_string(nx) + ")");
-        int batch = (int)x.shape(0);
-        if (batch > max_batch_) throw std::invalid_argument("plant_step: batch > max_batch");
-        check_array_2d(u, batch, num_vel_, "u");
-        py::array_t<CT> out({batch, nx});
-        int rc = fn_plant_step_(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
-        if (rc != 0) throw std::runtime_error("plant_step failed: rc=" + std::to_string(rc));
-        return out;
+        return plant_step_call(fn_plant_step_, "plant_step", x, u, dt, it, gravity,
+                               {num_joints_ + num_vel_});
     }
 
     // MuJoCo-convention plant_step -> (batch, NX). Floating-base only; EULER/SI-EULER.
     bool has_plant_step_mujoco() const { return fn_plant_step_mujoco_ != nullptr; }
     py::array_t<CT> plant_step_mujoco(arr_t x, arr_t u, CT dt, int it, CT gravity)
     {
-        require_plant((void*)fn_plant_step_mujoco_, "plant_step_mujoco");
-        int nx = num_joints_ + num_vel_;
-        if (x.ndim() != 2 || x.shape(1) != nx)
-            throw std::invalid_argument("plant_step_mujoco: x must be (batch, " + std::to_string(nx) + ")");
-        int batch = (int)x.shape(0);
-        if (batch > max_batch_) throw std::invalid_argument("plant_step_mujoco: batch > max_batch");
-        check_array_2d(u, batch, num_vel_, "u");
-        py::array_t<CT> out({batch, nx});
-        int rc = fn_plant_step_mujoco_(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
-        if (rc == 3) throw std::runtime_error("plant_step_mujoco: only EULER/SI-EULER supported");
-        if (rc != 0) throw std::runtime_error("plant_step_mujoco failed: rc=" + std::to_string(rc));
-        return out;
+        return plant_step_call(fn_plant_step_mujoco_, "plant_step_mujoco", x, u, dt, it, gravity,
+                               {num_joints_ + num_vel_}, "only EULER/SI-EULER supported");
     }
 
-    // ee_pos_cost: q (batch, NQ), p_des (batch, 3), W (batch, 3)
+    // Shared body for the point-tracking costs (ee_pos / com, pin + mjx):
+    // q (batch, NQ), p_des (batch, 3), W (batch, 3)
     // -> (value (batch,), grad_x (batch, NX), hess_x (batch, NX, NX)).
     std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
-    ee_pos_cost(
-        arr_t q,
-        arr_t p_des,
-        arr_t W)
+    plant_point_cost(fn_plant_cost_t fn, const char* name,
+                     arr_t q, arr_t p_des, arr_t W)
     {
-        require_plant((void*)fn_plant_ee_cost_, "ee_pos_cost");
+        require_plant((void*)fn, name);
         int nx = num_joints_ + num_vel_;
-        if (q.ndim() != 2 || q.shape(1) != num_joints_)
-            throw std::invalid_argument("ee_pos_cost: q must be (batch, " + std::to_string(num_joints_) + ")");
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) throw std::invalid_argument("ee_pos_cost: batch > max_batch");
+        int batch = check_q(q, name);
         check_array_2d(p_des, batch, 3, "p_des");
         check_array_2d(W, batch, 3, "W");
         py::array_t<CT> out({batch});
         py::array_t<CT> grad({batch, nx});
         py::array_t<CT> hess({batch, nx, nx});
-        int rc = fn_plant_ee_cost_(q.data(), p_des.data(), W.data(),
-                                   out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("ee_pos_cost failed: rc=" + std::to_string(rc));
+        int rc = fn(q.data(), p_des.data(), W.data(),
+                    out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error(std::string(name) + " failed: rc=" + std::to_string(rc));
         return {out, grad, hess};
     }
 
-    // com_cost: q (batch, NQ), p_des (batch, 3), W (batch, 3)
-    // -> (value (batch,), grad_x (batch, NX), hess_x (batch, NX, NX)). CoM-tracking.
     std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
-    com_cost(
-        arr_t q,
-        arr_t p_des,
-        arr_t W)
-    {
-        require_plant((void*)fn_plant_com_cost_, "com_cost");
-        int nx = num_joints_ + num_vel_;
-        if (q.ndim() != 2 || q.shape(1) != num_joints_)
-            throw std::invalid_argument("com_cost: q must be (batch, " + std::to_string(num_joints_) + ")");
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) throw std::invalid_argument("com_cost: batch > max_batch");
-        check_array_2d(p_des, batch, 3, "p_des");
-        check_array_2d(W, batch, 3, "W");
-        py::array_t<CT> out({batch});
-        py::array_t<CT> grad({batch, nx});
-        py::array_t<CT> hess({batch, nx, nx});
-        int rc = fn_plant_com_cost_(q.data(), p_des.data(), W.data(),
-                                    out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("com_cost failed: rc=" + std::to_string(rc));
-        return {out, grad, hess};
-    }
+    ee_pos_cost(arr_t q, arr_t p_des, arr_t W)
+    { return plant_point_cost(fn_plant_ee_cost_, "ee_pos_cost", q, p_des, W); }
+
+    // CoM-tracking cost (same shapes as ee_pos_cost).
+    std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
+    com_cost(arr_t q, arr_t p_des, arr_t W)
+    { return plant_point_cost(fn_plant_com_cost_, "com_cost", q, p_des, W); }
 
     // momentum_cost: q (batch, NQ), qd (batch, NV), h_des (batch, 6), W (batch, 6)
     // -> (value (batch,), grad_x (batch, NX), hess_x (batch, NX, NX)). Centroidal-momentum tracking.
@@ -1437,10 +1302,7 @@ public:
     {
         require_plant((void*)fn_plant_mom_cost_, "momentum_cost");
         int nx = num_joints_ + num_vel_;
-        if (q.ndim() != 2 || q.shape(1) != num_joints_)
-            throw std::invalid_argument("momentum_cost: q must be (batch, " + std::to_string(num_joints_) + ")");
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) throw std::invalid_argument("momentum_cost: batch > max_batch");
+        int batch = check_q(q, "momentum_cost");
         check_array_2d(qd, batch, num_vel_, "qd");
         check_array_2d(h_des, batch, 6, "h_des");
         check_array_2d(W, batch, 6, "W");
@@ -1459,40 +1321,12 @@ public:
     bool has_ee_pos_cost_mujoco() const { return fn_plant_ee_cost_mujoco_ != nullptr; }
     std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
     ee_pos_cost_mujoco(arr_t q, arr_t p_des, arr_t W)
-    {
-        require_plant((void*)fn_plant_ee_cost_mujoco_, "ee_pos_cost_mujoco");
-        int nx = num_joints_ + num_vel_;
-        if (q.ndim() != 2 || q.shape(1) != num_joints_)
-            throw std::invalid_argument("ee_pos_cost_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) throw std::invalid_argument("ee_pos_cost_mujoco: batch > max_batch");
-        check_array_2d(p_des, batch, 3, "p_des");
-        check_array_2d(W, batch, 3, "W");
-        py::array_t<CT> out({batch}); py::array_t<CT> grad({batch, nx}); py::array_t<CT> hess({batch, nx, nx});
-        int rc = fn_plant_ee_cost_mujoco_(q.data(), p_des.data(), W.data(),
-                                          out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("ee_pos_cost_mujoco failed: rc=" + std::to_string(rc));
-        return {out, grad, hess};
-    }
+    { return plant_point_cost(fn_plant_ee_cost_mujoco_, "ee_pos_cost_mujoco", q, p_des, W); }
 
     bool has_com_cost_mujoco() const { return fn_plant_com_cost_mujoco_ != nullptr; }
     std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
     com_cost_mujoco(arr_t q, arr_t p_des, arr_t W)
-    {
-        require_plant((void*)fn_plant_com_cost_mujoco_, "com_cost_mujoco");
-        int nx = num_joints_ + num_vel_;
-        if (q.ndim() != 2 || q.shape(1) != num_joints_)
-            throw std::invalid_argument("com_cost_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) throw std::invalid_argument("com_cost_mujoco: batch > max_batch");
-        check_array_2d(p_des, batch, 3, "p_des");
-        check_array_2d(W, batch, 3, "W");
-        py::array_t<CT> out({batch}); py::array_t<CT> grad({batch, nx}); py::array_t<CT> hess({batch, nx, nx});
-        int rc = fn_plant_com_cost_mujoco_(q.data(), p_des.data(), W.data(),
-                                           out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("com_cost_mujoco failed: rc=" + std::to_string(rc));
-        return {out, grad, hess};
-    }
+    { return plant_point_cost(fn_plant_com_cost_mujoco_, "com_cost_mujoco", q, p_des, W); }
 
     bool has_momentum_cost_mujoco() const { return fn_plant_mom_cost_mujoco_ != nullptr; }
     std::tuple<py::array_t<CT>, py::array_t<CT>, py::array_t<CT>>
@@ -1500,10 +1334,7 @@ public:
     {
         require_plant((void*)fn_plant_mom_cost_mujoco_, "momentum_cost_mujoco");
         int nx = num_joints_ + num_vel_;
-        if (q.ndim() != 2 || q.shape(1) != num_joints_)
-            throw std::invalid_argument("momentum_cost_mujoco: q must be (batch, " + std::to_string(num_joints_) + ")");
-        int batch = (int)q.shape(0);
-        if (batch > max_batch_) throw std::invalid_argument("momentum_cost_mujoco: batch > max_batch");
+        int batch = check_q(q, "momentum_cost_mujoco");
         check_array_2d(qd, batch, num_vel_, "qd");
         check_array_2d(h_des, batch, 6, "h_des");
         check_array_2d(W, batch, 6, "W");
@@ -1520,37 +1351,16 @@ public:
         arr_t u,
         CT dt, int it, CT gravity)
     {
-        require_plant((void*)fn_plant_step_grad_, "plant_step_gradient");
-        int nx = num_joints_ + num_vel_;
-        int nv = num_vel_;
-        if (x.ndim() != 2 || x.shape(1) != nx)
-            throw std::invalid_argument("plant_step_gradient: x must be (batch, " + std::to_string(nx) + ")");
-        int batch = (int)x.shape(0);
-        if (batch > max_batch_) throw std::invalid_argument("plant_step_gradient: batch > max_batch");
-        check_array_2d(u, batch, nv, "u");
-        py::array_t<CT> out({batch, 2 * nv, 3 * nv});
-        int rc = fn_plant_step_grad_(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
-        if (rc != 0) throw std::runtime_error("plant_step_gradient failed: rc=" + std::to_string(rc));
-        return out;
+        return plant_step_call(fn_plant_step_grad_, "plant_step_gradient", x, u, dt, it, gravity,
+                               {2 * num_vel_, 3 * num_vel_});
     }
 
     // MuJoCo-convention plant_step_gradient -> (batch, 2*NV, 3*NV). Floating; EULER/SI.
     bool has_plant_step_gradient_mujoco() const { return fn_plant_step_grad_mujoco_ != nullptr; }
     py::array_t<CT> plant_step_gradient_mujoco(arr_t x, arr_t u, CT dt, int it, CT gravity)
     {
-        require_plant((void*)fn_plant_step_grad_mujoco_, "plant_step_gradient_mujoco");
-        int nx = num_joints_ + num_vel_;
-        int nv = num_vel_;
-        if (x.ndim() != 2 || x.shape(1) != nx)
-            throw std::invalid_argument("plant_step_gradient_mujoco: x must be (batch, " + std::to_string(nx) + ")");
-        int batch = (int)x.shape(0);
-        if (batch > max_batch_) throw std::invalid_argument("plant_step_gradient_mujoco: batch > max_batch");
-        check_array_2d(u, batch, nv, "u");
-        py::array_t<CT> out({batch, 2 * nv, 3 * nv});
-        int rc = fn_plant_step_grad_mujoco_(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
-        if (rc == 3) throw std::runtime_error("plant_step_gradient_mujoco: only EULER/SI-EULER supported");
-        if (rc != 0) throw std::runtime_error("plant_step_gradient_mujoco failed: rc=" + std::to_string(rc));
-        return out;
+        return plant_step_call(fn_plant_step_grad_mujoco_, "plant_step_gradient_mujoco", x, u, dt, it, gravity,
+                               {2 * num_vel_, 3 * num_vel_}, "only EULER/SI-EULER supported");
     }
 
     // plant_step_hessian: x (batch, NX), u (batch, NV) -> d2AB (batch, 2*NV, 3*NV*3*NV).
@@ -1562,37 +1372,16 @@ public:
         arr_t u,
         CT dt, int it, CT gravity)
     {
-        require_plant((void*)fn_plant_step_hess_, "plant_step_hessian");
-        int nx = num_joints_ + num_vel_;
-        int nv = num_vel_;
-        if (x.ndim() != 2 || x.shape(1) != nx)
-            throw std::invalid_argument("plant_step_hessian: x must be (batch, " + std::to_string(nx) + ")");
-        int batch = (int)x.shape(0);
-        if (batch > max_batch_) throw std::invalid_argument("plant_step_hessian: batch > max_batch");
-        check_array_2d(u, batch, nv, "u");
-        py::array_t<CT> out({batch, 2 * nv, 3 * nv * 3 * nv});
-        int rc = fn_plant_step_hess_(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
-        if (rc != 0) throw std::runtime_error("plant_step_hessian failed: rc=" + std::to_string(rc));
-        return out;
+        return plant_step_call(fn_plant_step_hess_, "plant_step_hessian", x, u, dt, it, gravity,
+                               {2 * num_vel_, 3 * num_vel_ * 3 * num_vel_});
     }
 
     // MuJoCo-convention plant_step_hessian -> (batch, 2*NV, 3*NV*3*NV). Floating; EULER/SI.
     bool has_plant_step_hessian_mujoco() const { return fn_plant_step_hess_mujoco_ != nullptr; }
     py::array_t<CT> plant_step_hessian_mujoco(arr_t x, arr_t u, CT dt, int it, CT gravity)
     {
-        require_plant((void*)fn_plant_step_hess_mujoco_, "plant_step_hessian_mujoco");
-        int nx = num_joints_ + num_vel_;
-        int nv = num_vel_;
-        if (x.ndim() != 2 || x.shape(1) != nx)
-            throw std::invalid_argument("plant_step_hessian_mujoco: x must be (batch, " + std::to_string(nx) + ")");
-        int batch = (int)x.shape(0);
-        if (batch > max_batch_) throw std::invalid_argument("plant_step_hessian_mujoco: batch > max_batch");
-        check_array_2d(u, batch, nv, "u");
-        py::array_t<CT> out({batch, 2 * nv, 3 * nv * 3 * nv});
-        int rc = fn_plant_step_hess_mujoco_(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
-        if (rc == 3) throw std::runtime_error("plant_step_hessian_mujoco: only EULER/SI-EULER supported");
-        if (rc != 0) throw std::runtime_error("plant_step_hessian_mujoco failed: rc=" + std::to_string(rc));
-        return out;
+        return plant_step_call(fn_plant_step_hess_mujoco_, "plant_step_hessian_mujoco", x, u, dt, it, gravity,
+                               {2 * num_vel_, 3 * num_vel_ * 3 * num_vel_}, "only EULER/SI-EULER supported");
     }
 
     // ─── centroidal / energy / general-frame kinematics (F2) ─────────────────
@@ -1602,14 +1391,23 @@ public:
     // frame_jacobian family is opt-in codegen; its C-ABI symbol returns rc=3 if
     // the family wasn't generated for this robot's .so.
 
-    int check_q(const py::array_t<CT>& q, const char* name) const {
-        if (q.ndim() != 2 || q.shape(1) != num_joints_)
+    // Validate a 2-D (batch, last_dim) input and return batch. `arr` names the
+    // array in the shape error ("<name>: <arr> must be (batch, N)").
+    int check_2d(const py::array_t<CT>& a, int last_dim,
+                 const char* name, const char* arr) const {
+        if (a.ndim() != 2 || a.shape(1) != last_dim)
             throw std::invalid_argument(
-                std::string(name) + ": q must be (batch, " + std::to_string(num_joints_) + ")");
-        int batch = (int)q.shape(0);
+                std::string(name) + ": " + arr + " must be (batch, " + std::to_string(last_dim) + ")");
+        int batch = (int)a.shape(0);
         if (batch > max_batch_)
-            throw std::invalid_argument(std::string(name) + ": batch > max_batch");
+            throw std::invalid_argument(
+                std::string(name) + ": batch=" + std::to_string(batch)
+                + " > max_batch=" + std::to_string(max_batch_));
         return batch;
+    }
+
+    int check_q(const py::array_t<CT>& q, const char* name) const {
+        return check_2d(q, num_joints_, name, "q");
     }
 
     // com(q) -> (batch, 3 + 3*NUM_VEL): [p_com(3); J_com(3 x NV, col-major)].
@@ -2129,41 +1927,41 @@ private:
     fn_int_v_t fn_close_      = nullptr;
     fn_dyn_t  fn_inverse_dynamics_           = nullptr;
     fn_dyn_t  fn_inverse_dynamics_mujoco_    = nullptr;  // floating-base mjx ID (optional)
-    fn_minv_t  fn_minv_           = nullptr;
-    fn_fd_t    fn_fd_             = nullptr;
-    fn_fd_t    fn_aba_            = nullptr;
-    fn_crba_t  fn_crba_           = nullptr;
-    fn_crba_t  fn_crba_mujoco_    = nullptr;  // floating-base mjx CRBA (optional)
+    fn_q_out_t  fn_minv_           = nullptr;
+    fn_dyn_t    fn_fd_             = nullptr;
+    fn_dyn_t    fn_aba_            = nullptr;
+    fn_q_out_grav_t  fn_crba_           = nullptr;
+    fn_q_out_grav_t  fn_crba_mujoco_    = nullptr;  // floating-base mjx CRBA (optional)
     // floating-base mjx value kernels (optional symbols; nullptr on fixed base)
-    fn_fd_t    fn_fd_mujoco_      = nullptr;
-    fn_fd_t    fn_aba_mujoco_     = nullptr;
+    fn_dyn_t    fn_fd_mujoco_      = nullptr;
+    fn_dyn_t    fn_aba_mujoco_     = nullptr;
     fn_q_qd_out_grav_t fn_coriolis_matrix_mujoco_ = nullptr;
     fn_frame_jac_t     fn_frame_jacobian_mujoco_  = nullptr;
     fn_frame_jac_dot_t fn_frame_jacobian_dot_mujoco_ = nullptr;
     fn_q_out_t         fn_osc_inertia_mujoco_     = nullptr;
-    fn_minv_t          fn_minv_mujoco_            = nullptr;
+    fn_q_out_t          fn_minv_mujoco_            = nullptr;
     fn_q_out_t         fn_com_mujoco_             = nullptr;
     fn_q_qd_out_t      fn_ccrba_mujoco_           = nullptr;
     fn_q_qd_out_grav_t fn_energy_mujoco_          = nullptr;
     fn_q_qd_out_grav_t fn_kinetic_energy_regressor_mujoco_   = nullptr;
     fn_q_out_grav_t    fn_potential_energy_regressor_mujoco_ = nullptr;
-    fn_ee_t    fn_ee_pose_        = nullptr;
-    fn_ee_t    fn_ee_pose_grad_   = nullptr;
-    fn_ee_t    fn_ee_pose_mujoco_      = nullptr;  // floating-base mjx EE pose (optional)
-    fn_ee_t    fn_ee_pose_grad_mujoco_ = nullptr;  // floating-base mjx EE-pose grad (optional)
+    fn_q_out_t    fn_ee_pose_        = nullptr;
+    fn_q_out_t    fn_ee_pose_grad_   = nullptr;
+    fn_q_out_t    fn_ee_pose_mujoco_      = nullptr;  // floating-base mjx EE pose (optional)
+    fn_q_out_t    fn_ee_pose_grad_mujoco_ = nullptr;  // floating-base mjx EE-pose grad (optional)
     fn_dyn_t  fn_inverse_dynamics_gradient_      = nullptr;
     fn_dyn_t  fn_inverse_dynamics_gradient_mujoco_ = nullptr;  // floating mjx (optional)
-    fn_fd_t    fn_fd_grad_        = nullptr;
-    fn_fd_t    fn_fd_grad_mujoco_ = nullptr;  // floating mjx (optional)
-    fn_ee_t    fn_ee_pose_hessian_ = nullptr;
-    fn_ee_t    fn_ee_pose_hessian_mujoco_ = nullptr;  // floating-base mjx EE-pose hessian (optional)
+    fn_dyn_t    fn_fd_grad_        = nullptr;
+    fn_dyn_t    fn_fd_grad_mujoco_ = nullptr;  // floating mjx (optional)
+    fn_q_out_t    fn_ee_pose_hessian_ = nullptr;
+    fn_q_out_t    fn_ee_pose_hessian_mujoco_ = nullptr;  // floating-base mjx EE-pose hessian (optional)
     fn_fk_batched_t fn_fk_batched_ = nullptr;
     fn_dyn_no_fext_t fn_idsva_so_ = nullptr;
     fn_dyn_no_fext_t fn_idsva_so_mujoco_ = nullptr;  // floating mjx (optional)
     fn_dyn_no_fext_t fn_id_regressor_ = nullptr;         // (q, qd, qdd) -> Y (optional)
     fn_dyn_no_fext_t fn_id_regressor_mujoco_ = nullptr;  // floating mjx (optional)
-    fn_fd_no_fext_t   fn_fdsva_so_ = nullptr;
-    fn_fd_no_fext_t   fn_fdsva_so_mujoco_ = nullptr;  // floating mjx (optional)
+    fn_dyn_no_fext_t   fn_fdsva_so_ = nullptr;
+    fn_dyn_no_fext_t   fn_fdsva_so_mujoco_ = nullptr;  // floating mjx (optional)
     fn_integrator_t fn_integrator_      = nullptr;
     fn_integrator_t fn_integrator_mujoco_ = nullptr;  // floating-base mjx integrator (optional)
     fn_integrator_t fn_integrator_grad_ = nullptr;
@@ -2176,17 +1974,17 @@ private:
     fn_plant_barrier_t fn_plant_tor_barrier_ = nullptr;
     fn_plant_step_t    fn_plant_step_        = nullptr;
     fn_plant_step_t    fn_plant_step_mujoco_ = nullptr;  // floating mjx (optional)
-    fn_plant_ee_t      fn_plant_ee_cost_     = nullptr;
-    fn_plant_ee_t      fn_plant_com_cost_    = nullptr;
+    fn_plant_cost_t      fn_plant_ee_cost_     = nullptr;
+    fn_plant_cost_t      fn_plant_com_cost_    = nullptr;
     fn_plant_mom_t     fn_plant_mom_cost_    = nullptr;
-    fn_plant_ee_t      fn_plant_ee_cost_mujoco_  = nullptr;  // floating mjx (optional)
-    fn_plant_ee_t      fn_plant_com_cost_mujoco_ = nullptr;  // floating mjx (optional)
+    fn_plant_cost_t      fn_plant_ee_cost_mujoco_  = nullptr;  // floating mjx (optional)
+    fn_plant_cost_t      fn_plant_com_cost_mujoco_ = nullptr;  // floating mjx (optional)
     fn_plant_mom_t     fn_plant_mom_cost_mujoco_ = nullptr;  // floating mjx (optional)
     fn_plant_cost_t    fn_plant_state_cost_mujoco_ = nullptr;  // floating mjx (optional)
-    fn_plant_step_grad_t fn_plant_step_grad_ = nullptr;
-    fn_plant_step_grad_t fn_plant_step_grad_mujoco_ = nullptr;  // floating mjx (optional)
-    fn_plant_step_hess_t fn_plant_step_hess_ = nullptr;
-    fn_plant_step_hess_t fn_plant_step_hess_mujoco_ = nullptr;  // floating mjx (optional)
+    fn_plant_step_t fn_plant_step_grad_ = nullptr;
+    fn_plant_step_t fn_plant_step_grad_mujoco_ = nullptr;  // floating mjx (optional)
+    fn_plant_step_t fn_plant_step_hess_ = nullptr;
+    fn_plant_step_t fn_plant_step_hess_mujoco_ = nullptr;  // floating mjx (optional)
     // F2 centroidal / energy / general-frame kinematics (optional symbols)
     fn_q_out_t         fn_com_                 = nullptr;
     fn_q_qd_out_t      fn_ccrba_               = nullptr;
@@ -2211,9 +2009,9 @@ private:
     fn_q_out_t         fn_dccrba_mujoco_               = nullptr;  // floating mjx (optional)
     fn_q_qd_out_t      fn_cmm_time_variation_          = nullptr;
     fn_q_qd_out_t      fn_cmm_time_variation_mujoco_   = nullptr;  // floating-base mjx (optional)
-    fn_set_inertia_t   fn_set_inertia_params_          = nullptr;
-    fn_set_transform_t fn_set_transform_params_        = nullptr;
-    fn_set_jd_t        fn_set_jd_params_               = nullptr;
+    fn_set_params_t   fn_set_inertia_params_          = nullptr;
+    fn_set_params_t fn_set_transform_params_        = nullptr;
+    fn_set_params_t        fn_set_jd_params_               = nullptr;
 
     int num_joints_ = 0;
     int num_vel_    = 0;
