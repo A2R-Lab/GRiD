@@ -347,154 +347,64 @@ public:
         }
     }
 
-    // ─── inverse_dynamics ────────────────────────────────────────────────────────────────
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    // ── BEGIN GENERATED PYBIND METHOD BODIES (grid_codegen/core_body_gen.py — do not hand-edit) ──
+    // Regenerate: .venv/bin/python -m grid_codegen.core_body_gen
+    // Table: grid_codegen/abi_specs.py (ABI_SPECS: inputs/py_out_dims/
+    // py_rc3_msg/py_twin_guard); drift-gated by test/test_core_generated_block.py.
     //
-    // q, qd, qdd: (batch, num_joints) float32, C-contiguous. GRiD's kernels read
-    //         q, qd AND qdd all at the NUM_JOINTS (== num_pos == nq) stride; for a
-    //         FLOATING base the base 6-dof velocity lives in the leading slots and
-    //         the +1 quaternion offset is a padded slot (so qd/qdd stay nq-wide,
-    //         NOT nv-wide, on this surface).
-    // returns c (generalized force): (batch, num_joints) float32 — likewise nq-wide.
-    py::array_t<CT> inverse_dynamics(
-        arr_t q,
-        arr_t qd,
-        py::object qdd_opt,
-        CT gravity,
-        py::object f_ext_opt)
-    {
-        int batch = check_inputs_2d(q, qd, /*last_dim=*/num_joints_);
-        const CT* qdd_ptr = nullptr;
-        if (!qdd_opt.is_none()) {
-            auto qdd = qdd_opt.cast<
-                arr_t>();
-            check_array_2d(qdd, batch, num_joints_, "qdd");
-            qdd_ptr = qdd.data();
-        }
-        arr_t fe_hold;
-        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+    // Shared input contract: q/qd/qdd/u are (batch, NUM_JOINTS) float32,
+    // C-contiguous. For a FLOATING base the 6-dof base velocity lives in the
+    // leading slots and the +1 quaternion offset is a padded slot (qd/qdd stay
+    // nq-wide, NOT nv-wide, on this surface). Value vector outputs (c, qdd) are
+    // likewise nq-wide; matrix/Jacobian outputs are tangent-space (nv-sized).
 
-        py::array_t<CT> out({batch, num_joints_});
-        int rc = fn_inverse_dynamics_(q.data(), qd.data(), qdd_ptr,
-                          out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc == 3) throw std::runtime_error(
-            "inverse_dynamics not built into this robot .so — add 'inverse_dynamics' "
-            "to algorithm_list in register_robot() and rebuild");
-        if (rc != 0) {
-            throw std::runtime_error("grid_rbd_inverse_dynamics failed: rc=" + std::to_string(rc));
-        }
-        return out;
-    }
-
-    // ─── inverse_dynamics_mujoco ─────────────────────────────────────────────
-    //
-    // MuJoCo output-convention ID (floating base only). q/qd/qdd are MuJoCo-native
-    // and the returned tau is in the mjx frame — the convention transform is baked
-    // into the kernel (MUJOCO_OUTPUT=true), so NO host pre/post-process is applied.
-    // qdd is REQUIRED (the qdd=0 bias path can't represent mjx; use nonlinear_effects).
-    // Raises if the .so doesn't export the symbol (fixed-base / older build).
-    bool has_inverse_dynamics_mujoco() const { return fn_inverse_dynamics_mujoco_ != nullptr; }
-
-    py::array_t<CT> inverse_dynamics_mujoco(
-        arr_t q,
-        arr_t qd,
-        arr_t qdd,
-        CT gravity,
-        py::object f_ext_opt)
-    {
-        if (!fn_inverse_dynamics_mujoco_) {
-            throw std::runtime_error(
-                "inverse_dynamics_mujoco unavailable: this .so has no mjx ID kernel "
-                "(only floating-base robots export grid_rbd_inverse_dynamics_mujoco)");
-        }
-        int batch = check_inputs_2d(q, qd, /*last_dim=*/num_joints_);
-        check_array_2d(qdd, batch, num_joints_, "qdd");
-        arr_t fe_hold;
-        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-
-        py::array_t<CT> out({batch, num_joints_});
-        int rc = fn_inverse_dynamics_mujoco_(q.data(), qd.data(), qdd.data(),
-                          out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc != 0) {
-            throw std::runtime_error("grid_rbd_inverse_dynamics_mujoco failed: rc=" + std::to_string(rc));
-        }
-        return out;
-    }
-
-    // ─── minv ────────────────────────────────────────────────────────────────
-    py::array_t<CT> minv(
-        arr_t q)
-    {
-        int batch = check_q(q, "minv");
-        // Minv is nv x nv (tangent-space, pinocchio convention). For a FIXED base
-        // nv == nq == num_joints_; for a FLOATING base nv = num_vel_ < num_joints_
-        // (the kernel writes NUM_VEL*NUM_VEL, not NUM_JOINTS*NUM_JOINTS).
-        py::array_t<CT> out({batch, num_vel_, num_vel_});
-        int rc = fn_minv_(q.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error(
-            "minv not built into this robot .so — add 'minv' to algorithm_list "
-            "in register_robot() and rebuild");
-        if (rc != 0) {
-            throw std::runtime_error("grid_rbd_minv failed: rc=" + std::to_string(rc));
-        }
-        return out;
-    }
-
-    // ─── forward_dynamics ────────────────────────────────────────────────────
-    py::array_t<CT> forward_dynamics(
-        arr_t q,
-        arr_t qd,
-        arr_t u,
-        CT gravity,
-        py::object f_ext_opt)
-    {
-        int batch = check_inputs_2d(q, qd, /*last_dim=*/num_joints_);
-        check_array_2d(u, batch, num_joints_, "u");
-        arr_t fe_hold;
-        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-
-        py::array_t<CT> out({batch, num_joints_});
-        int rc = fn_fd_(q.data(), qd.data(), u.data(),
-                        out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc == 3) throw std::runtime_error(
-            "forward_dynamics not built into this robot .so — add 'forward_dynamics' "
-            "to algorithm_list in register_robot() and rebuild");
-        if (rc != 0) {
-            throw std::runtime_error("grid_rbd_forward_dynamics failed: rc=" + std::to_string(rc));
-        }
-        return out;
-    }
-
-    // ─── aba ─────────────────────────────────────────────────────────────────
-    py::array_t<CT> aba(
-        arr_t q,
-        arr_t qd,
-        arr_t u,
-        CT gravity,
-        py::object f_ext_opt)
-    {
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        check_array_2d(u, batch, num_joints_, "u");
-        arr_t fe_hold;
-        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<CT> out({batch, num_joints_});
-        int rc = fn_aba_(q.data(), qd.data(), u.data(),
-                         out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc == 3) throw std::runtime_error(
-            "aba not built into this robot .so — add 'aba' to algorithm_list "
-            "in register_robot() and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_aba failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    // ─── crba ────────────────────────────────────────────────────────────────
-    py::array_t<CT> crba(
-        arr_t q,
-        CT gravity)
+    // crba(q, gravity) -> (batch, num_vel_, num_vel_)
+    py::array_t<CT> crba(arr_t q, CT gravity)
     {
         int batch = check_q(q, "crba");
-        // M is nv x nv (tangent-space, pinocchio convention). FIXED base: nv == nq
-        // == num_joints_; FLOATING base: nv = num_vel_ < num_joints_ (the kernel
-        // writes NUM_VEL*NUM_VEL).
         py::array_t<CT> out({batch, num_vel_, num_vel_});
         int rc = fn_crba_(q.data(), out.mutable_data(), batch, gravity);
         if (rc == 3) throw std::runtime_error(
@@ -504,20 +414,13 @@ public:
         return out;
     }
 
-    // ─── crba_mujoco ─────────────────────────────────────────────────────────
-    // MuJoCo-convention mass matrix M_mjx = G M_pin G^T (floating base only). q is
-    // MuJoCo-native; the congruence is baked into the kernel — no host transform.
     bool has_crba_mujoco() const { return fn_crba_mujoco_ != nullptr; }
-
-    py::array_t<CT> crba_mujoco(
-        arr_t q,
-        CT gravity)
+    // crba_mujoco(q, gravity) -> (batch, num_vel_, num_vel_)
+    py::array_t<CT> crba_mujoco(arr_t q, CT gravity)
     {
-        if (!fn_crba_mujoco_) {
-            throw std::runtime_error(
-                "crba_mujoco unavailable: this .so has no mjx CRBA kernel "
-                "(only floating-base robots export grid_rbd_crba_mujoco)");
-        }
+        if (!fn_crba_mujoco_) throw std::runtime_error(
+            "crba_mujoco unavailable: this .so has no mjx CRBA kernel (only "
+            "floating-base robots export grid_rbd_crba_mujoco)");
         int batch = check_q(q, "crba_mujoco");
         py::array_t<CT> out({batch, num_vel_, num_vel_});
         int rc = fn_crba_mujoco_(q.data(), out.mutable_data(), batch, gravity);
@@ -525,10 +428,123 @@ public:
         return out;
     }
 
-    // ─── mjx value kernels (floating base only; raw mjx in, mjx-frame out) ─────
+    // inverse_dynamics(q, qd, qdd_opt, gravity, f_ext_opt) -> (batch, num_joints_)
+    py::array_t<CT> inverse_dynamics(arr_t q, arr_t qd, py::object qdd_opt, CT gravity, py::object f_ext_opt)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_joints_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_joints_});
+        int rc = fn_inverse_dynamics_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc == 3) throw std::runtime_error(
+            "inverse_dynamics not built into this robot .so — add "
+            "'inverse_dynamics' to algorithm_list in register_robot() and "
+            "rebuild");
+        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_inverse_dynamics_mujoco() const { return fn_inverse_dynamics_mujoco_ != nullptr; }
+    // inverse_dynamics_mujoco(q, qd, qdd, gravity, f_ext_opt) -> (batch, num_joints_)
+    py::array_t<CT> inverse_dynamics_mujoco(arr_t q, arr_t qd, arr_t qdd, CT gravity, py::object f_ext_opt)
+    {
+        if (!fn_inverse_dynamics_mujoco_) throw std::runtime_error(
+            "inverse_dynamics_mujoco unavailable: this .so has no mjx ID kernel "
+            "(only floating-base robots export "
+            "grid_rbd_inverse_dynamics_mujoco)");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(qdd, batch, num_joints_, "qdd");
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_joints_});
+        int rc = fn_inverse_dynamics_mujoco_(q.data(), qd.data(), qdd.data(), out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // integrator(q, qd, u, it, gravity) -> (batch, num_joints_ + num_vel_)
+    py::array_t<CT> integrator(arr_t q, arr_t qd, arr_t u, CT dt, int it, CT gravity)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        py::array_t<CT> out({batch, num_joints_ + num_vel_});
+        int rc = fn_integrator_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
+        if (rc == 3) throw std::runtime_error(
+            "integrator not built into this robot .so — add 'integrator' to "
+            "algorithm_list in register_robot() and rebuild");
+        if (rc != 0) throw std::runtime_error("grid_rbd_integrator failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_integrator_mujoco() const { return fn_integrator_mujoco_ != nullptr; }
+    // integrator_mujoco(q, qd, u, it, gravity) -> (batch, num_joints_ + num_vel_)
+    py::array_t<CT> integrator_mujoco(arr_t q, arr_t qd, arr_t u, CT dt, int it, CT gravity)
+    {
+        if (!fn_integrator_mujoco_) throw std::runtime_error(
+            "integrator_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        py::array_t<CT> out({batch, num_joints_ + num_vel_});
+        int rc = fn_integrator_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
+        if (rc == 3) throw std::runtime_error(
+            "integrator_mujoco: unsupported integrator_type for this build");
+        if (rc != 0) throw std::runtime_error("grid_rbd_integrator_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // minv(q) -> (batch, num_vel_, num_vel_)
+    py::array_t<CT> minv(arr_t q)
+    {
+        int batch = check_q(q, "minv");
+        py::array_t<CT> out({batch, num_vel_, num_vel_});
+        int rc = fn_minv_(q.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error(
+            "minv not built into this robot .so — add 'minv' to algorithm_list "
+            "in register_robot() and rebuild");
+        if (rc != 0) throw std::runtime_error("grid_rbd_minv failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_minv_mujoco() const { return fn_minv_mujoco_ != nullptr; }
+    // minv_mujoco(q) -> (batch, num_vel_, num_vel_)
+    py::array_t<CT> minv_mujoco(arr_t q)
+    {
+        if (!fn_minv_mujoco_) throw std::runtime_error(
+            "minv_mujoco unavailable: this .so has no mjx Minv kernel (only "
+            "floating-base robots export grid_rbd_minv_mujoco)");
+        int batch = check_q(q, "minv_mujoco");
+        py::array_t<CT> out({batch, num_vel_, num_vel_});
+        int rc = fn_minv_mujoco_(q.data(), out.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("grid_rbd_minv_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // forward_dynamics(q, qd, u, gravity, f_ext_opt) -> (batch, num_joints_)
+    py::array_t<CT> forward_dynamics(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_joints_});
+        int rc = fn_fd_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc == 3) throw std::runtime_error(
+            "forward_dynamics not built into this robot .so — add "
+            "'forward_dynamics' to algorithm_list in register_robot() and "
+            "rebuild");
+        if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     bool has_forward_dynamics_mujoco() const { return fn_fd_mujoco_ != nullptr; }
-    py::array_t<CT> forward_dynamics_mujoco(
-        arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
+    // forward_dynamics_mujoco(q, qd, u, gravity, f_ext_opt) -> (batch, num_joints_)
+    py::array_t<CT> forward_dynamics_mujoco(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
     {
         if (!fn_fd_mujoco_) throw std::runtime_error(
             "forward_dynamics_mujoco unavailable: floating-base .so only");
@@ -537,15 +553,30 @@ public:
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_joints_});
-        int rc = fn_fd_mujoco_(q.data(), qd.data(), u.data(),
-                               out.mutable_data(), batch, gravity, fe_ptr);
+        int rc = fn_fd_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
 
+    // aba(q, qd, u, gravity, f_ext_opt) -> (batch, num_joints_)
+    py::array_t<CT> aba(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_joints_});
+        int rc = fn_aba_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc == 3) throw std::runtime_error(
+            "aba not built into this robot .so — add 'aba' to algorithm_list in "
+            "register_robot() and rebuild");
+        if (rc != 0) throw std::runtime_error("grid_rbd_aba failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     bool has_aba_mujoco() const { return fn_aba_mujoco_ != nullptr; }
-    py::array_t<CT> aba_mujoco(
-        arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
+    // aba_mujoco(q, qd, u, gravity, f_ext_opt) -> (batch, num_joints_)
+    py::array_t<CT> aba_mujoco(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
     {
         if (!fn_aba_mujoco_) throw std::runtime_error(
             "aba_mujoco unavailable: floating-base .so only");
@@ -554,113 +585,281 @@ public:
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_joints_});
-        int rc = fn_aba_mujoco_(q.data(), qd.data(), u.data(),
-                                out.mutable_data(), batch, gravity, fe_ptr);
+        int rc = fn_aba_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error("grid_rbd_aba_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    bool has_coriolis_matrix_mujoco() const { return fn_coriolis_matrix_mujoco_ != nullptr; }
-    py::array_t<CT> coriolis_matrix_mujoco(arr_t q, arr_t qd, CT gravity)
+    // inverse_dynamics_gradient(q, qd, qdd_opt, gravity, f_ext_opt) -> (batch, num_vel_, 2 * num_vel_)
+    py::array_t<CT> inverse_dynamics_gradient(arr_t q, arr_t qd, py::object qdd_opt, CT gravity, py::object f_ext_opt)
     {
-        if (!fn_coriolis_matrix_mujoco_) throw std::runtime_error(
-            "coriolis_matrix_mujoco unavailable: floating-base .so only");
         int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<CT> out({batch, num_vel_ * num_vel_});
-        int rc = fn_coriolis_matrix_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_coriolis_matrix_mujoco failed: rc=" + std::to_string(rc));
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_joints_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
+        int rc = fn_inverse_dynamics_gradient_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc == 3) throw std::runtime_error(
+            "inverse_dynamics_gradient not built into this robot .so — add "
+            "'inverse_dynamics_gradient' to algorithm_list in register_robot() "
+            "and rebuild");
+        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_gradient failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    bool has_frame_jacobian_mujoco() const { return fn_frame_jacobian_mujoco_ != nullptr; }
-    py::array_t<CT> frame_jacobian_mujoco(arr_t q, int target_jid, int reference_frame)
+    bool has_inverse_dynamics_gradient_mujoco() const { return fn_inverse_dynamics_gradient_mujoco_ != nullptr; }
+    // inverse_dynamics_gradient_mujoco(q, qd, qdd, gravity, f_ext_opt) -> (batch, num_vel_, 2 * num_vel_)
+    py::array_t<CT> inverse_dynamics_gradient_mujoco(arr_t q, arr_t qd, arr_t qdd, CT gravity, py::object f_ext_opt)
     {
-        if (!fn_frame_jacobian_mujoco_) throw std::runtime_error(
-            "frame_jacobian_mujoco unavailable: floating-base .so with frame_jacobian only");
-        int batch = check_q(q, "frame_jacobian_mujoco");
-        py::array_t<CT> out({batch, 6 * num_vel_});
-        int rc = fn_frame_jacobian_mujoco_(q.data(), out.mutable_data(), batch, target_jid, reference_frame);
-        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_mujoco failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    bool has_frame_jacobian_dot_mujoco() const { return fn_frame_jacobian_dot_mujoco_ != nullptr; }
-    py::array_t<CT> frame_jacobian_dot_mujoco(arr_t q, arr_t qd, int target_jid, int reference_frame)
-    {
-        if (!fn_frame_jacobian_dot_mujoco_) throw std::runtime_error(
-            "frame_jacobian_dot_mujoco unavailable: floating-base .so with frame_jacobian only");
+        if (!fn_inverse_dynamics_gradient_mujoco_) throw std::runtime_error(
+            "inverse_dynamics_gradient_mujoco unavailable: floating-base .so only");
         int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<CT> out({batch, 6 * num_vel_});
-        int rc = fn_frame_jacobian_dot_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
-        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_dot_mujoco failed: rc=" + std::to_string(rc));
+        check_array_2d(qdd, batch, num_joints_, "qdd");
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
+        int rc = fn_inverse_dynamics_gradient_mujoco_(q.data(), qd.data(), qdd.data(), out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_gradient_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    bool has_osc_inertia_mujoco() const { return fn_osc_inertia_mujoco_ != nullptr; }
-    py::array_t<CT> osc_inertia_mujoco(arr_t q)
+    // forward_dynamics_gradient(q, qd, u, gravity, f_ext_opt) -> (batch, num_vel_, 2 * num_vel_)
+    py::array_t<CT> forward_dynamics_gradient(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
     {
-        if (!fn_osc_inertia_mujoco_) throw std::runtime_error(
-            "osc_inertia_mujoco unavailable: floating-base .so with frame_jacobian only");
-        int batch = check_q(q, "osc_inertia_mujoco");
-        py::array_t<CT> out({batch, 36});
-        int rc = fn_osc_inertia_mujoco_(q.data(), out.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("grid_rbd_osc_inertia_mujoco failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    // ─── minv_mujoco ─────────────────────────────────────────────────────────
-    // MuJoCo-convention direct mass-matrix inverse (floating base only). q is
-    // MuJoCo-native; the kernel reorders the quaternion + applies the congruence
-    // and writes a FULL DENSE SYMMETRIC mjx Minv — no host symmetrize / transform.
-    bool has_minv_mujoco() const { return fn_minv_mujoco_ != nullptr; }
-    py::array_t<CT> minv_mujoco(arr_t q)
-    {
-        if (!fn_minv_mujoco_) throw std::runtime_error(
-            "minv_mujoco unavailable: this .so has no mjx Minv kernel "
-            "(only floating-base robots export grid_rbd_minv_mujoco)");
-        int batch = check_q(q, "minv_mujoco");
-        py::array_t<CT> out({batch, num_vel_, num_vel_});
-        int rc = fn_minv_mujoco_(q.data(), out.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("grid_rbd_minv_mujoco failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    // ─── com_mujoco ──────────────────────────────────────────────────────────
-    // MuJoCo-convention com(q) -> (batch, 3 + 3*NV): [p_com(3); J_com(3 x NV)].
-    // p_com is invariant, J_com columns reframed by the kernel; q is mjx-native.
-    bool has_com_mujoco() const { return fn_com_mujoco_ != nullptr; }
-    py::array_t<CT> com_mujoco(arr_t q)
-    {
-        if (!fn_com_mujoco_) throw std::runtime_error(
-            "com_mujoco unavailable: floating-base .so with com only "
-            "(re-register with force_rebuild=True)");
-        int batch = check_q(q, "com_mujoco");
-        py::array_t<CT> out({batch, 3 + 3 * num_vel_});
-        int rc = fn_com_mujoco_(q.data(), out.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("grid_rbd_com_mujoco failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    // ─── ccrba_mujoco ────────────────────────────────────────────────────────
-    // MuJoCo-convention ccrba(q, qd) -> (batch, 6*NV + 6): [A(6 x NV); h(6)].
-    // h is invariant, A columns reframed by the kernel; q/qd are mjx-native.
-    bool has_ccrba_mujoco() const { return fn_ccrba_mujoco_ != nullptr; }
-    py::array_t<CT> ccrba_mujoco(arr_t q, arr_t qd)
-    {
-        if (!fn_ccrba_mujoco_) throw std::runtime_error(
-            "ccrba_mujoco unavailable: floating-base .so with ccrba only "
-            "(re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<CT> out({batch, 6 * num_vel_ + 6});
-        int rc = fn_ccrba_mujoco_(q.data(), qd.data(), out.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("grid_rbd_ccrba_mujoco failed: rc=" + std::to_string(rc));
+        check_array_2d(u, batch, num_joints_, "u");
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
+        int rc = fn_fd_grad_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc == 3) throw std::runtime_error(
+            "forward_dynamics_gradient not built into this robot .so — add "
+            "'forward_dynamics_gradient' to algorithm_list in register_robot() "
+            "and rebuild");
+        if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_gradient failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    // ─── energy_mujoco ───────────────────────────────────────────────────────
-    // MuJoCo-convention energy(q, qd, gravity) -> (batch, 3): [KE, PE, KE+PE].
-    // The energies are frame-invariant; the kernel only converts mjx-native inputs.
+    bool has_forward_dynamics_gradient_mujoco() const { return fn_fd_grad_mujoco_ != nullptr; }
+    // forward_dynamics_gradient_mujoco(q, qd, u, gravity, f_ext_opt) -> (batch, num_vel_, 2 * num_vel_)
+    py::array_t<CT> forward_dynamics_gradient_mujoco(arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
+    {
+        if (!fn_fd_grad_mujoco_) throw std::runtime_error(
+            "forward_dynamics_gradient_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        arr_t fe_hold;
+        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
+        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
+        int rc = fn_fd_grad_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
+        if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_gradient_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // idsva_so(q, qd, qdd_opt, second_order_tensor_size, gravity) -> (batch, second_order_tensor_size)
+    py::array_t<CT> idsva_so(arr_t q, arr_t qd, py::object qdd_opt, int second_order_tensor_size, CT gravity)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_joints_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<CT> out({batch, second_order_tensor_size});
+        int rc = fn_idsva_so_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
+        if (rc == 3) throw std::runtime_error(
+            "idsva_so not built into this robot .so — add 'idsva_so_body_frame' "
+            "to algorithm_list in register_robot() and rebuild");
+        if (rc != 0) throw std::runtime_error("grid_rbd_idsva_so failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_idsva_so_mujoco() const { return fn_idsva_so_mujoco_ != nullptr; }
+    // idsva_so_mujoco(q, qd, qdd_opt, second_order_tensor_size, gravity) -> (batch, second_order_tensor_size)
+    py::array_t<CT> idsva_so_mujoco(arr_t q, arr_t qd, py::object qdd_opt, int second_order_tensor_size, CT gravity)
+    {
+        if (!fn_idsva_so_mujoco_) throw std::runtime_error(
+            "idsva_so_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_joints_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<CT> out({batch, second_order_tensor_size});
+        int rc = fn_idsva_so_mujoco_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_idsva_so_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // fdsva_so(q, qd, u, second_order_tensor_size, gravity) -> (batch, second_order_tensor_size)
+    py::array_t<CT> fdsva_so(arr_t q, arr_t qd, arr_t u, int second_order_tensor_size, CT gravity)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        py::array_t<CT> out({batch, second_order_tensor_size});
+        int rc = fn_fdsva_so_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity);
+        if (rc == 3) throw std::runtime_error(
+            "fdsva_so not built into this robot .so — add 'fdsva_so' to "
+            "algorithm_list in register_robot() and rebuild");
+        if (rc != 0) throw std::runtime_error("grid_rbd_fdsva_so failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_fdsva_so_mujoco() const { return fn_fdsva_so_mujoco_ != nullptr; }
+    // fdsva_so_mujoco(q, qd, u, second_order_tensor_size, gravity) -> (batch, second_order_tensor_size)
+    py::array_t<CT> fdsva_so_mujoco(arr_t q, arr_t qd, arr_t u, int second_order_tensor_size, CT gravity)
+    {
+        if (!fn_fdsva_so_mujoco_) throw std::runtime_error(
+            "fdsva_so_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        py::array_t<CT> out({batch, second_order_tensor_size});
+        int rc = fn_fdsva_so_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_fdsva_so_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // inverse_dynamics_regressor(q, qd, qdd_opt, gravity) -> (batch, num_vel_ * 10 * num_bodies_)
+    py::array_t<CT> inverse_dynamics_regressor(arr_t q, arr_t qd, py::object qdd_opt, CT gravity)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_joints_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<CT> out({batch, num_vel_ * 10 * num_bodies_});
+        int rc = fn_id_regressor_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
+        if (rc == 3) throw std::runtime_error(
+            "inverse_dynamics_regressor not built into this robot .so — add "
+            "'inverse_dynamics_regressor' to algorithm_list in register_robot() "
+            "and rebuild");
+        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_regressor failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_inverse_dynamics_regressor_mujoco() const { return fn_id_regressor_mujoco_ != nullptr; }
+    // inverse_dynamics_regressor_mujoco(q, qd, qdd_opt, gravity) -> (batch, num_vel_ * 10 * num_bodies_)
+    py::array_t<CT> inverse_dynamics_regressor_mujoco(arr_t q, arr_t qd, py::object qdd_opt, CT gravity)
+    {
+        if (!fn_id_regressor_mujoco_) throw std::runtime_error(
+            "inverse_dynamics_regressor_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        const CT* qdd_ptr = nullptr;
+        if (!qdd_opt.is_none()) {
+            auto qdd = qdd_opt.cast<arr_t>();
+            check_array_2d(qdd, batch, num_joints_, "qdd");
+            qdd_ptr = qdd.data();
+        }
+        py::array_t<CT> out({batch, num_vel_ * 10 * num_bodies_});
+        int rc = fn_id_regressor_mujoco_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_regressor_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // integrator_gradient(q, qd, u, it, gravity) -> (batch, 2 * num_vel_ * 3 * num_vel_)
+    py::array_t<CT> integrator_gradient(arr_t q, arr_t qd, arr_t u, CT dt, int it, CT gravity)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        py::array_t<CT> out({batch, 2 * num_vel_ * 3 * num_vel_});
+        int rc = fn_integrator_grad_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
+        if (rc == 3) throw std::runtime_error(
+            "integrator_gradient not built into this robot .so — add "
+            "'integrator_gradient' to algorithm_list in register_robot() and "
+            "rebuild");
+        if (rc != 0) throw std::runtime_error("grid_rbd_integrator_gradient failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_integrator_gradient_mujoco() const { return fn_integrator_grad_mujoco_ != nullptr; }
+    // integrator_gradient_mujoco(q, qd, u, it, gravity) -> (batch, 2 * num_vel_ * 3 * num_vel_)
+    py::array_t<CT> integrator_gradient_mujoco(arr_t q, arr_t qd, arr_t u, CT dt, int it, CT gravity)
+    {
+        if (!fn_integrator_grad_mujoco_) throw std::runtime_error(
+            "integrator_gradient_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        check_array_2d(u, batch, num_joints_, "u");
+        py::array_t<CT> out({batch, 2 * num_vel_ * 3 * num_vel_});
+        int rc = fn_integrator_grad_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
+        if (rc == 3) throw std::runtime_error(
+            "integrator_gradient_mujoco: only EULER/SI-EULER supported");
+        if (rc != 0) throw std::runtime_error("grid_rbd_integrator_gradient_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // kinetic_energy_regressor(q, qd, gravity) -> (batch, 10 * num_bodies_)
+    py::array_t<CT> kinetic_energy_regressor(arr_t q, arr_t qd, CT gravity)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<CT> out({batch, 10 * num_bodies_});
+        int rc = fn_kinetic_energy_regressor_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_kinetic_energy_regressor failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_kinetic_energy_regressor_mujoco() const { return fn_kinetic_energy_regressor_mujoco_ != nullptr; }
+    // kinetic_energy_regressor_mujoco(q, qd, gravity) -> (batch, 10 * num_bodies_)
+    py::array_t<CT> kinetic_energy_regressor_mujoco(arr_t q, arr_t qd, CT gravity)
+    {
+        if (!fn_kinetic_energy_regressor_mujoco_) throw std::runtime_error(
+            "kinetic_energy_regressor_mujoco unavailable: floating-base .so "
+            "only (re-register with force_rebuild=True)");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<CT> out({batch, 10 * num_bodies_});
+        int rc = fn_kinetic_energy_regressor_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_kinetic_energy_regressor_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // potential_energy_regressor(q, gravity) -> (batch, 10 * num_bodies_)
+    py::array_t<CT> potential_energy_regressor(arr_t q, CT gravity)
+    {
+        int batch = check_q(q, "potential_energy_regressor");
+        py::array_t<CT> out({batch, 10 * num_bodies_});
+        int rc = fn_potential_energy_regressor_(q.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_potential_energy_regressor failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_potential_energy_regressor_mujoco() const { return fn_potential_energy_regressor_mujoco_ != nullptr; }
+    // potential_energy_regressor_mujoco(q, gravity) -> (batch, 10 * num_bodies_)
+    py::array_t<CT> potential_energy_regressor_mujoco(arr_t q, CT gravity)
+    {
+        if (!fn_potential_energy_regressor_mujoco_) throw std::runtime_error(
+            "potential_energy_regressor_mujoco unavailable: floating-base .so "
+            "only (re-register with force_rebuild=True)");
+        int batch = check_q(q, "potential_energy_regressor_mujoco");
+        py::array_t<CT> out({batch, 10 * num_bodies_});
+        int rc = fn_potential_energy_regressor_mujoco_(q.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_potential_energy_regressor_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // energy(q, qd, gravity) -> (batch, 3)
+    py::array_t<CT> energy(arr_t q, arr_t qd, CT gravity)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<CT> out({batch, 3});
+        int rc = fn_energy_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc == 3) throw std::runtime_error(
+            "energy not available for this robot: it is not generated for mimic "
+            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
+        if (rc != 0) throw std::runtime_error("grid_rbd_energy failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     bool has_energy_mujoco() const { return fn_energy_mujoco_ != nullptr; }
+    // energy_mujoco(q, qd, gravity) -> (batch, 3)
     py::array_t<CT> energy_mujoco(arr_t q, arr_t qd, CT gravity)
     {
         if (!fn_energy_mujoco_) throw std::runtime_error(
@@ -673,56 +872,22 @@ public:
         return out;
     }
 
-    // ─── kinetic_energy_regressor_mujoco ─────────────────────────────────────
-    // MuJoCo-convention y_KE -> (batch, 10*NUM_BODIES). Frame-invariant regressor;
-    // the kernel only converts the mjx-native inputs (quat reorder + qd reframe).
-    bool has_kinetic_energy_regressor_mujoco() const { return fn_kinetic_energy_regressor_mujoco_ != nullptr; }
-    py::array_t<CT> kinetic_energy_regressor_mujoco(arr_t q, arr_t qd, CT gravity)
-    {
-        if (!fn_kinetic_energy_regressor_mujoco_) throw std::runtime_error(
-            "kinetic_energy_regressor_mujoco unavailable: floating-base .so only "
-            "(re-register with force_rebuild=True)");
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<CT> out({batch, 10 * num_bodies_});
-        int rc = fn_kinetic_energy_regressor_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_kinetic_energy_regressor_mujoco failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    // ─── potential_energy_regressor_mujoco ───────────────────────────────────
-    // MuJoCo-convention y_PE -> (batch, 10*NUM_BODIES). Frame-invariant regressor;
-    // the kernel only converts the mjx-native q (quaternion reorder).
-    bool has_potential_energy_regressor_mujoco() const { return fn_potential_energy_regressor_mujoco_ != nullptr; }
-    py::array_t<CT> potential_energy_regressor_mujoco(arr_t q, CT gravity)
-    {
-        if (!fn_potential_energy_regressor_mujoco_) throw std::runtime_error(
-            "potential_energy_regressor_mujoco unavailable: floating-base .so only "
-            "(re-register with force_rebuild=True)");
-        int batch = check_q(q, "potential_energy_regressor_mujoco");
-        py::array_t<CT> out({batch, 10 * num_bodies_});
-        int rc = fn_potential_energy_regressor_mujoco_(q.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_potential_energy_regressor_mujoco failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    // ─── end_effector_pose ───────────────────────────────────────────────────
-    py::array_t<CT> end_effector_pose(
-        arr_t q)
+    // end_effector_pose(q) -> (batch, 6 * num_ees_)
+    py::array_t<CT> end_effector_pose(arr_t q)
     {
         int batch = check_q(q, "end_effector_pose");
         py::array_t<CT> out({batch, 6 * num_ees_});
         int rc = fn_ee_pose_(q.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error(
-            "end_effector_pose not built into this robot .so — add 'end_effector_pose' "
-            "to algorithm_list in register_robot() and rebuild");
+            "end_effector_pose not built into this robot .so — add "
+            "'end_effector_pose' to algorithm_list in register_robot() and "
+            "rebuild");
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    // MuJoCo-convention end_effector_pose(q) -> (batch, 6*NUM_EES). Pose is
-    // frame-INVARIANT; the native kernel reorders the mjx quaternion (latent-bug
-    // path like osc_inertia). Floating-base only.
     bool has_end_effector_pose_mujoco() const { return fn_ee_pose_mujoco_ != nullptr; }
+    // end_effector_pose_mujoco(q) -> (batch, 6 * num_ees_)
     py::array_t<CT> end_effector_pose_mujoco(arr_t q)
     {
         if (!fn_ee_pose_mujoco_) throw std::runtime_error(
@@ -734,41 +899,22 @@ public:
         return out;
     }
 
-    // ─── fk_batched (large-batch FK, pos+quat) ───────────────────────────────
-    // Input  q:     (batch, NUM_POS)
-    // Output pose7: (batch, 7) = [tx,ty,tz, qw,qx,qy,qz]
-    // use_warp selects the warp-cooperative per-sample inner.
-    py::array_t<CT> fk_batched(
-        arr_t q,
-        bool use_warp)
-    {
-        int batch = check_q(q, "fk_batched");
-        py::array_t<CT> out({batch, 7});
-        int rc = fn_fk_batched_(q.data(), out.mutable_data(), batch, use_warp ? 1 : 0);
-        if (rc == 3) throw std::runtime_error(
-            "fk_batched: not supported for this robot (floating-base / mimic)");
-        if (rc != 0) throw std::runtime_error("grid_rbd_fk_batched failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    py::array_t<CT> end_effector_pose_gradient(
-        arr_t q)
+    // end_effector_pose_gradient(q) -> (batch, 6 * num_ees_, num_vel_)
+    py::array_t<CT> end_effector_pose_gradient(arr_t q)
     {
         int batch = check_q(q, "end_effector_pose_gradient");
-        // d/dv tangent (pinocchio convention): (batch, 6*NUM_EES, NV)
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_});
         int rc = fn_ee_pose_grad_(q.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error(
             "end_effector_pose_gradient not built into this robot .so — add "
-            "'end_effector_pose_gradient' to algorithm_list in register_robot() and rebuild");
+            "'end_effector_pose_gradient' to algorithm_list in register_robot() "
+            "and rebuild");
         if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    // MuJoCo-convention end_effector_pose Jacobian (q) -> (batch, 6*NUM_EES, NV)
-    // in the mjx frame (base-linear column reframe baked into the kernel).
-    // Floating-base only.
     bool has_end_effector_pose_gradient_mujoco() const { return fn_ee_pose_grad_mujoco_ != nullptr; }
+    // end_effector_pose_gradient_mujoco(q) -> (batch, 6 * num_ees_, num_vel_)
     py::array_t<CT> end_effector_pose_gradient_mujoco(arr_t q)
     {
         if (!fn_ee_pose_grad_mujoco_) throw std::runtime_error(
@@ -780,10 +926,22 @@ public:
         return out;
     }
 
-    // MuJoCo-convention end_effector_pose Hessian (q) -> (batch, 6*NUM_EES, NV, NV).
-    // Double column-reframe + symmetrized base-rotation frame term baked in-kernel.
-    // Floating-base only.
+    // end_effector_pose_hessian(q) -> (batch, 6 * num_ees_, num_vel_, num_vel_)
+    py::array_t<CT> end_effector_pose_hessian(arr_t q)
+    {
+        int batch = check_q(q, "end_effector_pose_hessian");
+        py::array_t<CT> out({batch, 6 * num_ees_, num_vel_, num_vel_});
+        int rc = fn_ee_pose_hessian_(q.data(), out.mutable_data(), batch);
+        if (rc == 3) throw std::runtime_error(
+            "end_effector_pose_hessian not built into this robot .so — add "
+            "'end_effector_pose_hessian' to algorithm_list in register_robot() "
+            "and rebuild");
+        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_hessian failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
     bool has_end_effector_pose_hessian_mujoco() const { return fn_ee_pose_hessian_mujoco_ != nullptr; }
+    // end_effector_pose_hessian_mujoco(q) -> (batch, 6 * num_ees_, num_vel_, num_vel_)
     py::array_t<CT> end_effector_pose_hessian_mujoco(arr_t q)
     {
         if (!fn_ee_pose_hessian_mujoco_) throw std::runtime_error(
@@ -795,329 +953,341 @@ public:
         return out;
     }
 
-    // ─── inverse_dynamics_gradient / forward_dynamics_gradient ───────────────────────────────────
-    py::array_t<CT> inverse_dynamics_gradient(
-        arr_t q,
-        arr_t qd,
-        py::object qdd_opt,
-        CT gravity,
-        py::object f_ext_opt)
+    // fk_batched(q, use_warp) -> (batch, 7)
+    py::array_t<CT> fk_batched(arr_t q, bool use_warp)
     {
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        const CT* qdd_ptr = nullptr;
-        if (!qdd_opt.is_none()) {
-            auto qdd = qdd_opt.cast<
-                arr_t>();
-            check_array_2d(qdd, batch, num_joints_, "qdd");
-            qdd_ptr = qdd.data();
-        }
-        arr_t fe_hold;
-        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        // dc/d(q,qd) is nv x 2nv (tangent-space). FIXED base: nv == num_joints_;
-        // FLOATING base: nv = num_vel_ (the kernel writes 2*NUM_VEL*NUM_VEL).
-        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
-        int rc = fn_inverse_dynamics_gradient_(q.data(), qd.data(), qdd_ptr,
-                               out.mutable_data(), batch, gravity, fe_ptr);
+        int batch = check_q(q, "fk_batched");
+        py::array_t<CT> out({batch, 7});
+        int rc = fn_fk_batched_(q.data(), out.mutable_data(), batch, use_warp ? 1 : 0);
         if (rc == 3) throw std::runtime_error(
-            "inverse_dynamics_gradient not built into this robot .so — add "
-            "'inverse_dynamics_gradient' to algorithm_list in register_robot() and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_gradient failed: rc=" + std::to_string(rc));
+            "fk_batched: not supported for this robot (floating-base / mimic)");
+        if (rc != 0) throw std::runtime_error("grid_rbd_fk_batched failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    bool has_inverse_dynamics_gradient_mujoco() const { return fn_inverse_dynamics_gradient_mujoco_ != nullptr; }
-    py::array_t<CT> inverse_dynamics_gradient_mujoco(
-        arr_t q, arr_t qd, arr_t qdd, CT gravity, py::object f_ext_opt)
+    // frame_jacobian(q, target_jid, reference_frame) -> (batch, 6 * num_vel_)
+    py::array_t<CT> frame_jacobian(arr_t q, int target_jid, int reference_frame)
     {
-        if (!fn_inverse_dynamics_gradient_mujoco_) throw std::runtime_error(
-            "inverse_dynamics_gradient_mujoco unavailable: floating-base .so only");
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        check_array_2d(qdd, batch, num_joints_, "qdd");
-        arr_t fe_hold;
-        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
-        int rc = fn_inverse_dynamics_gradient_mujoco_(q.data(), qd.data(), qdd.data(),
-                               out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_gradient_mujoco failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    py::array_t<CT> forward_dynamics_gradient(
-        arr_t q,
-        arr_t qd,
-        arr_t u,
-        CT gravity,
-        py::object f_ext_opt)
-    {
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        check_array_2d(u, batch, num_joints_, "u");
-        arr_t fe_hold;
-        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        // dqdd/d(q,qd) is nv x 2nv (tangent-space). FIXED base: nv == num_joints_;
-        // FLOATING base: nv = num_vel_ (the kernel writes 2*NUM_VEL*NUM_VEL).
-        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
-        int rc = fn_fd_grad_(q.data(), qd.data(), u.data(),
-                             out.mutable_data(), batch, gravity, fe_ptr);
+        int batch = check_q(q, "frame_jacobian");
+        py::array_t<CT> out({batch, 6 * num_vel_});
+        int rc = fn_frame_jacobian_(q.data(), out.mutable_data(), batch, target_jid, reference_frame);
         if (rc == 3) throw std::runtime_error(
-            "forward_dynamics_gradient not built into this robot .so — add "
-            "'forward_dynamics_gradient' to algorithm_list in register_robot() and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_gradient failed: rc=" + std::to_string(rc));
+            "frame_jacobian not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    bool has_forward_dynamics_gradient_mujoco() const { return fn_fd_grad_mujoco_ != nullptr; }
-    py::array_t<CT> forward_dynamics_gradient_mujoco(
-        arr_t q, arr_t qd, arr_t u, CT gravity, py::object f_ext_opt)
+    bool has_frame_jacobian_mujoco() const { return fn_frame_jacobian_mujoco_ != nullptr; }
+    // frame_jacobian_mujoco(q, target_jid, reference_frame) -> (batch, 6 * num_vel_)
+    py::array_t<CT> frame_jacobian_mujoco(arr_t q, int target_jid, int reference_frame)
     {
-        if (!fn_fd_grad_mujoco_) throw std::runtime_error(
-            "forward_dynamics_gradient_mujoco unavailable: floating-base .so only");
+        if (!fn_frame_jacobian_mujoco_) throw std::runtime_error(
+            "frame_jacobian_mujoco unavailable: floating-base .so with "
+            "frame_jacobian only");
+        int batch = check_q(q, "frame_jacobian_mujoco");
+        py::array_t<CT> out({batch, 6 * num_vel_});
+        int rc = fn_frame_jacobian_mujoco_(q.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // frame_jacobian_dot(q, qd, target_jid, reference_frame) -> (batch, 6 * num_vel_)
+    py::array_t<CT> frame_jacobian_dot(arr_t q, arr_t qd, int target_jid, int reference_frame)
+    {
         int batch = check_inputs_2d(q, qd, num_joints_);
-        check_array_2d(u, batch, num_joints_, "u");
-        arr_t fe_hold;
-        const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
-        py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
-        int rc = fn_fd_grad_mujoco_(q.data(), qd.data(), u.data(),
-                                    out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_gradient_mujoco failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    // ─── end_effector_pose_hessian ───────────────────────────────────────────
-    py::array_t<CT> end_effector_pose_hessian(
-        arr_t q)
-    {
-        int batch = check_q(q, "end_effector_pose_hessian");
-        py::array_t<CT> out({batch, 6 * num_ees_, num_vel_, num_vel_});
-        int rc = fn_ee_pose_hessian_(q.data(), out.mutable_data(), batch);
+        py::array_t<CT> out({batch, 6 * num_vel_});
+        int rc = fn_frame_jacobian_dot_(q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
         if (rc == 3) throw std::runtime_error(
-            "end_effector_pose_hessian not built into this robot .so — add "
-            "'end_effector_pose_hessian' to algorithm_list in register_robot() and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_hessian failed: rc=" + std::to_string(rc));
+            "frame_jacobian_dot not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_dot failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    // ─── idsva_so / fdsva_so (raw second-order tensor surface) ───────────────
-    // Returns shape (B, SECOND_ORDER_TENSOR_SIZE) — flat, 4 * NV^3 floats per
-    // timestep. The Python side slices into the four NV^3 tensors.
-    py::array_t<CT> idsva_so(
-        arr_t q,
-        arr_t qd,
-        py::object qdd_opt,
-        int second_order_tensor_size,
-        CT gravity)
+    bool has_frame_jacobian_dot_mujoco() const { return fn_frame_jacobian_dot_mujoco_ != nullptr; }
+    // frame_jacobian_dot_mujoco(q, qd, target_jid, reference_frame) -> (batch, 6 * num_vel_)
+    py::array_t<CT> frame_jacobian_dot_mujoco(arr_t q, arr_t qd, int target_jid, int reference_frame)
     {
+        if (!fn_frame_jacobian_dot_mujoco_) throw std::runtime_error(
+            "frame_jacobian_dot_mujoco unavailable: floating-base .so with "
+            "frame_jacobian only");
         int batch = check_inputs_2d(q, qd, num_joints_);
-        const CT* qdd_ptr = nullptr;
-        if (!qdd_opt.is_none()) {
-            auto qdd = qdd_opt.cast<
-                arr_t>();
-            check_array_2d(qdd, batch, num_joints_, "qdd");
-            qdd_ptr = qdd.data();
-        }
-        py::array_t<CT> out({batch, second_order_tensor_size});
-        int rc = fn_idsva_so_(q.data(), qd.data(), qdd_ptr,
-                              out.mutable_data(), batch, gravity);
+        py::array_t<CT> out({batch, 6 * num_vel_});
+        int rc = fn_frame_jacobian_dot_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_dot_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // osc_inertia(q) -> (batch, 36)
+    py::array_t<CT> osc_inertia(arr_t q)
+    {
+        int batch = check_q(q, "osc_inertia");
+        py::array_t<CT> out({batch, 36});
+        int rc = fn_osc_inertia_(q.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error(
-            "idsva_so not built into this robot .so — add 'idsva_so_body_frame' "
-            "to algorithm_list in register_robot() and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_idsva_so failed: rc=" + std::to_string(rc));
+            "osc_inertia not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_osc_inertia failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    // MuJoCo-convention idsva_so -> (B, SECOND_ORDER_TENSOR_SIZE). Floating-base only.
-    bool has_idsva_so_mujoco() const { return fn_idsva_so_mujoco_ != nullptr; }
-    py::array_t<CT> idsva_so_mujoco(
-        arr_t q,
-        arr_t qd,
-        py::object qdd_opt,
-        int second_order_tensor_size,
-        CT gravity)
+    bool has_osc_inertia_mujoco() const { return fn_osc_inertia_mujoco_ != nullptr; }
+    // osc_inertia_mujoco(q) -> (batch, 36)
+    py::array_t<CT> osc_inertia_mujoco(arr_t q)
     {
-        if (!fn_idsva_so_mujoco_) throw std::runtime_error(
-            "idsva_so_mujoco unavailable: floating-base .so only");
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        const CT* qdd_ptr = nullptr;
-        if (!qdd_opt.is_none()) {
-            auto qdd = qdd_opt.cast<arr_t>();
-            check_array_2d(qdd, batch, num_joints_, "qdd");
-            qdd_ptr = qdd.data();
-        }
-        py::array_t<CT> out({batch, second_order_tensor_size});
-        int rc = fn_idsva_so_mujoco_(q.data(), qd.data(), qdd_ptr,
-                                     out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_idsva_so_mujoco failed: rc=" + std::to_string(rc));
+        if (!fn_osc_inertia_mujoco_) throw std::runtime_error(
+            "osc_inertia_mujoco unavailable: floating-base .so with "
+            "frame_jacobian only");
+        int batch = check_q(q, "osc_inertia_mujoco");
+        py::array_t<CT> out({batch, 36});
+        int rc = fn_osc_inertia_mujoco_(q.data(), out.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("grid_rbd_osc_inertia_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    // ─── inverse_dynamics_regressor: Y (NV x 10*NUM_BODIES), tau = Y . pi ─────
-    // Returns shape (B, NV*10*NUM_BODIES) flat, row-major NV x (10*NUM_BODIES) per
-    // timestep. The Python side reshapes into (B, NV, 10*NUM_BODIES).
-    py::array_t<CT> inverse_dynamics_regressor(
-        arr_t q,
-        arr_t qd,
-        py::object qdd_opt,
-        CT gravity)
+    // generalized_gravity(q, gravity) -> (batch, num_vel_)
+    py::array_t<CT> generalized_gravity(arr_t q, CT gravity)
+    {
+        int batch = check_q(q, "generalized_gravity");
+        py::array_t<CT> out({batch, num_vel_});
+        int rc = fn_generalized_gravity_(q.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_generalized_gravity failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_generalized_gravity_mujoco() const { return fn_generalized_gravity_mujoco_ != nullptr; }
+    // generalized_gravity_mujoco(q, gravity) -> (batch, num_vel_)
+    py::array_t<CT> generalized_gravity_mujoco(arr_t q, CT gravity)
+    {
+        if (!fn_generalized_gravity_mujoco_) throw std::runtime_error(
+            "generalized_gravity_mujoco unavailable: floating-base .so only");
+        int batch = check_q(q, "generalized_gravity_mujoco");
+        py::array_t<CT> out({batch, num_vel_});
+        int rc = fn_generalized_gravity_mujoco_(q.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_generalized_gravity_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // nonlinear_effects(q, qd, gravity) -> (batch, num_vel_)
+    py::array_t<CT> nonlinear_effects(arr_t q, arr_t qd, CT gravity)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
-        const CT* qdd_ptr = nullptr;
-        if (!qdd_opt.is_none()) {
-            auto qdd = qdd_opt.cast<arr_t>();
-            check_array_2d(qdd, batch, num_joints_, "qdd");
-            qdd_ptr = qdd.data();
-        }
-        py::array_t<CT> out({batch, num_vel_ * 10 * num_bodies_});
-        int rc = fn_id_regressor_(q.data(), qd.data(), qdd_ptr,
-                                  out.mutable_data(), batch, gravity);
+        py::array_t<CT> out({batch, num_vel_});
+        int rc = fn_nonlinear_effects_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_nonlinear_effects failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_nonlinear_effects_mujoco() const { return fn_nonlinear_effects_mujoco_ != nullptr; }
+    // nonlinear_effects_mujoco(q, qd, gravity) -> (batch, num_vel_)
+    py::array_t<CT> nonlinear_effects_mujoco(arr_t q, arr_t qd, CT gravity)
+    {
+        if (!fn_nonlinear_effects_mujoco_) throw std::runtime_error(
+            "nonlinear_effects_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<CT> out({batch, num_vel_});
+        int rc = fn_nonlinear_effects_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_nonlinear_effects_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // coriolis_matrix(q, qd, gravity) -> (batch, num_vel_ * num_vel_)
+    py::array_t<CT> coriolis_matrix(arr_t q, arr_t qd, CT gravity)
+    {
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<CT> out({batch, num_vel_ * num_vel_});
+        int rc = fn_coriolis_matrix_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_coriolis_matrix failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_coriolis_matrix_mujoco() const { return fn_coriolis_matrix_mujoco_ != nullptr; }
+    // coriolis_matrix_mujoco(q, qd, gravity) -> (batch, num_vel_ * num_vel_)
+    py::array_t<CT> coriolis_matrix_mujoco(arr_t q, arr_t qd, CT gravity)
+    {
+        if (!fn_coriolis_matrix_mujoco_) throw std::runtime_error(
+            "coriolis_matrix_mujoco unavailable: floating-base .so only");
+        int batch = check_inputs_2d(q, qd, num_joints_);
+        py::array_t<CT> out({batch, num_vel_ * num_vel_});
+        int rc = fn_coriolis_matrix_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        if (rc != 0) throw std::runtime_error("grid_rbd_coriolis_matrix_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // com(q) -> (batch, 3 + 3 * num_vel_)
+    py::array_t<CT> com(arr_t q)
+    {
+        int batch = check_q(q, "com");
+        py::array_t<CT> out({batch, 3 + 3 * num_vel_});
+        int rc = fn_com_(q.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error(
-            "inverse_dynamics_regressor not built into this robot .so — add "
-            "'inverse_dynamics_regressor' to algorithm_list in register_robot() and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_regressor failed: rc=" + std::to_string(rc));
+            "com not available for this robot: it is not generated for mimic "
+            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
+        if (rc != 0) throw std::runtime_error("grid_rbd_com failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    // MuJoCo-convention inverse_dynamics_regressor. Floating-base only. The base-linear
-    // ROWS (0:3) rotate by R in-kernel (the rows are tangent-indexed generalized forces).
-    bool has_inverse_dynamics_regressor_mujoco() const { return fn_id_regressor_mujoco_ != nullptr; }
-    py::array_t<CT> inverse_dynamics_regressor_mujoco(
-        arr_t q,
-        arr_t qd,
-        py::object qdd_opt,
-        CT gravity)
+    bool has_com_mujoco() const { return fn_com_mujoco_ != nullptr; }
+    // com_mujoco(q) -> (batch, 3 + 3 * num_vel_)
+    py::array_t<CT> com_mujoco(arr_t q)
     {
-        if (!fn_id_regressor_mujoco_) throw std::runtime_error(
-            "inverse_dynamics_regressor_mujoco unavailable: floating-base .so only");
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        const CT* qdd_ptr = nullptr;
-        if (!qdd_opt.is_none()) {
-            auto qdd = qdd_opt.cast<arr_t>();
-            check_array_2d(qdd, batch, num_joints_, "qdd");
-            qdd_ptr = qdd.data();
-        }
-        py::array_t<CT> out({batch, num_vel_ * 10 * num_bodies_});
-        int rc = fn_id_regressor_mujoco_(q.data(), qd.data(), qdd_ptr,
-                                         out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_regressor_mujoco failed: rc=" + std::to_string(rc));
+        if (!fn_com_mujoco_) throw std::runtime_error(
+            "com_mujoco unavailable: floating-base .so with com only "
+            "(re-register with force_rebuild=True)");
+        int batch = check_q(q, "com_mujoco");
+        py::array_t<CT> out({batch, 3 + 3 * num_vel_});
+        int rc = fn_com_mujoco_(q.data(), out.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("grid_rbd_com_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    py::array_t<CT> fdsva_so(
-        arr_t q,
-        arr_t qd,
-        arr_t u,
-        int second_order_tensor_size,
-        CT gravity)
+    // ccrba(q, qd) -> (batch, 6 * num_vel_ + 6)
+    py::array_t<CT> ccrba(arr_t q, arr_t qd)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
-        check_array_2d(u, batch, num_joints_, "u");
-        py::array_t<CT> out({batch, second_order_tensor_size});
-        int rc = fn_fdsva_so_(q.data(), qd.data(), u.data(),
-                              out.mutable_data(), batch, gravity);
+        py::array_t<CT> out({batch, 6 * num_vel_ + 6});
+        int rc = fn_ccrba_(q.data(), qd.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error(
-            "fdsva_so not built into this robot .so — add 'fdsva_so' "
-            "to algorithm_list in register_robot() and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_fdsva_so failed: rc=" + std::to_string(rc));
+            "ccrba not available for this robot: it is not generated for mimic "
+            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
+        if (rc != 0) throw std::runtime_error("grid_rbd_ccrba failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    // MuJoCo-convention fdsva_so -> (B, SECOND_ORDER_TENSOR_SIZE). Floating-base only.
-    bool has_fdsva_so_mujoco() const { return fn_fdsva_so_mujoco_ != nullptr; }
-    py::array_t<CT> fdsva_so_mujoco(
-        arr_t q,
-        arr_t qd,
-        arr_t u,
-        int second_order_tensor_size,
-        CT gravity)
+    bool has_ccrba_mujoco() const { return fn_ccrba_mujoco_ != nullptr; }
+    // ccrba_mujoco(q, qd) -> (batch, 6 * num_vel_ + 6)
+    py::array_t<CT> ccrba_mujoco(arr_t q, arr_t qd)
     {
-        if (!fn_fdsva_so_mujoco_) throw std::runtime_error(
-            "fdsva_so_mujoco unavailable: floating-base .so only");
+        if (!fn_ccrba_mujoco_) throw std::runtime_error(
+            "ccrba_mujoco unavailable: floating-base .so with ccrba only "
+            "(re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
-        check_array_2d(u, batch, num_joints_, "u");
-        py::array_t<CT> out({batch, second_order_tensor_size});
-        int rc = fn_fdsva_so_mujoco_(q.data(), qd.data(), u.data(),
-                                     out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_fdsva_so_mujoco failed: rc=" + std::to_string(rc));
+        py::array_t<CT> out({batch, 6 * num_vel_ + 6});
+        int rc = fn_ccrba_mujoco_(q.data(), qd.data(), out.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("grid_rbd_ccrba_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    // integrator(q, qd, u, dt, it) -> x_kp1 (batch, NUM_POS + NUM_VEL).
-    // gravity is the signed gravitational acceleration (default -9.81) (baked in the wrapper).
-    py::array_t<CT> integrator(
-        arr_t q,
-        arr_t qd,
-        arr_t u,
-        CT dt, int it, CT gravity)
+    // dccrba(q) -> (batch, 6 * num_vel_ * num_vel_)
+    py::array_t<CT> dccrba(arr_t q)
     {
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        check_array_2d(u, batch, num_joints_, "u");
-        py::array_t<CT> out({batch, num_joints_ + num_vel_});
-        int rc = fn_integrator_(q.data(), qd.data(), u.data(),
-                                out.mutable_data(), batch, gravity, dt, it);
-        // rc=3 here = integrator not built into this .so (subset profile). The
-        // Python surface validates integrator_type into a 0-4 code before this
-        // call, so the dispatch-default rc=3 (unknown it) is unreachable.
+        int batch = check_q(q, "dccrba");
+        py::array_t<CT> out({batch, 6 * num_vel_ * num_vel_});
+        int rc = fn_dccrba_(q.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error(
-            "integrator not built into this robot .so — add 'integrator' "
-            "to algorithm_list in register_robot() and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_integrator failed: rc=" + std::to_string(rc));
+            "dccrba not available for this robot: it is not generated for mimic "
+            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
+        if (rc != 0) throw std::runtime_error("grid_rbd_dccrba failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    bool has_integrator_mujoco() const { return fn_integrator_mujoco_ != nullptr; }
-    py::array_t<CT> integrator_mujoco(
-        arr_t q, arr_t qd, arr_t u, CT dt, int it, CT gravity)
+    bool has_dccrba_mujoco() const { return fn_dccrba_mujoco_ != nullptr; }
+    // dccrba_mujoco(q) -> (batch, 6 * num_vel_ * num_vel_)
+    py::array_t<CT> dccrba_mujoco(arr_t q)
     {
-        if (!fn_integrator_mujoco_) throw std::runtime_error(
-            "integrator_mujoco unavailable: floating-base .so only");
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        check_array_2d(u, batch, num_joints_, "u");
-        py::array_t<CT> out({batch, num_joints_ + num_vel_});
-        int rc = fn_integrator_mujoco_(q.data(), qd.data(), u.data(),
-                                       out.mutable_data(), batch, gravity, dt, it);
-        if (rc == 3) throw std::runtime_error("integrator_mujoco: unsupported integrator_type for this build");
-        if (rc != 0) throw std::runtime_error("grid_rbd_integrator_mujoco failed: rc=" + std::to_string(rc));
+        if (!fn_dccrba_mujoco_) throw std::runtime_error(
+            "dccrba_mujoco unavailable: floating-base non-mimic .so only");
+        int batch = check_q(q, "dccrba_mujoco");
+        py::array_t<CT> out({batch, 6 * num_vel_ * num_vel_});
+        int rc = fn_dccrba_mujoco_(q.data(), out.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("grid_rbd_dccrba_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    // integrator_gradient(q, qd, u, dt, it) -> flat dAB (batch, 2*NV*3*NV),
-    // column-major per timestep ([d/dq | d/dqd | d/du]); reshaped Python-side.
-    py::array_t<CT> integrator_gradient(
-        arr_t q,
-        arr_t qd,
-        arr_t u,
-        CT dt, int it, CT gravity)
+    // cmm_time_variation(q, qd) -> (batch, 6 * num_vel_)
+    py::array_t<CT> cmm_time_variation(arr_t q, arr_t qd)
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
-        check_array_2d(u, batch, num_joints_, "u");
-        py::array_t<CT> out({batch, 2 * num_vel_ * 3 * num_vel_});
-        int rc = fn_integrator_grad_(q.data(), qd.data(), u.data(),
-                                     out.mutable_data(), batch, gravity, dt, it);
+        py::array_t<CT> out({batch, 6 * num_vel_});
+        int rc = fn_cmm_time_variation_(q.data(), qd.data(), out.mutable_data(), batch);
         if (rc == 3) throw std::runtime_error(
-            "integrator_gradient not built into this robot .so — add 'integrator_gradient' "
-            "to algorithm_list in register_robot() and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_integrator_gradient failed: rc=" + std::to_string(rc));
+            "cmm_time_variation not available for this robot: it is not "
+            "generated for mimic robots (the per-body Jacobian fold is not yet "
+            "mimic-reduced)");
+        if (rc != 0) throw std::runtime_error("grid_rbd_cmm_time_variation failed: rc=" + std::to_string(rc));
         return out;
     }
 
-    // MuJoCo-convention integrator_gradient -> (batch, 2*NV*3*NV). Floating-base only;
-    // EULER/SI-EULER only (rc=3 otherwise).
-    bool has_integrator_gradient_mujoco() const { return fn_integrator_grad_mujoco_ != nullptr; }
-    py::array_t<CT> integrator_gradient_mujoco(
-        arr_t q,
-        arr_t qd,
-        arr_t u,
-        CT dt, int it, CT gravity)
+    bool has_cmm_time_variation_mujoco() const { return fn_cmm_time_variation_mujoco_ != nullptr; }
+    // cmm_time_variation_mujoco(q, qd) -> (batch, 6 * num_vel_)
+    py::array_t<CT> cmm_time_variation_mujoco(arr_t q, arr_t qd)
     {
-        if (!fn_integrator_grad_mujoco_) throw std::runtime_error(
-            "integrator_gradient_mujoco unavailable: floating-base .so only");
+        if (!fn_cmm_time_variation_mujoco_) throw std::runtime_error(
+            "cmm_time_variation_mujoco unavailable: floating-base .so only");
         int batch = check_inputs_2d(q, qd, num_joints_);
-        check_array_2d(u, batch, num_joints_, "u");
-        py::array_t<CT> out({batch, 2 * num_vel_ * 3 * num_vel_});
-        int rc = fn_integrator_grad_mujoco_(q.data(), qd.data(), u.data(),
-                                            out.mutable_data(), batch, gravity, dt, it);
-        if (rc == 3) throw std::runtime_error("integrator_gradient_mujoco: only EULER/SI-EULER supported");
-        if (rc != 0) throw std::runtime_error("grid_rbd_integrator_gradient_mujoco failed: rc=" + std::to_string(rc));
+        py::array_t<CT> out({batch, 6 * num_vel_});
+        int rc = fn_cmm_time_variation_mujoco_(q.data(), qd.data(), out.mutable_data(), batch);
+        if (rc != 0) throw std::runtime_error("grid_rbd_cmm_time_variation_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
+
+    // end_effector_pose_runtime(q, target_jid, offset) -> (batch, 6)
+    py::array_t<CT> end_effector_pose_runtime(arr_t q, int target_jid, arr_t offset)
+    {
+        int batch = check_q(q, "end_effector_pose_runtime");
+        const CT* off_ptr = nullptr;
+        if (offset.size() == 16) off_ptr = offset.data();
+        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_runtime: offset must be length-16 (4x4 col-major) or empty");
+        py::array_t<CT> out({batch, 6});
+        int rc = fn_ee_pose_runtime_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
+        if (rc == 3) throw std::runtime_error(
+            "end_effector_pose_runtime not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_runtime failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_end_effector_pose_runtime_mujoco() const { return fn_ee_pose_runtime_mujoco_ != nullptr; }
+    // end_effector_pose_runtime_mujoco(q, target_jid, offset) -> (batch, 6)
+    py::array_t<CT> end_effector_pose_runtime_mujoco(arr_t q, int target_jid, arr_t offset)
+    {
+        if (!fn_ee_pose_runtime_mujoco_) throw std::runtime_error(
+            "end_effector_pose_runtime_mujoco unavailable: floating-base .so only");
+        int batch = check_q(q, "end_effector_pose_runtime_mujoco");
+        const CT* off_ptr = nullptr;
+        if (offset.size() == 16) off_ptr = offset.data();
+        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_runtime_mujoco: offset must be length-16 (4x4 col-major) or empty");
+        py::array_t<CT> out({batch, 6});
+        int rc = fn_ee_pose_runtime_mujoco_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
+        if (rc == 3) throw std::runtime_error(
+            "end_effector_pose_runtime_mujoco not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_runtime_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // end_effector_pose_gradient_runtime(q, target_jid, offset) -> (batch, 6 * num_vel_)
+    py::array_t<CT> end_effector_pose_gradient_runtime(arr_t q, int target_jid, arr_t offset)
+    {
+        int batch = check_q(q, "end_effector_pose_gradient_runtime");
+        const CT* off_ptr = nullptr;
+        if (offset.size() == 16) off_ptr = offset.data();
+        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_gradient_runtime: offset must be length-16 (4x4 col-major) or empty");
+        py::array_t<CT> out({batch, 6 * num_vel_});
+        int rc = fn_ee_pose_grad_runtime_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
+        if (rc == 3) throw std::runtime_error(
+            "end_effector_pose_gradient_runtime not generated for this robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient_runtime failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    bool has_end_effector_pose_gradient_runtime_mujoco() const { return fn_ee_pose_grad_runtime_mujoco_ != nullptr; }
+    // end_effector_pose_gradient_runtime_mujoco(q, target_jid, offset) -> (batch, 6 * num_vel_)
+    py::array_t<CT> end_effector_pose_gradient_runtime_mujoco(arr_t q, int target_jid, arr_t offset)
+    {
+        if (!fn_ee_pose_grad_runtime_mujoco_) throw std::runtime_error(
+            "end_effector_pose_gradient_runtime_mujoco unavailable: "
+            "floating-base .so only");
+        int batch = check_q(q, "end_effector_pose_gradient_runtime_mujoco");
+        const CT* off_ptr = nullptr;
+        if (offset.size() == 16) off_ptr = offset.data();
+        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_gradient_runtime_mujoco: offset must be length-16 (4x4 col-major) or empty");
+        py::array_t<CT> out({batch, 6 * num_vel_});
+        int rc = fn_ee_pose_grad_runtime_mujoco_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
+        if (rc == 3) throw std::runtime_error(
+            "end_effector_pose_gradient_runtime_mujoco not generated for this "
+            "robot .so");
+        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient_runtime_mujoco failed: rc=" + std::to_string(rc));
+        return out;
+    }
+
+    // ── END GENERATED PYBIND METHOD BODIES ──
 
     // ─── grid_plant surface (G1 binding layer) ───────────────────────────────
     //
@@ -1384,12 +1554,7 @@ public:
                                {2 * num_vel_, 3 * num_vel_ * 3 * num_vel_}, "only EULER/SI-EULER supported");
     }
 
-    // ─── centroidal / energy / general-frame kinematics (F2) ─────────────────
-    //
-    // Each takes q (or q,qd) of shape (batch, NUM_JOINTS) and returns the flat
-    // per-timestep gridData output buffer (the Python handle reshapes). The
-    // frame_jacobian family is opt-in codegen; its C-ABI symbol returns rc=3 if
-    // the family wasn't generated for this robot's .so.
+    // ─── shared input validators ─────────────────────────────────────────────
 
     // Validate a 2-D (batch, last_dim) input and return batch. `arr` names the
     // array in the shape error ("<name>: <arr> must be (batch, N)").
@@ -1410,170 +1575,16 @@ public:
         return check_2d(q, num_joints_, name, "q");
     }
 
-    // com(q) -> (batch, 3 + 3*NUM_VEL): [p_com(3); J_com(3 x NV, col-major)].
-    py::array_t<CT> com(
-        arr_t q)
-    {
-        int batch = check_q(q, "com");
-        py::array_t<CT> out({batch, 3 + 3 * num_vel_});
-        int rc = fn_com_(q.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error(
-            "com not available for this robot: it is not generated for mimic "
-            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
-        if (rc != 0) throw std::runtime_error("grid_rbd_com failed: rc=" + std::to_string(rc));
-        return out;
-    }
 
-    // ccrba(q, qd) -> (batch, 6*NUM_VEL + 6): [A(6 x NV, col-major); h(6)].
-    py::array_t<CT> ccrba(
-        arr_t q,
-        arr_t qd)
-    {
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<CT> out({batch, 6 * num_vel_ + 6});
-        int rc = fn_ccrba_(q.data(), qd.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error(
-            "ccrba not available for this robot: it is not generated for mimic "
-            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
-        if (rc != 0) throw std::runtime_error("grid_rbd_ccrba failed: rc=" + std::to_string(rc));
-        return out;
-    }
 
-    // energy(q, qd, gravity) -> (batch, 3): [KE, PE, KE+PE].
-    py::array_t<CT> energy(
-        arr_t q,
-        arr_t qd,
-        CT gravity)
-    {
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<CT> out({batch, 3});
-        int rc = fn_energy_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc == 3) throw std::runtime_error(
-            "energy not available for this robot: it is not generated for mimic "
-            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
-        if (rc != 0) throw std::runtime_error("grid_rbd_energy failed: rc=" + std::to_string(rc));
-        return out;
-    }
 
-    // generalized_gravity(q, gravity) -> (batch, NUM_VEL): g(q) = RNEA(q,0,0).
-    py::array_t<CT> generalized_gravity(
-        arr_t q,
-        CT gravity)
-    {
-        int batch = check_q(q, "generalized_gravity");
-        py::array_t<CT> out({batch, num_vel_});
-        int rc = fn_generalized_gravity_(q.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_generalized_gravity failed: rc=" + std::to_string(rc));
-        return out;
-    }
 
-    bool has_generalized_gravity_mujoco() const { return fn_generalized_gravity_mujoco_ != nullptr; }
-    py::array_t<CT> generalized_gravity_mujoco(
-        arr_t q,
-        CT gravity)
-    {
-        if (!fn_generalized_gravity_mujoco_) throw std::runtime_error(
-            "generalized_gravity_mujoco unavailable: floating-base .so only");
-        int batch = check_q(q, "generalized_gravity_mujoco");
-        py::array_t<CT> out({batch, num_vel_});
-        int rc = fn_generalized_gravity_mujoco_(q.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_generalized_gravity_mujoco failed: rc=" + std::to_string(rc));
-        return out;
-    }
 
-    // nonlinear_effects(q, qd, gravity) -> (batch, NUM_VEL): c(q,qd) = RNEA(q,qd,0).
-    py::array_t<CT> nonlinear_effects(
-        arr_t q,
-        arr_t qd,
-        CT gravity)
-    {
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<CT> out({batch, num_vel_});
-        int rc = fn_nonlinear_effects_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_nonlinear_effects failed: rc=" + std::to_string(rc));
-        return out;
-    }
 
-    // MuJoCo-convention nonlinear_effects(q, qd, gravity) -> (batch, NUM_VEL): mjx
-    // qfrc_bias. Floating-base .so only (the accel-couple is a floating-root effect).
-    bool has_nonlinear_effects_mujoco() const { return fn_nonlinear_effects_mujoco_ != nullptr; }
-    py::array_t<CT> nonlinear_effects_mujoco(
-        arr_t q,
-        arr_t qd,
-        CT gravity)
-    {
-        if (!fn_nonlinear_effects_mujoco_) throw std::runtime_error(
-            "nonlinear_effects_mujoco unavailable: floating-base .so only");
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<CT> out({batch, num_vel_});
-        int rc = fn_nonlinear_effects_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_nonlinear_effects_mujoco failed: rc=" + std::to_string(rc));
-        return out;
-    }
 
-    // frame_jacobian(q) -> (batch, 6*NUM_VEL): leaf-EE frame Jacobian (col-major,
-    // [linear;angular], LOCAL_WORLD_ALIGNED). Opt-in codegen: rc=3 if absent.
-    py::array_t<CT> frame_jacobian(
-        arr_t q,
-        int target_jid, int reference_frame)
-    {
-        int batch = check_q(q, "frame_jacobian");
-        py::array_t<CT> out({batch, 6 * num_vel_});
-        // target_jid < 0 / reference_frame < 0 => the C ABI uses the codegen
-        // leaf-EE / LWA defaults baked into the host wrapper.
-        int rc = fn_frame_jacobian_(q.data(), out.mutable_data(), batch, target_jid, reference_frame);
-        if (rc == 3) throw std::runtime_error("frame_jacobian not generated for this robot .so");
-        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian failed: rc=" + std::to_string(rc));
-        return out;
-    }
 
-    // frame_jacobian_dot(q, qd, target_jid, reference_frame) -> (batch, 6*NUM_VEL).
-    // Opt-in codegen: rc=3 if absent.
-    py::array_t<CT> frame_jacobian_dot(
-        arr_t q,
-        arr_t qd,
-        int target_jid, int reference_frame)
-    {
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<CT> out({batch, 6 * num_vel_});
-        int rc = fn_frame_jacobian_dot_(q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
-        if (rc == 3) throw std::runtime_error("frame_jacobian_dot not generated for this robot .so");
-        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_dot failed: rc=" + std::to_string(rc));
-        return out;
-    }
 
-    // osc_inertia(q) -> (batch, 36): 6x6 task inertia Lambda = (J Minv J^T)^-1
-    // at the leaf-EE frame (LWA). Opt-in codegen: rc=3 if absent.
-    py::array_t<CT> osc_inertia(
-        arr_t q)
-    {
-        int batch = check_q(q, "osc_inertia");
-        py::array_t<CT> out({batch, 36});
-        int rc = fn_osc_inertia_(q.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error("osc_inertia not generated for this robot .so");
-        if (rc != 0) throw std::runtime_error("grid_rbd_osc_inertia failed: rc=" + std::to_string(rc));
-        return out;
-    }
 
-    // end_effector_pose_runtime(q, target_jid, offset) -> (batch, 6) = [xyz; rpy]
-    // of target_jid at a runtime offset point. target_jid<0 => leaf-EE default;
-    // offset is a length-3 array or empty (=> frame origin). Single-target; the
-    // Python list API loops it over a jid list. Opt-in codegen: rc=3 if absent.
-    py::array_t<CT> end_effector_pose_runtime(
-        arr_t q,
-        int target_jid,
-        arr_t offset)
-    {
-        int batch = check_q(q, "end_effector_pose_runtime");
-        const CT* off_ptr = nullptr;
-        if (offset.size() == 16) off_ptr = offset.data();
-        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_runtime: offset must be length-16 (4x4 col-major) or empty");
-        py::array_t<CT> out({batch, 6});
-        int rc = fn_ee_pose_runtime_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
-        if (rc == 3) throw std::runtime_error("end_effector_pose_runtime not generated for this robot .so");
-        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_runtime failed: rc=" + std::to_string(rc));
-        return out;
-    }
 
     // tool_fext(q, wrench, jid, rc) -> (batch, 6*NUM_BODIES) joint-local f_ext from a
     // world-aligned tool-tip wrench at runtime (body jid, offset rc). Feed to
@@ -1593,163 +1604,9 @@ public:
         return out;
     }
 
-    // end_effector_pose_gradient_runtime(q, target_jid, offset) -> (batch, 6*NUM_VEL)
-    // col-major d[xyz; rpy]/dv of target_jid at a runtime offset point. Same
-    // conventions as end_effector_pose_runtime. Opt-in codegen: rc=3 if absent.
-    py::array_t<CT> end_effector_pose_gradient_runtime(
-        arr_t q,
-        int target_jid,
-        arr_t offset)
-    {
-        int batch = check_q(q, "end_effector_pose_gradient_runtime");
-        const CT* off_ptr = nullptr;
-        if (offset.size() == 16) off_ptr = offset.data();
-        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_gradient_runtime: offset must be length-16 (4x4 col-major) or empty");
-        py::array_t<CT> out({batch, 6 * num_vel_});
-        int rc = fn_ee_pose_grad_runtime_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
-        if (rc == 3) throw std::runtime_error("end_effector_pose_gradient_runtime not generated for this robot .so");
-        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient_runtime failed: rc=" + std::to_string(rc));
-        return out;
-    }
 
-    // MuJoCo-convention end_effector_pose_runtime -> (batch, 6). Floating-base only.
-    // Pose value is frame-INVARIANT; only the input quat is reordered in-kernel.
-    bool has_end_effector_pose_runtime_mujoco() const { return fn_ee_pose_runtime_mujoco_ != nullptr; }
-    py::array_t<CT> end_effector_pose_runtime_mujoco(
-        arr_t q, int target_jid, arr_t offset)
-    {
-        if (!fn_ee_pose_runtime_mujoco_) throw std::runtime_error(
-            "end_effector_pose_runtime_mujoco unavailable: floating-base .so only");
-        int batch = check_q(q, "end_effector_pose_runtime_mujoco");
-        const CT* off_ptr = nullptr;
-        if (offset.size() == 16) off_ptr = offset.data();
-        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_runtime_mujoco: offset must be length-16 (4x4 col-major) or empty");
-        py::array_t<CT> out({batch, 6});
-        int rc = fn_ee_pose_runtime_mujoco_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
-        if (rc == 3) throw std::runtime_error("end_effector_pose_runtime_mujoco not generated for this robot .so");
-        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_runtime_mujoco failed: rc=" + std::to_string(rc));
-        return out;
-    }
 
-    // MuJoCo-convention end_effector_pose_gradient_runtime -> (batch, 6*NUM_VEL)
-    // col-major. Floating-base only; base-linear columns reframe by R^T in-kernel.
-    bool has_end_effector_pose_gradient_runtime_mujoco() const { return fn_ee_pose_grad_runtime_mujoco_ != nullptr; }
-    py::array_t<CT> end_effector_pose_gradient_runtime_mujoco(
-        arr_t q, int target_jid, arr_t offset)
-    {
-        if (!fn_ee_pose_grad_runtime_mujoco_) throw std::runtime_error(
-            "end_effector_pose_gradient_runtime_mujoco unavailable: floating-base .so only");
-        int batch = check_q(q, "end_effector_pose_gradient_runtime_mujoco");
-        const CT* off_ptr = nullptr;
-        if (offset.size() == 16) off_ptr = offset.data();
-        else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_gradient_runtime_mujoco: offset must be length-16 (4x4 col-major) or empty");
-        py::array_t<CT> out({batch, 6 * num_vel_});
-        int rc = fn_ee_pose_grad_runtime_mujoco_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
-        if (rc == 3) throw std::runtime_error("end_effector_pose_gradient_runtime_mujoco not generated for this robot .so");
-        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient_runtime_mujoco failed: rc=" + std::to_string(rc));
-        return out;
-    }
 
-    // ─── PS5 value ops (coriolis / energy regressors / dccrba / cmm) ──────────
-
-    // coriolis_matrix(q, qd, gravity) -> (batch, NUM_VEL*NUM_VEL) row-major C(q,qd).
-    py::array_t<CT> coriolis_matrix(
-        arr_t q,
-        arr_t qd,
-        CT gravity)
-    {
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<CT> out({batch, num_vel_ * num_vel_});
-        int rc = fn_coriolis_matrix_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_coriolis_matrix failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    // kinetic_energy_regressor(q, qd, gravity) -> (batch, 10*NUM_BODIES) y_KE.
-    py::array_t<CT> kinetic_energy_regressor(
-        arr_t q,
-        arr_t qd,
-        CT gravity)
-    {
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<CT> out({batch, 10 * num_bodies_});
-        int rc = fn_kinetic_energy_regressor_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_kinetic_energy_regressor failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    // potential_energy_regressor(q, gravity) -> (batch, 10*NUM_BODIES) y_PE.
-    py::array_t<CT> potential_energy_regressor(
-        arr_t q,
-        CT gravity)
-    {
-        int batch = check_q(q, "potential_energy_regressor");
-        py::array_t<CT> out({batch, 10 * num_bodies_});
-        int rc = fn_potential_energy_regressor_(q.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_potential_energy_regressor failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    // dccrba(q) -> (batch, 6*NUM_VEL*NUM_VEL) dA/dq tensor. Not emitted for mimic
-    // robots (rc=3): the per-body Jacobian fold isn't mimic-reduced.
-    py::array_t<CT> dccrba(
-        arr_t q)
-    {
-        int batch = check_q(q, "dccrba");
-        py::array_t<CT> out({batch, 6 * num_vel_ * num_vel_});
-        int rc = fn_dccrba_(q.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error(
-            "dccrba not available for this robot: it is not generated for mimic "
-            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
-        if (rc != 0) throw std::runtime_error("grid_rbd_dccrba failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    // MuJoCo-convention dccrba(q) -> (batch, 6*NUM_VEL*NUM_VEL) dA/dq tensor. Double
-    // G^{-1} reframe + base-rotation frame term baked in-kernel. Floating-base only
-    // (and non-mimic, like the base dccrba).
-    bool has_dccrba_mujoco() const { return fn_dccrba_mujoco_ != nullptr; }
-    py::array_t<CT> dccrba_mujoco(
-        arr_t q)
-    {
-        if (!fn_dccrba_mujoco_) throw std::runtime_error(
-            "dccrba_mujoco unavailable: floating-base non-mimic .so only");
-        int batch = check_q(q, "dccrba_mujoco");
-        py::array_t<CT> out({batch, 6 * num_vel_ * num_vel_});
-        int rc = fn_dccrba_mujoco_(q.data(), out.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("grid_rbd_dccrba_mujoco failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    // cmm_time_variation(q, qd) -> (batch, 6*NUM_VEL) Adot. Not emitted for mimic
-    // robots (rc=3), same caveat as dccrba.
-    py::array_t<CT> cmm_time_variation(
-        arr_t q,
-        arr_t qd)
-    {
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<CT> out({batch, 6 * num_vel_});
-        int rc = fn_cmm_time_variation_(q.data(), qd.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error(
-            "cmm_time_variation not available for this robot: it is not generated "
-            "for mimic robots (the per-body Jacobian fold is not yet mimic-reduced)");
-        if (rc != 0) throw std::runtime_error("grid_rbd_cmm_time_variation failed: rc=" + std::to_string(rc));
-        return out;
-    }
-
-    // MuJoCo-convention cmm_time_variation(q, qd) -> (batch, 6*NUM_VEL) Adot in
-    // the mjx frame (column reframe baked into the kernel). Floating-base only.
-    bool has_cmm_time_variation_mujoco() const { return fn_cmm_time_variation_mujoco_ != nullptr; }
-    py::array_t<CT> cmm_time_variation_mujoco(arr_t q, arr_t qd)
-    {
-        if (!fn_cmm_time_variation_mujoco_) throw std::runtime_error(
-            "cmm_time_variation_mujoco unavailable: floating-base .so only");
-        int batch = check_inputs_2d(q, qd, num_joints_);
-        py::array_t<CT> out({batch, 6 * num_vel_});
-        int rc = fn_cmm_time_variation_mujoco_(q.data(), qd.data(), out.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("grid_rbd_cmm_time_variation_mujoco failed: rc=" + std::to_string(rc));
-        return out;
-    }
 
     // set_inertia_params(params) — D.4 / Phase 5 runtime-mutable inertia.
     // params is a flat (10*num_bodies,) array, body-indexed bodies 1..N, each a

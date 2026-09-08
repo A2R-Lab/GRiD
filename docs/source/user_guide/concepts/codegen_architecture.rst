@@ -270,6 +270,18 @@ a table edit, fails a plain ``pytest -q``. Only ``tool_fext``, ``fk_batched``,
 the four plant cost twins, and the plant/FFI/torch/pybind sections remain
 hand-written (bespoke by design).
 
+The same table also drives the **numpy Runner's pybind surface**:
+``grid_codegen/core_body_gen.py`` emits the generated region of
+``bindings/src/_core.cpp`` — the 61 spec-backed value/gradient/second-order
+methods plus their ``has_*_mujoco`` accessors — from each row's
+``inputs``/``py_out_dims``/``py_rc3_msg``/``py_twin_guard`` fields
+(``-m grid_codegen.core_body_gen`` to regenerate, ``--check`` gated by
+``test/test_core_generated_block.py``). Adding an algorithm's spec row
+therefore produces its wrapper C-ABI body, its mjx twin, AND its pybind
+method in one regeneration. The pybind ``.def`` list (with its user-facing
+docstrings), the plant family, and the metadata/overlay surface stay
+hand-written.
+
 See also
 --------
 
