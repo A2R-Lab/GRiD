@@ -646,7 +646,6 @@ public:
         int batch = check_q(q, "frame_jacobian_mujoco");
         py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_frame_jacobian_mujoco_(q.data(), out.mutable_data(), batch, target_jid, reference_frame);
-        if (rc == 3) throw std::runtime_error("frame_jacobian not generated for this robot .so");
         if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -659,7 +658,6 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_frame_jacobian_dot_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
-        if (rc == 3) throw std::runtime_error("frame_jacobian_dot not generated for this robot .so");
         if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_dot_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -672,7 +670,6 @@ public:
         int batch = check_q(q, "osc_inertia_mujoco");
         py::array_t<CT> out({batch, 36});
         int rc = fn_osc_inertia_mujoco_(q.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error("osc_inertia not generated for this robot .so");
         if (rc != 0) throw std::runtime_error("grid_rbd_osc_inertia_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -714,7 +711,6 @@ public:
         int batch = check_q(q, "com_mujoco");
         py::array_t<CT> out({batch, 3 + 3 * num_vel_});
         int rc = fn_com_mujoco_(q.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error("com not generated for this robot (reduced codegen profile)");  // defensive: the twin has no rc=3 stub
         if (rc != 0) throw std::runtime_error("grid_rbd_com_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -731,7 +727,6 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_ + 6});
         int rc = fn_ccrba_mujoco_(q.data(), qd.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error("ccrba not generated for this robot (reduced codegen profile)");  // defensive: the twin has no rc=3 stub
         if (rc != 0) throw std::runtime_error("grid_rbd_ccrba_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -748,7 +743,6 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 3});
         int rc = fn_energy_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc == 3) throw std::runtime_error("energy not generated for this robot (reduced codegen profile)");  // defensive: the twin has no rc=3 stub
         if (rc != 0) throw std::runtime_error("grid_rbd_energy_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
@@ -1965,7 +1959,6 @@ public:
         int batch = check_q(q, "dccrba_mujoco");
         py::array_t<CT> out({batch, 6 * num_vel_ * num_vel_});
         int rc = fn_dccrba_mujoco_(q.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error(
             "dccrba_mujoco not available for this robot: not generated for mimic robots");
         if (rc != 0) throw std::runtime_error("grid_rbd_dccrba_mujoco failed: rc=" + std::to_string(rc));
         return out;

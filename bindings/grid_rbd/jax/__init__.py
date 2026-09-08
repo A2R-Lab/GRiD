@@ -50,6 +50,8 @@ from typing import Any
 
 import numpy as np
 
+from .._handle import _integrator_code, _resolve_frame_args
+
 import grid_rbd as _grid_rbd
 from grid_rbd._handle import RobotHandle, SecondOrderID, SecondOrderFD
 
@@ -496,7 +498,7 @@ class JaxRobotHandle:
         with ``jax.vmap``: under a vmap the mapped slice is 1D, and the FFI
         calls carry ``vmap_method="broadcast_all"`` which re-adds the mapped
         axis and dispatches a single native (B, NJ) kernel. For 1D inputs we
-        return ``B = None`` (the batch only materializes inside the vmap).
+        the batch only materializes inside the vmap.
         """
         import jax.numpy as jnp
         cast = [jnp.asarray(a, dtype=self._np_dt) for a in arrays]
@@ -511,7 +513,7 @@ class JaxRobotHandle:
                 raise ValueError(
                     f"{name}: arg{i} ndim={a.ndim} != arg0 ndim={ndim0}")
         if ndim0 == 1:
-            return cast, None  # per-sample (vmap) — batch handled by broadcast_all
+            return cast  # per-sample (vmap) — batch handled by broadcast_all
         B = cast[0].shape[0]
         for i, a in enumerate(cast[1:], start=1):
             if a.shape[0] != B:
@@ -520,7 +522,7 @@ class JaxRobotHandle:
         if B > self.max_batch:
             raise ValueError(
                 f"{name}: batch={B} > max_batch={self.max_batch}")
-        return cast, B
+        return cast
 
     def _out(self, lead_from, *trailing):
         """Build a ShapeDtypeStruct whose leading dims mirror ``lead_from``
@@ -573,7 +575,6 @@ class JaxRobotHandle:
         import functools
         import jax
         import jax.numpy as jnp
-        import numpy as np
         nj, nv, nee = self.num_joints, self.num_vel, self.num_ees
 
         def _t(method, symbol):
@@ -845,10 +846,10 @@ class JaxRobotHandle:
         """
         import jax.numpy as jnp
         if qdd is None:
-            (q, qd), B = self._prep_2d("inverse_dynamics", q, qd)
+            (q, qd) = self._prep_2d("inverse_dynamics", q, qd)
             qdd_b = jnp.zeros_like(q)
         else:
-            (q, qd, qdd_b), B = self._prep_2d("inverse_dynamics", q, qd, qdd)
+            (q, qd, qdd_b) = self._prep_2d("inverse_dynamics", q, qd, qdd)
         fe = self._f_ext_or_zeros(q, f_ext)
         return self._differentiable(self._resolve_convention(_convention))["inverse_dynamics"](
             gravity, q, qd, qdd_b, fe)
@@ -870,7 +871,7 @@ class JaxRobotHandle:
         import jax.numpy as jnp
         conv = self._resolve_convention(_convention)
         target = self._mt(conv, "minv", "grid_rbd_jax_minv")
-        (q,), B = self._prep_2d("minv", q)
+        (q,) = self._prep_2d("minv", q)
         nv = self.num_vel
         flat = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(q)
         m = flat.reshape(q.shape[:-1] + (nv, nv))
@@ -892,7 +893,7 @@ class JaxRobotHandle:
         (for ∂qdd/∂q, ∂qdd/∂qd) and ``minv`` (∂qdd/∂u = M⁻¹), and
         ``jax.vmap``-able over the leading batch axis. ``f_ext`` is not differentiated.
         """
-        (q, qd, u), B = self._prep_2d("forward_dynamics", q, qd, u)
+        (q, qd, u) = self._prep_2d("forward_dynamics", q, qd, u)
         fe = self._f_ext_or_zeros(q, f_ext)
         return self._differentiable(self._resolve_convention(_convention))["forward_dynamics"](
             gravity, q, qd, u, fe)
@@ -912,7 +913,7 @@ class JaxRobotHandle:
 
         Returns (B, NJ). ``jax.vmap``-able over the leading batch axis.
         """
-        (q, qd), B = self._prep_2d("inverse_dynamics_wrt_params", q, qd)
+        (q, qd) = self._prep_2d("inverse_dynamics_wrt_params", q, qd)
         import jax.numpy as jnp
         params = jnp.asarray(params, dtype=self._np_dt)
         return self._differentiable()["inverse_dynamics_wrt_params"](gravity, q, qd, params)
@@ -929,7 +930,7 @@ class JaxRobotHandle:
 
         Returns (B, NJ). ``jax.vmap``-able over the leading batch axis.
         """
-        (q, qd, u), B = self._prep_2d("forward_dynamics_wrt_params", q, qd, u)
+        (q, qd, u) = self._prep_2d("forward_dynamics_wrt_params", q, qd, u)
         import jax.numpy as jnp
         params = jnp.asarray(params, dtype=self._np_dt)
         return self._differentiable()["forward_dynamics_wrt_params"](gravity, q, qd, u, params)
@@ -945,12 +946,11 @@ class JaxRobotHandle:
         rotated to the mjx frame (same covector transform as the τ value)."""
         import jax
         import jax.numpy as jnp
-        import numpy as np
         target = self._mt(_convention,
             "inverse_dynamics_regressor", "grid_rbd_jax_inverse_dynamics_regressor")
         if qdd is None:
             qdd = jnp.zeros_like(jnp.asarray(q, dtype=self._np_dt))
-        (q, qd, qdd), B = self._prep_2d("inverse_dynamics_regressor", q, qd, qdd)
+        (q, qd, qdd) = self._prep_2d("inverse_dynamics_regressor", q, qd, qdd)
         nv, npar = self.num_vel, 10 * self.num_bodies
         flat = jax.ffi.ffi_call(target, self._out(q, nv * npar), vmap_method="broadcast_all")(
             q, qd, qdd, gravity=self._np_dt(gravity))
@@ -961,12 +961,11 @@ class JaxRobotHandle:
         (B, NV, 10*NUM_BODIES), row-major (NV, 10*NB) per sample."""
         import jax
         import jax.numpy as jnp
-        import numpy as np
         target = _register_method_target(
             self._so_path, self._cache_key,
             "forward_dynamics_parameter_gradient",
             "grid_rbd_jax_forward_dynamics_parameter_gradient")
-        (q, qd, u), B = self._prep_2d("forward_dynamics_parameter_gradient", q, qd, u)
+        (q, qd, u) = self._prep_2d("forward_dynamics_parameter_gradient", q, qd, u)
         nv, npar = self.num_vel, 10 * self.num_bodies
         flat = jax.ffi.ffi_call(target, self._out(q, nv * npar), vmap_method="broadcast_all")(
             q, qd, u, gravity=self._np_dt(gravity))
@@ -982,9 +981,8 @@ class JaxRobotHandle:
         MuJoCo-convention and the returned ``qdd`` is in the mjx frame."""
         import jax
         import jax.numpy as jnp
-        import numpy as np
         target = self._mt(_convention, "aba", "grid_rbd_jax_aba")
-        (q, qd, u), B = self._prep_2d("aba", q, qd, u)
+        (q, qd, u) = self._prep_2d("aba", q, qd, u)
         fe = self._f_ext_or_zeros(q, f_ext)
         out_type = self._out(q, self.num_joints)
         return jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
@@ -1000,9 +998,8 @@ class JaxRobotHandle:
         mjx-frame mass matrix (G M G^T congruence, written full dense)."""
         import jax
         import jax.numpy as jnp
-        import numpy as np
         target = self._mt(_convention, "crba", "grid_rbd_jax_crba")
-        (q,), B = self._prep_2d("crba", q)
+        (q,) = self._prep_2d("crba", q)
         nv = self.num_vel
         flat = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(
             q, gravity=self._np_dt(gravity))
@@ -1023,9 +1020,8 @@ class JaxRobotHandle:
         With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
         and the returned g is in the mjx frame (base rows rotated in-kernel)."""
         import jax
-        import numpy as np
         target = self._mt(_convention, "generalized_gravity", "grid_rbd_jax_generalized_gravity")
-        (q,), B = self._prep_2d("generalized_gravity", q)
+        (q,) = self._prep_2d("generalized_gravity", q)
         nv = self.num_vel
         return jax.ffi.ffi_call(target, self._out(q, nv), vmap_method="broadcast_all")(
             q, gravity=self._np_dt(gravity))
@@ -1036,9 +1032,8 @@ class JaxRobotHandle:
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
         MuJoCo-convention and the returned bias matches MuJoCo's ``qfrc_bias``."""
         import jax
-        import numpy as np
         target = self._mt(_convention, "nonlinear_effects", "grid_rbd_jax_nonlinear_effects")
-        (q, qd), B = self._prep_2d("nonlinear_effects", q, qd)
+        (q, qd) = self._prep_2d("nonlinear_effects", q, qd)
         nv = self.num_vel
         return jax.ffi.ffi_call(target, self._out(q, nv), vmap_method="broadcast_all")(
             q, qd, gravity=self._np_dt(gravity))
@@ -1049,9 +1044,8 @@ class JaxRobotHandle:
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
         MuJoCo-convention; the energies are frame-INVARIANT (inputs converted in-kernel)."""
         import jax
-        import numpy as np
         target = self._mt(_convention, "energy", "grid_rbd_jax_energy")
-        (q, qd), B = self._prep_2d("energy", q, qd)
+        (q, qd) = self._prep_2d("energy", q, qd)
         return jax.ffi.ffi_call(target, self._out(q, 3), vmap_method="broadcast_all")(
             q, qd, gravity=self._np_dt(gravity))
 
@@ -1066,7 +1060,7 @@ class JaxRobotHandle:
         and the ``J_com`` columns are reframed (computed in-kernel)."""
         import jax
         target = self._mt(_convention, "com", "grid_rbd_jax_com")
-        (q,), B = self._prep_2d("com", q)
+        (q,) = self._prep_2d("com", q)
         nv = self.num_vel
         raw = jax.ffi.ffi_call(target, self._out(q, 3 + 3 * nv), vmap_method="broadcast_all")(q)
         lead = q.shape[:-1]
@@ -1085,7 +1079,7 @@ class JaxRobotHandle:
         the ``A`` columns are reframed (computed in-kernel)."""
         import jax
         target = self._mt(_convention, "ccrba", "grid_rbd_jax_ccrba")
-        (q, qd), B = self._prep_2d("ccrba", q, qd)
+        (q, qd) = self._prep_2d("ccrba", q, qd)
         nv = self.num_vel
         raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv + 6), vmap_method="broadcast_all")(q, qd)
         lead = q.shape[:-1]
@@ -1101,7 +1095,7 @@ class JaxRobotHandle:
         and the returned tensor is the dA/dq of the mjx CMM (same layout)."""
         import jax
         target = self._mt(_convention, "dccrba", "grid_rbd_jax_dccrba")
-        (q,), B = self._prep_2d("dccrba", q)
+        (q,) = self._prep_2d("dccrba", q)
         nv = self.num_vel
         raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv * nv), vmap_method="broadcast_all")(q)
         lead = q.shape[:-1]
@@ -1116,7 +1110,7 @@ class JaxRobotHandle:
         MuJoCo-convention and Ȧ has its columns reframed (computed in-kernel)."""
         import jax
         target = self._mt(_convention, "cmm_time_variation", "grid_rbd_jax_cmm_time_variation")
-        (q, qd), B = self._prep_2d("cmm_time_variation", q, qd)
+        (q, qd) = self._prep_2d("cmm_time_variation", q, qd)
         nv = self.num_vel
         raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(q, qd)
         # (B, 6*NV) col-major A[r + 6*c] -> (..., NV, 6) -> (..., 6, NV).
@@ -1130,9 +1124,8 @@ class JaxRobotHandle:
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
         MuJoCo-convention and the returned ``C`` is the mjx-frame Coriolis matrix."""
         import jax
-        import numpy as np
         target = self._mt(_convention, "coriolis_matrix", "grid_rbd_jax_coriolis_matrix")
-        (q, qd), B = self._prep_2d("coriolis_matrix", q, qd)
+        (q, qd) = self._prep_2d("coriolis_matrix", q, qd)
         nv = self.num_vel
         raw = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(
             q, qd, gravity=self._np_dt(gravity))
@@ -1145,10 +1138,9 @@ class JaxRobotHandle:
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
         MuJoCo-convention; the regressor is frame-INVARIANT (inputs converted in-kernel)."""
         import jax
-        import numpy as np
         target = self._mt(_convention,
             "kinetic_energy_regressor", "grid_rbd_jax_kinetic_energy_regressor")
-        (q, qd), B = self._prep_2d("kinetic_energy_regressor", q, qd)
+        (q, qd) = self._prep_2d("kinetic_energy_regressor", q, qd)
         npar = 10 * self.num_bodies
         return jax.ffi.ffi_call(target, self._out(q, npar), vmap_method="broadcast_all")(
             q, qd, gravity=self._np_dt(gravity))
@@ -1160,10 +1152,9 @@ class JaxRobotHandle:
         With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention;
         the regressor is frame-INVARIANT (input converted in-kernel)."""
         import jax
-        import numpy as np
         target = self._mt(_convention,
             "potential_energy_regressor", "grid_rbd_jax_potential_energy_regressor")
-        (q,), B = self._prep_2d("potential_energy_regressor", q)
+        (q,) = self._prep_2d("potential_energy_regressor", q)
         npar = 10 * self.num_bodies
         return jax.ffi.ffi_call(target, self._out(q, npar), vmap_method="broadcast_all")(
             q, gravity=self._np_dt(gravity))
@@ -1180,11 +1171,9 @@ class JaxRobotHandle:
         With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
         and the returned Jacobian is column-reframed ``J G⁻¹`` (mjx frame)."""
         import jax
-        import numpy as np
-        from .._handle import _resolve_frame_args
         target = self._mt(_convention, "frame_jacobian", "grid_rbd_jax_frame_jacobian")
         tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
-        (q,), B = self._prep_2d("frame_jacobian", q)
+        (q,) = self._prep_2d("frame_jacobian", q)
         nv = self.num_vel
         raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(
             q, target_jid=np.int64(tj), reference_frame=np.int64(rf))
@@ -1201,11 +1190,9 @@ class JaxRobotHandle:
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
         MuJoCo-convention and Jdot is column-reframed (mjx frame)."""
         import jax
-        import numpy as np
-        from .._handle import _resolve_frame_args
         target = self._mt(_convention, "frame_jacobian_dot", "grid_rbd_jax_frame_jacobian_dot")
         tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
-        (q, qd), B = self._prep_2d("frame_jacobian_dot", q, qd)
+        (q, qd) = self._prep_2d("frame_jacobian_dot", q, qd)
         nv = self.num_vel
         raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(
             q, qd, target_jid=np.int64(tj), reference_frame=np.int64(rf))
@@ -1219,7 +1206,7 @@ class JaxRobotHandle:
         kinematics build (Lambda is otherwise frame-INVARIANT)."""
         import jax
         target = self._mt(_convention, "osc_inertia", "grid_rbd_jax_osc_inertia")
-        (q,), B = self._prep_2d("osc_inertia", q)
+        (q,) = self._prep_2d("osc_inertia", q)
         raw = jax.ffi.ffi_call(target, self._out(q, 36), vmap_method="broadcast_all")(q)
         return raw.reshape(q.shape[:-1] + (6, 6))
 
@@ -1230,7 +1217,7 @@ class JaxRobotHandle:
         ``q``) via GRiD's analytic ``end_effector_pose_gradient`` (tangent-space
         Jacobian), and ``jax.vmap``-able over the leading batch axis.
         """
-        (q,), B = self._prep_2d("end_effector_pose", q)
+        (q,) = self._prep_2d("end_effector_pose", q)
         return self._differentiable(self._resolve_convention(_convention))["end_effector_pose"](q)
 
     def end_effector_pose_gradient(self, q, *, _convention=None):
@@ -1250,7 +1237,7 @@ class JaxRobotHandle:
         import jax.numpy as jnp
         target = self._mt(_convention,
             "end_effector_pose_gradient", "grid_rbd_jax_end_effector_pose_gradient")
-        (q,), B = self._prep_2d("end_effector_pose_gradient", q)
+        (q,) = self._prep_2d("end_effector_pose_gradient", q)
         nee = self.num_ees
         nv = self.num_vel
         out_type = self._out(q, 6 * nee * nv)
@@ -1271,7 +1258,7 @@ class JaxRobotHandle:
         import jax.numpy as jnp
         target = self._mt(_convention,
             "end_effector_pose_hessian", "grid_rbd_jax_end_effector_pose_hessian")
-        (q,), B = self._prep_2d("end_effector_pose_hessian", q)
+        (q,) = self._prep_2d("end_effector_pose_hessian", q)
         nee = self.num_ees
         nv = self.num_vel
         out_type = self._out(q, 6 * nee * nv * nv)
@@ -1296,12 +1283,11 @@ class JaxRobotHandle:
         the world pose VALUE is frame-invariant."""
         import jax
         import jax.numpy as jnp
-        import numpy as np
         target = self._mt(_convention,
             "end_effector_pose_runtime", "grid_rbd_jax_end_effector_pose_runtime")
         jids = self._base._resolve_ee_jids(ee_joint_names)
         offsets = self._base._normalize_ee_offsets(ee_offsets, len(jids))
-        (q,), B = self._prep_2d("end_effector_pose_runtime", q)
+        (q,) = self._prep_2d("end_effector_pose_runtime", q)
         out_type = self._out(q, 6)
         per_ee = []
         for jid, off in zip(jids, offsets):
@@ -1329,12 +1315,11 @@ class JaxRobotHandle:
         are reframed by R^T in-kernel (column-reframe class)."""
         import jax
         import jax.numpy as jnp
-        import numpy as np
         target = self._mt(_convention, "end_effector_pose_gradient_runtime",
             "grid_rbd_jax_end_effector_pose_gradient_runtime")
         jids = self._base._resolve_ee_jids(ee_joint_names)
         offsets = self._base._normalize_ee_offsets(ee_offsets, len(jids))
-        (q,), B = self._prep_2d("end_effector_pose_gradient_runtime", q)
+        (q,) = self._prep_2d("end_effector_pose_gradient_runtime", q)
         nv = self.num_vel
         out_type = self._out(q, 6 * nv)
         per_ee = []
@@ -1363,14 +1348,13 @@ class JaxRobotHandle:
         mjx-convention Jacobian (rows base-rotated, columns base-reframed)."""
         import jax
         import jax.numpy as jnp
-        import numpy as np
         target = self._mt(_convention,
             "inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient")
         if qdd is None:
-            (q, qd), B = self._prep_2d("inverse_dynamics_gradient", q, qd)
+            (q, qd) = self._prep_2d("inverse_dynamics_gradient", q, qd)
             qdd_b = jnp.zeros_like(q)
         else:
-            (q, qd, qdd_b), B = self._prep_2d("inverse_dynamics_gradient", q, qd, qdd)
+            (q, qd, qdd_b) = self._prep_2d("inverse_dynamics_gradient", q, qd, qdd)
         nv = self.num_vel
         out_type = self._out(q, 2 * nv * nv)
         raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
@@ -1388,10 +1372,9 @@ class JaxRobotHandle:
         mjx-convention Jacobian."""
         import jax
         import jax.numpy as jnp
-        import numpy as np
         target = self._mt(_convention,
             "forward_dynamics_gradient", "grid_rbd_jax_forward_dynamics_gradient")
-        (q, qd, u), B = self._prep_2d("forward_dynamics_gradient", q, qd, u)
+        (q, qd, u) = self._prep_2d("forward_dynamics_gradient", q, qd, u)
         nv = self.num_vel
         out_type = self._out(q, 2 * nv * nv)
         raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
@@ -1415,11 +1398,10 @@ class JaxRobotHandle:
         """
         import jax
         import jax.numpy as jnp
-        import numpy as np
         target = self._mt(_convention, "idsva_so", "grid_rbd_jax_idsva_so")
         if qdd is None:
             qdd = jnp.zeros_like(jnp.asarray(q, dtype=self._np_dt))
-        (q, qd, qdd), B = self._prep_2d("idsva_so", q, qd, qdd)
+        (q, qd, qdd) = self._prep_2d("idsva_so", q, qd, qdd)
         nv = self.num_vel
         out_type = self._out(q, 4 * nv ** 3)
         flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
@@ -1443,12 +1425,11 @@ class JaxRobotHandle:
         """
         import jax
         import jax.numpy as jnp
-        import numpy as np
         # mjx fdsva_so LANDED: _mt routes to grid_rbd_jax_fdsva_so_mujoco (the
         # MUJOCO_OUTPUT=true kernel; epilogue recomputes Minv/qdd/dqdd_du fresh into a
         # disjoint scratch band — the §1g/§1h liveness bug is fixed).
         target = self._mt(_convention, "fdsva_so", "grid_rbd_jax_fdsva_so")
-        (q, qd, u), B = self._prep_2d("fdsva_so", q, qd, u)
+        (q, qd, u) = self._prep_2d("fdsva_so", q, qd, u)
         nv = self.num_vel
         out_type = self._out(q, 4 * nv ** 3)
         flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
@@ -1469,12 +1450,11 @@ class JaxRobotHandle:
         With ``output_convention="mujoco"`` (floating base) inputs/outputs are
         MuJoCo-convention (global-additive base retract + reframed base velocity).
         """
-        import numpy as np
         import jax
         import jax.numpy as jnp
-        from .._handle import _integrator_code
         target = self._mt(_convention, "integrator", "grid_rbd_jax_integrator")
-        (q, qd, u), B = self._prep_2d("integrator", q, qd, u)
+        (q, qd, u) = self._prep_2d("integrator", q, qd, u)
+        B = q.shape[0]  # 2-D only here (direct ShapeDtypeStruct; not vmap-able)
         out_type = jax.ShapeDtypeStruct((B, self.num_joints + self.num_vel), self._np_dt)
         return jax.ffi.ffi_call(target, out_type)(
             q, qd, u, dt=self._np_dt(dt), it=np.int64(_integrator_code(integrator_type)),
@@ -1487,13 +1467,12 @@ class JaxRobotHandle:
 
         With ``output_convention="mujoco"`` (floating base) the state-transition
         Jacobian is in the mjx convention (retract tangent + reframed velocity)."""
-        import numpy as np
         import jax
         import jax.numpy as jnp
-        from .._handle import _integrator_code
         target = self._mt(_convention,
             "integrator_gradient", "grid_rbd_jax_integrator_gradient")
-        (q, qd, u), B = self._prep_2d("integrator_gradient", q, qd, u)
+        (q, qd, u) = self._prep_2d("integrator_gradient", q, qd, u)
+        B = q.shape[0]  # 2-D only here (direct ShapeDtypeStruct; not vmap-able)
         nv = self.num_vel
         out_type = jax.ShapeDtypeStruct((B, 2 * nv * 3 * nv), self._np_dt)
         flat = jax.ffi.ffi_call(target, out_type)(
@@ -1530,7 +1509,7 @@ class JaxRobotHandle:
                 raise ValueError(f"{name}: {k} must be 2D with batch={B}; got {a.shape}")
         if B > self.max_batch:
             raise ValueError(f"{name}: batch={B} > max_batch={self.max_batch}")
-        return cast, B
+        return cast
 
     def _cost_out_types(self, B, n_grad, n_hess):
         import jax
@@ -1573,7 +1552,6 @@ class JaxRobotHandle:
     def _barrier(self, name, symbol, var, lower, upper, mu, n):
         import jax
         import jax.numpy as jnp
-        import numpy as np
         target = _register_method_target(self._so_path, self._cache_key, name, symbol)
         cast, B = self._prep_plant(name, var=var, lower=lower, upper=upper)
         out_types = (
@@ -1612,8 +1590,6 @@ class JaxRobotHandle:
         and the returned next state is mjx-convention (global-additive base retract)."""
         import jax
         import jax.numpy as jnp
-        import numpy as np
-        from .._handle import _integrator_code
         target = self._mt(_convention, "plant_step", "grid_rbd_jax_plant_step")
         cast, B = self._prep_plant("plant_step", x=x, u=u)
         nx = self.num_joints + self.num_vel
@@ -1631,8 +1607,6 @@ class JaxRobotHandle:
         Jacobian is in the mjx convention."""
         import jax
         import jax.numpy as jnp
-        import numpy as np
-        from .._handle import _integrator_code
         target = self._mt(_convention,
             "plant_step_gradient", "grid_rbd_jax_plant_step_gradient")
         cast, B = self._prep_plant("plant_step_gradient", x=x, u=u)

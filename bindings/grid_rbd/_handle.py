@@ -400,12 +400,6 @@ class RobotHandle:
         :py:attr:`mujoco` view passes it instead of mutating shared state)."""
         return self._resolve_convention(convention) == "mujoco" and self.floating_base
 
-    # (Removed 2026-06-21: `_mjx_guard_unsupported` interim scaffold. The mjx
-    # codegen fusion has landed for ALL derivative/second-order surfaces —
-    # id/fd gradients, ee_pose gradient+hessian, idsva_so/fdsva_so — verified
-    # against the RBDReference mujoco oracle on jax+torch (~1e-5 fp32) and the
-    # 39/39 native-kernel test. The guard had zero call sites; nothing to gate.)
-
     # ─── runtime-mutable inertia (D.4 / Phase 5) ─────────────────────────────
 
     @property
