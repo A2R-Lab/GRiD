@@ -1959,7 +1959,6 @@ public:
         int batch = check_q(q, "dccrba_mujoco");
         py::array_t<CT> out({batch, 6 * num_vel_ * num_vel_});
         int rc = fn_dccrba_mujoco_(q.data(), out.mutable_data(), batch);
-            "dccrba_mujoco not available for this robot: not generated for mimic robots");
         if (rc != 0) throw std::runtime_error("grid_rbd_dccrba_mujoco failed: rc=" + std::to_string(rc));
         return out;
     }
