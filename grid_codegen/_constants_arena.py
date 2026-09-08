@@ -10,6 +10,28 @@ from .algo_registry import (ALGO_DESCRIPTORS, arena_ctx_from_codegen, compose_ar
                             compose_arena_rungs, ARENA_COMPOSED_KEYS, ARENA_RUNG_KEYS)
 
 
+def _tier_bytes_lines(macro, counts, linalg_arg=", GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()"):
+    """The tier-templated *_DYNAMIC_SHARED_MEM_BYTES helper as its ONE emitted
+    source line: three if-constexpr branches over the per-tier t_counts.
+    String-for-string identical to the hand-written wall it replaced (C3
+    table-drive, 2026-09-08). `linalg_arg` is the third grid_shared_arena_bytes
+    argument including its leading ", " ("" for the SO arenas)."""
+    return ["template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t " + macro + "() { "
+            "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(counts[0]) + ", TOPOLOGY_HELPERS_COUNT" + linalg_arg + "); "
+            "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(counts[1]) + ", TOPOLOGY_HELPERS_COUNT" + linalg_arg + "); "
+            "else                                 return grid_shared_arena_bytes<T>(" + str(counts[2]) + ", TOPOLOGY_HELPERS_COUNT" + linalg_arg + "); }"]
+
+
+def _tier_ternary_line(name, ret_type, vals):
+    """A per-tier constexpr ternary helper line: `template <int TIER> ... NAME()
+    { return (TIER == TIER_SHARED) ? v0 : (TIER == TIER_LITE) ? v1 : v2; }`.
+    `vals` are the three already-formatted C literals (use _b for bools)."""
+    return ("template <int TIER> __host__ __device__ constexpr " + ret_type + " " + name +
+            "() { return (TIER == TIER_SHARED) ? " + vals[0] + " : (TIER == TIER_LITE) ? " +
+            vals[1] + " : " + vals[2] + "; }")
+
+
+
 def gen_add_constants_helpers(self, include_base_inertia = False, include_homogenous_transforms = False):
     # first add constants
     n = self.robot.get_num_pos()
@@ -1087,98 +1109,54 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              ""])
     self.gen_add_code_lines([
                              "template <typename T> __host__ __device__ inline size_t INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(id_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }",
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.inverse_dynamics_regressor_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.inverse_dynamics_regressor_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.inverse_dynamics_regressor_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "}",
+                             *_tier_bytes_lines("INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES", self.inverse_dynamics_regressor_t_count_per_tier),
                              # g1-spill: per-tier placement of s_Y -- true => smem, false => d_workspace.
-                             "template <int TIER> __host__ __device__ constexpr bool INVERSE_DYNAMICS_REGRESSOR_Y_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.inverse_dynamics_regressor_spill_tier_3way[0] == 0 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.inverse_dynamics_regressor_spill_tier_3way[1] == 0 else "false") + " : " + ("true" if self.inverse_dynamics_regressor_spill_tier_3way[2] == 0 else "false") + "; }",
+                             _tier_ternary_line("INVERSE_DYNAMICS_REGRESSOR_Y_IN_SMEM", "bool", (("true" if self.inverse_dynamics_regressor_spill_tier_3way[0] == 0 else "false"), ("true" if self.inverse_dynamics_regressor_spill_tier_3way[1] == 0 else "false"), ("true" if self.inverse_dynamics_regressor_spill_tier_3way[2] == 0 else "false"))),
                              # PS5 energy regressors (each output 10*NUM_BODIES, fits every tier -> no spill).
                              "template <typename T> __host__ __device__ inline size_t KINETIC_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(self.kinetic_energy_regressor_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }",
                              # PS5 Coriolis matrix C(q,qd) (nv x nv; fits smem at FULL -> no spill).
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t CORIOLIS_MATRIX_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.coriolis_matrix_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.coriolis_matrix_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.coriolis_matrix_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "}",
+                             *_tier_bytes_lines("CORIOLIS_MATRIX_DYNAMIC_SHARED_MEM_BYTES", self.coriolis_matrix_t_count_per_tier),
                              # g1-spill: tier-aware. At a spilled tier the s_Y regressor
                              # scratch moves to d_workspace, shrinking the smem arena. Default
                              # TIER = TIER_SHARED keeps every existing single-arg call site working.
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t FORWARD_DYNAMICS_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.forward_dynamics_parameter_gradient_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.forward_dynamics_parameter_gradient_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.forward_dynamics_parameter_gradient_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "}",
+                             *_tier_bytes_lines("FORWARD_DYNAMICS_PARAMETER_GRADIENT_DYNAMIC_SHARED_MEM_BYTES", self.forward_dynamics_parameter_gradient_t_count_per_tier),
                              # g1-spill: per-tier placement of s_Y -- true => smem, false => d_workspace.
-                             "template <int TIER> __host__ __device__ constexpr bool FD_PARAMETER_GRADIENT_Y_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.forward_dynamics_parameter_gradient_spill_tier_3way[0] == 0 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.forward_dynamics_parameter_gradient_spill_tier_3way[1] == 0 else "false") + " : " + ("true" if self.forward_dynamics_parameter_gradient_spill_tier_3way[2] == 0 else "false") + "; }",
+                             _tier_ternary_line("FD_PARAMETER_GRADIENT_Y_IN_SMEM", "bool", (("true" if self.forward_dynamics_parameter_gradient_spill_tier_3way[0] == 0 else "false"), ("true" if self.forward_dynamics_parameter_gradient_spill_tier_3way[1] == 0 else "false"), ("true" if self.forward_dynamics_parameter_gradient_spill_tier_3way[2] == 0 else "false"))),
                              # g1-spill: tier-aware. At a spilled tier s_dqdd_dfext (2nd output) moves to d_workspace.
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t F_EXT_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.f_ext_gradient_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.f_ext_gradient_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.f_ext_gradient_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "}",
+                             *_tier_bytes_lines("F_EXT_GRADIENT_DYNAMIC_SHARED_MEM_BYTES", self.f_ext_gradient_t_count_per_tier),
                              # g1/h2_plus-spill: per-tier placement. DQDD in smem only at rung 0 (full);
                              # DTAU in smem at rungs 0-1 (spilled only at the deep rung 2, which also
                              # routes minv-F to the GRAD workspace, F_IN_SMEM == DTAU_IN_SMEM).
-                             "template <int TIER> __host__ __device__ constexpr bool F_EXT_GRADIENT_DQDD_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.f_ext_gradient_spill_tier_3way[0] == 0 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.f_ext_gradient_spill_tier_3way[1] == 0 else "false") + " : " + ("true" if self.f_ext_gradient_spill_tier_3way[2] == 0 else "false") + "; }",
-                             "template <int TIER> __host__ __device__ constexpr bool F_EXT_GRADIENT_DTAU_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.f_ext_gradient_spill_tier_3way[0] <= 1 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.f_ext_gradient_spill_tier_3way[1] <= 1 else "false") + " : " + ("true" if self.f_ext_gradient_spill_tier_3way[2] <= 1 else "false") + "; }",
+                             _tier_ternary_line("F_EXT_GRADIENT_DQDD_IN_SMEM", "bool", (("true" if self.f_ext_gradient_spill_tier_3way[0] == 0 else "false"), ("true" if self.f_ext_gradient_spill_tier_3way[1] == 0 else "false"), ("true" if self.f_ext_gradient_spill_tier_3way[2] == 0 else "false"))),
+                             _tier_ternary_line("F_EXT_GRADIENT_DTAU_IN_SMEM", "bool", (("true" if self.f_ext_gradient_spill_tier_3way[0] <= 1 else "false"), ("true" if self.f_ext_gradient_spill_tier_3way[1] <= 1 else "false"), ("true" if self.f_ext_gradient_spill_tier_3way[2] <= 1 else "false"))),
                              # mimic-spill: dq kernel arena is tier-aware; the mimic per-sub slab spills at rung 1.
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t F_EXT_GRADIENT_DQ_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.f_ext_gradient_dq_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.f_ext_gradient_dq_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.f_ext_gradient_dq_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "}",
+                             *_tier_bytes_lines("F_EXT_GRADIENT_DQ_DYNAMIC_SHARED_MEM_BYTES", self.f_ext_gradient_dq_t_count_per_tier),
                              # mimic-spill: per-tier placement of the mimic per-sub slab -- true => smem, false => d_workspace.
                              "template <int TIER> __host__ __device__ constexpr bool F_EXT_GRADIENT_DQ_SLAB_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.f_ext_gradient_dq_spill_tier_3way[0] == 0 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.f_ext_gradient_dq_spill_tier_3way[1] == 0 else "false") + " : " + ("true" if self.f_ext_gradient_dq_spill_tier_3way[2] == 0 else "false") + "; }"] + [
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t MINV_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.minv_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.minv_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.minv_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "}",
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.fd_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.fd_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.fd_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "}",
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.inverse_dynamics_gradient_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.inverse_dynamics_gradient_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.inverse_dynamics_gradient_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "}",
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.forward_dynamics_gradient_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.forward_dynamics_gradient_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.forward_dynamics_gradient_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "}",
+                             *_tier_bytes_lines("MINV_DYNAMIC_SHARED_MEM_BYTES", self.minv_t_count_per_tier),
+                             *_tier_bytes_lines("FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES", self.fd_t_count_per_tier),
+                             *_tier_bytes_lines("INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES", self.inverse_dynamics_gradient_t_count_per_tier),
+                             *_tier_bytes_lines("FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES", self.forward_dynamics_gradient_t_count_per_tier),
                              # Tier-aware: at LITE/MINIMAL the FD inner's Minv F-region (6*nv*nv)
                              # spills to d_workspace, so the smem arena shrinks. Default TIER keeps
                              # the existing single-arg call sites working.
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.integrator_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.integrator_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.integrator_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "}",
+                             *_tier_bytes_lines("INTEGRATOR_DYNAMIC_SHARED_MEM_BYTES", self.integrator_t_count_per_tier),
                              # Per-robot tier->placement map for the integrator VALUE path's Minv F-region:
                              # in smem at spill level 0, in d_workspace (grad section) at level 1.
-                             "template <int TIER> __host__ __device__ constexpr bool INTEGRATOR_MINV_F_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.integrator_spill_tier_3way[0] == 0 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.integrator_spill_tier_3way[1] == 0 else "false") + " : " + ("true" if self.integrator_spill_tier_3way[2] == 0 else "false") + "; }",
+                             _tier_ternary_line("INTEGRATOR_MINV_F_IN_SMEM", "bool", (("true" if self.integrator_spill_tier_3way[0] == 0 else "false"), ("true" if self.integrator_spill_tier_3way[1] == 0 else "false"), ("true" if self.integrator_spill_tier_3way[2] == 0 else "false"))),
                              # Tier-aware: at LITE/MINIMAL the s_D_qdd_stage buffer (max_stages*nv*3nv)
                              # spills to d_workspace, so the smem arena shrinks. Default TIER keeps the
                              # existing single-arg call sites working.
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.integrator_gradient_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.integrator_gradient_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.integrator_gradient_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "}",
+                             *_tier_bytes_lines("INTEGRATOR_DU_DYNAMIC_SHARED_MEM_BYTES", self.integrator_gradient_t_count_per_tier),
                              # Per-robot tier->placement map for the integrator gradient's s_D_qdd_stage
                              # buffer: in smem at spill level 0, in d_workspace (grad section) at level 1.
                              # Per-robot tier->placement maps for the integrator gradient's surgical
                              # spill ladder. Each buffer's IN_SMEM bool is keyed on RESOURCE_TIER;
                              # INNER_LEVEL gives the FD-grad inner spill (0 full smem, 1 da_df-band
                              # selective, 2 whole inner -> d_workspace).
-                             "template <int TIER> __host__ __device__ constexpr bool INTEGRATOR_DU_D_QDD_IN_SMEM() { return (TIER == TIER_SHARED) ? " + _b(self.integrator_gradient_dqdd_in_smem_per_tier[0]) + " : (TIER == TIER_LITE) ? " + _b(self.integrator_gradient_dqdd_in_smem_per_tier[1]) + " : " + _b(self.integrator_gradient_dqdd_in_smem_per_tier[2]) + "; }",
-                             "template <int TIER> __host__ __device__ constexpr bool INTEGRATOR_DU_DAB_IN_SMEM() { return (TIER == TIER_SHARED) ? " + _b(self.integrator_gradient_dab_in_smem_per_tier[0]) + " : (TIER == TIER_LITE) ? " + _b(self.integrator_gradient_dab_in_smem_per_tier[1]) + " : " + _b(self.integrator_gradient_dab_in_smem_per_tier[2]) + "; }",
-                             "template <int TIER> __host__ __device__ constexpr int INTEGRATOR_DU_INNER_LEVEL() { return (TIER == TIER_SHARED) ? " + str(self.integrator_gradient_inner_level_per_tier[0]) + " : (TIER == TIER_LITE) ? " + str(self.integrator_gradient_inner_level_per_tier[1]) + " : " + str(self.integrator_gradient_inner_level_per_tier[2]) + "; }",
+                             _tier_ternary_line("INTEGRATOR_DU_D_QDD_IN_SMEM", "bool", (_b(self.integrator_gradient_dqdd_in_smem_per_tier[0]), _b(self.integrator_gradient_dqdd_in_smem_per_tier[1]), _b(self.integrator_gradient_dqdd_in_smem_per_tier[2]))),
+                             _tier_ternary_line("INTEGRATOR_DU_DAB_IN_SMEM", "bool", (_b(self.integrator_gradient_dab_in_smem_per_tier[0]), _b(self.integrator_gradient_dab_in_smem_per_tier[1]), _b(self.integrator_gradient_dab_in_smem_per_tier[2]))),
+                             _tier_ternary_line("INTEGRATOR_DU_INNER_LEVEL", "int", (str(self.integrator_gradient_inner_level_per_tier[0]), str(self.integrator_gradient_inner_level_per_tier[1]), str(self.integrator_gradient_inner_level_per_tier[2]))),
                              # d_workspace sub-offsets (within the per-timestep slot): Dqdd at 0, then dAB, then the inner-spill region.
                              "template <typename T> __host__ __device__ inline size_t GRID_INTEGRATOR_GRADIENT_DAB_OFFSET_BYTES() { return sizeof(T) * static_cast<size_t>(" + str(self._integrator_gradient_dqdd_count) + "); }",
                              "template <typename T> __host__ __device__ inline size_t GRID_INTEGRATOR_GRADIENT_INNER_OFFSET_BYTES() { return sizeof(T) * static_cast<size_t>(" + str(self._integrator_gradient_dqdd_count + self._integrator_gradient_dAB_count) + "); }",
@@ -1197,16 +1175,8 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              "        : grid_shared_arena_bytes<T>(" + str(fd_device_t_count - self.gen_forward_dynamics_inner_temp_mem_size(minv_f_in_smem=True)) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>());",
                              "}",
                              "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t FORWARD_DYNAMICS_DEVICE_INLINE_WORKSPACE_BYTES() { return (TIER == TIER_SHARED) ? static_cast<size_t>(0) : sizeof(T) * static_cast<size_t>(" + str(self.gen_forward_dynamics_inner_temp_mem_size(minv_f_in_smem=True)) + "); }",
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t ABA_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.aba_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.aba_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.aba_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "}",
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t CRBA_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.crba_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.crba_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.crba_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-                             "}",
+                             *_tier_bytes_lines("ABA_DYNAMIC_SHARED_MEM_BYTES", self.aba_t_count_per_tier),
+                             *_tier_bytes_lines("CRBA_DYNAMIC_SHARED_MEM_BYTES", self.crba_t_count_per_tier),
                              "template <typename T> __host__ __device__ constexpr size_t GRID_EE_LINALG_SHARED_BYTES() { return static_cast<size_t>(0); }",
                              # PS5 potential-energy regressor (kinematics / XmatsHom domain; uses the ee linalg helper bytes).
                              "template <typename T> __host__ __device__ inline size_t POTENTIAL_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(self.potential_energy_regressor_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }",
@@ -1214,73 +1184,36 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              # Phase 3d: tier-aware. PERF/LITE/MINIMAL each report the smem
                              # bytes their picked spill level needs. Collapsed picks (small
                              # robots) return identical values across branches.
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.end_effector_pose_gradient_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.end_effector_pose_gradient_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.end_effector_pose_gradient_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "}",
+                             *_tier_bytes_lines("END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES", self.end_effector_pose_gradient_t_count_per_tier, linalg_arg=", GRID_EE_LINALG_SHARED_BYTES<T>()"),
                              # Tier-aware: TIER_SHARED/LITE/MINIMAL each report the smem bytes their
                              # picked spill level needs. When the picks collapse (small robots) the
                              # three branches return identical values. Default TIER = TIER_SHARED
                              # preserves all existing single-arg call sites.
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.d2ee_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.d2ee_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.d2ee_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "}",
+                             *_tier_bytes_lines("END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES", self.d2ee_t_count_per_tier, linalg_arg=", GRID_EE_LINALG_SHARED_BYTES<T>()"),
                              # G2 centroidal quick-wins shared-mem macros (no tier spill).
                              "template <typename T> __host__ __device__ inline size_t INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(self.id_bias_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }",
                              # com/ccrba/energy: 2-rung J-spill ladder (DE-GATE #2). L0 keeps the Jw
                              # band in smem (== old single rung), L1 spills it -> d_workspace.
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t COM_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.com_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.com_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.com_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }",
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t CCRBA_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.ccrba_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.ccrba_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.ccrba_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }",
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t ENERGY_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.energy_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.energy_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.energy_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }",
-                             "template <int TIER> __host__ __device__ constexpr bool COM_J_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.com_spill_tier_3way[0] == 0 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.com_spill_tier_3way[1] == 0 else "false") + " : " + ("true" if self.com_spill_tier_3way[2] == 0 else "false") + "; }",
-                             "template <int TIER> __host__ __device__ constexpr bool CCRBA_J_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.ccrba_spill_tier_3way[0] == 0 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.ccrba_spill_tier_3way[1] == 0 else "false") + " : " + ("true" if self.ccrba_spill_tier_3way[2] == 0 else "false") + "; }",
-                             "template <int TIER> __host__ __device__ constexpr bool ENERGY_J_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.energy_spill_tier_3way[0] == 0 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.energy_spill_tier_3way[1] == 0 else "false") + " : " + ("true" if self.energy_spill_tier_3way[2] == 0 else "false") + "; }",
+                             *_tier_bytes_lines("COM_DYNAMIC_SHARED_MEM_BYTES", self.com_t_count_per_tier, linalg_arg=", GRID_EE_LINALG_SHARED_BYTES<T>()"),
+                             *_tier_bytes_lines("CCRBA_DYNAMIC_SHARED_MEM_BYTES", self.ccrba_t_count_per_tier, linalg_arg=", GRID_EE_LINALG_SHARED_BYTES<T>()"),
+                             *_tier_bytes_lines("ENERGY_DYNAMIC_SHARED_MEM_BYTES", self.energy_t_count_per_tier, linalg_arg=", GRID_EE_LINALG_SHARED_BYTES<T>()"),
+                             _tier_ternary_line("COM_J_IN_SMEM", "bool", (("true" if self.com_spill_tier_3way[0] == 0 else "false"), ("true" if self.com_spill_tier_3way[1] == 0 else "false"), ("true" if self.com_spill_tier_3way[2] == 0 else "false"))),
+                             _tier_ternary_line("CCRBA_J_IN_SMEM", "bool", (("true" if self.ccrba_spill_tier_3way[0] == 0 else "false"), ("true" if self.ccrba_spill_tier_3way[1] == 0 else "false"), ("true" if self.ccrba_spill_tier_3way[2] == 0 else "false"))),
+                             _tier_ternary_line("ENERGY_J_IN_SMEM", "bool", (("true" if self.energy_spill_tier_3way[0] == 0 else "false"), ("true" if self.energy_spill_tier_3way[1] == 0 else "false"), ("true" if self.energy_spill_tier_3way[2] == 0 else "false"))),
                              # PS5 dCCRBA (kinematics domain, uses the EE linalg scratch like ccrba):
                              # cmm_time_variation (Adot, 6*nv; no spill) + dccrba (6*nv*nv; per-tier
                              # surgical spill of the output to the d_workspace SO band).
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t CMM_TIME_VARIATION_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.cmm_time_variation_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.cmm_time_variation_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.cmm_time_variation_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "}",
+                             *_tier_bytes_lines("CMM_TIME_VARIATION_DYNAMIC_SHARED_MEM_BYTES", self.cmm_time_variation_t_count_per_tier, linalg_arg=", GRID_EE_LINALG_SHARED_BYTES<T>()"),
                              # DE-GATE #2: per-tier placement of the cmm Jw sweep band -- true => smem, false => d_workspace.
-                             "template <int TIER> __host__ __device__ constexpr bool CMM_J_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.cmm_time_variation_spill_tier_3way[0] == 0 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.cmm_time_variation_spill_tier_3way[1] == 0 else "false") + " : " + ("true" if self.cmm_time_variation_spill_tier_3way[2] == 0 else "false") + "; }",
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t DCCRBA_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.dccrba_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.dccrba_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.dccrba_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                             "}",
+                             _tier_ternary_line("CMM_J_IN_SMEM", "bool", (("true" if self.cmm_time_variation_spill_tier_3way[0] == 0 else "false"), ("true" if self.cmm_time_variation_spill_tier_3way[1] == 0 else "false"), ("true" if self.cmm_time_variation_spill_tier_3way[2] == 0 else "false"))),
+                             *_tier_bytes_lines("DCCRBA_DYNAMIC_SHARED_MEM_BYTES", self.dccrba_t_count_per_tier, linalg_arg=", GRID_EE_LINALG_SHARED_BYTES<T>()"),
                              # per-tier placement of the s_dccrba output -- true => smem, false => d_workspace.
-                             "template <int TIER> __host__ __device__ constexpr bool DCCRBA_OUTPUT_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.dccrba_spill_tier_3way[0] == 0 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.dccrba_spill_tier_3way[1] == 0 else "false") + " : " + ("true" if self.dccrba_spill_tier_3way[2] == 0 else "false") + "; }",
+                             _tier_ternary_line("DCCRBA_OUTPUT_IN_SMEM", "bool", (("true" if self.dccrba_spill_tier_3way[0] == 0 else "false"), ("true" if self.dccrba_spill_tier_3way[1] == 0 else "false"), ("true" if self.dccrba_spill_tier_3way[2] == 0 else "false"))),
                              # DE-GATE #2: per-tier placement of the dccrba Jw sweep band -- in smem at L0/L1 (pick<=1), spilled at L2.
-                             "template <int TIER> __host__ __device__ constexpr bool DCCRBA_J_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.dccrba_spill_tier_3way[0] <= 1 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.dccrba_spill_tier_3way[1] <= 1 else "false") + " : " + ("true" if self.dccrba_spill_tier_3way[2] <= 1 else "false") + "; }",
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.idsva_so_body_frame_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.idsva_so_body_frame_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.idsva_so_body_frame_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT); "
-                             "}",
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.idsva_so_world_frame_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.idsva_so_world_frame_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.idsva_so_world_frame_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT); "
-                             "}",
-                             "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES() { "
-                             "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(self.fdsva_so_t_count_per_tier[0]) + ", TOPOLOGY_HELPERS_COUNT); "
-                             "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(self.fdsva_so_t_count_per_tier[1]) + ", TOPOLOGY_HELPERS_COUNT); "
-                             "else                                 return grid_shared_arena_bytes<T>(" + str(self.fdsva_so_t_count_per_tier[2]) + ", TOPOLOGY_HELPERS_COUNT); "
-                             "}",
+                             _tier_ternary_line("DCCRBA_J_IN_SMEM", "bool", (("true" if self.dccrba_spill_tier_3way[0] <= 1 else "false"), ("true" if self.dccrba_spill_tier_3way[1] <= 1 else "false"), ("true" if self.dccrba_spill_tier_3way[2] <= 1 else "false"))),
+                             *_tier_bytes_lines("IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES", self.idsva_so_body_frame_t_count_per_tier, linalg_arg=""),
+                             *_tier_bytes_lines("IDSVA_SO_WORLD_FRAME_DYNAMIC_SHARED_MEM_BYTES", self.idsva_so_world_frame_t_count_per_tier, linalg_arg=""),
+                             *_tier_bytes_lines("FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES", self.fdsva_so_t_count_per_tier, linalg_arg=""),
                              "// Per-tier scratch sizes for fdsva_so_contract (inline-CUDA users only — the host launchers always use TIER_SHARED).",
                              "// At TIER_SHARED the 4*NV^3 inner scratch lives in s_temp; at TIER_LITE/MINIMAL it moves to d_workspace, freeing shared memory for the caller's outer kernel.",
                              "// fdsva_so_contract scratch sizing, keyed on the INNER's placement choice",
@@ -1296,7 +1229,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              # (which keeps the contract in smem) is classified correctly without a
                              # hardcoded index that the rung insertion would have shifted.
                              "// Per-robot tier->placement map: contraction scratch stays in smem at any rung that doesn't set use_workspace_temp.",
-                             "template <int TIER> __host__ __device__ constexpr bool FDSVA_SO_SCRATCH_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if not _fdsva_so_tiers[self.fdsva_so_spill_tier_3way[0]][3] else "false") + " : (TIER == TIER_LITE) ? " + ("true" if not _fdsva_so_tiers[self.fdsva_so_spill_tier_3way[1]][3] else "false") + " : " + ("true" if not _fdsva_so_tiers[self.fdsva_so_spill_tier_3way[2]][3] else "false") + "; }",
+                             _tier_ternary_line("FDSVA_SO_SCRATCH_IN_SMEM", "bool", (("true" if not _fdsva_so_tiers[self.fdsva_so_spill_tier_3way[0]][3] else "false"), ("true" if not _fdsva_so_tiers[self.fdsva_so_spill_tier_3way[1]][3] else "false"), ("true" if not _fdsva_so_tiers[self.fdsva_so_spill_tier_3way[2]][3] else "false"))),
                              "// Inner-controlled placement API (design rollout): each inline inner is keyed on a",
                              "// placement bool and decides arena pointers itself. *_INNER_{SMEM,WORKSPACE}_BYTES<T, IN_SMEM>",
                              "// give the two arena sizes; *_<...>_IN_SMEM<TIER>() give the per-robot tier->placement",
@@ -1304,11 +1237,11 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              "// --- minv_inner (F-region) ---",
                              "template <typename T, bool F_IN_SMEM = true> __host__ __device__ constexpr size_t MINV_INNER_SMEM_BYTES() { return sizeof(T) * static_cast<size_t>(" + str(self.gen_minv_inner_no_F_size()) + (" + " + str(6*nv*nv) + " * (F_IN_SMEM ? 1 : 0)") + "); }",
                              "template <typename T, bool F_IN_SMEM = true> __host__ __device__ constexpr size_t MINV_INNER_WORKSPACE_BYTES() { return F_IN_SMEM ? static_cast<size_t>(0) : sizeof(T) * static_cast<size_t>(" + str(6*nv*nv) + "); }",
-                             "template <int TIER> __host__ __device__ constexpr bool MINV_F_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.minv_spill_tier_3way[0] == 0 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.minv_spill_tier_3way[1] == 0 else "false") + " : " + ("true" if self.minv_spill_tier_3way[2] == 0 else "false") + "; }",
+                             _tier_ternary_line("MINV_F_IN_SMEM", "bool", (("true" if self.minv_spill_tier_3way[0] == 0 else "false"), ("true" if self.minv_spill_tier_3way[1] == 0 else "false"), ("true" if self.minv_spill_tier_3way[2] == 0 else "false"))),
                              "// --- forward_dynamics_inner (internal Minv F-region) ---",
                              "template <typename T, bool MINV_F_IN_SMEM = true> __host__ __device__ constexpr size_t FD_INNER_SMEM_BYTES() { return MINV_F_IN_SMEM ? sizeof(T) * static_cast<size_t>(" + str(self.gen_forward_dynamics_inner_temp_mem_size(minv_f_in_smem=True)) + ") : sizeof(T) * static_cast<size_t>(" + str(self.gen_forward_dynamics_inner_temp_mem_size(minv_f_in_smem=False)) + "); }",
                              "template <typename T, bool MINV_F_IN_SMEM = true> __host__ __device__ constexpr size_t FD_INNER_WORKSPACE_BYTES() { return MINV_F_IN_SMEM ? static_cast<size_t>(0) : sizeof(T) * static_cast<size_t>(" + str(6*nv*nv) + "); }",
-                             "template <int TIER> __host__ __device__ constexpr bool FD_MINV_F_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.fd_spill_tier_3way[0] == 0 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.fd_spill_tier_3way[1] == 0 else "false") + " : " + ("true" if self.fd_spill_tier_3way[2] == 0 else "false") + "; }",
+                             _tier_ternary_line("FD_MINV_F_IN_SMEM", "bool", (("true" if self.fd_spill_tier_3way[0] == 0 else "false"), ("true" if self.fd_spill_tier_3way[1] == 0 else "false"), ("true" if self.fd_spill_tier_3way[2] == 0 else "false"))),
                              # The integrator value path's only inner scratch is the FD inner itself,
                              # so its arena sizes mirror FD_INNER_* exactly: when MINV_F_IN_SMEM the
                              # 6*NV*NV F-region is in s_temp, else it spills to d_workspace. The
@@ -1322,22 +1255,22 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              "template <typename T, bool TEMP_IN_SMEM = true> __host__ __device__ constexpr size_t ABA_INNER_SMEM_BYTES() { return TEMP_IN_SMEM ? sizeof(T) * static_cast<size_t>(" + str(self.gen_aba_inner_temp_mem_size()) + ") : static_cast<size_t>(0); }",
                              "template <typename T, bool TEMP_IN_SMEM = true> __host__ __device__ constexpr size_t ABA_INNER_WORKSPACE_BYTES() { return TEMP_IN_SMEM ? static_cast<size_t>(0) : sizeof(T) * static_cast<size_t>(" + str(self.gen_aba_inner_temp_mem_size()) + "); }",
                              "template <typename T> __host__ __device__ constexpr size_t ABA_INNER_COLD_BYTES() { return sizeof(T) * static_cast<size_t>(" + str(self._aba_inner_cold_count) + "); }",
-                             "template <int TIER> __host__ __device__ constexpr bool ABA_TEMP_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("false" if self.aba_spill_tier_3way[0] == 2 else "true") + " : (TIER == TIER_LITE) ? " + ("false" if self.aba_spill_tier_3way[1] == 2 else "true") + " : " + ("false" if self.aba_spill_tier_3way[2] == 2 else "true") + "; }",
-                             "template <int TIER> __host__ __device__ constexpr bool ABA_COLD_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("false" if self.aba_spill_tier_3way[0] == 1 else "true") + " : (TIER == TIER_LITE) ? " + ("false" if self.aba_spill_tier_3way[1] == 1 else "true") + " : " + ("false" if self.aba_spill_tier_3way[2] == 1 else "true") + "; }",
+                             _tier_ternary_line("ABA_TEMP_IN_SMEM", "bool", (("false" if self.aba_spill_tier_3way[0] == 2 else "true"), ("false" if self.aba_spill_tier_3way[1] == 2 else "true"), ("false" if self.aba_spill_tier_3way[2] == 2 else "true"))),
+                             _tier_ternary_line("ABA_COLD_IN_SMEM", "bool", (("false" if self.aba_spill_tier_3way[0] == 1 else "true"), ("false" if self.aba_spill_tier_3way[1] == 1 else "true"), ("false" if self.aba_spill_tier_3way[2] == 1 else "true"))),
                              "// --- crba_inner (scratch band) ---",
                              "template <typename T, bool TEMP_IN_SMEM = true> __host__ __device__ constexpr size_t CRBA_INNER_SMEM_BYTES() { return TEMP_IN_SMEM ? sizeof(T) * static_cast<size_t>(" + str(self.gen_crba_inner_temp_mem_size()) + ") : static_cast<size_t>(0); }",
                              "template <typename T, bool TEMP_IN_SMEM = true> __host__ __device__ constexpr size_t CRBA_INNER_WORKSPACE_BYTES() { return TEMP_IN_SMEM ? static_cast<size_t>(0) : sizeof(T) * static_cast<size_t>(" + str(self.gen_crba_inner_temp_mem_size()) + "); }",
                              # Inner band stays in smem at rung0 AND rung1 (surgical output-spill); spills only at rung2 (whole-band). Mirror DCCRBA_J_IN_SMEM's <=1.
-                             "template <int TIER> __host__ __device__ constexpr bool CRBA_TEMP_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.crba_spill_tier_3way[0] <= 1 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.crba_spill_tier_3way[1] <= 1 else "false") + " : " + ("true" if self.crba_spill_tier_3way[2] <= 1 else "false") + "; }",
+                             _tier_ternary_line("CRBA_TEMP_IN_SMEM", "bool", (("true" if self.crba_spill_tier_3way[0] <= 1 else "false"), ("true" if self.crba_spill_tier_3way[1] <= 1 else "false"), ("true" if self.crba_spill_tier_3way[2] <= 1 else "false"))),
                              # s_M output in smem ONLY at rung0; spilled to the SO band at rung1/rung2. Mirror DCCRBA_OUTPUT_IN_SMEM's ==0.
-                             "template <int TIER> __host__ __device__ constexpr bool CRBA_M_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.crba_spill_tier_3way[0] == 0 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.crba_spill_tier_3way[1] == 0 else "false") + " : " + ("true" if self.crba_spill_tier_3way[2] == 0 else "false") + "; }",
+                             _tier_ternary_line("CRBA_M_IN_SMEM", "bool", (("true" if self.crba_spill_tier_3way[0] == 0 else "false"), ("true" if self.crba_spill_tier_3way[1] == 0 else "false"), ("true" if self.crba_spill_tier_3way[2] == 0 else "false"))),
                              "// --- end_effector_pose_gradient_inner (chain workspace) ---",
                              "template <typename T, bool TEMP_IN_SMEM = true> __host__ __device__ constexpr size_t EE_GRAD_INNER_SMEM_BYTES() { return TEMP_IN_SMEM ? sizeof(T) * static_cast<size_t>(" + str(self.gen_end_effector_pose_gradient_inner_temp_mem_size()) + ") : static_cast<size_t>(0); }",
                              "template <typename T, bool TEMP_IN_SMEM = true> __host__ __device__ constexpr size_t EE_GRAD_INNER_WORKSPACE_BYTES() { return TEMP_IN_SMEM ? static_cast<size_t>(0) : sizeof(T) * static_cast<size_t>(" + str(self.gen_end_effector_pose_gradient_inner_temp_mem_size()) + "); }",
-                             "template <int TIER> __host__ __device__ constexpr bool EE_GRAD_TEMP_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.end_effector_pose_gradient_spill_tier_3way[0] == 0 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.end_effector_pose_gradient_spill_tier_3way[1] == 0 else "false") + " : " + ("true" if self.end_effector_pose_gradient_spill_tier_3way[2] == 0 else "false") + "; }",
+                             _tier_ternary_line("EE_GRAD_TEMP_IN_SMEM", "bool", (("true" if self.end_effector_pose_gradient_spill_tier_3way[0] == 0 else "false"), ("true" if self.end_effector_pose_gradient_spill_tier_3way[1] == 0 else "false"), ("true" if self.end_effector_pose_gradient_spill_tier_3way[2] == 0 else "false"))),
                              "// --- end_effector_pose_hessian_inner (large nv^2 end_effector_pose_hessian output) ---",
                              "// Per-tier placement of the d2ee inner's OUTPUT s_end_effector_pose_hessian: true => smem, false => d_workspace (which the kernel sets to d_end_effector_pose_hessian directly).",
-                             "template <int TIER> __host__ __device__ constexpr bool D2EE_OUT_IN_SMEM() { return (TIER == TIER_SHARED) ? " + ("true" if self.d2ee_spill_tier_3way[0] == 0 else "false") + " : (TIER == TIER_LITE) ? " + ("true" if self.d2ee_spill_tier_3way[1] == 0 else "false") + " : " + ("true" if self.d2ee_spill_tier_3way[2] == 0 else "false") + "; }",
+                             _tier_ternary_line("D2EE_OUT_IN_SMEM", "bool", (("true" if self.d2ee_spill_tier_3way[0] == 0 else "false"), ("true" if self.d2ee_spill_tier_3way[1] == 0 else "false"), ("true" if self.d2ee_spill_tier_3way[2] == 0 else "false"))),
                              "// Per-tier sizes for forward_dynamics_gradient_device (inline-CUDA users only). At TIER_SHARED the temp scratch arena lives in s_temp; at TIER_LITE/MINIMAL it moves to d_workspace, freeing roughly " + str(forward_dynamics_gradient_temp_count) + "*sizeof(T) bytes of smem.",
                              "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t FORWARD_DYNAMICS_GRADIENT_DEVICE_INLINE_SMEM_BYTES() {",
                              "    return (TIER == TIER_SHARED)",
