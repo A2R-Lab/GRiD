@@ -1039,7 +1039,7 @@ remaining naming (§6) + pinocchio-alignment (§7) items.
    (120 KB > 101 KB) → tracks as B.4. MINIMAL on big robots (target=16384
    or similar) still uncollected; ~1 hr run if wanted before C.7.
 2. ✅ **Auto-parallel equivalence harness DONE 2026-05-29 (parent
-   084af68):** `test/cuda_equivalents/run_parallel.sh` sizes
+   084af68):** `test/cuda_equivalents/run_parallel.sh` (retired 2026-09-08; split driver owns this now) sized
    `pytest-xdist -n` from `free -g / GB_PER_JOB` (default 5 GB), clamps
    to `nproc`, uses `--dist loadgroup` to keep header cache hot per
    (robot, base). `pytest-xdist` added to `requirements-dev.txt`.

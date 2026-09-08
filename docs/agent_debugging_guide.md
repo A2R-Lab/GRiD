@@ -1277,7 +1277,7 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   switch must NOT name the unsupported cases.** Even an unreached `case FN<RK4>(...)` *instantiates* the
   template and trips the device `static_assert` at compile time. Use a restricted dispatch macro
   (e.g. `GRID_RBD_IT_DISPATCH_HESSIAN` lists only EULER/SI-EULER) and return rc=3 for the rest.
-- `run_parallel.sh` auto-sizes xdist by free RAM (~5 GB/compile). Equivalence tests are
+- Parallel equivalence runs go through `test/run_split_suite.py` (RAM-aware compile pool in `test/compile_sched.py`); the old `run_parallel.sh` xdist wrapper was retired 2026-09-08.
   correctness-only and safe to run concurrent; the PERF sweep must run ISOLATED (no other GPU/CPU,
   it skews timing).
 - **The editable `grid_rbd` install can point at a STALE sibling worktree.** `.venv` is under main
