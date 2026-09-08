@@ -53,6 +53,10 @@ _COMPILE_FREE_IN_CUDA_EQUIVALENTS = {
     # the CPU-only filter too -- that is precisely when you want to catch the default
     # having silently reverted.
     "test_pin_only_default.py",
+    # Its two UNMARKED tests (test_parse_native_rows / test_broad_tier_covering_property)
+    # are pure-python parser/property checks -- keep them CPU-collectable. The module's
+    # GPU tests all carry @pytest.mark.cuda_equivalence and stay behind the filter.
+    "test_cuda_collision_native.py",
 }
 
 # Decorators that are plumbing, not markers -- legal on helpers and fixtures.
