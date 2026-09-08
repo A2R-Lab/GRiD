@@ -471,8 +471,6 @@ def compile_so(
     max_batch: int = 256,
     glass_root: Path | None = None,
     extra_flags: list[str] | None = None,
-    enable_jax_ffi: bool = True,
-    enable_torch: bool = True,
     torch_op_key: str | None = None,
     t_double: bool = False,
     runtime_inertia: bool = False,
@@ -483,11 +481,11 @@ def compile_so(
 
     wrapper.cu must include "grid.cuh" from its own directory.
 
-    When `enable_jax_ffi=True` (default) and JAX is installed, the .so will
-    additionally export JAX FFI handler symbols (grid_rbd_jax_*). The
-    Python side picks these up via dlsym in grid_rbd.jax.register_robot.
-    If JAX isn't installed at compile time, the JAX FFI block is skipped
-    (the .so is still fully functional via the plain C ABI).
+    When JAX is installed, the .so additionally exports JAX FFI handler
+    symbols (grid_rbd_jax_*); the Python side picks these up via dlsym in
+    grid_rbd.jax.register_robot. Likewise the torch custom-op block compiles
+    in iff torch is installed. Either absent at compile time just skips its
+    block (the .so is still fully functional via the plain C ABI).
     """
     nvcc = find_nvcc()
     arch = f"sm_{cuda_arch}"
@@ -532,38 +530,36 @@ def compile_so(
     if runtime_joint_dynamics:
         cmd.append("-DGRID_RBD_RUNTIME_JOINT_DYNAMICS")
 
-    # JAX FFI handlers: optionally enabled. When jax is available, point
-    # nvcc at its FFI include dir and define GRID_RBD_WITH_JAX so the
-    # wrapper template emits its handler block.
-    if enable_jax_ffi:
-        jax_inc = _jax_ffi_include_dir()
-        if jax_inc and jax_inc.exists():
-            cmd.extend([
-                "-DGRID_RBD_WITH_JAX=1",
-                f"-I{jax_inc}",
-                "--expt-relaxed-constexpr",  # required by xla/ffi/api headers
-            ])
+    # JAX FFI handlers: when jax is available, point nvcc at its FFI include
+    # dir and define GRID_RBD_WITH_JAX so the wrapper template emits its
+    # handler block.
+    jax_inc = _jax_ffi_include_dir()
+    if jax_inc and jax_inc.exists():
+        cmd.extend([
+            "-DGRID_RBD_WITH_JAX=1",
+            f"-I{jax_inc}",
+            "--expt-relaxed-constexpr",  # required by xla/ffi/api headers
+        ])
 
-    # PyTorch custom ops: optionally enabled. When torch is available, point
-    # nvcc at its include/lib dirs, match its CXX11 ABI, and define
-    # GRID_RBD_WITH_TORCH so the wrapper emits its op block. The op-library
-    # name is keyed by the cache_key so two robots don't collide.
-    if enable_torch:
-        tflags = _torch_build_flags()
-        if tflags is not None:
-            cmd.append("-DGRID_RBD_WITH_TORCH=1")
-            for inc in tflags["includes"]:
-                cmd.append(f"-I{inc}")
-            for ld in tflags["libdirs"]:
-                # -rpath must go through the linker (nvcc rejects bare -Wl,...).
-                cmd.extend([f"-L{ld}", "-Xlinker", f"-rpath,{ld}"])
-            cmd.extend(["-ltorch", "-ltorch_cpu", "-ltorch_cuda", "-lc10", "-lc10_cuda"])
-            cmd.append(f"-D_GLIBCXX_USE_CXX11_ABI={tflags['cxx11_abi']}")
-            if "--expt-relaxed-constexpr" not in cmd:
-                cmd.append("--expt-relaxed-constexpr")
-            key = (torch_op_key or "default")
-            # op-namespace token must be a valid C identifier (hex prefix is).
-            cmd.append(f"-DGRID_RBD_TORCH_KEY={key}")
+    # PyTorch custom ops: when torch is available, point nvcc at its
+    # include/lib dirs, match its CXX11 ABI, and define GRID_RBD_WITH_TORCH so
+    # the wrapper emits its op block. The op-library name is keyed by the
+    # cache_key so two robots don't collide.
+    tflags = _torch_build_flags()
+    if tflags is not None:
+        cmd.append("-DGRID_RBD_WITH_TORCH=1")
+        for inc in tflags["includes"]:
+            cmd.append(f"-I{inc}")
+        for ld in tflags["libdirs"]:
+            # -rpath must go through the linker (nvcc rejects bare -Wl,...).
+            cmd.extend([f"-L{ld}", "-Xlinker", f"-rpath,{ld}"])
+        cmd.extend(["-ltorch", "-ltorch_cpu", "-ltorch_cuda", "-lc10", "-lc10_cuda"])
+        cmd.append(f"-D_GLIBCXX_USE_CXX11_ABI={tflags['cxx11_abi']}")
+        if "--expt-relaxed-constexpr" not in cmd:
+            cmd.append("--expt-relaxed-constexpr")
+        key = (torch_op_key or "default")
+        # op-namespace token must be a valid C identifier (hex prefix is).
+        cmd.append(f"-DGRID_RBD_TORCH_KEY={key}")
 
     if extra_flags:
         cmd.extend(extra_flags)
@@ -647,7 +643,6 @@ def compile_sources(
     compile_so(wrapper_cu, so_path, cuda_arch=cuda_arch,
                max_batch=max_batch, glass_root=glass_root,
                torch_op_key=torch_op_key, t_double=t_double,
-               enable_jax_ffi=True, enable_torch=True,
                runtime_inertia=bool(options.get("runtime_inertia", False)),
                runtime_transform=bool(options.get("runtime_transform", False)),
                runtime_joint_dynamics=bool(options.get("runtime_joint_dynamics", False)),
