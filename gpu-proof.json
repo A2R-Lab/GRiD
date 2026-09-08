@@ -12,8 +12,8 @@
   },
   "fingerprint": {
     "algorithm": "sha256",
-    "digest": "e6f19419fd8e033691b12288c2910dc097d8a266f4b5adc1dfea0e3bf9662b8d",
-    "file_count": 133,
+    "digest": "9a2467667dae706f17fd8df9cb418fac68c7f6bac40725803161d1fd7e67af64",
+    "file_count": 131,
     "included_paths": [
       "test/cuda_equivalents",
       "test/python_wrappers"
@@ -22,56 +22,15 @@
   "mode": "local",
   "repo": {
     "branch": "modernizing-tests",
-    "commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+    "commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
     "dirty": false,
     "github_username": "plancherb1",
     "remote_url": "git@github.com:A2R-Lab/GRiD.git"
   },
   "schema_version": "2",
   "session": {
-    "ended_at": "2026-09-08T04:52:50Z",
+    "ended_at": "2026-09-08T21:05:26Z",
     "node_ids": [
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_forward_parity",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_idsva_so_parity",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_inverse_dynamics_honors_qdd",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_param_op_forward_parity_vs_jax",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_aba",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_integrator",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics_wrt_params",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics_wrt_params",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_cuda_graph_replay",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_capture_over_max_batch_raises",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[generalized_gravity]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[nonlinear_effects]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[coriolis_matrix]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[kinetic_energy_regressor]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[potential_energy_regressor]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[energy]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[cmm_time_variation]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[dccrba]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian_dot]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[osc_inertia]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_com_ccrba_tuple_matches_numpy",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_runtime_ee_matches_numpy",
-      "test/python_wrappers/test_batch_switch.py::test_so_exposes_batch_switch",
-      "test/python_wrappers/test_batch_switch.py::test_set_readback_clear",
-      "test/python_wrappers/test_batch_switch.py::test_values_identical_across_regimes",
-      "test/python_wrappers/test_batch_switch.py::test_global_override_beats_switch",
-      "test/python_wrappers/test_batch_switch.py::test_apply_batch_overlay_from_config",
-      "test/cuda_equivalents/test_cuda_floating_values_equivalence.py::test_floating_value_only_matches_python_reference[go2-floating]",
-      "test/cuda_equivalents/test_cuda_floating_values_equivalence.py::test_floating_value_only_matches_python_reference[g1-floating]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[iiwa14-fixed]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[go2-floating]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[fr3-fixed]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[iiwa14-fixed]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[go2-floating]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[iiwa14-fixed]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[go2-floating]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[fr3-fixed]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_tangent_state_cost_matches_reference",
       "test/cuda_equivalents/test_cuda_codegen_layout.py::test_fixed_default_header_keeps_gradient_paths_all_shared",
       "test/cuda_equivalents/test_cuda_codegen_layout.py::test_fixed_forced_low_shared_header_selects_fallbacks",
       "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_integrator_gradient_codegen_now_emits[floating-integrators]",
@@ -194,6 +153,49 @@
       "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-end_effector_pose-threads96]",
       "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-end_effector_pose-threads100]",
       "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-end_effector_pose-threadssuggested]",
+      "test/python_wrappers/test_batch_switch.py::test_so_exposes_batch_switch",
+      "test/python_wrappers/test_batch_switch.py::test_set_readback_clear",
+      "test/python_wrappers/test_batch_switch.py::test_values_identical_across_regimes",
+      "test/python_wrappers/test_batch_switch.py::test_global_override_beats_switch",
+      "test/python_wrappers/test_batch_switch.py::test_apply_batch_overlay_from_config",
+      "test/python_wrappers/test_mujoco_fixed_base_noop.py::test_fixed_base_mujoco_convention_is_noop",
+      "test/python_wrappers/test_mujoco_fixed_base_noop.py::test_fixed_base_mujoco_convention_is_noop_jax_torch",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_forward_parity",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_idsva_so_parity",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_inverse_dynamics_honors_qdd",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_param_op_forward_parity_vs_jax",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_aba",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_integrator",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics_wrt_params",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics_wrt_params",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_cuda_graph_replay",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_capture_over_max_batch_raises",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[generalized_gravity]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[nonlinear_effects]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[coriolis_matrix]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[kinetic_energy_regressor]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[potential_energy_regressor]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[energy]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[cmm_time_variation]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[dccrba]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian_dot]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[osc_inertia]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_com_ccrba_tuple_matches_numpy",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_runtime_ee_matches_numpy",
+      "test/cuda_equivalents/test_cuda_floating_values_equivalence.py::test_floating_value_only_matches_python_reference[go2-floating]",
+      "test/cuda_equivalents/test_cuda_floating_values_equivalence.py::test_floating_value_only_matches_python_reference[g1-floating]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[iiwa14-fixed]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[go2-floating]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[fr3-fixed]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[iiwa14-fixed]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[go2-floating]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[iiwa14-fixed]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[go2-floating]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[fr3-fixed]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_tangent_state_cost_matches_reference",
       "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-end_effector_pose_gradient-threads32]",
       "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-end_effector_pose_gradient-threads96]",
       "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-end_effector_pose_gradient-threads100]",
@@ -1321,7 +1323,6 @@
       "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t128-go2]",
       "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t256-iiwa14]",
       "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t256-go2]",
-      "test/python_wrappers/test_mujoco_fixed_base_noop.py::test_fixed_base_mujoco_convention_is_noop",
       "test/python_wrappers/test_ps5_value_ops.py::test_coriolis_matrix",
       "test/python_wrappers/test_ps5_value_ops.py::test_kinetic_energy_regressor",
       "test/python_wrappers/test_ps5_value_ops.py::test_potential_energy_regressor",
@@ -1398,120 +1399,35 @@
     ],
     "shards": [
       {
-        "ended_at": "2026-09-08T04:52:50Z",
-        "node_count": 25,
+        "ended_at": "2026-09-08T21:05:26Z",
+        "node_count": 122,
         "signer": "plancherb1",
-        "source": "test_iiwa14_torch_smoke.json",
-        "started_at": "2026-09-08T04:52:47Z"
+        "source": "cuda_02_collision_pairs_collision_selfcc.json",
+        "started_at": "2026-09-08T20:51:46Z"
+      },
+      {
+        "ended_at": "2026-09-08T19:44:26Z",
+        "node_count": 5,
+        "signer": "plancherb1",
+        "source": "test_batch_switch.json",
+        "started_at": "2026-09-08T19:44:25Z"
+      },
+      {
+        "ended_at": "2026-09-08T19:44:48Z",
+        "node_count": 2,
+        "signer": "plancherb1",
+        "source": "test_mujoco_fixed_base_noop.json",
+        "started_at": "2026-09-08T19:44:28Z"
       }
     ],
-    "started_at": "2026-09-08T04:52:47Z"
+    "started_at": "2026-09-08T19:44:25Z"
   },
   "shards": [
     {
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "2504bd9e76f4a337a9d2d04f86eaa8515c7bc8697c507b53c52496629e4bf4fe",
-        "file_count": 1,
-        "included_paths": [
-          "test/python_wrappers/test_iiwa14_torch_smoke.py"
-        ]
-      },
-      "name": "test_iiwa14_torch_smoke",
-      "node_ids": [
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_forward_parity",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_idsva_so_parity",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_inverse_dynamics_honors_qdd",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_param_op_forward_parity_vs_jax",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_aba",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_integrator",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics_wrt_params",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics_wrt_params",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_cuda_graph_replay",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_capture_over_max_batch_raises",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[generalized_gravity]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[nonlinear_effects]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[coriolis_matrix]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[kinetic_energy_regressor]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[potential_energy_regressor]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[energy]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[cmm_time_variation]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[dccrba]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian_dot]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[osc_inertia]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_com_ccrba_tuple_matches_numpy",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_runtime_ee_matches_numpy"
-      ]
-    },
-    {
-      "carried": {
-        "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
-        "original_signer": "plancherb1"
-      },
-      "fingerprint": {
-        "algorithm": "sha256",
-        "digest": "94337da0242baf5490cc73981a22b75a0c1540a73b6646ab71bcc1ceaf5197ee",
-        "file_count": 1,
-        "included_paths": [
-          "test/python_wrappers/test_batch_switch.py"
-        ]
-      },
-      "name": "test_batch_switch",
-      "node_ids": [
-        "test/python_wrappers/test_batch_switch.py::test_so_exposes_batch_switch",
-        "test/python_wrappers/test_batch_switch.py::test_set_readback_clear",
-        "test/python_wrappers/test_batch_switch.py::test_values_identical_across_regimes",
-        "test/python_wrappers/test_batch_switch.py::test_global_override_beats_switch",
-        "test/python_wrappers/test_batch_switch.py::test_apply_batch_overlay_from_config"
-      ]
-    },
-    {
-      "carried": {
-        "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
-        "original_signer": "plancherb1"
-      },
-      "fingerprint": {
-        "algorithm": "sha256",
-        "digest": "33a46de3c1c723d6683bd874c28738f5a77fba79049845eab6815fb91862e369",
-        "file_count": 2,
-        "included_paths": [
-          "test/cuda_equivalents/test_cuda_floating_values_equivalence.py",
-          "test/cuda_equivalents/test_cuda_plant_equivalence.py"
-        ]
-      },
-      "name": "cuda_01_codegen_layout_collision_config_",
-      "node_ids": [
-        "test/cuda_equivalents/test_cuda_floating_values_equivalence.py::test_floating_value_only_matches_python_reference[go2-floating]",
-        "test/cuda_equivalents/test_cuda_floating_values_equivalence.py::test_floating_value_only_matches_python_reference[g1-floating]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[iiwa14-fixed]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[go2-floating]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[fr3-fixed]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[iiwa14-fixed]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[go2-floating]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[iiwa14-fixed]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[go2-floating]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[fr3-fixed]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_tangent_state_cost_matches_reference"
-      ]
-    },
-    {
-      "carried": {
-        "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
-        "original_signer": "plancherb1"
-      },
-      "fingerprint": {
-        "algorithm": "sha256",
-        "digest": "317f4c4f1da2a48309d2d7f2dce656ad7997fc8efbc430c478cd15d850b7d424",
+        "digest": "9c8a0e572a572977ff2bd062748439da545567112ed9ed001e9ed97431cc0565",
         "file_count": 30,
         "included_paths": [
           "test/cuda_equivalents/cuda_collision_config_free_runner.cu",
@@ -1673,10 +1589,120 @@
       ]
     },
     {
+      "carried": null,
+      "fingerprint": {
+        "algorithm": "sha256",
+        "digest": "06e5c2eb45924723b96e690516be14b10da6d8af24a82f6bf16c6b7b3add5b27",
+        "file_count": 1,
+        "included_paths": [
+          "test/python_wrappers/test_batch_switch.py"
+        ]
+      },
+      "name": "test_batch_switch",
+      "node_ids": [
+        "test/python_wrappers/test_batch_switch.py::test_so_exposes_batch_switch",
+        "test/python_wrappers/test_batch_switch.py::test_set_readback_clear",
+        "test/python_wrappers/test_batch_switch.py::test_values_identical_across_regimes",
+        "test/python_wrappers/test_batch_switch.py::test_global_override_beats_switch",
+        "test/python_wrappers/test_batch_switch.py::test_apply_batch_overlay_from_config"
+      ]
+    },
+    {
+      "carried": null,
+      "fingerprint": {
+        "algorithm": "sha256",
+        "digest": "1629779200fd79b98158b91c03ebf3cdf799ba1aa2380a8e2f1970a72e6add25",
+        "file_count": 1,
+        "included_paths": [
+          "test/python_wrappers/test_mujoco_fixed_base_noop.py"
+        ]
+      },
+      "name": "test_mujoco_fixed_base_noop",
+      "node_ids": [
+        "test/python_wrappers/test_mujoco_fixed_base_noop.py::test_fixed_base_mujoco_convention_is_noop",
+        "test/python_wrappers/test_mujoco_fixed_base_noop.py::test_fixed_base_mujoco_convention_is_noop_jax_torch"
+      ]
+    },
+    {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_signer": "plancherb1"
+      },
+      "fingerprint": {
+        "algorithm": "sha256",
+        "digest": "2504bd9e76f4a337a9d2d04f86eaa8515c7bc8697c507b53c52496629e4bf4fe",
+        "file_count": 1,
+        "included_paths": [
+          "test/python_wrappers/test_iiwa14_torch_smoke.py"
+        ]
+      },
+      "name": "test_iiwa14_torch_smoke",
+      "node_ids": [
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_forward_parity",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_idsva_so_parity",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_inverse_dynamics_honors_qdd",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_param_op_forward_parity_vs_jax",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_aba",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_integrator",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics_wrt_params",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics_wrt_params",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_cuda_graph_replay",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_capture_over_max_batch_raises",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[generalized_gravity]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[nonlinear_effects]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[coriolis_matrix]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[kinetic_energy_regressor]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[potential_energy_regressor]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[energy]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[cmm_time_variation]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[dccrba]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian_dot]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[osc_inertia]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_com_ccrba_tuple_matches_numpy",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_runtime_ee_matches_numpy"
+      ]
+    },
+    {
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_signer": "plancherb1"
+      },
+      "fingerprint": {
+        "algorithm": "sha256",
+        "digest": "33a46de3c1c723d6683bd874c28738f5a77fba79049845eab6815fb91862e369",
+        "file_count": 2,
+        "included_paths": [
+          "test/cuda_equivalents/test_cuda_floating_values_equivalence.py",
+          "test/cuda_equivalents/test_cuda_plant_equivalence.py"
+        ]
+      },
+      "name": "cuda_01_codegen_layout_collision_config_",
+      "node_ids": [
+        "test/cuda_equivalents/test_cuda_floating_values_equivalence.py::test_floating_value_only_matches_python_reference[go2-floating]",
+        "test/cuda_equivalents/test_cuda_floating_values_equivalence.py::test_floating_value_only_matches_python_reference[g1-floating]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[iiwa14-fixed]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[go2-floating]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[fr3-fixed]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[iiwa14-fixed]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[go2-floating]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[iiwa14-fixed]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[go2-floating]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[fr3-fixed]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_tangent_state_cost_matches_reference"
+      ]
+    },
+    {
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -1824,8 +1850,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2033,8 +2059,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2382,8 +2408,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2473,8 +2499,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2499,8 +2525,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2520,8 +2546,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2541,8 +2567,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2561,8 +2587,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2581,8 +2607,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2601,8 +2627,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2626,8 +2652,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2658,8 +2684,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2699,8 +2725,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2722,8 +2748,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2745,8 +2771,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2768,8 +2794,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2791,8 +2817,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2814,8 +2840,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2834,8 +2860,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2854,8 +2880,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2879,8 +2905,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2904,8 +2930,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2926,8 +2952,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2948,8 +2974,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2970,8 +2996,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2992,8 +3018,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3013,8 +3039,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3035,8 +3061,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3069,8 +3095,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3131,8 +3157,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3170,8 +3196,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3228,8 +3254,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3267,8 +3293,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3294,8 +3320,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3321,8 +3347,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3342,8 +3368,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3368,8 +3394,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3445,8 +3471,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3475,8 +3501,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3502,8 +3528,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3549,8 +3575,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3586,8 +3612,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3615,8 +3641,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3674,28 +3700,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
-        "original_signer": "plancherb1"
-      },
-      "fingerprint": {
-        "algorithm": "sha256",
-        "digest": "10d5d25a9e6c6a12cb4eef5d774f9ff261dc1ae4d0628dada02d0b7c7d4698ce",
-        "file_count": 1,
-        "included_paths": [
-          "test/python_wrappers/test_mujoco_fixed_base_noop.py"
-        ]
-      },
-      "name": "test_mujoco_fixed_base_noop",
-      "node_ids": [
-        "test/python_wrappers/test_mujoco_fixed_base_noop.py::test_fixed_base_mujoco_convention_is_noop"
-      ]
-    },
-    {
-      "carried": {
-        "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3719,8 +3725,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3748,8 +3754,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3775,8 +3781,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3799,8 +3805,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3831,8 +3837,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3862,8 +3868,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3892,8 +3898,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3917,8 +3923,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
-        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
+        "original_ended_at": "2026-09-08T04:52:50Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3941,9 +3947,783 @@
     "backend": "ssh-local",
     "key_fingerprint": "SHA256:hfyUcDJTDLry3j7nJ9V2X8iEIgNFmFJQKGQirOdyWtY",
     "signer": "plancherb1",
-    "value": "w8aVdUrghI7rALB2CExeMKOAfZgNC6LZroD0yQDkFoBKnGdDP65HzRX3R5BX9x3GHqfhf+GQQRlWPX43jm78Ag=="
+    "value": "rSmuoTyRhAcmhq9QLsDnmjvyOHH4Mo0zAE7lPTdrU9uXYWj2rtMiBYJlvANXp1q0xd9bgqmGmbVIGyc3lmE1Bg=="
   },
   "tests": [
+    {
+      "checks": [],
+      "duration_s": 21.7093,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_fixed_default_header_keeps_gradient_paths_all_shared",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 3.5121,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_fixed_forced_low_shared_header_selects_fallbacks",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 3.0433,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_integrator_gradient_codegen_now_emits[floating-integrators]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 51.5102,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_integrator_gradient_codegen_now_emits[floating-all]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 1.3917,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_gradient_codegen_now_emits[fixed-dynamics-gradients]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 1.266,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_gradient_codegen_now_emits[fixed-second-order]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.7445,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_gradient_codegen_now_emits[floating-dynamics-gradients]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.3923,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_gradient_codegen_now_emits[floating-second-order]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.8087,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_nongradient_codegen_still_works[dynamics-core]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.7641,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_nongradient_codegen_still_works[kinematics]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0001,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_uses_parent_topology[serial_chain]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_uses_parent_topology[base_fanout]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_uses_parent_topology[base_rooted_independent_chains]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_uses_parent_topology[moving_joint_fanout]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_uses_parent_topology[deep_moving_joint_fanout]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.1362,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_is_topology_gated[iiwa14-False]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.413,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_is_topology_gated[go2-False]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.1651,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_is_topology_gated[gen3-False]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.1559,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_is_topology_gated[rizon4-False]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.2221,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_is_topology_gated[fr3-True]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.4285,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_is_topology_gated[fetch-True]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.2851,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_codegen_does_not_select_algorithms_by_fixture_name_or_filename",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 28.4659,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_floating_header_does_not_require_second_order_kernels[iiwa14-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 29.8285,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_floating_header_does_not_require_second_order_kernels[go2-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.6899,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_floating_second_order_opt_in_header_compiles[iiwa14-idsva-body-frame-only]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 3.4111,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_floating_second_order_opt_in_header_compiles[iiwa14-idsva-body-frame-fdsva]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.8011,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_floating_second_order_opt_in_header_compiles[go2-idsva-body-frame-only]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.6883,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_floating_second_order_opt_in_header_compiles[iiwa14-idsva-body-frame-world-frame]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.1338,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_d2ee_spill_tiers_are_size_and_base_selected[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.5091,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_d2ee_spill_tiers_are_size_and_base_selected[go2-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 1.0527,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_d2ee_spill_tiers_are_size_and_base_selected[g1-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.3208,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_d2ee_spill_tiers_are_size_and_base_selected[fetch-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.2103,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_d2ee_spill_tiers_are_size_and_base_selected[iiwa14-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.5938,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_d2ee_spill_tiers_are_size_and_base_selected[go2-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 1.1198,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_d2ee_spill_tiers_are_size_and_base_selected[g1-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 3.7847,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_generated_header_includes_grid_data_variants_and_no_rnea_alias",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.84,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_linalg_backend_controls_and_helpers_are_generated",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 1.4676,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_linalg_backend_default_cxx11_compiles_without_mathdx",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 1.3414,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_linalg_base_strided_helpers_compile",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 9.6431,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_dynamics_grid_data_variant_wrappers_compile",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 1.5418,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_kinematics_grid_data_variant_wrappers_compile",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.025,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_fixed_kinematics_derivative_wrappers_compile",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 26.383,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_floating_kinematics_derivative_wrappers_compile",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 4.3144,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_grid_data_variant_invalid_wrappers_fail_to_compile[dynamics_api_rejects_kinematics_grid_data-\\n#include \"grid.cuh\"\\n\\nint main() {\\n    using T = float;\\n    grid::gridData<T, grid::GRID_DATA_KINEMATICS> *data = nullptr;\\n    grid::robotModel<T> *model = nullptr;\\n    cudaStream_t *streams = nullptr;\\n    dim3 blocks(1, 1, 1);\\n    dim3 threads(32, 1, 1);\\n    grid::inverse_dynamics<T, false, false, grid::GRID_DATA_KINEMATICS>(\\n        data, model, static_cast<T>(-9.81), 1, blocks, threads, streams);\\n    return 0;\\n}\\n-inverse_dynamics requires all-data or dynamics gridData]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 4.2078,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_grid_data_variant_invalid_wrappers_fail_to_compile[kinematics_api_rejects_dynamics_grid_data-\\n#include \"grid.cuh\"\\n\\nint main() {\\n    using T = float;\\n    grid::gridData<T, grid::GRID_DATA_DYNAMICS> *data = nullptr;\\n    grid::robotModel<T> *model = nullptr;\\n    cudaStream_t *streams = nullptr;\\n    dim3 blocks(1, 1, 1);\\n    dim3 threads(32, 1, 1);\\n    grid::end_effector_pose<T, false, grid::GRID_DATA_DYNAMICS>(\\n        data, model, 1, blocks, threads, streams);\\n    return 0;\\n}\\n-end_effector_pose requires all-data or kinematics gridData]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.8306,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_dynamics_core_profile_generates_only_core_dynamics_hosts",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.7395,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_kinematics_profile_generates_kinematics_hosts_only",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.9135,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_algorithm_list_override_expands_dependencies",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 3.2363,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_joint_limits_land_at_true_q_offsets",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 3.1233,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_tracking_cost_fc_overloads_emit_and_compile",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.0628,
+      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_arena_carve_structs_compile",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 1.8381,
+      "node_id": "test/cuda_equivalents/test_cuda_collision_config_free.py::test_collision_config_free",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.4303,
+      "node_id": "test/cuda_equivalents/test_cuda_collision_config_free.py::test_collision_config_free_real_robot",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 3.4985,
+      "node_id": "test/cuda_equivalents/test_cuda_collision_config_free.py::test_collision_self_collision",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.9177,
+      "node_id": "test/cuda_equivalents/test_cuda_collision_cost.py::test_collision_cost_fd",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 1.4116,
+      "node_id": "test/cuda_equivalents/test_cuda_collision_geometry.py::test_collision_geometry",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 3.0977,
+      "node_id": "test/cuda_equivalents/test_cuda_collision_native.py::test_collision_native_two_tier",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 3.2299,
+      "node_id": "test/cuda_equivalents/test_cuda_collision_native.py::test_collision_native_self_collision",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.2084,
+      "node_id": "test/cuda_equivalents/test_cuda_collision_pairs.py::test_collision_distance_pairs_fd",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.4224,
+      "node_id": "test/cuda_equivalents/test_cuda_collision_selfcc_rows.py::test_self_collision_rows_fd",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.7004,
+      "node_id": "test/cuda_equivalents/test_cuda_collision_two_tier.py::test_collision_two_tier_matches_fine",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 14.5176,
+      "node_id": "test/cuda_equivalents/test_cuda_continuous_joint_equivalence.py::test_cuda_continuous_joint_matches_reference_at_wrapped_angles[gen3-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 30.7563,
+      "node_id": "test/cuda_equivalents/test_cuda_continuous_joint_equivalence.py::test_cuda_continuous_joint_matches_reference_at_wrapped_angles[gen3-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 15.5912,
+      "node_id": "test/cuda_equivalents/test_cuda_coriolis.py::test_cuda_coriolis_matrix_matches_reference[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 19.5766,
+      "node_id": "test/cuda_equivalents/test_cuda_coriolis.py::test_cuda_coriolis_matrix_matches_reference[go2-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 31.4708,
+      "node_id": "test/cuda_equivalents/test_cuda_coriolis.py::test_cuda_coriolis_matrix_matches_reference[g1-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 14.4978,
+      "node_id": "test/cuda_equivalents/test_cuda_coriolis.py::test_cuda_coriolis_matrix_matches_reference[fr3-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 34.0169,
+      "node_id": "test/cuda_equivalents/test_cuda_coriolis.py::test_cuda_coriolis_matrix_matches_reference[h1_2-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 61.7239,
+      "node_id": "test/cuda_equivalents/test_cuda_coriolis_output_spill.py::test_cuda_coriolis_spill_matches_full[g1-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 17.6357,
+      "node_id": "test/cuda_equivalents/test_cuda_coriolis_output_spill.py::test_cuda_coriolis_spill_matches_full[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 12.8209,
+      "node_id": "test/cuda_equivalents/test_cuda_dccrba.py::test_cuda_dccrba_matches_reference[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 15.7894,
+      "node_id": "test/cuda_equivalents/test_cuda_dccrba.py::test_cuda_dccrba_matches_reference[go2-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 11.4206,
+      "node_id": "test/cuda_equivalents/test_cuda_dccrba.py::test_cuda_dccrba_matches_reference[g1-floating]",
+      "outcome": "skipped"
+    },
+    {
+      "checks": [],
+      "duration_s": 12.2978,
+      "node_id": "test/cuda_equivalents/test_cuda_dccrba.py::test_cuda_dccrba_matches_reference[fr3-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 11.0048,
+      "node_id": "test/cuda_equivalents/test_cuda_dccrba.py::test_cuda_dccrba_matches_reference[h1_2-fixed]",
+      "outcome": "skipped"
+    },
+    {
+      "checks": [],
+      "duration_s": 8.3847,
+      "node_id": "test/cuda_equivalents/test_cuda_ee_named_depth1.py::test_cuda_ee_named_depth1_pose_matches_reference[go2-floating-imu_joint]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.4918,
+      "node_id": "test/cuda_equivalents/test_cuda_ee_newton_hessian.py::test_ee_pos_cost_hessian_newton_matches_fd[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 3.3244,
+      "node_id": "test/cuda_equivalents/test_cuda_ee_newton_hessian.py::test_ee_pos_cost_hessian_newton_matches_fd[go2-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.6704,
+      "node_id": "test/cuda_equivalents/test_cuda_ee_psd_clamp.py::test_ee_pos_cost_hessian_psd_clamp[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 3.6275,
+      "node_id": "test/cuda_equivalents/test_cuda_ee_psd_clamp.py::test_ee_pos_cost_hessian_psd_clamp[go2-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 13.4315,
+      "node_id": "test/cuda_equivalents/test_cuda_eepose_runtime.py::test_cuda_eepose_runtime_matches_reference[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 18.1256,
+      "node_id": "test/cuda_equivalents/test_cuda_eepose_runtime.py::test_cuda_eepose_runtime_matches_reference[go2-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 13.3329,
+      "node_id": "test/cuda_equivalents/test_cuda_eepose_runtime.py::test_cuda_eepose_runtime_matches_reference[fr3-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 17.3319,
+      "node_id": "test/cuda_equivalents/test_cuda_eepose_runtime.py::test_cuda_eepose_runtime_matches_reference[fr3-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 26.9855,
+      "node_id": "test/cuda_equivalents/test_cuda_eepose_runtime.py::test_cuda_eepose_runtime_matches_reference[h1_2-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 4.1196,
+      "node_id": "test/cuda_equivalents/test_cuda_eepose_runtime.py::test_cuda_eepose_runtime_thread_invariance[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 4.4215,
+      "node_id": "test/cuda_equivalents/test_cuda_eepose_runtime.py::test_cuda_eepose_runtime_thread_invariance[fr3-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 8.1083,
+      "node_id": "test/cuda_equivalents/test_cuda_energy_regressor.py::test_cuda_energy_regressor_matches_reference[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 7.4253,
+      "node_id": "test/cuda_equivalents/test_cuda_energy_regressor.py::test_cuda_energy_regressor_matches_reference[fr3-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 42.2194,
+      "node_id": "test/cuda_equivalents/test_cuda_energy_regressor.py::test_cuda_energy_regressor_matches_reference[g1-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.1608,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics-threads32]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.1077,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics-threads96]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.0715,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics-threads100]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 4.1781,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics-threadssuggested]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.0953,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-minv-threads32]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.1013,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-minv-threads96]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.0834,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-minv-threads100]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 4.0038,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-minv-threadssuggested]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.0922,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics-threads32]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.1419,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics-threads96]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.1178,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics-threads100]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 4.1148,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics-threadssuggested]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.1998,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-aba-threads32]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.118,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-aba-threads96]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.1191,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-aba-threads100]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 4.1043,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-aba-threadssuggested]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.1084,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-crba-threads32]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.1081,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-crba-threads96]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.1517,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-crba-threads100]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 4.0815,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-crba-threadssuggested]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.2216,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics_gradient-threads32]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.3039,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics_gradient-threads96]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.1927,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics_gradient-threads100]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 4.1421,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics_gradient-threadssuggested]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.218,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics_gradient-threads32]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.1558,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics_gradient-threads96]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.1405,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics_gradient-threads100]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 4.0843,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics_gradient-threadssuggested]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.0454,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-end_effector_pose-threads32]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.02,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-end_effector_pose-threads96]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.0369,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-end_effector_pose-threads100]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 3.998,
+      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-end_effector_pose-threadssuggested]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0001,
+      "node_id": "test/python_wrappers/test_batch_switch.py::test_so_exposes_batch_switch",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0001,
+      "node_id": "test/python_wrappers/test_batch_switch.py::test_set_readback_clear",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0022,
+      "node_id": "test/python_wrappers/test_batch_switch.py::test_values_identical_across_regimes",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0002,
+      "node_id": "test/python_wrappers/test_batch_switch.py::test_global_override_beats_switch",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0007,
+      "node_id": "test/python_wrappers/test_batch_switch.py::test_apply_batch_overlay_from_config",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 19.7637,
+      "node_id": "test/python_wrappers/test_mujoco_fixed_base_noop.py::test_fixed_base_mujoco_convention_is_noop",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.2741,
+      "node_id": "test/python_wrappers/test_mujoco_fixed_base_noop.py::test_fixed_base_mujoco_convention_is_noop_jax_torch",
+      "outcome": "passed"
+    },
     {
       "checks": [],
       "duration_s": 0.0377,
@@ -4096,36 +4876,6 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0001,
-      "node_id": "test/python_wrappers/test_batch_switch.py::test_so_exposes_batch_switch",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0001,
-      "node_id": "test/python_wrappers/test_batch_switch.py::test_set_readback_clear",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0024,
-      "node_id": "test/python_wrappers/test_batch_switch.py::test_values_identical_across_regimes",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0002,
-      "node_id": "test/python_wrappers/test_batch_switch.py::test_global_override_beats_switch",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0007,
-      "node_id": "test/python_wrappers/test_batch_switch.py::test_apply_batch_overlay_from_config",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
       "duration_s": 7.0231,
       "node_id": "test/cuda_equivalents/test_cuda_floating_values_equivalence.py::test_floating_value_only_matches_python_reference[go2-floating]",
       "outcome": "passed"
@@ -4189,738 +4939,6 @@
       "duration_s": 382.5928,
       "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_tangent_state_cost_matches_reference",
       "outcome": "skipped"
-    },
-    {
-      "checks": [],
-      "duration_s": 20.734,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_fixed_default_header_keeps_gradient_paths_all_shared",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 3.4225,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_fixed_forced_low_shared_header_selects_fallbacks",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 3.1552,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_integrator_gradient_codegen_now_emits[floating-integrators]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 49.6562,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_integrator_gradient_codegen_now_emits[floating-all]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 1.3826,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_gradient_codegen_now_emits[fixed-dynamics-gradients]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 1.2954,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_gradient_codegen_now_emits[fixed-second-order]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7444,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_gradient_codegen_now_emits[floating-dynamics-gradients]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.3371,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_gradient_codegen_now_emits[floating-second-order]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.8159,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_nongradient_codegen_still_works[dynamics-core]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.6545,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_nongradient_codegen_still_works[kinematics]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0001,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_uses_parent_topology[serial_chain]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_uses_parent_topology[base_fanout]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_uses_parent_topology[base_rooted_independent_chains]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_uses_parent_topology[moving_joint_fanout]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_uses_parent_topology[deep_moving_joint_fanout]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.13,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_is_topology_gated[iiwa14-False]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.4887,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_is_topology_gated[go2-False]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.1678,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_is_topology_gated[gen3-False]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.1566,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_is_topology_gated[rizon4-False]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.2154,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_is_topology_gated[fr3-True]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.3124,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_idsva_so_reference_order_repair_is_topology_gated[fetch-True]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.2652,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_codegen_does_not_select_algorithms_by_fixture_name_or_filename",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 28.1816,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_floating_header_does_not_require_second_order_kernels[iiwa14-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 29.1986,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_floating_header_does_not_require_second_order_kernels[go2-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.5591,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_floating_second_order_opt_in_header_compiles[iiwa14-idsva-body-frame-only]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 3.2723,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_floating_second_order_opt_in_header_compiles[iiwa14-idsva-body-frame-fdsva]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7762,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_floating_second_order_opt_in_header_compiles[go2-idsva-body-frame-only]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.628,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_floating_second_order_opt_in_header_compiles[iiwa14-idsva-body-frame-world-frame]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.1317,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_d2ee_spill_tiers_are_size_and_base_selected[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.4054,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_d2ee_spill_tiers_are_size_and_base_selected[go2-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 1.1255,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_d2ee_spill_tiers_are_size_and_base_selected[g1-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.3105,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_d2ee_spill_tiers_are_size_and_base_selected[fetch-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.2063,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_d2ee_spill_tiers_are_size_and_base_selected[iiwa14-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.4835,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_d2ee_spill_tiers_are_size_and_base_selected[go2-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 1.1768,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_d2ee_spill_tiers_are_size_and_base_selected[g1-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 3.5727,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_generated_header_includes_grid_data_variants_and_no_rnea_alias",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.9141,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_linalg_backend_controls_and_helpers_are_generated",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 1.301,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_linalg_backend_default_cxx11_compiles_without_mathdx",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 1.3943,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_linalg_base_strided_helpers_compile",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 9.202,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_dynamics_grid_data_variant_wrappers_compile",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 1.5013,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_kinematics_grid_data_variant_wrappers_compile",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.0178,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_fixed_kinematics_derivative_wrappers_compile",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 25.6052,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_floating_kinematics_derivative_wrappers_compile",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 4.0335,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_grid_data_variant_invalid_wrappers_fail_to_compile[dynamics_api_rejects_kinematics_grid_data-\\n#include \"grid.cuh\"\\n\\nint main() {\\n    using T = float;\\n    grid::gridData<T, grid::GRID_DATA_KINEMATICS> *data = nullptr;\\n    grid::robotModel<T> *model = nullptr;\\n    cudaStream_t *streams = nullptr;\\n    dim3 blocks(1, 1, 1);\\n    dim3 threads(32, 1, 1);\\n    grid::inverse_dynamics<T, false, false, grid::GRID_DATA_KINEMATICS>(\\n        data, model, static_cast<T>(-9.81), 1, blocks, threads, streams);\\n    return 0;\\n}\\n-inverse_dynamics requires all-data or dynamics gridData]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 3.9357,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_grid_data_variant_invalid_wrappers_fail_to_compile[kinematics_api_rejects_dynamics_grid_data-\\n#include \"grid.cuh\"\\n\\nint main() {\\n    using T = float;\\n    grid::gridData<T, grid::GRID_DATA_DYNAMICS> *data = nullptr;\\n    grid::robotModel<T> *model = nullptr;\\n    cudaStream_t *streams = nullptr;\\n    dim3 blocks(1, 1, 1);\\n    dim3 threads(32, 1, 1);\\n    grid::end_effector_pose<T, false, grid::GRID_DATA_DYNAMICS>(\\n        data, model, 1, blocks, threads, streams);\\n    return 0;\\n}\\n-end_effector_pose requires all-data or kinematics gridData]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.7912,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_dynamics_core_profile_generates_only_core_dynamics_hosts",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.7003,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_kinematics_profile_generates_kinematics_hosts_only",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.8352,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_algorithm_list_override_expands_dependencies",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 3.102,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_joint_limits_land_at_true_q_offsets",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.8067,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_tracking_cost_fc_overloads_emit_and_compile",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 1.8349,
-      "node_id": "test/cuda_equivalents/test_cuda_codegen_layout.py::test_arena_carve_structs_compile",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.1082,
-      "node_id": "test/cuda_equivalents/test_cuda_collision_config_free.py::test_collision_config_free",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.6595,
-      "node_id": "test/cuda_equivalents/test_cuda_collision_config_free.py::test_collision_config_free_real_robot",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 3.6784,
-      "node_id": "test/cuda_equivalents/test_cuda_collision_config_free.py::test_collision_self_collision",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 3.1123,
-      "node_id": "test/cuda_equivalents/test_cuda_collision_cost.py::test_collision_cost_fd",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 1.6138,
-      "node_id": "test/cuda_equivalents/test_cuda_collision_geometry.py::test_collision_geometry",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 3.2311,
-      "node_id": "test/cuda_equivalents/test_cuda_collision_native.py::test_collision_native_two_tier",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 3.4397,
-      "node_id": "test/cuda_equivalents/test_cuda_collision_native.py::test_collision_native_self_collision",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.4643,
-      "node_id": "test/cuda_equivalents/test_cuda_collision_pairs.py::test_collision_distance_pairs_fd",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.5958,
-      "node_id": "test/cuda_equivalents/test_cuda_collision_selfcc_rows.py::test_self_collision_rows_fd",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.839,
-      "node_id": "test/cuda_equivalents/test_cuda_collision_two_tier.py::test_collision_two_tier_matches_fine",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 14.0171,
-      "node_id": "test/cuda_equivalents/test_cuda_continuous_joint_equivalence.py::test_cuda_continuous_joint_matches_reference_at_wrapped_angles[gen3-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 27.607,
-      "node_id": "test/cuda_equivalents/test_cuda_continuous_joint_equivalence.py::test_cuda_continuous_joint_matches_reference_at_wrapped_angles[gen3-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 17.5268,
-      "node_id": "test/cuda_equivalents/test_cuda_coriolis.py::test_cuda_coriolis_matrix_matches_reference[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 20.7543,
-      "node_id": "test/cuda_equivalents/test_cuda_coriolis.py::test_cuda_coriolis_matrix_matches_reference[go2-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 28.6209,
-      "node_id": "test/cuda_equivalents/test_cuda_coriolis.py::test_cuda_coriolis_matrix_matches_reference[g1-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 17.6289,
-      "node_id": "test/cuda_equivalents/test_cuda_coriolis.py::test_cuda_coriolis_matrix_matches_reference[fr3-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 33.5634,
-      "node_id": "test/cuda_equivalents/test_cuda_coriolis.py::test_cuda_coriolis_matrix_matches_reference[h1_2-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 45.2094,
-      "node_id": "test/cuda_equivalents/test_cuda_coriolis_output_spill.py::test_cuda_coriolis_spill_matches_full[g1-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 12.8636,
-      "node_id": "test/cuda_equivalents/test_cuda_coriolis_output_spill.py::test_cuda_coriolis_spill_matches_full[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 14.591,
-      "node_id": "test/cuda_equivalents/test_cuda_dccrba.py::test_cuda_dccrba_matches_reference[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 17.1422,
-      "node_id": "test/cuda_equivalents/test_cuda_dccrba.py::test_cuda_dccrba_matches_reference[go2-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 9.135,
-      "node_id": "test/cuda_equivalents/test_cuda_dccrba.py::test_cuda_dccrba_matches_reference[g1-floating]",
-      "outcome": "skipped"
-    },
-    {
-      "checks": [],
-      "duration_s": 15.0198,
-      "node_id": "test/cuda_equivalents/test_cuda_dccrba.py::test_cuda_dccrba_matches_reference[fr3-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 9.9362,
-      "node_id": "test/cuda_equivalents/test_cuda_dccrba.py::test_cuda_dccrba_matches_reference[h1_2-fixed]",
-      "outcome": "skipped"
-    },
-    {
-      "checks": [],
-      "duration_s": 9.2826,
-      "node_id": "test/cuda_equivalents/test_cuda_ee_named_depth1.py::test_cuda_ee_named_depth1_pose_matches_reference[go2-floating-imu_joint]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.6137,
-      "node_id": "test/cuda_equivalents/test_cuda_ee_newton_hessian.py::test_ee_pos_cost_hessian_newton_matches_fd[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 3.2586,
-      "node_id": "test/cuda_equivalents/test_cuda_ee_newton_hessian.py::test_ee_pos_cost_hessian_newton_matches_fd[go2-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7138,
-      "node_id": "test/cuda_equivalents/test_cuda_ee_psd_clamp.py::test_ee_pos_cost_hessian_psd_clamp[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 3.4746,
-      "node_id": "test/cuda_equivalents/test_cuda_ee_psd_clamp.py::test_ee_pos_cost_hessian_psd_clamp[go2-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 15.5966,
-      "node_id": "test/cuda_equivalents/test_cuda_eepose_runtime.py::test_cuda_eepose_runtime_matches_reference[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 21.0327,
-      "node_id": "test/cuda_equivalents/test_cuda_eepose_runtime.py::test_cuda_eepose_runtime_matches_reference[go2-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 16.1215,
-      "node_id": "test/cuda_equivalents/test_cuda_eepose_runtime.py::test_cuda_eepose_runtime_matches_reference[fr3-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 20.5315,
-      "node_id": "test/cuda_equivalents/test_cuda_eepose_runtime.py::test_cuda_eepose_runtime_matches_reference[fr3-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 27.5392,
-      "node_id": "test/cuda_equivalents/test_cuda_eepose_runtime.py::test_cuda_eepose_runtime_matches_reference[h1_2-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 3.8659,
-      "node_id": "test/cuda_equivalents/test_cuda_eepose_runtime.py::test_cuda_eepose_runtime_thread_invariance[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 4.3409,
-      "node_id": "test/cuda_equivalents/test_cuda_eepose_runtime.py::test_cuda_eepose_runtime_thread_invariance[fr3-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 6.5042,
-      "node_id": "test/cuda_equivalents/test_cuda_energy_regressor.py::test_cuda_energy_regressor_matches_reference[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 7.6462,
-      "node_id": "test/cuda_equivalents/test_cuda_energy_regressor.py::test_cuda_energy_regressor_matches_reference[fr3-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 28.5784,
-      "node_id": "test/cuda_equivalents/test_cuda_energy_regressor.py::test_cuda_energy_regressor_matches_reference[g1-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.8711,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics-threads32]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7729,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics-threads96]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.8054,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics-threads100]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 5.3637,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics-threadssuggested]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.863,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-minv-threads32]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7852,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-minv-threads96]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7829,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-minv-threads100]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 5.4676,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-minv-threadssuggested]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.8665,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics-threads32]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.9761,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics-threads96]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.9091,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics-threads100]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 5.7196,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics-threadssuggested]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7961,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-aba-threads32]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.8988,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-aba-threads96]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7847,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-aba-threads100]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 5.5039,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-aba-threadssuggested]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7606,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-crba-threads32]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7555,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-crba-threads96]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7894,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-crba-threads100]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 5.4037,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-crba-threadssuggested]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7772,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics_gradient-threads32]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.8084,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics_gradient-threads96]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.8314,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics_gradient-threads100]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 5.336,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-inverse_dynamics_gradient-threadssuggested]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7692,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics_gradient-threads32]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7675,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics_gradient-threads96]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7786,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics_gradient-threads100]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 5.4094,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-forward_dynamics_gradient-threadssuggested]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7344,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-end_effector_pose-threads32]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7142,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-end_effector_pose-threads96]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.7213,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-end_effector_pose-threads100]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 5.3356,
-      "node_id": "test/cuda_equivalents/test_cuda_executable_equivalence.py::test_fixed_base_generated_cuda_matches_python_reference[iiwa14-fixed-end_effector_pose-threadssuggested]",
-      "outcome": "passed"
     },
     {
       "checks": [],
@@ -11682,12 +11700,6 @@
       "checks": [],
       "duration_s": 0.5934,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t256-go2]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 18.6475,
-      "node_id": "test/python_wrappers/test_mujoco_fixed_base_noop.py::test_fixed_base_mujoco_convention_is_noop",
       "outcome": "passed"
     },
     {
