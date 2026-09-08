@@ -12,7 +12,7 @@
   },
   "fingerprint": {
     "algorithm": "sha256",
-    "digest": "a2d1356acbdc3f6b1f8ccc3e751e54310dc90754e0202c5f501ff047809652e1",
+    "digest": "e6f19419fd8e033691b12288c2910dc097d8a266f4b5adc1dfea0e3bf9662b8d",
     "file_count": 133,
     "included_paths": [
       "test/cuda_equivalents",
@@ -22,15 +22,40 @@
   "mode": "local",
   "repo": {
     "branch": "modernizing-tests",
-    "commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+    "commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
     "dirty": false,
     "github_username": "plancherb1",
     "remote_url": "git@github.com:A2R-Lab/GRiD.git"
   },
   "schema_version": "2",
   "session": {
-    "ended_at": "2026-08-29T02:00:23Z",
+    "ended_at": "2026-09-08T04:52:50Z",
     "node_ids": [
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_forward_parity",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_idsva_so_parity",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_inverse_dynamics_honors_qdd",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_param_op_forward_parity_vs_jax",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_aba",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_integrator",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics_wrt_params",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics_wrt_params",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_cuda_graph_replay",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_capture_over_max_batch_raises",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[generalized_gravity]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[nonlinear_effects]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[coriolis_matrix]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[kinetic_energy_regressor]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[potential_energy_regressor]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[energy]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[cmm_time_variation]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[dccrba]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian_dot]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[osc_inertia]",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_com_ccrba_tuple_matches_numpy",
+      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_runtime_ee_matches_numpy",
       "test/python_wrappers/test_batch_switch.py::test_so_exposes_batch_switch",
       "test/python_wrappers/test_batch_switch.py::test_set_readback_clear",
       "test/python_wrappers/test_batch_switch.py::test_values_identical_across_regimes",
@@ -1228,31 +1253,6 @@
       "test/python_wrappers/test_iiwa14_smoke.py::test_integrator_gradient[midpoint]",
       "test/python_wrappers/test_iiwa14_smoke.py::test_integrator_gradient[rk3]",
       "test/python_wrappers/test_iiwa14_smoke.py::test_integrator_gradient[rk4]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_forward_parity",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_idsva_so_parity",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_inverse_dynamics_honors_qdd",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_param_op_forward_parity_vs_jax",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_aba",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_integrator",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics_wrt_params",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics_wrt_params",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_cuda_graph_replay",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_capture_over_max_batch_raises",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[generalized_gravity]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[nonlinear_effects]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[coriolis_matrix]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[kinetic_energy_regressor]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[potential_energy_regressor]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[energy]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[cmm_time_variation]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[dccrba]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian_dot]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[osc_inertia]",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_com_ccrba_tuple_matches_numpy",
-      "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_runtime_ee_matches_numpy",
       "test/python_wrappers/test_joint_dynamics.py::test_damping_friction_value_path[iiwa14-fp32]",
       "test/python_wrappers/test_joint_dynamics.py::test_damping_gradient_path[iiwa14-fp32]",
       "test/python_wrappers/test_joint_dynamics.py::test_gradient_delta_is_damping_diag_only_no_friction[iiwa14-fp32]",
@@ -1398,18 +1398,62 @@
     ],
     "shards": [
       {
-        "ended_at": "2026-08-29T02:00:23Z",
-        "node_count": 5,
+        "ended_at": "2026-09-08T04:52:50Z",
+        "node_count": 25,
         "signer": "plancherb1",
-        "source": "test_batch_switch.json",
-        "started_at": "2026-08-29T01:59:59Z"
+        "source": "test_iiwa14_torch_smoke.json",
+        "started_at": "2026-09-08T04:52:47Z"
       }
     ],
-    "started_at": "2026-08-29T01:59:59Z"
+    "started_at": "2026-09-08T04:52:47Z"
   },
   "shards": [
     {
       "carried": null,
+      "fingerprint": {
+        "algorithm": "sha256",
+        "digest": "2504bd9e76f4a337a9d2d04f86eaa8515c7bc8697c507b53c52496629e4bf4fe",
+        "file_count": 1,
+        "included_paths": [
+          "test/python_wrappers/test_iiwa14_torch_smoke.py"
+        ]
+      },
+      "name": "test_iiwa14_torch_smoke",
+      "node_ids": [
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_forward_parity",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_idsva_so_parity",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_inverse_dynamics_honors_qdd",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_param_op_forward_parity_vs_jax",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_aba",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_integrator",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics_wrt_params",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics_wrt_params",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_cuda_graph_replay",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_capture_over_max_batch_raises",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[generalized_gravity]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[nonlinear_effects]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[coriolis_matrix]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[kinetic_energy_regressor]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[potential_energy_regressor]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[energy]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[cmm_time_variation]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[dccrba]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian_dot]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[osc_inertia]",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_com_ccrba_tuple_matches_numpy",
+        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_runtime_ee_matches_numpy"
+      ]
+    },
+    {
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "94337da0242baf5490cc73981a22b75a0c1540a73b6646ab71bcc1ceaf5197ee",
@@ -1430,8 +1474,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -1461,8 +1505,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -1631,8 +1675,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -1780,8 +1824,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -1989,8 +2033,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2338,8 +2382,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2429,8 +2473,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2455,8 +2499,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2476,8 +2520,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2497,8 +2541,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2517,8 +2561,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2537,8 +2581,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2557,8 +2601,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2582,8 +2626,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2614,8 +2658,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2655,8 +2699,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2678,8 +2722,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2701,8 +2745,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2724,8 +2768,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2747,8 +2791,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2770,8 +2814,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2790,8 +2834,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2810,8 +2854,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2835,8 +2879,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2860,8 +2904,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2882,8 +2926,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2904,8 +2948,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2926,8 +2970,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2948,8 +2992,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2969,8 +3013,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2991,8 +3035,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3025,8 +3069,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3087,8 +3131,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3126,8 +3170,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3184,8 +3228,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3223,8 +3267,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3250,8 +3294,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3277,8 +3321,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3298,8 +3342,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3324,8 +3368,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3401,8 +3445,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3431,8 +3475,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3458,8 +3502,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3505,52 +3549,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
-        "original_signer": "plancherb1"
-      },
-      "fingerprint": {
-        "algorithm": "sha256",
-        "digest": "186c618b88cced598a0e232fafa39f3f38c07cb158512c5ff3b03f7793f1ce16",
-        "file_count": 1,
-        "included_paths": [
-          "test/python_wrappers/test_iiwa14_torch_smoke.py"
-        ]
-      },
-      "name": "test_iiwa14_torch_smoke",
-      "node_ids": [
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_forward_parity",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_idsva_so_parity",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_inverse_dynamics_honors_qdd",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_param_op_forward_parity_vs_jax",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_aba",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_integrator",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics_wrt_params",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics_wrt_params",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_cuda_graph_replay",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_capture_over_max_batch_raises",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[generalized_gravity]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[nonlinear_effects]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[coriolis_matrix]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[kinetic_energy_regressor]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[potential_energy_regressor]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[energy]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[cmm_time_variation]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[dccrba]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian_dot]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[osc_inertia]",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_com_ccrba_tuple_matches_numpy",
-        "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_runtime_ee_matches_numpy"
-      ]
-    },
-    {
-      "carried": {
-        "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3586,8 +3586,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3615,8 +3615,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3674,8 +3674,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3694,8 +3694,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3719,8 +3719,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3748,8 +3748,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3775,8 +3775,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3799,8 +3799,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3831,8 +3831,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3862,8 +3862,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3892,8 +3892,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3917,8 +3917,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "29f00c78981ea2ef7f44e245b6cf34795b7fdeb5",
-        "original_ended_at": "2026-08-28T06:28:26Z",
+        "original_commit_sha": "e1a530f37cf8838b3efc449c15498547733533ae",
+        "original_ended_at": "2026-08-29T02:00:23Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3941,9 +3941,159 @@
     "backend": "ssh-local",
     "key_fingerprint": "SHA256:hfyUcDJTDLry3j7nJ9V2X8iEIgNFmFJQKGQirOdyWtY",
     "signer": "plancherb1",
-    "value": "nrktWqXqMKSK4WL1nSbAIZGa3y6S3YFaCc3QCubmOYeo6VXg72Z7SwPiY2Ab1Df1/03+6JUG2AmsZzw8YHFfAg=="
+    "value": "w8aVdUrghI7rALB2CExeMKOAfZgNC6LZroD0yQDkFoBKnGdDP65HzRX3R5BX9x3GHqfhf+GQQRlWPX43jm78Ag=="
   },
   "tests": [
+    {
+      "checks": [],
+      "duration_s": 0.0377,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_forward_parity",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0093,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_idsva_so_parity",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0003,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_inverse_dynamics_honors_qdd",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.1831,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_param_op_forward_parity_vs_jax",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.1157,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0068,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0067,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_aba",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0066,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_integrator",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.4507,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics_wrt_params",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.2886,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics_wrt_params",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0157,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_cuda_graph_replay",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0004,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_capture_over_max_batch_raises",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0003,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[generalized_gravity]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0002,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[nonlinear_effects]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0003,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[coriolis_matrix]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0002,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[kinetic_energy_regressor]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0002,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[potential_energy_regressor]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0002,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[energy]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0003,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[cmm_time_variation]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0003,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[dccrba]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0002,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0002,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian_dot]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0002,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[osc_inertia]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0008,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_com_ccrba_tuple_matches_numpy",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.0008,
+      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_runtime_ee_matches_numpy",
+      "outcome": "passed"
+    },
     {
       "checks": [],
       "duration_s": 0.0001,
@@ -11124,156 +11274,6 @@
       "checks": [],
       "duration_s": 0.0473,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_integrator_gradient[rk4]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0417,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_forward_parity",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0105,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_idsva_so_parity",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0004,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_inverse_dynamics_honors_qdd",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.4734,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_param_op_forward_parity_vs_jax",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.113,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0067,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.006,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_aba",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.006,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_integrator",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.4379,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics_wrt_params",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.2988,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics_wrt_params",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0158,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_cuda_graph_replay",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0004,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_capture_over_max_batch_raises",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0003,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[generalized_gravity]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0002,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[nonlinear_effects]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0003,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[coriolis_matrix]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0002,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[kinetic_energy_regressor]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0002,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[potential_energy_regressor]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0002,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[energy]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0003,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[cmm_time_variation]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0003,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[dccrba]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0002,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0002,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian_dot]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0002,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[osc_inertia]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0008,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_com_ccrba_tuple_matches_numpy",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.0008,
-      "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_runtime_ee_matches_numpy",
       "outcome": "passed"
     },
     {
