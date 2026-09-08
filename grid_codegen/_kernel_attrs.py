@@ -23,17 +23,12 @@ from ._launch_config import baked_launch_cfg
 # arena, so smem is tier-INVARIANT and the `<T>()` spelling stays exact for
 # any tier (audited 2026-09-05; the kernels themselves are still
 # tier-templated — the tier only moves launch_bounds/registers there).
-TIER_BLIND_BYTES_MACROS = frozenset({
-    "INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>()",
-    "END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>()",
-    "KINETIC_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>()",
-    "POTENTIAL_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>()",
-    "INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES<T>()",
-    "FRAME_JACOBIAN_DYNAMIC_SHARED_MEM_BYTES<T>()",
-    "FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES<T>()",
-    "END_EFFECTOR_POSE_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>()",
-    "END_EFFECTOR_POSE_GRADIENT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>()",
-})
+# Derived from the descriptor table's tier_blind_bytes field (C3 swap
+# 2026-09-08, assert-equal-verified against the audited literal set).
+from .algo_registry import ALGO_DESCRIPTORS as _ALGO_DESCRIPTORS
+
+TIER_BLIND_BYTES_MACROS = frozenset(
+    d.bytes_macro for d in _ALGO_DESCRIPTORS if d.tier_blind_bytes)
 
 
 def _tier_variant_kernel(kernel_name: str, tier_sym: str) -> str:

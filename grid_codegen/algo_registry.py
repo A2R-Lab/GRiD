@@ -178,6 +178,13 @@ class AlgoDescriptor:
     gate_attr: str | None = None          # explicit generate_*/_*_emitted gate, else None
     bytes_macro_stem: str | None = None   # override the default *_DYNAMIC_SHARED_MEM_BYTES stem
     launch_cfg_batch: int = 1             # GridAlgo enum ordering group (see header note)
+    # True iff the BYTES macro is emitted `template <typename T>` ONLY (single
+    # arena, tier-INVARIANT smem — the tier moves launch_bounds/registers, not
+    # bytes). Drives _kernel_attrs' divergent-tier spelling: tier-blind macros
+    # keep the exact `<T>()` call; everything else takes an explicit `, TIER>`.
+    # NOTE: multi_target_position[_gradient] are tier-AWARE despite having no
+    # ARENA_RUNG_FNS ladder — never derive this from rung membership.
+    tier_blind_bytes: bool = False
 
     @property
     def carries_launch_cfg(self) -> bool:
@@ -196,7 +203,7 @@ class AlgoDescriptor:
 
 ALGO_DESCRIPTORS: tuple[AlgoDescriptor, ...] = (
     # Core Dynamics
-    AlgoDescriptor("inverse_dynamics", autotune_keys=("id",)),
+    AlgoDescriptor("inverse_dynamics", autotune_keys=("id",), tier_blind_bytes=True),
     AlgoDescriptor("minv", autotune_keys=("minv",)),
     AlgoDescriptor("forward_dynamics", autotune_keys=("fd",)),
     AlgoDescriptor("aba", autotune_keys=("aba",)),
@@ -222,19 +229,23 @@ ALGO_DESCRIPTORS: tuple[AlgoDescriptor, ...] = (
     AlgoDescriptor("inverse_dynamics_regressor", autotune_keys=("inverse_dynamics_regressor",), launch_cfg_batch=2),
     AlgoDescriptor("forward_dynamics_parameter_gradient",
                    autotune_keys=("forward_dynamics_parameter_gradient",), launch_cfg_batch=2),
-    AlgoDescriptor("kinetic_energy_regressor", autotune_keys=("kinetic_energy_regressor",), launch_cfg_batch=2),
-    AlgoDescriptor("potential_energy_regressor", autotune_keys=("potential_energy_regressor",), launch_cfg_batch=2),
+    AlgoDescriptor("kinetic_energy_regressor", autotune_keys=("kinetic_energy_regressor",), launch_cfg_batch=2,
+                   tier_blind_bytes=True),
+    AlgoDescriptor("potential_energy_regressor", autotune_keys=("potential_energy_regressor",), launch_cfg_batch=2,
+                   tier_blind_bytes=True),
 
     # Kinematics
-    AlgoDescriptor("end_effector_pose", autotune_keys=("ee_pose",)),
+    AlgoDescriptor("end_effector_pose", autotune_keys=("ee_pose",), tier_blind_bytes=True),
     AlgoDescriptor("end_effector_pose_gradient", autotune_keys=("ee_pose_gradient",)),
     AlgoDescriptor("end_effector_pose_hessian", autotune_keys=("ee_pose_hessian",),
                    gate_attr="generate_end_effector_pose_hessian"),
-    AlgoDescriptor("frame_jacobian", autotune_keys=("frame_jacobian",), launch_cfg_batch=2),
-    AlgoDescriptor("frame_jacobian_dot", autotune_keys=("frame_jacobian_dot",), launch_cfg_batch=2),
+    AlgoDescriptor("frame_jacobian", autotune_keys=("frame_jacobian",), launch_cfg_batch=2,
+                   tier_blind_bytes=True),
+    AlgoDescriptor("frame_jacobian_dot", autotune_keys=("frame_jacobian_dot",), launch_cfg_batch=2,
+                   tier_blind_bytes=True),
     AlgoDescriptor("osc_inertia", autotune_keys=("osc_inertia",), launch_cfg_batch=2),
-    AlgoDescriptor("end_effector_pose_runtime"),
-    AlgoDescriptor("end_effector_pose_gradient_runtime"),
+    AlgoDescriptor("end_effector_pose_runtime", tier_blind_bytes=True),
+    AlgoDescriptor("end_effector_pose_gradient_runtime", tier_blind_bytes=True),
     # W1b.3 batched multi-target (opt-in via multi_target_batch). Real benchmarked
     # kernels (has_kernel_attr=True) gated on the generator's _has_multi_target_position
     # flag. bytes_macro stems default from KEY.upper() (MULTI_TARGET_POSITION[_GRADIENT]
@@ -264,9 +275,9 @@ ALGO_DESCRIPTORS: tuple[AlgoDescriptor, ...] = (
 
     # Centroidal / Energy / CoM
     AlgoDescriptor("generalized_gravity", autotune_keys=("generalized_gravity",), launch_cfg_batch=2,
-                   bytes_macro_stem="INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES"),
+                   bytes_macro_stem="INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES", tier_blind_bytes=True),
     AlgoDescriptor("nonlinear_effects", autotune_keys=("nonlinear_effects",), launch_cfg_batch=2,
-                   bytes_macro_stem="INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES"),
+                   bytes_macro_stem="INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES", tier_blind_bytes=True),
     AlgoDescriptor("energy", autotune_keys=("energy",), launch_cfg_batch=2),
     AlgoDescriptor("com", autotune_keys=("com",), launch_cfg_batch=2),
     AlgoDescriptor("ccrba", autotune_keys=("ccrba",), launch_cfg_batch=2),
