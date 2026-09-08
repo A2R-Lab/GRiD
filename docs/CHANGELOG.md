@@ -5,6 +5,19 @@ changes since the GLASS rollout for our own historical reference.
 
 ## Unreleased — v2.0 — cuBLASDx removal + resource-tier system
 
+### 2026-09-08 (catch-up: 08-28 → 09-08)
+- Wrapper collapse (P1): C-ABI bodies, kernel_max_threads table, and all 30 mjx
+  twins now EMITTED from grid_codegen/abi_specs.py into three checked-in
+  generated regions of wrapper_template.cu (drift-gated in CI).
+- B2: kernel-attr manifest registers divergent-BAKED-tier instantiations
+  (baked_launch_cfg = single load path with the launch_cfg<> bake).
+- B1/E5: per-tier autotune matrix blocks written for all 6 roster robots.
+- H6 slice 1: bench ALGOS arity + SIG_MJX flag dict derive from ABI_SPECS.
+- Bench: XLA prealloc disabled in standalone drivers (launch-time OOM class);
+  autotune skips unlaunchable kernels loudly; fresh full receipt @ night-7.
+- C0/C1/C2 cleanup: dead code deletes, archive moves, docs truth fixes
+  (see docs/open-tasks/cleanup_wave_2026-09-07.md).
+
 ### 2026-07-21 — single-distribution packaging + project hygiene
 
 - **One `pip install -e .`:** the codegen toolkit and the `grid_rbd` Python

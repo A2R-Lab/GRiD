@@ -384,6 +384,18 @@ Default cache size is 5 GB — bump if you're caching many builds:
 
 ## File Structure
 
+(Refreshed 2026-09-08 — tools added since the last sweep:)
+
+- `autotune_tier_matrix.py` — per-tier forced-probe matrix sweep; writes the `matrix` block (E5)
+- `bake_by_n_bucket.py` — E6 batch-switch bake (`ffi_bases_by_n`)
+- `collect_kernel_limits.py` — kernel limit collection (min_smem join for the matrix tool)
+- `gpu_resident_timing.py` — GPU-resident/no-transfer timing
+- `analyze_competitive.py` / `plot_benchmarks.py` / `run_competitive_gpu_baselines.sh` — competitive pipeline
+- `run_tier_sweep_phased.sh` — phased tier sweep driver
+- `test_autotune_picker.py` / `test_per_algo_specs_bijection.py` — CPU gates over the pickers/specs
+- `archive/` — superseded scripts + historical report snapshots
+
+
 ```
 test/benchmarks/
 ├── README.md                    ← this file
