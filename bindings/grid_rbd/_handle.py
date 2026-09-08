@@ -370,6 +370,13 @@ class RobotHandle:
         if value not in ("pinocchio", "mujoco"):
             raise ValueError(
                 f"output_convention must be 'pinocchio' or 'mujoco', got {value!r}")
+        if (value == "mujoco" and self.floating_base
+                and not getattr(self._runner, "has_inverse_dynamics_mujoco", False)):
+            raise ValueError(
+                "output_convention='mujoco' needs a floating-base .so built with "
+                "the mjx kernel twins (this one was built with "
+                "enable_mujoco_kernels=False, or the robot is mimic/skew) — "
+                "re-register with enable_mujoco_kernels=True.")
         self._output_convention = value
 
     @property
@@ -1069,25 +1076,23 @@ class RobotHandle:
         With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
         and the returned ``Minv`` is the mjx-frame inverse mass matrix.
         """
-        # mjx: prefer the native kernel (raw mjx q in, full DENSE SYMMETRIC mjx Minv
-        # out — the G^-T Minv G^-1 congruence is baked into the kernel). This path
-        # SKIPS both the host symmetrize and the minv_pin_to_mjx post-process.
-        if self._mjx_active(_convention) and getattr(self._runner, "has_minv_mujoco", False):
+        # mjx: native kernel only (raw mjx q in, full DENSE SYMMETRIC mjx Minv
+        # out — the G^-T Minv G^-1 congruence is baked into the kernel; no host
+        # symmetrize or post-process).
+        if self._mjx_active(_convention):
+            if not getattr(self._runner, "has_minv_mujoco", False):
+                raise NotImplementedError(
+                    "minv(output_convention='mujoco') needs a floating-base .so "
+                    "built with the mjx kernel — re-register with force_rebuild=True.")
             q = np.ascontiguousarray(q, dtype=self._dt)
             return self._cast_out(self._runner.minv_mujoco(q))
 
-        R = None
-        if self._mjx_active(_convention):
-            q, _, _, _, R = self._mjx_inputs(q)
         q = np.ascontiguousarray(q, dtype=self._dt)
         m = self._runner.minv(q)
         # Symmetrize: M = L + L^T - diag(L)  where L is the lower triangle.
         m_full = m + m.swapaxes(-1, -2)
         diag_idx = np.arange(m.shape[-1])
         m_full[:, diag_idx, diag_idx] -= np.diagonal(m, axis1=-2, axis2=-1)
-        if R is not None:
-            from . import _mujoco
-            m_full = _mujoco.minv_pin_to_mjx(np.asarray(m_full, np.float64), R, True).astype(self._dt)
         return self._cast_out(m_full)
 
     def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
@@ -1158,22 +1163,18 @@ class RobotHandle:
 
         With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
         and the returned ``M`` is the mjx-frame mass matrix."""
-        # mjx: prefer the native kernel (raw mjx q in, mjx M out — the G M G^T
-        # congruence is baked into the kernel); fall back to the validated host path.
-        if (self._mjx_active(_convention)
-                and getattr(self._runner, "has_crba_mujoco", False)):
+        # mjx: native kernel only (raw mjx q in, mjx M out — the G M G^T
+        # congruence is baked into the kernel).
+        if self._mjx_active(_convention):
+            if not getattr(self._runner, "has_crba_mujoco", False):
+                raise NotImplementedError(
+                    "crba(output_convention='mujoco') needs a floating-base .so "
+                    "built with the mjx kernel — re-register with force_rebuild=True.")
             q = np.ascontiguousarray(q, dtype=self._dt)
             return self._cast_out(self._runner.crba_mujoco(q, gravity))
 
-        R = None
-        if self._mjx_active(_convention):
-            q, _, _, _, R = self._mjx_inputs(q)
         q = np.ascontiguousarray(q, dtype=self._dt)
-        M = self._runner.crba(q, gravity)
-        if R is not None:
-            from . import _mujoco
-            M = _mujoco.mass_matrix_pin_to_mjx(np.asarray(M, np.float64), R, True).astype(self._dt)
-        return self._cast_out(M)
+        return self._cast_out(self._runner.crba(q, gravity))
 
     def end_effector_pose(self, q, *, _convention=None) -> np.ndarray:
         """End-effector pose [xyz, rpy] per EE. Returns shape (B, 6*NUM_EES).
