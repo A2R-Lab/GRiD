@@ -90,4 +90,4 @@ CMEEL_PC_DIR="$("${VENV_DIR}/bin/python" -c 'import sysconfig, pathlib, cmeel.co
 export PKG_CONFIG_PATH="${CMEEL_PC_DIR}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 (cd "${PIN_SO_EXT_DIR}" && "${VENV_DIR}/bin/python" setup.py build_ext --inplace)
 
-"${VENV_DIR}/bin/python" "${REPO_ROOT}/test/run_tests.py" --prepare-models --tier "${TIER}"
+"${VENV_DIR}/bin/python" "${REPO_ROOT}/test/prepare_reference_models.py" --prepare-models --tier "${TIER}"
