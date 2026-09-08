@@ -782,10 +782,8 @@ class RobotHandle:
         SKIPS any algo whose profile tier != the baked ffi tier (a tier mismatch needs
         a profile build, not a runtime overlay) so it never launches a kernel at a tier
         it wasn't compiled for. Returns the number of algos overlaid. No-op (returns 0)
-        if the .so predates the per-algo overlay or the robot has no ``<profile>_bases``.
+        if the robot has no ``<profile>_bases``.
         """
-        if not getattr(self._runner, "has_per_algo_threads", lambda: False)():
-            return 0
         from grid_codegen.GRiDCodeGenerator import (
             LAUNCH_CONFIG_TIER_SYMBOL,
             LAUNCH_CONFIG_DEFAULT_GPU, load_launch_config, _launch_configs_dir)
@@ -849,11 +847,9 @@ class RobotHandle:
         of the smallest bucket and the bake batch (16/256 -> 64). Same safety
         rules as apply_profile_overlay: enum-index derivation from the descriptor
         table, algo_count drift refusal, and SKIP on any entry whose tier differs
-        from the baked ffi tier. Returns the number of algos armed; 0 if the .so
-        predates the switch or no by-n block exists.
+        from the baked ffi tier. Returns the number of algos armed; 0 if no by-n
+        block exists.
         """
-        if not getattr(self._runner, "has_batch_switch", lambda: False)():
-            return 0
         from grid_codegen.GRiDCodeGenerator import (
             LAUNCH_CONFIG_TIER_SYMBOL,
             LAUNCH_CONFIG_DEFAULT_GPU, load_launch_config, _launch_configs_dir)

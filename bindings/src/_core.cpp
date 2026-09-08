@@ -157,23 +157,17 @@ public:
         fn_num_joints_       = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_num_joints"));
         fn_num_vel_          = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_num_vel"));
         fn_num_ees_          = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_num_ees"));
-        // num_bodies — OPTIONAL (older .so built before the f_ext surface lacks
-        // it). Used to size/validate the optional f_ext arg; fall back to 0
-        // (f_ext then rejected with a clear error) if absent.
-        fn_num_bodies_       = reinterpret_cast<fn_int_v_t>(opt_sym("grid_rbd_num_bodies"));
+        fn_num_bodies_       = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_num_bodies"));
         fn_max_batch_        = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_max_batch"));
         fn_max_perf_level_threads_ = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_max_perf_level_threads"));
         fn_threads_per_block_ = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_threads_per_block"));
         fn_set_threads_per_block_ = reinterpret_cast<fn_int_i_t>(require_sym("grid_rbd_set_threads_per_block"));
-        // OPTIONAL (E1): pre-this-patch .so lacks it -> kernel_max_threads returns -1
-        // and the FFI autotune falls back to swept-ceiling inference (never crashes).
-        fn_kernel_max_threads_ = reinterpret_cast<fn_int_s_t>(opt_sym("grid_rbd_kernel_max_threads"));
-        // OPTIONAL (E6 per-algo overlay): pre-this-patch .so lacks these -> overlay is a
-        // graceful no-op (has_per_algo_threads() == false).
-        fn_set_threads_for_  = reinterpret_cast<fn_int_ii_t>(opt_sym("grid_rbd_set_threads_for"));
-        fn_algo_count_       = reinterpret_cast<fn_int_v_t>(opt_sym("grid_rbd_algo_count"));
-        fn_set_threads_for_n_ = reinterpret_cast<fn_int_iii_t>(opt_sym("grid_rbd_set_threads_for_n"));
-        fn_get_batch_switch_ = reinterpret_cast<fn_int_ipp_t>(opt_sym("grid_rbd_get_batch_switch"));
+        // E1 kernel ceiling + E6 per-algo/batch-regime overlays.
+        fn_kernel_max_threads_ = reinterpret_cast<fn_int_s_t>(require_sym("grid_rbd_kernel_max_threads"));
+        fn_set_threads_for_  = reinterpret_cast<fn_int_ii_t>(require_sym("grid_rbd_set_threads_for"));
+        fn_algo_count_       = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_algo_count"));
+        fn_set_threads_for_n_ = reinterpret_cast<fn_int_iii_t>(require_sym("grid_rbd_set_threads_for_n"));
+        fn_get_batch_switch_ = reinterpret_cast<fn_int_ipp_t>(require_sym("grid_rbd_get_batch_switch"));
         fn_init_             = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_init"));
         fn_close_            = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_close"));
 
@@ -217,7 +211,7 @@ public:
         fn_ee_pose_hessian_mujoco_ = reinterpret_cast<fn_ee_t>(opt_sym("grid_rbd_end_effector_pose_hessian_mujoco"));  // floating only
         fn_idsva_so_         = reinterpret_cast<fn_dyn_no_fext_t>(require_sym("grid_rbd_idsva_so"));
         fn_idsva_so_mujoco_  = reinterpret_cast<fn_dyn_no_fext_t>(opt_sym("grid_rbd_idsva_so_mujoco"));  // floating only
-        fn_id_regressor_        = reinterpret_cast<fn_dyn_no_fext_t>(opt_sym("grid_rbd_inverse_dynamics_regressor"));
+        fn_id_regressor_        = reinterpret_cast<fn_dyn_no_fext_t>(require_sym("grid_rbd_inverse_dynamics_regressor"));
         fn_id_regressor_mujoco_ = reinterpret_cast<fn_dyn_no_fext_t>(opt_sym("grid_rbd_inverse_dynamics_regressor_mujoco"));  // floating only
         fn_fdsva_so_         = reinterpret_cast<fn_fd_no_fext_t>  (require_sym("grid_rbd_fdsva_so"));
         fn_fdsva_so_mujoco_  = reinterpret_cast<fn_fd_no_fext_t>  (opt_sym("grid_rbd_fdsva_so_mujoco"));  // floating only
@@ -226,14 +220,15 @@ public:
         fn_integrator_grad_  = reinterpret_cast<fn_integrator_t>(require_sym("grid_rbd_integrator_gradient"));
         fn_integrator_grad_mujoco_ = reinterpret_cast<fn_integrator_t>(opt_sym("grid_rbd_integrator_gradient_mujoco"));  // floating only
 
-        // grid_plant C ABI (G1) — OPTIONAL: resolve if present (older .so files
-        // built before the plant surface won't have them; the handle methods
-        // raise a clear error at call time if the symbol is null).
-        fn_plant_state_cost_ = reinterpret_cast<fn_plant_cost_t>(opt_sym("grid_plant_quadratic_state_cost"));
-        fn_plant_input_cost_ = reinterpret_cast<fn_plant_cost_t>(opt_sym("grid_plant_quadratic_input_cost"));
-        fn_plant_pos_barrier_ = reinterpret_cast<fn_plant_barrier_t>(opt_sym("grid_plant_joint_position_barrier"));
-        fn_plant_vel_barrier_ = reinterpret_cast<fn_plant_barrier_t>(opt_sym("grid_plant_joint_velocity_barrier"));
-        fn_plant_tor_barrier_ = reinterpret_cast<fn_plant_barrier_t>(opt_sym("grid_plant_joint_torque_barrier"));
+        // grid_plant C ABI (G1). The quadratic costs + barriers are always
+        // exported; step/gradient/hessian and the ee/com/momentum costs are
+        // feature-gated in the wrapper (GRID_PLANT_HAS_*), so those stay
+        // optional and the handle methods raise a clear error when null.
+        fn_plant_state_cost_ = reinterpret_cast<fn_plant_cost_t>(require_sym("grid_plant_quadratic_state_cost"));
+        fn_plant_input_cost_ = reinterpret_cast<fn_plant_cost_t>(require_sym("grid_plant_quadratic_input_cost"));
+        fn_plant_pos_barrier_ = reinterpret_cast<fn_plant_barrier_t>(require_sym("grid_plant_joint_position_barrier"));
+        fn_plant_vel_barrier_ = reinterpret_cast<fn_plant_barrier_t>(require_sym("grid_plant_joint_velocity_barrier"));
+        fn_plant_tor_barrier_ = reinterpret_cast<fn_plant_barrier_t>(require_sym("grid_plant_joint_torque_barrier"));
         fn_plant_step_       = reinterpret_cast<fn_plant_step_t>(opt_sym("grid_plant_step"));
         fn_plant_step_mujoco_ = reinterpret_cast<fn_plant_step_t>(opt_sym("grid_plant_step_mujoco"));  // floating only
         fn_plant_ee_cost_    = reinterpret_cast<fn_plant_ee_t>(opt_sym("grid_plant_ee_pos_cost"));
@@ -248,41 +243,40 @@ public:
         fn_plant_step_hess_  = reinterpret_cast<fn_plant_step_hess_t>(opt_sym("grid_plant_step_hessian"));
         fn_plant_step_hess_mujoco_ = reinterpret_cast<fn_plant_step_hess_t>(opt_sym("grid_plant_step_hessian_mujoco"));  // floating only
 
-        // G2 batched FK (pos+quat) — OPTIONAL: only present in newer .so files
-        // (and only non-null for fixed-base/non-mimic robots).
-        fn_fk_batched_      = reinterpret_cast<fn_fk_batched_t>(opt_sym("grid_rbd_fk_batched"));
+        // G2 batched FK (pos+quat) — returns rc=3 on floating-base/mimic robots.
+        fn_fk_batched_      = reinterpret_cast<fn_fk_batched_t>(require_sym("grid_rbd_fk_batched"));
 
-        // F2 centroidal / energy / general-frame kinematics — OPTIONAL: present
-        // in newer .so files. com/ccrba/energy/gg/nle are always emitted with
-        // the "all" profile; frame_jacobian* / osc_inertia are opt-in codegen
-        // (the C-ABI symbol returns rc=3 if the family wasn't generated).
-        fn_com_                = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_com"));
-        fn_ccrba_              = reinterpret_cast<fn_q_qd_out_t>(opt_sym("grid_rbd_ccrba"));
-        fn_energy_             = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_energy"));
-        fn_generalized_gravity_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_generalized_gravity"));
+        // F2 centroidal / energy / general-frame kinematics. com/ccrba/energy/
+        // gg/nle are always emitted with the "all" profile; frame_jacobian* /
+        // osc_inertia are opt-in codegen (the C-ABI returns rc=3 if the family
+        // wasn't generated).
+        fn_com_                = reinterpret_cast<fn_q_out_t>(require_sym("grid_rbd_com"));
+        fn_ccrba_              = reinterpret_cast<fn_q_qd_out_t>(require_sym("grid_rbd_ccrba"));
+        fn_energy_             = reinterpret_cast<fn_q_qd_out_grav_t>(require_sym("grid_rbd_energy"));
+        fn_generalized_gravity_ = reinterpret_cast<fn_q_out_grav_t>(require_sym("grid_rbd_generalized_gravity"));
         fn_generalized_gravity_mujoco_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_generalized_gravity_mujoco"));  // floating only
-        fn_nonlinear_effects_  = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_nonlinear_effects"));
+        fn_nonlinear_effects_  = reinterpret_cast<fn_q_qd_out_grav_t>(require_sym("grid_rbd_nonlinear_effects"));
         fn_nonlinear_effects_mujoco_ = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_nonlinear_effects_mujoco"));  // floating only
-        fn_frame_jacobian_     = reinterpret_cast<fn_frame_jac_t>(opt_sym("grid_rbd_frame_jacobian"));
-        fn_frame_jacobian_dot_ = reinterpret_cast<fn_frame_jac_dot_t>(opt_sym("grid_rbd_frame_jacobian_dot"));
-        fn_osc_inertia_        = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_osc_inertia"));
-        fn_ee_pose_runtime_      = reinterpret_cast<fn_ee_runtime_t>(opt_sym("grid_rbd_end_effector_pose_runtime"));
-        fn_ee_pose_grad_runtime_ = reinterpret_cast<fn_ee_runtime_t>(opt_sym("grid_rbd_end_effector_pose_gradient_runtime"));
+        fn_frame_jacobian_     = reinterpret_cast<fn_frame_jac_t>(require_sym("grid_rbd_frame_jacobian"));
+        fn_frame_jacobian_dot_ = reinterpret_cast<fn_frame_jac_dot_t>(require_sym("grid_rbd_frame_jacobian_dot"));
+        fn_osc_inertia_        = reinterpret_cast<fn_q_out_t>(require_sym("grid_rbd_osc_inertia"));
+        fn_ee_pose_runtime_      = reinterpret_cast<fn_ee_runtime_t>(require_sym("grid_rbd_end_effector_pose_runtime"));
+        fn_ee_pose_grad_runtime_ = reinterpret_cast<fn_ee_runtime_t>(require_sym("grid_rbd_end_effector_pose_gradient_runtime"));
         fn_ee_pose_runtime_mujoco_      = reinterpret_cast<fn_ee_runtime_t>(opt_sym("grid_rbd_end_effector_pose_runtime_mujoco"));            // floating only
         fn_ee_pose_grad_runtime_mujoco_ = reinterpret_cast<fn_ee_runtime_t>(opt_sym("grid_rbd_end_effector_pose_gradient_runtime_mujoco")); // floating only
         fn_tool_fext_            = reinterpret_cast<fn_tool_fext_t>(opt_sym("grid_rbd_tool_fext"));  // enable_tool only
 
-        // PS5 value ops — OPTIONAL: present in newer .so files.
+        // PS5 value ops.
         // coriolis_matrix / kinetic_energy_regressor / potential_energy_regressor
         // are always emitted with the "all" profile (mimic-safe). dccrba /
         // cmm_time_variation are skipped for mimic robots (the per-body Jacobian
         // fold isn't mimic-reduced), so their C-ABI symbol returns rc=3 there.
-        fn_coriolis_matrix_    = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_coriolis_matrix"));
-        fn_kinetic_energy_regressor_   = reinterpret_cast<fn_q_qd_out_grav_t>(opt_sym("grid_rbd_kinetic_energy_regressor"));
-        fn_potential_energy_regressor_ = reinterpret_cast<fn_q_out_grav_t>(opt_sym("grid_rbd_potential_energy_regressor"));
-        fn_dccrba_             = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_dccrba"));
+        fn_coriolis_matrix_    = reinterpret_cast<fn_q_qd_out_grav_t>(require_sym("grid_rbd_coriolis_matrix"));
+        fn_kinetic_energy_regressor_   = reinterpret_cast<fn_q_qd_out_grav_t>(require_sym("grid_rbd_kinetic_energy_regressor"));
+        fn_potential_energy_regressor_ = reinterpret_cast<fn_q_out_grav_t>(require_sym("grid_rbd_potential_energy_regressor"));
+        fn_dccrba_             = reinterpret_cast<fn_q_out_t>(require_sym("grid_rbd_dccrba"));
         fn_dccrba_mujoco_      = reinterpret_cast<fn_q_out_t>(opt_sym("grid_rbd_dccrba_mujoco"));  // floating only
-        fn_cmm_time_variation_ = reinterpret_cast<fn_q_qd_out_t>(opt_sym("grid_rbd_cmm_time_variation"));
+        fn_cmm_time_variation_ = reinterpret_cast<fn_q_qd_out_t>(require_sym("grid_rbd_cmm_time_variation"));
         // floating-base mjx variant (optional; present only on a floating .so)
         fn_cmm_time_variation_mujoco_ = reinterpret_cast<fn_q_qd_out_t>(opt_sym("grid_rbd_cmm_time_variation_mujoco"));
 
@@ -306,7 +300,7 @@ public:
         num_vel_    = fn_num_vel_();
         num_ees_    = fn_num_ees_();
         max_batch_  = fn_max_batch_();
-        num_bodies_ = fn_num_bodies_ ? fn_num_bodies_() : 0;
+        num_bodies_ = fn_num_bodies_();
 
         // Initialize device buffers eagerly. wrapper_template.cu does this
         // lazily on first algo call too, but eager init surfaces CUDA errors
@@ -331,46 +325,35 @@ public:
     int max_batch()  const { return max_batch_; }
     int max_perf_level_threads() const { return fn_max_perf_level_threads_(); }
     // E1: real compiled __launch_bounds__ ceiling of the baked kernel for `algo`
-    // (cudaFuncGetAttributes maxThreadsPerBlock). -1 if the symbol is absent (old
-    // .so) or the key is unknown/not-built; the FFI autotune treats -1 as "infer".
+    // (cudaFuncGetAttributes maxThreadsPerBlock). -1 if the key is
+    // unknown/not-built; the FFI autotune treats -1 as "infer".
     int kernel_max_threads(const std::string& algo) const {
-        return fn_kernel_max_threads_ ? fn_kernel_max_threads_(algo.c_str()) : -1;
+        return fn_kernel_max_threads_(algo.c_str());
     }
     // E6 per-algo threads overlay: force `n` threads for the GridAlgo at index `algo`
     // (n==0 clears it back to the baked launch_cfg<ALGO>::THREADS). The global
     // set_threads_per_block override still wins when set.
     void set_threads_for(int algo, int n) {
-        if (!fn_set_threads_for_)
-            throw std::runtime_error("set_threads_for: this .so predates the per-algo "
-                "threads overlay (rebuild to use profile overlays)");
         if (n < 0) throw std::invalid_argument("set_threads_for: n must be >= 0");
         int rc = fn_set_threads_for_(algo, n);
         if (rc != 0) throw std::runtime_error(
             "grid_rbd_set_threads_for failed: rc=" + std::to_string(rc));
     }
-    int algo_count() const { return fn_algo_count_ ? fn_algo_count_() : 0; }
-    bool has_per_algo_threads() const { return fn_set_threads_for_ != nullptr; }
+    int algo_count() const { return fn_algo_count_(); }
     // E6 batch-switch: when a call's batch <= threshold, launch `algo` with
     // n_small threads (threshold==0 clears the switch for that algo).
     void set_threads_for_n(int algo, int threshold, int n_small) {
-        if (!fn_set_threads_for_n_)
-            throw std::runtime_error("set_threads_for_n: this .so predates the "
-                "batch-regime overlay (rebuild to use the batch switch)");
         int rc = fn_set_threads_for_n_(algo, threshold, n_small);
         if (rc != 0) throw std::runtime_error(
             "grid_rbd_set_threads_for_n failed: rc=" + std::to_string(rc));
     }
     py::tuple get_batch_switch(int algo) const {
-        if (!fn_get_batch_switch_)
-            throw std::runtime_error("get_batch_switch: this .so predates the "
-                "batch-regime overlay");
         int threshold = 0, n_small = -1;
         int rc = fn_get_batch_switch_(algo, &threshold, &n_small);
         if (rc != 0) throw std::runtime_error(
             "grid_rbd_get_batch_switch failed: rc=" + std::to_string(rc));
         return py::make_tuple(threshold, n_small);
     }
-    bool has_batch_switch() const { return fn_set_threads_for_n_ != nullptr; }
     int threads_per_block() const { return fn_threads_per_block_(); }
     void set_threads_per_block(int n) {
         // Override the per-block thread count for all subsequent kernel
@@ -832,11 +815,6 @@ public:
         arr_t q,
         bool use_warp)
     {
-        if (!fn_fk_batched_) {
-            throw std::runtime_error(
-                "fk_batched not available in this robot .so (rebuild after adding "
-                "the G2 batched-FK surface)");
-        }
         if (q.ndim() != 2 || q.shape(1) != num_joints_) {
             throw std::invalid_argument(
                 "fk_batched: q must be (batch, " + std::to_string(num_joints_) + ")");
@@ -1087,15 +1065,12 @@ public:
     // ─── inverse_dynamics_regressor: Y (NV x 10*NUM_BODIES), tau = Y . pi ─────
     // Returns shape (B, NV*10*NUM_BODIES) flat, row-major NV x (10*NUM_BODIES) per
     // timestep. The Python side reshapes into (B, NV, 10*NUM_BODIES).
-    bool has_inverse_dynamics_regressor() const { return fn_id_regressor_ != nullptr; }
     py::array_t<CT> inverse_dynamics_regressor(
         arr_t q,
         arr_t qd,
         py::object qdd_opt,
         CT gravity)
     {
-        if (!fn_id_regressor_) throw std::runtime_error(
-            "inverse_dynamics_regressor not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
         const CT* qdd_ptr = nullptr;
         if (!qdd_opt.is_none()) {
@@ -1641,7 +1616,6 @@ public:
     py::array_t<CT> com(
         arr_t q)
     {
-        if (!fn_com_) throw std::runtime_error("com not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "com");
         py::array_t<CT> out({batch, 3 + 3 * num_vel_});
         int rc = fn_com_(q.data(), out.mutable_data(), batch);
@@ -1657,7 +1631,6 @@ public:
         arr_t q,
         arr_t qd)
     {
-        if (!fn_ccrba_) throw std::runtime_error("ccrba not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_ + 6});
         int rc = fn_ccrba_(q.data(), qd.data(), out.mutable_data(), batch);
@@ -1674,7 +1647,6 @@ public:
         arr_t qd,
         CT gravity)
     {
-        if (!fn_energy_) throw std::runtime_error("energy not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 3});
         int rc = fn_energy_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
@@ -1690,7 +1662,6 @@ public:
         arr_t q,
         CT gravity)
     {
-        if (!fn_generalized_gravity_) throw std::runtime_error("generalized_gravity not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "generalized_gravity");
         py::array_t<CT> out({batch, num_vel_});
         int rc = fn_generalized_gravity_(q.data(), out.mutable_data(), batch, gravity);
@@ -1718,7 +1689,6 @@ public:
         arr_t qd,
         CT gravity)
     {
-        if (!fn_nonlinear_effects_) throw std::runtime_error("nonlinear_effects not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, num_vel_});
         int rc = fn_nonlinear_effects_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
@@ -1749,7 +1719,6 @@ public:
         arr_t q,
         int target_jid, int reference_frame)
     {
-        if (!fn_frame_jacobian_) throw std::runtime_error("frame_jacobian not available in this .so (frame_jacobian family not generated; re-register with force_rebuild=True)");
         int batch = check_q(q, "frame_jacobian");
         py::array_t<CT> out({batch, 6 * num_vel_});
         // target_jid < 0 / reference_frame < 0 => the C ABI uses the codegen
@@ -1767,7 +1736,6 @@ public:
         arr_t qd,
         int target_jid, int reference_frame)
     {
-        if (!fn_frame_jacobian_dot_) throw std::runtime_error("frame_jacobian_dot not available in this .so (frame_jacobian family not generated; re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_frame_jacobian_dot_(q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
@@ -1781,7 +1749,6 @@ public:
     py::array_t<CT> osc_inertia(
         arr_t q)
     {
-        if (!fn_osc_inertia_) throw std::runtime_error("osc_inertia not available in this .so (frame_jacobian family not generated; re-register with force_rebuild=True)");
         int batch = check_q(q, "osc_inertia");
         py::array_t<CT> out({batch, 36});
         int rc = fn_osc_inertia_(q.data(), out.mutable_data(), batch);
@@ -1799,7 +1766,6 @@ public:
         int target_jid,
         arr_t offset)
     {
-        if (!fn_ee_pose_runtime_) throw std::runtime_error("end_effector_pose_runtime not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "end_effector_pose_runtime");
         const CT* off_ptr = nullptr;
         if (offset.size() == 16) off_ptr = offset.data();
@@ -1837,7 +1803,6 @@ public:
         int target_jid,
         arr_t offset)
     {
-        if (!fn_ee_pose_grad_runtime_) throw std::runtime_error("end_effector_pose_gradient_runtime not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "end_effector_pose_gradient_runtime");
         const CT* off_ptr = nullptr;
         if (offset.size() == 16) off_ptr = offset.data();
@@ -1895,7 +1860,6 @@ public:
         arr_t qd,
         CT gravity)
     {
-        if (!fn_coriolis_matrix_) throw std::runtime_error("coriolis_matrix not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, num_vel_ * num_vel_});
         int rc = fn_coriolis_matrix_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
@@ -1909,7 +1873,6 @@ public:
         arr_t qd,
         CT gravity)
     {
-        if (!fn_kinetic_energy_regressor_) throw std::runtime_error("kinetic_energy_regressor not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 10 * num_bodies_});
         int rc = fn_kinetic_energy_regressor_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
@@ -1922,7 +1885,6 @@ public:
         arr_t q,
         CT gravity)
     {
-        if (!fn_potential_energy_regressor_) throw std::runtime_error("potential_energy_regressor not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "potential_energy_regressor");
         py::array_t<CT> out({batch, 10 * num_bodies_});
         int rc = fn_potential_energy_regressor_(q.data(), out.mutable_data(), batch, gravity);
@@ -1935,8 +1897,6 @@ public:
     py::array_t<CT> dccrba(
         arr_t q)
     {
-        if (!fn_dccrba_) throw std::runtime_error(
-            "dccrba not available in this .so (re-register with force_rebuild=True)");
         int batch = check_q(q, "dccrba");
         py::array_t<CT> out({batch, 6 * num_vel_ * num_vel_});
         int rc = fn_dccrba_(q.data(), out.mutable_data(), batch);
@@ -1969,8 +1929,6 @@ public:
         arr_t q,
         arr_t qd)
     {
-        if (!fn_cmm_time_variation_) throw std::runtime_error(
-            "cmm_time_variation not available in this .so (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_cmm_time_variation_(q.data(), qd.data(), out.mutable_data(), batch);
@@ -2305,8 +2263,6 @@ static void register_runner(py::module_& m, const char* cls_name) {
             "overlay. The global set_threads_per_block override still takes precedence.")
         .def("algo_count", &R::algo_count,
             "GridAlgo enum size (per-algo overlay index bound); 0 if the .so predates it.")
-        .def("has_per_algo_threads", &R::has_per_algo_threads,
-            "True if the .so exposes the E6 per-algo threads overlay (set_threads_for).")
         .def("set_threads_for_n", &R::set_threads_for_n,
             py::arg("algo"), py::arg("threshold"), py::arg("n_small"),
             "E6 batch-switch: launch `algo` with n_small threads whenever a call's "
@@ -2314,8 +2270,6 @@ static void register_runner(py::module_& m, const char* cls_name) {
             "global override and the switch both beat the per-algo overlay.")
         .def("get_batch_switch", &R::get_batch_switch, py::arg("algo"),
             "(threshold, n_small) for the batch-switch on `algo`; threshold 0 = unarmed.")
-        .def("has_batch_switch", &R::has_batch_switch,
-            "True if the .so exposes the E6 batch-regime overlay (set_threads_for_n).")
         .def("inverse_dynamics", &R::inverse_dynamics,
              py::arg("q"), py::arg("qd"),
              py::arg("qdd") = py::none(),
@@ -2421,7 +2375,6 @@ static void register_runner(py::module_& m, const char* cls_name) {
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("second_order_tensor_size"),
              py::arg("gravity") = -9.81f)
-        .def_property_readonly("has_inverse_dynamics_regressor", &R::has_inverse_dynamics_regressor)
         .def("inverse_dynamics_regressor", &R::inverse_dynamics_regressor,
              py::arg("q"), py::arg("qd"), py::arg("qdd") = py::none(),
              py::arg("gravity") = -9.81f)

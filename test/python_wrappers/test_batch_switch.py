@@ -66,7 +66,9 @@ def samples(handle):
 
 
 def test_so_exposes_batch_switch(handle):
-    assert handle._runner.has_batch_switch()
+    # the batch-switch C-ABI is unconditionally exported (require_sym'd at load)
+    thr, small = handle._runner.get_batch_switch(0)
+    assert thr == 0 and small == -1
 
 
 def test_set_readback_clear(handle):
