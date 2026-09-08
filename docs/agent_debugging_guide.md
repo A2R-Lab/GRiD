@@ -107,7 +107,7 @@ DtoH copy of an `nv*nv`-written matrix — is the bug.
   flip to nq.
 - **Grep:** `get_num_vel()`/`nv`/`NUM_VEL` in per-timestep INPUT offsets, `Q_QD_U_STRIDE`,
   `NUM_POS + nv`, `2*nv + ` in load-counts/slot-widths/host-strides across `algorithms/*.py` +
-  the `*_DYNAMIC_SHARED_MEM_BYTES` input-slot terms in `GRiDCodeGenerator.py`.
+  the `*_DYNAMIC_SHARED_MEM_BYTES` input-slot terms in `_constants_arena.py` (post monolith-split).
 - **Same family in DEBUG_MODE printf loops (2026-06-10):** a `for ind in range(n=NUM_VEL)` debug loop that
   calls `get_*_by_id(ind)` / indexes per-jid structures (`running_sum_*_per_jid[ind]`) crashes on floating
   (nv-index isn't a body id → `get_bfs_level_by_id` returns None) — invisible on fixed base. Iterate
@@ -206,7 +206,7 @@ pinocchio = quat **xyzw** + free-joint velocity `[v_lin LOCAL; ω LOCAL]`; mujoc
 [v_lin GLOBAL; ω LOCAL]`. Transform `G(q)=blockdiag(R, I_3)` on the leading 6 tangent DOF (R = base rotation);
 G orthogonal ⇒ `G^{-1}=G^T`. Gradient base-linear maps `grad_mjx = R·grad_pin`; GN-hessian by congruence
 `G X Gᵀ`; velocity inputs `v_pin = Rᵀ v_mjx`. **SSOT: `RBDReference/equivalents/mujoco_convention.py`** +
-`docs/open-tasks/mjx_output_convention_flag.md`. CUDA emit: `_code_generation_helpers.py`
+`docs/open-tasks/archive/mjx_output_convention_flag.md`. CUDA emit: `_code_generation_helpers.py`
 (`gen_mjx_base_rotate`/`gen_mjx_congruence`/`_gen_mjx_build_R_lines`) + `_plant.py` (`_gen_cost_mjx_kernel_input`).
 - **THE TRAP:** `test_mujoco_kernel` (and friends) are a CONSISTENCY check `mjx_kernel(q) == G·pin_kernel(q_pin)`.
   When one fails, the reflex "the reframe is broken / centroidal base columns are stale" is almost always WRONG.
@@ -756,7 +756,7 @@ are. So prefer MORE parallelism (more threads/blocks) even for single-block accu
 work serial to "save" SM occupancy. Justify every serial block.
 
 **The three structural parallelism levers — AUDIT every algorithm against all three (canonical doc:
-`docs/source/user_guide/concepts/parallelism_patterns.rst`; status table: `docs/open-tasks/parallelism_audit.md`).
+`docs/source/user_guide/concepts/parallelism_patterns.rst`; status table: `docs/open-tasks/archive/parallelism_audit.md`).
 A serial block with no P1/P2/P3 justification is a bug to file, not a style choice:**
 - **P1 — Depth/BFS-level batching of tree recursions.** Bodies at the same tree DEPTH are independent;
   emit the recursion as a serial loop over LEVELS (O(depth)) and fan all bodies in a level across
@@ -982,7 +982,7 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
 ## 5. Merge discipline (multi-agent, file-isolated clones)
 
 - Agents clone off varying bases → expect **3-way merges**. File-isolated agents merge clean; the
-  ONE collision zone is `GRiDCodeGenerator.py`'s **`_MIMIC_GRADIENT_ALGORITHMS`** set (every mimic
+  ONE collision zone is `GRiDCodeGenerator.py`'s **`(historical: `_MIMIC_GRADIENT_ALGORITHMS`, removed 2026-08-27 — mimic refusals fully ungated)`** set (every mimic
   ungate touches it). Hand-reconcile to the **UNION** of removals.
 - **`set()` not `{}`** for an empty refusal set — `{}` is a dict and `dict |= set` raises.
 - **API 529 / an agent that dies MID-process** leaves UNVALIDATED partial edits in its file. PRESERVE
@@ -1519,7 +1519,7 @@ is their tombstone):
 - **Shared-helper scratch must be reserved in EVERY per-algo arena `t_count` (a SILENT OOB class).** When a SHARED device
   helper (e.g. `load_update_XImats_helpers`) writes a new block into `s_temp` (runtime_transform appended a 36·NB `Xfixed`
   block at offset 2·num_pos), growing the helper's OWN declared temp size is NOT enough — every algorithm's arena `t_count`
-  (GRiDCodeGenerator.py ~659-960, feeding `grid_shared_arena_bytes(t_count,…)`) must reserve it too, or the helper writes past
+  (grid_codegen/_constants_arena.py (arena/tier section; moved in the 2026-08-27 monolith split), feeding `grid_shared_arena_bytes(t_count,…)`) must reserve it too, or the helper writes past
   the kernel's dynamic-shared allocation. NO compile error, and the functional test can pass on small data — only
   **`compute-sanitizer --tool memcheck`** catches the "Invalid __shared__ write … out of bounds". A purely-additive `+= reserve`
   per arena is safe when the block is consumed inside the helper (dead after). The M descriptor table kills this class via an

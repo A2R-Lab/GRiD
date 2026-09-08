@@ -8,7 +8,7 @@ yet all dynamics/kinematics OUTPUTS agree because they depend on the angle only
 through ``cos``/``sin`` -- even at LARGE wrapped angles (theta = 5pi + delta),
 where the raw-q representations differ most.
 
-This module closes the matching CUDA gap (test_coverage_matrix.md item 8 / G2):
+This module closes the matching CUDA gap (archive/test_coverage_matrix.md item 8 / G2):
 the generated CUDA kernels for continuous joints had NO end-to-end coverage. It
 codegens gen3-fixed, drives the shared ``cuda_equivalence_runner.cu`` over the
 SAME large-wrapped-angle states the Python test uses, and asserts the CUDA

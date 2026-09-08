@@ -14,7 +14,8 @@ one-shot calls that round-trip to the host.
 | **torch** | `grid_rbd.torch.get_robot(name)` | CUDA `torch.Tensor` | PyTorch training / MPC; autograd-aware; `capture()` for CUDA-Graphs replay. **The fast path.** |
 
 All three share **one cache** (the same compiled `.so`, keyed by URDF bytes + codegen options +
-GRiD version + CUDA arch). Build once, use from any surface. Install is opt-in per backend:
+GRiD version + CUDA arch + wrapper/codegen source hashes — editing grid_codegen or the
+wrapper rotates every key; rebuilds are automatic, no force_rebuild needed). Build once, use from any surface. Install is opt-in per backend:
 `pip install -e ".[jax]"` / `[torch]` / `[all]` (base is numpy-only). `nvcc` must be on
 `PATH` at build time (not at `pip install` time); the per-robot `.so` is built on first use.
 
@@ -221,6 +222,13 @@ fastest at 128 threads but the FFI path is fastest at ~768 — the same kernel, 
 - A wrapper call is still a few µs of jax/XLA dispatch slower than the raw kernel even at the best
   block size — that **dispatch tax** is fixed per call, so stay GPU-resident and `jit`/`capture` to
   amortize it (see Do/Don't below). Threads fix the kernel regime; residency fixes the dispatch tax.
+
+Per-algo introspection: `handle.kernel_max_threads(key)` returns the REAL compiled
+`__launch_bounds__` ceiling for that algo's baked-tier kernel (keys = the autotune
+short names: id, fd, minv, id_du, fd_du, ee_pose, idsva_so, ...; -1 = unknown/absent).
+Batch-regime switching (E6): `set_threads_for_n`/`apply_batch_overlay`/`get_batch_switch`
+apply per-algo small-batch thread overrides from the config's `ffi_bases_by_n` block.
+
 
 ## Do / Don't
 

@@ -213,7 +213,11 @@ Cache layout
        └── robot.build.log
 
 Cache key = SHA-256 of ``urdf_bytes + canonical_json(options) +
-grid_rbd_version + cuda_arch``. CUDA arch in the key means a roaming
+grid_rbd_version + cuda_arch`` **plus** the wrapper-template hash, the
+codegen-source hash (every ``grid_codegen/``/``URDFParser`` file and
+``_compile.py``), and the torch/jax ABI tags — editing the codegen or the
+wrapper rotates every key, so rebuilds happen automatically and
+``force_rebuild`` is never needed for that. CUDA arch in the key means a roaming
 home directory (e.g. NFS-mounted between a laptop and a desktop) safely
 keeps separate ``.so`` files per machine.
 

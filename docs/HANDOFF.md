@@ -22,7 +22,7 @@ gradient bug that earlier revisions flagged as a "CRITICAL OPEN QUESTION" is
 > recurring bug classes (NV-vs-NB scratch sizing, shared-helper NB/NJ index bugs, silent CUDA
 > launch failures), debugging methodology, refactor traps, the optimization patterns that worked,
 > merge discipline, and oracle gotchas. Distilled from ~15 agent operations. Open systemic-bug
-> worklist: [`docs/open-tasks/f2_audit_findings.md`](docs/open-tasks/f2_audit_findings.md).
+> worklist: [`docs/open-tasks/archive/f2_audit_findings.md`](docs/open-tasks/archive/f2_audit_findings.md).
 
 ---
 
@@ -1192,7 +1192,7 @@ clean. Consolidated post-merge equivalence validation run separately. NOT yet pu
   → A **T3-finisher** is the natural next cascade launch (GPU now free).
 - **T2 left crba unmodified** (its Phase-2 is already parallel; the gap is batch
   occupancy/tier) → handled by T5's autotune, not a codegen restructure.
-- **T5 propose-only follow-ups** (`docs/open-tasks/tier_autotune_followups.md`):
+- **T5 propose-only follow-ups** (`docs/open-tasks/archive/tier_autotune_followups.md`):
   feed autotuned best-tier back into codegen per-robot defaults; deeper A.7 fix
   (LITE aliases SHARED launch_bounds for no-smem-spill algos) — belongs in B+C.
 
@@ -1376,7 +1376,7 @@ codegen smoke + additive-GCG reconcile).
 - **PERF (SO audit G4 partial)**: `id_du` branched-fixed + mimic-dense column-parallel (K-iddu);
   world-frame `idsva_so` forward-sweep parallelized + Xdown/rt-rp dedup (SO-idsva); `fdsva_so`
   timed/untimed emitter dedup byte-identical + A2 Minv-apply hotspot profiling PLAN (SO-fdsva).
-- **TEST/DOCS**: `docs/open-tasks/test_coverage_matrix.md` (per-algo × robot both-layer matrix) +
+- **TEST/DOCS**: `docs/open-tasks/archive/test_coverage_matrix.md` (per-algo × robot both-layer matrix) +
   `test_cuda_matmul_blockwrap_regression.py` (NB>NV pin, passes/fails-on-revert); README + CHANGELOG +
   new `frame_jacobian.rst` + stale-mimic corrections (docs-sweep); coverage-fill (robot-default
   widenings + the continuous-joint CUDA test = the one algo-family that had no CUDA coverage).
@@ -1453,7 +1453,7 @@ codegen smoke + additive-GCG reconcile).
   2026-05-31** — all-at-once split broke ~93 tests (mis-wired mixin MRO behind an identical public
   surface). Redo INCREMENTALLY: one mixin at a time, full numpy suite green after each.
 - F2. Naming/uniformity + warnings sweep + **two systemic bug-class audits** — full worklist in
-  [`docs/open-tasks/f2_audit_findings.md`](docs/open-tasks/f2_audit_findings.md):
+  [`docs/open-tasks/archive/f2_audit_findings.md`](docs/open-tasks/archive/f2_audit_findings.md):
   (A) **silent CUDA launch-failure pattern** — smoke runners that launch without a
   `cudaGetLastError` check (osc-Λ zero-output was one; `cuda_centroidal_smoke_runner.cu` +
   `cuda_plant_smoke_runner.cu` still unguarded). (B) **per-body scratch sized by NV not NB**
@@ -1499,7 +1499,7 @@ fix (immediate) from the full mimic-gradient implementation (after consolidation
   mimic robots). Neutralizes the F-deferred footgun without waiting for P3/P4.
 - **G1 — consolidate (serial on codegen core) + bindings (parallel):**
   - **B+C architecture consolidation:** device-`_device`-wrapper collapse +
-    table-driven tier-dispatch dedup (`docs/open-tasks/bc_cleanup_plan.md` items 1–2).
+    table-driven tier-dispatch dedup (`docs/open-tasks/archive/bc_cleanup_plan.md` items 1–2).
     Byte-identical validation. New G2 algos emit against the deduped base.
   - **Bindings track (parallel, `bindings/grid_rbd/` — independent of codegen core):**
     D.3 PyTorch in-memory compile + autograd + CUDA-Graphs + notebook UX

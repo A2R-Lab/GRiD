@@ -182,7 +182,7 @@ state whether it *applies-and-is-done*, *applies-and-is-a-TODO*, or
 dense pass over known zeros) with no such justification is a bug to file, not a
 style choice. When adding or refactoring an algorithm, the audit is part of the
 change. See the per-algorithm audit table in
-``docs/open-tasks/parallelism_audit.md`` (working doc) for current status.
+``docs/open-tasks/archive/parallelism_audit.md`` (working doc) for current status.
 
 .. seealso::
 

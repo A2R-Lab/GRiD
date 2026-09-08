@@ -208,9 +208,12 @@ warp-rounded). External callers are free to override (see
 sizes will be slower at the same batch size (work-per-block stays
 constant; fewer threads cover it).
 
-The codegen currently still emits ``__launch_bounds__(MAX_PERF_LEVEL_THREADS)``
-on each ``X_kernel``. That attribute drops in phase B1 (any-thread-count
-emission); see the design doc for the rollout sequence.
+Each ``X_kernel`` is emitted with ``__launch_bounds__(tier_max_threads<RESOURCE_TIER>())`` —
+tier-templated and load-bearing (it is what ``grid_rbd_kernel_max_threads`` introspects and
+what the baked-THREADS clamp validates against). Only the integrator family still uses
+``MAX_PERF_LEVEL_THREADS``. (An older revision here said the attribute was "about to drop
+in phase B1" — that plan was superseded; "B1/B2" now name the tier-matrix/kernel-attr
+phases in the live plan.)
 
 Per-algo metadata: the descriptor table
 ---------------------------------------
