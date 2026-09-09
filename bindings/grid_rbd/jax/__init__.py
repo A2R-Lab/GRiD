@@ -386,22 +386,16 @@ class JaxRobotHandle(BaseDelegateMixin):
             # nv == nj so _slice_nv / _pad_nj are byte-identical no-ops.
             flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
                 q, qd, u, gravity=self._np_dt(gravity))
-            # GRiD writes (2, NV, NV) column-major; transpose to row-major (out, in).
-            blocks = flat.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
-            df_dq, df_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
+            # shared out-layout (grad_concat → (…, NV, 2NV)); split the halves.
+            g2 = self._shape_out("forward_dynamics_gradient", flat)
+            df_dq, df_dqd = g2[..., :nv], g2[..., nv:]
             # minv is gravity-independent and its FFI binding declares NO gravity
             # attr (BIND_1IN) — do not pass one (H6 drift fix; XLA happened to
             # tolerate the undeclared attr, but the call was lying about a dep).
             mflat = jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(q)
-            m = mflat.reshape(q.shape[:-1] + (nv, nv))
-            # ∂qdd/∂u = Minv. pin minv writes the UPPER triangle, lower zero (symmetrize);
-            # the mjx minv_mujoco kernel writes a FULL DENSE symmetric matrix (the
-            # G^-T Minv G^-1 congruence baked in) so it is used as-is.
-            if mjx:
-                minv = m
-            else:
-                eye = jnp.eye(nv, dtype=m.dtype)
-                minv = m + jnp.swapaxes(m, -1, -2) - m * eye
+            # ∂qdd/∂u = Minv via the shared minv layout (pin UPPER-triangle
+            # symmetrize / mjx full-dense — _out_transform).
+            minv = self._shape_out("minv", mflat, mjx=mjx)
             ctv = _slice_nv(ct)
             gq = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, df_dq))
             gqd = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, df_dqd))
@@ -435,8 +429,8 @@ class JaxRobotHandle(BaseDelegateMixin):
             # — slice leading nv, contract, pad back to nj (no-op for fixed base).
             flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
                 q, qd, qdd, gravity=self._np_dt(gravity))
-            blocks = flat.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
-            dc_dq, dc_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
+            g2 = self._shape_out("inverse_dynamics_gradient", flat)
+            dc_dq, dc_dqd = g2[..., :nv], g2[..., nv:]
             ctv = _slice_nv(ct)
             gq = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, dc_dq))
             gqd = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, dc_dqd))
@@ -459,10 +453,8 @@ class JaxRobotHandle(BaseDelegateMixin):
             (q,) = res
             tg = _t("end_effector_pose_gradient", "grid_rbd_jax_end_effector_pose_gradient")
             raw = jax.ffi.ffi_call(tg, self._out(q, 6 * nee * nv), vmap_method=VM)(q)
-            # mirror the public reshape: (NEE, NV, 6) → (6*NEE, NV) row-major.
-            J = (raw.reshape(q.shape[:-1] + (nee, nv, 6))
-                    .swapaxes(-2, -1)
-                    .reshape(q.shape[:-1] + (6 * nee, nv)))
+            # shared out-layout (ee_grad → (…, 6*NEE, NV)) — same as the public chain.
+            J = self._shape_out("end_effector_pose_gradient", raw)
             # J cols index NV (tangent); the q input is nj-wide → pad the nv-wide
             # input cotangent back to nj (no-op for fixed base, nv == nj).
             gq = _pad_nj(jnp.einsum('...o,...oi->...i', ct, J))
@@ -505,8 +497,8 @@ class JaxRobotHandle(BaseDelegateMixin):
             # Jacobian + regressor rows are nv-wide; the c cotangent is nj-wide.
             flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
                 q, qd, zq, gravity=self._np_dt(gravity))
-            blocks = flat.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
-            dc_dq, dc_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
+            g2 = self._shape_out("inverse_dynamics_gradient", flat)
+            dc_dq, dc_dqd = g2[..., :nv], g2[..., nv:]
             ctv = _slice_nv(ct)
             gq = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, dc_dq))
             gqd = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, dc_dqd))
@@ -545,15 +537,14 @@ class JaxRobotHandle(BaseDelegateMixin):
             # Jacobian / Minv / param-gradient rows are nv-wide; qdd cotangent nj-wide.
             flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
                 q, qd, u, gravity=self._np_dt(gravity))
-            blocks = flat.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
-            df_dq, df_dqd = blocks[..., 0, :, :], blocks[..., 1, :, :]
+            g2 = self._shape_out("forward_dynamics_gradient", flat)
+            df_dq, df_dqd = g2[..., :nv], g2[..., nv:]
             # minv is gravity-independent and its FFI binding declares NO gravity
             # attr (BIND_1IN) — do not pass one (H6 drift fix; XLA happened to
             # tolerate the undeclared attr, but the call was lying about a dep).
             mflat = jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(q)
-            m = mflat.reshape(q.shape[:-1] + (nv, nv))
-            eye = jnp.eye(nv, dtype=m.dtype)
-            minv = m + jnp.swapaxes(m, -1, -2) - m * eye
+            # wrt_params is pin-only → always the pin symmetrize (mjx=False default).
+            minv = self._shape_out("minv", mflat)
             ctv = _slice_nv(ct)
             gq = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, df_dq))
             gqd = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, df_dqd))

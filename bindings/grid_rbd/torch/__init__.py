@@ -58,6 +58,7 @@ from typing import Any
 
 import grid_rbd as _grid_rbd
 from grid_rbd._handle import RobotHandle, SecondOrderID, SecondOrderFD, _integrator_code
+from .._out_transform import apply_out_layout
 from .._surface_common import BaseDelegateMixin, MujocoDerivativeViewMixin, MujocoViewBase
 
 
@@ -214,9 +215,9 @@ def _make_autograd(ns, nv, mujoco=False):
             # ∂(M·qdd)/∂q — included by threading the saved ctx.qdd into the grad
             # op (USE_QDD overload). A None/zero qdd reduces to the bias Jacobian.
             raw = _op("inverse_dynamics_gradient")(q, qd, ctx.gravity, ctx.qdd, ctx.f_ext)  # (B, 2*NV*NV) col-major
-            B = raw.shape[0]
-            blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)  # row-major (B,2,NV,NV)
-            dc_dq, dc_dqd = blocks[:, 0], blocks[:, 1]  # (B, NV, NV): rows=out, cols=in
+            # shared out-layout (grad_concat → (B, NV, 2NV)); split the halves.
+            g2 = apply_out_layout(raw, ("grad_concat",), None, nv=nv)
+            dc_dq, dc_dqd = g2[..., :nv], g2[..., nv:]  # (B, NV, NV): rows=out, cols=in
             # VJP: grad_in = grad_c · J → (B,1,NV) bmm (B,NV,NV) = (B,1,NV); the
             # torque cotangent is nj-wide so slice leading nv, then pad result to nj.
             gc = _slice_nv(grad_c, nj, nv).unsqueeze(1)
@@ -241,19 +242,15 @@ def _make_autograd(ns, nv, mujoco=False):
                 q, qd, u = ctx.saved_tensors
                 nj = q.shape[1]
                 raw = _op("forward_dynamics_gradient")(q, qd, u, ctx.gravity, ctx.f_ext)
-                B = raw.shape[0]
-                blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)
-                df_dq, df_dqd = blocks[:, 0], blocks[:, 1]
-                # ∂qdd/∂u = M⁻¹ (NV x NV). The pin minv kernel writes only the
-                # UPPER triangle (lower zero; _minv.py SYMMETRIC_UPPER) → symmetrize; the mjx minv_mujoco kernel writes a
-                # FULL DENSE symmetric matrix (the G^-T Minv G^-1 congruence baked
-                # in) so it is used as-is.
-                m = _op("minv")(q).reshape(B, nv, nv)
-                if mujoco:
-                    minv = m
-                else:
-                    eye = torch.eye(nv, dtype=m.dtype, device=m.device)
-                    minv = m + m.transpose(1, 2) - m * eye
+                # shared out-layout (grad_concat → (B, NV, 2NV)); split the halves.
+                g2 = apply_out_layout(raw, ("grad_concat",), None, nv=nv)
+                df_dq, df_dqd = g2[..., :nv], g2[..., nv:]
+                # ∂qdd/∂u = M⁻¹ via the shared minv layout (pin UPPER-triangle
+                # symmetrize / mjx full-dense — _out_transform).
+                mraw = _op("minv")(q)
+                eye = torch.eye(nv, dtype=mraw.dtype, device=mraw.device)
+                minv = apply_out_layout(mraw, ("minv",), None, nv=nv,
+                                        mjx=mujoco, eye=eye)
                 # qdd cotangent is nj-wide → slice leading nv, bmm, pad back to nj.
                 g = _slice_nv(grad_qdd, nj, nv).unsqueeze(1)
                 grad_q = _pad_nj(torch.bmm(g, df_dq).squeeze(1), nj, nv)
@@ -288,8 +285,9 @@ def _make_autograd(ns, nv, mujoco=False):
             # sysID is the bias gradient (qdd=0) → pass None for the qdd slot.
             raw = ops.inverse_dynamics_gradient(q, qd, ctx.gravity, None, ctx.f_ext)
             B = raw.shape[0]
-            blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)
-            dc_dq, dc_dqd = blocks[:, 0], blocks[:, 1]
+            # shared out-layout (grad_concat → (B, NV, 2NV)); split the halves.
+            g2 = apply_out_layout(raw, ("grad_concat",), None, nv=nv)
+            dc_dq, dc_dqd = g2[..., :nv], g2[..., nv:]
             # torque cotangent nj-wide → slice leading nv, bmm, pad inputs to nj.
             gc = _slice_nv(grad_c, nj, nv).unsqueeze(1)
             grad_q = _pad_nj(torch.bmm(gc, dc_dq).squeeze(1), nj, nv)
@@ -314,11 +312,13 @@ def _make_autograd(ns, nv, mujoco=False):
             nj = q.shape[1]
             raw = ops.forward_dynamics_gradient(q, qd, u, ctx.gravity, ctx.f_ext)
             B = raw.shape[0]
-            blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)
-            df_dq, df_dqd = blocks[:, 0], blocks[:, 1]
-            m = ops.minv(q).reshape(B, nv, nv)
-            eye = torch.eye(nv, dtype=m.dtype, device=m.device)
-            minv = m + m.transpose(1, 2) - m * eye
+            # shared out-layout (grad_concat → (B, NV, 2NV)); split the halves.
+            g2 = apply_out_layout(raw, ("grad_concat",), None, nv=nv)
+            df_dq, df_dqd = g2[..., :nv], g2[..., nv:]
+            # wrt_params is pin-only (mjx omits it) → always the pin symmetrize.
+            mraw = ops.minv(q)
+            eye = torch.eye(nv, dtype=mraw.dtype, device=mraw.device)
+            minv = apply_out_layout(mraw, ("minv",), None, nv=nv, eye=eye)
             # qdd cotangent nj-wide → slice leading nv, bmm, pad q/qd/u inputs to nj.
             g = _slice_nv(grad_qdd, nj, nv).unsqueeze(1)
             grad_q = _pad_nj(torch.bmm(g, df_dq).squeeze(1), nj, nv)
@@ -352,9 +352,10 @@ def _make_autograd(ns, nv, mujoco=False):
                     "— differentiate integrator_gradient outputs directly, or "
                     "use a fixed-base robot.")
             raw = _op("integrator_gradient")(q, qd, u, ctx.dt, ctx.it, ctx.gravity)
-            B = raw.shape[0]
-            # h_dAB is (2*NV x 3*NV) column-major per ts → row-major (B, 2*NV, 3*NV).
-            dAB = raw.reshape(B, 3 * nv, 2 * nv).transpose(1, 2)  # (B, 2NV, 3NV)
+            # h_dAB is (2*NV x 3*NV) column-major per ts → shared out-layout
+            # (colmajor_whole → row-major (B, 2NV, 3NV)).
+            dAB = apply_out_layout(raw, ("colmajor_whole", None),
+                                   (2 * nv, 3 * nv), nv=nv)
             # output x_{k+1} is 2*NV (fixed-base: nq==nv). grad_x is (B, 2*NV).
             gx = grad_x.unsqueeze(1)  # (B,1,2NV)
             vjp = torch.bmm(gx, dAB).squeeze(1)  # (B, 3NV) = [d/dq | d/dqd | d/du]
