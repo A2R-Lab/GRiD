@@ -349,20 +349,13 @@ class JaxRobotHandle(BaseDelegateMixin):
 
         VM = "broadcast_all"
 
-        # nq↔nv bridge for the VJPs. The dynamics VALUE outputs (c / qdd) are
-        # nj-wide (so their cotangents are nj-wide), but the analytic Jacobians
-        # are nv x nv (tangent space). For a FLOATING base nv < nj: take the
-        # leading nv of the value cotangent (the meaningful tangent rows; the
-        # trailing nj-vs-nv slot is the quaternion-padding of the value buffer)
-        # before contracting, and pad the nv-wide input cotangent back to nj for
-        # the nj-wide q/qd/u inputs. FIXED base nv == nj → both are no-ops.
-        def _slice_nv(ct):
-            return ct if nv == nj else ct[..., :nv]
-
-        def _pad_nj(g):
-            if nv == nj:
-                return g
-            return jnp.pad(g, [(0, 0)] * (g.ndim - 1) + [(0, nj - nv)])
+        # A4-1 vjp_ops: the backward recipes live in ABI_SPECS[key].vjp and run
+        # through the ONE shared driver (incl. the floating-base nv-slice /
+        # nj-pad bridge). Each shell below supplies SHAPED gradient-op
+        # callables and maps the driver's {name: cotangent} onto its own
+        # argument order.
+        from grid_codegen.abi_specs import ABI_SPECS
+        from .._vjp_common import vjp_backward
 
         # ── forward_dynamics: qdd = f(q,qd,u);  ∂qdd/∂q,∂qdd/∂qd via the
         #    analytic gradient FFI, ∂qdd/∂u = M⁻¹. ───────────────────────────
@@ -379,29 +372,19 @@ class JaxRobotHandle(BaseDelegateMixin):
             q, qd, u = res
             tg = _t("forward_dynamics_gradient", "grid_rbd_jax_forward_dynamics_gradient")
             tm = _t("minv", "grid_rbd_jax_minv")
-            # The Jacobian / Minv matrices are nv x nv (tangent space); the qdd
-            # VALUE (and its cotangent ct) stays nj-wide. For a floating base
-            # nv < nj: contract the leading nv of ct (the meaningful tangent rows)
-            # and pad the resulting nv-wide input cotangent back to nj. FIXED base
-            # nv == nj so _slice_nv / _pad_nj are byte-identical no-ops.
-            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
-                q, qd, u, gravity=self._np_dt(gravity))
-            # shared out-layout (grad_concat → (…, NV, 2NV)); split the halves.
-            g2 = self._shape_out("forward_dynamics_gradient", flat)
-            df_dq, df_dqd = g2[..., :nv], g2[..., nv:]
-            # minv is gravity-independent and its FFI binding declares NO gravity
-            # attr (BIND_1IN) — do not pass one (H6 drift fix; XLA happened to
-            # tolerate the undeclared attr, but the call was lying about a dep).
-            mflat = jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(q)
-            # ∂qdd/∂u = Minv via the shared minv layout (pin UPPER-triangle
-            # symmetrize / mjx full-dense — _out_transform).
-            minv = self._shape_out("minv", mflat, mjx=mjx)
-            ctv = _slice_nv(ct)
-            gq = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, df_dq))
-            gqd = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, df_dqd))
-            gu = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, minv))
-            # cotangents for (q, qd, u, f_ext); f_ext is non-diff.
-            return (gq, gqd, gu, None)
+            g = vjp_backward(ABI_SPECS["forward_dynamics"].vjp, ct, {
+                "grad": lambda: self._shape_out(
+                    "forward_dynamics_gradient",
+                    jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
+                        q, qd, u, gravity=self._np_dt(gravity))),
+                # minv is gravity-independent and its FFI binding declares NO
+                # gravity attr (BIND_1IN) — do not pass one (H6 drift fix).
+                "minv": lambda: self._shape_out(
+                    "minv",
+                    jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(q),
+                    mjx=mjx),
+            }, nv=nv, nj=nj)
+            return (g["q"], g["qd"], g["u"], g["f_ext"])
 
         fd.defvjp(fd_fwd, fd_bwd)
 
@@ -425,17 +408,13 @@ class JaxRobotHandle(BaseDelegateMixin):
         def id_bwd(gravity, res, ct):
             q, qd, qdd = res
             tg = _t("inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient")
-            # Jacobian is nv x 2nv (tangent); the torque VALUE/cotangent is nj-wide
-            # — slice leading nv, contract, pad back to nj (no-op for fixed base).
-            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
-                q, qd, qdd, gravity=self._np_dt(gravity))
-            g2 = self._shape_out("inverse_dynamics_gradient", flat)
-            dc_dq, dc_dqd = g2[..., :nv], g2[..., nv:]
-            ctv = _slice_nv(ct)
-            gq = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, dc_dq))
-            gqd = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, dc_dqd))
-            # cotangents for (q, qd, qdd, f_ext); qdd/f_ext are non-diff.
-            return (gq, gqd, None, None)
+            g = vjp_backward(ABI_SPECS["inverse_dynamics"].vjp, ct, {
+                "grad": lambda: self._shape_out(
+                    "inverse_dynamics_gradient",
+                    jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
+                        q, qd, qdd, gravity=self._np_dt(gravity))),
+            }, nv=nv, nj=nj)
+            return (g["q"], g["qd"], g["qdd"], g["f_ext"])
 
         idyn.defvjp(id_fwd, id_bwd)
 
@@ -452,13 +431,12 @@ class JaxRobotHandle(BaseDelegateMixin):
         def ee_bwd(res, ct):
             (q,) = res
             tg = _t("end_effector_pose_gradient", "grid_rbd_jax_end_effector_pose_gradient")
-            raw = jax.ffi.ffi_call(tg, self._out(q, 6 * nee * nv), vmap_method=VM)(q)
-            # shared out-layout (ee_grad → (…, 6*NEE, NV)) — same as the public chain.
-            J = self._shape_out("end_effector_pose_gradient", raw)
-            # J cols index NV (tangent); the q input is nj-wide → pad the nv-wide
-            # input cotangent back to nj (no-op for fixed base, nv == nj).
-            gq = _pad_nj(jnp.einsum('...o,...oi->...i', ct, J))
-            return (gq,)
+            g = vjp_backward(ABI_SPECS["end_effector_pose"].vjp, ct, {
+                "grad": lambda: self._shape_out(
+                    "end_effector_pose_gradient",
+                    jax.ffi.ffi_call(tg, self._out(q, 6 * nee * nv), vmap_method=VM)(q)),
+            }, nv=nv, nj=nj)
+            return (g["q"],)
 
         eepose.defvjp(ee_fwd, ee_bwd)
 
@@ -490,26 +468,22 @@ class JaxRobotHandle(BaseDelegateMixin):
 
         def id_pi_bwd(gravity, res, ct):
             q, qd = res
-            # q/qd cotangents (analytic id_gradient). sysID is the bias (qdd=0);
-            # the grad FFI now takes an explicit qdd buffer → pass zeros.
+            # sysID is the bias linearization (qdd=0): zeros thread into both
+            # the grad FFI's explicit qdd buffer and the regressor.
             tg = _t("inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient")
-            zq = jnp.zeros_like(q)
-            # Jacobian + regressor rows are nv-wide; the c cotangent is nj-wide.
-            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
-                q, qd, zq, gravity=self._np_dt(gravity))
-            g2 = self._shape_out("inverse_dynamics_gradient", flat)
-            dc_dq, dc_dqd = g2[..., :nv], g2[..., nv:]
-            ctv = _slice_nv(ct)
-            gq = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, dc_dq))
-            gqd = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, dc_dqd))
-            # pi cotangent: ctv · Y, Y = ∂c/∂pi (NV x 10*NB) at qdd=0.
             tr = _t("inverse_dynamics_regressor", "grid_rbd_jax_inverse_dynamics_regressor")
-            qdd0 = jnp.zeros_like(q)
-            Yflat = jax.ffi.ffi_call(tr, self._out(q, nv * npar), vmap_method=VM)(
-                q, qd, qdd0, gravity=self._np_dt(gravity))
-            Y = Yflat.reshape(q.shape[:-1] + (nv, npar))  # row-major (NV, 10NB)
-            gpi = jnp.einsum('...o,...op->...p', ctv, Y)
-            return (gq, gqd, gpi)
+            zq = jnp.zeros_like(q)
+            g = vjp_backward(ABI_SPECS["inverse_dynamics_wrt_params"].vjp, ct, {
+                "grad": lambda: self._shape_out(
+                    "inverse_dynamics_gradient",
+                    jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
+                        q, qd, zq, gravity=self._np_dt(gravity))),
+                "param_grad": lambda: self._shape_out(
+                    "inverse_dynamics_regressor",
+                    jax.ffi.ffi_call(tr, self._out(q, nv * npar), vmap_method=VM)(
+                        q, qd, zq, gravity=self._np_dt(gravity))),
+            }, nv=nv, nj=nj)
+            return (g["q"], g["qd"], g["params"])
 
         idyn_pi.defvjp(id_pi_fwd, id_pi_bwd)
 
@@ -534,34 +508,59 @@ class JaxRobotHandle(BaseDelegateMixin):
             q, qd, u = res
             tg = _t("forward_dynamics_gradient", "grid_rbd_jax_forward_dynamics_gradient")
             tm = _t("minv", "grid_rbd_jax_minv")
-            # Jacobian / Minv / param-gradient rows are nv-wide; qdd cotangent nj-wide.
-            flat = jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
-                q, qd, u, gravity=self._np_dt(gravity))
-            g2 = self._shape_out("forward_dynamics_gradient", flat)
-            df_dq, df_dqd = g2[..., :nv], g2[..., nv:]
-            # minv is gravity-independent and its FFI binding declares NO gravity
-            # attr (BIND_1IN) — do not pass one (H6 drift fix; XLA happened to
-            # tolerate the undeclared attr, but the call was lying about a dep).
-            mflat = jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(q)
-            # wrt_params is pin-only → always the pin symmetrize (mjx=False default).
-            minv = self._shape_out("minv", mflat)
-            ctv = _slice_nv(ct)
-            gq = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, df_dq))
-            gqd = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, df_dqd))
-            gu = _pad_nj(jnp.einsum('...o,...oi->...i', ctv, minv))
-            # pi cotangent: ctv · (∂qdd/∂pi), ∂qdd/∂pi = -Minv·Y (NV x 10*NB).
             tp = _t("forward_dynamics_parameter_gradient",
                     "grid_rbd_jax_forward_dynamics_parameter_gradient")
-            Gflat = jax.ffi.ffi_call(tp, self._out(q, nv * npar), vmap_method=VM)(
-                q, qd, u, gravity=self._np_dt(gravity))
-            G = Gflat.reshape(q.shape[:-1] + (nv, npar))  # row-major (NV, 10NB)
-            gpi = jnp.einsum('...o,...op->...p', ctv, G)
-            return (gq, gqd, gu, gpi)
+            g = vjp_backward(ABI_SPECS["forward_dynamics_wrt_params"].vjp, ct, {
+                "grad": lambda: self._shape_out(
+                    "forward_dynamics_gradient",
+                    jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
+                        q, qd, u, gravity=self._np_dt(gravity))),
+                # wrt_params is pin-only → always the pin symmetrize (no mjx=).
+                # minv declares NO gravity attr (BIND_1IN) — do not pass one.
+                "minv": lambda: self._shape_out(
+                    "minv",
+                    jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(q)),
+                "param_grad": lambda: self._shape_out(
+                    "forward_dynamics_parameter_gradient",
+                    jax.ffi.ffi_call(tp, self._out(q, nv * npar), vmap_method=VM)(
+                        q, qd, u, gravity=self._np_dt(gravity))),
+            }, nv=nv, nj=nj)
+            return (g["q"], g["qd"], g["u"], g["params"])
 
         fd_pi.defvjp(fd_pi_fwd, fd_pi_bwd)
 
+        # ── integrator: x_{k+1} = step(q, qd, u; dt, it) — FIXED base only
+        #    (VjpSpec.fixed_base_only: the SE(3)-chart VJP is unimplemented;
+        #    the public method keeps the direct non-differentiable FFI on a
+        #    floating base). NEW 2026-09-09: torch had this VJP, jax did not —
+        #    the vjp table made the asymmetry visible. ─────────────────────────
+        @functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2))
+        def integ(gravity, dt, it, q, qd, u):
+            t = _t("integrator", "grid_rbd_jax_integrator")
+            return jax.ffi.ffi_call(t, self._out(q, nj + nv), vmap_method=VM)(
+                q, qd, u, dt=self._np_dt(dt), it=np.int64(it),
+                gravity=self._np_dt(gravity))
+
+        def integ_fwd(gravity, dt, it, q, qd, u):
+            return integ(gravity, dt, it, q, qd, u), (q, qd, u)
+
+        def integ_bwd(gravity, dt, it, res, ct):
+            q, qd, u = res
+            tg = _t("integrator_gradient", "grid_rbd_jax_integrator_gradient")
+            g = vjp_backward(ABI_SPECS["integrator"].vjp, ct, {
+                "grad": lambda: self._shape_out(
+                    "integrator_gradient",
+                    jax.ffi.ffi_call(tg, self._out(q, 2 * nv * 3 * nv), vmap_method=VM)(
+                        q, qd, u, dt=self._np_dt(dt), it=np.int64(it),
+                        gravity=self._np_dt(gravity))),
+            }, nv=nv, nj=nj)
+            return (g["q"], g["qd"], g["u"])
+
+        integ.defvjp(integ_fwd, integ_bwd)
+
         d = {"forward_dynamics": fd, "inverse_dynamics": idyn, "end_effector_pose": eepose,
-             "inverse_dynamics_wrt_params": idyn_pi, "forward_dynamics_wrt_params": fd_pi}
+             "inverse_dynamics_wrt_params": idyn_pi, "forward_dynamics_wrt_params": fd_pi,
+             "integrator": integ}
         cache[convention] = d
         return d
 
@@ -1182,11 +1181,16 @@ class JaxRobotHandle(BaseDelegateMixin):
         """
         import jax
         import jax.numpy as jnp
-        target = self._mt(_convention, "integrator", "grid_rbd_jax_integrator")
         (q, qd, u) = self._prep_2d("integrator", q, qd, u)
-        # vmap-able since 2026-09-09 (was a hard-coded 2-D ShapeDtypeStruct):
-        # _out mirrors the prepped leading dims and broadcast_all re-adds the
-        # mapped axis — same dispatch as every other method here.
+        if not self.floating_base:
+            # differentiable route (A4-1 vjp table): custom_vjp backed by the
+            # analytic integrator_gradient — jax.grad now works, matching the
+            # torch surface. Primal path = the same FFI call as before.
+            return self._differentiable(self._resolve_convention(_convention))["integrator"](
+                float(gravity), float(dt), int(_integrator_code(integrator_type)), q, qd, u)
+        # FLOATING base: direct (non-differentiable) FFI — the SE(3)-chart VJP
+        # is unimplemented (VjpSpec.fixed_base_only). vmap-able since 2026-09-09.
+        target = self._mt(_convention, "integrator", "grid_rbd_jax_integrator")
         out_type = self._out(q, self.num_joints + self.num_vel)
         return jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
             q, qd, u, dt=self._np_dt(dt), it=np.int64(_integrator_code(integrator_type)),

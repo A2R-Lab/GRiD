@@ -33,6 +33,38 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
+class VjpSpec:
+    """A4-1 vjp_ops (user-approved 2026-09-09): the five facts a differentiable
+    op's backward needs, previously duplicated (divergently) between the jax
+    custom_vjp closures and the torch autograd.Function backwards. ONE driver
+    (bindings/grid_rbd/_vjp_common.vjp_backward) consumes these; the surfaces
+    keep only their registration shells + shaped-gradient-op callables.
+
+    - residuals: forward inputs saved for backward.
+    - grad_op:   ABI_SPECS key of the analytic gradient whose SHAPED output
+                 (its out_layout applied) is the contraction matrix. Its last
+                 dim must be len(wrt)*NV: ct·[A|B|…] splits into the per-input
+                 cotangents exactly as contracting each block separately.
+    - wrt:       inputs receiving those block cotangents, in block order.
+    - u_via_minv:     extra ∂out/∂u = M⁻¹ contraction for the "u" input.
+    - param_grad_op:  extra ∂out/∂π op (regressor / -M⁻¹Y) for "params".
+    - nondiff:   inputs whose cotangent is None.
+    - ct_slice_nv:    slice the value cotangent to its leading NV rows before
+                 contracting (the nj-wide dynamics outputs on a floating base;
+                 False for tangent-/task-space outputs like the EE pose).
+    - fixed_base_only: the recipe is undefined on a floating base (integrator:
+                 the SE(3)-chart VJP is unimplemented — shells must raise)."""
+    residuals: tuple[str, ...]
+    grad_op: str
+    wrt: tuple[str, ...]
+    u_via_minv: bool = False
+    param_grad_op: str | None = None
+    nondiff: tuple[str, ...] = ()
+    ct_slice_nv: bool = True
+    fixed_base_only: bool = False
+
+
+@dataclass(frozen=True)
 class AbiSpec:
     key: str                                  # join to AlgoDescriptor.key
     # ── identity & gating ───────────────────────────────────────────────
@@ -115,6 +147,7 @@ class AbiSpec:
     py_vmap_ok: bool = True
     py_rc3_msg: str | None = None             # _core's rc==3 message (differs from the wrapper stub)
     py_twin_guard: str | None = None          # the *_mujoco method's null-fn guard message
+    vjp: "VjpSpec | None" = None              # analytic-VJP recipe (A4-1); see VjpSpec
     # ── escape hatch ────────────────────────────────────────────────────
     body_override: bool = False
 
@@ -844,3 +877,70 @@ def expand_py_out_dims(spec: "AbiSpec", nq: int, nv: int, nee: int, nb: int):
         except Exception:
             return None
     return tuple(out)
+
+
+# ── VJP recipes (A4-1, user-approved 2026-09-09) ────────────────────────────
+# Attached via dataclasses.replace so the big rows above stay focused on the C
+# surface; this is THE list of differentiable ops. The two *_wrt_params
+# entries are python-surface pseudo-rows (no C body of their own — they are
+# the sysID linearizations of id/fd, π entering only through the backward).
+from dataclasses import replace as _replace
+
+_FD_VJP = VjpSpec(
+    residuals=("q", "qd", "u"),
+    grad_op="forward_dynamics_gradient",   # halves → (gq, gqd)
+    wrt=("q", "qd"),
+    u_via_minv=True,                       # ∂qdd/∂u = M⁻¹ (pin symmetrize / mjx dense)
+    nondiff=("f_ext",),
+)
+_VJPS = {
+    "forward_dynamics": _FD_VJP,
+    "aba": _FD_VJP,                        # same output, same analytic backward
+    "inverse_dynamics": VjpSpec(
+        residuals=("q", "qd", "qdd"),      # qdd threads into the USE_QDD grad overload
+        grad_op="inverse_dynamics_gradient",
+        wrt=("q", "qd"),
+        nondiff=("qdd", "f_ext"),
+    ),
+    "end_effector_pose": VjpSpec(
+        residuals=("q",),
+        grad_op="end_effector_pose_gradient",
+        wrt=("q",),
+        ct_slice_nv=False,                 # ct is the 6*NEE task-space cotangent
+    ),
+    "integrator": VjpSpec(
+        residuals=("q", "qd", "u"),
+        grad_op="integrator_gradient",     # (2NV, 3NV) dAB → thirds (gq, gqd, gu)
+        wrt=("q", "qd", "u"),
+        ct_slice_nv=False,                 # ct is the FULL 2NV state cotangent
+        fixed_base_only=True,              # SE(3)-chart VJP unimplemented
+    ),
+}
+for _k, _v in _VJPS.items():
+    ABI_SPECS[_k] = _replace(ABI_SPECS[_k], vjp=_v)
+
+ABI_SPECS["inverse_dynamics_wrt_params"] = AbiSpec(
+    "inverse_dynamics_wrt_params",
+    surface_class="python_only",
+    py_surfaces=("jax", "torch"),
+    vjp=VjpSpec(
+        residuals=("q", "qd"),             # bias linearization: qdd = 0
+        grad_op="inverse_dynamics_gradient",
+        wrt=("q", "qd"),
+        param_grad_op="inverse_dynamics_regressor",   # ∂c/∂π = Y(q, qd, 0)
+        nondiff=("f_ext",),
+    ),
+)
+ABI_SPECS["forward_dynamics_wrt_params"] = AbiSpec(
+    "forward_dynamics_wrt_params",
+    surface_class="python_only",
+    py_surfaces=("jax", "torch"),
+    vjp=VjpSpec(
+        residuals=("q", "qd", "u"),
+        grad_op="forward_dynamics_gradient",
+        wrt=("q", "qd"),
+        u_via_minv=True,                   # wrt_params is pin-only: always symmetrize
+        param_grad_op="forward_dynamics_parameter_gradient",  # ∂qdd/∂π = -M⁻¹Y
+        nondiff=("f_ext",),
+    ),
+)

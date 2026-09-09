@@ -177,20 +177,12 @@ def _make_autograd(ns, nv, mujoco=False):
         # AttributeError) via _resolve_core_op.
         return _resolve_core_op(ops, (name + "_mujoco") if mujoco else name)
 
-    # nq↔nv bridge for the backward VJPs. The dynamics VALUE outputs (c / qdd)
-    # are nj-wide (so grad_c / grad_qdd are nj-wide), but the analytic Jacobians
-    # / Minv / regressor rows are nv-wide (tangent space). For a FLOATING base
-    # nv < nj: slice the leading nv of the value cotangent (the meaningful
-    # tangent rows; the trailing nj-vs-nv slot is the quaternion-padding of the
-    # nj-wide value buffer) before bmm, and pad the nv-wide input cotangent back
-    # to nj for the nj-wide q/qd/u inputs. FIXED base nv == nj → both no-ops.
-    def _slice_nv(ct, nj, nv):
-        return ct if nv == nj else ct[:, :nv]
-
-    def _pad_nj(g, nj, nv):
-        if nv == nj:
-            return g
-        return torch.nn.functional.pad(g, (0, nj - nv))
+    # A4-1 vjp_ops: each backward is a SHELL — the recipe (grad op, per-input
+    # cotangents, the floating-base nv-slice/nj-pad bridge) lives in
+    # ABI_SPECS[key].vjp and runs through the shared _vjp_common.vjp_backward
+    # driver, identical to the jax surface.
+    from grid_codegen.abi_specs import ABI_SPECS
+    from .._vjp_common import vjp_backward
 
     class InverseDynamicsFn(torch.autograd.Function):
         # forward args mirror the op schema order (q, qd, gravity, qdd, f_ext);
@@ -207,24 +199,16 @@ def _make_autograd(ns, nv, mujoco=False):
         @staticmethod
         def backward(ctx, grad_c):
             q, qd = ctx.saved_tensors
-            nj = q.shape[1]
-            nv = ctx.nv
-            # f_ext is affine in RNEA → ∂c/∂(q,qd) is unchanged by a constant
-            # f_ext; we pass it through for bias consistency only. qdd shifts the
-            # value (M·qdd); ∂/∂(q,qd) at fixed qdd is the bias gradient plus
-            # ∂(M·qdd)/∂q — included by threading the saved ctx.qdd into the grad
-            # op (USE_QDD overload). A None/zero qdd reduces to the bias Jacobian.
-            raw = _op("inverse_dynamics_gradient")(q, qd, ctx.gravity, ctx.qdd, ctx.f_ext)  # (B, 2*NV*NV) col-major
-            # shared out-layout (grad_concat → (B, NV, 2NV)); split the halves.
-            g2 = apply_out_layout(raw, ("grad_concat",), None, nv=nv)
-            dc_dq, dc_dqd = g2[..., :nv], g2[..., nv:]  # (B, NV, NV): rows=out, cols=in
-            # VJP: grad_in = grad_c · J → (B,1,NV) bmm (B,NV,NV) = (B,1,NV); the
-            # torque cotangent is nj-wide so slice leading nv, then pad result to nj.
-            gc = _slice_nv(grad_c, nj, nv).unsqueeze(1)
-            grad_q = _pad_nj(torch.bmm(gc, dc_dq).squeeze(1), nj, nv)
-            grad_qd = _pad_nj(torch.bmm(gc, dc_dqd).squeeze(1), nj, nv)
+            # f_ext is affine in RNEA (passed through for bias consistency);
+            # qdd threads into the USE_QDD grad overload so ∂(M·qdd)/∂q is
+            # included. Recipe + nv-slice/nj-pad bridge: the shared vjp table.
+            g = vjp_backward(ABI_SPECS["inverse_dynamics"].vjp, grad_c, {
+                "grad": lambda: apply_out_layout(
+                    _op("inverse_dynamics_gradient")(q, qd, ctx.gravity, ctx.qdd, ctx.f_ext),
+                    ("grad_concat",), None, nv=nv),
+            }, nv=nv, nj=q.shape[1])
             # grads for (q, qd, gravity, qdd, f_ext)
-            return grad_q, grad_qd, None, None, None
+            return g["q"], g["qd"], None, g["qdd"], g["f_ext"]
 
     def _make_fd_like(fwd_op):
         # forward_dynamics & aba share the qdd output and the fd-grad backward
@@ -240,23 +224,17 @@ def _make_autograd(ns, nv, mujoco=False):
             @staticmethod
             def backward(ctx, grad_qdd):
                 q, qd, u = ctx.saved_tensors
-                nj = q.shape[1]
-                raw = _op("forward_dynamics_gradient")(q, qd, u, ctx.gravity, ctx.f_ext)
-                # shared out-layout (grad_concat → (B, NV, 2NV)); split the halves.
-                g2 = apply_out_layout(raw, ("grad_concat",), None, nv=nv)
-                df_dq, df_dqd = g2[..., :nv], g2[..., nv:]
-                # ∂qdd/∂u = M⁻¹ via the shared minv layout (pin UPPER-triangle
-                # symmetrize / mjx full-dense — _out_transform).
-                mraw = _op("minv")(q)
-                eye = torch.eye(nv, dtype=mraw.dtype, device=mraw.device)
-                minv = apply_out_layout(mraw, ("minv",), None, nv=nv,
-                                        mjx=mujoco, eye=eye)
-                # qdd cotangent is nj-wide → slice leading nv, bmm, pad back to nj.
-                g = _slice_nv(grad_qdd, nj, nv).unsqueeze(1)
-                grad_q = _pad_nj(torch.bmm(g, df_dq).squeeze(1), nj, nv)
-                grad_qd = _pad_nj(torch.bmm(g, df_dqd).squeeze(1), nj, nv)
-                grad_u = _pad_nj(torch.bmm(g, minv).squeeze(1), nj, nv)
-                return grad_q, grad_qd, grad_u, None, None
+                g = vjp_backward(ABI_SPECS["forward_dynamics"].vjp, grad_qdd, {
+                    "grad": lambda: apply_out_layout(
+                        _op("forward_dynamics_gradient")(q, qd, u, ctx.gravity, ctx.f_ext),
+                        ("grad_concat",), None, nv=nv),
+                    # ∂qdd/∂u = M⁻¹ via the shared minv layout (pin symmetrize
+                    # / mjx full-dense — _out_transform).
+                    "minv": lambda: apply_out_layout(
+                        _op("minv")(q), ("minv",), None, nv=nv, mjx=mujoco,
+                        eye=torch.eye(nv, dtype=q.dtype, device=q.device)),
+                }, nv=nv, nj=q.shape[1])
+                return g["q"], g["qd"], g["u"], None, g["f_ext"]
         return FDLikeFn
 
     FDFn = _make_fd_like(lambda q, qd, u, g, fe: _op("forward_dynamics")(q, qd, u, g, fe))
@@ -281,22 +259,16 @@ def _make_autograd(ns, nv, mujoco=False):
         @staticmethod
         def backward(ctx, grad_c):
             q, qd = ctx.saved_tensors
-            nj = q.shape[1]
-            # sysID is the bias gradient (qdd=0) → pass None for the qdd slot.
-            raw = ops.inverse_dynamics_gradient(q, qd, ctx.gravity, None, ctx.f_ext)
-            B = raw.shape[0]
-            # shared out-layout (grad_concat → (B, NV, 2NV)); split the halves.
-            g2 = apply_out_layout(raw, ("grad_concat",), None, nv=nv)
-            dc_dq, dc_dqd = g2[..., :nv], g2[..., nv:]
-            # torque cotangent nj-wide → slice leading nv, bmm, pad inputs to nj.
-            gc = _slice_nv(grad_c, nj, nv).unsqueeze(1)
-            grad_q = _pad_nj(torch.bmm(gc, dc_dq).squeeze(1), nj, nv)
-            grad_qd = _pad_nj(torch.bmm(gc, dc_dqd).squeeze(1), nj, nv)
-            # π cotangent: gc · Y, Y = ∂c/∂π (NV x 10*NB) at qdd=0 (no input-pad: π is npar-wide).
-            qdd0 = torch.zeros_like(q)
-            Y = ops.inverse_dynamics_regressor(q, qd, qdd0, ctx.gravity).reshape(B, nv, -1)
-            grad_pi = torch.bmm(gc, Y).squeeze(1)
-            return grad_q, grad_qd, grad_pi, None, None
+            # sysID is the bias linearization (qdd=0): None/zeros thread into
+            # the grad op's qdd slot and the regressor.
+            g = vjp_backward(ABI_SPECS["inverse_dynamics_wrt_params"].vjp, grad_c, {
+                "grad": lambda: apply_out_layout(
+                    ops.inverse_dynamics_gradient(q, qd, ctx.gravity, None, ctx.f_ext),
+                    ("grad_concat",), None, nv=nv),
+                "param_grad": lambda: ops.inverse_dynamics_regressor(
+                    q, qd, torch.zeros_like(q), ctx.gravity).reshape(q.shape[0], nv, -1),
+            }, nv=nv, nj=q.shape[1])
+            return g["q"], g["qd"], g["params"], None, None
 
     class FDWrtParamsFn(torch.autograd.Function):
         @staticmethod
@@ -309,25 +281,18 @@ def _make_autograd(ns, nv, mujoco=False):
         @staticmethod
         def backward(ctx, grad_qdd):
             q, qd, u = ctx.saved_tensors
-            nj = q.shape[1]
-            raw = ops.forward_dynamics_gradient(q, qd, u, ctx.gravity, ctx.f_ext)
-            B = raw.shape[0]
-            # shared out-layout (grad_concat → (B, NV, 2NV)); split the halves.
-            g2 = apply_out_layout(raw, ("grad_concat",), None, nv=nv)
-            df_dq, df_dqd = g2[..., :nv], g2[..., nv:]
-            # wrt_params is pin-only (mjx omits it) → always the pin symmetrize.
-            mraw = ops.minv(q)
-            eye = torch.eye(nv, dtype=mraw.dtype, device=mraw.device)
-            minv = apply_out_layout(mraw, ("minv",), None, nv=nv, eye=eye)
-            # qdd cotangent nj-wide → slice leading nv, bmm, pad q/qd/u inputs to nj.
-            g = _slice_nv(grad_qdd, nj, nv).unsqueeze(1)
-            grad_q = _pad_nj(torch.bmm(g, df_dq).squeeze(1), nj, nv)
-            grad_qd = _pad_nj(torch.bmm(g, df_dqd).squeeze(1), nj, nv)
-            grad_u = _pad_nj(torch.bmm(g, minv).squeeze(1), nj, nv)
-            # π cotangent: g · (∂qdd/∂π), ∂qdd/∂π = -Minv·Y (NV x 10*NB); π is npar-wide.
-            G = ops.forward_dynamics_parameter_gradient(q, qd, u, ctx.gravity).reshape(B, nv, -1)
-            grad_pi = torch.bmm(g, G).squeeze(1)
-            return grad_q, grad_qd, grad_u, grad_pi, None, None
+            g = vjp_backward(ABI_SPECS["forward_dynamics_wrt_params"].vjp, grad_qdd, {
+                "grad": lambda: apply_out_layout(
+                    ops.forward_dynamics_gradient(q, qd, u, ctx.gravity, ctx.f_ext),
+                    ("grad_concat",), None, nv=nv),
+                # wrt_params is pin-only (mjx omits it) → always the pin symmetrize.
+                "minv": lambda: apply_out_layout(
+                    ops.minv(q), ("minv",), None, nv=nv,
+                    eye=torch.eye(nv, dtype=q.dtype, device=q.device)),
+                "param_grad": lambda: ops.forward_dynamics_parameter_gradient(
+                    q, qd, u, ctx.gravity).reshape(q.shape[0], nv, -1),
+            }, nv=nv, nj=q.shape[1])
+            return g["q"], g["qd"], g["u"], g["params"], None, None
 
     class IntegratorFn(torch.autograd.Function):
         @staticmethod
@@ -351,18 +316,14 @@ def _make_autograd(ns, nv, mujoco=False):
                     "chart VJP (tangent 2*nv Jacobian vs nq+nv state cotangent) "
                     "— differentiate integrator_gradient outputs directly, or "
                     "use a fixed-base robot.")
-            raw = _op("integrator_gradient")(q, qd, u, ctx.dt, ctx.it, ctx.gravity)
-            # h_dAB is (2*NV x 3*NV) column-major per ts → shared out-layout
-            # (colmajor_whole → row-major (B, 2NV, 3NV)).
-            dAB = apply_out_layout(raw, ("colmajor_whole", None),
-                                   (2 * nv, 3 * nv), nv=nv)
-            # output x_{k+1} is 2*NV (fixed-base: nq==nv). grad_x is (B, 2*NV).
-            gx = grad_x.unsqueeze(1)  # (B,1,2NV)
-            vjp = torch.bmm(gx, dAB).squeeze(1)  # (B, 3NV) = [d/dq | d/dqd | d/du]
-            grad_q = vjp[:, :nv]
-            grad_qd = vjp[:, nv:2 * nv]
-            grad_u = vjp[:, 2 * nv:3 * nv]
-            return grad_q, grad_qd, grad_u, None, None, None
+            g = vjp_backward(ABI_SPECS["integrator"].vjp, grad_x, {
+                # h_dAB is (2*NV x 3*NV) column-major per ts → shared out-layout
+                # (colmajor_whole → row-major (B, 2NV, 3NV)); thirds = gq/gqd/gu.
+                "grad": lambda: apply_out_layout(
+                    _op("integrator_gradient")(q, qd, u, ctx.dt, ctx.it, ctx.gravity),
+                    ("colmajor_whole", None), (2 * nv, 3 * nv), nv=nv),
+            }, nv=nv, nj=q.shape[1])
+            return g["q"], g["qd"], g["u"], None, None, None
 
     fns = {"inverse_dynamics": InverseDynamicsFn, "fd": FDFn, "aba": AbaFn,
            "integrator": IntegratorFn}

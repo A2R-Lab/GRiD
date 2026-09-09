@@ -108,6 +108,11 @@ def test_function_and_twin_exist(key):
         assert f'strcmp(algo, "{stem}")' in _SRC, (
             f"{key}: kernel_only row but no kernel_max_threads ceiling entry")
         has_twin = False
+    elif spec.surface_class == "python_only":
+        # pure python-surface construct (the *_wrt_params sysID linearizations):
+        # nothing C-side to anchor; the vjp validity test is its referee.
+        assert spec.vjp is not None, f"{key}: python_only row carries no vjp"
+        has_twin = False
     else:
         _fn_def(stem)
         has_twin = f"grid_rbd_{stem}_mujoco(" in _SRC
@@ -119,7 +124,7 @@ def test_function_and_twin_exist(key):
 @pytest.mark.parametrize("key", _SPEC_IDS)
 def test_signature_params(key):
     spec = ABI_SPECS[key]
-    if spec.surface_class in ("ffi_only", "kernel_only"):
+    if spec.surface_class in ("ffi_only", "kernel_only", "python_only"):
         assert spec.inputs == (), f"{key}: {spec.surface_class} rows carry no C params"
         return
     if spec.surface_class == "plant":
@@ -252,3 +257,27 @@ def test_mjx_rejects_f_ext_invariant():
         assert spec.mjx_rejects_f_ext == expect, (
             f"{key}: mjx_rejects_f_ext={spec.mjx_rejects_f_ext} but "
             f"f_ext_mode={spec.f_ext_mode!r}, has_mjx_twin={spec.has_mjx_twin}")
+
+
+def test_vjp_recipes_valid():
+    """A4-1: every VJP recipe must reference real spec rows whose shaped
+    outputs the driver can contract — grad_op/param_grad_op rows carry an
+    out_layout, wrt names come from the residual set (plus the minv-backed u),
+    and the differentiable-op set is exactly the seven approved recipes."""
+    vjps = {k: s.vjp for k, s in ABI_SPECS.items() if s.vjp is not None}
+    assert sorted(vjps) == [
+        "aba", "end_effector_pose", "forward_dynamics",
+        "forward_dynamics_wrt_params", "integrator", "inverse_dynamics",
+        "inverse_dynamics_wrt_params"]
+    for key, v in vjps.items():
+        for op in (v.grad_op, v.param_grad_op):
+            if op is None:
+                continue
+            assert op in ABI_SPECS, f"{key}: vjp op {op!r} is not a spec row"
+            assert ABI_SPECS[op].out_layout is not None, (
+                f"{key}: vjp op {op!r} has no out_layout to shape by")
+        assert set(v.wrt) <= set(v.residuals), f"{key}: wrt not in residuals"
+        if v.u_via_minv:
+            assert "u" in v.residuals, f"{key}: u_via_minv without a saved u"
+            assert "minv" in ABI_SPECS
+        assert not (set(v.nondiff) & set(v.wrt)), f"{key}: nondiff ∩ wrt"
