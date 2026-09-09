@@ -13,5 +13,8 @@ input/output ABI, and the parallelism patterns.
    parallelism_patterns
    algorithms/index
    codegen_architecture
+   mjx_convention
    cublasdx_removal_design
    resource_tier_system
+   resource_tier_design_notes
+   resource_tier_changelog
