@@ -245,7 +245,7 @@ def _make_autograd(ns, nv, mujoco=False):
                 blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)
                 df_dq, df_dqd = blocks[:, 0], blocks[:, 1]
                 # ∂qdd/∂u = M⁻¹ (NV x NV). The pin minv kernel writes only the
-                # lower triangle → symmetrize; the mjx minv_mujoco kernel writes a
+                # UPPER triangle (lower zero; _minv.py SYMMETRIC_UPPER) → symmetrize; the mjx minv_mujoco kernel writes a
                 # FULL DENSE symmetric matrix (the G^-T Minv G^-1 congruence baked
                 # in) so it is used as-is.
                 m = _op("minv")(q).reshape(B, nv, nv)
@@ -339,7 +339,18 @@ def _make_autograd(ns, nv, mujoco=False):
         @staticmethod
         def backward(ctx, grad_x):
             q, qd, u = ctx.saved_tensors
-            nv = q.shape[1]
+            # A3-audit fix (2026-09-09): this used to shadow the closure's nv
+            # with q.shape[1] (= nq). Fixed base: nq == nv, worked by luck.
+            # Floating base: nq = nv+1, so the reshape below mis-sized AND the
+            # tangent (2nv-wide) Jacobian cannot be chained to the (nq+nv)-wide
+            # x cotangent without the quaternion-chart VJP — unimplemented, so
+            # say so instead of crashing on a confusing reshape.
+            if q.shape[1] != nv:
+                raise NotImplementedError(
+                    "integrator backward on a FLOATING base needs the SE(3) "
+                    "chart VJP (tangent 2*nv Jacobian vs nq+nv state cotangent) "
+                    "— differentiate integrator_gradient outputs directly, or "
+                    "use a fixed-base robot.")
             raw = _op("integrator_gradient")(q, qd, u, ctx.dt, ctx.it, ctx.gravity)
             B = raw.shape[0]
             # h_dAB is (2*NV x 3*NV) column-major per ts → row-major (B, 2*NV, 3*NV).
@@ -577,6 +588,9 @@ class TorchRobotHandle(BaseDelegateMixin):
 
         With ``output_convention="mujoco"`` (floating base) inputs/outputs are
         MuJoCo-convention and the autograd VJP uses the mjx-convention Jacobian."""
+        if f_ext is not None and self._mjx_active(_convention):
+            raise NotImplementedError(
+                "mjx-convention inverse_dynamics does not accept f_ext on the jax/torch surfaces: the mjx kernel twins do not reframe external wrenches yet, and dispatching them with f_ext would return silently wrong torques (found in the 2026-09-09 layout audit). Use the numpy handle (which falls back to the validated pin-kernel + host-rotation path), or pass f_ext in pinocchio convention.")
         return self._fns_for(_convention)["inverse_dynamics"].apply(
             q, qd, float(gravity), qdd, f_ext)
 
@@ -589,6 +603,9 @@ class TorchRobotHandle(BaseDelegateMixin):
 
         With ``output_convention="mujoco"`` (floating base) inputs/outputs are
         MuJoCo-convention and the autograd VJP uses the mjx-convention Jacobian."""
+        if f_ext is not None and self._mjx_active(_convention):
+            raise NotImplementedError(
+                "mjx-convention forward_dynamics does not accept f_ext on the jax/torch surfaces: the mjx kernel twins do not reframe external wrenches yet, and dispatching them with f_ext would return silently wrong torques (found in the 2026-09-09 layout audit). Use the numpy handle (which falls back to the validated pin-kernel + host-rotation path), or pass f_ext in pinocchio convention.")
         return self._fns_for(_convention)["fd"].apply(q, qd, u, float(gravity), f_ext)
 
     def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None):
@@ -599,6 +616,9 @@ class TorchRobotHandle(BaseDelegateMixin):
 
         With ``output_convention="mujoco"`` (floating base) inputs/outputs are
         MuJoCo-convention."""
+        if f_ext is not None and self._mjx_active(_convention):
+            raise NotImplementedError(
+                "mjx-convention aba does not accept f_ext on the jax/torch surfaces: the mjx kernel twins do not reframe external wrenches yet, and dispatching them with f_ext would return silently wrong torques (found in the 2026-09-09 layout audit). Use the numpy handle (which falls back to the validated pin-kernel + host-rotation path), or pass f_ext in pinocchio convention.")
         return self._fns_for(_convention)["aba"].apply(q, qd, u, float(gravity), f_ext)
 
     def inverse_dynamics_wrt_params(self, q, qd, params, *, gravity: float = -9.81, f_ext=None):
@@ -640,7 +660,7 @@ class TorchRobotHandle(BaseDelegateMixin):
     # ─── forward-only algorithms (raw kernel ops; reshapes mirror _handle) ──
 
     def minv(self, q, *, _convention=None):
-        """Minv(q) (B, NV, NV), symmetrized (kernel writes lower triangle).
+        """Minv(q) (B, NV, NV), symmetrized (the pin kernel writes the UPPER triangle, lower zero).
 
         Tangent-space (pinocchio) inverse mass matrix. FIXED base: NV == NJ
         (shape unchanged); FLOATING base: NV < NJ.

@@ -381,7 +381,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             # tolerate the undeclared attr, but the call was lying about a dep).
             mflat = jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(q)
             m = mflat.reshape(q.shape[:-1] + (nv, nv))
-            # ∂qdd/∂u = Minv. pin minv writes the lower triangle (symmetrize);
+            # ∂qdd/∂u = Minv. pin minv writes the UPPER triangle, lower zero (symmetrize);
             # the mjx minv_mujoco kernel writes a FULL DENSE symmetric matrix (the
             # G^-T Minv G^-1 congruence baked in) so it is used as-is.
             if mjx:
@@ -595,6 +595,9 @@ class JaxRobotHandle(BaseDelegateMixin):
         ∂(M·qdd)/∂q for a nonzero-qdd call; qdd/f_ext are not differentiated), and
         ``jax.vmap``-able over the leading batch axis.
         """
+        if f_ext is not None and self._mjx_active(_convention):
+            raise NotImplementedError(
+                "mjx-convention inverse_dynamics does not accept f_ext on the jax/torch surfaces: the mjx kernel twins do not reframe external wrenches yet, and dispatching them with f_ext would return silently wrong torques (found in the 2026-09-09 layout audit). Use the numpy handle (which falls back to the validated pin-kernel + host-rotation path), or pass f_ext in pinocchio convention.")
         import jax.numpy as jnp
         if qdd is None:
             (q, qd) = self._prep_2d("inverse_dynamics", q, qd)
@@ -610,8 +613,8 @@ class JaxRobotHandle(BaseDelegateMixin):
 
         Minv is the tangent-space (pinocchio-convention) inverse mass matrix:
         NV x NV. FIXED base: NV == NJ (shape unchanged); FLOATING base: NV < NJ
-        (the kernel writes NUM_VEL*NUM_VEL). The pin kernel writes the lower
-        triangle; we symmetrize inside the JAX graph so callers see a full SPD
+        (the kernel writes NUM_VEL*NUM_VEL). The pin kernel writes the UPPER
+        triangle (lower zero); we symmetrize inside the JAX graph so callers see a full SPD
         matrix. (The plain numpy wrapper does the same.)
 
         With ``output_convention="mujoco"`` (floating base) the returned Minv is the
@@ -628,7 +631,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         m = flat.reshape(q.shape[:-1] + (nv, nv))
         if self._mjx_active(_convention):
             return m  # mjx kernel writes a full dense symmetric matrix
-        # pin kernel fills the lower triangle; symmetrize as M + Mᵀ − diag(M).
+        # pin kernel fills the UPPER triangle (lower zero; _minv.py SYMMETRIC_UPPER); symmetrize as M + Mᵀ − diag(M).
         eye = jnp.eye(nv, dtype=m.dtype)
         return m + jnp.swapaxes(m, -1, -2) - m * eye
 
@@ -645,6 +648,9 @@ class JaxRobotHandle(BaseDelegateMixin):
         ``jax.vmap``-able over the leading batch axis. ``f_ext`` is not differentiated.
         """
         (q, qd, u) = self._prep_2d("forward_dynamics", q, qd, u)
+        if f_ext is not None and self._mjx_active(_convention):
+            raise NotImplementedError(
+                "mjx-convention forward_dynamics does not accept f_ext on the jax/torch surfaces: the mjx kernel twins do not reframe external wrenches yet, and dispatching them with f_ext would return silently wrong torques (found in the 2026-09-09 layout audit). Use the numpy handle (which falls back to the validated pin-kernel + host-rotation path), or pass f_ext in pinocchio convention.")
         fe = self._f_ext_or_zeros(q, f_ext)
         return self._differentiable(self._resolve_convention(_convention))["forward_dynamics"](
             gravity, q, qd, u, fe)
@@ -734,6 +740,9 @@ class JaxRobotHandle(BaseDelegateMixin):
         import jax.numpy as jnp
         target = self._mt(_convention, "aba", "grid_rbd_jax_aba")
         (q, qd, u) = self._prep_2d("aba", q, qd, u)
+        if f_ext is not None and self._mjx_active(_convention):
+            raise NotImplementedError(
+                "mjx-convention aba does not accept f_ext on the jax/torch surfaces: the mjx kernel twins do not reframe external wrenches yet, and dispatching them with f_ext would return silently wrong torques (found in the 2026-09-09 layout audit). Use the numpy handle (which falls back to the validated pin-kernel + host-rotation path), or pass f_ext in pinocchio convention.")
         fe = self._f_ext_or_zeros(q, f_ext)
         out_type = self._out(q, self.num_joints)
         return jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
