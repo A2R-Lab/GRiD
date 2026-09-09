@@ -260,19 +260,18 @@ def _mk_shard(name, ids, paths, digest):
 
 
 def test_plan_refresh_stale_detection_and_repack():
-    fps = {("a.py",): "d1", ("b.py",): "CHANGED", ("test/python_wrappers/test_w1.py",): "w1",
-           ("test/python_wrappers/test_w2.py",): "OLD"}
-    now = {("a.py",): "d1", ("b.py",): "d2", ("test/python_wrappers/test_w1.py",): "w1",
-           ("test/python_wrappers/test_w2.py",): "NEW"}
+    # wrapper shards fingerprint the bindings source too (2026-09-09 schema);
+    # the carried/stale wrapper fixtures record the NEW-style path lists.
+    _W1 = ["test/python_wrappers/test_w1.py", "bindings/grid_rbd", "bindings/src"]
+    _W2 = ["test/python_wrappers/test_w2.py", "bindings/grid_rbd", "bindings/src"]
+    now = {("a.py",): "d1", ("b.py",): "d2", tuple(_W1): "w1", tuple(_W2): "NEW"}
     clean_ids = [_fid("iiwa14", "fixed", "crba", t) for t in (1, 32)]
     stale_ids = [_fid("go2", "floating", "aba", t) for t in (1, 32)]
     old = {"shards": [
-        _mk_shard("cuda_00_clean", clean_ids, ["a.py"], fps[("a.py",)]),
-        _mk_shard("cuda_01_stale", stale_ids, ["b.py"], fps[("b.py",)]),
-        _mk_shard("test_w1", ["test/python_wrappers/test_w1.py::t"],
-                  ["test/python_wrappers/test_w1.py"], "w1"),
-        _mk_shard("test_w2", ["test/python_wrappers/test_w2.py::t"],
-                  ["test/python_wrappers/test_w2.py"], "OLD"),
+        _mk_shard("cuda_00_clean", clean_ids, ["a.py"], "d1"),
+        _mk_shard("cuda_01_stale", stale_ids, ["b.py"], "CHANGED"),
+        _mk_shard("test_w1", ["test/python_wrappers/test_w1.py::t"], _W1, "w1"),
+        _mk_shard("test_w2", ["test/python_wrappers/test_w2.py::t"], _W2, "OLD"),
     ]}
     fn = lambda paths: now[tuple(paths)]
     current_cuda = clean_ids + stale_ids  # stale shard's tests still exist
@@ -327,3 +326,20 @@ def test_plan_refresh_edge_cases():
 def test_plan_refresh_refuses_monolithic_receipt():
     with pytest.raises(RuntimeError, match="shards"):
         rss.plan_refresh({"tests": []}, [], [], {}, 7200.0, lambda p: "")
+
+
+def test_plan_refresh_bindings_fingerprint_schema_upgrade():
+    """A wrapper shard recorded under the OLD test-file-only fingerprint paths
+    is stale BY DEFINITION (2026-09-09: wrapper fingerprints must include the
+    bindings source, so a bindings-only change stales the tests importing it).
+    Its digest is never even recomputed — one re-run installs the new paths."""
+    old_paths = ["test/python_wrappers/test_w_old.py"]
+    old = {"shards": [
+        _mk_shard("test_w_old", ["test/python_wrappers/test_w_old.py::t"],
+                  old_paths, "SAME"),
+    ]}
+    # digest fn says "unchanged" — the schema rule must stale it anyway
+    stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
+        old, [], ["test_w_old"], {}, 7200.0, lambda paths: "SAME")
+    assert set(stale) == {"test_w_old"} and not carried
+    assert set(wrap_run) == {"test_w_old"} and not cuda_fresh

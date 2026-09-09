@@ -384,7 +384,16 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
     carried, stale = [], []
     for s in shards:
         fp = s.get("fingerprint") or {}
-        now = fingerprint_digest_fn(fp.get("included_paths") or [])
+        paths = fp.get("included_paths") or []
+        # 2026-09-09 fingerprint-schema upgrade: wrapper shards fingerprint the
+        # bindings SOURCE too (_BINDINGS_FP at shard construction — a bindings-
+        # only change must stale the tests that import it). A wrapper shard
+        # recorded under the old test-file-only paths is stale BY DEFINITION;
+        # one re-run installs the new paths, then digest comparison resumes.
+        if _is_wrapper(s) and "bindings/grid_rbd" not in paths:
+            stale.append(s)
+            continue
+        now = fingerprint_digest_fn(paths)
         (carried if now == fp.get("digest") else stale).append(s)
 
     old_wrapper_names = {s["name"] for s in shards if _is_wrapper(s)}
@@ -1225,9 +1234,19 @@ def main() -> int:
             print(f"=== Phase A: compile-warm ({len(WARM_MANIFEST)} modules' robots, serial) ===")
             for desc, status, secs, detail in phase_warm(out_dir):
                 print(f"  {status:12s} {secs:7.1f}s  {desc}  {detail}")
+        # Wrapper shards fingerprint the BINDINGS SOURCE alongside their test
+        # module (user decision 2026-09-09): the wrapper tests import
+        # bindings/grid_rbd, so a bindings-only change must stale them — before
+        # this, an entire bindings refactor shipped under carry because only
+        # test-file edits were fingerprinted. Deliberately NOT extended to the
+        # cuda domain (grid_codegen inputs there would turn every codegen edit
+        # into a multi-day full-domain refresh; that class stays covered by the
+        # byte-gates + equivalence smokes + release-policy full passes).
+        _BINDINGS_FP = ["bindings/grid_rbd", "bindings/src"]
         specs += [ShardSpec(name=mod, domain="wrappers",
                             targets=[f"test/python_wrappers/{mod}.py"],
-                            fingerprint_paths=[f"test/python_wrappers/{mod}.py"])
+                            fingerprint_paths=[f"test/python_wrappers/{mod}.py"]
+                            + _BINDINGS_FP)
                   for mod in modules]
 
     if run_cuda:
