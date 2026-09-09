@@ -501,6 +501,17 @@ class TorchRobotHandle(BaseDelegateMixin):
         """None → the handle default; else the explicit per-call convention."""
         return self._output_convention if convention is None else convention
 
+    def _shape_out(self, key, raw, *, mjx: bool = False):
+        """Apply the spec's out_layout (A3 slice 4) via the shared transform
+        module — replaces the reshape chains copied verbatim from _handle.py."""
+        import torch
+        from .._out_transform import shape_out_for
+        nv = self.num_vel
+        return shape_out_for(key, raw, nq=self.num_joints, nv=nv,
+                             nee=self.num_ees, nb=int(self.num_bodies),
+                             mjx=mjx,
+                             eye=torch.eye(nv, dtype=raw.dtype, device=raw.device))
+
     def _fns_for(self, convention):
         """Per-convention autograd Function registry (lazily built + cached).
         ``convention="mujoco"`` builds the SAME closures but every op is the
@@ -671,11 +682,10 @@ class TorchRobotHandle(BaseDelegateMixin):
         import torch
         conv = self._resolve_convention(_convention)
         nv = self.num_vel
-        m = self._op(conv, "minv")(q).reshape(-1, nv, nv)
-        if self._mjx_active(conv):
-            return m  # mjx kernel writes a full dense symmetric matrix
-        eye = torch.eye(nv, dtype=m.dtype, device=m.device)
-        return m + m.transpose(1, 2) - m * eye
+        raw = self._op(conv, "minv")(q)
+        # "minv" in the shared out-layout module: pin = UPPER-triangle
+        # symmetrize, mjx twin = full dense pass-through.
+        return self._shape_out("minv", raw, mjx=self._mjx_active(conv))
 
     def crba(self, q, *, gravity: float = -9.81, _convention=None):
         """Mass matrix M(q) (B, NV, NV), tangent-space (pinocchio) convention.
@@ -683,8 +693,7 @@ class TorchRobotHandle(BaseDelegateMixin):
 
         With ``output_convention="mujoco"`` (floating base) the returned M is the
         mjx-frame mass matrix (G M G^T congruence, written full dense)."""
-        nv = self.num_vel
-        return self._op(_convention, "crba")(q, float(gravity)).reshape(-1, nv, nv)
+        return self._shape_out("crba", self._op(_convention, "crba")(q, float(gravity)))
 
     # ─── centroidal / energy / kinematics value methods (numpy-handle parity) ──
     #
@@ -729,11 +738,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         and the ``J_com`` columns are reframed (computed in-kernel)."""
         nv = self.num_vel
         raw = self._gated_op(_convention, "com")(q)
-        B = raw.shape[0]
-        p_com = raw[:, :3]
-        # J_com stored column-major (3 x NV): J[r + 3*c]; recover (B, 3, NV).
-        j_com = raw[:, 3:].reshape(B, nv, 3).permute(0, 2, 1)
-        return p_com, j_com
+        return self._shape_out("com", raw)
 
     def ccrba(self, q, qd, *, _convention=None):
         """Centroidal momentum matrix A (6 x NV) and momentum h = A·qd (6,).
@@ -745,10 +750,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         the ``A`` columns are reframed (computed in-kernel)."""
         nv = self.num_vel
         raw = self._gated_op(_convention, "ccrba")(q, qd)
-        B = raw.shape[0]
-        A = raw[:, : 6 * nv].reshape(B, nv, 6).permute(0, 2, 1)
-        h = raw[:, 6 * nv:]
-        return A, h
+        return self._shape_out("ccrba", raw)
 
     def dccrba(self, q, *, _convention=None):
         """dCCRBA tensor ∂A/∂q, shape ``(B, 6, NV, NV)`` indexed
@@ -758,9 +760,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         and the returned tensor is the dA/dq of the mjx CMM (same layout)."""
         nv = self.num_vel
         raw = self._gated_op(_convention, "dccrba")(q)
-        B = raw.shape[0]
-        # flat layout dA[row + 6*k + 6*NV*m] -> (B, m, k, row) then -> (B, row, k, m).
-        return raw.reshape(B, nv, nv, 6).permute(0, 3, 2, 1)
+        return self._shape_out("dccrba", raw)
 
     def cmm_time_variation(self, q, qd, *, _convention=None):
         """Centroidal-momentum-matrix time variation Ȧ = dA(q(t))/dt, shape
@@ -770,9 +770,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         MuJoCo-convention and Ȧ has its columns reframed (computed in-kernel)."""
         nv = self.num_vel
         raw = self._gated_op(_convention, "cmm_time_variation")(q, qd)
-        B = raw.shape[0]
-        # (B, 6*NV) col-major A[r + 6*c] -> (B, NV, 6) -> (B, 6, NV).
-        return raw.reshape(B, nv, 6).permute(0, 2, 1)
+        return self._shape_out("cmm_time_variation", raw)
 
     def coriolis_matrix(self, q, qd, *, gravity: float = -9.81, _convention=None):
         """Coriolis matrix C(q,qd). Returns ``(B, NV, NV)`` row-major, with
@@ -783,7 +781,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         MuJoCo-convention and the returned ``C`` is the mjx-frame Coriolis matrix."""
         nv = self.num_vel
         raw = self._op(_convention, "coriolis_matrix")(q, qd, float(gravity))
-        return raw.reshape(-1, nv, nv)  # row-major
+        return self._shape_out("coriolis_matrix", raw)
 
     def kinetic_energy_regressor(self, q, qd, *, gravity: float = -9.81, _convention=None):
         """Kinetic-energy regressor y_KE, length ``10*num_bodies``, with
@@ -816,9 +814,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         nv = self.num_vel
         tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
         raw = self._gated_op(_convention, "frame_jacobian")(q, int(tj), int(rf))
-        B = raw.shape[0]
-        # (B, 6*NV) col-major J[r + 6*c] -> (B, NV, 6) -> (B, 6, NV).
-        return raw.reshape(B, nv, 6).permute(0, 2, 1)
+        return self._shape_out("frame_jacobian", raw)
 
     def frame_jacobian_dot(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
         """Time derivative Jdot of :py:meth:`frame_jacobian` along v = qd
@@ -833,8 +829,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         nv = self.num_vel
         tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
         raw = self._gated_op(_convention, "frame_jacobian_dot")(q, qd, int(tj), int(rf))
-        B = raw.shape[0]
-        return raw.reshape(B, nv, 6).permute(0, 2, 1)
+        return self._shape_out("frame_jacobian_dot", raw)
 
     def osc_inertia(self, q, *, _convention=None):
         """Operational-space (task) inertia Lambda = (J·M⁻¹·Jᵀ)⁻¹ (6 x 6) for
@@ -842,7 +837,7 @@ class TorchRobotHandle(BaseDelegateMixin):
 
         With ``output_convention="mujoco"`` the MuJoCo ``q`` is reordered before the
         kinematics build (Lambda is otherwise frame-INVARIANT)."""
-        return self._gated_op(_convention, "osc_inertia")(q).reshape(-1, 6, 6)
+        return self._shape_out("osc_inertia", self._gated_op(_convention, "osc_inertia")(q))
 
     def end_effector_pose(self, q, *, _convention=None):
         """EE pose [xyz, rpy] per EE (B, 6*NUM_EES).
@@ -857,8 +852,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         Jacobian columns are reframed to the mjx free-joint tangent (J·G^-1)."""
         nee, nv = self.num_ees, self.num_vel
         raw = self._op(_convention, "end_effector_pose_gradient")(q)
-        B = raw.shape[0]
-        return raw.reshape(B, nee, nv, 6).permute(0, 1, 3, 2).reshape(B, 6 * nee, nv)
+        return self._shape_out("end_effector_pose_gradient", raw)
 
     def end_effector_pose_hessian(self, q, *, _convention=None):
         """EE pose Hessian d²/dv² (B, 6*NEE, NV, NV).
@@ -866,7 +860,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         With ``output_convention="mujoco"`` (floating base) the base-tangent indices
         are reframed to the mjx free-joint convention."""
         nee, nv = self.num_ees, self.num_vel
-        return self._op(_convention, "end_effector_pose_hessian")(q).reshape(-1, 6 * nee, nv, nv)
+        return self._shape_out("end_effector_pose_hessian", self._op(_convention, "end_effector_pose_hessian")(q))
 
     def end_effector_pose_runtime(self, q, ee_joint_names=None, ee_offsets=None,
                                   *, _convention=None):
@@ -917,8 +911,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         for jid, off in zip(jids, offsets):
             off_t = torch.as_tensor(off, dtype=q.dtype, device=q.device).reshape(-1).contiguous()
             raw = op(q, int(jid), off_t)  # (B, 6*NV) col-major
-            B = raw.shape[0]
-            per_ee.append(raw.reshape(B, nv, 6).permute(0, 2, 1))  # (B, 6, NV)
+            per_ee.append(self._shape_out("end_effector_pose_gradient_runtime", raw))
         return torch.stack(per_ee, dim=1)  # (B, NUM_EE, 6, NV)
 
     def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None,
@@ -937,9 +930,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         mjx-convention Jacobian (rows base-rotated, columns base-reframed)."""
         nv = self.num_vel
         raw = self._op(_convention, "inverse_dynamics_gradient")(q, qd, float(gravity), qdd, f_ext)
-        B = raw.shape[0]
-        blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)
-        return _concat_blocks(blocks)
+        return self._shape_out("inverse_dynamics_gradient", raw)
 
     def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81, f_ext=None,
                                   _convention=None):
@@ -953,9 +944,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         mjx-convention Jacobian."""
         nv = self.num_vel
         raw = self._op(_convention, "forward_dynamics_gradient")(q, qd, u, float(gravity), f_ext)
-        B = raw.shape[0]
-        blocks = raw.reshape(B, 2, nv, nv).transpose(2, 3)
-        return _concat_blocks(blocks)
+        return self._shape_out("forward_dynamics_gradient", raw)
 
     def inverse_dynamics_regressor(self, q, qd, qdd=None, *, gravity: float = -9.81,
                                    _convention=None):
@@ -996,8 +985,7 @@ class TorchRobotHandle(BaseDelegateMixin):
             q = torch.as_tensor(q)
             qdd = torch.zeros_like(q)
         flat = self._op(_convention, "idsva_so")(q, qd, qdd, float(gravity))
-        B = flat.shape[0]
-        return SecondOrderID(*(flat[:, i*nv**3:(i+1)*nv**3].reshape(B, nv, nv, nv) for i in range(4)))
+        return SecondOrderID(*self._shape_out("idsva_so", flat))
 
     def fdsva_so(self, q, qd, u, *, gravity: float = -9.81, _convention=None):
         """Second-order FD. Returns a :class:`grid_rbd.SecondOrderFD` NamedTuple
@@ -1010,8 +998,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         # epilogue recomputes Minv/qdd/dqdd_du fresh into a disjoint scratch band — the
         # §1g/§1h liveness bug is fixed).
         flat = self._op(_convention, "fdsva_so")(q, qd, u, float(gravity))
-        B = flat.shape[0]
-        return SecondOrderFD(*(flat[:, i*nv**3:(i+1)*nv**3].reshape(B, nv, nv, nv) for i in range(4)))
+        return SecondOrderFD(*self._shape_out("fdsva_so", flat))
 
     def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81,
                             _convention=None):
@@ -1022,8 +1009,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         nv = self.num_vel
         it = _integrator_code(integrator_type)
         raw = self._op(_convention, "integrator_gradient")(q, qd, u, float(dt), it, float(gravity))
-        B = raw.shape[0]
-        return raw.reshape(B, 3 * nv, 2 * nv).transpose(1, 2)
+        return self._shape_out("integrator_gradient", raw)
 
     # ─── field-standard short aliases ────────────────────────────────────────
     # `rnea`/`fd` are the names roboticists reach for (pinocchio / frax / bard);

@@ -211,6 +211,19 @@ class JaxRobotHandle(BaseDelegateMixin):
         """None → the handle default; else the explicit per-call convention."""
         return self._output_convention if convention is None else convention
 
+    def _shape_out(self, key, raw, *, mjx: bool = False):
+        """Apply the spec's out_layout (A3 slice 4) via the shared transform
+        module — replaces the per-method reshape chains that were copied
+        verbatim from _handle.py. Traceable under jit; works on (B, N) and the
+        vmap per-sample (N,) shapes alike (last-axes ops only)."""
+        import jax.numpy as jnp
+        from .._out_transform import shape_out_for
+        nv = self.num_vel
+        return shape_out_for(key, raw, nq=self.num_joints, nv=nv,
+                             nee=self.num_ees,
+                             nb=int(self.num_bodies),
+                             mjx=mjx, eye=jnp.eye(nv, dtype=raw.dtype))
+
     def _mt(self, convention, method, symbol):
         """Register (and return) the FFI target for a DIRECT (non-custom_vjp) method,
         dispatching to the ``_mujoco`` variant when the mjx convention is ACTIVE
@@ -628,12 +641,9 @@ class JaxRobotHandle(BaseDelegateMixin):
         (q,) = self._prep_2d("minv", q)
         nv = self.num_vel
         flat = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(q)
-        m = flat.reshape(q.shape[:-1] + (nv, nv))
-        if self._mjx_active(_convention):
-            return m  # mjx kernel writes a full dense symmetric matrix
-        # pin kernel fills the UPPER triangle (lower zero; _minv.py SYMMETRIC_UPPER); symmetrize as M + Mᵀ − diag(M).
-        eye = jnp.eye(nv, dtype=m.dtype)
-        return m + jnp.swapaxes(m, -1, -2) - m * eye
+        # "minv" in the shared out-layout module: pin = UPPER-triangle
+        # symmetrize (M + Mᵀ − diag), mjx twin = full dense pass-through.
+        return self._shape_out("minv", flat, mjx=self._mjx_active(_convention))
 
     def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None,
                          _convention=None):
@@ -711,7 +721,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         nv, npar = self.num_vel, 10 * self.num_bodies
         flat = jax.ffi.ffi_call(target, self._out(q, nv * npar), vmap_method="broadcast_all")(
             q, qd, qdd, gravity=self._np_dt(gravity))
-        return flat.reshape(q.shape[:-1] + (nv, npar))
+        return self._shape_out("inverse_dynamics_regressor", flat)
 
     def forward_dynamics_parameter_gradient(self, q, qd, u, *, gravity: float = -9.81):
         """FD inertial-parameter gradient ∂qdd/∂π = -M⁻¹·Y. Returns
@@ -763,7 +773,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         nv = self.num_vel
         flat = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(
             q, gravity=self._np_dt(gravity))
-        return flat.reshape(q.shape[:-1] + (nv, nv))
+        return self._shape_out("crba", flat)
 
     # ─── centroidal / energy / kinematics value methods (numpy-handle parity) ──
     #
@@ -823,11 +833,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         (q,) = self._prep_2d("com", q)
         nv = self.num_vel
         raw = jax.ffi.ffi_call(target, self._out(q, 3 + 3 * nv), vmap_method="broadcast_all")(q)
-        lead = q.shape[:-1]
-        p_com = raw[..., :3]
-        # J_com stored column-major (3 x NV): J[r + 3*c]; recover (..., 3, NV).
-        j_com = raw[..., 3:].reshape(lead + (nv, 3)).swapaxes(-2, -1)
-        return p_com, j_com
+        return self._shape_out("com", raw)
 
     def ccrba(self, q, qd, *, _convention=None):
         """Centroidal momentum matrix A (6 x NV) and momentum h = A·qd (6,).
@@ -842,10 +848,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         (q, qd) = self._prep_2d("ccrba", q, qd)
         nv = self.num_vel
         raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv + 6), vmap_method="broadcast_all")(q, qd)
-        lead = q.shape[:-1]
-        A = raw[..., : 6 * nv].reshape(lead + (nv, 6)).swapaxes(-2, -1)
-        h = raw[..., 6 * nv:]
-        return A, h
+        return self._shape_out("ccrba", raw)
 
     def dccrba(self, q, *, _convention=None):
         """dCCRBA tensor ∂A/∂q, shape ``(B, 6, NV, NV)`` indexed
@@ -858,9 +861,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         (q,) = self._prep_2d("dccrba", q)
         nv = self.num_vel
         raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv * nv), vmap_method="broadcast_all")(q)
-        lead = q.shape[:-1]
-        # flat layout dA[row + 6*k + 6*NV*m] -> (..., m, k, row) then -> (..., row, k, m).
-        return raw.reshape(lead + (nv, nv, 6)).swapaxes(-3, -1)
+        return self._shape_out("dccrba", raw)
 
     def cmm_time_variation(self, q, qd, *, _convention=None):
         """Centroidal-momentum-matrix time variation Ȧ = dA(q(t))/dt, shape
@@ -873,8 +874,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         (q, qd) = self._prep_2d("cmm_time_variation", q, qd)
         nv = self.num_vel
         raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(q, qd)
-        # (B, 6*NV) col-major A[r + 6*c] -> (..., NV, 6) -> (..., 6, NV).
-        return raw.reshape(q.shape[:-1] + (nv, 6)).swapaxes(-2, -1)
+        return self._shape_out("cmm_time_variation", raw)
 
     def coriolis_matrix(self, q, qd, *, gravity: float = -9.81, _convention=None):
         """Coriolis matrix C(q,qd). Returns ``(B, NV, NV)`` row-major, with
@@ -889,7 +889,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         nv = self.num_vel
         raw = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(
             q, qd, gravity=self._np_dt(gravity))
-        return raw.reshape(q.shape[:-1] + (nv, nv))  # row-major
+        return self._shape_out("coriolis_matrix", raw)
 
     def kinetic_energy_regressor(self, q, qd, *, gravity: float = -9.81, _convention=None):
         """Kinetic-energy regressor y_KE, length ``10*num_bodies``, with
@@ -937,8 +937,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         nv = self.num_vel
         raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(
             q, target_jid=np.int64(tj), reference_frame=np.int64(rf))
-        # (B, 6*NV) col-major J[r + 6*c] -> (..., NV, 6) -> (..., 6, NV).
-        return raw.reshape(q.shape[:-1] + (nv, 6)).swapaxes(-2, -1)
+        return self._shape_out("frame_jacobian", raw)
 
     def frame_jacobian_dot(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
         """Time derivative Jdot of :py:meth:`frame_jacobian` along v = qd
@@ -956,7 +955,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         nv = self.num_vel
         raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(
             q, qd, target_jid=np.int64(tj), reference_frame=np.int64(rf))
-        return raw.reshape(q.shape[:-1] + (nv, 6)).swapaxes(-2, -1)
+        return self._shape_out("frame_jacobian_dot", raw)
 
     def osc_inertia(self, q, *, _convention=None):
         """Operational-space (task) inertia Lambda = (J·M⁻¹·Jᵀ)⁻¹ (6 x 6) for
@@ -968,7 +967,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         target = self._mt(_convention, "osc_inertia", "grid_rbd_jax_osc_inertia")
         (q,) = self._prep_2d("osc_inertia", q)
         raw = jax.ffi.ffi_call(target, self._out(q, 36), vmap_method="broadcast_all")(q)
-        return raw.reshape(q.shape[:-1] + (6, 6))
+        return self._shape_out("osc_inertia", raw)
 
     def end_effector_pose(self, q, *, _convention=None):
         """End-effector pose [xyz, rpy] per EE. Returns (B, 6*NUM_EES).
@@ -1002,10 +1001,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         nv = self.num_vel
         out_type = self._out(q, 6 * nee * nv)
         raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(q)
-        lead = q.shape[:-1]
-        return (raw.reshape(lead + (nee, nv, 6))
-                   .swapaxes(-2, -1)
-                   .reshape(lead + (6 * nee, nv)))
+        return self._shape_out("end_effector_pose_gradient", raw)
 
     def end_effector_pose_hessian(self, q, *, _convention=None):
         """End-effector pose Hessian d^2(pose)/dv^2 (tangent space, pinocchio convention).
@@ -1023,7 +1019,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         nv = self.num_vel
         out_type = self._out(q, 6 * nee * nv * nv)
         flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(q)
-        return flat.reshape(q.shape[:-1] + (6 * nee, nv, nv))
+        return self._shape_out("end_effector_pose_hessian", flat)
 
     def end_effector_pose_runtime(self, q, ee_joint_names=None, ee_offsets=None,
                                   *, _convention=None):
@@ -1087,8 +1083,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             xtool = np.ascontiguousarray(np.asarray(off, dtype=np.float32).reshape(-1))
             raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
                 q, target_jid=np.int64(int(jid)), xtool=xtool)
-            # (..., 6*NV) col-major -> (..., NV, 6) -> (..., 6, NV)
-            per_ee.append(raw.reshape(q.shape[:-1] + (nv, 6)).swapaxes(-2, -1))
+            per_ee.append(self._shape_out("end_effector_pose_gradient_runtime", raw))
         return jnp.stack(per_ee, axis=-3)  # (..., NUM_EE, 6, NV)
 
     def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81,
@@ -1119,8 +1114,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         out_type = self._out(q, 2 * nv * nv)
         raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
             q, qd, qdd_b, gravity=self._np_dt(gravity))
-        blocks = raw.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
-        return jnp.concatenate([blocks[..., 0, :, :], blocks[..., 1, :, :]], axis=-1)
+        return self._shape_out("inverse_dynamics_gradient", raw)
 
     def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81,
                                   _convention=None):
@@ -1139,8 +1133,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         out_type = self._out(q, 2 * nv * nv)
         raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
             q, qd, u, gravity=self._np_dt(gravity))
-        blocks = raw.reshape(q.shape[:-1] + (2, nv, nv)).swapaxes(-2, -1)
-        return jnp.concatenate([blocks[..., 0, :, :], blocks[..., 1, :, :]], axis=-1)
+        return self._shape_out("forward_dynamics_gradient", raw)
 
     def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81, _convention=None):
         """Second-order inverse dynamics at joint acceleration ``qdd``.
@@ -1166,11 +1159,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         out_type = self._out(q, 4 * nv ** 3)
         flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
             q, qd, qdd, gravity=self._np_dt(gravity))
-        lead = q.shape[:-1]
-        return SecondOrderID(*(
-            flat[..., i * nv ** 3:(i + 1) * nv ** 3].reshape(lead + (nv, nv, nv))
-            for i in range(4)
-        ))
+        return SecondOrderID(*self._shape_out("idsva_so", flat))
 
     def fdsva_so(self, q, qd, u, *, gravity: float = -9.81, _convention=None):
         """Second-order forward dynamics.
@@ -1194,11 +1183,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         out_type = self._out(q, 4 * nv ** 3)
         flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
             q, qd, u, gravity=self._np_dt(gravity))
-        lead = q.shape[:-1]
-        return SecondOrderFD(*(
-            flat[..., i * nv ** 3:(i + 1) * nv ** 3].reshape(lead + (nv, nv, nv))
-            for i in range(4)
-        ))
+        return SecondOrderFD(*self._shape_out("fdsva_so", flat))
 
     def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81,
                    _convention=None):
