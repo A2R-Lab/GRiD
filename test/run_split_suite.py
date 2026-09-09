@@ -1066,6 +1066,10 @@ def main() -> int:
                          "policy refuses them). Implies --receipts, both "
                          "domains, full scope.")
     ap.add_argument("--out", default=None, help="output dir (default test/.split_suite/<stamp>)")
+    ap.add_argument("--prune-receipts", type=int, default=None, metavar="N",
+                    help="delete all but the newest N timestamped run dirs under "
+                         "test/.split_suite/ (receipt_* and bare <stamp> dirs; the "
+                         "rolling durations/RSS ledgers are never touched), then exit")
     ap.add_argument("--warm-one", default=None, metavar="SPEC_JSON",
                     help=argparse.SUPPRESS)  # internal pool-worker mode
     ap.add_argument("pytest_args", nargs="*", default=[],
@@ -1074,6 +1078,23 @@ def main() -> int:
 
     if args.warm_one:
         return warm_one_worker(args.warm_one)
+
+    if args.prune_receipts is not None:
+        # Retention housekeeping (N3, 2026-09-09): run dirs are append-only
+        # otherwise and quietly accumulate. Keep the newest N; a dir named
+        # in a live SPLIT_RESUME should simply not be pruned mid-run — this
+        # is an explicit, standalone invocation, not part of a pass.
+        import shutil as _shutil
+        root = Path(__file__).resolve().parent / ".split_suite"
+        runs = sorted(p for p in root.iterdir()
+                      if p.is_dir() and (p.name.startswith("receipt_")
+                                         or p.name[:8].isdigit()))
+        doomed = runs[:-args.prune_receipts] if args.prune_receipts > 0 else runs
+        for p in doomed:
+            print(f"prune: {p}")
+            _shutil.rmtree(p)
+        print(f"kept {len(runs) - len(doomed)} run dir(s), pruned {len(doomed)}")
+        return 0
 
     domains = [d.strip() for d in args.domains.split(",") if d.strip()]
     bad_domains = [d for d in domains if d not in ("wrappers", "cuda")]
