@@ -137,3 +137,46 @@ def apply_out_layout(raw, layout, dims, *, nv, mjx=False, eye=None):
             return m  # the twin writes full dense (congruence forces it)
         return m + _swap_last2(m) - m * eye
     raise ValueError(f"unknown out_layout {layout!r}")
+
+
+def resolve_dims(layout, tokens):
+    """Resolve a layout's dim TOKENS (strings like "num_vel_", "3", "6*num_ees_",
+    or nested tuples of them) into the concrete ``dims`` argument
+    ``apply_out_layout`` expects. ``tokens`` is grid_codegen.abi_specs.
+    py_dim_tokens(...)-shaped ({token: int}). Layouts with no dim params
+    (grad_concat/so_slabs/minv/dccrba) resolve to None; ee_grad resolves to
+    (num_ees_,)."""
+    def _res(x):
+        if isinstance(x, tuple):
+            return tuple(_res(e) for e in x)
+        expr = str(x)
+        for tok, val in tokens.items():
+            expr = expr.replace(tok, str(val))
+        return int(eval(expr, {"__builtins__": {}}))  # arithmetic-only
+
+    kind = layout if isinstance(layout, str) else layout[0]
+    if kind in ("flat", "grad_concat", "so_slabs", "minv", "dccrba"):
+        return None
+    if kind == "ee_grad":
+        return (_res("num_ees_"),)
+    if kind in ("reshape", "colmajor", "colmajor_whole"):
+        return _res(layout[1])
+    if kind == "vec_then_colmajor":
+        return (_res(layout[1]), _res(layout[2]))
+    if kind == "colmajor_then_vec":
+        return (_res(layout[1]), _res(layout[2]))
+    raise ValueError(f"unknown out_layout {layout!r}")
+
+
+def shape_out_for(key, raw, *, nq, nv, nee, nb, mjx=False, eye=None):
+    """Convenience for the jax/torch surfaces (the numpy handle has its own
+    RobotHandle._shape_out): look up the spec's out_layout and apply it.
+    ``eye`` must be a framework-native (nv, nv) identity for the minv row
+    (jnp.eye / torch.eye — built by the caller so this module imports no
+    framework). Traceable under jit (pure reshape/transpose/concat ops)."""
+    from grid_codegen.abi_specs import ABI_SPECS, py_dim_tokens
+    spec = ABI_SPECS[key]
+    return apply_out_layout(
+        raw, spec.out_layout,
+        resolve_dims(spec.out_layout, py_dim_tokens(nq, nv, nee, nb)),
+        nv=nv, mjx=mjx, eye=eye)

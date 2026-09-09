@@ -367,6 +367,24 @@ class RobotHandle:
         "— twins are never emitted there) — re-register with "
         "enable_mujoco_kernels=True.")
 
+    def _shape_out(self, key: str, raw, *, mjx: bool = False):
+        """Apply the spec's out_layout (A3 slice 4): the ONE shared transform
+        implementation (bindings/grid_rbd/_out_transform.py) replacing the
+        per-method hand reshape/transpose chains. ``raw`` may arrive in the
+        _core allocation shape — it is flattened per batch item first."""
+        from grid_codegen.abi_specs import ABI_SPECS, py_dim_tokens
+        from ._out_transform import apply_out_layout, resolve_dims
+        spec = ABI_SPECS[key]
+        nv = self.num_vel
+        raw = np.asarray(raw)
+        raw = raw.reshape(raw.shape[0], -1)
+        toks = py_dim_tokens(self.num_joints, nv, self.num_ees,
+                             int(getattr(self._runner, "num_bodies", 0) or 0))
+        eye = np.eye(nv, dtype=raw.dtype)
+        return apply_out_layout(raw, spec.out_layout,
+                                resolve_dims(spec.out_layout, toks),
+                                nv=nv, mjx=mjx, eye=eye)
+
     def _require_mjx_twin(self, key: str, method: str | None = None) -> None:
         """Raise the standard actionable error unless the mjx twin symbol for
         ``key`` is present in the dlopen'd .so (A4 probe dedup, 2026-09-09 —
@@ -1152,12 +1170,9 @@ class RobotHandle:
             return self._cast_out(self._runner.minv_mujoco(q))
 
         q = np.ascontiguousarray(q, dtype=self._dt)
-        m = self._runner.minv(q)
-        # Symmetrize: M = L + L^T - diag(L)  where L is the lower triangle.
-        m_full = m + m.swapaxes(-1, -2)
-        diag_idx = np.arange(m.shape[-1])
-        m_full[:, diag_idx, diag_idx] -= np.diagonal(m, axis1=-2, axis2=-1)
-        return self._cast_out(m_full)
+        # A3 slice 4: the UPPER-triangle symmetrize (M + Mᵀ − diag) now lives in
+        # the shared out-layout module.
+        return self._cast_out(self._shape_out("minv", self._runner.minv(q)))
 
     def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
         """Forward dynamics qdd = M⁻¹·(τ − c). Returns shape (B, NJ).
@@ -1288,12 +1303,10 @@ class RobotHandle:
             self._require_mjx_twin("end_effector_pose_gradient", "end_effector_pose_gradient")
             q = np.ascontiguousarray(q, dtype=self._dt)
             raw = self._runner.end_effector_pose_gradient_mujoco(q)
-            B = raw.shape[0]
-            return raw.reshape(B, NEE, NV, 6).transpose(0, 1, 3, 2).reshape(B, 6 * NEE, NV)
+            return self._shape_out("end_effector_pose_gradient", raw)
         q = np.ascontiguousarray(q, dtype=self._dt)
         raw = self._runner.end_effector_pose_gradient(q)
-        B = raw.shape[0]
-        return raw.reshape(B, NEE, NV, 6).transpose(0, 1, 3, 2).reshape(B, 6 * NEE, NV)
+        return self._shape_out("end_effector_pose_gradient", raw)
 
     def inverse_dynamics_gradient(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
         """∂τ/∂(q, qd). Returns shape (B, NV, 2*NV) — concatenated
@@ -1321,9 +1334,7 @@ class RobotHandle:
             qd  = np.ascontiguousarray(qd,  dtype=self._dt)
             qdd_arr = np.ascontiguousarray(qdd, dtype=self._dt)
             raw = self._runner.inverse_dynamics_gradient_mujoco(q, qd, qdd_arr, gravity, None)
-            B = raw.shape[0]
-            blocks = raw.reshape(B, 2, NV, NV).transpose(0, 1, 3, 2)
-            return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
+            return self._shape_out("inverse_dynamics_gradient", raw)
         if self._mjx_active(_convention):
             raise NotImplementedError(
                 "inverse_dynamics_gradient(output_convention='mujoco') needs an explicit "
@@ -1336,14 +1347,9 @@ class RobotHandle:
             qdd_arr = np.ascontiguousarray(qdd, dtype=self._dt)
             self._check_nq_width(qdd_arr, "qdd")
         raw = self._runner.inverse_dynamics_gradient(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
-        # GRiD's dc_du = [dc_dq (NV×NV col-major), dc_dqd (NV×NV col-major)]
-        # per timestep, total 2*NV² floats. Reshape to (B, 2, NV, NV) col-major,
-        # transpose each block, hstack to match RBDReference's (NV, 2*NV).
-        # FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ.
-        B = raw.shape[0]
-        NV = self.num_vel
-        blocks = raw.reshape(B, 2, NV, NV).transpose(0, 1, 3, 2)  # row-major now
-        return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
+        # A3 slice 4: the two-col-major-halves -> (NV, 2NV) hstack chain lives
+        # in the shared out-layout module ("grad_concat").
+        return self._shape_out("inverse_dynamics_gradient", raw)
 
     def forward_dynamics_gradient(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
         """∂qdd/∂(q, qd). Returns shape (B, NV, 2*NV), tangent-space (pinocchio)
@@ -1363,24 +1369,19 @@ class RobotHandle:
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             u  = np.ascontiguousarray(u,  dtype=self._dt)
             raw = self._runner.forward_dynamics_gradient_mujoco(q, qd, u, gravity, None)
-            B = raw.shape[0]
-            blocks = raw.reshape(B, 2, NV, NV).transpose(0, 1, 3, 2)
-            return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
+            return self._shape_out("forward_dynamics_gradient", raw)
         if self._mjx_active(_convention):
             raise NotImplementedError(
                 "forward_dynamics_gradient(output_convention='mujoco') needs no f_ext "
-                "and a floating-base .so built with the mjx kernel "
-                "(re-register with force_rebuild=True).")
+                "and a floating-base .so built with " + self._MJX_TWINS_ADVICE.split("built with ", 1)[-1])
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
         self._check_nq_width(qd, "qd")
         self._check_nq_width(u, "u")
         raw = self._runner.forward_dynamics_gradient(q, qd, u, gravity, self._prep_f_ext(f_ext))
-        # Same layout as dc_du: [df_dq, df_dqd] NV×NV col-major blocks.
-        B = raw.shape[0]
-        blocks = raw.reshape(B, 2, NV, NV).transpose(0, 1, 3, 2)
-        return np.concatenate([blocks[:, 0], blocks[:, 1]], axis=-1)
+        # Same layout as dc_du ("grad_concat" in the shared out-layout module).
+        return self._shape_out("forward_dynamics_gradient", raw)
 
     def end_effector_pose_hessian(self, q, *, _convention=None) -> np.ndarray:
         """End-effector pose Hessian ∂²(pose)/∂v² (tangent-space, pinocchio convention).
@@ -1429,13 +1430,8 @@ class RobotHandle:
             self._check_nq_width(qd, "qd")
             self._check_nq_width(qdd_arr, "qdd")
             flat = self._runner.idsva_so(q, qd, qdd_arr, 4 * NV ** 3, gravity)
-        # Slice the 4 NV^3 blocks. Each block is stored as raw column/row
-        # depending on the kernel; we return them as (B, NV, NV, NV)
-        # without further reshape — callers wanting tensor-axis semantics
-        # should consult RBDReference's idsva_so docs.
-        B = flat.shape[0]
-        blocks = [flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4)]
-        return SecondOrderID(*self._cast_out(*blocks))
+        # 4 NV^3 slabs ("so_slabs" in the shared out-layout module).
+        return SecondOrderID(*self._cast_out(*self._shape_out("idsva_so", flat)))
 
     def inverse_dynamics_regressor(self, q, qd, qdd=None, *, gravity: float = -9.81, _convention=None) -> np.ndarray:
         """Inverse-dynamics inertial-parameter regressor ``Y`` with
@@ -1489,9 +1485,7 @@ class RobotHandle:
             self._check_nq_width(qd, "qd")
             self._check_nq_width(u, "u")
             flat = self._runner.fdsva_so(q, qd, u, 4 * NV ** 3, gravity)
-        B = flat.shape[0]
-        blocks = [flat[:, i*NV**3:(i+1)*NV**3].reshape(B, NV, NV, NV) for i in range(4)]
-        return SecondOrderFD(*self._cast_out(*blocks))
+        return SecondOrderFD(*self._cast_out(*self._shape_out("fdsva_so", flat)))
 
     def integrator(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81, _convention=None):
         """One integration step x_{k+1} = integrator(x_k, u, dt).
@@ -1538,10 +1532,8 @@ class RobotHandle:
             self._check_nq_width(qd, "qd")
             self._check_nq_width(u, "u")
             raw = self._runner.integrator_gradient(q, qd, u, float(dt), it, gravity=float(gravity))
-        # h_dAB is (2*NV x 3*NV) column-major per timestep; recover row-major.
-        B = raw.shape[0]
-        NV = self.num_vel
-        return raw.reshape(B, 3 * NV, 2 * NV).transpose(0, 2, 1)
+        # (2NV x 3NV) col-major dAB ("colmajor_whole" in the shared module).
+        return self._shape_out("integrator_gradient", raw)
 
     # ─── grid_plant surface (cost / barrier / plant-step) ────────────────────
     #
@@ -1777,10 +1769,8 @@ class RobotHandle:
         else:
             q = np.ascontiguousarray(q, dtype=self._dt)
             raw = self._runner.com(q)  # (B, 3 + 3*NV): [p_com(3); J_com(3 x NV col-major)]
-        B = raw.shape[0]
-        p_com = raw[:, :3]
-        # J_com stored column-major (3 x NV): J[r + 3*c]; recover (B, 3, NV).
-        j_com = raw[:, 3:].reshape(B, NV, 3).transpose(0, 2, 1)
+        # [p(3); J col-major] ("vec_then_colmajor" in the shared module).
+        p_com, j_com = self._shape_out("com", raw)
         return self._cast_out(p_com), self._cast_out(j_com)
 
     def ccrba(self, q, qd, *, _convention=None):
@@ -1806,9 +1796,7 @@ class RobotHandle:
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             self._check_nq_width(qd, "qd")
             raw = self._runner.ccrba(q, qd)  # (B, 6*NV + 6): [A(6 x NV col-major); h(6)]
-        B = raw.shape[0]
-        A = raw[:, : 6 * NV].reshape(B, NV, 6).transpose(0, 2, 1)
-        h = raw[:, 6 * NV:]
+        A, h = self._shape_out("ccrba", raw)
         return self._cast_out(A), self._cast_out(h)
 
     def energy(self, q, qd, *, gravity: float = -9.81, _convention=None):
@@ -1885,12 +1873,12 @@ class RobotHandle:
             q = np.ascontiguousarray(q, dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             raw = self._runner.coriolis_matrix_mujoco(q, qd, float(gravity))
-            return self._cast_out(raw.reshape(raw.shape[0], NV, NV))
+            return self._cast_out(self._shape_out("coriolis_matrix", raw))
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         self._check_nq_width(qd, "qd")
         raw = self._runner.coriolis_matrix(q, qd, float(gravity))  # (B, NV*NV) row-major
-        return self._cast_out(raw.reshape(raw.shape[0], NV, NV))
+        return self._cast_out(self._shape_out("coriolis_matrix", raw))
 
     def kinetic_energy_regressor(self, q, qd, *, gravity: float = -9.81, _convention=None):
         """Kinetic-energy regressor y_KE, length ``10*num_bodies``, with
@@ -1951,10 +1939,8 @@ class RobotHandle:
         else:
             q = np.ascontiguousarray(q, dtype=self._dt)
             raw = self._runner.dccrba(q)  # (B, 6*NV*NV) flat, dA[row + 6*k + 6*NV*m]
-        B = raw.shape[0]
-        NV = self.num_vel
-        # flat layout dA[row + 6*k + 6*NV*m] -> (B, m, k, row) then -> (B, row, k, m).
-        return self._cast_out(raw.reshape(B, NV, NV, 6).transpose(0, 3, 2, 1))
+        # flat dA[row + 6*k + 6*NV*m] -> (B, 6, NV, NV) ("dccrba" shared class).
+        return self._cast_out(self._shape_out("dccrba", raw))
 
     def cmm_time_variation(self, q, qd, *, _convention=None):
         """Centroidal-momentum-matrix time variation Ȧ = dA(q(t))/dt, shape
@@ -1975,14 +1961,12 @@ class RobotHandle:
             q = np.ascontiguousarray(q, dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             raw = self._runner.cmm_time_variation_mujoco(q, qd)  # (B, 6*NV) col-major A[r + 6*c]
-            B = raw.shape[0]
-            return self._cast_out(raw.reshape(B, NV, 6).transpose(0, 2, 1))
+            return self._cast_out(self._shape_out("cmm_time_variation", raw))
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         self._check_nq_width(qd, "qd")
         raw = self._runner.cmm_time_variation(q, qd)  # (B, 6*NV) col-major A[r + 6*c]
-        B = raw.shape[0]
-        return self._cast_out(raw.reshape(B, NV, 6).transpose(0, 2, 1))
+        return self._cast_out(self._shape_out("cmm_time_variation", raw))
 
     def frame_jacobian(self, q, *, target_jid=None, reference_frame=None, _convention=None):
         """Geometric Jacobian (6 x NV, ``[linear; angular]``) of a frame.
@@ -2005,10 +1989,10 @@ class RobotHandle:
                 "frame_jacobian(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
             q = np.ascontiguousarray(q, dtype=self._dt)
             raw = self._runner.frame_jacobian_mujoco(q, tj, rf)
-            return raw.reshape(raw.shape[0], NV, 6).transpose(0, 2, 1)
+            return self._shape_out("frame_jacobian", raw)
         q = np.ascontiguousarray(q, dtype=self._dt)
         raw = self._runner.frame_jacobian(q, tj, rf)  # (B, 6*NV) col-major: J[r + 6*c]
-        return raw.reshape(raw.shape[0], NV, 6).transpose(0, 2, 1)
+        return self._shape_out("frame_jacobian", raw)
 
     def frame_jacobian_dot(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
         """Time derivative Jdot of :py:meth:`frame_jacobian` along v = qd
@@ -2029,12 +2013,12 @@ class RobotHandle:
             q = np.ascontiguousarray(q, dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             raw = self._runner.frame_jacobian_dot_mujoco(q, qd, tj, rf)
-            return raw.reshape(raw.shape[0], NV, 6).transpose(0, 2, 1)
+            return self._shape_out("frame_jacobian_dot", raw)
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         self._check_nq_width(qd, "qd")
         raw = self._runner.frame_jacobian_dot(q, qd, tj, rf)  # (B, 6*NV) col-major
-        return raw.reshape(raw.shape[0], NV, 6).transpose(0, 2, 1)
+        return self._shape_out("frame_jacobian_dot", raw)
 
     def osc_inertia(self, q, *, _convention=None):
         """Operational-space (task) inertia Lambda = (J·M⁻¹·Jᵀ)⁻¹ (6 x 6) for
@@ -2050,10 +2034,10 @@ class RobotHandle:
                 "osc_inertia(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
             q = np.ascontiguousarray(q, dtype=self._dt)
             raw = self._runner.osc_inertia_mujoco(q)
-            return raw.reshape(raw.shape[0], 6, 6)
+            return self._shape_out("osc_inertia", raw)
         q = np.ascontiguousarray(q, dtype=self._dt)
         raw = self._runner.osc_inertia(q)  # (B, 36) row/col-major (symmetric)
-        return raw.reshape(raw.shape[0], 6, 6)
+        return self._shape_out("osc_inertia", raw)
 
     # ─── runtime arbitrary multi-EE pose / pose-gradient (target + offset) ─────
 
@@ -2175,8 +2159,7 @@ class RobotHandle:
                 raw = self._runner.end_effector_pose_gradient_runtime_mujoco(q, int(jid), off_arr)  # (B, 6*NV) col-major
             else:
                 raw = self._runner.end_effector_pose_gradient_runtime(q, int(jid), off_arr)  # (B, 6*NV) col-major
-            B = raw.shape[0]
-            per_ee.append(raw.reshape(B, NV, 6).transpose(0, 2, 1))  # (B, 6, NV)
+            per_ee.append(self._shape_out("end_effector_pose_gradient_runtime", raw))  # (B, 6, NV)
         return self._cast_out(np.stack(per_ee, axis=1))  # (B, NUM_EE, 6, NV)
 
     # ─── field-standard short aliases ────────────────────────────────────────
