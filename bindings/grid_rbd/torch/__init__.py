@@ -533,9 +533,19 @@ class TorchRobotHandle(BaseDelegateMixin):
         try:
             return getattr(self._ops, resolved)
         except AttributeError as e:
+            # A4 (2026-09-09): the per-algo advice lives in ABI_SPECS.py_rc3_msg
+            # (same table the numpy rc==3 path uses — algorithm_list hint for the
+            # opt-in family, the mimic explanation for centroidal). The old text
+            # promised force_rebuild=True, which can never fix a mimic robot.
+            hint = None
+            try:
+                from grid_codegen.abi_specs import ABI_SPECS
+                hint = ABI_SPECS[name].py_rc3_msg
+            except Exception:
+                pass
             raise AttributeError(
-                f"{name} not generated for this robot .so; re-register with "
-                f"force_rebuild=True (and ensure the kernel is enabled in codegen)."
+                hint or (f"{name} not generated for this robot .so "
+                         f"(subset algorithm_list, or unsupported for this robot class)")
             ) from e
 
     @property

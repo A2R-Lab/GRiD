@@ -322,6 +322,13 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         "joint_pos_limits": joint_pos_limits,
         "joint_vel_limits": joint_vel_limits,
         "joint_effort_limits": joint_effort_limits,
+        # A2 (N2.2, 2026-09-08): what this .so actually contains. algorithm_list
+        # is the REQUESTED build list (the _DEFAULT full profile when the caller
+        # passed None); generated_algorithms is the POST-dep-expansion emit set
+        # the codegen actually produced — handle.capabilities() keys on it.
+        "algorithm_list": list(algorithm_list),
+        "generated_algorithms": sorted(cg.generated_algorithms),
+        "enable_mujoco_kernels": bool(enable_mujoco_kernels),
     }
     # D.4 / Phase 5: when the mutable-inertia table is generated, persist the
     # BAKED 10-param-per-body table so the handle can expose it (fetch-then-mutate

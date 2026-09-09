@@ -656,3 +656,40 @@ ABI_SPECS: dict[str, AbiSpec] = {
 #        header) — allowed by the docstring ("may be a macro"), noted for P1.
 # from grid_codegen.abi_specs import AbiSpec
 
+
+
+# ── python-side out-dim expansion (H6-w2 item 6 / A2, 2026-09-09) ────────────
+# py_out_dims holds VERBATIM C++ trailing-dim expressions; python consumers
+# (handle.capabilities(), the coming jax/torch reshape collapse) expand them by
+# token substitution. ONE table so the token set can't drift per consumer.
+# `second_order_tensor_size` = the C++ SECOND_ORDER_TENSOR_SIZE constant
+# (four rank-3 nv tensors: 4 * nv^3).
+
+def py_dim_tokens(nq: int, nv: int, nee: int, nb: int) -> dict[str, int]:
+    """The substitution table for expanding an AbiSpec.py_out_dims entry."""
+    return {
+        "num_joints_": nq,
+        "num_vel_": nv,
+        "num_ees_": nee,
+        "num_bodies_": nb,
+        "second_order_tensor_size": 4 * nv ** 3,
+    }
+
+
+def expand_py_out_dims(spec: "AbiSpec", nq: int, nv: int, nee: int, nb: int):
+    """Expand spec.py_out_dims to concrete ints, or None when dims are absent
+    or reference an unavailable token value (e.g. nb unknown on an old .so)."""
+    if not spec.py_out_dims:
+        return None
+    toks = py_dim_tokens(nq, nv, nee, nb)
+    out = []
+    for d in spec.py_out_dims:
+        expr = d
+        for tok, val in toks.items():
+            if val is not None:
+                expr = expr.replace(tok, str(val))
+        try:
+            out.append(int(eval(expr, {"__builtins__": {}})))  # arithmetic-only exprs
+        except Exception:
+            return None
+    return tuple(out)

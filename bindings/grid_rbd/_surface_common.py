@@ -8,8 +8,8 @@ Three mixins, each previously hand-copied per surface:
   shared ``output_convention``), thread-safe next to pinocchio-convention calls.
   The five value/dynamics methods every surface exposes live here.
 - :class:`MujocoDerivativeViewMixin` — the derivative / kinematics / integrator
-  / plant-cost view methods shared by the jax and torch views (the numpy view
-  deliberately exposes only the value/centroidal set).
+  / plant-cost view methods (all THREE views compose it since the A4 roster
+  unification, 2026-09-09 — the numpy view used to expose only values).
 - :class:`BaseDelegateMixin` — jax/torch handle methods that pure-delegate to
   the underlying numpy :class:`~grid_rbd._handle.RobotHandle` (``self._base``):
   tool welding, runtime parameter tables, thread-count control, metadata.
@@ -55,6 +55,29 @@ class MujocoViewBase:
 
     def __repr__(self) -> str:
         return f"<mujoco view of {self._h!r}>"
+
+
+    # ── centroidal / energy (A4 roster unification, 2026-09-09: previously
+    # numpy-view-only; all three handles carry these with _convention=) ──
+    def com(self, qpos):
+        """CoM position (invariant) + CoM Jacobian (reframed) in the mjx frame."""
+        return self._h.com(qpos, _convention="mujoco")
+
+    def ccrba(self, qpos, qvel):
+        """Centroidal momentum matrix (reframed) + momentum h (invariant), mjx frame."""
+        return self._h.ccrba(qpos, qvel, _convention="mujoco")
+
+    def energy(self, qpos, qvel, *, gravity: float = -9.81):
+        """Kinetic / potential / mechanical energy (frame-invariant) from mjx inputs."""
+        return self._h.energy(qpos, qvel, gravity=gravity, _convention="mujoco")
+
+    def kinetic_energy_regressor(self, qpos, qvel, *, gravity: float = -9.81):
+        """Kinetic-energy regressor (frame-invariant) from mjx inputs."""
+        return self._h.kinetic_energy_regressor(qpos, qvel, gravity=gravity, _convention="mujoco")
+
+    def potential_energy_regressor(self, qpos, *, gravity: float = -9.81):
+        """Potential-energy regressor (frame-invariant) from mjx inputs."""
+        return self._h.potential_energy_regressor(qpos, gravity=gravity, _convention="mujoco")
 
 
 class MujocoDerivativeViewMixin:
@@ -307,3 +330,57 @@ class BaseDelegateMixin:
         (``[x, y, z, r, p, y]`` per joint). Fetch, mutate, and pass to
         :py:meth:`set_transform_params`. Only on a ``runtime_transform`` build."""
         return self._base.transform_params
+
+    # ── parity trio (N2.6, 2026-09-08): URDF-limit metadata + launch-config
+    # overlays, forwarded so jax/torch handles match the numpy surface. ──
+
+    @property
+    def joint_pos_limits(self):
+        """Per-joint position limits ``[lower, upper]`` (index == joint id) from
+        the URDF; ``None`` where unspecified. Metadata only."""
+        return self._base.joint_pos_limits
+
+    @property
+    def joint_vel_limits(self):
+        """Per-joint velocity limits (index == joint id) from the URDF;
+        ``None`` where unspecified. Metadata only."""
+        return self._base.joint_vel_limits
+
+    @property
+    def joint_effort_limits(self):
+        """Per-joint effort (torque) limits (index == joint id) from the URDF;
+        ``None`` where unspecified. Metadata only."""
+        return self._base.joint_effort_limits
+
+    def apply_profile_overlay(self, profile: str) -> int:
+        """Apply the tuned per-algo threads/tier overlay block ``profile`` from
+        ``config/launch_configs/<robot>/<gpu>.json`` to the shared underlying
+        ``.so`` (all surfaces over it see the change). Returns the number of
+        algos overlaid (0 = no config for this robot/GPU/profile)."""
+        return self._base.apply_profile_overlay(profile)
+
+    def apply_batch_overlay(self, profile: str = "ffi") -> int:
+        """Apply the tuned small-batch switch table (threshold → n_small
+        threads per algo) for ``profile`` to the shared underlying ``.so``.
+        Returns the number of algos configured."""
+        return self._base.apply_batch_overlay(profile)
+
+
+# ── Deliberate backend asymmetries (documented, not bugs — N2.6) ─────────────
+# The jax/torch surfaces deliberately DO NOT mirror these numpy-handle members:
+#
+#   member                  where       why it stays single-surface
+#   ----------------------  ----------  ------------------------------------------
+#   fk_batched              numpy only  G2 batched FK helper for host-side IK
+#                                       seeding; rc=3 on floating/mimic. Framework
+#                                       users differentiate ee_pose instead.
+#   plant_step_hessian      numpy only  DDP consumers (GATO/PDDP) drive it from
+#                                       host pipelines; no vjp story on jax/torch.
+#   *_wrt_params            jax+torch   regressor-basis parameter gradients exist
+#                                       to be DIFFERENTIATED (custom_vjp/autograd
+#                                       sysID ops); numpy exposes the regressor
+#                                       itself (inverse_dynamics_regressor).
+#   capture()               torch only  CUDA-graph capture is a torch-runtime
+#                                       feature (stream capture of the op chain).
+#   vjp/autograd wiring     jax/torch   custom_vjp / autograd.Function only mean
+#                                       something on a framework surface.

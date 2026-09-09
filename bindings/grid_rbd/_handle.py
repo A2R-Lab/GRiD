@@ -23,7 +23,7 @@ import functools
 from typing import Any, NamedTuple
 
 import numpy as np
-from ._surface_common import MujocoViewBase
+from ._surface_common import MujocoDerivativeViewMixin, MujocoViewBase
 
 
 def _unbatch(out):
@@ -173,44 +173,23 @@ def _resolve_frame_args(meta, target_jid, reference_frame):
     return tj, rf
 
 
-class _MujocoView(MujocoViewBase):
+class _MujocoView(MujocoDerivativeViewMixin, MujocoViewBase):
     """MuJoCo-native view over a :class:`RobotHandle` (``handle.mujoco``).
 
-    Exposes only the convention-supported VALUE methods, with MuJoCo parameter
-    names (``qpos``/``qvel``/``qacc``/``qfrc``) and the mjx output convention applied
-    PER CALL — it forwards an explicit ``_convention="mujoco"`` rather than mutating
-    the handle's shared ``output_convention``, so it is thread-safe and safe to use
-    concurrently with pinocchio-convention calls on the same handle. On a fixed base
-    the convention is a no-op (no free-flyer), so the view simply matches pinocchio.
+    MuJoCo parameter names (``qpos``/``qvel``/``qacc``/``qfrc``) with the mjx
+    output convention applied PER CALL — it forwards an explicit
+    ``_convention="mujoco"`` rather than mutating the handle's shared
+    ``output_convention``, so it is thread-safe alongside pinocchio-convention
+    calls. On a fixed base the convention is a no-op (no free-flyer).
 
-    Derivative / second-order surfaces ARE supported in mujoco convention on the
-    handle itself (call e.g. ``handle.inverse_dynamics_gradient(...,
-    _convention="mujoco")`` on a .so built with the mjx kernel twins); this view
-    only exposes the value/centroidal/energy set with MuJoCo parameter names.
-    The five shared value/dynamics methods live on MujocoViewBase
-    (grid_rbd._surface_common); a subclass adds __slots__ = () to stay slotted."""
+    A4 roster unification (2026-09-09): the full shared surface — values,
+    centroidal/energy (now on MujocoViewBase), and the derivative / kinematics
+    / integrator / plant methods (MujocoDerivativeViewMixin) — matching the
+    jax/torch views method-for-method. Derivative methods need a .so built
+    with the mjx kernel twins on a floating base (clear error otherwise)."""
 
     __slots__ = ()
 
-    def com(self, qpos):
-        """CoM position (invariant) + CoM Jacobian (reframed) in the mjx frame."""
-        return self._h.com(qpos, _convention="mujoco")
-
-    def ccrba(self, qpos, qvel):
-        """Centroidal momentum matrix (reframed) + momentum h (invariant), mjx frame."""
-        return self._h.ccrba(qpos, qvel, _convention="mujoco")
-
-    def energy(self, qpos, qvel, *, gravity: float = -9.81):
-        """Kinetic / potential / mechanical energy (frame-invariant) from mjx inputs."""
-        return self._h.energy(qpos, qvel, gravity=gravity, _convention="mujoco")
-
-    def kinetic_energy_regressor(self, qpos, qvel, *, gravity: float = -9.81):
-        """Kinetic-energy regressor (frame-invariant) from mjx inputs."""
-        return self._h.kinetic_energy_regressor(qpos, qvel, gravity=gravity, _convention="mujoco")
-
-    def potential_energy_regressor(self, qpos, *, gravity: float = -9.81):
-        """Potential-energy regressor (frame-invariant) from mjx inputs."""
-        return self._h.potential_energy_regressor(qpos, gravity=gravity, _convention="mujoco")
 
 
 class RobotHandle:
@@ -382,6 +361,21 @@ class RobotHandle:
         :py:attr:`mujoco` view passes it instead of mutating shared state)."""
         return self._resolve_convention(convention) == "mujoco" and self.floating_base
 
+    _MJX_TWINS_ADVICE = (
+        "needs a floating-base .so built with the mjx kernel twins (this .so "
+        "was built with enable_mujoco_kernels=False, or the robot is mimic/skew "
+        "— twins are never emitted there) — re-register with "
+        "enable_mujoco_kernels=True.")
+
+    def _require_mjx_twin(self, key: str, method: str | None = None) -> None:
+        """Raise the standard actionable error unless the mjx twin symbol for
+        ``key`` is present in the dlopen'd .so (A4 probe dedup, 2026-09-09 —
+        one message, one probe idiom, instead of 15 hand copies)."""
+        if not getattr(self._runner, f"has_{key}_mujoco", False):
+            raise NotImplementedError(
+                f"{method or key}(output_convention='mujoco') "
+                + self._MJX_TWINS_ADVICE)
+
     # ─── runtime-mutable inertia (D.4 / Phase 5) ─────────────────────────────
 
     @property
@@ -389,6 +383,111 @@ class RobotHandle:
         """True if this robot was registered with ``runtime_inertia=True`` (the
         .so carries a mutable inertia table + :py:meth:`set_inertia_params`)."""
         return bool(self._meta.get("runtime_inertia", False))
+
+    @property
+    def meta(self):
+        """A COPY of the .so's persisted metadata (``meta.json``): sizes, joint
+        names/limits, build facts (``algorithm_list`` / ``generated_algorithms``
+        / ``dtype`` / ``max_batch`` / ``cuda_arch`` / ``enable_mujoco_kernels``),
+        and the launch-config robot key. Mutating the returned dict never
+        affects the handle. Keys added over time; a .so cached by an older
+        grid-rbd simply lacks the newer ones."""
+        import copy
+        return copy.deepcopy(self._meta)
+
+    @property
+    def joint_names(self):
+        """Joint names, index == joint id (the input-vector ordering). ``None``
+        on a .so registered before names were persisted."""
+        names = self._meta.get("joint_names")
+        return list(names) if names else None
+
+    def capabilities(self):
+        """What this .so can do, per python-surface method key:
+        ``{key: {"built", "mjx", "out_shape", "tier", "threads", "max_threads"}}``.
+
+        - ``built``: the algorithm was in the build's post-dep-expansion emit
+          set (``None`` on a .so cached before ``generated_algorithms`` was
+          persisted — re-register with ``force_rebuild=True`` to populate).
+          Best-effort: a robot-CLASS-limited surface (centroidal family on a
+          mimic robot, ``fk_batched`` on floating/mimic) can still raise its
+          clean rc=3 error at call time even when requested at build time.
+        - ``mjx``: the MuJoCo-convention twin symbol is REALLY present in the
+          dlopen'd .so (ground truth), for methods that have a twin.
+        - ``out_shape``: trailing per-batch-item output dims (ints).
+        - ``tier``/``threads``: the tuned launch config baked for this robot/
+          GPU (``None`` without a config/launch_configs entry).
+        - ``max_threads``: the compiled kernel's real ``__launch_bounds__``
+          ceiling via :py:meth:`kernel_max_threads` (``None`` where the probe
+          does not apply).
+        """
+        from grid_codegen.abi_specs import ABI_SPECS, expand_py_out_dims
+        gen = self._meta.get("generated_algorithms")
+        gen_set = set(gen) if gen is not None else None
+        # spec key -> the algorithm_list key whose membership gates it (default:
+        # the spec key itself).
+        algo_key_of = {
+            "idsva_so": "idsva_so_body_frame",
+            "energy": "kinetic_energy_regressor",
+            "fk_batched": "end_effector_pose",
+        }
+        num_bodies = int(getattr(self._runner, "num_bodies", 0) or 0)
+        # tuned launch config (best-effort)
+        baked = {}
+        try:
+            from grid_codegen.GRiDCodeGenerator import load_launch_config, LAUNCH_CONFIG_DEFAULT_GPU
+            from grid_codegen.algo_registry import build_launch_config_algo_to_symbol
+            robot_key = self._meta.get("launch_config_robot")
+            if robot_key:
+                gpu = self._meta.get("launch_config_gpu", LAUNCH_CONFIG_DEFAULT_GPU)
+                by_sym = load_launch_config(robot_key, self.floating_base, gpu, profile="ffi") or {}
+                sym_of = build_launch_config_algo_to_symbol()
+                baked = {k: by_sym.get(s) for k, s in sym_of.items() if by_sym.get(s)}
+        except Exception:
+            baked = {}
+
+        def _shape(spec):
+            return expand_py_out_dims(spec, self.num_joints, self.num_vel,
+                                      self.num_ees, num_bodies)
+
+        try:
+            from grid_codegen.algo_registry import descriptor_for
+        except Exception:
+            descriptor_for = None
+
+        out = {}
+        for key, spec in ABI_SPECS.items():
+            if not spec.py_out_dims:
+                continue
+            akey = algo_key_of.get(key, key)
+            built = (akey in gen_set) if gen_set is not None else None
+            # the ceiling probe + launch-config tables key on the SHORT autotune
+            # key ("id", "fd", "idsva_so", ...), not the surface method name.
+            short = key
+            if descriptor_for is not None:
+                try:
+                    ak = descriptor_for(key).autotune_keys
+                    if ak:
+                        short = ak[0]
+                except Exception:
+                    pass
+            try:
+                mt = self.kernel_max_threads(short)
+                max_threads = mt if mt and mt > 0 else None
+            except Exception:
+                max_threads = None
+            cfg = baked.get(short) or {}
+            out[key] = {
+                "built": built,
+                # the has_*_mujoco bindings are pybind PROPERTIES, not methods
+                "mjx": (bool(getattr(self._runner, f"has_{key}_mujoco", False))
+                        if spec.has_mjx_twin else None),
+                "out_shape": _shape(spec),
+                "tier": cfg.get("tier"),
+                "threads": cfg.get("threads"),
+                "max_threads": max_threads,
+            }
+        return out
 
     @property
     def joint_pos_limits(self):
@@ -1048,10 +1147,7 @@ class RobotHandle:
         # out — the G^-T Minv G^-1 congruence is baked into the kernel; no host
         # symmetrize or post-process).
         if self._mjx_active(_convention):
-            if not getattr(self._runner, "has_minv_mujoco", False):
-                raise NotImplementedError(
-                    "minv(output_convention='mujoco') needs a floating-base .so "
-                    "built with the mjx kernel — re-register with force_rebuild=True.")
+            self._require_mjx_twin("minv", "minv")
             q = np.ascontiguousarray(q, dtype=self._dt)
             return self._cast_out(self._runner.minv_mujoco(q))
 
@@ -1134,10 +1230,7 @@ class RobotHandle:
         # mjx: native kernel only (raw mjx q in, mjx M out — the G M G^T
         # congruence is baked into the kernel).
         if self._mjx_active(_convention):
-            if not getattr(self._runner, "has_crba_mujoco", False):
-                raise NotImplementedError(
-                    "crba(output_convention='mujoco') needs a floating-base .so "
-                    "built with the mjx kernel — re-register with force_rebuild=True.")
+            self._require_mjx_twin("crba", "crba")
             q = np.ascontiguousarray(q, dtype=self._dt)
             return self._cast_out(self._runner.crba_mujoco(q, gravity))
 
@@ -1153,11 +1246,7 @@ class RobotHandle:
         kernel routes ``q`` through the mjx quaternion reorder (so the output
         equals feeding the pin kernel the pin-converted ``q``)."""
         if self._mjx_active(_convention):
-            if not getattr(self._runner, "has_end_effector_pose_mujoco", False):
-                raise NotImplementedError(
-                    "end_effector_pose(output_convention='mujoco') needs a "
-                    "floating-base .so built with the mjx kernel — re-register with "
-                    "force_rebuild=True.")
+            self._require_mjx_twin("end_effector_pose", "end_effector_pose")
             q = np.ascontiguousarray(q, dtype=self._dt)
             return self._runner.end_effector_pose_mujoco(q)
         q = np.ascontiguousarray(q, dtype=self._dt)
@@ -1196,11 +1285,7 @@ class RobotHandle:
         NEE = self.num_ees
         NV = self.num_vel
         if self._mjx_active(_convention):
-            if not getattr(self._runner, "has_end_effector_pose_gradient_mujoco", False):
-                raise NotImplementedError(
-                    "end_effector_pose_gradient(output_convention='mujoco') needs a "
-                    "floating-base .so built with the mjx kernel — re-register with "
-                    "force_rebuild=True.")
+            self._require_mjx_twin("end_effector_pose_gradient", "end_effector_pose_gradient")
             q = np.ascontiguousarray(q, dtype=self._dt)
             raw = self._runner.end_effector_pose_gradient_mujoco(q)
             B = raw.shape[0]
@@ -1242,8 +1327,7 @@ class RobotHandle:
         if self._mjx_active(_convention):
             raise NotImplementedError(
                 "inverse_dynamics_gradient(output_convention='mujoco') needs an explicit "
-                "qdd, no f_ext, and a floating-base .so built with the mjx kernel "
-                "(re-register with force_rebuild=True).")
+                "qdd, no f_ext, and a floating-base .so built with the mjx kernel twins (this .so was built with enable_mujoco_kernels=False, or the robot is mimic/skew — twins are never emitted there) — re-register with enable_mujoco_kernels=True.")
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         self._check_nq_width(qd, "qd")
@@ -1312,8 +1396,7 @@ class RobotHandle:
             return self._runner.end_effector_pose_hessian_mujoco(q)
         if self._mjx_active(_convention):
             raise NotImplementedError(
-                "end_effector_pose_hessian(output_convention='mujoco') needs a floating-base "
-                ".so built with the mjx kernel (re-register with force_rebuild=True).")
+                "end_effector_pose_hessian(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.end_effector_pose_hessian(q)
 
@@ -1341,8 +1424,7 @@ class RobotHandle:
             flat = self._runner.idsva_so_mujoco(q, qd, qdd_arr, 4 * NV ** 3, gravity)
         elif self._mjx_active(_convention):
             raise NotImplementedError(
-                "idsva_so(output_convention='mujoco') needs a floating-base .so built with "
-                "the mjx kernel (re-register with force_rebuild=True).")
+                "idsva_so(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         else:
             self._check_nq_width(qd, "qd")
             self._check_nq_width(qdd_arr, "qdd")
@@ -1375,8 +1457,7 @@ class RobotHandle:
             flat = self._runner.inverse_dynamics_regressor_mujoco(q, qd, qdd_arr, gravity)
         elif self._mjx_active(_convention):
             raise NotImplementedError(
-                "inverse_dynamics_regressor(output_convention='mujoco') needs a floating-base .so built "
-                "with the mjx kernel (re-register with force_rebuild=True).")
+                "inverse_dynamics_regressor(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         else:
             self._check_nq_width(qd, "qd")
             self._check_nq_width(qdd_arr, "qdd")
@@ -1403,8 +1484,7 @@ class RobotHandle:
             flat = self._runner.fdsva_so_mujoco(q, qd, u, 4 * NV ** 3, gravity)
         elif self._mjx_active(_convention):
             raise NotImplementedError(
-                "fdsva_so(output_convention='mujoco') needs a floating-base .so built with "
-                "the mjx kernel (re-register with force_rebuild=True).")
+                "fdsva_so(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         else:
             self._check_nq_width(qd, "qd")
             self._check_nq_width(u, "u")
@@ -1430,10 +1510,7 @@ class RobotHandle:
         u  = np.ascontiguousarray(u,  dtype=self._dt)
         it = _integrator_code(integrator_type)
         if self._mjx_active(_convention):
-            if not getattr(self._runner, "has_integrator_mujoco", False):
-                raise NotImplementedError(
-                    "integrator(output_convention='mujoco') needs a floating-base .so "
-                    "built with the mjx kernel — re-register with force_rebuild=True.")
+            self._require_mjx_twin("integrator", "integrator")
             return self._runner.integrator_mujoco(q, qd, u, float(dt), it, gravity=float(gravity))
         self._check_nq_width(qd, "qd")
         self._check_nq_width(u, "u")
@@ -1456,8 +1533,7 @@ class RobotHandle:
             raw = self._runner.integrator_gradient_mujoco(q, qd, u, float(dt), it, gravity=float(gravity))
         elif self._mjx_active(_convention):
             raise NotImplementedError(
-                "integrator_gradient(output_convention='mujoco') needs a floating-base .so built "
-                "with the mjx kernel (re-register with force_rebuild=True).")
+                "integrator_gradient(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         else:
             self._check_nq_width(qd, "qd")
             self._check_nq_width(u, "u")
@@ -1492,8 +1568,7 @@ class RobotHandle:
             return self._runner.quadratic_state_cost_mujoco(x, x_des, Q)
         if self._mjx_active(_convention):
             raise NotImplementedError(
-                "quadratic_state_cost(output_convention='mujoco') needs a floating-base .so built "
-                "with the mjx kernel (re-register with force_rebuild=True).")
+                "quadratic_state_cost(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         return self._runner.quadratic_state_cost(x, x_des, Q)
 
     def quadratic_input_cost(self, u, u_des, R):
@@ -1513,6 +1588,7 @@ class RobotHandle:
         q is (B, NUM_POS); p_des / W are (B, 3). Returns:
           value (B,), grad_x (B, NX) = [J_p^T (W·r); 0], GN hess_x (B, NX, NX)
           with the top-left NV×NV q-block = J_p^T diag(W) J_p.
+
         The hessian is returned in the kernel's column-major layout; since the
         GN hessian J_p^T W J_p is symmetric the row/col-major distinction is
         immaterial.
@@ -1527,8 +1603,7 @@ class RobotHandle:
             return self._runner.ee_pos_cost_mujoco(q, p_des, W)
         if self._mjx_active(_convention):
             raise NotImplementedError(
-                "ee_pos_cost(output_convention='mujoco') needs a floating-base .so built "
-                "with the mjx kernel (re-register with force_rebuild=True).")
+                "ee_pos_cost(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         return self._runner.ee_pos_cost(q, p_des, W)
 
     def joint_position_barrier(self, var, lower, upper, mu):
@@ -1570,8 +1645,7 @@ class RobotHandle:
             return self._runner.plant_step_mujoco(x, u, float(dt), it, float(gravity))
         if self._mjx_active(_convention):
             raise NotImplementedError(
-                "plant_step(output_convention='mujoco') needs a floating-base .so built "
-                "with the mjx kernel (re-register with force_rebuild=True).")
+                "plant_step(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         return self._runner.plant_step(x, u, float(dt), it, float(gravity))
 
     def plant_step_gradient(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81, _convention=None):
@@ -1591,8 +1665,7 @@ class RobotHandle:
             raw = self._runner.plant_step_gradient_mujoco(x, u, float(dt), it, float(gravity))
         elif self._mjx_active(_convention):
             raise NotImplementedError(
-                "plant_step_gradient(output_convention='mujoco') needs a floating-base .so built "
-                "with the mjx kernel (re-register with force_rebuild=True).")
+                "plant_step_gradient(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         else:
             raw = self._runner.plant_step_gradient(x, u, float(dt), it, float(gravity))
         # raw is filled with the (2*NV x 3*NV) column-major dAB; recover row-major.
@@ -1623,8 +1696,7 @@ class RobotHandle:
             raw = self._runner.plant_step_hessian_mujoco(x, u, float(dt), it, float(gravity))
         elif self._mjx_active(_convention):
             raise NotImplementedError(
-                "plant_step_hessian(output_convention='mujoco') needs a floating-base .so built "
-                "with the mjx kernel (re-register with force_rebuild=True).")
+                "plant_step_hessian(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         else:
             raw = self._runner.plant_step_hessian(x, u, float(dt), it, float(gravity))
         # raw is row-major (2*NV, 3*NV*3*NV) per timestep — reshape the trailing
@@ -1639,6 +1711,7 @@ class RobotHandle:
         q is (B, NUM_POS); p_des / W are (B, 3). Returns:
           value (B,), grad_x (B, NX) = [J_com^T (W·r); 0], GN hess_x (B, NX, NX)
           with the top-left NV×NV q-block = J_com^T diag(W) J_com.
+
         Matches ``RBDReference.com_cost(q, p_des, W)``.
 
         With ``output_convention="mujoco"`` (floating base) the CoM position (and value)
@@ -1650,8 +1723,7 @@ class RobotHandle:
             return self._runner.com_cost_mujoco(q, p_des, W)
         if self._mjx_active(_convention):
             raise NotImplementedError(
-                "com_cost(output_convention='mujoco') needs a floating-base .so built "
-                "with the mjx kernel (re-register with force_rebuild=True).")
+                "com_cost(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         return self._runner.com_cost(q, p_des, W)
 
     def momentum_cost(self, q, qd, h_des, W, *, _convention=None):
@@ -1660,6 +1732,7 @@ class RobotHandle:
         q is (B, NUM_POS); qd is (B, NUM_VEL); h_des / W are (B, 6). Returns:
           value (B,), grad_x (B, NX) = [0; A^T (W·r)], GN hess_x (B, NX, NX)
           with the bottom-right NV×NV qd-block = A^T diag(W) A.
+
         Matches ``RBDReference.momentum_cost(q, qd, h_des, W)``.
 
         With ``output_convention="mujoco"`` (floating base) the centroidal momentum h
@@ -1672,8 +1745,7 @@ class RobotHandle:
             return self._runner.momentum_cost_mujoco(q, qd, h_des, W)
         if self._mjx_active(_convention):
             raise NotImplementedError(
-                "momentum_cost(output_convention='mujoco') needs a floating-base .so built "
-                "with the mjx kernel (re-register with force_rebuild=True).")
+                "momentum_cost(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         return self._runner.momentum_cost(q, qd, h_des, W)
 
     # ─── centroidal / energy / general-frame kinematics (F2) ─────────────────
@@ -1699,8 +1771,7 @@ class RobotHandle:
         if self._mjx_active(_convention):
             if not getattr(self._runner, "has_com_mujoco", False):
                 raise NotImplementedError(
-                    "com(output_convention='mujoco') needs a floating-base .so built "
-                    "with the mjx kernel — re-register with force_rebuild=True.")
+                "com(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
             q = np.ascontiguousarray(q, dtype=self._dt)
             raw = self._runner.com_mujoco(q)
         else:
@@ -1726,8 +1797,7 @@ class RobotHandle:
         if self._mjx_active(_convention):
             if not getattr(self._runner, "has_ccrba_mujoco", False):
                 raise NotImplementedError(
-                    "ccrba(output_convention='mujoco') needs a floating-base .so built "
-                    "with the mjx kernel — re-register with force_rebuild=True.")
+                "ccrba(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
             q = np.ascontiguousarray(q, dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             raw = self._runner.ccrba_mujoco(q, qd)
@@ -1752,8 +1822,7 @@ class RobotHandle:
         if self._mjx_active(_convention):
             if not getattr(self._runner, "has_energy_mujoco", False):
                 raise NotImplementedError(
-                    "energy(output_convention='mujoco') needs a floating-base .so built "
-                    "with the mjx kernel — re-register with force_rebuild=True.")
+                "energy(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
             q = np.ascontiguousarray(q, dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             return self._cast_out(self._runner.energy_mujoco(q, qd, float(gravity)))
@@ -1774,8 +1843,7 @@ class RobotHandle:
             return self._runner.generalized_gravity_mujoco(q, float(gravity))
         if self._mjx_active(_convention):
             raise NotImplementedError(
-                "generalized_gravity(output_convention='mujoco') needs a floating-base "
-                ".so built with the mjx kernel (re-register with force_rebuild=True).")
+                "generalized_gravity(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         q = np.ascontiguousarray(q, dtype=self._dt)
         return self._runner.generalized_gravity(q, float(gravity))
 
@@ -1794,8 +1862,7 @@ class RobotHandle:
             return self._runner.nonlinear_effects_mujoco(q, qd, float(gravity))
         if self._mjx_active(_convention):
             raise NotImplementedError(
-                "nonlinear_effects(output_convention='mujoco') needs a floating-base "
-                ".so built with the mjx kernel (re-register with force_rebuild=True).")
+                "nonlinear_effects(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         self._check_nq_width(qd, "qd")
@@ -1814,8 +1881,7 @@ class RobotHandle:
         if self._mjx_active(_convention):
             if not getattr(self._runner, "has_coriolis_matrix_mujoco", False):
                 raise NotImplementedError(
-                    "coriolis_matrix(output_convention='mujoco') needs a floating-base "
-                    ".so built with the mjx kernel — re-register with force_rebuild=True.")
+                "coriolis_matrix(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
             q = np.ascontiguousarray(q, dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             raw = self._runner.coriolis_matrix_mujoco(q, qd, float(gravity))
@@ -1836,11 +1902,7 @@ class RobotHandle:
         MuJoCo-convention; the regressor is frame-INVARIANT, so the native kernel
         only converts the inputs and the output equals the pin result."""
         if self._mjx_active(_convention):
-            if not getattr(self._runner, "has_kinetic_energy_regressor_mujoco", False):
-                raise NotImplementedError(
-                    "kinetic_energy_regressor(output_convention='mujoco') needs a "
-                    "floating-base .so built with the mjx kernel — re-register with "
-                    "force_rebuild=True.")
+            self._require_mjx_twin("kinetic_energy_regressor", "kinetic_energy_regressor")
             q = np.ascontiguousarray(q, dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             return self._cast_out(self._runner.kinetic_energy_regressor_mujoco(q, qd, float(gravity)))
@@ -1859,11 +1921,7 @@ class RobotHandle:
         the regressor is frame-INVARIANT, so the native kernel only converts the
         input and the output equals the pin result."""
         if self._mjx_active(_convention):
-            if not getattr(self._runner, "has_potential_energy_regressor_mujoco", False):
-                raise NotImplementedError(
-                    "potential_energy_regressor(output_convention='mujoco') needs a "
-                    "floating-base .so built with the mjx kernel — re-register with "
-                    "force_rebuild=True.")
+            self._require_mjx_twin("potential_energy_regressor", "potential_energy_regressor")
             q = np.ascontiguousarray(q, dtype=self._dt)
             return self._cast_out(self._runner.potential_energy_regressor_mujoco(q, float(gravity)))
         q = np.ascontiguousarray(q, dtype=self._dt)
@@ -1889,8 +1947,7 @@ class RobotHandle:
             raw = self._runner.dccrba_mujoco(q)
         elif self._mjx_active(_convention):
             raise NotImplementedError(
-                "dccrba(output_convention='mujoco') needs a floating-base .so built with "
-                "the mjx kernel (re-register with force_rebuild=True).")
+                "dccrba(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         else:
             q = np.ascontiguousarray(q, dtype=self._dt)
             raw = self._runner.dccrba(q)  # (B, 6*NV*NV) flat, dA[row + 6*k + 6*NV*m]
@@ -1914,11 +1971,7 @@ class RobotHandle:
         frame (computed natively in the kernel)."""
         NV = self.num_vel
         if self._mjx_active(_convention):
-            if not getattr(self._runner, "has_cmm_time_variation_mujoco", False):
-                raise NotImplementedError(
-                    "cmm_time_variation(output_convention='mujoco') needs a "
-                    "floating-base .so built with the mjx kernel — re-register with "
-                    "force_rebuild=True.")
+            self._require_mjx_twin("cmm_time_variation", "cmm_time_variation")
             q = np.ascontiguousarray(q, dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             raw = self._runner.cmm_time_variation_mujoco(q, qd)  # (B, 6*NV) col-major A[r + 6*c]
@@ -1949,8 +2002,7 @@ class RobotHandle:
         if self._mjx_active(_convention):
             if not getattr(self._runner, "has_frame_jacobian_mujoco", False):
                 raise NotImplementedError(
-                    "frame_jacobian(output_convention='mujoco') needs a floating-base "
-                    ".so built with the mjx kernel — re-register with force_rebuild=True.")
+                "frame_jacobian(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
             q = np.ascontiguousarray(q, dtype=self._dt)
             raw = self._runner.frame_jacobian_mujoco(q, tj, rf)
             return raw.reshape(raw.shape[0], NV, 6).transpose(0, 2, 1)
@@ -1973,8 +2025,7 @@ class RobotHandle:
         if self._mjx_active(_convention):
             if not getattr(self._runner, "has_frame_jacobian_dot_mujoco", False):
                 raise NotImplementedError(
-                    "frame_jacobian_dot(output_convention='mujoco') needs a floating-base "
-                    ".so built with the mjx kernel — re-register with force_rebuild=True.")
+                "frame_jacobian_dot(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
             q = np.ascontiguousarray(q, dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
             raw = self._runner.frame_jacobian_dot_mujoco(q, qd, tj, rf)
@@ -1996,8 +2047,7 @@ class RobotHandle:
         if self._mjx_active(_convention):
             if not getattr(self._runner, "has_osc_inertia_mujoco", False):
                 raise NotImplementedError(
-                    "osc_inertia(output_convention='mujoco') needs a floating-base "
-                    ".so built with the mjx kernel — re-register with force_rebuild=True.")
+                "osc_inertia(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
             q = np.ascontiguousarray(q, dtype=self._dt)
             raw = self._runner.osc_inertia_mujoco(q)
             return raw.reshape(raw.shape[0], 6, 6)
@@ -2086,10 +2136,8 @@ class RobotHandle:
         jids = self._resolve_ee_jids(ee_joint_names)
         offsets = self._normalize_ee_offsets(ee_offsets, len(jids))
         mjx = self._mjx_active(_convention)
-        if mjx and not getattr(self._runner, "has_end_effector_pose_runtime_mujoco", False):
-            raise NotImplementedError(
-                "end_effector_pose_runtime(output_convention='mujoco') needs a floating-base .so "
-                "built with the mjx kernel (re-register with force_rebuild=True).")
+        if mjx:
+            self._require_mjx_twin("end_effector_pose_runtime")
         per_ee = []
         for jid, off in zip(jids, offsets):
             off_arr = np.ascontiguousarray(off, dtype=self._dt)
@@ -2119,8 +2167,7 @@ class RobotHandle:
         mjx = self._mjx_active(_convention)
         if mjx and not getattr(self._runner, "has_end_effector_pose_gradient_runtime_mujoco", False):
             raise NotImplementedError(
-                "end_effector_pose_gradient_runtime(output_convention='mujoco') needs a floating-base "
-                ".so built with the mjx kernel (re-register with force_rebuild=True).")
+                "end_effector_pose_gradient_runtime(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         per_ee = []
         for jid, off in zip(jids, offsets):
             off_arr = np.ascontiguousarray(off, dtype=self._dt)
