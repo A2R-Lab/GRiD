@@ -3104,6 +3104,14 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_impl(
     cudaMemcpyAsync(c->typed_data(), g_data->d_c,
                     batch * nj * sizeof(T),
                     cudaMemcpyDeviceToDevice, stream);
+    // Reset the singleton f_ext AFTER the kernel consumed it (stream-ordered):
+    // jax handlers WITHOUT an f_ext input (the gradients, the integrators)
+    // launch with g_data->d_f_ext and must see zeros — a resident wrench from
+    // this call silently poisoned their results (2026-09-09 survey finding,
+    // repro: 21.2 max gradient drift; mirrors the C-ABI reset_f_ext epilogue
+    // and grid_torch_f_ext_reset).
+    cudaMemsetAsync(g_data->d_f_ext, 0,
+                    (size_t)batch * 6 * grid::NUM_BODIES * sizeof(T), stream);
     return ffi::Error::Success();
 }
 
@@ -3229,6 +3237,9 @@ static ffi::Error grid_rbd_jax_forward_dynamics_impl(
     cudaMemcpyAsync(qdd_out->typed_data(), g_data->d_qdd,
                     batch * nj * sizeof(T),
                     cudaMemcpyDeviceToDevice, stream);
+    // Reset f_ext after consumption (see inverse_dynamics handler note).
+    cudaMemsetAsync(g_data->d_f_ext, 0,
+                    (size_t)batch * 6 * grid::NUM_BODIES * sizeof(T), stream);
     return ffi::Error::Success();
 }
 
@@ -3287,6 +3298,9 @@ static ffi::Error grid_rbd_jax_aba_impl(
     cudaMemcpyAsync(qdd_out->typed_data(), g_data->d_qdd,
                     batch * nj * sizeof(T),
                     cudaMemcpyDeviceToDevice, stream);
+    // Reset f_ext after consumption (see inverse_dynamics handler note).
+    cudaMemsetAsync(g_data->d_f_ext, 0,
+                    (size_t)batch * 6 * grid::NUM_BODIES * sizeof(T), stream);
     return ffi::Error::Success();
 }
 

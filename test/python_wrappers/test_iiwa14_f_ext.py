@@ -200,3 +200,27 @@ def test_torch_inverse_dynamics_f_ext(handle, ref, samples):
     qg = q.clone().requires_grad_(True)
     th.inverse_dynamics(qg, qd, f_ext=fe).sum().backward()
     assert qg.grad is not None and torch.isfinite(qg.grad).all()
+
+
+def test_jax_no_f_ext_residue_after_f_ext_call(handle, samples):
+    """2026-09-09 survey finding: the jax value handlers copy the caller's
+    f_ext into the singleton d_f_ext, but the jax GRADIENT handlers take no
+    f_ext input while still passing d_f_ext to their kernels — without the
+    stream-ordered reset in the value handlers, a prior f_ext call silently
+    poisoned every later jax gradient (repro measured 21.2 max drift)."""
+    gj = pytest.importorskip("grid_rbd.jax")
+    jh = gj.register_robot(name="iiwa14_fext_smoke", urdf_path=str(_URDF),
+                           floating_base=False, max_batch_size=8)
+    q = samples["q"]; qd = samples["qd"]
+    base_grad = np.asarray(jh.inverse_dynamics_gradient(q, qd)).copy()
+    base_fd_grad = np.asarray(jh.forward_dynamics_gradient(q, qd, samples["u"])).copy()
+    _ = jh.inverse_dynamics(q, qd, f_ext=samples["f_ext"])
+    _ = jh.forward_dynamics(q, qd, samples["u"], f_ext=samples["f_ext"])
+    after_grad = np.asarray(jh.inverse_dynamics_gradient(q, qd))
+    after_fd_grad = np.asarray(jh.forward_dynamics_gradient(q, qd, samples["u"]))
+    assert np.array_equal(base_grad, after_grad), (
+        f"stale f_ext poisoned inverse_dynamics_gradient: "
+        f"max drift {abs(base_grad - after_grad).max()}")
+    assert np.array_equal(base_fd_grad, after_fd_grad), (
+        f"stale f_ext poisoned forward_dynamics_gradient: "
+        f"max drift {abs(base_fd_grad - after_fd_grad).max()}")

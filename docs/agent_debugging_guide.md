@@ -1755,3 +1755,25 @@ scope `static` state in wrapper_template.cu is already internal-linkage and
 safe. RULE: any NEW mutable state emitted into the HEADER must be either
 hidden-visibility or moved into the wrapper TU; test it with a two-robot
 one-process repro, not just single-robot suites.
+
+### 7.z5 Singleton-buffer residue across surface handlers (2026-09-09, jax f_ext)
+
+**Symptom.** A jax gradient/integrator result silently changes after an
+earlier `f_ext=`-carrying value call in the same process — values stay
+correct, only the f_ext-less consumers drift (repro measured 21.2 max).
+
+**Cause.** Singleton device state (`g_data->d_f_ext`) written by handlers
+that TAKE the input but read by handlers that DON'T. The C-ABI bodies reset
+f_ext in their epilogue and torch has `grid_torch_f_ext_reset`; the
+hand-written jax FFI section had NO reset anywhere — the classic risk of the
+same contract hand-copied across three surfaces (found by the surface-gen
+survey, not by any test: every suite exercised f_ext and gradients in
+separate processes/fixtures).
+
+**Fix + rule.** Every handler that WRITES a singleton input buffer resets it
+after the kernel consumes it, stream-ordered (`cudaMemsetAsync` on the same
+stream, sized to THIS call's batch — inductively clean because every writer
+resets its own extent; `tool_fext` sizes kMaxBatch for its own known trap).
+When auditing a new surface, grep for every `g_data->d_*` a launch passes
+and check who zeroes it. Regression: test_iiwa14_f_ext.py::
+test_jax_no_f_ext_residue_after_f_ext_call.
