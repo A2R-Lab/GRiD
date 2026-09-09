@@ -119,8 +119,9 @@ seconds of regeneration, never an nvcc rebuild.
 - **Thread-count invariant** — a kernel's output must be identical at 1 / 32 / any thread count.
   Test it. Floating-base reductions must also be **run-to-run bit-deterministic** (fixed-order sums).
 - **Byte-identical codegen discipline** — a refactor that shouldn't change emitted code must produce
-  a byte-identical `grid.cuh` (regen before/after + `diff`). Never advance on a non-identical diff
-  without a CUDA-equivalence sign-off.
+  a byte-identical `grid.cuh` (regen before/after + `diff`; harness:
+  `.venv/bin/python tools/byte_gate.py <outdir>` — 7 representative cells, sha256 per cell). Never
+  advance on a non-identical diff without a CUDA-equivalence sign-off.
 - **Fix, don't guard** — no `xfail`/`skip`/defensive guards; fix the root cause.
 - **Physics**: gravity `-9.81`; Pinocchio is authoritative. Prefer extending GLASS primitives over
   working around them (GLASS is first-party).
