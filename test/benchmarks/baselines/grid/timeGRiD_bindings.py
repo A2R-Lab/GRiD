@@ -36,14 +36,13 @@ from pathlib import Path
 
 import numpy as np
 
-# XLA's default allocator PREALLOCATES 75% of GPU memory at first backend init
-# (test/conftest.py carries the same guard for pytest runs; standalone drivers
-# import THIS module before jax, so this is their earliest hook). Without it,
-# big-humanoid kernels fail AT LAUNCH with cudaErrorMemoryAllocation — the
-# runtime can't allocate the local-memory pool once XLA holds 24+ GiB
-# (h1_2 forward_dynamics "launch failed", autotune leg 2026-09-05).
-# setdefault so an explicit caller choice still wins.
-os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+# 2026-09-09: the XLA_PYTHON_CLIENT_PREALLOCATE=false guard is GONE. It was
+# a workaround for XLA's 75% preallocation starving GRiD's raw cudaMallocs
+# (h1_2 "launch failed", autotune leg 2026-09-05). The device-pool slab now
+# carves GRiD's arena OUT OF XLA's pool (proven on h1_2 itself: 60-min cold
+# register + idsva_so all-finite with prealloc ACTIVE, used==bytes referee),
+# so timing runs under XLA's real allocator — the representative config.
+# Set the env var yourself if you need the old behavior for an A/B.
 
 THIS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = THIS_DIR.parents[3]
