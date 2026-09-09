@@ -303,7 +303,8 @@ class GRiDCodeGenerator:
         
     def gen_all_code(self, include_base_inertia = False, include_homogenous_transforms = False, fixed_target_name = "", output_path = None,
                      codegen_profile = "all", algorithm_list = None, enable_floating_second_order = True,
-                     enable_idsva_so_world_frame = None, runtime_inertia = False, runtime_transform = False,
+                     enable_idsva_so_world_frame = None, enable_idsva_so_body_frame = None,
+                     runtime_inertia = False, runtime_transform = False,
                      runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
                      contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None,
                      emit_alloc_gating = False):
@@ -411,6 +412,26 @@ class GRiDCodeGenerator:
                 )
         if "idsva_so_world_frame" in algorithms:
             enable_idsva_so_world_frame = True
+        # A6 (2026-09-08): the body-frame family defaults OFF when it is dead code —
+        # i.e. when the dispatcher routes this robot to world_frame AND nothing else
+        # composes the body inner. On h1_2-floating the never-dispatched body-frame
+        # diagnostic is a 3 MB / 782,584-float arena that costs compile time and a
+        # dead kernel registration (docs/open-tasks/so_memory_memo_2026-09-08.md).
+        # It stays emitted when:
+        #   - body IS the dispatched frame (cardinal fixed-base, NV < threshold), or
+        #   - fdsva_so composes the body inner (fixed-base non-spherical — including
+        #     high-DOF fixed like g1, whose idsva_so dispatches world but whose
+        #     fdsva_so still calls idsva_so_body_frame_inner), or
+        #   - world_frame emission is disabled (body is then the only variant —
+        #     preserves the bench force-a-variant A/B workflow).
+        # Pass enable_idsva_so_body_frame=True to force the diagnostic emission
+        # (the floating body-frame diagnostic test does), False to force it off.
+        if enable_idsva_so_body_frame is None:
+            fdsva_composes_body = ("fdsva_so" in algorithms) and not (
+                self.robot.floating_base or self.robot.robot_has_spherical())
+            enable_idsva_so_body_frame = ((not _idsva_so_use_world_frame(self))
+                                          or fdsva_composes_body
+                                          or not enable_idsva_so_world_frame)
         self.include_fixed_kinematic_targets = fixed_target_name != ""
         # GATO Ask-4: the single named kinematic target, resolved ONCE here so every
         # consumer agrees. The generic end_effector_pose* family evaluates the last
@@ -464,9 +485,13 @@ class GRiDCodeGenerator:
         self.generate_end_effector_pose_hessian = "end_effector_pose_hessian" in algorithms
         self.enable_floating_second_order = enable_floating_second_order
         allow_second_order = (not self.robot.floating_base) or enable_floating_second_order
-        self.generate_idsva_so_body_frame = ("idsva_so_body_frame" in algorithms) and allow_second_order
+        requested_second_order = ("idsva_so_body_frame" in algorithms) and allow_second_order
+        self.generate_idsva_so_body_frame = requested_second_order and bool(enable_idsva_so_body_frame)
         self.generate_fdsva_so = ("fdsva_so" in algorithms) and allow_second_order
-        self.generate_idsva_so_world_frame = bool(enable_idsva_so_world_frame) and self.generate_idsva_so_body_frame
+        # A6: world no longer requires body emission (previously chained through the
+        # body gate) — only that second-order was requested at all. The new legal
+        # combination is world WITHOUT body (floating/spherical/high-DOF default).
+        self.generate_idsva_so_world_frame = bool(enable_idsva_so_world_frame) and requested_second_order
         # fdsva_so on floating-base's body calls idsva_so_world_frame_inner<T>(...)
         # unconditionally — without world_frame emission we'd produce a header
         # that fails at link time. Catch the misconfiguration early so the
@@ -775,18 +800,23 @@ class GRiDCodeGenerator:
             self.gen_integrator_du_arena_carve_struct()
         if not self.robot.floating_base or enable_floating_second_order:
             if "idsva_so_body_frame" in algorithms:
-                self.gen_idsva_so_body_frame()
-                # Optional: emit the world-frame single-pass alternative path alongside
-                # the existing emission. Co-exists with `idsva_so_body_frame_kernel`/`idsva_so_body_frame` (host);
-                # the new entry point is `idsva_so_world_frame_kernel`/`idsva_so_world_frame` (host).
-                if enable_idsva_so_world_frame:
+                # A6: the body-frame family is now gated (default-dropped on
+                # world-dispatching robots with no fdsva_so body-inner dependency —
+                # see the enable_idsva_so_body_frame resolution above).
+                if self.generate_idsva_so_body_frame:
+                    self.gen_idsva_so_body_frame()
+                # World-frame single-pass path. Entry points are
+                # `idsva_so_world_frame_kernel` / `idsva_so_world_frame` (host); may
+                # now be the ONLY emitted variant (floating/spherical/high-DOF fixed).
+                if self.generate_idsva_so_world_frame:
                     self.gen_idsva_so_world_frame()
-                # Emit the dispatching `idsva_so` host wrapper. It forwards to
-                # world_frame for floating-base / spherical / high-DOF fixed-base
-                # (NV >= threshold) and to body_frame otherwise; the world-frame
-                # cases require world_frame to have been enabled above (now kept in
-                # lockstep via _idsva_so_use_world_frame).
-                if (not self.robot.floating_base) or enable_idsva_so_world_frame:
+                # Emit the dispatching `idsva_so` host wrapper only when the frame it
+                # would dispatch to (world for floating/spherical/high-DOF fixed via
+                # _idsva_so_use_world_frame, body otherwise) was actually emitted.
+                _dispatched_emitted = (self.generate_idsva_so_world_frame
+                                       if _idsva_so_use_world_frame(self)
+                                       else self.generate_idsva_so_body_frame)
+                if _dispatched_emitted:
                     self.gen_idsva_so_dispatcher()
             if "fdsva_so" in algorithms:
                 self.gen_fdsva_so()

@@ -67,13 +67,16 @@ def emit_feature_macros(gen, algorithms):
     gen.gen_add_code_line(
         "#define GRID_HAS_IDSVA_SO_WORLD_FRAME " + str(int(getattr(gen, "generate_idsva_so_world_frame", False)))
     )
-    # GRID_HAS_IDSVA_SO gates the dispatching `grid::idsva_so` host wrapper.
-    # Emitted whenever the chosen variant for this robot's base type is
-    # available: body_frame for fixed-base (always), world_frame for
-    # floating-base (opt-in via enable_idsva_so_world_frame).
-    has_idsva_so = getattr(gen, "generate_idsva_so_body_frame", True) and (
-        (not gen.robot.floating_base) or getattr(gen, "generate_idsva_so_world_frame", False)
-    )
+    # GRID_HAS_IDSVA_SO gates the dispatching `grid::idsva_so` host wrapper:
+    # present exactly when the frame the dispatcher would route THIS robot to
+    # (world for floating/spherical/high-DOF fixed — _idsva_so_use_world_frame —
+    # body otherwise) was emitted. A6: the body-frame family may now be absent
+    # on world-dispatching robots, so key on the dispatched variant, not on
+    # body-frame presence.
+    if _idsva_so_use_world_frame(gen):
+        has_idsva_so = getattr(gen, "generate_idsva_so_world_frame", False)
+    else:
+        has_idsva_so = getattr(gen, "generate_idsva_so_body_frame", True)
     gen.gen_add_code_line("#define GRID_HAS_IDSVA_SO " + str(int(has_idsva_so)))
     # The `grid::idsva_so` dispatcher forwards at CODEGEN time (world frame for
     # floating / spherical / high-DOF fixed — _idsva_so_use_world_frame). A

@@ -116,6 +116,7 @@ def _generate_second_order_header(
     *,
     enable_floating_second_order=False,
     algorithm_list=None,
+    enable_idsva_so_body_frame=None,
 ):
     header_path = build_dir / "grid.cuh"
     env_updates = {"GRID_CUDA_TARGET_SHARED_MEM_BYTES": target_shared_bytes}
@@ -132,6 +133,7 @@ def _generate_second_order_header(
                 codegen_profile="all",
                 algorithm_list=algorithm_list,
                 enable_floating_second_order=enable_floating_second_order,
+                enable_idsva_so_body_frame=enable_idsva_so_body_frame,
                 output_path=str(header_path),
             )
     return header_path
@@ -197,6 +199,7 @@ def _build_second_order_case(
     enable_floating_second_order=False,
     enable_fdsva=True,
     algorithm_list=None,
+    enable_idsva_so_body_frame=None,
 ):
     build_dir = tmp_path / label
     build_dir.mkdir()
@@ -206,6 +209,7 @@ def _build_second_order_case(
         target_shared_bytes,
         enable_floating_second_order=enable_floating_second_order,
         algorithm_list=algorithm_list,
+        enable_idsva_so_body_frame=enable_idsva_so_body_frame,
     )
     return _compile_second_order_runner(build_dir, enable_fdsva=enable_fdsva)
 
@@ -539,6 +543,9 @@ def test_floating_second_order_diagnostic_matches_python_reference(tmp_path, rob
         enable_floating_second_order=True,
         enable_fdsva=enable_fdsva,
         algorithm_list=algorithm_list,
+        # A6: floating-base default-drops the never-dispatched body-frame family;
+        # this test IS the diagnostic that validates it, so force the emission.
+        enable_idsva_so_body_frame=True,
     )
     block_indices = _idsva_block_indices_from_env()
 
