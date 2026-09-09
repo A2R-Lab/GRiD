@@ -311,22 +311,19 @@ public:
     void set_threads_for(int algo, int n) {
         if (n < 0) throw std::invalid_argument("set_threads_for: n must be >= 0");
         int rc = fn_set_threads_for_(algo, n);
-        if (rc != 0) throw std::runtime_error(
-            "grid_rbd_set_threads_for failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "set_threads_for", nullptr));
     }
     int algo_count() const { return fn_algo_count_(); }
     // E6 batch-switch: when a call's batch <= threshold, launch `algo` with
     // n_small threads (threshold==0 clears the switch for that algo).
     void set_threads_for_n(int algo, int threshold, int n_small) {
         int rc = fn_set_threads_for_n_(algo, threshold, n_small);
-        if (rc != 0) throw std::runtime_error(
-            "grid_rbd_set_threads_for_n failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "set_threads_for_n", nullptr));
     }
     py::tuple get_batch_switch(int algo) const {
         int threshold = 0, n_small = -1;
         int rc = fn_get_batch_switch_(algo, &threshold, &n_small);
-        if (rc != 0) throw std::runtime_error(
-            "grid_rbd_get_batch_switch failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "get_batch_switch", nullptr));
         return py::make_tuple(threshold, n_small);
     }
     int threads_per_block() const { return fn_threads_per_block_(); }
@@ -341,10 +338,7 @@ public:
                 "set_threads_per_block: n must be >= 0 (0 resets to autotuned default), got " + std::to_string(n));
         }
         int rc = fn_set_threads_per_block_(n);
-        if (rc != 0) {
-            throw std::runtime_error(
-                "grid_rbd_set_threads_per_block failed: rc=" + std::to_string(rc));
-        }
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "set_threads_per_block", nullptr));
     }
 
 
@@ -407,10 +401,9 @@ public:
         int batch = check_q(q, "crba");
         py::array_t<CT> out({batch, num_vel_, num_vel_});
         int rc = fn_crba_(q.data(), out.mutable_data(), batch, gravity);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "crba",
             "crba not built into this robot .so — add 'crba' to algorithm_list "
-            "in register_robot() and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_crba failed: rc=" + std::to_string(rc));
+            "in register_robot() and rebuild"));
         return out;
     }
 
@@ -424,7 +417,8 @@ public:
         int batch = check_q(q, "crba_mujoco");
         py::array_t<CT> out({batch, num_vel_, num_vel_});
         int rc = fn_crba_mujoco_(q.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_crba_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "crba_mujoco",
+            nullptr));
         return out;
     }
 
@@ -442,11 +436,10 @@ public:
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_joints_});
         int rc = fn_inverse_dynamics_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics",
             "inverse_dynamics not built into this robot .so — add "
             "'inverse_dynamics' to algorithm_list in register_robot() and "
-            "rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics failed: rc=" + std::to_string(rc));
+            "rebuild"));
         return out;
     }
 
@@ -464,7 +457,8 @@ public:
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_joints_});
         int rc = fn_inverse_dynamics_mujoco_(q.data(), qd.data(), qdd.data(), out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics_mujoco",
+            nullptr));
         return out;
     }
 
@@ -475,10 +469,9 @@ public:
         check_array_2d(u, batch, num_joints_, "u");
         py::array_t<CT> out({batch, num_joints_ + num_vel_});
         int rc = fn_integrator_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "integrator",
             "integrator not built into this robot .so — add 'integrator' to "
-            "algorithm_list in register_robot() and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_integrator failed: rc=" + std::to_string(rc));
+            "algorithm_list in register_robot() and rebuild"));
         return out;
     }
 
@@ -492,9 +485,8 @@ public:
         check_array_2d(u, batch, num_joints_, "u");
         py::array_t<CT> out({batch, num_joints_ + num_vel_});
         int rc = fn_integrator_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
-        if (rc == 3) throw std::runtime_error(
-            "integrator_mujoco: unsupported integrator_type for this build");
-        if (rc != 0) throw std::runtime_error("grid_rbd_integrator_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "integrator_mujoco",
+            "integrator_mujoco: unsupported integrator_type for this build"));
         return out;
     }
 
@@ -504,10 +496,9 @@ public:
         int batch = check_q(q, "minv");
         py::array_t<CT> out({batch, num_vel_, num_vel_});
         int rc = fn_minv_(q.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "minv",
             "minv not built into this robot .so — add 'minv' to algorithm_list "
-            "in register_robot() and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_minv failed: rc=" + std::to_string(rc));
+            "in register_robot() and rebuild"));
         return out;
     }
 
@@ -521,7 +512,8 @@ public:
         int batch = check_q(q, "minv_mujoco");
         py::array_t<CT> out({batch, num_vel_, num_vel_});
         int rc = fn_minv_mujoco_(q.data(), out.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("grid_rbd_minv_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "minv_mujoco",
+            nullptr));
         return out;
     }
 
@@ -534,11 +526,10 @@ public:
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_joints_});
         int rc = fn_fd_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics",
             "forward_dynamics not built into this robot .so — add "
             "'forward_dynamics' to algorithm_list in register_robot() and "
-            "rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics failed: rc=" + std::to_string(rc));
+            "rebuild"));
         return out;
     }
 
@@ -554,7 +545,8 @@ public:
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_joints_});
         int rc = fn_fd_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics_mujoco",
+            nullptr));
         return out;
     }
 
@@ -567,10 +559,9 @@ public:
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_joints_});
         int rc = fn_aba_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "aba",
             "aba not built into this robot .so — add 'aba' to algorithm_list in "
-            "register_robot() and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_aba failed: rc=" + std::to_string(rc));
+            "register_robot() and rebuild"));
         return out;
     }
 
@@ -586,7 +577,8 @@ public:
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_joints_});
         int rc = fn_aba_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc != 0) throw std::runtime_error("grid_rbd_aba_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "aba_mujoco",
+            nullptr));
         return out;
     }
 
@@ -604,11 +596,10 @@ public:
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
         int rc = fn_inverse_dynamics_gradient_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics_gradient",
             "inverse_dynamics_gradient not built into this robot .so — add "
             "'inverse_dynamics_gradient' to algorithm_list in register_robot() "
-            "and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_gradient failed: rc=" + std::to_string(rc));
+            "and rebuild"));
         return out;
     }
 
@@ -624,7 +615,8 @@ public:
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
         int rc = fn_inverse_dynamics_gradient_mujoco_(q.data(), qd.data(), qdd.data(), out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_gradient_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics_gradient_mujoco",
+            nullptr));
         return out;
     }
 
@@ -637,11 +629,10 @@ public:
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
         int rc = fn_fd_grad_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics_gradient",
             "forward_dynamics_gradient not built into this robot .so — add "
             "'forward_dynamics_gradient' to algorithm_list in register_robot() "
-            "and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_gradient failed: rc=" + std::to_string(rc));
+            "and rebuild"));
         return out;
     }
 
@@ -657,7 +648,8 @@ public:
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
         int rc = fn_fd_grad_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
-        if (rc != 0) throw std::runtime_error("grid_rbd_forward_dynamics_gradient_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics_gradient_mujoco",
+            nullptr));
         return out;
     }
 
@@ -673,10 +665,9 @@ public:
         }
         py::array_t<CT> out({batch, second_order_tensor_size});
         int rc = fn_idsva_so_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "idsva_so",
             "idsva_so not built into this robot .so — add 'idsva_so_body_frame' "
-            "to algorithm_list in register_robot() and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_idsva_so failed: rc=" + std::to_string(rc));
+            "to algorithm_list in register_robot() and rebuild"));
         return out;
     }
 
@@ -695,7 +686,8 @@ public:
         }
         py::array_t<CT> out({batch, second_order_tensor_size});
         int rc = fn_idsva_so_mujoco_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_idsva_so_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "idsva_so_mujoco",
+            nullptr));
         return out;
     }
 
@@ -706,10 +698,9 @@ public:
         check_array_2d(u, batch, num_joints_, "u");
         py::array_t<CT> out({batch, second_order_tensor_size});
         int rc = fn_fdsva_so_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "fdsva_so",
             "fdsva_so not built into this robot .so — add 'fdsva_so' to "
-            "algorithm_list in register_robot() and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_fdsva_so failed: rc=" + std::to_string(rc));
+            "algorithm_list in register_robot() and rebuild"));
         return out;
     }
 
@@ -723,7 +714,8 @@ public:
         check_array_2d(u, batch, num_joints_, "u");
         py::array_t<CT> out({batch, second_order_tensor_size});
         int rc = fn_fdsva_so_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_fdsva_so_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "fdsva_so_mujoco",
+            nullptr));
         return out;
     }
 
@@ -739,11 +731,10 @@ public:
         }
         py::array_t<CT> out({batch, num_vel_ * 10 * num_bodies_});
         int rc = fn_id_regressor_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics_regressor",
             "inverse_dynamics_regressor not built into this robot .so — add "
             "'inverse_dynamics_regressor' to algorithm_list in register_robot() "
-            "and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_regressor failed: rc=" + std::to_string(rc));
+            "and rebuild"));
         return out;
     }
 
@@ -762,7 +753,8 @@ public:
         }
         py::array_t<CT> out({batch, num_vel_ * 10 * num_bodies_});
         int rc = fn_id_regressor_mujoco_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_inverse_dynamics_regressor_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics_regressor_mujoco",
+            nullptr));
         return out;
     }
 
@@ -773,11 +765,10 @@ public:
         check_array_2d(u, batch, num_joints_, "u");
         py::array_t<CT> out({batch, 2 * num_vel_ * 3 * num_vel_});
         int rc = fn_integrator_grad_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "integrator_gradient",
             "integrator_gradient not built into this robot .so — add "
             "'integrator_gradient' to algorithm_list in register_robot() and "
-            "rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_integrator_gradient failed: rc=" + std::to_string(rc));
+            "rebuild"));
         return out;
     }
 
@@ -791,9 +782,8 @@ public:
         check_array_2d(u, batch, num_joints_, "u");
         py::array_t<CT> out({batch, 2 * num_vel_ * 3 * num_vel_});
         int rc = fn_integrator_grad_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
-        if (rc == 3) throw std::runtime_error(
-            "integrator_gradient_mujoco: only EULER/SI-EULER supported");
-        if (rc != 0) throw std::runtime_error("grid_rbd_integrator_gradient_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "integrator_gradient_mujoco",
+            "integrator_gradient_mujoco: only EULER/SI-EULER supported"));
         return out;
     }
 
@@ -803,7 +793,8 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 10 * num_bodies_});
         int rc = fn_kinetic_energy_regressor_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_kinetic_energy_regressor failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "kinetic_energy_regressor",
+            nullptr));
         return out;
     }
 
@@ -817,7 +808,8 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 10 * num_bodies_});
         int rc = fn_kinetic_energy_regressor_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_kinetic_energy_regressor_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "kinetic_energy_regressor_mujoco",
+            nullptr));
         return out;
     }
 
@@ -827,7 +819,8 @@ public:
         int batch = check_q(q, "potential_energy_regressor");
         py::array_t<CT> out({batch, 10 * num_bodies_});
         int rc = fn_potential_energy_regressor_(q.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_potential_energy_regressor failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "potential_energy_regressor",
+            nullptr));
         return out;
     }
 
@@ -841,7 +834,8 @@ public:
         int batch = check_q(q, "potential_energy_regressor_mujoco");
         py::array_t<CT> out({batch, 10 * num_bodies_});
         int rc = fn_potential_energy_regressor_mujoco_(q.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_potential_energy_regressor_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "potential_energy_regressor_mujoco",
+            nullptr));
         return out;
     }
 
@@ -851,10 +845,9 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 3});
         int rc = fn_energy_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "energy",
             "energy not available for this robot: it is not generated for mimic "
-            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
-        if (rc != 0) throw std::runtime_error("grid_rbd_energy failed: rc=" + std::to_string(rc));
+            "robots (the per-body Jacobian fold is not yet mimic-reduced)"));
         return out;
     }
 
@@ -868,7 +861,8 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 3});
         int rc = fn_energy_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_energy_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "energy_mujoco",
+            nullptr));
         return out;
     }
 
@@ -878,11 +872,10 @@ public:
         int batch = check_q(q, "end_effector_pose");
         py::array_t<CT> out({batch, 6 * num_ees_});
         int rc = fn_ee_pose_(q.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose",
             "end_effector_pose not built into this robot .so — add "
             "'end_effector_pose' to algorithm_list in register_robot() and "
-            "rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose failed: rc=" + std::to_string(rc));
+            "rebuild"));
         return out;
     }
 
@@ -895,7 +888,8 @@ public:
         int batch = check_q(q, "end_effector_pose_mujoco");
         py::array_t<CT> out({batch, 6 * num_ees_});
         int rc = fn_ee_pose_mujoco_(q.data(), out.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_mujoco",
+            nullptr));
         return out;
     }
 
@@ -905,11 +899,10 @@ public:
         int batch = check_q(q, "end_effector_pose_gradient");
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_});
         int rc = fn_ee_pose_grad_(q.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_gradient",
             "end_effector_pose_gradient not built into this robot .so — add "
             "'end_effector_pose_gradient' to algorithm_list in register_robot() "
-            "and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient failed: rc=" + std::to_string(rc));
+            "and rebuild"));
         return out;
     }
 
@@ -922,7 +915,8 @@ public:
         int batch = check_q(q, "end_effector_pose_gradient_mujoco");
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_});
         int rc = fn_ee_pose_grad_mujoco_(q.data(), out.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_gradient_mujoco",
+            nullptr));
         return out;
     }
 
@@ -932,11 +926,10 @@ public:
         int batch = check_q(q, "end_effector_pose_hessian");
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_, num_vel_});
         int rc = fn_ee_pose_hessian_(q.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_hessian",
             "end_effector_pose_hessian not built into this robot .so — add "
             "'end_effector_pose_hessian' to algorithm_list in register_robot() "
-            "and rebuild");
-        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_hessian failed: rc=" + std::to_string(rc));
+            "and rebuild"));
         return out;
     }
 
@@ -949,7 +942,8 @@ public:
         int batch = check_q(q, "end_effector_pose_hessian_mujoco");
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_, num_vel_});
         int rc = fn_ee_pose_hessian_mujoco_(q.data(), out.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_hessian_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_hessian_mujoco",
+            nullptr));
         return out;
     }
 
@@ -959,9 +953,8 @@ public:
         int batch = check_q(q, "fk_batched");
         py::array_t<CT> out({batch, 7});
         int rc = fn_fk_batched_(q.data(), out.mutable_data(), batch, use_warp ? 1 : 0);
-        if (rc == 3) throw std::runtime_error(
-            "fk_batched: not supported for this robot (floating-base / mimic)");
-        if (rc != 0) throw std::runtime_error("grid_rbd_fk_batched failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "fk_batched",
+            "fk_batched: not supported for this robot (floating-base / mimic)"));
         return out;
     }
 
@@ -971,9 +964,9 @@ public:
         int batch = check_q(q, "frame_jacobian");
         py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_frame_jacobian_(q.data(), out.mutable_data(), batch, target_jid, reference_frame);
-        if (rc == 3) throw std::runtime_error(
-            "frame_jacobian not generated for this robot .so");
-        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_jacobian",
+            "frame_jacobian not built into this robot .so — add "
+            "'frame_jacobian' to algorithm_list in register_robot() and rebuild"));
         return out;
     }
 
@@ -987,7 +980,8 @@ public:
         int batch = check_q(q, "frame_jacobian_mujoco");
         py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_frame_jacobian_mujoco_(q.data(), out.mutable_data(), batch, target_jid, reference_frame);
-        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_jacobian_mujoco",
+            nullptr));
         return out;
     }
 
@@ -997,9 +991,10 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_frame_jacobian_dot_(q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
-        if (rc == 3) throw std::runtime_error(
-            "frame_jacobian_dot not generated for this robot .so");
-        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_dot failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_jacobian_dot",
+            "frame_jacobian_dot not built into this robot .so — add "
+            "'frame_jacobian_dot' to algorithm_list in register_robot() and "
+            "rebuild"));
         return out;
     }
 
@@ -1013,7 +1008,8 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_frame_jacobian_dot_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
-        if (rc != 0) throw std::runtime_error("grid_rbd_frame_jacobian_dot_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_jacobian_dot_mujoco",
+            nullptr));
         return out;
     }
 
@@ -1023,9 +1019,9 @@ public:
         int batch = check_q(q, "osc_inertia");
         py::array_t<CT> out({batch, 36});
         int rc = fn_osc_inertia_(q.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error(
-            "osc_inertia not generated for this robot .so");
-        if (rc != 0) throw std::runtime_error("grid_rbd_osc_inertia failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "osc_inertia",
+            "osc_inertia not built into this robot .so — add 'osc_inertia' to "
+            "algorithm_list in register_robot() and rebuild"));
         return out;
     }
 
@@ -1039,7 +1035,8 @@ public:
         int batch = check_q(q, "osc_inertia_mujoco");
         py::array_t<CT> out({batch, 36});
         int rc = fn_osc_inertia_mujoco_(q.data(), out.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("grid_rbd_osc_inertia_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "osc_inertia_mujoco",
+            nullptr));
         return out;
     }
 
@@ -1049,7 +1046,8 @@ public:
         int batch = check_q(q, "generalized_gravity");
         py::array_t<CT> out({batch, num_vel_});
         int rc = fn_generalized_gravity_(q.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_generalized_gravity failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "generalized_gravity",
+            nullptr));
         return out;
     }
 
@@ -1062,7 +1060,8 @@ public:
         int batch = check_q(q, "generalized_gravity_mujoco");
         py::array_t<CT> out({batch, num_vel_});
         int rc = fn_generalized_gravity_mujoco_(q.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_generalized_gravity_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "generalized_gravity_mujoco",
+            nullptr));
         return out;
     }
 
@@ -1072,7 +1071,8 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, num_vel_});
         int rc = fn_nonlinear_effects_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_nonlinear_effects failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "nonlinear_effects",
+            nullptr));
         return out;
     }
 
@@ -1085,7 +1085,8 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, num_vel_});
         int rc = fn_nonlinear_effects_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_nonlinear_effects_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "nonlinear_effects_mujoco",
+            nullptr));
         return out;
     }
 
@@ -1095,7 +1096,8 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, num_vel_ * num_vel_});
         int rc = fn_coriolis_matrix_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_coriolis_matrix failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "coriolis_matrix",
+            nullptr));
         return out;
     }
 
@@ -1108,7 +1110,8 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, num_vel_ * num_vel_});
         int rc = fn_coriolis_matrix_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
-        if (rc != 0) throw std::runtime_error("grid_rbd_coriolis_matrix_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "coriolis_matrix_mujoco",
+            nullptr));
         return out;
     }
 
@@ -1118,10 +1121,9 @@ public:
         int batch = check_q(q, "com");
         py::array_t<CT> out({batch, 3 + 3 * num_vel_});
         int rc = fn_com_(q.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "com",
             "com not available for this robot: it is not generated for mimic "
-            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
-        if (rc != 0) throw std::runtime_error("grid_rbd_com failed: rc=" + std::to_string(rc));
+            "robots (the per-body Jacobian fold is not yet mimic-reduced)"));
         return out;
     }
 
@@ -1135,7 +1137,8 @@ public:
         int batch = check_q(q, "com_mujoco");
         py::array_t<CT> out({batch, 3 + 3 * num_vel_});
         int rc = fn_com_mujoco_(q.data(), out.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("grid_rbd_com_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "com_mujoco",
+            nullptr));
         return out;
     }
 
@@ -1145,10 +1148,9 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_ + 6});
         int rc = fn_ccrba_(q.data(), qd.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "ccrba",
             "ccrba not available for this robot: it is not generated for mimic "
-            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
-        if (rc != 0) throw std::runtime_error("grid_rbd_ccrba failed: rc=" + std::to_string(rc));
+            "robots (the per-body Jacobian fold is not yet mimic-reduced)"));
         return out;
     }
 
@@ -1162,7 +1164,8 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_ + 6});
         int rc = fn_ccrba_mujoco_(q.data(), qd.data(), out.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("grid_rbd_ccrba_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "ccrba_mujoco",
+            nullptr));
         return out;
     }
 
@@ -1172,10 +1175,9 @@ public:
         int batch = check_q(q, "dccrba");
         py::array_t<CT> out({batch, 6 * num_vel_ * num_vel_});
         int rc = fn_dccrba_(q.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "dccrba",
             "dccrba not available for this robot: it is not generated for mimic "
-            "robots (the per-body Jacobian fold is not yet mimic-reduced)");
-        if (rc != 0) throw std::runtime_error("grid_rbd_dccrba failed: rc=" + std::to_string(rc));
+            "robots (the per-body Jacobian fold is not yet mimic-reduced)"));
         return out;
     }
 
@@ -1188,7 +1190,8 @@ public:
         int batch = check_q(q, "dccrba_mujoco");
         py::array_t<CT> out({batch, 6 * num_vel_ * num_vel_});
         int rc = fn_dccrba_mujoco_(q.data(), out.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("grid_rbd_dccrba_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "dccrba_mujoco",
+            nullptr));
         return out;
     }
 
@@ -1198,11 +1201,10 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_cmm_time_variation_(q.data(), qd.data(), out.mutable_data(), batch);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "cmm_time_variation",
             "cmm_time_variation not available for this robot: it is not "
             "generated for mimic robots (the per-body Jacobian fold is not yet "
-            "mimic-reduced)");
-        if (rc != 0) throw std::runtime_error("grid_rbd_cmm_time_variation failed: rc=" + std::to_string(rc));
+            "mimic-reduced)"));
         return out;
     }
 
@@ -1215,7 +1217,8 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_cmm_time_variation_mujoco_(q.data(), qd.data(), out.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("grid_rbd_cmm_time_variation_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "cmm_time_variation_mujoco",
+            nullptr));
         return out;
     }
 
@@ -1228,9 +1231,10 @@ public:
         else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_runtime: offset must be length-16 (4x4 col-major) or empty");
         py::array_t<CT> out({batch, 6});
         int rc = fn_ee_pose_runtime_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
-        if (rc == 3) throw std::runtime_error(
-            "end_effector_pose_runtime not generated for this robot .so");
-        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_runtime failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_runtime",
+            "end_effector_pose_runtime not built into this robot .so — add "
+            "'end_effector_pose_runtime' to algorithm_list in register_robot() "
+            "and rebuild"));
         return out;
     }
 
@@ -1246,9 +1250,8 @@ public:
         else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_runtime_mujoco: offset must be length-16 (4x4 col-major) or empty");
         py::array_t<CT> out({batch, 6});
         int rc = fn_ee_pose_runtime_mujoco_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
-        if (rc == 3) throw std::runtime_error(
-            "end_effector_pose_runtime_mujoco not generated for this robot .so");
-        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_runtime_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_runtime_mujoco",
+            "end_effector_pose_runtime_mujoco not generated for this robot .so"));
         return out;
     }
 
@@ -1261,9 +1264,10 @@ public:
         else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_gradient_runtime: offset must be length-16 (4x4 col-major) or empty");
         py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_ee_pose_grad_runtime_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
-        if (rc == 3) throw std::runtime_error(
-            "end_effector_pose_gradient_runtime not generated for this robot .so");
-        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient_runtime failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_gradient_runtime",
+            "end_effector_pose_gradient_runtime not built into this robot .so — "
+            "add 'end_effector_pose_gradient_runtime' to algorithm_list in "
+            "register_robot() and rebuild"));
         return out;
     }
 
@@ -1280,10 +1284,9 @@ public:
         else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_gradient_runtime_mujoco: offset must be length-16 (4x4 col-major) or empty");
         py::array_t<CT> out({batch, 6 * num_vel_});
         int rc = fn_ee_pose_grad_runtime_mujoco_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
-        if (rc == 3) throw std::runtime_error(
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_gradient_runtime_mujoco",
             "end_effector_pose_gradient_runtime_mujoco not generated for this "
-            "robot .so");
-        if (rc != 0) throw std::runtime_error("grid_rbd_end_effector_pose_gradient_runtime_mujoco failed: rc=" + std::to_string(rc));
+            "robot .so"));
         return out;
     }
 
@@ -1319,7 +1322,7 @@ public:
         py::array_t<CT> hess({batch, N, N});
         int rc = fn(var.data(), des.data(), w.data(),
                     out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error(std::string(name) + " failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, name, nullptr));
         return {out, grad, hess};
     }
 
@@ -1365,7 +1368,7 @@ public:
         py::array_t<CT> hess_diag({batch, N});
         int rc = fn(var.data(), lower.data(), upper.data(), mu,
                     out.mutable_data(), grad.mutable_data(), hess_diag.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error(std::string(name) + " failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, name, nullptr));
         return {out, grad, hess_diag};
     }
 
@@ -1410,7 +1413,7 @@ public:
         int rc = fn(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
         if (rc == 3 && rc3_msg)
             throw std::runtime_error(std::string(name) + ": " + rc3_msg);
-        if (rc != 0) throw std::runtime_error(std::string(name) + " failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, name, nullptr));
         return out;
     }
 
@@ -1448,7 +1451,7 @@ public:
         py::array_t<CT> hess({batch, nx, nx});
         int rc = fn(q.data(), p_des.data(), W.data(),
                     out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error(std::string(name) + " failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, name, nullptr));
         return {out, grad, hess};
     }
 
@@ -1481,7 +1484,7 @@ public:
         py::array_t<CT> hess({batch, nx, nx});
         int rc = fn_plant_mom_cost_(q.data(), qd.data(), h_des.data(), W.data(),
                                     out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("momentum_cost failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "momentum_cost", nullptr));
         return {out, grad, hess};
     }
 
@@ -1511,7 +1514,7 @@ public:
         py::array_t<CT> out({batch}); py::array_t<CT> grad({batch, nx}); py::array_t<CT> hess({batch, nx, nx});
         int rc = fn_plant_mom_cost_mujoco_(q.data(), qd.data(), h_des.data(), W.data(),
                                            out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
-        if (rc != 0) throw std::runtime_error("momentum_cost_mujoco failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "momentum_cost_mujoco", nullptr));
         return {out, grad, hess};
     }
 
@@ -1567,12 +1570,72 @@ public:
         if (batch > max_batch_)
             throw std::invalid_argument(
                 std::string(name) + ": batch=" + std::to_string(batch)
-                + " > max_batch=" + std::to_string(max_batch_));
+                + " > max_batch=" + std::to_string(max_batch_)
+                + " (compiled-in limit; pass max_batch_size= at register_robot time to raise it)");
         return batch;
     }
 
     int check_q(const py::array_t<CT>& q, const char* name) const {
         return check_2d(q, num_joints_, name, "q");
+    }
+
+    // ─── C-ABI return-code decoder ───────────────────────────────────────────
+
+    // Name the cudaError_t values users actually hit (this TU is deliberately
+    // CUDA-free — dlopen only — so no cudaGetErrorString; unknown codes stay
+    // numeric and the message points at the enum).
+    static std::string cuda_err(int e) {
+        const char* name =
+            e == 1   ? "cudaErrorInvalidValue" :
+            e == 2   ? "cudaErrorMemoryAllocation" :
+            e == 9   ? "cudaErrorInvalidConfiguration" :
+            e == 98  ? "cudaErrorInvalidDeviceFunction" :
+            e == 700 ? "cudaErrorIllegalAddress" :
+            e == 701 ? "cudaErrorLaunchOutOfResources" :
+            e == 719 ? "cudaErrorLaunchFailure" : nullptr;
+        return std::to_string(e) + (name ? std::string(" = ") + name
+                                         : std::string(" (see cudaError_t)"));
+    }
+
+    // Decode a nonzero grid_rbd_* C-ABI return code into ONE actionable message.
+    // rc contract (bindings/grid_rbd/wrapper_template.cu): 1 bad argument or
+    // failed runtime-arena init; 2 batch > compiled max_batch; 3 algorithm not
+    // in this .so (rc3_hint carries the per-algo advice and is returned
+    // VERBATIM — subset errors must keep the "not built into this robot .so"
+    // wording, with no "failed: rc=" prefix, per the wrapper subset tests);
+    // 4 missing required input (the mjx derivative surfaces need an explicit
+    // qdd) or a device scratch alloc failure; 5 cudaMemcpy failure;
+    // 6 cudaMalloc failure; 100+e cudaError_t e surfaced at sync;
+    // 200+e cudaError_t e at kernel LAUNCH time.
+    std::string rc_message(int rc, const char* fn, const char* rc3_hint) const {
+        if (rc == 3)
+            return rc3_hint ? std::string(rc3_hint)
+                            : std::string(fn) + " not built into this robot .so "
+                              "(subset algorithm_list, or unsupported for this "
+                              "robot class) — re-register with it in "
+                              "algorithm_list and rebuild";
+        std::string m = std::string(fn) + " failed: rc=" + std::to_string(rc);
+        if (rc == 1)
+            m += " (bad argument, or the .so's runtime arena failed to initialize)";
+        else if (rc == 2)
+            m += " (batch exceeds the compiled-in max_batch="
+                 + std::to_string(max_batch_)
+                 + "; pass a larger max_batch_size= at register_robot time)";
+        else if (rc == 4)
+            m += " (missing required input — the mjx derivative surfaces need an "
+                 "explicit qdd — or a device scratch allocation failed)";
+        else if (rc == 5)
+            m += " (cudaMemcpy failed)";
+        else if (rc == 6)
+            m += " (cudaMalloc failed)";
+        else if (rc >= 200)
+            m += " (CUDA error " + cuda_err(rc - 200) + " at kernel LAUNCH: "
+                 "usually threads above the kernel's __launch_bounds__ or dynamic "
+                 "shared memory above the device cap — lower threads or pick a "
+                 "smaller tier via set_threads_for)";
+        else if (rc >= 100)
+            m += " (CUDA error " + cuda_err(rc - 100) + " at kernel sync)";
+        return m;
     }
 
 
@@ -1599,8 +1662,8 @@ public:
         if (rc.size() != 3) throw std::invalid_argument("tool_fext: rc must be length-3");
         py::array_t<CT> out({batch, 6 * num_bodies_});
         int rc0 = fn_tool_fext_(q.data(), wrench.data(), jid, rc.data(), out.mutable_data(), batch);
-        if (rc0 == 3) throw std::runtime_error("tool_fext not generated for this robot .so");
-        if (rc0 != 0) throw std::runtime_error("grid_rbd_tool_fext failed: rc=" + std::to_string(rc0));
+        if (rc0 != 0) throw std::runtime_error(rc_message(rc0, "tool_fext",
+            "tool_fext not built into this robot .so — re-register with enable_tool=True, force_rebuild=True"));
         return out;
     }
 
@@ -1637,8 +1700,7 @@ public:
                 ", size=" + std::to_string(params.size()));
         }
         int rc = fn_set_inertia_params_(params.data());
-        if (rc != 0) throw std::runtime_error(
-            "grid_rbd_set_inertia_params failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "set_inertia_params", nullptr));
     }
 
     // set_transform_params(params) — runtime-mutable joint-frame transform.
@@ -1662,8 +1724,7 @@ public:
                 ", size=" + std::to_string(params.size()));
         }
         int rc = fn_set_transform_params_(params.data());
-        if (rc != 0) throw std::runtime_error(
-            "grid_rbd_set_transform_params failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "set_transform_params", nullptr));
     }
 
     // set_joint_dynamics_params(params) — runtime-mutable damping/friction (C5).
@@ -1687,8 +1748,7 @@ public:
                 ", size=" + std::to_string(params.size()));
         }
         int rc = fn_set_jd_params_(params.data());
-        if (rc != 0) throw std::runtime_error(
-            "grid_rbd_set_joint_dynamics_params failed: rc=" + std::to_string(rc));
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "set_joint_dynamics_params", nullptr));
     }
 
 private:

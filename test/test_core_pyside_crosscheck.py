@@ -29,7 +29,13 @@ _CORE = _REPO / "bindings" / "src" / "_core.cpp"
 _METHOD = re.compile(
     r"\n    py::array_t<CT> (\w+)\((.*?)\)\n?\s*\{\n(.*?)\n    \}\n", re.DOTALL)
 _OUT = re.compile(r"py::array_t<CT> out\(\{batch,?\s*([^}]*)\}\)")
-_RC3 = re.compile(r"if \(rc == 3\) throw std::runtime_error\((.*?)\);\n", re.DOTALL)
+# A1 (2026-09-08): rc handling is one rc_message(rc, "<name>", <hint>) call; the
+# rc==3 hint is its third argument — a C string literal, or the bare token
+# `nullptr` for methods with no per-algo message (the decoder's generic rc==3
+# text covers them). The pre-A1 `if (rc == 3) throw` form no longer exists.
+_RC3 = re.compile(
+    r'if \(rc != 0\) throw std::runtime_error\(rc_message\(rc, "\w+",\n(.*?)\)\);\n',
+    re.DOTALL)
 _GUARD = re.compile(r"if \(!fn_\w+\)\s*\{?\s*\n?\s*throw std::runtime_error\((.*?)\);", re.DOTALL)
 
 
@@ -45,10 +51,13 @@ def _core_methods():
         name, _, body = m.groups()
         o = _OUT.search(body)
         rc3 = _RC3.search(body)
+        rc3_hint = None
+        if rc3 and "nullptr" not in rc3.group(1):
+            rc3_hint = _cjoin(rc3.group(1))
         guard = _GUARD.search(body)
         out[name] = dict(
             dims=tuple(d.strip() for d in o.group(1).split(",")) if o else None,
-            rc3=_cjoin(rc3.group(1)) if rc3 else None,
+            rc3=rc3_hint,
             guard=_cjoin(guard.group(1)) if guard else None,
         )
     return out

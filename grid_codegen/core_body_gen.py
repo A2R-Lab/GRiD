@@ -198,12 +198,16 @@ def gen_method(spec, mjx: bool) -> str:
         L.append("        " + p)
     L.append(f"        py::array_t<CT> out({{batch, {dims}}});")
     L.append(f"        int rc = {fn}({', '.join(call)});")
+    # A1 (2026-09-08): ONE throw per method through the rc_message decoder
+    # (defined beside the shared validators in the hand region). rc==3 returns
+    # the per-algo hint VERBATIM (the wrapper subset tests key on its "not
+    # built into this robot .so" wording, no "failed: rc=" prefix); every other
+    # rc gets the decoded actionable message (max_batch advice, cudaError
+    # names, launch-config guidance).
     rc3 = MJX_RC3.get(key) if mjx else spec.py_rc3_msg
-    if rc3:
-        L.append("        if (rc == 3) throw std::runtime_error(")
-        L.append(f"            {_cxx_str(rc3, '            ')});")
-    stem = (spec.abi_stem or key) + ("_mujoco" if mjx else "")
-    L.append(f'        if (rc != 0) throw std::runtime_error("grid_rbd_{stem} failed: rc=" + std::to_string(rc));')
+    hint = _cxx_str(rc3, "            ") if rc3 else "nullptr"
+    L.append(f'        if (rc != 0) throw std::runtime_error(rc_message(rc, "{name}",')
+    L.append(f"            {hint}));")
     L.append("        return out;")
     L.append("    }")
     return "\n".join(L)

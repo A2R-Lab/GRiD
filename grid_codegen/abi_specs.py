@@ -444,7 +444,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_size_expr="6*grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,  # [D6] nested twin block
         py_out_dims=('6 * num_vel_',),
-        py_rc3_msg='frame_jacobian not generated for this robot .so',
+        py_rc3_msg="frame_jacobian not built into this robot .so — add 'frame_jacobian' to algorithm_list in register_robot() and rebuild",
         py_twin_guard='frame_jacobian_mujoco unavailable: floating-base .so with frame_jacobian only',
     ),
     "frame_jacobian_dot": AbiSpec(
@@ -459,7 +459,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_size_expr="6*grid::NUM_VEL",
         has_mjx_twin=True, mjx_omits_tier=True,  # [D6] inner #ifdef in FJ twin block
         py_out_dims=('6 * num_vel_',),
-        py_rc3_msg='frame_jacobian_dot not generated for this robot .so',
+        py_rc3_msg="frame_jacobian_dot not built into this robot .so — add 'frame_jacobian_dot' to algorithm_list in register_robot() and rebuild",
         py_twin_guard='frame_jacobian_dot_mujoco unavailable: floating-base .so with frame_jacobian only',
     ),
     "osc_inertia": AbiSpec(
@@ -472,7 +472,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         out_size_expr="36",
         has_mjx_twin=True, mjx_omits_tier=True,  # frame bakes at codegen; no trailing args
         py_out_dims=('36',),
-        py_rc3_msg='osc_inertia not generated for this robot .so',
+        py_rc3_msg="osc_inertia not built into this robot .so — add 'osc_inertia' to algorithm_list in register_robot() and rebuild",
         py_twin_guard='osc_inertia_mujoco unavailable: floating-base .so with frame_jacobian only',
     ),
 
@@ -587,7 +587,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         # Xtool staging (16-float identity/copy + cudaMemcpy->d_eepose_runtime_offset,
         # rc=101) is emitted by the XTOOL_STAGING feature in wrapper_body_gen.py.
         py_out_dims=('6',),
-        py_rc3_msg='end_effector_pose_runtime not generated for this robot .so',
+        py_rc3_msg="end_effector_pose_runtime not built into this robot .so — add 'end_effector_pose_runtime' to algorithm_list in register_robot() and rebuild",
         py_twin_guard='end_effector_pose_runtime_mujoco unavailable: floating-base .so only',
     ),
     "end_effector_pose_gradient_runtime": AbiSpec(
@@ -604,7 +604,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_mjx_twin=True, mjx_omits_tier=True,
         # Same XTOOL_STAGING emission as the pose variant.
         py_out_dims=('6 * num_vel_',),
-        py_rc3_msg='end_effector_pose_gradient_runtime not generated for this robot .so',
+        py_rc3_msg="end_effector_pose_gradient_runtime not built into this robot .so — add 'end_effector_pose_gradient_runtime' to algorithm_list in register_robot() and rebuild",
         py_twin_guard='end_effector_pose_gradient_runtime_mujoco unavailable: floating-base .so only',
     ),
 }
