@@ -53,20 +53,21 @@ def main():
         build_header = build_dir / "grid.cuh"
 
         if inputs is not None:
-            URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE, FIXED_TARGET_NAMES, _, _ = inputs
+            # parseInputs returns the argparse Namespace (2026-09-08; the old
+            # tuple unpack here had drifted a field short and crashed).
             parser = URDFParser()
-            robot = parser.parse(URDF_PATH, floating_base=FLOATING_BASE)
+            robot = parser.parse(inputs.urdf_path, floating_base=inputs.floating_base)
 
             validateRobot(robot, NO_ARG_OPTION=True)
 
             print("-----------------")
             print("Generating GRiD.cuh")
             print("-----------------")
-            codegen = GRiDCodeGenerator(robot, DEBUG_MODE, True, FILE_NAMESPACE=FILE_NAMESPACE_NAME)
-            include_homogenous_transforms = not FLOATING_BASE
+            codegen = GRiDCodeGenerator(robot, inputs.debug, True, FILE_NAMESPACE=inputs.namespace)
+            include_homogenous_transforms = not inputs.floating_base
             codegen.gen_all_code(
                 include_homogenous_transforms=include_homogenous_transforms,
-                fixed_target_name=FIXED_TARGET_NAMES,
+                fixed_target_name=inputs.fixed_target_names,
                 output_path=str(build_header),
             )
             print(f"New code generated in temporary build directory: {build_header}")

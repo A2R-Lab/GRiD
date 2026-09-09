@@ -45,6 +45,16 @@
 # robot -k would silently deselect whole modules; 12/25 under curated, 2026-08-09).
 set -euo pipefail
 
+# All knobs are ENV VARS (SCOPE/SPLIT/PYTEST_ARGS/...), not flags. Guard the
+# arg list so `--help` prints the header instead of silently starting a
+# multi-hour GPU pass (N2.4 ergonomics, 2026-09-08).
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
+    *) echo "ERROR: unknown arg '$1' — this script is configured via env vars (SCOPE=, SPLIT=, PYTEST_ARGS=, ...); see --help" >&2; exit 2 ;;
+  esac
+done
+
 # SCOPE -> a -k expression narrowing the gpu_proof test set. Empty = full suite.
 SCOPE="${SCOPE:-full}"
 case "$SCOPE" in

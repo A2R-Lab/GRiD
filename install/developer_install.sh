@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
+# Developer install: apt deps + .venv + editable installs + pinocchio oracle
+# build (PINOCCHIO_EQUIVALENCE_TIER=smoke|curated|full picks the oracle robot
+# tier). No flags — configured via env vars.
 set -euo pipefail
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) sed -n '2,4p' "$0"; exit 0 ;;
+    *) echo "ERROR: unknown arg '$1' — no flags; see --help" >&2; exit 2 ;;
+  esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"

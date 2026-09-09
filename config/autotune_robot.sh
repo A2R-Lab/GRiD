@@ -33,6 +33,8 @@
 # Run on a QUIET GPU — timing must be isolated (close other GPU workloads).
 set -uo pipefail
 
+case "${1:-}" in -h|--help) sed -n '2,33p' "$0"; exit 0 ;; esac
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 export PATH=/usr/local/cuda/bin:$PATH

@@ -155,6 +155,23 @@ def register_robot(
     in fp32, cast i/o to fp64); prefer ``dtype="float64"`` for real double
     precision. ``allow_fp64`` is ignored when ``dtype="float64"``.
 
+    **Parameter groups — and what each costs.** A knob that participates in
+    the ``.so`` cache key triggers a full codegen + nvcc rebuild the FIRST time
+    a new value is used (minutes on an arm, tens of minutes on a humanoid);
+    after that the cached ``.so`` is reused. The others are free.
+
+    - *Model* (re-keys the cache): ``urdf_path`` / ``urdf_string``,
+      ``floating_base``, ``ee_joint_names``.
+    - *Build contents & size* (re-keys the cache): ``max_batch_size``,
+      ``dtype``, ``algorithm_list``, ``enable_mujoco_kernels`` (only when
+      ``False``), ``use_joint_dynamics``, ``enable_tool``.
+    - *Runtime-mutable tables* (re-keys the cache): ``runtime_inertia``,
+      ``runtime_transform``, ``runtime_joint_dynamics``.
+    - *Cache & toolchain* (no codegen effect): ``cache_dir``,
+      ``force_rebuild``, ``cuda_arch``, ``backend``.
+    - *Runtime-only* (never rebuilds; not in the cache key):
+      ``output_convention``, ``allow_fp64``, ``_profile_overlay``.
+
     Parameters
     ----------
     name : str
@@ -191,6 +208,38 @@ def register_robot(
     cuda_arch : int | None, optional
         Compute capability as int (e.g. 120 for sm_120). Default detects
         via nvidia-smi.
+    dtype : str, optional
+        Compute precision of the ``.so``: ``"float32"`` (default) or
+        ``"float64"`` (true fp64 tier — see the precision paragraph above).
+        Re-keys the cache; the fp32 and fp64 ``.so`` coexist.
+    allow_fp64 : bool, optional
+        LEGACY fp32-compute upcast convenience: accept/return float64 arrays
+        while computing in fp32. Runtime-only (same ``.so``); ignored when
+        ``dtype="float64"``. Prefer ``dtype="float64"`` for real precision.
+    enable_tool : bool, optional
+        Default ``False``. Build the runtime tool/payload surface
+        (:py:meth:`RobotHandle.tool_fext`, ``attach_tool``/``detach_tool``):
+        a kernel mapping a world-aligned tool-tip wrench at a runtime body to
+        joint-local ``f_ext`` rows. Re-keys the cache.
+    runtime_transform : bool, optional
+        Like ``runtime_inertia`` but for the joint-frame transforms: emits a
+        mutable ``d_transform_params`` table ([x,y,z,r,p,y] per joint) + host
+        mutator, and the handle gains ``set_transform_params`` /
+        ``transform_params``. Calibration / kinematic-error injection without a
+        recompile. Re-keys the cache.
+    runtime_joint_dynamics : bool, optional
+        Like ``runtime_inertia`` but for per-joint damping/friction: emits a
+        mutable ``[damping(nv) || friction(nv)]`` table + host mutator and the
+        handle gains ``set_joint_dynamics_params``. Composes with
+        ``use_joint_dynamics`` (which bakes the URDF values as the initial
+        table). Re-keys the cache.
+    _profile_overlay : str | None, optional
+        INTERNAL (underscore = not part of the public API; may change without
+        notice). Which launch-config profile block of
+        ``config/launch_configs/<robot>/<gpu>.json`` seeds per-algo
+        threads/tier overlays on this handle: ``"pybind"`` (default),
+        ``"torch"``/``None`` (what the torch/jax registrars pass — jax's baked
+        defaults already ARE its tuned config). Runtime-only.
     runtime_inertia : bool, optional
         Build the robot with a runtime-mutable inertia table (D.4 / Phase 5,
         numpy backend only). Default False ⇒ the per-link spatial inertia is

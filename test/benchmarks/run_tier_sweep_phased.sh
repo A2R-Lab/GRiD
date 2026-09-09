@@ -71,6 +71,7 @@ set -uo pipefail
 cd /home/plancher/Desktop/GRiD
 export PATH=/usr/local/cuda/bin:$PATH
 
+case "${1:-}" in -h|--help) sed -n '2,69p' "$0"; exit 0 ;; esac
 PHASE="${1:-all}"
 BUILD_JOBS="${2:-4}"
 TS="$(date +%Y%m%d_%H%M)"

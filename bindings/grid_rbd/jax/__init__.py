@@ -245,6 +245,18 @@ class JaxRobotHandle(BaseDelegateMixin):
         cast = [jnp.asarray(a, dtype=self._np_dt) for a in arrays]
         for i, a in enumerate(cast):
             if a.ndim not in (1, 2) or a.shape[-1] != self.num_joints:
+                # nq-vs-nv footgun (Friction 3, ported from the numpy handle's
+                # _check_nq_width): on a FLOATING base an nv-wide qd/u is the
+                # natural mjx/pinocchio habit but reads into the quaternion pad.
+                if a.ndim in (1, 2) and a.shape[-1] == self.num_vel != self.num_joints:
+                    raise ValueError(
+                        f"{name}: arg{i} last dim is {a.shape[-1]}, which equals "
+                        f"num_vel (nv={self.num_vel}); but this is a FLOATING-base "
+                        f"robot and GRiD expects ALL inputs at the num_joints "
+                        f"(nq={self.num_joints}) stride — velocity/force in the "
+                        f"first nv slots, the trailing quaternion slot a 0 pad. "
+                        f"Pass an nq-wide ({self.num_joints}) array. "
+                        f"(Matrix/gradient OUTPUTS are nv-wide; INPUTS are nq-wide.)")
                 raise ValueError(
                     f"{name}: arg{i} must be (B, {self.num_joints}) or "
                     f"({self.num_joints},) under vmap; got {a.shape}")

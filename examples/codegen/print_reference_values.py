@@ -25,11 +25,10 @@ from test.helpers import initializeValues
 
 
 def main():
-    (URDF_PATH, DEBUG_MODE, FILE_NAMESPACE_NAME, FLOATING_BASE, FIXED_TARGET_NAMES,
-     _collision, _collision_res, _collision_native) = parseInputs()
+    args = parseInputs()  # argparse Namespace (2026-09-08; was a drift-prone tuple)
 
     parser = URDFParser()
-    robot = parser.parse(URDF_PATH, floating_base=FLOATING_BASE)
+    robot = parser.parse(args.urdf_path, floating_base=args.floating_base)
 
     validateRobot(robot)
 
@@ -40,7 +39,7 @@ def main():
     print("qd\n", qd)
     print("u\n", u)
 
-    (c, v, a, f) = reference.rnea(q, qd)
+    (c, v, a, f) = reference.inverse_dynamics(q, qd)
     print("c\n", c)
 
     Minv = reference.minv(q)
@@ -49,14 +48,14 @@ def main():
     qdd = np.matmul(Minv, (u - c))
     print("qdd\n", qdd)
 
-    if not FLOATING_BASE:
+    if not args.floating_base:
         qdd_aba = reference.aba(q, qd, u)
         print("aba\n", qdd_aba)
 
         crba = reference.crba(q)
         print("crba\n", crba)
 
-    dc_du = reference.rnea_grad(q, qd, qdd)
+    dc_du = reference.inverse_dynamics_gradient(q, qd, qdd)
     print("dc/dq with qdd\n", dc_du)
     print("dc/dqd with qdd\n", dc_du)
 
@@ -64,26 +63,26 @@ def main():
     print("df/dq\n", df_du)
     print("df/dqd\n", df_du)
 
-    dqdd_dq, dqdd_dqd = reference.forward_dynamics_grad(q, qd, c)
+    dqdd_dq, dqdd_dqd = reference.forward_dynamics_gradient(q, qd, u)
     print("dqdd_dq")
     print(dqdd_dq)
     print("dqdd_dqd")
     print(dqdd_dqd)
 
-    if not FLOATING_BASE:
+    if not args.floating_base:
         ee_pos = reference.end_effector_pose(q)
         print("end_effector_pose\n", ee_pos)
 
-        if FIXED_TARGET_NAMES != "":
-            ee_pos2 = reference.end_effector_pose(q, ee_joint_names=FIXED_TARGET_NAMES)
-            print("end_effector_pose-" + FIXED_TARGET_NAMES + "\n", ee_pos2)
+        if args.fixed_target_names != "":
+            ee_pos2 = reference.end_effector_pose(q, ee_joint_names=args.fixed_target_names)
+            print("end_effector_pose-" + args.fixed_target_names + "\n", ee_pos2)
 
         dee_pos = reference.end_effector_pose_gradient(q)
         print("end_effector_pose_gradient\n", dee_pos)
 
-        if FIXED_TARGET_NAMES != "":
-            dee_pos2 = reference.end_effector_pose_gradient(q, ee_joint_names=FIXED_TARGET_NAMES)
-            print("end_effector_pose_gradient-" + FIXED_TARGET_NAMES + "\n", dee_pos2)
+        if args.fixed_target_names != "":
+            dee_pos2 = reference.end_effector_pose_gradient(q, ee_joint_names=args.fixed_target_names)
+            print("end_effector_pose_gradient-" + args.fixed_target_names + "\n", dee_pos2)
 
         d2ee_pos = reference.end_effector_pose_hessian(q)
         print("end_effector_pose_hessian\n", d2ee_pos)
@@ -104,11 +103,11 @@ def main():
     fdsva_so_out = reference.fdsva_so(q, qd, u)
     print(f'\nfdsva_so (rank-3 partials of qdd):\n{fdsva_so_out}')
 
-    if DEBUG_MODE:
+    if args.debug:
         print("-------------------")
         print("printing intermediate outputs from refactorings")
         print("-------------------")
-        codegen = GRiDCodeGenerator(robot, DEBUG_MODE, FILE_NAMESPACE=FILE_NAMESPACE_NAME)
+        codegen = GRiDCodeGenerator(robot, args.debug, FILE_NAMESPACE=args.namespace)
         (c, v, a, f) = codegen.test_rnea(q, qd)
         print("v\n", v)
         print("a\n", a)
