@@ -187,6 +187,22 @@ Run it once per robot before any interactive or latency-sensitive use; every
 subsequent ``load_robot`` / ``get_robot`` / ``jax.jit`` in any process is
 then an instant cache hit.
 
+GPU memory: GRiD lives inside the framework allocator's pool
+------------------------------------------------------------
+
+The jax and torch surfaces install a *device pool* automatically at
+``register_robot`` / ``get_robot``: GRiD's entire device arena is carved out
+of ONE slab allocated by the framework itself (jax: a buffer from XLA's
+memory pool; torch: a caching-allocator tensor) instead of raw
+``cudaMalloc``. XLA's default 75% preallocation can therefore stay ON — it no
+longer starves GRiD's allocations (the humanoid "launch failed" class).
+``handle.capabilities()`` reports the tuned launch state per method
+(including the armed small-batch switch as ``batch_threshold`` /
+``threads_small``), and ``runner.device_pool_used()`` equals
+``device_pool_bytes()`` after a pool-mode init. The numpy-only surface keeps
+plain ``cudaMalloc`` with its VRAM auto-fit. ``GRID_WORKSPACE_TIMESTEP_SLOTS``
+is honored in both modes.
+
 See also
 --------
 

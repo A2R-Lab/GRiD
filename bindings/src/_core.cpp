@@ -63,6 +63,9 @@ struct CAbi {
     using fn_int_ii_t       = int (*)(int, int);      // set_threads_for(algo, n)
     using fn_int_iii_t      = int (*)(int, int, int); // set_threads_for_n(algo, threshold, n_small)
     using fn_int_ipp_t      = int (*)(int, int*, int*); // get_batch_switch(algo, &threshold, &n_small)
+    using fn_ll_i_t         = long long (*)(int);       // device_pool_bytes(ws_slots)
+    using fn_int_pulli_t    = int (*)(void*, unsigned long long, int); // set_device_pool(base, bytes, ws_slots)
+    using fn_ll_v_t         = long long (*)();          // device_pool_used()
     using fn_dyn_t         = int (*)(const CT*, const CT*, const CT*,
                                       CT*, int, CT, const CT*);
     using fn_dyn_no_fext_t = int (*)(const CT*, const CT*, const CT*,
@@ -101,6 +104,9 @@ class RunnerT {
     using fn_int_ii_t = typename CAbi<CT>::fn_int_ii_t;
     using fn_int_iii_t = typename CAbi<CT>::fn_int_iii_t;
     using fn_int_ipp_t = typename CAbi<CT>::fn_int_ipp_t;
+    using fn_ll_i_t = typename CAbi<CT>::fn_ll_i_t;
+    using fn_int_pulli_t = typename CAbi<CT>::fn_int_pulli_t;
+    using fn_ll_v_t = typename CAbi<CT>::fn_ll_v_t;
     using fn_dyn_t = typename CAbi<CT>::fn_dyn_t;
     using fn_dyn_no_fext_t = typename CAbi<CT>::fn_dyn_no_fext_t;
     using fn_fk_batched_t = typename CAbi<CT>::fn_fk_batched_t;
@@ -143,6 +149,9 @@ public:
         fn_algo_count_       = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_algo_count"));
         fn_set_threads_for_n_ = reinterpret_cast<fn_int_iii_t>(require_sym("grid_rbd_set_threads_for_n"));
         fn_get_batch_switch_ = reinterpret_cast<fn_int_ipp_t>(require_sym("grid_rbd_get_batch_switch"));
+        fn_device_pool_bytes_ = reinterpret_cast<fn_ll_i_t>(require_sym("grid_rbd_device_pool_bytes"));
+        fn_set_device_pool_  = reinterpret_cast<fn_int_pulli_t>(require_sym("grid_rbd_set_device_pool"));
+        fn_device_pool_used_ = reinterpret_cast<fn_ll_v_t>(require_sym("grid_rbd_device_pool_used"));
         fn_init_             = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_init"));
         fn_close_            = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_close"));
 
@@ -325,6 +334,23 @@ public:
         int rc = fn_get_batch_switch_(algo, &threshold, &n_small);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "get_batch_switch", nullptr));
         return py::make_tuple(threshold, n_small);
+    }
+    // Device-pool (slab) mode: carve GRiD's gridData VRAM from a caller-owned
+    // framework-allocator buffer instead of cudaMalloc (see wrapper docs).
+    long long device_pool_bytes(int ws_slots) const { return fn_device_pool_bytes_(ws_slots); }
+    void set_device_pool(unsigned long long base_ptr, unsigned long long bytes, int ws_slots) {
+        int rc = fn_set_device_pool_(
+            reinterpret_cast<void *>(static_cast<uintptr_t>(base_ptr)), bytes, ws_slots);
+        if (rc != 0) throw std::runtime_error(
+            "set_device_pool: arena already initialized — install the device pool "
+            "before the first kernel call (or close() first; the slab must outlive the arena)");
+    }
+    long long device_pool_used() const { return fn_device_pool_used_(); }
+    void close_arena() {
+        // grid_rbd_close: free the device/host arena (attached tools + runtime
+        // parameter tables reset with it); the next call re-inits lazily.
+        // install_device_pool uses this to re-carve a fresh arena from a slab.
+        if (fn_close_) fn_close_();
     }
     int threads_per_block() const { return fn_threads_per_block_(); }
     void set_threads_per_block(int n) {
@@ -1840,6 +1866,9 @@ private:
     fn_int_v_t fn_algo_count_             = nullptr;
     fn_int_iii_t fn_set_threads_for_n_    = nullptr;
     fn_int_ipp_t fn_get_batch_switch_     = nullptr;
+    fn_ll_i_t fn_device_pool_bytes_       = nullptr;
+    fn_int_pulli_t fn_set_device_pool_    = nullptr;
+    fn_ll_v_t fn_device_pool_used_        = nullptr;
     fn_int_v_t fn_init_       = nullptr;
     fn_int_v_t fn_close_      = nullptr;
     fn_dyn_t  fn_inverse_dynamics_           = nullptr;
@@ -1985,6 +2014,22 @@ static void register_runner(py::module_& m, const char* cls_name) {
             "global override and the switch both beat the per-algo overlay.")
         .def("get_batch_switch", &R::get_batch_switch, py::arg("algo"),
             "(threshold, n_small) for the batch-switch on `algo`; threshold 0 = unarmed.")
+        .def("device_pool_bytes", &R::device_pool_bytes, py::arg("ws_slots") = 0,
+            "Device bytes a pool-mode init will carve at the given workspace slot "
+            "count (<1 = max_batch slots): size the framework-allocator slab with this.")
+        .def("set_device_pool", &R::set_device_pool,
+            py::arg("base_ptr"), py::arg("bytes"), py::arg("ws_slots") = 0,
+            "Install a caller-owned device slab (raw pointer as int) that the arena "
+            "init carves from instead of cudaMalloc — jax/torch allocator integration. "
+            "Must run before the first kernel call; base_ptr=0 uninstalls. The slab "
+            "must stay alive until close.")
+        .def("close_arena", &R::close_arena,
+            "Free the device/host arena (grid_rbd_close; tools/runtime tables "
+            "reset); the next call re-inits lazily — pool installs re-carve here.")
+        .def("device_pool_used", &R::device_pool_used,
+            "Bytes carved from the installed device pool so far (0 = cudaMalloc mode "
+            "or not yet initialized); equals device_pool_bytes(ws_slots) after a "
+            "pool-mode init — the no-drift referee.")
         .def("inverse_dynamics", &R::inverse_dynamics,
              py::arg("q"), py::arg("qd"),
              py::arg("qdd") = py::none(),

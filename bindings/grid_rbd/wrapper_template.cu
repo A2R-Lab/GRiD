@@ -213,6 +213,35 @@ extern "C" int grid_rbd_close() {
     return (e != cudaSuccess) ? 100 + (int)e : 0;
 }
 
+// ─── device-pool (slab) install: framework-allocator integration ─────────────
+// A jax/torch surface hands GRiD a device slab from ITS OWN allocator BEFORE
+// the lazy init; init_gridData then carves every gridData buffer from it
+// (grid.cuh grid_device_alloc, 256-aligned bump) instead of cudaMalloc-ing,
+// so GRiD's VRAM lives inside the framework pool rather than fighting it (the
+// XLA-75%-prealloc "launch failed" starvation class). The slab is CALLER-
+// owned: it must stay alive until grid_rbd_close, close never frees it, and
+// base=nullptr uninstalls (back to the cudaMalloc path). ws_slots declares
+// the workspace slot count the slab was sized for (grid_rbd_device_pool_bytes
+// with the same count says how big to make it; <1 means kMaxBatch). The
+// GRID_WORKSPACE_TIMESTEP_SLOTS env override still wins inside init — a
+// caller that honors it must size and declare with the same count.
+extern "C" long long grid_rbd_device_pool_bytes(int ws_slots) {
+    return (long long)grid::gridData_device_bytes<T, kMaxBatch>(
+        ws_slots < 1 ? kMaxBatch : ws_slots);
+}
+extern "C" int grid_rbd_set_device_pool(void *base, unsigned long long bytes, int ws_slots) {
+    if (g_data) return 1;  // arena already initialized: close first
+    auto &pool = grid::grid_device_pool();
+    pool.base = base;
+    pool.bytes = (size_t)bytes;
+    pool.used = 0;
+    pool.ws_slots = ws_slots < 1 ? kMaxBatch : ws_slots;
+    return 0;
+}
+extern "C" long long grid_rbd_device_pool_used(void) {
+    return (long long)grid::grid_device_pool().used;
+}
+
 // ─── metadata ────────────────────────────────────────────────────────────────
 
 extern "C" int grid_rbd_num_joints()     { return grid::NUM_JOINTS; }

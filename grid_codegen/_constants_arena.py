@@ -1572,6 +1572,44 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              "    T *h_energy;", \
                              "};"])
 
+def _derive_device_bytes_lines(code_lines):
+    """Derive the body of gridData_device_bytes from THE SAME init_gridData
+    line list, so the byte count and the carve can never drift: identical
+    #if GRID_HAS_* / if (needs_*) structure, one grid_pool_align(size) add per
+    cudaMalloc, and the workspace block mirrored on the ws_slots parameter
+    (env/auto-fit lines dropped — the CALLER of the bytes fn decides slots;
+    the pool-mode init branch consumes the same declared count). Any
+    unclassified cudaMalloc raises at codegen time; the runtime referee is
+    pool.used == gridData_device_bytes(slots) after a pool-mode init
+    (asserted by the bindings' install path)."""
+    import re as _re
+    alloc = _re.compile(r"^(\s*)gpuErrchk\(cudaMalloc\(\(void\*\*\)&hd_data->\w+, (.+)\)\);$")
+    ws_i = next(i for i, l in enumerate(code_lines) if "workspace arena LAST" in l)
+    out = ["size_t _total = 0;"]
+    for line in code_lines[:ws_i]:
+        s = line.strip()
+        m = alloc.match(line)
+        if m:
+            out.append(m.group(1) + "_total += grid_pool_align(" + m.group(2) + ");")
+        elif (s.startswith("#if") or s.startswith("#endif")
+              or s.startswith("const bool needs_") or s.startswith("if (needs_")
+              or s == "}"):
+            out.append(line)
+        elif "cudaMalloc" in line:
+            raise RuntimeError("unclassified cudaMalloc in init_gridData: " + line)
+    ws_tail = code_lines[ws_i:]
+    cond = next(l for l in ws_tail if l.strip().startswith("if (needs_dynamics ||"))
+    gate_open = [l for l in ws_tail if l.strip().startswith("#if")]
+    gate_close = [l for l in ws_tail if l.strip().startswith("#endif")]
+    out += gate_open + [
+        cond,
+        "        const size_t _ws_per_ts = GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS;",
+        "        int _ws_slots = ws_slots < 1 ? 1 : (ws_slots < NUM_TIMESTEPS ? ws_slots : NUM_TIMESTEPS);",
+        "        _total += grid_pool_align(_ws_per_ts*(size_t)_ws_slots);",
+        "    }"] + gate_close + ["return _total;"]
+    return out
+
+
 def gen_init_gridData(self):
     # 2a (h2_plus OOM): opt-in per-algo ALLOC GATING for the bench's solo exes.
     # When gen_all_code(emit_alloc_gating=True), every LARGE per-algo output
@@ -1867,6 +1905,64 @@ def gen_init_gridData(self):
         "    free(p);",
         "}",
         ""])
+    # Device-pool (slab) mode (2026-09-09): an embedding framework (jax/torch)
+    # installs a caller-owned device slab BEFORE init_gridData; every gridData
+    # device allocation then carves from it (256-aligned bump) instead of
+    # cudaMalloc, so GRiD's VRAM lives INSIDE the framework allocator's pool
+    # (jax: an XLA-pool jnp buffer; torch: a caching-allocator tensor) rather
+    # than fighting it — the root cause of the XLA-75%-prealloc "launch failed"
+    # starvation class. gridData_device_bytes (emitted below, DERIVED from the
+    # same alloc lines) tells the caller how big a slab to hand over; the
+    # bindings assert used == bytes after a pool-mode init as the runtime
+    # referee. The slab is caller-owned: close_grid's grid_device_free is a
+    # no-op for carved pointers and the caller frees the slab by releasing its
+    # framework buffer.
+    self.gen_add_code_lines([
+        "struct grid_device_pool_t { void *base; size_t bytes; size_t used; int ws_slots; };",
+        "// ⚠hidden visibility is LOAD-BEARING: without it the dynamic linker",
+        "// unifies this inline function's static (weak symbol) across every",
+        "// dlopened robot .so, so a second robot's init would carve from the",
+        "// FIRST robot's (already exhausted) slab and 'OOM' on an empty GPU",
+        "// (observed 2026-09-09, jax-then-torch two-robot process).",
+        "__host__ inline __attribute__((visibility(\"hidden\"))) grid_device_pool_t &grid_device_pool() {",
+        "    static grid_device_pool_t p = {nullptr, 0, 0, 0};",
+        "    return p;",
+        "}",
+        "__host__ __device__ constexpr size_t grid_pool_align(size_t b) { return (b + 255) & ~(size_t)255; }",
+        "__host__ inline cudaError_t grid_device_alloc(void **p, size_t bytes) {",
+        "    grid_device_pool_t &pool = grid_device_pool();",
+        "    if (pool.base != nullptr) {",
+        "        const size_t need = grid_pool_align(bytes);",
+        "        if (pool.used + need > pool.bytes) { *p = nullptr; return cudaErrorMemoryAllocation; }",
+        "        *p = (void *)((char *)pool.base + pool.used);",
+        "        pool.used += need;",
+        "        return cudaSuccess;",
+        "    }",
+        "    return cudaMalloc(p, bytes);",
+        "}",
+        "template <typename T>",
+        "__host__ inline cudaError_t grid_device_free(T *p) {",
+        "    grid_device_pool_t &pool = grid_device_pool();",
+        "    if (pool.base != nullptr && (void *)p >= pool.base && (char *)p < (char *)pool.base + pool.bytes) {",
+        "        return cudaSuccess;  // carved from the caller-owned slab: nothing to free",
+        "    }",
+        "    return cudaFree((void *)p);",
+        "}",
+        ""])
+    # Device-pool mode (2026-09-09): (a) the workspace slot count honors an
+    # installed pool's declared ws_slots (env override still wins; the
+    # cudaMemGetInfo auto-fit stays the cudaMalloc-path fallback); (b) every
+    # gridData cudaMalloc goes through grid_device_alloc (carve-or-malloc);
+    # (c) gridData_device_bytes is DERIVED from the same lines so the slab
+    # size and the carve can never drift.
+    _ws_env_i = next(i for i, l in enumerate(code_lines) if "_ws_env != nullptr" in l)
+    code_lines.insert(_ws_env_i + 1,
+        "        else if (grid_device_pool().base != nullptr && grid_device_pool().ws_slots > 0) "
+        "{ _ws_slots = grid_device_pool().ws_slots < NUM_TIMESTEPS ? grid_device_pool().ws_slots : NUM_TIMESTEPS; }")
+    bytes_lines = _derive_device_bytes_lines(code_lines)
+    code_lines = [l.replace("gpuErrchk(cudaMalloc((void**)&hd_data->",
+                            "gpuErrchk(grid_device_alloc((void**)&hd_data->")
+                  for l in code_lines]
     # generate as templated or not function
     self.gen_add_func_doc("Allocated device and host memory for all computations",
                           [], [], "A pointer to the gridData struct of pointers")
@@ -1881,4 +1977,15 @@ def gen_init_gridData(self):
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("gridData<T, KIND> *init_gridData(int NUM_TIMESTEPS){", True)
     self.gen_add_code_lines(code_lines)
+    self.gen_add_end_function()
+    self.gen_add_func_doc("Device bytes a pool-mode init_gridData will carve for "
+                          "this KIND at the given workspace slot count — size the "
+                          "slab handed to grid_device_pool() with this (derived "
+                          "from the SAME allocation list as init_gridData).",
+                          [], ["workspace timestep slots (clamped to [1, NUM_TIMESTEPS])"],
+                          "total device bytes (256-aligned per allocation)")
+    self.gen_add_code_line("template <typename T, int NUM_TIMESTEPS, gridDataKind KIND = GRID_DATA_ALL>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line("size_t gridData_device_bytes(int ws_slots = NUM_TIMESTEPS){", True)
+    self.gen_add_code_lines(bytes_lines)
     self.gen_add_end_function()

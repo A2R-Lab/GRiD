@@ -659,7 +659,7 @@ def gen_init_close_grid(self):
     self.gen_add_code_line("template <typename T, gridDataKind KIND = GRID_DATA_ALL>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("void close_grid(cudaStream_t *streams, robotModel<T> *d_robotModel, gridData<T, KIND> *hd_data){", True)
-    self.gen_add_code_lines(["free_robotModel(d_robotModel); // frees nested d_XImats/d_topology_helpers(+runtime tables)+struct (bare cudaFree would leak the nested arrays)", \
+    close_lines = (["free_robotModel(d_robotModel); // frees nested d_XImats/d_topology_helpers(+runtime tables)+struct (bare cudaFree would leak the nested arrays)", \
                              "gpuErrchk(cudaFree(hd_data->d_q_qd_u)); gpuErrchk(cudaFree(hd_data->d_q_qd)); gpuErrchk(cudaFree(hd_data->d_q));", \
                              "gpuErrchk(cudaFree(hd_data->d_f_ext)); grid_host_free(hd_data->h_f_ext);", \
                              "gpuErrchk(cudaFree(hd_data->d_c)); gpuErrchk(cudaFree(hd_data->d_Minv)); gpuErrchk(cudaFree(hd_data->d_qdd)); gpuErrchk(cudaFree(hd_data->d_M));", \
@@ -706,4 +706,13 @@ def gen_init_close_grid(self):
                              "gpuErrchk(cudaFree(hd_data->d_x_kp1)); gpuErrchk(cudaFree(hd_data->d_dAB));", \
                              "grid_host_free(hd_data->h_x_kp1); grid_host_free(hd_data->h_dAB);", \
                              "for(int i=0; i<" + str(MAX_STREAMS) + "; i++){gpuErrchk(cudaStreamDestroy(streams[i]));} free(streams);"])
+    # Device-pool mode (2026-09-09): gridData device frees route through
+    # grid_device_free (no-op for slab-carved pointers, cudaFree otherwise),
+    # and the consumed pool is rewound so a close/re-init cycle re-carves from
+    # the top of the caller-owned slab.
+    close_lines = [l.replace("gpuErrchk(cudaFree(hd_data->",
+                             "gpuErrchk(grid_device_free(hd_data->")
+                   for l in close_lines]
+    close_lines.insert(len(close_lines) - 1, "grid_device_pool().used = 0;")
+    self.gen_add_code_lines(close_lines)
     self.gen_add_end_function()

@@ -1732,3 +1732,26 @@ Triage recipe for FFI "launch failed":
    generated header vs `sharedMemPerBlockOptin` (99KB on sm_120). h1_2's
    IDSVA_SO_BODY_FRAME bakes 782,584 floats ≈ 3.0MB at EVERY tier — unlaunchable on any
    GPU, the legitimate hardware-limit skip class (real fix = SO memory wave-2).
+
+### 7.z4 Inline-function statics in grid.cuh UNIFY across dlopened robot .so's (2026-09-09, device-pool)
+
+**Symptom.** Two robots in one process; the second robot's `grid_rbd_init()`
+fails with `GPUassert: out of memory` on a GPU with tens of GB free — and the
+assert's `__FILE__` cites the FIRST robot's generated header path.
+
+**Cause.** A `__host__ inline` function in grid.cuh holding a function-local
+`static` (the device-pool state) compiles to a WEAK symbol with default
+visibility in every robot `.so`. When a process dlopens a second robot, the
+dynamic linker binds that weak symbol to the first `.so`'s copy — so robot
+B's `init_gridData` carved from robot A's (already exhausted) slab and its
+`grid_device_alloc` returned `cudaErrorMemoryAllocation`. Alone, each robot
+is green; only multi-`.so` processes break, which is exactly the pattern the
+per-module split suite never exercises — a probe/bench process caught it.
+
+**Fix + rule.** Mark any state-carrying inline accessor emitted into grid.cuh
+`__attribute__((visibility("hidden")))` (the local static's guard/storage
+inherit the function's visibility, so each `.so` keeps its own copy). File-
+scope `static` state in wrapper_template.cu is already internal-linkage and
+safe. RULE: any NEW mutable state emitted into the HEADER must be either
+hidden-visibility or moved into the wrapper TU; test it with a two-robot
+one-process repro, not just single-robot suites.
