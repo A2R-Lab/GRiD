@@ -52,7 +52,7 @@ def test_ceil_rows_match_registry():
     short name (the emission invariant), and every row's overload list exists.
     The idsva_so dispatcher and the divider are the only non-uniform rows."""
     from grid_codegen.algo_registry import descriptor_for, launch_config_descriptors
-    from grid_codegen._kernel_attrs import KERNEL_OVERLOADS
+    from grid_codegen.kernel_attrs import KERNEL_OVERLOADS
     enum_keys = {d.key for d in launch_config_descriptors()}
     specials = 0
     for key, short in g.CEIL_ROWS:

@@ -12,7 +12,7 @@ from .helpers._host_clamp import _apply_host_thread_clamp_pass
 # Launch-config bake moved to _launch_config.py (H4); re-exported here because
 # bindings/_compile/_handle/autotune_ffi and the parity goldens import these
 # names from grid_codegen.GRiDCodeGenerator.
-from ._launch_config import (LAUNCH_CONFIG_DEFAULT_GPU, LAUNCH_CONFIG_TIER_SYMBOL,
+from .launch_config import (LAUNCH_CONFIG_DEFAULT_GPU, LAUNCH_CONFIG_TIER_SYMBOL,
                              _ALGO_TO_SYMBOL, _launch_configs_dir, load_launch_config)
 
 
@@ -145,9 +145,9 @@ class GRiDCodeGenerator:
                             gen_multi_target_position_bench
     from .algorithms._collision import gen_collision_namespace
     from .algorithms._combos import gen_combination_functions, gen_centroidal_quickwins
-    from ._launch_config import gen_add_launch_config_helpers
+    from .launch_config import gen_add_launch_config_helpers
     from ._constants_arena import gen_add_constants_helpers, gen_init_gridData
-    from ._kernel_attrs import (_f_ext_gradient_dq_emitted, KERNEL_OVERLOADS,
+    from .kernel_attrs import (_f_ext_gradient_dq_emitted, KERNEL_OVERLOADS,
                                 KERNEL_ATTR_MANIFEST, MJX_KERNEL_OVERLOADS,
                                 gen_init_close_grid)
     from .helpers._gpu_err import gen_add_gpu_err

@@ -160,7 +160,7 @@ def _ceil_sig(short: str) -> str:
     """The branch's compact cast: the LAST non-single_timing overload for this
     kernel from KERNEL_OVERLOADS, reformatted (robotModel first — it contains
     'T *'; then the pointer-spacing collapses)."""
-    from ._kernel_attrs import KERNEL_OVERLOADS
+    from .kernel_attrs import KERNEL_OVERLOADS
     cands = [sig for name, sig in KERNEL_OVERLOADS[short]
              if not name.startswith(short + "_kernel_single_timing")]
     sig = cands[-1]

@@ -80,7 +80,7 @@ sys.path.insert(0, str(REPO_ROOT))
 # Reuse autotune_ffi's measurement machinery wholesale (module import so the
 # probe URDF redirect below can patch ITS get_urdf_path binding, not ours).
 from test.benchmarks import autotune_ffi as af  # noqa: E402
-from grid_codegen._launch_config import (  # noqa: E402
+from grid_codegen.launch_config import (  # noqa: E402
     LAUNCH_CONFIG_DEFAULT_GPU,
     LAUNCH_CONFIG_TIER_SYMBOL,
     _launch_configs_dir,
