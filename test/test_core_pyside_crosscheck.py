@@ -73,8 +73,17 @@ def test_py_fields_match_core():
         base = methods.get(key)
         twin = methods.get(key + "_mujoco")
         if base is None and twin is None:
-            if spec.py_out_dims or spec.py_rc3_msg or spec.py_twin_guard:
+            # rows that never surface through _core (py_surfaces without
+            # "numpy": the FFI-only fdpg) legitimately carry py_* fields for
+            # the jax/torch consumers.
+            surfaces_numpy = spec.py_surfaces is None or "numpy" in spec.py_surfaces
+            if surfaces_numpy and (spec.py_out_dims or spec.py_rc3_msg or spec.py_twin_guard):
                 problems.append(f"{key}: py_* fields set but no _core method exists")
+            continue
+        if spec.surface_class != "cabi":
+            # hand-written _core bodies (plant section) don't follow the
+            # generated allocation/rc3 idiom the parser extracts — existence
+            # (checked above) is the contract for those rows.
             continue
         if base is not None:
             if spec.py_out_dims != base["dims"]:

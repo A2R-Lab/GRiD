@@ -39,6 +39,8 @@ _INFRA = {
     "plant_alloc", "plant_free", "plant_quadratic_cost", "plant_step",
     "plant_step_gradient", "plant_step_hessian", "plant_ee_cost",
     "plant_com_cost", "plant_momentum_cost", "plant_quadratic_state_cost",
+    # device-pool (slab) framework-allocator integration
+    "device_pool_bytes", "set_device_pool", "device_pool_used",
 }
 
 
@@ -74,12 +76,41 @@ def _norm(s: str) -> str:
 _SPEC_IDS = sorted(ABI_SPECS)
 
 
+def _fn_def_prefixed(stem: str, prefix: str) -> tuple[int, str]:
+    """(start index, signature text) of extern "C" <prefix><stem> (the plant
+    section uses the grid_plant_ prefix; everything else grid_rbd_)."""
+    m = re.search(r'extern "C" int ' + re.escape(prefix + stem) + r"\(", _SRC)
+    assert m, f"no extern C {prefix}{stem}( in wrapper_template.cu"
+    depth, i = 1, m.end()
+    while depth:
+        c = _SRC[i]
+        depth += c == "("
+        depth -= c == ")"
+        i += 1
+    return m.start(), _SRC[m.end():i - 1]
+
+
 @pytest.mark.parametrize("key", _SPEC_IDS)
 def test_function_and_twin_exist(key):
     spec = ABI_SPECS[key]
     stem = _stem(spec)
-    _fn_def(stem)
-    has_twin = f"grid_rbd_{stem}_mujoco(" in _SRC
+    if spec.surface_class == "plant":
+        # hand-written PlantBuffers body under the grid_plant_ prefix
+        _fn_def_prefixed(stem[len("plant_"):], "grid_plant_")
+        has_twin = f"grid_{stem}_mujoco(" in _SRC
+    elif spec.surface_class == "ffi_only":
+        # no C-ABI body: the jax FFI handler is the ground truth
+        assert f"grid_rbd_jax_{stem}_impl(" in _SRC, (
+            f"{key}: ffi_only row but no jax FFI handler in wrapper")
+        has_twin = f"grid_rbd_jax_{stem}_mujoco" in _SRC
+    elif spec.surface_class == "kernel_only":
+        # no binding surface at all — the kernel ceiling entry is the anchor
+        assert f'strcmp(algo, "{stem}")' in _SRC, (
+            f"{key}: kernel_only row but no kernel_max_threads ceiling entry")
+        has_twin = False
+    else:
+        _fn_def(stem)
+        has_twin = f"grid_rbd_{stem}_mujoco(" in _SRC
     assert has_twin == spec.has_mjx_twin, (
         f"{key}: has_mjx_twin={spec.has_mjx_twin} but twin "
         f"{'exists' if has_twin else 'missing'} in wrapper")
@@ -88,7 +119,13 @@ def test_function_and_twin_exist(key):
 @pytest.mark.parametrize("key", _SPEC_IDS)
 def test_signature_params(key):
     spec = ABI_SPECS[key]
-    _, sig = _fn_def(_stem(spec))
+    if spec.surface_class in ("ffi_only", "kernel_only"):
+        assert spec.inputs == (), f"{key}: {spec.surface_class} rows carry no C params"
+        return
+    if spec.surface_class == "plant":
+        _, sig = _fn_def_prefixed(_stem(spec)[len("plant_"):], "grid_plant_")
+    else:
+        _, sig = _fn_def(_stem(spec))
     names = [p.strip().split()[-1].lstrip("*") for p in sig.split(",") if p.strip()]
     want = [n for (n, _t) in spec.inputs]
     assert names == want, f"{key}: params {names} != spec.inputs {want}"
@@ -97,6 +134,8 @@ def test_signature_params(key):
 @pytest.mark.parametrize("key", _SPEC_IDS)
 def test_gate(key):
     spec = ABI_SPECS[key]
+    if spec.surface_class != "cabi":
+        return  # plant/ffi/kernel rows: no generated gate topology to check
     start, _ = _fn_def(_stem(spec))
     macro = spec.gate_macro or ("GRID_HAS_" + spec.key.upper())
     # Convention A (most bodies): the gate wraps the body INSIDE the function
@@ -132,6 +171,8 @@ def test_gate(key):
 @pytest.mark.parametrize("key", _SPEC_IDS)
 def test_body_fields(key):
     spec = ABI_SPECS[key]
+    if spec.surface_class != "cabi":
+        return  # hand-written / FFI-only / surface-less: no generated body
     body = _body(_stem(spec))
     if spec.sig_mjx_macro:
         # IT-dispatch bodies forward to a hand-written launcher that owns the
@@ -177,10 +218,13 @@ def test_coverage_no_untranscribed_algo_fns():
 
 
 def test_specs_join_registry():
-    """Every spec key must be a registry key (fk_batched is the known extra)."""
+    """Every "cabi" spec key must be a registry key (fk_batched is the known
+    extra); non-cabi rows (plant_step family) may sit outside the registry —
+    the registry describes grid.cuh kernels, not the PlantBuffers layer."""
     from grid_codegen.algo_registry import ALGO_DESCRIPTORS
     reg = {d.key for d in ALGO_DESCRIPTORS}
-    extras = sorted(set(ABI_SPECS) - reg - {"fk_batched"})
+    cabi = {k for k, s in ABI_SPECS.items() if s.surface_class == "cabi"}
+    extras = sorted(cabi - reg - {"fk_batched"})
     assert not extras, f"spec keys not in registry: {extras}"
 
 
@@ -195,3 +239,16 @@ def test_sig_mjx_macros_bidirectional():
     assert not missing, f"template uses sig macros with no spec row: {missing}"
     orphaned = sorted(carried - used)
     assert not orphaned, f"spec rows carry unused sig macros: {orphaned}"
+
+
+def test_mjx_rejects_f_ext_invariant():
+    """The mjx kernel twins do not reframe external wrenches (2026-09-09 layout
+    audit): every f_ext-taking row WITH a twin must carry mjx_rejects_f_ext
+    (the jax/torch surfaces refuse f_ext under the active mjx convention via
+    BaseDelegateMixin._refuse_mjx_f_ext) — and ONLY those rows. If a future
+    twin learns to reframe, flip its row and delete it from this derivation."""
+    for key, spec in ABI_SPECS.items():
+        expect = spec.f_ext_mode == "optional" and spec.has_mjx_twin
+        assert spec.mjx_rejects_f_ext == expect, (
+            f"{key}: mjx_rejects_f_ext={spec.mjx_rejects_f_ext} but "
+            f"f_ext_mode={spec.f_ext_mode!r}, has_mjx_twin={spec.has_mjx_twin}")

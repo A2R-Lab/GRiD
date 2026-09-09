@@ -43,6 +43,17 @@ class AbiSpec:
     sig_mjx_macro: str | None = None          # GRID_RBD_SIG_MJX_* when host template has MUJOCO_OUTPUT
     not_built_msg: str = "subset"             # "subset" | "reduced" | "bare" | literal stub text
                                               # (3 rows carry bespoke phrasings — see D1 notes)
+    # Which kind of body/surface the row describes (drives which referee checks
+    # apply and which emitter, if any, consumes it):
+    #   "cabi"        generated extern "C" grid_rbd_<stem> body (the default;
+    #                 full referee validation + wrapper_body_gen emission)
+    #   "plant"       hand-written extern "C" grid_plant_<stem> body (PlantBuffers
+    #                 section; python-surface fields only, body stays literal)
+    #   "ffi_only"    no C-ABI body — surfaces ONLY through the jax FFI handler
+    #                 + torch op (forward_dynamics_parameter_gradient)
+    #   "kernel_only" grid.cuh kernel with NO binding surface at all yet
+    #                 (f_ext_gradient[_dq]; registry + kernel ceiling only)
+    surface_class: str = "cabi"
     # ── inputs ──────────────────────────────────────────────────────────
     inputs: tuple[tuple[str, str], ...] = ()  # ordered (c_name, c_type) of the extern "C" params
     pack_mode: str = "q_qd_null"
@@ -67,6 +78,14 @@ class AbiSpec:
     mjx_requires_qdd: bool = False            # `if (!qdd_opt) return 4;`
     mjx_it_dispatch: str | None = None        # twin's IT dispatch when it differs
     mjx_post_launch_check: bool = False       # twin's 200+e cudaGetLastError block
+    # The mjx kernel twins do NOT reframe external wrenches: dispatching a twin
+    # with a caller f_ext returns silently wrong torques/Jacobians (2026-09-09
+    # layout audit). The jax/torch surfaces refuse f_ext under the ACTIVE mjx
+    # convention for every row flagged here (numpy falls back to the validated
+    # pin-kernel + host-rotation path instead). Referee invariant: True exactly
+    # when f_ext_mode == "optional" and has_mjx_twin — flip per-row if a future
+    # twin learns to reframe.
+    mjx_rejects_f_ext: bool = False
     # ── python (pybind _core.cpp) surface — C4 arc, one field/many consumers ──
     # py_out_dims: trailing per-batch-item out dims as the VERBATIM C++ exprs the
     # pybind method allocates ({batch, *py_out_dims}); the jax/torch reshape
@@ -89,9 +108,10 @@ class AbiSpec:
     # which python surfaces expose the method ("numpy","jax","torch"); None =
     # all three. fk_batched is numpy-only BY DESIGN (_surface_common table).
     py_surfaces: tuple[str, ...] | None = None
-    # jax integrator/plant ops are deliberately 2-D-only (hard-coded
-    # ShapeDtypeStruct — not vmap-able); a table-driven emitter must not
-    # silently make them vmap-able (changes FFI dispatch).
+    # jax PLANT ops are deliberately 2-D-only (hard-coded ShapeDtypeStruct —
+    # not vmap-able); a table-driven emitter must not silently make them
+    # vmap-able (changes FFI dispatch). The integrator pair became vmap-able
+    # 2026-09-09 (routed through _out + broadcast_all like everything else).
     py_vmap_ok: bool = True
     py_rc3_msg: str | None = None             # _core's rc==3 message (differs from the wrapper stub)
     py_twin_guard: str | None = None          # the *_mujoco method's null-fn guard message
@@ -129,7 +149,8 @@ ABI_SPECS: dict[str, AbiSpec] = {
         sig_mjx_macro="GRID_RBD_SIG_MJX_INVERSE_DYNAMICS",
         template_shape="qdd6",
         out_buffer="h_c", out_copy="memcpy_h", out_size_expr="grid::NUM_JOINTS",
-        has_mjx_twin=True, mjx_requires_qdd=True,
+        has_mjx_twin=True,
+        mjx_rejects_f_ext=True, mjx_requires_qdd=True,
         py_out_dims=('num_joints_',),
         out_layout="flat",
         py_rc3_msg="inverse_dynamics not built into this robot .so — add 'inverse_dynamics' to algorithm_list in register_robot() and rebuild",
@@ -154,7 +175,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         has_mjx_twin=True,
         py_out_dims=('num_joints_ + num_vel_',),
         out_layout="flat",
-        py_vmap_ok=False,
         py_rc3_msg="integrator not built into this robot .so — add 'integrator' to algorithm_list in register_robot() and rebuild",
         py_twin_guard='integrator_mujoco unavailable: floating-base .so only',
     ),
@@ -202,6 +222,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         template_shape="so4",
         out_buffer="h_qdd", out_copy="memcpy_h", out_size_expr="grid::NUM_JOINTS",
         has_mjx_twin=True,
+        mjx_rejects_f_ext=True,
         # Twin note (no field): _mujoco path only valid for null f_ext (kernel does
         # not reframe f_ext); enforced by the python dispatch, NOT by a return-4 here.
         py_out_dims=('num_joints_',),
@@ -222,6 +243,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         template_shape="so4",
         out_buffer="h_qdd", out_copy="memcpy_h", out_size_expr="grid::NUM_JOINTS",
         has_mjx_twin=True,
+        mjx_rejects_f_ext=True,
         py_out_dims=('num_joints_',),
         out_layout="flat",
         py_rc3_msg="aba not built into this robot .so — add 'aba' to algorithm_list in register_robot() and rebuild",
@@ -241,7 +263,8 @@ ABI_SPECS: dict[str, AbiSpec] = {
         template_shape="qdd6",
         out_buffer="d_dc_du", out_copy="cudaMemcpy_d",
         out_size_expr="2*grid::NUM_VEL*grid::NUM_VEL",  # code: (size_t)batch * 2 * nv * nv * sizeof(T)
-        has_mjx_twin=True, mjx_requires_qdd=True,
+        has_mjx_twin=True,
+        mjx_rejects_f_ext=True, mjx_requires_qdd=True,
         py_out_dims=('num_vel_', '2 * num_vel_'),
         out_layout=("grad_concat",),
         py_rc3_msg="inverse_dynamics_gradient not built into this robot .so — add 'inverse_dynamics_gradient' to algorithm_list in register_robot() and rebuild",
@@ -262,6 +285,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
         template_shape="fdgrad5",
         out_buffer="d_df_du", out_copy="cudaMemcpy_d", out_size_expr="2*grid::NUM_VEL*grid::NUM_VEL",
         has_mjx_twin=True,
+        mjx_rejects_f_ext=True,
         py_out_dims=('num_vel_', '2 * num_vel_'),
         out_layout=("grad_concat",),
         py_rc3_msg="forward_dynamics_gradient not built into this robot .so — add 'forward_dynamics_gradient' to algorithm_list in register_robot() and rebuild",
@@ -348,7 +372,6 @@ ABI_SPECS: dict[str, AbiSpec] = {
         # MUJOCO_OUTPUT=true (mjx_omits_tier=False).
         py_out_dims=('2 * num_vel_ * 3 * num_vel_',),
         out_layout=("colmajor_whole", ("2*num_vel_", "3*num_vel_")),
-        py_vmap_ok=False,
         py_rc3_msg="integrator_gradient not built into this robot .so — add 'integrator_gradient' to algorithm_list in register_robot() and rebuild",
         py_twin_guard='integrator_gradient_mujoco unavailable: floating-base .so only',
     ),
@@ -660,6 +683,70 @@ ABI_SPECS: dict[str, AbiSpec] = {
         py_rc3_msg="end_effector_pose_gradient_runtime not built into this robot .so — add 'end_effector_pose_gradient_runtime' to algorithm_list in register_robot() and rebuild",
         py_twin_guard='end_effector_pose_gradient_runtime_mujoco unavailable: floating-base .so only',
     ),
+
+    # ── non-"cabi" rows (wave-2 item 5, 2026-09-09): python-surface metadata
+    # for the hand-written plant section, the FFI-only param gradient, and the
+    # two surface-less kernels — referee checks branch on surface_class. ──────
+
+    "forward_dynamics_parameter_gradient": AbiSpec(
+        "forward_dynamics_parameter_gradient",
+        surface_class="ffi_only",             # no C-ABI body: jax FFI handler
+                                              # + torch op only (sysID ∂qdd/∂π)
+        takes_gravity=True,
+        py_out_dims=('num_vel_', '10 * num_bodies_'),
+        out_layout=("reshape", ("num_vel_", "10*num_bodies_")),
+        py_surfaces=("jax", "torch"),
+        py_rc3_msg="forward_dynamics_parameter_gradient not built into this robot .so — add 'forward_dynamics_parameter_gradient' to algorithm_list in register_robot() and rebuild",
+    ),
+    "f_ext_gradient": AbiSpec(
+        "f_ext_gradient",
+        surface_class="kernel_only",          # grid.cuh kernel + registry +
+        py_surfaces=(),                       # ceiling entry; NO binding yet
+    ),
+    "f_ext_gradient_dq": AbiSpec(
+        "f_ext_gradient_dq",
+        surface_class="kernel_only",
+        py_surfaces=(),
+    ),
+    "plant_step": AbiSpec(
+        "plant_step",
+        surface_class="plant",
+        py_vmap_ok=False,                # extern "C" grid_plant_step —
+                                              # hand-written PlantBuffers body
+        inputs=(("x", "const T*"), ("u", "const T*"), ("x_kp1", "T*"),
+                ("batch", "int"), ("gravity", "float"), ("dt", "float"),
+                ("it", "int")),
+        takes_gravity=True, takes_dt_it=True,
+        has_mjx_twin=True,
+        py_out_dims=('num_joints_ + num_vel_',),
+        out_layout="flat",
+    ),
+    "plant_step_gradient": AbiSpec(
+        "plant_step_gradient",
+        surface_class="plant",
+        py_vmap_ok=False,
+        inputs=(("x", "const T*"), ("u", "const T*"), ("dAB", "T*"),
+                ("batch", "int"), ("gravity", "float"), ("dt", "float"),
+                ("it", "int")),
+        takes_gravity=True, takes_dt_it=True,
+        has_mjx_twin=True,
+        py_out_dims=('2 * num_vel_ * 3 * num_vel_',),
+        out_layout=("colmajor_whole", ("2*num_vel_", "3*num_vel_")),
+    ),
+    "plant_step_hessian": AbiSpec(
+        "plant_step_hessian",
+        surface_class="plant",
+        py_vmap_ok=False,
+        inputs=(("x", "const T*"), ("u", "const T*"), ("d2AB", "T*"),
+                ("batch", "int"), ("gravity", "float"), ("dt", "float"),
+                ("it", "int")),
+        takes_gravity=True, takes_dt_it=True,
+        has_mjx_twin=True,
+        py_out_dims=('2 * num_vel_ * 3 * num_vel_ * 3 * num_vel_',),
+        # row-major already (H is C-order) — reshape only, no transpose.
+        out_layout=("reshape", ("2*num_vel_", "3*num_vel_", "3*num_vel_")),
+        py_surfaces=("numpy",),               # jax/torch don't expose it yet
+    ),
 }
 
 # ── transcription deviation notes (2026-08-28 agents) ──────────────────
@@ -717,6 +804,17 @@ ABI_SPECS: dict[str, AbiSpec] = {
 # token substitution. ONE table so the token set can't drift per consumer.
 # `second_order_tensor_size` = the C++ SECOND_ORDER_TENSOR_SIZE constant
 # (four rank-3 nv tensors: 4 * nv^3).
+
+# The ONE spelling of the f_ext-under-mjx refusal (see AbiSpec.mjx_rejects_f_ext;
+# raised by BaseDelegateMixin._refuse_mjx_f_ext on the jax/torch surfaces).
+MJX_F_EXT_REFUSAL = (
+    "mjx-convention {name} does not accept f_ext on the jax/torch surfaces: "
+    "the mjx kernel twins do not reframe external wrenches yet, and dispatching "
+    "them with f_ext would return silently wrong torques (found in the "
+    "2026-09-09 layout audit). Use the numpy handle (which falls back to the "
+    "validated pin-kernel + host-rotation path), or pass f_ext in pinocchio "
+    "convention.")
+
 
 def py_dim_tokens(nq: int, nv: int, nee: int, nb: int) -> dict[str, int]:
     """The substitution table for expanding an AbiSpec.py_out_dims entry."""

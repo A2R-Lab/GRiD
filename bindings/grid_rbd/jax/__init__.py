@@ -599,9 +599,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         ∂(M·qdd)/∂q for a nonzero-qdd call; qdd/f_ext are not differentiated), and
         ``jax.vmap``-able over the leading batch axis.
         """
-        if f_ext is not None and self._mjx_active(_convention):
-            raise NotImplementedError(
-                "mjx-convention inverse_dynamics does not accept f_ext on the jax/torch surfaces: the mjx kernel twins do not reframe external wrenches yet, and dispatching them with f_ext would return silently wrong torques (found in the 2026-09-09 layout audit). Use the numpy handle (which falls back to the validated pin-kernel + host-rotation path), or pass f_ext in pinocchio convention.")
+        self._refuse_mjx_f_ext("inverse_dynamics", f_ext, _convention)
         import jax.numpy as jnp
         if qdd is None:
             (q, qd) = self._prep_2d("inverse_dynamics", q, qd)
@@ -649,9 +647,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         ``jax.vmap``-able over the leading batch axis. ``f_ext`` is not differentiated.
         """
         (q, qd, u) = self._prep_2d("forward_dynamics", q, qd, u)
-        if f_ext is not None and self._mjx_active(_convention):
-            raise NotImplementedError(
-                "mjx-convention forward_dynamics does not accept f_ext on the jax/torch surfaces: the mjx kernel twins do not reframe external wrenches yet, and dispatching them with f_ext would return silently wrong torques (found in the 2026-09-09 layout audit). Use the numpy handle (which falls back to the validated pin-kernel + host-rotation path), or pass f_ext in pinocchio convention.")
+        self._refuse_mjx_f_ext("forward_dynamics", f_ext, _convention)
         fe = self._f_ext_or_zeros(q, f_ext)
         return self._differentiable(self._resolve_convention(_convention))["forward_dynamics"](
             gravity, q, qd, u, fe)
@@ -727,7 +723,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         nv, npar = self.num_vel, 10 * self.num_bodies
         flat = jax.ffi.ffi_call(target, self._out(q, nv * npar), vmap_method="broadcast_all")(
             q, qd, u, gravity=self._np_dt(gravity))
-        return flat.reshape(q.shape[:-1] + (nv, npar))
+        return self._shape_out("forward_dynamics_parameter_gradient", flat)
 
     def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None):
         """qdd = aba(q, qd, u) via the articulated body algorithm. Returns (B, NJ).
@@ -741,9 +737,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         import jax.numpy as jnp
         target = self._mt(_convention, "aba", "grid_rbd_jax_aba")
         (q, qd, u) = self._prep_2d("aba", q, qd, u)
-        if f_ext is not None and self._mjx_active(_convention):
-            raise NotImplementedError(
-                "mjx-convention aba does not accept f_ext on the jax/torch surfaces: the mjx kernel twins do not reframe external wrenches yet, and dispatching them with f_ext would return silently wrong torques (found in the 2026-09-09 layout audit). Use the numpy handle (which falls back to the validated pin-kernel + host-rotation path), or pass f_ext in pinocchio convention.")
+        self._refuse_mjx_f_ext("aba", f_ext, _convention)
         fe = self._f_ext_or_zeros(q, f_ext)
         out_type = self._out(q, self.num_joints)
         return jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
@@ -1190,9 +1184,11 @@ class JaxRobotHandle(BaseDelegateMixin):
         import jax.numpy as jnp
         target = self._mt(_convention, "integrator", "grid_rbd_jax_integrator")
         (q, qd, u) = self._prep_2d("integrator", q, qd, u)
-        B = q.shape[0]  # 2-D only here (direct ShapeDtypeStruct; not vmap-able)
-        out_type = jax.ShapeDtypeStruct((B, self.num_joints + self.num_vel), self._np_dt)
-        return jax.ffi.ffi_call(target, out_type)(
+        # vmap-able since 2026-09-09 (was a hard-coded 2-D ShapeDtypeStruct):
+        # _out mirrors the prepped leading dims and broadcast_all re-adds the
+        # mapped axis — same dispatch as every other method here.
+        out_type = self._out(q, self.num_joints + self.num_vel)
+        return jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
             q, qd, u, dt=self._np_dt(dt), it=np.int64(_integrator_code(integrator_type)),
             gravity=self._np_dt(gravity))
 
@@ -1208,14 +1204,14 @@ class JaxRobotHandle(BaseDelegateMixin):
         target = self._mt(_convention,
             "integrator_gradient", "grid_rbd_jax_integrator_gradient")
         (q, qd, u) = self._prep_2d("integrator_gradient", q, qd, u)
-        B = q.shape[0]  # 2-D only here (direct ShapeDtypeStruct; not vmap-able)
         nv = self.num_vel
-        out_type = jax.ShapeDtypeStruct((B, 2 * nv * 3 * nv), self._np_dt)
-        flat = jax.ffi.ffi_call(target, out_type)(
+        # vmap-able since 2026-09-09 (was a hard-coded 2-D ShapeDtypeStruct).
+        out_type = self._out(q, 2 * nv * 3 * nv)
+        flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
             q, qd, u, dt=self._np_dt(dt), it=np.int64(_integrator_code(integrator_type)),
             gravity=self._np_dt(gravity))
-        # h_dAB is (2*NV x 3*NV) column-major per timestep; recover row-major.
-        return flat.reshape(B, 3 * nv, 2 * nv).transpose(0, 2, 1)
+        # h_dAB is (2*NV x 3*NV) column-major per timestep → shared out-layout.
+        return self._shape_out("integrator_gradient", flat)
 
     # ─── field-standard short aliases ────────────────────────────────────────
     # `rnea`/`fd` are the names roboticists reach for (pinocchio / frax / bard);
@@ -1245,7 +1241,12 @@ class JaxRobotHandle(BaseDelegateMixin):
                 raise ValueError(f"{name}: {k} must be 2D with batch={B}; got {a.shape}")
         if B > self.max_batch:
             raise ValueError(f"{name}: batch={B} > max_batch={self.max_batch}")
-        return cast
+        # (cast, B): every plant call site unpacks both. This returned only
+        # `cast` until 2026-09-09 — `cast, B = ...` silently unpacked the DICT
+        # KEYS for 2-input methods and raised for 3-input ones, so the whole
+        # jax plant surface was latently broken and provably uncalled; the
+        # items-2-4 gate + the plant cross-surface checks now cover it.
+        return cast, B
 
     def _cost_out_types(self, B, n_grad, n_hess):
         import jax
@@ -1351,8 +1352,8 @@ class JaxRobotHandle(BaseDelegateMixin):
         flat = jax.ffi.ffi_call(target, out_type)(
             cast["x"], cast["u"], dt=self._np_dt(dt),
             it=np.int64(_integrator_code(integrator_type)), gravity=self._np_dt(gravity))
-        # (2*NV x 3*NV) column-major per timestep; recover row-major.
-        return flat.reshape(B, 3 * nv, 2 * nv).transpose(0, 2, 1)
+        # (2*NV x 3*NV) column-major per timestep → shared out-layout.
+        return self._shape_out("plant_step_gradient", flat)
 
     def ee_pos_cost(self, q, p_des, W, *, _convention=None):
         """End-effector position cost (EE 0). q (B, NQ); p_des/W (B, 3). Returns
@@ -1407,6 +1408,28 @@ class JaxRobotHandle(BaseDelegateMixin):
 
 
 # ─── public API ─────────────────────────────────────────────────────────────
+
+
+def _install_xla_device_pool(base):
+    """Carve GRiD's gridData device arena out of XLA's memory pool: allocate
+    the slab as a plain ``jnp`` uint8 buffer (held alive on the handle) and
+    hand its device address to the .so (RobotHandle.install_device_pool).
+    With the slab inside XLA's pool, ``XLA_PYTHON_CLIENT_PREALLOCATE`` can
+    stay ON without starving GRiD's allocations (the h1_2 "launch failed"
+    class). Falls back to the cudaMalloc path (returning 0) when the arena is
+    already initialized or XLA cannot fit the slab."""
+    import jax.numpy as jnp
+
+    def _alloc(nbytes):
+        buf = jnp.zeros((int(nbytes),), dtype=jnp.uint8)
+        buf.block_until_ready()
+        try:
+            ptr = buf.unsafe_buffer_pointer()
+        except AttributeError:
+            ptr = buf.__cuda_array_interface__["data"][0]
+        return buf, ptr
+
+    return base.install_device_pool(_alloc)
 
 
 def register_robot(
@@ -1479,6 +1502,9 @@ def register_robot(
     # E6 batch-switch: arm the small-batch regime from ffi_bases_by_n (no-op
     # when the config has no by-n block or the .so predates the switch).
     base.apply_batch_overlay("ffi")
+    # Allocator integration: carve GRiD's device arena out of XLA's pool so
+    # XLA preallocation and GRiD's cudaMallocs stop fighting.
+    _install_xla_device_pool(base)
     # Pull the cache_key + .so path from the manifest so we can dlopen
     # to register JAX FFI symbols.
     from grid_rbd._cache import default_cache_dir, manifest_lookup, store_dir
@@ -1506,6 +1532,7 @@ def get_robot(
     _require_jax()  # fail early with install guidance if jax is missing
     base = _grid_rbd.get_robot(name, cache_dir=cache_dir, _profile_overlay=None)  # jax baked default = ffi
     base.apply_batch_overlay("ffi")  # E6 batch-switch (no-op without a by-n block)
+    _install_xla_device_pool(base)  # arena carved from XLA's pool (see register_robot)
     from grid_rbd._cache import default_cache_dir, manifest_lookup, store_dir
     cd = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
     entry = manifest_lookup(cd, name)

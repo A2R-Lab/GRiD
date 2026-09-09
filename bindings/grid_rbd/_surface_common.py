@@ -198,6 +198,18 @@ class BaseDelegateMixin:
         no-op — mirrors the numpy handle's ``_mjx_active``)."""
         return self._resolve_convention(convention) == "mujoco" and self.floating_base
 
+    def _refuse_mjx_f_ext(self, key: str, f_ext, convention=None) -> None:
+        """Refuse a caller ``f_ext`` under the ACTIVE mjx convention for every
+        method whose spec row carries ``mjx_rejects_f_ext`` (the mjx kernel
+        twins do not reframe external wrenches — dispatching them with f_ext
+        returns silently wrong torques/Jacobians; 2026-09-09 layout audit).
+        One table-driven implementation of the six-plus hand refusals."""
+        if f_ext is None or not self._mjx_active(convention):
+            return
+        from grid_codegen.abi_specs import ABI_SPECS, MJX_F_EXT_REFUSAL
+        if ABI_SPECS[key].mjx_rejects_f_ext:
+            raise NotImplementedError(MJX_F_EXT_REFUSAL.format(name=key))
+
     def attach_tool(self, joint, *, mass, com=(0.0, 0.0, 0.0), inertia=None,
                     tip_transform=None):
         """Weld a rigid tool/payload at runtime (no recompile). Delegates to the base

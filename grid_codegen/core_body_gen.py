@@ -219,7 +219,11 @@ def gen_accessor(spec) -> str:
 
 
 def generated_keys():
-    return [k for k in ABI_SPECS if k not in EXCLUDE and ABI_SPECS[k].py_out_dims]
+    # only "cabi" rows have generated pybind bodies — plant/ffi_only/kernel_only
+    # rows carry python-surface metadata for hand-written or FFI-only paths.
+    return [k for k in ABI_SPECS
+            if k not in EXCLUDE and ABI_SPECS[k].py_out_dims
+            and ABI_SPECS[k].surface_class == "cabi"]
 
 
 def gen_region() -> str:

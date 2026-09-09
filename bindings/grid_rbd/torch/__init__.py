@@ -535,40 +535,34 @@ class TorchRobotHandle(BaseDelegateMixin):
         return self._fns_for("pinocchio")
 
     def _op(self, conv, name):
-        """Resolve a DIRECT (non-autograd) CORE op, dispatching to the ``_mujoco``
+        """Resolve a DIRECT (non-autograd) op, dispatching to the ``_mujoco``
         variant when the mjx convention is ACTIVE (resolved "mujoco" AND floating
-        base — fixed base: the pin op is the correct no-op). A core op missing
-        on a SUBSET build maps to the clean "not built — add to algorithm_list"
-        error (via _resolve_core_op)."""
-        if self._mjx_active(conv):
-            return _resolve_core_op(self._ops, name + "_mujoco")
-        return _resolve_core_op(self._ops, name)
+        base — fixed base: the pin op is the correct no-op).
 
-    def _gated_op(self, conv, name):
-        """Like :py:meth:`_op` but for the GATED centroidal / kinematics methods
-        (com / ccrba / energy / dccrba / cmm_time_variation / frame_jacobian[_dot]
-        / osc_inertia): if the op isn't in the .so (the kernel wasn't generated
-        for this robot) re-raise with an actionable message mirroring the numpy
-        handle. These are #ifdef-gated (emitted-when-present), distinct from the
-        core subset gating, so resolve the raw op directly and keep the dedicated
-        'not generated' message."""
+        Missing-op handling is driven by ``ABI_SPECS[name].gate_form`` (the same
+        field the C emitter uses) instead of a per-call-site chooser:
+        - ``"if"`` (core subset-gated): resolve via ``_resolve_core_op`` → the
+          clean "not built — add to algorithm_list" error.
+        - ``"ifdef"`` (emitted-when-present: the centroidal / kinematics family
+          com / ccrba / energy / dccrba / cmm_time_variation /
+          frame_jacobian[_dot] / osc_inertia / runtime-EE pair): resolve the raw
+          op and, when absent, raise the per-algo advice from
+          ``ABI_SPECS.py_rc3_msg`` (same table the numpy rc==3 path uses)."""
         resolved = (name + "_mujoco") if self._mjx_active(conv) else name
+        try:
+            from grid_codegen.abi_specs import ABI_SPECS
+            spec = ABI_SPECS.get(name)
+        except Exception:
+            spec = None
+        if spec is None or spec.gate_form != "ifdef":
+            return _resolve_core_op(self._ops, resolved)
         try:
             return getattr(self._ops, resolved)
         except AttributeError as e:
-            # A4 (2026-09-09): the per-algo advice lives in ABI_SPECS.py_rc3_msg
-            # (same table the numpy rc==3 path uses — algorithm_list hint for the
-            # opt-in family, the mimic explanation for centroidal). The old text
-            # promised force_rebuild=True, which can never fix a mimic robot.
-            hint = None
-            try:
-                from grid_codegen.abi_specs import ABI_SPECS
-                hint = ABI_SPECS[name].py_rc3_msg
-            except Exception:
-                pass
             raise AttributeError(
-                hint or (f"{name} not generated for this robot .so "
-                         f"(subset algorithm_list, or unsupported for this robot class)")
+                spec.py_rc3_msg
+                or (f"{name} not generated for this robot .so "
+                    f"(subset algorithm_list, or unsupported for this robot class)")
             ) from e
 
     @property
@@ -600,9 +594,7 @@ class TorchRobotHandle(BaseDelegateMixin):
 
         With ``output_convention="mujoco"`` (floating base) inputs/outputs are
         MuJoCo-convention and the autograd VJP uses the mjx-convention Jacobian."""
-        if f_ext is not None and self._mjx_active(_convention):
-            raise NotImplementedError(
-                "mjx-convention inverse_dynamics does not accept f_ext on the jax/torch surfaces: the mjx kernel twins do not reframe external wrenches yet, and dispatching them with f_ext would return silently wrong torques (found in the 2026-09-09 layout audit). Use the numpy handle (which falls back to the validated pin-kernel + host-rotation path), or pass f_ext in pinocchio convention.")
+        self._refuse_mjx_f_ext("inverse_dynamics", f_ext, _convention)
         return self._fns_for(_convention)["inverse_dynamics"].apply(
             q, qd, float(gravity), qdd, f_ext)
 
@@ -615,9 +607,7 @@ class TorchRobotHandle(BaseDelegateMixin):
 
         With ``output_convention="mujoco"`` (floating base) inputs/outputs are
         MuJoCo-convention and the autograd VJP uses the mjx-convention Jacobian."""
-        if f_ext is not None and self._mjx_active(_convention):
-            raise NotImplementedError(
-                "mjx-convention forward_dynamics does not accept f_ext on the jax/torch surfaces: the mjx kernel twins do not reframe external wrenches yet, and dispatching them with f_ext would return silently wrong torques (found in the 2026-09-09 layout audit). Use the numpy handle (which falls back to the validated pin-kernel + host-rotation path), or pass f_ext in pinocchio convention.")
+        self._refuse_mjx_f_ext("forward_dynamics", f_ext, _convention)
         return self._fns_for(_convention)["fd"].apply(q, qd, u, float(gravity), f_ext)
 
     def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None):
@@ -628,9 +618,7 @@ class TorchRobotHandle(BaseDelegateMixin):
 
         With ``output_convention="mujoco"`` (floating base) inputs/outputs are
         MuJoCo-convention."""
-        if f_ext is not None and self._mjx_active(_convention):
-            raise NotImplementedError(
-                "mjx-convention aba does not accept f_ext on the jax/torch surfaces: the mjx kernel twins do not reframe external wrenches yet, and dispatching them with f_ext would return silently wrong torques (found in the 2026-09-09 layout audit). Use the numpy handle (which falls back to the validated pin-kernel + host-rotation path), or pass f_ext in pinocchio convention.")
+        self._refuse_mjx_f_ext("aba", f_ext, _convention)
         return self._fns_for(_convention)["aba"].apply(q, qd, u, float(gravity), f_ext)
 
     def inverse_dynamics_wrt_params(self, q, qd, params, *, gravity: float = -9.81, f_ext=None):
@@ -699,13 +687,11 @@ class TorchRobotHandle(BaseDelegateMixin):
     # ─── centroidal / energy / kinematics value methods (numpy-handle parity) ──
     #
     # Mirror the numpy RobotHandle's centroidal / energy / regressor / frame
-    # methods exactly (same torch op names, same gravity/int args, same output
-    # reshape copied VERBATIM from `_handle.py`). Forward-only (no autograd).
-    # The GATED ops (com / ccrba / energy / dccrba / cmm_time_variation /
-    # frame_jacobian[_dot] / osc_inertia) route through `_gated_op` for an
-    # actionable "not generated for this robot" message; the always-emitted ones
-    # (generalized_gravity / nonlinear_effects / coriolis_matrix / *_regressor)
-    # use `_op`.
+    # methods exactly (same torch op names, same gravity/int args, shared
+    # out-layout module). Forward-only (no autograd). Every method calls `_op`;
+    # missing-op behavior (subset "not built" vs the actionable "not generated
+    # for this robot" advice) is chosen by ABI_SPECS[name].gate_form — the same
+    # field that gates the C emit.
 
     def generalized_gravity(self, q, *, gravity: float = -9.81, _convention=None):
         """Generalized gravity torque g(q) = RNEA(q, 0, 0). Returns (B, NV).
@@ -726,7 +712,7 @@ class TorchRobotHandle(BaseDelegateMixin):
 
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
         MuJoCo-convention; the energies are frame-INVARIANT (inputs converted in-kernel)."""
-        return self._gated_op(_convention, "energy")(q, qd, float(gravity))
+        return self._op(_convention, "energy")(q, qd, float(gravity))
 
     def com(self, q, *, _convention=None):
         """Center-of-mass world position p_com and CoM Jacobian J_com.
@@ -738,7 +724,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         With ``output_convention="mujoco"`` (floating base) ``p_com`` is invariant
         and the ``J_com`` columns are reframed (computed in-kernel)."""
         nv = self.num_vel
-        raw = self._gated_op(_convention, "com")(q)
+        raw = self._op(_convention, "com")(q)
         return self._shape_out("com", raw)
 
     def ccrba(self, q, qd, *, _convention=None):
@@ -750,7 +736,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         With ``output_convention="mujoco"`` (floating base) ``h`` is invariant and
         the ``A`` columns are reframed (computed in-kernel)."""
         nv = self.num_vel
-        raw = self._gated_op(_convention, "ccrba")(q, qd)
+        raw = self._op(_convention, "ccrba")(q, qd)
         return self._shape_out("ccrba", raw)
 
     def dccrba(self, q, *, _convention=None):
@@ -760,7 +746,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention
         and the returned tensor is the dA/dq of the mjx CMM (same layout)."""
         nv = self.num_vel
-        raw = self._gated_op(_convention, "dccrba")(q)
+        raw = self._op(_convention, "dccrba")(q)
         return self._shape_out("dccrba", raw)
 
     def cmm_time_variation(self, q, qd, *, _convention=None):
@@ -770,7 +756,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         With ``output_convention="mujoco"`` (floating base) ``q``/``qd`` are
         MuJoCo-convention and Ȧ has its columns reframed (computed in-kernel)."""
         nv = self.num_vel
-        raw = self._gated_op(_convention, "cmm_time_variation")(q, qd)
+        raw = self._op(_convention, "cmm_time_variation")(q, qd)
         return self._shape_out("cmm_time_variation", raw)
 
     def coriolis_matrix(self, q, qd, *, gravity: float = -9.81, _convention=None):
@@ -814,7 +800,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         from .._handle import _resolve_frame_args
         nv = self.num_vel
         tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
-        raw = self._gated_op(_convention, "frame_jacobian")(q, int(tj), int(rf))
+        raw = self._op(_convention, "frame_jacobian")(q, int(tj), int(rf))
         return self._shape_out("frame_jacobian", raw)
 
     def frame_jacobian_dot(self, q, qd, *, target_jid=None, reference_frame=None, _convention=None):
@@ -829,7 +815,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         from .._handle import _resolve_frame_args
         nv = self.num_vel
         tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
-        raw = self._gated_op(_convention, "frame_jacobian_dot")(q, qd, int(tj), int(rf))
+        raw = self._op(_convention, "frame_jacobian_dot")(q, qd, int(tj), int(rf))
         return self._shape_out("frame_jacobian_dot", raw)
 
     def osc_inertia(self, q, *, _convention=None):
@@ -838,7 +824,7 @@ class TorchRobotHandle(BaseDelegateMixin):
 
         With ``output_convention="mujoco"`` the MuJoCo ``q`` is reordered before the
         kinematics build (Lambda is otherwise frame-INVARIANT)."""
-        return self._shape_out("osc_inertia", self._gated_op(_convention, "osc_inertia")(q))
+        return self._shape_out("osc_inertia", self._op(_convention, "osc_inertia")(q))
 
     def end_effector_pose(self, q, *, _convention=None):
         """EE pose [xyz, rpy] per EE (B, 6*NUM_EES).
@@ -880,7 +866,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         import torch
         jids = self._base._resolve_ee_jids(ee_joint_names)
         offsets = self._base._normalize_ee_offsets(ee_offsets, len(jids))
-        op = self._gated_op(_convention, "end_effector_pose_runtime")
+        op = self._op(_convention, "end_effector_pose_runtime")
         per_ee = []
         for jid, off in zip(jids, offsets):
             # off is the 16-float col-major X_tool from _normalize_ee_offsets;
@@ -907,7 +893,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         nv = self.num_vel
         jids = self._base._resolve_ee_jids(ee_joint_names)
         offsets = self._base._normalize_ee_offsets(ee_offsets, len(jids))
-        op = self._gated_op(_convention, "end_effector_pose_gradient_runtime")
+        op = self._op(_convention, "end_effector_pose_gradient_runtime")
         per_ee = []
         for jid, off in zip(jids, offsets):
             off_t = torch.as_tensor(off, dtype=q.dtype, device=q.device).reshape(-1).contiguous()
@@ -929,6 +915,7 @@ class TorchRobotHandle(BaseDelegateMixin):
 
         With ``output_convention="mujoco"`` (floating base) the gradient is the
         mjx-convention Jacobian (rows base-rotated, columns base-reframed)."""
+        self._refuse_mjx_f_ext("inverse_dynamics_gradient", f_ext, _convention)
         nv = self.num_vel
         raw = self._op(_convention, "inverse_dynamics_gradient")(q, qd, float(gravity), qdd, f_ext)
         return self._shape_out("inverse_dynamics_gradient", raw)
@@ -943,6 +930,7 @@ class TorchRobotHandle(BaseDelegateMixin):
 
         With ``output_convention="mujoco"`` (floating base) the gradient is the
         mjx-convention Jacobian."""
+        self._refuse_mjx_f_ext("forward_dynamics_gradient", f_ext, _convention)
         nv = self.num_vel
         raw = self._op(_convention, "forward_dynamics_gradient")(q, qd, u, float(gravity), f_ext)
         return self._shape_out("forward_dynamics_gradient", raw)
@@ -967,8 +955,8 @@ class TorchRobotHandle(BaseDelegateMixin):
     def forward_dynamics_parameter_gradient(self, q, qd, u, *, gravity: float = -9.81):
         """FD inertial-parameter gradient ∂qdd/∂π = -M⁻¹·Y. Returns
         (B, NV, 10*num_bodies), row-major (NV, 10*NB) per sample."""
-        nv, npar = self.num_vel, 10 * self.num_bodies
-        return self._ops.forward_dynamics_parameter_gradient(q, qd, u, float(gravity)).reshape(-1, nv, npar)
+        return self._shape_out("forward_dynamics_parameter_gradient",
+                               self._ops.forward_dynamics_parameter_gradient(q, qd, u, float(gravity)))
 
     def idsva_so(self, q, qd, qdd=None, *, gravity: float = -9.81, _convention=None):
         """Second-order ID at joint acceleration ``qdd``. Returns a
@@ -1077,8 +1065,8 @@ class TorchRobotHandle(BaseDelegateMixin):
         nv = self.num_vel
         it = _integrator_code(integrator_type)
         raw = self._op(_convention, "plant_step_gradient")(x, u, float(dt), it, float(gravity))
-        B = raw.shape[0]
-        return raw.reshape(B, 3 * nv, 2 * nv).transpose(1, 2)
+        # (2*NV x 3*NV) column-major per timestep → shared out-layout.
+        return self._shape_out("plant_step_gradient", raw)
 
     def ee_pos_cost(self, q, p_des, W, *, _convention=None):
         """End-effector position cost (EE 0). q (B, NQ); p_des/W (B, 3). Returns
@@ -1194,9 +1182,25 @@ def register_robot(
         dtype=dtype,  # Wave 2a: fp64 .so carries an fp64 torch surface
         _profile_overlay="torch",  # E6 torch threads overlay
     )
+    _install_torch_device_pool(base)  # arena carved from torch's caching allocator
     cache_key, so_path = _lookup(name, cache_dir)
     return TorchRobotHandle(base, cache_key, so_path,
                             output_convention=output_convention)
+
+
+def _install_torch_device_pool(base):
+    """Carve GRiD's gridData device arena out of torch's caching allocator (a
+    uint8 CUDA tensor held alive on the handle) instead of raw cudaMalloc —
+    same framework-allocator integration as the jax surface (see
+    RobotHandle.install_device_pool). Falls back to the cudaMalloc path when
+    the arena is already initialized or the allocation does not fit."""
+    import torch
+
+    def _alloc(nbytes):
+        buf = torch.empty(int(nbytes), dtype=torch.uint8, device="cuda")
+        return buf, buf.data_ptr()
+
+    return base.install_device_pool(_alloc)
 
 
 def get_robot(name: str, cache_dir: str | Path | None = None, *,
@@ -1206,6 +1210,7 @@ def get_robot(name: str, cache_dir: str | Path | None = None, *,
     can also be set later via the handle's ``output_convention`` property."""
     _require_torch()  # fail early with install guidance if torch is missing
     base = _grid_rbd.get_robot(name, cache_dir=cache_dir, _profile_overlay="torch")  # E6
+    _install_torch_device_pool(base)
     cache_key, so_path = _lookup(name, cache_dir)
     return TorchRobotHandle(base, cache_key, so_path,
                             output_convention=output_convention)

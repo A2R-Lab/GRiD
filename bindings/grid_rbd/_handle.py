@@ -438,6 +438,10 @@ class RobotHandle:
         - ``max_threads``: the compiled kernel's real ``__launch_bounds__``
           ceiling via :py:meth:`kernel_max_threads` (``None`` where the probe
           does not apply).
+        - ``batch_threshold``/``threads_small``: the ARMED E6 batch-switch state
+          (see :py:meth:`apply_batch_overlay`) — calls with batch <=
+          ``batch_threshold`` launch at ``threads_small`` instead of
+          ``threads``. Both ``None`` when the switch is not armed for the algo.
         """
         from grid_codegen.abi_specs import ABI_SPECS, expand_py_out_dims
         gen = self._meta.get("generated_algorithms")
@@ -448,6 +452,10 @@ class RobotHandle:
             "idsva_so": "idsva_so_body_frame",
             "energy": "kinetic_energy_regressor",
             "fk_batched": "end_effector_pose",
+            # the plant surface builds as ONE algorithm_list entry
+            "plant_step": "plant",
+            "plant_step_gradient": "plant",
+            "plant_step_hessian": "plant",
         }
         num_bodies = int(getattr(self._runner, "num_bodies", 0) or 0)
         # tuned launch config (best-effort)
@@ -473,12 +481,31 @@ class RobotHandle:
         except Exception:
             descriptor_for = None
 
+        # armed E6 batch-switch state, keyed by SHORT autotune key (best-effort;
+        # same enum-index derivation as apply_batch_overlay).
+        switch = {}
+        try:
+            ctx = self._overlay_context()
+            if ctx is not None:
+                _, _, algo_to_symbol, algo_index, _, _ = ctx
+                for akey, sym in algo_to_symbol.items():
+                    idx = algo_index.get(sym)
+                    if idx is None:
+                        continue
+                    thr, n_small = self._runner.get_batch_switch(idx)
+                    if thr and thr > 0 and n_small and n_small > 0:
+                        switch[akey] = (int(thr), int(n_small))
+        except Exception:
+            switch = {}
+
         out = {}
         for key, spec in ABI_SPECS.items():
             if not spec.py_out_dims:
                 continue
             akey = algo_key_of.get(key, key)
             built = (akey in gen_set) if gen_set is not None else None
+            if spec.surface_class == "plant" and gen_set is not None and akey not in gen_set:
+                built = None  # the plant layer isn't tracked in generated_algorithms
             # the ceiling probe + launch-config tables key on the SHORT autotune
             # key ("id", "fd", "idsva_so", ...), not the surface method name.
             short = key
@@ -495,6 +522,7 @@ class RobotHandle:
             except Exception:
                 max_threads = None
             cfg = baked.get(short) or {}
+            sw = switch.get(short)
             out[key] = {
                 "built": built,
                 # the has_*_mujoco bindings are pybind PROPERTIES, not methods
@@ -504,6 +532,8 @@ class RobotHandle:
                 "tier": cfg.get("tier"),
                 "threads": cfg.get("threads"),
                 "max_threads": max_threads,
+                "batch_threshold": sw[0] if sw else None,
+                "threads_small": sw[1] if sw else None,
             }
         return out
 
@@ -945,6 +975,64 @@ class RobotHandle:
             return None
         baked = load_launch_config(robot_key, floating, gpu, profile="ffi")  # {sym:{tier,threads}}
         return doc, base, algo_to_symbol, algo_index, baked, LAUNCH_CONFIG_TIER_SYMBOL
+
+    def install_device_pool(self, alloc_fn) -> int:
+        """Framework-allocator integration (2026-09-09): carve GRiD's entire
+        gridData device arena out of a slab the embedding framework allocates
+        (jax: an XLA-pool ``jnp`` buffer; torch: a caching-allocator tensor)
+        instead of raw ``cudaMalloc`` — so framework preallocation (XLA's 75%)
+        and GRiD's allocations stop fighting (the h1_2 "launch failed" class).
+
+        ``alloc_fn(nbytes) -> (buffer, device_ptr)`` allocates ``nbytes`` on
+        the CUDA device via the framework and returns the keep-alive object
+        plus its raw device address. Must run BEFORE the first kernel call
+        (the arena init is lazy). Honors ``GRID_WORKSPACE_TIMESTEP_SLOTS``;
+        when the framework cannot fit the full-slot slab the slot count is
+        halved down to 1 (mirroring the auto-fit) before giving up. Returns
+        the installed slab size in bytes, or 0 when the pool stays off (the
+        ``cudaMalloc`` path with its own VRAM auto-fit remains the fallback).
+        The slab is held alive on the handle until close/GC."""
+        import os
+        import warnings
+        try:
+            if int(self._runner.device_pool_used()) > 0:
+                # a sibling surface (jax/torch handle on the SAME .so) already
+                # installed a pool and the arena carved from it — nothing to do,
+                # and closing a live arena here would drop tools/runtime tables.
+                return 0
+        except Exception:
+            pass
+        env = os.environ.get("GRID_WORKSPACE_TIMESTEP_SLOTS", "")
+        slots = int(env) if env.strip().isdigit() and int(env) > 0 else 0
+        full = slots if slots > 0 else int(self.max_batch)
+        try_slots = full
+        while True:
+            n = int(self._runner.device_pool_bytes(try_slots))
+            if n <= 0:
+                return 0
+            try:
+                buf, ptr = alloc_fn(n)
+            except Exception:
+                if try_slots <= 1:
+                    warnings.warn(
+                        "install_device_pool: framework allocator could not fit "
+                        "even a 1-slot slab — staying on the cudaMalloc path")
+                    return 0
+                try_slots = max(1, try_slots // 2)
+                continue
+            try:
+                self._runner.set_device_pool(int(ptr), n, try_slots)
+            except RuntimeError:
+                # The Runner constructor eagerly grid_rbd_init()s as a load
+                # sanity check, so a fresh handle's arena already exists on the
+                # cudaMalloc path — close it (unconfigured at this point) and
+                # let the lazy re-init carve from the slab. ⚠A LATE install
+                # resets attached tools / runtime parameter tables the same
+                # way close() does.
+                self._runner.close_arena()
+                self._runner.set_device_pool(int(ptr), n, try_slots)
+            self._device_pool_keepalive = buf
+            return n
 
     def apply_batch_overlay(self, profile: str = "ffi") -> int:
         """Arm the E6 batch-switch from this profile's ``<profile>_bases_by_n``
@@ -1660,10 +1748,8 @@ class RobotHandle:
                 "plant_step_gradient(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         else:
             raw = self._runner.plant_step_gradient(x, u, float(dt), it, float(gravity))
-        # raw is filled with the (2*NV x 3*NV) column-major dAB; recover row-major.
-        B = raw.shape[0]
-        NV = self.num_vel
-        return raw.reshape(B, 3 * NV, 2 * NV).transpose(0, 2, 1)
+        # (2*NV x 3*NV) column-major dAB → shared out-layout (colmajor_whole).
+        return self._shape_out("plant_step_gradient", raw)
 
     def plant_step_hessian(self, x, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81, _convention=None):
         """Second-order sensitivity of the integrator step x_{k+1} = [q; v].
@@ -1691,11 +1777,9 @@ class RobotHandle:
                 "plant_step_hessian(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         else:
             raw = self._runner.plant_step_hessian(x, u, float(dt), it, float(gravity))
-        # raw is row-major (2*NV, 3*NV*3*NV) per timestep — reshape the trailing
-        # 9*NV^2 into (3*NV, 3*NV) (C-order, no transpose: H is already row-major).
-        B = raw.shape[0]
-        NV = self.num_vel
-        return raw.reshape(B, 2 * NV, 3 * NV, 3 * NV)
+        # row-major per timestep (C-order, no transpose) → shared out-layout
+        # (reshape (2*NV, 3*NV, 3*NV)).
+        return self._shape_out("plant_step_hessian", raw)
 
     def com_cost(self, q, p_des, W, *, _convention=None):
         """Center-of-mass tracking cost over the 3 CoM axes.
