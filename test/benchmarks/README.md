@@ -11,7 +11,7 @@ The 14 rows are the first-order set (`inverse_dynamics`, `minv`, `forward_dynami
 `fdsva_so`). The two IDSVA-SO variants are mathematically equivalent and ship
 side-by-side so the table shows the body-vs-world crossover; `idsva_so` itself
 is the codegen-time dispatcher (body-frame for fixed-base, world-frame for
-floating-base — see [docs/sweep-on-5090.md](../../docs/sweep-on-5090.md) for
+floating-base — see [docs/notes/sweep-on-5090.md](../../docs/notes/sweep-on-5090.md) (local notes, gitignored) for
 the crossover numbers).
 
 ---

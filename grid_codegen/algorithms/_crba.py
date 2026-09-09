@@ -634,7 +634,7 @@ def gen_crba_inner_floating(self):
     # off-diagonal + floating-root coupling cells. ONE __syncthreads at the
     # end of the loop, vs the ~3-per-(jid, ancestor) of the prior impl
     # (~42 syncs/call on iiwa14-floating). See
-    # docs/a3_core_dynamics_floating_loss_audit.md for the full refactor plan.
+    # docs/notes/a3_core_dynamics_floating_loss_audit.md (local, gitignored) for the full refactor plan.
     self.gen_add_code_line("//")
     self.gen_add_code_line("// Phase 2: per-jid thread-parallel chain walk filling M's scalar-joint")
     self.gen_add_code_line("// diagonal + scalar/scalar off-diagonals + scalar/floating-root coupling.")

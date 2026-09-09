@@ -1034,7 +1034,7 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
 - **Bring new parent-level test files by COPYING from the clone**, then bump submodule pointers
   yourself — do NOT merge the clone's parent commit (its submodule pointers reference the clone's
   local SHAs).
-- **Main owns `HANDOFF.md` + the memory system** — discard agents' edits to them.
+- **Main owns the session-handoff notes (`docs/notes/`) + the memory system** — discard agents' edits to them.
 - Per merge: no conflict markers, `py_compile`, targeted codegen smoke, confirm only-expected-files.
 - **Agents that end mid-turn without a complete report** (the heavy-iteration "d2ee class") leave
   work UNCOMMITTED in their clone. Inspect the clone's working tree, validate yourself, commit for
@@ -1686,7 +1686,7 @@ immune to the loaded-vs-disk skew by construction.
 
 ---
 
-*Linked from HANDOFF.md. Companion: `docs/idsva_so_inner_refactor_notes.md` (SO internals + resume hints).*
+*Companion: `docs/idsva_so_inner_refactor_notes.md` (SO internals + resume hints).*
 
 ### 7.z2 Lie-chart second derivatives: the dN(0) chart-slope term is easy to drop (2026-08-11)
 

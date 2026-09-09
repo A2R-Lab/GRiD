@@ -177,7 +177,7 @@ def normalize_codegen_algorithms(gen, codegen_profile = "all", algorithm_list = 
     # linear<->angular velocity coupling" story was a MISDIAGNOSIS: the real
     # defect was a CUDA thread-count race in inverse_dynamics_gradient
     # (missing __syncthreads + a 6-way root accumulation), correct at 32
-    # threads and racing above one warp. Fixed; see HANDOFF.md §3.
+    # threads and racing above one warp. Fixed; see the retired docs/HANDOFF.md §3 in git history.
     if "integrator" in algorithms:
         algorithms.update({"inverse_dynamics", "minv", "forward_dynamics"})
     if "integrator_gradient" in algorithms or "integrator_with_gradient" in algorithms:
