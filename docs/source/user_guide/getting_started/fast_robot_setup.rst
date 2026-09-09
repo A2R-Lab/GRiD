@@ -181,7 +181,7 @@ The exact one-liner to warm a robot from a script, CI job, or agent shell
 
 .. code-block:: shell
 
-   .venv/bin/python -c "import grid_rbd; grid_rbd.precompile('go2', 'urdfs/go2.urdf', floating_base=True, backends=('numpy', 'jax'))"
+   .venv/bin/python -c "import grid_rbd; grid_rbd.precompile('go2', 'config/robot_assets/go2.urdf', floating_base=True, backends=('numpy', 'jax'))"
 
 Run it once per robot before any interactive or latency-sensitive use; every
 subsequent ``load_robot`` / ``get_robot`` / ``jax.jit`` in any process is

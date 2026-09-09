@@ -9,8 +9,9 @@ Pair it with the conceptual docs:
 * :doc:`../concepts/design_principles` — *why* the codegen looks the way
   it does (smart inners, thin wrappers, inner-owns-placement, the spill
   ladder).
-* :doc:`../concepts/codegen_architecture` — the three emission layers
-  (``_host`` / ``_kernel`` / ``_device``) and their composition contract.
+* :doc:`../concepts/codegen_architecture` — the four emission layers
+  (``_inner`` / ``_device`` / ``_kernel`` / host) and their composition
+  contract.
 * :doc:`../concepts/resource_tier_system` — per-tier dispatch and
   selective spill.
 

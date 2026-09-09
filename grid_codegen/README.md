@@ -1,28 +1,27 @@
-# GRiDCodeGenerator
+# grid_codegen — the GRiD code-generation engine
 
-A optimized CUDA C++ code generation engine for rigid body dynamics algorithms and their analytical gradients.
+The in-repo Python engine that reads a parsed `robot` (from the `URDFParser`
+submodule under `external/`) and emits the per-robot CUDA C++ header
+(`grid.cuh`) plus the checked-in generated binding regions. It installs with
+the repo's single editable install (`bash install/base_install.sh` — no
+separate pip step; new algorithms land here, with their numpy oracle in the
+`RBDReference` submodule).
 
-This package is written in Python and outputs CUDA C++ code. Helper functions have been written to speed up the algorithm implementation process and are detailed below. If your favorite rigid body dynamics algorithm is not yet implemented please either submit a PR to this repo with the code generation implementation or simply submit a PR to our [rbdReference](https://github.com/A2R-Lab/rbdReference) package with the Python implementation and we'll then try to get a GPU implementation designed as soon as possible.
-
-## Usage:
-This package relies on an already parsed ```robot``` object from our [URDFParser](https://github.com/A2R-Lab/URDFParser) package.
+## Usage
 ```python
-GRiDCodeGenerator = GRiDCodeGenerator(robot, DEBUG_MODE = False)
-GRiDCodeGenerator.gen_all_code()
+from grid_codegen import GRiDCodeGenerator
+codegen = GRiDCodeGenerator(robot, DEBUG_MODE=False)
+codegen.gen_all_code(output_path="grid.cuh")
 ```
-A file named ```grid.cuh``` will be written to the current working directory and can then be included into your project. See the wrapper [GRiD](https://github.com/A2R-Lab/GRiD) package for more instructions on how to use and test this code.
-
-## Instalation Instructions:
-The only external dependencies needed to run this package are ```numpy,sympy``` which can be automatically installed by running:
-```shell
-pip3 install -r requirements.txt
-```
-This package also depends on our [URDFParser](https://github.com/A2R-Lab/URDFParser) package.
-
-Running the CUDA C++ code output by the GRiDCodegenerator also requires CUDA to be installed on your system. Please see the [README.md in the GRID](https://github.com/A2R-Lab/GRiD) wrapper package for instalation notes for CUDA.
+Or use the `grid-generate` CLI (see the repo README's Quick Start).
 
 ## C++ API
-GRiD emits **three layers** per algorithm. Each layer has a single, clear responsibility:
+
+**Canonical architecture doc:**
+`docs/source/user_guide/concepts/codegen_architecture.rst` — the FOUR-layer
+stack (`_inner` / `_device` / `_kernel` / host) and its composition contract.
+The one-line version of the three EXTERNAL layers (`_inner` is internal to
+`_device`):
 + ```ALGORITHM_device```: the canonical ``__device__`` function. It takes caller-supplied buffer pointers (inputs, outputs, the ``s_temp`` shared scratch pool, and ``d_workspace`` for the spilled tiers) and owns its scratch placement. A single ``if constexpr (!SCRATCH_IN_SMEM) { s_temp = d_workspace; }`` at the top routes the whole pool to global for spilled tiers; every consumer below (XImats helper, sub-inners) inherits the placement. This is what inline-CUDA users embed inside their own kernel.
 + ```ALGORITHM_kernel```: a ``__global__`` entry point that handles batch scheduling (grid-stride loop over timesteps) and global ↔ shared memory transfer. It allocates ``__shared__`` smem for inputs/outputs/``s_temp`` from the per-tier ``*_DYNAMIC_SHARED_MEM_BYTES`` macro and calls ``ALGORITHM_device``. Per-tier dispatch is via the ``RESOURCE_TIER`` template parameter.
 + ```ALGORITHM```: a host function that wraps ``_kernel`` and handles H↔D copies for inputs and outputs.
@@ -69,8 +68,11 @@ We also include functions that break these algorithms down into there different 
 
 ## Binding-surface emission
 
-`abi_specs.py` (ABI_SPECS) + `wrapper_body_gen.py` emit the three checked-in
-generated regions of `bindings/grid_rbd/wrapper_template.cu` (C-ABI bodies,
-kernel_max_threads branch table, mjx twins; verbatim twin docs in
-`wrapper_mjx_docs.py`). Regenerate: `.venv/bin/python -m grid_codegen.wrapper_body_gen`
-(`--check` = the CI drift gate in test/test_wrapper_generated_block.py).
+`abi_specs.py` (ABI_SPECS) drives BOTH generated binding surfaces:
+`wrapper_body_gen.py` emits the three checked-in regions of
+`bindings/grid_rbd/wrapper_template.cu` (C-ABI bodies, kernel_max_threads
+branch table, mjx twins; verbatim twin docs in `wrapper_mjx_docs.py`) and
+`core_body_gen.py` emits the pybind method bodies + mjx accessors of
+`bindings/src/_core.cpp`. Regenerate with `make gen` (or the two
+`.venv/bin/python -m grid_codegen.{wrapper,core}_body_gen` commands);
+`--check` = the CI drift gates in test/test_{wrapper,core}_generated_block.py.

@@ -126,3 +126,27 @@ Known Caveats
   (∂τ/∂f_ext = −Jᵀ, ∂q̈/∂f_ext = M⁻¹Jᵀ) and the fixed-base ``f_ext_gradient_dq``
   (−∂Jᵀ/∂q), both with CUDA equivalence tests, and both now fold correctly to the
   reduced coordinates on mimic robots as well.
+
+
+Algorithm catalog (moved from the README, 2026-09-09)
+-----------------------------------------------------
+
+- Inverse Dynamics via the Recursive Newton Euler Algorithm (RNEA) from `Featherstone <https://link.springer.com/book/10.1007/978-1-4899-7560-7>`__
+- Composite Rigid Body Algorithm (CRBA) for the joint-space mass matrix and the Articulated Body Algorithm (ABA) for forward dynamics, both from `Featherstone <https://link.springer.com/book/10.1007/978-1-4899-7560-7>`__
+- The Direct Inverse of Mass Matrix from `Carpentier <https://www.researchgate.net/publication/343098270_Analytical_Inverse_of_the_Joint_Space_Inertia_Matrix>`__
+- Forward Dynamics by combining the above algorithms as qdd = -M^{-1}(u-RNEA(q,qd,0))
+- Analytical Gradients of Inverse Dynamics from `Carpentier <https://hal.archives-ouvertes.fr/hal-01790971>`__
+- Analytical Gradient of Forward Dynamics from `Carpentier <https://hal.archives-ouvertes.fr/hal-01790971>`__
+- End-effector pose, pose gradient (Jacobian), and pose Hessian
+- General-frame geometric Jacobian for an arbitrary target frame in any of the three Pinocchio reference frames (``LOCAL``, ``WORLD``, ``LOCAL_WORLD_ALIGNED``). The numpy reference additionally provides the Jacobian time-variation J̇ and the operational-space (OSC) inertia Λ = (J·M⁻¹·Jᵀ)⁻¹ — all validated against Pinocchio's ``getFrameJacobian``/``getJointJacobian``, ``computeJointJacobiansTimeVariation``, and ``(J·M⁻¹·Jᵀ)⁻¹``. CUDA codegen emits all three as opt-in keys — J (``frame_jacobian``), J̇ (``frame_jacobian_dot``), and Λ (``osc_inertia``) — each validated on-device against the numpy reference across the three frames (Λ is self-contained: it composes M⁻¹ on-device). All three additionally have the full launchable surface (batched ``*_kernel`` + 3-mode host writing the ``gridData`` ``d_frame_jacobian`` / ``d_frame_jacobian_dot`` / ``d_osc_inertia`` buffers), so they are benchmarkable + bindable; the launchable surface bakes the leaf-EE target + ``LOCAL_WORLD_ALIGNED`` frame, while the ``*_device`` functions stay the arbitrary-target/-frame entry points
+- Second-Order Inverse Dynamics (IDSVA-SO) from `Singh, Russell, & Wensing <https://arxiv.org/abs/2302.06001>`__ — both body-frame and world-frame variants. A codegen-time dispatcher picks body-frame for fixed-base (multi-pass amortizes, ~30× faster) and world-frame for floating-base (single-pass + no gravity shim, 2–4× faster)
+- Second-Order Forward Dynamics (FDSVA-SO) from `Singh, Russell, & Wensing <https://arxiv.org/abs/2302.06001>`__ on both fixed and floating bases
+- A **time-integrator** family: the discrete step ``x_{k+1}`` plus its gradient ``∂x_{k+1}/∂(x,u)`` and a fused value-and-gradient variant
+- Optional per-body **external forces** (``f_ext``), threaded through RNEA, forward dynamics, ABA, and the inverse-/forward-dynamics gradients. Opt-in (a ``nullptr``/empty default reproduces the no-force path exactly), supplied in the body-local frame (``6*NUM_BODIES``, body-major) and subtracted from the per-body force.
+- **External-force gradients**: ``∂tau/∂f_ext = -Jᵀ`` and ``∂q̈/∂f_ext = M⁻¹Jᵀ``, plus the fixed-base ``∂(inverse_dynamics_gradient)/∂f_ext = -∂Jᵀ/∂q``
+- A trajectory-optimization-oriented **``grid_plant`` layer** (emitted as a sibling ``grid_plant`` namespace): a ``plant_step`` integrator wrapper, quadratic state/input costs, an end-effector position cost (with Gauss-Newton Hessian), and joint position/velocity/torque log-barriers.
+- The **Coriolis matrix** ``C(q,q̇)`` (with ``C·q̇ + g(q) = nonlinear_effects``)
+- **Inertial-parameter energy regressors**: kinetic ``y_KE`` and potential ``y_PE`` (each length ``10·NB``, with ``KE = y_KE·π`` and ``PE = y_PE·π``)
+- The **centroidal derivatives**: ``dccrba`` (the ∂A/∂q tensor, 6×NV×NV) and ``cmm_time_variation`` (the centroidal-momentum-matrix time variation Ȧ)
+- **Runtime arbitrary multi-EE pose / pose-gradient** (``end_effector_pose_runtime`` + ``_gradient``): the end-effector target joint id and a per-target offset become runtime arguments instead of codegen-baked, so one compiled robot serves any leaf/target frame.
+- **Runtime-mutable inertial parameters** (flag-gated): a ``set_inertia_params`` device entry mutates an on-device parameter table (sysID / domain randomization) with no recompile; the baked default path is byte-identical.

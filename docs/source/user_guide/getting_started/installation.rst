@@ -5,7 +5,7 @@ GRiD is a single repository with its peer products (``GLASS``, ``RBDReference``,
 ``URDFParser``) vendored as git submodules under ``external/``. Clone with
 ``--recursive`` so those populate, then run the install script — a single
 ``pip install -e .`` installs the codegen toolkit and the ``grid_rbd`` Python
-wrapper together (see the :doc:`../../../index` quick-start for the extras).
+wrapper together (see the :doc:`../../index` quick-start for the extras).
 
 .. code-block:: shell
 

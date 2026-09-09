@@ -54,9 +54,9 @@ and `NV`-dimensioned. For a **FIXED base `NV == NJ`**.
 > `batch > 1`** via a per-timestep stride mismatch (324 written vs 361 read). The
 > new shapes match `RBDReference` / pinocchio's `nv`-space mass matrix and
 > Jacobians and fix the binding-side `batch > 1` corruption. Fixed-base robots
-> are unaffected (`NV == NJ`). NOTE: the JAX-FFI and torch backends still expose
-> the old `NJ`-sized floating shapes pending a coordinated autodiff-side
-> migration; the numpy `register_robot(...)` handle is the corrected surface.
+> are unaffected (`NV == NJ`). The JAX-FFI and torch backends
+> completed the same migration — all three surfaces expose the corrected
+> `NV`-sized floating shapes.
 >
 > Previously-noted floating-base CRBA batch issue — **RESOLVED**. The floating-base
 > CRBA kernel used to return inconsistent mass matrices across `batch > 1` slots for

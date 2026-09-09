@@ -1,7 +1,9 @@
-Core Functionality
-=========================================
+Concepts
+========
 
-Learn about the core concepts and algorithms in GRID.
+The core concepts behind GRiD's generated code: the design principles, the
+codegen architecture, the shared-memory resource-tier system, the
+input/output ABI, and the parallelism patterns.
 
 .. toctree::
    :maxdepth: 2

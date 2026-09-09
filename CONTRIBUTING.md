@@ -35,6 +35,33 @@ tooling (Pinocchio, docs, comparators) installs via
   [`docs/source/contribution_guidelines.rst`](docs/source/contribution_guidelines.rst)
   (published at https://a2r-lab.github.io/GRiD/).
 
+## Developer Testing
+
+The Pinocchio-side floating convention regression suite exercises both public
+floating-base orderings across the current floating robot manifest:
+
+```bash
+.venv/bin/python -m pytest external/RBDReference/tests/test_floating_base_conventions.py -q
+```
+
+The CUDA executable equivalence suite defaults to the Pinocchio-facing
+floating convention and is an established suite with broad floating-base
+algorithm coverage (40+ equivalence modules across the robot manifest).
+
+For floating CUDA development, the pytest harness also accepts optional env
+overrides:
+
++ `GRID_CUDA_FLOATING_ALGORITHMS=all` to try the broader floating candidate set
++ `GRID_CUDA_FLOATING_ALGORITHMS=inverse_dynamics,forward_dynamics` to request a subset
++ `GRID_CUDA_FLOATING_SAMPLE_NAMES=all` to run every deterministic/random sample instead of only `zero`
+
+Generated CUDA defaults to a 96 KiB dynamic shared-memory target
+(`GRID_CUDA_TARGET_SHARED_MEM_BYTES=98304`) and selects spill fallbacks only
+when the generated arena would exceed that target. See
+[CUDA validation guide](https://a2r-lab.github.io/GRiD/user_guide/tutorials/cuda_validation.html)
+for shared-memory target overrides, L2 controls, and the recommended
+ptxas/register-pressure analysis workflow for tuning a specific robot/GPU.
+
 ## Code of conduct
 
 This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). By

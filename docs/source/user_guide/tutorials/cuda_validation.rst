@@ -93,6 +93,38 @@ receipt is present** so code can ship before the long GPU run lands. A second
 always-on CPU lane runs the no-GPU tests (descriptor parity, kernel-attr
 manifest, plant launch hygiene).
 
+The two-tier receipt policy (when CI goes red, and the fix)
+-----------------------------------------------------------
+
+The committed ``gpu-proof.json`` goes stale — and CI's verify-receipt job goes
+RED — the moment a push touches a fingerprinted test file (anything under
+``test/cuda_equivalents/`` or ``test/python_wrappers/``). **That red is by
+design**; the fix is a refresh, not a revert:
+
+- **Everyday** (``test/gpu-proof-policy.yaml``, ``allow_carried: true``):
+  ``SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh`` re-runs ONLY the shards
+  whose narrow fingerprints changed vs the committed receipt and CARRIES the
+  rest; commit the refreshed receipt and CI goes green — minutes-to-hours,
+  not a full pass. A carried shard attests "these tests, whose files are
+  unchanged, passed at an ancestor commit ≤30 days old"; cross-cutting
+  codegen/bindings changes are NOT re-proven by carry.
+  ``GRID_SPLIT_REFRESH_DRY=1`` previews the stale/carried plan (clean tree
+  required).
+- **Release** (``test/gpu-proof-policy-release.yaml``,
+  ``allow_carried: false``): refuses carried shards outright — a release
+  receipt requires ONE fresh full ``SPLIT=1`` pass at the release tip.
+  Verify with ``--policy test/gpu-proof-policy-release.yaml``.
+
+Maintainer internals: stale shard NAMES are recycled into the fresh partition
+automatically (the carry contract has no "superseded" state); a deleted test
+module forces a full pass; and both compile caches are CONTENT-keyed
+(header/source bytes), so byte-identical codegen edits cost seconds of
+regeneration, never an nvcc rebuild.
+
+The full test-pyramid rationale (which suite exists for what, and why the
+receipt is trustworthy) lives in ``test/TESTING_STRATEGY.md``; a bucket map of
+everything in ``test/``'s root is ``test/README.md``.
+
 CUDA Artifact Cache
 -------------------
 

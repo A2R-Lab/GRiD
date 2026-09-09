@@ -19,7 +19,8 @@ Pick how you want to call GRiD
 
       ``pip install -e .`` and call the ``RobotHandle`` API — 20+ batched
       methods covering RNEA, FD/ABA, CRBA, Minv, EE pose family, RNEA/FD
-      gradients, and second-order ID/FD.
+      gradients, and second-order ID/FD. Guided notebooks:
+      ``examples/notebooks/`` in the repo (01-quickstart → 06-jax).
 
    .. grid-item-card:: From JAX
       :link: jax-ffi-quickstart
@@ -35,8 +36,15 @@ Pick how you want to call GRiD
       Generate a per-robot ``grid.cuh`` with the ``grid-generate`` CLI or the
       ``GRiDCodeGenerator`` Python API, then ``#include`` it in your project.
 
-.. grid:: 2
+.. grid:: 3
    :gutter: 3
+
+   .. grid-item-card:: How do I…?
+      :link: how_do_i
+      :link-type: doc
+
+      The task router: the right entry point for calling, generating,
+      testing, benchmarking, or debugging — one table.
 
    .. grid-item-card:: API Reference
       :link: api_reference/index
@@ -78,13 +86,18 @@ If you use GRiD in your research, please cite:
 
 .. toctree::
    :hidden:
+
+   how_do_i
+
+.. toctree::
+   :hidden:
    :caption: User Guide
 
-   user_guide/landing_page
    user_guide/getting_started/installation
    user_guide/getting_started/fast_robot_setup
    user_guide/getting_started/library_overview
    user_guide/getting_started/docker_setup
+   user_guide/glossary
 
 .. toctree::
    :hidden:

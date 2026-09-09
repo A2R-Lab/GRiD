@@ -1,5 +1,7 @@
 # Integrating GRiD via `grid_rbd` — a guide for agents & users
 
+*Last verified against repo state `dd9b5fe` (2026-09-09). If the code and this guide disagree, trust the code and fix the guide.*
+
 How to call GRiD's GPU rigid-body dynamics from Python **as effectively as possible**. The
 golden rule: **place your data on the GPU once and keep it there.** GRiD is a GPU library;
 its speed comes from staying resident across an entire control / learning pipeline, not from
@@ -19,13 +21,14 @@ wrapper rotates every key; rebuilds are automatic, no force_rebuild needed). Bui
 `pip install -e ".[jax]"` / `[torch]` / `[all]` (base is numpy-only). `nvcc` must be on
 `PATH` at build time (not at `pip install` time); the per-robot `.so` is built on first use.
 
-## Lifecycle: register → precompile → get_robot
+## Lifecycle: load_robot / register → precompile → get_robot
 
-Three entry points over the same cache:
+Four entry points over the same cache:
 
 | Call | Does | Use when |
 |------|------|----------|
-| `register_robot(name, urdf_path, ...)` | build-if-missing **and** return a handle | one-shot build + get |
+| `load_robot(urdf_path, backend=...)` | ZERO-ceremony: derives a stable content-addressed name, builds-if-missing, returns a handle | the frictionless default — no name to invent |
+| `register_robot(name, urdf_path, ...)` | build-if-missing **and** return a handle under YOUR name | you want a human-friendly handle name |
 | `precompile(name, urdf_path, tiers=..., backends=...)` | build + cache only (no handle) | warm the cache offline (CI / Docker), maybe several tiers/backends |
 | `get_robot(name)` | look up an already-registered robot by name | fast start once the cache is warm; raises `RobotNotRegisteredError` if absent |
 
@@ -153,8 +156,9 @@ forward-only). The `inverse_dynamics` gradient is qdd-aware (includes the `∂(M
 
 ## Runtime-mutable model params — sysID / domain-rand / calibration, no recompile
 
-Two opt-in tables let you change the model **after** compile with **no nvcc rebuild** (numpy
-backend only today; jax/torch raise a clear error — the FFI surfaces don't thread the tables yet):
+Two opt-in tables let you change the model **after** compile with **no nvcc rebuild** — on ALL
+three backends: the jax/torch kernels read the same device-resident table the numpy mutator
+pokes, so one `set_*_params` call is seen by every surface over that `.so`:
 
 | Build flag | Mutator | Table shape | Mutates |
 |------------|---------|-------------|---------|
@@ -183,7 +187,7 @@ sensor), select it by **joint name** — two routes, see [`ee_named_targets.py`]
   `ee_joint_names` is in the cache key, so distinct targets land in distinct entries. The named
   target now flows through `end_effector_pose` **and** `_gradient` **and** `_hessian` (the
   just-landed gradient/hessian codegen support — not just the value).
-- **Runtime** (numpy only): one compiled robot, choose the frame **and** an offset point per call:
+- **Runtime** (all backends): one compiled robot, choose the frame **and** an offset point per call:
   `end_effector_pose_runtime(q, ee_joint_names=..., ee_offsets=...)` → `(B, NUM_EE, 6)` and
   `end_effector_pose_gradient_runtime(...)` → `(B, NUM_EE, 6, NV)`. `ee_joint_names` is `None`
   (all leaves) / a name / a list; `ee_offsets` is `None` (origin) / one `[x,y,z]` per frame. Ideal
@@ -196,8 +200,11 @@ velocity) use the `.mujoco` view (`h.mujoco.forward_dynamics(...)`), `output_con
 or set `handle.output_convention`. It is **floating-base only** (fixed-base, the two coincide) and
 a **runtime** setting (not in the cache key — same `.so`). The `.mujoco` view applies the convention
 per-call and is thread-safe, so it's safe to mix with pinocchio-convention calls on the same handle.
-Today the **value** methods (id/fd/aba/crba/minv) honor mujoco mode; the derivative/second-order
-surfaces raise a clear error in mujoco mode (use pinocchio and transform).
+The **value** methods (id/fd/aba/crba/minv) AND the derivative/second-order surfaces
+(`inverse_dynamics_gradient` / `forward_dynamics_gradient` / `idsva_so` / `fdsva_so`) honor
+mujoco mode — the mjx kernel twins serve them natively (floating, non-mimic robots built with
+`enable_mujoco_kernels=True`, the default). A mimic/skew robot or an
+`enable_mujoco_kernels=False` build has no twins and raises a clear error instead.
 
 ## Performance: the block size is tuned for *your* launch path + use case
 
@@ -241,8 +248,8 @@ apply per-algo small-batch thread overrides from the config's `ffi_bases_by_n` b
   D2H+H2D round-trip per step and erases the GPU advantage (see the timed anti-pattern in
   `jax_gpu_resident.py`).
 - **Don't** rebuild per run — `precompile` once and reuse the cache.
-- **Don't** size a batch above `max_batch` (chunk instead), and don't expect derivative/SO
-  methods in `mujoco` mode yet — both raise a clear error rather than returning wrong data.
+- **Don't** size a batch above `max_batch` (chunk instead) — the error names the compiled
+  limit and the `max_batch_size=` knob that raises it.
 
 ## Common pitfalls
 

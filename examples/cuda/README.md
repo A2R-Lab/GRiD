@@ -43,7 +43,7 @@ the oracle (`worst rel_err ≈ 2.7e-07` on this box, float32, tol 1e-4).
 ```python
 from robot_descriptions import iiwa14_description
 from URDFParser import URDFParser
-from GRiDCodeGenerator import GRiDCodeGenerator
+from grid_codegen import GRiDCodeGenerator
 
 robot = URDFParser().parse(iiwa14_description.URDF_PATH, floating_base=False)
 GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(

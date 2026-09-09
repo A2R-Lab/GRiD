@@ -19,6 +19,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
+# grid_rbd (the pip package the users call) lives under bindings/; its _core
+# pybind extension and the jax/torch frameworks are imported LAZILY, so the
+# numpy-surface autodoc works in the docs CI without a compiled extension.
+sys.path.insert(0, str(REPO_ROOT / "bindings"))
 
 extensions = [
 	'sphinx.ext.autodoc',

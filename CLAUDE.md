@@ -1,8 +1,9 @@
 # CLAUDE.md — agent & contributor onboarding
 
 Orientation for an AI agent (or a new human) working in this repo. Read this first, then the
-deeper docs it points at. This file is tracked; per-machine/session notes live in the (gitignored)
-`docs/STARTUP_PROMPT.md`.
+deeper docs it points at. This file is tracked and authoritative for conventions; the gitignored
+`docs/STARTUP_PROMPT.md` holds machine-local facts ONLY (GPU arch, RAM caps) — it is never a task
+list, and current plans live in `docs/open-tasks/`.
 
 ## What GRiD is
 

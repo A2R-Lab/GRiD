@@ -5,6 +5,37 @@ Hard-won institutional knowledge from the multi-agent campaigns on `modernizing-
 GRiD codegen/CUDA issue or doing a refactor.** GRiD = Python codegen (`GRiDCodeGenerator`)
 emitting CUDA C++ from URDFs; numpy/pinocchio reference oracle lives in `RBDReference`.
 
+> **APPEND-ONLY: never renumber or retitle existing §IDs.** A dozen source files cite
+> sections by ID (grep `§1j` / `agent_debugging_guide` to see); three legacy tail sections
+> are all literally titled "7.x" — leave them, and give NEW tail sections fresh unique IDs
+> (`7.z4`, `7.z5`, …). New bug classes go at the END of their numbered family.
+
+## Symptom → section index (start here)
+
+| Symptom you're staring at | Go to |
+|---|---|
+| Mimic robot: buffer overflow / garbage past `nv` entries | §1a |
+| One bug appearing across MANY algorithms at once | §1b (shared linalg helper), §1j (beta=0 GEMM), §1p (stale GLASS pin) |
+| All-zeros output that "ran fine" | §1c (silent launch fail), §1l (missing barrier before epilogue) |
+| Floating base: wrong dynamics, no error, off-by-one-slot flavor | §1e (nq vs nv input stride) |
+| mjx/`_mujoco` output "wrong" vs pin | §1k (it's a KNOWN frame transform — check the pin baseline first) |
+| Kernel won't launch >48KB smem / `cudaErrorInvalidValue` on a variant | §1f (unregistered variant), §1z (probe checked the wrong kernel) |
+| Results differ run-to-run at last ULP (floating base) | §1q (atomicAdd fold order) |
+| "undefined `*_inner`" at nvcc time on a subset/high-DOF build | §1m (dispatcher vs emission gate), §1aa (helper gated behind unrequested algo) |
+| NaNs from a direct `*_inner` call in YOUR kernel | §1n (usually caller wiring, not codegen) |
+| "out of memory" on a nearly-empty GPU (big robot) | §1y (int overflow in size arithmetic), §1v (stack `const T[]`) |
+| Kernel got SLOWER after adding per-thread arrays | §1u (register-array spill — block-share it) |
+| Spill tier still over budget after "reducing" | §1t (reduction must apply inside the max()) |
+| Sanitizer (racecheck/initcheck) findings | §1r (two known non-bugs) FIRST |
+| Fixed-target EE chain silently wrong/dead | §1s (fixed jid has no link) |
+| Spherical fixed-base buffer too small | §1ab (`n+fb` is not a position-space width) |
+| Equivalence test flakes / stale results after codegen edit | §0 (cache discipline), §7 (test-infra gotchas) |
+| FFI/jax/torch "kernel launch failed" | §7.z3 (THREE distinct causes) |
+| Wrapper builds broken only on fixed-base or only floating | §1i (non-uniform signatures), §1x (backend delegation kwargs) |
+| A `.so` behaves like OLD code after an edit | §7.z (bindings cache poisoning), and rebuild `_core` via `make build` |
+| Driver wedged, every GPU run hangs | §7.x "SIGKILLing a running big-SO exe…" (never SIGKILL GPU exes) |
+| Second derivatives wrong only at the floating root | §7.z2 (dropped dN(0) chart-slope term) |
+
 ---
 
 ## 0. The validation checklist (do these EVERY time — they each caught a real bug)
