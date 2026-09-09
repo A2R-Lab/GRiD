@@ -276,6 +276,12 @@ def _shard_fingerprint_paths(member_mods: set[str]) -> list[str]:
         runner = mod.removeprefix("test_") + "_runner.cu"
         if (CUDA_DIR / runner).exists():
             paths.append(f"test/cuda_equivalents/{runner}")
+    # Wave D harness split (2026-09-09): every cuda module imports the shared
+    # harness, so EVERY cuda shard fingerprints it — a harness edit stales the
+    # whole domain honestly, while a flagship-TEST edit stales only the
+    # flagship shards (pre-split, the fingerprint could not tell those apart).
+    if (CUDA_DIR / "cuda_harness.py").exists():
+        paths.append("test/cuda_equivalents/cuda_harness.py")
     if _FLAGSHIP in member_mods:
         for extra in ("cuda_equivalence_runner.cu", "grid_runner_select.cuh"):
             if (CUDA_DIR / extra).exists():
@@ -783,7 +789,7 @@ def _write_ledger(out_dir: Path, results: list[dict]) -> None:
     os.replace(tmp, out_dir / "results.json")
 
 
-CUDA_CACHE_DIR_DEFAULT = str(REPO_ROOT / ".pytest_cache" / "grid_cuda")
+CUDA_CACHE_DIR_DEFAULT = str(REPO_ROOT / ".grid_build_cache" / "cuda")
 # Host-RAM floor once GPU shards are running (jax/torch shards need real RAM
 # on top of the compile pool's own floor).
 GPU_PHASE_FLOOR_KB = 14 * 1024 * 1024

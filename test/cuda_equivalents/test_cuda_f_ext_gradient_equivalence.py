@@ -40,7 +40,7 @@ from RBDReference.tests.tolerances import get_tolerance
 
 from grid_codegen import GRiDCodeGenerator
 
-from test.cuda_equivalents.test_cuda_executable_equivalence import (
+from test.cuda_equivalents.cuda_harness import (
     _detect_cuda_arch,
     _parse_runner_output,
     GPU_UNAVAILABLE_PATTERNS,

@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from grid_codegen import GRiDCodeGenerator
-from test.cuda_equivalents.test_cuda_executable_equivalence import (
+from test.cuda_equivalents.cuda_harness import (
     _build_cuda_samples,
     _detect_cuda_arch,
     _has_invertible_project_mass_matrix,

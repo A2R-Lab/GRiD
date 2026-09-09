@@ -25,7 +25,7 @@ from URDFParser import URDFParser
 from RBDReference import RBDReference
 from RBDReference.equivalents.reference_backend import ProjectModelAdapter
 from grid_codegen import GRiDCodeGenerator
-from test.cuda_equivalents.test_cuda_executable_equivalence import (
+from test.cuda_equivalents.cuda_harness import (
     _detect_cuda_arch,
     _parse_runner_output,
     GPU_UNAVAILABLE_PATTERNS,

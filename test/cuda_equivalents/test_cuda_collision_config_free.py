@@ -24,7 +24,7 @@ import pytest
 
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.algorithms._collision import build_self_cc_ranges
-from test.cuda_equivalents.test_cuda_executable_equivalence import _detect_cuda_arch
+from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from RBDReference.tests.model_sources import resolve_robot_spec, iter_robot_cases
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.equivalents.reference_backend import build_project_adapter

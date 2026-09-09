@@ -48,7 +48,7 @@ def test_equivalence_survives_smem_poison(selector, tmp_path):
     env["GRID_CUDA_THREAD_COUNTS"] = "32"
     env["PYTHONPATH"] = str(REPO_ROOT)
     # Reuse the parent's compiled-runner cache (poison is runtime-only -> same exe).
-    env.setdefault("GRID_CUDA_CACHE_DIR", str(REPO_ROOT / ".pytest_cache/grid_cuda"))
+    env.setdefault("GRID_CUDA_CACHE_DIR", str(REPO_ROOT / ".grid_build_cache/cuda"))
 
     cmd = [
         sys.executable, "-m", "pytest", str(EQUIV_TEST),

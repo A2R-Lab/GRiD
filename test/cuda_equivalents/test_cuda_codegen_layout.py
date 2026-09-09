@@ -12,7 +12,7 @@ from grid_codegen import GRiDCodeGenerator
 from grid_codegen.algorithms._idsva_so import (
     idsva_so_parent_topology_needs_reference_order_output_repair,
 )
-from test.cuda_equivalents.test_cuda_executable_equivalence import _detect_cuda_arch
+from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import (
     iter_robot_cases,

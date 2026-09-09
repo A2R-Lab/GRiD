@@ -102,6 +102,7 @@ venv.bak/
 
 # Test cache
 .pytest_cache/
+.grid_build_cache/
 
 # Developer install scratch (CppADCodeGen clone, etc.)
 .cache/

@@ -31,7 +31,7 @@ from RBDReference import RBDReference
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter
-from test.cuda_equivalents.test_cuda_executable_equivalence import (
+from test.cuda_equivalents.cuda_harness import (
     _build_cuda_samples,
     _compile_runner,
     _expected_output,

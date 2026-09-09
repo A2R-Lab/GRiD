@@ -26,7 +26,7 @@ import os
 
 import pytest
 
-from test.cuda_equivalents.test_cuda_executable_equivalence import (
+from test.cuda_equivalents.cuda_harness import (
     _run_cuda_equivalence_case,
     _sample_name_selection,
     build_floating_cuda_case_params,

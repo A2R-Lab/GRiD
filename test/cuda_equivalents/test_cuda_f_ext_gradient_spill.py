@@ -43,7 +43,7 @@ from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter
 from RBDReference.tests.state_sampling import build_dynamics_samples
-from test.cuda_equivalents.test_cuda_executable_equivalence import _detect_cuda_arch
+from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from test.cuda_equivalents.test_cuda_f_ext_gradient_equivalence import _parse_runner_output
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]

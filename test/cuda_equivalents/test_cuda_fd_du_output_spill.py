@@ -34,7 +34,7 @@ from grid_codegen import GRiDCodeGenerator
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter
-from test.cuda_equivalents.test_cuda_executable_equivalence import _detect_cuda_arch
+from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 
 # fd_du needs these (+ its id/minv/fd composition); crba/aba/end_effector_pose are
 # launched unconditionally by cuda_equivalence_runner.cu's value block. NONE are

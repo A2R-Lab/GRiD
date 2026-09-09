@@ -47,7 +47,7 @@ from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spe
 from RBDReference.equivalents.reference_backend import build_project_adapter
 from RBDReference.equivalents import build_adapter, resolve_backend
 
-from test.cuda_equivalents.test_cuda_executable_equivalence import (
+from test.cuda_equivalents.cuda_harness import (
     _assert_close,
     _build_cuda_samples,
     _compile_runner,

@@ -102,7 +102,7 @@ where the runner looks for it; no other configuration needed.  Bust the pinocchi
 binary cache after installing so the rebuild picks up `-DHAVE_CPPADCG`:
 
 ```bash
-rm -rf .pytest_cache/grid_cuda/pinocchio_benchmarks
+rm -rf .grid_build_cache/cuda/pinocchio_benchmarks
 ```
 
 If you'd rather use the system package or build from source, those still work too:

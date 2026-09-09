@@ -71,7 +71,7 @@ Therefore the CUDA equivalence tests sweep block thread counts:
 - `1` warp (32) — the warp-synchronous baseline.
 - Multi-warp counts (e.g. 96, 448=`MAX_PERF_LEVEL_THREADS`).
 - A **session-random count that is not a multiple of 32** (`_random_thread_count`
-  in `test_cuda_executable_equivalence.py`), so a trailing partial warp is always
+  in `cuda_harness.py`, the shared harness behind `test_cuda_executable_equivalence.py`), so a trailing partial warp is always
   present and, over many runs, many distinct counts are probed. The chosen value
   appears in the test id / error message for reproducibility; override with the
   relevant `GRID_CUDA_*_THREAD(S)*` env var to reproduce a specific failure.

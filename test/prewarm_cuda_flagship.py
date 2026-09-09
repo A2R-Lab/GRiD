@@ -53,7 +53,10 @@ _PARAM_RE = re.compile(r"\[([^\]]+)\]$")
 
 def _import_flagship():
     sys.path.insert(0, str(REPO_ROOT))
-    from test.cuda_equivalents import test_cuda_executable_equivalence as mod  # noqa: PLC0415
+    # Wave D harness split: the compile chain (and everything else this
+    # prewarmer touches) lives in cuda_harness — importing it directly keeps
+    # the cache-keys-match-by-construction property.
+    from test.cuda_equivalents import cuda_harness as mod  # noqa: PLC0415
     return mod
 
 

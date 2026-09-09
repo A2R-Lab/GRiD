@@ -34,7 +34,7 @@ from grid_codegen import GRiDCodeGenerator
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter
-from test.cuda_equivalents.test_cuda_executable_equivalence import _detect_cuda_arch, _build_cuda_samples
+from test.cuda_equivalents.cuda_harness import _detect_cuda_arch, _build_cuda_samples
 
 _RUNNER = Path(__file__).with_name("cuda_frame_jacobian_host_runner.cu")
 _REF_FRAME = "LOCAL_WORLD_ALIGNED"  # the osc_inertia kernel bakes leaf[0] + LWA

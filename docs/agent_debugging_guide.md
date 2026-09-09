@@ -1245,7 +1245,7 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   cache-key payload (git HEAD of the GLASS submodule, with a hash-of-`src/base` fallback for exported trees).
   **General rule:** anything copied INTO generated output (vendored headers, baked tables, template files) is a
   codegen input; if the cache key only tracks the generator's own source, a dependency bump goes undetected.
-  When in doubt after bumping a vendored dep, clear `.pytest_cache/grid_cuda` to force regeneration.
+  When in doubt after bumping a vendored dep, clear `.grid_build_cache/cuda` to force regeneration.
 - **The `grid::grid::` per-tier macro trap.** `GRID_DEFAULT_RESOURCE_TIER` is `#define`d BARE (`TIER_SHARED`).
   Algos emitting INSIDE `namespace grid` (11 of 12) reference it bare; `_plant` emits its kernel +
   `*_DYNAMIC_SHARED_MEM_BYTES` OUTSIDE the namespace so it correctly qualifies `grid::GRID_DEFAULT_RESOURCE_TIER`
@@ -1358,7 +1358,7 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   For DEV iteration on big robots, trade compile-time via the sweep's `--split-compile` /
   `--ofast-compile {min,mid,max}` / `--ptxas-opt-level` knobs; a MEASURING sweep wants full opt.
 - **Header cache key does NOT hash codegen source** (only schema/robot/nq/nv/urdf) → a comment-only or
-  internal codegen change is cache-invisible. `rm -rf .pytest_cache/grid_cuda` to force a fresh emit when
+  internal codegen change is cache-invisible. `rm -rf .grid_build_cache/cuda` to force a fresh emit when
   you NEED to test new codegen; conversely, a proven comment-only change reuses the cache validly (the
   compiled binary is identical) — no wipe needed.
 - **A STRUCTURALLY ZERO reference makes a norm guard vacuous — and only an absolute floor is

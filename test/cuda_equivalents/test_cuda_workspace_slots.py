@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 from grid_codegen import GRiDCodeGenerator
-from test.cuda_equivalents.test_cuda_executable_equivalence import _detect_cuda_arch
+from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import iter_robot_cases, resolve_robot_spec
 from RBDReference.equivalents.reference_backend import build_project_adapter

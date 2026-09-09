@@ -20,7 +20,7 @@ import pytest
 
 from grid_codegen import GRiDCodeGenerator
 from grid_codegen.algorithms._collision import collision_spec_from_urdf
-from test.cuda_equivalents.test_cuda_executable_equivalence import _detect_cuda_arch
+from test.cuda_equivalents.cuda_harness import _detect_cuda_arch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))

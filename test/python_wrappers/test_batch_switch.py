@@ -145,7 +145,7 @@ def test_global_override_beats_switch(handle, samples):
 def test_apply_batch_overlay_from_config(handle, tmp_path, monkeypatch):
     """apply_batch_overlay arms from ffi_bases_by_n and skips tier mismatches."""
     import json
-    import grid_codegen._launch_config as lc
+    import grid_codegen.launch_config as lc
 
     robot_key = handle._meta.get("launch_config_robot")
     if not robot_key:
