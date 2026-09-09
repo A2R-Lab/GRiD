@@ -12,8 +12,8 @@
   },
   "fingerprint": {
     "algorithm": "sha256",
-    "digest": "9a2467667dae706f17fd8df9cb418fac68c7f6bac40725803161d1fd7e67af64",
-    "file_count": 131,
+    "digest": "26e17305988ac397b3453af772af4aa9f7a1962df612fcc7ae564fe07283056b",
+    "file_count": 132,
     "included_paths": [
       "test/cuda_equivalents",
       "test/python_wrappers"
@@ -22,15 +22,29 @@
   "mode": "local",
   "repo": {
     "branch": "modernizing-tests",
-    "commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+    "commit_sha": "638f87ecbd312780497e7219a1a0e5c9f0c950e8",
     "dirty": false,
     "github_username": "plancherb1",
     "remote_url": "git@github.com:A2R-Lab/GRiD.git"
   },
   "schema_version": "2",
   "session": {
-    "ended_at": "2026-09-08T21:05:26Z",
+    "ended_at": "2026-09-09T10:11:20Z",
     "node_ids": [
+      "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[iiwa14-fixed]",
+      "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[fr3-fixed]",
+      "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[g1-floating]",
+      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[iiwa14-fixed]",
+      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[go2-fixed]",
+      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[fr3-fixed]",
+      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[g1-fixed]",
+      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[h1_2-fixed]",
+      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[iiwa14-floating]",
+      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[go2-floating]",
+      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[fr3-floating]",
+      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[g1-floating]",
+      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[h1_2-floating]",
+      "test/python_wrappers/test_two_robot_process.py::test_two_so_pools_are_independent",
       "test/cuda_equivalents/test_cuda_codegen_layout.py::test_fixed_default_header_keeps_gradient_paths_all_shared",
       "test/cuda_equivalents/test_cuda_codegen_layout.py::test_fixed_forced_low_shared_header_selects_fallbacks",
       "test/cuda_equivalents/test_cuda_codegen_layout.py::test_mimic_integrator_gradient_codegen_now_emits[floating-integrators]",
@@ -901,19 +915,6 @@
       "test/cuda_equivalents/test_cuda_fd_parameter_gradient.py::test_cuda_fd_parameter_gradient_matches_reference[g1-floating]",
       "test/cuda_equivalents/test_cuda_fext_equivalence.py::test_cuda_fext_three_way_equivalence[iiwa14-fixed]",
       "test/cuda_equivalents/test_cuda_fext_equivalence.py::test_cuda_fext_three_way_equivalence[g1-floating]",
-      "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[iiwa14-fixed]",
-      "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[fr3-fixed]",
-      "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[g1-floating]",
-      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[iiwa14-fixed]",
-      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[go2-fixed]",
-      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[fr3-fixed]",
-      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[g1-fixed]",
-      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[h1_2-fixed]",
-      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[iiwa14-floating]",
-      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[go2-floating]",
-      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[fr3-floating]",
-      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[g1-floating]",
-      "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[h1_2-floating]",
       "test/cuda_equivalents/test_cuda_spherical_eepose_gradhess_equivalence.py::test_cuda_spherical_eepose_gradhess_matches_reference[float-spherical_arm.urdf]",
       "test/cuda_equivalents/test_cuda_spherical_eepose_gradhess_equivalence.py::test_cuda_spherical_eepose_gradhess_matches_reference[float-mixed_spherical_arm.urdf]",
       "test/cuda_equivalents/test_cuda_spherical_eepose_gradhess_equivalence.py::test_cuda_spherical_eepose_gradhess_matches_reference[double-spherical_arm.urdf]",
@@ -1399,32 +1400,178 @@
     ],
     "shards": [
       {
-        "ended_at": "2026-09-08T21:05:26Z",
-        "node_count": 122,
+        "ended_at": "2026-09-09T08:33:39Z",
+        "node_count": 6,
         "signer": "plancherb1",
-        "source": "cuda_02_collision_pairs_collision_selfcc.json",
-        "started_at": "2026-09-08T20:51:46Z"
+        "source": "cuda_23_plant_equivalence_regressor_seco.json",
+        "started_at": "2026-09-09T08:06:07Z"
       },
       {
-        "ended_at": "2026-09-08T19:44:26Z",
-        "node_count": 5,
+        "ended_at": "2026-09-09T09:10:49Z",
+        "node_count": 1,
         "signer": "plancherb1",
-        "source": "test_batch_switch.json",
-        "started_at": "2026-09-08T19:44:25Z"
+        "source": "cuda_24_second_order_fallb.json",
+        "started_at": "2026-09-09T08:33:40Z"
       },
       {
-        "ended_at": "2026-09-08T19:44:48Z",
-        "node_count": 2,
+        "ended_at": "2026-09-09T10:06:34Z",
+        "node_count": 1,
         "signer": "plancherb1",
-        "source": "test_mujoco_fixed_base_noop.json",
-        "started_at": "2026-09-08T19:44:28Z"
+        "source": "cuda_25_second_order_fallb.json",
+        "started_at": "2026-09-09T09:10:50Z"
+      },
+      {
+        "ended_at": "2026-09-09T10:07:50Z",
+        "node_count": 3,
+        "signer": "plancherb1",
+        "source": "cuda_26_second_order_fallb.json",
+        "started_at": "2026-09-09T10:06:35Z"
+      },
+      {
+        "ended_at": "2026-09-09T10:08:59Z",
+        "node_count": 1,
+        "signer": "plancherb1",
+        "source": "cuda_27_second_order_fallb.json",
+        "started_at": "2026-09-09T10:07:51Z"
+      },
+      {
+        "ended_at": "2026-09-09T10:11:20Z",
+        "node_count": 1,
+        "signer": "plancherb1",
+        "source": "cuda_28_second_order_fallb.json",
+        "started_at": "2026-09-09T10:09:00Z"
+      },
+      {
+        "ended_at": "2026-09-09T08:06:05Z",
+        "node_count": 1,
+        "signer": "plancherb1",
+        "source": "test_two_robot_process.json",
+        "started_at": "2026-09-09T08:06:03Z"
       }
     ],
-    "started_at": "2026-09-08T19:44:25Z"
+    "started_at": "2026-09-09T08:06:03Z"
   },
   "shards": [
     {
       "carried": null,
+      "fingerprint": {
+        "algorithm": "sha256",
+        "digest": "27542bfd0708765dd6c9b958c9ef7945cb0d6a0971c05db2a5f85d41f37775d9",
+        "file_count": 2,
+        "included_paths": [
+          "test/cuda_equivalents/test_cuda_regressor.py",
+          "test/cuda_equivalents/test_cuda_second_order_fallback.py"
+        ]
+      },
+      "name": "cuda_23_plant_equivalence_regressor_seco",
+      "node_ids": [
+        "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[iiwa14-fixed]",
+        "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[fr3-fixed]",
+        "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[g1-floating]",
+        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[iiwa14-fixed]",
+        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[go2-fixed]",
+        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[fr3-fixed]"
+      ]
+    },
+    {
+      "carried": null,
+      "fingerprint": {
+        "algorithm": "sha256",
+        "digest": "b9547d844b85575a1b481034841472ffe2e03f627c4ddfae45e2c7803c75e4dc",
+        "file_count": 1,
+        "included_paths": [
+          "test/cuda_equivalents/test_cuda_second_order_fallback.py"
+        ]
+      },
+      "name": "cuda_24_second_order_fallb",
+      "node_ids": [
+        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[g1-fixed]"
+      ]
+    },
+    {
+      "carried": null,
+      "fingerprint": {
+        "algorithm": "sha256",
+        "digest": "b9547d844b85575a1b481034841472ffe2e03f627c4ddfae45e2c7803c75e4dc",
+        "file_count": 1,
+        "included_paths": [
+          "test/cuda_equivalents/test_cuda_second_order_fallback.py"
+        ]
+      },
+      "name": "cuda_25_second_order_fallb",
+      "node_ids": [
+        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[h1_2-fixed]"
+      ]
+    },
+    {
+      "carried": null,
+      "fingerprint": {
+        "algorithm": "sha256",
+        "digest": "b9547d844b85575a1b481034841472ffe2e03f627c4ddfae45e2c7803c75e4dc",
+        "file_count": 1,
+        "included_paths": [
+          "test/cuda_equivalents/test_cuda_second_order_fallback.py"
+        ]
+      },
+      "name": "cuda_26_second_order_fallb",
+      "node_ids": [
+        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[iiwa14-floating]",
+        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[go2-floating]",
+        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[fr3-floating]"
+      ]
+    },
+    {
+      "carried": null,
+      "fingerprint": {
+        "algorithm": "sha256",
+        "digest": "b9547d844b85575a1b481034841472ffe2e03f627c4ddfae45e2c7803c75e4dc",
+        "file_count": 1,
+        "included_paths": [
+          "test/cuda_equivalents/test_cuda_second_order_fallback.py"
+        ]
+      },
+      "name": "cuda_27_second_order_fallb",
+      "node_ids": [
+        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[g1-floating]"
+      ]
+    },
+    {
+      "carried": null,
+      "fingerprint": {
+        "algorithm": "sha256",
+        "digest": "b9547d844b85575a1b481034841472ffe2e03f627c4ddfae45e2c7803c75e4dc",
+        "file_count": 1,
+        "included_paths": [
+          "test/cuda_equivalents/test_cuda_second_order_fallback.py"
+        ]
+      },
+      "name": "cuda_28_second_order_fallb",
+      "node_ids": [
+        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[h1_2-floating]"
+      ]
+    },
+    {
+      "carried": null,
+      "fingerprint": {
+        "algorithm": "sha256",
+        "digest": "1991f985bb1fdd417c3686269e9e2da30393c1b12d8c54dd2ea58ccbea28090b",
+        "file_count": 1,
+        "included_paths": [
+          "test/python_wrappers/test_two_robot_process.py"
+        ]
+      },
+      "name": "test_two_robot_process",
+      "node_ids": [
+        "test/python_wrappers/test_two_robot_process.py::test_two_so_pools_are_independent"
+      ]
+    },
+    {
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "9c8a0e572a572977ff2bd062748439da545567112ed9ed001e9ed97431cc0565",
@@ -1589,7 +1736,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "06e5c2eb45924723b96e690516be14b10da6d8af24a82f6bf16c6b7b3add5b27",
@@ -1608,7 +1760,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "1629779200fd79b98158b91c03ebf3cdf799ba1aa2380a8e2f1970a72e6add25",
@@ -1626,8 +1783,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -1670,8 +1827,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -1701,8 +1858,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -1850,8 +2007,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2059,8 +2216,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2408,8 +2565,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2499,136 +2656,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
-        "original_signer": "plancherb1"
-      },
-      "fingerprint": {
-        "algorithm": "sha256",
-        "digest": "683ef72319b6e6e9713a06cee66efee5afaf26d103ed410bab64b28040c205e5",
-        "file_count": 2,
-        "included_paths": [
-          "test/cuda_equivalents/test_cuda_regressor.py",
-          "test/cuda_equivalents/test_cuda_second_order_fallback.py"
-        ]
-      },
-      "name": "cuda_23_plant_equivalence_regressor_seco",
-      "node_ids": [
-        "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[iiwa14-fixed]",
-        "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[fr3-fixed]",
-        "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[g1-floating]",
-        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[iiwa14-fixed]",
-        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[go2-fixed]",
-        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[fr3-fixed]"
-      ]
-    },
-    {
-      "carried": {
-        "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
-        "original_signer": "plancherb1"
-      },
-      "fingerprint": {
-        "algorithm": "sha256",
-        "digest": "2f92d86079cba94489f4ef6e1d93a233e9dd5ff8faacd7923f2bb4e077c5c527",
-        "file_count": 1,
-        "included_paths": [
-          "test/cuda_equivalents/test_cuda_second_order_fallback.py"
-        ]
-      },
-      "name": "cuda_24_second_order_fallb",
-      "node_ids": [
-        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[g1-fixed]",
-        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[h1_2-fixed]"
-      ]
-    },
-    {
-      "carried": {
-        "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
-        "original_signer": "plancherb1"
-      },
-      "fingerprint": {
-        "algorithm": "sha256",
-        "digest": "2f92d86079cba94489f4ef6e1d93a233e9dd5ff8faacd7923f2bb4e077c5c527",
-        "file_count": 1,
-        "included_paths": [
-          "test/cuda_equivalents/test_cuda_second_order_fallback.py"
-        ]
-      },
-      "name": "cuda_25_second_order_fallb",
-      "node_ids": [
-        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[iiwa14-floating]",
-        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[go2-floating]"
-      ]
-    },
-    {
-      "carried": {
-        "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
-        "original_signer": "plancherb1"
-      },
-      "fingerprint": {
-        "algorithm": "sha256",
-        "digest": "2f92d86079cba94489f4ef6e1d93a233e9dd5ff8faacd7923f2bb4e077c5c527",
-        "file_count": 1,
-        "included_paths": [
-          "test/cuda_equivalents/test_cuda_second_order_fallback.py"
-        ]
-      },
-      "name": "cuda_26_second_order_fallb",
-      "node_ids": [
-        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[fr3-floating]"
-      ]
-    },
-    {
-      "carried": {
-        "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
-        "original_signer": "plancherb1"
-      },
-      "fingerprint": {
-        "algorithm": "sha256",
-        "digest": "2f92d86079cba94489f4ef6e1d93a233e9dd5ff8faacd7923f2bb4e077c5c527",
-        "file_count": 1,
-        "included_paths": [
-          "test/cuda_equivalents/test_cuda_second_order_fallback.py"
-        ]
-      },
-      "name": "cuda_27_second_order_fallb",
-      "node_ids": [
-        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[g1-floating]"
-      ]
-    },
-    {
-      "carried": {
-        "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
-        "original_signer": "plancherb1"
-      },
-      "fingerprint": {
-        "algorithm": "sha256",
-        "digest": "2f92d86079cba94489f4ef6e1d93a233e9dd5ff8faacd7923f2bb4e077c5c527",
-        "file_count": 1,
-        "included_paths": [
-          "test/cuda_equivalents/test_cuda_second_order_fallback.py"
-        ]
-      },
-      "name": "cuda_28_second_order_fallb",
-      "node_ids": [
-        "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[h1_2-floating]"
-      ]
-    },
-    {
-      "carried": {
-        "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2652,8 +2681,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2684,8 +2713,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2725,8 +2754,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2748,8 +2777,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2771,8 +2800,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2794,8 +2823,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2817,8 +2846,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2840,8 +2869,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2860,8 +2889,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2880,8 +2909,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2905,8 +2934,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2930,8 +2959,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2952,8 +2981,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2974,8 +3003,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2996,8 +3025,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3018,8 +3047,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3039,8 +3068,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3061,8 +3090,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3095,8 +3124,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3157,8 +3186,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3196,8 +3225,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3254,8 +3283,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3293,8 +3322,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3320,8 +3349,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3347,8 +3376,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3368,8 +3397,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3394,8 +3423,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3471,8 +3500,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3501,8 +3530,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3528,8 +3557,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3575,8 +3604,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3612,8 +3641,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3641,8 +3670,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3700,8 +3729,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3725,8 +3754,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3754,8 +3783,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3781,8 +3810,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3805,8 +3834,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3837,8 +3866,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3868,8 +3897,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3898,8 +3927,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3923,8 +3952,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "10645be08dfcb6dfbaac9dbcb88b36152fb19363",
-        "original_ended_at": "2026-09-08T04:52:50Z",
+        "original_commit_sha": "64b2f5bc74dd655e77aa980ee0e0503698feeaf2",
+        "original_ended_at": "2026-09-08T21:05:26Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3947,9 +3976,93 @@
     "backend": "ssh-local",
     "key_fingerprint": "SHA256:hfyUcDJTDLry3j7nJ9V2X8iEIgNFmFJQKGQirOdyWtY",
     "signer": "plancherb1",
-    "value": "rSmuoTyRhAcmhq9QLsDnmjvyOHH4Mo0zAE7lPTdrU9uXYWj2rtMiBYJlvANXp1q0xd9bgqmGmbVIGyc3lmE1Bg=="
+    "value": "LkOl/5OqUDF1dPCXdOaw45hq0YmWYpKv6Lp90QwWUNKADyWsfLaBeNd3HINpsj/xBJHWoyoVxohnXKSBfaKUAA=="
   },
   "tests": [
+    {
+      "checks": [],
+      "duration_s": 11.6801,
+      "node_id": "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 8.1718,
+      "node_id": "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[fr3-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 55.4609,
+      "node_id": "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[g1-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 577.5186,
+      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 305.7931,
+      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[go2-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 693.5345,
+      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[fr3-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2228.1377,
+      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[g1-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 3344.613,
+      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[h1_2-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 30.3072,
+      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[iiwa14-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 20.9383,
+      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[go2-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 23.7955,
+      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[fr3-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 67.8243,
+      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[g1-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 140.4566,
+      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[h1_2-floating]",
+      "outcome": "skipped"
+    },
+    {
+      "checks": [],
+      "duration_s": 0.6971,
+      "node_id": "test/python_wrappers/test_two_robot_process.py::test_two_so_pools_are_independent",
+      "outcome": "passed"
+    },
     {
       "checks": [],
       "duration_s": 21.7093,
@@ -9169,84 +9282,6 @@
       "duration_s": 306.287,
       "node_id": "test/cuda_equivalents/test_cuda_fext_equivalence.py::test_cuda_fext_three_way_equivalence[g1-floating]",
       "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 9.3065,
-      "node_id": "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 8.5007,
-      "node_id": "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[fr3-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 31.3614,
-      "node_id": "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[g1-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 190.5994,
-      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 192.3368,
-      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[go2-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 573.8901,
-      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[fr3-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 733.8052,
-      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[g1-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 1790.6784,
-      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[h1_2-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 20.4175,
-      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[iiwa14-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 18.1989,
-      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[go2-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 27.1222,
-      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[fr3-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 51.7634,
-      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[g1-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 139.2059,
-      "node_id": "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_floating_second_order_diagnostic_matches_python_reference[h1_2-floating]",
-      "outcome": "skipped"
     },
     {
       "checks": [],
