@@ -1777,3 +1777,47 @@ resets its own extent; `tool_fext` sizes kMaxBatch for its own known trap).
 When auditing a new surface, grep for every `g_data->d_*` a launch passes
 and check who zeroes it. Regression: test_iiwa14_f_ext.py::
 test_jax_no_f_ext_residue_after_f_ext_call.
+
+### 7.z6 TF32 matmul precision poisons jax jacobians of custom VJPs (2026-09-10, vjp_ops)
+
+**Symptom.** `jax.jacobian`/`jacrev` of a custom_vjp op is off by a SMALL
+RELATIVE amount (~2–5e-4: 0.013 on O(64) entries) vs the analytic gradient,
+while (a) the analytic-gradient FFI itself is bit-equal to numpy and (b) an
+EAGER per-one-hot `jax.vjp` of the same op is bit-exact. Deterministic —
+same wrong floats every run — so it does not look like a race.
+
+**Cause.** The backward's cotangent contraction was spelled as broadcast
+matmul (`ct[..., None, :] @ G`). Under jacrev the backward runs vmapped, the
+batched matmul lowers to an XLA gemm, and at jax's DEFAULT matmul precision
+that gemm is TF32-eligible on this GPU (10-bit input mantissa). Eager and
+`jax.default_matmul_precision("highest")` avoid the tensor-core path — that
+asymmetry is the diagnostic signature.
+
+**Fix + rule.** Spell framework-shared contractions as broadcast multiply +
+`.sum(-2)` (lowers to exact fp32 multiply/reduce on jax AND torch; the old
+einsum spelling was in this exact class, which is why the pre-collapse code
+never hit it). RULE: in shared numeric code that must match analytic kernels
+bitwise, do not introduce `@`/`matmul`/`bmm` on fp32 CUDA without either an
+explicit highest-precision guarantee or an A/B under `jax.jacobian` (not
+just eager `jax.vjp` — the failing kernel selection only appears vmapped).
+
+### 7.z7 Derived-code transcription drops function-local decls (2026-09-10, gridData_device_bytes)
+
+**Symptom.** `grid.cuh` fails to COMPILE (`identifier "MT_POS_SLOTS" is
+undefined` inside `gridData_device_bytes`) — but only for multi-target
+robots; every byte-identity baseline robot is clean.
+
+**Cause.** `_derive_device_bytes_lines` transcribes each `cudaMalloc` SIZE
+EXPRESSION from the init_gridData line list into the derived bytes function,
+and copies structural lines (#if/needs_/}) — but silently DROPPED plain
+statements, including the `const int MT_*_SLOTS = ...;` locals the MT malloc
+sizes reference. The MT block is the only init site whose malloc size uses
+function-locals instead of header constexprs, so no baseline covered it.
+
+**Fix + rule.** The deriver now carries `const int` / `const size_t` decl
+lines into the derived body. RULE for any derive-from-the-same-lines
+generator: a transcribed expression's free identifiers must be resolvable in
+the DERIVED context — carry local decls along (or raise on unknown
+identifiers), and remember byte-identity gates only cover configurations the
+baseline robots actually emit (Python-conditional blocks need their own
+gate robot; here = a multi-target register).
