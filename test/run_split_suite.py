@@ -504,9 +504,28 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
             wrapper_to_run, cuda_fresh)
 
 
+def _shard_receipt_sha(out_dir: Path, shard: str) -> str | None:
+    """repo.commit_sha recorded by a shard's own receipt (None when absent
+    or unreadable — non-receipts runs have no per-shard receipt)."""
+    path = out_dir / "receipts" / f"{shard}.json"
+    if not path.exists():
+        return None
+    try:
+        return ((json.loads(path.read_text()) or {}).get("repo") or {}) \
+            .get("commit_sha")
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def load_prior_results(out_dir: Path, spec_names: set[str]) -> list[dict]:
     """--resume: keep only CLEAN rows for shards that still exist; everything
-    else (failures, casualties, vanished shards) re-runs."""
+    else (failures, casualties, vanished shards) re-runs.
+
+    2026-09-11 sha-divergence prune: a clean row whose per-shard RECEIPT was
+    recorded at a different commit than the current HEAD cannot merge with
+    fresh work (gpu-proof merge refuses mixed repo.commit_sha — the ONE-
+    commit receipt invariant; a mid-run commit is how this state arises).
+    Such rows re-run instead of poisoning the merge at the very end."""
     path = out_dir / "results.json"
     if not path.exists():
         return []
@@ -514,8 +533,27 @@ def load_prior_results(out_dir: Path, spec_names: set[str]) -> list[dict]:
         prior = json.loads(path.read_text())
     except json.JSONDecodeError:
         return []
-    return [dict(r, fresh=False) for r in prior
-            if r.get("kind") in CLEAN_KINDS and r.get("shard") in spec_names]
+    try:
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT,
+                              check=True, capture_output=True,
+                              text=True).stdout.strip()
+    except (subprocess.CalledProcessError, OSError):
+        head = None
+    kept, divergent = [], []
+    for r in prior:
+        if r.get("kind") not in CLEAN_KINDS or r.get("shard") not in spec_names:
+            continue
+        sha = _shard_receipt_sha(out_dir, r.get("shard", ""))
+        if head and sha and sha != head:
+            divergent.append(r.get("shard"))
+            continue
+        kept.append(dict(r, fresh=False))
+    if divergent:
+        print(f"  resume: {len(divergent)} clean shard(s) recorded at a "
+              f"DIFFERENT commit than HEAD — re-running them so the merged "
+              f"receipt stays single-commit: {', '.join(sorted(divergent)[:6])}"
+              + (" …" if len(divergent) > 6 else ""))
+    return kept
 
 
 def save_partition(out_dir: Path, shards: list[ShardSpec]) -> None:

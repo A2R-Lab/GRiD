@@ -414,3 +414,28 @@ def test_cuda_carry_soundness_paths(monkeypatch):
     monkeypatch.setenv("GRID_REFRESH_ASSUME_NEUTRAL", "1")
     ok, why = cn.cuda_carry_soundness(clean)
     assert ok and "WITHOUT proof" in why
+
+
+def test_resume_prunes_sha_divergent_clean_rows(tmp_path, monkeypatch):
+    """2026-09-11: a clean resume row whose per-shard receipt was recorded at
+    a different commit than HEAD re-runs (mixed-sha receipts cannot merge);
+    same-sha and receipt-less rows are kept as before."""
+    import json as _json
+    import subprocess as _sp
+    head = _sp.run(["git", "rev-parse", "HEAD"], cwd=rss.REPO_ROOT,
+                   capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "receipts").mkdir()
+    rows = [
+        {"shard": "s_same", "kind": "OK"},
+        {"shard": "s_divergent", "kind": "OK"},
+        {"shard": "s_noreceipt", "kind": "OK"},
+        {"shard": "s_failed", "kind": "FAILURES"},
+    ]
+    (tmp_path / "results.json").write_text(_json.dumps(rows))
+    (tmp_path / "receipts" / "s_same.json").write_text(
+        _json.dumps({"repo": {"commit_sha": head}}))
+    (tmp_path / "receipts" / "s_divergent.json").write_text(
+        _json.dumps({"repo": {"commit_sha": "0" * 40}}))
+    kept = rss.load_prior_results(
+        tmp_path, {"s_same", "s_divergent", "s_noreceipt", "s_failed"})
+    assert {r["shard"] for r in kept} == {"s_same", "s_noreceipt"}

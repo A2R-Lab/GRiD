@@ -1821,3 +1821,24 @@ the DERIVED context — carry local decls along (or raise on unknown
 identifiers), and remember byte-identity gates only cover configurations the
 baseline robots actually emit (Python-conditional blocks need their own
 gate robot; here = a multi-target register).
+
+### 7.z8 Mid-run COMMITS poison a receipted split run (2026-09-11)
+
+**Symptom.** Every shard green, then the FINAL merge refuses:
+`shards disagree on repo.commit_sha ... a merged receipt must come from ONE
+commit/config`. Hours of proof stranded one step from a receipt.
+
+**Cause.** Per-shard receipts record `repo.commit_sha` AT SHARD RUN TIME.
+"My edit isn't in any shard's fingerprint" is NOT sufficient safety during a
+receipted run — fingerprints gate staleness, but the merge separately pins
+one commit across all fresh shards. A commit between shard N and shard N+1
+splits the run across two SHAs (and an uncommitted edit is worse: the later
+shards' receipts record dirty=true, which no future refresh can anchor on).
+
+**Fix + rule.** RULE: from receipted-run launch to merged receipt, the repo
+is FROZEN — no edits (fingerprint race), no commits (sha divergence). Draft
+in the scratchpad; land after. Recovery is now mechanical: resume's
+`load_prior_results` prunes clean rows whose shard receipt sha differs from
+HEAD (they re-run at the current commit; test_resume_prunes_sha_divergent_
+clean_rows is the referee) — the cost is re-running the divergent shards,
+which is exactly why the rule exists.
