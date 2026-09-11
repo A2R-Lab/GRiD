@@ -22,15 +22,47 @@
   "mode": "local",
   "repo": {
     "branch": "modernizing-tests",
-    "commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+    "commit_sha": "231f0b9853a773daf70cf9c4b1038ea7bbe9f5ab",
     "dirty": false,
     "github_username": "plancherb1",
     "remote_url": "git@github.com:A2R-Lab/GRiD.git"
   },
   "schema_version": "2",
   "session": {
-    "ended_at": "2026-09-11T15:37:01Z",
+    "ended_at": "2026-09-11T17:48:21Z",
     "node_ids": [
+      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch1]",
+      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch16]",
+      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch256]",
+      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch1]",
+      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch16]",
+      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch256]",
+      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch1]",
+      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch16]",
+      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch256]",
+      "test/cuda_equivalents/test_cuda_mjx_tier_invariance.py::test_mjx_second_order_tier_invariance[idsva_so]",
+      "test/cuda_equivalents/test_cuda_mjx_tier_invariance.py::test_mjx_second_order_tier_invariance[fdsva_so]",
+      "test/cuda_equivalents/test_cuda_multi_target_position.py::test_multi_target_position[iiwa14-fixed]",
+      "test/cuda_equivalents/test_cuda_multi_target_position.py::test_multi_target_position[baxter-fixed]",
+      "test/cuda_equivalents/test_cuda_multi_target_position_gradient.py::test_multi_target_position_gradient[iiwa14-fixed]",
+      "test/cuda_equivalents/test_cuda_multi_target_position_gradient.py::test_multi_target_position_gradient[baxter-fixed]",
+      "test/cuda_equivalents/test_cuda_osc_inertia_spill.py::test_cuda_osc_inertia_spill_matches_reference[g1-floating]",
+      "test/cuda_equivalents/test_cuda_osc_inertia_spill.py::test_cuda_osc_inertia_spill_matches_reference[iiwa14-fixed]",
+      "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[planar_arm.urdf]",
+      "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[translation_arm.urdf]",
+      "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[skew_planar_arm.urdf]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[iiwa14-fixed]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[go2-floating]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[fr3-fixed]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[iiwa14-fixed]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[go2-floating]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[iiwa14-fixed]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[go2-floating]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[fr3-fixed]",
+      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_tangent_state_cost_matches_reference",
+      "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[iiwa14-fixed]",
+      "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[fr3-fixed]",
+      "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[g1-floating]",
       "test/cuda_equivalents/test_cuda_batched_host_wrapper.py::test_cuda_batched_host_wrapper_matches_reference[iiwa14-fixed]",
       "test/cuda_equivalents/test_cuda_batched_host_wrapper.py::test_cuda_batched_host_wrapper_matches_reference[go2-floating]",
       "test/cuda_equivalents/test_cuda_branching_skew_equivalence.py::test_cuda_skew_aba_minv_matches_reference[branching]",
@@ -1294,38 +1326,6 @@
       "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[iiwa14-fixed-batch1]",
       "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[iiwa14-fixed-batch16]",
       "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[iiwa14-fixed-batch256]",
-      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch1]",
-      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch16]",
-      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch256]",
-      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch1]",
-      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch16]",
-      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch256]",
-      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch1]",
-      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch16]",
-      "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch256]",
-      "test/cuda_equivalents/test_cuda_mjx_tier_invariance.py::test_mjx_second_order_tier_invariance[idsva_so]",
-      "test/cuda_equivalents/test_cuda_mjx_tier_invariance.py::test_mjx_second_order_tier_invariance[fdsva_so]",
-      "test/cuda_equivalents/test_cuda_multi_target_position.py::test_multi_target_position[iiwa14-fixed]",
-      "test/cuda_equivalents/test_cuda_multi_target_position.py::test_multi_target_position[baxter-fixed]",
-      "test/cuda_equivalents/test_cuda_multi_target_position_gradient.py::test_multi_target_position_gradient[iiwa14-fixed]",
-      "test/cuda_equivalents/test_cuda_multi_target_position_gradient.py::test_multi_target_position_gradient[baxter-fixed]",
-      "test/cuda_equivalents/test_cuda_osc_inertia_spill.py::test_cuda_osc_inertia_spill_matches_reference[g1-floating]",
-      "test/cuda_equivalents/test_cuda_osc_inertia_spill.py::test_cuda_osc_inertia_spill_matches_reference[iiwa14-fixed]",
-      "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[planar_arm.urdf]",
-      "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[translation_arm.urdf]",
-      "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[skew_planar_arm.urdf]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[iiwa14-fixed]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[go2-floating]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[fr3-fixed]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[iiwa14-fixed]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[go2-floating]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[iiwa14-fixed]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[go2-floating]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[fr3-fixed]",
-      "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_tangent_state_cost_matches_reference",
-      "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[iiwa14-fixed]",
-      "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[fr3-fixed]",
-      "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[g1-floating]",
       "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[iiwa14-fixed]",
       "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[go2-fixed]",
       "test/cuda_equivalents/test_cuda_second_order_fallback.py::test_fixed_second_order_forced_fallback_matches_python_reference[fr3-fixed]",
@@ -1401,207 +1401,80 @@
     ],
     "shards": [
       {
-        "ended_at": "2026-09-11T15:37:01Z",
-        "node_count": 836,
+        "ended_at": "2026-09-11T17:48:21Z",
+        "node_count": 32,
         "signer": "plancherb1",
-        "source": "cuda_00_batched_host_wrapp_branching_ske.json",
-        "started_at": "2026-09-11T14:12:25Z"
-      },
-      {
-        "ended_at": "2026-09-11T09:36:38Z",
-        "node_count": 39,
-        "signer": "plancherb1",
-        "source": "test_any_thread_count.json",
-        "started_at": "2026-09-11T09:36:37Z"
-      },
-      {
-        "ended_at": "2026-09-11T09:36:41Z",
-        "node_count": 5,
-        "signer": "plancherb1",
-        "source": "test_batch_switch.json",
-        "started_at": "2026-09-11T09:36:40Z"
-      },
-      {
-        "ended_at": "2026-09-11T09:36:45Z",
-        "node_count": 20,
-        "signer": "plancherb1",
-        "source": "test_centroidal_energy_frame.json",
-        "started_at": "2026-09-11T09:36:43Z"
-      },
-      {
-        "ended_at": "2026-09-11T09:37:14Z",
-        "node_count": 13,
-        "signer": "plancherb1",
-        "source": "test_ee_named_target_floating_multileaf.json",
-        "started_at": "2026-09-11T09:36:47Z"
-      },
-      {
-        "ended_at": "2026-09-11T09:37:19Z",
-        "node_count": 8,
-        "signer": "plancherb1",
-        "source": "test_fk_batched.json",
-        "started_at": "2026-09-11T09:37:15Z"
-      },
-      {
-        "ended_at": "2026-09-11T09:37:22Z",
-        "node_count": 8,
-        "signer": "plancherb1",
-        "source": "test_fp64_parity.json",
-        "started_at": "2026-09-11T09:37:21Z"
-      },
-      {
-        "ended_at": "2026-09-11T09:37:26Z",
-        "node_count": 2,
-        "signer": "plancherb1",
-        "source": "test_g1_plant_hessian_smoke.json",
-        "started_at": "2026-09-11T09:37:24Z"
-      },
-      {
-        "ended_at": "2026-09-11T09:37:29Z",
-        "node_count": 8,
-        "signer": "plancherb1",
-        "source": "test_iiwa14_f_ext.json",
-        "started_at": "2026-09-11T09:37:27Z"
-      },
-      {
-        "ended_at": "2026-09-11T09:37:34Z",
-        "node_count": 58,
-        "signer": "plancherb1",
-        "source": "test_iiwa14_jax_smoke.json",
-        "started_at": "2026-09-11T09:37:31Z"
-      },
-      {
-        "ended_at": "2026-09-11T09:37:36Z",
-        "node_count": 11,
-        "signer": "plancherb1",
-        "source": "test_iiwa14_plant_smoke.json",
-        "started_at": "2026-09-11T09:37:35Z"
-      },
-      {
-        "ended_at": "2026-09-11T09:48:30Z",
-        "node_count": 8,
-        "signer": "plancherb1",
-        "source": "test_iiwa14_qdd_aware_grad.json",
-        "started_at": "2026-09-11T09:37:38Z"
-      },
-      {
-        "ended_at": "2026-09-11T09:48:33Z",
-        "node_count": 28,
-        "signer": "plancherb1",
-        "source": "test_iiwa14_smoke.json",
-        "started_at": "2026-09-11T09:48:31Z"
-      },
-      {
-        "ended_at": "2026-09-11T09:48:36Z",
-        "node_count": 25,
-        "signer": "plancherb1",
-        "source": "test_iiwa14_torch_smoke.json",
-        "started_at": "2026-09-11T09:48:34Z"
-      },
-      {
-        "ended_at": "2026-09-11T11:06:22Z",
-        "node_count": 18,
-        "signer": "plancherb1",
-        "source": "test_joint_dynamics.json",
-        "started_at": "2026-09-11T09:48:38Z"
-      },
-      {
-        "ended_at": "2026-09-11T11:42:33Z",
-        "node_count": 10,
-        "signer": "plancherb1",
-        "source": "test_joint_dynamics_ffi.json",
-        "started_at": "2026-09-11T11:06:23Z"
-      },
-      {
-        "ended_at": "2026-09-11T11:42:46Z",
-        "node_count": 40,
-        "signer": "plancherb1",
-        "source": "test_kinematics_thread_batch_matrix.json",
-        "started_at": "2026-09-11T11:42:35Z"
-      },
-      {
-        "ended_at": "2026-09-11T11:43:05Z",
-        "node_count": 2,
-        "signer": "plancherb1",
-        "source": "test_mjx_fixed_base_noop.json",
-        "started_at": "2026-09-11T11:42:47Z"
-      },
-      {
-        "ended_at": "2026-09-11T12:02:50Z",
-        "node_count": 6,
-        "signer": "plancherb1",
-        "source": "test_ps5_value_ops.json",
-        "started_at": "2026-09-11T11:43:07Z"
-      },
-      {
-        "ended_at": "2026-09-11T12:13:47Z",
-        "node_count": 10,
-        "signer": "plancherb1",
-        "source": "test_runtime_inertia.json",
-        "started_at": "2026-09-11T12:02:52Z"
-      },
-      {
-        "ended_at": "2026-09-11T13:13:39Z",
-        "node_count": 8,
-        "signer": "plancherb1",
-        "source": "test_runtime_joint_dynamics.json",
-        "started_at": "2026-09-11T12:13:48Z"
-      },
-      {
-        "ended_at": "2026-09-11T13:38:16Z",
-        "node_count": 5,
-        "signer": "plancherb1",
-        "source": "test_runtime_transform.json",
-        "started_at": "2026-09-11T13:13:40Z"
-      },
-      {
-        "ended_at": "2026-09-11T13:49:33Z",
-        "node_count": 13,
-        "signer": "plancherb1",
-        "source": "test_subset_build.json",
-        "started_at": "2026-09-11T13:38:18Z"
-      },
-      {
-        "ended_at": "2026-09-11T14:00:51Z",
-        "node_count": 12,
-        "signer": "plancherb1",
-        "source": "test_subset_build_jax.json",
-        "started_at": "2026-09-11T13:49:35Z"
-      },
-      {
-        "ended_at": "2026-09-11T14:12:10Z",
-        "node_count": 11,
-        "signer": "plancherb1",
-        "source": "test_subset_build_torch.json",
-        "started_at": "2026-09-11T14:00:53Z"
-      },
-      {
-        "ended_at": "2026-09-11T14:12:13Z",
-        "node_count": 6,
-        "signer": "plancherb1",
-        "source": "test_tool.json",
-        "started_at": "2026-09-11T14:12:12Z"
-      },
-      {
-        "ended_at": "2026-09-11T14:12:16Z",
-        "node_count": 1,
-        "signer": "plancherb1",
-        "source": "test_two_robot_process.json",
-        "started_at": "2026-09-11T14:12:14Z"
-      },
-      {
-        "ended_at": "2026-09-11T14:12:25Z",
-        "node_count": 2,
-        "signer": "plancherb1",
-        "source": "test_workspace_slots_direct_launch.json",
-        "started_at": "2026-09-11T14:12:17Z"
+        "source": "cuda_04_kinematics_thread__mjx_tier_inva.json",
+        "started_at": "2026-09-11T15:39:18Z"
       }
     ],
-    "started_at": "2026-09-11T09:36:37Z"
+    "started_at": "2026-09-11T15:39:18Z"
   },
   "shards": [
     {
       "carried": null,
+      "fingerprint": {
+        "algorithm": "sha256",
+        "digest": "bd7485aee17056cb2da77157768f3f8568c881636363d07f0196bcecf5f7bb9a",
+        "file_count": 12,
+        "included_paths": [
+          "test/cuda_equivalents/cuda_harness.py",
+          "test/cuda_equivalents/cuda_mjx_tier_invariance_runner.cu",
+          "test/cuda_equivalents/cuda_multi_target_position_gradient_runner.cu",
+          "test/cuda_equivalents/cuda_multi_target_position_runner.cu",
+          "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py",
+          "test/cuda_equivalents/test_cuda_mjx_tier_invariance.py",
+          "test/cuda_equivalents/test_cuda_multi_target_position.py",
+          "test/cuda_equivalents/test_cuda_multi_target_position_gradient.py",
+          "test/cuda_equivalents/test_cuda_osc_inertia_spill.py",
+          "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py",
+          "test/cuda_equivalents/test_cuda_plant_equivalence.py",
+          "test/cuda_equivalents/test_cuda_regressor.py"
+        ]
+      },
+      "name": "cuda_04_kinematics_thread__mjx_tier_inva",
+      "node_ids": [
+        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch1]",
+        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch16]",
+        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch256]",
+        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch1]",
+        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch16]",
+        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch256]",
+        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch1]",
+        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch16]",
+        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch256]",
+        "test/cuda_equivalents/test_cuda_mjx_tier_invariance.py::test_mjx_second_order_tier_invariance[idsva_so]",
+        "test/cuda_equivalents/test_cuda_mjx_tier_invariance.py::test_mjx_second_order_tier_invariance[fdsva_so]",
+        "test/cuda_equivalents/test_cuda_multi_target_position.py::test_multi_target_position[iiwa14-fixed]",
+        "test/cuda_equivalents/test_cuda_multi_target_position.py::test_multi_target_position[baxter-fixed]",
+        "test/cuda_equivalents/test_cuda_multi_target_position_gradient.py::test_multi_target_position_gradient[iiwa14-fixed]",
+        "test/cuda_equivalents/test_cuda_multi_target_position_gradient.py::test_multi_target_position_gradient[baxter-fixed]",
+        "test/cuda_equivalents/test_cuda_osc_inertia_spill.py::test_cuda_osc_inertia_spill_matches_reference[g1-floating]",
+        "test/cuda_equivalents/test_cuda_osc_inertia_spill.py::test_cuda_osc_inertia_spill_matches_reference[iiwa14-fixed]",
+        "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[planar_arm.urdf]",
+        "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[translation_arm.urdf]",
+        "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[skew_planar_arm.urdf]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[iiwa14-fixed]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[go2-floating]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[fr3-fixed]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[iiwa14-fixed]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[go2-floating]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[iiwa14-fixed]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[go2-floating]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[fr3-fixed]",
+        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_tangent_state_cost_matches_reference",
+        "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[iiwa14-fixed]",
+        "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[fr3-fixed]",
+        "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[g1-floating]"
+      ]
+    },
+    {
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "2abcbd0587da66143fc94d5970f8ea44ea524868e15ce32778f7cb5639ff2ca3",
@@ -2494,7 +2367,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "5b0432d2426b6204ceebbc43d1705493d85220415f68499776d337cc3fe05457",
@@ -2549,7 +2427,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "79bee9aee01ba9c3b979b0e551f587c98e79a720820d6f013304dfeb7bc5fc1f",
@@ -2570,7 +2453,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "2cef46ee0ff4be83ecb14df5bac09c0f196a75d3ae3737601eca66fddf229661",
@@ -2606,7 +2494,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "f073538780d4e3f1e5e5c848ef75309bf15dbde4d0ec4d3972b6db72a7362517",
@@ -2635,7 +2528,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "b78c7657ba88becb41dcab8bfebad33d76813004870958364ac761100dea727e",
@@ -2659,7 +2557,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "9d8e532c3461adf8620af16f387bf010880ea438519d4e0048af8e898dce9662",
@@ -2683,7 +2586,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "3311921af04469f7f72ac16570fc9f12983eb1de8d1578a87b13e30ace6c60fb",
@@ -2701,7 +2609,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "d92dd68a0f5563915a5939443d844b9011009ae2ba3e83a42afa0be7700619f3",
@@ -2725,7 +2638,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "a58cb0a0202231dc48d952c6ebe7e9799b9c4052bf6b77185dcb4a370de53418",
@@ -2799,7 +2717,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "e087e2ffa968c450e36339f4872c01cef717cefce731b816f3eec058dfea3bfe",
@@ -2826,7 +2749,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "e8c154510fbf7c701326358612dcd45d9bb8ff9550f5b03cb0a9f3f589d16d8f",
@@ -2850,7 +2778,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "9e985f7e051f45c447094581ca5361e519ab0bfdd66378aa730c1ed3452ee9b6",
@@ -2894,7 +2827,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "321189f002ec266e6bb799ef7fc45a1ea621ea5088676175d51d4ae2b267c297",
@@ -2935,7 +2873,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "5b989e212e7cb53b77bab210bca7cba9be489d5a323a35ffe0990e189a318065",
@@ -2969,7 +2912,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "a079c5866afadedcab36ec955815ec137cbbb58bff1897dccec05d7e1a6212eb",
@@ -2995,7 +2943,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "b799f4f67ed06ecbf63856355f454dfe43b79bc97ba6671fc714d1f64e345533",
@@ -3051,7 +3004,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "bf1f98cf40c6272bc4ace04e454b4c0e111e965b26abe652053fc40f6e9f7752",
@@ -3069,7 +3027,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "87dbeb84e744970784db6b096898feff79ef22fa1d639df7dc74e3c79dbbe4a6",
@@ -3091,7 +3054,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "d0b4aeddb33bd894aff61711b3f8827606098c61c6345520680769be3f4e9104",
@@ -3117,7 +3085,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "2f82f2174b4dbf630e2414020297b6ba363654edeeed21e785d82f940f823756",
@@ -3141,7 +3114,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "d4ac597dfdb465dd078fbd84bc002ee4dec5994d9f5ca9e06296e824dc56fa63",
@@ -3162,7 +3140,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "28a6860b04c6cc2d5f73dcd24d39fbed1b3905945b3b3562d1b63d0a60fdc3bd",
@@ -3191,7 +3174,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "30624a1c9e2b8cbd102f02cb88e74fb85afab90865900c30d6a3b90d49e06d6f",
@@ -3219,7 +3207,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "86cb9f816ddf45c1eaaaeb6cf3f93de71a0f3da9beb8bd63dee3f3a2f5a9d876",
@@ -3246,7 +3239,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "46d92d3ac877d7125fbcad9adddba9d7c21d10b3daaa0626be032221fc75b504",
@@ -3268,7 +3266,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "e005cc3dbeb2b2199a54c298fbc98b917f4e33cef6c9ca9bdf989938e0afb10f",
@@ -3285,7 +3288,12 @@
       ]
     },
     {
-      "carried": null,
+      "carried": {
+        "from": "gpu-proof.json",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
+        "original_signer": "plancherb1"
+      },
       "fingerprint": {
         "algorithm": "sha256",
         "digest": "877c6225ae9e127c4a7094a4951355fa76ac24fa572a65b3fd05f4ad5031ccc7",
@@ -3305,8 +3313,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "4aee8dd2f671123eb03e8cca5f32974e3923d335",
-        "original_ended_at": "2026-09-11T01:05:23Z",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3366,8 +3374,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "4aee8dd2f671123eb03e8cca5f32974e3923d335",
-        "original_ended_at": "2026-09-11T01:05:23Z",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3390,8 +3398,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "4aee8dd2f671123eb03e8cca5f32974e3923d335",
-        "original_ended_at": "2026-09-11T01:05:23Z",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3424,70 +3432,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "4aee8dd2f671123eb03e8cca5f32974e3923d335",
-        "original_ended_at": "2026-09-11T01:05:23Z",
-        "original_signer": "plancherb1"
-      },
-      "fingerprint": {
-        "algorithm": "sha256",
-        "digest": "bd7485aee17056cb2da77157768f3f8568c881636363d07f0196bcecf5f7bb9a",
-        "file_count": 12,
-        "included_paths": [
-          "test/cuda_equivalents/cuda_harness.py",
-          "test/cuda_equivalents/cuda_mjx_tier_invariance_runner.cu",
-          "test/cuda_equivalents/cuda_multi_target_position_gradient_runner.cu",
-          "test/cuda_equivalents/cuda_multi_target_position_runner.cu",
-          "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py",
-          "test/cuda_equivalents/test_cuda_mjx_tier_invariance.py",
-          "test/cuda_equivalents/test_cuda_multi_target_position.py",
-          "test/cuda_equivalents/test_cuda_multi_target_position_gradient.py",
-          "test/cuda_equivalents/test_cuda_osc_inertia_spill.py",
-          "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py",
-          "test/cuda_equivalents/test_cuda_plant_equivalence.py",
-          "test/cuda_equivalents/test_cuda_regressor.py"
-        ]
-      },
-      "name": "cuda_04_kinematics_thread__mjx_tier_inva",
-      "node_ids": [
-        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch1]",
-        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch16]",
-        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch256]",
-        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch1]",
-        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch16]",
-        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch256]",
-        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch1]",
-        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch16]",
-        "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch256]",
-        "test/cuda_equivalents/test_cuda_mjx_tier_invariance.py::test_mjx_second_order_tier_invariance[idsva_so]",
-        "test/cuda_equivalents/test_cuda_mjx_tier_invariance.py::test_mjx_second_order_tier_invariance[fdsva_so]",
-        "test/cuda_equivalents/test_cuda_multi_target_position.py::test_multi_target_position[iiwa14-fixed]",
-        "test/cuda_equivalents/test_cuda_multi_target_position.py::test_multi_target_position[baxter-fixed]",
-        "test/cuda_equivalents/test_cuda_multi_target_position_gradient.py::test_multi_target_position_gradient[iiwa14-fixed]",
-        "test/cuda_equivalents/test_cuda_multi_target_position_gradient.py::test_multi_target_position_gradient[baxter-fixed]",
-        "test/cuda_equivalents/test_cuda_osc_inertia_spill.py::test_cuda_osc_inertia_spill_matches_reference[g1-floating]",
-        "test/cuda_equivalents/test_cuda_osc_inertia_spill.py::test_cuda_osc_inertia_spill_matches_reference[iiwa14-fixed]",
-        "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[planar_arm.urdf]",
-        "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[translation_arm.urdf]",
-        "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[skew_planar_arm.urdf]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[iiwa14-fixed]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[go2-floating]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[fr3-fixed]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[iiwa14-fixed]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[go2-floating]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[iiwa14-fixed]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[go2-floating]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[fr3-fixed]",
-        "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_tangent_state_cost_matches_reference",
-        "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[iiwa14-fixed]",
-        "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[fr3-fixed]",
-        "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[g1-floating]"
-      ]
-    },
-    {
-      "carried": {
-        "from": "gpu-proof.json",
-        "original_commit_sha": "4aee8dd2f671123eb03e8cca5f32974e3923d335",
-        "original_ended_at": "2026-09-11T01:05:23Z",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3510,8 +3456,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "4aee8dd2f671123eb03e8cca5f32974e3923d335",
-        "original_ended_at": "2026-09-11T01:05:23Z",
+        "original_commit_sha": "2250cd0780c0111070aa5b6e3f190341393f9a82",
+        "original_ended_at": "2026-09-11T15:37:01Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3611,9 +3557,201 @@
     "backend": "ssh-local",
     "key_fingerprint": "SHA256:hfyUcDJTDLry3j7nJ9V2X8iEIgNFmFJQKGQirOdyWtY",
     "signer": "plancherb1",
-    "value": "yHwvdUwlTIdLud+4SUFyKRWxUgntiZZnvttHiaRWF3RWZKZGsSlv9MiMAQNi2/HZgpxLEfdqrpmOlwk7YSouCQ=="
+    "value": "5gjoN9Sao+aQlCRDK1nUOceG3NJ1V/d+YsavgGPAAx8d9EmwTkK98abO4PfmMs13WmiJHDkMqywrBzzyl+e5BA=="
   },
   "tests": [
+    {
+      "checks": [],
+      "duration_s": 67.0787,
+      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch1]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 52.3236,
+      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch16]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 804.0418,
+      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch256]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 17.0734,
+      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch1]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 42.2004,
+      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch16]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 449.1496,
+      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch256]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 61.988,
+      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch1]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 88.6627,
+      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch16]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 510.7902,
+      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch256]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 16.4237,
+      "node_id": "test/cuda_equivalents/test_cuda_mjx_tier_invariance.py::test_mjx_second_order_tier_invariance[idsva_so]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 25.2415,
+      "node_id": "test/cuda_equivalents/test_cuda_mjx_tier_invariance.py::test_mjx_second_order_tier_invariance[fdsva_so]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.1497,
+      "node_id": "test/cuda_equivalents/test_cuda_multi_target_position.py::test_multi_target_position[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 3.7332,
+      "node_id": "test/cuda_equivalents/test_cuda_multi_target_position.py::test_multi_target_position[baxter-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 2.3371,
+      "node_id": "test/cuda_equivalents/test_cuda_multi_target_position_gradient.py::test_multi_target_position_gradient[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 4.1116,
+      "node_id": "test/cuda_equivalents/test_cuda_multi_target_position_gradient.py::test_multi_target_position_gradient[baxter-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 57.9039,
+      "node_id": "test/cuda_equivalents/test_cuda_osc_inertia_spill.py::test_cuda_osc_inertia_spill_matches_reference[g1-floating]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 9.6971,
+      "node_id": "test/cuda_equivalents/test_cuda_osc_inertia_spill.py::test_cuda_osc_inertia_spill_matches_reference[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 8.1389,
+      "node_id": "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[planar_arm.urdf]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 8.138,
+      "node_id": "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[translation_arm.urdf]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 9.4074,
+      "node_id": "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[skew_planar_arm.urdf]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 571.9238,
+      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 718.7681,
+      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[go2-floating]",
+      "outcome": "skipped"
+    },
+    {
+      "checks": [],
+      "duration_s": 473.8532,
+      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[fr3-fixed]",
+      "outcome": "skipped"
+    },
+    {
+      "checks": [],
+      "duration_s": 567.448,
+      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 690.8437,
+      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[go2-floating]",
+      "outcome": "skipped"
+    },
+    {
+      "checks": [],
+      "duration_s": 561.983,
+      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 698.3941,
+      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[go2-floating]",
+      "outcome": "skipped"
+    },
+    {
+      "checks": [],
+      "duration_s": 474.4269,
+      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[fr3-fixed]",
+      "outcome": "skipped"
+    },
+    {
+      "checks": [],
+      "duration_s": 692.3838,
+      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_tangent_state_cost_matches_reference",
+      "outcome": "skipped"
+    },
+    {
+      "checks": [],
+      "duration_s": 8.4053,
+      "node_id": "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[iiwa14-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 7.8766,
+      "node_id": "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[fr3-fixed]",
+      "outcome": "passed"
+    },
+    {
+      "checks": [],
+      "duration_s": 36.427,
+      "node_id": "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[g1-floating]",
+      "outcome": "passed"
+    },
     {
       "checks": [],
       "duration_s": 5.8207,
@@ -11190,198 +11328,6 @@
       "checks": [],
       "duration_s": 436.944,
       "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[iiwa14-fixed-batch256]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 1883.4581,
-      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch1]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 50.6617,
-      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch16]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 803.2587,
-      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_ee_pose_thread_invariance[go2-floating-batch256]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 17.0104,
-      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch1]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 43.6856,
-      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch16]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 449.1739,
-      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[go2-floating-batch256]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 61.9203,
-      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch1]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 88.0836,
-      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch16]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 509.8194,
-      "node_id": "test/cuda_equivalents/test_cuda_kinematics_thread_invariance.py::test_frame_jacobian_thread_invariance[g1-floating-batch256]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 16.2963,
-      "node_id": "test/cuda_equivalents/test_cuda_mjx_tier_invariance.py::test_mjx_second_order_tier_invariance[idsva_so]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 25.5786,
-      "node_id": "test/cuda_equivalents/test_cuda_mjx_tier_invariance.py::test_mjx_second_order_tier_invariance[fdsva_so]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.8566,
-      "node_id": "test/cuda_equivalents/test_cuda_multi_target_position.py::test_multi_target_position[iiwa14-fixed]",
-      "outcome": "failed"
-    },
-    {
-      "checks": [],
-      "duration_s": 1.9347,
-      "node_id": "test/cuda_equivalents/test_cuda_multi_target_position.py::test_multi_target_position[baxter-fixed]",
-      "outcome": "failed"
-    },
-    {
-      "checks": [],
-      "duration_s": 0.8805,
-      "node_id": "test/cuda_equivalents/test_cuda_multi_target_position_gradient.py::test_multi_target_position_gradient[iiwa14-fixed]",
-      "outcome": "failed"
-    },
-    {
-      "checks": [],
-      "duration_s": 2.1575,
-      "node_id": "test/cuda_equivalents/test_cuda_multi_target_position_gradient.py::test_multi_target_position_gradient[baxter-fixed]",
-      "outcome": "failed"
-    },
-    {
-      "checks": [],
-      "duration_s": 58.8276,
-      "node_id": "test/cuda_equivalents/test_cuda_osc_inertia_spill.py::test_cuda_osc_inertia_spill_matches_reference[g1-floating]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 9.7087,
-      "node_id": "test/cuda_equivalents/test_cuda_osc_inertia_spill.py::test_cuda_osc_inertia_spill_matches_reference[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 8.3338,
-      "node_id": "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[planar_arm.urdf]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 8.1245,
-      "node_id": "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[translation_arm.urdf]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 9.4375,
-      "node_id": "test/cuda_equivalents/test_cuda_planar_translation_equivalence.py::test_cuda_decomposed_joint_matches_reference[skew_planar_arm.urdf]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 576.1292,
-      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 693.5034,
-      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[go2-floating]",
-      "outcome": "skipped"
-    },
-    {
-      "checks": [],
-      "duration_s": 470.1172,
-      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_matches_reference[fr3-fixed]",
-      "outcome": "skipped"
-    },
-    {
-      "checks": [],
-      "duration_s": 560.5076,
-      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 691.0277,
-      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_step_hessian_matches_reference[go2-floating]",
-      "outcome": "skipped"
-    },
-    {
-      "checks": [],
-      "duration_s": 566.9121,
-      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 692.9437,
-      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[go2-floating]",
-      "outcome": "skipped"
-    },
-    {
-      "checks": [],
-      "duration_s": 470.8988,
-      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_plant_centroidal_costs_match_reference[fr3-fixed]",
-      "outcome": "skipped"
-    },
-    {
-      "checks": [],
-      "duration_s": 693.9302,
-      "node_id": "test/cuda_equivalents/test_cuda_plant_equivalence.py::test_cuda_tangent_state_cost_matches_reference",
-      "outcome": "skipped"
-    },
-    {
-      "checks": [],
-      "duration_s": 8.4192,
-      "node_id": "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[iiwa14-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 7.8392,
-      "node_id": "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[fr3-fixed]",
-      "outcome": "passed"
-    },
-    {
-      "checks": [],
-      "duration_s": 36.8176,
-      "node_id": "test/cuda_equivalents/test_cuda_regressor.py::test_cuda_regressor_matches_reference[g1-floating]",
       "outcome": "passed"
     },
     {
