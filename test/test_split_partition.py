@@ -439,3 +439,26 @@ def test_resume_prunes_sha_divergent_clean_rows(tmp_path, monkeypatch):
     kept = rss.load_prior_results(
         tmp_path, {"s_same", "s_divergent", "s_noreceipt", "s_failed"})
     assert {r["shard"] for r in kept} == {"s_same", "s_noreceipt"}
+
+
+def test_plan_refresh_never_carries_recorded_failures(monkeypatch):
+    """2026-09-11: a fingerprint-clean shard whose recorded results contain a
+    non-passing test is stale anyway — carrying it would keep attesting the
+    old failure after a codegen-side fix that never touched its test files
+    (the cuda_04 MT case, live)."""
+    import codegen_neutrality
+    monkeypatch.setattr(codegen_neutrality, "cuda_carry_soundness",
+                        lambda r: (True, "stubbed neutral"))
+    ids = [_fid("iiwa14", "fixed", "crba", 1), _fid("go2", "fixed", "crba", 1)]
+    old = {"repo": {"commit_sha": "abc", "dirty": False},
+           "tests": [{"node_id": ids[0], "outcome": "failed"},
+                     {"node_id": ids[1], "outcome": "passed"}],
+           "shards": [
+        _mk_shard("cuda_00_bad", [ids[0]], ["test/cuda_equivalents/a.py"], "SAME"),
+        _mk_shard("cuda_01_good", [ids[1]], ["test/cuda_equivalents/b.py"], "SAME"),
+    ]}
+    stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
+        old, ids, [], {}, 7200.0, lambda paths: "SAME")
+    assert "cuda_00_bad" in stale and carried == ["cuda_01_good"]
+    assert {s.name for s in cuda_fresh} == {"cuda_00_bad"}
+    assert sorted(i for s in cuda_fresh for i in s.targets) == [ids[0]]

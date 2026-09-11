@@ -387,8 +387,19 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
         ids = s.get("node_ids") or []
         return bool(ids) and str(ids[0]).startswith("test/python_wrappers/")
 
+    # 2026-09-11: a shard whose RECORDED results contain non-passing tests is
+    # stale regardless of fingerprint — carrying it would ride known-red
+    # results into every future receipt (hit live: cuda_04's MT failures were
+    # fixed in CODEGEN, so its test-side fingerprint never changed and the
+    # carried row kept attesting the old failures).
+    _bad_ids = {t.get("node_id") for t in (old_receipt.get("tests") or [])
+                if t.get("outcome") not in ("passed", "skipped")}
+
     carried, stale = [], []
     for s in shards:
+        if _bad_ids.intersection(s.get("node_ids") or []):
+            stale.append(s)
+            continue
         fp = s.get("fingerprint") or {}
         paths = fp.get("included_paths") or []
         # 2026-09-09 fingerprint-schema upgrade: wrapper shards fingerprint the
