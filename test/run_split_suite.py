@@ -402,6 +402,24 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
         now = fingerprint_digest_fn(paths)
         (carried if now == fp.get("digest") else stale).append(s)
 
+    # 2026-09-11 byte-neutrality gate (user decision, option 2): cuda narrow
+    # fingerprints are test-side only — the GENERATOR inputs (grid_codegen,
+    # URDF assets, URDFParser pin) are pinned at receipt level. Carrying a
+    # fingerprint-clean cuda shard is therefore sound only when those inputs
+    # are unchanged vs the old receipt's commit OR the change is PROVEN to
+    # emit byte-identical headers over the covering matrix
+    # (test/codegen_neutrality.py). Otherwise the whole cuda domain is stale.
+    if any(not _is_wrapper(s) for s in carried):
+        from codegen_neutrality import cuda_carry_soundness  # noqa: PLC0415
+        carry_ok, reason = cuda_carry_soundness(old_receipt)
+        print(f"  cuda-carry soundness: {reason}")
+        if not carry_ok:
+            demoted = [s for s in carried if not _is_wrapper(s)]
+            carried = [s for s in carried if _is_wrapper(s)]
+            stale += demoted
+            print(f"  cuda-carry REFUSED -> {len(demoted)} fingerprint-clean "
+                  f"cuda shard(s) demoted to stale (full cuda re-proof)")
+
     old_wrapper_names = {s["name"] for s in shards if _is_wrapper(s)}
     stale_wrapper_names = {s["name"] for s in stale if _is_wrapper(s)}
     # Stale wrapper shard whose module still exists → re-run it; a module NEW

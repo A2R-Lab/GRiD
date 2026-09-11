@@ -259,7 +259,10 @@ def _mk_shard(name, ids, paths, digest):
             "fingerprint": {"included_paths": paths, "digest": digest}}
 
 
-def test_plan_refresh_stale_detection_and_repack():
+def test_plan_refresh_stale_detection_and_repack(monkeypatch):
+    import codegen_neutrality
+    monkeypatch.setattr(codegen_neutrality, "cuda_carry_soundness",
+                        lambda r: (True, "stubbed neutral"))
     # wrapper shards fingerprint the bindings source too (2026-09-09 schema);
     # the carried/stale wrapper fixtures record the NEW-style path lists.
     _W1 = ["test/python_wrappers/test_w1.py", "bindings/grid_rbd", "bindings/src"]
@@ -290,7 +293,10 @@ def test_plan_refresh_stale_detection_and_repack():
     assert {s.name for s in cuda_fresh} == {"cuda_01_stale"}
 
 
-def test_plan_refresh_edge_cases():
+def test_plan_refresh_edge_cases(monkeypatch):
+    import codegen_neutrality
+    monkeypatch.setattr(codegen_neutrality, "cuda_carry_soundness",
+                        lambda r: (True, "stubbed neutral"))
     ids = [_fid("iiwa14", "fixed", "crba", 1)]
     fn = {"a.py": "d1", "b.py": "CHANGED"}.__getitem__
     fn1 = lambda paths: fn(paths[0])
@@ -343,3 +349,68 @@ def test_plan_refresh_bindings_fingerprint_schema_upgrade():
         old, [], ["test_w_old"], {}, 7200.0, lambda paths: "SAME")
     assert set(stale) == {"test_w_old"} and not carried
     assert set(wrap_run) == {"test_w_old"} and not cuda_fresh
+
+
+def test_plan_refresh_cuda_carry_gate(monkeypatch):
+    """2026-09-11 byte-neutrality gate: fingerprint-clean cuda shards are
+    carried ONLY when codegen_neutrality declares the carry sound; otherwise
+    the whole cuda domain is demoted to stale (and the fresh partition
+    shadows every demoted name). Wrapper carries are never affected."""
+    import codegen_neutrality
+    ids = [_fid("iiwa14", "fixed", "crba", 1), _fid("go2", "fixed", "crba", 1)]
+    _W = ["test/python_wrappers/test_w.py", "bindings/grid_rbd", "bindings/src"]
+    old = {"repo": {"commit_sha": "deadbeef", "dirty": False}, "shards": [
+        _mk_shard("cuda_00_x", [ids[0]], ["test/cuda_equivalents/a.py"], "SAME"),
+        _mk_shard("cuda_01_y", [ids[1]], ["test/cuda_equivalents/b.py"], "SAME"),
+        _mk_shard("test_w", ["test/python_wrappers/test_w.py::t"], _W, "SAME"),
+    ]}
+    same = lambda paths: "SAME"
+
+    monkeypatch.setattr(codegen_neutrality, "cuda_carry_soundness",
+                        lambda r: (True, "proven"))
+    stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
+        old, ids, ["test_w"], {}, 7200.0, same)
+    assert set(carried) == {"cuda_00_x", "cuda_01_y", "test_w"} and not stale
+
+    monkeypatch.setattr(codegen_neutrality, "cuda_carry_soundness",
+                        lambda r: (False, "not neutral"))
+    stale, carried, wrap_run, cuda_fresh = rss.plan_refresh(
+        old, ids, ["test_w"], {}, 7200.0, same)
+    assert set(stale) == {"cuda_00_x", "cuda_01_y"}
+    assert carried == ["test_w"]          # wrapper carry untouched
+    assert {s.name for s in cuda_fresh} == {"cuda_00_x", "cuda_01_y"}
+    assert sorted(i for s in cuda_fresh for i in s.targets) == sorted(ids)
+
+
+def test_cuda_carry_soundness_paths(monkeypatch):
+    """Unit-level decision table for codegen_neutrality.cuda_carry_soundness:
+    unchanged inputs -> carry; changed+proven -> carry; changed+dirty old
+    receipt -> refuse; changed+not-neutral -> refuse; assume-neutral env ->
+    carry without proof."""
+    import codegen_neutrality as cn
+    clean = {"repo": {"commit_sha": "abc", "dirty": False}}
+
+    monkeypatch.setattr(cn, "codegen_inputs_changed", lambda sha: False)
+    ok, why = cn.cuda_carry_soundness(clean)
+    assert ok and "unchanged" in why
+
+    monkeypatch.setattr(cn, "codegen_inputs_changed", lambda sha: True)
+    monkeypatch.setattr(cn, "prove_byte_neutrality",
+                        lambda sha: (True, "6 matrix rows byte-identical"))
+    ok, why = cn.cuda_carry_soundness(clean)
+    assert ok and "PROVEN" in why
+
+    monkeypatch.setattr(cn, "prove_byte_neutrality",
+                        lambda sha: (False, "matrix rows differ: x"))
+    ok, why = cn.cuda_carry_soundness(clean)
+    assert not ok and "NOT byte-neutral" in why
+
+    ok, why = cn.cuda_carry_soundness(
+        {"repo": {"commit_sha": "abc", "dirty": True}})
+    assert not ok and "DIRTY" in why
+
+    assert not cn.cuda_carry_soundness({})[0]
+
+    monkeypatch.setenv("GRID_REFRESH_ASSUME_NEUTRAL", "1")
+    ok, why = cn.cuda_carry_soundness(clean)
+    assert ok and "WITHOUT proof" in why
