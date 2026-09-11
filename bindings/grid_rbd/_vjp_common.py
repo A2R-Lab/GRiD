@@ -30,8 +30,18 @@ from ._out_transform import _concat_last
 
 def _contract(ct, G):
     """Row-cotangent × matrix over the last two axes: (…, o) × (…, o, i) →
-    (…, i). Broadcast matmul; identical spelling for jax and torch."""
-    return (ct[..., None, :] @ G)[..., 0, :]
+    (…, i). Identical spelling for jax and torch.
+
+    Spelled as broadcast multiply + sum, NOT ``(ct[..., None, :] @ G)``:
+    under ``jax.jacobian`` the batched matmul lowers to an XLA gemm that is
+    TF32-eligible at the DEFAULT matmul precision (10-bit mantissa → ~5e-4
+    relative error; repro 2026-09-10: jacrev dc/dq off by 0.013 on O(64)
+    entries while the eager per-one-hot vjp was bit-exact, and
+    ``jax.default_matmul_precision("highest")`` restored 0.0). Multiply+sum
+    lowers to an exact fp32 multiply/reduce on both frameworks — the same
+    class the pre-collapse einsum spelling used — and these contractions are
+    tiny (nv × len(wrt)·nv), so gemm throughput is irrelevant."""
+    return (ct[..., :, None] * G).sum(-2)
 
 
 def _pad_tail(g, n):
