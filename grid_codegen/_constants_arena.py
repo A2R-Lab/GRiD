@@ -1595,6 +1595,13 @@ def _derive_device_bytes_lines(code_lines):
               or s.startswith("const bool needs_") or s.startswith("if (needs_")
               or s == "}"):
             out.append(line)
+        elif s.startswith("const int ") or s.startswith("const size_t "):
+            # Function-local decls feeding a later cudaMalloc size (the
+            # multi-target MT_*_SLOTS pair is the only site today) must ride
+            # into the bytes body too — dropping them leaves the transcribed
+            # size exprs referencing undefined identifiers (grid.cuh failed
+            # to COMPILE on MT robots, 2026-09-10 full pass, cuda_04).
+            out.append(line)
         elif "cudaMalloc" in line:
             raise RuntimeError("unclassified cudaMalloc in init_gridData: " + line)
     ws_tail = code_lines[ws_i:]
