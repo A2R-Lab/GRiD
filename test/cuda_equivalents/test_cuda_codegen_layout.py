@@ -457,16 +457,20 @@ def test_floating_header_does_not_require_second_order_kernels(tmp_path, robot_i
 @pytest.mark.developer_only
 @pytest.mark.floating_base
 @pytest.mark.parametrize(
-    ("robot_id", "algorithm_list", "generates_fdsva", "enable_world_frame"),
+    ("robot_id", "algorithm_list", "generates_fdsva", "enable_world_frame", "generates_body"),
     [
-        pytest.param("iiwa14", "idsva_so_body_frame", 0, False, id="iiwa14-idsva-body-frame-only"),
+        pytest.param("iiwa14", "idsva_so_body_frame", 0, False, 1, id="iiwa14-idsva-body-frame-only"),
         # fdsva_so on floating-base calls idsva_so_world_frame_inner, so codegen now
         # (correctly) requires enable_idsva_so_world_frame=True alongside fdsva_so on
         # floating-base — otherwise it raises ValueError to avoid a link-time
         # undefined symbol. Enable world frame for this case.
-        pytest.param("iiwa14", "idsva_so_body_frame,fdsva_so", 1, True, id="iiwa14-idsva-body-frame-fdsva"),
-        pytest.param("go2", "idsva_so_body_frame", 0, False, id="go2-idsva-body-frame-only"),
-        pytest.param("iiwa14", "idsva_so_body_frame", 0, True, id="iiwa14-idsva-body-frame-world-frame"),
+        # A6 (a40d06e): on a world-dispatching robot (floating here) the body-frame
+        # family is DEFAULT-DROPPED whenever world-frame emission is on — the
+        # dispatcher routes to world and floating fdsva_so composes the WORLD inner,
+        # so generates_body == int(not enable_world_frame) for these floating cases.
+        pytest.param("iiwa14", "idsva_so_body_frame,fdsva_so", 1, True, 0, id="iiwa14-idsva-body-frame-fdsva"),
+        pytest.param("go2", "idsva_so_body_frame", 0, False, 1, id="go2-idsva-body-frame-only"),
+        pytest.param("iiwa14", "idsva_so_body_frame", 0, True, 0, id="iiwa14-idsva-body-frame-world-frame"),
     ],
 )
 def test_floating_second_order_opt_in_header_compiles(
@@ -475,6 +479,7 @@ def test_floating_second_order_opt_in_header_compiles(
     algorithm_list,
     generates_fdsva,
     enable_world_frame,
+    generates_body,
 ):
     header = _generate_header(
         tmp_path,
@@ -486,7 +491,7 @@ def test_floating_second_order_opt_in_header_compiles(
     )
     constants = _constants(header)
 
-    assert constants["GRID_GENERATES_IDSVA_SO_BODY_FRAME"] == 1
+    assert constants["GRID_GENERATES_IDSVA_SO_BODY_FRAME"] == generates_body
     assert constants["GRID_GENERATES_FDSVA_SO"] == generates_fdsva
     assert constants["SECOND_ORDER_COORDS"] == constants["NUM_VEL"]
     assert constants["SECOND_ORDER_TENSOR_SIZE"] == 4 * constants["NUM_VEL"]**3
@@ -499,7 +504,10 @@ def test_floating_second_order_opt_in_header_compiles(
     # 2*NUM_POS — silent corruption, so this constant is a real ABI and is pinned here,
     # in test_cuda_input_abi.py, and by the device allocation / host memcpy / stride arg.
     assert constants["Q_QD_U_STRIDE"] == 3 * constants["NUM_POS"]
-    assert "void idsva_so_body_frame(gridData<T, KIND> *hd_data" in header
+    if generates_body:
+        assert "void idsva_so_body_frame(gridData<T, KIND> *hd_data" in header
+    else:
+        assert "void idsva_so_body_frame(gridData<T, KIND> *hd_data" not in header
     if generates_fdsva:
         assert "void fdsva_so(gridData<T, KIND> *hd_data" in header
     else:
@@ -517,7 +525,7 @@ def test_floating_second_order_opt_in_header_compiles(
         """
         #include "grid.cuh"
         int main() {
-            static_assert(grid::GRID_GENERATES_IDSVA_SO_BODY_FRAME == 1, "IDSVA-SO must be generated");
+            static_assert(grid::GRID_GENERATES_IDSVA_SO_BODY_FRAME == EXPECTED_BODY, "IDSVA-SO body-frame flag mismatch");
             static_assert(grid::GRID_GENERATES_FDSVA_SO == EXPECTED_FDSVA, "FDSVA-SO flag mismatch");
             static_assert(grid::SECOND_ORDER_COORDS == grid::NUM_VEL, "second-order tensor must be velocity-sized");
             static_assert(grid::SECOND_ORDER_TENSOR_SIZE == 4 * grid::NUM_VEL * grid::NUM_VEL * grid::NUM_VEL, "tensor size mismatch");
@@ -528,7 +536,8 @@ def test_floating_second_order_opt_in_header_compiles(
                           "published input-slot offset constants mismatch");
             return 0;
         }
-        """.replace("EXPECTED_FDSVA", str(generates_fdsva)),
+        """.replace("EXPECTED_FDSVA", str(generates_fdsva))
+           .replace("EXPECTED_BODY", str(generates_body)),
         f"{robot_id}_floating_so_{algorithm_list.replace(',', '_')}",
     )
 

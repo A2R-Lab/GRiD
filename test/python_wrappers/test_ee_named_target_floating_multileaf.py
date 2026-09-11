@@ -78,7 +78,7 @@ from RBDReference.equivalents import build_adapter, resolve_backend  # noqa: E40
 
 # _build_cuda_samples gives correct floating-quat sample layouts (q[0:3]=xyz,
 # q[3:7]=quat_xyzw normalized, q[7:]=joints) plus deterministic corner samples.
-from test.cuda_equivalents.test_cuda_executable_equivalence import (  # noqa: E402
+from test.cuda_equivalents.cuda_harness import (  # noqa: E402
     _build_cuda_samples,
 )
 
