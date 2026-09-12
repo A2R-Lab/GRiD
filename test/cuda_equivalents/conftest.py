@@ -35,6 +35,113 @@ import pytest
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _record_header_content_keys():
+    """A4 (2026-09-11): record every generated grid.cuh's CONTENT hash.
+
+    When ``GRID_HEADER_KEYS_OUT`` names a file (run_split_suite sets it per
+    cuda shard under --receipts), append one JSON line per header this shard
+    generates or reuses, so the shard's receipt gains a per-cell header
+    content-key sidecar. Wave A' consumes these at refresh time: regenerate a
+    cell's header CPU-side, compare content hashes, and re-run only the cells
+    whose emitted bytes actually rotated (instead of staling the whole cuda
+    domain on any codegen edit).
+
+    Two capture layers, both patched from HERE (deliberately not from
+    cuda_harness.py — that file is in every cuda shard's fingerprint, so an
+    edit there would itself stale the whole domain; this conftest is not):
+      - GRiDCodeGenerator.gen_all_code — every DIRECT per-test codegen call
+        (the ~26 non-flagship modules), with the bound call kwargs as the
+        best-effort recipe evidence;
+      - cuda_harness._generate_grid_header — the flagship header path, which
+        on a warm cache COPIES the header without calling gen_all_code (the
+        layer above would miss cache hits).
+    Recording is best-effort by design: a missing record makes Wave A'
+    conservatively stale that cell, never silently carry it.
+    """
+    out = os.environ.get("GRID_HEADER_KEYS_OUT")
+    if not out:
+        yield
+        return
+    import hashlib
+    import inspect
+    import json
+    from pathlib import Path
+
+    from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator
+
+    def emit(record: dict) -> None:
+        try:
+            with open(out, "a") as f:
+                f.write(json.dumps(record, sort_keys=True) + "\n")
+        except OSError:
+            pass
+
+    def _hash(path) -> str | None:
+        try:
+            return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        except OSError:
+            return None
+
+    orig_gen = GRiDCodeGenerator.gen_all_code
+    sig = inspect.signature(orig_gen)
+
+    def gen_wrapper(self, *args, **kwargs):
+        result = orig_gen(self, *args, **kwargs)
+        try:
+            bound = sig.bind(self, *args, **kwargs)
+            call = {k: v for k, v in bound.arguments.items() if k != "self"}
+            out_path = call.pop("output_path", None) or "grid.cuh"
+            import re
+            call = {k: (v if isinstance(v, (str, int, float, bool, type(None)))
+                        else sorted(v) if k == "algorithm_list"
+                        # strip id() addresses so records are run-stable
+                        else re.sub(r" at 0x[0-9a-f]+", "", repr(v)))
+                    for k, v in call.items()}
+            robot = getattr(self, "robot", None)
+            emit({"kind": "direct",
+                  "robot": getattr(robot, "name", None),
+                  "floating": bool(getattr(robot, "floating_base", False)),
+                  "kwargs": call,
+                  "content_sha256": _hash(out_path)})
+        except Exception:
+            pass
+        return result
+
+    try:
+        from test.cuda_equivalents import cuda_harness
+    except ImportError:
+        cuda_harness = None
+    orig_flagship = getattr(cuda_harness, "_generate_grid_header", None)
+
+    def flagship_wrapper(project_model, resolved_model, build_dir, config,
+                         codegen_algorithm_list=None):
+        header_path, header_key = orig_flagship(
+            project_model, resolved_model, build_dir, config,
+            codegen_algorithm_list=codegen_algorithm_list)
+        try:
+            emit({"kind": "flagship",
+                  "robot": project_model.spec.robot_id,
+                  "base_mode": project_model.base_mode,
+                  "header_key": header_key,
+                  "algorithm_list": (sorted(codegen_algorithm_list)
+                                     if codegen_algorithm_list else None),
+                  "content_sha256": _hash(header_path)})
+        except Exception:
+            pass
+        return header_path, header_key
+
+    GRiDCodeGenerator.gen_all_code = gen_wrapper
+    if orig_flagship is not None:
+        cuda_harness._generate_grid_header = flagship_wrapper
+    try:
+        yield
+    finally:
+        GRiDCodeGenerator.gen_all_code = orig_gen
+        if orig_flagship is not None:
+            cuda_harness._generate_grid_header = orig_flagship
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _pin_only_headers():
     """Default `gen_all_code` to `enable_mujoco_kernels=False` for this directory.
 

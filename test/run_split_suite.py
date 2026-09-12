@@ -605,6 +605,51 @@ def update_durations(merged_receipt: Path) -> None:
               f"{DURATIONS_PATH.relative_to(REPO_ROOT)}")
 
 
+HEADER_KEYS_PATH = REPO_ROOT / "test" / "gpu-proof-header-keys.json"
+
+
+def aggregate_header_keys(rdir: Path, results: list[dict]) -> None:
+    """A4 (2026-09-11): fold the per-shard header content-key sidecars
+    (receipts/<shard>.header_keys.jsonl, recorded by the cuda conftest) into
+    the COMMITTED aggregate test/gpu-proof-header-keys.json, carrying forward
+    the old aggregate's rows for shards that were carried (present in the
+    ledger, no fresh sidecar). Wave A' refresh planning reads the aggregate:
+    a cell whose header CONTENT hash still reproduces CPU-side need not
+    re-run; a shard with no rows stays conservatively fingerprint-ruled."""
+    new: dict[str, list] = {}
+    for p in sorted(rdir.glob("*.header_keys.jsonl")):
+        shard = p.name[: -len(".header_keys.jsonl")]
+        seen: set[str] = set()
+        rows = []
+        for line in p.read_text().splitlines():
+            line = line.strip()
+            if not line or line in seen:
+                continue
+            seen.add(line)
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        new[shard] = rows
+    old: dict[str, list] = {}
+    if HEADER_KEYS_PATH.exists():
+        try:
+            old = json.loads(HEADER_KEYS_PATH.read_text()).get("shards", {})
+        except (OSError, json.JSONDecodeError):
+            pass
+    ledger = {r.get("shard") for r in results}
+    for shard, rows in old.items():
+        if shard not in new and shard in ledger:
+            new[shard] = rows
+    HEADER_KEYS_PATH.write_text(json.dumps(
+        {"schema": 1, "shards": {k: new[k] for k in sorted(new)}},
+        indent=1, sort_keys=True) + "\n")
+    total = sum(len(v) for v in new.values())
+    where = (HEADER_KEYS_PATH.relative_to(REPO_ROOT)
+             if HEADER_KEYS_PATH.is_relative_to(REPO_ROOT) else HEADER_KEYS_PATH)
+    print(f"  header-keys: {len(new)} shard(s), {total} record(s) -> {where}")
+
+
 # ─── change-aware selection ──────────────────────────────────────────────────
 # A module's input fingerprint covers everything that can change its outcome:
 # the module file itself (registration kwargs live in it), the shared conftest,
@@ -1034,6 +1079,13 @@ def phase_run(shards: list[ShardSpec], out_dir: Path, receipts: bool,
             # ONE warm cache. NOTE the cache writers have no file locking:
             # shards must stay SERIAL (they are — one GPU, one at a time).
             env.setdefault("GRID_CUDA_CACHE_DIR", CUDA_CACHE_DIR_DEFAULT)
+            if receipts:
+                # A4: per-shard header content-key sidecar (recorded by the
+                # cuda conftest; consumed by Wave A' refresh planning). Fresh
+                # file per attempt so a re-run can't append onto stale rows.
+                keys_path = out_dir / "receipts" / f"{spec.name}.header_keys.jsonl"
+                keys_path.unlink(missing_ok=True)
+                env["GRID_HEADER_KEYS_OUT"] = str(keys_path)
         t0 = time.monotonic()
         with open(log_path, "w") as log:
             # start_new_session so a kill takes the WHOLE process group —
@@ -1466,6 +1518,7 @@ def main() -> int:
                 bad += 1
             elif bad == 0:
                 update_durations(merged)
+                aggregate_header_keys(rdir, results)
         else:
             print("  receipts: no shard receipts were produced")
 

@@ -462,3 +462,41 @@ def test_plan_refresh_never_carries_recorded_failures(monkeypatch):
     assert "cuda_00_bad" in stale and carried == ["cuda_01_good"]
     assert {s.name for s in cuda_fresh} == {"cuda_00_bad"}
     assert sorted(i for s in cuda_fresh for i in s.targets) == [ids[0]]
+
+
+def test_aggregate_header_keys_folds_and_carries(tmp_path, monkeypatch):
+    """A4: fresh sidecars are deduped + folded; carried shards (in the ledger,
+    no fresh sidecar) keep their committed rows; shards gone from the ledger
+    drop out."""
+    import run_split_suite as rss
+
+    committed = tmp_path / "gpu-proof-header-keys.json"
+    monkeypatch.setattr(rss, "HEADER_KEYS_PATH", committed)
+    committed.write_text(json.dumps({"schema": 1, "shards": {
+        "cuda_00": [{"kind": "flagship", "robot": "iiwa14",
+                     "content_sha256": "old00"}],
+        "cuda_01": [{"kind": "direct", "robot": "go2",
+                     "content_sha256": "old01"}],
+        "cuda_gone": [{"kind": "direct", "robot": "baxter",
+                       "content_sha256": "oldgone"}],
+    }}))
+    rdir = tmp_path / "receipts"
+    rdir.mkdir()
+    row = json.dumps({"kind": "flagship", "robot": "iiwa14",
+                      "content_sha256": "new00"}, sort_keys=True)
+    (rdir / "cuda_00.header_keys.jsonl").write_text(
+        row + "\n" + row + "\nnot-json\n")
+    results = [{"shard": "cuda_00", "kind": "OK"},
+               {"shard": "cuda_01", "kind": "OK"}]
+
+    rss.aggregate_header_keys(rdir, results)
+
+    data = json.loads(committed.read_text())["shards"]
+    # fresh sidecar replaces (and dedupes; junk line dropped)
+    assert data["cuda_00"] == [{"kind": "flagship", "robot": "iiwa14",
+                                "content_sha256": "new00"}]
+    # carried shard keeps committed rows
+    assert data["cuda_01"] == [{"kind": "direct", "robot": "go2",
+                                "content_sha256": "old01"}]
+    # shard absent from the ledger is dropped
+    assert "cuda_gone" not in data
