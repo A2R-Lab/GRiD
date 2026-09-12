@@ -872,23 +872,13 @@ TORCH_TABLE_ORDER: tuple[str, ...] = (
     "com", "ccrba", "cmm_time_variation", "dccrba", "frame_jacobian",
     "frame_jacobian_dot", "osc_inertia", "end_effector_pose_runtime",
     "end_effector_pose_gradient_runtime",
-    "quadratic_state_cost",
+    # Wave D 2026-09-12: the plant cost quartet are REAL spec rows now (the
+    # old COST side table dissolved); their table names de-prefix in
+    # _torch_table_row (historical torch op naming).
+    "plant_quadratic_state_cost",
     "plant_step", "plant_step_gradient",
-    "ee_pos_cost", "com_cost", "momentum_cost",
+    "plant_ee_pos_cost", "plant_com_cost", "plant_momentum_cost",
 )
-
-# Plant-cost rows without spec rows yet: (schema, gate or None=always, tail).
-TORCH_COST_SIDE_TABLE = {
-    "quadratic_state_cost": (
-        '"(Tensor x, Tensor x_des, Tensor Q) -> Tensor[]"', None,
-        "  // always emitted"),
-    "ee_pos_cost": ('"(Tensor q, Tensor p_des, Tensor W) -> Tensor[]"',
-                    "GRID_PLANT_HAS_EE_COST", ""),
-    "com_cost": ('"(Tensor q, Tensor p_des, Tensor W) -> Tensor[]"',
-                 "GRID_PLANT_HAS_COM_COST", ""),
-    "momentum_cost": ('"(Tensor q, Tensor qd, Tensor h_des, Tensor W) -> Tensor[]"',
-                      "GRID_PLANT_HAS_MOMENTUM_COST", ""),
-}
 
 _TORCH_TABLE_HEADER = """\
 // ── def/impl op table (X-macro) ──────────────────────────────────────────────
@@ -946,15 +936,22 @@ def _torch_schema(spec: AbiSpec) -> str:
 
 
 def _torch_table_row(key: str) -> str:
-    macro = "GRID_TORCH_ROW_" + key.upper()
-    if key in TORCH_COST_SIDE_TABLE:
-        schema, gate, tail = TORCH_COST_SIDE_TABLE[key]
-        if gate is None:
-            return f"#define {macro}(X) X({key}, {schema}){tail}\n"
-        return (f"#ifdef {gate}\n"
-                f"#define {macro}(X) X({key}, {schema})\n"
-                f"#else\n#define {macro}(X)\n#endif\n")
     spec = ABI_SPECS[key]
+    # Wave D: the plant COST rows (plant_returns) register their torch ops
+    # under the historical de-prefixed names; schema = the const T* tensor
+    # inputs -> Tensor[] (multi-output out/grad/hess). quadratic_state_cost
+    # is the one deliberately ALWAYS-emitted row (no plant gate).
+    if spec.plant_returns:
+        name = key.removeprefix("plant_")
+        macro = "GRID_TORCH_ROW_" + name.upper()
+        tensors = [n for n, t in spec.inputs if t == "const T*"]
+        schema = '"(' + ", ".join(f"Tensor {n}" for n in tensors) + ') -> Tensor[]"'
+        if spec.gate_macro is None:
+            return f"#define {macro}(X) X({name}, {schema})  // always emitted\n"
+        return (f"#ifdef {spec.gate_macro}\n"
+                f"#define {macro}(X) X({name}, {schema})\n"
+                f"#else\n#define {macro}(X)\n#endif\n")
+    macro = "GRID_TORCH_ROW_" + key.upper()
     gate = _torch_table_gate(key, spec)
     if spec.gate_requires:
         cond = " && ".join(f"defined({m})" for m in (*spec.gate_requires, gate))
@@ -968,6 +965,13 @@ def _torch_table_row(key: str) -> str:
             f"#else\n#define {macro}(X)\n#endif\n")
 
 
+def _torch_table_name(key: str) -> str:
+    """Registered torch-op name of a table row: plant COST rows (the ones
+    with plant_returns) drop the plant_ prefix (historical naming); the
+    plant_step family and every rbd op keep their key."""
+    return key.removeprefix("plant_") if ABI_SPECS[key].plant_returns else key
+
+
 def gen_torch_ops_table() -> str:
     parts = [TORCH_OPS_BEGIN + "\n",
              "// Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen\n",
@@ -975,7 +979,8 @@ def gen_torch_ops_table() -> str:
     parts += [_torch_table_row(k) for k in TORCH_TABLE_ORDER]
     parts.append("\n#define GRID_RBD_TORCH_OPS(X) \\\n")
     parts.append(" \\\n".join(
-        f"    GRID_TORCH_ROW_{k.upper()}(X)" for k in TORCH_TABLE_ORDER))
+        f"    GRID_TORCH_ROW_{_torch_table_name(k).upper()}(X)"
+        for k in TORCH_TABLE_ORDER))
     parts.append("\n" + TORCH_OPS_END + "\n")
     return "".join(parts)
 

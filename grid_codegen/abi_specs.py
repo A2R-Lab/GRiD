@@ -169,6 +169,14 @@ class AbiSpec:
                                               # row gate (fjd/osc need FRAME_JACOBIAN)
     hoist_out_size: bool = False              # hoist `const int out_size` + (size_t)batch
                                               # memcpy cast (id_regressor, fdpg)
+    # ── plant-surface fields (Wave D, 2026-09-12) ───────────────────────
+    # The plant cost/barrier twins are named grid_rbd_<key-minus-plant_>_mujoco
+    # (NOT grid_plant_*_mujoco like the plant_step family) — referee override.
+    mjx_twin_symbol: str | None = None
+    # Ordered (buffer, per-item dims) of a multi-output plant op's returns;
+    # dim tokens: "1", "3", "6", "nq", "nv", "nx" (nx = nq + nv). The buffer
+    # names must match the C out-param names (referee-checked).
+    plant_returns: tuple = ()
     # ── escape hatch ────────────────────────────────────────────────────
     body_override: bool = False
 
@@ -774,6 +782,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
     "plant_step": AbiSpec(
         "plant_step",
         surface_class="plant",
+        gate_macro="GRID_PLANT_HAS_STEP", gate_form="ifdef",
         py_vmap_ok=False,                # extern "C" grid_plant_step —
                                               # hand-written PlantBuffers body
         inputs=(("x", "const T*"), ("u", "const T*"), ("x_kp1", "T*"),
@@ -787,6 +796,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
     "plant_step_gradient": AbiSpec(
         "plant_step_gradient",
         surface_class="plant",
+        gate_macro="GRID_PLANT_HAS_STEP_GRADIENT", gate_form="ifdef",
         py_vmap_ok=False,
         inputs=(("x", "const T*"), ("u", "const T*"), ("dAB", "T*"),
                 ("batch", "int"), ("gravity", "float"), ("dt", "float"),
@@ -799,6 +809,7 @@ ABI_SPECS: dict[str, AbiSpec] = {
     "plant_step_hessian": AbiSpec(
         "plant_step_hessian",
         surface_class="plant",
+        gate_macro="GRID_PLANT_HAS_STEP_HESSIAN", gate_form="ifdef",
         py_vmap_ok=False,
         inputs=(("x", "const T*"), ("u", "const T*"), ("d2AB", "T*"),
                 ("batch", "int"), ("gravity", "float"), ("dt", "float"),
@@ -809,6 +820,95 @@ ABI_SPECS: dict[str, AbiSpec] = {
         # row-major already (H is C-order) — reshape only, no transpose.
         out_layout=("reshape", ("2*num_vel_", "3*num_vel_", "3*num_vel_")),
         py_surfaces=("numpy",),               # jax/torch don't expose it yet
+    ),
+
+    # ── plant cost/barrier rows (Wave D, 2026-09-12) — transcription of the
+    # hand-written PlantBuffers bodies (wrapper_template.cu; quadratic pair
+    # shares plant_quadratic_cost_impl<STATE>, barriers share
+    # plant_barrier_impl(which)). Bodies stay literal (body_override); the
+    # rows drive the torch op-table emission + the referee (incl. the
+    # GRID_PLANT_HAS_* gate coverage that was previously UNCHECKED). ──────
+    "plant_quadratic_state_cost": AbiSpec(
+        "plant_quadratic_state_cost",
+        surface_class="plant", py_vmap_ok=False,
+        # ALWAYS emitted — deliberately NO GRID_PLANT_HAS_* gate.
+        inputs=(("x", "const T*"), ("x_des", "const T*"), ("Q", "const T*"),
+                ("out", "T*"), ("grad", "T*"), ("hess", "T*"), ("batch", "int")),
+        has_mjx_twin=True,
+        mjx_twin_symbol="grid_rbd_quadratic_state_cost_mujoco",
+        plant_returns=(("out", ("1",)), ("grad", ("nx",)), ("hess", ("nx", "nx"))),
+        body_override=True,
+    ),
+    "plant_quadratic_input_cost": AbiSpec(
+        "plant_quadratic_input_cost",
+        surface_class="plant", py_vmap_ok=False,
+        inputs=(("u", "const T*"), ("u_des", "const T*"), ("R", "const T*"),
+                ("out", "T*"), ("grad", "T*"), ("hess", "T*"), ("batch", "int")),
+        # input cost is convention-invariant: NO mjx twin.
+        plant_returns=(("out", ("1",)), ("grad", ("nv",)), ("hess", ("nv", "nv"))),
+        body_override=True,
+    ),
+    "plant_joint_position_barrier": AbiSpec(
+        "plant_joint_position_barrier",
+        surface_class="plant", py_vmap_ok=False,
+        inputs=(("var", "const T*"), ("lower", "const T*"), ("upper", "const T*"),
+                ("mu", "float"), ("out", "T*"), ("grad", "T*"),
+                ("hess_diag", "T*"), ("batch", "int")),
+        plant_returns=(("out", ("1",)), ("grad", ("nq",)), ("hess_diag", ("nq",))),
+        body_override=True,   # shared plant_barrier_impl(POSITION)
+    ),
+    "plant_joint_velocity_barrier": AbiSpec(
+        "plant_joint_velocity_barrier",
+        surface_class="plant", py_vmap_ok=False,
+        inputs=(("var", "const T*"), ("lower", "const T*"), ("upper", "const T*"),
+                ("mu", "float"), ("out", "T*"), ("grad", "T*"),
+                ("hess_diag", "T*"), ("batch", "int")),
+        plant_returns=(("out", ("1",)), ("grad", ("nv",)), ("hess_diag", ("nv",))),
+        body_override=True,
+    ),
+    "plant_joint_torque_barrier": AbiSpec(
+        "plant_joint_torque_barrier",
+        surface_class="plant", py_vmap_ok=False,
+        inputs=(("var", "const T*"), ("lower", "const T*"), ("upper", "const T*"),
+                ("mu", "float"), ("out", "T*"), ("grad", "T*"),
+                ("hess_diag", "T*"), ("batch", "int")),
+        plant_returns=(("out", ("1",)), ("grad", ("nv",)), ("hess_diag", ("nv",))),
+        body_override=True,
+    ),
+    "plant_ee_pos_cost": AbiSpec(
+        "plant_ee_pos_cost",
+        surface_class="plant", py_vmap_ok=False,
+        gate_macro="GRID_PLANT_HAS_EE_COST", gate_form="ifdef",
+        inputs=(("q", "const T*"), ("p_des", "const T*"), ("W", "const T*"),
+                ("out", "T*"), ("grad", "T*"), ("hess", "T*"), ("batch", "int")),
+        has_mjx_twin=True,
+        mjx_twin_symbol="grid_rbd_ee_pos_cost_mujoco",
+        plant_returns=(("out", ("1",)), ("grad", ("nx",)), ("hess", ("nx", "nx"))),
+        body_override=True,   # GN J^T W J; smem proxy = EE_POSE_GRADIENT bytes
+    ),
+    "plant_com_cost": AbiSpec(
+        "plant_com_cost",
+        surface_class="plant", py_vmap_ok=False,
+        gate_macro="GRID_PLANT_HAS_COM_COST", gate_form="ifdef",
+        inputs=(("q", "const T*"), ("p_des", "const T*"), ("W", "const T*"),
+                ("out", "T*"), ("grad", "T*"), ("hess", "T*"), ("batch", "int")),
+        has_mjx_twin=True,
+        mjx_twin_symbol="grid_rbd_com_cost_mujoco",
+        plant_returns=(("out", ("1",)), ("grad", ("nx",)), ("hess", ("nx", "nx"))),
+        body_override=True,   # smem proxy = COM bytes; clamp com_cost_kernel
+    ),
+    "plant_momentum_cost": AbiSpec(
+        "plant_momentum_cost",
+        surface_class="plant", py_vmap_ok=False,
+        gate_macro="GRID_PLANT_HAS_MOMENTUM_COST", gate_form="ifdef",
+        inputs=(("q", "const T*"), ("qd", "const T*"), ("h_des", "const T*"),
+                ("W", "const T*"), ("out", "T*"), ("grad", "T*"),
+                ("hess", "T*"), ("batch", "int")),
+        has_mjx_twin=True,
+        mjx_twin_symbol="grid_rbd_momentum_cost_mujoco",
+        plant_returns=(("out", ("1",)), ("grad", ("nx",)), ("hess", ("nx", "nx"))),
+        body_override=True,   # h_des/W pack d_in_c halves; smem proxy = CCRBA
+                              # bytes; clamp (register-heavy, ~140 regs/thread)
     ),
 }
 

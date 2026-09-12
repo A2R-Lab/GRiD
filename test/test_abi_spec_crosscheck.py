@@ -34,11 +34,10 @@ _INFRA = {
     "set_transform_params", "get_transform_params", "has_runtime_transform",
     "set_joint_dynamics_params", "get_joint_dynamics_params",
     "has_runtime_joint_dynamics", "attach_tool", "detach_tool", "tool_info",
-    # plant surface: PlantBuffers-based, out of AbiSpec scope until the
-    # descriptor-table refactor reaches the plant layer
-    "plant_alloc", "plant_free", "plant_quadratic_cost", "plant_step",
-    "plant_step_gradient", "plant_step_hessian", "plant_ee_cost",
-    "plant_com_cost", "plant_momentum_cost", "plant_quadratic_state_cost",
+    # NOTE (Wave D 2026-09-12): the former plant_* entries here were dead
+    # weight — every plant body is grid_plant_-prefixed (or a *_mujoco twin),
+    # neither of which this grid_rbd_ coverage scan matches. The plant layer
+    # now has real spec rows; its referees are the plant-specific tests below.
     # device-pool (slab) framework-allocator integration
     "device_pool_bytes", "set_device_pool", "device_pool_used",
 }
@@ -95,9 +94,11 @@ def test_function_and_twin_exist(key):
     spec = ABI_SPECS[key]
     stem = _stem(spec)
     if spec.surface_class == "plant":
-        # hand-written PlantBuffers body under the grid_plant_ prefix
+        # hand-written PlantBuffers body under the grid_plant_ prefix; the
+        # cost twins are grid_rbd_<name>_mujoco (mjx_twin_symbol override)
         _fn_def_prefixed(stem[len("plant_"):], "grid_plant_")
-        has_twin = f"grid_{stem}_mujoco(" in _SRC
+        twin_sym = spec.mjx_twin_symbol or f"grid_{stem}_mujoco"
+        has_twin = f"{twin_sym}(" in _SRC
     elif spec.surface_class == "ffi_only":
         # no C-ABI body: the jax FFI handler is the ground truth
         assert f"grid_rbd_jax_{stem}_impl(" in _SRC, (
@@ -480,12 +481,15 @@ def test_no_default_tier_smem_on_tier_tuned_launches():
 
 def test_torch_ops_table_coverage():
     """X-macro row coverage: the GRID_RBD_TORCH_OPS table rows must be exactly
-    the torch-surface ops with a <bool MUJOCO> impl/_mujoco twin, plus the
-    four plant-cost side rows (real spec rows land with Wave D)."""
+    the torch-surface ops with a <bool MUJOCO> impl/_mujoco twin. Wave D: the
+    plant cost rows are real specs now; their TABLE names drop the plant_
+    prefix (historical torch op naming — plant_returns rows de-prefix, the
+    plant_step family keeps its prefix), so quadratic_input_cost/barriers
+    (no twin) correctly stay hand-registered outside the table."""
     rows = {m.lower() for m in re.findall(r"#define GRID_TORCH_ROW_([A-Z0-9_]+)\(X\)", _SRC)}
-    want = {k for k, s in ABI_SPECS.items()
+    want = {(k.removeprefix("plant_") if s.plant_returns else k)
+            for k, s in ABI_SPECS.items()
             if s.has_mjx_twin and (s.py_surfaces is None or "torch" in s.py_surfaces)}
-    want |= {"quadratic_state_cost", "ee_pos_cost", "com_cost", "momentum_cost"}
     assert rows == want, (f"op-table rows != expected: extra={sorted(rows - want)} "
                           f"missing={sorted(want - rows)}")
 
@@ -503,3 +507,52 @@ def test_gate_requires():
         for req in (*spec.gate_requires, spec.gate_macro or "GRID_HAS_" + key.upper()):
             assert f"defined({req})" in opener, (
                 f"{key}: gate_requires macro {req} not in row gate {opener!r}")
+
+
+# ── Wave D plant referees (2026-09-12) ──────────────────────────────────────
+
+def test_plant_gate_coverage():
+    """Every GRID_PLANT_HAS_* macro the template consumes must be carried by
+    exactly one plant spec row's gate_macro — these gates were UNCHECKED
+    before Wave D (a renamed/added plant gate could silently orphan its op).
+    """
+    used = set(re.findall(r"GRID_PLANT_HAS_[A-Z_0-9]+", _SRC))
+    carried = {s.gate_macro for s in ABI_SPECS.values()
+               if s.surface_class == "plant" and s.gate_macro}
+    missing = sorted(used - carried)
+    assert not missing, f"plant gates with no spec row: {missing}"
+    orphaned = sorted(carried - used)
+    assert not orphaned, f"spec rows carry unused plant gates: {orphaned}"
+
+
+@pytest.mark.parametrize("key", sorted(
+    k for k, s in ABI_SPECS.items() if s.plant_returns))
+def test_plant_returns_match_out_params(key):
+    """plant_returns buffer names must be exactly the C out-params (the T*
+    params after the last const input, before batch), in order."""
+    spec = ABI_SPECS[key]
+    outs = [n for (n, t) in spec.inputs if t == "T*"]
+    want = [b for b, _dims in spec.plant_returns]
+    assert outs == want, f"{key}: out params {outs} != plant_returns {want}"
+    for _b, dims in spec.plant_returns:
+        for d in dims:
+            assert d in ("1", "3", "6", "nq", "nv", "nx"), (
+                f"{key}: unknown plant_returns dim token {d!r}")
+
+
+def test_plant_twin_symbols_resolve():
+    """Each mjx_twin_symbol must name a real extern C fn; rows WITHOUT a twin
+    must not have one under either naming convention."""
+    for key, spec in ABI_SPECS.items():
+        if spec.surface_class != "plant":
+            continue
+        stem = spec.abi_stem or spec.key
+        if spec.has_mjx_twin:
+            sym = spec.mjx_twin_symbol or f"grid_{stem}_mujoco"
+            assert f'extern "C" int {sym}(' in _SRC, (
+                f"{key}: twin symbol {sym} not found")
+        else:
+            for sym in (f"grid_{stem}_mujoco",
+                        f"grid_rbd_{stem.removeprefix('plant_')}_mujoco"):
+                assert f'extern "C" int {sym}(' not in _SRC, (
+                    f"{key}: has_mjx_twin=False but {sym} exists")
