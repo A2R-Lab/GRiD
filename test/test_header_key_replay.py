@@ -151,3 +151,39 @@ def test_plan_refresh_per_shard_replay(monkeypatch, tmp_path):
     assert "cuda_rotated" in stale
     assert len(fallback_calls) == 1  # lazy, computed once
     assert {s.name for s in cuda_fresh} == {"cuda_rotated"}
+
+
+def test_collision_spec_record_replays(tmp_path):
+    """P3 outcome: collision specs are plain JSON-clean dicts, so a
+    collision-cell record replays GENERICALLY — no HEADER_RECIPES entry.
+    Guards the tuples->lists JSON round-trip staying byte-identical (if a
+    future spec field breaks serializability, the recorder routes it to
+    `opaque` and this test's record would go conservative instead of green)."""
+    from config import robot_urdf
+    from URDFParser import URDFParser
+    from grid_codegen.GRiDCodeGenerator import GRiDCodeGenerator
+    from grid_codegen.algorithms._collision import build_self_cc_ranges
+
+    urdf = Path(robot_urdf("iiwa14"))
+    out = tmp_path / "grid.cuh"
+    with hkr._apply_env(_ENV), open(os.devnull, "w") as devnull, \
+            contextlib.redirect_stdout(devnull):
+        robot = URDFParser().parse(str(urdf), floating_base=False)
+        spec = {"anchor": [2, 4],
+                "offset": [0.02, -0.01, 0.03, -0.02, 0.01, -0.03],
+                "radius": [0.5, 0.5],
+                "self_cc_ranges": build_self_cc_ranges(robot, [2, 4])}
+        GRiDCodeGenerator(robot, FILE_NAMESPACE="grid").gen_all_code(
+            codegen_profile="kinematics", output_path=str(out),
+            collision_spec=spec)
+    record = {
+        "kind": "direct", "robot": "iiwa14", "floating": False,
+        # what the recorder stores: the JSON round-trip of the kwargs
+        "kwargs": json.loads(json.dumps(
+            {"codegen_profile": "kinematics", "collision_spec": spec})),
+        "opaque": {}, "codegen": dict(_CTOR), "env": dict(_ENV),
+        "urdf_sha256": hashlib.sha256(urdf.read_bytes()).hexdigest(),
+        "content_sha256": hashlib.sha256(out.read_bytes()).hexdigest(),
+    }
+    ok, why = hkr.replay_record(record)
+    assert ok is True, why
