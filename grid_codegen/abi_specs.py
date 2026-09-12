@@ -1065,22 +1065,6 @@ for _k, _v in _GATE_REQUIRES.items():
 for _k in _HOIST_OUT_SIZE:
     ABI_SPECS[_k] = _replace(ABI_SPECS[_k], hoist_out_size=True)
 
-# TRANSCRIPTION of the wrapper's CURRENT smem-call spelling, per launch site:
-# members instantiate the bytes macro tier-aware (<T, launch_cfg<ALGO>::TIER>);
-# every other substitution site spells default-tier <T>() while LAUNCHING at
-# TIER. inverse_dynamics_gradient's member is its JAX handler (its torch body
-# is bespoke). ⚠A3 (finding #2) replaces this set with the registry rule
-# `tier-aware call iff not descriptor.tier_blind_bytes` — a flag-flip commit,
-# A/B-gated on divergent-tier robots — after which the 7 divergent rows
-# (id_regressor, fdpg, coriolis_matrix, energy, com, ccrba, osc_inertia)
-# switch spelling and this set is DELETED. Do not grow it.
-SMEM_TIER_CALL_SITES = frozenset({
-    "minv", "forward_dynamics", "aba", "crba", "end_effector_pose_gradient",
-    "end_effector_pose_hessian", "forward_dynamics_gradient", "fdsva_so",
-    "cmm_time_variation", "dccrba", "inverse_dynamics_gradient",
-})
-
-
 def kernel_symbol_for(spec: "AbiSpec") -> str:
     return spec.kernel_symbol or (spec.key + "_kernel")
 
@@ -1132,12 +1116,16 @@ def kernel_launch_args(spec: "AbiSpec", surface: str) -> tuple[str, ...]:
 def smem_bytes_call(spec: "AbiSpec") -> str:
     """The launch's dynamic-smem argument. Stem comes from the ALGO REGISTRY
     (bytes_macro_stem — gg/nle share INVERSE_DYNAMICS_BIAS); tier spelling
-    from SMEM_TIER_CALL_SITES (transcription; registry-ruled after A3)."""
+    follows the registry's tier_blind_bytes (A3, finding #2): a tier-aware
+    macro is instantiated at the LAUNCH tier — <T>() under a TIER-tuned
+    thread count requests the DEFAULT tier's byte count, the same
+    size-mismatch class the idsva_so launch note documents. Tier-blind
+    macros are emitted template<typename T> only, so <T>() is exact there
+    (passing a TIER would not compile)."""
     from grid_codegen.algo_registry import ALGO_DESCRIPTORS
-    stems = {d.key: d.bytes_macro_stem or (d.key.upper() + "_DYNAMIC_SHARED_MEM_BYTES")
-             for d in ALGO_DESCRIPTORS}
-    stem = stems[spec.key]
+    d = next(d for d in ALGO_DESCRIPTORS if d.key == spec.key)
+    stem = d.bytes_macro_stem or (spec.key.upper() + "_DYNAMIC_SHARED_MEM_BYTES")
     algo = spec.launch_algo or ("GRID_ALGO_" + spec.key.upper())
-    if spec.key in SMEM_TIER_CALL_SITES:
+    if not d.tier_blind_bytes:
         return f"grid::{stem}<T, grid::launch_cfg<grid::{algo}>::TIER>()"
     return f"grid::{stem}<T>()"
