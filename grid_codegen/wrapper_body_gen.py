@@ -543,7 +543,7 @@ def gen_mjx_block() -> str:
 # The torch op bodies, the jax FFI handlers (+ their BIND registrations), and
 # the torch X-macro op table, generated from the same ABI_SPECS rows (A1's
 # kernel_args / kernel_symbol / jax_buffer_inputs / hoist_out_size fields plus
-# the SMEM_TIER_CALL_SITES transcription set — registry-ruled after A3).
+# the registry's tier_blind_bytes for the smem-call tier spelling, A3).
 # Emitters were proven offline 2026-09-10 against the hand-written units
 # (torch 24/24 byte-identical, jax 26/26 semantically equal under the
 # documented canonicalization); the region landing normalizes the enumerated
@@ -555,7 +555,7 @@ def gen_mjx_block() -> str:
 # integrators, runtime-EE pair; all plant ops) stay hand-written OUTSIDE the
 # regions.
 from .abi_specs import (
-    SMEM_TIER_CALL_SITES, jax_buffer_inputs_for, jax_substitution_keys,
+    jax_buffer_inputs_for, jax_substitution_keys,
     kernel_launch_args, kernel_symbol_for, smem_bytes_call,
     torch_substitution_keys, torch_tensor_args)
 from .wrapper_surface_docs import (

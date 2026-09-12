@@ -316,7 +316,7 @@ def test_vjp_recipes_valid():
 # generated text (double coverage with the byte-gate, both cheap).
 
 from grid_codegen.abi_specs import (  # noqa: E402
-    SMEM_TIER_CALL_SITES, jax_buffer_inputs_for, jax_substitution_keys,
+    jax_buffer_inputs_for, jax_substitution_keys,
     kernel_launch_args, kernel_symbol_for, smem_bytes_call,
     torch_substitution_keys, torch_tensor_args,
 )
@@ -453,17 +453,29 @@ def test_hoist_out_size():
             f"{key}: hoist_out_size={want} mismatch in jax handler")
 
 
-def test_smem_tier_call_sites_shape():
-    """The transcription set must stay inside the tier-AWARE registry rows
-    (calling a tier-blind <T>-only macro with a TIER arg would not compile),
-    and every member must be a substitution row. A3 replaces the set with
-    `not descriptor.tier_blind_bytes` — this test then asserts equality."""
+def test_no_default_tier_smem_on_tier_tuned_launches():
+    """A3 (finding #2): wherever a kernel is LAUNCHED at a launch_cfg tier
+    (its template args carry launch_cfg<...>::TIER), the dynamic-smem
+    argument must not be a default-tier (<T>()) instantiation of a
+    tier-AWARE bytes macro — that requests the DEFAULT tier's byte count
+    under a TIER-tuned thread count (the idsva_so launch-failure class).
+    Sweeps every launch in the template, bespoke bodies included. Sites that
+    use a bytes macro merely to SIZE scratch for an untuned default-tier
+    kernel (tool_fext, the plant momentum_cost CCRBA proxy) launch WITHOUT
+    launch_cfg tier template args and are correctly out of scope."""
     from grid_codegen.algo_registry import ALGO_DESCRIPTORS
-    blind = {d.key for d in ALGO_DESCRIPTORS if d.tier_blind_bytes}
-    overlap = SMEM_TIER_CALL_SITES & blind
-    assert not overlap, f"tier-aware call on tier-blind macros: {overlap}"
-    stray = SMEM_TIER_CALL_SITES - set(_JAX_SUB)
-    assert not stray, f"SMEM_TIER_CALL_SITES members without surfaces: {stray}"
+    aware_stems = {d.bytes_macro_stem or (d.key.upper() + "_DYNAMIC_SHARED_MEM_BYTES")
+                   for d in ALGO_DESCRIPTORS if not d.tier_blind_bytes}
+    bad = []
+    for m in re.finditer(r"grid::(\w+)<([^;]*?)><<<(.*?)>>>", _SRC, re.S):
+        kern, targs, cfg = m.groups()
+        if "launch_cfg<" not in targs or "::TIER" not in targs:
+            continue
+        for sm in re.findall(r"(\w+_DYNAMIC_SHARED_MEM_BYTES)<T>\(\)", cfg):
+            if sm in aware_stems:
+                bad.append((kern, sm))
+    assert not bad, ("tier-tuned launches with default-tier smem bytes "
+                     f"(pass the launch tier to the macro): {bad}")
 
 
 def test_torch_ops_table_coverage():
