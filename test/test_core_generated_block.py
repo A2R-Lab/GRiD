@@ -31,5 +31,15 @@ def test_generated_methods_cover_all_specced_rows():
     from grid_codegen.core_body_gen import EXCLUDE, generated_keys
 
     keys = set(generated_keys())
-    expected = {k for k, s in ABI_SPECS.items() if s.py_out_dims and k not in EXCLUDE}
+    # Only "cabi" rows get generated pybind method bodies (638f87e); the other
+    # py_out_dims-carrying rows are the hand-written plant trio + the FFI-only
+    # fdpg — pinned here so a NEW non-cabi surface class can't silently skip
+    # pybind emission without showing up in this referee.
+    expected = {k for k, s in ABI_SPECS.items()
+                if s.py_out_dims and k not in EXCLUDE and s.surface_class == "cabi"}
     assert keys == expected
+    hand_written = {k for k, s in ABI_SPECS.items()
+                    if s.py_out_dims and k not in EXCLUDE and s.surface_class != "cabi"}
+    assert hand_written == {"plant_step", "plant_step_gradient",
+                            "plant_step_hessian",
+                            "forward_dynamics_parameter_gradient"}

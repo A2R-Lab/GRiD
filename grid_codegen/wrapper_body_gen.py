@@ -539,6 +539,447 @@ def gen_mjx_block() -> str:
     return "\n".join(parts) + "\n"
 
 
+# ── torch/jax surface regions (#4-6, A2 2026-09-11) ─────────────────────────
+# The torch op bodies, the jax FFI handlers (+ their BIND registrations), and
+# the torch X-macro op table, generated from the same ABI_SPECS rows (A1's
+# kernel_args / kernel_symbol / jax_buffer_inputs / hoist_out_size fields plus
+# the SMEM_TIER_CALL_SITES transcription set — registry-ruled after A3).
+# Emitters were proven offline 2026-09-10 against the hand-written units
+# (torch 24/24 byte-identical, jax 26/26 semantically equal under the
+# documented canonicalization); the region landing normalizes the enumerated
+# hand quirks (per-op local-decl layout, one misaligned wrap column, jax
+# per-op formatting/local-naming variance, the id handler's tautological
+# last-dim check) — every delta reviewed at the swap, receipts re-proven by
+# the wrapper-domain refresh. Bespoke surface bodies (torch id/id_grad qdd
+# forks, both integrators, idsva_so, runtime-EE pair; jax idsva_so, both
+# integrators, runtime-EE pair; all plant ops) stay hand-written OUTSIDE the
+# regions.
+from .abi_specs import (
+    SMEM_TIER_CALL_SITES, jax_buffer_inputs_for, jax_substitution_keys,
+    kernel_launch_args, kernel_symbol_for, smem_bytes_call,
+    torch_substitution_keys, torch_tensor_args)
+from .wrapper_surface_docs import (
+    JAX_OP_DOCS, JAX_TWIN_BIND_DOC_OPS, SECTION_BANNERS, TORCH_OP_DOCS)
+
+TORCH_BODIES_BEGIN = ("// ── BEGIN GENERATED TORCH OP BODIES "
+                      "(grid_codegen/wrapper_body_gen.py — do not hand-edit) ──")
+TORCH_BODIES_END = "// ── END GENERATED TORCH OP BODIES ──"
+JAX_HANDLERS_BEGIN = ("// ── BEGIN GENERATED JAX FFI HANDLERS "
+                      "(grid_codegen/wrapper_body_gen.py — do not hand-edit) ──")
+JAX_HANDLERS_END = "// ── END GENERATED JAX FFI HANDLERS ──"
+TORCH_OPS_BEGIN = ("// ── BEGIN GENERATED TORCH OP TABLE "
+                   "(grid_codegen/wrapper_body_gen.py — do not hand-edit) ──")
+TORCH_OPS_END = "// ── END GENERATED TORCH OP TABLE ──"
+
+# Region order = the hand-written file order at the swap (banners keyed to the
+# op they preceded). jax additionally emits id/id_grad (substitution there,
+# bespoke qdd-fork bodies on torch).
+TORCH_SURFACE_KEYS: tuple[str, ...] = (
+    "minv", "forward_dynamics", "aba", "crba", "end_effector_pose",
+    "end_effector_pose_gradient", "end_effector_pose_hessian",
+    "forward_dynamics_gradient", "fdsva_so", "inverse_dynamics_regressor",
+    "forward_dynamics_parameter_gradient", "generalized_gravity",
+    "nonlinear_effects", "coriolis_matrix", "kinetic_energy_regressor",
+    "potential_energy_regressor", "energy", "com", "ccrba",
+    "cmm_time_variation", "dccrba", "frame_jacobian", "frame_jacobian_dot",
+    "osc_inertia")
+JAX_SURFACE_KEYS: tuple[str, ...] = (
+    "inverse_dynamics", "minv", "forward_dynamics", "aba", "crba",
+    "end_effector_pose", "end_effector_pose_gradient",
+    "end_effector_pose_hessian", "inverse_dynamics_gradient",
+    "forward_dynamics_gradient", "fdsva_so", "inverse_dynamics_regressor",
+    "forward_dynamics_parameter_gradient", "generalized_gravity",
+    "nonlinear_effects", "coriolis_matrix", "kinetic_energy_regressor",
+    "potential_energy_regressor", "energy", "com", "ccrba",
+    "cmm_time_variation", "dccrba", "frame_jacobian", "frame_jacobian_dot",
+    "osc_inertia")
+_TORCH_REGION_BANNERS = {"inverse_dynamics_regressor": "torch_sysid",
+                         "generalized_gravity": "torch_ptier1"}
+_JAX_REGION_BANNERS = {"inverse_dynamics_regressor": "jax_regressor",
+                       "generalized_gravity": "jax_ptier1",
+                       "energy": "jax_wave2",
+                       "frame_jacobian": "jax_wave3"}
+
+# Load-bearing per-op comments inside the torch bodies (verbatim from the hand
+# originals; same preserved-comment pattern as the C-ABI emitters above).
+TORCH_PRE_PACK_COMMENTS: dict[str, str] = {
+    "inverse_dynamics_regressor":
+        "// qdd occupies the u-slot (read as the acceleration; mirrors the JAX handler).",
+}
+TORCH_PRE_ALLOC_COMMENTS: dict[str, str] = {
+    "minv": (
+        "// Minv is nv x nv (tangent-space); the kernel writes d_Minv nv*nv-strided.\n"
+        "    // Size the output + copy at nv*nv (unified with numpy/JAX). FIXED base: nv == nj."),
+    "crba": (
+        "// M is nv x nv (tangent-space); the kernel writes d_M nv*nv-strided. Size the\n"
+        "    // output + copy at nv*nv (unified with numpy/JAX). FIXED base: nv == nj."),
+    "forward_dynamics_gradient": (
+        "// df_du is nv x 2nv (tangent-space); the kernel writes d_df_du 2*nv*nv-strided.\n"
+        "    // Size + copy at 2*nv*nv (unified with numpy/JAX). FIXED base: nv == nj."),
+}
+
+_SURF_DIM_ORDER = (("grid::NUM_JOINTS", "nj"), ("grid::NUM_VEL", "nv"),
+                   ("grid::NUM_BODIES", "nb"), ("GRID_RBD_NUM_EES", "nee"))
+
+
+def _surface_gate(spec: AbiSpec) -> tuple[str, str]:
+    """(opener, closer) preprocessor lines of one surface unit. gate_requires
+    flattens the old nested frame-family blocks into composite gates."""
+    gate = spec.gate_macro or ("GRID_HAS_" + spec.key.upper())
+    if spec.gate_requires:
+        macros = (*spec.gate_requires, gate)
+        cond = " && ".join(f"defined({m})" for m in macros)
+        return f"#if {cond}", f"#endif  // {' && '.join(macros)}"
+    if spec.gate_form == "ifdef":
+        return f"#ifdef {gate}", f"#endif  // {gate}"
+    return f"#if {gate}", f"#endif  // {gate}"
+
+
+def _surface_size(spec: AbiSpec) -> tuple[str, str, list[str]]:
+    """(alloc_size, copy_size, local dims used): out_size_expr with dims as
+    locals — memcpy keeps the original parenthesization, alloc strips an outer
+    paren pair. SECOND_ORDER-sized ops keep the constant inline; hoisted ops
+    route through `out_size` (handled by the callers)."""
+    e = spec.out_size_expr
+    if "SECOND_ORDER" in e:
+        return e, e, []
+    dims = []
+    for full, loc in _SURF_DIM_ORDER:
+        if full in e:
+            e = e.replace(full, loc)
+            dims.append(loc)
+    e = " ".join(e.replace("*", " * ").split())
+    alloc = e[1:-1].strip() if e.startswith("(") and e.endswith(")") else e
+    return alloc, e, dims
+
+
+def emit_torch_body(key: str) -> str:
+    spec = ABI_SPECS[key]
+    tensors = list(torch_tensor_args(spec))
+    templated = spec.has_mjx_twin
+    args = [f"torch::Tensor {n}" for n in tensors]
+    args += [f"int64_t {n}" for n in ("target_jid", "reference_frame")
+             if n in spec.trailing_runtime_args]
+    if spec.takes_gravity:
+        args.append("double gravity")
+    if spec.f_ext_mode == "optional":
+        args.append("c10::optional<torch::Tensor> f_ext")
+    prefix = ("template <bool MUJOCO>\n" if templated else "") + \
+        f"torch::Tensor torch_{key}("
+    if any(a.startswith("c10::optional") for a in args):
+        # the optional f_ext alone wraps, aligned to the open paren
+        col = len(prefix.rsplit("\n", 1)[-1])
+        sig = prefix + ", ".join(args[:-1]) + ",\n" + " " * col + args[-1] + ") {"
+    else:
+        sig = prefix + ", ".join(args) + ") {"
+    alloc_size, copy_size, size_dims = _surface_size(spec)
+    if spec.hoist_out_size:
+        alloc_size = copy_size = "out_size"
+        size_dims = []
+    dims = [("grid::NUM_JOINTS", "nj")] + [
+        (f, l) for f, l in _SURF_DIM_ORDER if l in size_dims and l != "nj"]
+    decls = "    const int " + ", ".join(f"{l} = {f}" for f, l in dims) + ";"
+    checks = [f'grid_torch_check({n}, "{key}: {n}", nj);' for n in tensors]
+    joined = "    " + " ".join(checks)
+    check_lines = [joined] if len(joined) <= 140 else ["    " + c for c in checks]
+    pack = ["&" + n for n in tensors[:3]] + ["nullptr"] * (3 - len(tensors))
+    algo = spec.launch_algo or ("GRID_ALGO_" + key.upper())
+    ksym = kernel_symbol_for(spec)
+    targs = (f"T, grid::launch_cfg<grid::{algo}>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO"
+             if templated else "T")
+    L = [sig, "    grid_torch_init_or_throw();", decls, *check_lines,
+         "    int batch = grid_torch_batch(q);",
+         "    cudaStream_t stream = at::cuda::getCurrentCUDAStream();"]
+    if key in TORCH_PRE_PACK_COMMENTS:
+        L.append("    " + TORCH_PRE_PACK_COMMENTS[key])
+    L.append(f"    grid_torch_pack(stream, batch, nj, {', '.join(pack)});")
+    if spec.f_ext_mode == "optional":
+        L.append("    grid_torch_f_ext_apply(stream, batch, f_ext);")
+    if key in TORCH_PRE_ALLOC_COMMENTS:
+        L.append("    " + TORCH_PRE_ALLOC_COMMENTS[key])
+    if spec.hoist_out_size:
+        L.append(f"    const int out_size = {spec.out_size_expr};")
+    kargs = ", ".join(kernel_launch_args(spec, "torch"))
+    L += [f"    auto out = grid_torch_empty(batch, {alloc_size}, q);",
+          "    constexpr int stride = 3 * grid::NUM_JOINTS;",
+          f"    grid::{ksym}<{targs}><<<grid_rbd_grid_for(batch), "
+          f"grid_rbd_launch_threads_n<grid::{algo}>(batch), {smem_bytes_call(spec)}, stream>>>(",
+          f"        {kargs});",
+          f'    TORCH_CHECK(cudaGetLastError() == cudaSuccess, "{ksym} launch failed");']
+    batch_sz = "(size_t)batch" if spec.hoist_out_size else "batch"
+    out_arg = kernel_launch_args(spec, "torch")[0]
+    L.append(f"    cudaMemcpyAsync(out.data_ptr<T>(), {out_arg}, "
+             f"{batch_sz} * {copy_size} * sizeof(T), cudaMemcpyDeviceToDevice, stream);")
+    if spec.f_ext_mode == "optional":
+        L.append("    grid_torch_f_ext_reset(stream, batch, f_ext);")
+    L += ["    return out;", "}"]
+    return "\n".join(L) + "\n"
+
+
+def gen_torch_bodies_block() -> str:
+    parts = [TORCH_BODIES_BEGIN,
+             "// Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen",
+             "// Table: grid_codegen/abi_specs.py (kernel_args et al.); docs verbatim",
+             "// from grid_codegen/wrapper_surface_docs.py.",
+             ""]
+    assert set(TORCH_SURFACE_KEYS) == set(torch_substitution_keys())
+    for key in TORCH_SURFACE_KEYS:
+        if key in _TORCH_REGION_BANNERS:
+            parts.append(SECTION_BANNERS[_TORCH_REGION_BANNERS[key]])
+        opener, closer = _surface_gate(ABI_SPECS[key])
+        doc = TORCH_OP_DOCS.get(key)
+        parts.append(opener + "\n" + (doc if doc else "")
+                     + emit_torch_body(key) + closer + "\n")
+    parts.append(TORCH_BODIES_END)
+    return "\n".join(parts) + "\n"
+
+
+def emit_jax_handler(key: str) -> str:
+    spec = ABI_SPECS[key]
+    bufs = list(jax_buffer_inputs_for(spec))
+    kargs_tokens = spec.jax_kernel_args or spec.kernel_args
+    staged_qdd = "QDD" in kargs_tokens
+    packed = [b for b in bufs if b != "f_ext" and not (b == "qdd" and staged_qdd)]
+    templated = spec.has_mjx_twin
+    sig = ["    cudaStream_t stream"]
+    sig += [f"    ffi::Buffer<GRID_FFI_T> {b}" for b in bufs]
+    sig.append("    ffi::ResultBuffer<GRID_FFI_T> out")
+    sig += [f"    int64_t {a}" for a in spec.trailing_runtime_args]
+    if spec.takes_gravity:
+        sig.append("    T gravity")
+    _alloc, copy_size, size_dims = _surface_size(spec)
+    dims = [("grid::NUM_JOINTS", "nj")] + [
+        (f, l) for f, l in _SURF_DIM_ORDER if l in size_dims and l != "nj"]
+    L = []
+    if templated:
+        L.append("template <bool MUJOCO>")
+    L.append(f"static ffi::Error grid_rbd_jax_{key}_impl(")
+    L.append(",\n".join(sig) + ")")
+    L.append("{")
+    L.append('    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }')
+    L.append(f'    GRID_RBD_FFI_VALIDATE_2D(q, "{key}: q", grid::NUM_JOINTS);')
+    L.append("    int batch = (int)q.dimensions()[0];")
+    L.append("    int " + ", ".join(f"{l} = {f}" for f, l in dims) + ";")
+    L.append(f'    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("{key}: batch > max_batch");')
+    L.append("    const size_t row_bytes = nj * sizeof(T);")
+    L.append("    const size_t dst_pitch = 3 * nj * sizeof(T);")
+    slots = ["0", "nj", "2*nj"]
+    for i, b in enumerate(packed):
+        L.append(f"    cudaMemcpy2DAsync(&g_data->d_q_qd_u[{slots[i]}], dst_pitch, "
+                 f"{b}.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);")
+    if staged_qdd:
+        L.append("    cudaMemcpyAsync(g_data->d_qdd, qdd.typed_data(), "
+                 "batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);")
+    if "f_ext" in bufs:
+        L.append("    cudaMemcpyAsync(g_data->d_f_ext, f_ext.typed_data(), "
+                 "(size_t)batch * 6 * grid::NUM_BODIES * sizeof(T), cudaMemcpyDeviceToDevice, stream);")
+    L.append("    constexpr int stride = 3 * grid::NUM_JOINTS;")
+    algo = spec.launch_algo or ("GRID_ALGO_" + key.upper())
+    ksym = kernel_symbol_for(spec)
+    targs = (f"T, grid::launch_cfg<grid::{algo}>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO"
+             if templated else "T")
+    kargs = ", ".join(kernel_launch_args(spec, "jax"))
+    L.append(f"    grid::{ksym}<{targs}><<<")
+    L.append(f"        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::{algo}>(batch), {smem_bytes_call(spec)}, stream>>>(")
+    L.append(f"            {kargs});")
+    L.append(f'    if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("{ksym} launch failed");')
+    out_arg = kernel_launch_args(spec, "jax")[0]
+    if spec.hoist_out_size:
+        L.append(f"    const int out_size = {spec.out_size_expr};")
+        L.append(f"    cudaMemcpyAsync(out->typed_data(), {out_arg}, "
+                 f"batch * out_size * sizeof(T), cudaMemcpyDeviceToDevice, stream);")
+    else:
+        L.append(f"    cudaMemcpyAsync(out->typed_data(), {out_arg}, "
+                 f"batch * {copy_size} * sizeof(T), cudaMemcpyDeviceToDevice, stream);")
+    if "f_ext" in bufs:
+        L.append("    cudaMemsetAsync(g_data->d_f_ext, 0, "
+                 "(size_t)batch * 6 * grid::NUM_BODIES * sizeof(T), stream);")
+    L.append("    return ffi::Error::Success();")
+    L.append("}")
+    return "\n".join(L) + "\n"
+
+
+def _jax_bind(name: str, impl: str, spec: AbiSpec) -> str:
+    if spec.trailing_runtime_args:
+        # raw registration: int64 attrs have no BIND_* macro shape
+        args = "".join("        .Arg<ffi::Buffer<GRID_FFI_T>>()\n"
+                       for _ in jax_buffer_inputs_for(spec))
+        attrs = ".".join(f'Attr<int64_t>("{a}")' for a in spec.trailing_runtime_args)
+        return ("XLA_FFI_DEFINE_HANDLER_SYMBOL(\n"
+                f"    {name},\n"
+                f"    {impl},\n"
+                "    ffi::Ffi::Bind()\n"
+                "        .Ctx<ffi::PlatformStream<cudaStream_t>>()\n"
+                f"{args}"
+                "        .Ret<ffi::Buffer<GRID_FFI_T>>()\n"
+                f"        .{attrs}\n"
+                ");")
+    macro = (f"GRID_RBD_JAX_BIND_{len(jax_buffer_inputs_for(spec))}IN"
+             + ("_DT_IT" if spec.takes_dt_it else "")
+             + ("_GRAV" if spec.takes_gravity else ""))
+    return f"{macro}({name}, {impl});"
+
+
+def _jax_unit(key: str) -> str:
+    spec = ABI_SPECS[key]
+    opener, closer = _surface_gate(spec)
+    name = f"grid_rbd_jax_{key}"
+    impl = name + "_impl"
+    doc = JAX_OP_DOCS.get(key)
+    parts = [opener + "\n" + (doc if doc else "") + emit_jax_handler(key)]
+    if spec.has_mjx_twin:
+        parts.append("\n" + _jax_bind(name, impl + "<false>", spec) + "\n")
+        twin = ["\n#ifdef GRID_RBD_WITH_MUJOCO"]
+        if key in JAX_TWIN_BIND_DOC_OPS:
+            twin.append(f"// MuJoCo-convention {key} (floating only): identical "
+                        "plumbing, kernel launched with MUJOCO_OUTPUT=true.")
+        twin.append(_jax_bind(name + "_mujoco", impl + "<true>", spec))
+        twin.append("#endif  // GRID_RBD_WITH_MUJOCO")
+        parts.append("\n".join(twin) + "\n")
+    else:
+        parts.append("\n" + _jax_bind(name, impl, spec) + "\n")
+    parts.append(closer + "\n")
+    return "".join(parts)
+
+
+def gen_jax_handlers_block() -> str:
+    parts = [JAX_HANDLERS_BEGIN,
+             "// Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen",
+             "// Table: grid_codegen/abi_specs.py (kernel_args / jax_buffer_inputs",
+             "// et al.); docs verbatim from grid_codegen/wrapper_surface_docs.py.",
+             ""]
+    assert set(JAX_SURFACE_KEYS) == set(jax_substitution_keys())
+    for key in JAX_SURFACE_KEYS:
+        if key in _JAX_REGION_BANNERS:
+            parts.append(SECTION_BANNERS[_JAX_REGION_BANNERS[key]])
+        parts.append(_jax_unit(key))
+    parts.append(JAX_HANDLERS_END)
+    return "\n".join(parts) + "\n"
+
+
+# ── torch X-macro op table (region #4) ───────────────────────────────────────
+# Row order is the checked-in order; the coverage referee in
+# test_abi_spec_crosscheck.py asserts the row SET equals the spec-derived one.
+# The four cost rows have no spec rows yet (Wave D) — side table below.
+TORCH_TABLE_ORDER: tuple[str, ...] = (
+    "inverse_dynamics", "minv", "forward_dynamics", "aba", "crba",
+    "end_effector_pose", "end_effector_pose_gradient",
+    "end_effector_pose_hessian", "inverse_dynamics_gradient",
+    "forward_dynamics_gradient", "idsva_so", "fdsva_so",
+    "inverse_dynamics_regressor", "integrator", "integrator_gradient",
+    "generalized_gravity", "nonlinear_effects", "coriolis_matrix",
+    "kinetic_energy_regressor", "potential_energy_regressor", "energy",
+    "com", "ccrba", "cmm_time_variation", "dccrba", "frame_jacobian",
+    "frame_jacobian_dot", "osc_inertia", "end_effector_pose_runtime",
+    "end_effector_pose_gradient_runtime",
+    "quadratic_state_cost",
+    "plant_step", "plant_step_gradient",
+    "ee_pos_cost", "com_cost", "momentum_cost",
+)
+
+# Plant-cost rows without spec rows yet: (schema, gate or None=always, tail).
+TORCH_COST_SIDE_TABLE = {
+    "quadratic_state_cost": (
+        '"(Tensor x, Tensor x_des, Tensor Q) -> Tensor[]"', None,
+        "  // always emitted"),
+    "ee_pos_cost": ('"(Tensor q, Tensor p_des, Tensor W) -> Tensor[]"',
+                    "GRID_PLANT_HAS_EE_COST", ""),
+    "com_cost": ('"(Tensor q, Tensor p_des, Tensor W) -> Tensor[]"',
+                 "GRID_PLANT_HAS_COM_COST", ""),
+    "momentum_cost": ('"(Tensor q, Tensor qd, Tensor h_des, Tensor W) -> Tensor[]"',
+                      "GRID_PLANT_HAS_MOMENTUM_COST", ""),
+}
+
+_TORCH_TABLE_HEADER = """\
+// ── def/impl op table (X-macro) ──────────────────────────────────────────────
+// One row per op that has a <bool MUJOCO> impl template AND (on floating
+// builds) a _mujoco twin — i.e. every torch op except the pin-only stragglers
+// def'd/impl'd by hand after each table expansion below
+// (forward_dynamics_parameter_gradient, quadratic_input_cost, the three
+// barriers). Each row macro expands to X(name, sig) when its algorithm gate is
+// on and to NOTHING otherwise, so the def / impl / mjx-def / mjx-impl blocks
+// share ONE gate per op by construction (a schema def'd without its impl
+// throws a confusing error at call time; gating the def makes the op absent
+// instead, matching the numpy rc=3 / missing-symbol subset pattern — this also
+// fixes the formerly UNGATED energy/com/ccrba/cmm/dccrba/frame-family/
+// ee-runtime schema defs). The gate FORM is load-bearing: core-algo GRID_HAS_*
+// macros are always defined (to 1/0) -> #if; opt-in ones are defined-or-absent
+// -> #ifdef / defined().
+"""
+
+_TORCH_SCALAR_FMT = {"gravity": "float gravity", "dt": "float dt", "it": "int it",
+                     "target_jid": "int target_jid",
+                     "reference_frame": "int reference_frame",
+                     "offset": "Tensor offset"}
+
+
+def _torch_table_gate(key: str, spec: AbiSpec) -> str:
+    if spec.gate_macro:
+        return spec.gate_macro
+    if spec.surface_class == "plant":
+        return "GRID_PLANT_HAS_" + key.removeprefix("plant_").upper()
+    return "GRID_HAS_" + key.upper()
+
+
+def _torch_schema(spec: AbiSpec) -> str:
+    """Torch schema from the C-ABI input row. Uniform rule (reproduces both
+    historical 'exceptions'): tensors before the out slot in order (minus the
+    flag-fork qdd_opt), then dt/it if takes_dt_it, then gravity, then the
+    non-scalar trailing args, then `Tensor? qdd=None` (flag_fork) and
+    `Tensor? f_ext=None` (optional f_ext)."""
+    names = [n for n, _t in spec.inputs]
+    bi = names.index("batch")
+    tensors = [n for n in names[:bi - 1]
+               if not (spec.qdd_route == "flag_fork" and n == "qdd_opt")]
+    post = [n for n in names[bi + 1:] if n not in ("gravity", "f_ext", "dt", "it")]
+    args = [f"Tensor {n}" for n in tensors]
+    if spec.takes_dt_it:
+        args += ["float dt", "int it"]
+    if spec.takes_gravity:
+        args.append("float gravity")
+    args += [_TORCH_SCALAR_FMT[n] for n in post]
+    if spec.qdd_route == "flag_fork":
+        args.append("Tensor? qdd=None")
+    if spec.f_ext_mode == "optional":
+        args.append("Tensor? f_ext=None")
+    return '"(' + ", ".join(args) + ') -> Tensor"'
+
+
+def _torch_table_row(key: str) -> str:
+    macro = "GRID_TORCH_ROW_" + key.upper()
+    if key in TORCH_COST_SIDE_TABLE:
+        schema, gate, tail = TORCH_COST_SIDE_TABLE[key]
+        if gate is None:
+            return f"#define {macro}(X) X({key}, {schema}){tail}\n"
+        return (f"#ifdef {gate}\n"
+                f"#define {macro}(X) X({key}, {schema})\n"
+                f"#else\n#define {macro}(X)\n#endif\n")
+    spec = ABI_SPECS[key]
+    gate = _torch_table_gate(key, spec)
+    if spec.gate_requires:
+        cond = " && ".join(f"defined({m})" for m in (*spec.gate_requires, gate))
+        opener = f"#if {cond}"
+    elif spec.gate_form == "ifdef" or spec.surface_class == "plant":
+        opener = f"#ifdef {gate}"
+    else:
+        opener = f"#if {gate}"
+    return (f"{opener}\n"
+            f"#define {macro}(X) X({key}, {_torch_schema(spec)})\n"
+            f"#else\n#define {macro}(X)\n#endif\n")
+
+
+def gen_torch_ops_table() -> str:
+    parts = [TORCH_OPS_BEGIN + "\n",
+             "// Regenerate: .venv/bin/python -m grid_codegen.wrapper_body_gen\n",
+             _TORCH_TABLE_HEADER]
+    parts += [_torch_table_row(k) for k in TORCH_TABLE_ORDER]
+    parts.append("\n#define GRID_RBD_TORCH_OPS(X) \\\n")
+    parts.append(" \\\n".join(
+        f"    GRID_TORCH_ROW_{k.upper()}(X)" for k in TORCH_TABLE_ORDER))
+    parts.append("\n" + TORCH_OPS_END + "\n")
+    return "".join(parts)
+
+
 def template_path() -> Path:
     return Path(__file__).resolve().parents[1] / "bindings" / "grid_rbd" / "wrapper_template.cu"
 
@@ -548,6 +989,9 @@ REGIONS = (
     (BEGIN, END, gen_block),
     (CEIL_BEGIN, CEIL_END, gen_ceil_block),
     (MJX_BEGIN, MJX_END, gen_mjx_block),
+    (TORCH_OPS_BEGIN, TORCH_OPS_END, gen_torch_ops_table),
+    (TORCH_BODIES_BEGIN, TORCH_BODIES_END, gen_torch_bodies_block),
+    (JAX_HANDLERS_BEGIN, JAX_HANDLERS_END, gen_jax_handlers_block),
 )
 
 
@@ -573,7 +1017,8 @@ def main() -> int:
         return 0
     p.write_text(new)
     print(f"rewrote generated regions ({len(GENERATED_KEYS)} bodies + "
-          f"{len(CEIL_ROWS)} ceiling branches)")
+          f"{len(CEIL_ROWS)} ceiling branches + {len(TORCH_SURFACE_KEYS)} torch ops + "
+          f"{len(JAX_SURFACE_KEYS)} jax handlers + {len(TORCH_TABLE_ORDER)}-row op table)")
     return 0
 
 
