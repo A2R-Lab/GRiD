@@ -3204,10 +3204,10 @@ static ffi::Error grid_rbd_jax_forward_dynamics_impl(
     T gravity)
 {
     if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }
-    GRID_RBD_FFI_VALIDATE_2D(q, "fd: q", grid::NUM_JOINTS);
+    GRID_RBD_FFI_VALIDATE_2D(q, "forward_dynamics: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj    = grid::NUM_JOINTS;
-    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("fd: batch > max_batch");
+    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("forward_dynamics: batch > max_batch");
 
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -5288,7 +5288,7 @@ torch::Tensor torch_forward_dynamics(torch::Tensor q, torch::Tensor qd, torch::T
                                      c10::optional<torch::Tensor> f_ext) {
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
-    grid_torch_check(q, "fd: q", nj); grid_torch_check(qd, "fd: qd", nj); grid_torch_check(u, "fd: u", nj);
+    grid_torch_check(q, "forward_dynamics: q", nj); grid_torch_check(qd, "forward_dynamics: qd", nj); grid_torch_check(u, "forward_dynamics: u", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, &qd, &u);
@@ -5515,7 +5515,7 @@ torch::Tensor torch_forward_dynamics_gradient(torch::Tensor q, torch::Tensor qd,
     grid_torch_init_or_throw();
     const int nj = grid::NUM_JOINTS;
     const int nv = grid::NUM_VEL;
-    grid_torch_check(q, "fd_grad: q", nj); grid_torch_check(qd, "fd_grad: qd", nj); grid_torch_check(u, "fd_grad: u", nj);
+    grid_torch_check(q, "forward_dynamics_gradient: q", nj); grid_torch_check(qd, "forward_dynamics_gradient: qd", nj); grid_torch_check(u, "forward_dynamics_gradient: u", nj);
     int batch = grid_torch_batch(q);
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     grid_torch_pack(stream, batch, nj, &q, &qd, &u);

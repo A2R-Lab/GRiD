@@ -124,7 +124,31 @@ def test_function_and_twin_exist(key):
 @pytest.mark.parametrize("key", _SPEC_IDS)
 def test_signature_params(key):
     spec = ABI_SPECS[key]
-    if spec.surface_class in ("ffi_only", "kernel_only", "python_only"):
+    if spec.surface_class == "ffi_only":
+        # A1 2026-09-11: the row spells the inputs the C-ABI body WOULD take
+        # so the surface emitters derive uniformly; validate the tensor args
+        # against the actual jax handler buffers + torch op tensor params.
+        from grid_codegen.abi_specs import jax_buffer_inputs_for, torch_tensor_args
+        assert spec.inputs, f"{key}: ffi_only row now carries emitter inputs"
+        stem = _stem(spec)
+        m = re.search(r"static ffi::Error grid_rbd_jax_" + re.escape(stem)
+                      + r"_impl\(", _SRC)
+        assert m, f"{key}: no jax handler"
+        depth, i = 1, m.end()
+        while depth:
+            depth += _SRC[i] == "("
+            depth -= _SRC[i] == ")"
+            i += 1
+        bufs = tuple(re.findall(r"ffi::Buffer<GRID_FFI_T>\s+(\w+)", _SRC[m.end():i - 1]))
+        assert bufs == jax_buffer_inputs_for(spec), (
+            f"{key}: jax buffers {bufs} != derived {jax_buffer_inputs_for(spec)}")
+        tm = re.search(r"torch::Tensor torch_" + re.escape(stem) + r"\(([^)]*)\)", _SRC)
+        assert tm, f"{key}: no torch op"
+        tensors = tuple(re.findall(r"torch::Tensor\s+(\w+)", tm.group(1)))
+        assert tensors == torch_tensor_args(spec), (
+            f"{key}: torch tensors {tensors} != derived {torch_tensor_args(spec)}")
+        return
+    if spec.surface_class in ("kernel_only", "python_only"):
         assert spec.inputs == (), f"{key}: {spec.surface_class} rows carry no C params"
         return
     if spec.surface_class == "plant":
@@ -281,3 +305,189 @@ def test_vjp_recipes_valid():
             assert "u" in v.residuals, f"{key}: u_via_minv without a saved u"
             assert "minv" in ABI_SPECS
         assert not (set(v.nondiff) & set(v.wrt)), f"{key}: nondiff ∩ wrt"
+
+
+# ── A1 surface-emitter field referees (2026-09-11) ──────────────────────────
+# The kernel_args / kernel_symbol / smem / jax-buffer fields drive the torch
+# op-body and jax FFI-handler emitters (wrapper_body_gen REGIONS #4-6). Until
+# those regions land, these checks validate every field against the
+# HAND-WRITTEN surface bodies — the same transcribe-then-consume pattern as
+# the C-ABI half above. After the regions land they keep running against the
+# generated text (double coverage with the byte-gate, both cheap).
+
+from grid_codegen.abi_specs import (  # noqa: E402
+    SMEM_TIER_CALL_SITES, jax_buffer_inputs_for, jax_substitution_keys,
+    kernel_launch_args, kernel_symbol_for, smem_bytes_call,
+    torch_substitution_keys, torch_tensor_args,
+)
+
+_TORCH_SUB = torch_substitution_keys()
+_JAX_SUB = jax_substitution_keys()
+# Surface bodies that stay hand-written (bespoke qdd forks / IT dispatch /
+# frame fork / offset staging) — the emitters keep them literal.
+_TORCH_BESPOKE = {
+    "inverse_dynamics", "inverse_dynamics_gradient", "integrator",
+    "integrator_gradient", "idsva_so", "end_effector_pose_runtime",
+    "end_effector_pose_gradient_runtime",
+}
+_JAX_BESPOKE = {
+    "idsva_so", "integrator", "integrator_gradient",
+    "end_effector_pose_runtime", "end_effector_pose_gradient_runtime",
+}
+
+
+def _surface_body(name_re: str, key: str) -> str:
+    m = re.search(name_re, _SRC)
+    assert m, f"{key}: no {name_re} in wrapper_template.cu"
+    end = re.compile(r"^\}$", re.M).search(_SRC, m.start())
+    return _SRC[m.start():end.end()]
+
+
+def _torch_body(key):
+    return _surface_body(r"torch::Tensor torch_" + re.escape(key) + r"\(", key)
+
+
+def _jax_body(key):
+    return _surface_body(
+        r"static ffi::Error grid_rbd_jax_" + re.escape(key) + r"_impl\(", key)
+
+
+def _launch_args(body: str, key: str) -> list[str]:
+    i = body.find(">>>(")
+    assert i != -1, f"{key}: no kernel launch in body"
+    depth, j = 1, i + 4
+    while depth:
+        depth += body[j] == "("
+        depth -= body[j] == ")"
+        j += 1
+    return [a.strip() for a in body[i + 4:j - 1].split(",")]
+
+
+def _jax_norm(s: str) -> str:
+    s = re.sub(r"/\*.*?\*/", "", s, flags=re.S)    # /*arg=*/ annotations
+    s = re.sub(r"\bstride\w*\b", "stride", s)      # local stride_* names vary
+    s = s.replace("static_cast<T>(gravity)", "gravity").replace("(T)gravity", "gravity")
+    return re.sub(r"\s+", "", s)
+
+
+@pytest.mark.parametrize("key", sorted(_TORCH_SUB))
+def test_kernel_args_torch(key):
+    spec = ABI_SPECS[key]
+    body = _torch_body(key)
+    got = [re.sub(r"\s+", "", a) for a in _launch_args(body, key)]
+    want = [re.sub(r"\s+", "", a) for a in kernel_launch_args(spec, "torch")]
+    assert got == want, f"{key}: torch launch args {got} != spec {want}"
+    ksym = kernel_symbol_for(spec)
+    assert f"grid::{ksym}<" in body, f"{key}: kernel symbol {ksym} not launched"
+    assert re.sub(r"\s+", "", smem_bytes_call(spec)) in re.sub(r"\s+", "", body), (
+        f"{key}: smem call {smem_bytes_call(spec)} not in torch body")
+
+
+@pytest.mark.parametrize("key", sorted(_JAX_SUB))
+def test_kernel_args_jax(key):
+    spec = ABI_SPECS[key]
+    body = _jax_body(key)
+    got = [_jax_norm(a) for a in _launch_args(body, key)]
+    want = [_jax_norm(a) for a in kernel_launch_args(spec, "jax")]
+    assert got == want, f"{key}: jax launch args {got} != spec {want}"
+    ksym = kernel_symbol_for(spec)
+    assert f"grid::{ksym}<" in body, f"{key}: kernel symbol {ksym} not launched"
+    assert _jax_norm(smem_bytes_call(spec)) in _jax_norm(body), (
+        f"{key}: smem call {smem_bytes_call(spec)} not in jax handler")
+
+
+@pytest.mark.parametrize("key", sorted(_JAX_SUB))
+def test_jax_buffer_inputs(key):
+    spec = ABI_SPECS[key]
+    body = _jax_body(key)
+    sig = body[:body.index(")\n{") if ")\n{" in body else body.index("{")]
+    bufs = tuple(re.findall(r"ffi::Buffer<GRID_FFI_T>\s+(\w+)", sig))
+    assert bufs == jax_buffer_inputs_for(spec), (
+        f"{key}: handler buffers {bufs} != jax_buffer_inputs {jax_buffer_inputs_for(spec)}")
+
+
+def test_substitution_partitions():
+    """The substitution sets derive from kernel_args[_jax] presence and must
+    partition the surface inventory: every torch_<x>/jax impl body that is
+    NOT substitution-emitted is on the known-bespoke list (or plant/infra)."""
+    assert len(_TORCH_SUB) == 24 and len(_JAX_SUB) == 26
+    assert set(_JAX_SUB) - set(_TORCH_SUB) == {
+        "inverse_dynamics", "inverse_dynamics_gradient"}
+    torch_fns = set(re.findall(r"torch::Tensor torch_([a-z0-9_]+)\(", _SRC))
+    torch_fns -= {k for k in torch_fns if k.startswith("plant_")}
+    unaccounted = torch_fns - set(_TORCH_SUB) - _TORCH_BESPOKE
+    assert not unaccounted, f"torch bodies neither specced nor bespoke: {unaccounted}"
+    jax_fns = set(re.findall(r"grid_rbd_jax_([a-z0-9_]+)_impl\(", _SRC))
+    jax_fns = {f for f in jax_fns
+               if not f.startswith("plant_") and not f.endswith("_mujoco")}
+    unaccounted = jax_fns - set(_JAX_SUB) - _JAX_BESPOKE
+    assert not unaccounted, f"jax handlers neither specced nor bespoke: {unaccounted}"
+
+
+def test_err_prefixes_canonical():
+    """User decision 2026-09-11: error prefixes are the FULL op key — the
+    abbreviated fd/fd_grad spellings are gone and every substitution torch
+    body checks its tensors under its own key."""
+    assert '"fd: ' not in _SRC and '"fd_grad: ' not in _SRC
+    for key in _TORCH_SUB:
+        body = _torch_body(key)
+        for msg in re.findall(r'grid_torch_check\(\w+, "([^"]+)"', body):
+            assert msg.startswith(key + ": "), (
+                f"{key}: non-canonical check message {msg!r}")
+    for key in _JAX_SUB:
+        body = _jax_body(key)
+        for msg in re.findall(r'GRID_RBD_FFI_VALIDATE_2D\(\w+, "([^"]+)"', body):
+            assert msg.startswith(key + ": "), (
+                f"{key}: non-canonical validate message {msg!r}")
+
+
+def test_hoist_out_size():
+    for key, spec in ABI_SPECS.items():
+        if spec.kernel_args is None and spec.jax_kernel_args is None:
+            continue
+        want = spec.hoist_out_size
+        if key in _TORCH_SUB:
+            assert ("const int out_size" in _torch_body(key)) == want, (
+                f"{key}: hoist_out_size={want} mismatch in torch body")
+        assert ("const int out_size" in _jax_body(key)) == want, (
+            f"{key}: hoist_out_size={want} mismatch in jax handler")
+
+
+def test_smem_tier_call_sites_shape():
+    """The transcription set must stay inside the tier-AWARE registry rows
+    (calling a tier-blind <T>-only macro with a TIER arg would not compile),
+    and every member must be a substitution row. A3 replaces the set with
+    `not descriptor.tier_blind_bytes` — this test then asserts equality."""
+    from grid_codegen.algo_registry import ALGO_DESCRIPTORS
+    blind = {d.key for d in ALGO_DESCRIPTORS if d.tier_blind_bytes}
+    overlap = SMEM_TIER_CALL_SITES & blind
+    assert not overlap, f"tier-aware call on tier-blind macros: {overlap}"
+    stray = SMEM_TIER_CALL_SITES - set(_JAX_SUB)
+    assert not stray, f"SMEM_TIER_CALL_SITES members without surfaces: {stray}"
+
+
+def test_torch_ops_table_coverage():
+    """X-macro row coverage: the GRID_RBD_TORCH_OPS table rows must be exactly
+    the torch-surface ops with a <bool MUJOCO> impl/_mujoco twin, plus the
+    four plant-cost side rows (real spec rows land with Wave D)."""
+    rows = {m.lower() for m in re.findall(r"#define GRID_TORCH_ROW_([A-Z0-9_]+)\(X\)", _SRC)}
+    want = {k for k, s in ABI_SPECS.items()
+            if s.has_mjx_twin and (s.py_surfaces is None or "torch" in s.py_surfaces)}
+    want |= {"quadratic_state_cost", "ee_pos_cost", "com_cost", "momentum_cost"}
+    assert rows == want, (f"op-table rows != expected: extra={sorted(rows - want)} "
+                          f"missing={sorted(want - rows)}")
+
+
+def test_gate_requires():
+    """Composite row gates: each gate_requires macro must appear AND-ed in the
+    #if line right above the op-table row macro definition."""
+    for key, spec in ABI_SPECS.items():
+        if not spec.gate_requires:
+            continue
+        macro = f"#define GRID_TORCH_ROW_{key.upper()}(X)"
+        i = _SRC.index(macro)
+        opener = _SRC[:i].rstrip().rsplit("\n", 1)[-1]
+        assert opener.startswith("#if "), f"{key}: row gate is not an #if ({opener!r})"
+        for req in (*spec.gate_requires, spec.gate_macro or "GRID_HAS_" + key.upper()):
+            assert f"defined({req})" in opener, (
+                f"{key}: gate_requires macro {req} not in row gate {opener!r}")

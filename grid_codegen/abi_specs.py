@@ -148,6 +148,27 @@ class AbiSpec:
     py_rc3_msg: str | None = None             # _core's rc==3 message (differs from the wrapper stub)
     py_twin_guard: str | None = None          # the *_mujoco method's null-fn guard message
     vjp: "VjpSpec | None" = None              # analytic-VJP recipe (A4-1); see VjpSpec
+    # ── torch/jax surface-emitter fields (A1, 2026-09-11) ───────────────
+    # Proven by the 2026-09-10 offline emitter drafts (torch bodies 24/24
+    # byte-identical, jax handlers 26/26 semantically equal). A row with
+    # kernel_args set is SUBSTITUTION-emitted on torch; kernel_args OR
+    # jax_kernel_args set -> substitution-emitted on jax. Rows with neither
+    # keep bespoke hand-written surface bodies (id/id_grad torch qdd forks,
+    # integrator pair, idsva_so frame fork, runtime-EE offset staging).
+    # kernel_args: ordered launch-arg tokens (see KERNEL_ARG_TOKENS); the
+    # SAME tuple drives both surfaces except where jax_kernel_args overrides
+    # (id/id_grad: jax always passes d_qdd, no flag fork on that surface).
+    kernel_args: tuple[str, ...] | None = None
+    jax_kernel_args: tuple[str, ...] | None = None
+    kernel_symbol: str | None = None          # None -> key+"_kernel"; EE trio = macros
+    # jax handler ffi::Buffer inputs in order; None -> the packed tensor args
+    # (torch_tensor_args). Trailing "qdd" stages via cudaMemcpy to d_qdd (NOT
+    # a pack slot); trailing "f_ext" stages to d_f_ext + memset-after epilogue.
+    jax_buffer_inputs: tuple[str, ...] | None = None
+    gate_requires: tuple[str, ...] = ()       # extra macros AND-ed into the op-table
+                                              # row gate (fjd/osc need FRAME_JACOBIAN)
+    hoist_out_size: bool = False              # hoist `const int out_size` + (size_t)batch
+                                              # memcpy cast (id_regressor, fdpg)
     # ── escape hatch ────────────────────────────────────────────────────
     body_override: bool = False
 
@@ -725,7 +746,16 @@ ABI_SPECS: dict[str, AbiSpec] = {
         "forward_dynamics_parameter_gradient",
         surface_class="ffi_only",             # no C-ABI body: jax FFI handler
                                               # + torch op only (sysID ∂qdd/∂π)
+        # A1 2026-09-11: real inputs/out for the surface emitters — the row is
+        # spelled as the C-ABI body WOULD be (tensors, out slot, batch,
+        # gravity) so torch_tensor_args/jax_buffer_inputs_for derive uniformly;
+        # the referee validates against the jax handler + torch op instead of
+        # a (nonexistent) extern "C" signature.
+        inputs=(("q", "const T*"), ("qd", "const T*"), ("u", "const T*"),
+                ("dqdd_dpi_out", "T*"), ("batch", "int"), ("gravity", "T")),
         takes_gravity=True,
+        out_buffer="d_dqdd_dpi", out_copy="cudaMemcpy_d",
+        out_size_expr="grid::NUM_VEL * 10 * grid::NUM_BODIES",
         py_out_dims=('num_vel_', '10 * num_bodies_'),
         out_layout=("reshape", ("num_vel_", "10*num_bodies_")),
         py_surfaces=("jax", "torch"),
@@ -944,3 +974,170 @@ ABI_SPECS["forward_dynamics_wrt_params"] = AbiSpec(
         nondiff=("f_ext",),
     ),
 )
+
+
+# ── torch/jax surface-emitter tables (A1, 2026-09-11) ───────────────────────
+# Transcribed 1:1 from the PROVEN offline drafts (torch bodies 24/24
+# byte-identical, jax handlers 26/26 semantically equal —
+# docs/open-tasks/surface_gen_drafts_2026-09-10). Applied onto the rows via
+# dataclasses.replace (the _VJPS pattern) so the draft tables stay visibly
+# what landed. Error-string prefixes are CANONICALIZED to the full op key
+# (user decision 2026-09-11) — there is deliberately NO err_prefix field, and
+# the three abbreviated sites (torch fd/fd_grad, jax fd) were edited in
+# wrapper_template.cu the same day.
+
+# Launch-arg token vocabulary. OUT expands per-row from out_buffer; GRAV is
+# the one per-surface difference ((T)gravity on torch, gravity on jax — the
+# jax impl signature already types it T).
+KERNEL_ARG_TOKENS = (
+    "OUT", "WS", "QQDU", "STRIDE", "QDD", "FEXT", "IDSVA", "EEGRAD",
+    "JID", "FRAME", "ROBOT", "GRAV", "BATCH")
+
+_KERNEL_ARGS = {
+    "minv":         ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "BATCH"),
+    "forward_dynamics": ("OUT", "WS", "QQDU", "STRIDE", "FEXT", "ROBOT", "GRAV", "BATCH"),
+    "aba":          ("OUT", "WS", "QQDU", "STRIDE", "FEXT", "ROBOT", "GRAV", "BATCH"),
+    "crba":         ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "GRAV", "BATCH"),
+    "end_effector_pose": ("OUT", "QQDU", "STRIDE", "ROBOT", "BATCH"),
+    "end_effector_pose_gradient": ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "BATCH"),
+    "end_effector_pose_hessian": ("OUT", "EEGRAD", "WS", "QQDU", "STRIDE", "ROBOT", "BATCH"),
+    "forward_dynamics_gradient": ("OUT", "WS", "QQDU", "STRIDE", "FEXT", "ROBOT", "GRAV", "BATCH"),
+    "fdsva_so":     ("OUT", "WS", "QQDU", "STRIDE", "IDSVA", "ROBOT", "GRAV", "BATCH"),
+    "inverse_dynamics_regressor": ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "GRAV", "BATCH"),
+    "forward_dynamics_parameter_gradient": ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "GRAV", "BATCH"),
+    "generalized_gravity": ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "GRAV", "BATCH"),
+    "nonlinear_effects": ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "GRAV", "BATCH"),
+    "coriolis_matrix": ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "GRAV", "BATCH"),
+    "kinetic_energy_regressor": ("OUT", "QQDU", "STRIDE", "ROBOT", "GRAV", "BATCH"),
+    "potential_energy_regressor": ("OUT", "QQDU", "STRIDE", "ROBOT", "GRAV", "BATCH"),
+    "energy":       ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "GRAV", "BATCH"),
+    "com":          ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "BATCH"),
+    "ccrba":        ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "BATCH"),
+    "cmm_time_variation": ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "BATCH"),
+    "dccrba":       ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "BATCH"),
+    "frame_jacobian": ("OUT", "QQDU", "STRIDE", "JID", "FRAME", "ROBOT", "BATCH"),
+    "frame_jacobian_dot": ("OUT", "QQDU", "STRIDE", "JID", "FRAME", "ROBOT", "BATCH"),
+    "osc_inertia":  ("OUT", "WS", "QQDU", "STRIDE", "ROBOT", "BATCH"),
+}
+
+# id has qdd as 3rd kernel arg and no workspace (the torch fork's qdd branch);
+# jax always passes d_qdd (zeros when the caller omits qdd), so these two are
+# substitution-emitted on jax while staying bespoke qdd-fork bodies on torch.
+_JAX_KERNEL_ARGS = {
+    "inverse_dynamics": ("OUT", "QQDU", "STRIDE", "QDD", "FEXT", "ROBOT", "GRAV", "BATCH"),
+    "inverse_dynamics_gradient": ("OUT", "WS", "QQDU", "STRIDE", "QDD", "FEXT", "ROBOT", "GRAV", "BATCH"),
+}
+
+_KERNEL_SYMBOL = {
+    "end_effector_pose": "GRID_RBD_EE_POSE_KERNEL",
+    "end_effector_pose_gradient": "GRID_RBD_EE_POSE_GRADIENT_KERNEL",
+    "end_effector_pose_hessian": "GRID_RBD_EE_POSE_HESSIAN_KERNEL",
+}
+
+# Only the rows whose jax buffer list is NOT the packed tensor args: the three
+# value ops take REQUIRED f_ext buffers (yet the gradients launch with d_f_ext
+# without taking one), and id/id_grad take a required qdd buffer.
+_JAX_BUFFER_INPUTS = {
+    "inverse_dynamics": ("q", "qd", "qdd", "f_ext"),
+    "inverse_dynamics_gradient": ("q", "qd", "qdd"),
+    "forward_dynamics": ("q", "qd", "u", "f_ext"),
+    "aba": ("q", "qd", "u", "f_ext"),
+}
+
+_GATE_REQUIRES = {
+    "frame_jacobian_dot": ("GRID_HAS_FRAME_JACOBIAN",),
+    "osc_inertia": ("GRID_HAS_FRAME_JACOBIAN",),
+}
+
+_HOIST_OUT_SIZE = ("inverse_dynamics_regressor",
+                   "forward_dynamics_parameter_gradient")
+
+for _k, _v in _KERNEL_ARGS.items():
+    ABI_SPECS[_k] = _replace(ABI_SPECS[_k], kernel_args=_v)
+for _k, _v in _JAX_KERNEL_ARGS.items():
+    ABI_SPECS[_k] = _replace(ABI_SPECS[_k], jax_kernel_args=_v)
+for _k, _v in _KERNEL_SYMBOL.items():
+    ABI_SPECS[_k] = _replace(ABI_SPECS[_k], kernel_symbol=_v)
+for _k, _v in _JAX_BUFFER_INPUTS.items():
+    ABI_SPECS[_k] = _replace(ABI_SPECS[_k], jax_buffer_inputs=_v)
+for _k, _v in _GATE_REQUIRES.items():
+    ABI_SPECS[_k] = _replace(ABI_SPECS[_k], gate_requires=_v)
+for _k in _HOIST_OUT_SIZE:
+    ABI_SPECS[_k] = _replace(ABI_SPECS[_k], hoist_out_size=True)
+
+# TRANSCRIPTION of the wrapper's CURRENT smem-call spelling, per launch site:
+# members instantiate the bytes macro tier-aware (<T, launch_cfg<ALGO>::TIER>);
+# every other substitution site spells default-tier <T>() while LAUNCHING at
+# TIER. inverse_dynamics_gradient's member is its JAX handler (its torch body
+# is bespoke). ⚠A3 (finding #2) replaces this set with the registry rule
+# `tier-aware call iff not descriptor.tier_blind_bytes` — a flag-flip commit,
+# A/B-gated on divergent-tier robots — after which the 7 divergent rows
+# (id_regressor, fdpg, coriolis_matrix, energy, com, ccrba, osc_inertia)
+# switch spelling and this set is DELETED. Do not grow it.
+SMEM_TIER_CALL_SITES = frozenset({
+    "minv", "forward_dynamics", "aba", "crba", "end_effector_pose_gradient",
+    "end_effector_pose_hessian", "forward_dynamics_gradient", "fdsva_so",
+    "cmm_time_variation", "dccrba", "inverse_dynamics_gradient",
+})
+
+
+def kernel_symbol_for(spec: "AbiSpec") -> str:
+    return spec.kernel_symbol or (spec.key + "_kernel")
+
+
+def torch_tensor_args(spec: "AbiSpec") -> tuple[str, ...]:
+    """Tensor args of the torch op: the C inputs before the out slot (the
+    entry immediately preceding `batch`), minus the flag-fork qdd_opt."""
+    names = [n for n, _t in spec.inputs]
+    bi = names.index("batch")
+    return tuple(n for n in names[:bi - 1] if n != "qdd_opt")
+
+
+def jax_buffer_inputs_for(spec: "AbiSpec") -> tuple[str, ...]:
+    return spec.jax_buffer_inputs or torch_tensor_args(spec)
+
+
+def torch_substitution_keys() -> tuple[str, ...]:
+    return tuple(k for k, s in ABI_SPECS.items() if s.kernel_args is not None)
+
+
+def jax_substitution_keys() -> tuple[str, ...]:
+    return tuple(k for k, s in ABI_SPECS.items()
+                 if s.kernel_args is not None or s.jax_kernel_args is not None)
+
+
+def kernel_launch_args(spec: "AbiSpec", surface: str) -> tuple[str, ...]:
+    """Expand the row's launch-arg tokens to the C expressions of one surface
+    ("torch" | "jax"). ONE implementation shared by the wrapper_body_gen
+    emitters and the cross-check referee."""
+    table = spec.kernel_args
+    if surface == "jax" and spec.jax_kernel_args is not None:
+        table = spec.jax_kernel_args
+    assert table is not None, f"{spec.key}: no kernel_args for {surface}"
+    dout = "d_" + (spec.out_buffer or spec.key).removeprefix("h_").removeprefix("d_")
+    exp = {
+        "OUT": f"g_data->{dout}", "WS": "g_data->d_workspace",
+        "QQDU": "g_data->d_q_qd_u", "STRIDE": "stride",
+        "QDD": "g_data->d_qdd", "FEXT": "g_data->d_f_ext",
+        "IDSVA": "g_data->d_idsva_so",
+        "EEGRAD": "g_data->d_end_effector_pose_gradient",
+        "JID": "(int)target_jid", "FRAME": "(int)reference_frame",
+        "ROBOT": "g_robot",
+        "GRAV": "(T)gravity" if surface == "torch" else "gravity",
+        "BATCH": "batch",
+    }
+    return tuple(exp[t] for t in table)
+
+
+def smem_bytes_call(spec: "AbiSpec") -> str:
+    """The launch's dynamic-smem argument. Stem comes from the ALGO REGISTRY
+    (bytes_macro_stem — gg/nle share INVERSE_DYNAMICS_BIAS); tier spelling
+    from SMEM_TIER_CALL_SITES (transcription; registry-ruled after A3)."""
+    from grid_codegen.algo_registry import ALGO_DESCRIPTORS
+    stems = {d.key: d.bytes_macro_stem or (d.key.upper() + "_DYNAMIC_SHARED_MEM_BYTES")
+             for d in ALGO_DESCRIPTORS}
+    stem = stems[spec.key]
+    algo = spec.launch_algo or ("GRID_ALGO_" + spec.key.upper())
+    if spec.key in SMEM_TIER_CALL_SITES:
+        return f"grid::{stem}<T, grid::launch_cfg<grid::{algo}>::TIER>()"
+    return f"grid::{stem}<T>()"
