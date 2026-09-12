@@ -85,23 +85,64 @@ def _record_header_content_keys():
     orig_gen = GRiDCodeGenerator.gen_all_code
     sig = inspect.signature(orig_gen)
 
+    # Env knobs that steer codegen output — snapshotted into every record so
+    # the A' replayer regenerates under the SAME environment (spill tests
+    # monkeypatch the smem knobs mid-session; the suite pins mjx kernels off).
+    replay_env = ("GRID_ENABLE_MUJOCO_KERNELS", "GRID_CODEGEN_PROFILE",
+                  "GRID_CUDA_TARGET_SHARED_MEM_BYTES",
+                  "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES")
+
+    def _env_snapshot() -> dict:
+        return {k: os.environ.get(k) for k in replay_env}
+
+    def _urdf_sha(robot_name) -> str | None:
+        try:
+            from config import robot_urdf
+            return _hash(robot_urdf(robot_name))
+        except Exception:
+            return None
+
     def gen_wrapper(self, *args, **kwargs):
         result = orig_gen(self, *args, **kwargs)
         try:
             bound = sig.bind(self, *args, **kwargs)
             call = {k: v for k, v in bound.arguments.items() if k != "self"}
             out_path = call.pop("output_path", None) or "grid.cuh"
+            # JSON-representable kwargs stay STRUCTURED (the A' replayer can
+            # feed them straight back to gen_all_code); everything else goes
+            # to `opaque` as an address-stripped repr — evidence only, replay
+            # needs a HEADER_RECIPES entry or conservatively stales the cell.
             import re
-            call = {k: (v if isinstance(v, (str, int, float, bool, type(None)))
-                        else sorted(v) if k == "algorithm_list"
-                        # strip id() addresses so records are run-stable
-                        else re.sub(r" at 0x[0-9a-f]+", "", repr(v)))
-                    for k, v in call.items()}
+            clean, opaque = {}, {}
+            for k, v in call.items():
+                if isinstance(v, tuple):
+                    v = list(v)
+                try:
+                    json.dumps(v)
+                    clean[k] = v
+                except (TypeError, ValueError):
+                    opaque[k] = re.sub(r" at 0x[0-9a-f]+", "", repr(v))
             robot = getattr(self, "robot", None)
+            name = getattr(robot, "name", None)
             emit({"kind": "direct",
-                  "robot": getattr(robot, "name", None),
+                  "robot": name,
                   "floating": bool(getattr(robot, "floating_base", False)),
-                  "kwargs": call,
+                  "kwargs": clean,
+                  "opaque": opaque,
+                  # generator-ctor state that shapes output (replayed as ctor
+                  # kwargs; a truthy launch_config_robot is opaque -> no replay)
+                  "codegen": {
+                      "DEBUG_MODE": bool(getattr(self, "DEBUG_MODE", False)),
+                      "gen_print_mat": bool(getattr(self, "gen_print_mat", False)),
+                      "file_namespace": getattr(self, "file_namespace", "grid"),
+                      "USE_JOINT_DYNAMICS": bool(getattr(self, "USE_JOINT_DYNAMICS", False)),
+                      "MUJOCO_OUTPUT": bool(getattr(self, "MUJOCO_OUTPUT", False)),
+                      "launch_config_profile": getattr(self, "launch_config_profile", "host"),
+                      "runtime_joint_dynamics": bool(getattr(self, "runtime_joint_dynamics", False)),
+                      "launch_config_robot": bool(getattr(self, "launch_config_robot", None)),
+                  },
+                  "env": _env_snapshot(),
+                  "urdf_sha256": _urdf_sha(name),
                   "content_sha256": _hash(out_path)})
         except Exception:
             pass
@@ -125,6 +166,7 @@ def _record_header_content_keys():
                   "header_key": header_key,
                   "algorithm_list": (sorted(codegen_algorithm_list)
                                      if codegen_algorithm_list else None),
+                  "env": _env_snapshot(),
                   "content_sha256": _hash(header_path)})
         except Exception:
             pass

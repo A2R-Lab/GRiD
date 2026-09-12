@@ -421,15 +421,61 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
     # emit byte-identical headers over the covering matrix
     # (test/codegen_neutrality.py). Otherwise the whole cuda domain is stale.
     if any(not _is_wrapper(s) for s in carried):
-        from codegen_neutrality import cuda_carry_soundness  # noqa: PLC0415
-        carry_ok, reason = cuda_carry_soundness(old_receipt)
-        print(f"  cuda-carry soundness: {reason}")
-        if not carry_ok:
-            demoted = [s for s in carried if not _is_wrapper(s)]
-            carried = [s for s in carried if _is_wrapper(s)]
+        import codegen_neutrality  # noqa: PLC0415
+        import header_key_replay  # noqa: PLC0415
+        repo = old_receipt.get("repo") or {}
+        old_sha = repo.get("commit_sha")
+        assume = os.environ.get("GRID_REFRESH_ASSUME_NEUTRAL") == "1"
+        if old_sha and not assume \
+                and not codegen_neutrality.codegen_inputs_changed(old_sha):
+            print("  cuda-carry soundness: generator inputs unchanged vs old receipt")
+        else:
+            # Wave A' P2 (2026-09-11): generator inputs changed — decide
+            # PER SHARD from the recorded header content keys: a shard whose
+            # every recorded header still reproduces byte-identically from
+            # the CURRENT tree keeps its carry (the nvcc content keys would
+            # not even rotate); one whose bytes rotate is honestly stale.
+            # Shards with no / unreplayable records fall back to the ONE
+            # domain-level verdict (env override or the 6-row covering-matrix
+            # prover in codegen_neutrality) — computed lazily, at most once.
+            try:
+                hk = json.loads(HEADER_KEYS_PATH.read_text()).get("shards", {})
+            except (OSError, json.JSONDecodeError):
+                hk = {}
+            replay_cache: dict = {}
+            domain_verdict: tuple | None = None
+            kept_replay = kept_fallback = 0
+            demoted, kept = [], []
+            for s in carried:
+                if _is_wrapper(s):
+                    kept.append(s)
+                    continue
+                verdict, why = (None, "assume-neutral override") if assume else \
+                    header_key_replay.shard_replay_verdict(
+                        hk.get(s["name"]) or [], replay_cache)
+                if verdict is True:
+                    kept.append(s)
+                    kept_replay += 1
+                    continue
+                if verdict is False:
+                    print(f"  cuda-carry: {s['name']} stale by header-key "
+                          f"replay ({why})")
+                    demoted.append(s)
+                    continue
+                if domain_verdict is None:
+                    domain_verdict = codegen_neutrality.cuda_carry_soundness(
+                        old_receipt)
+                    print(f"  cuda-carry fallback verdict: {domain_verdict[1]}")
+                if domain_verdict[0]:
+                    kept.append(s)
+                    kept_fallback += 1
+                else:
+                    demoted.append(s)
+            carried = kept
             stale += demoted
-            print(f"  cuda-carry REFUSED -> {len(demoted)} fingerprint-clean "
-                  f"cuda shard(s) demoted to stale (full cuda re-proof)")
+            print(f"  cuda-carry: {kept_replay} shard(s) kept by header-key "
+                  f"replay, {kept_fallback} by fallback verdict, "
+                  f"{len(demoted)} demoted to stale")
 
     old_wrapper_names = {s["name"] for s in shards if _is_wrapper(s)}
     stale_wrapper_names = {s["name"] for s in stale if _is_wrapper(s)}
