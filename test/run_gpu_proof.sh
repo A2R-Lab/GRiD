@@ -139,9 +139,15 @@ if [[ "${SPLIT:-0}" = "1" ]]; then
         exit 1
     fi
 
-    # The driver already merged + re-signed; publish to the repo-root path CI reads.
-    cp "$OUT_DIR/gpu-proof.json" gpu-proof.json
-    echo "[run_gpu_proof] SPLIT receipt written to gpu-proof.json (shards in $OUT_DIR)"
+    # The driver already merged + re-signed; publish to the repo-root path CI
+    # reads. A refresh with NOTHING stale merges nothing (the committed
+    # receipt already covers the tree) — that is success, not a missing file.
+    if [[ -f "$OUT_DIR/gpu-proof.json" ]]; then
+        cp "$OUT_DIR/gpu-proof.json" gpu-proof.json
+        echo "[run_gpu_proof] SPLIT receipt written to gpu-proof.json (shards in $OUT_DIR)"
+    else
+        echo "[run_gpu_proof] nothing stale — committed gpu-proof.json already covers this tree"
+    fi
     exit 0
 fi
 
