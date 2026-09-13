@@ -1842,3 +1842,18 @@ in the scratchpad; land after. Recovery is now mechanical: resume's
 HEAD (they re-run at the current commit; test_resume_prunes_sha_divergent_
 clean_rows is the referee) — the cost is re-running the divergent shards,
 which is exactly why the rule exists.
+
+### 7.z9 XLA-pool accumulation across sequential registrations in ONE process (2026-09-13)
+A jax-surface process that registers robot A (XLA's allocator grows through
+the sweep/tests), then registers a BIG robot B, can fail B's `grid_rbd_init`
+with `GPUassert: out of memory` at the gridData arena cudaMalloc — XLA never
+returns its grown pool. First hit: autotune_ffi `--base both` on h1_2 (fixed
+sweep first, floating init OOM) — this was the REAL cause of the 08-28
+"h1_2 n16 launch-fail", not a kernel/config misfit. Rule: one process per
+base/robot for jax-surface sweeps (fresh process releases the pool);
+torch/numpy surfaces are unaffected. Related: the test/conftest.py
+`XLA_PYTHON_CLIENT_PREALLOCATE=false` opt-out REMAINS justified — re-triaged
+2026-09-13: an 8-module monolithic wrapper run with prealloc=ON passes
+(150/150) but peaks at 28.0 GiB of 32 — the historical SIGABRT ceiling —
+so the full suite would still be at risk. The durable fix direction is the
+jax-C-API slab + MEM_FRACTION integration (see _install_xla_device_pool).
