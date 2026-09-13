@@ -403,6 +403,27 @@ def write_ffi_config(robot, gpu, base_picks, n, base_maxperf, surface="jax"):
     print(f"\n  wrote {profile}_bases -> {path}  (tier_source={sorted(tier_sources)})")
 
 
+def _rewrite_base_argv(argv, base):
+    """This script's argv with the --base value replaced by `base` (added if absent)."""
+    out, i, seen = [], 0, False
+    while i < len(argv):
+        a = argv[i]
+        if a == "--base":
+            out += ["--base", base]
+            i += 2
+            seen = True
+        elif a.startswith("--base="):
+            out.append(f"--base={base}")
+            i += 1
+            seen = True
+        else:
+            out.append(a)
+            i += 1
+    if not seen:
+        out += ["--base", base]
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -422,6 +443,28 @@ def main():
                          "core/non-SO set first and defer idsva_so/fdsva_so. Default = full build.")
     ap.add_argument("--dry-run", action="store_true", help="sweep + print, do not write")
     args = ap.parse_args()
+
+    if args.base == "both":
+        # ONE PROCESS PER BASE (guide §7.z9): XLA's device pool only grows across
+        # sequential .so registrations in a single process, so after the fixed
+        # sweep the floating .so's grid_rbd_init arena cudaMalloc OOMs on big
+        # robots (first hit: h1_2 n16 night, 2026-09-12 — "GPUassert: out of
+        # memory" at gridData init). Re-exec this script per base in a fresh
+        # process instead; each child merges its own base block into the same
+        # launch_configs JSON via write_ffi_config, so the result is identical
+        # to the old single-process merge (per-base `<profile>_meta.tier_source`
+        # reflects the last child's bases — cosmetic only). Run BOTH even if the
+        # first fails: one base's failure must not lose the other's tune.
+        import subprocess
+        rcs = {}
+        for base in ("fixed", "floating"):
+            argv = [sys.executable, str(THIS)] + _rewrite_base_argv(sys.argv[1:], base)
+            print(f"\n### --base both -> fresh process for base={base} (guide 7.z9)")
+            rcs[base] = subprocess.call(argv)
+        for base, rc in rcs.items():
+            if rc != 0:
+                print(f"### base={base} subprocess FAILED rc={rc}")
+        sys.exit(max(rcs.values()))
 
     bases = ["fixed", "floating"] if args.base == "both" else [args.base]
     want = set(args.algos) if args.algos else None
