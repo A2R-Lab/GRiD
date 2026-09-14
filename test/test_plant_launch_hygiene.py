@@ -86,7 +86,10 @@ _DISPATCHED_VOID_LAUNCHERS = (
     "torch_launch_plant_step", "torch_launch_plant_step_gradient",
 )
 
-_CHECK_MARKERS = ("cudaGetLastError", "gpuErrchk")
+_CHECK_MARKERS = ("cudaGetLastError", "gpuErrchk",
+                  # S1 (2026-09-13): the post-launch checks are now these helpers,
+                  # which capture cudaGetLastError ONCE and append cudaGetErrorName.
+                  "GRID_RBD_FFI_CHECK_LAUNCH", "grid_torch_check_launch")
 
 
 def _void_launcher_ranges(lines):
