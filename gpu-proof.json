@@ -1,7 +1,7 @@
 {
   "environment": {
     "gpu_info": {
-      "driver_version": "610.57.04",
+      "driver_version": "615.71.09",
       "memory": "32607 MiB",
       "name": "NVIDIA GeForce RTX 5090"
     },
@@ -22,14 +22,14 @@
   "mode": "local",
   "repo": {
     "branch": "modernizing-tests",
-    "commit_sha": "2a3c4e74d7e932d1889f298cac607a87bf7ac09f",
+    "commit_sha": "d3b8538c4b3e1ecc2c7a9573e4df1439fcf3047f",
     "dirty": false,
     "github_username": "plancherb1",
     "remote_url": "git@github.com:A2R-Lab/GRiD.git"
   },
   "schema_version": "2",
   "session": {
-    "ended_at": "2026-09-12T22:45:54Z",
+    "ended_at": "2026-09-14T15:13:24Z",
     "node_ids": [
       "test/python_wrappers/test_any_thread_count.py::test_set_threads_per_block_default",
       "test/python_wrappers/test_any_thread_count.py::test_set_threads_per_block_zero_resets_to_autotuned_default",
@@ -1401,203 +1401,203 @@
     ],
     "shards": [
       {
-        "ended_at": "2026-09-12T15:11:59Z",
+        "ended_at": "2026-09-14T04:40:07Z",
         "node_count": 39,
         "signer": "plancherb1",
         "source": "test_any_thread_count.json",
-        "started_at": "2026-09-12T14:55:05Z"
+        "started_at": "2026-09-14T04:40:05Z"
       },
       {
-        "ended_at": "2026-09-12T15:29:25Z",
+        "ended_at": "2026-09-14T04:40:11Z",
         "node_count": 5,
         "signer": "plancherb1",
         "source": "test_batch_switch.json",
-        "started_at": "2026-09-12T15:12:01Z"
+        "started_at": "2026-09-14T04:40:09Z"
       },
       {
-        "ended_at": "2026-09-12T15:29:29Z",
+        "ended_at": "2026-09-14T04:52:25Z",
         "node_count": 20,
         "signer": "plancherb1",
         "source": "test_centroidal_energy_frame.json",
-        "started_at": "2026-09-12T15:29:27Z"
+        "started_at": "2026-09-14T04:52:22Z"
       },
       {
-        "ended_at": "2026-09-12T17:33:57Z",
+        "ended_at": "2026-09-14T08:49:23Z",
         "node_count": 13,
         "signer": "plancherb1",
         "source": "test_ee_named_target_floating_multileaf.json",
-        "started_at": "2026-09-12T15:37:12Z"
+        "started_at": "2026-09-14T05:37:20Z"
       },
       {
-        "ended_at": "2026-09-12T17:34:02Z",
+        "ended_at": "2026-09-14T08:49:30Z",
         "node_count": 8,
         "signer": "plancherb1",
         "source": "test_fk_batched.json",
-        "started_at": "2026-09-12T17:33:59Z"
+        "started_at": "2026-09-14T08:49:26Z"
       },
       {
-        "ended_at": "2026-09-12T17:34:05Z",
+        "ended_at": "2026-09-14T08:49:35Z",
         "node_count": 8,
         "signer": "plancherb1",
         "source": "test_fp64_parity.json",
-        "started_at": "2026-09-12T17:34:03Z"
+        "started_at": "2026-09-14T08:49:32Z"
       },
       {
-        "ended_at": "2026-09-12T17:34:09Z",
+        "ended_at": "2026-09-14T08:49:40Z",
         "node_count": 2,
         "signer": "plancherb1",
         "source": "test_g1_plant_hessian_smoke.json",
-        "started_at": "2026-09-12T17:34:07Z"
+        "started_at": "2026-09-14T08:49:37Z"
       },
       {
-        "ended_at": "2026-09-12T17:34:13Z",
+        "ended_at": "2026-09-14T08:49:47Z",
         "node_count": 8,
         "signer": "plancherb1",
         "source": "test_iiwa14_f_ext.json",
-        "started_at": "2026-09-12T17:34:11Z"
+        "started_at": "2026-09-14T08:49:42Z"
       },
       {
-        "ended_at": "2026-09-12T17:34:17Z",
+        "ended_at": "2026-09-14T08:49:54Z",
         "node_count": 58,
         "signer": "plancherb1",
         "source": "test_iiwa14_jax_smoke.json",
-        "started_at": "2026-09-12T17:34:14Z"
+        "started_at": "2026-09-14T08:49:49Z"
       },
       {
-        "ended_at": "2026-09-12T17:34:20Z",
+        "ended_at": "2026-09-14T08:49:57Z",
         "node_count": 11,
         "signer": "plancherb1",
         "source": "test_iiwa14_plant_smoke.json",
-        "started_at": "2026-09-12T17:34:19Z"
+        "started_at": "2026-09-14T08:49:56Z"
       },
       {
-        "ended_at": "2026-09-12T17:45:12Z",
+        "ended_at": "2026-09-14T09:17:11Z",
         "node_count": 8,
         "signer": "plancherb1",
         "source": "test_iiwa14_qdd_aware_grad.json",
-        "started_at": "2026-09-12T17:34:22Z"
+        "started_at": "2026-09-14T08:49:59Z"
       },
       {
-        "ended_at": "2026-09-12T17:45:15Z",
+        "ended_at": "2026-09-14T09:17:15Z",
         "node_count": 28,
         "signer": "plancherb1",
         "source": "test_iiwa14_smoke.json",
-        "started_at": "2026-09-12T17:45:14Z"
+        "started_at": "2026-09-14T09:17:13Z"
       },
       {
-        "ended_at": "2026-09-12T17:45:19Z",
+        "ended_at": "2026-09-14T09:17:21Z",
         "node_count": 25,
         "signer": "plancherb1",
         "source": "test_iiwa14_torch_smoke.json",
-        "started_at": "2026-09-12T17:45:17Z"
+        "started_at": "2026-09-14T09:17:17Z"
       },
       {
-        "ended_at": "2026-09-12T19:02:53Z",
+        "ended_at": "2026-09-14T11:19:22Z",
         "node_count": 18,
         "signer": "plancherb1",
         "source": "test_joint_dynamics.json",
-        "started_at": "2026-09-12T17:45:21Z"
+        "started_at": "2026-09-14T09:17:23Z"
       },
       {
-        "ended_at": "2026-09-12T19:39:10Z",
+        "ended_at": "2026-09-14T12:03:48Z",
         "node_count": 10,
         "signer": "plancherb1",
         "source": "test_joint_dynamics_ffi.json",
-        "started_at": "2026-09-12T19:02:54Z"
+        "started_at": "2026-09-14T11:19:23Z"
       },
       {
-        "ended_at": "2026-09-12T19:39:23Z",
+        "ended_at": "2026-09-14T12:04:01Z",
         "node_count": 40,
         "signer": "plancherb1",
         "source": "test_kinematics_thread_batch_matrix.json",
-        "started_at": "2026-09-12T19:39:12Z"
+        "started_at": "2026-09-14T12:03:50Z"
       },
       {
-        "ended_at": "2026-09-12T19:39:44Z",
+        "ended_at": "2026-09-14T12:04:21Z",
         "node_count": 2,
         "signer": "plancherb1",
         "source": "test_mjx_fixed_base_noop.json",
-        "started_at": "2026-09-12T19:39:25Z"
+        "started_at": "2026-09-14T12:04:02Z"
       },
       {
-        "ended_at": "2026-09-12T19:59:32Z",
+        "ended_at": "2026-09-14T12:26:43Z",
         "node_count": 6,
         "signer": "plancherb1",
         "source": "test_ps5_value_ops.json",
-        "started_at": "2026-09-12T19:39:46Z"
+        "started_at": "2026-09-14T12:04:22Z"
       },
       {
-        "ended_at": "2026-09-12T20:47:05Z",
+        "ended_at": "2026-09-14T13:14:37Z",
         "node_count": 10,
         "signer": "plancherb1",
         "source": "test_runtime_inertia.json",
-        "started_at": "2026-09-12T19:59:33Z"
+        "started_at": "2026-09-14T12:26:45Z"
       },
       {
-        "ended_at": "2026-09-12T21:46:57Z",
+        "ended_at": "2026-09-14T14:13:22Z",
         "node_count": 8,
         "signer": "plancherb1",
         "source": "test_runtime_joint_dynamics.json",
-        "started_at": "2026-09-12T20:47:07Z"
+        "started_at": "2026-09-14T13:14:39Z"
       },
       {
-        "ended_at": "2026-09-12T22:11:28Z",
+        "ended_at": "2026-09-14T14:38:33Z",
         "node_count": 5,
         "signer": "plancherb1",
         "source": "test_runtime_transform.json",
-        "started_at": "2026-09-12T21:46:59Z"
+        "started_at": "2026-09-14T14:13:23Z"
       },
       {
-        "ended_at": "2026-09-12T22:22:51Z",
+        "ended_at": "2026-09-14T14:50:56Z",
         "node_count": 13,
         "signer": "plancherb1",
         "source": "test_subset_build.json",
-        "started_at": "2026-09-12T22:11:30Z"
+        "started_at": "2026-09-14T14:38:35Z"
       },
       {
-        "ended_at": "2026-09-12T22:34:13Z",
+        "ended_at": "2026-09-14T15:02:08Z",
         "node_count": 12,
         "signer": "plancherb1",
         "source": "test_subset_build_jax.json",
-        "started_at": "2026-09-12T22:22:52Z"
+        "started_at": "2026-09-14T14:50:57Z"
       },
       {
-        "ended_at": "2026-09-12T22:45:38Z",
+        "ended_at": "2026-09-14T15:13:10Z",
         "node_count": 11,
         "signer": "plancherb1",
         "source": "test_subset_build_torch.json",
-        "started_at": "2026-09-12T22:34:15Z"
+        "started_at": "2026-09-14T15:02:10Z"
       },
       {
-        "ended_at": "2026-09-12T22:45:41Z",
+        "ended_at": "2026-09-14T15:13:13Z",
         "node_count": 6,
         "signer": "plancherb1",
         "source": "test_tool.json",
-        "started_at": "2026-09-12T22:45:39Z"
+        "started_at": "2026-09-14T15:13:11Z"
       },
       {
-        "ended_at": "2026-09-12T22:45:44Z",
+        "ended_at": "2026-09-14T15:13:16Z",
         "node_count": 1,
         "signer": "plancherb1",
         "source": "test_two_robot_process.json",
-        "started_at": "2026-09-12T22:45:42Z"
+        "started_at": "2026-09-14T15:13:14Z"
       },
       {
-        "ended_at": "2026-09-12T22:45:54Z",
+        "ended_at": "2026-09-14T15:13:24Z",
         "node_count": 2,
         "signer": "plancherb1",
         "source": "test_workspace_slots_direct_launch.json",
-        "started_at": "2026-09-12T22:45:45Z"
+        "started_at": "2026-09-14T15:13:17Z"
       }
     ],
-    "started_at": "2026-09-12T14:55:05Z"
+    "started_at": "2026-09-14T04:40:05Z"
   },
   "shards": [
     {
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "1df4300f8d0f66d5de85d803e37f29ba5145d461854c36a5ca5277c1b4b93602",
+        "digest": "875925287f80ba387ed803b514cd3f6bffda6d8e70d3fc530e88e2f8af0d90c1",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -1652,7 +1652,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "40933f92b7475d15e60b3403d8ae387dcb46734d3c1eb237e1562503a7ef0c29",
+        "digest": "ee1acb96cce76375fb5a2e2a432986db217bbd87f73bf89e9c6394f90523ee72",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -1673,7 +1673,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "e66db21e7ad6244a676ff1c5e35d959ba2f90887d479f3238e20ff737da3cd16",
+        "digest": "852207f9535f4c07945a6eeeaa259d898d17bb6a8ae52cb9da5c38c15ea3609f",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -1709,7 +1709,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "759ee2a1c406f1aaef5710165450743022c573daa5d21221c1b3f9110e854d0b",
+        "digest": "a354607501ca171da5e5f4dded0c4d9554790689de77649f3a87a17c53990af6",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -1738,7 +1738,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "04243d74008a4a0a3afda72b53b6c04b7775fd77d3bc4aec96c473b3dd001bd7",
+        "digest": "4daa40597cc23a503c490c0469d0ea18a5bdbf7572bc7a972ab0537423d1f263",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -1762,7 +1762,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "a562f3782751df08343b5eb532cf9599454172eab8da03b87db7dd0b74a92340",
+        "digest": "d11fa85327055d891b777963dbbba33ccb7207c02330fb6e0e13446cd57dd123",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -1786,7 +1786,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "85574a1198cdb3e8e1f2707ef19c5459acf3819cb91e39bb6a73ebaea5eb2380",
+        "digest": "eee4c801de6744dc686d210f5cbfdbf67cd827997baf37ae033b8cafe2144728",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -1804,7 +1804,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "36833838d7a8be1882103b7975231f47f3e66c375120776a042cdff47f2e37c2",
+        "digest": "642dd89b417eb23053e609bec3a27a06075a5283d29b93db8e18f109459b4402",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -1828,7 +1828,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "72d3e8434e4a22cc95fea46ab330426f1439bdfa8405c41faf2661f882c3f9ca",
+        "digest": "9ed875175d51b6251cba9d7429cb22046ea905c276e9e2ad41714cea806ac9c0",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -1902,7 +1902,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "e0faf09f790a2414340dca934a1067f13e2d8d97daa619c2c53ff1a0973b6ea4",
+        "digest": "9fba06e681d5a9c88d3d87fab7267e6dd4ce9ea421361c4f8be002c0c1b38777",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -1929,7 +1929,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "462139a2d968cbcac6b87fb147cd2997423bf0fc7153e6ebbe841b2a6b90ddf8",
+        "digest": "0292426a1dccbf7fd9499de4475aea4839cab868990596e955dac3f8197a0438",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -1953,7 +1953,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "dc6078c77ad66fc8c3b51e9755fdf58db5d3e5ea117c7a5b22415da2772ee310",
+        "digest": "a37a8bb1b8a8761e7b28d8a60246a06ba6007c659cd02c32477ef6fde26307c5",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -1997,7 +1997,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "3512a6f3f5a233a7f9a8164a9d377a5e6e6aa55eba2853456fdbb446a5acd7fc",
+        "digest": "eeb20770bbcd2c5a7ff20076b07504c2baf0ab9a21438d2e680b667e83b79d64",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -2038,7 +2038,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "ac4d1ee02b6e5c18555a2a097e046680796ba834548092dad346cce127d5d45c",
+        "digest": "24fb23366f885c1b50f250d8f22831e0a341077c3391050140e90813772f0a15",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -2072,7 +2072,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "fb745265bc634c3709b54f4e752866e46a9764e133777d77a6be8eba4a2bfd2a",
+        "digest": "58a892afcd89b4eb8d6f0c61ef0d1259f121efa133e713353a46639810217d90",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -2098,7 +2098,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "53ca47ec01723e06a9277c5fbbf38642d8864714fb452029c2bbcb2750bcf4a0",
+        "digest": "590f49a4dcf4d31c7a3d94e0947d023e0666e54f06b49563b50673240c92002e",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -2154,7 +2154,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "34dab8a8f1d147db274a3132ad2e81c1ef105bb262099cd861c3e094184ba0e4",
+        "digest": "379221eb4f8edcb6dcf0f1d1c73cf9ab5ce3a62f96d2f744cc1ff3339d808869",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -2172,7 +2172,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "8ed4b8dbd7c876fe3dd5b134c7a73a85cf43fbdb6f36391c13bae12c1d9b6681",
+        "digest": "580925fa2d33699a20c896df5784ca60e7783754716116e5daae77ee1ad5c74d",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -2194,7 +2194,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "7a6684bc40e651988740d3001b4e684b74b35c969df4bb925eedf37b91b53b67",
+        "digest": "2b958c0bd362a0f0edc283d9870e0c01a314c8e7ed8f6dc275f022024fdf63c9",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -2220,7 +2220,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "4a7519effc92f723ed2080f58fd7b6b16dbce4e65a7d943c63024f8c2a11c2f4",
+        "digest": "64fac71bafab8beebfe90ab3320c86beeb7350633c01226e7d49d839619ed268",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -2244,7 +2244,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "abd2f15671f06bc8067a8666dac494769a229a7ec457aa9fa33763ac752445eb",
+        "digest": "d59ec8bc39f4fb64f288e458c0d3e0380d9e9933500b33e956fcfba35174685b",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -2265,7 +2265,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "b1d087516f280d5a5785c7f4d71764631318475ba031b4ba88143d012f09f119",
+        "digest": "068001c64c5213043bcdfaa8e2d695cca428a2886f52fcb3744a979dc1a20567",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -2294,7 +2294,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "5c4e868db449b0e41d81ea1fc72cbe6ee872a236db7cfc97251799f7bef7535c",
+        "digest": "da609e9888d947bed5be428b3c890a62e9b968dc690656c1976e3dcf5975734f",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -2322,7 +2322,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "62418248bca7594779d604cbea17e68f5cb7d7cec4f0663ad1aebd4aeb63d82f",
+        "digest": "7a48c6e2e21eb807e2512c526506e287f01d5499a39a77c380f6cabee11723e1",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -2349,7 +2349,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "7f1971f684efa13a026be7d585070326863044c052d5713aa692bafded3e1ef5",
+        "digest": "5c2900e061d0121627a67f1b571e9439fcee895bc9c256af7461718bf949c967",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -2371,7 +2371,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "08c870fcf6a2182ba69d3f868e9b39585851876ebb0a9c0e8863df27d0b4884b",
+        "digest": "6cb1e793b9bd967adf09859edbbbe680b46d1e010402ed27c7ecc127ab8d3036",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -2388,7 +2388,7 @@
       "carried": null,
       "fingerprint": {
         "algorithm": "sha256",
-        "digest": "b21fd93fcbde6787e4e31251c23594f83594a1c7b030d46d1de1c19faf05a7a1",
+        "digest": "62e73fdd2a3851c39e038bdf4a8622be330ea3abb258ce17c83a9aea21c43e8c",
         "file_count": 17,
         "included_paths": [
           "bindings/grid_rbd",
@@ -2405,8 +2405,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "231f0b9853a773daf70cf9c4b1038ea7bbe9f5ab",
-        "original_ended_at": "2026-09-11T17:48:21Z",
+        "original_commit_sha": "2a3c4e74d7e932d1889f298cac607a87bf7ac09f",
+        "original_ended_at": "2026-09-12T22:45:54Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -2467,8 +2467,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "231f0b9853a773daf70cf9c4b1038ea7bbe9f5ab",
-        "original_ended_at": "2026-09-11T17:48:21Z",
+        "original_commit_sha": "2a3c4e74d7e932d1889f298cac607a87bf7ac09f",
+        "original_ended_at": "2026-09-12T22:45:54Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3365,8 +3365,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "231f0b9853a773daf70cf9c4b1038ea7bbe9f5ab",
-        "original_ended_at": "2026-09-11T17:48:21Z",
+        "original_commit_sha": "2a3c4e74d7e932d1889f298cac607a87bf7ac09f",
+        "original_ended_at": "2026-09-12T22:45:54Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3426,8 +3426,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "231f0b9853a773daf70cf9c4b1038ea7bbe9f5ab",
-        "original_ended_at": "2026-09-11T17:48:21Z",
+        "original_commit_sha": "2a3c4e74d7e932d1889f298cac607a87bf7ac09f",
+        "original_ended_at": "2026-09-12T22:45:54Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3450,8 +3450,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "231f0b9853a773daf70cf9c4b1038ea7bbe9f5ab",
-        "original_ended_at": "2026-09-11T17:48:21Z",
+        "original_commit_sha": "2a3c4e74d7e932d1889f298cac607a87bf7ac09f",
+        "original_ended_at": "2026-09-12T22:45:54Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3484,8 +3484,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "231f0b9853a773daf70cf9c4b1038ea7bbe9f5ab",
-        "original_ended_at": "2026-09-11T17:48:21Z",
+        "original_commit_sha": "2a3c4e74d7e932d1889f298cac607a87bf7ac09f",
+        "original_ended_at": "2026-09-12T22:45:54Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3508,8 +3508,8 @@
     {
       "carried": {
         "from": "gpu-proof.json",
-        "original_commit_sha": "231f0b9853a773daf70cf9c4b1038ea7bbe9f5ab",
-        "original_ended_at": "2026-09-11T17:48:21Z",
+        "original_commit_sha": "2a3c4e74d7e932d1889f298cac607a87bf7ac09f",
+        "original_ended_at": "2026-09-12T22:45:54Z",
         "original_signer": "plancherb1"
       },
       "fingerprint": {
@@ -3609,7 +3609,7 @@
     "backend": "ssh-local",
     "key_fingerprint": "SHA256:hfyUcDJTDLry3j7nJ9V2X8iEIgNFmFJQKGQirOdyWtY",
     "signer": "plancherb1",
-    "value": "cVraG+LalzmpcEhAQQDQg9Pbg33kSnDtfkMJiowlOJvY6QmJUNnsoSjuztmvLdvbVQOMH4i5lD6NAsnTnYXXAQ=="
+    "value": "BGglE3iV5peoxE6NNjiKnjG8hdnDaszs6Wd0H1HP6Cxeda8ScQ4SqUTxZq7KQKJ894LHrrTjEh+lHo3z5iIvAw=="
   },
   "tests": [
     {
@@ -3632,7 +3632,7 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0001,
+      "duration_s": 0.0002,
       "node_id": "test/python_wrappers/test_any_thread_count.py::test_method_at_block_size[inverse_dynamics-64]",
       "outcome": "passed"
     },
@@ -3650,7 +3650,7 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0001,
+      "duration_s": 0.0002,
       "node_id": "test/python_wrappers/test_any_thread_count.py::test_method_at_block_size[minv-64]",
       "outcome": "passed"
     },
@@ -3746,7 +3746,7 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0001,
+      "duration_s": 0.0002,
       "node_id": "test/python_wrappers/test_any_thread_count.py::test_method_at_block_size[end_effector_pose_gradient-128]",
       "outcome": "passed"
     },
@@ -3776,7 +3776,7 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0001,
+      "duration_s": 0.0002,
       "node_id": "test/python_wrappers/test_any_thread_count.py::test_method_at_block_size[inverse_dynamics_gradient-64]",
       "outcome": "passed"
     },
@@ -3794,19 +3794,19 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0001,
+      "duration_s": 0.0002,
       "node_id": "test/python_wrappers/test_any_thread_count.py::test_method_at_block_size[forward_dynamics_gradient-64]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0001,
+      "duration_s": 0.0002,
       "node_id": "test/python_wrappers/test_any_thread_count.py::test_method_at_block_size[forward_dynamics_gradient-128]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0001,
+      "duration_s": 0.0002,
       "node_id": "test/python_wrappers/test_any_thread_count.py::test_method_at_block_size[forward_dynamics_gradient-256]",
       "outcome": "passed"
     },
@@ -3824,13 +3824,13 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0001,
+      "duration_s": 0.0002,
       "node_id": "test/python_wrappers/test_any_thread_count.py::test_method_at_block_size[idsva_so-256]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0002,
+      "duration_s": 0.0003,
       "node_id": "test/python_wrappers/test_any_thread_count.py::test_method_at_block_size[fdsva_so-64]",
       "outcome": "passed"
     },
@@ -3860,265 +3860,265 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0025,
+      "duration_s": 0.0136,
       "node_id": "test/python_wrappers/test_batch_switch.py::test_values_identical_across_regimes",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0002,
+      "duration_s": 0.0003,
       "node_id": "test/python_wrappers/test_batch_switch.py::test_global_override_beats_switch",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0008,
+      "duration_s": 0.0011,
       "node_id": "test/python_wrappers/test_batch_switch.py::test_apply_batch_overlay_from_config",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0341,
+      "duration_s": 0.0545,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_com[iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0029,
+      "duration_s": 0.0045,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_ccrba[iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0102,
+      "duration_s": 0.0148,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_energy[iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0011,
+      "duration_s": 0.0017,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_generalized_gravity[iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.001,
+      "duration_s": 0.0016,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_nonlinear_effects[iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0009,
+      "duration_s": 0.0015,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_frame_jacobian[iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0014,
+      "duration_s": 0.0023,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_frame_jacobian_nondefault_frame[iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0016,
+      "duration_s": 0.0026,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_frame_jacobian_default_target_explicit_frame[iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.002,
+      "duration_s": 0.0032,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_frame_jacobian_dot[iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0042,
+      "duration_s": 0.0097,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_osc_inertia[iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0099,
+      "duration_s": 0.0132,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_com[go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0032,
+      "duration_s": 0.0046,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_ccrba[go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0149,
+      "duration_s": 0.0199,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_energy[go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0015,
+      "duration_s": 0.0023,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_generalized_gravity[go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0014,
+      "duration_s": 0.0022,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_nonlinear_effects[go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0008,
+      "duration_s": 0.0011,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_frame_jacobian[go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0013,
+      "duration_s": 0.0019,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_frame_jacobian_nondefault_frame[go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0014,
+      "duration_s": 0.0019,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_frame_jacobian_default_target_explicit_frame[go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0012,
+      "duration_s": 0.0018,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_frame_jacobian_dot[go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0026,
+      "duration_s": 0.0039,
       "node_id": "test/python_wrappers/test_centroidal_energy_frame.py::test_osc_inertia[go2]",
       "outcome": "skipped"
     },
     {
       "checks": [],
-      "duration_s": 2.4267,
+      "duration_s": 2.6259,
       "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[iiwa14-floating-named-iiwa_joint_ee]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 2.2314,
+      "duration_s": 2.2844,
       "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[go2-floating-named-imu_joint]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 3.0494,
+      "duration_s": 3.0706,
       "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[baxter-floating-named-right_hand_camera_axis]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 6.627,
+      "duration_s": 6.6784,
       "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[go2-floating-multileaf]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 7.1909,
+      "duration_s": 7.1263,
       "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[baxter-floating-multileaf]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.3702,
+      "duration_s": 0.3847,
       "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_gradient_hessian[iiwa14-fixed-named-iiwa_joint_ee]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 2477.8922,
+      "duration_s": 2862.4478,
       "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[iiwa14-floating-named-iiwa_joint_ee]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 945.0487,
+      "duration_s": 1756.9156,
       "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[go2-floating-named-imu_joint]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 870.3607,
+      "duration_s": 1595.2476,
       "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[baxter-floating-named-right_hand_camera_axis]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 860.9444,
+      "duration_s": 1667.4374,
       "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[go2-floating-multileaf]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 847.5334,
+      "duration_s": 1341.2793,
       "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[baxter-floating-multileaf]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 632.1118,
+      "duration_s": 1598.2859,
       "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_multileaf_thread_invariance[iiwa14-fixed-named-iiwa_joint_ee]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 348.8708,
+      "duration_s": 679.1996,
       "node_id": "test/python_wrappers/test_ee_named_target_floating_multileaf.py::test_ee_named_root_attached_zero_gradient_hessian",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 1.3409,
+      "duration_s": 1.8847,
       "node_id": "test/python_wrappers/test_fk_batched.py::test_fk_batched_matches_reference[iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.2403,
+      "duration_s": 0.3128,
       "node_id": "test/python_wrappers/test_fk_batched.py::test_fk_batched_matches_reference[gen3]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.5666,
+      "duration_s": 0.7495,
       "node_id": "test/python_wrappers/test_fk_batched.py::test_fk_batched_matches_reference[go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.3363,
+      "duration_s": 0.4347,
       "node_id": "test/python_wrappers/test_fk_batched.py::test_fk_batched_matches_reference[fr3]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0371,
+      "duration_s": 0.0424,
       "node_id": "test/python_wrappers/test_fk_batched.py::test_fk_batched_variant_invariant_to_block_threads[thread]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.033,
+      "duration_s": 0.0401,
       "node_id": "test/python_wrappers/test_fk_batched.py::test_fk_batched_variant_invariant_to_block_threads[warp]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0334,
+      "duration_s": 0.0396,
       "node_id": "test/python_wrappers/test_fk_batched.py::test_fk_batched_layout_distinct_per_sample",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.5674,
+      "duration_s": 0.7388,
       "node_id": "test/python_wrappers/test_fk_batched.py::test_fk_batched_floating_base_matches_reference",
       "outcome": "passed"
     },
@@ -4130,55 +4130,55 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0258,
+      "duration_s": 0.0355,
       "node_id": "test/python_wrappers/test_fp64_parity.py::test_fp64_inverse_dynamics_tight",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0021,
+      "duration_s": 0.0079,
       "node_id": "test/python_wrappers/test_fp64_parity.py::test_fp64_crba_tight",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.004,
+      "duration_s": 0.0059,
       "node_id": "test/python_wrappers/test_fp64_parity.py::test_fp64_minv_tight",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0021,
+      "duration_s": 0.0033,
       "node_id": "test/python_wrappers/test_fp64_parity.py::test_fp64_forward_dynamics_tight",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0092,
+      "duration_s": 0.0152,
       "node_id": "test/python_wrappers/test_fp64_parity.py::test_fp64_materially_tighter_than_fp32",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0229,
+      "duration_s": 0.0467,
       "node_id": "test/python_wrappers/test_fp64_parity.py::test_fp64_torch_dtype_and_tight",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.2028,
+      "duration_s": 0.3262,
       "node_id": "test/python_wrappers/test_fp64_parity.py::test_fp64_jax_dtype_and_tight",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.18,
+      "duration_s": 0.2594,
       "node_id": "test/python_wrappers/test_g1_plant_hessian_smoke.py::test_plant_step_hessian[euler]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1031,
+      "duration_s": 0.1557,
       "node_id": "test/python_wrappers/test_g1_plant_hessian_smoke.py::test_plant_step_hessian[semi_implicit_euler]",
       "outcome": "passed"
     },
@@ -4190,25 +4190,25 @@
     },
     {
       "checks": [],
-      "duration_s": 0.026,
+      "duration_s": 0.0354,
       "node_id": "test/python_wrappers/test_iiwa14_f_ext.py::test_inverse_dynamics_f_ext",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0022,
+      "duration_s": 0.0035,
       "node_id": "test/python_wrappers/test_iiwa14_f_ext.py::test_forward_dynamics_f_ext",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0013,
+      "duration_s": 0.0021,
       "node_id": "test/python_wrappers/test_iiwa14_f_ext.py::test_aba_f_ext",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0002,
+      "duration_s": 0.0003,
       "node_id": "test/python_wrappers/test_iiwa14_f_ext.py::test_no_f_ext_path_unchanged",
       "outcome": "passed"
     },
@@ -4220,13 +4220,13 @@
     },
     {
       "checks": [],
-      "duration_s": 0.099,
+      "duration_s": 2.5728,
       "node_id": "test/python_wrappers/test_iiwa14_f_ext.py::test_torch_inverse_dynamics_f_ext",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.4605,
+      "duration_s": 0.6606,
       "node_id": "test/python_wrappers/test_iiwa14_f_ext.py::test_jax_no_f_ext_residue_after_f_ext_call",
       "outcome": "passed"
     },
@@ -4238,325 +4238,325 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0993,
+      "duration_s": 0.1191,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_inverse_dynamics_eager_matches_plain",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0311,
+      "duration_s": 0.0384,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_inverse_dynamics_jit_matches_eager",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0035,
+      "duration_s": 0.0031,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_inverse_dynamics_honors_qdd",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0249,
+      "duration_s": 0.0307,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_inverse_dynamics_honors_qdd_under_jit",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0174,
+      "duration_s": 0.0253,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_jax_f_ext_parity_vs_numpy",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0019,
+      "duration_s": 0.0025,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_inverse_dynamics_accepts_numpy_input",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.031,
+      "duration_s": 0.0339,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_inverse_dynamics_under_vmap",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.2622,
+      "duration_s": 0.3267,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_minv_eager_matches_plain",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0018,
+      "duration_s": 0.0022,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_minv_is_symmetric",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0017,
+      "duration_s": 0.0015,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_forward_dynamics_eager_matches_plain",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0009,
+      "duration_s": 0.0012,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_aba_eager_matches_plain",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0014,
+      "duration_s": 0.0025,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_aba_matches_forward_dynamics",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0081,
+      "duration_s": 0.0114,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_crba_eager_matches_plain",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0009,
+      "duration_s": 0.0013,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_crba_is_symmetric",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0016,
+      "duration_s": 0.0028,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_minv_and_crba_invert",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0074,
+      "duration_s": 0.0106,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_end_effector_pose_eager_matches_plain",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0087,
+      "duration_s": 0.0124,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_end_effector_pose_jit_matches_eager",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0715,
+      "duration_s": 0.0931,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_end_effector_pose_gradient_eager_matches_plain",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.047,
+      "duration_s": 0.06,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_end_effector_pose_gradient_jit_matches_eager",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.014,
+      "duration_s": 0.0209,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_end_effector_pose_hessian_eager_matches_plain",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0088,
+      "duration_s": 0.0136,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_end_effector_pose_hessian_jit_matches_eager",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1207,
+      "duration_s": 0.1499,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_inverse_dynamics_gradient_eager_matches_plain",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0543,
+      "duration_s": 0.0669,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_inverse_dynamics_gradient_jit_matches_eager",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0089,
+      "duration_s": 0.0121,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_forward_dynamics_grad_eager_matches_plain",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0331,
+      "duration_s": 0.0396,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_forward_dynamics_grad_jit_matches_eager",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0415,
+      "duration_s": 0.0533,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_idsva_so_eager_matches_plain",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0438,
+      "duration_s": 0.0521,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_idsva_so_jit_matches_eager",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0092,
+      "duration_s": 0.012,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_fdsva_so_eager_matches_plain",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0411,
+      "duration_s": 0.0494,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_fdsva_so_jit_matches_eager",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0081,
+      "duration_s": 0.0118,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_integrator_eager_matches_plain[euler]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0071,
+      "duration_s": 0.0113,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_integrator_eager_matches_plain[semi_implicit_euler]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0073,
+      "duration_s": 0.0118,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_integrator_eager_matches_plain[midpoint]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0073,
+      "duration_s": 0.0117,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_integrator_eager_matches_plain[rk3]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0073,
+      "duration_s": 0.0116,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_integrator_eager_matches_plain[rk4]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0673,
+      "duration_s": 0.0909,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_integrator_gradient_eager_matches_plain[euler]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0091,
+      "duration_s": 0.0119,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_integrator_gradient_eager_matches_plain[semi_implicit_euler]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0082,
+      "duration_s": 0.0122,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_integrator_gradient_eager_matches_plain[midpoint]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0083,
+      "duration_s": 0.0128,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_integrator_gradient_eager_matches_plain[rk3]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.008,
+      "duration_s": 0.0125,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_integrator_gradient_eager_matches_plain[rk4]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0098,
+      "duration_s": 0.0145,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_integrator_jit_matches_eager",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.051,
+      "duration_s": 0.0646,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_integrator_gradient_jit_matches_eager",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0781,
+      "duration_s": 0.0971,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_all_methods_jit",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0078,
+      "duration_s": 0.0104,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_ptier1_array_matches_plain[generalized_gravity]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0068,
+      "duration_s": 0.0098,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_ptier1_array_matches_plain[nonlinear_effects]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0075,
+      "duration_s": 0.0109,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_ptier1_array_matches_plain[coriolis_matrix]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0075,
+      "duration_s": 0.0102,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_ptier1_array_matches_plain[kinetic_energy_regressor]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0076,
+      "duration_s": 0.01,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_ptier1_array_matches_plain[potential_energy_regressor]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0081,
+      "duration_s": 0.0098,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_ptier1_array_matches_plain[energy]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.066,
+      "duration_s": 0.0747,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_ptier1_array_matches_plain[cmm_time_variation]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0697,
+      "duration_s": 0.0913,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_ptier1_array_matches_plain[dccrba]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0089,
+      "duration_s": 0.0119,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_ptier1_array_matches_plain[frame_jacobian]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0081,
+      "duration_s": 0.012,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_ptier1_array_matches_plain[frame_jacobian_dot]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0146,
+      "duration_s": 0.0225,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_ptier1_array_matches_plain[osc_inertia]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1604,
+      "duration_s": 0.2104,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_ptier1_com_ccrba_tuple_matches_plain",
       "outcome": "passed"
     },
@@ -4568,127 +4568,127 @@
     },
     {
       "checks": [],
-      "duration_s": 0.1038,
+      "duration_s": 0.1372,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_ptier1_runtime_ee_matches_plain",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0348,
+      "duration_s": 0.0397,
       "node_id": "test/python_wrappers/test_iiwa14_jax_smoke.py::test_register_idempotent",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0005,
+      "duration_s": 0.0006,
       "node_id": "test/python_wrappers/test_iiwa14_plant_smoke.py::test_quadratic_state_cost",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0002,
+      "duration_s": 0.0003,
       "node_id": "test/python_wrappers/test_iiwa14_plant_smoke.py::test_quadratic_input_cost",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0277,
+      "duration_s": 0.0373,
       "node_id": "test/python_wrappers/test_iiwa14_plant_smoke.py::test_plant_step",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0127,
+      "duration_s": 0.0198,
       "node_id": "test/python_wrappers/test_iiwa14_plant_smoke.py::test_plant_step_gradient",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0227,
+      "duration_s": 0.0374,
       "node_id": "test/python_wrappers/test_iiwa14_plant_smoke.py::test_plant_step_hessian[euler]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0223,
+      "duration_s": 0.037,
       "node_id": "test/python_wrappers/test_iiwa14_plant_smoke.py::test_plant_step_hessian[semi_implicit_euler]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0066,
+      "duration_s": 0.0092,
       "node_id": "test/python_wrappers/test_iiwa14_plant_smoke.py::test_com_cost",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0027,
+      "duration_s": 0.0042,
       "node_id": "test/python_wrappers/test_iiwa14_plant_smoke.py::test_momentum_cost",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0013,
+      "duration_s": 0.0019,
       "node_id": "test/python_wrappers/test_iiwa14_plant_smoke.py::test_ee_pos_cost",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0003,
+      "duration_s": 0.0004,
       "node_id": "test/python_wrappers/test_iiwa14_plant_smoke.py::test_joint_position_barrier",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0002,
+      "duration_s": 0.0003,
       "node_id": "test/python_wrappers/test_iiwa14_plant_smoke.py::test_joint_torque_barrier_inf_bound",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0006,
+      "duration_s": 0.0008,
       "node_id": "test/python_wrappers/test_iiwa14_qdd_aware_grad.py::test_numpy_gradient_depends_on_qdd",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.6076,
+      "duration_s": 0.8774,
       "node_id": "test/python_wrappers/test_iiwa14_qdd_aware_grad.py::test_jax_autograd_through_nonzero_qdd",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0555,
+      "duration_s": 0.0957,
       "node_id": "test/python_wrappers/test_iiwa14_qdd_aware_grad.py::test_jax_autograd_qdd_none_regression",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1388,
+      "duration_s": 0.1949,
       "node_id": "test/python_wrappers/test_iiwa14_qdd_aware_grad.py::test_jax_public_gradient_takes_qdd",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0501,
+      "duration_s": 0.0997,
       "node_id": "test/python_wrappers/test_iiwa14_qdd_aware_grad.py::test_torch_autograd_through_nonzero_qdd",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0086,
+      "duration_s": 0.0112,
       "node_id": "test/python_wrappers/test_iiwa14_qdd_aware_grad.py::test_torch_autograd_qdd_none_regression",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0005,
+      "duration_s": 0.001,
       "node_id": "test/python_wrappers/test_iiwa14_qdd_aware_grad.py::test_torch_public_gradient_takes_qdd",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0066,
+      "duration_s": 0.0104,
       "node_id": "test/python_wrappers/test_iiwa14_qdd_aware_grad.py::test_torch_sysid_grad_unchanged",
       "outcome": "passed"
     },
@@ -4700,85 +4700,85 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0259,
+      "duration_s": 0.0365,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_inverse_dynamics",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.001,
+      "duration_s": 0.0017,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_inverse_dynamics_honors_qdd",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0038,
+      "duration_s": 0.0061,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_minv",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.002,
+      "duration_s": 0.0033,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_forward_dynamics",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0013,
+      "duration_s": 0.002,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_aba",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0019,
+      "duration_s": 0.0032,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_crba",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0034,
+      "duration_s": 0.0051,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_end_effector_pose",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0011,
+      "duration_s": 0.0015,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_end_effector_pose_gradient",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0057,
+      "duration_s": 0.0092,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_inverse_dynamics_gradient",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0087,
+      "duration_s": 0.0139,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_forward_dynamics_gradient",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0359,
+      "duration_s": 0.0405,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_register_idempotent",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.002,
+      "duration_s": 0.0029,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_get_robot_roundtrip",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0014,
+      "duration_s": 0.002,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_get_robot_missing_raises",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0005,
+      "duration_s": 0.0008,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_end_effector_pose_hessian_shape",
       "outcome": "passed"
     },
@@ -4790,7 +4790,7 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0428,
+      "duration_s": 0.0739,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_idsva_so_honors_qdd",
       "outcome": "passed"
     },
@@ -4802,157 +4802,157 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0022,
+      "duration_s": 0.0033,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_integrator[euler]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.002,
+      "duration_s": 0.0032,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_integrator[semi_implicit_euler]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0039,
+      "duration_s": 0.0062,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_integrator[midpoint]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0056,
+      "duration_s": 0.009,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_integrator[rk3]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0074,
+      "duration_s": 0.0118,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_integrator[rk4]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0097,
+      "duration_s": 0.0157,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_integrator_gradient[euler]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0115,
+      "duration_s": 0.0188,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_integrator_gradient[semi_implicit_euler]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0225,
+      "duration_s": 0.0366,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_integrator_gradient[midpoint]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0338,
+      "duration_s": 0.0548,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_integrator_gradient[rk3]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0451,
+      "duration_s": 0.0728,
       "node_id": "test/python_wrappers/test_iiwa14_smoke.py::test_integrator_gradient[rk4]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0345,
+      "duration_s": 0.082,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_forward_parity",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0102,
+      "duration_s": 0.0209,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_idsva_so_parity",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0004,
+      "duration_s": 0.0006,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_inverse_dynamics_honors_qdd",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.292,
+      "duration_s": 0.4694,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_param_op_forward_parity_vs_jax",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0231,
+      "duration_s": 0.0549,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0065,
+      "duration_s": 0.0089,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0061,
+      "duration_s": 0.0087,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_aba",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0063,
+      "duration_s": 0.0086,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_integrator",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.6097,
+      "duration_s": 0.8524,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_inverse_dynamics_wrt_params",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.2219,
+      "duration_s": 0.3212,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_autograd_forward_dynamics_wrt_params",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0142,
+      "duration_s": 0.0353,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_cuda_graph_replay",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0004,
+      "duration_s": 0.0008,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_capture_over_max_batch_raises",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0003,
+      "duration_s": 0.0004,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[generalized_gravity]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0002,
+      "duration_s": 0.0003,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[nonlinear_effects]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0004,
+      "duration_s": 0.0005,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[coriolis_matrix]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0002,
+      "duration_s": 0.0003,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[kinetic_energy_regressor]",
       "outcome": "passed"
     },
@@ -4964,31 +4964,31 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0002,
+      "duration_s": 0.0003,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[energy]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0004,
+      "duration_s": 0.0005,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[cmm_time_variation]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0003,
+      "duration_s": 0.0004,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[dccrba]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0003,
+      "duration_s": 0.0004,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0003,
+      "duration_s": 0.0004,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_array_matches_numpy[frame_jacobian_dot]",
       "outcome": "passed"
     },
@@ -5000,133 +5000,133 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0009,
+      "duration_s": 0.0012,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_com_ccrba_tuple_matches_numpy",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0009,
+      "duration_s": 0.0012,
       "node_id": "test/python_wrappers/test_iiwa14_torch_smoke.py::test_ptier1_runtime_ee_matches_numpy",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1394,
+      "duration_s": 0.1417,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_damping_friction_value_path[iiwa14-fp32]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1345,
+      "duration_s": 0.1355,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_damping_gradient_path[iiwa14-fp32]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1124,
+      "duration_s": 0.1135,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_gradient_delta_is_damping_diag_only_no_friction[iiwa14-fp32]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1254,
+      "duration_s": 0.1266,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_default_off_matches_bare_oracle_and_differs_from_on[iiwa14-fp32]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1278,
+      "duration_s": 0.1755,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_damping_friction_value_path[iiwa14-fp64]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.136,
+      "duration_s": 0.1961,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_damping_gradient_path[iiwa14-fp64]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1137,
+      "duration_s": 0.1587,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_gradient_delta_is_damping_diag_only_no_friction[iiwa14-fp64]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1273,
+      "duration_s": 0.1794,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_default_off_matches_bare_oracle_and_differs_from_on[iiwa14-fp64]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.2095,
+      "duration_s": 0.2109,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_damping_friction_value_path[fr3-fp32]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.2211,
+      "duration_s": 0.2207,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_damping_gradient_path[fr3-fp32]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1919,
+      "duration_s": 0.1916,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_gradient_delta_is_damping_diag_only_no_friction[fr3-fp32]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.2083,
+      "duration_s": 0.2084,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_default_off_matches_bare_oracle_and_differs_from_on[fr3-fp32]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.2131,
+      "duration_s": 0.2245,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_damping_friction_value_path[fr3-fp64]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.223,
+      "duration_s": 0.2339,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_damping_gradient_path[fr3-fp64]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1911,
+      "duration_s": 0.2016,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_gradient_delta_is_damping_diag_only_no_friction[fr3-fp64]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.2162,
+      "duration_s": 0.2209,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_default_off_matches_bare_oracle_and_differs_from_on[fr3-fp64]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1309,
+      "duration_s": 0.134,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_rbdreference_oracle_dqd_block_matches_fd[iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.2927,
+      "duration_s": 0.3148,
       "node_id": "test/python_wrappers/test_joint_dynamics.py::test_rbdreference_oracle_dqd_block_matches_fd[fr3]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1228,
+      "duration_s": 0.1302,
       "node_id": "test/python_wrappers/test_joint_dynamics_ffi.py::test_value_path_numpy_jax_torch_parity[iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.2514,
+      "duration_s": 0.2776,
       "node_id": "test/python_wrappers/test_joint_dynamics_ffi.py::test_gradient_path_numpy_jax_torch_parity[iiwa14]",
       "outcome": "passed"
     },
@@ -5138,7 +5138,7 @@
     },
     {
       "checks": [],
-      "duration_s": 0.1509,
+      "duration_s": 0.16,
       "node_id": "test/python_wrappers/test_joint_dynamics_ffi.py::test_second_order_damping_contract[iiwa14]",
       "outcome": "passed"
     },
@@ -5150,13 +5150,13 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0738,
+      "duration_s": 0.0717,
       "node_id": "test/python_wrappers/test_joint_dynamics_ffi.py::test_value_path_numpy_jax_torch_parity[fr3]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.2259,
+      "duration_s": 0.2382,
       "node_id": "test/python_wrappers/test_joint_dynamics_ffi.py::test_gradient_path_numpy_jax_torch_parity[fr3]",
       "outcome": "passed"
     },
@@ -5168,301 +5168,301 @@
     },
     {
       "checks": [],
-      "duration_s": 0.2234,
+      "duration_s": 0.221,
       "node_id": "test/python_wrappers/test_joint_dynamics_ffi.py::test_second_order_damping_contract[fr3]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0006,
+      "duration_s": 0.0005,
       "node_id": "test/python_wrappers/test_joint_dynamics_ffi.py::test_nle_coriolis_damping_convention[fr3]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 1.1448,
+      "duration_s": 1.1382,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_thread_count_invariant[B1-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1983,
+      "duration_s": 0.2104,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_thread_count_invariant[B1-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0357,
+      "duration_s": 0.0319,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_thread_count_invariant[B16-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0325,
+      "duration_s": 0.0313,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_thread_count_invariant[B16-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0321,
+      "duration_s": 0.0322,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_thread_count_invariant[B256-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0326,
+      "duration_s": 0.0311,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_thread_count_invariant[B256-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.037,
+      "duration_s": 0.0354,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_thread_count_invariant[B1-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0365,
+      "duration_s": 0.0352,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_thread_count_invariant[B1-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0353,
+      "duration_s": 0.0331,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_thread_count_invariant[B16-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.036,
+      "duration_s": 0.0327,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_thread_count_invariant[B16-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0353,
+      "duration_s": 0.0324,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_thread_count_invariant[B256-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.039,
+      "duration_s": 0.0372,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_thread_count_invariant[B256-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1942,
+      "duration_s": 0.1917,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_matches_reference[t1-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.7611,
+      "duration_s": 0.7368,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_matches_reference[t1-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1534,
+      "duration_s": 0.1486,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_matches_reference[t2-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.4782,
+      "duration_s": 0.4689,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_matches_reference[t2-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1555,
+      "duration_s": 0.1512,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_matches_reference[t16-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.5654,
+      "duration_s": 0.5487,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_matches_reference[t16-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1562,
+      "duration_s": 0.1505,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_matches_reference[t32-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.4867,
+      "duration_s": 0.474,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_matches_reference[t32-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1561,
+      "duration_s": 0.1523,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_matches_reference[t64-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.5742,
+      "duration_s": 0.5545,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_matches_reference[t64-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.155,
+      "duration_s": 0.1516,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_matches_reference[t128-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.4824,
+      "duration_s": 0.473,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_matches_reference[t128-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1578,
+      "duration_s": 0.1519,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_matches_reference[t256-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.5796,
+      "duration_s": 0.5563,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_matches_reference[t256-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1598,
+      "duration_s": 0.1545,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t1-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.5077,
+      "duration_s": 0.4813,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t1-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1593,
+      "duration_s": 0.1552,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t2-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.4935,
+      "duration_s": 0.4848,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t2-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1608,
+      "duration_s": 0.1562,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t16-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.5808,
+      "duration_s": 0.5614,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t16-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1573,
+      "duration_s": 0.1538,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t32-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.4923,
+      "duration_s": 0.4843,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t32-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1594,
+      "duration_s": 0.1553,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t64-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.5842,
+      "duration_s": 0.5621,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t64-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1621,
+      "duration_s": 0.1549,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t128-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.4947,
+      "duration_s": 0.4855,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t128-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1597,
+      "duration_s": 0.1546,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t256-iiwa14]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.5894,
+      "duration_s": 0.5639,
       "node_id": "test/python_wrappers/test_kinematics_thread_batch_matrix.py::test_end_effector_pose_gradient_matches_reference[t256-go2]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 18.5221,
+      "duration_s": 17.5905,
       "node_id": "test/python_wrappers/test_mjx_fixed_base_noop.py::test_fixed_base_mujoco_convention_is_noop",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.9357,
+      "duration_s": 1.025,
       "node_id": "test/python_wrappers/test_mjx_fixed_base_noop.py::test_fixed_base_mujoco_convention_is_noop_jax_torch",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0246,
+      "duration_s": 0.032,
       "node_id": "test/python_wrappers/test_ps5_value_ops.py::test_coriolis_matrix",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0009,
+      "duration_s": 0.0014,
       "node_id": "test/python_wrappers/test_ps5_value_ops.py::test_kinetic_energy_regressor",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0034,
+      "duration_s": 0.0052,
       "node_id": "test/python_wrappers/test_ps5_value_ops.py::test_potential_energy_regressor",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0028,
+      "duration_s": 0.0046,
       "node_id": "test/python_wrappers/test_ps5_value_ops.py::test_dccrba",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0029,
+      "duration_s": 0.0046,
       "node_id": "test/python_wrappers/test_ps5_value_ops.py::test_cmm_time_variation",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 538.9175,
+      "duration_s": 659.4904,
       "node_id": "test/python_wrappers/test_ps5_value_ops.py::test_dccrba_cmm_mimic_supported",
       "outcome": "passed"
     },
@@ -5474,19 +5474,19 @@
     },
     {
       "checks": [],
-      "duration_s": 0.2038,
+      "duration_s": 0.2032,
       "node_id": "test/python_wrappers/test_runtime_inertia.py::test_baked_params_reproduce_baked_result",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1208,
+      "duration_s": 0.1209,
       "node_id": "test/python_wrappers/test_runtime_inertia.py::test_mutated_table_matches_oracle_fp32",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1239,
+      "duration_s": 0.1244,
       "node_id": "test/python_wrappers/test_runtime_inertia.py::test_mutated_table_matches_oracle_fp64",
       "outcome": "passed"
     },
@@ -5516,7 +5516,7 @@
     },
     {
       "checks": [],
-      "duration_s": 648.3884,
+      "duration_s": 635.981,
       "node_id": "test/python_wrappers/test_runtime_inertia.py::test_inertia_poke_seen_across_surfaces",
       "outcome": "passed"
     },
@@ -5540,7 +5540,7 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0003,
+      "duration_s": 0.0002,
       "node_id": "test/python_wrappers/test_runtime_joint_dynamics.py::test_poke_matches_analytic_bias",
       "outcome": "passed"
     },
@@ -5564,13 +5564,13 @@
     },
     {
       "checks": [],
-      "duration_s": 447.9971,
+      "duration_s": 443.3001,
       "node_id": "test/python_wrappers/test_runtime_joint_dynamics.py::test_poke_seen_across_surfaces",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 1601.9736,
+      "duration_s": 1580.2091,
       "node_id": "test/python_wrappers/test_runtime_joint_dynamics.py::test_fr3_mimic_untouched_equals_baked_and_zero_toggles",
       "outcome": "passed"
     },
@@ -5582,7 +5582,7 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0009,
+      "duration_s": 0.0008,
       "node_id": "test/python_wrappers/test_runtime_transform.py::test_default_params_match_baked",
       "outcome": "passed"
     },
@@ -5594,7 +5594,7 @@
     },
     {
       "checks": [],
-      "duration_s": 0.2902,
+      "duration_s": 0.4387,
       "node_id": "test/python_wrappers/test_runtime_transform.py::test_transform_poke_seen_across_surfaces",
       "outcome": "passed"
     },
@@ -5612,13 +5612,13 @@
     },
     {
       "checks": [],
-      "duration_s": 0.03,
+      "duration_s": 0.0305,
       "node_id": "test/python_wrappers/test_subset_build.py::test_default_value_methods_match_oracle",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0188,
+      "duration_s": 0.0181,
       "node_id": "test/python_wrappers/test_subset_build.py::test_default_derivative_methods_match_oracle",
       "outcome": "passed"
     },
@@ -5636,7 +5636,7 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0073,
+      "duration_s": 0.0072,
       "node_id": "test/python_wrappers/test_subset_build.py::test_subset_transitive_deps_work",
       "outcome": "passed"
     },
@@ -5678,31 +5678,31 @@
     },
     {
       "checks": [],
-      "duration_s": 0.023,
+      "duration_s": 0.0262,
       "node_id": "test/python_wrappers/test_subset_build.py::test_subset_does_not_rekey_default",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.129,
+      "duration_s": 0.1267,
       "node_id": "test/python_wrappers/test_subset_build_jax.py::test_subset_requested_algos_match_oracle",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.3771,
+      "duration_s": 0.392,
       "node_id": "test/python_wrappers/test_subset_build_jax.py::test_subset_transitive_deps_work",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0279,
+      "duration_s": 0.0284,
       "node_id": "test/python_wrappers/test_subset_build_jax.py::test_subset_jit_matches_eager",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0279,
+      "duration_s": 0.0302,
       "node_id": "test/python_wrappers/test_subset_build_jax.py::test_subset_vmap_compose",
       "outcome": "passed"
     },
@@ -5726,19 +5726,19 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0015,
+      "duration_s": 0.0018,
       "node_id": "test/python_wrappers/test_subset_build_jax.py::test_subset_unrequested_raises_clean_error[end_effector_pose-<lambda>]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0013,
+      "duration_s": 0.0014,
       "node_id": "test/python_wrappers/test_subset_build_jax.py::test_subset_unrequested_raises_clean_error[integrator-<lambda>]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0542,
+      "duration_s": 0.0606,
       "node_id": "test/python_wrappers/test_subset_build_jax.py::test_default_built_algos_run",
       "outcome": "passed"
     },
@@ -5750,31 +5750,31 @@
     },
     {
       "checks": [],
-      "duration_s": 0.0248,
+      "duration_s": 0.0238,
       "node_id": "test/python_wrappers/test_subset_build_jax.py::test_subset_does_not_rekey_default",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0261,
+      "duration_s": 0.0259,
       "node_id": "test/python_wrappers/test_subset_build_torch.py::test_subset_requested_algos_match_oracle",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0354,
+      "duration_s": 0.0703,
       "node_id": "test/python_wrappers/test_subset_build_torch.py::test_subset_transitive_deps_work",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0664,
+      "duration_s": 0.7452,
       "node_id": "test/python_wrappers/test_subset_build_torch.py::test_subset_forward_dynamics_backward_vjp",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0002,
+      "duration_s": 0.0003,
       "node_id": "test/python_wrappers/test_subset_build_torch.py::test_subset_unrequested_raises_clean_error[idsva_so-<lambda>]",
       "outcome": "passed"
     },
@@ -5816,7 +5816,7 @@
     },
     {
       "checks": [],
-      "duration_s": 0.027,
+      "duration_s": 0.0265,
       "node_id": "test/python_wrappers/test_subset_build_torch.py::test_subset_does_not_rekey_default",
       "outcome": "passed"
     },
@@ -5828,13 +5828,13 @@
     },
     {
       "checks": [],
-      "duration_s": 0.1587,
+      "duration_s": 0.1531,
       "node_id": "test/python_wrappers/test_tool.py::test_attach_payload_matches_oracle",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.1194,
+      "duration_s": 0.1146,
       "node_id": "test/python_wrappers/test_tool.py::test_se3_tip_matches_oracle",
       "outcome": "passed"
     },
@@ -5846,31 +5846,31 @@
     },
     {
       "checks": [],
-      "duration_s": 0.1182,
+      "duration_s": 0.1146,
       "node_id": "test/python_wrappers/test_tool.py::test_tool_fext_matches_host_map",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.0003,
+      "duration_s": 0.0002,
       "node_id": "test/python_wrappers/test_tool.py::test_detach_restores_baked",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 0.602,
+      "duration_s": 0.8396,
       "node_id": "test/python_wrappers/test_two_robot_process.py::test_two_so_pools_are_independent",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 4.4989,
+      "duration_s": 4.37,
       "node_id": "test/python_wrappers/test_workspace_slots_direct_launch.py::test_direct_launch_bit_identical_under_reduced_slots[jax]",
       "outcome": "passed"
     },
     {
       "checks": [],
-      "duration_s": 3.751,
+      "duration_s": 3.2621,
       "node_id": "test/python_wrappers/test_workspace_slots_direct_launch.py::test_direct_launch_bit_identical_under_reduced_slots[torch]",
       "outcome": "passed"
     },
