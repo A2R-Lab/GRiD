@@ -1864,3 +1864,30 @@ which with the slab carve keeps GRiD fed from inside the pool and leaves
 torch the rest of the card. Validated same day on a live wrapper module
 run; the first post-flip SPLIT_REFRESH re-executed the whole wrapper
 domain under the new setting.
+
+### 7.z10 Receipt verify must match CI's invocation — bare verify FAILs on pinned skips (2026-09-14)
+`gpu-proof verify --receipt gpu-proof.json --policy test/gpu-proof-policy.yaml`
+alone prints `FAIL: 141 marked test(s) were skipped` — those are the PINNED
+baseline skips, not a regression. CI's job (.github/workflows/
+verify-gpu-proof.yml) always adds `--expected-skips
+test/gpu-proof-expected-skips.txt`; do the same locally, and compare local
+green against CI's EXACT cpu-lane module list from that workflow before
+pushing codegen-surface changes (the S1 launch-check helpers passed 297
+crosscheck referees locally, then CI's `test_plant_launch_hygiene.py` —
+absent from the crosscheck set — went red on the unrecognized helper names).
+
+### 7.z11 Post-pass string rewrites vs recorded positions in generated code (2026-09-14, header fragments)
+Two traps from slicing gen_all_code's emission into fragments:
+1. `_apply_host_thread_clamp_pass` (and any whole-file post-pass) INSERTS
+   lines, so character/line OFFSETS recorded during emission are dead on
+   arrival — record boundaries as unique SENTINEL COMMENT LINES instead;
+   comment lines ride through the pass untouched and are stripped after.
+   (Also: the pass carries global state — an overload census, one injection
+   anchor, a monotonically numbered clamp var — so applying it per-fragment
+   does NOT compose to the whole-file result.)
+2. Reconstructing the stripped file by CONCATENATING fragment texts leaks
+   one newline per EMPTY fragment (adjacent sentinels); build the stripped
+   text by FILTERING the sentinel lines from the original line list. Both
+   were caught by the byte-gate (tools/byte_gate.py before/after via
+   `git stash`) — run it on ANY emission-path change, even "observational"
+   ones.

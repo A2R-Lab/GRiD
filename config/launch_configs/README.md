@@ -69,5 +69,8 @@ values. (See the **"Autotune launch config for your robot / GPU"** section of
    auto-discovers the file.
 
 Currently seeded: **baxter, g1, go2, h1_2, h2_plus, iiwa14** on `rtx5090_sm120`. Note that
-  (h1_2 was re-tuned 2026-09-05 — fresh floating ffi_bases + per-tier matrix
-  cells; treat its config as current, not legacy.)
+  (All six robots' `torch_bases`/`pybind_bases` — and h1_2's `ffi_bases` —
+  were re-baked 2026-09-14 from the N=16 batch-to-land sweep via
+  `test/benchmarks/autotune_bake_from_logs.py`; the other five robots keep
+  N=256-tuned `ffi_bases` plus `ffi_bases_by_n["16"]` small-batch overlays.
+  Treat every config as current, not legacy.)
