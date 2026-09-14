@@ -81,6 +81,96 @@ def gen_add_code_line(self, new_code_line, add_indent_after = False):
     if add_indent_after:
         self.indent_level += 1
 
+
+# ── per-algorithm header fragments (M3 F0, design doc
+# docs/open-tasks/header_fragments_design_2026-09-14.md) ──────────────────────
+# gen_all_code drops a SENTINEL COMMENT LINE at each top-level fragment
+# boundary. Sentinels (not offsets) survive the whole-file post-passes
+# (_apply_host_thread_clamp_pass inserts lines, which would invalidate
+# offsets). After the passes, split_fragment_sentinels() slices the stream on
+# the sentinels and STRIPS them, so the final grid.cuh is byte-identical to
+# the pre-F0 emission — enforced by tools/byte_gate.py and the fragment
+# referee. The slice before the first sentinel is the "_prologue" fragment
+# (file doc + includes, outside namespace grid).
+
+FRAGMENT_SENTINEL = "//__GRID_FRAGMENT__ "
+
+
+def gen_add_fragment_mark(self, name):
+    # raw append (no indent): the sentinel is matched by lstrip().startswith,
+    # but keeping it column-0 makes the stripped/kept invariant trivial.
+    self.code_str += FRAGMENT_SENTINEL + name + "\n"
+
+
+def split_fragment_sentinels(code_str):
+    """(fragments, stripped) — fragments is an ORDERED list of (name, text)
+    slices with the sentinel lines removed (an unselected group's fragment is
+    the empty string); stripped is the full source minus exactly the sentinel
+    LINES (built by line filtering, so it is the pre-F0 emission verbatim —
+    naive re-concatenation of fragment texts is NOT the invariant: adjacent
+    empty fragments would each contribute a joining newline)."""
+    frags = []
+    cur_name, cur = "_prologue", []
+    kept = []
+    for ln in code_str.split("\n"):
+        if ln.lstrip().startswith(FRAGMENT_SENTINEL):
+            frags.append((cur_name, "\n".join(cur)))
+            cur_name, cur = ln.lstrip()[len(FRAGMENT_SENTINEL):].strip(), []
+        else:
+            cur.append(ln)
+            kept.append(ln)
+    frags.append((cur_name, "\n".join(cur)))
+    names = [n for n, _ in frags]
+    assert len(names) == len(set(names)), f"duplicate fragment names: {names}"
+    return frags, "\n".join(kept)
+
+
+# M3 F1: which fragment carries each algorithm_list key's emission. A subset
+# consumer's fragment set = {_prologue, core} ∪ fragments of the CLOSURE of its
+# algos (closure = GRiDCodeGenerator._normalize_codegen_algorithms — the same
+# dependency expansion the emitter itself uses) ∪ {combinations, init_close}
+# (+ grid_plant/collision when those namespaces are wanted). Kinematics keys
+# share the ee_kinematics fragment (interleaved emission); the SO family
+# shares second_order; regressor keys share regressors; centroidal quick-wins
+# share centroidal. Referee: test/test_header_fragments.py keeps this map
+# honest against the emitted fragments.
+ALGO_TO_FRAGMENT = {
+    "inverse_dynamics": "inverse_dynamics",
+    "inverse_dynamics_regressor": "regressors",
+    "kinetic_energy_regressor": "regressors",
+    "potential_energy_regressor": "regressors",
+    "minv": "minv",
+    "forward_dynamics": "forward_dynamics",
+    "forward_dynamics_parameter_gradient": "forward_dynamics_parameter_gradient",
+    "inverse_dynamics_gradient": "inverse_dynamics_gradient",
+    "forward_dynamics_gradient": "forward_dynamics_gradient",
+    "f_ext_gradient": "f_ext_gradient",
+    "aba": "aba",
+    "crba": "crba",
+    "integrator": "integrator",
+    "integrator_gradient": "integrator",
+    "integrator_with_gradient": "integrator",
+    "integrator_hessian": "second_order",
+    "idsva_so_body_frame": "second_order",
+    "idsva_so_world_frame": "second_order",
+    "fdsva_so": "second_order",
+    "generalized_gravity": "centroidal",
+    "nonlinear_effects": "centroidal",
+    "com": "centroidal",
+    "ccrba": "centroidal",
+    "energy": "centroidal",
+    "cmm_time_variation": "centroidal",
+    "dccrba": "centroidal",
+    "frame_jacobian": "frame_jacobian_family",
+    "frame_jacobian_dot": "frame_jacobian_family",
+    "osc_inertia": "frame_jacobian_family",
+    "end_effector_pose": "ee_kinematics",
+    "end_effector_pose_gradient": "ee_kinematics",
+    "end_effector_pose_hessian": "ee_kinematics",
+    "end_effector_pose_runtime": "ee_runtime",
+    "end_effector_pose_gradient_runtime": "ee_runtime",
+}
+
 def gen_bake_const_array(self, name, vals, elem="int"):
     """Emit a baked compile-time constant array: `static const <elem> NAME[] = { ... };`.
 

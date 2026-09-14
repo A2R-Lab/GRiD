@@ -85,4 +85,5 @@ jobs:
             test/test_kernel_attr_manifest_consistency.py \
             test/test_plant_launch_hygiene.py \
             test/test_wrapper_plant_block.py \
+            test/test_header_fragments.py \
             -v

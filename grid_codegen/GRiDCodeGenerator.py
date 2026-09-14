@@ -8,6 +8,7 @@ import warnings
 from .algorithms._idsva_so import _idsva_so_use_world_frame
 
 from .helpers._host_clamp import _apply_host_thread_clamp_pass
+from .helpers._code_generation_helpers import split_fragment_sentinels
 
 # Launch-config bake moved to _launch_config.py (H4); re-exported here because
 # bindings/_compile/_handle/autotune_ffi and the parity goldens import these
@@ -37,7 +38,7 @@ class GRiDCodeGenerator:
                          gen_topology_S_sign_for_cpp, gen_insert_helpers_function_call, gen_insert_helpers_func_def_params, gen_init_robotModel, gen_free_robotModel, gen_joint_limits_size, gen_init_joint_limits, \
                          gen_grid_linalg_backend_helpers, gen_linalg_smem_setup, gen_invert_matrix, gen_matmul, gen_matmul_trans, gen_crm_mul, gen_crm, gen_mxS_general, custom_is_constant, \
                          gen_mjx_input_convert, gen_mjx_quat_reorder, gen_mjx_base_rotate, gen_mjx_symmetrize_full, gen_mjx_accel_out, gen_mjx_congruence, gen_mjx_column_reframe, gen_mjx_retract, \
-                         robot_has_mimic_joints, _v_slot_cpp, _alpha_for_jid, _id_S_desc
+                         robot_has_mimic_joints, _v_slot_cpp, _alpha_for_jid, _id_S_desc, gen_add_fragment_mark
 
     # then import all of the algorithms
     from .algorithms import gen_inverse_dynamics_inner_temp_mem_size, gen_inverse_dynamics_inner_function_call, \
@@ -307,7 +308,7 @@ class GRiDCodeGenerator:
                      runtime_inertia = False, runtime_transform = False,
                      runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
                      contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None,
-                     emit_alloc_gating = False):
+                     emit_alloc_gating = False, fragments_dir = None):
         # enable_mujoco_kernels=False builds a PIN-ONLY header: the mjx
         # (MUJOCO_OUTPUT=true) template overloads are still EMITTED (they are
         # templates -- uninstantiated they cost nothing; a bare #include is 2 s /
@@ -579,6 +580,7 @@ class GRiDCodeGenerator:
         if self.include_fixed_kinematic_targets:
             file_notes += ["", "Additional EEPose Functions Included for Fixed Kinematic Target: " + fixed_target_name,""]
         self.gen_add_func_doc("This instance of grid.cuh is optimized for the urdf: " + self.robot.name,file_notes)
+        self.gen_add_fragment_mark("core")
         # then all of the includes (and namespaces and defines)
         self.gen_add_includes()
         # then add the gpu error macro
@@ -661,6 +663,7 @@ class GRiDCodeGenerator:
         # Standalone topology-helper filler for external/inline-CUDA callers of the
         # *_inner functions (uniform interface; no-op for serial chains).
         self.gen_load_topology_helpers()
+        self.gen_add_fragment_mark("ee_kinematics")
         if include_homogenous_transforms and include_any_kinematics:
             self.gen_load_update_XmatsHom_helpers(include_base_inertia)
             if "end_effector_pose_gradient" in algorithms or "end_effector_pose_hessian" in algorithms:
@@ -756,9 +759,11 @@ class GRiDCodeGenerator:
                         self.gen_multi_target_position_gradient(_cc_batch, suffix="")
         if self.robot.floating_base and not enable_floating_second_order:
             warnings.warn('floating-base second order dynamics are still under development')
+        self.gen_add_fragment_mark("inverse_dynamics")
         # then generate the dynamics algorithms
         if "inverse_dynamics" in algorithms:
             self.gen_inverse_dynamics()
+        self.gen_add_fragment_mark("regressors")
         # E1: joint-torque regressor Y (tau = Y . pi). Additive; reuses the RNEA
         # forward sweep emitted by gen_inverse_dynamics (requires "inverse_dynamics").
         if "inverse_dynamics_regressor" in algorithms:
@@ -770,25 +775,34 @@ class GRiDCodeGenerator:
             self.gen_kinetic_energy_regressor()
         if "potential_energy_regressor" in algorithms:
             self.gen_potential_energy_regressor()
+        self.gen_add_fragment_mark("minv")
         if "minv" in algorithms:
             self.gen_minv()
+        self.gen_add_fragment_mark("forward_dynamics")
         if "forward_dynamics" in algorithms:
             self.gen_forward_dynamics()
+        self.gen_add_fragment_mark("forward_dynamics_parameter_gradient")
         # FD parameter gradient dqdd/dpi = -Minv . Y. Additive; composes the
         # regressor (Y), minv (Minv) and inverse_dynamics/forward_dynamics
         # inners, so it requires "inverse_dynamics", "minv", "forward_dynamics" and "inverse_dynamics_regressor" co-emitted.
         if "forward_dynamics_parameter_gradient" in algorithms:
             self.gen_forward_dynamics_parameter_gradient()
+        self.gen_add_fragment_mark("inverse_dynamics_gradient")
         if "inverse_dynamics_gradient" in algorithms:
             self.gen_inverse_dynamics_gradient()
+        self.gen_add_fragment_mark("forward_dynamics_gradient")
         if "forward_dynamics_gradient" in algorithms:
             self.gen_forward_dynamics_gradient()
+        self.gen_add_fragment_mark("f_ext_gradient")
         if "f_ext_gradient" in algorithms:
             self.gen_f_ext_gradient()
+        self.gen_add_fragment_mark("aba")
         if "aba" in algorithms:
             self.gen_aba()
+        self.gen_add_fragment_mark("crba")
         if "crba" in algorithms:
             self.gen_crba()
+        self.gen_add_fragment_mark("integrator")
         if "integrator" in algorithms:
             self.gen_integrator()
             # GATO ASK6: namespace-scope carve struct mirroring the integrator
@@ -798,6 +812,7 @@ class GRiDCodeGenerator:
             self.gen_integrator_gradient()
             # GATO ASK6: the du-kernel twin (with-x_kp1 shape, TIER_SHARED rung).
             self.gen_integrator_du_arena_carve_struct()
+        self.gen_add_fragment_mark("second_order")
         if not self.robot.floating_base or enable_floating_second_order:
             if "idsva_so_body_frame" in algorithms:
                 # A6: the body-frame family is now gated (default-dropped on
@@ -826,6 +841,7 @@ class GRiDCodeGenerator:
                 # Hessian) both emit; only multi-stage RK static_asserts out. Gated on
                 # fdsva_so membership to keep non-fdsva_so headers byte-identical.
                 self.gen_integrator_hessian_device()
+        self.gen_add_fragment_mark("centroidal")
         # G2 centroidal quick-wins (R1-R3): additive families gated on their
         # grid:: deps. generalized_gravity / nonlinear_effects are RNEA bias
         # wrappers (need `id`); com / ccrba / energy live in the kinematics
@@ -833,6 +849,7 @@ class GRiDCodeGenerator:
         # (need `ee_pose`). All are NEW emitters appended after the existing
         # algorithms, so existing emission is byte-identical.
         self.gen_centroidal_quickwins(algorithms)
+        self.gen_add_fragment_mark("frame_jacobian_family")
         # E2 (additive, opt-in): general-frame geometric Jacobian. Only emitted
         # when the `frame_jacobian` key is explicitly selected, so every existing
         # profile's header is byte-identical. Needs ee_pose's world-transform
@@ -928,6 +945,7 @@ class GRiDCodeGenerator:
         if ("frame_jacobian" in algorithms and "end_effector_pose" in algorithms
                 and self.robot_has_mimic_joints() and "osc_inertia" not in algorithms):
             self.gen_add_code_line("#define GRID_FRAME_JAC_MIMIC 1")
+        self.gen_add_fragment_mark("ee_runtime")
         # Runtime-target pose / pose-gradient (additive, opt-in). Emitted only when
         # their key is selected, so every existing profile's header is byte-identical.
         # Both need ee_pose's world-transform machinery (pulled in above). The arena
@@ -957,14 +975,18 @@ class GRiDCodeGenerator:
                     ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }")
                 self.gen_add_code_line("#define GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME 1")
                 self.gen_end_effector_pose_gradient_runtime()
+        self.gen_add_fragment_mark("combinations")
         self.gen_combination_functions(algorithms, fixed_target_name)
+        self.gen_add_fragment_mark("init_close")
         # then finally the master init and close the namespace
         self.gen_init_close_grid()
         self.gen_add_end_control_flow()
+        self.gen_add_fragment_mark("grid_plant")
         # T6: emit the sibling `grid_plant` namespace (cost/constraint/plant-step
         # primitives composed over the grid:: surface). Additive: this runs AFTER
         # the grid namespace closes and makes ZERO edits to any grid:: emit path.
         self.gen_grid_plant(algorithms)
+        self.gen_add_fragment_mark("collision")
         # W3: sibling `grid_collision` namespace (baked sphere radii + self_cc_ranges + config_free
         # over grid::multi_target_position + the static SDF header). Emitted like grid_plant, after
         # the grid namespace closes; gated on collision_spec (the sphere batch was emitted above).
@@ -980,6 +1002,20 @@ class GRiDCodeGenerator:
         # 2026-06-19 incident). One pass fixes all ~170 launch sites for every
         # consumer (bindings, GATO/MPCGPU-style direct callers, bench exes).
         self.code_str = _apply_host_thread_clamp_pass(self.code_str)
+        # M3 F0 (docs/open-tasks/header_fragments_design_2026-09-14.md): slice
+        # the stream on the fragment sentinels and STRIP them, so the written
+        # grid.cuh is byte-identical to the pre-F0 emission (gate:
+        # tools/byte_gate.py; referee: test/test_header_fragments.py). Slicing
+        # runs AFTER the clamp pass on purpose — that pass inserts lines, which
+        # would invalidate recorded offsets, while sentinel LINES ride through
+        # it untouched. fragments_dir (opt-in) writes one grid_frag_<name>.cuh
+        # per fragment; self.header_fragments always holds the ordered slices.
+        self.header_fragments, self.code_str = split_fragment_sentinels(self.code_str)
+        if fragments_dir is not None:
+            os.makedirs(fragments_dir, exist_ok=True)
+            for _frag_name, _frag_text in self.header_fragments:
+                with open(os.path.join(fragments_dir, "grid_frag_" + _frag_name + ".cuh"), "w") as _f:
+                    _f.write(_frag_text)
         # then output to a file
         if output_path is None:
             output_path = self.file_namespace + ".cuh"
