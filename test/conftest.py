@@ -26,13 +26,18 @@ import subprocess
 import pytest
 
 # XLA's default allocator PREALLOCATES 75% of GPU memory at first backend init
-# (24.6 GiB on a 32 GiB card, measured 2026-08-27) — in a monolithic in-process
-# run that pool plus torch's caching allocator was the entire "accumulation
-# SIGABRT" late-suite abort (close-tracker A/B proved handles were irrelevant:
-# both arms died at ~28.0 GiB). Must be set before the first jax import
-# anywhere in the process; conftest import is the earliest hook we own.
+# (24.6 GiB on a 32 GiB card, measured 2026-08-27) — with torch's caching
+# allocator on top that was the "accumulation SIGABRT" abort class (~28.0 GiB
+# ceiling, re-measured 2026-09-13 under prealloc=ON: guide §7.z9). The old
+# mitigation here was PREALLOCATE=false; since the device-pool slab landed
+# (GRiD's gridData arena is carved OUT OF XLA's pool — _install_xla_device_pool,
+# 2026-09-09) the proper fix is to keep XLA's fast preallocating allocator ON
+# but BOUNDED: 35% of a 32 GiB card = 11.2 GiB, comfortably above the measured
+# jax working sets (humanoid armD peak 4.2 GiB total process) while leaving
+# torch's allocator the rest of the card. Must be set before the first jax
+# import anywhere in the process; conftest import is the earliest hook we own.
 # setdefault so an explicit caller choice still wins.
-os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.35")
 
 _GPU_PROOF_SOURCE_MARKERS = ("cuda_equivalence", "python_wrappers")
 

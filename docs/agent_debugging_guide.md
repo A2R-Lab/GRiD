@@ -1857,3 +1857,10 @@ torch/numpy surfaces are unaffected. Related: the test/conftest.py
 (150/150) but peaks at 28.0 GiB of 32 — the historical SIGABRT ceiling —
 so the full suite would still be at risk. The durable fix direction is the
 jax-C-API slab + MEM_FRACTION integration (see _install_xla_device_pool).
+LANDED 2026-09-13 (canonical-plan S5): conftest now sets
+`XLA_PYTHON_CLIENT_MEM_FRACTION=0.35` instead of the prealloc opt-out —
+XLA's preallocating allocator stays ON but bounded at 11.2 GiB (of 32),
+which with the slab carve keeps GRiD fed from inside the pool and leaves
+torch the rest of the card. Validated same day on a live wrapper module
+run; the first post-flip SPLIT_REFRESH re-executed the whole wrapper
+domain under the new setting.
