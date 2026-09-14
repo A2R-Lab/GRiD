@@ -705,7 +705,7 @@ def emit_torch_body(key: str) -> str:
           f"    grid::{ksym}<{targs}><<<grid_rbd_grid_for(batch), "
           f"grid_rbd_launch_threads_n<grid::{algo}>(batch), {smem_bytes_call(spec)}, stream>>>(",
           f"        {kargs});",
-          f'    TORCH_CHECK(cudaGetLastError() == cudaSuccess, "{ksym} launch failed");']
+          f'    grid_torch_check_launch("{ksym}");']
     batch_sz = "(size_t)batch" if spec.hoist_out_size else "batch"
     out_arg = kernel_launch_args(spec, "torch")[0]
     L.append(f"    cudaMemcpyAsync(out.data_ptr<T>(), {out_arg}, "
@@ -782,7 +782,7 @@ def emit_jax_handler(key: str) -> str:
     L.append(f"    grid::{ksym}<{targs}><<<")
     L.append(f"        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::{algo}>(batch), {smem_bytes_call(spec)}, stream>>>(")
     L.append(f"            {kargs});")
-    L.append(f'    if (cudaGetLastError() != cudaSuccess) return ffi::Error::Internal("{ksym} launch failed");')
+    L.append(f'    GRID_RBD_FFI_CHECK_LAUNCH("{ksym}");')
     out_arg = kernel_launch_args(spec, "jax")[0]
     if spec.hoist_out_size:
         L.append(f"    const int out_size = {spec.out_size_expr};")
