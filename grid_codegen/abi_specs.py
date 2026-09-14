@@ -827,7 +827,13 @@ ABI_SPECS: dict[str, AbiSpec] = {
     # shares plant_quadratic_cost_impl<STATE>, barriers share
     # plant_barrier_impl(which)). Bodies stay literal (body_override); the
     # rows drive the torch op-table emission + the referee (incl. the
-    # GRID_PLANT_HAS_* gate coverage that was previously UNCHECKED). ──────
+    # GRID_PLANT_HAS_* gate coverage that was previously UNCHECKED).
+    # M2 (2026-09-14): the GATED per-op jax/torch wrapper tails (plant_step,
+    # plant_step_gradient, ee/com/momentum cost) are now EMITTED by
+    # grid_codegen/wrapper_plant_gen.py (one table row per op, both
+    # surfaces; drift referee test/test_wrapper_plant_block.py). The C-ABI
+    # PlantBuffers bodies and the quadratic/barrier shared impls remain
+    # hand-written — body_override still describes those. ─────────────────
     "plant_quadratic_state_cost": AbiSpec(
         "plant_quadratic_state_cost",
         surface_class="plant", py_vmap_ok=False,

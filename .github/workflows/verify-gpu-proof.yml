@@ -84,4 +84,5 @@ jobs:
             test/test_algo_descriptor_parity.py \
             test/test_kernel_attr_manifest_consistency.py \
             test/test_plant_launch_hygiene.py \
+            test/test_wrapper_plant_block.py \
             -v
