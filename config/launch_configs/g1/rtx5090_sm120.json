@@ -55,7 +55,7 @@
       "idsva_so": {
         "threads": 224,
         "tier": "lite",
-        "us_at_optimal": 958.12
+        "us_at_optimal": 1168.57
       },
       "idsva_so_body_frame": {
         "threads": 256,
@@ -202,7 +202,7 @@
       "idsva_so": {
         "threads": 128,
         "tier": "shared",
-        "us_at_optimal": 1977.51
+        "us_at_optimal": 1817.53
       },
       "idsva_so_body_frame": {
         "threads": 96,
@@ -950,7 +950,7 @@
       "kernel"
     ]
   },
-  "source": "GRiD autotune sweep 2026-08-26",
+  "source": "GRiD autotune sweep 2026-09-15",
   "torch_bases": {
     "fixed": {
       "aba": {
