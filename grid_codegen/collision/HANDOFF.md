@@ -136,6 +136,11 @@ Sizing:
 Minimal launches: `cuda_collision_config_free_runner.cu` (single-tier) and
 `cuda_collision_two_tier_runner.cu` (broad→fine) under `test/cuda_equivalents/`.
 
+Measured `config_free` latency (iiwa14, RTX 5090, 2026-08-02; B=1024, iters=50, threads=128,
+5 reps per arm): **native capsule rows 0.0970 µs/config vs spherized rows 0.3127 µs/config —
+~3.2× faster native** (raw output: `test/benchmarks/results/overnight_20260803/legB_collision_ab/`;
+A/B runner archived at `test/benchmarks/archive/collision_configfree_timing.cu`).
+
 The underlying SDFs (squared-gap convention, `<0` = collision) live in
 `collision/grid_collision_geometry.cuh` — hand-written, robot-agnostic, peer to the GLASS linalg
 headers.

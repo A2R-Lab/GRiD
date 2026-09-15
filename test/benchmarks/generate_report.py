@@ -461,18 +461,16 @@ def generate_report(data: dict, output_path: Path) -> None:
     lines += [
         "## cuRobo Reference",
         "",
-        "cuRobo (arxiv 2603.05493) does not expose a standalone dynamics API — "
-        "dynamics kernels are fused into the motion-planning optimization loop and "
-        "are not independently benchmarkable. Numbers from the paper are shown below "
-        "for context (Table 2 from the cuRobo paper; `compute-only` column, RTX 3090).",
-        "",
-        "| Algorithm | cuRobo (batch 1024, µs) | Notes |",
-        "|-----------|:-----------------------:|-------|",
-        "| ID | ~2.3 | Fused forward pass |",
-        "| FD | ~4.1 | Fused forward pass |",
-        "| ID_DU | ~8.7 | Fused Jacobian pass |",
-        "",
-        "> Numbers from cuRobo paper; methodology differs from GRiD/Pinocchio benchmarks above.",
+        "cuRobo's dynamics layer IS independently benchmarkable via its torch "
+        "`Dynamics.compute_inverse_dynamics` API: the adapter at "
+        "`test/benchmarks/baselines/curobo/timeCurobo.py` captures `inverse_dynamics` "
+        "(RNEA forward) and `inverse_dynamics_gradient` (RNEA backward via autograd); "
+        "its other algorithms are not exposed standalone. "
+        "Measured captures live in `test/benchmarks/results/competitive_*/g1_fixed_curobo.json` "
+        "and are scored by `analyze_competitive.py` (2026-07-12: GRiD 5.75x on id, "
+        "10.44x on id_du at N=256, g1-fixed, RTX 5090). See that competitive report "
+        "for the head-to-head numbers; cuRobo is not a column in the multi-version "
+        "table above (different capture path).",
         "",
     ]
 
