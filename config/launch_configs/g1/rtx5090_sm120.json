@@ -53,9 +53,9 @@
         "us_at_optimal": 61.75
       },
       "idsva_so": {
-        "threads": 256,
-        "tier": "shared",
-        "us_at_optimal": 1220.9
+        "threads": 224,
+        "tier": "lite",
+        "us_at_optimal": 958.12
       },
       "idsva_so_body_frame": {
         "threads": 256,
