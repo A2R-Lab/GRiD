@@ -664,8 +664,10 @@ static inline void reset_f_ext(const T* f_ext, int batch) {
 //   q layout:     (batch, NUM_POS)            -> q[b*NUM_POS + j]
 //   pose7 layout: (batch, 7) = [tx,ty,tz, qw,qx,qy,qz]
 // use_warp selects the warp-cooperative inner (1) vs the thread inner (0).
-// Only present when the generated header supports the standalone FK inner
-// (fixed-base, non-mimic robots); floating-base/mimic robots return rc=3.
+// Only present when the generated header emits the standalone FK inner —
+// fixed AND floating bases, mimic included (registry A2, 2026-08). rc=3 only
+// for spherical-joint robots, >32-joint robots (warp inner's lane==jid cap),
+// or a reduced codegen profile that skipped the EE-pose family.
 extern "C" int grid_rbd_fk_batched(
     const T* q,
     T* pose7_out,
@@ -4625,6 +4627,7 @@ GRID_RBD_JAX_PLANT_BARRIER_BIND(grid_rbd_jax_plant_joint_velocity_barrier,
 GRID_RBD_JAX_PLANT_BARRIER_BIND(grid_rbd_jax_plant_joint_torque_barrier,
                                 grid_rbd_jax_plant_joint_torque_barrier_impl);
 
+// ── BEGIN GENERATED JAX PLANT TAIL (grid_codegen/wrapper_plant_gen.py — do not hand-edit) ──
 #ifdef GRID_PLANT_HAS_STEP
 // plant_step(x, u; dt, it) → x_kp1  (B, NX). Reuses g_plant.d_grad as x_kp1
 // (size NX), matching the C-ABI launch_plant_step.
@@ -4877,6 +4880,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_PLANT_HAS_MOMENTUM_COST
+// ── END GENERATED JAX PLANT TAIL ──
 
 #endif  // GRID_RBD_WITH_JAX
 
@@ -5880,6 +5884,7 @@ std::vector<torch::Tensor> torch_joint_torque_barrier(torch::Tensor v, torch::Te
     return torch_plant_barrier(v, lo, hi, mu, 2);
 }
 
+// ── BEGIN GENERATED TORCH PLANT TAIL (grid_codegen/wrapper_plant_gen.py — do not hand-edit) ──
 #ifdef GRID_PLANT_HAS_STEP
 template <grid::IntegratorType IT, bool MUJOCO>
 static void torch_launch_plant_step(cudaStream_t stream, int batch, double gravity, double dt) {
@@ -6042,6 +6047,7 @@ std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Tensor qd
     return {out, grad, hess};
 }
 #endif  // GRID_PLANT_HAS_MOMENTUM_COST
+// ── END GENERATED TORCH PLANT TAIL ──
 
 }  // namespace
 

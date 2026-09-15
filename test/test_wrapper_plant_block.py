@@ -3,12 +3,13 @@
 M2 (canonical plan 2026-09-13): the five gated plant ops (plant_step,
 plant_step_gradient, ee_pos_cost, com_cost, momentum_cost) are emitted for
 BOTH the jax-FFI and torch surfaces by grid_codegen/wrapper_plant_gen.py —
-one PLANT_STEP_OPS / COST_OPS row per op. The regions carry NO BEGIN/END
-marker comments (wrapper.cu bytes feed the stage-2 content key; a cosmetic
-marker line would force a full robot-.so rebuild), so THIS referee is what
-enforces the do-not-hand-edit contract: the emitter output must equal the
-checked-in text byte-for-byte. On a legitimate change, edit the table /
-emitter and run `.venv/bin/python -m grid_codegen.wrapper_plant_gen`.
+one PLANT_STEP_OPS / COST_OPS row per op. Since the 2026-09-15 wrapper
+window the regions are delimited by explicit BEGIN/END GENERATED marker
+comments (house style; the markers themselves are hand-written and sit
+OUTSIDE the emitted region). This referee enforces the do-not-hand-edit
+contract: the emitter output must equal the checked-in text between the
+markers byte-for-byte. On a legitimate change, edit the table / emitter and
+run `.venv/bin/python -m grid_codegen.wrapper_plant_gen`.
 """
 from pathlib import Path
 
@@ -45,4 +46,4 @@ def test_spans_are_disjoint_and_ordered():
     spans = plant_tail_spans(text)
     jb, je = spans["jax"]
     tb, te = spans["torch"]
-    assert jb < je < tb < te, "plant tail sentinels out of order — anchors moved?"
+    assert jb < je < tb < te, "plant tail marker regions out of order — markers moved?"

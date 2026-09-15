@@ -12,14 +12,14 @@ they are already table-shaped in C++ (one templated shared impl + thin
 wrappers), so emitting them would move code into Python strings for zero
 de-duplication.
 
-REGION LOCATION — sentinels, not BEGIN/END markers: each surface's tail runs
-from ``#ifdef GRID_PLANT_HAS_STEP`` to ``#endif  // GRID_PLANT_HAS_MOMENTUM_COST``
-inside that surface's plant section. Marker comment lines were NOT added
-because wrapper.cu bytes feed the stage-2 content key — a cosmetic marker
-would force a full robot-.so rebuild plus a wrapper-domain receipt
-re-execution. Flip to explicit markers in the next window where a REAL
-wrapper-staling change lands. Until then the emitted text is byte-identical
-to the checked-in file, asserted by test/test_wrapper_plant_block.py.
+REGION LOCATION — explicit BEGIN/END marker comments (house style, matching
+wrapper_body_gen's regions): each surface's tail is the text BETWEEN its
+``// ── BEGIN GENERATED <SURFACE> PLANT TAIL …`` and ``// ── END …`` lines.
+(M2 initially shipped marker-less sentinel location because wrapper.cu bytes
+feed the stage-2 content key and a cosmetic marker would have forced a full
+robot-.so rebuild; the markers were added in the 2026-09-15 wrapper-staling
+window as planned.) The emitted text stays byte-identical to the checked-in
+file, asserted by test/test_wrapper_plant_block.py.
 
 Regenerate (rewrites the regions in place; no-op while byte-identical):
   .venv/bin/python -m grid_codegen.wrapper_plant_gen
@@ -490,21 +490,23 @@ def gen_torch_plant_tail() -> str:
 # ── region location + rewrite ────────────────────────────────────────────────
 
 _TEMPLATE = Path(__file__).resolve().parents[1] / "bindings" / "grid_rbd" / "wrapper_template.cu"
-_JAX_ANCHOR = "// handlers whose kernels were emitted. Python-side reshapes mirror _handle.py."
-_TORCH_ANCHOR = "// conventions are done Python-side. Gated on the same GRID_PLANT_HAS_* defines."
-_TAIL_BEGIN = "#ifdef GRID_PLANT_HAS_STEP"
-_TAIL_END = "#endif  // GRID_PLANT_HAS_MOMENTUM_COST"
+_MARKERS = {
+    "jax": ("// ── BEGIN GENERATED JAX PLANT TAIL (grid_codegen/wrapper_plant_gen.py — do not hand-edit) ──",
+            "// ── END GENERATED JAX PLANT TAIL ──"),
+    "torch": ("// ── BEGIN GENERATED TORCH PLANT TAIL (grid_codegen/wrapper_plant_gen.py — do not hand-edit) ──",
+              "// ── END GENERATED TORCH PLANT TAIL ──"),
+}
 
 
 def plant_tail_spans(text: str) -> dict[str, tuple[int, int]]:
-    """{surface: (begin, end)} line indices of each surface's gated op tail —
-    begin/end inclusive of the sentinel lines themselves."""
+    """{surface: (begin, end)} inclusive line indices of each surface's emitted
+    tail content — the lines BETWEEN that surface's BEGIN/END marker lines
+    (the markers themselves are hand-written and stay outside the region)."""
     lines = text.split("\n")
     spans = {}
-    for surface, anchor in (("jax", _JAX_ANCHOR), ("torch", _TORCH_ANCHOR)):
-        a = lines.index(anchor)
-        b = next(i for i in range(a, len(lines)) if lines[i] == _TAIL_BEGIN)
-        e = next(i for i in range(b, len(lines)) if lines[i] == _TAIL_END)
+    for surface, (mark_begin, mark_end) in _MARKERS.items():
+        b = lines.index(mark_begin) + 1
+        e = lines.index(mark_end) - 1
         spans[surface] = (b, e)
     return spans
 
