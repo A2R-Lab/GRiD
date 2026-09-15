@@ -1891,3 +1891,33 @@ Two traps from slicing gen_all_code's emission into fragments:
    were caught by the byte-gate (tools/byte_gate.py before/after via
    `git stash`) — run it on ANY emission-path change, even "observational"
    ones.
+
+### 7.z12 Launch-config rows outlive the kernels they measured (2026-09-15, g1 idsva_so stale bake)
+`config/launch_configs/<robot>/<gpu>.json` rows are MEASUREMENTS, and nothing
+re-measures them when codegen changes what a row's symbol actually launches.
+Two sub-classes, both found by the 2026-09-15 parked-list audit:
+1. **Dispatch re-routing**: EXP-1 (@6ef48ff, 2026-06-17) re-routed g1-fixed
+   `idsva_so` from the body-frame to the world-frame inner, but the config's
+   `bases.fixed.idsva_so` row kept the body-era pick (shared/256/1220.9µs)
+   through THREE later bakes — the host path launched the world inner ~22%
+   off its optimum (lite/224/958µs) for three months. RULE: a commit that
+   re-routes an algo's dispatch (or otherwise changes which kernel a config
+   row times) must re-sweep or at least flag that row in the same arc.
+2. **Sweep-era drift between redundant rows**: `grid::idsva_so` forwards to
+   the routed frame family's host wrapper — the SAME kernel — so its row and
+   the `idsva_so_<frame>` row measure one kernel twice, at whatever dates
+   their sweeps ran. Rows carry NO per-row provenance, so a large alias-vs-
+   frame µs gap (g1-floating 29%, go2-floating 50% at audit time) means one
+   row is stale — but WHICH one needs a fresh sweep, not a CI referee
+   (baxter's alias row was the FRESHER of its pair). Don't write cross-row
+   consistency referees against this data; re-sweep the suspect cell.
+Related receipt hygiene (same day): gpu-proof signing counts UNTRACKED files
+as dirty (gitignored ones are fine) — the §7.z8 freeze includes CREATING new
+files inside the repo; stage them in the session scratchpad until the receipt
+lands. Recovery is cheap: drop the dirty shards' rows from the resume
+ledger (`results.json`, keyed on "shard"), rm their receipts, and
+`SPLIT_RESUME=<out>` re-runs only those shards and re-merges.
+Workflow discipline that FOUND all this: archive planning docs with a verdict
+block the moment an arc closes, and reconcile any parked item against
+tree+git BEFORE scheduling it (9 of 19 "parked" items were already done) —
+memory: feedback_plan_archive_and_audit_discipline.

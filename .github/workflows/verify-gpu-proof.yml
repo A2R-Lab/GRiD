@@ -86,4 +86,5 @@ jobs:
             test/test_plant_launch_hygiene.py \
             test/test_wrapper_plant_block.py \
             test/test_header_fragments.py \
+            test/test_signature_uniformity.py \
             -v
