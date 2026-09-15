@@ -33,6 +33,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -235,6 +236,10 @@ def _nvcc_cmd(src: Path, exe: Path, header_file: Path, arch: str, tier: str | No
     if macro is not None:   # shared == default => no flag (byte-identical to run.py's TIER_SHARED)
         cmd.append(f"-DGRID_DEFAULT_RESOURCE_TIER={macro}")
     cmd += _alloc_gate_flags(alloc_gate_algo)
+    # A/B seam: extra nvcc flags from the environment (e.g. the L2-pin A/B's
+    # -DGRID_CUDA_ENABLE_L2_PERSISTING=0 arm). Also mixed into the content
+    # stamp (_compile_one) so arms never alias a cached exe.
+    cmd += shlex.split(os.environ.get("GRID_BENCH_EXTRA_NVCC_FLAGS", ""))
     cmd += ["-o", str(exe), str(src)]
     return cmd
 
@@ -261,7 +266,9 @@ def _compile_one(algo: str, build_dir: Path, header_file: Path, arch: str,
     gate_algo = algo if alloc_gate else None
     key = hashlib.sha1(
         (src_txt + "\0" + str(_TIER_MACRO.get(tier)) + "\0"
-         + " ".join(_alloc_gate_flags(gate_algo)) + "\0" + header_file.read_text()).encode()
+         + " ".join(_alloc_gate_flags(gate_algo)) + "\0"
+         + os.environ.get("GRID_BENCH_EXTRA_NVCC_FLAGS", "") + "\0"
+         + header_file.read_text()).encode()
     ).hexdigest()
     if exe.exists() and stamp.exists() and stamp.read_text().strip() == key:
         return algo, exe, "cache hit (content stamp match)"
