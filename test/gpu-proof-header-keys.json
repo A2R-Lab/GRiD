@@ -4385,6 +4385,174 @@
      "inverse_dynamics"
     ],
     "base_mode": "fixed",
+    "content_sha256": "1399ed226d9e4bbab1f6780eea7159a0c51f10659bc47dc39624d1862808066e",
+    "env": {
+     "GRID_CODEGEN_PROFILE": null,
+     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
+     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
+     "GRID_ENABLE_MUJOCO_KERNELS": "0"
+    },
+    "header_key": "6b11d1734cfc636b08dfcad349d54f776ca7bbedd90593daaaa8c548d1d3c2a6",
+    "kind": "flagship",
+    "robot": "rizon4"
+   },
+   {
+    "algorithm_list": [
+     "minv"
+    ],
+    "base_mode": "fixed",
+    "content_sha256": "ade457cc9eeecf641f4642ee91b956157aa1b7a8fb8e05dbdf47662f5a5aa458",
+    "env": {
+     "GRID_CODEGEN_PROFILE": null,
+     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
+     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
+     "GRID_ENABLE_MUJOCO_KERNELS": "0"
+    },
+    "header_key": "519fa79585372427d8014673c1337e62c1f1537b5cd9986b309a046dd55edcd3",
+    "kind": "flagship",
+    "robot": "rizon4"
+   },
+   {
+    "algorithm_list": [
+     "forward_dynamics",
+     "inverse_dynamics",
+     "minv"
+    ],
+    "base_mode": "fixed",
+    "content_sha256": "5a1eada8622964f986850627d8f5a4beec64a152afe763a1a4db4f836786ae10",
+    "env": {
+     "GRID_CODEGEN_PROFILE": null,
+     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
+     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
+     "GRID_ENABLE_MUJOCO_KERNELS": "0"
+    },
+    "header_key": "edb2865643650b5c1e795fb81fe9c7f1834d12aff746ef3b9d617c58fcede591",
+    "kind": "flagship",
+    "robot": "rizon4"
+   },
+   {
+    "algorithm_list": [
+     "aba"
+    ],
+    "base_mode": "fixed",
+    "content_sha256": "38a85c21a3537a201a3771e52b7309255fffa6160efe5cd56a165104ea557197",
+    "env": {
+     "GRID_CODEGEN_PROFILE": null,
+     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
+     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
+     "GRID_ENABLE_MUJOCO_KERNELS": "0"
+    },
+    "header_key": "4aead0e980b968b29689e53fb38c0ff1ccb62713054470424ff3410f2378975f",
+    "kind": "flagship",
+    "robot": "rizon4"
+   },
+   {
+    "algorithm_list": [
+     "crba"
+    ],
+    "base_mode": "fixed",
+    "content_sha256": "75e12e609d4e6c1849a8ef9515b1ee7cbf741c59f415552ce337922a692557ed",
+    "env": {
+     "GRID_CODEGEN_PROFILE": null,
+     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
+     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
+     "GRID_ENABLE_MUJOCO_KERNELS": "0"
+    },
+    "header_key": "fe34c7175f64798bb99380a76fb165054d8255c3f0819f047dbec1bd62a98e22",
+    "kind": "flagship",
+    "robot": "rizon4"
+   },
+   {
+    "algorithm_list": [
+     "crba",
+     "inverse_dynamics",
+     "inverse_dynamics_gradient"
+    ],
+    "base_mode": "fixed",
+    "content_sha256": "367690c2514535d7414fae3b2d53d29494a3d117eb322dcabfb2e18994f02506",
+    "env": {
+     "GRID_CODEGEN_PROFILE": null,
+     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
+     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
+     "GRID_ENABLE_MUJOCO_KERNELS": "0"
+    },
+    "header_key": "36fd3a1bc59593b679c7af2cfe74e9ce9d751d2691753cb4386e7e74a966682c",
+    "kind": "flagship",
+    "robot": "rizon4"
+   },
+   {
+    "algorithm_list": [
+     "crba",
+     "forward_dynamics",
+     "forward_dynamics_gradient",
+     "inverse_dynamics",
+     "minv"
+    ],
+    "base_mode": "fixed",
+    "content_sha256": "ae4ab631ab513fb20569091367bcb7cf2bf0f27d38264d988747111dadcbcdbd",
+    "env": {
+     "GRID_CODEGEN_PROFILE": null,
+     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
+     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
+     "GRID_ENABLE_MUJOCO_KERNELS": "0"
+    },
+    "header_key": "b6ae386efc415773a4e8ff8a298d807773b34c4fff616d7bded6248b48488483",
+    "kind": "flagship",
+    "robot": "rizon4"
+   },
+   {
+    "algorithm_list": [
+     "end_effector_pose"
+    ],
+    "base_mode": "fixed",
+    "content_sha256": "14324e74b84f71c4bbb8741e7e1d02c4fa630872b4317e78974e9ede5cfec2da",
+    "env": {
+     "GRID_CODEGEN_PROFILE": null,
+     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
+     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
+     "GRID_ENABLE_MUJOCO_KERNELS": "0"
+    },
+    "header_key": "26a2c569b7dc805d2e41ec0a3ed23c3e283b2ffbd1bde5bd11cc884bcc8048fb",
+    "kind": "flagship",
+    "robot": "rizon4"
+   },
+   {
+    "algorithm_list": [
+     "end_effector_pose_gradient"
+    ],
+    "base_mode": "fixed",
+    "content_sha256": "1bee7e4ff050b9c83bd212ec8a52e7605abd8bd921128f8f7b4835d8231221fb",
+    "env": {
+     "GRID_CODEGEN_PROFILE": null,
+     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
+     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
+     "GRID_ENABLE_MUJOCO_KERNELS": "0"
+    },
+    "header_key": "fe4148c32146f32045e6f0f0233f46ea38c5a116fe27c472146d4f72c56913cd",
+    "kind": "flagship",
+    "robot": "rizon4"
+   },
+   {
+    "algorithm_list": [
+     "end_effector_pose_hessian"
+    ],
+    "base_mode": "fixed",
+    "content_sha256": "4565fe04e57905825748da86b28e2a0bef0a3183c6832c9bd24fb12467deade7",
+    "env": {
+     "GRID_CODEGEN_PROFILE": null,
+     "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
+     "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
+     "GRID_ENABLE_MUJOCO_KERNELS": "0"
+    },
+    "header_key": "c0caead04939e28e62de00d55c86113cebdbc3f8a8f77b3d4ae661f0470952ac",
+    "kind": "flagship",
+    "robot": "rizon4"
+   },
+   {
+    "algorithm_list": [
+     "inverse_dynamics"
+    ],
+    "base_mode": "fixed",
     "content_sha256": "6d5bc299bafc7b2f6ad402c9bbce826b922b85250fce68d0c86219a2107799a8",
     "env": {
      "GRID_CODEGEN_PROFILE": null,
@@ -5325,14 +5493,14 @@
      "inverse_dynamics"
     ],
     "base_mode": "floating",
-    "content_sha256": "caafe69063a06bb739f13b197bc3d8d022a08e1a1d0ab1be469e1347dfaeadd5",
+    "content_sha256": "293c487b614c3ee9988928ecb12bf70531b379f03243458ea26cbc3955cddf57",
     "env": {
      "GRID_CODEGEN_PROFILE": null,
      "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
      "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
      "GRID_ENABLE_MUJOCO_KERNELS": "0"
     },
-    "header_key": "bdcbda2f3d168d36921f1343b17d9a1bff13f7667579c9d4a6ddec76f33be09d",
+    "header_key": "1a42e2ce3ca83c3390167c3162e45f28261b33c7a1d520669b28136b32a165a1",
     "kind": "flagship",
     "robot": "rizon4"
    },
@@ -5341,14 +5509,14 @@
      "minv"
     ],
     "base_mode": "floating",
-    "content_sha256": "daecd57acffd0a69edcd90129e6b415e0051e2f478d75ab375b981a1bbd9c2c0",
+    "content_sha256": "0206c463d6eb76efeb341083e9b988424b836d7d6fb5261493f772ddb20f79b8",
     "env": {
      "GRID_CODEGEN_PROFILE": null,
      "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
      "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
      "GRID_ENABLE_MUJOCO_KERNELS": "0"
     },
-    "header_key": "b2ca31032e3a1a3b80e621c95870d838c49653e6859c98917af3f9c71818f209",
+    "header_key": "7c11fe657ee5924a075ba9b4810b686fa331e5e84665cac53eac4c7df7e80994",
     "kind": "flagship",
     "robot": "rizon4"
    },
@@ -5359,14 +5527,14 @@
      "minv"
     ],
     "base_mode": "floating",
-    "content_sha256": "3ef82afe3663267097ec5203aea56bdfe93a3ec77f46d24e9d3ad92ee5885342",
+    "content_sha256": "ca292df8238b3386b4f220334f1a6589372fb250c05359edf75cd02f856a7461",
     "env": {
      "GRID_CODEGEN_PROFILE": null,
      "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
      "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
      "GRID_ENABLE_MUJOCO_KERNELS": "0"
     },
-    "header_key": "eac682a25e7daab51190bf44d36b5b3e1e4c1521ba35f4854c16f13adb2f909f",
+    "header_key": "a169a3987c8b3ab46feaa31bc1624775b1bacbd1fdaccf8cbf77d4714919fd4e",
     "kind": "flagship",
     "robot": "rizon4"
    },
@@ -5375,14 +5543,14 @@
      "aba"
     ],
     "base_mode": "floating",
-    "content_sha256": "4df9007a4fa8c24f12f1059a91d4310f1b1d0f93f262e5682ab0a3368bd5f020",
+    "content_sha256": "fbec7e2150f8d64605ef0566e7bd2ccf01d2c41e39d45a461bde7f771c9ac8dd",
     "env": {
      "GRID_CODEGEN_PROFILE": null,
      "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
      "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
      "GRID_ENABLE_MUJOCO_KERNELS": "0"
     },
-    "header_key": "c94ec8766d029012e3c2d0748801e5cd99e5c8b202249420bb2739ed9d990c20",
+    "header_key": "edba96cb9f029f50dc994117c580b242062f851eb19e60a11017236a6cf206d8",
     "kind": "flagship",
     "robot": "rizon4"
    },
@@ -5391,14 +5559,14 @@
      "crba"
     ],
     "base_mode": "floating",
-    "content_sha256": "34a0cae89234044da4bfc5dfdae61aa81fa13aca8309e7f0836336c2f86687a4",
+    "content_sha256": "f708f57244899e5c82da7bf18864256fee559e6a0c903b40d23a70b3b8591368",
     "env": {
      "GRID_CODEGEN_PROFILE": null,
      "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
      "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
      "GRID_ENABLE_MUJOCO_KERNELS": "0"
     },
-    "header_key": "72bbfd23437a35069b20b3747d88e03aae8b0aada77610859551cf01668b00be",
+    "header_key": "5c8e3ce7d394984adcec015a68f1e34af4c2d3bb666da9b09d6b8f27c79924a9",
     "kind": "flagship",
     "robot": "rizon4"
    },
@@ -5409,14 +5577,14 @@
      "inverse_dynamics_gradient"
     ],
     "base_mode": "floating",
-    "content_sha256": "2800bdf8a947f41fd1854e2598959ff00a7bf4c0a76e392b4905fdbafea2f407",
+    "content_sha256": "0a20575e0df3c6ef9cbc9238d45d1bb189ffe67a02b9a764f38df1c37cb42b61",
     "env": {
      "GRID_CODEGEN_PROFILE": null,
      "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
      "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
      "GRID_ENABLE_MUJOCO_KERNELS": "0"
     },
-    "header_key": "98790de2f615303e772602cb206cd11166255f93fbb25e7fbccb197de4597686",
+    "header_key": "fa6a4540a6bcdd66a1729b827b1f030ca126807dfacb1fd640e788a6b15bfac7",
     "kind": "flagship",
     "robot": "rizon4"
    },
@@ -5429,14 +5597,14 @@
      "minv"
     ],
     "base_mode": "floating",
-    "content_sha256": "e731c1e24a26aef0f1980a12f6c999885d0d21ae3bbfab5238c3f3547db77128",
+    "content_sha256": "1dc24a05f854677bd19cf544cab575287a832544ae00233c77859bf1a77b7cfb",
     "env": {
      "GRID_CODEGEN_PROFILE": null,
      "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
      "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
      "GRID_ENABLE_MUJOCO_KERNELS": "0"
     },
-    "header_key": "481e76c1435082ee6a07d407649e53d9cafc418b54264f180f363f48314eaab8",
+    "header_key": "1133cd963f8f59f2d048efb39fe4d1c2888c157323277b126c9ba89c4472c3b3",
     "kind": "flagship",
     "robot": "rizon4"
    },
@@ -5445,14 +5613,14 @@
      "end_effector_pose"
     ],
     "base_mode": "floating",
-    "content_sha256": "cd994fc6969081d902bcd382393ca10ae0c45e22ee0656c208e486b0d209a007",
+    "content_sha256": "7cc90cdc29250017633dd18e60841b93778803ccca3f82511a753cee14db4a5b",
     "env": {
      "GRID_CODEGEN_PROFILE": null,
      "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES": null,
      "GRID_CUDA_TARGET_SHARED_MEM_BYTES": null,
      "GRID_ENABLE_MUJOCO_KERNELS": "0"
     },
-    "header_key": "c2117bc752a11056cf3d50f153025a65e7bdd5b8a11139d899639a5b202b2838",
+    "header_key": "d1591adf1d8d4234cd5597728b30a01f69634f20ed1ac9a502065dc5a08fd403",
     "kind": "flagship",
     "robot": "rizon4"
    },
