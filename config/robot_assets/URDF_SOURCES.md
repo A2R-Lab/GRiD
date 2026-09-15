@@ -16,3 +16,13 @@ lets the test/equivalence/bench pipelines run without the multi-GB
 | gen3 | `config/robot_assets/gen3.urdf` | `xacrodoc/gen3_description/gen3_description-e9602d5440f026ea.urdf` | `0e7c89432f98` |
 | fetch | `config/robot_assets/fetch.urdf` | `roboschool/roboschool/models_robot/fetch_description/robots/fetch.urdf` | `8a6ce15ab481` |
 | baxter | `config/robot_assets/baxter.urdf` | `baxter_common/baxter_description/urdf/baxter.urdf` | `ab936bfb412f` |
+
+## Local modifications
+
+- **rizon4** (2026-09-15): the upstream flexiv xacro emits each link's
+  `<origin>/<mass>/<inertia>` triple BARE (not wrapped in `<inertial>`), so
+  every link parsed massless and the dynamics suites skipped rizon4 with a
+  degenerate-inertia gate. The local copy wraps the 8 triples in proper
+  `<inertial>` elements — values are flexiv's own (rounded; cross-checked
+  against `mujoco_menagerie/flexiv_rizon4`'s precise inertials). The sha
+  column above still names the unmodified upstream file.
