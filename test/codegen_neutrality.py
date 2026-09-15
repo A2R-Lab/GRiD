@@ -25,6 +25,15 @@ principle diverge while MATRIX stays identical; extend MATRIX when adding a
 new Python-conditional emission block (the 7.z7 lesson: byte-identity gates
 only cover configurations something actually emits).
 
+⚠The matrix proof covers codegen LOGIC, never per-robot DATA: an edit to
+config/robot_assets/<robot>.urdf changes only THAT robot's emission, and
+every matrix row stays byte-identical unless the robot happens to be one of
+the six (2026-09-15 rizon4 lesson — the fixed URDF slid under a "PROVEN
+byte-neutral" verdict). `changed_robot_assets()` names the affected robots
+so the refresh demotes exactly their carried shards; header-key replay,
+when records exist, catches the same class per-shard and stays
+authoritative.
+
 Escape hatch: GRID_REFRESH_ASSUME_NEUTRAL=1 skips the proof and carries
 anyway (loudly) — for a change KNOWN neutral where the ~2×matrix codegen
 cost is unwanted. Never the default.
@@ -97,6 +106,26 @@ def codegen_inputs_changed(old_sha: str) -> bool:
         return True
     untracked = _git("status", "--porcelain", "--", *CODEGEN_INPUT_PATHS)
     return any(line.startswith("??") for line in untracked.splitlines())
+
+
+def changed_robot_assets(old_sha: str) -> set[str]:
+    """Robot ids whose config/robot_assets/<robot>.urdf differs between the
+    old commit and the current working tree (tracked diffs + untracked).
+    Per-robot data changes are OUTSIDE the covering-matrix proof (see the
+    module docstring); the refresh demotes carried cuda shards covering
+    these robots instead of trusting the matrix verdict."""
+    # No check=True: an unresolvable sha (unit-test fixtures) contributes
+    # nothing here — production shas come from a verified receipt, and a
+    # truly broken tree still fails loudly in the matrix prover itself.
+    changed = subprocess.run(
+        ["git", "diff", "--name-only", old_sha, "--", "config/robot_assets"],
+        cwd=REPO_ROOT, capture_output=True, text=True).stdout
+    names = set(changed.splitlines())
+    for line in _git("status", "--porcelain", "--",
+                     "config/robot_assets").splitlines():
+        if line.startswith("??"):
+            names.add(line[3:].strip())
+    return {Path(n).stem for n in names if n.endswith(".urdf")}
 
 
 def _submodule_pins_match(old_sha: str) -> bool:

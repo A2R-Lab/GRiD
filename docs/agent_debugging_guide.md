@@ -1921,3 +1921,21 @@ Workflow discipline that FOUND all this: archive planning docs with a verdict
 block the moment an arc closes, and reconcile any parked item against
 tree+git BEFORE scheduling it (9 of 19 "parked" items were already done) —
 memory: feedback_plan_archive_and_audit_discipline.
+
+### 7.z13 The cuda-carry covering-matrix proves LOGIC, not per-robot DATA (2026-09-15, rizon4 URDF)
+SPLIT_REFRESH's cuda-carry soundness has three rungs: header-key replay
+(per-shard, byte-precise), else the 6-row covering-matrix byte-neutrality
+prover, else re-run. The matrix rows are SIX FIXED ROBOTS chosen to cover
+Python-conditional emission families — so an edit to ONE robot's URDF
+(config/robot_assets/rizon4.urdf's healed <inertial>s) left all 6 rows
+byte-identical and the fallback printed "PROVEN byte-neutral" while rizon4's
+own emission changed; its carried shards kept attesting skips the tree no
+longer produces. FIX (@ this commit): codegen_neutrality.changed_robot_assets
+names robots whose assets differ vs the old receipt's sha, and plan_refresh
+demotes carried cuda shards covering those robots BEFORE trusting the
+fallback verdict (replay, when records exist, stays authoritative — a
+comment-only URDF edit that replays byte-identical still carries). Gated by
+test_split_partition.py::test_plan_refresh_asset_change_demotes_covering_shards.
+General form: a covering proof only covers what its rows vary — data keyed
+by an identifier outside the rows (robot, GPU, dtype) needs its own change
+detector.

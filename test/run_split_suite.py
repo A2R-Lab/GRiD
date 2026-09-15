@@ -446,6 +446,7 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
             domain_verdict: tuple | None = None
             kept_replay = kept_fallback = 0
             demoted, kept = [], []
+            changed_assets: set | None = None
             for s in carried:
                 if _is_wrapper(s):
                     kept.append(s)
@@ -462,6 +463,28 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
                           f"replay ({why})")
                     demoted.append(s)
                     continue
+                # Per-robot ASSET changes are invisible to the covering-matrix
+                # fallback (fixed robot rows): a URDF edit for a robot the
+                # matrix never generates leaves all rows byte-identical while
+                # THAT robot's emission changes (2026-09-15 rizon4 lesson —
+                # the healed URDF slid under a "PROVEN byte-neutral" verdict).
+                # Replay verdicts above stay authoritative (byte-precise);
+                # only the fallback path is gated here.
+                if not assume and old_sha:
+                    if changed_assets is None:
+                        changed_assets = \
+                            codegen_neutrality.changed_robot_assets(old_sha)
+                    hit = sorted(
+                        r for r in changed_assets
+                        if any(f"[{r}-" in i or f"[{r}]" in i or f"-{r}-" in i
+                               or i.endswith(f"-{r}]")
+                               for i in (s.get("node_ids") or [])))
+                    if hit:
+                        print(f"  cuda-carry: {s['name']} stale — robot "
+                              f"asset(s) {hit} changed (per-robot data is "
+                              f"outside the covering-matrix proof)")
+                        demoted.append(s)
+                        continue
                 if domain_verdict is None:
                     domain_verdict = codegen_neutrality.cuda_carry_soundness(
                         old_receipt)
