@@ -87,6 +87,163 @@
         "tier": "shared",
         "us_at_optimal": 461.07
       }
+    },
+    "floating": {
+      "aba": {
+        "threads": 160,
+        "tier": "minimal",
+        "us_at_optimal": 165.66
+      },
+      "ccrba": {
+        "threads": 352,
+        "tier": "minimal",
+        "us_at_optimal": 639.83
+      },
+      "cmm_time_variation": {
+        "threads": 512,
+        "tier": "minimal",
+        "us_at_optimal": 3234.47
+      },
+      "com": {
+        "threads": 320,
+        "tier": "lite",
+        "us_at_optimal": 647.2
+      },
+      "coriolis_matrix": {
+        "threads": 192,
+        "tier": "minimal",
+        "us_at_optimal": 359.27
+      },
+      "crba": {
+        "threads": 48,
+        "tier": "shared",
+        "us_at_optimal": 291.01
+      },
+      "dccrba": {
+        "threads": 512,
+        "tier": "minimal",
+        "us_at_optimal": 3261.74
+      },
+      "ee_pose": {
+        "threads": 224,
+        "tier": "shared",
+        "us_at_optimal": 26.78
+      },
+      "ee_pose_gradient": {
+        "threads": 384,
+        "tier": "lite",
+        "us_at_optimal": 40.01
+      },
+      "ee_pose_hessian": {
+        "threads": 1024,
+        "tier": "minimal",
+        "us_at_optimal": 452.79
+      },
+      "energy": {
+        "threads": 352,
+        "tier": "minimal",
+        "us_at_optimal": 674.3
+      },
+      "f_ext_gradient": {
+        "threads": 256,
+        "tier": "shared",
+        "us_at_optimal": 611.94
+      },
+      "f_ext_gradient_dq": {
+        "threads": 112,
+        "tier": "minimal",
+        "us_at_optimal": 2289.84
+      },
+      "fd": {
+        "threads": 320,
+        "tier": "minimal",
+        "us_at_optimal": 456.02
+      },
+      "fd_du": {
+        "threads": 256,
+        "tier": "shared",
+        "us_at_optimal": 635.82
+      },
+      "fdsva_so": {
+        "threads": 512,
+        "tier": "shared",
+        "us_at_optimal": 47224.07
+      },
+      "frame_jacobian": {
+        "threads": 192,
+        "tier": "minimal",
+        "us_at_optimal": 61.66
+      },
+      "frame_jacobian_dot": {
+        "threads": 384,
+        "tier": "lite",
+        "us_at_optimal": 80.35
+      },
+      "generalized_gravity": {
+        "threads": 160,
+        "tier": "lite",
+        "us_at_optimal": 45.29
+      },
+      "id": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 44.53
+      },
+      "id_du": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 259.03
+      },
+      "idsva_so": {
+        "threads": 384,
+        "tier": "lite",
+        "us_at_optimal": 7862.41
+      },
+      "integrator": {
+        "threads": 320,
+        "tier": "lite",
+        "us_at_optimal": 406.87
+      },
+      "integrator_gradient": {
+        "threads": 640,
+        "tier": "minimal",
+        "us_at_optimal": 1185.39
+      },
+      "integrator_with_gradient": {
+        "threads": 320,
+        "tier": "shared",
+        "us_at_optimal": 1148.45
+      },
+      "inverse_dynamics_regressor": {
+        "threads": 384,
+        "tier": "lite",
+        "us_at_optimal": 88.87
+      },
+      "kinetic_energy_regressor": {
+        "threads": 192,
+        "tier": "shared",
+        "us_at_optimal": 45.76
+      },
+      "minv": {
+        "threads": 192,
+        "tier": "minimal",
+        "us_at_optimal": 383.57
+      },
+      "nonlinear_effects": {
+        "threads": 192,
+        "tier": "lite",
+        "us_at_optimal": 46.57
+      },
+      "osc_inertia": {
+        "threads": 320,
+        "tier": "minimal",
+        "us_at_optimal": 431.54
+      },
+      "potential_energy_regressor": {
+        "threads": 224,
+        "tier": "shared",
+        "us_at_optimal": 26.53
+      }
     }
   },
   "cuda_arch": "sm_120",
@@ -685,7 +842,7 @@
       "kernel"
     ]
   },
-  "source": "GRiD autotune sweep 2026-06-13",
+  "source": "GRiD autotune sweep 2026-09-15",
   "torch_bases": {
     "fixed": {
       "aba": {
