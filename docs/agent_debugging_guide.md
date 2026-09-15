@@ -1939,3 +1939,16 @@ test_split_partition.py::test_plan_refresh_asset_change_demotes_covering_shards.
 General form: a covering proof only covers what its rows vary — data keyed
 by an identifier outside the rows (robot, GPU, dtype) needs its own change
 detector.
+
+**7.z13 addendum (same day, leg 2 + two git gotchas):** the equivalence
+fleet resolves vendored URDFs from the RBDReference SUBMODULE's
+robot_assets/ (manifest resolver), NOT config/robot_assets/ — the rizon4 fix
+had to land in BOTH copies, and an ORACLE-side asset change is invisible
+even to header-key replay (emitted headers never rotate) while it flips test
+outcomes, so the asset gate demotes BEFORE replay and
+changed_robot_assets() diffs the submodule between the old receipt's
+recorded pin and the current submodule state. Git gotchas found doing it:
+(1) `git ls-tree <sha> external` returns the TREE ENTRY itself — you need
+the trailing slash (`external/`) to list the submodule commit entries;
+this had made _submodule_pins_match vacuously True since it was written.
+(2) gpu-proof receipts count UNTRACKED repo files as dirty (see §7.z12).

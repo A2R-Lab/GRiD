@@ -330,19 +330,24 @@ def test_plan_refresh_edge_cases(monkeypatch):
 
 
 def test_plan_refresh_asset_change_demotes_covering_shards(monkeypatch):
-    """2026-09-15 rizon4 lesson: a per-robot URDF edit is invisible to the
-    covering-matrix fallback (its rows are six fixed robots) — a carried cuda
-    shard whose node ids cover a CHANGED robot must demote to stale even
-    under a byte-neutral domain verdict; shards of unchanged robots keep the
-    fallback carry. Header-key replay (when records exist) stays the
-    byte-precise authority upstream of this gate."""
+    """2026-09-15 rizon4 lessons: a per-robot URDF edit is invisible to the
+    covering-matrix fallback (its rows are six fixed robots), and an
+    ORACLE-side asset edit (RBDReference submodule copy) never rotates the
+    emitted headers — so the asset gate must demote BEFORE header-key
+    replay: even a replay verdict of True must not keep a shard covering a
+    changed robot. Shards of unchanged robots keep their replay/fallback
+    carry. Also: asset changes ALONE (no codegen-input diff) must open the
+    soundness block."""
     import codegen_neutrality
+    import header_key_replay
     monkeypatch.setattr(codegen_neutrality, "codegen_inputs_changed",
-                        lambda sha: True)
+                        lambda sha: False)  # assets alone open the block
     monkeypatch.setattr(codegen_neutrality, "cuda_carry_soundness",
                         lambda r: (True, "stubbed neutral"))
     monkeypatch.setattr(codegen_neutrality, "changed_robot_assets",
                         lambda sha: {"rizon4"})
+    monkeypatch.setattr(header_key_replay, "shard_replay_verdict",
+                        lambda recs, cache: (True, "stubbed byte-identical"))
     hit_ids = [_fid("rizon4", "fixed", "inverse_dynamics", t) for t in (1, 32)]
     safe_ids = [_fid("iiwa14", "fixed", "crba", t) for t in (1, 32)]
     old = {"repo": {"commit_sha": "0" * 40},

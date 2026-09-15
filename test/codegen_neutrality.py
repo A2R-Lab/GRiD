@@ -109,14 +109,18 @@ def codegen_inputs_changed(old_sha: str) -> bool:
 
 
 def changed_robot_assets(old_sha: str) -> set[str]:
-    """Robot ids whose config/robot_assets/<robot>.urdf differs between the
-    old commit and the current working tree (tracked diffs + untracked).
-    Per-robot data changes are OUTSIDE the covering-matrix proof (see the
-    module docstring); the refresh demotes carried cuda shards covering
-    these robots instead of trusting the matrix verdict."""
-    # No check=True: an unresolvable sha (unit-test fixtures) contributes
-    # nothing here — production shas come from a verified receipt, and a
-    # truly broken tree still fails loudly in the matrix prover itself.
+    """Robot ids whose URDF assets differ between the old commit and the
+    current tree — BOTH copies: config/robot_assets/ (the codegen input) and
+    the RBDReference submodule's robot_assets/ (what the equivalence fleet's
+    resolver + oracle actually load). Per-robot data changes are OUTSIDE the
+    covering-matrix proof, and an ORACLE-side change is invisible even to
+    header-key replay (emitted headers never rotate) while it still changes
+    test outcomes (2026-09-15: the healed rizon4 URDF flipped skips to
+    executions). The refresh demotes carried cuda shards covering these
+    robots before trusting replay or the matrix verdict."""
+    # No check=True anywhere: an unresolvable sha (unit-test fixtures)
+    # contributes nothing here — production shas come from a verified
+    # receipt, and a truly broken tree still fails loudly in the prover.
     changed = subprocess.run(
         ["git", "diff", "--name-only", old_sha, "--", "config/robot_assets"],
         cwd=REPO_ROOT, capture_output=True, text=True).stdout
@@ -125,6 +129,32 @@ def changed_robot_assets(old_sha: str) -> set[str]:
                      "config/robot_assets").splitlines():
         if line.startswith("??"):
             names.add(line[3:].strip())
+    # Oracle-side leg: diff the submodule's assets between the old receipt's
+    # recorded pin and the current submodule state (uncommitted edits too).
+    sub = REPO_ROOT / "external" / "RBDReference"
+    old_pin = None
+    # Trailing slash: "external" names the tree itself; "external/" lists
+    # its children (the submodule commit entries).
+    ls = subprocess.run(["git", "ls-tree", old_sha, "external/"],
+                        cwd=REPO_ROOT, capture_output=True, text=True).stdout
+    for line in ls.splitlines():
+        meta, name = line.split("\t")
+        if meta.split()[1] == "commit" and name.endswith("RBDReference"):
+            old_pin = meta.split()[2]
+    if old_pin and sub.is_dir():
+        cur_pin = subprocess.run(["git", "rev-parse", "HEAD"], cwd=sub,
+                                 capture_output=True, text=True).stdout.strip()
+        if cur_pin and cur_pin != old_pin:
+            sub_diff = subprocess.run(
+                ["git", "diff", "--name-only", old_pin, cur_pin,
+                 "--", "robot_assets"],
+                cwd=sub, capture_output=True, text=True).stdout
+            names.update(sub_diff.splitlines())
+        sub_status = subprocess.run(
+            ["git", "status", "--porcelain", "--", "robot_assets"],
+            cwd=sub, capture_output=True, text=True).stdout
+        for line in sub_status.splitlines():
+            names.add(line[3:].strip())
     return {Path(n).stem for n in names if n.endswith(".urdf")}
 
 
@@ -132,7 +162,11 @@ def _submodule_pins_match(old_sha: str) -> bool:
     """The worktree reconstruction symlinks the CURRENT external/ checkouts —
     only valid when the old commit pinned the same submodule SHAs."""
     old = {}
-    for line in _git("ls-tree", old_sha, "external").splitlines():
+    # "external/" (trailing slash) lists the tree's children; bare "external"
+    # returns the tree entry itself — which parsed to ZERO commit entries and
+    # made this check vacuously True (found 2026-09-15 fixing the same bug in
+    # changed_robot_assets).
+    for line in _git("ls-tree", old_sha, "external/").splitlines():
         meta, name = line.split("\t")
         if meta.split()[1] == "commit":
             old[name.split("/")[-1]] = meta.split()[2]

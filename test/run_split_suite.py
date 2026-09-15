@@ -426,7 +426,14 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
         repo = old_receipt.get("repo") or {}
         old_sha = repo.get("commit_sha")
         assume = os.environ.get("GRID_REFRESH_ASSUME_NEUTRAL") == "1"
-        if old_sha and not assume \
+        # Robot ASSET changes (either copy: config/ codegen input, or the
+        # RBDReference submodule the ORACLE loads) open the soundness block
+        # on their own — an oracle-side change alters test outcomes with
+        # zero codegen diff (2026-09-15 rizon4 lesson, leg 2).
+        changed_assets: set = set()
+        if old_sha and not assume:
+            changed_assets = codegen_neutrality.changed_robot_assets(old_sha)
+        if old_sha and not assume and not changed_assets \
                 and not codegen_neutrality.codegen_inputs_changed(old_sha):
             print("  cuda-carry soundness: generator inputs unchanged vs old receipt")
         else:
@@ -446,10 +453,29 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
             domain_verdict: tuple | None = None
             kept_replay = kept_fallback = 0
             demoted, kept = [], []
-            changed_assets: set | None = None
             for s in carried:
                 if _is_wrapper(s):
                     kept.append(s)
+                    continue
+                # Per-robot ASSET changes demote FIRST — before replay: the
+                # covering-matrix fallback's rows are fixed robots (a URDF
+                # edit for any other robot leaves all rows byte-identical),
+                # and an ORACLE-side asset change (RBDReference submodule
+                # copy — what the fleet's resolver loads) never rotates the
+                # emitted headers, so even byte-precise replay would wrongly
+                # keep the shard while its outcomes change (2026-09-15
+                # rizon4: healed URDF flips skips to executions).
+                hit = sorted(
+                    r for r in changed_assets
+                    if any(f"[{r}-" in i or f"[{r}]" in i or f"-{r}-" in i
+                           or i.endswith(f"-{r}]")
+                           for i in (s.get("node_ids") or [])))
+                if hit:
+                    print(f"  cuda-carry: {s['name']} stale — robot "
+                          f"asset(s) {hit} changed (per-robot data is "
+                          f"outside the covering-matrix proof AND header "
+                          f"replay)")
+                    demoted.append(s)
                     continue
                 verdict, why = (None, "assume-neutral override") if assume else \
                     header_key_replay.shard_replay_verdict(
@@ -463,28 +489,6 @@ def plan_refresh(old_receipt: dict, cuda_ids_now: list[str],
                           f"replay ({why})")
                     demoted.append(s)
                     continue
-                # Per-robot ASSET changes are invisible to the covering-matrix
-                # fallback (fixed robot rows): a URDF edit for a robot the
-                # matrix never generates leaves all rows byte-identical while
-                # THAT robot's emission changes (2026-09-15 rizon4 lesson —
-                # the healed URDF slid under a "PROVEN byte-neutral" verdict).
-                # Replay verdicts above stay authoritative (byte-precise);
-                # only the fallback path is gated here.
-                if not assume and old_sha:
-                    if changed_assets is None:
-                        changed_assets = \
-                            codegen_neutrality.changed_robot_assets(old_sha)
-                    hit = sorted(
-                        r for r in changed_assets
-                        if any(f"[{r}-" in i or f"[{r}]" in i or f"-{r}-" in i
-                               or i.endswith(f"-{r}]")
-                               for i in (s.get("node_ids") or [])))
-                    if hit:
-                        print(f"  cuda-carry: {s['name']} stale — robot "
-                              f"asset(s) {hit} changed (per-robot data is "
-                              f"outside the covering-matrix proof)")
-                        demoted.append(s)
-                        continue
                 if domain_verdict is None:
                     domain_verdict = codegen_neutrality.cuda_carry_soundness(
                         old_receipt)
