@@ -172,13 +172,20 @@ existing call sites are unchanged):
      - ``int RESOURCE_TIER``
      - whole inner ``s_temp`` arena (via the ``tier_workspace_expr`` helper)
 
-**Spilled global memory is L2-pinned.** Most spilled buffers are
-recursion-hot (touched every BFS step), so a naive spill to HBM would be a
-perf cliff. With L2 persistence enabled by default
-(``GRID_CUDA_ENABLE_L2_PERSISTING=1``), the generated workspace is pinned in
-L2 for the kernel's lifetime, so a spilled access costs roughly an L2 hit
-rather than an HBM round-trip. The cost of a spill is then bounded by the
-shared-vs-L2 latency gap, not the shared-vs-HBM gap.
+**Spilled global memory and L2 pinning (measured: default-OFF).** Spilled
+buffers are recursion-hot, and the original design pinned the workspace in
+persisting L2 (``GRID_CUDA_ENABLE_L2_PERSISTING=1``) so a spilled access
+would cost an L2 hit rather than an HBM round-trip. A controlled A/B on an
+RTX 5090 (2026-09-15: spilling algos + shared-tier controls on
+iiwa14-fixed / g1-floating / h1_2-floating, four interleaved reps, spreads
+≤0.7%) found the pin **never helped and hurt 17 of 51 cells** — up to 23%
+(integrator family), including shared-tier cells that spill nothing,
+because the persisting window is installed on the stream whenever a
+workspace exists and its carve evicts more general L2 traffic than it
+saves (modern L2s already cache the spilled band well on their own). The
+generated default is therefore **0** since 2026-09-15; opt back in
+per-build with ``-DGRID_CUDA_ENABLE_L2_PERSISTING=1`` if your
+GPU/workload measures otherwise.
 
 **Spill levels and the per-robot tier→level map.** Each algorithm has a fixed
 *menu* of spill levels (level 0 = everything in shared memory; higher levels

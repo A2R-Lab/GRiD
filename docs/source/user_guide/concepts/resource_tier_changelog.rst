@@ -224,24 +224,29 @@ emits 2 or 3 specialized bodies inside ``if constexpr`` branches.
   monolithic idsva_so / fdsva_so inners so even MINIMAL keeps more of the hot
   band in smem) is tracked in ``docs/idsva_so_inner_refactor_notes.md``.
 
-**L2 cache pinning (default-ON in v2.0)**
+**L2 cache pinning (default-ON in v2.0; flipped to default-OFF 2026-09-15
+on measurement)**
 
-``GRID_CUDA_ENABLE_L2_PERSISTING`` defaults to 1 in the generated header.
-The ``init_gridData`` wrapper calls ``grid_begin_l2_persisting`` on
-``d_workspace`` once at allocation time and pairs it with
-``grid_end_l2_persisting`` in ``close_grid``. This means spilled buffers
-(Minv-F at Phase 3a, FD's Minv-F at 3b, ABA's interleaved scratch at 3c,
-FDSVA_SO's df_du/Minv at 3e) live in L2 cache for the kernel's lifetime —
-the perf hit relative to keeping them in shared memory is ~smem→L2 latency
-(~a few cycles), not the smem→HBM gap (~100s of cycles).
+``GRID_CUDA_ENABLE_L2_PERSISTING`` originally defaulted to 1: the
+``init_gridData`` wrapper calls ``grid_begin_l2_persisting`` on
+``d_workspace`` once at allocation time (paired with
+``grid_end_l2_persisting`` in ``close_grid``), intending spilled hot
+buffers (Minv-F at 3a, FD's Minv-F at 3b, ABA's scratch at 3c,
+FDSVA_SO's df_du/Minv at 3e) to live in persisting L2.
 
-Why this matters: most Phase 3 spills target recursion-hot buffers
-(touched many times per kernel), not write-once outputs. Without L2
-pinning, spilled hot data would hit HBM repeatedly and the perf cliff
-would be sharp. With L2 pinning, the kernel still mostly hits L2.
-
-If your workload requires the L2 cache for other concurrent kernels and
-you want to opt out, compile with ``-DGRID_CUDA_ENABLE_L2_PERSISTING=0``.
+**2026-09-15 measured verdict — the pin never helps.** A/B on RTX 5090
+(spilling algos + shared controls on iiwa14-fixed / g1-floating /
+h1_2-floating; two prebuilt arms, 4 ABBA reps, spreads ≤0.7%): 0 cells
+helped, 17 of 51 hurt (OFF faster up to 23% — integrator family across
+all robots, h1_2 crba −18 %, minv −9/−10 %, h1_2 idsva_so −3.8 %),
+34 neutral. Because the window is installed at ``init_gridData``, it
+taxes every kernel on the stream — including non-spilling ones — and the
+hitRatio-0.6 persisting carve evicts more useful L2 traffic than it
+saves; the plain L2 already caches the spilled band. The generated
+default is now ``0``; the begin/end helpers remain, so a workload that
+measures a win can opt back in with
+``-DGRID_CUDA_ENABLE_L2_PERSISTING=1``. Raw data:
+``test/benchmarks/results/l2pin_ab_20260915/``.
 
 **Phase 3a + 3b + 3c + 3d + 3e shipped — Minv + FD + ABA + END_EFFECTOR_POSE_GRADIENT + FDSVA_SO L4-5 spill landed**
 

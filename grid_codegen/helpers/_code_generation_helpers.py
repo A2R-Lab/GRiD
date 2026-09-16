@@ -968,14 +968,18 @@ def gen_add_shared_memory_helpers(self):
         "enum class IntegratorType { EULER = 0, SEMI_IMPLICIT_EULER = 1, MIDPOINT = 2, RK3 = 3, RK4 = 4, TRAPEZOIDAL = 5 };",
         "",
         "#ifndef GRID_CUDA_ENABLE_L2_PERSISTING",
-        # Phase 3a/b/c spill design: workspace bytes are HOT (recursion-internal
-        # buffers like Minv-F, ABA's interleaved scratch, FDSVA_SO's df_du/Minv)
-        # touched many times per kernel. L2 pinning narrows the smem→HBM penalty
-        # to smem→L2 (~few-cycle hit instead of 100s of cycles). Default-ON
-        # because every codegen target we emit either doesn't spill (= no-op)
-        # or spills hot data (= L2 is the right cache). Niche concurrent-kernel
-        # workloads can override with -DGRID_CUDA_ENABLE_L2_PERSISTING=0.
-        "#define GRID_CUDA_ENABLE_L2_PERSISTING 1",
+        # Default-OFF since 2026-09-15: the measured A/B (rtx5090/sm_120,
+        # results/l2pin_ab_20260915 — spilling algos + shared controls on
+        # iiwa14-fixed/g1-floating/h1_2-floating, 4 ABBA reps, spreads
+        # <=0.7%) found the persisting window NEVER helps and HURTS 17/51
+        # cells (up to 23%: integrator family, h1_2 crba -18% — even
+        # shared-tier cells regress, the window engages whenever a workspace
+        # ptr is passed). The original "spilled workspace is hot -> pin it"
+        # rationale (Phase 3a/b/c) did not survive measurement: the hitRatio
+        # 0.6 persisting carve evicts more general L2 traffic than it saves.
+        # Opt back in per-build with -DGRID_CUDA_ENABLE_L2_PERSISTING=1
+        # (the begin/end helpers below keep full support).
+        "#define GRID_CUDA_ENABLE_L2_PERSISTING 0",
         "#endif",
         "",
         "__host__ inline cudaError_t grid_get_max_dynamic_shared_memory_bytes(size_t *bytes) {",
