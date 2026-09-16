@@ -968,7 +968,18 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
     # plus the Jw band itself when any of them spills (same robots cmm spills).
     _centroidal_spill_ws = (6 * nv * nv + self.centroidal_spill_J_ws_count) if any(
         p >= 1 for p in (self.com_spill_tier_3way + self.ccrba_spill_tier_3way + self.energy_spill_tier_3way)) else 0
-    so_workspace_t_count = max(8*max(nv**3, 1), d2ee_workspace_t_count, end_effector_pose_gradient_workspace_t_count, idsva_so_body_frame_grav_spill_t_count, idsva_so_spill_ws_t_count, _fpg_spill_ws, _idr_spill_ws, _feg_spill_ws, _feg_dq_spill_ws, _dccrba_spill_ws, _cmm_spill_ws, _centroidal_spill_ws)
+    # W2b Component B: the multi_target kernels' TIER_LITE/MINIMAL path routes
+    # the FK/Jacobian scratch to the SO band base (GRID_SO_WORKSPACE_TEMP_
+    # OFFSET_BYTES; MT kernels never run concurrently with the SO/grad
+    # kernels that share the band). Outputs write directly to the global
+    # output slabs (the d2ee direct-to-output idiom) so they never touch the
+    # band. Only for the opt-in multi_target_batch path; collision batches
+    # stay device-composite with a caller-provided workspace.
+    _mt_spill_ws = 0
+    if getattr(self, "_has_multi_target_position", False):
+        _mt_spill_ws = max(self.gen_multi_target_position_inner_temp_mem_size(self._mt_batch),
+                           self.gen_multi_target_position_gradient_inner_temp_mem_size(self._mt_batch))
+    so_workspace_t_count = max(8*max(nv**3, 1), d2ee_workspace_t_count, end_effector_pose_gradient_workspace_t_count, idsva_so_body_frame_grav_spill_t_count, idsva_so_spill_ws_t_count, _fpg_spill_ws, _idr_spill_ws, _feg_spill_ws, _feg_dq_spill_ws, _dccrba_spill_ws, _cmm_spill_ws, _centroidal_spill_ws, _mt_spill_ws)
     # Deprecated launch-count constants remain for external callers that still
     # pass COUNT*sizeof(T).  Make them conservative aliases for the byte arena
     # layouts so those callers do not under-allocate int topology helpers or
@@ -1329,6 +1340,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                                     (_dccrba_spill_ws, ("dccrba",)),
                                     (_cmm_spill_ws, ("cmm_time_variation",)),
                                     (_centroidal_spill_ws, ("com", "ccrba", "energy")),
+                                    (_mt_spill_ws, ("multi_target_position", "multi_target_position_gradient")),
                                 ) if term_count > 0
                                 for line in (
                                     "#if " + _ag_expr(term_keys),
@@ -1849,7 +1861,13 @@ def gen_init_gridData(self):
                   # slot count (tests + bench A/B comparability).
                   "// workspace arena LAST: auto-fit slots to remaining device memory (see struct field)."]
                   + ag_open(*_ws_keys) + [
-                  "    if (needs_dynamics || (needs_kinematics && (GRID_END_EFFECTOR_POSE_HESSIAN_USES_WORKSPACE_TEMP || GRID_END_EFFECTOR_POSE_GRADIENT_USES_WORKSPACE_TEMP || GRID_DCCRBA_USES_WORKSPACE_TEMP || GRID_OSC_INERTIA_USES_WORKSPACE))) {", \
+                  # multi_target robots: any kinematics gridData may launch the MT
+                  # kernels at a spill tier (FK scratch -> SO band), so it needs the
+                  # arena too (W2b Component B; Python-conditional so non-MT robots
+                  # emit this line unchanged).
+                  "    if (needs_dynamics || (needs_kinematics && (GRID_END_EFFECTOR_POSE_HESSIAN_USES_WORKSPACE_TEMP || GRID_END_EFFECTOR_POSE_GRADIENT_USES_WORKSPACE_TEMP || GRID_DCCRBA_USES_WORKSPACE_TEMP || GRID_OSC_INERTIA_USES_WORKSPACE"
+                  + (" || 1 /* multi_target spill tiers */" if getattr(self, "_has_multi_target_position", False) else "")
+                  + "))) {", \
                   "        const size_t _ws_per_ts = GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*GRID_WORKSPACE_SLOTS;", \
                   "        int _ws_slots = NUM_TIMESTEPS;", \
                   "        const char *_ws_env = getenv(\"GRID_WORKSPACE_TIMESTEP_SLOTS\");", \

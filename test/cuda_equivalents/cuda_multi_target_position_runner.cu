@@ -87,6 +87,35 @@ int main(){
     printf("SPILLDIFF maxdiff=%.3e (smem %zu->%zu, ws %zu B)\n",
            spilldiff, grid::MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES<T>(), smem_spill, ws_bytes);
 
+    // ---- production kernel path (W2b Component B): TIER_SHARED (smem staging)
+    // vs TIER_MINIMAL (direct-to-output + SO-band workspace slot) must be
+    // BIT-identical over a small varying-q batch ----
+    double kdiff = 0;
+    {
+        const int NTS = 4;
+        std::vector<T> hq4(NQ*NTS);
+        for (int k=0;k<NTS;++k) for(int i=0;i<NQ;++i) hq4[k*NQ+i]=0.2*sin(0.7*i+0.3*k)+0.1;
+        T *d_q4,*d_out4; unsigned char *d_wsk;
+        CK(cudaMalloc(&d_q4,NQ*NTS*sizeof(T)));
+        CK(cudaMalloc(&d_out4,3*NT*NTS*sizeof(T)));
+        size_t wsk_bytes = grid::GRID_WORKSPACE_BYTES_PER_TIMESTEP<T>()*NTS;
+        CK(cudaMalloc(&d_wsk, wsk_bytes ? wsk_bytes : 1));
+        CK(cudaMemcpy(d_q4,hq4.data(),NQ*NTS*sizeof(T),cudaMemcpyHostToDevice));
+        std::vector<T> out_sh(3*NT*NTS), out_min(3*NT*NTS);
+        size_t k_smem_sh  = grid::MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES<T, grid::TIER_SHARED>();
+        size_t k_smem_min = grid::MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES<T, grid::TIER_MINIMAL>();
+        cudaFuncSetAttribute(grid::multi_target_position_kernel<T, grid::TIER_SHARED>,  cudaFuncAttributeMaxDynamicSharedMemorySize,(int)k_smem_sh);
+        cudaFuncSetAttribute(grid::multi_target_position_kernel<T, grid::TIER_MINIMAL>,cudaFuncAttributeMaxDynamicSharedMemorySize,(int)k_smem_min);
+        grid::multi_target_position_kernel<T, grid::TIER_SHARED><<<NTS,128,k_smem_sh>>>(d_out4,d_wsk,d_q4,NQ,d_m,NTS);
+        CK(cudaDeviceSynchronize());
+        CK(cudaMemcpy(out_sh.data(),d_out4,3*NT*NTS*sizeof(T),cudaMemcpyDeviceToHost));
+        grid::multi_target_position_kernel<T, grid::TIER_MINIMAL><<<NTS,128,k_smem_min>>>(d_out4,d_wsk,d_q4,NQ,d_m,NTS);
+        CK(cudaDeviceSynchronize());
+        CK(cudaMemcpy(out_min.data(),d_out4,3*NT*NTS*sizeof(T),cudaMemcpyDeviceToHost));
+        for(size_t i=0;i<out_sh.size();++i) kdiff=std::max(kdiff,fabs(out_sh[i]-out_min[i]));
+        printf("KERNELTIER maxdiff=%.3e (smem %zu vs %zu, kws %zu B)\n", kdiff, k_smem_sh, k_smem_min, wsk_bytes);
+    }
+
     // ee poses (256 threads)
     std::vector<T> hpose(6*NEE);
     ee_kernel<<<1,256,smem>>>(d_pose,d_q,d_m); CK(cudaDeviceSynchronize());
@@ -98,6 +127,7 @@ int main(){
 
     if (tinv > 1e-9) { printf("RESULT: FAIL (thread-variance %.3e)\n", tinv); return 3; }
     if (spilldiff != 0.0) { printf("RESULT: FAIL (spill non-bit-identical %.3e)\n", spilldiff); return 4; }
+    if (kdiff != 0.0) { printf("RESULT: FAIL (kernel tier non-bit-identical %.3e)\n", kdiff); return 5; }
     printf("RESULT: PASS\n");
     return 0;
 }
