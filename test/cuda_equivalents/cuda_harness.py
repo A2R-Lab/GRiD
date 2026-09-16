@@ -654,6 +654,12 @@ def _header_cache_key(
         "target_shared_mem_bytes": os.environ.get("GRID_CUDA_TARGET_SHARED_MEM_BYTES", "default"),
         "shared_mem_type_size_bytes": os.environ.get("GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES", "default"),
         "codegen_profile": os.environ.get("GRID_CODEGEN_PROFILE", "all"),
+        # 2026-09-16: the mjx toggle changes a floating non-mimic robot's
+        # emission wholesale, but was MISSING from this key — the pin-only and
+        # with-mjx flavors collided under one cache entry (whichever context
+        # populated first poisoned the other; exposed when header-key replay
+        # records failed to round-trip on an unchanged tree, guide §7.z14).
+        "enable_mujoco_kernels": os.environ.get("GRID_ENABLE_MUJOCO_KERNELS", "default"),
         # Mimic robots codegen a reduced algorithm list (fixed vs floating differ
         # in which gradients are emitted); fold the ACTUAL list into the key so
         # their headers never collide with a full-"all" header or each other.

@@ -1952,3 +1952,24 @@ recorded pin and the current submodule state. Git gotchas found doing it:
 the trailing slash (`external/`) to list the submodule commit entries;
 this had made _submodule_pins_match vacuously True since it was written.
 (2) gpu-proof receipts count UNTRACKED repo files as dirty (see §7.z12).
+
+### 7.z14 Header-cache flavor collision: env knobs that change emission MUST be in the cache key (2026-09-16)
+The equivalence harness's `_header_cache_key` folded in three env knobs
+(TARGET_SHARED_MEM, SHARED_MEM_TYPE_SIZE, CODEGEN_PROFILE) but NOT
+`GRID_ENABLE_MUJOCO_KERNELS` — and for a floating non-mimic robot that
+toggle changes the emitted header wholesale (mjx twins). The pin-only and
+with-mjx flavors therefore shared ONE cache entry: whichever context
+generated first poisoned every later lookup of the other flavor. Latent
+because both flavors PASS the pin tests (the with-mjx header is a
+superset — correctness attestations stayed valid; compile time/perf
+differ); EXPOSED when header-key replay records (seeded 2026-09-15)
+failed to round-trip on an unchanged tree — 62/311 records "rotated",
+all iiwa14-FLOATING flagship subsets, on BOTH the changed and unchanged
+trees (the round-trip probe that separated "my change rotated it" from
+"the record never round-tripped": run replay in a pre-change git
+worktree; also note a worktree needs the external/ submodules symlinked
+in). FIX: the env var joins the key payload. RULE: any env var that
+changes gen_all_code's emission must be in the header cache key — when
+adding such a knob, grep _header_cache_key. Diagnostic tip: a
+direct-gen_all_code probe BYPASSES the harness cache — byte-identical
+probes with rotating replay = suspect the cache layer, not codegen.
