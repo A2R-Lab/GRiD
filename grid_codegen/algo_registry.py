@@ -63,6 +63,8 @@ ALGO_REGISTRY: tuple[AlgoEntry, ...] = (
               "Gradients"),
     AlgoEntry("inverse_dynamics_regressor", "Inverse Dynamics Regressor (Joint-torque Y; tau=Y·π, ∂tau/∂π)",
               "Gradients"),
+    AlgoEntry("inverse_dynamics_regressor_gradient", "Inverse Dynamics Regressor Gradient (∂Y/∂q,v; dY_dx[c]·π == ∂tau/∂x[:,c])",
+              "Gradients"),
     AlgoEntry("forward_dynamics_parameter_gradient", "Forward Dynamics Parameter Gradient (∂q̈/∂π = -M⁻¹·Y)",
               "Gradients"),
     AlgoEntry("kinetic_energy_regressor", "Kinetic Energy Regressor (KE = y_KE·π, length 10·NB)",
@@ -284,6 +286,10 @@ ALGO_DESCRIPTORS: tuple[AlgoDescriptor, ...] = (
     AlgoDescriptor("coriolis_matrix", autotune_keys=("coriolis_matrix",), launch_cfg_batch=2),
     AlgoDescriptor("dccrba", autotune_keys=("dccrba",), launch_cfg_batch=2),
     AlgoDescriptor("cmm_time_variation", autotune_keys=("cmm_time_variation",), launch_cfg_batch=2),
+    # ─ batch 3 (B.0 dY/dx, 2026-09-17): APPENDED — the enum order is an
+    #   append-only ABI (see test_algo_descriptor_parity's golden anchors) ─
+    AlgoDescriptor("inverse_dynamics_regressor_gradient",
+                   autotune_keys=("inverse_dynamics_regressor_gradient",), launch_cfg_batch=2),
 
     # Plant (no standalone kernel)
     AlgoDescriptor("plant", has_kernel_attr=False),
@@ -647,6 +653,11 @@ _ARENA_FULL_FNS: dict[str, Callable[[ArenaCtx], int]] = {
         lambda c: c.n + ((6*c.feg_dq_jobs if c.has_mimic else 0) + c.ximats_helper_temp) + c.XI + c.rt,
     "inverse_dynamics_regressor":
         lambda c: (c.n + 2*c.nv) + c.nv*10*c.NB + 18*c.n + c.idr_inner + c.XI + c.rt,
+    # dY/dx (B.0): q|qd|qdd input (3*NUM_POS) + s_dc_du id_du-staging scratch +
+    # vel-flavour s_vaf + the id_du inner scratch pool (staging provider). The
+    # OUTPUT is direct-to-global (never smem), so no output term.
+    "inverse_dynamics_regressor_gradient":
+        lambda c: 3*c.n + 2*c.nv*c.nv + c.grad_vaf + c.idgrad_inner + c.XI + c.rt,
     "forward_dynamics_parameter_gradient":
         lambda c: (c.n + 2*c.nv) + c.nv*10*c.NB + c.nv*c.nv + c.nv*10*c.NB + c.nv + 18*c.n + c.nv
                   + c.fpg_inner + c.XI + c.rt,
@@ -800,6 +811,13 @@ _ARENA_RUNG_FNS: dict[str, tuple[Callable[[ArenaCtx], int], ...]] = {
         lambda c: c.nv + 3*c.n + 12*c.NJ + c.XI + c.rt,                         # workspace: whole inner -> ws
     ),
     # ── 3.5d parameter/regressor + f_ext ladders ──
+    # dY/dx (B.0): same 3-rung menu as inverse_dynamics_gradient (the staging
+    # provider); output is direct-to-global at every rung.
+    "inverse_dynamics_regressor_gradient": (
+        lambda c: 3*c.n + 2*c.nv*c.nv + c.grad_vaf + c.idgrad_inner + c.XI + c.rt,      # full
+        lambda c: 3*c.n + 2*c.nv*c.nv + c.grad_vaf + c.idgrad_selective + c.XI + c.rt,  # selective inner
+        lambda c: 3*c.n + 2*c.nv*c.nv + c.grad_vaf + c.XI + c.rt,                       # emergency: inner -> ws
+    ),
     "inverse_dynamics_regressor": (
         lambda c: (c.n + 2*c.nv) + c.nv*10*c.NB + 18*c.n + c.idr_inner + c.XI + c.rt,   # full: s_Y in smem
         lambda c: (c.n + 2*c.nv) + 18*c.n + c.idr_inner + c.XI + c.rt,                  # surgical: s_Y -> ws

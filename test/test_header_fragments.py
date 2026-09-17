@@ -30,7 +30,8 @@ from URDFParser import URDFParser
 EXPECTED_ORDER = [
     "_prologue", "core", "ee_kinematics", "inverse_dynamics", "regressors",
     "minv", "forward_dynamics", "forward_dynamics_parameter_gradient",
-    "inverse_dynamics_gradient", "forward_dynamics_gradient", "f_ext_gradient",
+    "inverse_dynamics_gradient", "inverse_dynamics_regressor_gradient",
+    "forward_dynamics_gradient", "f_ext_gradient",
     "aba", "crba", "integrator", "second_order", "centroidal",
     "frame_jacobian_family", "ee_runtime", "combinations", "init_close",
     "grid_plant", "collision",

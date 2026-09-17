@@ -441,6 +441,16 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
     # Per-tier t_counts exposed for tier-aware constexpr metadata.
     self.inverse_dynamics_gradient_t_count_per_tier = tuple(_inverse_dynamics_gradient_arenas[i] for i in self.inverse_dynamics_gradient_spill_tier_3way)
     self.forward_dynamics_gradient_t_count_per_tier = tuple(_forward_dynamics_gradient_arenas[i] for i in self.forward_dynamics_gradient_spill_tier_3way)
+    # dY/dx (B.0): same 3-rung staging menu as inverse_dynamics_gradient (its
+    # scratch pool IS the id_du inner's, called as the staging provider); the
+    # dense (mimic/skew/spherical) fold has no selective rung, so collapse
+    # rung 1 -> rung 0 the way id_du's selective count does.
+    _idrg_arenas = compose_arena_rungs("inverse_dynamics_regressor_gradient", self._arena_ctx)
+    if self.robot_has_mimic_joints():
+        _idrg_arenas = (_idrg_arenas[0], _idrg_arenas[0], _idrg_arenas[2])
+    self.inverse_dynamics_regressor_gradient_spill_tier_3way = select_shared_tier_3way(*_idrg_arenas)
+    self.inverse_dynamics_regressor_gradient_t_count_per_tier = tuple(
+        _idrg_arenas[i] for i in self.inverse_dynamics_regressor_gradient_spill_tier_3way)
     # §1e: the aba kernel body reserves a 3*nq-wide per-timestep input slot
     # ("s_q_qd_tau", 3*nq in _emit_aba_kernel_body_for_flags; n == get_num_pos()
     # == nq here); the matching ABA_DYNAMIC_SHARED_MEM_BYTES arena count (now
@@ -1017,6 +1027,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              "const int D2XHOM_T_COUNT = " + str(d2Xhom_size) + ";", \
                              "const int GRID_INVERSE_DYNAMICS_GRADIENT_USES_GLOBAL_TEMP = " + str(int(self.inverse_dynamics_gradient_use_global_temp)) + ";", \
                              "const int GRID_INVERSE_DYNAMICS_GRADIENT_USES_WORKSPACE_ANY_TIER = " + str(1 if any(p >= 1 for p in self.inverse_dynamics_gradient_spill_tier_3way) else 0) + ";", \
+                             "const int GRID_INVERSE_DYNAMICS_REGRESSOR_GRADIENT_USES_WORKSPACE_ANY_TIER = " + str(1 if any(p >= 1 for p in self.inverse_dynamics_regressor_gradient_spill_tier_3way) else 0) + ";", \
                              "const int GRID_FORWARD_DYNAMICS_GRADIENT_USES_GLOBAL_TEMP = " + str(int(self.forward_dynamics_gradient_use_global_temp)) + ";", \
                              "const int GRID_FORWARD_DYNAMICS_GRADIENT_USES_WORKSPACE_ANY_TIER = " + str(1 if any(p >= 1 for p in self.forward_dynamics_gradient_spill_tier_3way) else 0) + ";", \
                              "const int GRID_INVERSE_DYNAMICS_GRADIENT_USES_DA_DF_SPILL = " + str(int(self.inverse_dynamics_gradient_use_selective_spill)) + ";", \
@@ -1147,6 +1158,8 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              *_tier_bytes_lines("MINV_DYNAMIC_SHARED_MEM_BYTES", self.minv_t_count_per_tier),
                              *_tier_bytes_lines("FORWARD_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES", self.fd_t_count_per_tier),
                              *_tier_bytes_lines("INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES", self.inverse_dynamics_gradient_t_count_per_tier),
+                             # B.0 dY/dx: same 3-rung staging menu as inverse_dynamics_gradient
+                             *_tier_bytes_lines("INVERSE_DYNAMICS_REGRESSOR_GRADIENT_DYNAMIC_SHARED_MEM_BYTES", self.inverse_dynamics_regressor_gradient_t_count_per_tier),
                              *_tier_bytes_lines("FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES", self.forward_dynamics_gradient_t_count_per_tier),
                              # Tier-aware: at LITE/MINIMAL the FD inner's Minv F-region (6*nv*nv)
                              # spills to d_workspace, so the smem arena shrinks. Default TIER keeps
@@ -1485,6 +1498,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              "    T *d_f_ext_gradient_dq;  // -dJ^T/dq = d(inverse_dynamics_gradient)/dfext, nv*6NB*nv (both base modes)",
                              # R2: regressor + FD param-gradient outputs (each nv x 10*NUM_BODIES)
                              "    T *d_Y;          // inverse_dynamics_regressor (tau = Y . pi), nv*10NB",
+                             "    T *d_dY_dx;      // inverse_dynamics_regressor_gradient (dY/dq | dY/dqd), 2*nv*nv*10NB",
                              "    T *d_dqdd_dpi;   // forward_dynamics_parameter_gradient (-Minv . Y), nv*10NB",
                              # PS5 energy regressors (each 10*NUM_BODIES; KE=y_KE.pi, PE=y_PE.pi)
                              "    T *d_ke_regressor;   // kinetic_energy_regressor (KE = y_KE . pi), 10NB",
@@ -1546,6 +1560,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              "    T *h_f_ext_gradient_dq;  // -dJ^T/dq, nv*6NB*nv (both base modes)",
                              # R2: regressor + FD param-gradient outputs (each nv x 10*NUM_BODIES)
                              "    T *h_Y;",
+                             "    T *h_dY_dx;",
                              "    T *h_dqdd_dpi;",
                              # PS5 energy regressors
                              "    T *h_ke_regressor;",
@@ -1736,6 +1751,12 @@ def gen_init_gridData(self):
                   "    #if GRID_HAS_FORWARD_DYNAMICS_PARAMETER_GRADIENT" + ag("forward_dynamics_parameter_gradient"),
                   "    gpuErrchk(cudaMalloc((void**)&hd_data->d_dqdd_dpi, NUM_VEL*10*NUM_BODIES*NUM_TIMESTEPS*sizeof(T)));",
                   "    hd_data->h_dqdd_dpi = grid_host_alloc<T>(NUM_VEL*10*NUM_BODIES*NUM_TIMESTEPS*sizeof(T));",
+                  "    #endif",
+                  "    // B.0: dY/dx (dq | dqd halves, each direction an nv x 10NB row-major block).",
+                  "    // sizeof(T) leads: 2*nv*nv*10NB*NUM_TIMESTEPS alone overflows int on big robots.",
+                  "    #if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR_GRADIENT" + ag("inverse_dynamics_regressor_gradient"),
+                  "    gpuErrchk(cudaMalloc((void**)&hd_data->d_dY_dx, sizeof(T)*2*NUM_VEL*NUM_VEL*10*NUM_BODIES*NUM_TIMESTEPS));",
+                  "    hd_data->h_dY_dx = grid_host_alloc<T>(sizeof(T)*2*NUM_VEL*NUM_VEL*10*NUM_BODIES*NUM_TIMESTEPS);",
                   "    #endif"]
                   + [
                   # d_idsva_so is ALSO a kernel input of fdsva_so (the fdsva_so kernel takes

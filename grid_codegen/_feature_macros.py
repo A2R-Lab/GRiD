@@ -30,6 +30,10 @@ CORE_HAS_MACROS = {
     "F_EXT_GRADIENT": "f_ext_gradient",
     "F_EXT_GRADIENT_DQ": "f_ext_gradient",
     "INVERSE_DYNAMICS_REGRESSOR": "inverse_dynamics_regressor",
+    # dY/dx (B.0): gates the d_/h_dY_dx gridData alloc (2*nv*nv*10NB per
+    # timestep — the largest regressor-family buffer, so never allocated when
+    # the algo wasn't generated).
+    "INVERSE_DYNAMICS_REGRESSOR_GRADIENT": "inverse_dynamics_regressor_gradient",
     # FD parameter gradient (dqdd/dpi = -Minv . Y): its grid::kernel is
     # emitted only when 'forward_dynamics_parameter_gradient' is in the
     # (post-dep-expansion) algorithm set, so the jax/torch handler that

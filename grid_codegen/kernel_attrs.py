@@ -191,6 +191,14 @@ KERNEL_OVERLOADS = {
         ("inverse_dynamics_regressor_kernel_single_timing<T>",
          "void (*)(T *, unsigned char *, const T *, const int, const robotModel<T> *, const T, const int)"),
     ],
+    # B.0 dY/dx: scratch = the id_du inner pool (same big-robot smem class as
+    # inverse_dynamics_gradient), so it MUST opt in like its staging provider.
+    "inverse_dynamics_regressor_gradient": [
+        ("inverse_dynamics_regressor_gradient_kernel<T>",
+         "void (*)(T *, unsigned char *, const T *, const int, const robotModel<T> *, const T, const int)"),
+        ("inverse_dynamics_regressor_gradient_kernel_single_timing<T>",
+         "void (*)(T *, unsigned char *, const T *, const int, const robotModel<T> *, const T, const int)"),
+    ],
     # PS5 energy regressors (each output 10*NUM_BODIES; opt-in like the joint-torque
     # regressor so big-robot launches set the dynamic-smem attr).
     "kinetic_energy_regressor": [
@@ -670,6 +678,8 @@ def gen_init_close_grid(self):
                              # R2: regressor Y + FD param-gradient dqdd/dpi outputs
                              "gpuErrchk(cudaFree(hd_data->d_Y)); gpuErrchk(cudaFree(hd_data->d_dqdd_dpi));",
                              "grid_host_free(hd_data->h_Y); grid_host_free(hd_data->h_dqdd_dpi);",
+                             # B.0: dY/dx output slab
+                             "gpuErrchk(cudaFree(hd_data->d_dY_dx)); grid_host_free(hd_data->h_dY_dx);",
                              # PS5 energy regressors
                              "gpuErrchk(cudaFree(hd_data->d_ke_regressor)); gpuErrchk(cudaFree(hd_data->d_pe_regressor));",
                              "grid_host_free(hd_data->h_ke_regressor); grid_host_free(hd_data->h_pe_regressor);",

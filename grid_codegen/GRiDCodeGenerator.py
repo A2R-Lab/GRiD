@@ -49,6 +49,11 @@ class GRiDCodeGenerator:
                             gen_inverse_dynamics_regressor_inner, \
                             gen_inverse_dynamics_regressor_device, gen_inverse_dynamics_regressor_kernel, \
                             gen_inverse_dynamics_regressor_host, gen_inverse_dynamics_regressor, \
+                            gen_inverse_dynamics_regressor_gradient_inner_temp_mem_size, \
+                            gen_inverse_dynamics_regressor_gradient_inner_function_call, \
+                            gen_inverse_dynamics_regressor_gradient_inner, \
+                            gen_inverse_dynamics_regressor_gradient_device, gen_inverse_dynamics_regressor_gradient_kernel, \
+                            gen_inverse_dynamics_regressor_gradient_host, gen_inverse_dynamics_regressor_gradient, \
                             gen_kinetic_energy_regressor_inner_temp_mem_size, gen_kinetic_energy_regressor_inner_function_call, \
                             gen_kinetic_energy_regressor_inner, gen_kinetic_energy_regressor_device, gen_kinetic_energy_regressor_kernel, \
                             gen_kinetic_energy_regressor_host, gen_kinetic_energy_regressor, \
@@ -790,6 +795,11 @@ class GRiDCodeGenerator:
         self.gen_add_fragment_mark("inverse_dynamics_gradient")
         if "inverse_dynamics_gradient" in algorithms:
             self.gen_inverse_dynamics_gradient()
+        self.gen_add_fragment_mark("inverse_dynamics_regressor_gradient")
+        # B.0 (du x pi): dY/dx. Composes the id_du staging (requires
+        # "inverse_dynamics" and "inverse_dynamics_gradient" co-emitted).
+        if "inverse_dynamics_regressor_gradient" in algorithms:
+            self.gen_inverse_dynamics_regressor_gradient()
         self.gen_add_fragment_mark("forward_dynamics_gradient")
         if "forward_dynamics_gradient" in algorithms:
             self.gen_forward_dynamics_gradient()

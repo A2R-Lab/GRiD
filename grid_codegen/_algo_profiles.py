@@ -14,6 +14,8 @@ def normalize_codegen_algorithms(gen, codegen_profile = "all", algorithm_list = 
         "idsva_so_body_frame", "fdsva_so", "end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian",
         "integrator", "integrator_gradient", "integrator_with_gradient",
         "f_ext_gradient", "inverse_dynamics_regressor", "forward_dynamics_parameter_gradient",
+        # B.0 (du x pi): dY/dx — the state derivative of the joint-torque regressor.
+        "inverse_dynamics_regressor_gradient",
         "kinetic_energy_regressor", "potential_energy_regressor",
         # G2 centroidal quick-wins: each is its OWN first-class key (R6). They
         # expand to their real deps below (com/ccrba/energy -> ee_pose kin
@@ -119,6 +121,10 @@ def normalize_codegen_algorithms(gen, codegen_profile = "all", algorithm_list = 
         algorithms.update({"inverse_dynamics", "minv", "forward_dynamics", "inverse_dynamics_gradient"})
     if "inverse_dynamics_gradient" in algorithms:
         algorithms.add("inverse_dynamics")
+    # B.0 dY/dx composes the id_du staging (calls inverse_dynamics_gradient_inner)
+    # on top of the RNEA vaf sweep.
+    if "inverse_dynamics_regressor_gradient" in algorithms:
+        algorithms.update({"inverse_dynamics", "inverse_dynamics_gradient"})
     # f_ext gradient: dtau/dfext reuses the RNEA spatial-transform load (id),
     # dqdd/dfext reuses minv's inner (minv).
     if "f_ext_gradient" in algorithms:

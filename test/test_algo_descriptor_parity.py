@@ -73,6 +73,8 @@ _GOLDEN_ALGO_TO_SYMBOL = {
     "coriolis_matrix":       "coriolis_matrix",
     "dccrba":                "dccrba",
     "cmm_time_variation":    "cmm_time_variation",
+    # ─ batch 3 (B.0 dY/dx, 2026-09-17): APPENDED after batch 2 ─
+    "inverse_dynamics_regressor_gradient": "inverse_dynamics_regressor_gradient",
 }
 
 # The emitted `enum GridAlgo` order (byte-identity anchor). Equals the launch-cfg
@@ -95,6 +97,8 @@ _GOLDEN_LAUNCH_ORDER = (
     "frame_jacobian", "frame_jacobian_dot", "osc_inertia",
     "generalized_gravity", "nonlinear_effects", "energy",
     "com", "ccrba", "coriolis_matrix", "dccrba", "cmm_time_variation",
+    # batch 3 — B.0 dY/dx (2026-09-17), appended:
+    "inverse_dynamics_regressor_gradient",
 )
 
 

@@ -143,6 +143,7 @@ ALGO_TO_FRAGMENT = {
     "forward_dynamics": "forward_dynamics",
     "forward_dynamics_parameter_gradient": "forward_dynamics_parameter_gradient",
     "inverse_dynamics_gradient": "inverse_dynamics_gradient",
+    "inverse_dynamics_regressor_gradient": "inverse_dynamics_regressor_gradient",
     "forward_dynamics_gradient": "forward_dynamics_gradient",
     "f_ext_gradient": "f_ext_gradient",
     "aba": "aba",
