@@ -237,6 +237,18 @@ class BaseDelegateMixin:
         (returns a numpy array). See :py:meth:`grid_rbd.RobotHandle.tool_fext`."""
         return self._base.tool_fext(q, wrench, joint=joint, offset=offset)
 
+    @property
+    def contact_frames(self):
+        """The registered contact frames ``[{name, jid, offset}]`` or ``None``."""
+        return self._base.contact_frames
+
+    def contact_fext(self, q, f_c):
+        """Per-registered-contact-frame world-aligned wrenches -> joint-local f_ext
+        ``(B, 6*num_bodies)``, ready to pass as ``f_ext=`` to the dynamics ops.
+        Delegates to the base handle (returns a numpy array). See
+        :py:meth:`grid_rbd.RobotHandle.contact_fext`."""
+        return self._base.contact_fext(q, f_c)
+
     def close(self) -> None:
         """Release the underlying .so handle (delegates to the base RobotHandle).
         Idempotent. Process-global backend registrations (JAX FFI targets / the

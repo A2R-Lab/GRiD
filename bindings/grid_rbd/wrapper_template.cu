@@ -896,6 +896,79 @@ extern "C" int grid_rbd_tool_fext(const T*, const T*, int, const T*, T*, int) { 
 
 
 // ────────────────────────────────────────────────────────────────────────────
+// Baked multi-contact wrenches -> joint-local f_ext (registered contact frames)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// contact_fext(q, f_c) -> (batch, 6*NUM_BODIES) joint-local f_ext, ready for
+// inverse_dynamics(f_ext=...) / forward_dynamics(f_ext=...) / aba(f_ext=...).
+// `f_c` is (batch, 6*NUM_CONTACT_FRAMES): per registered frame (registration
+// order) a world-aligned [n_w; f_w] 6-vector, moment about the contact-frame
+// origin (pinocchio LOCAL_WORLD_ALIGNED — the same convention as tool_fext's
+// wrench). Gated on GRID_HAS_CONTACT_FRAMES (register with contact_frames=[...]).
+// Mirrors grid_rbd_tool_fext exactly, but calls the BAKED grid::f_ext_body_device
+// (per-frame body ids + offsets compiled in; per-body sums in a baked order — no
+// atomics, deterministic).
+extern "C" int grid_rbd_num_contact_frames() {
+#ifdef GRID_HAS_CONTACT_FRAMES
+    return grid::NUM_CONTACT_FRAMES;
+#else
+    return 0;
+#endif
+}
+#ifdef GRID_HAS_CONTACT_FRAMES
+__global__ void grid_rbd_contact_fext_kernel(const T* d_q, int stride_q,
+                                             const T* d_fc,
+                                             const grid::robotModel<T>* d_robotModel,
+                                             T* d_workspace, T* d_out) {
+    const int k = blockIdx.x;
+    const int tid = threadIdx.x + threadIdx.y * blockDim.x;
+    const int nth = blockDim.x * blockDim.y;
+    __shared__ T s_fext[6 * grid::NUM_BODIES];
+    grid::f_ext_body_device<T>(s_fext, &d_fc[k * 6 * grid::NUM_CONTACT_FRAMES],
+                               &d_q[k * stride_q], d_robotModel, d_workspace);
+    __syncthreads();
+    for (int i = tid; i < 6 * grid::NUM_BODIES; i += nth)
+        d_out[k * 6 * grid::NUM_BODIES + i] = s_fext[i];
+}
+
+extern "C" int grid_rbd_contact_fext(const T* q, const T* f_c, T* out, int batch) {
+    if (!g_data) { int rc0 = grid_rbd_init(); if (rc0) return rc0; }
+    if (batch > kMaxBatch) return 2;
+    const int nj = grid::NUM_JOINTS;
+    const int fc_stride = 6 * grid::NUM_CONTACT_FRAMES;
+    pack_q_qd_u(q, q, nullptr, batch, nj);   // q at offset 0, stride 3*nj
+    const int stride_q = 3 * nj;
+    if (cudaMemcpy(g_data->d_q_qd_u, g_data->h_q_qd_u,
+                   (size_t)batch * stride_q * sizeof(T), cudaMemcpyHostToDevice) != cudaSuccess) return 5;
+    T *d_fc = nullptr;
+    if (cudaMalloc(&d_fc, (size_t)fc_stride * batch * sizeof(T)) != cudaSuccess) return 6;
+    cudaMemcpy(d_fc, f_c, (size_t)fc_stride * batch * sizeof(T), cudaMemcpyHostToDevice);
+    size_t smem = grid::F_EXT_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
+    size_t s2 = grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>();
+    if (s2 > smem) smem = s2;
+    smem += 4096;
+    cudaFuncSetAttribute(grid_rbd_contact_fext_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
+    grid_rbd_contact_fext_kernel<<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), smem>>>(
+        g_data->d_q_qd_u, stride_q, d_fc, g_robot,
+        reinterpret_cast<T*>(g_data->d_workspace), g_data->d_f_ext);
+    { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }
+    cudaError_t e = cudaDeviceSynchronize();
+    if (e == cudaSuccess) e = grid_consume_last_error();
+    cudaFree(d_fc);
+    if (e != cudaSuccess) return 100 + (int)e;
+    if (cudaMemcpy(out, g_data->d_f_ext, (size_t)6 * grid::NUM_BODIES * batch * sizeof(T),
+                   cudaMemcpyDeviceToHost) != cudaSuccess) return 5;
+    // d_f_ext is the shared f_ext buffer; re-zero it so a later NO-f_ext dynamics
+    // call is not polluted by the contact wrenches we just wrote.
+    cudaMemset(g_data->d_f_ext, 0, (size_t)6 * grid::NUM_BODIES * kMaxBatch * sizeof(T));
+    return 0;
+}
+#else
+extern "C" int grid_rbd_contact_fext(const T*, const T*, T*, int) { return 3; }
+#endif
+
+
+// ────────────────────────────────────────────────────────────────────────────
 // Time integrator (value + gradient)
 // ────────────────────────────────────────────────────────────────────────────
 //

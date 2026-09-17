@@ -251,6 +251,18 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # changing that key would hand back a stale .so built the other way. Binding consumers
     # pass the option; the env var is a codegen-session convenience (the test suite).
     enable_mujoco_kernels = options.get("enable_mujoco_kernels", True)
+    # Multi-contact f_ext (wrapper window 2): contact_frames is a list of URDF
+    # FIXED-JOINT names naming the contact frames (same convention as the baked
+    # f_ext_body family). Resolved HERE against the live parse (codegen is the
+    # only place the URDF is open) into [{name, jid, offset}] specs; passed to
+    # gen_all_code (bakes the f_ext_body* device family + fc plant controls +
+    # GRID_HAS_CONTACT_FRAMES) and persisted to meta so the handle can echo the
+    # registered frames at runtime. Default None = byte-identical build.
+    contact_frame_names = options.get("contact_frames")
+    contact_frame_specs = None
+    if contact_frame_names:
+        from grid_codegen.algorithms._f_ext_contact import contact_frames_from_urdf
+        contact_frame_specs = contact_frames_from_urdf(robot, list(contact_frame_names))
     with contextlib.redirect_stdout(io.StringIO()):
         cg.gen_all_code(
             output_path=str(out_path),
@@ -269,6 +281,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
             runtime_transform=runtime_transform,
             runtime_joint_dynamics=runtime_joint_dynamics,
             enable_contact_runtime=bool(options.get("enable_contact_runtime", False)),
+            contact_frames=contact_frame_specs,
         )
 
     if not out_path.exists():
@@ -330,6 +343,15 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         "generated_algorithms": sorted(cg.generated_algorithms),
         "enable_mujoco_kernels": bool(enable_mujoco_kernels),
     }
+    # Multi-contact f_ext: echo the registered contact frames (registration
+    # order == the contact_fext f_c column order) so the handle can validate
+    # shapes and report frames without reopening the URDF.
+    if contact_frame_specs:
+        meta["contact_frames"] = [
+            {"name": c["name"], "jid": int(c["jid"]),
+             "offset": [float(v) for v in c["offset"]]}
+            for c in contact_frame_specs
+        ]
     # D.4 / Phase 5: when the mutable-inertia table is generated, persist the
     # BAKED 10-param-per-body table so the handle can expose it (fetch-then-mutate
     # via set_inertia_params). Layout mirrors gen_init_inertia_params /

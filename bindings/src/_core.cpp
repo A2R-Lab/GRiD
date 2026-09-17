@@ -87,6 +87,7 @@ struct CAbi {
     using fn_frame_jac_dot_t = int (*)(const CT*, const CT*, CT*, int, int, int);
     using fn_ee_runtime_t   = int (*)(const CT*, CT*, int, int, const CT*);
     using fn_tool_fext_t    = int (*)(const CT*, const CT*, int, const CT*, CT*, int);  // grid_rbd_tool_fext
+    using fn_contact_fext_t = int (*)(const CT*, const CT*, CT*, int);                   // grid_rbd_contact_fext
     using fn_q_qd_out_grav_t = int (*)(const CT*, const CT*, CT*, int, CT);
     using fn_q_out_grav_t   = int (*)(const CT*, CT*, int, CT);
     using fn_set_params_t   = int (*)(const CT*);   // set_{inertia,transform,joint_dynamics}_params
@@ -121,6 +122,7 @@ class RunnerT {
     using fn_frame_jac_dot_t = typename CAbi<CT>::fn_frame_jac_dot_t;
     using fn_ee_runtime_t = typename CAbi<CT>::fn_ee_runtime_t;
     using fn_tool_fext_t = typename CAbi<CT>::fn_tool_fext_t;
+    using fn_contact_fext_t = typename CAbi<CT>::fn_contact_fext_t;
     using fn_q_qd_out_grav_t = typename CAbi<CT>::fn_q_qd_out_grav_t;
     using fn_q_out_grav_t = typename CAbi<CT>::fn_q_out_grav_t;
     using fn_set_params_t = typename CAbi<CT>::fn_set_params_t;
@@ -249,6 +251,9 @@ public:
         fn_ee_pose_runtime_mujoco_      = reinterpret_cast<fn_ee_runtime_t>(opt_sym("grid_rbd_end_effector_pose_runtime_mujoco"));            // floating only
         fn_ee_pose_grad_runtime_mujoco_ = reinterpret_cast<fn_ee_runtime_t>(opt_sym("grid_rbd_end_effector_pose_gradient_runtime_mujoco")); // floating only
         fn_tool_fext_            = reinterpret_cast<fn_tool_fext_t>(opt_sym("grid_rbd_tool_fext"));  // enable_tool only
+        fn_contact_fext_         = reinterpret_cast<fn_contact_fext_t>(opt_sym("grid_rbd_contact_fext"));           // contact_frames only
+        fn_num_contact_frames_   = reinterpret_cast<fn_int_v_t>(opt_sym("grid_rbd_num_contact_frames"));
+        if (fn_num_contact_frames_) num_contact_frames_ = fn_num_contact_frames_();
 
         // PS5 value ops.
         // coriolis_matrix / kinetic_energy_regressor / potential_energy_regressor
@@ -1697,6 +1702,25 @@ public:
 
 
 
+    // contact_fext(q, f_c) -> (batch, 6*NUM_BODIES) joint-local f_ext from
+    // per-registered-contact-frame world-aligned [n_w; f_w] wrenches
+    // (f_c is (batch, 6*num_contact_frames), frames in registration order).
+    // Present only on a .so built with contact_frames=[...].
+    bool has_contact_fext() const { return fn_contact_fext_ != nullptr; }
+    int num_contact_frames() const { return num_contact_frames_; }
+    py::array_t<CT> contact_fext(arr_t q, arr_t f_c)
+    {
+        if (!fn_contact_fext_) throw std::runtime_error("contact_fext not available in this .so (register with contact_frames=[...], force_rebuild=True)");
+        int batch = check_q(q, "contact_fext");
+        if (f_c.size() != (py::ssize_t)6 * num_contact_frames_ * batch)
+            throw std::invalid_argument("contact_fext: f_c must be (batch, 6*num_contact_frames)");
+        py::array_t<CT> out({batch, 6 * num_bodies_});
+        int rc0 = fn_contact_fext_(q.data(), f_c.data(), out.mutable_data(), batch);
+        if (rc0 != 0) throw std::runtime_error(rc_message(rc0, "contact_fext",
+            "contact_fext not built into this robot .so — re-register with contact_frames=[...], force_rebuild=True"));
+        return out;
+    }
+
     // set_inertia_params(params) — D.4 / Phase 5 runtime-mutable inertia.
     // params is a flat (10*num_bodies,) array, body-indexed bodies 1..N, each a
     // length-10 [m, h(3), I_O(6)] vector. Copies it into the device d_inertia_params
@@ -1945,6 +1969,9 @@ private:
     fn_ee_runtime_t    fn_ee_pose_runtime_      = nullptr;
     fn_ee_runtime_t    fn_ee_pose_grad_runtime_ = nullptr;
     fn_tool_fext_t     fn_tool_fext_            = nullptr;
+    fn_contact_fext_t  fn_contact_fext_         = nullptr;
+    fn_int_v_t         fn_num_contact_frames_   = nullptr;
+    int                num_contact_frames_      = 0;
     fn_ee_runtime_t    fn_ee_pose_runtime_mujoco_      = nullptr;  // floating mjx (optional)
     fn_ee_runtime_t    fn_ee_pose_grad_runtime_mujoco_ = nullptr;  // floating mjx (optional)
     // PS5 value ops (optional symbols)
@@ -2245,6 +2272,10 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def_property_readonly("has_tool_fext", &R::has_tool_fext)
         .def("tool_fext", &R::tool_fext,
              py::arg("q"), py::arg("wrench"), py::arg("jid"), py::arg("rc"))
+        .def_property_readonly("has_contact_fext", &R::has_contact_fext)
+        .def_property_readonly("num_contact_frames", &R::num_contact_frames)
+        .def("contact_fext", &R::contact_fext,
+             py::arg("q"), py::arg("f_c"))
         .def_property_readonly("has_end_effector_pose_runtime_mujoco", &R::has_end_effector_pose_runtime_mujoco)
         .def("end_effector_pose_runtime_mujoco", &R::end_effector_pose_runtime_mujoco,
              py::arg("q"), py::arg("target_jid") = -1,

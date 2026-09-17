@@ -127,6 +127,7 @@ def register_robot(
     runtime_joint_dynamics: bool = False,
     use_joint_dynamics: bool = False,
     enable_tool: bool = False,
+    contact_frames: list[str] | tuple[str, ...] | None = None,
     output_convention: str = "pinocchio",
     algorithm_list: list[str] | tuple[str, ...] | str | None = None,
     enable_mujoco_kernels: bool = True,
@@ -221,6 +222,14 @@ def register_robot(
         (:py:meth:`RobotHandle.tool_fext`, ``attach_tool``/``detach_tool``):
         a kernel mapping a world-aligned tool-tip wrench at a runtime body to
         joint-local ``f_ext`` rows. Re-keys the cache.
+    contact_frames : list[str], optional
+        Default ``None``. Names of URDF FIXED joints to bake as contact frames
+        (e.g. a quadruped's foot joints). Builds the multi-contact surface
+        (:py:meth:`RobotHandle.contact_fext`): per-frame world-aligned
+        ``[n_w; f_w]`` wrenches (moment about the frame origin,
+        LOCAL_WORLD_ALIGNED) -> joint-local ``f_ext`` in one kernel, ready to
+        pass as ``f_ext=`` to the dynamics ops. Registration order fixes the
+        ``f_c`` column order. Re-keys the cache.
     runtime_transform : bool, optional
         Like ``runtime_inertia`` but for the joint-frame transforms: emits a
         mutable ``d_transform_params`` table ([x,y,z,r,p,y] per joint) + host
@@ -405,6 +414,7 @@ def register_robot(
         runtime_transform=runtime_transform,
         runtime_joint_dynamics=runtime_joint_dynamics,
         use_joint_dynamics=use_joint_dynamics, enable_tool=enable_tool,
+        contact_frames=contact_frames,
         algorithm_list=algorithm_list, enable_mujoco_kernels=enable_mujoco_kernels,
     )
     handle = RobotHandle(name, str(so_path), meta, allow_fp64=allow_fp64)
@@ -436,6 +446,7 @@ def warm_robot(
     runtime_joint_dynamics: bool = False,
     use_joint_dynamics: bool = False,
     enable_tool: bool = False,
+    contact_frames: list[str] | tuple[str, ...] | None = None,
     algorithm_list: list[str] | tuple[str, ...] | str | None = None,
     enable_mujoco_kernels: bool = True,
 ) -> tuple[str, Path, dict]:
@@ -495,6 +506,13 @@ def warm_robot(
     if enable_tool:
         runtime_inertia = True
         code_options["enable_contact_runtime"] = True
+    # Multi-contact f_ext (wrapper window 2): contact_frames names URDF FIXED
+    # joints to bake as contact frames (registration order == the contact_fext
+    # f_c column order). Injected only when set, so a default build stays
+    # byte-identical and reuses its .so; a contact_frames .so gets its own
+    # cache entry (the baked family + GRID_HAS_CONTACT_FRAMES change the header).
+    if contact_frames:
+        code_options["contact_frames"] = list(contact_frames)
     if runtime_inertia:
         code_options["runtime_inertia"] = True
     # runtime_transform (mirror of runtime_inertia): runtime-mutable joint-frame

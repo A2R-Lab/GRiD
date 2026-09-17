@@ -713,6 +713,35 @@ class RobotHandle:
         raw = self._runner.tool_fext(q, w, jid, rc)     # (B, 6*num_bodies)
         return self._cast_out(raw)
 
+    # ─── multi-contact f_ext (contact_frames) ────────────────────────────────
+
+    @property
+    def contact_frames(self):
+        """The registered contact frames ``[{name, jid, offset}]`` (registration
+        order == the ``contact_fext`` ``f_c`` column order) or ``None``."""
+        return self._meta.get("contact_frames")
+
+    def contact_fext(self, q, f_c):
+        """Map per-contact-frame world-aligned wrenches to joint-local ``f_ext``.
+
+        ``f_c`` is ``(B, 6*num_contact_frames)``: per registered frame (in
+        registration order) a 6-vector ``[n_w; f_w]`` — WORLD-ALIGNED axes,
+        moment about the contact-frame origin (pinocchio LOCAL_WORLD_ALIGNED;
+        the same wrench convention as :py:meth:`tool_fext`). Returns
+        ``(B, 6*num_bodies)`` joint-local f_ext ready to pass as ``f_ext=`` to
+        :py:meth:`inverse_dynamics` / :py:meth:`forward_dynamics` /
+        :py:meth:`aba` and their gradients — e.g. stance-foot reaction forces
+        on a quadruped/humanoid. Needs a ``contact_frames=[...]`` .so."""
+        frames = self._meta.get("contact_frames")
+        if not frames or not getattr(self._runner, "has_contact_fext", False):
+            raise NotImplementedError(
+                "contact_fext needs a contact_frames .so (re-register with "
+                "register_robot(..., contact_frames=[...], force_rebuild=True)).")
+        q = np.ascontiguousarray(q, dtype=self._dt)
+        fc = np.ascontiguousarray(f_c, dtype=self._dt)
+        raw = self._runner.contact_fext(q, fc)          # (B, 6*num_bodies)
+        return self._cast_out(raw)
+
     def _tool_tip_default(self, ee_joint_names, ee_offsets):
         """If a tool with a tip frame is attached and the caller gave no explicit
         target/offset, default the runtime EE query to the tool tip frame."""
