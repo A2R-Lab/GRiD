@@ -287,6 +287,13 @@ apply per-algo small-batch thread overrides from the config's `ffi_bases_by_n` b
 - [`tool_use.py`](tool_use.py) — weld a rigid tool/payload at RUNTIME (`attach_tool`/`detach_tool`),
   no recompile: payload inertia + a full SE(3) tool-tip frame, attach anywhere, gripping + closed-loop
   recipes, payload-hypothesis sweep.
+- [`multi_contact_fext.py`](multi_contact_fext.py) — multi-contact stance forces: register go2 with
+  `contact_frames=[four feet]`, map per-foot world-aligned wrenches to joint-local `f_ext` in one
+  `contact_fext` call, feed the result to `inverse_dynamics`/`forward_dynamics` as `f_ext=`.
+- [`system_identification.py`](system_identification.py) — least-squares inertial-parameter fit with
+  the joint-torque regressor (`tau = Y·π`), verified in torque space, pushed back into the running
+  model via `set_inertia_params`, plus the differentiable outer loop (`inverse_dynamics_wrt_params`
+  under `jax.grad`).
 
 ## Welded tools / payloads (`attach_tool`, no recompile)
 

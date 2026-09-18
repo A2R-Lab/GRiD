@@ -7,8 +7,10 @@ times, all batched over axis 0.
 
 Every notebook ends in `assert` cells that cross-check GRiD against
 `RBDReference` or a finite-difference of its own forward map — so a green
-**Run All** validates the *numbers*, not just "no exception." They double as CI
-smoke tests (`pytest --nbval-lax examples/notebooks/`).
+**Run All** validates the *numbers*, not just "no exception." They can be run
+headless as smoke tests (`pytest --nbval-lax examples/notebooks/`, needs a GPU +
+`grid-rbd` + `nbval`); they are not part of the default CI lanes or the GPU
+receipt.
 
 ## Notebooks
 

@@ -26,7 +26,7 @@ For additional information and links to our paper on this work, check out our [p
 | **Get MuJoCo/mjx-convention I/O** | `handle.mujoco.<method>(...)` — values AND derivatives/second-order |
 | **Everything else** | [How do I…?](https://a2r-lab.github.io/GRiD/how_do_i.html) on the docs site |
 
-**Start-here track:** [`examples/README.md`](examples/README.md) routes the three usage tracks — the [`examples/notebooks/`](examples/notebooks/) Python-bindings tour (01-quickstart → 06-jax), codegen scripts, and hand-written-CUDA walkthroughs.
+**Start-here track:** [`examples/README.md`](examples/README.md) routes the four usage tracks — the [`examples/notebooks/`](examples/notebooks/) Python-bindings tour (01-quickstart → 07-inline-cuda), the runnable [`bindings/examples/`](bindings/examples/) scripts, codegen scripts, and hand-written-CUDA walkthroughs.
 
 **This package contains submodules make sure to run ```git submodule update --init --recursive```** after cloning!
 

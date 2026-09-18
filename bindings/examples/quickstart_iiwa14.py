@@ -1,4 +1,4 @@
-"""grid-rbd quickstart: register an iiwa14 and exercise every method.
+"""grid-rbd quickstart: register an iiwa14 and exercise the core methods.
 
 Demonstrates the register-then-run UX:
 

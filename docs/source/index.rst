@@ -20,7 +20,7 @@ Pick how you want to call GRiD
       ``pip install -e .`` and call the ``RobotHandle`` API — 20+ batched
       methods covering RNEA, FD/ABA, CRBA, Minv, EE pose family, RNEA/FD
       gradients, and second-order ID/FD. Guided notebooks:
-      ``examples/notebooks/`` in the repo (01-quickstart → 06-jax).
+      ``examples/notebooks/`` in the repo (01-quickstart → 07-inline-cuda).
 
    .. grid-item-card:: From JAX
       :link: jax-ffi-quickstart
