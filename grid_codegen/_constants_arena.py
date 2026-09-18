@@ -22,6 +22,14 @@ def _tier_bytes_lines(macro, counts, linalg_arg=", GRID_LINALG_NVIDIA_MAX_HELPER
             "else                                 return grid_shared_arena_bytes<T>(" + str(counts[2]) + ", TOPOLOGY_HELPERS_COUNT" + linalg_arg + "); }"]
 
 
+def _ag_alloc_expr(keys):
+    """The alloc-gate preprocessor disjunction shared by the constants-helpers
+    and init_gridData emitters (audit 2026-09-18: was defined verbatim inside
+    both — one copy, module scope)."""
+    return " || ".join(["!defined(GRID_ALLOC_GATE)"]
+                       + ["GRID_ALLOC_" + k.upper() for k in keys])
+
+
 def _tier_ternary_line(name, ret_type, vals):
     """A per-tier constexpr ternary helper line: `template <int TIER> ... NAME()
     { return (TIER == TIER_SHARED) ? v0 : (TIER == TIER_LITE) ? v1 : v2; }`.
@@ -915,10 +923,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
     # below): only bench headers (emit_alloc_gating=True) get the gated
     # form; default emission stays byte-identical.
     _ws_gating = getattr(self, "emit_alloc_gating", False)
-
-    def _ag_expr(keys):
-        return " || ".join(["!defined(GRID_ALLOC_GATE)"]
-                           + ["GRID_ALLOC_" + k.upper() for k in keys])
+    _ag_expr = _ag_alloc_expr
 
     grad_spill_workspace_t_count = max(inverse_dynamics_gradient_temp_layout["spill_count"],
                                        inverse_dynamics_gradient_temp_count,
@@ -1662,10 +1667,7 @@ def gen_init_gridData(self):
     # inverse_dynamics in every solo exe and cross-wrapper reads touch them.
     # Default emit_alloc_gating=False emits the header BYTE-IDENTICAL.
     gating = getattr(self, "emit_alloc_gating", False)
-
-    def _ag_expr(keys):
-        return " || ".join(["!defined(GRID_ALLOC_GATE)"]
-                           + ["GRID_ALLOC_" + k.upper() for k in keys])
+    _ag_expr = _ag_alloc_expr
 
     def ag(*keys):
         # appended to an existing "#if GRID_HAS_X" alloc guard

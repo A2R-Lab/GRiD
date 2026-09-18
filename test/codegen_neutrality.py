@@ -72,6 +72,14 @@ MATRIX = (
       "enable_floating_second_order": True,
       "enable_idsva_so_world_frame": True}),
     ("baxter-fixed-full", "baxter", False, {}),
+    # contact family (audit 2026-09-18): gen_f_ext_contact is gated purely on
+    # the contact_frames kwarg — the 7.z7 rule says every Python-conditional
+    # emission block needs a covering row. contact_frame_names is a MATRIX
+    # pseudo-kwarg the gen script resolves via contact_frames_from_urdf
+    # (fixed-joint names -> {jid, offset} specs) at generation time.
+    ("iiwa14-fixed-contact", "iiwa14", False,
+     {"algorithm_list": ["f_ext_gradient", "end_effector_pose"],
+      "contact_frame_names": ["iiwa_joint_ee", "tool0_joint"]}),
 )
 
 _GEN_SCRIPT = textwrap.dedent("""\
@@ -84,6 +92,10 @@ _GEN_SCRIPT = textwrap.dedent("""\
     robot_id, floating, out_path = sys.argv[1], sys.argv[2] == "1", sys.argv[3]
     kwargs = eval(sys.argv[4])
     robot = URDFParser().parse(str(robot_urdf(robot_id)), floating_base=floating)
+    _cf_names = kwargs.pop("contact_frame_names", None)
+    if _cf_names:
+        from grid_codegen.algorithms._f_ext_contact import contact_frames_from_urdf
+        kwargs["contact_frames"] = contact_frames_from_urdf(robot, _cf_names)
     g = GRiDCodeGenerator(robot, FILE_NAMESPACE="grid")
     with open(os.devnull, "w") as d, contextlib.redirect_stdout(d), \\
             contextlib.redirect_stderr(d):

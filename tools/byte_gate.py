@@ -45,12 +45,23 @@ CELLS = [
          + [{"anchor_jid": int(j), "offset": (0.03, -0.02, 0.05)} for j in r.get_leaf_nodes()]))),
     ("iiwa14_coll", robot_urdf("iiwa14"), False,
      lambda r, u: dict(codegen_profile="kinematics", collision_spec=_coll_spec(r, u))),
+    # contact family (audit 2026-09-18): the f_ext_body emitters are gated
+    # purely on contact_frames= — without this cell a refactor of
+    # _f_ext_contact.py has no byte-identity referee (the 7.z7 lesson).
+    ("iiwa14_contact", robot_urdf("iiwa14"), False,
+     lambda r, u: dict(algorithm_list=["f_ext_gradient", "end_effector_pose"],
+                       contact_frames=_contact_spec(r))),
 ]
 
 
 def _coll_spec(robot, urdf):
     from grid_codegen.algorithms._collision import collision_spec_from_urdf
     return collision_spec_from_urdf(robot, str(urdf), resolution=0.06)
+
+
+def _contact_spec(robot):
+    from grid_codegen.algorithms._f_ext_contact import contact_frames_from_urdf
+    return contact_frames_from_urdf(robot, ["iiwa_joint_ee", "tool0_joint"])
 
 
 outdir = Path(sys.argv[1]); outdir.mkdir(parents=True, exist_ok=True)

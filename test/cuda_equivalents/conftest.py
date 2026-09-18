@@ -140,6 +140,13 @@ def _record_header_content_keys():
                       "launch_config_profile": getattr(self, "launch_config_profile", "host"),
                       "runtime_joint_dynamics": bool(getattr(self, "runtime_joint_dynamics", False)),
                       "launch_config_robot": bool(getattr(self, "launch_config_robot", None)),
+                      # fp64 (audit 2026-09-18): the ctor's dtype="double" folds into
+                      # cuda_shared_mem_type_size_bytes (8 vs 4) and reshapes every
+                      # arena/spill decision — the same emission-shaping class as
+                      # GRID_ENABLE_MUJOCO_KERNELS (7.z14). Record the RESOLVED byte
+                      # size (covers ctor dtype AND the env override in one value);
+                      # replay reconstructs dtype from it.
+                      "t_bytes": int(getattr(self, "cuda_shared_mem_type_size_bytes", 4)),
                   },
                   "env": _env_snapshot(),
                   "urdf_sha256": _urdf_sha(name),

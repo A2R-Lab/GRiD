@@ -141,6 +141,13 @@ def _direct_content(record: dict) -> tuple[str | None, str]:
                 MUJOCO_OUTPUT=ctor.get("MUJOCO_OUTPUT", False),
                 LAUNCH_CONFIG_PROFILE=ctor.get("launch_config_profile", "host"),
                 runtime_joint_dynamics=ctor.get("runtime_joint_dynamics", False),
+                # fp64: reconstruct the ctor dtype from the recorded resolved
+                # T byte size (old records lack the key -> 4 -> "float", which
+                # matches how every pre-audit record was generated). When the
+                # record's env carries GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES,
+                # _apply_env re-applies it and the env override wins, exactly
+                # as it did at record time.
+                dtype=("double" if int(ctor.get("t_bytes", 4)) == 8 else "float"),
             )
             with tempfile.TemporaryDirectory(prefix="hk_replay_") as td:
                 out = Path(td) / "grid.cuh"
