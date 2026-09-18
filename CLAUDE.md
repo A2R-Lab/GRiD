@@ -18,9 +18,10 @@ numpy oracle in `RBDReference` (validated against Pinocchio) and the generated C
 
 - `grid_codegen/` — the code-generation engine (the heart of GRiD); emits `grid.cuh` AND the
   checked-in generated regions of `bindings/grid_rbd/wrapper_template.cu` (C-ABI bodies,
-  kernel_max_threads table, mjx twins — via `wrapper_body_gen.py`) and of
-  `bindings/src/_core.cpp` (the pybind method bodies + mjx accessors — via `core_body_gen.py`),
-  all driven by the one `abi_specs.py` table. Regenerate with
+  kernel_max_threads table, mjx twins, JAX-FFI handlers, torch op bodies + op table — via
+  `wrapper_body_gen.py`; the JAX/torch plant tails — via `grid_codegen/wrapper_plant_gen.py`)
+  and of `bindings/src/_core.cpp` (the pybind method bodies + mjx accessors — via
+  `core_body_gen.py`), all driven by the one `abi_specs.py` table. Regenerate with
   `.venv/bin/python -m grid_codegen.wrapper_body_gen` / `-m grid_codegen.core_body_gen`; never
   hand-edit inside the BEGIN/END markers. Includes
   `grid_codegen/collision/` (collision-geometry SDF header + spherized assets for two-tier `config_free`).

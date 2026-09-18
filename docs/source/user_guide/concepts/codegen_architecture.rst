@@ -249,15 +249,20 @@ The descriptor table has a sibling: ``grid_codegen/abi_specs.py`` (the
 ``ABI_SPECS`` rows) transcribes every C-ABI body of the Python binding —
 signature, packing, qdd/f_ext routing, launch template shape, output
 buffer/size, mjx-twin variance — and ``grid_codegen/wrapper_body_gen.py``
-EMITS three checked-in generated regions of
+EMITS six checked-in generated regions of
 ``bindings/grid_rbd/wrapper_template.cu`` from those rows:
 
 1. the ``extern "C"`` algorithm bodies (30+ functions),
 2. the ``grid_rbd_kernel_max_threads`` introspection branch table,
-3. all 30 ``grid_rbd_<algo>_mujoco`` twin bodies.
+3. all 30 ``grid_rbd_<algo>_mujoco`` twin bodies,
+4. the JAX FFI handlers,
+5. the torch op bodies,
+6. the torch op table.
 
-The regions live between ``BEGIN/END GENERATED`` markers **in the checked-in
-file** — never hand-edit inside them. To change a generated body, edit the
+``grid_codegen/wrapper_plant_gen.py`` emits the remaining two generated
+regions — the JAX plant tail and the torch plant tail — for eight
+``BEGIN/END GENERATED`` regions in all. The regions live between those
+markers **in the checked-in file** — never hand-edit inside them. To change a generated body, edit the
 spec row (or the emitter) and regenerate::
 
     .venv/bin/python -m grid_codegen.wrapper_body_gen          # rewrite
@@ -266,8 +271,10 @@ spec row (or the emitter) and regenerate::
 ``test/test_wrapper_generated_block.py`` runs ``--check`` in CI, and
 ``test/test_abi_spec_crosscheck.py`` validates every spec field against the
 template text — so a hand-edit inside a marker region, or a stale block after
-a table edit, fails a plain ``pytest -q``. Only ``tool_fext``, ``fk_batched``,
-the four plant cost twins, and the plant/FFI/torch/pybind sections remain
+a table edit, fails a plain ``pytest -q``. Only ``tool_fext``,
+``contact_fext`` (``wrapper_template.cu`` ~:902-967, outside the generated
+C-ABI region), ``fk_batched``, the four plant cost twins, and the
+plant/FFI/torch/pybind scaffolding outside the marker regions remain
 hand-written (bespoke by design).
 
 The same table also drives the **numpy Runner's pybind surface**:

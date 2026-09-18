@@ -5,6 +5,17 @@ The shipped-work log for the tier/spill system, split out of
 :doc:`resource_tier_system` on 2026-09-09. Newest-relevant first is NOT
 guaranteed — these are historical records in their original order.
 
+MT output tiering — W2b Component B (2026-09-16)
+------------------------------------------------
+
+The runtime multi-target (MT) kernels — ``multi_target_position`` /
+``multi_target_position_gradient`` — are output-tiered. At ``TIER_SHARED``
+they stage per-timestep outputs in static shared memory and copy out; at
+spilled tiers they write direct-to-global (``&d_out[k*out_size]``) with
+per-timestep inner scratch placed in the ``d_workspace`` SO band. The
+generated hosts pass ``hd_data->d_workspace`` and use workspace-clamped
+launches.
+
 Integrator surgical spill (value + gradient)
 --------------------------------------------
 

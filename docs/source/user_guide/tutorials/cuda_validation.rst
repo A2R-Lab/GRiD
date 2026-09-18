@@ -119,7 +119,15 @@ Maintainer internals: stale shard NAMES are recycled into the fresh partition
 automatically (the carry contract has no "superseded" state); a deleted test
 module forces a full pass; and both compile caches are CONTENT-keyed
 (header/source bytes), so byte-identical codegen edits cost seconds of
-regeneration, never an nvcc rebuild.
+regeneration, never an nvcc rebuild. Two newer carry gates: the per-shard
+**header-key replay** (``test/header_key_replay.py``, records in
+``test/gpu-proof-header-keys.json``) byte-precisely re-checks that each
+carried shard's generated headers regenerate identically; and the
+**robot-asset gate** (``codegen_neutrality.changed_robot_assets``) demotes
+the covering shards when an oracle-side robot asset changes. Related lesson:
+every emission-shaping env var must be folded into the header cache key —
+``GRID_ENABLE_MUJOCO_KERNELS`` once changed emission without changing the
+key and served stale headers.
 
 The full test-pyramid rationale (which suite exists for what, and why the
 receipt is trustworthy) lives in ``test/TESTING_STRATEGY.md``; a bucket map of
@@ -134,7 +142,7 @@ test stages.
 
 Environment variables:
 
-* ``GRID_CUDA_CACHE_DIR=.pytest_cache/grid_cuda`` controls the cache root.
+* ``GRID_CUDA_CACHE_DIR=.grid_build_cache/cuda`` controls the cache root.
 * ``GRID_CUDA_DISABLE_CACHE=1`` disables header and runner reuse.
 * ``GRID_CUDA_VERBOSE_CACHE=1`` prints cache hit/miss details.
 * ``GRID_CUDA_ARCH=120`` overrides architecture detection when needed.
@@ -215,7 +223,10 @@ device.
 Useful environment variables for fallback testing:
 
 * ``GRID_CUDA_TARGET_SHARED_MEM_BYTES=10000`` forces low-target fallback paths.
-* ``GRID_CUDA_ENABLE_L2_PERSISTING=1`` enables the optional persisting-L2 hint.
+* ``GRID_CUDA_ENABLE_L2_PERSISTING=1`` opts back in to the persisting-L2 hint.
+  The generated default is now ``0``: a controlled A/B measured the pin never
+  helping and hurting by up to 23%. The harness forwards the env var to the
+  compile as ``-DGRID_CUDA_ENABLE_L2_PERSISTING=<n>``.
 * ``GRID_CUDA_FORCE_SHARED_TIER=GRID_SPILL_DA_DF_OUTPUT`` forces a gradient
   shared-memory tier when generated support is available.
 

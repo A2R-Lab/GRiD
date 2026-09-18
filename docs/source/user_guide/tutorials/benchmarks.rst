@@ -43,9 +43,9 @@ was removed in v2.0 of the codegen; see
 Algorithms measured
 -------------------
 
-The bench reports 14 rows per cell:
+The bench reports 13 rows per cell:
 
-**First-order set (9 algorithms)**:
+**First-order set (10 algorithms)**:
 
 * ``inverse_dynamics`` — inverse dynamics (RNEA).
 * ``minv`` — direct mass-matrix inverse.
@@ -56,8 +56,9 @@ The bench reports 14 rows per cell:
 * ``forward_dynamics_gradient`` — ∂(forward_dynamics)/∂(q, qd).
 * ``end_effector_pose`` — end-effector pose.
 * ``end_effector_pose_gradient`` — end-effector Jacobian.
+* ``end_effector_pose_hessian`` — end-effector Hessian (∂²ee/∂q²).
 
-**Second-order set (4 algorithms)**:
+**Second-order set (4 algorithms, 3 rows per cell)**:
 
 * ``idsva_so`` — second-order inverse dynamics, codegen-time-dispatched
   to ``idsva_so_body_frame`` (fixed-base) or ``idsva_so_world_frame``
@@ -68,8 +69,24 @@ The bench reports 14 rows per cell:
 * ``fdsva_so`` — second-order forward dynamics.
 
 The two IDSVA-SO variants are mathematically equivalent and ship
-side-by-side so the report shows the body-vs-world crossover; see
+side-by-side so the report shows the body-vs-world crossover; per cell the
+standalone variant that is bit-identical to the dispatcher's pick is
+deduplicated (its row would time the exact same kernel twice), so the four
+second-order algorithms contribute 3 rows — 13 rows in all. See
 :doc:`../concepts/algorithms/idsva` for the dispatch rule details.
+
+Beyond the 13 core rows, the per-algo harness's ``PER_ALGO_SPECS`` table
+(``test/benchmarks/baselines/grid/run.py``) drives ~42 benchable keys in
+total — the f_ext gradients, ``inverse_dynamics_regressor``,
+``forward_dynamics_parameter_gradient``, the energy regressors, the
+integrator family, ``multi_target_position``/``_gradient``, the runtime-EE
+and frame-Jacobian families, the centroidal set, and the mjx twins — so
+any of those can be timed the same way.
+
+``GRID_BENCH_EXTRA_NVCC_FLAGS`` is the compile-flag env seam: extra
+``nvcc`` flags for the bench build (used for compile-flag A/Bs). The value
+is folded into the bench's content stamp, so changing the flags correctly
+invalidates the cached binaries instead of reusing a stale build.
 
 Output schema
 -------------

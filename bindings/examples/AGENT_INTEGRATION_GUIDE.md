@@ -1,6 +1,6 @@
 # Integrating GRiD via `grid_rbd` — a guide for agents & users
 
-*Last verified against repo state `dd9b5fe` (2026-09-09). If the code and this guide disagree, trust the code and fix the guide.*
+*Last verified against repo state `f0db1a1` (2026-09-18). If the code and this guide disagree, trust the code and fix the guide.*
 
 How to call GRiD's GPU rigid-body dynamics from Python **as effectively as possible**. The
 golden rule: **place your data on the GPU once and keep it there.** GRiD is a GPU library;
@@ -137,7 +137,15 @@ qdd-aware) · `forward_dynamics_gradient(q,qd,u)`→`(B,NV,2·NV)` · second-ord
 `{kinetic,potential}_energy_regressor`, `frame_jacobian`/`_dot` (runtime `target_jid` +
 `reference_frame` LOCAL/WORLD/LOCAL_WORLD_ALIGNED), `osc_inertia`, and the runtime-target EE pose
 (`end_effector_pose_runtime`, `..._gradient_runtime` — pick any target frame + offset at call
-time, one compiled robot serves all). The canonical per-backend surface list is
+time, one compiled robot serves all).
+
+**π-regressor / tool / contact ops** — `inverse_dynamics_regressor(q,qd,qdd=None)`→`(B,NV,10·NB)`
+(the joint-torque regressor `Y`, `tau = Y·π`; all three backends) · differentiable-in-π
+`inverse_dynamics_wrt_params(q,qd,params)` (jax/torch; autograd flows `∂c/∂π = Y` to `params`) ·
+`forward_dynamics_parameter_gradient(q,qd,u)`→`(B,NV,10·NB)` (jax/torch; `∂q̈/∂π = −M⁻¹Y`) ·
+`tool_fext(q, wrench)`→`(B,6·NB)` (world-aligned tool-tip wrench → joint-local `f_ext`; needs
+`enable_tool=True`) · `contact_fext(q, f_c)`→`(B,6·NB)` (per-contact-frame wrenches → joint-local
+`f_ext`; needs `register_robot(contact_frames=[...])`). The canonical per-backend surface list is
 `docs/source/user_guide/tutorials/python_wrappers.rst`.
 
 Properties: `num_joints`, `num_vel`, `num_ees`, `floating_base`, `max_batch`, `output_convention`.

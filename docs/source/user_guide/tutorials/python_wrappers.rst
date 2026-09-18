@@ -140,12 +140,45 @@ pass the same value to both for cross-validation.
      - ``(B, 6*NUM_EES)``
      - Runtime arbitrary multi-EE pose (runtime target joints + per-target
        offset); ``end_effector_pose_gradient_runtime`` returns its Jacobian.
+   * - ``inverse_dynamics_regressor(q, qd, qdd=None)``
+     - ``(B, NV, 10*NB)``
+     - Joint-torque inertial-parameter regressor ``Y`` (``tau = Y·π``);
+       bound on all three backends.
+   * - ``inverse_dynamics_wrt_params(q, qd, params)`` /
+       ``forward_dynamics_wrt_params(q, qd, u, params)``
+     - ``(B, NJ)``
+     - jax/torch only: ID / FD as differentiable-in-π ops — autograd flows
+       the analytic ``∂c/∂π = Y`` / ``∂q̈/∂π = −M⁻¹Y`` to ``params``.
+   * - ``forward_dynamics_parameter_gradient(q, qd, u)``
+     - ``(B, NV, 10*NB)``
+     - jax/torch only: the FD inertial-parameter gradient ``∂q̈/∂π = −M⁻¹Y``.
+   * - ``attach_tool(joint, mass=..., ...)`` / ``detach_tool()`` /
+       ``tool_fext(q, wrench)``
+     - varies / — / ``(B, 6*NB)``
+     - Runtime welded tool/payload (``enable_tool=True``): numpy computes
+       the composed payload inertia + tool-tip frame and delegates to the
+       runtime tables; ``tool_fext`` maps a world-aligned tool-tip wrench to
+       joint-local ``f_ext``.
+   * - ``contact_fext(q, f_c)`` (+ the ``contact_frames`` property)
+     - ``(B, 6*NB)``
+     - Multi-contact: maps per-contact-frame world-aligned wrenches to
+       joint-local ``f_ext``; needs a ``register_robot(contact_frames=[...])``
+       build.
+   * - ``set_inertia_params(t)`` / ``set_transform_params(t)`` /
+       ``set_joint_dynamics(damping=, friction=)``
+     - —
+     - Runtime-mutable model tables (flag-gated builds; no recompile).
+   * - ``fk_batched(q)``
+     - ``(B, 7)``
+     - Large-batch forward kinematics for the leaf EE frame
+       (``[xyz, quat wxyz]``); ``use_warp=True`` selects the warp-cooperative
+       variant.
 
 The numeric methods also accept ``allow_fp64=True`` at ``register_robot`` for
 an fp64-in/fp64-out convenience cast (compute stays fp32).
 
 Validation against ``RBDReference`` lives at
-``test/python_wrappers/test_iiwa14_smoke.py`` (16 tests, all numerical
+``test/python_wrappers/test_iiwa14_smoke.py`` (28 tests, all numerical
 methods pass at float32 precision).
 
 Build cost on large floating-base robots
@@ -241,6 +274,22 @@ fixed-joint target into the codegen:
 
 A different ``ee_joint_names`` value lands in a separate cache entry —
 both targets can coexist in the cache.
+
+Contact frames and welded tools
+-------------------------------
+
+``register_robot(contact_frames=[...])`` takes a list of **fixed-joint
+names** and bakes the contact family into the build: the handle gains the
+``contact_fext`` method (per-contact-frame world-aligned wrenches →
+joint-local ``f_ext``) and a ``contact_frames`` property. The kwarg
+re-keys the ``.so`` cache, so contact and non-contact builds coexist.
+
+``register_robot(enable_tool=True)`` enables the runtime welded-tool
+surface — ``attach_tool`` / ``detach_tool`` / ``tool_fext`` — by turning
+on the runtime inertia table + runtime contact surface, all with no
+recompile at attach time. See
+``bindings/examples/AGENT_INTEGRATION_GUIDE.md`` and
+``bindings/examples/tool_use.py`` for the full recipes.
 
 .. _jax-ffi-quickstart:
 
@@ -371,13 +420,6 @@ path). The generated host wrappers carry the ``d_f_ext`` argument, and an
 ``f_ext=`` kwarg is exposed on the ``RobotHandle`` algorithm methods that
 support it (``inverse_dynamics`` / ``forward_dynamics`` / ``aba`` and
 their gradients); the default ``None`` reproduces the no-force path.
-
-Coming next
------------
-
-* Floating-base JAX FFI for ``idsva_so`` (currently routes to the
-  body-frame kernel; world-frame fallback for floating-base needs the
-  codegen to emit a preprocessor-visible dispatcher).
 
 See also
 --------

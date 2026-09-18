@@ -40,8 +40,11 @@ Fixed-base CUDA coverage includes the core dynamics and kinematics paths:
   ``inverse_dynamics`` and ``crba`` (stage 1; cardinal axes byte-identical).
 
 Second-order fixed-base diagnostics are still developer-only. The current
-green zero-sample set includes ``iiwa14``, ``go2``, ``gen3``, ``fr3``, and
-``fetch``. ``rizon4`` still needs diagnosis for a non-finite IDSVA-SO output.
+green zero-sample set includes ``iiwa14``, ``go2``, ``gen3``, ``fr3``,
+``fetch``, and ``rizon4`` (healed 2026-09-15: the upstream flexiv xacro
+emitted each link's origin/mass/inertia triple bare, so the local
+``config/robot_assets/rizon4.urdf`` now wraps them in proper ``<inertial>``
+elements).
 
 Floating-Base Robots
 --------------------
@@ -150,3 +153,10 @@ Algorithm catalog (moved from the README, 2026-09-09)
 - The **centroidal derivatives**: ``dccrba`` (the ∂A/∂q tensor, 6×NV×NV) and ``cmm_time_variation`` (the centroidal-momentum-matrix time variation Ȧ)
 - **Runtime arbitrary multi-EE pose / pose-gradient** (``end_effector_pose_runtime`` + ``_gradient``): the end-effector target joint id and a per-target offset become runtime arguments instead of codegen-baked, so one compiled robot serves any leaf/target frame.
 - **Runtime-mutable inertial parameters** (flag-gated): a ``set_inertia_params`` device entry mutates an on-device parameter table (sysID / domain randomization) with no recompile; the baked default path is byte-identical.
+- The **joint-torque inertial-parameter regressor** (``inverse_dynamics_regressor``): the classic ``Y(q, q̇, q̈)`` with ``tau = Y·π``
+- The **analytic regressor gradient** (``inverse_dynamics_regressor_gradient``): ∂Y/∂q and ∂Y/∂q̇, satisfying the contraction identity ``dY_dx[c]·π == ∂τ/∂x[:,c]``
+- The **forward-dynamics parameter gradient** (``forward_dynamics_parameter_gradient``): ``∂q̈/∂π = −M⁻¹Y``
+- **Contact-frame wrench mapping** (``f_ext_contact``): maps a contact-frame wrench to the joint-local ``f_ext`` layout, with the ``∂/∂f_c`` and ``∂/∂q`` derivatives
+- **Runtime multi-target positions** (``multi_target_position`` / ``multi_target_position_gradient``): batched runtime-target position queries and their gradients
+- The **integrator Hessian** (``integrator_hessian``): the second-order sensitivity of the discrete integrator step
+- The **collision family**: two-tier ``config_free`` collision checking over spherized collision geometry

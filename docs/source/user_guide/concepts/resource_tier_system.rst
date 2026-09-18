@@ -1,8 +1,9 @@
 Resource-Tier System (v2.0)
 ============================
 
-**Status**: shipped in v2.0 + Phase 3a/b/c/d/e spill machinery + L2 pinning
-default-on. Inner-controlled placement refactor (below) implemented and
+**Status**: shipped in v2.0 + Phase 3a/b/c/d/e spill machinery (L2 pinning
+is default-OFF since 2026-09-15 — measured; see the spilled-memory section
+below). Inner-controlled placement refactor (below) implemented and
 numerically validated for fdsva_so/Minv/FD/ABA/EE_GRAD. Per-tier surgical
 spill now also lands for **idsva_so (body + world frame)** and the
 **time-integrator value + gradient** kernels — see
@@ -168,6 +169,13 @@ existing call sites are unchanged):
    * - ``integrator_gradient_kernel``
      - per-tier rung (Dqdd / dAB / inner level)
      - composes inverse_dynamics_gradient selective/global_temp + spills Dqdd & the dAB output
+   * - ``multi_target_position`` / ``_gradient`` kernels
+     - per-tier output placement
+     - at ``TIER_SHARED`` the MT kernels stage outputs in static shared
+       memory and copy out; at spilled tiers they write direct-to-global
+       (``&d_out[k*out_size]``) with per-timestep inner scratch in the
+       ``d_workspace`` SO band. The generated hosts pass
+       ``hd_data->d_workspace`` and use workspace-clamped launches.
    * - ``*_device`` (inverse_dynamics_gradient / forward_dynamics_gradient / idsva_so / end_effector_pose_hessian)
      - ``int RESOURCE_TIER``
      - whole inner ``s_temp`` arena (via the ``tier_workspace_expr`` helper)
@@ -285,7 +293,7 @@ correctly and know what codegen chose. Using fdsva_so as the template::
     template <typename T, bool SCRATCH_IN_SMEM = true>
     constexpr size_t FDSVA_SO_INNER_SMEM_BYTES();
 
-    // bytes to reserve in (L2-pinned) global memory for this placement
+    // bytes to reserve in global memory for this placement
     template <typename T, bool SCRATCH_IN_SMEM = true>
     constexpr size_t FDSVA_SO_INNER_WORKSPACE_BYTES();
 
@@ -316,7 +324,7 @@ Rule of thumb for an inline call:
    shared memory for the primitive's ``s_temp``.
 #. ``cudaMalloc`` (once) ``..._INNER_WORKSPACE_BYTES<T, placement>()`` per
    concurrently-resident block for ``d_workspace`` (0 when the placement keeps
-   everything in shared). Pin it in L2 if you spill (see ``grid_begin_l2_persisting``).
+   everything in shared).
 #. Call ``<algo>_inner<T, placement>(..., s_temp, d_workspace, ...)``.
 
 **Testing status of the refactor**: all five converted algos

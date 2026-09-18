@@ -113,7 +113,13 @@ with a codegen-time dispatcher, FDSVA-SO); the kinematics family (EE pose /
 Jacobian / Hessian, general-frame `frame_jacobian`/`J̇`/OSC inertia, runtime
 multi-EE targets); integrators + integrator gradients; the centroidal family
 (CoM, CCRBA, `dccrba`, CMM time-variation, Coriolis matrix, energy/ID
-regressors); a trajectory-optimization `grid_plant` cost/step layer; and
+regressors); the inertial-parameter (π) family (the joint-torque regressor
+`Y` with its analytic gradient ∂Y/∂(q,v) and the FD parameter gradient
+∂q̈/∂π); contact-frame wrench mapping (`contact_fext` /
+`register_robot(contact_frames=...)`); runtime tool/payload welding
+(`attach_tool`/`tool_fext`); runtime multi-target positions; the collision
+family (two-tier `config_free`); a trajectory-optimization `grid_plant`
+cost/step layer; and
 runtime-mutable inertia/transform/joint-dynamics tables. The **complete
 per-algorithm catalog with citations and per-feature detail** lives in the
 [CUDA support status page](https://a2r-lab.github.io/GRiD/user_guide/tutorials/cuda_support_status.html).
@@ -183,7 +189,13 @@ and the handle also surfaces the `grid_plant` cost/barrier methods. `inverse_dyn
 autograd gradient is qdd-aware, returning the correct ∂τ/∂(q,q̇) including the
 ∂(M·q̈)/∂q term), and all three backends expose the value ops `coriolis_matrix`,
 `kinetic_energy_regressor`, `potential_energy_regressor`, `dccrba`, and
-`cmm_time_variation` (forward-only on jax/torch). Pass `allow_fp64=True` at `register_robot` for an
+`cmm_time_variation` (forward-only on jax/torch). The π-regressor family
+(`inverse_dynamics_regressor`, the differentiable
+`inverse_dynamics_wrt_params`/`forward_dynamics_wrt_params`, and the
+`forward_dynamics_parameter_gradient` ∂q̈/∂π), runtime tool welding
+(`attach_tool`/`tool_fext`, via `enable_tool=True`), and multi-contact
+wrench mapping (`contact_fext`, via `register_robot(contact_frames=[...])`)
+are bound as well. Pass `allow_fp64=True` at `register_robot` for an
 fp64-in/fp64-out convenience cast (compute stays fp32). See
 [`bindings/README.md`](bindings/README.md) and the
 [Python wrappers docs](https://a2r-lab.github.io/GRiD/user_guide/tutorials/python_wrappers.html).

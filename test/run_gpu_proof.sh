@@ -37,12 +37,23 @@
 #   SPLIT=1 SPLIT_CARRY_FROM=old-gpu-proof.json test/run_gpu_proof.sh
 #     (carry unchanged modules' shards from an older receipt — verifier accepts
 #      carried shards only under a policy with allow_carried: true)
+#   SPLIT=1 SPLIT_REFRESH=1 test/run_gpu_proof.sh
+#     (the EVERYDAY workflow when CI's verify-receipt goes red: re-run ONLY the
+#      shards whose fingerprints changed vs the COMMITTED gpu-proof.json and
+#      carry the rest — soundness-gated by codegen_neutrality's covering
+#      matrix + robot-asset gate + per-shard header-key replay. Requires a
+#      CLEAN tree. GRID_SPLIT_REFRESH_DRY=1 previews the stale/carried plan.)
 # To pause a running SPLIT pass: `touch <out_dir>/PAUSE` (stops cleanly between
 # shards, ≤ one shard's latency), or SIGINT/SIGTERM the driver (stops within
 # the shard); resume with SPLIT_RESUME.
 # SCOPE narrows only the cuda side (via --cuda-k at COLLECTION time — the
 # wrapper modules are iiwa14-based without robot names in their test IDs, so a
-# robot -k would silently deselect whole modules; 12/25 under curated, 2026-08-09).
+# robot -k would silently deselect whole modules).
+# Verify like CI does — WITH the skip baseline (a local verify without it
+# disagrees with CI):
+#   gpu-proof verify --receipt gpu-proof.json --policy test/gpu-proof-policy.yaml \
+#     --expected-skips test/gpu-proof-expected-skips.txt
+# (release: --policy test/gpu-proof-policy-release.yaml refuses carried shards).
 set -euo pipefail
 
 # All knobs are ENV VARS (SCOPE/SPLIT/PYTEST_ARGS/...), not flags. Guard the
@@ -50,7 +61,7 @@ set -euo pipefail
 # multi-hour GPU pass (N2.4 ergonomics, 2026-09-08).
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,56p' "$0"; exit 0 ;;
     *) echo "ERROR: unknown arg '$1' — this script is configured via env vars (SCOPE=, SPLIT=, PYTEST_ARGS=, ...); see --help" >&2; exit 2 ;;
   esac
 done

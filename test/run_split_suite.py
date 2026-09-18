@@ -9,6 +9,10 @@ every failure after it (three times in the week of 2026-08-03). This driver:
   Phase A (warm): compiles every cache-missing robot ``.so`` via
       ``grid_rbd.warm_robot`` — codegen + nvcc only, NO handle, NO CUDA context,
       so a compile failure is its own named row, never a mid-suite surprise.
+      Warms run through a RAM-aware parallel pool (``test/compile_sched.py``;
+      ``GRID_SPLIT_COMPILE_JOBS``, default 5, 0 = legacy serial) that also
+      admits the cuda flagship header/exe pre-warms and OVERLAPS Phase B —
+      a shard only waits for its own compile jobs.
   Phase B (run):  runs each test module in its OWN pytest subprocess (serial on
       the GPU) with ``--junitxml`` and an explicitly captured exit code. A module
       that dies (SIGABRT etc.) is a named CASUALTY row; the driver continues.
@@ -25,6 +29,21 @@ Usage (from the repo root):
                                                            # + granular cuda shards
   .venv/bin/python test/run_split_suite.py --resume test/.split_suite/<dir>
                                                            # continue an interrupted run
+  .venv/bin/python test/run_split_suite.py --receipts --refresh-from gpu-proof.json
+                                                           # the SPLIT_REFRESH path: re-run only
+                                                           #   fingerprint-stale shards, carry the rest
+  .venv/bin/python test/run_split_suite.py --receipts-carry-from old.json
+                                                           # carry unchanged modules from an old receipt
+
+Refresh-carry soundness (the subtlest contract here, see plan_refresh): a
+carried cuda shard is trusted only after (1) the robot-ASSET gate — oracle-side
+URDF changes (config/robot_assets + the RBDReference submodule copy) demote
+covering shards BEFORE anything else, because emitted headers never rotate for
+an oracle change; (2) per-shard HEADER-KEY REPLAY — byte-precise regeneration
+of each recorded flagship header under the current tree (records in
+test/gpu-proof-header-keys.json; every emission-shaping ctor/env input must be
+in the record — the GRID_ENABLE_MUJOCO_KERNELS and dtype lessons); (3) the
+codegen_neutrality covering-matrix prover for logic-level changes.
 
 Granular cuda shards (--domains ...,cuda): test/cuda_equivalents used to run as
 ONE monolithic pytest (~15h cold, 2026-08-16). The driver now partitions its

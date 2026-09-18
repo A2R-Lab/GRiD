@@ -1,12 +1,13 @@
 # GRiD Benchmarks
 
-Performance comparison of GRiD vs. Pinocchio vs. MJX across 14 core algorithms,
+Performance comparison of GRiD vs. Pinocchio vs. MJX across 13 core algorithms,
 for `iiwa14`, `baxter`, `go2`, `g1`, and `h2_plus` robots in fixed and
 floating-base configurations.
 
-The 14 rows are the first-order set (`inverse_dynamics`, `minv`, `forward_dynamics`,
+The 13 rows are the first-order set (`inverse_dynamics`, `minv`, `forward_dynamics`,
 `aba`, `crba`, `inverse_dynamics_gradient`, `forward_dynamics_gradient`,
-`end_effector_pose`, `end_effector_pose_gradient`) plus the second-order set (`idsva_so`
+`end_effector_pose`, `end_effector_pose_gradient`, `end_effector_pose_hessian`)
+plus the second-order set — 4 algorithms, 3 rows per cell (`idsva_so`
 — the dispatched winner, `idsva_so_body_frame`, `idsva_so_world_frame`,
 `fdsva_so`). The two IDSVA-SO variants are mathematically equivalent and ship
 side-by-side so the table shows the body-vs-world crossover; `idsva_so` itself

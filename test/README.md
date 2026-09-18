@@ -27,14 +27,23 @@ fingerprinted.
 partition/resume/carry), `compile_sched.py` (RAM-aware parallel compile
 pool), `prewarm_cuda_flagship.py` (header/exe pre-warm),
 `gpu-proof-policy.yaml` / `gpu-proof-policy-release.yaml` (everyday vs
-release verification), `gpu-proof-expected-skips.txt`.
+release verification), `gpu-proof-expected-skips.txt` (85-entry skip
+baseline CI applies), `codegen_neutrality.py` (refresh-soundness prover:
+covering matrix + robot-asset gate), `header_key_replay.py` +
+`test_header_key_replay.py` + `gpu-proof-header-keys.json` (per-shard
+byte-precise header replay — the cuda-carry gate),
+`dynamics_fingerprint.json` + `test_dynamics_fingerprint.py` (fleet
+numeric fingerprints).
 
 **Drift gates** (CPU-only; keep the generated regions + registry honest):
 `test_wrapper_generated_block.py`, `test_core_generated_block.py`,
 `test_abi_spec_crosscheck.py`, `test_core_pyside_crosscheck.py`,
 `test_algo_descriptor_parity.py`, `test_algo_descriptor_arena_parity.py`,
 `test_kernel_attr_manifest_consistency.py`, `test_feature_macro_coverage.py`,
-`test_shared_arena_covers_carve.py`, `test_dynamics_fingerprint.py`.
+`test_shared_arena_covers_carve.py`, `test_dynamics_fingerprint.py`,
+`test_header_fragments.py`, `test_signature_uniformity.py`,
+`test_out_transform_equivalence.py`, `test_vjp_common_equivalence.py`,
+`test_wrapper_plant_block.py`.
 
 **Policy/hygiene gates** (CPU-only): `test_marker_hygiene.py`,
 `test_fast_compile_hygiene.py`, `test_plant_launch_hygiene.py`,
@@ -48,8 +57,9 @@ logic itself), `test_collision_spherize.py`, `test_collision_flange_mapping.py`.
 
 - `test/.split_suite/` — receipt run dirs (`receipt_<stamp>/`), rolling shard
   durations, the compile-RSS ledger. Old `receipt_*` dirs are prunable.
-- `.pytest_cache/` — ⚠ currently also holds the content-keyed nvcc build
-  cache (several GB, warm = fast reruns); `pytest --cache-clear` nukes it.
-  (Planned move to `.grid_build_cache/`.)
+- `.grid_build_cache/cuda` — the content-keyed nvcc build cache (several GB,
+  warm = fast reruns). Safe to delete; the next run rebuilds cold. The old
+  `.pytest_cache/` location is history — `pytest --cache-clear` no longer
+  touches the build cache.
 - `test/benchmarks/results/` — timing sweep outputs; prunable, but old
   sweeps feed the rolling launch-config bakes — check before bulk-deleting.

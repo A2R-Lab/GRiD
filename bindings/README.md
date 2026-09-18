@@ -28,11 +28,17 @@ JAX FFI, etc.) lives in the
 ## Status — v0.5
 
 The full method surface — core dynamics/kinematics, analytical gradients, the
-second-order derivatives, and the centroidal / energy / general-frame value ops
+second-order derivatives, the centroidal / energy / general-frame value ops
 (`com`, `ccrba`, `dccrba`, `cmm_time_variation`, `coriolis_matrix`, `energy`,
 `generalized_gravity`, `nonlinear_effects`, the KE/PE regressors,
 `frame_jacobian`/`_dot`, `osc_inertia`, and the runtime-target EE pose /
-gradient) — is bound and validated against
+gradient), the inertial-parameter (π) regressor family
+(`inverse_dynamics_regressor`, the differentiable
+`inverse_dynamics_wrt_params` / `forward_dynamics_wrt_params`, and
+`forward_dynamics_parameter_gradient` = ∂q̈/∂π), runtime welded tools
+(`attach_tool` / `tool_fext`), and multi-contact wrench mapping
+(`contact_fext` / `register_robot(contact_frames=...)`) — is bound and
+validated against
 [`RBDReference`](https://github.com/A2R-Lab/RBDReference) at float32 precision,
 and is available on **all three backends** (numpy / jax / torch; the value ops
 are forward-only on jax/torch). The per-method table (shapes, arguments,
@@ -124,6 +130,11 @@ The full reference for the rest of the surface lives in the
 
 * the per-method table (shapes, `qdd=`-aware gradients, `ee_joint_names`,
   `allow_fp64`),
+* the π-regressor family (`inverse_dynamics_regressor`,
+  `inverse_dynamics_wrt_params` / `forward_dynamics_wrt_params`,
+  `forward_dynamics_parameter_gradient`),
+* welded tools (`attach_tool` / `tool_fext`, via `enable_tool=True`) and
+  multi-contact (`contact_fext`, via `register_robot(contact_frames=...)`),
 * the `grid_plant` cost / barrier / plant-step methods,
 * per-body external forces (`f_ext=`),
 * build cost on big floating-base robots and the `enable_mujoco_kernels`

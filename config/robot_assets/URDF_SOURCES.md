@@ -16,6 +16,7 @@ lets the test/equivalence/bench pipelines run without the multi-GB
 | gen3 | `config/robot_assets/gen3.urdf` | `xacrodoc/gen3_description/gen3_description-e9602d5440f026ea.urdf` | `0e7c89432f98` |
 | fetch | `config/robot_assets/fetch.urdf` | `roboschool/roboschool/models_robot/fetch_description/robots/fetch.urdf` | `8a6ce15ab481` |
 | baxter | `config/robot_assets/baxter.urdf` | `baxter_common/baxter_description/urdf/baxter.urdf` | `ab936bfb412f` |
+| h2_plus | `config/robot_assets/h2_plus.urdf` | vendored H2+ extended-humanoid model (nv=81 scaling testbed; no public MJCF/URDF upstream — in-repo vendored asset) | `212533d728ca` |
 
 ## Local modifications
 
