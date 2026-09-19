@@ -139,3 +139,38 @@ def test_contact_frames_subset_without_kinematics_is_self_contained(tmp_path):
     assert "#define GRID_HAS_CONTACT_FRAMES 1" in text
     assert "const int NUM_CONTACT_FRAMES = 2;" in text
     assert not _undefined_inners(text), sorted(_undefined_inners(text))
+
+
+# --------------------------------------------------------------------------
+# mjx twins (floating, non-mimic robots emit a MuJoCo-convention twin of every
+# twinned kernel). The twins compose extra inners of their own (the ID-gradient
+# twin's epilogue rebuilds M via crba_inner), so the closure must hold with the
+# twins ON as well — found 2026-09-19 by a go2 subset build that failed in ptxas
+# with "Unresolved extern function grid::crba_inner".
+# --------------------------------------------------------------------------
+GO2 = REPO / "config" / "robot_assets" / "go2.urdf"
+
+
+def _gen_go2_floating():
+    with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
+        robot = URDFParser().parse(str(GO2), floating_base=True)
+        return GRiDCodeGenerator(robot, DEBUG_MODE=False, NEED_PRINT_MAT=False, FILE_NAMESPACE="grid")
+
+
+def _twinned_keys():
+    from grid_codegen.abi_specs import ABI_SPECS
+    return sorted(k for k, s in ABI_SPECS.items()
+                  if getattr(s, "sig_mjx_macro", None) and k not in NOT_REQUESTABLE
+                  and any(d.key == k for d in ALGO_DESCRIPTORS))
+
+
+@pytest.mark.parametrize("key", _twinned_keys())
+def test_singleton_with_mjx_twins_defines_every_inner_it_calls(key, tmp_path):
+    if not GO2.exists():
+        pytest.skip("go2 asset missing")
+    gen = _gen_go2_floating()
+    out = tmp_path / f"{key}_mjx.cuh"
+    with open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
+        gen.gen_all_code(algorithm_list=[key], output_path=str(out), enable_mujoco_kernels=True)
+    text = out.read_text()
+    assert not _undefined_inners(text), f"{key}+mjx: calls undefined inners {sorted(_undefined_inners(text))}"

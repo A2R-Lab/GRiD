@@ -375,6 +375,15 @@ class GRiDCodeGenerator:
         # (where the kwarg default is False). Resolve the algorithm set up front
         # so the request can be OR'd into enable_idsva_so_world_frame below.
         algorithms = self._normalize_codegen_algorithms(codegen_profile, algorithm_list)
+        # mjx twins (floating base, enable_mujoco_kernels): the MUJOCO_OUTPUT
+        # epilogues of the ID gradient and fdsva_so rebuild the dense mass matrix
+        # with crba_inner, a dependency the pin-only closure never sees. A
+        # go2 subset [inverse_dynamics, inverse_dynamics_gradient] + twins failed
+        # in ptxas ("Unresolved extern function grid::crba_inner") — audit W07
+        # closure net, 2026-09-19. Harmless on full profiles (crba already in).
+        if (self.enable_mujoco_kernels and self.robot.floating_base
+                and ({"inverse_dynamics_gradient", "fdsva_so"} & set(algorithms))):
+            algorithms = set(algorithms) | {"crba"}
         # SPHERICAL (Tier-C) slices: inverse_dynamics + crba + minv + forward_dynamics
         # (dynamics) plus end_effector_pose + frame_jacobian (kinematics) are ported.
         # forward_dynamics routes through minv (= inv(CRBA(q))) + the compute_c RNEA,
