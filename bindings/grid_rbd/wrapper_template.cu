@@ -3167,6 +3167,8 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch, qd.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_data->d_qdd, qdd.typed_data(), batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    GRID_RBD_FFI_VALIDATE_2D(f_ext, "inverse_dynamics: f_ext", 6 * grid::NUM_BODIES);
+    if ((int)f_ext.dimensions()[0] != batch) return ffi::Error::InvalidArgument("inverse_dynamics: f_ext batch must equal the q batch");
     cudaMemcpyAsync(g_data->d_f_ext, f_ext.typed_data(), (size_t)batch * 6 * grid::NUM_BODIES * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::inverse_dynamics_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
@@ -3241,6 +3243,8 @@ static ffi::Error grid_rbd_jax_forward_dynamics_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch, qd.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj], dst_pitch, u.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    GRID_RBD_FFI_VALIDATE_2D(f_ext, "forward_dynamics: f_ext", 6 * grid::NUM_BODIES);
+    if ((int)f_ext.dimensions()[0] != batch) return ffi::Error::InvalidArgument("forward_dynamics: f_ext batch must equal the q batch");
     cudaMemcpyAsync(g_data->d_f_ext, f_ext.typed_data(), (size_t)batch * 6 * grid::NUM_BODIES * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::forward_dynamics_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
@@ -3282,6 +3286,8 @@ static ffi::Error grid_rbd_jax_aba_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch, qd.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj], dst_pitch, u.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    GRID_RBD_FFI_VALIDATE_2D(f_ext, "aba: f_ext", 6 * grid::NUM_BODIES);
+    if ((int)f_ext.dimensions()[0] != batch) return ffi::Error::InvalidArgument("aba: f_ext batch must equal the q batch");
     cudaMemcpyAsync(g_data->d_f_ext, f_ext.typed_data(), (size_t)batch * 6 * grid::NUM_BODIES * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::aba_kernel<T, grid::launch_cfg<grid::GRID_ALGO_ABA>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
@@ -3456,6 +3462,7 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_gradient_impl(
     ffi::Buffer<GRID_FFI_T> q,
     ffi::Buffer<GRID_FFI_T> qd,
     ffi::Buffer<GRID_FFI_T> qdd,
+    ffi::Buffer<GRID_FFI_T> f_ext,
     ffi::ResultBuffer<GRID_FFI_T> out,
     T gravity)
 {
@@ -3469,20 +3476,24 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_gradient_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch, qd.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_data->d_qdd, qdd.typed_data(), batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    GRID_RBD_FFI_VALIDATE_2D(f_ext, "inverse_dynamics_gradient: f_ext", 6 * grid::NUM_BODIES);
+    if ((int)f_ext.dimensions()[0] != batch) return ffi::Error::InvalidArgument("inverse_dynamics_gradient: f_ext batch must equal the q batch");
+    cudaMemcpyAsync(g_data->d_f_ext, f_ext.typed_data(), (size_t)batch * 6 * grid::NUM_BODIES * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::inverse_dynamics_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
         grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>(batch), grid::INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::TIER>(), stream>>>(
             g_data->d_dc_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_qdd, g_data->d_f_ext, g_robot, gravity, batch);
     GRID_RBD_FFI_CHECK_LAUNCH("inverse_dynamics_gradient_kernel");
     cudaMemcpyAsync(out->typed_data(), g_data->d_dc_du, batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemsetAsync(g_data->d_f_ext, 0, (size_t)batch * 6 * grid::NUM_BODIES * sizeof(T), stream);
     return ffi::Error::Success();
 }
 
-GRID_RBD_JAX_BIND_3IN_GRAV(grid_rbd_jax_inverse_dynamics_gradient, grid_rbd_jax_inverse_dynamics_gradient_impl<false>);
+GRID_RBD_JAX_BIND_4IN_GRAV(grid_rbd_jax_inverse_dynamics_gradient, grid_rbd_jax_inverse_dynamics_gradient_impl<false>);
 
 #ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention inverse_dynamics_gradient (floating only): identical plumbing, kernel launched with MUJOCO_OUTPUT=true.
-GRID_RBD_JAX_BIND_3IN_GRAV(grid_rbd_jax_inverse_dynamics_gradient_mujoco, grid_rbd_jax_inverse_dynamics_gradient_impl<true>);
+GRID_RBD_JAX_BIND_4IN_GRAV(grid_rbd_jax_inverse_dynamics_gradient_mujoco, grid_rbd_jax_inverse_dynamics_gradient_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_INVERSE_DYNAMICS_GRADIENT
 
@@ -3496,6 +3507,7 @@ static ffi::Error grid_rbd_jax_forward_dynamics_gradient_impl(
     ffi::Buffer<GRID_FFI_T> q,
     ffi::Buffer<GRID_FFI_T> qd,
     ffi::Buffer<GRID_FFI_T> u,
+    ffi::Buffer<GRID_FFI_T> f_ext,
     ffi::ResultBuffer<GRID_FFI_T> out,
     T gravity)
 {
@@ -3509,20 +3521,24 @@ static ffi::Error grid_rbd_jax_forward_dynamics_gradient_impl(
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[nj], dst_pitch, qd.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj], dst_pitch, u.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    GRID_RBD_FFI_VALIDATE_2D(f_ext, "forward_dynamics_gradient: f_ext", 6 * grid::NUM_BODIES);
+    if ((int)f_ext.dimensions()[0] != batch) return ffi::Error::InvalidArgument("forward_dynamics_gradient: f_ext batch must equal the q batch");
+    cudaMemcpyAsync(g_data->d_f_ext, f_ext.typed_data(), (size_t)batch * 6 * grid::NUM_BODIES * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     constexpr int stride = 3 * grid::NUM_JOINTS;
     grid::forward_dynamics_gradient_kernel<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<
         grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>(batch), grid::FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER>(), stream>>>(
             g_data->d_df_du, g_data->d_workspace, g_data->d_q_qd_u, stride, g_data->d_f_ext, g_robot, gravity, batch);
     GRID_RBD_FFI_CHECK_LAUNCH("forward_dynamics_gradient_kernel");
     cudaMemcpyAsync(out->typed_data(), g_data->d_df_du, batch * 2 * nv * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
+    cudaMemsetAsync(g_data->d_f_ext, 0, (size_t)batch * 6 * grid::NUM_BODIES * sizeof(T), stream);
     return ffi::Error::Success();
 }
 
-GRID_RBD_JAX_BIND_3IN_GRAV(grid_rbd_jax_forward_dynamics_gradient, grid_rbd_jax_forward_dynamics_gradient_impl<false>);
+GRID_RBD_JAX_BIND_4IN_GRAV(grid_rbd_jax_forward_dynamics_gradient, grid_rbd_jax_forward_dynamics_gradient_impl<false>);
 
 #ifdef GRID_RBD_WITH_MUJOCO
 // MuJoCo-convention forward_dynamics_gradient (floating only): identical plumbing, kernel launched with MUJOCO_OUTPUT=true.
-GRID_RBD_JAX_BIND_3IN_GRAV(grid_rbd_jax_forward_dynamics_gradient_mujoco, grid_rbd_jax_forward_dynamics_gradient_impl<true>);
+GRID_RBD_JAX_BIND_4IN_GRAV(grid_rbd_jax_forward_dynamics_gradient_mujoco, grid_rbd_jax_forward_dynamics_gradient_impl<true>);
 #endif  // GRID_RBD_WITH_MUJOCO
 #endif  // GRID_HAS_FORWARD_DYNAMICS_GRADIENT
 
@@ -5059,6 +5075,9 @@ static inline void grid_torch_f_ext_apply(cudaStream_t stream, int batch,
     const torch::Tensor& fe = f_ext.value();
     const int row = 6 * grid::NUM_BODIES;
     grid_torch_check(fe, "f_ext", row);
+    // The copy is sized by the STATE batch (audit W03, 2026-09-19): a (1, 6*NB)
+    // force for a batch of 8 must be rejected here, not read 7 rows past its end.
+    TORCH_CHECK(fe.size(0) == batch, "f_ext: batch ", fe.size(0), " must equal the q batch ", batch);
     cudaMemcpyAsync(g_data->d_f_ext, fe.data_ptr<T>(),
                     (size_t)batch * row * sizeof(T), cudaMemcpyDeviceToDevice, stream);
 }

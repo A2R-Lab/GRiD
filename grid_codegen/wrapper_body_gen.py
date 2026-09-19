@@ -771,6 +771,13 @@ def emit_jax_handler(key: str) -> str:
         L.append("    cudaMemcpyAsync(g_data->d_qdd, qdd.typed_data(), "
                  "batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);")
     if "f_ext" in bufs:
+        # Native buffer contract (audit W03, 2026-09-19): the copy below is sized by
+        # the STATE batch, so the force operand must physically be (batch, 6*NB) —
+        # a broadcast-shaped (1, 6*NB) buffer would be read 6*NB*(batch-1) elements
+        # past its end. The Python surface materializes broadcasts; this is the
+        # boundary check for traced programs and direct handler use.
+        L.append(f'    GRID_RBD_FFI_VALIDATE_2D(f_ext, "{key}: f_ext", 6 * grid::NUM_BODIES);')
+        L.append(f'    if ((int)f_ext.dimensions()[0] != batch) return ffi::Error::InvalidArgument("{key}: f_ext batch must equal the q batch");')
         L.append("    cudaMemcpyAsync(g_data->d_f_ext, f_ext.typed_data(), "
                  "(size_t)batch * 6 * grid::NUM_BODIES * sizeof(T), cudaMemcpyDeviceToDevice, stream);")
     L.append("    constexpr int stride = 3 * grid::NUM_JOINTS;")

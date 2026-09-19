@@ -162,7 +162,7 @@ def _load_ops(so_path: Path, cache_key: str) -> str:
 # itself graph-capturable.
 
 
-def _make_autograd(ns, nv, mujoco=False):
+def _make_autograd(ns, nv, mujoco=False, nee=0):
     import torch
 
     ops = getattr(torch.ops, ns)
@@ -206,7 +206,7 @@ def _make_autograd(ns, nv, mujoco=False):
                 "grad": lambda: apply_out_layout(
                     _op("inverse_dynamics_gradient")(q, qd, ctx.gravity, ctx.qdd, ctx.f_ext),
                     ("grad_concat",), None, nv=nv),
-            }, nv=nv, nj=q.shape[1])
+            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco)
             # grads for (q, qd, gravity, qdd, f_ext)
             return g["q"], g["qd"], None, g["qdd"], g["f_ext"]
 
@@ -233,7 +233,7 @@ def _make_autograd(ns, nv, mujoco=False):
                     "minv": lambda: apply_out_layout(
                         _op("minv")(q), ("minv",), None, nv=nv, mjx=mujoco,
                         eye=torch.eye(nv, dtype=q.dtype, device=q.device)),
-                }, nv=nv, nj=q.shape[1])
+                }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco)
                 return g["q"], g["qd"], g["u"], None, g["f_ext"]
         return FDLikeFn
 
@@ -267,7 +267,7 @@ def _make_autograd(ns, nv, mujoco=False):
                     ("grad_concat",), None, nv=nv),
                 "param_grad": lambda: ops.inverse_dynamics_regressor(
                     q, qd, torch.zeros_like(q), ctx.gravity).reshape(q.shape[0], nv, -1),
-            }, nv=nv, nj=q.shape[1])
+            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco)
             return g["q"], g["qd"], g["params"], None, None
 
     class FDWrtParamsFn(torch.autograd.Function):
@@ -291,7 +291,7 @@ def _make_autograd(ns, nv, mujoco=False):
                     eye=torch.eye(nv, dtype=q.dtype, device=q.device)),
                 "param_grad": lambda: ops.forward_dynamics_parameter_gradient(
                     q, qd, u, ctx.gravity).reshape(q.shape[0], nv, -1),
-            }, nv=nv, nj=q.shape[1])
+            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco)
             return g["q"], g["qd"], g["u"], g["params"], None, None
 
     class IntegratorFn(torch.autograd.Function):
@@ -322,11 +322,30 @@ def _make_autograd(ns, nv, mujoco=False):
                 "grad": lambda: apply_out_layout(
                     _op("integrator_gradient")(q, qd, u, ctx.dt, ctx.it, ctx.gravity),
                     ("colmajor_whole", None), (2 * nv, 3 * nv), nv=nv),
-            }, nv=nv, nj=q.shape[1])
+            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco)
             return g["q"], g["qd"], g["u"], None, None, None
 
+    class EndEffectorPoseFn(torch.autograd.Function):
+        # Task-space pose (B, 6*NEE) with the EE-pose Jacobian as the backward
+        # (audit W01, 2026-09-19: the torch method was value-only — q.grad was
+        # None — while the jax surface had its custom_vjp; same shared recipe now).
+        @staticmethod
+        def forward(ctx, q):
+            ctx.save_for_backward(q)
+            return _op("end_effector_pose")(q)
+
+        @staticmethod
+        def backward(ctx, grad_pose):
+            (q,) = ctx.saved_tensors
+            g = vjp_backward(ABI_SPECS["end_effector_pose"].vjp, grad_pose, {
+                "grad": lambda: apply_out_layout(
+                    _op("end_effector_pose_gradient")(q), ("ee_grad",), (nee,), nv=nv,
+                    mjx=mujoco, eye=torch.eye(nv, dtype=q.dtype, device=q.device)),
+            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco)
+            return (g["q"],)
+
     fns = {"inverse_dynamics": InverseDynamicsFn, "fd": FDFn, "aba": AbaFn,
-           "integrator": IntegratorFn}
+           "integrator": IntegratorFn, "ee_pose": EndEffectorPoseFn}
     if not mujoco:
         # sysID (inverse/forward_dynamics_wrt_params) has NO _mujoco kernel; omit
         # in mjx mode so a caller hitting it gets a clean KeyError, not a
@@ -487,7 +506,7 @@ class TorchRobotHandle(BaseDelegateMixin):
             # mjx closures only when ACTIVE (floating base) — on a fixed base the
             # pin closures ARE the mjx closures (the conventions coincide).
             cache[conv] = _make_autograd(self._ns, self._base.num_vel,
-                                         mujoco=self._mjx_active(conv))
+                                         mujoco=self._mjx_active(conv), nee=self._base.num_ees)
         return cache[conv]
 
     @property
@@ -788,10 +807,12 @@ class TorchRobotHandle(BaseDelegateMixin):
         return self._shape_out("osc_inertia", self._op(_convention, "osc_inertia")(q))
 
     def end_effector_pose(self, q, *, _convention=None):
-        """EE pose [xyz, rpy] per EE (B, 6*NUM_EES).
+        """EE pose [xyz, rpy] per EE (B, 6*NUM_EES). Differentiable w.r.t. ``q``
+        (backward = the analytic EE-pose Jacobian; on a floating base the q
+        cotangent is pulled back to the ``[pos, quat, joints]`` layout).
 
         With ``output_convention="mujoco"`` (floating base) ``q`` is MuJoCo-convention."""
-        return self._op(_convention, "end_effector_pose")(q)
+        return self._fns_for(_convention)["ee_pose"].apply(q)
 
     def end_effector_pose_gradient(self, q, *, _convention=None):
         """EE pose Jacobian d/dv (B, 6*NEE, NV), pinocchio tangent convention.

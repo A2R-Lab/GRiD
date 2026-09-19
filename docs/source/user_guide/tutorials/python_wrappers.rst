@@ -336,11 +336,11 @@ PyTorch backend (``backend="torch"``)
 -------------------------------------
 
 ``register_robot(..., backend="torch")`` returns a ``TorchRobotHandle``
-whose methods return ``torch.Tensor``. The four differentiable
-algorithms (``inverse_dynamics`` / ``forward_dynamics`` / ``aba`` / ``integrator``)
-are autograd-aware — their backward passes are analytic, reusing the
-existing ``*_gradient`` kernels — while the remaining methods are
-forward-only ops. The ``.so`` is shared with the numpy/JAX surfaces; the
+whose methods return ``torch.Tensor``. The differentiable
+algorithms (``inverse_dynamics`` / ``forward_dynamics`` / ``aba`` /
+``end_effector_pose`` / ``integrator``) are autograd-aware — their backward
+passes are analytic, reusing the existing ``*_gradient`` kernels — while the
+remaining methods are forward-only ops. The ``.so`` is shared with the numpy/JAX surfaces; the
 torch op block is compiled in under ``-DGRID_RBD_WITH_TORCH`` when torch
 is present at register time.
 
@@ -356,6 +356,30 @@ is present at register time.
 
    qdd = h.forward_dynamics(q, qd, u)   # autograd-aware torch.Tensor
    qdd.sum().backward()                 # gradients flow to q, qd, u
+
+**What the gradients mean (both backends, audit 2026-09-19).**
+
+* **Floating base, w.r.t. ``q``.** The analytic kernels differentiate in the
+  Pinocchio free-flyer *tangent* chart (``[v_lin local, ω local, joints]``,
+  nv-wide; that is what ``inverse_dynamics_gradient`` etc. return). The
+  public ``q`` is ``[pos(3), quat_xyzw(4), joints]`` (nq = nv+1), and
+  ``jax.grad`` / ``q.grad`` return the exact pullback to THAT layout: the
+  kernels evaluate ``R(p/|p|)``, so the value is ``f ∘ normalize`` on the
+  ambient quaternion and the gradient is its true ambient derivative
+  (central differences over any ``q`` component agree, including for a
+  non-unit quaternion; the radial direction is a null direction). Under
+  ``output_convention="mujoco"`` the twins use the mjx free-joint chart
+  (linear world, angular local, ``quat_wxyz``) and expect a UNIT quaternion
+  (they do not renormalize): the returned ``q`` cotangent is the on-manifold
+  pullback (zero radial component). Need the tangent-space gradient instead?
+  Contract your cotangent with the ``*_gradient`` Jacobian yourself.
+* **External forces.** ``f_ext`` is a non-differentiated input, but the
+  ``q``/``qd`` gradients are taken *at* the given force (a fixed body-local
+  wrench has q-dependent joint torques). ``f_ext`` must be ``(B, 6*num_bodies)``
+  in the body-local frame; on the jax surface ``(6*num_bodies,)`` and
+  ``(1, 6*num_bodies)`` broadcast forms are materialized to the batch, and any
+  other leading shape is rejected before the FFI call (the native handlers
+  reject a batch mismatch too).
 
 For fixed-batch, low-launch-overhead replay (MPC / training),
 ``handle.capture(method, *example_inputs, **kwargs)`` returns a

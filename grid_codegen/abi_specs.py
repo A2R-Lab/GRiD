@@ -1140,13 +1140,17 @@ _KERNEL_SYMBOL = {
     "end_effector_pose_hessian": "GRID_RBD_EE_POSE_HESSIAN_KERNEL",
 }
 
-# Only the rows whose jax buffer list is NOT the packed tensor args: the three
-# value ops take REQUIRED f_ext buffers (yet the gradients launch with d_f_ext
-# without taking one), and id/id_grad take a required qdd buffer.
+# Only the rows whose jax buffer list is NOT the packed tensor args: the value
+# ops AND their analytic gradients take REQUIRED f_ext buffers (audit W02,
+# 2026-09-19: the gradient handlers used to launch with whatever d_f_ext held —
+# zeros — so a jax q/qd gradient under a nonzero body-local force was the
+# zero-force gradient; a fixed body-local wrench still has q-dependent effects),
+# and id/id_grad take a required qdd buffer.
 _JAX_BUFFER_INPUTS = {
     "inverse_dynamics": ("q", "qd", "qdd", "f_ext"),
-    "inverse_dynamics_gradient": ("q", "qd", "qdd"),
+    "inverse_dynamics_gradient": ("q", "qd", "qdd", "f_ext"),
     "forward_dynamics": ("q", "qd", "u", "f_ext"),
+    "forward_dynamics_gradient": ("q", "qd", "u", "f_ext"),
     "aba": ("q", "qd", "u", "f_ext"),
 }
 

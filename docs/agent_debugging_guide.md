@@ -2051,3 +2051,42 @@ Also from this audit round: `forward_dynamics` and
 _algo_profiles (bare singletons emitted nvcc-rejected headers), and
 `canonicalize("dynamics-core")` rewrote the PROFILE key into `dynamics_core`
 and missed it — profile keys resolve in their hyphenated spelling first now.
+
+### 6.z Floating-base q cotangents are a PULLBACK, not a pad; jax backward must carry f_ext (audit W01/W02/W03, 2026-09-19)
+- **W01.** `_vjp_common.vjp_backward` tail-padded EVERY input cotangent from nv
+  to nj — right for qd/qdd/u (transport pad slot), WRONG for `q`: the position
+  buffer is `[pos(3), quat_xyzw(4), joints]`, so joints landed one slot early,
+  the last joint's gradient was 0, and quaternion slots carried raw ω
+  cotangents. No test compared a floating-base jax/torch q-gradient against
+  finite differences (only tangent Jacobians vs the oracle), so it survived.
+  Conventions were PROVED numerically before coding (`w01_convention_probe.py`
+  pattern): the kernels' tangent is lin=LOCAL, ang=LOCAL (Pinocchio; ID alone
+  cannot distinguish the linear frame — it is translation-invariant — the
+  EE pose can), the kernels evaluate R(p/|p|) so the public function is
+  `f∘normalize` on the ambient quaternion, and the exact pullback is
+  `g_pos = R g_lin`, `g_quat = 2·[w g0−z g1+y g2, z g0+w g1−x g2,
+  −y g0+x g1+w g2, −x g0−y g1−z g2]/|p|` (x,y,z,w = p/|p|), joints shifted
+  by one — verified to 1e-10 against ambient central differences, radial
+  direction a null direction. `_configuration_cotangent` does this; the
+  driver takes the saved `q` (every jax/torch call site passes `q=q`).
+  Torch `end_effector_pose` had NO autograd Function (q.grad None) — added.
+  mjx twins (output_convention="mujoco"): chart = linear WORLD, angular
+  LOCAL, quat wxyz (G = blockdiag(R, I) vs pin), and the twins do NOT
+  renormalize (radial ambient FD component ≠ 0): the returned cotangent is
+  the on-manifold pullback — test it on the TANGENTIAL projection.
+- **W02.** The jax custom_vjp residuals omitted `f_ext` and the JAX gradient
+  FFI handlers took no force buffer (they launched with whatever d_f_ext held
+  = zeros): q/qd gradients under a nonzero wrench were the zero-force ones.
+  Torch already threaded `ctx.f_ext`; the C-ABI rows already took f_ext.
+  Fix = `_JAX_BUFFER_INPUTS` rows for both gradient handlers + residuals +
+  bwd calls (+ explicit zero buffers on the sysID paths, zero force by design).
+- **W03.** `_f_ext_or_zeros` only checked the last dim; the FFI copies
+  `batch*6*NB` sized by the STATE batch → a (1, 6nb) force for batch 8 read
+  past its buffer. Now broadcasts are materialized on the jax surface, other
+  leading shapes rejected, and BOTH native boundaries (jax handler, torch
+  `grid_torch_f_ext_apply`) check `f_ext.dim(0) == batch`.
+- Nets: `test_floating_q_cotangent.py` (jax+torch, go2, unit AND non-unit
+  quaternion, ID/FD/EE vs ambient FD) and `test_f_ext_backward_and_shapes.py`
+  (force-conditioned grads vs FD, jit no-capture, jax==torch, shapes).
+  RULE: a floating-base autodiff test must difference the PUBLIC function over
+  the PUBLIC q; comparing two paths that share `_pad_tail` proves nothing.

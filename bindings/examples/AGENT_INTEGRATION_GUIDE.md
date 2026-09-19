@@ -159,8 +159,18 @@ Properties: `num_joints`, `num_vel`, `num_ees`, `floating_base`, `max_batch`, `o
 `jax.grad` / `loss.backward()` do **not** autodiff or finite-difference through GRiD — each
 differentiable method carries GRiD's own **analytic** Jacobian (a matvec FFI call). On JAX:
 `inverse_dynamics`/`forward_dynamics`/`aba`/`end_effector_pose`/`integrator` + the π-regressor VJP
-+ `f_ext` parity. On torch: `inverse_dynamics`/`forward_dynamics`/`aba`/`integrator` (the rest are
-forward-only). The `inverse_dynamics` gradient is qdd-aware (includes the `∂(M·q̈)/∂q` term).
++ `f_ext` parity. On torch: `inverse_dynamics`/`forward_dynamics`/`aba`/`end_effector_pose`/
+`integrator` (the rest are forward-only). The `inverse_dynamics` gradient is qdd-aware (includes
+the `∂(M·q̈)/∂q` term).
+
+- **Floating base, d/dq:** the kernels' Jacobians live in the Pinocchio free-flyer TANGENT chart
+  (`[v_lin local, ω local, joints]`, nv-wide). What `jax.grad`/`q.grad` return is the exact
+  pullback to the public `q = [pos, quat_xyzw, joints]` layout of `f ∘ normalize` (the kernels
+  evaluate `R(p/|p|)`) — finite differences over every ambient `q` component agree, unit or not.
+- **d/dq at a force:** `f_ext` is non-differentiated, but the `q`/`qd` gradients are taken AT the
+  force you pass (jax used to silently take the zero-force gradient — fixed 2026-09-19).
+- **`f_ext` shape:** `(B, 6*num_bodies)` body-local; jax materializes `(6nb,)`/`(1, 6nb)`
+  broadcasts, anything else is rejected (natively too).
 
 ## Runtime-mutable model params — sysID / domain-rand / calibration, no recompile
 
