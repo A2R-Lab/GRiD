@@ -32,6 +32,10 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <mutex>
+#include <unordered_map>
+#include <climits>
+#include <cstdlib>
 #include <tuple>
 
 namespace py = pybind11;
@@ -297,15 +301,44 @@ public:
         if (fn_init_() != 0) {
             throw std::runtime_error(std::string("grid_rbd_init() failed in ") + so_path);
         }
-    }
-
-    ~RunnerT() {
-        if (handle_) {
-            if (fn_close_) fn_close_();
-            dlclose(handle_);
-            handle_ = nullptr;
+        so_key_ = canonical_path(so_path);
+        {
+            std::lock_guard<std::mutex> lk(owners_mutex());
+            ++owners()[so_key_];
         }
     }
+
+    // ── shared-runtime ownership (audit W04 increment A, 2026-09-19) ──────
+    // The .so owns ONE runtime (g_data / g_robot / streams / runtime parameter
+    // tables) and dlopen() of the same path hands every Runner the SAME image.
+    // Each destructor used to call grid_rbd_close() unconditionally, so closing
+    // handle B freed the runtime handle A was still using (A's next call
+    // re-initialized with baked defaults — live inertia updates lost). The
+    // runtime now closes only when the LAST Runner on that path releases it;
+    // release() is idempotent (close() then the destructor is fine).
+    static std::mutex& owners_mutex() { static std::mutex m; return m; }
+    static std::unordered_map<std::string, int>& owners() {
+        static std::unordered_map<std::string, int> m; return m;
+    }
+    static std::string canonical_path(const std::string& p) {
+        char buf[PATH_MAX];
+        const char* r = ::realpath(p.c_str(), buf);
+        return r ? std::string(r) : p;
+    }
+    void release() {
+        if (!handle_) return;
+        {
+            std::lock_guard<std::mutex> lk(owners_mutex());
+            auto it = owners().find(so_key_);
+            if (it != owners().end() && --(it->second) <= 0) {
+                owners().erase(it);
+                if (fn_close_) fn_close_();      // last owner: free the runtime
+            }
+        }
+        dlclose(handle_);
+        handle_ = nullptr;
+    }
+    ~RunnerT() { release(); }
 
     int num_joints() const { return num_joints_; }
     int num_vel()    const { return num_vel_; }
@@ -1876,6 +1909,7 @@ private:
     }
 
     void* handle_ = nullptr;
+    std::string so_key_;   // canonical .so path = the shared-runtime ownership key
 
     fn_int_v_t fn_num_joints_ = nullptr;
     fn_int_v_t fn_num_vel_    = nullptr;
