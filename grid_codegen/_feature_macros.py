@@ -11,6 +11,17 @@ import warnings
 
 from .algorithms._idsva_so import _idsva_so_use_world_frame
 
+# GRID_HAS_* rows whose algorithm is a CODEGEN/CUDA-ONLY surface by decision (no
+# wrapper C-ABI body, so nothing in wrapper_template.cu gates on the macro). The
+# macro still matters for direct grid.cuh consumers + examples; the coverage test
+# (test_feature_macro_coverage) treats these as intentional, not stale. Adding a
+# wrapper surface for one of them = delete it here + add the ABI_SPECS row.
+CODEGEN_ONLY_HAS_MACROS = {
+    # dY/dx v1 (2026-09-17): consumed by examples/codegen/generate_regressor_gradient.py
+    # + the CUDA equivalence runner; the Python surface is the tracked follow-up.
+    "INVERSE_DYNAMICS_REGRESSOR_GRADIENT": "dY/dx v1 is codegen-only (no ABI row yet)",
+}
+
 CORE_HAS_MACROS = {
     "INVERSE_DYNAMICS": "inverse_dynamics",
     "MINV": "minv",

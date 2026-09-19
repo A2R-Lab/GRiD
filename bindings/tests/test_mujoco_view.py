@@ -48,9 +48,13 @@ def test_mujoco_view_is_cached_and_exposes_value_methods():
     assert h.mujoco is v                              # cached
     for m in ("inverse_dynamics", "forward_dynamics", "aba", "crba", "minv"):
         assert hasattr(v, m)
-    # guarded surfaces are deliberately NOT on the view
-    for m in ("inverse_dynamics_gradient", "idsva_so", "integrator"):
-        assert not hasattr(v, m)
+    # A4 roster unification (2026-09-09): the derivative / second-order / integrator
+    # surface IS on the view too (MujocoDerivativeViewMixin), method-for-method with
+    # the jax/torch views. They need a .so built with those algorithms to CALL, but
+    # they are always present as attributes.
+    for m in ("inverse_dynamics_gradient", "forward_dynamics_gradient", "idsva_so",
+              "fdsva_so", "integrator", "integrator_gradient", "plant_step"):
+        assert hasattr(v, m), m
 
 
 def test_view_forwards_mujoco_convention():

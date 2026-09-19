@@ -78,13 +78,19 @@ jobs:
       - name: Install GRiD (CPU deps only)
         run: pip install -e . && pip install pytest
 
+      # The BROAD CPU set (audit W00, 2026-09-19): every test/test_*.py + the
+      # benchmark-spec guards + the CPU-only bindings modules. The former six-
+      # module hand-list let nine integration-tail failures (registry/arena/
+      # macro/bench-spec/ABI rows of a new algorithm) sit unnoticed for two
+      # days. Anything here that needs a GPU, nvcc, jax or torch must
+      # importorskip/skip itself; the lane installs CPU deps only. GPU suites
+      # (test/cuda_equivalents, test/python_wrappers) stay on the receipt path.
       - name: Run CPU-only lane
         run: |
           python -m pytest \
-            test/test_algo_descriptor_parity.py \
-            test/test_kernel_attr_manifest_consistency.py \
-            test/test_plant_launch_hygiene.py \
-            test/test_wrapper_plant_block.py \
-            test/test_header_fragments.py \
-            test/test_signature_uniformity.py \
-            -v
+            test/test_*.py \
+            test/benchmarks/test_*.py \
+            bindings/tests/test_mujoco_view.py \
+            bindings/tests/test_mujoco_transforms.py \
+            bindings/tests/test_register_forwarding.py \
+            -q

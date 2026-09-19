@@ -40,6 +40,13 @@ _INFRA = {
     # now has real spec rows; its referees are the plant-specific tests below.
     # device-pool (slab) framework-allocator integration
     "device_pool_bytes", "set_device_pool", "device_pool_used",
+    # Multi-contact f_ext (2026-09-17): `grid_rbd_contact_fext` + `grid_rbd_num_contact_frames`
+    # are HAND-WRITTEN in wrapper_template.cu under GRID_HAS_CONTACT_FRAMES (they call the
+    # baked grid::f_ext_body_device and mirror tool_fext's d_f_ext handling); they are a
+    # host helper surface, not a generated per-algo body, so they carry no ABI_SPECS row.
+    # Converting them to a spec row (so wrapper_body_gen owns the body) is the tracked
+    # follow-up in the canonical plan's register; until then this is the recorded exemption.
+    "contact_fext", "num_contact_frames",
 }
 
 

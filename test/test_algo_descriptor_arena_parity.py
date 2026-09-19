@@ -89,6 +89,9 @@ _RT_RESERVING_FULL_KEYS = frozenset({
     "idsva_so_world_frame", "integrator", "integrator_gradient", "integrator_hessian",
     "integrator_with_gradient", "inverse_dynamics", "inverse_dynamics_gradient",
     "inverse_dynamics_regressor", "kinetic_energy_regressor", "minv", "nonlinear_effects",
+    # dY/dx (2026-09-17) composes inverse_dynamics_gradient_inner on top of the RNEA
+    # sweep, so its full arena carries the same rt_xfixed band (`c.rt` in its ladder).
+    "inverse_dynamics_regressor_gradient",
 })
 
 

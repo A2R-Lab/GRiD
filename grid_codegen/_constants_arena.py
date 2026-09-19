@@ -859,6 +859,9 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
         "inverse_dynamics_gradient":           inverse_dynamics_gradient_t_count_full,
         "forward_dynamics_gradient":           forward_dynamics_gradient_t_count_full,
         "aba":                                 _aba_arenas[0],
+        # dY/dx (2026-09-17): rung-0 of its 3-rung ladder (same shape as aba: the
+        # composer IS the source; the parity test then pins the composed value).
+        "inverse_dynamics_regressor_gradient": _idrg_arenas[0],
         "crba":                                _crba_t_count_full,
         "osc_inertia":                         _osc_t_full,
         "end_effector_pose":                   ee_t_count,

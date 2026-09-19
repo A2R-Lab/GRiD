@@ -71,9 +71,16 @@ def test_every_wrapper_gate_has_an_emitter():
 def test_core_has_macros_wall_reaches_the_wrapper():
     """Every CORE_HAS_MACROS row must actually gate something in the wrapper —
     a stale row (algo renamed/removed) would emit a dead #define forever."""
-    from grid_codegen._feature_macros import CORE_HAS_MACROS
+    from grid_codegen._feature_macros import CORE_HAS_MACROS, CODEGEN_ONLY_HAS_MACROS
 
     used = _wrapper_gated_macros()
     stale = sorted("GRID_HAS_" + s for s in CORE_HAS_MACROS
-                   if "GRID_HAS_" + s not in used)
+                   if "GRID_HAS_" + s not in used and s not in CODEGEN_ONLY_HAS_MACROS)
     assert not stale, f"CORE_HAS_MACROS rows unused by wrapper_template.cu: {stale}"
+    # The codegen-only classification must stay honest in BOTH directions: every
+    # entry names a real CORE_HAS_MACROS row, and none of them is (any longer)
+    # gated in the wrapper — the moment one grows a wrapper surface, drop it there.
+    unknown = sorted(s for s in CODEGEN_ONLY_HAS_MACROS if s not in CORE_HAS_MACROS)
+    assert not unknown, f"CODEGEN_ONLY_HAS_MACROS names non-rows: {unknown}"
+    now_wrapped = sorted(s for s in CODEGEN_ONLY_HAS_MACROS if "GRID_HAS_" + s in used)
+    assert not now_wrapped, f"CODEGEN_ONLY_HAS_MACROS rows now gated in the wrapper: {now_wrapped}"

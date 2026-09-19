@@ -423,6 +423,17 @@ PER_ALGO_SPECS: dict[str, dict] = {
         "gate": None,
         "shared_mem_skip": "INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES",
     },
+    # dY/dx (B.0, 2026-09-17): dY_dx[c] = d(Y)/d(x[c]) for x = (q, qd); same host
+    # shape as the regressor (gravity arg, gridData-owned output d_dY_dx). See
+    # _regressor.py:gen_inverse_dynamics_regressor_gradient_host.
+    "inverse_dynamics_regressor_gradient": {
+        "single_call":        "grid::inverse_dynamics_regressor_gradient_single_timing<float>(hd_data,d_robotModel,GRAVITY,SINGLE_CALL_ITERS_GLOBAL,dim3(1,1,1),dimms,streams)",
+        "batch_with_mem":     "grid::inverse_dynamics_regressor_gradient<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms,streams)",
+        "batch_compute_only": "grid::inverse_dynamics_regressor_gradient_compute_only<float>(d,m,GRAVITY,N,dim3(N,1,1),dimms)",
+        "batch_label": "INVERSE_DYNAMICS_REGRESSOR_GRADIENT",
+        "gate": None,
+        "shared_mem_skip": "INVERSE_DYNAMICS_REGRESSOR_GRADIENT_DYNAMIC_SHARED_MEM_BYTES",
+    },
     # FD parameter gradient dqdd/dpi = -Minv.Y (A1). grid:: symbol AND registry key
     # are now both `forward_dynamics_parameter_gradient`; R2: its output buffer
     # `d_dqdd_dpi` is now part of gridData (hd_data->d_dqdd_dpi), so the bench no
