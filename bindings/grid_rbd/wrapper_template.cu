@@ -866,10 +866,10 @@ extern "C" int grid_rbd_tool_fext(const T* q, const T* wrench, int jid, const T*
     if (cudaMalloc(&d_rc, 3 * sizeof(T)) != cudaSuccess) { cudaFree(d_wrench); return 6; }
     cudaMemcpy(d_wrench, wrench, (size_t)6 * batch * sizeof(T), cudaMemcpyHostToDevice);
     cudaMemcpy(d_rc, rc, 3 * sizeof(T), cudaMemcpyHostToDevice);
-    size_t smem = grid::F_EXT_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
-    size_t s2 = grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>();
-    if (s2 > smem) smem = s2;
-    smem += 4096;
+    // Sized by the contact family's OWN arena constant (emitted next to
+    // GRID_HAS_CONTACT_RUNTIME). It used max(F_EXT_GRADIENT, EE_POSE)+4096 —
+    // constants of families a dynamics-only subset does not build.
+    size_t smem = grid::F_EXT_CONTACT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(grid_rbd_tool_fext_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
     grid_rbd_tool_fext_kernel<<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), smem>>>(
         g_data->d_q_qd_u, stride_q, jid, d_rc, d_wrench, g_robot,
@@ -943,10 +943,9 @@ extern "C" int grid_rbd_contact_fext(const T* q, const T* f_c, T* out, int batch
     T *d_fc = nullptr;
     if (cudaMalloc(&d_fc, (size_t)fc_stride * batch * sizeof(T)) != cudaSuccess) return 6;
     cudaMemcpy(d_fc, f_c, (size_t)fc_stride * batch * sizeof(T), cudaMemcpyHostToDevice);
-    size_t smem = grid::F_EXT_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>();
-    size_t s2 = grid::END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES<T>();
-    if (s2 > smem) smem = s2;
-    smem += 4096;
+    // Sized by the contact family's OWN arena constant (emitted next to
+    // NUM_CONTACT_FRAMES) — see the note on grid_rbd_tool_fext above.
+    size_t smem = grid::F_EXT_CONTACT_DYNAMIC_SHARED_MEM_BYTES<T>();
     cudaFuncSetAttribute(grid_rbd_contact_fext_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);
     grid_rbd_contact_fext_kernel<<<grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch), smem>>>(
         g_data->d_q_qd_u, stride_q, d_fc, g_robot,

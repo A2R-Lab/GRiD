@@ -1114,6 +1114,7 @@ def register_robot(
     runtime_inertia: bool = False,
     runtime_transform: bool = False,
     enable_tool: bool = False,
+    contact_frames: list[str] | tuple[str, ...] | None = None,
     enable_mujoco_kernels: bool = True,
     dtype: str = "float32",
 ) -> TorchRobotHandle:
@@ -1139,6 +1140,7 @@ def register_robot(
         runtime_inertia=runtime_inertia,  # D.4: mutable inertia table (torch op reads same device global)
         runtime_transform=runtime_transform,  # mutable joint-origin table (shared device global)
         enable_tool=enable_tool,  # tool welding: attach_tool/detach_tool/tool_fext surface
+        contact_frames=contact_frames,  # multi-contact f_ext frames (baked); forwarded, never dropped
         enable_mujoco_kernels=enable_mujoco_kernels,  # pin-only builds (RAM/compile-time)
         dtype=dtype,  # Wave 2a: fp64 .so carries an fp64 torch surface
         _profile_overlay="torch",  # E6 torch threads overlay

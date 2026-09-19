@@ -282,7 +282,12 @@ Contact frames and welded tools
 names** and bakes the contact family into the build: the handle gains the
 ``contact_fext`` method (per-contact-frame world-aligned wrenches →
 joint-local ``f_ext``) and a ``contact_frames`` property. The kwarg
-re-keys the ``.so`` cache, so contact and non-contact builds coexist.
+re-keys the ``.so`` cache, so contact and non-contact builds coexist. It
+is accepted by every backend's ``register_robot`` (NumPy, JAX, PyTorch)
+and composes with a subset ``algorithm_list`` — e.g.
+``algorithm_list=["inverse_dynamics", "forward_dynamics"]`` plus
+``contact_frames=[...]`` builds only the dynamics cores and the contact
+family (the ``bindings/examples/multi_contact_fext.py`` recipe).
 
 ``register_robot(enable_tool=True)`` enables the runtime welded-tool
 surface — ``attach_tool`` / ``detach_tool`` / ``tool_fext`` — by turning

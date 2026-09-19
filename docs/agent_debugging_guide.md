@@ -2008,3 +2008,46 @@ one writer per cell), iiwa14/go2 unchanged. Lessons:
   (`no_instruction` 42% of stalls, ~485 KB of SASS) at 19% occupancy from
   168 regs — the contract loop is 3% there. Don't generalize one robot's
   hotspot to the family.
+
+### 7.z15 Opt-in features in SUBSET builds: own your emission gate AND your smem constant (2026-09-19)
+Two bug classes surfaced the moment `register_robot(contact_frames=[...])` met a
+dynamics-only `algorithm_list`:
+1. **Emission nested inside another feature's gate.** `gen_f_ext_contact` was
+   called inside `if include_any_kinematics:` in gen_all_code, so a subset
+   with no kinematics algorithm silently emitted NO contact section
+   (`GRID_HAS_CONTACT_FRAMES` absent, `grid_rbd_num_contact_frames()==0`,
+   and the numpy handle then failed a shape check with a misleading message).
+   Hoisting it out exposed its real dependency — the value-form
+   `load_update_XmatsHom_helpers`, which only the kinematics block emitted —
+   so the contact block now emits that loader itself when the kinematics
+   block did not (tracked by `_xmatshom_helpers_emitted`; full builds stay
+   byte-identical because emission ORDER is unchanged).
+2. **A constant TABLE gated on another feature.** The XmatsHom loader copies
+   its homogeneous-transform block out of `d_XImats[baseXI_size + ind]`, and
+   that block is appended to the XImats table only when
+   `include_homogenous_transforms` is on — which gen_all_code derived from
+   "any kinematics requested". A dynamics-only subset + contact_frames
+   therefore compiled AND ran, reading d_XImats PAST THE TABLE: on go2 the
+   last BFS joint's world transform came back NaN, and since the inner
+   rotates EVERY body's (zero) wrench through its transform, 0*NaN put NaN in
+   body 12 for every call. Only a live numeric run showed it (iiwa14 passed —
+   a serial chain whose over-read happened to land on valid slack). Fix: the
+   contact families now imply include_homogenous_transforms. Diagnostic that
+   found it: a subset+end_effector_pose build was finite, so the missing piece
+   was something kinematics EMITS, not the kernel. While there, the launchers
+   also stopped sizing smem on `max(F_EXT_GRADIENT, EE_POSE)+4096` (constants
+   of families a subset may not build): the contact family emits its OWN
+   `F_EXT_CONTACT{,_RUNTIME}_DYNAMIC_SHARED_MEM_BYTES<T,TIER>()` (same shape
+   as MULTI_TARGET_POSITION's). RULE: a launcher sizes on its own family's
+   constant, and an opt-in feature declares EVERY table/helper it composes.
+Nets that now catch both: `test/test_algo_profiles_closure.py` — every
+requestable registry singleton's header must define every `*_inner` /
+`load_update_*_helpers` it references (comments stripped; definitions matched
+as `name(...) {` with any return type), plus a dynamics-only+contact_frames
+subset case; and the hygiene test forces examples onto subset builds so a
+subset regression shows up in an example run, not in a user's script.
+Also from this audit round: `forward_dynamics` and
+`forward_dynamics_parameter_gradient` had NO dependency rows in
+_algo_profiles (bare singletons emitted nvcc-rejected headers), and
+`canonicalize("dynamics-core")` rewrote the PROFILE key into `dynamics_core`
+and missed it — profile keys resolve in their hyphenated spelling first now.

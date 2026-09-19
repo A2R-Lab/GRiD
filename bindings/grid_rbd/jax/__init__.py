@@ -1454,6 +1454,7 @@ def register_robot(
     runtime_inertia: bool = False,
     runtime_transform: bool = False,
     enable_tool: bool = False,
+    contact_frames: list[str] | tuple[str, ...] | None = None,
     enable_mujoco_kernels: bool = True,
     dtype: str = "float32",
 ) -> JaxRobotHandle:
@@ -1499,6 +1500,7 @@ def register_robot(
         runtime_inertia=runtime_inertia,  # D.4: mutable inertia table (FFI reads the same device global)
         runtime_transform=runtime_transform,  # mutable joint-origin table (shared device global)
         enable_tool=enable_tool,  # tool welding: attach_tool/detach_tool/tool_fext surface
+        contact_frames=contact_frames,  # multi-contact f_ext frames (baked); forwarded, never dropped
         enable_mujoco_kernels=enable_mujoco_kernels,
         dtype=dtype,  # pin-only builds (RAM/compile-time)
         _profile_overlay=None,  # jax's baked default IS the ffi profile — no overlay

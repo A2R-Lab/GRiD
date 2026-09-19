@@ -81,7 +81,17 @@ def normalize_codegen_algorithms(gen, codegen_profile = "all", algorithm_list = 
     }
 
     def canonicalize(name):
-        return aliases.get(str(name).strip().lower().replace("_", "-"), str(name).strip().lower().replace("-", "_"))
+        # Profile names are hyphenated keys of profile_algorithms ("dynamics-core");
+        # algorithm names are underscored ("inverse_dynamics"). Resolve an alias or a
+        # profile in its hyphenated spelling FIRST — the old single-pass rewrite
+        # turned "dynamics-core" into "dynamics_core" and then missed the profile.
+        raw = str(name).strip().lower()
+        hyphenated = raw.replace("_", "-")
+        if hyphenated in aliases:
+            return aliases[hyphenated]
+        if hyphenated in profile_algorithms:
+            return hyphenated
+        return raw.replace("-", "_")
 
     if algorithm_list is None:
         profile_key = str(codegen_profile or "all").strip().lower().replace("_", "-")
@@ -119,6 +129,16 @@ def normalize_codegen_algorithms(gen, codegen_profile = "all", algorithm_list = 
         algorithms.add("end_effector_pose")
     if "forward_dynamics_gradient" in algorithms:
         algorithms.update({"inverse_dynamics", "minv", "forward_dynamics", "inverse_dynamics_gradient"})
+    # forward_dynamics composes inverse_dynamics_inner (bias) + minv_inner (solve):
+    # a bare algorithm_list=["forward_dynamics"] used to emit a header that nvcc
+    # rejected (undefined minv_inner / inverse_dynamics_inner) — audit W07 2026-09-19.
+    if "forward_dynamics" in algorithms:
+        algorithms.update({"inverse_dynamics", "minv"})
+    # dqdd/dpi = -Minv . Y composes the regressor inner + minv_inner on top of the
+    # RNEA sweep (the "fd-param-gradient" profile lists exactly these; a bare
+    # singleton request emitted an nvcc-rejected header — audit W07 closure net).
+    if "forward_dynamics_parameter_gradient" in algorithms:
+        algorithms.update({"inverse_dynamics", "minv", "inverse_dynamics_regressor"})
     if "inverse_dynamics_gradient" in algorithms:
         algorithms.add("inverse_dynamics")
     # B.0 dY/dx composes the id_du staging (calls inverse_dynamics_gradient_inner)

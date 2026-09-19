@@ -510,7 +510,14 @@ class GRiDCodeGenerator:
                 "True for floating-base) or remove fdsva_so from algorithms."
             )
         include_any_kinematics = any(name in algorithms for name in ("end_effector_pose", "end_effector_pose_gradient", "end_effector_pose_hessian"))
-        include_homogenous_transforms = include_homogenous_transforms or include_any_kinematics
+        # The contact families (baked contact_frames / runtime tool contact) compose
+        # load_update_XmatsHom_helpers, which copies the homogeneous-transform block
+        # out of d_XImats — so they need that block appended to the XImats table
+        # (gen_init_XImats / gen_add_constants_helpers) exactly like kinematics does.
+        # Without this a dynamics-only subset + contact_frames read d_XImats past the
+        # table end (garbage/NaN world transforms) — audit W07/W08 2026-09-19.
+        include_homogenous_transforms = (include_homogenous_transforms or include_any_kinematics
+                                         or bool(contact_frames) or bool(enable_contact_runtime))
         # first generate the file info
         file_notes = [ "Interface is:", \
             "    __host__   robotModel<T> *d_robotModel = init_robotModel<T>()", \
@@ -669,8 +676,12 @@ class GRiDCodeGenerator:
         # *_inner functions (uniform interface; no-op for serial chains).
         self.gen_load_topology_helpers()
         self.gen_add_fragment_mark("ee_kinematics")
+        # Tracked so the contact-frame emitters below can pull the value-form
+        # loader into a kinematics-free subset build without redefining it here.
+        self._xmatshom_helpers_emitted = False
         if include_homogenous_transforms and include_any_kinematics:
             self.gen_load_update_XmatsHom_helpers(include_base_inertia)
+            self._xmatshom_helpers_emitted = True
             if "end_effector_pose_gradient" in algorithms or "end_effector_pose_hessian" in algorithms:
                 self.gen_load_update_XmatsHom_helpers(include_base_inertia,include_gradients = True)
             if "end_effector_pose_hessian" in algorithms:
@@ -727,15 +738,31 @@ class GRiDCodeGenerator:
                 self.gen_multi_target_position(_mt_batch, emit_num_const=False)
                 self.gen_multi_target_position_gradient(_mt_batch)
                 self.gen_multi_target_position_bench(_mt_batch)
-            # C.2 (GATO ask 1): contact-frame wrench -> joint-local f_ext + d/dq. Opt-in: default None
-            # emits nothing, so every existing header is byte-identical. Reuses the SAME world-FK
-            # chain-up as multi_target (emit_world_fk_chainup) — no second copy.
-            if contact_frames:
-                self.gen_f_ext_contact(contact_frames)
-            # Tool-use: runtime single-contact f_ext (the welded-tool tip). Body id + local
-            # offset are RUNTIME args. Opt-in (default False => byte-identical header).
-            if enable_contact_runtime:
-                self.gen_f_ext_contact_runtime()
+        # NOTE (audit W07/W08, 2026-09-19): the two contact emitters used to sit INSIDE
+        # `if include_any_kinematics:` — a subset build without any kinematics
+        # algorithm (e.g. contact_frames= + algorithm_list=['inverse_dynamics',
+        # 'forward_dynamics']) silently dropped the whole contact section (no
+        # GRID_HAS_CONTACT_FRAMES, NUM_CONTACT_FRAMES=0 at runtime). They are
+        # self-contained (own world-FK chain-up), so they run unconditionally here;
+        # emission ORDER is unchanged (multi_target -> contact -> collision), so
+        # every full/kinematics build stays byte-identical.
+        # C.2 (GATO ask 1): contact-frame wrench -> joint-local f_ext + d/dq. Opt-in: default None
+        # emits nothing, so every existing header is byte-identical. Reuses the SAME world-FK
+        # chain-up as multi_target (emit_world_fk_chainup) — no second copy.
+        if contact_frames or enable_contact_runtime:
+            # Both contact device wrappers build s_XmatsHom through the value-form
+            # load_update_XmatsHom_helpers (5-arg overload); a dynamics-only subset
+            # never reaches the kinematics block that emits it, so emit it here.
+            if not self._xmatshom_helpers_emitted:
+                self.gen_load_update_XmatsHom_helpers(include_base_inertia)
+                self._xmatshom_helpers_emitted = True
+        if contact_frames:
+            self.gen_f_ext_contact(contact_frames)
+        # Tool-use: runtime single-contact f_ext (the welded-tool tip). Body id + local
+        # offset are RUNTIME args. Opt-in (default False => byte-identical header).
+        if enable_contact_runtime:
+            self.gen_f_ext_contact_runtime()
+        if include_any_kinematics:
             # W3: collision. Each sphere-density tier IS a multi_target batch — build it in the
             # tier's own order (NO group re-sort) so the baked radii/self_cc_ranges stay
             # index-aligned. Emit a POSITION extractor per tier (config_free's broad-phase needs

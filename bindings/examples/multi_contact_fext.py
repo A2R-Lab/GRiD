@@ -36,6 +36,11 @@ def main(urdf: str):
     h = grid_rbd.register_robot(
         "go2_multi_contact", urdf, floating_base=True,
         contact_frames=GO2_FEET,
+        # Subset build: this example only calls inverse/forward dynamics (+ the
+        # contact helper, which is baked by contact_frames= regardless of the
+        # algorithm list). Without this a floating go2 compiles the whole
+        # ~35-algorithm surface plus its mjx twins — minutes of nvcc for nothing.
+        algorithm_list=["inverse_dynamics", "forward_dynamics"],
     )
     print("registered contact frames:", [f["name"] for f in h.contact_frames])
 

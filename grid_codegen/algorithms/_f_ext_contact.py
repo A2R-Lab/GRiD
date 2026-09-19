@@ -744,6 +744,17 @@ def gen_f_ext_contact_runtime(self):
     self.gen_add_code_line("// ---- runtime single contact (welded-tool tip): world-aligned wrench -> joint-local f_ext")
     self.gen_add_code_line("//   body id + local offset are RUNTIME arguments (not a baked URDF frame)")
     self.gen_add_code_line("#define GRID_HAS_CONTACT_RUNTIME 1")
+    XHom_size, _dXhom, _d2Xhom = self.gen_get_Xhom_size()
+    scratch = gen_f_ext_contact_inner_temp_mem_size(self)
+    self.gen_add_code_lines([
+        "// Device-wrapper smem arena (mirrors MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES): s_XmatsHom +",
+        "// the s_Xworld FK scratch (spilled to d_workspace at TIER_LITE+) + the EE linalg scratch. The",
+        "// grid_rbd tool_fext launcher sizes on THIS constant — never on another algorithm's",
+        "// (it used max(F_EXT_GRADIENT, EE_POSE)+4096, borrowed from families a dynamics-only subset",
+        "// does not even build; a family launcher must size on its own arena constant).",
+        "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t F_EXT_CONTACT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES() { "
+        "if constexpr (TIER == TIER_SHARED) return grid_shared_arena_bytes<T>(" + str(XHom_size + scratch) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
+        "else return grid_shared_arena_bytes<T>(" + str(XHom_size) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }"])
     gen_f_ext_body_runtime_inner(self)
     gen_f_ext_body_jacobian_dfc_runtime_inner(self)
     gen_f_ext_body_jacobian_dq_runtime_inner(self)
@@ -767,6 +778,17 @@ def gen_f_ext_contact(self, contacts):
                                " @ local offset (" + ", ".join("%.6g" % v for v in c["offset"]) + ")")
     self.gen_add_code_line("#define GRID_HAS_CONTACT_FRAMES 1")
     self.gen_add_code_line("const int NUM_CONTACT_FRAMES = " + str(cs["n"]) + ";")
+    XHom_size, _dXhom, _d2Xhom = self.gen_get_Xhom_size()
+    scratch = gen_f_ext_contact_inner_temp_mem_size(self)
+    self.gen_add_code_lines([
+        "// Device-wrapper smem arena (mirrors MULTI_TARGET_POSITION_DYNAMIC_SHARED_MEM_BYTES): s_XmatsHom +",
+        "// the s_Xworld FK scratch (spilled to d_workspace at TIER_LITE+) + the EE linalg scratch. The",
+        "// grid_rbd contact_fext launcher sizes on THIS constant — never on another algorithm's",
+        "// (it used max(F_EXT_GRADIENT, EE_POSE)+4096, borrowed from families a dynamics-only subset",
+        "// does not even build; a family launcher must size on its own arena constant).",
+        "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t F_EXT_CONTACT_DYNAMIC_SHARED_MEM_BYTES() { "
+        "if constexpr (TIER == TIER_SHARED) return grid_shared_arena_bytes<T>(" + str(XHom_size + scratch) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
+        "else return grid_shared_arena_bytes<T>(" + str(XHom_size) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }"])
     gen_f_ext_body_inner(self, contacts)
     gen_f_ext_body_jacobian_dfc_inner(self, contacts)
     gen_f_ext_body_jacobian_dq_inner(self, contacts)

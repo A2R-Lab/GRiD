@@ -392,6 +392,7 @@ def register_robot(
             runtime_joint_dynamics=runtime_joint_dynamics,
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform, enable_tool=enable_tool,
+            contact_frames=contact_frames,
             enable_mujoco_kernels=enable_mujoco_kernels, dtype=dtype)
     if backend == "torch":
         from . import torch as _torch_backend
@@ -404,6 +405,7 @@ def register_robot(
             runtime_joint_dynamics=runtime_joint_dynamics,
             runtime_inertia=runtime_inertia,
             runtime_transform=runtime_transform, enable_tool=enable_tool,
+            contact_frames=contact_frames,
             enable_mujoco_kernels=enable_mujoco_kernels, dtype=dtype)
 
     cache_key, so_path, meta = warm_robot(
