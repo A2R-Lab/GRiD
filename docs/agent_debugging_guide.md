@@ -1973,3 +1973,38 @@ changes gen_all_code's emission must be in the header cache key — when
 adding such a knob, grep _header_cache_key. Diagnostic tip: a
 direct-gen_all_code probe BYPASSES the harness cache — byte-identical
 probes with rotating replay = suspect the cache layer, not codegen.
+
+### 4.z Profile-first pays: the fdsva_so "FMA hotspot" was an LSU/coalescing bug fixed by a lane remap (2026-09-19)
+The 4*n^3 `iL,Ljk->ijk` -Minv contraction in `fdsva_so_contract` was twice
+"optimized" on the assumption it was FMA-bound (cuBLASDx gemm, coalesced-dot
+primitive — both rejected). The first in-context Nsight Compute capture (ncu
+unblocked by `NVreg_RestrictProfilingToAdminUsers=0`) said otherwise: on
+g1-floating (n=35, lite tier) the loop was 67% of the kernel's warp-stall
+samples with the FMA pipe 1.3% busy — stalls were MIO throttle + scoreboards,
+global loads at 14 sectors/request. Root cause was NOT the buffer layout
+(`[L][k][j]` is a fine GEMM B operand) but the LANE mapping: `k = ind % n`
+was the fastest thread index, so each warp gathered `inner[j + k*n + L*n^2]`
+at a stride of n floats. Making `j` the fastest lane index (one emitted
+decode line) made the gather contiguous: g1 fdsva_so 18.2 ms -> 5.7 ms at
+N=256 (3.2x), outputs BIT-IDENTICAL (same dot, same summation order, still
+one writer per cell), iiwa14/go2 unchanged. Lessons:
+- For a `parallel_loop("ind", ...)` that decodes `ind -> (i,j,k)`, the
+  FASTEST-varying decoded index is the lane index: make it the index that is
+  contiguous in the loop's dominant load, not whatever the output layout
+  suggests. Loads outnumber stores n:1 in a contraction — coalesce the loads.
+- Permuting which thread computes which cell is a free, provably
+  output-identical transformation (verify with a raw-uint32 `array_equal`
+  before/after through the numpy handle — cheap and stronger than tolerance).
+- How to read a GRiD kernel profile: `ncu --set full --import-source yes` on a
+  `-lineinfo` bench exe (`GRID_BENCH_EXTRA_NVCC_FLAGS=-lineinfo` +
+  `--build-dir` in per_algo_bench), then `--page source --print-source
+  cuda,sass --csv` and attribute EVERY SASS instruction to the nearest
+  preceding algorithm-level source line (helpers like dot/gemm are inlined
+  and would otherwise absorb the cost under their own line). Plain
+  `--print-source cuda` carries no metrics. Pick the launch with
+  `--launch-skip 800` = the first N=256 launch in the bench exe (100 iters x
+  2 loops per N, N order 16,32,64,128,256,...).
+- Small robots have a DIFFERENT profile: iiwa14 fdsva_so is I-cache-bound
+  (`no_instruction` 42% of stalls, ~485 KB of SASS) at 19% occupancy from
+  168 regs — the contract loop is 3% there. Don't generalize one robot's
+  hotspot to the family.

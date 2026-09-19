@@ -127,21 +127,26 @@ def gen_fdsva_so_contract(self):
 
     # 2Dx3D tensor computation defined as iL,Ljk->ijk
     self.gen_add_code_line('// Multiply by -Minv to finish algorithm')
-    # PERF NOTE: this 4*n^3 iL,Ljk->ijk contraction (each thread a serial n-element
-    # dot, ~4*n^4 FMAs) is the hottest loop in fdsva_so_contract. Two rewrites were
-    # evaluated and REJECTED:
-    #  - cuBLASDx gemm: standalone-gemm wins (2.4-5.2x) don't survive in-kernel
-    #    (register pressure with SO state live, non-gemm-friendly iL,Ljk strides,
-    #    tier/smem pressure on already-spilled g1_floating). Profile in-context
-    #    before retrying — may be bandwidth/sync-bound, not FMA-bound.
-    #  - grid_linalg_dot_strided_coalesced: the contracted axis L is the buffer's
-    #    stride-n^2 slowest index, so coalescing along L issues WORSE stride-n^2
-    #    warp loads; and the block-cooperative primitive would serialize 4*n^3
-    #    block-reductions, collapsing the current 4*n^3-way thread parallelism.
-    # Left AS-IS; don't re-attempt without a layout that makes the contracted axis
-    # contiguous AND avoids one-dot-per-block serialization.
+    # PERF NOTE (ncu-profiled 2026-09-19 on g1-floating lite/512 N=256 — see
+    # docs/open-tasks/so_audit_plan.md "A2 PROFILE VERDICT"): this 4*n^3 iL,Ljk->ijk
+    # contraction (each thread a serial n-element dot, ~4*n^4 FMAs) is THE fdsva_so
+    # hotspot on big robots (67% of warp-stall samples on g1) and it is LSU/memory-
+    # instruction bound, NOT FMA bound (FMA pipe 1.3% busy; stalls = MIO throttle +
+    # short/long scoreboard; shared bank conflicts negligible). The [L][k][j] buffer
+    # layout is already GEMM-friendly (jk contiguous, L outermost); what was wrong
+    # was the LANE mapping: with k the fastest thread index the warp gathered
+    # inner[j + k*n + L*n^2] at a stride of n floats (32 sectors per request on g1).
+    # Making j the fastest lane index makes that gather contiguous with ZERO change
+    # to the per-output arithmetic (same dot, same L order -> bit-identical results;
+    # still exactly one writer per cell, so thread-count invariance is untouched).
+    # Rejected rewrites (still rejected — the profile shows no FMA headroom):
+    #  - cuBLASDx in-kernel gemm (register/smem pressure with SO state live).
+    #  - grid_linalg_dot_strided_coalesced (block-cooperative, one scalar per call
+    #    -> 4*n^3 serialized block reductions).
+    # Next step if MIO throttle still dominates after the remap: register-tile R
+    # outputs per thread along k (reuse each s_Minv[i + L*n] LDS R times).
     self.gen_add_parallel_loop("ind",str(4*n**3))
-    self.gen_add_code_line(f'int i = ind / {n*n} % {n}; int j = ind / {n} % {n}; int k = ind % {n};')
+    self.gen_add_code_line(f'int j = ind % {n}; int k = ind / {n} % {n}; int i = ind / {n*n} % {n};')
     self.gen_add_code_line(f'if (ind < {n**3}) d2a_dqdq[i*{n*n} + j*{n} + k] = -dot_prod<T, {n}, {n}, {n*n}>(&s_Minv[i], &inner_dq[j + k*{n}]);')
     self.gen_add_code_line(f'else if (ind < {2*n**3}) d2a_dvdq[i*{n*n} + j*{n} + k] = -dot_prod<T, {n}, {n}, {n*n}>(&s_Minv[i], &inner_cross[j + k*{n}]);')
     self.gen_add_code_line(f'else if (ind < {3*n**3}) d2a_dvdv[i*{n*n} + j*{n} + k] = -dot_prod<T, {n}, {n}, {n*n}>(&s_Minv[i], &d2tau_dvdv[j + k*{n}]);')
