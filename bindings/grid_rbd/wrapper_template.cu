@@ -205,12 +205,15 @@ extern "C" int grid_rbd_init() {
 extern "C" int grid_rbd_close() {
     if (!g_data) return 0;
     grid_consume_last_error();
+    // Framework streams may still reference slab-carved scratch. Complete them
+    // before the last shared owner releases the allocator's buffer.
+    cudaError_t pending = cudaDeviceSynchronize();
     grid::close_grid<T>(g_streams, g_robot, g_data);
     g_data    = nullptr;
     g_robot   = nullptr;
     g_streams = nullptr;
     cudaError_t e = grid_consume_last_error();
-    return (e != cudaSuccess) ? 100 + (int)e : 0;
+    return (pending != cudaSuccess) ? 100 + (int)pending : ((e != cudaSuccess) ? 100 + (int)e : 0);
 }
 
 // ─── device-pool (slab) install: framework-allocator integration ─────────────
@@ -713,8 +716,8 @@ extern "C" int grid_rbd_fk_batched(
 // ∂c/∂(q, qd): output shape (batch, NV, 2*NV) — concatenated [dc_dq | dc_dqd]
 // (tangent-space; FIXED base NV == NJ, FLOATING base NV < NJ).
 // f_ext (optional, may be null): (batch, 6*NUM_BODIES) local-frame body wrenches.
-// f_ext enters RNEA additively (affine), so dc/d(q,qd) is unchanged for a
-// CONSTANT f_ext; this just keeps the bias consistent with grid_rbd_inverse_dynamics.
+// The q-Jacobian depends on the supplied body-local force even when that force
+// is held constant. Value and gradient calls must use the same f_ext.
 
 // ∂qdd/∂(q, qd): output shape (batch, NV, 2*NV) (tangent-space; FIXED base
 // NV == NJ, FLOATING base NV < NJ).

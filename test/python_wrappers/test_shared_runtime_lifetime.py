@@ -78,3 +78,79 @@ def test_reverse_close_order_and_gc():
     del a; gc.collect()
     np.testing.assert_allclose(_tau(b, q, qd), ref)
     b.close()
+
+
+@pytest.mark.parametrize("backend", ["torch", "jax"])
+def test_framework_pool_owner_survives_installer_gc(backend):
+    """The last native owner, not the first Python handle, owns the slab."""
+    import gc
+    import weakref
+    framework = pytest.importorskip(backend)
+    name = "w04_pool_installer_" + backend
+    registered = _register(name)
+    registered.close()
+    # The suite's module fixture retains register_robot results. get_robot is
+    # not retained there, so this handle really can be collected in this test.
+    a = grid_rbd.get_robot(name)
+    installer_ref = weakref.ref(a)
+    refs = []
+    def alloc(n):
+        if backend == "torch":
+            buf = framework.empty(n, dtype=framework.uint8, device="cuda")
+            ptr = buf.data_ptr()
+        else:
+            import jax.numpy as jnp
+            buf = jnp.zeros(n, dtype=jnp.uint8)
+            buf.block_until_ready()
+            ptr = buf.unsafe_buffer_pointer()
+        refs.append(weakref.ref(buf))
+        return buf, ptr
+    try:
+        assert a.install_device_pool(alloc) > 0
+        # Creating another view before first use must not replace the uncarved pool.
+        b = grid_rbd.get_robot("w04_pool_installer_" + backend, backend=backend)
+        q = np.full((2, a.num_joints), .2, np.float32)
+        ref = _tau(a, q, np.zeros_like(q))
+        assert a._runner.device_pool_used() > 0
+        a.close(); del a; gc.collect()
+        assert installer_ref() is None
+        assert refs[0]() is not None
+        if backend == "torch":
+            tq = framework.as_tensor(q, device="cuda")
+            result = b.inverse_dynamics(tq, framework.zeros_like(tq)).cpu().numpy()
+        else:
+            result = np.asarray(b.inverse_dynamics(q, np.zeros_like(q)))
+        np.testing.assert_allclose(result, ref, rtol=2e-5, atol=2e-5)
+        b.close(); del b; gc.collect()
+        assert refs[0]() is None
+        # Framework registrations keep the .so loaded: its old pointer must be uninstalled.
+        c = _register("w04_pool_after_" + backend)
+        try:
+            np.testing.assert_allclose(_tau(c, q, np.zeros_like(q)), ref)
+        finally:
+            c.close()
+    finally:
+        if "a" in locals(): a.close()
+        if "b" in locals(): b.close()
+
+
+@pytest.mark.parametrize("backend", ["torch", "jax"])
+def test_late_framework_view_preserves_live_inertia(backend):
+    pytest.importorskip(backend)
+    a = _register("w04_late_" + backend)
+    b = None
+    try:
+        q = np.full((1, a.num_joints), .3, np.float32)
+        qd = np.zeros_like(q)
+        original = _tau(a, q, qd)
+        params = a.inertia_params.copy(); params[:, 0] *= 2
+        a.set_inertia_params(params)
+        changed = _tau(a, q, qd)
+        assert np.abs(changed - original).max() > 1e-3
+        b = grid_rbd.get_robot("w04_late_" + backend, backend=backend)
+        np.testing.assert_allclose(_tau(a, q, qd), changed)
+        with pytest.raises(RuntimeError, match="shared"):
+            b._base._runner.close_arena()
+    finally:
+        if b is not None: b.close()
+        a.close()

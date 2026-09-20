@@ -373,6 +373,10 @@ is present at register time.
   (they do not renormalize): the returned ``q`` cotangent is the on-manifold
   pullback (zero radial component). Need the tangent-space gradient instead?
   Contract your cotangent with the ``*_gradient`` Jacobian yourself.
+  Spherical joints have their own four-position/three-tangent quaternion
+  blocks. Their pullbacks use the model's per-joint coordinate offsets, not
+  a floating-root assumption. Old spherical artifacts without this layout
+  metadata must be re-registered before using framework autodiff.
 * **External forces.** ``f_ext`` is a non-differentiated input, but the
   ``q``/``qd`` gradients are taken *at* the given force (a fixed body-local
   wrench has q-dependent joint torques). ``f_ext`` must be ``(B, 6*num_bodies)``
@@ -380,6 +384,17 @@ is present at register time.
   ``(1, 6*num_bodies)`` broadcast forms are materialized to the batch, and any
   other leading shape is rejected before the FFI call (the native handlers
   reject a batch mismatch too).
+
+**Shared runtime lifetime.** Backend handles referring to the same compiled
+artifact share its model and arena. Closing or collecting one handle does not
+reset the others. Framework-allocated arena buffers are retained by the shared
+native owner until the last Runner closes, and outstanding device work is
+completed before that buffer is released. A fresh runtime allocates lazily on
+its first operation or parameter update, so CUDA allocation errors can surface
+there rather than during registration. A framework view opened after a NumPy
+arena is already live reuses it; it does not replace the allocator or erase
+inertia, transform, or tool updates. This does not introduce isolated contexts
+or make concurrent operations on shared scratch independently safe.
 
 For fixed-batch, low-launch-overhead replay (MPC / training),
 ``handle.capture(method, *example_inputs, **kwargs)`` returns a

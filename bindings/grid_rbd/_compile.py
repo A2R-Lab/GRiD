@@ -103,6 +103,28 @@ def repo_root() -> Path | None:
     return None
 
 
+def configuration_layout_from_robot(robot):
+    """Serialize independent (kind, q_start, v_start, nq, nv) joint blocks.
+
+    Keep metadata generation here: _compile.py participates in BOTH cache keys,
+    so a layout change cannot reuse an artifact's old metadata. Mimic joints
+    share their source's coordinates and must not appear twice.
+    """
+    from ._configuration import validate_configuration_layout
+    blocks = []
+    for joint in robot.joints:
+        if getattr(joint, "is_mimic", False) or joint.get_num_dof() == 0:
+            continue
+        qi = robot.get_joint_index_q(joint.jid)
+        vi = robot.get_joint_index_v(joint.jid)
+        qi = qi if isinstance(qi, list) else [qi]
+        vi = vi if isinstance(vi, list) else [vi]
+        kind = joint.jtype if joint.jtype in ("floating", "spherical") else "euclidean"
+        blocks.append((kind, int(qi[0]), int(vi[0]), len(qi), len(vi)))
+    return validate_configuration_layout(sorted(blocks, key=lambda b: b[1]),
+                                         robot.get_num_pos(), robot.get_num_vel())
+
+
 def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) -> None:
     """Run URDFParser + GRiDCodeGenerator to produce grid.cuh at out_path.
 
@@ -343,6 +365,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         "generated_algorithms": sorted(cg.generated_algorithms),
         "enable_mujoco_kernels": bool(enable_mujoco_kernels),
     }
+    meta["configuration_layout"] = configuration_layout_from_robot(robot)
     # Multi-contact f_ext: echo the registered contact frames (registration
     # order == the contact_fext f_c column order) so the handle can validate
     # shapes and report frames without reopening the URDF.

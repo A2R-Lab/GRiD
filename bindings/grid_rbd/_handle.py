@@ -307,6 +307,12 @@ class RobotHandle:
         return bool(self._meta.get("floating_base", False))
 
     @property
+    def configuration_layout(self):
+        """Independent joint blocks mapping public positions to tangent slots."""
+        from ._configuration import configuration_layout_from_meta
+        return configuration_layout_from_meta(self._meta, self.num_joints, self.num_vel)
+
+    @property
     def output_convention(self) -> str:
         """Output/IO convention: ``"pinocchio"`` (default, GRiD-native — xyzw quat,
         spatial-local free-joint velocity) or ``"mujoco"`` (mjx parity — wxyz quat,
@@ -1020,11 +1026,13 @@ class RobotHandle:
         halved down to 1 (mirroring the auto-fit) before giving up. Returns
         the installed slab size in bytes, or 0 when the pool stays off (the
         ``cudaMalloc`` path with its own VRAM auto-fit remains the fallback).
-        The slab is held alive on the handle until close/GC."""
+        The slab is held by the shared native owner until its last Runner closes.
+        A live arena is never reset to install a pool; late framework views keep
+        using that arena without erasing model updates."""
         import os
         import warnings
         try:
-            if int(self._runner.device_pool_used()) > 0:
+            if self._runner.has_owned_device_pool() or int(self._runner.device_pool_used()) > 0:
                 # a sibling surface (jax/torch handle on the SAME .so) already
                 # installed a pool and the arena carved from it — nothing to do,
                 # and closing a live arena here would drop tools/runtime tables.
@@ -1049,19 +1057,8 @@ class RobotHandle:
                     return 0
                 try_slots = max(1, try_slots // 2)
                 continue
-            try:
-                self._runner.set_device_pool(int(ptr), n, try_slots)
-            except RuntimeError:
-                # The Runner constructor eagerly grid_rbd_init()s as a load
-                # sanity check, so a fresh handle's arena already exists on the
-                # cudaMalloc path — close it (unconfigured at this point) and
-                # let the lazy re-init carve from the slab. ⚠A LATE install
-                # resets attached tools / runtime parameter tables the same
-                # way close() does.
-                self._runner.close_arena()
-                self._runner.set_device_pool(int(ptr), n, try_slots)
-            self._device_pool_keepalive = buf
-            return n
+            installed = self._runner.install_owned_device_pool(int(ptr), n, try_slots, buf)
+            return n if installed else 0
 
     def apply_batch_overlay(self, profile: str = "ffi") -> int:
         """Arm the E6 batch-switch from this profile's ``<profile>_bases_by_n``

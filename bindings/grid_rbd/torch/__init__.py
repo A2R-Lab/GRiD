@@ -162,7 +162,7 @@ def _load_ops(so_path: Path, cache_key: str) -> str:
 # itself graph-capturable.
 
 
-def _make_autograd(ns, nv, mujoco=False, nee=0):
+def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None):
     import torch
 
     ops = getattr(torch.ops, ns)
@@ -206,7 +206,7 @@ def _make_autograd(ns, nv, mujoco=False, nee=0):
                 "grad": lambda: apply_out_layout(
                     _op("inverse_dynamics_gradient")(q, qd, ctx.gravity, ctx.qdd, ctx.f_ext),
                     ("grad_concat",), None, nv=nv),
-            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco)
+            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
             # grads for (q, qd, gravity, qdd, f_ext)
             return g["q"], g["qd"], None, g["qdd"], g["f_ext"]
 
@@ -233,7 +233,7 @@ def _make_autograd(ns, nv, mujoco=False, nee=0):
                     "minv": lambda: apply_out_layout(
                         _op("minv")(q), ("minv",), None, nv=nv, mjx=mujoco,
                         eye=torch.eye(nv, dtype=q.dtype, device=q.device)),
-                }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco)
+                }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
                 return g["q"], g["qd"], g["u"], None, g["f_ext"]
         return FDLikeFn
 
@@ -267,7 +267,7 @@ def _make_autograd(ns, nv, mujoco=False, nee=0):
                     ("grad_concat",), None, nv=nv),
                 "param_grad": lambda: ops.inverse_dynamics_regressor(
                     q, qd, torch.zeros_like(q), ctx.gravity).reshape(q.shape[0], nv, -1),
-            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco)
+            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
             return g["q"], g["qd"], g["params"], None, None
 
     class FDWrtParamsFn(torch.autograd.Function):
@@ -291,7 +291,7 @@ def _make_autograd(ns, nv, mujoco=False, nee=0):
                     eye=torch.eye(nv, dtype=q.dtype, device=q.device)),
                 "param_grad": lambda: ops.forward_dynamics_parameter_gradient(
                     q, qd, u, ctx.gravity).reshape(q.shape[0], nv, -1),
-            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco)
+            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
             return g["q"], g["qd"], g["u"], g["params"], None, None
 
     class IntegratorFn(torch.autograd.Function):
@@ -322,7 +322,7 @@ def _make_autograd(ns, nv, mujoco=False, nee=0):
                 "grad": lambda: apply_out_layout(
                     _op("integrator_gradient")(q, qd, u, ctx.dt, ctx.it, ctx.gravity),
                     ("colmajor_whole", None), (2 * nv, 3 * nv), nv=nv),
-            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco)
+            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
             return g["q"], g["qd"], g["u"], None, None, None
 
     class EndEffectorPoseFn(torch.autograd.Function):
@@ -341,7 +341,7 @@ def _make_autograd(ns, nv, mujoco=False, nee=0):
                 "grad": lambda: apply_out_layout(
                     _op("end_effector_pose_gradient")(q), ("ee_grad",), (nee,), nv=nv,
                     mjx=mujoco, eye=torch.eye(nv, dtype=q.dtype, device=q.device)),
-            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco)
+            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
             return (g["q"],)
 
     fns = {"inverse_dynamics": InverseDynamicsFn, "fd": FDFn, "aba": AbaFn,
@@ -506,7 +506,8 @@ class TorchRobotHandle(BaseDelegateMixin):
             # mjx closures only when ACTIVE (floating base) — on a fixed base the
             # pin closures ARE the mjx closures (the conventions coincide).
             cache[conv] = _make_autograd(self._ns, self._base.num_vel,
-                                         mujoco=self._mjx_active(conv), nee=self._base.num_ees)
+                                         mujoco=self._mjx_active(conv), nee=self._base.num_ees,
+                                         configuration_layout=self._base.configuration_layout)
         return cache[conv]
 
     @property
@@ -1174,7 +1175,7 @@ def register_robot(
 
 def _install_torch_device_pool(base):
     """Carve GRiD's gridData device arena out of torch's caching allocator (a
-    uint8 CUDA tensor held alive on the handle) instead of raw cudaMalloc —
+    uint8 CUDA tensor held by the shared runtime owner) instead of raw cudaMalloc —
     same framework-allocator integration as the jax surface (see
     RobotHandle.install_device_pool). Falls back to the cudaMalloc path when
     the arena is already initialized or the allocation does not fit."""

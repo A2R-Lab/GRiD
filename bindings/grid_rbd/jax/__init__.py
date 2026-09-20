@@ -340,6 +340,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         import jax
         import jax.numpy as jnp
         nj, nv, nee = self.num_joints, self.num_vel, self.num_ees
+        configuration_layout = self._base.configuration_layout
 
         def _t(method, symbol):
             # In mjx mode dispatch to the _mujoco-suffixed target/symbol.
@@ -385,7 +386,7 @@ class JaxRobotHandle(BaseDelegateMixin):
                     "minv",
                     jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(q),
                     mjx=mjx),
-            }, nv=nv, nj=nj, q=q, mjx=mjx)
+            }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"], g["qd"], g["u"], g["f_ext"])
 
         fd.defvjp(fd_fwd, fd_bwd)
@@ -418,7 +419,7 @@ class JaxRobotHandle(BaseDelegateMixin):
                     "inverse_dynamics_gradient",
                     jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
                         q, qd, qdd, f_ext, gravity=self._np_dt(gravity))),
-            }, nv=nv, nj=nj, q=q, mjx=mjx)
+            }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"], g["qd"], g["qdd"], g["f_ext"])
 
         idyn.defvjp(id_fwd, id_bwd)
@@ -440,7 +441,7 @@ class JaxRobotHandle(BaseDelegateMixin):
                 "grad": lambda: self._shape_out(
                     "end_effector_pose_gradient",
                     jax.ffi.ffi_call(tg, self._out(q, 6 * nee * nv), vmap_method=VM)(q)),
-            }, nv=nv, nj=nj, q=q, mjx=mjx)
+            }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"],)
 
         eepose.defvjp(ee_fwd, ee_bwd)
@@ -488,7 +489,7 @@ class JaxRobotHandle(BaseDelegateMixin):
                     "inverse_dynamics_regressor",
                     jax.ffi.ffi_call(tr, self._out(q, nv * npar), vmap_method=VM)(
                         q, qd, zq, gravity=self._np_dt(gravity))),
-            }, nv=nv, nj=nj, q=q, mjx=mjx)
+            }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"], g["qd"], g["params"])
 
         idyn_pi.defvjp(id_pi_fwd, id_pi_bwd)
@@ -531,7 +532,7 @@ class JaxRobotHandle(BaseDelegateMixin):
                     "forward_dynamics_parameter_gradient",
                     jax.ffi.ffi_call(tp, self._out(q, nv * npar), vmap_method=VM)(
                         q, qd, u, gravity=self._np_dt(gravity))),
-            }, nv=nv, nj=nj, q=q, mjx=mjx)
+            }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"], g["qd"], g["u"], g["params"])
 
         fd_pi.defvjp(fd_pi_fwd, fd_pi_bwd)
@@ -560,7 +561,7 @@ class JaxRobotHandle(BaseDelegateMixin):
                     jax.ffi.ffi_call(tg, self._out(q, 2 * nv * 3 * nv), vmap_method=VM)(
                         q, qd, u, dt=self._np_dt(dt), it=np.int64(it),
                         gravity=self._np_dt(gravity))),
-            }, nv=nv, nj=nj, q=q, mjx=mjx)
+            }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"], g["qd"], g["u"])
 
         integ.defvjp(integ_fwd, integ_bwd)
@@ -1444,7 +1445,7 @@ class JaxRobotHandle(BaseDelegateMixin):
 
 def _install_xla_device_pool(base):
     """Carve GRiD's gridData device arena out of XLA's memory pool: allocate
-    the slab as a plain ``jnp`` uint8 buffer (held alive on the handle) and
+    the slab as a plain ``jnp`` uint8 buffer (held by the shared runtime owner) and
     hand its device address to the .so (RobotHandle.install_device_pool).
     With the slab inside XLA's pool, ``XLA_PYTHON_CLIENT_PREALLOCATE`` can
     stay ON without starving GRiD's allocations (the h1_2 "launch failed"

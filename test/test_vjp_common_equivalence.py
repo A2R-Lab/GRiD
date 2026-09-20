@@ -5,11 +5,14 @@ bit-comparison against the captured pre-collapse gradients on real kernels.
 """
 import numpy as np
 import pytest
+from functools import partial
 
 from grid_codegen.abi_specs import ABI_SPECS
-from grid_rbd._vjp_common import _contract, _pad_tail, _configuration_cotangent, vjp_backward
+from grid_rbd._vjp_common import _contract, _pad_tail, _configuration_cotangent, vjp_backward as _vjp_backward
 
 B, NV, NJ, NEE, NB = 3, 8, 9, 2, 9  # floating-style nj = nv + 1 (6 root + 2 joints)
+LAYOUT = (("floating", 0, 0, 7, 6), ("euclidean", 7, 6, 2, 2))
+vjp_backward = partial(_vjp_backward, configuration_layout=LAYOUT)
 
 
 # ── independent numpy oracle for the floating-base q pullback (audit W01) ──
@@ -102,8 +105,8 @@ def test_floating_q_needs_the_saved_position():
 
 def test_configuration_cotangent_mjx_chart():
     g, q = _r(B, NV), _q(mjx=True)                                # q = [pos, quat_wxyz, joints]
-    np.testing.assert_allclose(_configuration_cotangent(g, q, mjx=True), _pullback_np(g, q, mjx=True), rtol=1e-13)
-    np.testing.assert_allclose(_configuration_cotangent(g, q), _pullback_np(g, q), rtol=1e-13)
+    np.testing.assert_allclose(_configuration_cotangent(g, q, mjx=True, layout=LAYOUT), _pullback_np(g, q, mjx=True), rtol=1e-13)
+    np.testing.assert_allclose(_configuration_cotangent(g, q, layout=LAYOUT), _pullback_np(g, q), rtol=1e-13)
 
 
 def test_ee_recipe_no_ct_slice():

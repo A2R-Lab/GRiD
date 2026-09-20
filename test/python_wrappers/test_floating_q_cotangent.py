@@ -180,7 +180,7 @@ def test_mujoco_convention_q_cotangent_is_the_on_manifold_pullback(numpy_go2_mjx
         f = lambda qq: float(w @ np.asarray(h.end_effector_pose(qq[None]), dtype=np.float64).reshape(-1))
         G = np.asarray(h.end_effector_pose_gradient(q[None]), dtype=np.float64)[0].reshape(-1, nv)
     g_tan = (w @ G)                                                               # (nv,) tangent cotangent
-    g_q = _configuration_cotangent(g_tan[None], q[None], mjx=True)[0]             # (nq,)
+    g_q = _configuration_cotangent(g_tan[None], q[None], mjx=True, layout=h.configuration_layout)[0]
     fd = _central_fd(f, q)
     P = np.eye(4) - np.outer(q[3:7], q[3:7])                                      # tangential projector
     scale = max(1.0, np.abs(fd).max())
@@ -188,3 +188,93 @@ def test_mujoco_convention_q_cotangent_is_the_on_manifold_pullback(numpy_go2_mjx
     np.testing.assert_allclose(g_q[3:7] @ P, fd[3:7] @ P, rtol=2e-5, atol=2e-6 * scale)  # tangential quaternion
     assert abs(g_q[3:7] @ q[3:7]) < 1e-9 * scale                                        # zero radial component
     np.testing.assert_allclose(g_q[7:], fd[7:], rtol=2e-5, atol=2e-6 * scale)          # joints, shifted by one
+
+
+# These are the generator's existing spherical CUDA fixtures (fixed base).
+# Floating+spherical pullbacks are covered by test_configuration_cotangent;
+# that combined model currently fails earlier in RNEA code generation's
+# single-axis topology helper, independently of the Python pullback.
+@pytest.fixture(scope="module", params=[("spherical_arm", False), ("mixed_spherical_arm", False)])
+def spherical_handle(request):
+    name, floating = request.param
+    urdf = REPO_ROOT / "external/URDFParser/tests/fixtures" / f"{name}.urdf"
+    h = grid_rbd.register_robot(f"w01_{name}_{floating}_fp64", str(urdf),
+                                floating_base=floating, algorithm_list=_ALGOS,
+                                enable_mujoco_kernels=False, max_batch_size=8, dtype="float64")
+    yield h
+    h.close()
+
+
+@pytest.mark.parametrize("backend", ["jax", "torch"])
+@pytest.mark.parametrize("method", ["inverse_dynamics", "forward_dynamics", "end_effector_pose"])
+def test_spherical_public_q_gradient(spherical_handle, backend, method):
+    framework = pytest.importorskip(backend)
+    if backend == "jax": framework.config.update("jax_enable_x64", True)
+    base = spherical_handle
+    h = grid_rbd.get_robot(base.name, backend=backend)
+    rng = np.random.default_rng(81)
+    q = rng.uniform(-.5, .5, base.num_joints)
+    for kind, qi, vi, nq, nv in base.configuration_layout:
+        if kind != "euclidean":
+            start = qi + (3 if kind == "floating" else 0)
+            q[start:start+4] *= 1.2 / np.linalg.norm(q[start:start+4])
+    qd = np.zeros_like(q); qd[:base.num_vel] = rng.uniform(-.2, .2, base.num_vel)
+    u = np.zeros_like(q); u[:base.num_vel] = rng.uniform(-.3, .3, base.num_vel)
+    try:
+        if backend == "jax":
+            loss = _jax_cases(h)[method]
+            f = lambda x: loss(x, qd, u)
+            actual = np.asarray(framework.jit(framework.grad(f))(q))
+            numeric = _central_fd(lambda x: float(f(x)), q)
+        else:
+            T = lambda x: framework.as_tensor(x, dtype=framework.float64, device="cuda")
+            def f(x):
+                if method == "end_effector_pose": out = h.end_effector_pose(x[None])
+                elif method == "inverse_dynamics": out = h.inverse_dynamics(x[None], T(qd)[None])
+                else: out = h.forward_dynamics(x[None], T(qd)[None], T(u)[None])
+                w = framework.linspace(.5, 1.5, out.numel(), dtype=out.dtype, device=out.device)
+                return (out.reshape(-1)*w).sum()
+            qt = T(q).requires_grad_(True)
+            f(qt).backward()
+            actual = qt.grad.cpu().numpy()
+            numeric = _central_fd(lambda x: float(f(T(x)).item()), q)
+        assert actual.shape == q.shape
+        np.testing.assert_allclose(actual, numeric, rtol=2e-5,
+                                   atol=2e-6*max(1., np.abs(numeric).max()))
+    finally:
+        h.close()
+
+
+@pytest.mark.parametrize("backend", ["jax", "torch"])
+@pytest.mark.parametrize("method", ["inverse_dynamics", "end_effector_pose"])
+def test_mujoco_public_autodiff_with_explicit_normalization(numpy_go2_mjx, backend, method):
+    framework = pytest.importorskip(backend)
+    if backend == "jax": framework.config.update("jax_enable_x64", True)
+    h = grid_rbd.get_robot(numpy_go2_mjx.name, backend=backend, output_convention="mujoco")
+    q, qd, _ = _sample(h.num_joints, h.num_vel, False, seed=31)
+    try:
+        if backend == "jax":
+            import jax.numpy as xp
+            def loss(x):
+                normalized = xp.concatenate((x[:3], x[3:7]/xp.linalg.norm(x[3:7]), x[7:]))
+                if method == "inverse_dynamics": out = h.inverse_dynamics(normalized[None], qd[None])
+                else: out = h.end_effector_pose(normalized[None])
+                return (out.reshape(-1)*xp.linspace(.5, 1.5, out.size)).sum()
+            actual = np.asarray(framework.jit(framework.grad(loss))(q))
+            numeric = _central_fd(lambda x: float(loss(x)), q)
+        else:
+            T = lambda x: framework.as_tensor(x, dtype=framework.float64, device="cuda")
+            def loss(x):
+                normalized = framework.cat((x[:3], x[3:7]/framework.linalg.vector_norm(x[3:7]), x[7:]))
+                if method == "inverse_dynamics": out = h.inverse_dynamics(normalized[None], T(qd)[None])
+                else: out = h.end_effector_pose(normalized[None])
+                w = framework.linspace(.5, 1.5, out.numel(), dtype=out.dtype, device=out.device)
+                return (out.reshape(-1)*w).sum()
+            qt = T(q).requires_grad_(True)
+            loss(qt).backward()
+            actual = qt.grad.cpu().numpy()
+            numeric = _central_fd(lambda x: float(loss(T(x)).item()), q)
+        np.testing.assert_allclose(actual, numeric, rtol=2e-5,
+                                   atol=2e-6*max(1., np.abs(numeric).max()))
+    finally:
+        h.close()

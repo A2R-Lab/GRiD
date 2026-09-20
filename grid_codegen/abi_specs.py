@@ -1023,7 +1023,7 @@ def expand_py_out_dims(spec: "AbiSpec", nq: int, nv: int, nee: int, nb: int):
 from dataclasses import replace as _replace
 
 _FD_VJP = VjpSpec(
-    residuals=("q", "qd", "u"),
+    residuals=("q", "qd", "u", "f_ext"),
     grad_op="forward_dynamics_gradient",   # halves → (gq, gqd)
     wrt=("q", "qd"),
     u_via_minv=True,                       # ∂qdd/∂u = M⁻¹ (pin symmetrize / mjx dense)
@@ -1033,7 +1033,7 @@ _VJPS = {
     "forward_dynamics": _FD_VJP,
     "aba": _FD_VJP,                        # same output, same analytic backward
     "inverse_dynamics": VjpSpec(
-        residuals=("q", "qd", "qdd"),      # qdd threads into the USE_QDD grad overload
+        residuals=("q", "qd", "qdd", "f_ext"),  # differentiate at the saved acceleration/force
         grad_op="inverse_dynamics_gradient",
         wrt=("q", "qd"),
         nondiff=("qdd", "f_ext"),

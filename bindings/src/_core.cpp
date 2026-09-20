@@ -36,6 +36,7 @@
 #include <unordered_map>
 #include <climits>
 #include <cstdlib>
+#include <utility>
 #include <tuple>
 
 namespace py = pybind11;
@@ -295,16 +296,13 @@ public:
         max_batch_  = fn_max_batch_();
         num_bodies_ = fn_num_bodies_();
 
-        // Initialize device buffers eagerly. wrapper_template.cu does this
-        // lazily on first algo call too, but eager init surfaces CUDA errors
-        // at register_robot time rather than first inference.
-        if (fn_init_() != 0) {
-            throw std::runtime_error(std::string("grid_rbd_init() failed in ") + so_path);
-        }
+        // Runtime allocation is lazy: framework views must be able to install
+        // their slab BEFORE init, without closing/resetting a live shared model.
+        // Algorithm calls and parameter setters initialize through the C ABI.
         so_key_ = canonical_path(so_path);
         {
             std::lock_guard<std::mutex> lk(owners_mutex());
-            ++owners()[so_key_];
+            ++owners()[so_key_].count;
         }
     }
 
@@ -317,8 +315,12 @@ public:
     // runtime now closes only when the LAST Runner on that path releases it;
     // release() is idempotent (close() then the destructor is fine).
     static std::mutex& owners_mutex() { static std::mutex m; return m; }
-    static std::unordered_map<std::string, int>& owners() {
-        static std::unordered_map<std::string, int> m; return m;
+    struct RuntimeOwner {
+        int count = 0;
+        py::object pool;  // shared allocator keepalive; released AFTER native close
+    };
+    static std::unordered_map<std::string, RuntimeOwner>& owners() {
+        static std::unordered_map<std::string, RuntimeOwner> m; return m;
     }
     static std::string canonical_path(const std::string& p) {
         char buf[PATH_MAX];
@@ -327,12 +329,17 @@ public:
     }
     void release() {
         if (!handle_) return;
+        py::object pool;
         {
             std::lock_guard<std::mutex> lk(owners_mutex());
             auto it = owners().find(so_key_);
-            if (it != owners().end() && --(it->second) <= 0) {
-                owners().erase(it);
+            if (it != owners().end() && --(it->second.count) <= 0) {
                 if (fn_close_) fn_close_();      // last owner: free the runtime
+                // The library may stay loaded through Torch/JAX registrations.
+                // Never leave its pool pointing at a released framework tensor.
+                if (fn_set_device_pool_) fn_set_device_pool_(nullptr, 0, 0);
+                pool = std::move(it->second.pool);
+                owners().erase(it);
             }
         }
         dlclose(handle_);
@@ -384,10 +391,33 @@ public:
             "before the first kernel call (or close() first; the slab must outlive the arena)");
     }
     long long device_pool_used() const { return fn_device_pool_used_(); }
+    bool has_owned_device_pool() const {
+        std::lock_guard<std::mutex> lk(owners_mutex());
+        const auto it = owners().find(so_key_);
+        return it != owners().end() && static_cast<bool>(it->second.pool);
+    }
+    bool install_owned_device_pool(unsigned long long ptr, unsigned long long bytes,
+                                   int slots, py::object pool) {
+        std::lock_guard<std::mutex> lk(owners_mutex());
+        auto &owner = owners().at(so_key_);
+        if (owner.pool) return false;  // an uninitialized slab is already owned too
+        if (pool.is_none() || ptr == 0 || bytes == 0)
+            throw std::invalid_argument("device pool requires a nonempty buffer and owner");
+        const int rc = fn_set_device_pool_(
+            reinterpret_cast<void *>(static_cast<uintptr_t>(ptr)), bytes, slots);
+        // A live cudaMalloc arena cannot be migrated implicitly: it may contain
+        // parameter updates / attached tools belonging to another backend.
+        if (rc != 0) return false;
+        owner.pool = std::move(pool);
+        return true;
+    }
     void close_arena() {
         // grid_rbd_close: free the device/host arena (attached tools + runtime
         // parameter tables reset with it); the next call re-inits lazily.
-        // install_device_pool uses this to re-carve a fresh arena from a slab.
+        // Explicit resets retain any owned slab, but cannot reset a sibling's state.
+        std::lock_guard<std::mutex> lk(owners_mutex());
+        if (owners().at(so_key_).count > 1)
+            throw std::runtime_error("cannot reset an arena shared by multiple handles");
         if (fn_close_) fn_close_();
     }
     int threads_per_block() const { return fn_threads_per_block_(); }
@@ -2078,6 +2108,11 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("device_pool_bytes", &R::device_pool_bytes, py::arg("ws_slots") = 0,
             "Device bytes a pool-mode init will carve at the given workspace slot "
             "count (<1 = max_batch slots): size the framework-allocator slab with this.")
+        .def("has_owned_device_pool", &R::has_owned_device_pool)
+        .def("install_owned_device_pool", &R::install_owned_device_pool,
+             py::arg("base_ptr"), py::arg("bytes"), py::arg("ws_slots"), py::arg("owner"),
+             "Install and retain a framework slab on the shared runtime owner. "
+             "Returns false if a pool or live arena already exists; never resets it.")
         .def("set_device_pool", &R::set_device_pool,
             py::arg("base_ptr"), py::arg("bytes"), py::arg("ws_slots") = 0,
             "Install a caller-owned device slab (raw pointer as int) that the arena "
@@ -2086,7 +2121,8 @@ static void register_runner(py::module_& m, const char* cls_name) {
             "must stay alive until close.")
         .def("close_arena", &R::close_arena,
             "Free the device/host arena (grid_rbd_close; tools/runtime tables "
-            "reset); the next call re-inits lazily — pool installs re-carve here.")
+            "reset); the next call re-inits lazily. Retains any owned slab and "
+            "rejects resets while multiple handles share the runtime.")
         .def("device_pool_used", &R::device_pool_used,
             "Bytes carved from the installed device pool so far (0 = cudaMalloc mode "
             "or not yet initialized); equals device_pool_bytes(ws_slots) after a "
