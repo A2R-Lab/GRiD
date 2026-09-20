@@ -174,3 +174,16 @@ def test_singleton_with_mjx_twins_defines_every_inner_it_calls(key, tmp_path):
         gen.gen_all_code(algorithm_list=[key], output_path=str(out), enable_mujoco_kernels=True)
     text = out.read_text()
     assert not _undefined_inners(text), f"{key}+mjx: calls undefined inners {sorted(_undefined_inners(text))}"
+
+
+def test_algorithm_name_beats_a_same_spelled_profile():
+    """'frame_jacobian' is an ALGORITHM; 'frame-jacobian' is a PROFILE that also
+    pulls frame_jacobian_dot + osc_inertia. Requesting the algorithm must not
+    expand to the profile (2026-09-20 receipt: the spherical kinematics fixture
+    asked for [end_effector_pose, frame_jacobian] and got unsupported algorithms)."""
+    gen = _gen()
+    got = _closure(gen, ["end_effector_pose", "frame_jacobian"])
+    assert "frame_jacobian" in got and "end_effector_pose" in got
+    assert not ({"frame_jacobian_dot", "osc_inertia"} & got), got
+    via_profile = _closure(gen, ["frame-jacobian"])
+    assert {"frame_jacobian_dot", "osc_inertia"} <= via_profile

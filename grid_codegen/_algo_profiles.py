@@ -85,13 +85,28 @@ def normalize_codegen_algorithms(gen, codegen_profile = "all", algorithm_list = 
         # algorithm names are underscored ("inverse_dynamics"). Resolve an alias or a
         # profile in its hyphenated spelling FIRST — the old single-pass rewrite
         # turned "dynamics-core" into "dynamics_core" and then missed the profile.
+        # An exact ALGORITHM name wins over a profile that shares its spelling:
+        # "frame_jacobian" (algorithm) vs "frame-jacobian" (profile, which also
+        # pulls frame_jacobian_dot + osc_inertia) — resolving the profile first
+        # turned a spherical-arm kinematics request into unsupported algorithms
+        # (2026-09-20 receipt run).
+        # Exact spelling decides the ambiguous pair: "frame-jacobian" (hyphen) is
+        # the PROFILE, "frame_jacobian" (underscore) is the ALGORITHM. Any other
+        # spelling resolves as an algorithm first, then as a profile.
         raw = str(name).strip().lower()
+        if raw in aliases:
+            return aliases[raw]
+        if raw in profile_algorithms:
+            return raw
+        underscored = raw.replace("-", "_")
+        if underscored in all_algorithms or underscored in opt_in_algorithms:
+            return underscored
         hyphenated = raw.replace("_", "-")
         if hyphenated in aliases:
             return aliases[hyphenated]
         if hyphenated in profile_algorithms:
             return hyphenated
-        return raw.replace("-", "_")
+        return underscored
 
     if algorithm_list is None:
         profile_key = str(codegen_profile or "all").strip().lower().replace("_", "-")

@@ -2050,7 +2050,12 @@ Also from this audit round: `forward_dynamics` and
 `forward_dynamics_parameter_gradient` had NO dependency rows in
 _algo_profiles (bare singletons emitted nvcc-rejected headers), and
 `canonicalize("dynamics-core")` rewrote the PROFILE key into `dynamics_core`
-and missed it — profile keys resolve in their hyphenated spelling first now.
+and missed it. The first fix (profiles first) then turned the ALGORITHM
+`frame_jacobian` into the `frame-jacobian` PROFILE (which also pulls
+frame_jacobian_dot + osc_inertia) and broke every spherical-arm kinematics
+receipt cell. Rule now: exact spelling decides the ambiguous pair (hyphen =
+profile, underscore = algorithm); other spellings resolve as an algorithm
+first, then a profile. Both directions are pinned in the closure net.
 
 ### 6.z Floating-base q cotangents are a PULLBACK, not a pad; jax backward must carry f_ext (audit W01/W02/W03, 2026-09-19)
 - **W01.** `_vjp_common.vjp_backward` tail-padded EVERY input cotangent from nv
@@ -2090,3 +2095,22 @@ and missed it — profile keys resolve in their hyphenated spelling first now.
   (force-conditioned grads vs FD, jit no-capture, jax==torch, shapes).
   RULE: a floating-base autodiff test must difference the PUBLIC function over
   the PUBLIC q; comparing two paths that share `_pad_tail` proves nothing.
+
+
+### 7.z16 numpy path vs framework streams: drain before staging into shared g_data buffers (2026-09-20)
+The 2026-09-19 receipt run turned `test_jax_f_ext_parity_vs_numpy` red with a
+DENSE mismatch (numpy inverse dynamics computed against a zeroed `d_f_ext`).
+Standalone it passes every time; under two concurrent codegen jobs 2/20 fail.
+Cause: the jax/torch handlers enqueue H2D copies, the kernel and the trailing
+`cudaMemsetAsync(d_f_ext, 0)` on THEIR (non-blocking) streams into the same
+`g_data` buffers the numpy path stages synchronously on the legacy default
+stream; a numpy call issued while a jax result was still un-materialized could
+have its staged force zeroed before its launch. The receipt's Phase-A compile
+pool delays XLA dispatch enough to open the window — the test suites never do.
+Fix: `cudaDeviceSynchronize()` at `pack_q_qd_u` entry (the common staging point
+of every numpy op incl. tool/contact/fk) and before runtime parameter-table
+writes; net = `test_numpy_vs_async_framework_race.py` (interleaves un-materialized
+jax calls with numpy calls 200x). Framework-vs-framework overlap (jax and torch
+on different streams) is the same class and remains W04-B (context design).
+RULE: a load-dependent, standalone-green receipt failure is a race until proven
+otherwise — reproduce under CPU load (two codegen jobs), not by rerunning quietly.
