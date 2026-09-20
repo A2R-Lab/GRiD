@@ -917,6 +917,75 @@ def gen_ee_raw_evaluators(self, with_gradient = True):
     self.gen_add_end_function()
 
 
+def gen_contact_frame_raw_evaluators(self):
+    """grid_plant::contact_frame_positions[_gradient] (GATO ask 2026-09-20): caller-scratch
+    wrappers over the contact-frame multi-target family — world positions of the baked
+    contact ORIGINS (the f_ext_body wrench points) and their 3 x NV tangent Jacobians.
+    Same single-load structure as ee_pos / ee_pos_gradient (one XmatsHom load, then the
+    suffixed multi-target inners); emitted only when the header bakes contact_frames."""
+    batch = getattr(self, "_contact_frame_batch", None)
+    if batch is None:
+        return   # emit NOTHING (not even a skip comment): every non-contact header must stay byte-identical
+    nv = self.robot.get_num_vel()
+    nf = batch["n"]
+    self.gen_add_func_doc(
+        "contact_frame_positions: RAW contact-frame world positions (GATO ask 2026-09-20)",
+        ["Caller-scratch INNER over grid::multi_target_position_contact_frames_inner: the world",
+         "positions of the " + str(nf) + " baked contact-frame ORIGINS (the same points f_ext_body",
+         "takes the wrench about), in registration order.",
+         "s_scratch must hold >= CONTACT_FRAME_POSITIONS_DYNAMIC_SHARED_MEM_COUNT elements of T, 16B aligned."],
+        ["s_pos is the 3*NUM_CONTACT_FRAMES position output",
+         "s_q is the joint position vector (size NUM_POS)",
+         "s_scratch is caller shared scratch",
+         "d_robotModel is the GPU model helpers"],
+        None)
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void contact_frame_positions(T *s_pos, const T *s_q, T *s_scratch, "
+                           "const grid::robotModel<T> *d_robotModel) {", True)
+    self.gen_add_code_line("using namespace grid;")
+    _scratch = self.gen_multi_target_position_inner_temp_mem_size(batch)
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(_scratch, include_linalg_scratch = True,
+                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()",
+                                                      arena_base_expr = "s_scratch")
+    self.gen_load_update_XmatsHom_helpers_function_call()
+    self.gen_multi_target_position_inner_function_call(updated_var_names = {"s_out_pos_name": "s_pos"},
+                                                       suffix = "_contact_frames")
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+    self.gen_add_func_doc(
+        "contact_frame_positions_gradient: RAW contact-frame positions + tangent Jacobians (GATO ask 2026-09-20)",
+        ["Caller-scratch INNER: ONE XmatsHom load feeds both the position and the gradient inner.",
+         "Jacobian layout: s_dpos[3*" + str(nv) + "*f + 3*vi + row] (position rows only; tangent d/dv",
+         "convention — floating base = [v_lin; omega; joints] in the pin LOCAL chart).",
+         "s_scratch must hold >= CONTACT_FRAME_POSITIONS_GRADIENT_DYNAMIC_SHARED_MEM_COUNT elements of T, 16B aligned."],
+        ["s_pos is the 3*NUM_CONTACT_FRAMES position output",
+         "s_dpos is the 3*NUM_VEL*NUM_CONTACT_FRAMES Jacobian output",
+         "s_q is the joint position vector (size NUM_POS)",
+         "s_scratch is caller shared scratch",
+         "d_robotModel is the GPU model helpers"],
+        None)
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__device__")
+    self.gen_add_code_line("void contact_frame_positions_gradient(T *s_pos, T *s_dpos, const T *s_q, T *s_scratch, "
+                           "const grid::robotModel<T> *d_robotModel) {", True)
+    self.gen_add_code_line("using namespace grid;")
+    _scratch = max(self.gen_multi_target_position_inner_temp_mem_size(batch),
+                   self.gen_multi_target_position_gradient_inner_temp_mem_size(batch))
+    self.gen_XmatsHom_helpers_temp_shared_memory_code(_scratch, include_linalg_scratch = True,
+                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()",
+                                                      arena_base_expr = "s_scratch")
+    self.gen_load_update_XmatsHom_helpers_function_call()
+    self.gen_multi_target_position_inner_function_call(updated_var_names = {"s_out_pos_name": "s_pos"},
+                                                       suffix = "_contact_frames")
+    self.gen_add_sync()
+    self.gen_multi_target_position_gradient_inner_function_call(updated_var_names = {"s_out_grad_name": "s_dpos"},
+                                                                suffix = "_contact_frames")
+    self.gen_add_sync()
+    self.gen_add_end_function()
+
+
 def gen_ee_pos_cost(self, with_d2ee = False):
     """ee_pos_cost family. p(q) = grid::end_effector_pose (rows 0..2 of the 6-pose);
     J_p = rows 0..2 of grid::end_effector_pose_gradient (layout
@@ -2692,6 +2761,7 @@ def gen_grid_plant(self, algorithms):
         gen_ee_raw_evaluators(self, with_gradient = ("end_effector_pose_gradient" in algorithms))
     else:
         self.gen_add_code_line("// [grid_plant] ee_pos / ee_pos_gradient (raw) skipped: requires 'end_effector_pose' — not generated.")
+    gen_contact_frame_raw_evaluators(self)   # no-op comment unless contact_frames were baked
     if ee_cost_ok:
         self.gen_ee_pos_cost(with_d2ee = ("end_effector_pose_hessian" in algorithms))
     else:

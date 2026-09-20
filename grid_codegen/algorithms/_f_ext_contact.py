@@ -795,3 +795,44 @@ def gen_f_ext_contact(self, contacts):
     _emit_device(self, contacts, "value")
     _emit_device(self, contacts, "dfc")
     _emit_device(self, contacts, "dq")
+    gen_contact_frame_positions(self, contacts)
+
+def gen_contact_frame_positions(self, contacts):
+    """GATO ask 2026-09-20: world positions + 3 x NV tangent Jacobians of the baked
+    contact-frame ORIGINS — the same points f_ext_body takes the wrench about — emitted
+    as a suffixed multi-target batch (`_contact_frames`) over the existing multi-target
+    emitters (no new FK code), plus the asked-for names as thin aliases and the
+    element-count scratch constants the grid_plant caller-scratch wrappers document.
+    Registration order is preserved (no target groups)."""
+    batch = self.build_target_batch([{"anchor_jid": int(c["jid"]), "offset": tuple(c["offset"])}
+                                     for c in contacts])
+    self._contact_frame_batch = batch
+    self.gen_add_code_line("")
+    self.gen_add_code_line("// ---- contact-frame positions + tangent Jacobians (GATO ask 2026-09-20): the baked contact ORIGINS")
+    self.gen_add_code_line("//      (the points f_ext_body takes the wrench about) as a suffixed multi-target batch; registration order.")
+    self.gen_multi_target_position(batch, suffix="_contact_frames", emit_num_const=True)
+    self.gen_multi_target_position_gradient(batch, suffix="_contact_frames")
+    XHom_size, _dXhom, _d2Xhom = self.gen_get_Xhom_size()
+    scratch_pos = self.gen_multi_target_position_inner_temp_mem_size(batch)
+    scratch_grad = max(scratch_pos, self.gen_multi_target_position_gradient_inner_temp_mem_size(batch))
+    nv = self.robot.get_num_vel()
+    self.gen_add_code_lines([
+        "// Asked-for names: thin aliases over the suffixed multi-target family. positions = 3*NUM_CONTACT_FRAMES;",
+        "// Jacobian = 3*NUM_VEL per frame, layout [3*NUM_VEL*f + 3*vi + row], tangent [v_lin; omega; joints] (pin LOCAL chart).",
+        "// The *_COUNT constants size a caller-provided T scratch for the grid_plant wrappers (XmatsHom + FK scratch +",
+        "// topology ints + alignment slack, the ee_pos convention); the *_BYTES sizers are the dynamic-smem arena.",
+        "const int CONTACT_FRAME_POSITIONS_DYNAMIC_SHARED_MEM_COUNT = " + str(XHom_size + scratch_pos) + " + TOPOLOGY_HELPERS_COUNT + 8;",
+        "const int CONTACT_FRAME_POSITIONS_GRADIENT_DYNAMIC_SHARED_MEM_COUNT = " + str(XHom_size + scratch_grad) + " + TOPOLOGY_HELPERS_COUNT + 8;",
+        "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t CONTACT_FRAME_POSITIONS_DYNAMIC_SHARED_MEM_BYTES() { return MULTI_TARGET_POSITION_CONTACT_FRAMES_DYNAMIC_SHARED_MEM_BYTES<T, TIER>(); }",
+        "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t CONTACT_FRAME_POSITIONS_DEVICE_INLINE_WORKSPACE_BYTES() { return MULTI_TARGET_POSITION_CONTACT_FRAMES_DEVICE_INLINE_WORKSPACE_BYTES<T, TIER>(); }",
+        "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t CONTACT_FRAME_POSITIONS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() { return MULTI_TARGET_POSITION_GRADIENT_CONTACT_FRAMES_DYNAMIC_SHARED_MEM_BYTES<T, TIER>(); }",
+        "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t CONTACT_FRAME_POSITIONS_GRADIENT_DEVICE_INLINE_WORKSPACE_BYTES() { return MULTI_TARGET_POSITION_GRADIENT_CONTACT_FRAMES_DEVICE_INLINE_WORKSPACE_BYTES<T, TIER>(); }",
+        "template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>",
+        "__device__ inline void contact_frame_positions_device(T *s_pos, const T *s_q, const robotModel<T> *d_robotModel, T *d_workspace = nullptr) {",
+        "    multi_target_position_contact_frames_device<T, RESOURCE_TIER>(s_pos, s_q, d_robotModel, d_workspace);",
+        "}",
+        "template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>",
+        "__device__ inline void contact_frame_positions_gradient_device(T *s_dpos, const T *s_q, const robotModel<T> *d_robotModel, T *d_workspace = nullptr) {",
+        "    multi_target_position_gradient_contact_frames_device<T, RESOURCE_TIER>(s_dpos, s_q, d_robotModel, d_workspace);",
+        "}",
+    ])

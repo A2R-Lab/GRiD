@@ -289,6 +289,18 @@ and composes with a subset ``algorithm_list`` — e.g.
 ``contact_frames=[...]`` builds only the dynamics cores and the contact
 family (the ``bindings/examples/multi_contact_fext.py`` recipe).
 
+The baked contact set also exposes its ORIGINS to CUDA/plant consumers
+(GATO ask 2026-09-20): ``grid::contact_frame_positions_device`` (the
+``3*NUM_CONTACT_FRAMES`` world positions of the points ``f_ext_body`` takes
+the wrench about, registration order) and
+``grid::contact_frame_positions_gradient_device`` (``3 x NUM_VEL`` per
+frame, layout ``[3*NUM_VEL*f + 3*vi + row]``, floating tangent
+``[v_lin; omega; joints]``), with the caller-scratch wrappers
+``grid_plant::contact_frame_positions[_gradient](…, s_scratch, …)`` sized by
+``CONTACT_FRAME_POSITIONS[_GRADIENT]_DYNAMIC_SHARED_MEM_COUNT``. They ride
+the multi-target emitters, so a dynamics-only ``algorithm_list`` still gets
+them. (No Python method yet — the device/plant layer is the consumer.)
+
 ``register_robot(enable_tool=True)`` enables the runtime welded-tool
 surface — ``attach_tool`` / ``detach_tool`` / ``tool_fext`` — by turning
 on the runtime inertia table + runtime contact surface, all with no
