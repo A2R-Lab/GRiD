@@ -550,6 +550,7 @@ extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
 #define GRID_RBD_RUNTIME_PARAM_SETTER(NAME, SIZE_EXPR)                          \
 extern "C" int grid_rbd_set_##NAME##_params(const T* h_params) {                \
     if (!g_robot) { int rc = grid_rbd_init(); if (rc) return rc; }              \
+    cudaDeviceSynchronize(); /* drain framework streams reading the table */   \
     grid::set_##NAME##_params<T>(g_robot, h_params);                            \
     cudaError_t err = cudaDeviceSynchronize();                                  \
     if (err == cudaSuccess) err = grid_consume_last_error(); /* NO_EXIT sticky */\
@@ -598,6 +599,12 @@ GRID_RBD_RUNTIME_PARAM_SETTER(joint_dynamics, 2 * grid::NUM_VEL)
 static inline void pack_q_qd_u(const T* q, const T* qd, const T* u,
                                int batch, int num_joints)
 {
+    // Drain in-flight framework work first (audit W04-B class, 2026-09-20): the jax/torch
+    // handlers enqueue async copies, kernels and the f_ext reset on THEIR (non-blocking)
+    // streams into these same g_data buffers; the numpy path stages synchronously on the
+    // legacy default stream, so without this a framework memset could land between our
+    // staging and our launch (seen: numpy ID computed against a zeroed d_f_ext).
+    cudaDeviceSynchronize();
     const int stride = 3 * num_joints;
     for (int t = 0; t < batch; ++t) {
         std::memcpy(&g_data->h_q_qd_u[t * stride + 0],          &q[t * num_joints],
