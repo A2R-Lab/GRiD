@@ -51,6 +51,27 @@ def _tier_variant_bytes(bytes_macro: str, tier_sym: str) -> str:
     return bytes_macro[:-3] + ", " + tier_sym + ">()"
 
 
+import re as _re_attr
+_ATTR_GPU = _re_attr.compile(r"^(\s*)(.*?)gpuErrchk\((.*)\);\s*$")
+
+
+def _checked_attr_lines(lines):
+    """init_grid_kernel_attrs lines with every gpuErrchk(call) turned into a
+    return-on-error check (the op named by callee + first argument)."""
+    out = []
+    for line in lines:
+        m = _ATTR_GPU.match(line)
+        if m and "gpuErrchk(" in line:
+            indent, prefix, expr = m.group(1), m.group(2), m.group(3)
+            callee = expr.split("(", 1)[0].strip()
+            arg0 = expr.split("(", 1)[1].split(",", 1)[0].strip().strip('"') if "(" in expr else ""
+            out.append(indent + prefix + "{ cudaError_t _e = GRID_CUDA_CALL(" + expr + "); if (_e != cudaSuccess) { return grid_fail(failed_op, \"" + callee + "(" + arg0 + ")\", _e); } }")
+        else:
+            assert "gpuErrchk(" not in line, "attr line not covered: " + line
+            out.append(line)
+    return out
+
+
 def _tier_variant_attr_lines(label, bytes_macro, kernels, tier_sym, alias_start):
     """The extra registration block for one divergent-tier algo entry.
     Returns (lines, next_alias). Mirrors the default-tier block's shape."""
@@ -461,9 +482,11 @@ def gen_init_close_grid(self):
                           "function across TUs and we set the attribute on one TU's "
                           "stubs while the launch goes through a different TU's.",
                           [], [], None)
+    self.gen_add_func_doc("Library-safe MaxDynamicSharedMemorySize registration for every algorithm kernel: returns the first cudaFuncSetAttribute/fit-check error and names it (no resources to release)",
+                          [], ["failed_op (optional) receives a static string naming the failed operation"], "cudaSuccess or the first error")
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__ __forceinline__")
-    self.gen_add_code_line("void init_grid_kernel_attrs(){", True)
+    self.gen_add_code_line("cudaError_t init_grid_kernel_attrs_checked(const char **failed_op = nullptr){", True)
     attr_lines = ["// enable opt-in dynamic shared memory for every algorithm kernel",
                   "// Gate registration on the DEVICE opt-in max (not the codegen target):",
                   "// grid_check_dynamic_shared_memory_bytes and the bench's",
@@ -555,7 +578,16 @@ def gen_init_close_grid(self):
                 algo_label, bytes_macro, kernels, divergent_tiers[algo_short],
                 alias_counter)
             attr_lines.extend(extra)
-    self.gen_add_code_lines(attr_lines)
+    self.gen_add_code_lines(_checked_attr_lines(attr_lines))
+    self.gen_add_code_line("return cudaSuccess;")
+    self.gen_add_end_function()
+    # legacy spelling (historical policy) AFTER the checked template it calls
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__host__ __forceinline__")
+    self.gen_add_code_line("void init_grid_kernel_attrs(){", True)
+    self.gen_add_code_lines(["const char *op = nullptr;",
+                             "cudaError_t e = init_grid_kernel_attrs_checked<T>(&op);  // sequenced BEFORE reading op",
+                             "grid_legacy_check(e, op, __FILE__, __LINE__);"])
     self.gen_add_end_function()
 
     # ----- Per-algo init_grid_kernel_attr_<short><T>() (P0: split-compile) ----
@@ -630,18 +662,45 @@ def gen_init_close_grid(self):
     self.gen_add_func_doc("Allocates streams for host functions WITHOUT registering any kernel "
                           "attributes (pair with an init_grid_kernel_attr_<algo> for split "
                           "compiles).", [], [], "A pointer to the array of streams")
+    # checked stream allocation (shared by init_grid_checked): every created
+    # stream is destroyed again on a later failure; *out published on success.
+    stream_checked_lines = [
+        "*out = nullptr;",
+        "{ cudaError_t _e = GRID_CUDA_CALL(cudaDeviceSynchronize()); if (_e != cudaSuccess) { return grid_fail(failed_op, \"cudaDeviceSynchronize()\", _e); } }",
+        "// allocate streams",
+        "cudaStream_t *streams = (cudaStream_t *)GRID_HOST_ALLOC(malloc(" + str(MAX_STREAMS) + "*sizeof(cudaStream_t)));",
+        "if (streams == nullptr) { return grid_fail(failed_op, \"malloc(streams)\", cudaErrorMemoryAllocation); }",
+        "int priority, minPriority, maxPriority;",
+        "{ cudaError_t _e = GRID_CUDA_CALL(cudaDeviceGetStreamPriorityRange(&minPriority, &maxPriority)); if (_e != cudaSuccess) { free(streams); return grid_fail(failed_op, \"cudaDeviceGetStreamPriorityRange()\", _e); } }",
+        "for(int i=0; i<" + str(MAX_STREAMS) + "; i++){",
+        "    int adjusted_max = maxPriority - i; priority = adjusted_max > minPriority ? adjusted_max : minPriority;",
+        "    cudaError_t _e = GRID_CUDA_CALL(cudaStreamCreateWithPriority(&(streams[i]),cudaStreamDefault,priority));  // BLOCKING streams: every generated host wrapper copies inputs on streams[0] and launches kernels on streams[0]; a blocking stream keeps that ordered against the legacy default stream (`cudaStreamNonBlocking` here would let a kernel run BEFORE the H2D copy landed).",
+        "    if (_e != cudaSuccess) { for (int j = 0; j < i; j++) { GRID_CUDA_CALL(cudaStreamDestroy(streams[j])); } free(streams); return grid_fail(failed_op, \"cudaStreamCreateWithPriority(streams[i])\", _e); }",
+        "}", "*out = streams;", "return cudaSuccess;"]
+    self.gen_add_func_doc("Library-safe stream allocation WITHOUT kernel-attribute registration: on failure every stream created by this attempt is destroyed and the failed operation named; *out published on success only",
+                          [], ["out receives the stream array (nullptr on failure)", "failed_op (optional)"], "cudaSuccess or the first error")
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line("cudaError_t init_grid_streams_checked(cudaStream_t **out, const char **failed_op = nullptr){", True)
+    self.gen_add_code_lines(stream_checked_lines)
+    self.gen_add_end_function()
+    self.gen_add_func_doc("Library-safe full init: kernel attributes then streams (see init_grid_kernel_attrs_checked / init_grid_streams_checked)",
+                          [], ["out receives the stream array (nullptr on failure)", "failed_op (optional)"], "cudaSuccess or the first error")
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line("cudaError_t init_grid_checked(cudaStream_t **out, const char **failed_op = nullptr){", True)
+    self.gen_add_code_lines(["*out = nullptr;",
+                             "{ cudaError_t _e = init_grid_kernel_attrs_checked<T>(failed_op); if (_e != cudaSuccess) { return _e; } }",
+                             "return init_grid_streams_checked<T>(out, failed_op);"])
+    self.gen_add_end_function()
+    # legacy spelling AFTER the checked templates it calls
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("cudaStream_t *init_grid_streams(){", True)
-    self.gen_add_code_lines(["gpuErrchk(cudaDeviceSynchronize());",
-                  "// allocate streams",
-                  "cudaStream_t *streams = (cudaStream_t *)malloc(" + str(MAX_STREAMS) + "*sizeof(cudaStream_t));",
-                  "int priority, minPriority, maxPriority;",
-                  "gpuErrchk(cudaDeviceGetStreamPriorityRange(&minPriority, &maxPriority));",
-                  "for(int i=0; i<" + str(MAX_STREAMS) + "; i++){",
-                  "    int adjusted_max = maxPriority - i; priority = adjusted_max > minPriority ? adjusted_max : minPriority;",
-                  "    gpuErrchk(cudaStreamCreateWithPriority(&(streams[i]),cudaStreamDefault,priority));  // BLOCKING streams: every generated host wrapper copies inputs on streams[0] and launches kernels on the DEFAULT stream — legacy default-stream sync is the ordering guarantee (nonblocking streams made that copy->launch pair a data race; ps5 fr3 first-call repro 2026-08-11)",
-                  "}", "return streams;"])
+    self.gen_add_code_lines(["cudaStream_t *streams = nullptr; const char *op = nullptr;",
+                             "cudaError_t e = init_grid_streams_checked<T>(&streams, &op);  // sequenced BEFORE reading op",
+                             "grid_legacy_check(e, op, __FILE__, __LINE__);",
+                             "return streams;"])
     self.gen_add_end_function()
 
     # ----- init_grid<T>(): full init = attrs + streams (the original API) ----
@@ -650,79 +709,43 @@ def gen_init_close_grid(self):
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("cudaStream_t *init_grid(){", True)
-    init_lines = ["init_grid_kernel_attrs<T>();",
-                  "gpuErrchk(cudaDeviceSynchronize());",
-                  "// allocate streams",
-                  "cudaStream_t *streams = (cudaStream_t *)malloc(" + str(MAX_STREAMS) + "*sizeof(cudaStream_t));",
-                  "int priority, minPriority, maxPriority;",
-                  "gpuErrchk(cudaDeviceGetStreamPriorityRange(&minPriority, &maxPriority));",
-                  "for(int i=0; i<" + str(MAX_STREAMS) + "; i++){",
-                  "    int adjusted_max = maxPriority - i; priority = adjusted_max > minPriority ? adjusted_max : minPriority;",
-                  "    gpuErrchk(cudaStreamCreateWithPriority(&(streams[i]),cudaStreamDefault,priority));  // BLOCKING streams: every generated host wrapper copies inputs on streams[0] and launches kernels on the DEFAULT stream — legacy default-stream sync is the ordering guarantee (nonblocking streams made that copy->launch pair a data race; ps5 fr3 first-call repro 2026-08-11)",
-                  "}", "return streams;"]
-    self.gen_add_code_lines(init_lines)
+    self.gen_add_code_lines(["cudaStream_t *streams = nullptr; const char *op = nullptr;",
+                             "cudaError_t e = init_grid_checked<T>(&streams, &op);  // sequenced BEFORE reading op",
+                             "grid_legacy_check(e, op, __FILE__, __LINE__);",
+                             "return streams;"])
     self.gen_add_end_function()
-    # free the streams and all allocated data
-    self.gen_add_func_doc("Frees the memory used by grid", [], ["streams allocated by init_grid", "robotModel allocated by init_robotModel", "data allocated by init_gridData"], None)
+    # free the streams and all allocated data — library-safe (part 2): the
+    # release list is DERIVED from init_gridData's allocation lines
+    # (release_gridData_members), not hand-written; nullptr args are no-ops;
+    # cleanup continues past a failure and the FIRST error is returned.
+    self.gen_add_func_doc("Library-safe teardown of streams, robotModel and gridData: every argument may be nullptr (no-op); cleanup continues past a failed free/destroy and the FIRST error is returned and named; never exit/abort/cudaDeviceReset",
+                          [], ["streams allocated by init_grid[_checked] (or nullptr)", "robotModel allocated by init_robotModel[_checked] (or nullptr)", "data allocated by init_gridData[_checked] (or nullptr)", "failed_op (optional)"], "cudaSuccess or the first error")
+    self.gen_add_code_line("template <typename T, gridDataKind KIND = GRID_DATA_ALL>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line("cudaError_t close_grid_checked(cudaStream_t *streams, robotModel<T> *d_robotModel, gridData<T, KIND> *hd_data, const char **failed_op = nullptr){", True)
+    self.gen_add_code_lines([
+        "cudaError_t first = cudaSuccess; const char *op = nullptr;",
+        "{ cudaError_t e = free_robotModel_checked<T>(d_robotModel, &op); if (e != cudaSuccess && first == cudaSuccess) { first = e; grid_fail(failed_op, op, e); } }",
+        "if (hd_data != nullptr) {",
+        "    op = nullptr;",
+        "    { cudaError_t e = release_gridData_members<T, KIND>(hd_data, &op); if (e != cudaSuccess && first == cudaSuccess) { first = e; grid_fail(failed_op, op, e); } }",
+        "    // Phase 3a/b/c/e: end the L2 persisting window opened at init.",
+        "    { cudaError_t e = GRID_CUDA_CALL(grid_end_l2_persisting(0)); if (e != cudaSuccess && first == cudaSuccess) { first = e; grid_fail(failed_op, \"grid_end_l2_persisting(0)\", e); } }",
+        "    free(hd_data);",
+        "    // Device-pool mode: rewind the consumed slab so a close/re-init cycle re-carves from the top.",
+        "    grid_device_pool().used = 0;",
+        "}",
+        "if (streams != nullptr) {",
+        "    for(int i=0; i<" + str(MAX_STREAMS) + "; i++){ cudaError_t e = GRID_CUDA_CALL(cudaStreamDestroy(streams[i])); if (e != cudaSuccess && first == cudaSuccess) { first = e; grid_fail(failed_op, \"cudaStreamDestroy(streams[i])\", e); } }",
+        "    free(streams);",
+        "}",
+        "return first;"])
+    self.gen_add_end_function()
+    self.gen_add_func_doc("Frees the memory used by grid (legacy policy: exit on failure, or sticky first error under GRID_GPUERRCHK_NO_EXIT; prefer close_grid_checked in library code)", [], ["streams allocated by init_grid", "robotModel allocated by init_robotModel", "data allocated by init_gridData"], None)
     self.gen_add_code_line("template <typename T, gridDataKind KIND = GRID_DATA_ALL>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("void close_grid(cudaStream_t *streams, robotModel<T> *d_robotModel, gridData<T, KIND> *hd_data){", True)
-    close_lines = (["free_robotModel(d_robotModel); // frees nested d_XImats/d_topology_helpers(+runtime tables)+struct (bare cudaFree would leak the nested arrays)", \
-                             "gpuErrchk(cudaFree(hd_data->d_q_qd_u)); gpuErrchk(cudaFree(hd_data->d_q_qd)); gpuErrchk(cudaFree(hd_data->d_q));", \
-                             "gpuErrchk(cudaFree(hd_data->d_f_ext)); grid_host_free(hd_data->h_f_ext);", \
-                             "gpuErrchk(cudaFree(hd_data->d_c)); gpuErrchk(cudaFree(hd_data->d_Minv)); gpuErrchk(cudaFree(hd_data->d_qdd)); gpuErrchk(cudaFree(hd_data->d_M));", \
-                             "gpuErrchk(cudaFree(hd_data->d_dc_du)); gpuErrchk(cudaFree(hd_data->d_df_du));", \
-                             "gpuErrchk(cudaFree(hd_data->d_dtau_dfext)); gpuErrchk(cudaFree(hd_data->d_dqdd_dfext));",
-                             "grid_host_free(hd_data->h_dtau_dfext); grid_host_free(hd_data->h_dqdd_dfext);",
-                             "gpuErrchk(cudaFree(hd_data->d_f_ext_gradient_dq)); grid_host_free(hd_data->h_f_ext_gradient_dq);",
-                             # R2: regressor Y + FD param-gradient dqdd/dpi outputs
-                             "gpuErrchk(cudaFree(hd_data->d_Y)); gpuErrchk(cudaFree(hd_data->d_dqdd_dpi));",
-                             "grid_host_free(hd_data->h_Y); grid_host_free(hd_data->h_dqdd_dpi);",
-                             # B.0: dY/dx output slab
-                             "gpuErrchk(cudaFree(hd_data->d_dY_dx)); grid_host_free(hd_data->h_dY_dx);",
-                             # PS5 energy regressors
-                             "gpuErrchk(cudaFree(hd_data->d_ke_regressor)); gpuErrchk(cudaFree(hd_data->d_pe_regressor));",
-                             "grid_host_free(hd_data->h_ke_regressor); grid_host_free(hd_data->h_pe_regressor);",
-                             # PS5 Coriolis matrix
-                             "gpuErrchk(cudaFree(hd_data->d_coriolis)); grid_host_free(hd_data->h_coriolis);",
-                             # PS5 dCCRBA
-                             "gpuErrchk(cudaFree(hd_data->d_dccrba)); gpuErrchk(cudaFree(hd_data->d_cmm_time_variation));",
-                             "grid_host_free(hd_data->h_dccrba); grid_host_free(hd_data->h_cmm_time_variation);"]
-                             + [
-                             "gpuErrchk(cudaFree(hd_data->d_end_effector_pose)); gpuErrchk(cudaFree(hd_data->d_end_effector_pose_gradient)); gpuErrchk(cudaFree(hd_data->d_end_effector_pose_hessian));", \
-                             # Phase 3a/b/c/e: end the L2 persisting window opened at init.
-                             "gpuErrchk(grid_end_l2_persisting(0));", \
-                             "gpuErrchk(cudaFree(hd_data->d_workspace));", \
-                            # idsva_so - d2tau_dq, d2tau_dqd, d2tau_dvdq, dM_dq
-                             "gpuErrchk(cudaFree(hd_data->d_idsva_so));", \
-                             # fdsva_so - d2fd_dq2, d2fd_cross, d2fd_dqd2, d2fd_dtaudq
-                             "gpuErrchk(cudaFree(hd_data->d_df2));", \
-                             "grid_host_free(hd_data->h_idsva_so); grid_host_free(hd_data->h_df2);", \
-                             "grid_host_free(hd_data->h_q_qd_u); grid_host_free(hd_data->h_q_qd); grid_host_free(hd_data->h_q);", \
-                             "grid_host_free(hd_data->h_c); grid_host_free(hd_data->h_Minv); grid_host_free(hd_data->h_qdd); grid_host_free(hd_data->h_M);", \
-                             "grid_host_free(hd_data->h_dc_du); grid_host_free(hd_data->h_df_du);",\
-                             "grid_host_free(hd_data->h_end_effector_pose); grid_host_free(hd_data->h_end_effector_pose_gradient); grid_host_free(hd_data->h_end_effector_pose_hessian);", \
-                             # E2/S1: general-frame Jacobian outputs (frame_jacobian / frame_jacobian_dot / osc_inertia)
-                             "gpuErrchk(cudaFree(hd_data->d_frame_jacobian)); gpuErrchk(cudaFree(hd_data->d_frame_jacobian_dot)); gpuErrchk(cudaFree(hd_data->d_osc_inertia));", \
-                             "grid_host_free(hd_data->h_frame_jacobian); grid_host_free(hd_data->h_frame_jacobian_dot); grid_host_free(hd_data->h_osc_inertia);", \
-                             "gpuErrchk(cudaFree(hd_data->d_eePose)); gpuErrchk(cudaFree(hd_data->d_eePoseGrad)); gpuErrchk(cudaFree(hd_data->d_eepose_runtime_offset));", \
-                             "grid_host_free(hd_data->h_eePose); grid_host_free(hd_data->h_eePoseGrad);"] \
-                             # W1b.3 batched multi-target (opt-in; Python-conditional, mirrors the alloc)
-                             + ([
-                             "gpuErrchk(cudaFree(hd_data->d_multi_target_position)); gpuErrchk(cudaFree(hd_data->d_multi_target_position_gradient));",
-                             "grid_host_free(hd_data->h_multi_target_position); grid_host_free(hd_data->h_multi_target_position_gradient);",
-                             ] if getattr(self, "_has_multi_target_position", False) else []) \
-                             + [
-                             "gpuErrchk(cudaFree(hd_data->d_x_kp1)); gpuErrchk(cudaFree(hd_data->d_dAB));", \
-                             "grid_host_free(hd_data->h_x_kp1); grid_host_free(hd_data->h_dAB);", \
-                             "for(int i=0; i<" + str(MAX_STREAMS) + "; i++){gpuErrchk(cudaStreamDestroy(streams[i]));} free(streams);"])
-    # Device-pool mode (2026-09-09): gridData device frees route through
-    # grid_device_free (no-op for slab-carved pointers, cudaFree otherwise),
-    # and the consumed pool is rewound so a close/re-init cycle re-carves from
-    # the top of the caller-owned slab.
-    close_lines = [l.replace("gpuErrchk(cudaFree(hd_data->",
-                             "gpuErrchk(grid_device_free(hd_data->")
-                   for l in close_lines]
-    close_lines.insert(len(close_lines) - 1, "grid_device_pool().used = 0;")
-    self.gen_add_code_lines(close_lines)
+    self.gen_add_code_lines(["const char *op = nullptr;",
+                             "cudaError_t e = close_grid_checked<T, KIND>(streams, d_robotModel, hd_data, &op);  // sequenced BEFORE reading op",
+                             "grid_legacy_check(e, op, __FILE__, __LINE__);"])
     self.gen_add_end_function()

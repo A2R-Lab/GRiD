@@ -57,6 +57,10 @@ _COMPILE_FREE_IN_CUDA_EQUIVALENTS = {
     # are pure-python parser/property checks -- keep them CPU-collectable. The module's
     # GPU tests all carry @pytest.mark.cuda_equivalence and stay behind the filter.
     "test_cuda_collision_native.py",
+    # Its two UNMARKED tests (default-identity / GLASS-revision provenance) only run
+    # the generator -- no nvcc -- and are precisely the checks a CPU lane should keep;
+    # the alias compile+run test carries @pytest.mark.cuda_equivalence.
+    "test_cuda_vendor_glass_alias.py",
 }
 
 # Decorators that are plumbing, not markers -- legal on helpers and fixtures.

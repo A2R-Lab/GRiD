@@ -8,6 +8,10 @@ copy in the generated ``*_checked`` initializers is fault-injectable
 deterministically — no real OOM, no context reset, no runtime cost in the
 math kernels (the seams are never used in device code).
 
+Part 2 (arena / streams / close_grid) is swept the same way: every CUDA call
+index of init_gridData_checked and init_grid_checked, close_grid_checked with
+null arguments and with an injected failure mid-cleanup.
+
 Robots: iiwa14 fixed (serial chain, no topology-helper table) and go2
 floating with ALL runtime tables on (topology helpers + inertia + transform +
 joint-dynamics ownership paths), so the ledger covers every nested member.
@@ -80,7 +84,7 @@ def test_checked_initialization_contract(tmp_path, name, floating, options):
     if shutil.which("nvcc") is None:
         pytest.skip("nvcc not on PATH")
     exes = _build(name, floating, options, tmp_path / f"{name}_safe_init")
-    for mode in ("success", "sweep", "cleanup", "limits"):
+    for mode in ("success", "sweep", "cleanup", "limits", "arena", "streams", "close"):
         rc, out = _run(exes["default"], mode)
         assert rc == 0 and f"OK {mode}" in out, f"{name}/{mode} (default build):\n{out}"
         rc, out = _run(exes["noexit"], mode)
@@ -89,6 +93,9 @@ def test_checked_initialization_contract(tmp_path, name, floating, options):
     rc, out = _run(exes["default"], "sweep")
     m = re.search(r"SWEEP calls=(\d+) failed_attempts=(\d+)", out)
     assert m and int(m.group(1)) == int(m.group(2)) >= 4, out
+    rc, out = _run(exes["default"], "arena")
+    m = re.search(r"ARENA calls=(\d+)", out)
+    assert m and int(m.group(1)) >= 8, out
 
 
 @pytest.mark.cuda_equivalence

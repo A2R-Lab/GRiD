@@ -1665,6 +1665,106 @@ def _derive_device_bytes_lines(code_lines):
     return out
 
 
+# ─── library-safe arena (HJCD ask part 2, 2026-09-22) ───────────────────────
+# Both derived from the ONE init_gridData line list, so the checked
+# constructor, its rollback and close_grid_checked release exactly what was
+# allocated (the legacy close_grid kept a hand-written free list).
+import re as _re_ck
+_CK_ALLOC = _re_ck.compile(r"^(\s*)gpuErrchk\((grid_device_alloc\(\(void\*\*\)&hd_data->(\w+),.*)\);(\s*\}?\s*(?://.*)?)$")
+_CK_GPU = _re_ck.compile(r"^(\s*)gpuErrchk\((.*)\);(\s*\}?\s*(?://.*)?)$")
+_CK_HOST = _re_ck.compile(r"^(\s*)hd_data->(h_\w+) = (grid_host_alloc<T>\(.*\)|\(T \*\)calloc\(.*\));(\s*\}?\s*(?://.*)?)$")
+
+
+def _ck_op_name(expr):
+    callee = expr.split("(", 1)[0].strip()
+    m = _re_ck.search(r"hd_data->(\w+)", expr)
+    return callee + "(" + (m.group(1) if m else "") + ")"
+
+
+def _checked_init_lines(code_lines):
+    """init_gridData's body with every allocation/copy guarded: on the first
+    failure everything this attempt acquired is released and the failed op is
+    named; `*out` is published on success only."""
+    out = []
+    for line in code_lines:
+        st = line.strip()
+        if st.startswith("gridData<T, KIND> *hd_data = (gridData<T, KIND> *)calloc("):
+            out.append("*out = nullptr;")
+            out.append("gridData<T, KIND> *hd_data = (gridData<T, KIND> *)GRID_HOST_ALLOC(calloc(1, sizeof(gridData<T, KIND>)));")
+            out.append("if (hd_data == nullptr) { return grid_fail(failed_op, \"calloc(gridData)\", cudaErrorMemoryAllocation); }")
+            continue
+        m = _CK_ALLOC.match(line) or _CK_GPU.match(line)
+        if m:
+            indent, expr, suffix = m.group(1), m.group(2), m.group(m.lastindex)
+            out.append(indent + "{ cudaError_t _e = GRID_CUDA_CALL(" + expr + "); if (_e != cudaSuccess) { "
+                       "release_gridData_members<T, KIND>(hd_data); free(hd_data); "
+                       "return grid_fail(failed_op, \"" + _ck_op_name(expr) + "\", _e); } }" + suffix)
+            continue
+        m = _CK_HOST.match(line)
+        if m:
+            indent, member, expr, suffix = m.group(1), m.group(2), m.group(3), m.group(4)
+            out.append(indent + "hd_data->" + member + " = (T *)GRID_HOST_ALLOC(" + expr + "); "
+                       "if (hd_data->" + member + " == nullptr) { release_gridData_members<T, KIND>(hd_data); free(hd_data); "
+                       "return grid_fail(failed_op, \"host_alloc(" + member + ")\", cudaErrorMemoryAllocation); }" + suffix)
+            continue
+        if st == "return hd_data;":
+            out.append("*out = hd_data;")
+            out.append("return cudaSuccess;")
+            continue
+        assert "gpuErrchk(" not in line and "grid_host_alloc<T>(" not in line, (
+            "init_gridData line not covered by the checked transform: " + line)
+        out.append(line)
+    return out
+
+
+def _release_lines(code_lines):
+    """release_gridData_members body: every device buffer through
+    grid_device_free (pool-aware), every host buffer through grid_host_free,
+    same #if / needs_ structure as the allocation; null members skipped; the
+    first cleanup error is recorded, never thrown or exited."""
+    out = ["cudaError_t first = cudaSuccess;", "if (hd_data == nullptr) { return first; }"]
+    skip_depth = 0  # inside a dropped block (e.g. the workspace auto-fit `else if {...}`)
+    for line in code_lines:
+        st = line.strip()
+        if skip_depth > 0:
+            skip_depth += st.count("{") - st.count("}")
+            assert not _CK_ALLOC.match(line) and not _CK_HOST.match(line), (
+                "allocation inside a block the release transform skips: " + line)
+            continue
+        if st.startswith("gridData<T, KIND> *hd_data =") or st == "return hd_data;":
+            continue
+        m = _CK_ALLOC.match(line)
+        if m:
+            indent, member, suffix = m.group(1), m.group(3), m.group(4)
+            out.append(indent + "grid_cleanup_device_free(hd_data->" + member + ", \"grid_device_free(" + member + ")\", &first, cleanup_op); hd_data->" + member + " = nullptr;" + suffix)
+            continue
+        m = _CK_GPU.match(line)
+        if m:
+            # memsets/copies/probes/L2 window: nothing to release; keep a trailing brace
+            if "}" in m.group(3):
+                out.append(m.group(1) + "}")
+            continue
+        m = _CK_HOST.match(line)
+        if m:
+            indent, member, suffix = m.group(1), m.group(2), m.group(4)
+            out.append(indent + "grid_host_free(hd_data->" + member + "); hd_data->" + member + " = nullptr;" + suffix)
+            continue
+        # Structural lines carry over (same #if / needs_ / brace shape as the
+        # allocation); everything else (size decls, env parsing, slot fits —
+        # they reference the constructor's NUM_TIMESTEPS) is dropped, and a
+        # dropped line that opens a block drops the block.
+        structural = (st.startswith("#if") or st.startswith("#endif") or st.startswith("#else")
+                      or st.startswith("const bool needs_") or st.startswith("if (needs_")
+                      or st in ("}", "{") or st.startswith("//") or st == "")
+        if structural:
+            out.append(line)
+        else:
+            skip_depth += st.count("{") - st.count("}")
+            assert skip_depth >= 0, "release transform: unbalanced drop at " + line
+    out.append("return first;")
+    return out
+
+
 def gen_init_gridData(self):
     # 2a (h2_plus OOM): opt-in per-algo ALLOC GATING for the bench's solo exes.
     # When gen_all_code(emit_alloc_gating=True), every LARGE per-algo output
@@ -2027,20 +2127,58 @@ def gen_init_gridData(self):
     code_lines = [l.replace("gpuErrchk(cudaMalloc((void**)&hd_data->",
                             "gpuErrchk(grid_device_alloc((void**)&hd_data->")
                   for l in code_lines]
-    # generate as templated or not function
-    self.gen_add_func_doc("Allocated device and host memory for all computations",
+    # ─── library-safe arena (HJCD ask part 2) ───────────────────────────
+    self.gen_add_code_lines([
+        "template <typename T>",
+        "__host__ inline void grid_cleanup_device_free(T *p, const char *op, cudaError_t *first_cleanup_code, const char **first_cleanup_op) {",
+        "    if (p == nullptr) { return; }",
+        "    cudaError_t e = GRID_CUDA_CALL(grid_device_free(p));",
+        "    if (e != cudaSuccess && first_cleanup_code != nullptr && *first_cleanup_code == cudaSuccess) {",
+        "        *first_cleanup_code = e; if (first_cleanup_op != nullptr) { *first_cleanup_op = op; }",
+        "    }",
+        "}",
+        "",
+    ])
+    self.gen_add_func_doc("Releases every device/host buffer a gridData owns (best effort, null members skipped; pool-carved buffers are rewound by the caller); the struct itself is NOT freed",
+                          [], ["hd_data allocated by init_gridData[_checked] (or nullptr)"], "the first cudaFree error (cudaSuccess if none), named in *cleanup_op")
+    self.gen_add_code_line("template <typename T, gridDataKind KIND = GRID_DATA_ALL>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line("cudaError_t release_gridData_members(gridData<T, KIND> *hd_data, const char **cleanup_op = nullptr) {", True)
+    self.gen_add_code_lines(_release_lines(code_lines))
+    self.gen_add_end_function()
+    checked_lines = _checked_init_lines(code_lines)
+    self.gen_add_func_doc("Library-safe allocation of the device and host memory for all computations: stops at the first failed allocation/copy, releases everything this attempt acquired, names the failed operation and publishes *out on complete success only (never exit/abort/cudaDeviceReset)",
+                          [], ["out receives the gridData pointer (nullptr on failure)", "failed_op (optional) receives a static string naming the failed operation"], "cudaSuccess or the first error")
+    self.gen_add_code_line("template <typename T, int NUM_TIMESTEPS, gridDataKind KIND = GRID_DATA_ALL>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line("cudaError_t init_gridData_checked(gridData<T, KIND> **out, const char **failed_op = nullptr) {", True)
+    self.gen_add_code_lines(checked_lines)
+    self.gen_add_end_function()
+    self.gen_add_code_line("template <typename T, gridDataKind KIND = GRID_DATA_ALL>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line("cudaError_t init_gridData_checked(int NUM_TIMESTEPS, gridData<T, KIND> **out, const char **failed_op = nullptr) {", True)
+    self.gen_add_code_lines(checked_lines)
+    self.gen_add_end_function()
+    # legacy spellings: historical policy (exit / sticky+nullptr under NO_EXIT)
+    self.gen_add_func_doc("Allocated device and host memory for all computations (legacy policy: exit on failure, or sticky first error + nullptr under GRID_GPUERRCHK_NO_EXIT; prefer init_gridData_checked in library code)",
                           [], [], "A pointer to the gridData struct of pointers")
     self.gen_add_code_line("template <typename T, int NUM_TIMESTEPS, gridDataKind KIND = GRID_DATA_ALL>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("gridData<T, KIND> *init_gridData(){", True)
-    self.gen_add_code_lines(code_lines)
+    self.gen_add_code_lines(["gridData<T, KIND> *hd_data = nullptr; const char *op = nullptr;",
+                             "cudaError_t e = init_gridData_checked<T, NUM_TIMESTEPS, KIND>(&hd_data, &op);  // sequenced BEFORE reading op",
+                             "grid_legacy_check(e, op, __FILE__, __LINE__);",
+                             "return hd_data;"])
     self.gen_add_end_function()
-    self.gen_add_func_doc("Allocated device and host memory for all computations",
+    self.gen_add_func_doc("Allocated device and host memory for all computations (legacy policy; prefer init_gridData_checked in library code)",
                           [], ["Max number of timesteps in the trajectory"], "A pointer to the gridData struct of pointers")
     self.gen_add_code_line("template <typename T, gridDataKind KIND = GRID_DATA_ALL>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("gridData<T, KIND> *init_gridData(int NUM_TIMESTEPS){", True)
-    self.gen_add_code_lines(code_lines)
+    self.gen_add_code_lines(["gridData<T, KIND> *hd_data = nullptr; const char *op = nullptr;",
+                             "cudaError_t e = init_gridData_checked<T, KIND>(NUM_TIMESTEPS, &hd_data, &op);  // sequenced BEFORE reading op",
+                             "grid_legacy_check(e, op, __FILE__, __LINE__);",
+                             "return hd_data;"])
     self.gen_add_end_function()
     self.gen_add_func_doc("Device bytes a pool-mode init_gridData will carve for "
                           "this KIND at the given workspace slot count — size the "

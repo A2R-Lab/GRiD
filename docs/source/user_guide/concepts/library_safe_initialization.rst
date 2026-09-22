@@ -64,6 +64,49 @@ The contract
   thread-safe). The legacy sticky slot (below) is a single non-atomic
   process-wide first-error slot and is *not* part of this contract.
 
+Streams, arena and teardown (part 2)
+------------------------------------
+
+The same contract covers the rest of the lifecycle, so a whole GRiD instance
+can be brought up and torn down without a single terminating path:
+
+.. code-block:: cpp
+
+   cudaStream_t *streams = nullptr; grid::robotModel<float> *model = nullptr;
+   grid::gridData<float> *data = nullptr; const char *op = nullptr;
+   cudaError_t e = grid::init_grid_checked<float>(&streams, &op);          // kernel attrs + streams
+   if (e == cudaSuccess) e = grid::init_robotModel_checked<float>(&model, &op);
+   if (e == cudaSuccess) e = grid::init_gridData_checked<float, N>(&data, &op);   // or (n, &data, &op)
+   if (e != cudaSuccess) {
+       grid::close_grid_checked<float>(streams, model, data);   // null stages are no-ops
+       throw std::runtime_error(std::string(op) + ": " + cudaGetErrorString(e));
+   }
+   ...
+   e = grid::close_grid_checked<float>(streams, model, data, &op);
+
+* ``init_grid_kernel_attrs_checked`` returns the first
+  ``cudaFuncSetAttribute`` / shared-memory fit-check error and names the
+  kernel; ``init_grid_streams_checked`` destroys every stream it created
+  before reporting a later failure; ``init_grid_checked`` composes the two.
+* ``init_gridData_checked`` guards all ~80 device and host allocations of the
+  batch arena (and the memsets/copies between them). Its release list is
+  **derived from the allocation list at generation time** (one emitted line
+  list feeds the constructor, the rollback and ``close_grid_checked``), so
+  the two can never drift the way a hand-written free list could. Host
+  staging buffers (pinned, with a pageable fallback) are checked too.
+* ``close_grid_checked(streams, model, data, &op)``: every argument may be
+  ``nullptr`` (a no-op), cleanup continues past a failed free/destroy, the
+  first error is returned and named, and a caller-installed device pool is
+  rewound afterwards exactly as before.
+* The legacy ``init_grid`` / ``init_grid_streams`` / ``init_grid_kernel_attrs``
+  / ``init_gridData`` / ``close_grid`` keep their signatures and policy as
+  thin wrappers.
+
+The ``grid_rbd`` bindings construct streams, model and arena through the
+checked calls and release the completed stages on a later failure, so a
+failed registration leaves nothing allocated and raises a Python exception
+naming the operation.
+
 Owning handle
 -------------
 

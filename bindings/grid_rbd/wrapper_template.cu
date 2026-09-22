@@ -187,31 +187,23 @@ static inline dim3 grid_rbd_grid_for(int batch) {
 extern "C" int grid_rbd_init() {
     if (g_data) return 0;  // already initialized
     grid_consume_last_error();  // clear stale sticky state (GRID_GPUERRCHK_NO_EXIT builds)
-    g_streams = grid::init_grid<T>();
-    // Library-safe model construction (2026-09-22): the checked initializer
-    // publishes g_robot only on complete success and rolls back everything a
-    // failed attempt acquired — no partial struct, no leaked nested tables, no
-    // exit()/cudaDeviceReset in the embedding interpreter. The failed op is
-    // reported on stderr; rc = 100 + cudaError like every other init failure.
+    // Library-safe construction (2026-09-22, parts 1+2): every stage publishes
+    // its output only on complete success and rolls back what it acquired; a
+    // later stage's failure releases the earlier stages through the checked
+    // teardown. No partial arena, no leaked tables, no exit()/cudaDeviceReset
+    // in the embedding interpreter. The failed op is reported on stderr and
+    // rc = 100 + cudaError like every other init failure.
     const char *failed_op = nullptr;
-    cudaError_t e = grid::init_robotModel_checked<T>(&g_robot, &failed_op);
+    cudaError_t e = grid::init_grid_checked<T>(&g_streams, &failed_op);
+    if (e == cudaSuccess) e = grid::init_robotModel_checked<T>(&g_robot, &failed_op);
+    if (e == cudaSuccess) e = grid::init_gridData_checked<T, kMaxBatch>(&g_data, &failed_op);
     if (e != cudaSuccess) {
-        fprintf(stderr, "grid_rbd_init: %s failed: %s\n", failed_op ? failed_op : "init_robotModel", cudaGetErrorString(e));
-        g_robot = nullptr; g_streams = nullptr;
-        return 100 + (int)e;
-    }
-    g_data    = grid::init_gridData<T, kMaxBatch>();
-    // Bindings compile with -DGRID_GPUERRCHK_NO_EXIT: a failed cudaMalloc etc. in
-    // the (not yet checked) stream/arena init path lands in the sticky slot. A
-    // partially-initialized arena is NOT safe to close (unset device pointers);
-    // release the model we own, drop the rest and report rc = 100 + cudaError.
-    e = grid_consume_last_error();
-    if (e != cudaSuccess) {
-        grid::free_robotModel_checked<T>(g_robot);
+        fprintf(stderr, "grid_rbd_init: %s failed: %s\n", failed_op ? failed_op : "grid_rbd_init", cudaGetErrorString(e));
+        grid::close_grid_checked<T>(g_streams, g_robot, g_data);  // null stages are no-ops
         g_data = nullptr; g_robot = nullptr; g_streams = nullptr;
         return 100 + (int)e;
     }
-    return (g_data && g_robot && g_streams) ? 0 : 1;
+    return 0;
 }
 
 extern "C" int grid_rbd_close() {
@@ -220,11 +212,12 @@ extern "C" int grid_rbd_close() {
     // Framework streams may still reference slab-carved scratch. Complete them
     // before the last shared owner releases the allocator's buffer.
     cudaError_t pending = cudaDeviceSynchronize();
-    grid::close_grid<T>(g_streams, g_robot, g_data);
+    const char *failed_op = nullptr;
+    cudaError_t e = grid::close_grid_checked<T>(g_streams, g_robot, g_data, &failed_op);  // continues past a failure, first error returned
     g_data    = nullptr;
     g_robot   = nullptr;
     g_streams = nullptr;
-    cudaError_t e = grid_consume_last_error();
+    if (e != cudaSuccess) fprintf(stderr, "grid_rbd_close: %s failed: %s\n", failed_op ? failed_op : "close_grid", cudaGetErrorString(e));
     return (pending != cudaSuccess) ? 100 + (int)pending : ((e != cudaSuccess) ? 100 + (int)e : 0);
 }
 

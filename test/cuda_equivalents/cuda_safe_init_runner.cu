@@ -35,12 +35,20 @@ static cudaError_t g_inject_code = cudaErrorMemoryAllocation;
 static cudaError_t g_inject_code_now = cudaErrorMemoryAllocation;
 
 static cudaError_t g_inject_code2 = cudaErrorInvalidValue;
+static bool is_alloc(const char *w) {  // acquisitions the ledger tracks
+    return std::strncmp(w, "cudaMalloc", 10) == 0 || std::strncmp(w, "grid_device_alloc", 17) == 0
+        || std::strncmp(w, "cudaStreamCreate", 16) == 0;
+}
+static bool is_free(const char *w) {   // releases the ledger tracks
+    return std::strncmp(w, "cudaFree", 8) == 0 || std::strncmp(w, "grid_device_free", 16) == 0
+        || std::strncmp(w, "cudaStreamDestroy", 17) == 0;
+}
 static bool fi_fail(const char *what) {
     int i = g_call++;
     bool fail = (i == g_fail_at) || (i == g_fail_at2);
     if (i == g_fail_at2) g_inject_code_now = g_inject_code2; else g_inject_code_now = g_inject_code;
-    if (!fail && std::strncmp(what, "cudaMalloc", 10) == 0) g_mallocs_ok++;
-    if (std::strncmp(what, "cudaFree", 8) == 0) g_frees++;
+    if (!fail && is_alloc(what)) g_mallocs_ok++;
+    if (is_free(what)) g_frees++;
     return fail;
 }
 static bool host_fail(const char *) { bool f = g_host_fail != 0; g_host_fail = 0; return f; }
@@ -176,6 +184,91 @@ static int limits_sweep() {
     return 0;
 }
 
+// ─── part 2: arena (init_gridData), streams (init_grid), close_grid ─────────
+template <typename T>
+static int arena_sweep() {
+    grid::gridData<T> *d = nullptr; const char *op = nullptr;
+    reset();
+    CHECK((grid::init_gridData_checked<T, 4>(&d, &op)) == cudaSuccess && d != nullptr, "arena dry init");
+    const int n_calls = g_call;
+    CHECK(n_calls >= 8, "arena construction has too few CUDA calls to sweep");
+    reset(); op = nullptr;
+    CHECK((grid::close_grid_checked<T, grid::GRID_DATA_ALL>(nullptr, nullptr, d, &op)) == cudaSuccess, "arena dry close");
+    for (int k = 0; k < n_calls; ++k) {
+        reset(k); d = nullptr; op = nullptr;
+        cudaError_t e = grid::init_gridData_checked<T, 4>(&d, &op);
+        CHECK(e == g_inject_code, "arena: injected error not returned");
+        CHECK(d == nullptr, "arena: output published on failure");
+        CHECK(op != nullptr, "arena: failed_op not recorded");
+        if (ledger_balanced<T>("arena")) return 1;
+    }
+    reset(); g_host_fail = 1; d = nullptr; op = nullptr;
+    CHECK((grid::init_gridData_checked<T, 4>(&d, &op)) == cudaErrorMemoryAllocation && d == nullptr && op != nullptr, "arena host alloc failure");
+    if (ledger_balanced<T>("arena hostfail")) return 1;
+    reset(); d = nullptr; op = nullptr;
+    CHECK((grid::init_gridData_checked<T, 4>(&d, &op)) == cudaSuccess && d != nullptr, "arena post-sweep init");
+    // the runtime-int spelling shares the body
+    grid::gridData<T> *d2 = nullptr;
+    CHECK((grid::init_gridData_checked<T>(4, &d2, &op)) == cudaSuccess && d2 != nullptr, "arena int init");
+    CHECK((grid::close_grid_checked<T, grid::GRID_DATA_ALL>(nullptr, nullptr, d, &op)) == cudaSuccess, "arena post-sweep close");
+    CHECK((grid::close_grid_checked<T, grid::GRID_DATA_ALL>(nullptr, nullptr, d2, &op)) == cudaSuccess, "arena int close");
+    if (ledger_balanced<T>("arena post")) return 1;
+    std::printf("ARENA calls=%d\n", n_calls);
+    return 0;
+}
+
+template <typename T>
+static int streams_sweep() {
+    cudaStream_t *st = nullptr; const char *op = nullptr;
+    reset();
+    CHECK((grid::init_grid_checked<T>(&st, &op)) == cudaSuccess && st != nullptr, "streams dry init");
+    const int n_calls = g_call;
+    g_fail_at = -1; op = nullptr;  // keep the ledger across init+close: creates must equal destroys
+    CHECK((grid::close_grid_checked<T, grid::GRID_DATA_ALL>(st, nullptr, nullptr, &op)) == cudaSuccess, "streams dry close");
+    if (ledger_balanced<T>("streams dry")) return 1;
+    int with_rollback = 0;
+    for (int k = 0; k < n_calls; ++k) {
+        reset(k); st = nullptr; op = nullptr;
+        cudaError_t e = grid::init_grid_checked<T>(&st, &op);
+        CHECK(e == g_inject_code, "streams: injected error not returned");
+        CHECK(st == nullptr, "streams: output published on failure");
+        CHECK(op != nullptr, "streams: failed_op not recorded");
+        if (ledger_balanced<T>("streams")) return 1;
+        if (g_mallocs_ok > 0) with_rollback++;
+    }
+    CHECK(with_rollback > 0, "streams: no failure index exercised the created-streams rollback");
+    reset(); st = nullptr; op = nullptr;
+    CHECK((grid::init_grid_checked<T>(&st, &op)) == cudaSuccess && st != nullptr, "streams post-sweep init");
+    CHECK((grid::close_grid_checked<T, grid::GRID_DATA_ALL>(st, nullptr, nullptr, &op)) == cudaSuccess, "streams post-sweep close");
+    std::printf("STREAMS calls=%d rollback_cases=%d\n", n_calls, with_rollback);
+    return 0;
+}
+
+template <typename T>
+static int close_failures() {
+    const char *op = nullptr;
+    // null everything: no-op
+    CHECK((grid::close_grid_checked<T, grid::GRID_DATA_ALL>(nullptr, nullptr, nullptr, &op)) == cudaSuccess, "close null no-op");
+    // full set, then a stream destroy fails: cleanup continues, FIRST error returned + named, all frees attempted
+    cudaStream_t *st = nullptr; grid::robotModel<T> *m = nullptr; grid::gridData<T> *d = nullptr;
+    reset();
+    CHECK((grid::init_grid_checked<T>(&st, &op)) == cudaSuccess, "close: init streams");
+    CHECK((grid::init_robotModel_checked<T>(&m, &op)) == cudaSuccess, "close: init model");
+    CHECK((grid::init_gridData_checked<T, 4>(&d, &op)) == cudaSuccess, "close: init arena");
+    const int allocs = g_mallocs_ok;
+    reset(); op = nullptr;
+    // dry count of close calls to place the injection on a stream destroy (the last calls)
+    // (we cannot dry-run close without freeing, so inject on a late index and verify the op name)
+    g_fail_at = 5; g_inject_code = cudaErrorInvalidValue;
+    cudaError_t e = grid::close_grid_checked<T, grid::GRID_DATA_ALL>(st, m, d, &op);
+    CHECK(e == cudaErrorInvalidValue, "close: injected error not returned as first error");
+    CHECK(op != nullptr, "close: failed op not named");
+    CHECK(g_frees >= allocs, "close: cleanup stopped early after a failure");
+    g_inject_code = cudaErrorMemoryAllocation;
+    std::printf("CLOSE ok (op=%s)\n", op);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "success";
     if (std::strcmp(mode, "success") == 0) {
@@ -187,6 +280,12 @@ int main(int argc, char **argv) {
         if (cleanup_failures<float>()) return 1;
     } else if (std::strcmp(mode, "limits") == 0) {
         if (limits_sweep<float>()) return 1;
+    } else if (std::strcmp(mode, "arena") == 0) {
+        if (arena_sweep<float>()) return 1;
+    } else if (std::strcmp(mode, "streams") == 0) {
+        if (streams_sweep<float>()) return 1;
+    } else if (std::strcmp(mode, "close") == 0) {
+        if (close_failures<float>()) return 1;
     } else if (std::strcmp(mode, "legacy") == 0) {
         reset(argc > 2 ? std::atoi(argv[2]) : 1);
         grid::robotModel<float> *m = grid::init_robotModel<float>();  // exits here in the default build

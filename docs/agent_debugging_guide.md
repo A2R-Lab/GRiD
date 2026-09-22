@@ -2170,3 +2170,21 @@ is the proof: fail EVERY call index in the construction sequence and assert
 error-returned / out-null / ledger `frees == successful mallocs`; a
 sanitizer run on the success path is supplementary, not a substitute;
 (4) `exit()` tests run in a subprocess, never inside pytest's process.
+
+**7.z18 addendum (part 2: arena / streams / close, same day).** The batch
+arena has ~80 allocation sites behind `#if`/`needs_*` gating, and `close_grid`
+carried a HAND-WRITTEN free list that had already drifted (buffers with no
+matching free). The checked constructor, its rollback and
+`close_grid_checked` are now all DERIVED from the one `code_lines` list in
+`gen_init_gridData` (`_checked_init_lines` / `_release_lines`), the way
+`gridData_device_bytes` already was — RULE: never hand-write a second copy
+of an emitted resource list; derive it. Three traps met on the way: (1) a
+legacy wrapper `void f(){ e = f_checked<T>(&op); ... }` must be emitted
+AFTER the checked template — an undeclared dependent template-id parses as
+comparisons; (2) verbatim lines carried into the release body referenced
+the constructor's `NUM_TIMESTEPS` template parameter — the release transform
+keeps only structural lines (`#if`, `needs_`, braces) and frees, and a
+dropped line that opens a block drops the block; (3) in the fault-injection
+runner, resetting the ledger between a dry init and its dry close makes
+every destroy look unmatched — clear only the injection index between a
+paired acquire/release.
