@@ -71,6 +71,7 @@ import ast
 import glob
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -82,7 +83,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WRAPPERS_DIR = REPO_ROOT / "test" / "python_wrappers"
 CUDA_DIR = REPO_ROOT / "test" / "cuda_equivalents"
-PYTHON = str(REPO_ROOT / ".venv" / "bin" / "python")
+# The project venv when present (local convention: always .venv/bin/python);
+# otherwise the interpreter running this driver (CI installs into the runner's
+# python — the venv path does not exist there, and the cpu lane's live
+# collection test spawned a missing binary, 2026-09-22).
+_VENV_PY = REPO_ROOT / ".venv" / "bin" / "python"
+PYTHON = str(_VENV_PY) if _VENV_PY.exists() else sys.executable
+_VENV_GPU_PROOF = REPO_ROOT / ".venv" / "bin" / "gpu-proof"
+GPU_PROOF = (str(_VENV_GPU_PROOF) if _VENV_GPU_PROOF.exists()
+             else (shutil.which("gpu-proof") or "gpu-proof"))
 DURATIONS_PATH = REPO_ROOT / "test" / ".split_suite" / "durations.json"
 # Result kinds the summary treats as clean (and --resume will not re-run).
 CLEAN_KINDS = ("OK", "FLOOR-SKIP", "DESELECTED")
@@ -1597,7 +1606,7 @@ def main() -> int:
         shards = sorted(str(p) for p in rdir.glob("*.json")) if rdir.exists() else []
         if shards:
             merged = out_dir / "gpu-proof.json"
-            cmd = [str(REPO_ROOT / ".venv" / "bin" / "gpu-proof"), "merge",
+            cmd = [GPU_PROOF, "merge",
                    "--out", str(merged), "--repo", str(REPO_ROOT)]
             if args.receipts_carry_from:
                 cmd += ["--carry-from", args.receipts_carry_from]
