@@ -1,5 +1,5 @@
 pytest
-pytest-gpu-proof>=0.3.0   # signed GPU-equivalence receipts (test/run_gpu_proof.sh); was the test/pytest-gpu-proof submodule, now on PyPI
+pytest-gpu-proof==0.4.0   # pinned 2026-09-22 (audit W09; CI installs the same pin) — signed GPU-equivalence receipts (test/run_gpu_proof.sh); was the test/pytest-gpu-proof submodule, now on PyPI
 nbval            # execute example notebooks as smoke tests (pytest --nbval-lax examples/notebooks/)
 pin
 robot_descriptions>=1.23.0

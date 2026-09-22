@@ -11,17 +11,32 @@ Layout:
         │   ├── wrapper.cu         # boilerplate that exposes C ABI
         │   ├── robot.so           # compiled per-robot library
         │   ├── meta.json          # NUM_JOINTS / NUM_VEL / NUM_EES / options
+        │   ├── build_inputs.json  # the build identity this entry was built under
         │   └── build.log
         └── ...
 
 Two keys (see the "two-stage content-addressed store" section below):
   - STAGE-1 input key = sha256(urdf_bytes + canonical_json(options) +
-    codegen-source-tree hash + grid_rbd_version + cuda_arch). The keymap maps it
-    to a content key so the warm path (unchanged inputs) never regenerates.
+    codegen-source-tree hash + grid_rbd_version + the BUILD IDENTITY below).
+    The keymap maps it to a content key so the warm path (unchanged inputs)
+    never regenerates.
   - STAGE-2 content key = sha256 of exactly what nvcc sees (generated
-    grid.cuh + wrapper.cu bytes + compile-flag drivers + toolchain + ABI tags);
-    store/ dirs live under it. A codegen edit whose emitted bytes are identical
-    re-runs only the cheap CPU generation half — never an nvcc rebuild.
+    grid.cuh + wrapper.cu bytes + compile-flag drivers + the toolchain part of
+    the build identity); store/ dirs live under it. A codegen edit whose
+    emitted bytes are identical re-runs only the cheap CPU generation half —
+    never an nvcc rebuild.
+  - BUILD IDENTITY (2026-09-22, audit W05) = every input that shapes the
+    artifact but is not a caller option: cuda_arch, nvcc path+version, host
+    C++ compiler, the CONTENT of the GLASS headers the generator vendors (not
+    the submodule commit — a dirty checkout must re-key), the compile-flag
+    module (_compile.py), wrapper_template.cu, torch/jax ABI tags, the
+    generation-time env knobs (GRID_CUDA_TARGET_SHARED_MEM_BYTES,
+    GRID_CUDA_TARGET_LITE_SHARED_MEM_BYTES, GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES,
+    GRID_NO_LICM_BARRIER) and a key-schema number. `build_identity()` returns
+    it as a readable dict; each store entry keeps a copy in build_inputs.json
+    and a stage-1 hit is honoured ONLY if that record equals the current
+    identity (a pointer recorded before the identity existed, or by a
+    different toolchain, is a miss — never a silent stale .so).
 CUDA arch is part of both keys so a multi-GPU user keeps separate .so files.
 
 The manifest binds a human-friendly `name` to a content key. Re-registering the
@@ -30,8 +45,10 @@ same name with a different URDF or options overwrites the binding (the old
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -46,6 +63,12 @@ except ImportError:
 
 
 _SCHEMA_VERSION = 1
+# Bumped whenever the set of inputs folded into the keys changes: every bykey
+# pointer recorded under an older schema becomes unreachable (a miss), the
+# content-keyed store is untouched, and identical builds are still reused
+# through the content key. Migration = selective rebuild, never a global wipe.
+_KEY_SCHEMA = 2
+_log = logging.getLogger("grid_rbd")
 
 
 def default_cache_dir() -> Path:
@@ -199,6 +222,12 @@ def compute_cache_key(urdf_bytes: bytes, options: dict[str, Any], cuda_arch: int
     # reused by a later jax-enabled session, and a jax-version bump that changes
     # the FFI ABI re-keys. Empty when jax is absent → no effect on no-jax builds.
     h.update(f"{_jax_ffi_tag()}".encode())
+    # Audit W05 (2026-09-22): the toolchain / GLASS-content / env-knob identity.
+    # Before this the stage-1 hit could hand back a .so built by another nvcc
+    # or against other GLASS headers (the content key knew, but a bykey hit
+    # never recomputed it). cuda_arch/torch/jax above are repeated inside the
+    # identity dict; hashing them twice is harmless and keeps the dict whole.
+    h.update(("identity=" + canonical_options(build_identity(cuda_arch))).encode())
     return h.hexdigest()
 
 
@@ -269,6 +298,136 @@ def _glass_tag() -> str:
         return "unknown"
 
 
+_HOST_CXX_TAG: str | None = None
+_GLASS_CONTENT_HASH: str | None = None
+# Env knobs GRiDCodeGenerator / the emission helpers read at GENERATION time
+# (grep os.environ in grid_codegen). GRID_ENABLE_MUJOCO_KERNELS is deliberately
+# absent: _compile.generate_sources resolves it to an explicit option (see the
+# comment there). GRID_WORKSPACE_* are read by the EMITTED code at runtime.
+GENERATION_ENV_KNOBS = (
+    "GRID_CUDA_TARGET_SHARED_MEM_BYTES",
+    "GRID_CUDA_TARGET_LITE_SHARED_MEM_BYTES",
+    "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES",
+    "GRID_NO_LICM_BARRIER",
+)
+BUILD_INPUTS_FILE = "build_inputs.json"
+
+
+def _host_cxx_tag() -> str:
+    """Host compiler nvcc drives (-ccbin default = c++ on PATH): path + the
+    first line of --version. Cached per process."""
+    global _HOST_CXX_TAG
+    if _HOST_CXX_TAG is None:
+        cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
+        if cxx is None:
+            _HOST_CXX_TAG = "missing"
+        else:
+            try:
+                out = subprocess.run([cxx, "--version"], capture_output=True,
+                                     text=True, timeout=30)
+                first = (out.stdout.strip().splitlines() or [f"rc={out.returncode}"])[0]
+                _HOST_CXX_TAG = f"{cxx}:{first}"
+            except Exception:
+                _HOST_CXX_TAG = f"{cxx}:error"
+    return _HOST_CXX_TAG
+
+
+def _nvcc_identity() -> str:
+    """Resolved nvcc path + its --version text: two toolkits on one box (or a
+    PATH change) must not share artifacts."""
+    return f"{shutil.which('nvcc') or 'missing'}:{_nvcc_version_tag()}"
+
+
+def _glass_root() -> Path | None:
+    root = Path(__file__).resolve().parents[2] / "external" / "GLASS"
+    return root if root.exists() else None
+
+
+def _glass_content_hash() -> str:
+    """sha256 over the CONTENT of every GLASS header the generator can vendor
+    (relative path + bytes; the top-level *.cuh and src/**; bench/docs/examples
+    excluded). A dirty submodule checkout at the same commit re-keys — the
+    commit label alone (see _glass_tag) cannot see that. Cached per process
+    (~90 small files). Empty for an sdist install without the submodule."""
+    global _GLASS_CONTENT_HASH
+    if _GLASS_CONTENT_HASH is None:
+        root = _glass_root()
+        if root is None:
+            _GLASS_CONTENT_HASH = ""
+        else:
+            h = hashlib.sha256()
+            files = sorted(root.glob("*.cuh")) + sorted(
+                p for p in (root / "src").rglob("*")
+                if p.is_file() and p.suffix in (".cuh", ".h", ".hpp", ".cu", ".inl"))
+            for f in files:
+                try:
+                    h.update(f.relative_to(root).as_posix().encode())
+                    h.update(f.read_bytes())
+                except OSError:
+                    continue
+            _GLASS_CONTENT_HASH = h.hexdigest()
+    return _GLASS_CONTENT_HASH
+
+
+def _generation_env() -> dict[str, str | None]:
+    return {k: os.environ.get(k) for k in GENERATION_ENV_KNOBS}
+
+
+def build_identity(cuda_arch: int) -> dict[str, Any]:
+    """Every artifact-shaping input that is NOT a caller option, as a readable
+    dict (persisted beside each store entry as build_inputs.json). Folded into
+    the stage-1 key; its toolchain subset is folded into the content key."""
+    return {
+        "key_schema": _KEY_SCHEMA,
+        "cuda_arch": int(cuda_arch),
+        "nvcc": _nvcc_identity(),
+        "host_cxx": _host_cxx_tag(),
+        "glass_content": _glass_content_hash(),
+        "glass_commit": _glass_tag(),  # label only; content decides
+        "compile_py": _compile_source_hash(),
+        "wrapper_template": _wrapper_template_hash(),
+        "torch_abi": _torch_abi_tag(),
+        "jax_ffi": _jax_ffi_tag(),
+        "generation_env": _generation_env(),
+    }
+
+
+# Identity fields that matter for a stage-1 hit. `glass_commit` is a label
+# (content decides) and generation_env is already reflected in the emitted
+# bytes of the pointed-to entry — but both live inside the stage-1 KEY, so an
+# honoured pointer implies they matched when it was recorded. The sidecar
+# check is the belt to that suspender: it catches pointers recorded before
+# the identity existed (no sidecar) or by a process whose identity did not
+# include everything (older key schema).
+def write_build_inputs(entry_dir: Path, identity: dict[str, Any]) -> None:
+    tmp = entry_dir / f".{BUILD_INPUTS_FILE}.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(identity, indent=2, sort_keys=True))
+    tmp.replace(entry_dir / BUILD_INPUTS_FILE)
+
+
+def read_build_inputs(entry_dir: Path) -> dict[str, Any] | None:
+    try:
+        return json.loads((entry_dir / BUILD_INPUTS_FILE).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def stale_hit_reasons(entry_dir: Path, identity: dict[str, Any]) -> list[str]:
+    """Why a stage-1 pointer to `entry_dir` must NOT be honoured: [] = sound.
+    Missing sidecar = the entry predates the identity record (treated as a
+    miss; the content key re-hits the same .so if it truly is identical)."""
+    recorded = read_build_inputs(entry_dir)
+    if recorded is None:
+        return ["no build_inputs.json (entry predates the build-identity record)"]
+    reasons = []
+    for k in sorted(set(identity) | set(recorded)):
+        if k == "glass_commit":
+            continue
+        if recorded.get(k) != identity.get(k):
+            reasons.append(f"{k}: recorded {recorded.get(k)!r} != current {identity.get(k)!r}")
+    return reasons
+
+
 def compute_content_key(source_dir: Path, options: dict[str, Any],
                         cuda_arch: int, max_batch: int) -> str:
     """Content-addressed key for a generated-source dir: exactly the inputs
@@ -285,8 +444,13 @@ def compute_content_key(source_dir: Path, options: dict[str, Any],
     h.update(f"compile={_compile_source_hash()}".encode())
     h.update(f"{_torch_abi_tag()}".encode())
     h.update(f"{_jax_ffi_tag()}".encode())
-    h.update(f"nvcc={_nvcc_version_tag()}".encode())
-    h.update(f"glass={_glass_tag()}".encode())
+    h.update(f"nvcc={_nvcc_identity()}".encode())
+    h.update(f"host_cxx={_host_cxx_tag()}".encode())
+    # Content, not commit (W05): the vendored GLASS bytes are inside grid.cuh
+    # already, so this mostly guards the -I include path — but a dirty
+    # submodule must never share a key with the clean commit it sits on.
+    h.update(f"glass={_glass_content_hash()}".encode())
+    h.update(f"key_schema={_KEY_SCHEMA}".encode())
     return h.hexdigest()
 
 
@@ -344,13 +508,26 @@ def manifest_register(
     meta: dict[str, Any],
 ) -> None:
     """Bind `name` to `cache_key` in the manifest, overwriting any prior
-    binding under the same name."""
-    manifest = load_manifest(cache_dir)
-    manifest["robots"][name] = {
-        "cache_key": cache_key,
-        **meta,
-    }
-    save_manifest(cache_dir, manifest)
+    binding under the same name.
+
+    Audit W06 (2026-09-22): the read-modify-write is serialized by an
+    advisory lock (manifest.lock beside the file) so concurrent registrations
+    (the split driver's compile pool warms robots in parallel) cannot lose
+    each other's bindings — before, two writers loaded the same snapshot and
+    the second rename dropped the first's robot. save_manifest's tmp+rename
+    still makes each publish atomic for readers, which take no lock."""
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with (cache_dir / "manifest.lock").open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            manifest = load_manifest(cache_dir)
+            manifest["robots"][name] = {
+                "cache_key": cache_key,
+                **meta,
+            }
+            save_manifest(cache_dir, manifest)
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def manifest_lookup(cache_dir: Path, name: str) -> dict[str, Any] | None:

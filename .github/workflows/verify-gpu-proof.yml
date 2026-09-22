@@ -47,7 +47,7 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         # pyyaml is required by `gpu-proof verify` when --policy is a .yaml file
         # (verify.py imports yaml); the plugin package itself does not depend on it.
-        run: pip install pytest-gpu-proof pyyaml
+        run: pip install "pytest-gpu-proof==0.4.0" pyyaml  # pinned (audit W09) — keep in step with install/requirements-dev.txt
 
       - name: Verify receipt
         if: steps.detect.outputs.present == 'true'
