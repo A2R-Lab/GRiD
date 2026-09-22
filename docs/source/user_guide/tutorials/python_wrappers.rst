@@ -267,6 +267,105 @@ a desktop) safely keeps separate ``.so`` files per machine.
 Override the cache root with ``$GRID_RBD_CACHE_DIR`` or
 ``cache_dir=...`` on ``register_robot``.
 
+Dimensions, layouts and differentiability
+-----------------------------------------
+
+**Dimension names.** Every handle exposes three read-only widths (the legacy
+names remain as aliases):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 22 64
+
+   * - Name
+     - Legacy alias
+     - Meaning
+   * - ``nq``
+     - ``num_joints``
+     - Configuration width: ``q`` is ``(B, nq)``. Fixed base: the joint
+       count. Floating base: ``7 + joints`` — ``[p(3), quat xyzw(4), joints]``.
+   * - ``nv``
+     - ``num_vel``
+     - Tangent width: matrix and gradient **outputs** are ``nv``-wide
+       (``minv`` is ``(B, nv*nv)``, ``*_gradient`` blocks are ``nv`` columns).
+       Floating base: ``6 + joints`` — ``[v_lin(3), omega(3), joints]`` in the
+       pinocchio LOCAL convention (``output_convention="mujoco"`` flips the
+       root block, see :doc:`../concepts/mjx_convention`).
+   * - ``nb``
+     - ``num_bodies``
+     - Body count (base included on a floating base): ``f_ext`` is
+       ``(B, 6*nb)``, one spatial force per body in the local body frame.
+
+**Velocity-space inputs are nq-wide.** ``qd``, ``qdd`` and ``u`` are passed
+at the ``nq`` stride: on a floating base the tangent occupies the first
+``nv`` slots and the trailing slot is a 0 pad (the raw transport layout the
+kernels read). An ``nv``-wide input raises a clear ``ValueError`` rather than
+being padded silently; outputs never carry the pad. Accepting natural
+``nv``-wide velocity inputs at the high-level API is a registered design
+item (audit W11) — not done, so as not to change existing shapes quietly.
+
+**What is differentiable.** ``jax`` and ``torch`` handles attach an analytic
+backward (a batched VJP through the ``*_gradient`` kernels) to exactly these
+methods; everything else is forward-only on every backend.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 26 44
+
+   * - Method
+     - Differentiable inputs
+     - Notes
+   * - ``forward_dynamics`` / ``aba``
+     - ``q``, ``qd``, ``u``
+     - ``f_ext`` is a residual, its cotangent is zero. ``∂qdd/∂u = M⁻¹``.
+   * - ``inverse_dynamics``
+     - ``q``, ``qd``, ``qdd``
+     - same ``f_ext`` treatment.
+   * - ``end_effector_pose``
+     - ``q``
+     - the derivative of the returned coordinates (position + quaternion
+       block), i.e. a coordinate, not a geometric, orientation derivative.
+   * - ``integrator``
+     - ``q``, ``qd``, ``u``
+     - through the baked ``integrator_with_gradient`` kernel (the same fused
+       step + Jacobian that ``integrator_gradient`` / ``plant_step_gradient``
+       return); ``dt``/steps are static.
+   * - ``inverse_dynamics_wrt_params`` / ``forward_dynamics_wrt_params``
+     - ``params`` only
+     - local parameter sensitivity, see below.
+
+Each of these is a **reverse-mode VJP only**: there is no forward-mode
+(``jax.jvp`` / ``jax.jacfwd`` through them fails), no higher-order autograd
+(differentiating the backward again is not supported — use the explicit
+second-order kernels ``idsva_so`` / ``fdsva_so`` / ``end_effector_pose_hessian``,
+which are forward-only outputs), and ``jax.vmap`` composes only along the
+batch axis. The ``q`` cotangent on a floating base is the exact ambient
+pullback through the kernel's quaternion normalization (pinocchio handles)
+or the on-manifold pullback (``mjx`` handles); see *Gradient semantics* under
+the JAX section.
+
+**``*_wrt_params`` are local sensitivities, not parameterized functions.**
+``inverse_dynamics_wrt_params(q, qd, params)`` returns the SAME torque the
+baked (or current runtime) inertial table gives, whatever ``params`` you pass;
+the operand exists so that the backward can supply ``∂τ/∂π`` through the
+regressor VJP. Use them as the linearization point for sysID / calibration
+(the gradient with respect to ``π`` at the current model), not as a function
+you can evaluate at a different ``π`` — to actually change the model, call
+``set_inertia_params`` (``runtime_inertia=True`` builds). A functional
+parameterized forward is a registered design decision (audit W11, option B),
+not something the current API pretends to be.
+
+**Runtime tables reach dynamics, not baked kinematics.** ``runtime_inertia``,
+``runtime_transform`` and ``runtime_joint_dynamics`` rebuild the dynamics
+tables from a mutable device table once per launch, so ``inverse_dynamics``,
+``forward_dynamics``, their gradients and the second-order kernels follow
+``set_*_params`` with no recompile. The homogeneous-transform path used by
+``end_effector_pose`` / ``end_effector_pose_gradient`` / ``_hessian`` /
+``frame_jacobian`` / ``fk_batched`` reads the BAKED joint origins: after
+``set_transform_params`` the kinematics still report the URDF geometry. That
+is a documented partial capability, not a bug you can work around from
+Python; consistent kinematic updates are a separate feature (register item).
+
 End-effector target selection
 -----------------------------
 

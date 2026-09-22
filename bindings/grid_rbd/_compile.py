@@ -220,6 +220,16 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     ee_joint_names = options.get("ee_joint_names") or []
     if ee_joint_names:
         fixed_target_name = ee_joint_names[0]
+        if len(ee_joint_names) > 1:
+            # Explicit capability, not a silent drop (audit W08/W11): the baked
+            # EE family is single-target; extra names are ignored here. The
+            # runtime multi-target surface is end_effector_pose_runtime.
+            import warnings
+            warnings.warn(
+                f"ee_joint_names={list(ee_joint_names)!r}: the baked end-effector "
+                f"family is single-target; only {ee_joint_names[0]!r} is honored. "
+                "Use handle.end_effector_pose_runtime(q, ee_joint_names=[...]) for "
+                "several targets at once.", UserWarning, stacklevel=3)
 
     # gen_all_code accepts output_path directly; redirect stdout to swallow
     # the chatty per-stage printouts. enable_floating_second_order=True so

@@ -295,6 +295,27 @@ class RobotHandle:
     def num_ees(self) -> int:
         return self._runner.num_ees
 
+    # Unambiguous dimension names (audit W11, 2026-09-22). ``num_joints`` has
+    # always meant the CONFIGURATION width nq (floating base: 7 + joints), not
+    # a joint count; ``num_vel`` is the tangent width nv; ``num_bodies`` the
+    # body count nb. The legacy names stay; these are read-only aliases.
+    @property
+    def nq(self) -> int:
+        """Configuration width: ``q`` is ``(B, nq)``. Floating base: 7 (pos + quat xyzw) + joints."""
+        return self._runner.num_joints
+
+    @property
+    def nv(self) -> int:
+        """Tangent/velocity width: matrix and gradient OUTPUTS are ``nv``-wide.
+        Floating base: 6 + joints. Velocity/force INPUTS are passed ``nq``-wide
+        (tangent in the first ``nv`` slots, trailing slot a 0 pad)."""
+        return self._runner.num_vel
+
+    @property
+    def nb(self) -> int:
+        """Body count (incl. the base for floating-base): ``f_ext`` is ``(B, 6*nb)``."""
+        return self._runner.num_bodies
+
     @property
     def dtype(self) -> str:
         """Compute precision of this handle's .so: ``"float32"`` (default) or

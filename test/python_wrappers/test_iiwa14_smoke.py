@@ -93,6 +93,8 @@ def _max_err(out_grid, out_ref):
 def test_metadata(handle):
     assert handle.num_joints == 7
     assert handle.num_vel == 7
+    # W11 dimension aliases: nq (configuration width) / nv (tangent) / nb (bodies)
+    assert (handle.nq, handle.nv, handle.nb) == (handle.num_joints, handle.num_vel, handle.num_bodies) == (7, 7, 7)
     assert handle.num_ees == 1
     assert handle.floating_base is False
     assert handle.max_batch == 8

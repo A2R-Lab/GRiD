@@ -15,6 +15,52 @@ wrapper together (see the :doc:`../../index` quick-start for the extras).
 If you already cloned without ``--recursive``, populate the submodules with
 ``git submodule update --init --recursive``.
 
+Supported installation mode (read this first)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+GRiD is distributed as an **editable install from a git checkout** and
+nothing else. There is no wheel or sdist on PyPI: the code generator, the
+wrapper template, the launch-config profiles, the vendored GLASS headers and
+the model assets are resolved **relative to the repository root** next to the
+installed module, so ``pip install grid-rbd`` from an index, or moving the
+installed package out of its checkout, is not supported. A standalone
+distribution is a registered product decision (audit W17), not an
+unfinished feature you can work around.
+
+What each activity needs:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Activity
+     - Requirements
+   * - Import ``grid_codegen`` / generate ``grid.cuh``
+     - Python ≥ 3.10, the ``external/`` submodules populated. No GPU, no
+       ``nvcc``.
+   * - ``grid_rbd.register_robot`` / ``warm_robot`` (first call per robot)
+     - the CUDA Toolkit's ``nvcc`` on ``PATH`` (the toolkit that matches your
+       driver), a host C++ compiler, and an NVIDIA GPU present (the compute
+       capability is read from ``nvidia-smi`` unless you pass ``cuda_arch=``).
+   * - Warm loads and every numeric method
+     - a GPU with the arch the ``.so`` was built for; no ``nvcc``.
+   * - ``backend="jax"`` / ``backend="torch"``
+     - the ``[jax]`` / ``[torch]`` extra **plus a CUDA build of that framework
+       matching your GPU arch** (the extras pin the CPU packages only; the
+       CUDA wheel is your choice, see ``bindings/README.md``). A missing
+       framework is reported at ``register_robot`` time, not deep inside a call.
+   * - Equivalence tests / the Pinocchio oracle / docs
+     - ``install/developer_install.sh`` (apt build deps, ``pin``,
+       robot-description fixtures, the Pinocchio second-order extension).
+
+Platform: Linux x86_64 with CUDA 12.x/13.x is what is built and tested
+(the committed GPU-proof receipt names the exact GPU and toolkit). Windows
+and macOS are not supported and are not incidental scope. The submodules
+must be populated **before** ``pip install -e .`` — the install scripts do
+this in the right order; a bare editable install on a non-recursive clone
+succeeds and then fails at first generation with a "GLASS submodule is
+missing" error naming the fix.
+
 Install Python Dependencies
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

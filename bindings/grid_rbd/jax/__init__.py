@@ -199,6 +199,12 @@ class JaxRobotHandle(BaseDelegateMixin):
     @property
     def num_bodies(self) -> int:  return self._base.num_bodies
     @property
+    def nq(self) -> int:          return self._base.num_joints
+    @property
+    def nv(self) -> int:          return self._base.num_vel
+    @property
+    def nb(self) -> int:          return self._base.num_bodies
+    @property
     def floating_base(self) -> bool: return self._base.floating_base
     @property
     def max_batch(self) -> int:   return self._base.max_batch
