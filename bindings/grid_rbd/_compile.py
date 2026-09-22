@@ -183,10 +183,17 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
     # so adopters get the FFI-fast config by default; per-algo fallback to host `bases`
     # keeps un-FFI-tuned algos on the safe pick. Override with launch_config_profile.
     launch_config_profile = options.get("launch_config_profile", "ffi")
+    # W15: the GPU profile is DEVICE-keyed (warm_robot resolves it from the
+    # detected/explicit cuda_arch and puts it in the cache key); fall back to
+    # the same selection here so a direct generate_grid_cuh call agrees.
+    from grid_codegen.launch_config import select_launch_config_gpu
+    launch_config_gpu = options.get("launch_config_gpu") or select_launch_config_gpu(
+        launch_config_robot, options.get("cuda_arch"))
     cg = GRiDCodeGenerator(robot, debug_mode, FILE_NAMESPACE=file_namespace,
                            dtype=codegen_dtype, USE_JOINT_DYNAMICS=use_joint_dynamics,
                            LAUNCH_CONFIG_ROBOT=launch_config_robot,
-                           LAUNCH_CONFIG_PROFILE=launch_config_profile)
+                           LAUNCH_CONFIG_PROFILE=launch_config_profile,
+                           LAUNCH_CONFIG_GPU=launch_config_gpu)
 
     # D.4 / Phase 5: runtime-mutable inertia table. options["runtime_inertia"]
     # (default absent/False) gates the codegen `runtime_inertia` flag (emits the
@@ -362,6 +369,7 @@ def generate_grid_cuh(urdf_path: Path, options: dict[str, Any], out_path: Path) 
         # Canonical launch-config robot key (URDF stem -> tuned-JSON dir). Lets the
         # handle locate config/launch_configs/<key>/<gpu>.json for the E6 profile overlay.
         "launch_config_robot": launch_config_robot,
+        "launch_config_gpu": launch_config_gpu,   # the profile actually baked (W15)
         "joint_names": joint_names,
         "leaf_jids": [int(j) for j in robot.get_leaf_nodes()],
         "joint_pos_limits": joint_pos_limits,

@@ -41,6 +41,39 @@ def _launch_configs_dir():
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "launch_configs")
 
 
+_GPU_SELECT_WARNED = set()
+
+
+def select_launch_config_gpu(robot_id, cuda_arch = None):
+    """Pick the config/launch_configs/<robot_id>/<gpu>.json profile for the
+    DEVICE this build targets (audit W15, 2026-09-22). Profiles are named
+    ``<gpu>_sm<arch>``; the one whose suffix matches ``cuda_arch`` wins. With
+    no match (or no arch) the default profile (``LAUNCH_CONFIG_DEFAULT_GPU``)
+    is used and a one-time warning names the mismatch — a config tuned on one
+    arch still compiles and runs on another, just not at its measured optimum.
+    Returns the profile name (file stem) to hand to load_launch_config."""
+    import glob as _glob
+    import warnings as _warnings
+    if robot_id is None:
+        return LAUNCH_CONFIG_DEFAULT_GPU
+    stems = sorted(os.path.splitext(os.path.basename(f))[0]
+                   for f in _glob.glob(os.path.join(_launch_configs_dir(), str(robot_id), "*.json")))
+    if cuda_arch:
+        suffix = "_sm" + str(int(cuda_arch))
+        exact = [st for st in stems if st.endswith(suffix)]
+        if exact:
+            return LAUNCH_CONFIG_DEFAULT_GPU if LAUNCH_CONFIG_DEFAULT_GPU in exact else exact[0]
+        key = (str(robot_id), int(cuda_arch))
+        if stems and key not in _GPU_SELECT_WARNED:
+            _GPU_SELECT_WARNED.add(key)
+            _warnings.warn(
+                f"launch config for robot {robot_id!r}: no profile tuned for sm_{int(cuda_arch)} "
+                f"(have {stems}); baking {LAUNCH_CONFIG_DEFAULT_GPU!r}. Kernels run correctly but "
+                f"not at this GPU's measured thread/tier optimum — run config/autotune_robot.sh "
+                f"on this device to add a profile.", UserWarning, stacklevel=2)
+    return LAUNCH_CONFIG_DEFAULT_GPU
+
+
 def load_launch_config(robot_id, floating_base, gpu = LAUNCH_CONFIG_DEFAULT_GPU, profile = "host"):
     """Return {grid_symbol: {"tier": TIER_*, "threads": int}} for (robot_id, base).
 
@@ -119,7 +152,8 @@ def baked_launch_cfg(codegen):
     robot_id = (codegen.launch_config_robot if codegen.launch_config_robot is not None
                 else codegen.robot.get_name())
     profile = getattr(codegen, "launch_config_profile", "host")
-    return load_launch_config(robot_id, codegen.robot.floating_base, profile=profile)
+    gpu = getattr(codegen, "launch_config_gpu", None) or LAUNCH_CONFIG_DEFAULT_GPU
+    return load_launch_config(robot_id, codegen.robot.floating_base, gpu=gpu, profile=profile)
 
 
 def gen_add_launch_config_helpers(self):
@@ -149,10 +183,11 @@ def gen_add_launch_config_helpers(self):
     algo_symbols = [d.key for d in launch_descriptors]
     enum_names = {d.key: d.enum_name for d in launch_descriptors}
     base_name = "floating" if self.robot.floating_base else "fixed"
+    gpu_name = getattr(self, "launch_config_gpu", None) or LAUNCH_CONFIG_DEFAULT_GPU
     if cfg:
-        src = "config/launch_configs/" + str(robot_id) + "/" + LAUNCH_CONFIG_DEFAULT_GPU + ".json (" + base_name + ", profile=" + profile + ")"
+        src = "config/launch_configs/" + str(robot_id) + "/" + gpu_name + ".json (" + base_name + ", profile=" + profile + ")"
     else:
-        src = "NONE found for robot=" + str(robot_id) + " base=" + base_name + " gpu=" + LAUNCH_CONFIG_DEFAULT_GPU + " profile=" + profile + " -> conservative fallback"
+        src = "NONE found for robot=" + str(robot_id) + " base=" + base_name + " gpu=" + gpu_name + " profile=" + profile + " -> conservative fallback"
     self.gen_add_code_lines([
         "",
         "// ─── A1b baked launch config (single source of truth) ───────────────",

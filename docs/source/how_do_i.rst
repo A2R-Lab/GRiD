@@ -70,6 +70,12 @@ The task router: find the right entry point for what you are trying to do.
        (what makes shards stale). Details:
        :doc:`user_guide/getting_started/fast_robot_setup` and
        :doc:`user_guide/tutorials/cuda_validation`.
+   * - **See what a registration would build, or why it rebuilt**
+     - ``grid_rbd.build_plan(name, urdf, cuda_arch=...)`` — options, build
+       identity, keys and cache status without building anything; and
+       ``precompile(..., backends=["numpy"])`` populates the cache without a
+       handle or a CUDA context (build boxes). See
+       :doc:`user_guide/getting_started/fast_robot_setup`.
    * - **Tune kernel launch configs for my GPU**
      - ``config/autotune_robot.sh --help`` (writes
        ``config/launch_configs/<robot>/<gpu>.json``, baked at codegen time,

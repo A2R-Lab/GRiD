@@ -239,3 +239,33 @@ def test_dead_staging_dirs_are_swept_live_ones_kept(stubs):
     _warm(stubs)
     assert not dead.exists(), "orphaned staging dir from a dead pid survived"
     assert live.exists(), "a live builder's staging dir was removed"
+
+
+# ─── W10: build_plan resolves everything and touches nothing ────────────────
+
+def test_build_plan_is_read_only_and_tracks_the_cache(stubs):
+    plan = grid_rbd.build_plan("probe", urdf_string=URDF, cache_dir=stubs.cache_dir, cuda_arch=ARCH)
+    assert plan["cached"] is False and plan["content_key"] is None and plan["would"].startswith("generate")
+    assert plan["build_identity"]["cuda_arch"] == ARCH and len(plan["input_key"]) == 64
+    assert (stubs.generate_calls, stubs.compile_calls) == (0, 0), "a plan must not build"
+    assert not (stubs.cache_dir / "bykey").exists(), "a plan must not record a pointer"
+    key, so, _ = _warm(stubs)
+    plan = grid_rbd.build_plan("probe", urdf_string=URDF, cache_dir=stubs.cache_dir, cuda_arch=ARCH)
+    assert plan["cached"] is True and plan["content_key"] == key and plan["would"] == "load"
+    assert plan["input_key"] == _bykey_entries(stubs.cache_dir)[0]
+    # a stale pointer is reported with its reasons, not silently reused
+    rec = json.loads((so.parent / _cache.BUILD_INPUTS_FILE).read_text()); rec["nvcc"] = "/old/nvcc:11.0"
+    (so.parent / _cache.BUILD_INPUTS_FILE).write_text(json.dumps(rec))
+    plan = grid_rbd.build_plan("probe", urdf_string=URDF, cache_dir=stubs.cache_dir, cuda_arch=ARCH)
+    assert plan["cached"] is False and plan["stale_reasons"] and plan["stale_reasons"][0].startswith("nvcc:")
+    assert (stubs.generate_calls, stubs.compile_calls) == (1, 1)
+
+
+def test_precompile_numpy_builds_without_a_handle(stubs, monkeypatch):
+    def _no_handle(*a, **k):
+        raise AssertionError("precompile(backends=['numpy']) must not construct a RobotHandle")
+    monkeypatch.setattr(grid_rbd, "RobotHandle", _no_handle)
+    out = grid_rbd.precompile("probe", urdf_string=URDF, cache_dir=stubs.cache_dir, cuda_arch=ARCH,
+                              backends=["numpy"])
+    assert (stubs.generate_calls, stubs.compile_calls) == (1, 1)
+    assert out and out[0]["name"] == "probe" and out[0]["backend"] == "numpy" and "cache_key" in out[0]

@@ -164,7 +164,7 @@ class GRiDCodeGenerator:
                       test_rnea_grad, mx0, mx1, mx2, mx3, mx4, mx5, mxS, fxv
 
     # initialize the object
-    def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False):
+    def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False, LAUNCH_CONFIG_GPU = None):
         self.robot = robotObj
         # runtime_joint_dynamics: when True, the id/fd/aba/*_gradient bias reads
         # the per-DOF damping/friction coefficients from a mutable device table
@@ -194,6 +194,10 @@ class GRiDCodeGenerator:
         # falls back to the conservative MAX_PERF_LEVEL_THREADS default so
         # un-tuned robots keep compiling exactly as before (additive, Gate-A safe).
         self.launch_config_robot = LAUNCH_CONFIG_ROBOT
+        # W15 (2026-09-22): which config/launch_configs/<robot>/<gpu>.json to bake.
+        # None = LAUNCH_CONFIG_DEFAULT_GPU (byte-identical to before); the bindings
+        # pass launch_config.select_launch_config_gpu(robot, cuda_arch).
+        self.launch_config_gpu = LAUNCH_CONFIG_GPU if LAUNCH_CONFIG_GPU else LAUNCH_CONFIG_DEFAULT_GPU
         # MUJOCO_OUTPUT: when True AND the robot is floating-base, the generator
         # additionally INSTANTIATES the `MUJOCO_OUTPUT=true` variant of every
         # convention-sensitive floating kernel/host wrapper (the mjx output
