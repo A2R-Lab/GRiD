@@ -13,3 +13,4 @@ from ._topology_helpers import *
 from ._topology_helpers import _joint_dynamics_folded_by_vslot
 from ._topology_helpers import _robotModel_members
 from ._lin_alg_helpers import *
+from ._lin_alg_helpers import _gen_vendored_glass, _gen_linalg_wrappers

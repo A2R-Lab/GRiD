@@ -44,6 +44,7 @@ COMPOSING (every factor already exists):
     dqdd/dq|f_c  = (the usual dqdd/dq) + (dqdd/dfext) @ (dfext/dq)   <-- the term you'd otherwise DROP
 """
 import numpy as _np
+from grid_codegen._constants_arena import _tier2_bytes_line
 
 
 def contact_frames_from_urdf(robot, names):
@@ -752,9 +753,7 @@ def gen_f_ext_contact_runtime(self):
         "// grid_rbd tool_fext launcher sizes on THIS constant — never on another algorithm's",
         "// (it used max(F_EXT_GRADIENT, EE_POSE)+4096, borrowed from families a dynamics-only subset",
         "// does not even build; a family launcher must size on its own arena constant).",
-        "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t F_EXT_CONTACT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES() { "
-        "if constexpr (TIER == TIER_SHARED) return grid_shared_arena_bytes<T>(" + str(XHom_size + scratch) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-        "else return grid_shared_arena_bytes<T>(" + str(XHom_size) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }"])
+        _tier2_bytes_line("F_EXT_CONTACT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES", XHom_size + scratch, XHom_size)])
     gen_f_ext_body_runtime_inner(self)
     gen_f_ext_body_jacobian_dfc_runtime_inner(self)
     gen_f_ext_body_jacobian_dq_runtime_inner(self)
@@ -786,9 +785,7 @@ def gen_f_ext_contact(self, contacts):
         "// grid_rbd contact_fext launcher sizes on THIS constant — never on another algorithm's",
         "// (it used max(F_EXT_GRADIENT, EE_POSE)+4096, borrowed from families a dynamics-only subset",
         "// does not even build; a family launcher must size on its own arena constant).",
-        "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t F_EXT_CONTACT_DYNAMIC_SHARED_MEM_BYTES() { "
-        "if constexpr (TIER == TIER_SHARED) return grid_shared_arena_bytes<T>(" + str(XHom_size + scratch) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-        "else return grid_shared_arena_bytes<T>(" + str(XHom_size) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }"])
+        _tier2_bytes_line("F_EXT_CONTACT_DYNAMIC_SHARED_MEM_BYTES", XHom_size + scratch, XHom_size)])
     gen_f_ext_body_inner(self, contacts)
     gen_f_ext_body_jacobian_dfc_inner(self, contacts)
     gen_f_ext_body_jacobian_dq_inner(self, contacts)
@@ -823,9 +820,9 @@ def gen_contact_frame_positions(self, contacts):
         "// topology ints + alignment slack, the ee_pos convention); the *_BYTES sizers are the dynamic-smem arena.",
         "const int CONTACT_FRAME_POSITIONS_DYNAMIC_SHARED_MEM_COUNT = " + str(XHom_size + scratch_pos) + " + TOPOLOGY_HELPERS_COUNT + 8;",
         "const int CONTACT_FRAME_POSITIONS_GRADIENT_DYNAMIC_SHARED_MEM_COUNT = " + str(XHom_size + scratch_grad) + " + TOPOLOGY_HELPERS_COUNT + 8;",
-        "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t CONTACT_FRAME_POSITIONS_DYNAMIC_SHARED_MEM_BYTES() { return MULTI_TARGET_POSITION_CONTACT_FRAMES_DYNAMIC_SHARED_MEM_BYTES<T, TIER>(); }",
+        "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t CONTACT_FRAME_POSITIONS_DYNAMIC_SHARED_MEM_BYTES() { return MULTI_TARGET_POSITION_CONTACT_FRAMES_DYNAMIC_SHARED_MEM_BYTES<T, TIER>(); }",
         "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t CONTACT_FRAME_POSITIONS_DEVICE_INLINE_WORKSPACE_BYTES() { return MULTI_TARGET_POSITION_CONTACT_FRAMES_DEVICE_INLINE_WORKSPACE_BYTES<T, TIER>(); }",
-        "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t CONTACT_FRAME_POSITIONS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() { return MULTI_TARGET_POSITION_GRADIENT_CONTACT_FRAMES_DYNAMIC_SHARED_MEM_BYTES<T, TIER>(); }",
+        "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t CONTACT_FRAME_POSITIONS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES() { return MULTI_TARGET_POSITION_GRADIENT_CONTACT_FRAMES_DYNAMIC_SHARED_MEM_BYTES<T, TIER>(); }",
         "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t CONTACT_FRAME_POSITIONS_GRADIENT_DEVICE_INLINE_WORKSPACE_BYTES() { return MULTI_TARGET_POSITION_GRADIENT_CONTACT_FRAMES_DEVICE_INLINE_WORKSPACE_BYTES<T, TIER>(); }",
         "template <typename T, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>",
         "__device__ inline void contact_frame_positions_device(T *s_pos, const T *s_q, const robotModel<T> *d_robotModel, T *d_workspace = nullptr) {",

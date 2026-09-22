@@ -36,7 +36,7 @@ class GRiDCodeGenerator:
                          gen_get_Xhom_size, gen_load_update_XmatsHom_helpers, gen_load_update_XmatsHom_helpers_function_call, gen_XmatsHom_helpers_temp_shared_memory_code, gen_load_topology_helpers, \
                          gen_topology_sparsity_helpers_python, gen_init_topology_helpers, gen_topology_helpers_pointers_for_cpp, \
                          gen_topology_S_sign_for_cpp, gen_insert_helpers_function_call, gen_insert_helpers_func_def_params, gen_init_robotModel, gen_free_robotModel, gen_joint_limits_size, gen_init_joint_limits, gen_checked_table_tail, gen_legacy_init_wrapper, gen_checked_host_alloc, _robotModel_members, \
-                         gen_grid_linalg_backend_helpers, gen_linalg_smem_setup, gen_invert_matrix, gen_matmul, gen_matmul_trans, gen_crm_mul, gen_crm, gen_mxS_general, custom_is_constant, \
+                         gen_grid_linalg_backend_helpers, _gen_vendored_glass, _gen_linalg_wrappers, gen_linalg_smem_setup, gen_invert_matrix, gen_matmul, gen_matmul_trans, gen_crm_mul, gen_crm, gen_mxS_general, custom_is_constant, \
                          gen_mjx_input_convert, gen_mjx_quat_reorder, gen_mjx_base_rotate, gen_mjx_symmetrize_full, gen_mjx_accel_out, gen_mjx_congruence, gen_mjx_column_reframe, gen_mjx_retract, \
                          robot_has_mimic_joints, _v_slot_cpp, _alpha_for_jid, _id_S_desc, gen_add_fragment_mark
 
@@ -287,6 +287,8 @@ class GRiDCodeGenerator:
         self.gen_add_code_line("#include <string.h>")
         self.gen_add_code_line("#include <time.h>")
         self.gen_add_code_line("#include <cuda_runtime.h>")
+        if not getattr(self, "vendor_glass", True):
+            self.gen_add_code_line("#include \"glass.cuh\"  // vendor_glass=False: the consumer's top-level GLASS (-I<GLASS root>)")
         self.gen_add_code_lines([
             "",
             "#if defined(__has_include)",
@@ -313,7 +315,8 @@ class GRiDCodeGenerator:
                      runtime_inertia = False, runtime_transform = False,
                      runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
                      contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None,
-                     emit_alloc_gating = False, fragments_dir = None):
+                     emit_alloc_gating = False, fragments_dir = None,
+                     vendor_glass = True, glass_revision = None):
         # enable_mujoco_kernels=False builds a PIN-ONLY header: the mjx
         # (MUJOCO_OUTPUT=true) template overloads are still EMITTED (they are
         # templates -- uninstantiated they cost nothing; a bare #include is 2 s /
@@ -337,6 +340,13 @@ class GRiDCodeGenerator:
         if enable_mujoco_kernels is None:
             enable_mujoco_kernels = os.environ.get("GRID_ENABLE_MUJOCO_KERNELS", "1") != "0"
         self.enable_mujoco_kernels = enable_mujoco_kernels
+        # GATO ask 2026-09-20: vendor_glass=False consumes the top-level GLASS
+        # (#include in the prelude + `namespace glass = ::glass;`) instead of
+        # inlining the pinned subset; default True is byte-identical. glass_revision
+        # (else $GRID_GLASS_REVISION) labels the header's GLASS provenance when the
+        # tree has no git checkout (HJCD follow-up); see _lin_alg_helpers._glass_commit.
+        self.vendor_glass = bool(vendor_glass)
+        self.glass_revision = glass_revision
         # 2a: opt-in per-algo alloc gating in init_gridData (see gen_init_gridData).
         # Default False emits the header BYTE-IDENTICAL to before the feature; the
         # per-algo bench turns it on so its solo exes can -D away other algos'
@@ -921,7 +931,7 @@ class GRiDCodeGenerator:
             # arena for it is harmless; mirrors ee_t_count = n + 6*ees + inner + XHom.
             fj_t_count = Xhom_size_fj + (16 * NJ_fj) + n_pos_fj + (6 * nv_fj)
             self.gen_add_code_line(
-                "template <typename T> __host__ __device__ inline size_t FRAME_JACOBIAN_DYNAMIC_SHARED_MEM_BYTES() "
+                "template <typename T> __host__ __device__ constexpr size_t FRAME_JACOBIAN_DYNAMIC_SHARED_MEM_BYTES() "
                 "{ return grid_shared_arena_bytes<T>(" + str(fj_t_count) +
                 ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }")
             # S1: surface-presence marker so host runners/bindings can detect the
@@ -937,7 +947,7 @@ class GRiDCodeGenerator:
                 # entirely — so this size matches the wrapper exactly.
                 fjd_t_count = Xhom_size_fj + (6 * NJ_fj) + (6 * nv_fj) + (16 * NJ_fj)
                 self.gen_add_code_line(
-                    "template <typename T> __host__ __device__ inline size_t FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES() "
+                    "template <typename T> __host__ __device__ constexpr size_t FRAME_JACOBIAN_DOT_DYNAMIC_SHARED_MEM_BYTES() "
                     "{ return grid_shared_arena_bytes<T>(" + str(fjd_t_count) +
                     ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }")
                 self.gen_add_code_line("#define GRID_HAS_FRAME_JACOBIAN_DOT 1")
@@ -970,11 +980,8 @@ class GRiDCodeGenerator:
                 # keeps s_F in smem) is the single source of truth the device reads.
                 _osc_per = self.osc_inertia_t_count_per_tier
                 _osc_F_in_smem = tuple(p == 0 for p in self.osc_inertia_spill_tier_3way)
-                self.gen_add_code_line(
-                    "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES() { "
-                    "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(_osc_per[0]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                    "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(_osc_per[1]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-                    "else                                 return grid_shared_arena_bytes<T>(" + str(_osc_per[2]) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }")
+                from ._constants_arena import _tier_bytes_lines
+                self.gen_add_code_lines(_tier_bytes_lines("OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES", _osc_per, ", GRID_EE_LINALG_SHARED_BYTES<T>()"))
                 self.gen_add_code_line(
                     "template <int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr bool OSC_INERTIA_F_IN_SMEM() { return (TIER == TIER_SHARED) ? "
                     + ("true" if _osc_F_in_smem[0] else "false") + " : (TIER == TIER_LITE) ? "
@@ -1008,7 +1015,7 @@ class GRiDCodeGenerator:
             if "end_effector_pose_runtime" in algorithms:
                 eprt_t_count = Xhom_size_rt + (16 * NJ_rt) + n_pos_rt + 6
                 self.gen_add_code_line(
-                    "template <typename T> __host__ __device__ inline size_t END_EFFECTOR_POSE_RUNTIME_DYNAMIC_SHARED_MEM_BYTES() "
+                    "template <typename T> __host__ __device__ constexpr size_t END_EFFECTOR_POSE_RUNTIME_DYNAMIC_SHARED_MEM_BYTES() "
                     "{ return grid_shared_arena_bytes<T>(" + str(eprt_t_count) +
                     ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }")
                 self.gen_add_code_line("#define GRID_HAS_END_EFFECTOR_POSE_RUNTIME 1")
@@ -1016,7 +1023,7 @@ class GRiDCodeGenerator:
             if "end_effector_pose_gradient_runtime" in algorithms:
                 epgrt_t_count = Xhom_size_rt + (16 * NJ_rt) + n_pos_rt + (6 * nv_rt)
                 self.gen_add_code_line(
-                    "template <typename T> __host__ __device__ inline size_t END_EFFECTOR_POSE_GRADIENT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES() "
+                    "template <typename T> __host__ __device__ constexpr size_t END_EFFECTOR_POSE_GRADIENT_RUNTIME_DYNAMIC_SHARED_MEM_BYTES() "
                     "{ return grid_shared_arena_bytes<T>(" + str(epgrt_t_count) +
                     ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }")
                 self.gen_add_code_line("#define GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME 1")

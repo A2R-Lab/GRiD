@@ -24,6 +24,23 @@ The task router: find the right entry point for what you are trying to do.
        with ``algorithm_list=`` and/or skip the mjx twins with
        ``enable_mujoco_kernels=False`` (also ``grid-generate
        --algorithm-list ... --no-mujoco-kernels``).
+   * - **Use my own top-level GLASS instead of the copy vendored in grid.cuh**
+     - ``gen_all_code(..., vendor_glass=False)``: the header ``#include``\ s
+       ``glass.cuh`` from your include path (``-I<GLASS root>``) and aliases
+       ``grid::glass`` to ``::glass`` — one GLASS per translation unit. The
+       default (vendored, self-contained) header is byte-identical. All
+       ``*_DYNAMIC_SHARED_MEM_BYTES<T[, TIER]>()`` sizers are ``constexpr``.
+   * - **Label the GLASS revision when generating from a source archive (no .git)**
+     - ``gen_all_code(..., glass_revision="<sha>")`` or
+       ``GRID_GLASS_REVISION=<sha>``: the ``// Pinned commit:`` line carries
+       the bare revision, so the header is byte-identical to a git checkout's;
+       a live checkout that disagrees is an error, and
+       ``gen.glass_revision_source`` reports ``git`` / ``git-verified`` /
+       ``supplied-unverified`` / ``unknown``.
+   * - **Embed the generated header in a library or interpreter (no exit() on CUDA errors)**
+     - ``init_robotModel_checked`` / ``init_joint_limits_checked`` /
+       ``free_robotModel_checked`` (or ``robotModel_owner<T>``):
+       :doc:`user_guide/concepts/library_safe_initialization`.
    * - **Add a new algorithm to GRiD**
      - :doc:`user_guide/tutorials/adding_an_algorithm` (numpy oracle in
        ``RBDReference`` first, then the codegen emitter, then equivalence

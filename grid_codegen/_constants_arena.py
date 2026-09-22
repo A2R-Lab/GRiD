@@ -16,10 +16,23 @@ def _tier_bytes_lines(macro, counts, linalg_arg=", GRID_LINALG_NVIDIA_MAX_HELPER
     String-for-string identical to the hand-written wall it replaced (C3
     table-drive, 2026-09-08). `linalg_arg` is the third grid_shared_arena_bytes
     argument including its leading ", " ("" for the SO arenas)."""
-    return ["template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t " + macro + "() { "
-            "if constexpr (TIER == TIER_SHARED)    return grid_shared_arena_bytes<T>(" + str(counts[0]) + ", TOPOLOGY_HELPERS_COUNT" + linalg_arg + "); "
-            "else if constexpr (TIER == TIER_LITE) return grid_shared_arena_bytes<T>(" + str(counts[1]) + ", TOPOLOGY_HELPERS_COUNT" + linalg_arg + "); "
-            "else                                 return grid_shared_arena_bytes<T>(" + str(counts[2]) + ", TOPOLOGY_HELPERS_COUNT" + linalg_arg + "); }"]
+    # ONE return statement (a nested ternary), not an `if constexpr` chain: the
+    # sizers are constexpr (GATO ask 2026-09-20) and the equivalence runners
+    # compile with -std=c++11, where a constexpr function body must be exactly
+    # one return. Same values per tier as the chain it replaced.
+    return ["template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t " + macro + "() { "
+            "return (TIER == TIER_SHARED) ? grid_shared_arena_bytes<T>(" + str(counts[0]) + ", TOPOLOGY_HELPERS_COUNT" + linalg_arg + ") "
+            ": (TIER == TIER_LITE) ? grid_shared_arena_bytes<T>(" + str(counts[1]) + ", TOPOLOGY_HELPERS_COUNT" + linalg_arg + ") "
+            ": grid_shared_arena_bytes<T>(" + str(counts[2]) + ", TOPOLOGY_HELPERS_COUNT" + linalg_arg + "); }"]
+
+
+def _tier2_bytes_line(macro, shared_count, other_count, linalg_arg=", GRID_EE_LINALG_SHARED_BYTES<T>()"):
+    """2-rung variant: TIER_SHARED keeps a scratch region in smem, every other
+    tier spills it (the kinematics/multi-target/contact families). One
+    single-return constexpr line, same shape as `_tier_bytes_lines`."""
+    return ("template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t " + macro + "() { "
+            "return (TIER == TIER_SHARED) ? grid_shared_arena_bytes<T>(" + str(shared_count) + ", TOPOLOGY_HELPERS_COUNT" + linalg_arg + ") "
+            ": grid_shared_arena_bytes<T>(" + str(other_count) + ", TOPOLOGY_HELPERS_COUNT" + linalg_arg + "); }")
 
 
 def _ag_alloc_expr(keys):
@@ -1138,12 +1151,12 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              "#define GRID_GENERATED_NUM_EES " + str(self.robot.get_total_leaf_nodes()),
                              ""])
     self.gen_add_code_lines([
-                             "template <typename T> __host__ __device__ inline size_t INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(id_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }",
+                             "template <typename T> __host__ __device__ constexpr size_t INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(id_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }",
                              *_tier_bytes_lines("INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES", self.inverse_dynamics_regressor_t_count_per_tier),
                              # g1-spill: per-tier placement of s_Y -- true => smem, false => d_workspace.
                              _tier_ternary_line("INVERSE_DYNAMICS_REGRESSOR_Y_IN_SMEM", "bool", (("true" if self.inverse_dynamics_regressor_spill_tier_3way[0] == 0 else "false"), ("true" if self.inverse_dynamics_regressor_spill_tier_3way[1] == 0 else "false"), ("true" if self.inverse_dynamics_regressor_spill_tier_3way[2] == 0 else "false"))),
                              # PS5 energy regressors (each output 10*NUM_BODIES, fits every tier -> no spill).
-                             "template <typename T> __host__ __device__ inline size_t KINETIC_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(self.kinetic_energy_regressor_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }",
+                             "template <typename T> __host__ __device__ constexpr size_t KINETIC_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(self.kinetic_energy_regressor_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }",
                              # PS5 Coriolis matrix C(q,qd) (nv x nv; fits smem at FULL -> no spill).
                              *_tier_bytes_lines("CORIOLIS_MATRIX_DYNAMIC_SHARED_MEM_BYTES", self.coriolis_matrix_t_count_per_tier),
                              # g1-spill: tier-aware. At a spilled tier the s_Y regressor
@@ -1190,11 +1203,11 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              _tier_ternary_line("INTEGRATOR_DU_DAB_IN_SMEM", "bool", (_b(self.integrator_gradient_dab_in_smem_per_tier[0]), _b(self.integrator_gradient_dab_in_smem_per_tier[1]), _b(self.integrator_gradient_dab_in_smem_per_tier[2]))),
                              _tier_ternary_line("INTEGRATOR_DU_INNER_LEVEL", "int", (str(self.integrator_gradient_inner_level_per_tier[0]), str(self.integrator_gradient_inner_level_per_tier[1]), str(self.integrator_gradient_inner_level_per_tier[2]))),
                              # d_workspace sub-offsets (within the per-timestep slot): Dqdd at 0, then dAB, then the inner-spill region.
-                             "template <typename T> __host__ __device__ inline size_t GRID_INTEGRATOR_GRADIENT_DAB_OFFSET_BYTES() { return sizeof(T) * static_cast<size_t>(" + str(self._integrator_gradient_dqdd_count) + "); }",
-                             "template <typename T> __host__ __device__ inline size_t GRID_INTEGRATOR_GRADIENT_INNER_OFFSET_BYTES() { return sizeof(T) * static_cast<size_t>(" + str(self._integrator_gradient_dqdd_count + self._integrator_gradient_dAB_count) + "); }",
-                             "template <typename T> __host__ __device__ inline size_t INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(id_device_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }",
-                             "template <typename T> __host__ __device__ inline size_t MINV_DEVICE_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(minv_device_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }",
-                             "template <typename T> __host__ __device__ inline size_t FORWARD_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(fd_device_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }",
+                             "template <typename T> __host__ __device__ constexpr size_t GRID_INTEGRATOR_GRADIENT_DAB_OFFSET_BYTES() { return sizeof(T) * static_cast<size_t>(" + str(self._integrator_gradient_dqdd_count) + "); }",
+                             "template <typename T> __host__ __device__ constexpr size_t GRID_INTEGRATOR_GRADIENT_INNER_OFFSET_BYTES() { return sizeof(T) * static_cast<size_t>(" + str(self._integrator_gradient_dqdd_count + self._integrator_gradient_dAB_count) + "); }",
+                             "template <typename T> __host__ __device__ constexpr size_t INVERSE_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(id_device_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }",
+                             "template <typename T> __host__ __device__ constexpr size_t MINV_DEVICE_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(minv_device_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }",
+                             "template <typename T> __host__ __device__ constexpr size_t FORWARD_DYNAMICS_DEVICE_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(fd_device_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }",
                              # Per-tier sizes for forward_dynamics_device (inline-CUDA users only).
                              # At TIER_SHARED the FD inner s_temp lives in the smem arena; at
                              # TIER_LITE/MINIMAL the whole arena moves to d_workspace (this is the
@@ -1211,8 +1224,8 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              *_tier_bytes_lines("CRBA_DYNAMIC_SHARED_MEM_BYTES", self.crba_t_count_per_tier),
                              "template <typename T> __host__ __device__ constexpr size_t GRID_EE_LINALG_SHARED_BYTES() { return static_cast<size_t>(0); }",
                              # PS5 potential-energy regressor (kinematics / XmatsHom domain; uses the ee linalg helper bytes).
-                             "template <typename T> __host__ __device__ inline size_t POTENTIAL_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(self.potential_energy_regressor_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }",
-                             "template <typename T> __host__ __device__ inline size_t END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(ee_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }",
+                             "template <typename T> __host__ __device__ constexpr size_t POTENTIAL_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(self.potential_energy_regressor_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }",
+                             "template <typename T> __host__ __device__ constexpr size_t END_EFFECTOR_POSE_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(ee_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }",
                              # Phase 3d: tier-aware. PERF/LITE/MINIMAL each report the smem
                              # bytes their picked spill level needs. Collapsed picks (small
                              # robots) return identical values across branches.
@@ -1223,7 +1236,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              # preserves all existing single-arg call sites.
                              *_tier_bytes_lines("END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES", self.d2ee_t_count_per_tier, linalg_arg=", GRID_EE_LINALG_SHARED_BYTES<T>()"),
                              # G2 centroidal quick-wins shared-mem macros (no tier spill).
-                             "template <typename T> __host__ __device__ inline size_t INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(self.id_bias_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }",
+                             "template <typename T> __host__ __device__ constexpr size_t INVERSE_DYNAMICS_BIAS_DYNAMIC_SHARED_MEM_BYTES() { return grid_shared_arena_bytes<T>(" + str(self.id_bias_t_count) + ", TOPOLOGY_HELPERS_COUNT, GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); }",
                              # com/ccrba/energy: 2-rung J-spill ladder (DE-GATE #2). L0 keeps the Jw
                              # band in smem (== old single rung), L1 spills it -> d_workspace.
                              *_tier_bytes_lines("COM_DYNAMIC_SHARED_MEM_BYTES", self.com_t_count_per_tier, linalg_arg=", GRID_EE_LINALG_SHARED_BYTES<T>()"),
@@ -1329,7 +1342,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              "        : grid_shared_arena_bytes<T>(" + str(XI_size) + ", TOPOLOGY_HELPERS_COUNT);",
                              "}",
                              "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t IDSVA_SO_DEVICE_INLINE_WORKSPACE_BYTES() { return (TIER == TIER_SHARED) ? static_cast<size_t>(0) : sizeof(T) * static_cast<size_t>(" + str(idsva_so_world_frame_inner_temp_count if self.robot.floating_base else idsva_so_body_frame_inner_temp_count) + "); }",
-                             "template <typename T> __host__ __device__ inline size_t GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP() { return sizeof(T) * static_cast<size_t>(" + str(grad_spill_workspace_t_count) + "); }"] + (
+                             "template <typename T> __host__ __device__ constexpr size_t GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP() { return sizeof(T) * static_cast<size_t>(" + str(grad_spill_workspace_t_count) + "); }"] + (
                              # SO-REGION band gating v2 (2026-08-23, the "why 30 GB" fix): the
                              # SO section is a UNION region — its size is the max over the
                              # per-algo spill terms that overlay it. v1 gated the whole region
@@ -1343,7 +1356,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              # run concurrently). Ungated emission stays byte-identical; a
                              # gated header with NO -D flags evaluates every #if true and
                              # reproduces the ungated max exactly.
-                             ["template <typename T> __host__ __device__ inline size_t GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP() {",
+                             ["template <typename T> __host__ __device__ constexpr size_t GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP() {",
                               "    size_t _m = 0, _t = 0; (void)_t;"]
                              + [line
                                 for term_count, term_keys in (
@@ -1370,7 +1383,7 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              + ["    return _m;",
                                 "}"]
                              if _ws_gating else
-                             ["template <typename T> __host__ __device__ inline size_t GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP() { return sizeof(T) * static_cast<size_t>(" + str(so_workspace_t_count) + "); }"]) + [
+                             ["template <typename T> __host__ __device__ constexpr size_t GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP() { return sizeof(T) * static_cast<size_t>(" + str(so_workspace_t_count) + "); }"]) + [
                              # Phase 3e: sized for MINIMAL tier's spill (max across PERF/LITE/MINIMAL).
                              # Even if PERF doesn't spill df_du/Minv, MINIMAL might — the workspace
                              # allocation has to cover MINIMAL's needs at all times.
@@ -1380,45 +1393,45 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
                              # value (Gate-A byte-identical for cardinals). The 3*NV^2 span backs
                              # s_df_du(2*NV^2) + s_Minv(NV^2) at GRID_FDSVA_SO_SPILL_OFFSET_BYTES.
                              ] + (lambda _fdsva_spill_line=(
-                                 "template <typename T> __host__ __device__ inline size_t GRID_FDSVA_SO_SPILL_BYTES_PER_TIMESTEP() { return sizeof(T) * static_cast<size_t>("
+                                 "template <typename T> __host__ __device__ constexpr size_t GRID_FDSVA_SO_SPILL_BYTES_PER_TIMESTEP() { return sizeof(T) * static_cast<size_t>("
                                  + str(3*nv*nv if any(p >= 5 for p in getattr(self, 'fdsva_so_spill_tier_3way', (0, 0, 0))) else 0) + "); }"):
                                  (["#if " + _ag_expr(("fdsva_so", "fdsva_so_mjx")),
                                    _fdsva_spill_line,
                                    "#else",
-                                   "template <typename T> __host__ __device__ inline size_t GRID_FDSVA_SO_SPILL_BYTES_PER_TIMESTEP() { return static_cast<size_t>(0); }",
+                                   "template <typename T> __host__ __device__ constexpr size_t GRID_FDSVA_SO_SPILL_BYTES_PER_TIMESTEP() { return static_cast<size_t>(0); }",
                                    "#endif"]
                                   if _ws_gating else [_fdsva_spill_line]))() + [
-                             "template <typename T> __host__ __device__ inline size_t GRID_FDSVA_SO_SPILL_OFFSET_BYTES() { return GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP<T>(); }",
-                             "template <typename T> __host__ __device__ inline size_t GRID_WORKSPACE_BYTES_PER_TIMESTEP() { return GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_FDSVA_SO_SPILL_BYTES_PER_TIMESTEP<T>(); }",
+                             "template <typename T> __host__ __device__ constexpr size_t GRID_FDSVA_SO_SPILL_OFFSET_BYTES() { return GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP<T>(); }",
+                             "template <typename T> __host__ __device__ constexpr size_t GRID_WORKSPACE_BYTES_PER_TIMESTEP() { return GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_SO_WORKSPACE_BYTES_PER_TIMESTEP<T>() + GRID_FDSVA_SO_SPILL_BYTES_PER_TIMESTEP<T>(); }",
                              "template <typename T> __host__ __device__ inline gridSharedTier GRID_INVERSE_DYNAMICS_GRADIENT_SHARED_TIER() { return static_cast<gridSharedTier>(GRID_INVERSE_DYNAMICS_GRADIENT_SHARED_TIER_VALUE); }",
                              "template <typename T> __host__ __device__ inline gridSharedTier GRID_FORWARD_DYNAMICS_GRADIENT_SHARED_TIER() { return static_cast<gridSharedTier>(GRID_FORWARD_DYNAMICS_GRADIENT_SHARED_TIER_VALUE); }",
-                             "template <typename T> __host__ __device__ inline size_t GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES() { return GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP<T>(); }",
+                             "template <typename T> __host__ __device__ constexpr size_t GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES() { return GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP<T>(); }",
                              # DE-GATE #2: the dccrba Jw sweep band (and the cmm Jw band) spill to the SO
                              # band at a DISTINCT sub-offset so they never alias the dccrba output (which
                              # sits at GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES, size 6*nv*nv*sizeof(T)). For cmm
                              # the output region is unused so the overlap is harmless.
-                             "template <typename T> __host__ __device__ inline size_t GRID_DCCRBA_J_OFFSET_BYTES() { return GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>() + sizeof(T) * static_cast<size_t>(" + str(6 * nv * nv) + "); }",
+                             "template <typename T> __host__ __device__ constexpr size_t GRID_DCCRBA_J_OFFSET_BYTES() { return GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>() + sizeof(T) * static_cast<size_t>(" + str(6 * nv * nv) + "); }",
                              # Phase 3a: Minv-F lives at offset 0 of the grad section when spilled.
                              # Safe to overlap with inverse_dynamics_gradient spill region because Minv finishes before
                              # inverse_dynamics_gradient starts in any kernel that composes both.
-                             "template <typename T> __host__ __device__ inline size_t GRID_MINV_F_WORKSPACE_OFFSET_BYTES() { return static_cast<size_t>(0); }",
+                             "template <typename T> __host__ __device__ constexpr size_t GRID_MINV_F_WORKSPACE_OFFSET_BYTES() { return static_cast<size_t>(0); }",
                              # ABA surgical cold sub-buffer reuses the SO/grad workspace band base (ABA
                              # never runs concurrently with SO/grad). The cold band (ABA_INNER_COLD_BYTES)
                              # is far smaller than GRID_GRAD_WORKSPACE_BYTES_PER_TIMESTEP, so it fits at
                              # offset 0 without growing GRID_WORKSPACE_BYTES_PER_TIMESTEP.
-                             "template <typename T> __host__ __device__ inline size_t GRID_ABA_COLD_OFFSET_BYTES() { return static_cast<size_t>(0); }",
+                             "template <typename T> __host__ __device__ constexpr size_t GRID_ABA_COLD_OFFSET_BYTES() { return static_cast<size_t>(0); }",
                              # D2EE no longer uses a per-timestep d_workspace slice (the spilled
                              # s_end_effector_pose_hessian is written directly into d_end_effector_pose_hessian); these offset macros are
                              # retained as 0 for backward compatibility with any inline-CUDA caller
                              # pattern that still references them. New code should not use them.
-                             "template <typename T> __host__ __device__ inline size_t GRID_END_EFFECTOR_POSE_HESSIAN_WORKSPACE_TEMP_OFFSET_BYTES() { return static_cast<size_t>(0); }",
-                             "template <typename T> __host__ __device__ inline size_t GRID_END_EFFECTOR_POSE_HESSIAN_WORKSPACE_D2XHOM_OFFSET_BYTES() { return static_cast<size_t>(0); }",
-                             "template <typename T> __host__ __device__ inline size_t GRID_END_EFFECTOR_POSE_HESSIAN_WORKSPACE_D2EETEMP_OFFSET_BYTES() { return static_cast<size_t>(0); }",
+                             "template <typename T> __host__ __device__ constexpr size_t GRID_END_EFFECTOR_POSE_HESSIAN_WORKSPACE_TEMP_OFFSET_BYTES() { return static_cast<size_t>(0); }",
+                             "template <typename T> __host__ __device__ constexpr size_t GRID_END_EFFECTOR_POSE_HESSIAN_WORKSPACE_D2XHOM_OFFSET_BYTES() { return static_cast<size_t>(0); }",
+                             "template <typename T> __host__ __device__ constexpr size_t GRID_END_EFFECTOR_POSE_HESSIAN_WORKSPACE_D2EETEMP_OFFSET_BYTES() { return static_cast<size_t>(0); }",
                              # Phase 3d: EE_POSE_GRAD reuses the SO section (the kernels don't
                              # run concurrently — d_workspace bytes are safely repurposed). When
                              # the MINIMAL tier spills dXmatsHom, it sits before the temp arena.
-                             "template <typename T> __host__ __device__ inline size_t GRID_END_EFFECTOR_POSE_GRADIENT_WORKSPACE_DXHOM_OFFSET_BYTES() { return GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>(); }",
-                             "template <typename T> __host__ __device__ inline size_t GRID_END_EFFECTOR_POSE_GRADIENT_WORKSPACE_TEMP_OFFSET_BYTES() { return GRID_END_EFFECTOR_POSE_GRADIENT_WORKSPACE_DXHOM_OFFSET_BYTES<T>() + (GRID_END_EFFECTOR_POSE_GRADIENT_USES_WORKSPACE_DXHOM ? sizeof(T) * static_cast<size_t>(DXHOM_T_COUNT) : 0); }",
+                             "template <typename T> __host__ __device__ constexpr size_t GRID_END_EFFECTOR_POSE_GRADIENT_WORKSPACE_DXHOM_OFFSET_BYTES() { return GRID_SO_WORKSPACE_TEMP_OFFSET_BYTES<T>(); }",
+                             "template <typename T> __host__ __device__ constexpr size_t GRID_END_EFFECTOR_POSE_GRADIENT_WORKSPACE_TEMP_OFFSET_BYTES() { return GRID_END_EFFECTOR_POSE_GRADIENT_WORKSPACE_DXHOM_OFFSET_BYTES<T>() + (GRID_END_EFFECTOR_POSE_GRADIENT_USES_WORKSPACE_DXHOM ? sizeof(T) * static_cast<size_t>(DXHOM_T_COUNT) : 0); }",
                              "template <typename T> __host__ __device__ inline bool grid_selected_shared_memory_fits() { return INVERSE_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>() <= GRID_CUDA_TARGET_SHARED_MEM_BYTES && FORWARD_DYNAMICS_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T>() <= GRID_CUDA_TARGET_SHARED_MEM_BYTES && (!GRID_GENERATES_D2EE || END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T>() <= GRID_CUDA_TARGET_SHARED_MEM_BYTES) && (!GRID_GENERATES_IDSVA_SO_BODY_FRAME || IDSVA_SO_BODY_FRAME_DYNAMIC_SHARED_MEM_BYTES<T>() <= GRID_CUDA_TARGET_SHARED_MEM_BYTES) && (!GRID_GENERATES_FDSVA_SO || FDSVA_SO_DYNAMIC_SHARED_MEM_BYTES<T>() <= GRID_CUDA_TARGET_SHARED_MEM_BYTES); }",
                              "// __forceinline__ used throughout the xhom helper chain so ptxas folds these into the",
                              "// inner kernels at all opt levels. For fixed-base the body of grid_q_index_affects_joint is",

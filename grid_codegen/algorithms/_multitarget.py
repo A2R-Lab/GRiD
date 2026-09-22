@@ -20,6 +20,7 @@ by ONE shared FK (all link world transforms) + a cheap parallel-over-targets
 extraction driven by a baked (anchor, offset) table — same table-driven idiom as the
 W1a hessian collapse. Subsumes backlog D (multi-named-EE-target).
 """
+from grid_codegen._constants_arena import _tier2_bytes_line
 from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, host_mode_flags, mangle_host_func_defs, wrap_host_single_call_timing
 
 
@@ -239,9 +240,7 @@ def gen_multi_target_position(self, batch, suffix="", emit_num_const=True):
         # Tier-aware smem arena: at TIER_SHARED the FK scratch (s_Xworld) is in smem; at
         # TIER_LITE/MINIMAL it spills to the device fn's d_workspace, shrinking the arena to
         # s_XmatsHom + linalg only. Default TIER keeps every single-arg call site working.
-        "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t " + POS + "_DYNAMIC_SHARED_MEM_BYTES() { "
-        "if constexpr (TIER == TIER_SHARED) return grid_shared_arena_bytes<T>(" + str(total_t) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-        "else return grid_shared_arena_bytes<T>(" + str(XHom_size) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }",
+        _tier2_bytes_line(POS + "_DYNAMIC_SHARED_MEM_BYTES", total_t, XHom_size),
         # Companion d_workspace sizing for multi_target_position<suffix>_device at TIER_LITE+.
         "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t " + POS + "_DEVICE_INLINE_WORKSPACE_BYTES() "
         "{ return (TIER == TIER_SHARED) ? static_cast<size_t>(0) : sizeof(T) * static_cast<size_t>(" + str(scratch) + "); }",
@@ -435,9 +434,7 @@ def gen_multi_target_position_gradient(self, batch, suffix=""):
         "// W2a batched multi-target world-position GRADIENT (opt-in via multi_target_batch)",
         # Tier-aware smem arena: TIER_SHARED keeps the Jacobian scratch in smem; TIER_LITE/MINIMAL
         # spills it to the device fn's d_workspace, shrinking the arena to s_XmatsHom + linalg.
-        "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t " + POSG + "_DYNAMIC_SHARED_MEM_BYTES() { "
-        "if constexpr (TIER == TIER_SHARED) return grid_shared_arena_bytes<T>(" + str(total_t) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); "
-        "else return grid_shared_arena_bytes<T>(" + str(XHom_size) + ", TOPOLOGY_HELPERS_COUNT, GRID_EE_LINALG_SHARED_BYTES<T>()); }",
+        _tier2_bytes_line(POSG + "_DYNAMIC_SHARED_MEM_BYTES", total_t, XHom_size),
         "template <typename T, int TIER = GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t " + POSG + "_DEVICE_INLINE_WORKSPACE_BYTES() "
         "{ return (TIER == TIER_SHARED) ? static_cast<size_t>(0) : sizeof(T) * static_cast<size_t>(" + str(scratch) + "); }",
     ])

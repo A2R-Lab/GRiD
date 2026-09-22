@@ -61,14 +61,52 @@ def _glass_root():
     return root
 
 
-def _glass_commit():
+def _glass_git_head():
+    """HEAD of the GLASS submodule via git, or None when git/.git is unavailable
+    (an exported source archive)."""
     try:
         return subprocess.check_output(
             ["git", "-C", str(_glass_root()), "rev-parse", "HEAD"],
-            text=True,
+            text=True, stderr=subprocess.DEVNULL,
         ).strip()
     except Exception:
-        return "unknown"
+        return None
+
+
+def _glass_commit(supplied=None):
+    """The GLASS revision recorded in the generated header.
+
+    Resolution (HJCD provenance follow-up, 2026-09-22): an explicit revision —
+    the ``glass_revision`` codegen argument, else ``$GRID_GLASS_REVISION`` —
+    wins over git discovery, so a tree without ``.git`` (a source archive)
+    regenerates a header BYTE-IDENTICAL to the checkout's. It is never
+    presented as verified: when git IS available and disagrees, that is an
+    error (a wrong label must not be baked); when git is unavailable a note
+    goes to stderr. With neither input the label is "unknown" (also noted).
+    Returns the bare revision string (no "git:"/"supplied:" prefix — the
+    header is data; the verification status is reported at generation time
+    and exposed as ``glass_revision_source``)."""
+    import os as _os
+    import sys as _sys
+    supplied = supplied or _os.environ.get("GRID_GLASS_REVISION") or None
+    head = _glass_git_head()
+    if supplied:
+        if head is not None and head != supplied:
+            raise ValueError(
+                f"glass_revision={supplied!r} disagrees with the GLASS checkout at "
+                f"{_glass_root()} (git HEAD {head}); refusing to bake a wrong provenance label")
+        if head is None:
+            print(f"[grid_codegen] GLASS revision {supplied} taken from the caller "
+                  f"(no git checkout to verify it against)", file=_sys.stderr)
+        _glass_commit.source = "git-verified" if head is not None else "supplied-unverified"
+        return supplied
+    if head is not None:
+        _glass_commit.source = "git"
+        return head
+    print("[grid_codegen] GLASS revision unknown: no git checkout and no "
+          "glass_revision=/GRID_GLASS_REVISION supplied", file=_sys.stderr)
+    _glass_commit.source = "unknown"
+    return "unknown"
 
 
 # File-level `GLASS_*` preprocessor guards (e.g. gemm.cuh's
@@ -124,7 +162,29 @@ def gen_grid_linalg_backend_helpers(self):
     accept (and ignore) a trailing ``glass_nvidia_smem`` argument so
     pre-v2.0 callsites continue to compile without edits.
     """
-    glass_commit = _glass_commit()
+    glass_commit = _glass_commit(getattr(self, "glass_revision", None))
+    self.glass_revision_source = getattr(_glass_commit, "source", "unknown")
+    if not getattr(self, "vendor_glass", True):
+        # GATO ask 2026-09-20 (opt-in): consume the consumer's top-level GLASS
+        # instead of inlining the pinned subset — ONE GLASS per translation
+        # unit. The `#include "glass.cuh"` is emitted in the global prelude
+        # (gen_add_includes); here only the namespace alias, so every bare
+        # `glass::` call site in the generated code resolves to ::glass.
+        self.gen_add_func_doc("GLASS linear algebra helpers (SIMT only) — consumed from the top-level GLASS (vendor_glass=False)")
+        self.gen_add_code_lines([
+            "",
+            "// vendor_glass=False: GLASS is NOT vendored. The consumer's include path",
+            "// must provide the top-level glass.cuh (included in this header's prelude);",
+            "// the generator was run against GLASS revision " + glass_commit + ".",
+            "namespace glass = ::glass;",
+            "",
+        ])
+    else:
+        self._gen_vendored_glass(glass_commit)
+    self._gen_linalg_wrappers()
+
+
+def _gen_vendored_glass(self, glass_commit):
     self.gen_add_func_doc("Vendored GLASS linear algebra helpers (SIMT only)")
     # Vendor GLASS NESTED inside the generated namespace (e.g. `grid::glass`) rather
     # than at global `glass::`. This keeps GRiD hermetic: a consumer can include its
@@ -146,6 +206,8 @@ def gen_grid_linalg_backend_helpers(self):
     self.gen_add_code_line("} // namespace glass")
     self.gen_add_code_line("")
 
+
+def _gen_linalg_wrappers(self):
     self.gen_add_func_doc("Linear algebra wrappers (SIMT GLASS)")
     self.gen_add_code_lines([
         "// SIMT-only linalg. The `glass_nvidia_smem` parameter on each wrapper is",

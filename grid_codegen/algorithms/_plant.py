@@ -2306,7 +2306,7 @@ def gen_plant_step_hessian_kernel(self):
         from ._integrator_gradient import floating_hessian_mjx_ws_count
         ws_t_count += floating_hessian_mjx_ws_count(n)
     self.gen_add_code_line(
-        "template <typename T> __host__ __device__ inline size_t "
+        "template <typename T> __host__ __device__ constexpr size_t "
         "PLANT_HESSIAN_WORKSPACE_BYTES_PER_TIMESTEP() { return sizeof(T) * static_cast<size_t>("
         + str(ws_t_count) + "); }")
     self.gen_add_func_doc("plant_step_hessian kernel: s_d2AB = d^2 integrator([q;qd], u, dt) per timestep "
@@ -2361,7 +2361,7 @@ def gen_plant_step_hessian_kernel(self):
     t1 = _tier_t_count(picks[1])
     t2 = _tier_t_count(picks[2])
     self.gen_add_code_line(
-        "template <typename T, int TIER = grid::GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ inline size_t "
+        "template <typename T, int TIER = grid::GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t "
         "INTEGRATOR_HESSIAN_DYNAMIC_SHARED_MEM_BYTES() { "
         "if constexpr (TIER == grid::TIER_SHARED)    return grid::grid_shared_arena_bytes<T>(" + str(t0) + ", grid::TOPOLOGY_HELPERS_COUNT, grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
         "else if constexpr (TIER == grid::TIER_LITE) return grid::grid_shared_arena_bytes<T>(" + str(t1) + ", grid::TOPOLOGY_HELPERS_COUNT, grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
