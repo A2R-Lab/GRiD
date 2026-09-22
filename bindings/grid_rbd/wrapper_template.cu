@@ -188,14 +188,26 @@ extern "C" int grid_rbd_init() {
     if (g_data) return 0;  // already initialized
     grid_consume_last_error();  // clear stale sticky state (GRID_GPUERRCHK_NO_EXIT builds)
     g_streams = grid::init_grid<T>();
-    g_robot   = grid::init_robotModel<T>();
+    // Library-safe model construction (2026-09-22): the checked initializer
+    // publishes g_robot only on complete success and rolls back everything a
+    // failed attempt acquired — no partial struct, no leaked nested tables, no
+    // exit()/cudaDeviceReset in the embedding interpreter. The failed op is
+    // reported on stderr; rc = 100 + cudaError like every other init failure.
+    const char *failed_op = nullptr;
+    cudaError_t e = grid::init_robotModel_checked<T>(&g_robot, &failed_op);
+    if (e != cudaSuccess) {
+        fprintf(stderr, "grid_rbd_init: %s failed: %s\n", failed_op ? failed_op : "init_robotModel", cudaGetErrorString(e));
+        g_robot = nullptr; g_streams = nullptr;
+        return 100 + (int)e;
+    }
     g_data    = grid::init_gridData<T, kMaxBatch>();
     // Bindings compile with -DGRID_GPUERRCHK_NO_EXIT: a failed cudaMalloc etc. in
-    // the generated init path no longer exit()s the embedding interpreter — it
-    // lands in the sticky slot. A partially-initialized arena is NOT safe to
-    // close (unset device pointers); drop it and report rc = 100 + cudaError.
-    cudaError_t e = grid_consume_last_error();
+    // the (not yet checked) stream/arena init path lands in the sticky slot. A
+    // partially-initialized arena is NOT safe to close (unset device pointers);
+    // release the model we own, drop the rest and report rc = 100 + cudaError.
+    e = grid_consume_last_error();
     if (e != cudaSuccess) {
+        grid::free_robotModel_checked<T>(g_robot);
         g_data = nullptr; g_robot = nullptr; g_streams = nullptr;
         return 100 + (int)e;
     }

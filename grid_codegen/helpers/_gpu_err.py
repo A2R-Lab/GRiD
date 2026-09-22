@@ -55,6 +55,49 @@ def gen_add_gpu_err(self):
     self.gen_add_code_line("#define gpuErrchkKernel() {gpuErrchk(cudaPeekAtLastError()); gpuErrchk(cudaDeviceSynchronize());}")
     self.gen_add_code_line("#endif")
     self.gen_add_code_line("")
+    self.gen_library_safe_init_contract()
+
+def gen_library_safe_init_contract(self):
+    """Library-safe (nonterminating) initialization contract (2026-09-22,
+    HJCD ask): the `*_checked` initializers/destructor emitted by
+    _topology_helpers return cudaError_t, name the failed operation, publish
+    ownership only on complete success and roll back everything acquired by a
+    failed attempt without exit/abort/cudaDeviceReset. The legacy
+    `init_*()` / `free_robotModel()` spellings are thin wrappers that apply the
+    historical policy (fail-fast, or sticky slot under GRID_GPUERRCHK_NO_EXIT).
+    GRID_CUDA_CALL / GRID_HOST_ALLOC are HOST-ONLY fault-injection seams: a
+    test TU defines them before including grid.cuh; the default expands to the
+    bare expression (no runtime cost, never used in device code)."""
+    self.gen_add_code_line("// ─── library-safe initialization contract (init_*_checked / free_robotModel_checked) ───")
+    self.gen_add_code_line("// Host-only fault-injection seams: define BEFORE including this header to intercept")
+    self.gen_add_code_line("// every allocation/copy the checked initializers make (tests); default = the bare call.")
+    self.gen_add_code_line("#ifndef GRID_CUDA_CALL")
+    self.gen_add_code_line("#define GRID_CUDA_CALL(expr) (expr)")
+    self.gen_add_code_line("#endif")
+    self.gen_add_code_line("#ifndef GRID_HOST_ALLOC")
+    self.gen_add_code_line("#define GRID_HOST_ALLOC(expr) (expr)")
+    self.gen_add_code_line("#endif")
+    # Record the FIRST failed operation (primary error wins; cleanup never overwrites it).
+    self.gen_add_code_line("__host__ inline cudaError_t grid_fail(const char **failed_op, const char *op, cudaError_t code){")
+    self.gen_add_code_line("    if (failed_op != nullptr && *failed_op == nullptr) { *failed_op = op; }")
+    self.gen_add_code_line("    return code;")
+    self.gen_add_code_line("}")
+    # Best-effort free of an owned device pointer during rollback/destruction: a
+    # null pointer is a no-op; the first cleanup error is recorded separately so
+    # the caller's primary error is never hidden.
+    self.gen_add_code_line("__host__ inline void grid_cleanup_free(void *p, const char *op, cudaError_t *first_cleanup_code, const char **first_cleanup_op){")
+    self.gen_add_code_line("    if (p == nullptr) { return; }")
+    self.gen_add_code_line("    cudaError_t e = GRID_CUDA_CALL(cudaFree(p));")
+    self.gen_add_code_line("    if (e != cudaSuccess && first_cleanup_code != nullptr && *first_cleanup_code == cudaSuccess) {")
+    self.gen_add_code_line("        *first_cleanup_code = e; if (first_cleanup_op != nullptr) { *first_cleanup_op = op; }")
+    self.gen_add_code_line("    }")
+    self.gen_add_code_line("}")
+    # Legacy policy: report the op, then the historical gpuAssert behaviour
+    # (exit / sticky first error). Used ONLY by the un-suffixed wrappers.
+    self.gen_add_code_line("__host__ inline void grid_legacy_check(cudaError_t e, const char *op, const char *file, const int line){")
+    self.gen_add_code_line("    if (e != cudaSuccess) { fprintf(stderr, \"GRiD: %s failed: \", op ? op : \"initialization\"); gpuAssert(e, file, line); }")
+    self.gen_add_code_line("}")
+    self.gen_add_code_line("")
 
     # also add printMat for debug if requested
     if self.gen_print_mat:

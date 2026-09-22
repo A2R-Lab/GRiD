@@ -11,4 +11,5 @@ from ._spatial_algebra_helpers import *
 from ._topology_helpers import *
 # underscore-prefixed helpers are not picked up by `import *`; re-export explicitly
 from ._topology_helpers import _joint_dynamics_folded_by_vslot
+from ._topology_helpers import _robotModel_members
 from ._lin_alg_helpers import *

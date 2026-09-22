@@ -2142,3 +2142,31 @@ snapshot lost the first's binding). Test: `test/test_rbd_cache_identity.py`
 (CPU-only, stubbed generate/compile halves counting their calls; every
 identity input rotates the key; a tampered/missing record is rejected; 24
 threads register without a lost update).
+
+### 7.z18 Generated initializers must be library-safe: status-returning, rollback, publish-on-success (2026-09-22, HJCD ask)
+`init_robotModel()` built the struct member by member with `gpuErrchk` around
+every alloc/copy: default policy `cudaDeviceReset(); exit(code)` (kills an
+embedding interpreter), and under `GRID_GPUERRCHK_NO_EXIT` the sticky slot
+just recorded the error and the function CONTINUED — returning a partially
+built struct whose earlier members leaked and whose later members were
+garbage; `free_robotModel` then trusted a device struct that may never have
+been completed. The fix is in the GENERATOR (`_topology_helpers.py` +
+`_gpu_err.py`), one implementation, two spellings: every table initializer
+emits `init_X_checked(T **out, const char **failed_op)` (null `*out` first,
+checked `calloc`, guarded `cudaMalloc`+`cudaMemcpy` through the host-only
+`GRID_CUDA_CALL`/`GRID_HOST_ALLOC` seams, release-on-failure, publish on
+success), `init_robotModel_checked` composes them with a reverse-order
+rollback (`release_robotModel_members`), `free_robotModel_checked` validates
+device affinity (`cudaPointerGetAttributes`), treats nullptr as a no-op and a
+failed copy-back as "touch nothing, report, documented leak"; the legacy
+names are thin wrappers calling the checked function INTO A LOCAL and then
+`grid_legacy_check(e, op, ...)`. RULES: (1) never pass `f(&op), op` in one
+argument list — C++ argument evaluation order is unspecified and the op read
+raced the call that set it (caught by the runner's message check);
+(2) a new owned member of `robotModel<T>` joins `_robotModel_members()` and
+NOTHING else — construction, rollback and destruction all iterate that list;
+(3) the fault-injection runner (`test/cuda_equivalents/cuda_safe_init_runner.cu`)
+is the proof: fail EVERY call index in the construction sequence and assert
+error-returned / out-null / ledger `frees == successful mallocs`; a
+sanitizer run on the success path is supplementary, not a substitute;
+(4) `exit()` tests run in a subprocess, never inside pytest's process.

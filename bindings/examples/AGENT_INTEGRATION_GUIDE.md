@@ -266,6 +266,11 @@ apply per-algo small-batch thread overrides from the config's `ffi_bases_by_n` b
   D2H+H2D round-trip per step and erases the GPU advantage (see the timed anti-pattern in
   `jax_gpu_resident.py`).
 - **Don't** rebuild per run — `precompile` once and reuse the cache.
+- **Embedding the generated header directly (C++)?** Use the nonterminating
+  `init_robotModel_checked` / `init_joint_limits_checked` / `free_robotModel_checked`
+  family (or `robotModel_owner<T>`): status-returning, rollback-safe, names the failed
+  operation, never `exit()`s or resets the context. The un-suffixed `init_*()` keep the
+  historical fail-fast policy. See docs: *Library-safe initialization and cleanup*.
 - **Don't** size a batch above `max_batch` (chunk instead) — the error names the compiled
   limit and the `max_batch_size=` knob that raises it.
 

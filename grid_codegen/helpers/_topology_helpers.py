@@ -106,6 +106,47 @@ def custom_is_constant(self, val):
         # Unhashable expression — fall back to uncached call.
         return val.is_constant()
 
+
+def gen_checked_table_tail(self, h_name, d_name, size_expr, ctype, host_freed=True):
+    """Tail of a `*_checked` table initializer: guarded cudaMalloc + cudaMemcpy
+    of `h_name` (size_expr elements of ctype) into a fresh device buffer; on
+    any failure every resource acquired by THIS call is released and the
+    failed operation is recorded; `*out` is published on success only."""
+    free_h = ("free(" + h_name + "); ") if host_freed else ""
+    self.gen_add_code_lines([
+        ctype + " *" + d_name + " = nullptr;",
+        "cudaError_t _e = GRID_CUDA_CALL(cudaMalloc((void**)&" + d_name + "," + size_expr + "*sizeof(" + ctype + ")));",
+        "if (_e != cudaSuccess) { " + free_h + "return grid_fail(failed_op, \"cudaMalloc(" + d_name + ")\", _e); }",
+        "_e = GRID_CUDA_CALL(cudaMemcpy(" + d_name + "," + h_name + "," + size_expr + "*sizeof(" + ctype + "),cudaMemcpyHostToDevice));",
+        free_h.strip() if free_h else "",
+        "if (_e != cudaSuccess) { grid_cleanup_free(" + d_name + ", \"cudaFree(" + d_name + ")\", nullptr, nullptr); return grid_fail(failed_op, \"cudaMemcpy(" + d_name + ")\", _e); }",
+        "*out = " + d_name + ";",
+        "return cudaSuccess;",
+    ])
+    self.gen_add_end_function()
+
+
+def gen_legacy_init_wrapper(self, name, ctype):
+    """`ctype* name()` = the historical spelling: calls `name_checked` and
+    applies the legacy policy (fail-fast exit, or sticky first error + nullptr
+    return under GRID_GPUERRCHK_NO_EXIT)."""
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line(ctype + "* " + name + "() {", True)
+    self.gen_add_code_lines([
+        ctype + " *d = nullptr; const char *op = nullptr;",
+        "cudaError_t e = " + name + "_checked<T>(&d, &op);  // sequenced BEFORE reading op",
+        "grid_legacy_check(e, op, __FILE__, __LINE__);",
+        "return d;",
+    ])
+    self.gen_add_end_function()
+
+
+def gen_checked_host_alloc(self, h_name, size_expr, ctype):
+    self.gen_add_code_line("*out = nullptr;")
+    self.gen_add_code_line(ctype + " *" + h_name + " = (" + ctype + " *)GRID_HOST_ALLOC(calloc(" + size_expr + ",sizeof(" + ctype + ")));")
+    self.gen_add_code_line("if (" + h_name + " == nullptr) { return grid_fail(failed_op, \"calloc(" + h_name + ")\", cudaErrorMemoryAllocation); }")
+
 def gen_init_XImats(self, include_base_inertia = False, include_homogenous_transforms = False):
     # add function description
     if include_base_inertia:
@@ -120,12 +161,12 @@ def gen_init_XImats(self, include_base_inertia = False, include_homogenous_trans
     # add the function start boilerplate
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
-    self.gen_add_code_line("T* init_XImats() {", True)
-    # allocate CPU memory
+    self.gen_add_code_line("cudaError_t init_XImats_checked(T **out, const char **failed_op = nullptr) {", True)
+    # allocate CPU memory (checked; the table is filled below, then copied)
     n = self.robot.get_num_pos()
     XI_size = self.gen_get_XI_size(include_base_inertia,include_homogenous_transforms)
     baseXI_size = self.gen_get_XI_size(include_base_inertia,include_homogenous_transforms = False) #just base XI_size to know where Xhom starts in XI (if needed)
-    self.gen_add_code_line("T *h_XImats = (T *)calloc(" + str(XI_size) + ",sizeof(T));")
+    self.gen_checked_host_alloc("h_XImats", str(XI_size), "T")
     # loop through Xmats and add all constant values from the sp matrix (initialize non-constant to 0)
     Xmats = self.robot.get_Xmats_ordered_by_id()
     for ind in range(len(Xmats)):
@@ -196,13 +237,9 @@ def gen_init_XImats(self, include_base_inertia = False, include_homogenous_trans
                         str_val = str(val)
                         cpp_ind = baseXI_size + Xhom_size + dXhom_size + self.gen_static_array_ind_3d(ind,col,row,ind_stride=16,col_stride=4)
                         self.gen_add_code_line("h_XImats[" + str(cpp_ind) + "] = static_cast<T>(" + str_val + ");")
-    # allocate and transfer data to the GPU, free CPU memory and return the pointer to the memory
-    self.gen_add_code_line("T *d_XImats; gpuErrchk(cudaMalloc((void**)&d_XImats," + str(XI_size) + "*sizeof(T)));")
-    self.gen_add_code_line("gpuErrchk(cudaMemcpy(d_XImats,h_XImats," + str(XI_size) + "*sizeof(T),cudaMemcpyHostToDevice));")
-    self.gen_add_code_line("free(h_XImats);")
-    self.gen_add_code_line("return d_XImats;")
-    # add the function end
-    self.gen_add_end_function()
+    # guarded device alloc + copy, free CPU memory, publish on success only
+    self.gen_checked_table_tail("h_XImats", "d_XImats", str(XI_size), "T")
+    self.gen_legacy_init_wrapper("init_XImats", "T")
 
 def gen_get_inertia_params_size(self, include_base_inertia = False):
     # 10 standard inertial parameters per body, body-indexed, mirroring the
@@ -222,9 +259,9 @@ def gen_init_inertia_params(self, include_base_inertia = False):
             [], "A pointer to the inertia-params memory in the GPU")
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
-    self.gen_add_code_line("T* init_inertia_params() {", True)
+    self.gen_add_code_line("cudaError_t init_inertia_params_checked(T **out, const char **failed_op = nullptr) {", True)
     size = self.gen_get_inertia_params_size(include_base_inertia)
-    self.gen_add_code_line("T *h_inertia_params = (T *)calloc(" + str(size) + ",sizeof(T));")
+    self.gen_checked_host_alloc("h_inertia_params", str(size), "T")
     params = self.robot.get_inertia_params_ordered_by_id()
     if not include_base_inertia:
         params = params[1:]
@@ -232,11 +269,8 @@ def gen_init_inertia_params(self, include_base_inertia = False):
         self.gen_add_code_line("// pi[" + str(ind) + "]")
         for k in range(10):
             self.gen_add_code_line("h_inertia_params[" + str(10*ind + k) + "] = static_cast<T>(" + str(params[ind][k]) + ");")
-    self.gen_add_code_line("T *d_inertia_params; gpuErrchk(cudaMalloc((void**)&d_inertia_params," + str(size) + "*sizeof(T)));")
-    self.gen_add_code_line("gpuErrchk(cudaMemcpy(d_inertia_params,h_inertia_params," + str(size) + "*sizeof(T),cudaMemcpyHostToDevice));")
-    self.gen_add_code_line("free(h_inertia_params);")
-    self.gen_add_code_line("return d_inertia_params;")
-    self.gen_add_end_function()
+    self.gen_checked_table_tail("h_inertia_params", "d_inertia_params", str(size), "T")
+    self.gen_legacy_init_wrapper("init_inertia_params", "T")
 
 def gen_set_inertia_params(self, include_base_inertia = False):
     # D.4 / Phase 5: public mutator. Thin cudaMemcpy of the 10*NB (or 10*(NB+1))
@@ -273,19 +307,16 @@ def gen_init_transform_params(self):
             [], "A pointer to the transform-params memory in the GPU")
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
-    self.gen_add_code_line("T* init_transform_params() {", True)
+    self.gen_add_code_line("cudaError_t init_transform_params_checked(T **out, const char **failed_op = nullptr) {", True)
     size = self.gen_get_transform_params_size()
-    self.gen_add_code_line("T *h_transform_params = (T *)calloc(" + str(size) + ",sizeof(T));")
+    self.gen_checked_host_alloc("h_transform_params", str(size), "T")
     params = self.robot.get_origin_params_ordered_by_id()
     for ind in range(len(params)):
         self.gen_add_code_line("// op[" + str(ind) + "]")
         for k in range(6):
             self.gen_add_code_line("h_transform_params[" + str(6*ind + k) + "] = static_cast<T>(" + repr(float(params[ind][k])) + ");")
-    self.gen_add_code_line("T *d_transform_params; gpuErrchk(cudaMalloc((void**)&d_transform_params," + str(size) + "*sizeof(T)));")
-    self.gen_add_code_line("gpuErrchk(cudaMemcpy(d_transform_params,h_transform_params," + str(size) + "*sizeof(T),cudaMemcpyHostToDevice));")
-    self.gen_add_code_line("free(h_transform_params);")
-    self.gen_add_code_line("return d_transform_params;")
-    self.gen_add_end_function()
+    self.gen_checked_table_tail("h_transform_params", "d_transform_params", str(size), "T")
+    self.gen_legacy_init_wrapper("init_transform_params", "T")
 
 def gen_set_transform_params(self):
     # runtime_transform (mirror of gen_set_inertia_params): public mutator. Thin
@@ -365,10 +396,10 @@ def gen_init_joint_dynamics_params(self):
             [], "A pointer to the joint-dynamics-params memory in the GPU")
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
-    self.gen_add_code_line("T* init_joint_dynamics_params() {", True)
+    self.gen_add_code_line("cudaError_t init_joint_dynamics_params_checked(T **out, const char **failed_op = nullptr) {", True)
     nv   = self.robot.get_num_vel()
     size = self.gen_get_joint_dynamics_params_size()
-    self.gen_add_code_line("T *h_joint_dynamics_params = (T *)calloc(" + str(size) + ",sizeof(T));")
+    self.gen_checked_host_alloc("h_joint_dynamics_params", str(size), "T")
     b_vslot, f_vslot = self._joint_dynamics_folded_by_vslot()
     for vs in range(nv):
         b = b_vslot[vs]; fr = f_vslot[vs]
@@ -379,11 +410,8 @@ def gen_init_joint_dynamics_params(self):
             self.gen_add_code_line("h_joint_dynamics_params[" + str(vs) + "] = static_cast<T>(" + repr(float(b)) + ");")
         if fr != 0.0:
             self.gen_add_code_line("h_joint_dynamics_params[" + str(nv + vs) + "] = static_cast<T>(" + repr(float(fr)) + ");")
-    self.gen_add_code_line("T *d_joint_dynamics_params; gpuErrchk(cudaMalloc((void**)&d_joint_dynamics_params," + str(size) + "*sizeof(T)));")
-    self.gen_add_code_line("gpuErrchk(cudaMemcpy(d_joint_dynamics_params,h_joint_dynamics_params," + str(size) + "*sizeof(T),cudaMemcpyHostToDevice));")
-    self.gen_add_code_line("free(h_joint_dynamics_params);")
-    self.gen_add_code_line("return d_joint_dynamics_params;")
-    self.gen_add_end_function()
+    self.gen_checked_table_tail("h_joint_dynamics_params", "d_joint_dynamics_params", str(size), "T")
+    self.gen_legacy_init_wrapper("init_joint_dynamics_params", "T")
 
 def gen_set_joint_dynamics_params(self):
     # runtime_joint_dynamics (mirror of gen_set_inertia_params): public mutator.
@@ -1418,6 +1446,9 @@ def gen_init_topology_helpers(self):
                                  "//", \
                                  "template <typename T>", \
                                  "__host__", \
+                                 "cudaError_t init_topology_helpers_checked(int **out, const char **failed_op = nullptr){ (void)failed_op; *out = nullptr; return cudaSuccess; }", \
+                                 "template <typename T>", \
+                                 "__host__", \
                                  "int *init_topology_helpers(){return nullptr;}"])
         return
     # add function description
@@ -1426,7 +1457,7 @@ def gen_init_topology_helpers(self):
     # add the function start boilerplate
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
-    self.gen_add_code_line("int *init_topology_helpers() {", True)
+    self.gen_add_code_line("cudaError_t init_topology_helpers_checked(int **out, const char **failed_op = nullptr) {", True)
     # add the helpers needed
     code = []
     if not self.robot.is_serial_chain():
@@ -1448,10 +1479,9 @@ def gen_init_topology_helpers(self):
     self.gen_add_code_lines(code)
     
     # allocate and transfer data to the GPU and return the pointer to the memory
-    self.gen_add_code_line("int *d_topology_helpers; gpuErrchk(cudaMalloc((void**)&d_topology_helpers," + str(self.gen_topology_helpers_size()) + "*sizeof(int)));")
-    self.gen_add_code_line("gpuErrchk(cudaMemcpy(d_topology_helpers,h_topology_helpers," + str(self.gen_topology_helpers_size()) + "*sizeof(int),cudaMemcpyHostToDevice));")
-    self.gen_add_code_line("return d_topology_helpers;")
-    self.gen_add_end_function()
+    self.gen_add_code_line("*out = nullptr;")
+    self.gen_checked_table_tail("h_topology_helpers", "d_topology_helpers", str(self.gen_topology_helpers_size()), "int", host_freed=False)
+    self.gen_legacy_init_wrapper("init_topology_helpers", "int")
 
 def gen_topology_helpers_pointers_for_cpp(self, inds = None, updated_var_names = None, NO_GRAD_FLAG = False, OFFSET = True):
     """
@@ -1637,57 +1667,139 @@ def gen_insert_helpers_func_def_params(self, func_def, func_params, param_insert
     func_params.insert(param_insert_position,"s_topology_helpers is the (shared) memory location for the topology_helpers (nullptr/unused for serial chains with identical Ss)")
     return func_def, func_params
 
+def _robotModel_members(self):
+    """Owned device members of robotModel<T> in construction order:
+    (member, init_checked function, ctype)."""
+    members = [("d_XImats", "init_XImats_checked<T>", "T"),
+               ("d_topology_helpers", "init_topology_helpers_checked<T>", "int")]
+    if getattr(self, "runtime_inertia", False):
+        members.append(("d_inertia_params", "init_inertia_params_checked<T>", "T"))
+    if getattr(self, "runtime_transform", False):
+        members.append(("d_transform_params", "init_transform_params_checked<T>", "T"))
+    if getattr(self, "runtime_joint_dynamics", False):
+        members.append(("d_joint_dynamics_params", "init_joint_dynamics_params_checked<T>", "T"))
+    return members
+
 def gen_init_robotModel(self):
-    self.gen_add_func_doc("Initializes the robotModel helpers in GPU memory", \
+    members = self._robotModel_members()
+    # Best-effort release of whatever nested members a HOST-side struct owns
+    # (reverse construction order; nullptr members are skipped; the first
+    # cleanup error is reported through the out-params, never thrown/exited).
+    # Shared by the construction rollback and by free_robotModel_checked.
+    self.gen_add_func_doc("Releases the nested device arrays a host-side robotModel<T> owns (best effort, reverse order; null members skipped)",
+                          [], ["h_robotModel is the host copy of the struct; members are nulled as they are released"], "the first cudaFree error (cudaSuccess if none); the failing member is named in *cleanup_op")
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line("cudaError_t release_robotModel_members(robotModel<T> &h_robotModel, const char **cleanup_op = nullptr) {", True)
+    self.gen_add_code_line("cudaError_t first = cudaSuccess;")
+    for member, _, _ in reversed(members):
+        self.gen_add_code_line("grid_cleanup_free(h_robotModel." + member + ", \"cudaFree(" + member + ")\", &first, cleanup_op); h_robotModel." + member + " = nullptr;")
+    self.gen_add_code_line("return first;")
+    self.gen_add_end_function()
+
+    self.gen_add_func_doc("Library-safe initialization of the robotModel helpers in GPU memory: every owned pointer is null before the first fallible call, construction stops at the first failure, everything acquired by this attempt is released, and *out is published only on complete success (never exit/abort/cudaDeviceReset)",
+                          ["The allocating device must be current; the model is bound to it (see free_robotModel_checked)"],
+                          ["out receives the device-resident struct pointer (nullptr on failure)",
+                           "failed_op (optional) receives a static string naming the failed operation"],
+                          "cudaSuccess, or the first CUDA error (cudaErrorMemoryAllocation also stands for a failed host allocation)")
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line("cudaError_t init_robotModel_checked(robotModel<T> **out, const char **failed_op = nullptr) {", True)
+    self.gen_add_code_lines(["*out = nullptr;",
+                             "robotModel<T> h_robotModel = {};  // every owned pointer null before any fallible work",
+                             "cudaError_t e = cudaSuccess;"])
+    for member, fn, _ in members:
+        self.gen_add_code_line("e = " + fn + "(&h_robotModel." + member + ", failed_op);")
+        self.gen_add_code_line("if (e != cudaSuccess) { release_robotModel_members<T>(h_robotModel); return e; }")
+    self.gen_add_code_lines(["robotModel<T> *d_robotModel = nullptr;",
+                             "e = GRID_CUDA_CALL(cudaMalloc((void**)&d_robotModel,sizeof(robotModel<T>)));",
+                             "if (e != cudaSuccess) { release_robotModel_members<T>(h_robotModel); return grid_fail(failed_op, \"cudaMalloc(d_robotModel)\", e); }",
+                             "e = GRID_CUDA_CALL(cudaMemcpy(d_robotModel,&h_robotModel,sizeof(robotModel<T>),cudaMemcpyHostToDevice));",
+                             "if (e != cudaSuccess) { grid_cleanup_free(d_robotModel, \"cudaFree(d_robotModel)\", nullptr, nullptr); release_robotModel_members<T>(h_robotModel); return grid_fail(failed_op, \"cudaMemcpy(d_robotModel)\", e); }",
+                             "*out = d_robotModel;",
+                             "return cudaSuccess;"])
+    self.gen_add_end_function()
+
+    # Legacy spelling: historical policy (fail-fast exit; sticky + nullptr under NO_EXIT).
+    self.gen_add_func_doc("Initializes the robotModel helpers in GPU memory (legacy policy: exit on failure, or sticky first error + nullptr under GRID_GPUERRCHK_NO_EXIT; prefer init_robotModel_checked in library code)", \
                            [], [],"A pointer to the robotModel struct")
-    # add the function start boilerplate
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("robotModel<T>* init_robotModel() {", True)
-    # then construct the host side struct
-    init_lines = ["robotModel<T> h_robotModel;", \
-                  "h_robotModel.d_XImats = init_XImats<T>();", \
-                  "h_robotModel.d_topology_helpers = init_topology_helpers<T>();"]
-    if getattr(self, "runtime_inertia", False):
-        # D.4 / Phase 5: flag-gated mutable inertia table init.
-        init_lines.append("h_robotModel.d_inertia_params = init_inertia_params<T>();")
-    if getattr(self, "runtime_transform", False):
-        # runtime_transform: flag-gated mutable joint-origin table init.
-        init_lines.append("h_robotModel.d_transform_params = init_transform_params<T>();")
-    if getattr(self, "runtime_joint_dynamics", False):
-        # runtime_joint_dynamics: flag-gated mutable damping/friction table init.
-        init_lines.append("h_robotModel.d_joint_dynamics_params = init_joint_dynamics_params<T>();")
-    self.gen_add_code_lines(init_lines)
-    # then allocate memeory and copy to device
-    self.gen_add_code_lines(["robotModel<T> *d_robotModel; gpuErrchk(cudaMalloc((void**)&d_robotModel,sizeof(robotModel<T>)));",
-                             "gpuErrchk(cudaMemcpy(d_robotModel,&h_robotModel,sizeof(robotModel<T>),cudaMemcpyHostToDevice));"])
-    self.gen_add_code_line("return d_robotModel;")
+    self.gen_add_code_lines(["robotModel<T> *d_robotModel = nullptr; const char *op = nullptr;",
+                             "cudaError_t e = init_robotModel_checked<T>(&d_robotModel, &op);  // sequenced BEFORE reading op",
+                             "grid_legacy_check(e, op, __FILE__, __LINE__);",
+                             "return d_robotModel;"])
     self.gen_add_end_function()
 
 def gen_free_robotModel(self):
     self.gen_add_func_doc(
-        "Frees a robotModel allocated by init_robotModel: the NESTED device arrays "
-        "(d_XImats / d_topology_helpers [+ any flag-gated runtime parameter tables]) AND the "
-        "struct itself. A bare cudaFree(d_robotModel) frees ONLY the struct and leaks the nested "
-        "arrays; this recovers them by copying the struct back to host first.",
+        "Library-safe destruction of a robotModel allocated by init_robotModel[_checked]: frees the NESTED device arrays "
+        "(d_XImats / d_topology_helpers [+ any flag-gated runtime parameter tables]) AND the struct itself, without exit/abort/"
+        "cudaDeviceReset. nullptr is a no-op (cudaSuccess). The struct is copied back to recover the nested pointers; if THAT "
+        "copy fails nothing further is touched (documented limitation: the nested arrays cannot be recovered and leak) and the "
+        "copy error is returned. Device affinity: the model must be freed with its allocating device current — a mismatch "
+        "returns cudaErrorInvalidDevice and frees nothing. Cleanup continues past a failed cudaFree; the FIRST error is returned.",
+        [], ["d_robotModel is a pointer returned by init_robotModel[_checked] (or nullptr)",
+             "failed_op (optional) receives a static string naming the failed operation"], "cudaSuccess or the first error")
+    self.gen_add_code_line("template <typename T>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line("cudaError_t free_robotModel_checked(robotModel<T> *d_robotModel, const char **failed_op = nullptr) {", True)
+    self.gen_add_code_lines([
+        "if (d_robotModel == nullptr) { return cudaSuccess; }",
+        "cudaPointerAttributes attr; int current_device = -1;",
+        "cudaError_t e = GRID_CUDA_CALL(cudaPointerGetAttributes(&attr, d_robotModel));",
+        "if (e != cudaSuccess) { return grid_fail(failed_op, \"cudaPointerGetAttributes(d_robotModel)\", e); }",
+        "e = GRID_CUDA_CALL(cudaGetDevice(&current_device));",
+        "if (e != cudaSuccess) { return grid_fail(failed_op, \"cudaGetDevice\", e); }",
+        "if (attr.type != cudaMemoryTypeDevice || attr.device != current_device) { return grid_fail(failed_op, \"device affinity (d_robotModel was allocated on another device)\", cudaErrorInvalidDevice); }",
+        "robotModel<T> h_robotModel = {};",
+        "e = GRID_CUDA_CALL(cudaMemcpy(&h_robotModel, d_robotModel, sizeof(robotModel<T>), cudaMemcpyDeviceToHost));",
+        "if (e != cudaSuccess) { return grid_fail(failed_op, \"cudaMemcpy(robotModel D2H; nested arrays unrecoverable)\", e); }",
+        "const char *cleanup_op = nullptr;",
+        "cudaError_t first = release_robotModel_members<T>(h_robotModel, &cleanup_op);",
+        "if (first != cudaSuccess) { grid_fail(failed_op, cleanup_op, first); }",
+        "grid_cleanup_free(d_robotModel, \"cudaFree(d_robotModel)\", &first, failed_op != nullptr && *failed_op == nullptr ? failed_op : nullptr);",
+        "return first;",
+    ])
+    self.gen_add_end_function()
+
+    self.gen_add_func_doc(
+        "Frees a robotModel allocated by init_robotModel (legacy policy: exit on failure, or sticky first error under "
+        "GRID_GPUERRCHK_NO_EXIT; prefer free_robotModel_checked in library code). A bare cudaFree(d_robotModel) frees ONLY the "
+        "struct and leaks the nested arrays; this recovers them by copying the struct back to host first.",
         [], ["d_robotModel is a pointer returned by init_robotModel"], None)
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("void free_robotModel(robotModel<T> *d_robotModel) {", True)
-    # Copy the struct back to host to recover the nested device pointers, then free each.
-    self.gen_add_code_line("robotModel<T> h_robotModel;")
-    self.gen_add_code_line("gpuErrchk(cudaMemcpy(&h_robotModel, d_robotModel, sizeof(robotModel<T>), cudaMemcpyDeviceToHost));")
-    free_lines = ["gpuErrchk(cudaFree(h_robotModel.d_XImats));",
-                  "gpuErrchk(cudaFree(h_robotModel.d_topology_helpers));"]
-    if getattr(self, "runtime_inertia", False):
-        free_lines.append("gpuErrchk(cudaFree(h_robotModel.d_inertia_params));")
-    if getattr(self, "runtime_transform", False):
-        free_lines.append("gpuErrchk(cudaFree(h_robotModel.d_transform_params));")
-    if getattr(self, "runtime_joint_dynamics", False):
-        free_lines.append("gpuErrchk(cudaFree(h_robotModel.d_joint_dynamics_params));")
-    self.gen_add_code_lines(free_lines)
-    self.gen_add_code_line("gpuErrchk(cudaFree(d_robotModel));")
+    self.gen_add_code_lines(["const char *op = nullptr;",
+                             "cudaError_t e = free_robotModel_checked<T>(d_robotModel, &op);  // sequenced BEFORE reading op",
+                             "grid_legacy_check(e, op, __FILE__, __LINE__);"])
     self.gen_add_end_function()
+
+    # Optional owning handle: noncopyable, movable, destroys on scope exit
+    # (best effort — a destructor cannot report; use release()+free_robotModel_checked
+    # to observe cleanup errors).
+    self.gen_add_code_lines([
+        "// Owning handle for a robotModel<T>: noncopyable, movable; init() constructs via",
+        "// init_robotModel_checked, free() destroys via free_robotModel_checked (reportable),",
+        "// the destructor destroys best-effort, release() transfers ownership to the caller.",
+        "template <typename T>",
+        "struct robotModel_owner {",
+        "    robotModel<T> *model = nullptr;",
+        "    robotModel_owner() = default;",
+        "    robotModel_owner(const robotModel_owner&) = delete;",
+        "    robotModel_owner& operator=(const robotModel_owner&) = delete;",
+        "    robotModel_owner(robotModel_owner &&o) noexcept : model(o.model) { o.model = nullptr; }",
+        "    robotModel_owner& operator=(robotModel_owner &&o) noexcept { if (this != &o) { free(); model = o.model; o.model = nullptr; } return *this; }",
+        "    ~robotModel_owner() { free(); }",
+        "    __host__ cudaError_t init(const char **failed_op = nullptr) { free(); return init_robotModel_checked<T>(&model, failed_op); }",
+        "    __host__ cudaError_t free(const char **failed_op = nullptr) { robotModel<T> *m = model; model = nullptr; return free_robotModel_checked<T>(m, failed_op); }",
+        "    __host__ robotModel<T>* release() { robotModel<T> *m = model; model = nullptr; return m; }",
+        "    __host__ robotModel<T>* get() const { return model; }",
+        "};",
+        "",
+    ])
 
 def gen_joint_limits_size(self):
     n = self.robot.get_num_pos()
@@ -1739,10 +1851,12 @@ def gen_init_joint_limits(self):
     )
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
-    self.gen_add_code_line("T* init_joint_limits() {", True)
+    self.gen_add_code_line("cudaError_t init_joint_limits_checked(T **out, const char **failed_op = nullptr) {", True)
 
     total_size = self.gen_joint_limits_size()
-    self.gen_add_code_line(f"T *h_joint_limits = (T*)malloc({total_size}*sizeof(T));")
+    # 2*nq scalars: a stack array — the unchecked host malloc is gone (HJCD ask).
+    self.gen_add_code_line("*out = nullptr;")
+    self.gen_add_code_line(f"T h_joint_limits[{total_size}];")
 
     for i in range(n):
         lo, hi = limits_by_qslot.get(i, (-float("inf"), float("inf")))
@@ -1755,9 +1869,5 @@ def gen_init_joint_limits(self):
         self.gen_add_code_line(f"h_joint_limits[{i}] = {lo_str};")
         self.gen_add_code_line(f"h_joint_limits[{i + n}] = {hi_str};")
 
-    self.gen_add_code_line("T *d_joint_limits;")
-    self.gen_add_code_line(f"gpuErrchk(cudaMalloc((void**)&d_joint_limits, {total_size}*sizeof(T)));")
-    self.gen_add_code_line(f"gpuErrchk(cudaMemcpy(d_joint_limits, h_joint_limits, {total_size}*sizeof(T), cudaMemcpyHostToDevice));")
-    self.gen_add_code_line("free(h_joint_limits);")
-    self.gen_add_code_line("return d_joint_limits;")
-    self.gen_add_end_function()
+    self.gen_checked_table_tail("h_joint_limits", "d_joint_limits", str(total_size), "T", host_freed=False)
+    self.gen_legacy_init_wrapper("init_joint_limits", "T")

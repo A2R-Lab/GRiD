@@ -35,7 +35,7 @@ class GRiDCodeGenerator:
                          gen_XImats_helpers_temp_shared_memory_code, gen_load_update_XImats_helpers, gen_topology_helpers_size, \
                          gen_get_Xhom_size, gen_load_update_XmatsHom_helpers, gen_load_update_XmatsHom_helpers_function_call, gen_XmatsHom_helpers_temp_shared_memory_code, gen_load_topology_helpers, \
                          gen_topology_sparsity_helpers_python, gen_init_topology_helpers, gen_topology_helpers_pointers_for_cpp, \
-                         gen_topology_S_sign_for_cpp, gen_insert_helpers_function_call, gen_insert_helpers_func_def_params, gen_init_robotModel, gen_free_robotModel, gen_joint_limits_size, gen_init_joint_limits, \
+                         gen_topology_S_sign_for_cpp, gen_insert_helpers_function_call, gen_insert_helpers_func_def_params, gen_init_robotModel, gen_free_robotModel, gen_joint_limits_size, gen_init_joint_limits, gen_checked_table_tail, gen_legacy_init_wrapper, gen_checked_host_alloc, _robotModel_members, \
                          gen_grid_linalg_backend_helpers, gen_linalg_smem_setup, gen_invert_matrix, gen_matmul, gen_matmul_trans, gen_crm_mul, gen_crm, gen_mxS_general, custom_is_constant, \
                          gen_mjx_input_convert, gen_mjx_quat_reorder, gen_mjx_base_rotate, gen_mjx_symmetrize_full, gen_mjx_accel_out, gen_mjx_congruence, gen_mjx_column_reframe, gen_mjx_retract, \
                          robot_has_mimic_joints, _v_slot_cpp, _alpha_for_jid, _id_S_desc, gen_add_fragment_mark
@@ -156,7 +156,7 @@ class GRiDCodeGenerator:
     from .kernel_attrs import (_f_ext_gradient_dq_emitted, KERNEL_OVERLOADS,
                                 KERNEL_ATTR_MANIFEST, MJX_KERNEL_OVERLOADS,
                                 gen_init_close_grid)
-    from .helpers._gpu_err import gen_add_gpu_err
+    from .helpers._gpu_err import gen_add_gpu_err, gen_library_safe_init_contract
     from .algorithms._dccrba import _dccrba_inner_temp_mem_size, _dccrba_sweep_J_count, gen_cmm_time_variation, gen_dccrba
 
     # finally import the test code
