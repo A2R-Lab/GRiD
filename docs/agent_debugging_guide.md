@@ -2225,3 +2225,19 @@ a shipped cache must load on a box without the build toolchain. jax/torch
 (handle + arch stubbed; CPU-only). RULE: every reader of a persisted pointer
 validates what the pointer implies before dereferencing it — a name binding
 carries no proof of ABI compatibility.
+
+### 7.z21 Header caches must key EVERY generation-time env knob from one list (2026-09-24)
+The L2 A/B toggled `GRID_FDSVA_SO_MINV_TILE=1` between two per_algo_bench builds;
+both came back untiled. The bench header cache keyed the codegen tree hash plus a
+hand-picked `GRID_NO_LICM_BARRIER`, so the second build was served the first
+build's header — the A/B was comparing a header to itself (the same trap the
+runtime-param A/B hit in 2026-07). Three caches each hand-listed a different
+subset: the bench (`baselines/grid/run.py`), the CUDA equivalence harness
+(`cuda_harness._header_cache_key`) and the bindings store (`_cache.GENERATION_ENV_KNOBS`).
+Fix: `grid_codegen/env_knobs.py` is the single list (`GENERATION_ENV_KNOBS`,
+`generation_env()`), every cache folds it, and `test/test_generation_env_knobs.py`
+asserts the list equals the `os.environ` reads in grid_codegen and that each cache
+references it. RULES: (1) a new `os.environ.get("GRID_…")` in grid_codegen goes into
+that list in the same commit (the test fails otherwise); (2) an A/B script asserts
+the variant marker is present/absent in EACH built header before timing (l2_ab.py
+does, which is how this was caught) — never trust a cache to honour a knob.

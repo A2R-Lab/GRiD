@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from grid_codegen import GRiDCodeGenerator
+from grid_codegen.env_knobs import generation_env
 from RBDReference.tests import MANIFEST_PATH
 from RBDReference.tests.model_sources import (
     iter_robot_cases,
@@ -660,6 +661,8 @@ def _header_cache_key(
         # populated first poisoned the other; exposed when header-key replay
         # records failed to round-trip on an unchanged tree, guide §7.z14).
         "enable_mujoco_kernels": os.environ.get("GRID_ENABLE_MUJOCO_KERNELS", "default"),
+        # every generation-time env knob (grid_codegen/env_knobs.py), 2026-09-24
+        "generation_env": generation_env(),
         # Mimic robots codegen a reduced algorithm list (fixed vs floating differ
         # in which gradients are emitted); fold the ACTUAL list into the key so
         # their headers never collide with a full-"all" header or each other.

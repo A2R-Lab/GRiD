@@ -8,6 +8,7 @@ fdsva_so already composes — never here.
 """
 
 # Shared block-parallel emit primitives (also used by _idsva_so). See _mjx_blockpar.
+import os
 from ._mjx_blockpar import bpfor as _bpfor, bpctrl as _bpctrl, stride_rc as _fbp
 from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 
@@ -143,18 +144,58 @@ def gen_fdsva_so_contract(self):
     #  - cuBLASDx in-kernel gemm (register/smem pressure with SO state live).
     #  - grid_linalg_dot_strided_coalesced (block-cooperative, one scalar per call
     #    -> 4*n^3 serialized block reductions).
-    # Next step if MIO throttle still dominates after the remap: register-tile R
-    # outputs per thread along k (reuse each s_Minv[i + L*n] LDS R times).
-    self.gen_add_parallel_loop("ind",str(4*n**3))
-    self.gen_add_code_line(f'int j = ind % {n}; int k = ind / {n} % {n}; int i = ind / {n*n} % {n};')
-    self.gen_add_code_line(f'if (ind < {n**3}) d2a_dqdq[i*{n*n} + j*{n} + k] = -dot_prod<T, {n}, {n}, {n*n}>(&s_Minv[i], &inner_dq[j + k*{n}]);')
-    self.gen_add_code_line(f'else if (ind < {2*n**3}) d2a_dvdq[i*{n*n} + j*{n} + k] = -dot_prod<T, {n}, {n}, {n*n}>(&s_Minv[i], &inner_cross[j + k*{n}]);')
-    self.gen_add_code_line(f'else if (ind < {3*n**3}) d2a_dvdv[i*{n*n} + j*{n} + k] = -dot_prod<T, {n}, {n}, {n*n}>(&s_Minv[i], &d2tau_dvdv[j + k*{n}]);')
-    self.gen_add_code_line(f'else d2a_dtdq[i*{n*n} + j*{n} + k] = -dot_prod<T, {n}, {n}, {n*n}>(&s_Minv[i], &inner_tau[j + k*{n}]);')
-    self.gen_add_end_control_flow()
+    # 2026-09-24 ncu re-capture AFTER the remap (perf_design_a2_leads_2026-09-22.md
+    # "Capture results"): the loop is now global-LATENCY bound (long_sb 53-55% of its
+    # samples; loads coalesced; issued 0.09/scheduler at 33% occupancy) — the arena
+    # loads of inner_*/d2tau_dvdv wait, s_Minv is a warp broadcast. So the tile goes
+    # along i, NOT k: a thread produces R = FDSVA_SO_MINV_TILE outputs d2a[i0..i0+R-1, j, k]
+    # and every strided arena load is issued ONCE and reused R times against R broadcast
+    # s_Minv reads, with R independent FMA chains hiding the latency. Per-cell arithmetic
+    # is exactly glass::dot_strided's (res = 0; res += x[L*n]*y[L*n*n] for L ascending)
+    # so the outputs are bit-identical to the untiled loop; one writer per cell keeps
+    # thread-count invariance. R = the largest divisor of n that is <= 8 with n/R >= 2
+    # tiles (35 -> 7, 18 -> 6, 36 -> 6; n = 7 and any prime n stay at R = 1 = the
+    # untiled loop, byte-identical).
+    # GRID_FDSVA_SO_MINV_TILE=1 forces R = 1 for the A/B (a generation-time knob, part
+    # of the bindings cache identity).
+    R = _fdsva_so_minv_tile(n)
+    if R == 1:
+        self.gen_add_parallel_loop("ind",str(4*n**3))
+        self.gen_add_code_line(f'int j = ind % {n}; int k = ind / {n} % {n}; int i = ind / {n*n} % {n};')
+        self.gen_add_code_line(f'if (ind < {n**3}) d2a_dqdq[i*{n*n} + j*{n} + k] = -dot_prod<T, {n}, {n}, {n*n}>(&s_Minv[i], &inner_dq[j + k*{n}]);')
+        self.gen_add_code_line(f'else if (ind < {2*n**3}) d2a_dvdq[i*{n*n} + j*{n} + k] = -dot_prod<T, {n}, {n}, {n*n}>(&s_Minv[i], &inner_cross[j + k*{n}]);')
+        self.gen_add_code_line(f'else if (ind < {3*n**3}) d2a_dvdv[i*{n*n} + j*{n} + k] = -dot_prod<T, {n}, {n}, {n*n}>(&s_Minv[i], &d2tau_dvdv[j + k*{n}]);')
+        self.gen_add_code_line(f'else d2a_dtdq[i*{n*n} + j*{n} + k] = -dot_prod<T, {n}, {n}, {n*n}>(&s_Minv[i], &inner_tau[j + k*{n}]);')
+        self.gen_add_end_control_flow()
+    else:
+        tiles = n // R
+        self.gen_add_code_line(f'// i-tiled: {R} outputs per thread along i share each strided arena load (bit-identical to the per-cell dot)')
+        self.gen_add_parallel_loop("ind",str(4*n*n*tiles))
+        self.gen_add_code_line(f'int j = ind % {n}; int k = ind / {n} % {n}; int i0 = (ind / {n*n} % {tiles}) * {R}; int which = ind / {n*n*tiles};')
+        self.gen_add_code_line(f'const T *src = (which == 0) ? &inner_dq[j + k*{n}] : (which == 1) ? &inner_cross[j + k*{n}] : (which == 2) ? &d2tau_dvdv[j + k*{n}] : &inner_tau[j + k*{n}];')
+        self.gen_add_code_line('T *dst = (which == 0) ? d2a_dqdq : (which == 1) ? d2a_dvdq : (which == 2) ? d2a_dvdv : d2a_dtdq;')
+        self.gen_add_code_line(f'T acc[{R}];')
+        self.gen_add_code_line(f'for (int r = 0; r < {R}; ++r) acc[r] = static_cast<T>(0);')
+        self.gen_add_code_line(f'for (int L = 0; L < {n}; ++L) {{', True)
+        self.gen_add_code_line(f'T v = src[L*{n*n}];')
+        self.gen_add_code_line(f'for (int r = 0; r < {R}; ++r) acc[r] += s_Minv[i0 + r + L*{n}] * v;')
+        self.gen_add_end_control_flow()
+        self.gen_add_code_line(f'for (int r = 0; r < {R}; ++r) dst[(i0 + r)*{n*n} + j*{n} + k] = -acc[r];')
+        self.gen_add_end_control_flow()
     self.gen_add_sync()
 
     self.gen_add_end_function()
+
+def _fdsva_so_minv_tile(n):
+    """Register-tile width R for the -Minv contraction: the largest divisor of n
+    that is <= 8 (so no remainder guard is ever emitted) AND leaves >= 2 i-tiles
+    (n/R >= 2, so a small robot keeps enough parallel work items per block —
+    n = 7 stays at R = 1, the untiled loop). GRID_FDSVA_SO_MINV_TILE=1 forces
+    the untiled loop (A/B knob)."""
+    if os.environ.get("GRID_FDSVA_SO_MINV_TILE", "") == "1":
+        return 1
+    return max(d for d in range(1, 9) if n % d == 0 and n // d >= 2)
+
 
 def gen_fdsva_so_contract_temp_mem_size(self):
     n = self.robot.get_num_vel()

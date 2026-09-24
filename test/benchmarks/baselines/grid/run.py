@@ -36,6 +36,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "external"))  # peer submodules (RBDReference/URDFParser/GLASS)
 
 from config import robot_urdf  # noqa: E402
+from grid_codegen.env_knobs import generation_env
 from grid_codegen import GRiDCodeGenerator  # noqa: E402
 from grid_codegen.algo_registry import ALGO_REGISTRY  # noqa: E402
 from RBDReference.equivalents.reference_backend import strict_parse_robot  # noqa: E402
@@ -209,6 +210,9 @@ def generate_header(
             "profile": bench_algo_list_env or "all+frame_jacobian",
             "homogenous": True,
             "no_licm_barrier": no_licm_barrier_env,
+            # EVERY generation-time env knob (grid_codegen/env_knobs.py): a knob flipped for an
+            # A/B must never be served the other variant's cached header (2026-09-24).
+            "generation_env": generation_env(),
             "idsva_so_world_frame": True,
             "enable_floating_second_order": True,
             # ee_frame intentionally excluded: not passed to gen_all_code

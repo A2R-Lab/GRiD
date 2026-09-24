@@ -32,7 +32,7 @@ Two keys (see the "two-stage content-addressed store" section below):
     module (_compile.py), wrapper_template.cu, torch/jax ABI tags, the
     generation-time env knobs (GRID_CUDA_TARGET_SHARED_MEM_BYTES,
     GRID_CUDA_TARGET_LITE_SHARED_MEM_BYTES, GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES,
-    GRID_NO_LICM_BARRIER) and a key-schema number. `build_identity()` returns
+    GRID_NO_LICM_BARRIER, GRID_FDSVA_SO_MINV_TILE) and a key-schema number. `build_identity()` returns
     it as a readable dict; each store entry keeps a copy in build_inputs.json
     and a stage-1 hit is honoured ONLY if that record equals the current
     identity (a pointer recorded before the identity existed, or by a
@@ -44,6 +44,8 @@ same name with a different URDF or options overwrites the binding (the old
 .so file lingers in store/ for manual GC; future v2 will add `grid-rbd gc`).
 """
 from __future__ import annotations
+
+from grid_codegen.env_knobs import GENERATION_ENV_KNOBS as _ALL_GENERATION_ENV_KNOBS
 
 import fcntl
 import hashlib
@@ -301,16 +303,13 @@ def _glass_tag() -> str:
 
 _HOST_CXX_TAG: str | None = None
 _GLASS_CONTENT_HASH: str | None = None
-# Env knobs GRiDCodeGenerator / the emission helpers read at GENERATION time
-# (grep os.environ in grid_codegen). GRID_ENABLE_MUJOCO_KERNELS is deliberately
-# absent: _compile.generate_sources resolves it to an explicit option (see the
-# comment there). GRID_WORKSPACE_* are read by the EMITTED code at runtime.
-GENERATION_ENV_KNOBS = (
-    "GRID_CUDA_TARGET_SHARED_MEM_BYTES",
-    "GRID_CUDA_TARGET_LITE_SHARED_MEM_BYTES",
-    "GRID_CUDA_SHARED_MEM_TYPE_SIZE_BYTES",
-    "GRID_NO_LICM_BARRIER",
-)
+# Env knobs GRiDCodeGenerator / the emission helpers read at GENERATION time: the
+# ONE list in grid_codegen/env_knobs.py (2026-09-24; test_generation_env_knobs.py
+# keeps it equal to the reads in the tree). GRID_ENABLE_MUJOCO_KERNELS is deliberately
+# dropped here: _compile.generate_sources resolves it to an explicit option (see the
+# comment there), which is already a keyed code option. GRID_WORKSPACE_* are read by
+# the EMITTED code at runtime.
+GENERATION_ENV_KNOBS = tuple(k for k in _ALL_GENERATION_ENV_KNOBS if k != "GRID_ENABLE_MUJOCO_KERNELS")
 BUILD_INPUTS_FILE = "build_inputs.json"
 
 
