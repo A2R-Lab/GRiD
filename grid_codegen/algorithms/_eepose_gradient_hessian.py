@@ -237,20 +237,13 @@ def gen_end_effector_pose_device(self, fixed_target_name = ""):
     func_def_middle = "T *s_end_effector_pose, const T *s_q, "
     func_def_end = "const robotModel<T> *d_robotModel) {"
     func_def = func_def_start + func_def_middle + func_def_end
-    # then generate the code
-    self.gen_add_func_doc("Computes the End Effector Position",\
-                          func_notes,func_params,None)
-    self.gen_add_code_line("template <typename T>")
-    self.gen_add_code_line("__device__")
-    self.gen_add_code_line(func_def, True)
-    # add the shared memory variables
-    shared_mem_size = self.gen_end_effector_pose_inner_temp_mem_size(fixed_target_name)
-    self.gen_XmatsHom_helpers_temp_shared_memory_code(shared_mem_size, include_linalg_scratch = True,
-                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()")
-    # then load/update XI and run the algo
-    self.gen_load_update_XmatsHom_helpers_function_call()
-    self.gen_end_effector_pose_inner_function_call(fixed_target_name = fixed_target_name)
-    self.gen_add_end_function()
+    # shared device-wrapper skeleton (XmatsHom arena + loader; hygiene 6/9)
+    self.gen_device_wrapper(
+        "Computes the End Effector Position", func_def,
+        self.gen_end_effector_pose_inner_temp_mem_size(fixed_target_name),
+        lambda: self.gen_end_effector_pose_inner_function_call(fixed_target_name = fixed_target_name),
+        func_notes = func_notes, func_params = func_params,
+        xmats_hom = True, linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()")
 
 def gen_end_effector_pose_kernel(self, single_call_timing = False, fixed_target_name = ""):
     n = self.robot.get_num_pos()
@@ -866,25 +859,19 @@ def gen_end_effector_pose_gradient_device(self, fixed_target_name = ""):
     func_def_middle = "T *s_end_effector_pose_gradient, const T *s_q, "
     func_def_end = "const robotModel<T> *d_robotModel) {"
     func_def = func_def_start + func_def_middle + func_def_end
-    # then generate the code
-    self.gen_add_func_doc("Computes the Gradient of the End Effector Pose with respect to joint position",\
-                          func_notes,func_params,None)
-    self.gen_add_code_line("template <typename T>")
-    self.gen_add_code_line("__device__")
-    self.gen_add_code_line(func_def, True)
-    # add the shared memory variables. The shared-chain geometric-Jacobian inner
-    # uses ONLY local Xhom (s_dXhom is unused, marked `(void)`) so skip the
-    # per-joint local d-transform allocation + computation entirely. On floating
-    # base this also skips the (expensive) quaternion derivative of the base
-    # transform, which dominated the old per-(djid, ee) re-chain cost.
-    shared_mem_size = self.gen_end_effector_pose_gradient_inner_temp_mem_size(fixed_target_name)
-    self.gen_XmatsHom_helpers_temp_shared_memory_code(shared_mem_size, include_gradients = False, include_linalg_scratch = True,
-                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()")
-    # then load/update XI and run the algo
-    self.gen_load_update_XmatsHom_helpers_function_call(include_gradients = False)
-    self.gen_end_effector_pose_gradient_inner_function_call(fixed_target_name = fixed_target_name,
-        updated_var_names = {"s_dXhom_name": "nullptr"})
-    self.gen_add_end_function()
+    # Shared device-wrapper skeleton (XmatsHom arena + loader; hygiene 6/9). The
+    # shared-chain geometric-Jacobian inner uses ONLY local Xhom (s_dXhom is unused,
+    # marked `(void)`) so the per-joint local d-transform allocation + computation is
+    # skipped entirely (include_gradients=False). On floating base this also skips
+    # the (expensive) quaternion derivative of the base transform, which dominated
+    # the old per-(djid, ee) re-chain cost.
+    self.gen_device_wrapper(
+        "Computes the Gradient of the End Effector Pose with respect to joint position", func_def,
+        self.gen_end_effector_pose_gradient_inner_temp_mem_size(fixed_target_name),
+        lambda: self.gen_end_effector_pose_gradient_inner_function_call(fixed_target_name = fixed_target_name,
+                                                                        updated_var_names = {"s_dXhom_name": "nullptr"}),
+        func_notes = func_notes, func_params = func_params,
+        xmats_hom = True, linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()")
 
 _EE_GRAD_PICK_FLAGS = [
     # (use_workspace_temp, use_workspace_dxhom). The geometric-Jacobian gradient inner
@@ -2440,30 +2427,21 @@ def gen_end_effector_pose_hessian_device(self, fixed_target_name = ""):
     func_def_middle = "T *s_end_effector_pose_hessian, T *s_end_effector_pose_gradient, const T *s_q, "
     func_def_end = "const robotModel<T> *d_robotModel, T *d_workspace = nullptr) {"
     func_def = func_def_start + func_def_middle + func_def_end
-    # then generate the code
-    self.gen_add_func_doc("Computes the Hessian (and Jacobian) of the End Effector Pose with respect to generalized velocity (d^2/dv^2 tangent, pinocchio convention)",\
-                          func_notes,func_params,None)
-    self.gen_add_code_line("template <typename T, int RESOURCE_TIER = TIER_SHARED>")
-    self.gen_add_code_line("__device__")
-    self.gen_add_code_line(func_def, True)
-    # Smem arena: s_temp is always the inner-temp size. The output s_end_effector_pose_hessian lives
-    # in smem at TIER_SHARED (carved from the arena tail) and in d_workspace at
-    # TIER_LITE/MINIMAL (inner repoints internally). Note: the geometric-Jacobian
-    # path uses ONLY s_Xhom (LOCAL transforms); s_dXmatsHom and s_d2XmatsHom are
-    # no longer needed (saves substantial smem on big robots).
-    self.gen_XmatsHom_helpers_temp_shared_memory_code(inner_temp_size, include_gradients = False, include_hessians = False,
-                                                      include_linalg_scratch = True,
-                                                      linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()")
-    # At TIER_SHARED s_end_effector_pose_hessian is allocated by the caller; at LITE/MINIMAL it's
-    # the inner's job to repoint via OUT_IN_SMEM=false + d_workspace.
-    # then load Xhom (Jacobian only needs local transforms) and run the algo
-    self.gen_load_update_XmatsHom_helpers_function_call(include_gradients = False, include_hessians = False)
-    # Inner-owns placement: pass d_workspace + the per-tier flag. When the flag is
-    # false the inner repoints s_end_effector_pose_hessian at d_workspace.
-    self.gen_end_effector_pose_hessian_inner_function_call(
-        updated_var_names = {"d_workspace_name": "d_workspace", "s_Xhom_name": "s_XmatsHom", "d_robotModel_name": "d_robotModel"},
-        out_in_smem_expr = "D2EE_OUT_IN_SMEM<RESOURCE_TIER>()", fixed_target_name = fixed_target_name)
-    self.gen_add_end_function()
+    # Shared device-wrapper skeleton (XmatsHom arena + loader; hygiene 6/9). Smem
+    # arena: s_temp is always the inner-temp size. The output s_end_effector_pose_hessian
+    # lives in smem at TIER_SHARED (carved from the arena tail) and in d_workspace at
+    # TIER_LITE/MINIMAL (inner repoints internally via OUT_IN_SMEM=false + d_workspace).
+    # The geometric-Jacobian path uses ONLY s_Xhom (LOCAL transforms); s_dXmatsHom and
+    # s_d2XmatsHom are not allocated (saves substantial smem on big robots).
+    self.gen_device_wrapper(
+        "Computes the Hessian (and Jacobian) of the End Effector Pose with respect to generalized velocity (d^2/dv^2 tangent, pinocchio convention)", func_def,
+        inner_temp_size,
+        lambda: self.gen_end_effector_pose_hessian_inner_function_call(
+            updated_var_names = {"d_workspace_name": "d_workspace", "s_Xhom_name": "s_XmatsHom", "d_robotModel_name": "d_robotModel"},
+            out_in_smem_expr = "D2EE_OUT_IN_SMEM<RESOURCE_TIER>()", fixed_target_name = fixed_target_name),
+        template_line = "template <typename T, int RESOURCE_TIER = TIER_SHARED>",
+        func_notes = func_notes, func_params = func_params,
+        xmats_hom = True, linalg_scratch_bytes = "GRID_EE_LINALG_SHARED_BYTES<T>()")
 
 _D2EE_PICK_FLAGS = [
     # use_workspace_output (s_end_effector_pose_hessian lives in d_workspace?)

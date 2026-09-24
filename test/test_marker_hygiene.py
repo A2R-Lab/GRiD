@@ -49,6 +49,9 @@ _TEST_ROOT = pathlib.Path(__file__).resolve().parent
 # because that is the surface they guard. Each must stay genuinely compile-free.
 _COMPILE_FREE_IN_CUDA_EQUIVALENTS = {
     "test_cuda_matmul_blockwrap_regression.py",
+    # Its one UNMARKED test (test_header_without_a_multi_target_batch_emits_no_raw_evaluators)
+    # only generates a header and greps it; the runner tests carry cuda_equivalence.
+    "test_cuda_multi_target_raw_evaluators.py",
     # Asserts this suite's pin-only header default (conftest.py). Deliberately runs under
     # the CPU-only filter too -- that is precisely when you want to catch the default
     # having silently reverted.

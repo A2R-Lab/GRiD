@@ -1395,10 +1395,16 @@ def gen_device_wrapper(self, func_desc, func_def, shared_mem_size, inner_call_fn
                        template_line = "template <typename T>",
                        func_notes = None, func_params = None,
                        extra_t_buffers = None, include_linalg_scratch = True,
-                       tier_workspace_expr = None, skip_floating_base_X = False):
+                       tier_workspace_expr = None, skip_floating_base_X = False,
+                       xmats_hom = False, include_gradients = False, include_hessians = False,
+                       linalg_scratch_bytes = None):
     """Emit the shared `__device__` wrapper skeleton common to the simple
     inline-CUDA device entry points (id / fd / aba / crba / minv /
-    idsva_so / integrator). Each of these repeats the identical sequence:
+    idsva_so / integrator, and — with ``xmats_hom=True`` — the kinematics
+    wrappers end_effector_pose / _gradient / _hessian whose arena is the
+    XmatsHom layout and whose loader is load_update_XmatsHom_helpers;
+    hygiene 6/9, 2026-09-24, byte-identical). Each of these repeats the
+    identical sequence:
 
         gen_add_func_doc(...)
         gen_add_code_line(<template line>)
@@ -1419,6 +1425,10 @@ def gen_device_wrapper(self, func_desc, func_def, shared_mem_size, inner_call_fn
       - `tier_workspace_expr` : the LITE/MINIMAL whole-arena repoint target
                             (only the tier-aware device paths set this).
       - `skip_floating_base_X` : CRBA-only surgical lever on the XImats load.
+      - `xmats_hom` / `include_gradients` / `include_hessians` /
+        `linalg_scratch_bytes` : the XmatsHom-arena variant (kinematics
+                            wrappers): arena + loader come from the XmatsHom
+                            helpers, with the EE linalg scratch size.
       - `inner_call_fn`   : a 0-arg closure that emits the per-algo inner
                             call(s) between the XImats load and the function
                             end (the irreducibly per-algo body).
@@ -1431,11 +1441,19 @@ def gen_device_wrapper(self, func_desc, func_def, shared_mem_size, inner_call_fn
     self.gen_add_code_line(template_line)
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def, True)
-    self.gen_XImats_helpers_temp_shared_memory_code(
-        shared_mem_size, extra_t_buffers = extra_t_buffers,
-        include_linalg_scratch = include_linalg_scratch,
-        tier_workspace_expr = tier_workspace_expr)
-    self.gen_load_update_XImats_helpers_function_call(skip_floating_base_X = skip_floating_base_X)
+    if xmats_hom:
+        kw = {} if linalg_scratch_bytes is None else {"linalg_scratch_bytes": linalg_scratch_bytes}
+        self.gen_XmatsHom_helpers_temp_shared_memory_code(
+            shared_mem_size, include_gradients = include_gradients, include_hessians = include_hessians,
+            extra_t_buffers = extra_t_buffers, include_linalg_scratch = include_linalg_scratch, **kw)
+        self.gen_load_update_XmatsHom_helpers_function_call(include_gradients = include_gradients,
+                                                            include_hessians = include_hessians)
+    else:
+        self.gen_XImats_helpers_temp_shared_memory_code(
+            shared_mem_size, extra_t_buffers = extra_t_buffers,
+            include_linalg_scratch = include_linalg_scratch,
+            tier_workspace_expr = tier_workspace_expr)
+        self.gen_load_update_XImats_helpers_function_call(skip_floating_base_X = skip_floating_base_X)
     inner_call_fn()
     self.gen_add_end_function()
 
