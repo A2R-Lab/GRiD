@@ -199,6 +199,14 @@ class JaxRobotHandle(BaseDelegateMixin):
     def device_profile(self) -> dict:
         return self._base.device_profile
 
+    @property
+    def model_version(self) -> int:
+        """See :py:attr:`grid_rbd.RobotHandle.model_version`. A custom_vjp forward
+        stamps this version ON DEVICE (a data dependency of its backward, so a
+        jitted function reads it at execution time, not at trace time) and the
+        backward raises if the model was mutated in between."""
+        return self._base.model_version
+
     def context(self, *, workspace_slots: int = 0):
         """A view over a NEW runtime context of the same artifact (see
         :py:meth:`grid_rbd.RobotHandle.context`): its own arena/streams/tables,
@@ -382,7 +390,18 @@ class JaxRobotHandle(BaseDelegateMixin):
                 method, symbol = method + "_mujoco", symbol + "_mujoco"
             return _register_method_target(self._so_path, self._cache_key, method, symbol)
 
+        def _tv(method, symbol, suffix):
+            # B2 (K4) twins: `<symbol>[_mujoco]_stamped` (forward: value + int32
+            # model-version stamp) / `<symbol>[_mujoco]_checked` (backward: takes
+            # the stamp as its FIRST operand and refuses a stale one).
+            if mjx:
+                method, symbol = method + "_mujoco", symbol + "_mujoco"
+            return _register_method_target(self._so_path, self._cache_key, method + suffix, symbol + suffix)
+
         VM = "broadcast_all"
+        # The stamp is an int32 slot (no x64 mode needed); under vmap it gains the
+        # mapped axis like every other output and the handler reads element 0.
+        STAMP = jax.ShapeDtypeStruct((1,), jnp.int32)
 
         # A4-1 vjp_ops: the backward recipes live in ABI_SPECS[key].vjp and run
         # through the ONE shared driver (incl. the floating-base nv-slice /
@@ -403,22 +422,26 @@ class JaxRobotHandle(BaseDelegateMixin):
         def fd_fwd(gravity, q, qd, u, f_ext):
             # f_ext is a residual: the analytic gradient is taken AT this force
             # (audit W02, 2026-09-19 — it used to be the zero-force gradient).
-            return fd(gravity, q, qd, u, f_ext), (q, qd, u, f_ext)
+            # B2: the stamped twin also returns the model-version stamp (residual).
+            ts = _tv("forward_dynamics", "grid_rbd_jax_forward_dynamics", "_stamped")
+            out, stamp = self._ffi(ts, (self._out(q, nj), STAMP), vmap_method=VM)(
+                q, qd, u, f_ext, gravity=self._np_dt(gravity))
+            return out, (q, qd, u, f_ext, stamp)
 
         def fd_bwd(gravity, res, ct):
-            q, qd, u, f_ext = res
-            tg = _t("forward_dynamics_gradient", "grid_rbd_jax_forward_dynamics_gradient")
-            tm = _t("minv", "grid_rbd_jax_minv")
+            q, qd, u, f_ext, stamp = res
+            tg = _tv("forward_dynamics_gradient", "grid_rbd_jax_forward_dynamics_gradient", "_checked")
+            tm = _tv("minv", "grid_rbd_jax_minv", "_checked")
             g = vjp_backward(ABI_SPECS["forward_dynamics"].vjp, ct, {
                 "grad": lambda: self._shape_out(
                     "forward_dynamics_gradient",
                     self._ffi(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
-                        q, qd, u, f_ext, gravity=self._np_dt(gravity))),
+                        stamp, q, qd, u, f_ext, gravity=self._np_dt(gravity))),
                 # minv is gravity-independent and its FFI binding declares NO
                 # gravity attr (BIND_1IN) — do not pass one (H6 drift fix).
                 "minv": lambda: self._shape_out(
                     "minv",
-                    self._ffi(tm, self._out(q, nv * nv), vmap_method=VM)(q),
+                    self._ffi(tm, self._out(q, nv * nv), vmap_method=VM)(stamp, q),
                     mjx=mjx),
             }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"], g["qd"], g["u"], g["f_ext"])
@@ -443,16 +466,19 @@ class JaxRobotHandle(BaseDelegateMixin):
         def id_fwd(gravity, q, qd, qdd, f_ext):
             # f_ext is a residual: the analytic gradient is taken AT this force
             # (audit W02, 2026-09-19 — it used to be the zero-force gradient).
-            return idyn(gravity, q, qd, qdd, f_ext), (q, qd, qdd, f_ext)
+            ts = _tv("inverse_dynamics", "grid_rbd_jax_inverse_dynamics", "_stamped")
+            out, stamp = self._ffi(ts, (self._out(q, nj), STAMP), vmap_method=VM)(
+                q, qd, qdd, f_ext, gravity=self._np_dt(gravity))
+            return out, (q, qd, qdd, f_ext, stamp)
 
         def id_bwd(gravity, res, ct):
-            q, qd, qdd, f_ext = res
-            tg = _t("inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient")
+            q, qd, qdd, f_ext, stamp = res
+            tg = _tv("inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient", "_checked")
             g = vjp_backward(ABI_SPECS["inverse_dynamics"].vjp, ct, {
                 "grad": lambda: self._shape_out(
                     "inverse_dynamics_gradient",
                     self._ffi(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
-                        q, qd, qdd, f_ext, gravity=self._np_dt(gravity))),
+                        stamp, q, qd, qdd, f_ext, gravity=self._np_dt(gravity))),
             }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"], g["qd"], g["qdd"], g["f_ext"])
 
@@ -466,15 +492,17 @@ class JaxRobotHandle(BaseDelegateMixin):
             return self._ffi(t, self._out(q, 6 * nee), vmap_method=VM)(q)
 
         def ee_fwd(q):
-            return eepose(q), (q,)
+            ts = _tv("end_effector_pose", "grid_rbd_jax_end_effector_pose", "_stamped")
+            out, stamp = self._ffi(ts, (self._out(q, 6 * nee), STAMP), vmap_method=VM)(q)
+            return out, (q, stamp)
 
         def ee_bwd(res, ct):
-            (q,) = res
-            tg = _t("end_effector_pose_gradient", "grid_rbd_jax_end_effector_pose_gradient")
+            q, stamp = res
+            tg = _tv("end_effector_pose_gradient", "grid_rbd_jax_end_effector_pose_gradient", "_checked")
             g = vjp_backward(ABI_SPECS["end_effector_pose"].vjp, ct, {
                 "grad": lambda: self._shape_out(
                     "end_effector_pose_gradient",
-                    self._ffi(tg, self._out(q, 6 * nee * nv), vmap_method=VM)(q)),
+                    self._ffi(tg, self._out(q, 6 * nee * nv), vmap_method=VM)(stamp, q)),
             }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"],)
 
@@ -504,25 +532,31 @@ class JaxRobotHandle(BaseDelegateMixin):
                 q, qd, z, zfe, gravity=self._np_dt(gravity))
 
         def id_pi_fwd(gravity, q, qd, params):
-            return idyn_pi(gravity, q, qd, params), (q, qd)
+            del params
+            ts = _tv("inverse_dynamics", "grid_rbd_jax_inverse_dynamics", "_stamped")
+            z = jnp.zeros_like(q)
+            zfe = jnp.zeros(q.shape[:-1] + (6 * nb,), dtype=q.dtype)
+            out, stamp = self._ffi(ts, (self._out(q, nj), STAMP), vmap_method=VM)(
+                q, qd, z, zfe, gravity=self._np_dt(gravity))
+            return out, (q, qd, stamp)
 
         def id_pi_bwd(gravity, res, ct):
-            q, qd = res
+            q, qd, stamp = res
             # sysID is the bias linearization (qdd=0): zeros thread into both
             # the grad FFI's explicit qdd buffer and the regressor.
-            tg = _t("inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient")
-            tr = _t("inverse_dynamics_regressor", "grid_rbd_jax_inverse_dynamics_regressor")
+            tg = _tv("inverse_dynamics_gradient", "grid_rbd_jax_inverse_dynamics_gradient", "_checked")
+            tr = _tv("inverse_dynamics_regressor", "grid_rbd_jax_inverse_dynamics_regressor", "_checked")
             zq = jnp.zeros_like(q)
             g = vjp_backward(ABI_SPECS["inverse_dynamics_wrt_params"].vjp, ct, {
                 "grad": lambda: self._shape_out(
                     "inverse_dynamics_gradient",
                     self._ffi(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
-                        q, qd, zq, jnp.zeros(q.shape[:-1] + (6 * nb,), dtype=q.dtype),   # sysID: zero force by design
+                        stamp, q, qd, zq, jnp.zeros(q.shape[:-1] + (6 * nb,), dtype=q.dtype),   # sysID: zero force by design
                         gravity=self._np_dt(gravity))),
                 "param_grad": lambda: self._shape_out(
                     "inverse_dynamics_regressor",
                     self._ffi(tr, self._out(q, nv * npar), vmap_method=VM)(
-                        q, qd, zq, gravity=self._np_dt(gravity))),
+                        stamp, q, qd, zq, gravity=self._np_dt(gravity))),
             }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"], g["qd"], g["params"])
 
@@ -543,29 +577,34 @@ class JaxRobotHandle(BaseDelegateMixin):
                 q, qd, u, zfe, gravity=self._np_dt(gravity))
 
         def fd_pi_fwd(gravity, q, qd, u, params):
-            return fd_pi(gravity, q, qd, u, params), (q, qd, u)
+            del params
+            ts = _tv("forward_dynamics", "grid_rbd_jax_forward_dynamics", "_stamped")
+            zfe = jnp.zeros(q.shape[:-1] + (6 * nb,), dtype=q.dtype)
+            out, stamp = self._ffi(ts, (self._out(q, nj), STAMP), vmap_method=VM)(
+                q, qd, u, zfe, gravity=self._np_dt(gravity))
+            return out, (q, qd, u, stamp)
 
         def fd_pi_bwd(gravity, res, ct):
-            q, qd, u = res
-            tg = _t("forward_dynamics_gradient", "grid_rbd_jax_forward_dynamics_gradient")
-            tm = _t("minv", "grid_rbd_jax_minv")
-            tp = _t("forward_dynamics_parameter_gradient",
-                    "grid_rbd_jax_forward_dynamics_parameter_gradient")
+            q, qd, u, stamp = res
+            tg = _tv("forward_dynamics_gradient", "grid_rbd_jax_forward_dynamics_gradient", "_checked")
+            tm = _tv("minv", "grid_rbd_jax_minv", "_checked")
+            tp = _tv("forward_dynamics_parameter_gradient",
+                     "grid_rbd_jax_forward_dynamics_parameter_gradient", "_checked")
             g = vjp_backward(ABI_SPECS["forward_dynamics_wrt_params"].vjp, ct, {
                 "grad": lambda: self._shape_out(
                     "forward_dynamics_gradient",
                     self._ffi(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
-                        q, qd, u, jnp.zeros(q.shape[:-1] + (6 * nb,), dtype=q.dtype),    # sysID: zero force by design
+                        stamp, q, qd, u, jnp.zeros(q.shape[:-1] + (6 * nb,), dtype=q.dtype),    # sysID: zero force by design
                         gravity=self._np_dt(gravity))),
                 # wrt_params is pin-only → always the pin symmetrize (no mjx=).
                 # minv declares NO gravity attr (BIND_1IN) — do not pass one.
                 "minv": lambda: self._shape_out(
                     "minv",
-                    self._ffi(tm, self._out(q, nv * nv), vmap_method=VM)(q)),
+                    self._ffi(tm, self._out(q, nv * nv), vmap_method=VM)(stamp, q)),
                 "param_grad": lambda: self._shape_out(
                     "forward_dynamics_parameter_gradient",
                     self._ffi(tp, self._out(q, nv * npar), vmap_method=VM)(
-                        q, qd, u, gravity=self._np_dt(gravity))),
+                        stamp, q, qd, u, gravity=self._np_dt(gravity))),
             }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"], g["qd"], g["u"], g["params"])
 
@@ -584,16 +623,20 @@ class JaxRobotHandle(BaseDelegateMixin):
                 gravity=self._np_dt(gravity))
 
         def integ_fwd(gravity, dt, it, q, qd, u):
-            return integ(gravity, dt, it, q, qd, u), (q, qd, u)
+            ts = _tv("integrator", "grid_rbd_jax_integrator", "_stamped")
+            out, stamp = self._ffi(ts, (self._out(q, nj + nv), STAMP), vmap_method=VM)(
+                q, qd, u, dt=self._np_dt(dt), it=np.int64(it),
+                gravity=self._np_dt(gravity))
+            return out, (q, qd, u, stamp)
 
         def integ_bwd(gravity, dt, it, res, ct):
-            q, qd, u = res
-            tg = _t("integrator_gradient", "grid_rbd_jax_integrator_gradient")
+            q, qd, u, stamp = res
+            tg = _tv("integrator_gradient", "grid_rbd_jax_integrator_gradient", "_checked")
             g = vjp_backward(ABI_SPECS["integrator"].vjp, ct, {
                 "grad": lambda: self._shape_out(
                     "integrator_gradient",
                     self._ffi(tg, self._out(q, 2 * nv * 3 * nv), vmap_method=VM)(
-                        q, qd, u, dt=self._np_dt(dt), it=np.int64(it),
+                        stamp, q, qd, u, dt=self._np_dt(dt), it=np.int64(it),
                         gravity=self._np_dt(gravity))),
             }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"], g["qd"], g["u"])

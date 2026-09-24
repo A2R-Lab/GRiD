@@ -2301,3 +2301,34 @@ schema … doesn't match`), so every spelling must change together, and a traili
 `int ctx_id=0` default keeps it legal after defaulted tensors; (5) a mechanical
 signature rewrite must insert once per FUNCTION, not once per prologue
 occurrence (`#if` branches carry two prologues).
+
+### 7.z25 Execution-time model versions for autograd, and the schema trap that keeps returning (2026-09-24, W04-B B2)
+A mutation counter read in Python is trace-time, not execution-time: a jitted
+JAX function bakes attributes when traced, so "record `version` in the
+residuals" would either falsely reject after a legitimate mutation or
+silently pass a stale forward. The honest mechanism is a DEVICE stamp: the
+differentiable forward writes the version it was admitted under into a
+caller-owned int32 slot with a 1-thread kernel on its own stream, INSIDE its
+admission scope (so nothing can mutate between admission and the write), and
+the backward hands that slot to every gradient op, which reads it (4-byte
+D2H + stream sync, inside its own admission scope) and refuses on mismatch.
+JAX gets separate `_stamped` (extra S32 result) / `_checked` (leading S32
+operand) handler symbols generated from the vjp role table, with the handler
+body split into `_body(GridCtx*, …)` + entry shims so both twins share one
+launch; torch gets optional trailing `Tensor? stamp_out=None` /
+`Tensor? stamp_expect=None` args so every existing call site and captured
+graph is untouched. The admission lock itself is a `std::shared_mutex` on
+the context (compute = shared, mutators = exclusive), taken AFTER the
+registry mutex is released (lock order registry → admission; a long setter
+must not stall other contexts' lookups) and released BEFORE `inflight--`
+(close frees at zero). RULES: (1) anything autograd must compare across a
+deferred backward has to be produced on the device by the forward itself;
+(2) an `int32` stamp keeps JAX out of x64 mode; (3) §7.z24 (4) struck again —
+`inverse_dynamics`, `inverse_dynamics_gradient`, `integrator`,
+`integrator_gradient` and `forward_dynamics_parameter_gradient` are BESPOKE
+torch bodies whose schema rows are GENERATED: after any schema-table change,
+grep `^torch::Tensor torch_<key>(` for every affected key and diff the arg
+lists against the `Tensor? …` rows, or the .so aborts at dlopen with
+"Inferred operator schema … doesn't match" (found only when a test process
+loads it); (4) the crosscheck's body extractor must look for `_body(` before
+`_impl(` once a key is split.

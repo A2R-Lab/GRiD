@@ -203,27 +203,35 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
     from grid_codegen.abi_specs import ABI_SPECS
     from .._vjp_common import vjp_backward
 
+    # B2 (K4): every forward allocates an int32 model-version stamp that the op
+    # fills at execution time (`stamp_out`); the backward hands it back to each
+    # gradient op (`stamp_expect`), which refuses to run if the model was mutated
+    # in between ("model mutated between forward and backward").
+    def _stamp(q):
+        return torch.zeros(1, dtype=torch.int32, device=q.device)
+
     class InverseDynamicsFn(torch.autograd.Function):
         # forward args mirror the op schema order (q, qd, gravity, qdd, f_ext);
         # qdd/gravity/f_ext are non-differentiated (backward returns None for them).
         @staticmethod
         def forward(ctx, q, qd, gravity, qdd, f_ext):
-            ctx.save_for_backward(q, qd)
+            stamp = _stamp(q)
+            ctx.save_for_backward(q, qd, stamp)
             ctx.gravity = gravity
             ctx.qdd = qdd
             ctx.f_ext = f_ext
             ctx.nv = nv
-            return _op("inverse_dynamics")(q, qd, gravity, qdd, f_ext)
+            return _op("inverse_dynamics")(q, qd, gravity, qdd, f_ext, stamp_out=stamp)
 
         @staticmethod
         def backward(ctx, grad_c):
-            q, qd = ctx.saved_tensors
+            q, qd, stamp = ctx.saved_tensors
             # f_ext is affine in RNEA (passed through for bias consistency);
             # qdd threads into the USE_QDD grad overload so ∂(M·qdd)/∂q is
             # included. Recipe + nv-slice/nj-pad bridge: the shared vjp table.
             g = vjp_backward(ABI_SPECS["inverse_dynamics"].vjp, grad_c, {
                 "grad": lambda: apply_out_layout(
-                    _op("inverse_dynamics_gradient")(q, qd, ctx.gravity, ctx.qdd, ctx.f_ext),
+                    _op("inverse_dynamics_gradient")(q, qd, ctx.gravity, ctx.qdd, ctx.f_ext, stamp_expect=stamp),
                     ("grad_concat",), None, nv=nv),
             }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
             # grads for (q, qd, gravity, qdd, f_ext)
@@ -235,29 +243,30 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
         class FDLikeFn(torch.autograd.Function):
             @staticmethod
             def forward(ctx, q, qd, u, gravity, f_ext):
-                ctx.save_for_backward(q, qd, u)
+                stamp = _stamp(q)
+                ctx.save_for_backward(q, qd, u, stamp)
                 ctx.gravity = gravity
                 ctx.f_ext = f_ext
-                return fwd_op(q, qd, u, gravity, f_ext)
+                return fwd_op(q, qd, u, gravity, f_ext, stamp)
 
             @staticmethod
             def backward(ctx, grad_qdd):
-                q, qd, u = ctx.saved_tensors
+                q, qd, u, stamp = ctx.saved_tensors
                 g = vjp_backward(ABI_SPECS["forward_dynamics"].vjp, grad_qdd, {
                     "grad": lambda: apply_out_layout(
-                        _op("forward_dynamics_gradient")(q, qd, u, ctx.gravity, ctx.f_ext),
+                        _op("forward_dynamics_gradient")(q, qd, u, ctx.gravity, ctx.f_ext, stamp_expect=stamp),
                         ("grad_concat",), None, nv=nv),
                     # ∂qdd/∂u = M⁻¹ via the shared minv layout (pin symmetrize
                     # / mjx full-dense — _out_transform).
                     "minv": lambda: apply_out_layout(
-                        _op("minv")(q), ("minv",), None, nv=nv, mjx=mujoco,
+                        _op("minv")(q, stamp_expect=stamp), ("minv",), None, nv=nv, mjx=mujoco,
                         eye=torch.eye(nv, dtype=q.dtype, device=q.device)),
                 }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
                 return g["q"], g["qd"], g["u"], None, g["f_ext"]
         return FDLikeFn
 
-    FDFn = _make_fd_like(lambda q, qd, u, g, fe: _op("forward_dynamics")(q, qd, u, g, fe))
-    AbaFn = _make_fd_like(lambda q, qd, u, g, fe: _op("aba")(q, qd, u, g, fe))
+    FDFn = _make_fd_like(lambda q, qd, u, g, fe, s: _op("forward_dynamics")(q, qd, u, g, fe, stamp_out=s))
+    AbaFn = _make_fd_like(lambda q, qd, u, g, fe, s: _op("aba")(q, qd, u, g, fe, stamp_out=s))
 
     # ── inertial-parameter (sysID) VJPs ──
     # The forward op is independent of the `params` (π) VALUE (the compiled .so
@@ -270,59 +279,62 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
         @staticmethod
         def forward(ctx, q, qd, params, gravity, f_ext):
             # forward value ignores `params`; baked-in inertia → c = ID(q, qd).
-            ctx.save_for_backward(q, qd)
+            stamp = _stamp(q)
+            ctx.save_for_backward(q, qd, stamp)
             ctx.gravity = gravity
             ctx.f_ext = f_ext
-            return ops.inverse_dynamics(q, qd, gravity, None, f_ext)
+            return ops.inverse_dynamics(q, qd, gravity, None, f_ext, stamp_out=stamp)
 
         @staticmethod
         def backward(ctx, grad_c):
-            q, qd = ctx.saved_tensors
+            q, qd, stamp = ctx.saved_tensors
             # sysID is the bias linearization (qdd=0): None/zeros thread into
             # the grad op's qdd slot and the regressor.
             g = vjp_backward(ABI_SPECS["inverse_dynamics_wrt_params"].vjp, grad_c, {
                 "grad": lambda: apply_out_layout(
-                    ops.inverse_dynamics_gradient(q, qd, ctx.gravity, None, ctx.f_ext),
+                    ops.inverse_dynamics_gradient(q, qd, ctx.gravity, None, ctx.f_ext, stamp_expect=stamp),
                     ("grad_concat",), None, nv=nv),
                 "param_grad": lambda: ops.inverse_dynamics_regressor(
-                    q, qd, torch.zeros_like(q), ctx.gravity).reshape(q.shape[0], nv, -1),
+                    q, qd, torch.zeros_like(q), ctx.gravity, stamp_expect=stamp).reshape(q.shape[0], nv, -1),
             }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
             return g["q"], g["qd"], g["params"], None, None
 
     class FDWrtParamsFn(torch.autograd.Function):
         @staticmethod
         def forward(ctx, q, qd, u, params, gravity, f_ext):
-            ctx.save_for_backward(q, qd, u)
+            stamp = _stamp(q)
+            ctx.save_for_backward(q, qd, u, stamp)
             ctx.gravity = gravity
             ctx.f_ext = f_ext
-            return ops.forward_dynamics(q, qd, u, gravity, f_ext)
+            return ops.forward_dynamics(q, qd, u, gravity, f_ext, stamp_out=stamp)
 
         @staticmethod
         def backward(ctx, grad_qdd):
-            q, qd, u = ctx.saved_tensors
+            q, qd, u, stamp = ctx.saved_tensors
             g = vjp_backward(ABI_SPECS["forward_dynamics_wrt_params"].vjp, grad_qdd, {
                 "grad": lambda: apply_out_layout(
-                    ops.forward_dynamics_gradient(q, qd, u, ctx.gravity, ctx.f_ext),
+                    ops.forward_dynamics_gradient(q, qd, u, ctx.gravity, ctx.f_ext, stamp_expect=stamp),
                     ("grad_concat",), None, nv=nv),
                 # wrt_params is pin-only (mjx omits it) → always the pin symmetrize.
                 "minv": lambda: apply_out_layout(
-                    ops.minv(q), ("minv",), None, nv=nv,
+                    ops.minv(q, stamp_expect=stamp), ("minv",), None, nv=nv,
                     eye=torch.eye(nv, dtype=q.dtype, device=q.device)),
                 "param_grad": lambda: ops.forward_dynamics_parameter_gradient(
-                    q, qd, u, ctx.gravity).reshape(q.shape[0], nv, -1),
+                    q, qd, u, ctx.gravity, stamp_expect=stamp).reshape(q.shape[0], nv, -1),
             }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
             return g["q"], g["qd"], g["u"], g["params"], None, None
 
     class IntegratorFn(torch.autograd.Function):
         @staticmethod
         def forward(ctx, q, qd, u, dt, it, gravity):
-            ctx.save_for_backward(q, qd, u)
+            stamp = _stamp(q)
+            ctx.save_for_backward(q, qd, u, stamp)
             ctx.dt, ctx.it, ctx.gravity = dt, it, gravity
-            return _op("integrator")(q, qd, u, dt, it, gravity)
+            return _op("integrator")(q, qd, u, dt, it, gravity, stamp_out=stamp)
 
         @staticmethod
         def backward(ctx, grad_x):
-            q, qd, u = ctx.saved_tensors
+            q, qd, u, stamp = ctx.saved_tensors
             # A3-audit fix (2026-09-09): this used to shadow the closure's nv
             # with q.shape[1] (= nq). Fixed base: nq == nv, worked by luck.
             # Floating base: nq = nv+1, so the reshape below mis-sized AND the
@@ -339,7 +351,7 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
                 # h_dAB is (2*NV x 3*NV) column-major per ts → shared out-layout
                 # (colmajor_whole → row-major (B, 2NV, 3NV)); thirds = gq/gqd/gu.
                 "grad": lambda: apply_out_layout(
-                    _op("integrator_gradient")(q, qd, u, ctx.dt, ctx.it, ctx.gravity),
+                    _op("integrator_gradient")(q, qd, u, ctx.dt, ctx.it, ctx.gravity, stamp_expect=stamp),
                     ("colmajor_whole", None), (2 * nv, 3 * nv), nv=nv),
             }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
             return g["q"], g["qd"], g["u"], None, None, None
@@ -350,15 +362,16 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
         # None — while the jax surface had its custom_vjp; same shared recipe now).
         @staticmethod
         def forward(ctx, q):
-            ctx.save_for_backward(q)
-            return _op("end_effector_pose")(q)
+            stamp = _stamp(q)
+            ctx.save_for_backward(q, stamp)
+            return _op("end_effector_pose")(q, stamp_out=stamp)
 
         @staticmethod
         def backward(ctx, grad_pose):
-            (q,) = ctx.saved_tensors
+            q, stamp = ctx.saved_tensors
             g = vjp_backward(ABI_SPECS["end_effector_pose"].vjp, grad_pose, {
                 "grad": lambda: apply_out_layout(
-                    _op("end_effector_pose_gradient")(q), ("ee_grad",), (nee,), nv=nv,
+                    _op("end_effector_pose_gradient")(q, stamp_expect=stamp), ("ee_grad",), (nee,), nv=nv,
                     mjx=mujoco, eye=torch.eye(nv, dtype=q.dtype, device=q.device)),
             }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
             return (g["q"],)
@@ -485,6 +498,14 @@ class TorchRobotHandle(BaseDelegateMixin):
     @property
     def device_profile(self) -> dict:
         return self._base.device_profile
+
+    @property
+    def model_version(self) -> int:
+        """See :py:attr:`grid_rbd.RobotHandle.model_version`. Every autograd
+        forward stamps this version on device (``stamp_out``) and its backward
+        passes the stamp back (``stamp_expect``): a backward after a mutation
+        raises instead of differentiating the new model."""
+        return self._base.model_version
 
     def context(self, *, workspace_slots: int = 0):
         """A view over a NEW runtime context of the same artifact (see

@@ -106,6 +106,7 @@ struct CAbi {
     using fn_ctx_close_t    = int (*)(long long);                    // ctx_close(id)
     using fn_ctx_idp_t      = int (*)(long long*);                   // ctx_default_id(&id)
     using fn_ctx_profile_t  = int (*)(long long, void*);             // ctx_profile(id, GridDeviceProfile*)
+    using fn_ctx_version_t  = int (*)(long long, unsigned long long*);  // ctx_version(id, &version)  (B2)
 };
 
 
@@ -150,6 +151,7 @@ class RunnerT {
     using fn_ctx_close_t = typename CAbi<CT>::fn_ctx_close_t;
     using fn_ctx_idp_t = typename CAbi<CT>::fn_ctx_idp_t;
     using fn_ctx_profile_t = typename CAbi<CT>::fn_ctx_profile_t;
+    using fn_ctx_version_t = typename CAbi<CT>::fn_ctx_version_t;
     // Per-dtype numpy array alias: an input is force-cast to CT, outputs are CT.
     using arr_t = py::array_t<CT, py::array::c_style | py::array::forcecast>;
 public:
@@ -173,6 +175,7 @@ public:
         fn_ctx_close_        = reinterpret_cast<fn_ctx_close_t>(require_sym("grid_rbd_ctx_close"));
         fn_ctx_default_id_   = reinterpret_cast<fn_ctx_idp_t>(require_sym("grid_rbd_ctx_default_id"));
         fn_ctx_profile_      = reinterpret_cast<fn_ctx_profile_t>(require_sym("grid_rbd_ctx_profile"));
+        fn_ctx_version_      = reinterpret_cast<fn_ctx_version_t>(require_sym("grid_rbd_ctx_version"));
         // E1 kernel ceiling + E6 per-algo/batch-regime overlays.
         fn_kernel_max_threads_ = reinterpret_cast<fn_int_s_t>(require_sym("grid_rbd_kernel_max_threads"));
         fn_set_threads_for_  = reinterpret_cast<fn_ctx_int_ii_t>(require_sym("grid_rbd_set_threads_for"));
@@ -432,6 +435,12 @@ public:
         int rc = fn_ctx_default_id_(&id);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "ctx_default_id", nullptr));
         return id;
+    }
+    unsigned long long ctx_version(long long id) {
+        unsigned long long v = 0;
+        int rc = fn_ctx_version_(id, &v);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "ctx_version", nullptr));
+        return v;
     }
     py::dict ctx_profile(long long id) {
         struct P { int device_cc, artifact_cc; long long total_bytes, free_bytes, arena_bytes; int workspace_slots, max_batch; long long smem_optin_bytes; int slab_installed; } prof{};
@@ -1782,6 +1791,8 @@ public:
             m += " (context is closing)";
         else if (rc == 13)
             m += " (this robot artifact was compiled for another GPU architecture)";
+        else if (rc == 15)
+            m += " (model mutated between forward and backward; recompute the forward)";
         else if (rc >= 200)
             m += " (CUDA error " + cuda_err(rc - 200) + " at kernel LAUNCH: "
                  "usually threads above the kernel's __launch_bounds__ or dynamic "
@@ -2015,6 +2026,7 @@ private:
     fn_ctx_close_t fn_ctx_close_ = nullptr;
     fn_ctx_idp_t fn_ctx_default_id_ = nullptr;
     fn_ctx_profile_t fn_ctx_profile_ = nullptr;
+    fn_ctx_version_t fn_ctx_version_ = nullptr;
     long long ctx_id_ = 0;  // 0 = this artifact's default context; explicit contexts hold their salted id
     fn_int_v_t fn_algo_count_             = nullptr;
     fn_ctx_int_iii_t fn_set_threads_for_n_    = nullptr;
@@ -2199,6 +2211,7 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("ctx_close", &R::ctx_close, py::arg("id"), "Close a context: refuse new admissions, drain, free.")
         .def("ctx_default_id", &R::ctx_default_id, "The default context's real id (created if absent).")
         .def("ctx_profile", &R::ctx_profile, py::arg("id"), "The device-profile record captured when the context was created.")
+        .def("ctx_version", &R::ctx_version, py::arg("id"), "The context's model version (bumps on every runtime-parameter mutation; W04-B B2).")
         .def("inverse_dynamics", &R::inverse_dynamics,
              py::arg("q"), py::arg("qd"),
              py::arg("qdd") = py::none(),

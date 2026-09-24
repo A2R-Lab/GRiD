@@ -61,13 +61,53 @@ was carved from a caller-owned slab. A deployment can assert it; the
 constrained-memory behaviour (a slab too small for the arena) fails cleanly at
 creation with nothing published.
 
+Mutation, model versions and autograd
+-------------------------------------
+
+Every call is **admitted** against its context: compute calls hold the
+context's admission lock *shared* for their whole submission, and every
+**model mutation** — ``set_inertia_params``, ``set_transform_params``,
+``set_joint_dynamics``, hence ``attach_tool`` / ``detach_tool`` — and every
+launch override (``set_threads_per_block``, ``set_threads_for``...) holds it
+*exclusive*. A mutation is therefore ordered after every admitted call and
+before every later one: a thread hammering ``forward_dynamics`` while another
+swaps the inertia table sees either the old or the new physics, never a torn
+table, and a launch override is never read half-written.
+
+Each model mutation increments the context's **model version**
+(``handle.model_version``, starts at 1; launch overrides do not bump it; a new
+context starts at its own 1). The version is what makes autograd honest across
+mutations:
+
+* a torch / JAX **forward** stamps the version it ran under **on the device**,
+  as part of its own launch (``stamp_out`` on the torch op, a second output of
+  the ``_stamped`` FFI twin), so under ``jax.jit`` or a captured graph the stamp
+  is produced when the forward *executes*, not when it was traced;
+* the matching **backward** hands the stamp to each gradient op
+  (``stamp_expect`` / the ``_checked`` FFI twin), which reads it inside its own
+  admission scope and refuses to run if the model has moved on:
+  ``model mutated between forward and backward (version A -> B); recompute the
+  forward``. A backward never silently differentiates a model its forward did
+  not see.
+
+The same compiled function keeps working across mutations — a jitted
+``jax.grad`` called after ``set_inertia_params`` differentiates the new model,
+because its forward and backward stamp and check within one execution. Only a
+forward whose backward is deferred across a mutation is refused. The check
+costs the gradient op one 4-byte device-to-host read (a stream sync) per
+backward; direct (non-autograd) gradient calls do not pay it.
+
+Runtime end-effector offsets (``end_effector_pose_runtime`` and its gradient)
+are per-call inputs, not model state: they take no lock and bump no version.
+
 What stays for later increments
 -------------------------------
 
-B1 keeps today's synchronisation: setters still fence with a device-wide
-synchronise and the numpy input pack still drains the device. Per-call leases
-(B3) and the mutation version check in autograd backward (B2) follow, each as
-its own gated increment.
+B1/B2 keep today's synchronisation: setters still fence with a device-wide
+synchronise (now redundant with the exclusive admission, kept until the
+per-call leases of B3 are proven) and the numpy input pack still drains the
+device. Concurrent asynchronous calls on ONE context still share its scratch
+buffers — one pipeline per context; use a context per pipeline.
 
 Inline-CUDA consumers of ``grid.cuh`` are untouched: ``init_gridData`` /
 ``init_gridData_checked`` / ``close_grid`` keep their signatures (the checked

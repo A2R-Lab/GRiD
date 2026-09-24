@@ -2342,6 +2342,20 @@ class RobotHandle:
         return new
 
     @property
+    def model_version(self) -> int:
+        """This handle's context MODEL VERSION (W04-B B2): starts at 1 and
+        increments on every runtime-parameter mutation — :py:meth:`set_inertia_params`,
+        :py:meth:`set_transform_params`, :py:meth:`set_joint_dynamics`, hence
+        :py:meth:`attach_tool` / :py:meth:`detach_tool`. Launch overrides
+        (:py:meth:`set_threads_per_block` & co.) do not bump it. A mutation is
+        ordered after every admitted call and before every later one (exclusive
+        admission). The torch / JAX autograd forwards stamp the version on device at
+        execution time and their backwards refuse to run against a different
+        version ("model mutated between forward and backward") — recompute the
+        forward after mutating."""
+        return int(self._runner.ctx_version(self._runner.ctx_id()))
+
+    @property
     def device_profile(self) -> dict:
         """The device-profile record captured when this handle's context was
         created: device and artifact compute capability, total/free device

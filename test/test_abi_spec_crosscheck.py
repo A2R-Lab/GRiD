@@ -41,6 +41,7 @@ _INFRA = {
     # device-pool (slab) framework-allocator integration
     "device_pool_bytes", "set_device_pool", "device_pool_used",
     "ctx_create", "ctx_close", "ctx_default_id", "ctx_profile", "ctx_count",  # W04-B B1 runtime contexts
+    "ctx_version",  # W04-B B2 model version
     # Multi-contact f_ext (2026-09-17): `grid_rbd_contact_fext` + `grid_rbd_num_contact_frames`
     # are HAND-WRITTEN in wrapper_template.cu under GRID_HAS_CONTACT_FRAMES (they call the
     # baked grid::f_ext_body_device and mirror tool_fext's d_f_ext handling); they are a
@@ -360,8 +361,12 @@ def _torch_body(key):
 
 
 def _jax_body(key):
-    return _surface_body(
-        r"static ffi::Error grid_rbd_jax_" + re.escape(key) + r"_impl\(", key)
+    # W04-B B2: the vjp-role handlers split into `_body` (the launch, context
+    # passed in) + the plain / `_stamped` / `_checked` entry shims.
+    name = r"static ffi::Error grid_rbd_jax_" + re.escape(key)
+    if re.search(name + r"_body\(", _SRC):
+        return _surface_body(name + r"_body\(", key)
+    return _surface_body(name + r"_impl\(", key)
 
 
 def _launch_args(body: str, key: str) -> list[str]:
@@ -430,7 +435,8 @@ def test_substitution_partitions():
     unaccounted = torch_fns - set(_TORCH_SUB) - _TORCH_BESPOKE
     assert not unaccounted, f"torch bodies neither specced nor bespoke: {unaccounted}"
     jax_fns = set(re.findall(r"grid_rbd_jax_([a-z0-9_]+)_impl\(", _SRC))
-    jax_fns = {f for f in jax_fns
+    # B2: `<key>_stamped` / `<key>_checked` shims are twins of a specced key.
+    jax_fns = {re.sub(r"_(stamped|checked)$", "", f) for f in jax_fns
                if not f.startswith("plant_") and not f.endswith("_mujoco")}
     unaccounted = jax_fns - set(_JAX_SUB) - _JAX_BESPOKE
     assert not unaccounted, f"jax handlers neither specced nor bespoke: {unaccounted}"

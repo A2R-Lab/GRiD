@@ -25,18 +25,22 @@ grid_rbd = pytest.importorskip("grid_rbd")
 
 pytestmark = pytest.mark.python_wrappers
 ALGOS = ["forward_dynamics", "inverse_dynamics"]
+# B2 (K4): the iiwa artifact also carries fd's backward ops + runtime inertia so
+# the version / stamp tests can mutate the model and differentiate through it.
+ALGOS_B2 = ALGOS + ["forward_dynamics_gradient", "minv"]
 
 
-def _register(name, urdf, floating):
+def _register(name, urdf, floating, algos=ALGOS, runtime_inertia=False):
     if shutil.which("nvcc") is None:
         pytest.skip("nvcc not on PATH")
     return grid_rbd.register_robot(name, str(_REPO / "config/robot_assets" / urdf), floating_base=floating,
-                                   max_batch_size=16, algorithm_list=ALGOS, enable_mujoco_kernels=False)
+                                   max_batch_size=16, algorithm_list=algos, enable_mujoco_kernels=False,
+                                   runtime_inertia=runtime_inertia)
 
 
 @pytest.fixture(scope="module")
 def iiwa():
-    h = _register("ctx_pytest_iiwa14", "iiwa14.urdf", False)
+    h = _register("ctx_pytest_iiwa14", "iiwa14.urdf", False, algos=ALGOS_B2, runtime_inertia=True)
     yield h
     h.close()
 
@@ -195,3 +199,112 @@ def _cache_key(handle):
     """The manifest's content key for a handle (what the jax/torch views key their registrations on)."""
     entry = grid_rbd.manifest_lookup(grid_rbd.default_cache_dir(), handle._name)
     return entry["cache_key"]
+
+
+# ─── W04-B B2: admission lock, model version, execution-time stamps (K4) ───────
+
+def _scaled_inertia(h, factor):
+    tbl = np.array(h.inertia_params, dtype=np.float32, copy=True)
+    tbl[1:, 0] *= factor   # scale every non-root mass (row 0 may be the fixed base)
+    return tbl
+
+
+def test_model_version_bumps_on_parameter_mutation_only(iiwa):
+    v0 = iiwa.model_version
+    assert v0 >= 1
+    iiwa.set_inertia_params(np.asarray(iiwa.inertia_params, dtype=np.float32))
+    assert iiwa.model_version == v0 + 1
+    # launch overrides are exclusive-admission too, but NOT a model mutation
+    iiwa.set_threads_per_block(64); iiwa.set_threads_per_block(0)
+    assert iiwa.model_version == v0 + 1
+    # attach/detach route through the inertia setter: one bump each
+    row_joint = list(iiwa._meta.get("inertia_row_by_joint_name") or {"": None})[-1]
+    if row_joint:
+        iiwa.attach_tool(row_joint, mass=0.5)
+        iiwa.detach_tool()
+        assert iiwa.model_version == v0 + 3
+    # a NEW context starts at its own version 1, independent of the default's history
+    ctx = iiwa.context()
+    try:
+        assert ctx.model_version == 1
+    finally:
+        ctx.close()
+
+
+def test_mutation_is_serialized_against_admitted_calls(iiwa):
+    """A setter racing a hot submitting thread must never see a torn table or
+    crash: every result is either the old or the new physics (both are exact
+    kernels on a consistent table), and the version moves monotonically."""
+    q, qd, u = _state(iiwa, B=8, seed=3)
+    base = np.asarray(iiwa.inertia_params, dtype=np.float32)
+    ref_a = iiwa.forward_dynamics(q, qd, u)
+    iiwa.set_inertia_params(_scaled_inertia(iiwa, 2.0))
+    ref_b = iiwa.forward_dynamics(q, qd, u)
+    iiwa.set_inertia_params(base)
+    bad = []
+    stop = threading.Event()
+
+    def hammer():
+        while not stop.is_set():
+            out = iiwa.forward_dynamics(q, qd, u)
+            if not (np.allclose(out, ref_a, atol=1e-4) or np.allclose(out, ref_b, atol=1e-4)):
+                bad.append(out.copy())
+    th = threading.Thread(target=hammer); th.start()
+    v = iiwa.model_version
+    for i in range(20):
+        iiwa.set_inertia_params(_scaled_inertia(iiwa, 2.0) if i % 2 == 0 else base)
+        assert iiwa.model_version == v + i + 1
+    stop.set(); th.join()
+    iiwa.set_inertia_params(base)
+    assert not bad, f"{len(bad)} torn/inconsistent results under a racing mutation"
+
+
+def test_torch_backward_rejects_a_mutated_model_and_fresh_forward_recovers(iiwa):
+    torch = pytest.importorskip("torch")
+    import grid_rbd.torch as gt
+    tv = gt.TorchRobotHandle(iiwa, _cache_key(iiwa), iiwa._so_path)
+    q, qd, u = _state(iiwa)
+    base = np.asarray(iiwa.inertia_params, dtype=np.float32)
+    tq = torch.as_tensor(q, device="cuda").requires_grad_(True)
+    tqd, tu = (torch.as_tensor(x, device="cuda") for x in (qd, u))
+    out = tv.forward_dynamics(tq, tqd, tu)
+    iiwa.set_inertia_params(_scaled_inertia(iiwa, 1.5))     # forward@A -> mutate -> backward
+    try:
+        with pytest.raises(RuntimeError, match="model mutated between forward and backward"):
+            out.sum().backward()
+        tq.grad = None
+        out2 = tv.forward_dynamics(tq, tqd, tu)              # a fresh forward at B differentiates B
+        out2.sum().backward()
+        assert tq.grad is not None and np.isfinite(tq.grad.cpu().numpy()).all()
+    finally:
+        iiwa.set_inertia_params(base)
+
+
+def test_jax_vjp_rejects_a_mutated_model_and_a_jitted_grad_follows_it(iiwa):
+    jax = pytest.importorskip("jax")
+    import jax.numpy as jnp, grid_rbd.jax as gj
+    jv = gj.JaxRobotHandle(iiwa, _cache_key(iiwa), iiwa._so_path)
+    q, qd, u = _state(iiwa)
+    base = np.asarray(iiwa.inertia_params, dtype=np.float32)
+    jq, jqd, ju = (jnp.asarray(x) for x in (q, qd, u))
+    # eager vjp: forward@A -> mutate -> backward must raise (K4 acceptance)
+    y, f_vjp = jax.vjp(lambda a: jv.forward_dynamics(a, jqd, ju), jq)
+    jax.block_until_ready(y)
+    iiwa.set_inertia_params(_scaled_inertia(iiwa, 1.5))
+    try:
+        with pytest.raises(Exception, match="model mutated between forward and backward"):
+            jax.block_until_ready(f_vjp(jnp.ones_like(y)))
+        # the SAME compiled function across mutations: the stamp is produced at
+        # execution time inside the executable, so no false rejection, and the
+        # gradient tracks the CURRENT model (differs from the pre-mutation one).
+        g = jax.jit(jax.grad(lambda a: jv.forward_dynamics(a, jqd, ju).sum()))
+        g_b = np.asarray(jax.block_until_ready(g(jq)))
+        iiwa.set_inertia_params(base)
+        g_a = np.asarray(jax.block_until_ready(g(jq)))
+        eager_a = np.asarray(jax.block_until_ready(
+            jax.grad(lambda a: jv.forward_dynamics(a, jqd, ju).sum())(jq)))
+        assert np.isfinite(g_a).all() and np.isfinite(g_b).all()
+        assert not np.allclose(g_a, g_b, atol=1e-5), "jitted grad ignored the mutation"
+        assert np.allclose(g_a, eager_a, atol=1e-5)
+    finally:
+        iiwa.set_inertia_params(base)

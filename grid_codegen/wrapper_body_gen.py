@@ -30,6 +30,27 @@ from pathlib import Path
 
 from .abi_specs import ABI_SPECS, AbiSpec
 
+
+def _vjp_roles() -> tuple[frozenset[str], frozenset[str]]:
+    """W04-B B2 (K4): the ops whose native handlers get a model-version STAMP.
+    Forward-role = every op with a vjp row (the custom_vjp / autograd forward);
+    gradient-role = every op a vjp row's backward calls (grad_op, param_grad_op,
+    minv when u_via_minv). Derived from the one vjp table so a new differentiable
+    op picks up its stamps by construction."""
+    fwd = {k for k, s in ABI_SPECS.items() if s.vjp is not None}
+    grad: set[str] = set()
+    for k in fwd:
+        v = ABI_SPECS[k].vjp
+        grad.add(v.grad_op)
+        if v.param_grad_op:
+            grad.add(v.param_grad_op)
+        if v.u_via_minv:
+            grad.add("minv")
+    return frozenset(fwd), frozenset(grad)
+
+
+VJP_FORWARD_KEYS, VJP_GRAD_KEYS = _vjp_roles()
+
 # Increment-1 scope: the tight-style family (no sig-fork, no qdd fork, no
 # IT dispatch, no body_override).
 GENERATED_KEYS: tuple[str, ...] = (
@@ -664,7 +685,12 @@ def emit_torch_body(key: str) -> str:
         args.append("double gravity")
     if spec.f_ext_mode == "optional":
         args.append("c10::optional<torch::Tensor> f_ext")
-    args.append("int64_t ctx_id")  # W04-B B1: the op's LAST argument
+    args.append("int64_t ctx_id")  # W04-B B1: the context id (after it: only the B2 stamp)
+    role = ("fwd" if key in VJP_FORWARD_KEYS else "grad" if key in VJP_GRAD_KEYS else None)
+    if role == "fwd":
+        args.append("c10::optional<torch::Tensor> stamp_out")       # B2 (K4): version stamp OUT
+    elif role == "grad":
+        args.append("c10::optional<torch::Tensor> stamp_expect")    # B2 (K4): version stamp CHECK
     prefix = ("template <bool MUJOCO>\n" if templated else "") + \
         f"torch::Tensor torch_{key}("
     if any(a.startswith("c10::optional") for a in args):
@@ -691,6 +717,8 @@ def emit_torch_body(key: str) -> str:
     L = [sig, "    GRID_RBD_CTX_OR_THROW(ctx_id);", decls, *check_lines,
          "    int batch = grid_torch_batch(q);",
          "    cudaStream_t stream = at::cuda::getCurrentCUDAStream();"]
+    if role == "grad":
+        L.append("    grid_torch_stamp_check(g_ctx, stream, stamp_expect);")
     if key in TORCH_PRE_PACK_COMMENTS:
         L.append("    " + TORCH_PRE_PACK_COMMENTS[key])
     L.append(f"    grid_torch_pack(g_ctx, stream, batch, nj, {', '.join(pack)});")
@@ -713,6 +741,8 @@ def emit_torch_body(key: str) -> str:
              f"{batch_sz} * {copy_size} * sizeof(T), cudaMemcpyDeviceToDevice, stream);")
     if spec.f_ext_mode == "optional":
         L.append("    grid_torch_f_ext_reset(g_ctx, stream, batch, f_ext);")
+    if role == "fwd":
+        L.append("    grid_torch_stamp_write(g_ctx, stream, stamp_out);")
     L += ["    return out;", "}"]
     return "\n".join(L) + "\n"
 
@@ -748,17 +778,30 @@ def emit_jax_handler(key: str) -> str:
     sig += [f"    int64_t {a}" for a in spec.trailing_runtime_args]
     if spec.takes_gravity:
         sig.append("    T gravity")
-    sig.append("    int64_t ctx_id")  # W04-B B1: the Bind chain's LAST attr
+    role = ("fwd" if key in VJP_FORWARD_KEYS else "grad" if key in VJP_GRAD_KEYS else None)
     _alloc, copy_size, size_dims = _surface_size(spec)
     dims = [("grid::NUM_JOINTS", "nj")] + [
         (f, l) for f, l in _SURF_DIM_ORDER if l in size_dims and l != "nj"]
     L = []
-    if templated:
-        L.append("template <bool MUJOCO>")
-    L.append(f"static ffi::Error grid_rbd_jax_{key}_impl(")
-    L.append(",\n".join(sig) + ")")
-    L.append("{")
-    L.append("    GRID_RBD_CTX_OR_FFI(ctx_id);")
+    if role is None:
+        sig.append("    int64_t ctx_id")  # W04-B B1: the Bind chain's LAST attr
+        if templated:
+            L.append("template <bool MUJOCO>")
+        L.append(f"static ffi::Error grid_rbd_jax_{key}_impl(")
+        L.append(",\n".join(sig) + ")")
+        L.append("{")
+        L.append("    GRID_RBD_CTX_OR_FFI(ctx_id);")
+    else:
+        # B2 (K4): the role keys split into ONE body (context passed in) and the
+        # plain / `_stamped` (forward) or `_checked` (gradient) entry shims, so the
+        # stamp write / check sits inside the SAME admission scope as the launch.
+        body_sig = ["    GridCtx *ctx, cudaStream_t stream"] + sig[1:]
+        if templated:
+            L.append("template <bool MUJOCO>")
+        L.append(f"static ffi::Error grid_rbd_jax_{key}_body(")
+        L.append(",\n".join(body_sig) + ")")
+        L.append("{")
+        L.append("    GRID_RBD_CTX_LOCALS(ctx);")
     L.append(f'    GRID_RBD_FFI_VALIDATE_2D(q, "{key}: q", grid::NUM_JOINTS);')
     L.append("    int batch = (int)q.dimensions()[0];")
     L.append("    int " + ", ".join(f"{l} = {f}" for f, l in dims) + ";")
@@ -805,15 +848,55 @@ def emit_jax_handler(key: str) -> str:
                  "(size_t)batch * 6 * grid::NUM_BODIES * sizeof(T), stream);")
     L.append("    return ffi::Error::Success();")
     L.append("}")
+    if role is not None:
+        names = bufs + ["out"] + list(spec.trailing_runtime_args) + (["gravity"] if spec.takes_gravity else [])
+        tmpl = "template <bool MUJOCO>\n" if templated else ""
+        call = f"grid_rbd_jax_{key}_body{'<MUJOCO>' if templated else ''}(g_ctx, stream, {', '.join(names)})"
+        plain = sig + ["    int64_t ctx_id"]
+        L.append(f"{tmpl}static ffi::Error grid_rbd_jax_{key}_impl(")
+        L.append(",\n".join(plain) + ")")
+        L.append("{")
+        L.append("    GRID_RBD_CTX_OR_FFI(ctx_id);")
+        L.append(f"    return {call};")
+        L.append("}")
+        if role == "fwd":
+            out_i = sig.index("    ffi::ResultBuffer<GRID_FFI_T> out")
+            stamped = sig[:out_i + 1] + ["    ffi::ResultBuffer<ffi::S32> stamp"] + sig[out_i + 1:] + ["    int64_t ctx_id"]
+            L.append(f"// B2 `_stamped` twin (the custom_vjp / autograd forward): value + int32 version stamp.")
+            L.append(f"{tmpl}static ffi::Error grid_rbd_jax_{key}_stamped_impl(")
+            L.append(",\n".join(stamped) + ")")
+            L.append("{")
+            L.append("    GRID_RBD_CTX_OR_FFI(ctx_id);")
+            L.append(f"    ffi::Error e = {call};")
+            L.append("    if (e.failure()) return e;")
+            L.append("    grid_rbd_stamp_write(g_ctx, stream, stamp->typed_data());")
+            L.append("    return ffi::Error::Success();")
+            L.append("}")
+        else:
+            checked = sig[:1] + ["    ffi::Buffer<ffi::S32> stamp"] + sig[1:] + ["    int64_t ctx_id"]
+            L.append(f"// B2 `_checked` twin (the custom_vjp / autograd backward): refuses a stale forward stamp.")
+            L.append(f"{tmpl}static ffi::Error grid_rbd_jax_{key}_checked_impl(")
+            L.append(",\n".join(checked) + ")")
+            L.append("{")
+            L.append("    GRID_RBD_CTX_OR_FFI(ctx_id);")
+            L.append("    GRID_RBD_FFI_STAMP_CHECK(stamp);")
+            L.append(f"    return {call};")
+            L.append("}")
     return "\n".join(L) + "\n"
 
 
-def _jax_bind(name: str, impl: str, spec: AbiSpec) -> str:
-    if spec.trailing_runtime_args:
-        # raw registration: int64 attrs have no BIND_* macro shape
+def _jax_bind(name: str, impl: str, spec: AbiSpec, stamp: str | None = None) -> str:
+    if spec.trailing_runtime_args or stamp is not None:
+        # raw registration: int64 attrs / the B2 stamp slot have no BIND_* macro shape
         args = "".join("        .Arg<ffi::Buffer<GRID_FFI_T>>()\n"
                        for _ in jax_buffer_inputs_for(spec))
-        attrs = ".".join(f'Attr<int64_t>("{a}")' for a in spec.trailing_runtime_args)
+        if stamp == "arg":
+            args = "        .Arg<ffi::Buffer<ffi::S32>>()\n" + args
+        attrs = "".join(f'        .Attr<int64_t>("{a}")\n' for a in spec.trailing_runtime_args)
+        if spec.takes_dt_it:
+            attrs = '        .Attr<T>("dt").Attr<int64_t>("it")\n' + attrs
+        if spec.takes_gravity:
+            attrs += '        .Attr<T>("gravity")\n'
         return ("XLA_FFI_DEFINE_HANDLER_SYMBOL(\n"
                 f"    {name},\n"
                 f"    {impl},\n"
@@ -821,8 +904,9 @@ def _jax_bind(name: str, impl: str, spec: AbiSpec) -> str:
                 "        .Ctx<ffi::PlatformStream<cudaStream_t>>()\n"
                 f"{args}"
                 "        .Ret<ffi::Buffer<GRID_FFI_T>>()\n"
-                f"        .{attrs}\n"
-                '        .Attr<int64_t>("ctx_id")\n'
+                + ("        .Ret<ffi::Buffer<ffi::S32>>()\n" if stamp == "ret" else "")
+                + attrs
+                + '        .Attr<int64_t>("ctx_id")\n'
                 ");")
     macro = (f"GRID_RBD_JAX_BIND_{len(jax_buffer_inputs_for(spec))}IN"
              + ("_DT_IT" if spec.takes_dt_it else "")
@@ -837,17 +921,28 @@ def _jax_unit(key: str) -> str:
     impl = name + "_impl"
     doc = JAX_OP_DOCS.get(key)
     parts = [opener + "\n" + (doc if doc else "") + emit_jax_handler(key)]
+    # B2 (K4): the role keys also register a `_stamped` (forward) / `_checked`
+    # (gradient) symbol next to the plain one (and `_mujoco_stamped` / `_mujoco_checked`).
+    role = ("ret", "_stamped") if key in VJP_FORWARD_KEYS else ("arg", "_checked") if key in VJP_GRAD_KEYS else None
+
+    def binds(suffix: str, targs: str) -> list[str]:
+        out = [_jax_bind(name + suffix, impl + targs, spec)]
+        if role is not None:
+            out.append(_jax_bind(name + suffix + role[1],
+                                 f"grid_rbd_jax_{key}{role[1]}_impl" + targs, spec, stamp=role[0]))
+        return out
+
     if spec.has_mjx_twin:
-        parts.append("\n" + _jax_bind(name, impl + "<false>", spec) + "\n")
+        parts.append("\n" + "\n".join(binds("", "<false>")) + "\n")
         twin = ["\n#ifdef GRID_RBD_WITH_MUJOCO"]
         if key in JAX_TWIN_BIND_DOC_OPS:
             twin.append(f"// MuJoCo-convention {key} (floating only): identical "
                         "plumbing, kernel launched with MUJOCO_OUTPUT=true.")
-        twin.append(_jax_bind(name + "_mujoco", impl + "<true>", spec))
+        twin += binds("_mujoco", "<true>")
         twin.append("#endif  // GRID_RBD_WITH_MUJOCO")
         parts.append("\n".join(twin) + "\n")
     else:
-        parts.append("\n" + _jax_bind(name, impl, spec) + "\n")
+        parts.append("\n" + "\n".join(binds("", "")) + "\n")
     parts.append(closer + "\n")
     return "".join(parts)
 
@@ -942,7 +1037,14 @@ def _torch_schema(spec: AbiSpec) -> str:
         args.append("Tensor? qdd=None")
     if spec.f_ext_mode == "optional":
         args.append("Tensor? f_ext=None")
-    return '"(' + ", ".join(args) + ', int ctx_id=0) -> Tensor"'
+    args.append("int ctx_id=0")
+    # B2 (K4): the vjp-role ops take an optional int32 stamp (write / check).
+    key = next(k for k, s in ABI_SPECS.items() if s is spec)
+    if key in VJP_FORWARD_KEYS:
+        args.append("Tensor? stamp_out=None")
+    elif key in VJP_GRAD_KEYS:
+        args.append("Tensor? stamp_expect=None")
+    return '"(' + ", ".join(args) + ') -> Tensor"'
 
 
 def _torch_table_row(key: str) -> str:

@@ -537,7 +537,11 @@ inertia, transform, or tool updates. Isolation is opt-in: ``handle.context()``
 the same artifact — its own arena, tables, streams and launch overrides — see
 the *Runtime contexts* concepts page. Concurrent operations on ONE context's
 scratch are still not independently safe (per-call leases are a later
-increment).
+increment). Runtime-parameter mutations (``set_inertia_params``,
+``attach_tool`` …) are serialized against every in-flight call and bump
+``handle.model_version``; a torch or JAX backward whose forward ran under an
+older version raises (``model mutated between forward and backward``) instead
+of differentiating the new model — recompute the forward after mutating.
 
 For fixed-batch, low-launch-overhead replay (MPC / training),
 ``handle.capture(method, *example_inputs, **kwargs)`` returns a
