@@ -1493,8 +1493,10 @@ def gen_add_constants_helpers(self, include_base_inertia = False, include_homoge
         struct_lines.append("    T *d_joint_dynamics_params;")
     struct_lines.append("};")
     self.gen_add_code_lines(struct_lines)
-    self.gen_add_code_lines(["template <typename T, gridDataKind KIND = GRID_DATA_ALL>", \
+    self.gen_add_code_lines(["struct grid_device_pool_t;  // defined with the allocator below", \
+                             "template <typename T, gridDataKind KIND = GRID_DATA_ALL>", \
                              "struct gridData {", \
+                             "    grid_device_pool_t *pool;  // the allocator this arena was carved from (W04-B B1/K1); the default pool unless init_gridData_checked was given one", \
                              "    // GPU INPUTS", \
                              "    T *d_q_qd_u;", \
                              "    T *d_q_qd;", \
@@ -1671,7 +1673,7 @@ def _derive_device_bytes_lines(code_lines):
 # constructor, its rollback and close_grid_checked release exactly what was
 # allocated (the legacy close_grid kept a hand-written free list).
 import re as _re_ck
-_CK_ALLOC = _re_ck.compile(r"^(\s*)gpuErrchk\((grid_device_alloc\(\(void\*\*\)&hd_data->(\w+),.*)\);(\s*\}?\s*(?://.*)?)$")
+_CK_ALLOC = _re_ck.compile(r"^(\s*)gpuErrchk\((grid_device_alloc\((?:_pool, )?\(void\*\*\)&hd_data->(\w+),.*)\);(\s*\}?\s*(?://.*)?)$")
 _CK_GPU = _re_ck.compile(r"^(\s*)gpuErrchk\((.*)\);(\s*\}?\s*(?://.*)?)$")
 _CK_HOST = _re_ck.compile(r"^(\s*)hd_data->(h_\w+) = (grid_host_alloc<T>\(.*\)|\(T \*\)calloc\(.*\));(\s*\}?\s*(?://.*)?)$")
 
@@ -1693,6 +1695,7 @@ def _checked_init_lines(code_lines):
             out.append("*out = nullptr;")
             out.append("gridData<T, KIND> *hd_data = (gridData<T, KIND> *)GRID_HOST_ALLOC(calloc(1, sizeof(gridData<T, KIND>)));")
             out.append("if (hd_data == nullptr) { return grid_fail(failed_op, \"calloc(gridData)\", cudaErrorMemoryAllocation); }")
+            out.append("hd_data->pool = _pool;")
             continue
         m = _CK_ALLOC.match(line) or _CK_GPU.match(line)
         if m:
@@ -1737,7 +1740,7 @@ def _release_lines(code_lines):
         m = _CK_ALLOC.match(line)
         if m:
             indent, member, suffix = m.group(1), m.group(3), m.group(4)
-            out.append(indent + "grid_cleanup_device_free(hd_data->" + member + ", \"grid_device_free(" + member + ")\", &first, cleanup_op); hd_data->" + member + " = nullptr;" + suffix)
+            out.append(indent + "grid_cleanup_device_free(hd_data->pool, hd_data->" + member + ", \"grid_device_free(" + member + ")\", &first, cleanup_op); hd_data->" + member + " = nullptr;" + suffix)
             continue
         m = _CK_GPU.match(line)
         if m:
@@ -2094,25 +2097,29 @@ def gen_init_gridData(self):
         "    return p;",
         "}",
         "__host__ __device__ constexpr size_t grid_pool_align(size_t b) { return (b + 255) & ~(size_t)255; }",
-        "__host__ inline cudaError_t grid_device_alloc(void **p, size_t bytes) {",
-        "    grid_device_pool_t &pool = grid_device_pool();",
-        "    if (pool.base != nullptr) {",
+        "// W04-B B1 (K1): the allocator takes its pool EXPLICITLY so several arenas (runtime",
+        "// contexts) on one .so never share a cursor; the pool-less overloads below keep the",
+        "// historical one-liners (HJCD/GATO consumers) on the default pool — same caller API.",
+        "__host__ inline cudaError_t grid_device_alloc(grid_device_pool_t *pool, void **p, size_t bytes) {",
+        "    if (pool != nullptr && pool->base != nullptr) {",
         "        const size_t need = grid_pool_align(bytes);",
-        "        if (pool.used + need > pool.bytes) { *p = nullptr; return cudaErrorMemoryAllocation; }",
-        "        *p = (void *)((char *)pool.base + pool.used);",
-        "        pool.used += need;",
+        "        if (pool->used + need > pool->bytes) { *p = nullptr; return cudaErrorMemoryAllocation; }",
+        "        *p = (void *)((char *)pool->base + pool->used);",
+        "        pool->used += need;",
         "        return cudaSuccess;",
         "    }",
         "    return cudaMalloc(p, bytes);",
         "}",
+        "__host__ inline cudaError_t grid_device_alloc(void **p, size_t bytes) { return grid_device_alloc(&grid_device_pool(), p, bytes); }",
         "template <typename T>",
-        "__host__ inline cudaError_t grid_device_free(T *p) {",
-        "    grid_device_pool_t &pool = grid_device_pool();",
-        "    if (pool.base != nullptr && (void *)p >= pool.base && (char *)p < (char *)pool.base + pool.bytes) {",
+        "__host__ inline cudaError_t grid_device_free(grid_device_pool_t *pool, T *p) {",
+        "    if (pool != nullptr && pool->base != nullptr && (void *)p >= pool->base && (char *)p < (char *)pool->base + pool->bytes) {",
         "        return cudaSuccess;  // carved from the caller-owned slab: nothing to free",
         "    }",
         "    return cudaFree((void *)p);",
         "}",
+        "template <typename T>",
+        "__host__ inline cudaError_t grid_device_free(T *p) { return grid_device_free(&grid_device_pool(), p); }",
         ""])
     # Device-pool mode (2026-09-09): (a) the workspace slot count honors an
     # installed pool's declared ws_slots (env override still wins; the
@@ -2122,21 +2129,25 @@ def gen_init_gridData(self):
     # size and the carve can never drift.
     _ws_env_i = next(i for i, l in enumerate(code_lines) if "_ws_env != nullptr" in l)
     code_lines.insert(_ws_env_i + 1,
-        "        else if (grid_device_pool().base != nullptr && grid_device_pool().ws_slots > 0) "
-        "{ _ws_slots = grid_device_pool().ws_slots < NUM_TIMESTEPS ? grid_device_pool().ws_slots : NUM_TIMESTEPS; }")
+        "        else if (_pool->base != nullptr && _pool->ws_slots > 0) "
+        "{ _ws_slots = _pool->ws_slots < NUM_TIMESTEPS ? _pool->ws_slots : NUM_TIMESTEPS; }")
     bytes_lines = _derive_device_bytes_lines(code_lines)
     code_lines = [l.replace("gpuErrchk(cudaMalloc((void**)&hd_data->",
-                            "gpuErrchk(grid_device_alloc((void**)&hd_data->")
+                            "gpuErrchk(grid_device_alloc(_pool, (void**)&hd_data->")
                   for l in code_lines]
     # ─── library-safe arena (HJCD ask part 2) ───────────────────────────
     self.gen_add_code_lines([
         "template <typename T>",
-        "__host__ inline void grid_cleanup_device_free(T *p, const char *op, cudaError_t *first_cleanup_code, const char **first_cleanup_op) {",
+        "__host__ inline void grid_cleanup_device_free(grid_device_pool_t *pool, T *p, const char *op, cudaError_t *first_cleanup_code, const char **first_cleanup_op) {",
         "    if (p == nullptr) { return; }",
-        "    cudaError_t e = GRID_CUDA_CALL(grid_device_free(p));",
+        "    cudaError_t e = GRID_CUDA_CALL(grid_device_free(pool, p));",
         "    if (e != cudaSuccess && first_cleanup_code != nullptr && *first_cleanup_code == cudaSuccess) {",
         "        *first_cleanup_code = e; if (first_cleanup_op != nullptr) { *first_cleanup_op = op; }",
         "    }",
+        "}",
+        "template <typename T>",
+        "__host__ inline void grid_cleanup_device_free(T *p, const char *op, cudaError_t *first_cleanup_code, const char **first_cleanup_op) {",
+        "    grid_cleanup_device_free(&grid_device_pool(), p, op, first_cleanup_code, first_cleanup_op);",
         "}",
         "",
     ])
@@ -2147,17 +2158,18 @@ def gen_init_gridData(self):
     self.gen_add_code_line("cudaError_t release_gridData_members(gridData<T, KIND> *hd_data, const char **cleanup_op = nullptr) {", True)
     self.gen_add_code_lines(_release_lines(code_lines))
     self.gen_add_end_function()
-    checked_lines = _checked_init_lines(code_lines)
+    checked_lines = (["grid_device_pool_t *_pool = (pool != nullptr) ? pool : &grid_device_pool();"]
+                     + _checked_init_lines(code_lines))
     self.gen_add_func_doc("Library-safe allocation of the device and host memory for all computations: stops at the first failed allocation/copy, releases everything this attempt acquired, names the failed operation and publishes *out on complete success only (never exit/abort/cudaDeviceReset)",
                           [], ["out receives the gridData pointer (nullptr on failure)", "failed_op (optional) receives a static string naming the failed operation"], "cudaSuccess or the first error")
     self.gen_add_code_line("template <typename T, int NUM_TIMESTEPS, gridDataKind KIND = GRID_DATA_ALL>")
     self.gen_add_code_line("__host__")
-    self.gen_add_code_line("cudaError_t init_gridData_checked(gridData<T, KIND> **out, const char **failed_op = nullptr) {", True)
+    self.gen_add_code_line("cudaError_t init_gridData_checked(gridData<T, KIND> **out, const char **failed_op = nullptr, grid_device_pool_t *pool = nullptr) {", True)
     self.gen_add_code_lines(checked_lines)
     self.gen_add_end_function()
     self.gen_add_code_line("template <typename T, gridDataKind KIND = GRID_DATA_ALL>")
     self.gen_add_code_line("__host__")
-    self.gen_add_code_line("cudaError_t init_gridData_checked(int NUM_TIMESTEPS, gridData<T, KIND> **out, const char **failed_op = nullptr) {", True)
+    self.gen_add_code_line("cudaError_t init_gridData_checked(int NUM_TIMESTEPS, gridData<T, KIND> **out, const char **failed_op = nullptr, grid_device_pool_t *pool = nullptr) {", True)
     self.gen_add_code_lines(checked_lines)
     self.gen_add_end_function()
     # legacy spellings: historical policy (exit / sticky+nullptr under NO_EXIT)

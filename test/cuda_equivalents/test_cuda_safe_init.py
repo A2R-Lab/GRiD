@@ -84,7 +84,7 @@ def test_checked_initialization_contract(tmp_path, name, floating, options):
     if shutil.which("nvcc") is None:
         pytest.skip("nvcc not on PATH")
     exes = _build(name, floating, options, tmp_path / f"{name}_safe_init")
-    for mode in ("success", "sweep", "cleanup", "limits", "arena", "streams", "close"):
+    for mode in ("success", "sweep", "cleanup", "limits", "arena", "pool", "streams", "close"):
         rc, out = _run(exes["default"], mode)
         assert rc == 0 and f"OK {mode}" in out, f"{name}/{mode} (default build):\n{out}"
         rc, out = _run(exes["noexit"], mode)

@@ -1,6 +1,6 @@
 // Library-safe initialization runner (HJCD ask 2026-09-21): deterministic
 // fault injection around EVERY host/device allocation and copy the generated
-// `*_checked` initializers make. Modes (argv[1]):
+// `*_checked` initializers make. Modes (argv[1]) (+ `pool` = explicit-pool arena, W04-B B1):
 //   success   : float+double init/free via the checked API; values identical to
 //               the legacy path; ledger balanced (every successful cudaMalloc
 //               saw a cudaFree); null free is a no-op.
@@ -269,6 +269,38 @@ static int close_failures() {
     return 0;
 }
 
+// ─── W04-B B1 (K1): an arena carved from an EXPLICIT pool — several arenas on one
+// header never share a cursor; the pool-less spellings (used by every other mode)
+// stay on the default pool = the historical caller API (codex constraint C3).
+template <typename T>
+static int explicit_pool() {
+    reset();
+    const size_t bytes = grid::gridData_device_bytes<T, 4>(4);
+    void *slab = nullptr;
+    CHECK(cudaMalloc(&slab, bytes) == cudaSuccess && slab != nullptr, "pool: slab alloc");
+    grid::grid_device_pool_t mine = {slab, bytes, 0, 4};
+    const size_t default_used_before = grid::grid_device_pool().used;
+    grid::gridData<T> *d = nullptr; const char *op = nullptr;
+    CHECK((grid::init_gridData_checked<T, 4>(&d, &op, &mine)) == cudaSuccess && d != nullptr, "pool: explicit init");
+    CHECK(d->pool == &mine, "pool: arena does not record its pool");
+    CHECK(mine.used == bytes, "pool: used != gridData_device_bytes (referee)");
+    CHECK(grid::grid_device_pool().used == default_used_before, "pool: default pool cursor moved");
+    CHECK((char *)d->d_q_qd_u >= (char *)slab && (char *)d->d_q_qd_u < (char *)slab + bytes, "pool: buffer not carved from the slab");
+    // a second, default-pool arena coexists (independent cursor), then both close
+    grid::gridData<T> *d2 = nullptr;
+    CHECK((grid::init_gridData_checked<T, 4>(&d2, &op)) == cudaSuccess && d2 != nullptr, "pool: default init beside explicit");
+    CHECK(d2->pool == &grid::grid_device_pool(), "pool: default arena pool");
+    CHECK((grid::close_grid_checked<T, grid::GRID_DATA_ALL>(nullptr, nullptr, d, &op)) == cudaSuccess, "pool: explicit close");
+    CHECK(mine.used == 0, "pool: close did not rewind the explicit pool");
+    CHECK((grid::close_grid_checked<T, grid::GRID_DATA_ALL>(nullptr, nullptr, d2, &op)) == cudaSuccess, "pool: default close");
+    // a slab too small for the arena fails cleanly at the first carve and publishes nothing
+    grid::grid_device_pool_t tiny = {slab, 256, 0, 4}; d = nullptr; op = nullptr;
+    CHECK((grid::init_gridData_checked<T, 4>(&d, &op, &tiny)) == cudaErrorMemoryAllocation && d == nullptr && op != nullptr, "pool: tiny slab must fail cleanly");
+    CHECK(tiny.used <= 256, "pool: failed init leaked past the slab");
+    CHECK(cudaFree(slab) == cudaSuccess, "pool: slab free");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "success";
     if (std::strcmp(mode, "success") == 0) {
@@ -284,6 +316,8 @@ int main(int argc, char **argv) {
         if (arena_sweep<float>()) return 1;
     } else if (std::strcmp(mode, "streams") == 0) {
         if (streams_sweep<float>()) return 1;
+    } else if (std::strcmp(mode, "pool") == 0) {
+        if (explicit_pool<float>()) return 1;
     } else if (std::strcmp(mode, "close") == 0) {
         if (close_failures<float>()) return 1;
     } else if (std::strcmp(mode, "legacy") == 0) {
