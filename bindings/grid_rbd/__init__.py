@@ -505,7 +505,10 @@ def warm_robot(
     to skip the nvidia-smi arch probe).
     """
     cache_dir = Path(cache_dir).expanduser() if cache_dir else default_cache_dir()
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    if not plan_only:
+        # Review R3 (2026-09-23): a plan is read-only — an absent cache root
+        # stays absent; only a build creates it.
+        cache_dir.mkdir(parents=True, exist_ok=True)
 
     # Source the URDF bytes from either an inline string or a file. The cache
     # key hashes these bytes (compute_cache_key), so an inline string and the

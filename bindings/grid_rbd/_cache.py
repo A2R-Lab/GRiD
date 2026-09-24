@@ -269,6 +269,7 @@ def _nvcc_version_tag() -> str:
     the input key never folded the toolchain, so a CUDA upgrade could reuse a
     stale .so; the content key does fold it."""
     global _NVCC_VERSION_TAG
+    _toolchain_memo_valid()
     if _NVCC_VERSION_TAG is None:
         nvcc = shutil.which("nvcc")
         if nvcc is None:
@@ -317,6 +318,7 @@ def _host_cxx_tag() -> str:
     """Host compiler nvcc drives (-ccbin default = c++ on PATH): path + the
     first line of --version. Cached per process."""
     global _HOST_CXX_TAG
+    _toolchain_memo_valid()
     if _HOST_CXX_TAG is None:
         cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
         if cxx is None:
@@ -343,30 +345,95 @@ def _glass_root() -> Path | None:
     return root if root.exists() else None
 
 
+_GLASS_SNAPSHOT: tuple | None = None
+_TOOLCHAIN_SNAPSHOT: tuple | None = None
+
+
+def _glass_files():
+    root = _glass_root()
+    if root is None:
+        return None, []
+    files = sorted(root.glob("*.cuh")) + sorted(
+        p for p in (root / "src").rglob("*")
+        if p.is_file() and p.suffix in (".cuh", ".h", ".hpp", ".cu", ".inl"))
+    return root, files
+
+
+def _glass_snapshot(files):
+    """(path, mtime_ns, size) per header: the cheap change detector."""
+    out = []
+    for f in files:
+        try:
+            st = f.stat()
+            out.append((f.as_posix(), st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append((f.as_posix(), -1, -1))
+    return tuple(out)
+
+
+def refresh_build_identity() -> None:
+    """Drop every memoized identity input so the next key/identity query
+    re-measures GLASS content and the toolchain. The memos refresh
+    automatically when a header's (mtime_ns, size) or the resolved compiler
+    path/binary changes (review R2, 2026-09-23); this is the explicit escape
+    hatch for the cases metadata cannot see — a same-size edit with a preserved
+    timestamp, or a toolchain swapped behind an unchanged path/stat."""
+    global _GLASS_CONTENT_HASH, _GLASS_SNAPSHOT, _NVCC_VERSION_TAG, _HOST_CXX_TAG, _TOOLCHAIN_SNAPSHOT
+    _GLASS_CONTENT_HASH = None; _GLASS_SNAPSHOT = None
+    _NVCC_VERSION_TAG = None; _HOST_CXX_TAG = None; _TOOLCHAIN_SNAPSHOT = None
+
+
 def _glass_content_hash() -> str:
     """sha256 over the CONTENT of every GLASS header the generator can vendor
     (relative path + bytes; the top-level *.cuh and src/**; bench/docs/examples
     excluded). A dirty submodule checkout at the same commit re-keys — the
-    commit label alone (see _glass_tag) cannot see that. Cached per process
-    (~90 small files). Empty for an sdist install without the submodule."""
-    global _GLASS_CONTENT_HASH
-    if _GLASS_CONTENT_HASH is None:
-        root = _glass_root()
-        if root is None:
-            _GLASS_CONTENT_HASH = ""
-        else:
-            h = hashlib.sha256()
-            files = sorted(root.glob("*.cuh")) + sorted(
-                p for p in (root / "src").rglob("*")
-                if p.is_file() and p.suffix in (".cuh", ".h", ".hpp", ".cu", ".inl"))
-            for f in files:
-                try:
-                    h.update(f.relative_to(root).as_posix().encode())
-                    h.update(f.read_bytes())
-                except OSError:
-                    continue
-            _GLASS_CONTENT_HASH = h.hexdigest()
+    commit label alone (see _glass_tag) cannot see that. Memoized per process
+    behind a (path, mtime_ns, size) snapshot of the same files, so an edit
+    AFTER an earlier registration in the same process is noticed on the next
+    query (review R2); the snapshot is metadata, so a same-size edit with a
+    preserved timestamp needs `refresh_build_identity()`. Empty for an sdist
+    install without the submodule."""
+    global _GLASS_CONTENT_HASH, _GLASS_SNAPSHOT
+    root, files = _glass_files()
+    if root is None:
+        return ""
+    snap = _glass_snapshot(files)
+    if _GLASS_CONTENT_HASH is None or snap != _GLASS_SNAPSHOT:
+        h = hashlib.sha256()
+        for f in files:
+            try:
+                h.update(f.relative_to(root).as_posix().encode())
+                h.update(f.read_bytes())
+            except OSError:
+                continue
+        _GLASS_CONTENT_HASH = h.hexdigest()
+        _GLASS_SNAPSHOT = snap
     return _GLASS_CONTENT_HASH
+
+
+def _toolchain_snapshot():
+    """Resolved compiler paths + their (mtime_ns, size): a PATH change or a
+    replaced binary behind the same path re-measures nvcc/host-cxx versions."""
+    out = []
+    for name in ("nvcc", "c++", "g++", "clang++"):
+        exe = shutil.which(name)
+        try:
+            st = os.stat(exe) if exe else None
+            out.append((name, exe, st.st_mtime_ns if st else -1, st.st_size if st else -1))
+        except OSError:
+            out.append((name, exe, -1, -1))
+    return tuple(out)
+
+
+def _toolchain_memo_valid() -> bool:
+    global _TOOLCHAIN_SNAPSHOT, _NVCC_VERSION_TAG, _HOST_CXX_TAG
+    snap = _toolchain_snapshot()
+    if snap != _TOOLCHAIN_SNAPSHOT:
+        _TOOLCHAIN_SNAPSHOT = snap
+        _NVCC_VERSION_TAG = None
+        _HOST_CXX_TAG = None
+        return False
+    return True
 
 
 def _generation_env() -> dict[str, str | None]:

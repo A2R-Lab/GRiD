@@ -269,3 +269,49 @@ def test_precompile_numpy_builds_without_a_handle(stubs, monkeypatch):
                               backends=["numpy"])
     assert (stubs.generate_calls, stubs.compile_calls) == (1, 1)
     assert out and out[0]["name"] == "probe" and out[0]["backend"] == "numpy" and "cache_key" in out[0]
+
+
+# ─── R2: an in-process GLASS/toolchain change is noticed on the next query ───
+
+def test_glass_edit_in_the_same_process_changes_the_identity(tmp_path, monkeypatch):
+    root = tmp_path / "GLASS"; (root / "src" / "base").mkdir(parents=True)
+    hdr = root / "src" / "base" / "gemm.cuh"; hdr.write_text("// v1\n")
+    (root / "glass.cuh").write_text("#include \"src/base/gemm.cuh\"\n")
+    monkeypatch.setattr(_cache, "_glass_root", lambda: root)
+    _cache.refresh_build_identity()
+    h1 = _cache._glass_content_hash()
+    assert h1 == _cache._glass_content_hash(), "memo must hold while nothing changed"
+    hdr.write_text("// v2 — a REAL edit after the first query\n")
+    h2 = _cache._glass_content_hash()
+    assert h2 != h1, "an in-process GLASS edit was not noticed"
+    k1 = _cache.compute_cache_key(b"<robot/>", {"floating_base": False, "max_batch": 256, "ee_joint_names": []}, ARCH)
+    hdr.write_text("// v3\n")
+    k2 = _cache.compute_cache_key(b"<robot/>", {"floating_base": False, "max_batch": 256, "ee_joint_names": []}, ARCH)
+    assert k1 != k2, "the stage-1 key did not follow the in-process edit"
+    # explicit escape hatch for what metadata cannot see
+    _cache.refresh_build_identity()
+    assert _cache._glass_content_hash() == _cache._glass_content_hash()
+
+
+def test_toolchain_path_change_in_the_same_process_refreshes_the_tags(tmp_path, monkeypatch):
+    fake = tmp_path / "bin"; fake.mkdir()
+    nv = fake / "nvcc"; nv.write_text("#!/bin/sh\necho 'fake nvcc 1.0'\n"); nv.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+    _cache.refresh_build_identity()
+    t1 = _cache._nvcc_identity()
+    assert "fake nvcc 1.0" in t1
+    nv.write_text("#!/bin/sh\necho 'fake nvcc 2.0 with a longer banner'\n")  # size + mtime change
+    t2 = _cache._nvcc_identity()
+    assert "fake nvcc 2.0" in t2 and t2 != t1, "a replaced compiler binary was not noticed"
+    _cache.refresh_build_identity()
+
+
+# ─── R3: build_plan leaves an absent cache root absent ──────────────────────
+
+def test_build_plan_does_not_create_the_cache_root(stubs, tmp_path):
+    root = tmp_path / "never_created"
+    assert not root.exists()
+    plan = grid_rbd.build_plan("probe", urdf_string=URDF, cache_dir=root, cuda_arch=ARCH)
+    assert plan["cached"] is False and not root.exists(), "build_plan created the cache root"
+    _warm(stubs)  # a build still creates its own root
+    assert stubs.cache_dir.exists()
