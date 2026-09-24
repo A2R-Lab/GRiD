@@ -1498,7 +1498,7 @@ extern "C" int grid_rbd_frame_jacobian(long long ctx_id, const T* q, T* out, int
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
-    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;
+    if (target_jid < -1 || target_jid >= grid::NUM_JOINTS) return 1;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     // -1 per arg => "use default" (leaf-EE / LWA); the host resolves each
     // INDEPENDENTLY, so a default target with an explicit frame is honored.
@@ -1517,7 +1517,7 @@ extern "C" int grid_rbd_frame_jacobian_dot(long long ctx_id, const T* q, const T
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
-    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;
+    if (target_jid < -1 || target_jid >= grid::NUM_JOINTS) return 1;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     // -1 per arg => "use default" (leaf-EE / LWA); the host resolves each
     // INDEPENDENTLY, so a default target with an explicit frame is honored.
@@ -2249,7 +2249,7 @@ extern "C" int grid_rbd_frame_jacobian_mujoco(const T* q, T* out, int batch, int
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
-    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;
+    if (target_jid < -1 || target_jid >= grid::NUM_JOINTS) return 1;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     grid::frame_jacobian<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN>(g_ctx, batch), g_streams, target_jid, reference_frame);
@@ -2264,7 +2264,7 @@ extern "C" int grid_rbd_frame_jacobian_dot_mujoco(const T* q, const T* qd, T* ou
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
-    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;
+    if (target_jid < -1 || target_jid >= grid::NUM_JOINTS) return 1;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::frame_jacobian_dot<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(g_ctx, batch), g_streams, target_jid, reference_frame);

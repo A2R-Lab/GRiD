@@ -295,7 +295,11 @@ def gen_body(spec: AbiSpec) -> str:
          "    if (batch < 1) return 1;",          # W03: zero batch is an argument error
          "    if (batch > kMaxBatch) return 2;"]
     if "target_jid" in spec.trailing_runtime_args:
-        L.append("    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;")
+        # W03: the frame_jacobian family (has reference_frame) accepts -1 = the
+        # baked leaf-EE default (mapped by the grid.cuh host wrapper); the runtime
+        # EE ops take a resolved joint id only.
+        lo = -1 if "reference_frame" in spec.trailing_runtime_args else 0
+        L.append(f"    if (target_jid < {lo} || target_jid >= grid::NUM_JOINTS) return 1;")
     if spec.key in PRE_PACK_COMMENTS:
         L.append(PRE_PACK_COMMENTS[spec.key])
     L.append(_PACK[spec.pack_mode])
@@ -500,7 +504,11 @@ def gen_mjx_body(spec: AbiSpec) -> str:
     L.append("    if (batch < 1) return 1;")
     L.append("    if (batch > kMaxBatch) return 2;")
     if "target_jid" in spec.trailing_runtime_args:
-        L.append("    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;")
+        # W03: the frame_jacobian family (has reference_frame) accepts -1 = the
+        # baked leaf-EE default (mapped by the grid.cuh host wrapper); the runtime
+        # EE ops take a resolved joint id only.
+        lo = -1 if "reference_frame" in spec.trailing_runtime_args else 0
+        L.append(f"    if (target_jid < {lo} || target_jid >= grid::NUM_JOINTS) return 1;")
     L.append(_PACK[spec.pack_mode])
     if spec.key in XTOOL_STAGING:
         L.append(XTOOL_BLOCK)
