@@ -926,22 +926,43 @@ def gen_contact_frame_raw_evaluators(self):
     batch = getattr(self, "_contact_frame_batch", None)
     if batch is None:
         return   # emit NOTHING (not even a skip comment): every non-contact header must stay byte-identical
+    _gen_raw_multi_target_evaluators(self, batch, suffix="_contact_frames",
+        name="contact_frame_positions", count_sym="NUM_CONTACT_FRAMES",
+        smem_sym="CONTACT_FRAME_POSITIONS", tag="(GATO ask 2026-09-20)", what="contact-frame",
+        origin_lines=["positions of the " + str(batch["n"]) + " baked contact-frame ORIGINS (the same points f_ext_body",
+                      "takes the wrench about), in registration order."])
+
+
+def gen_multi_target_raw_evaluators(self):
+    """grid_plant::multi_target_position[_gradient] (GATO nit 2, 2026-09-24): the same
+    caller-scratch pair for the DEFAULT multi-target batch (collision spheres / the
+    multi_target_batch option) — the raw evaluator GATO's hand-carved `ee_carve` FK
+    composed by itself. Emitted only when the header bakes a multi-target batch."""
+    if not getattr(self, "_has_multi_target_position", False):
+        return   # emit NOTHING: non-multi-target headers stay byte-identical
+    _gen_raw_multi_target_evaluators(self, self._mt_batch, suffix="",
+        name="multi_target_position", count_sym="NUM_MULTI_TARGETS",
+        smem_sym="MULTI_TARGET_POSITION", tag="(GATO nit 2, 2026-09-24)", what="multi-target",
+        origin_lines=["positions of the " + str(self._mt_batch["n"]) + " baked multi-target ORIGINS (the",
+                      "multi_target_batch / collision-sphere points), in registration order."])
+
+
+def _gen_raw_multi_target_evaluators(self, batch, suffix, name, count_sym, smem_sym, tag, what, origin_lines):
     nv = self.robot.get_num_vel()
     nf = batch["n"]
     self.gen_add_func_doc(
-        "contact_frame_positions: RAW contact-frame world positions (GATO ask 2026-09-20)",
-        ["Caller-scratch INNER over grid::multi_target_position_contact_frames_inner: the world",
-         "positions of the " + str(nf) + " baked contact-frame ORIGINS (the same points f_ext_body",
-         "takes the wrench about), in registration order.",
-         "s_scratch must hold >= CONTACT_FRAME_POSITIONS_DYNAMIC_SHARED_MEM_COUNT elements of T, 16B aligned."],
-        ["s_pos is the 3*NUM_CONTACT_FRAMES position output",
+        name + ": RAW " + what + " world positions " + tag,
+        ["Caller-scratch INNER over grid::multi_target_position" + suffix + "_inner: the world",
+         *origin_lines,
+         "s_scratch must hold >= " + smem_sym + "_DYNAMIC_SHARED_MEM_COUNT elements of T, 16B aligned."],
+        ["s_pos is the 3*" + count_sym + " position output",
          "s_q is the joint position vector (size NUM_POS)",
          "s_scratch is caller shared scratch",
          "d_robotModel is the GPU model helpers"],
         None)
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
-    self.gen_add_code_line("void contact_frame_positions(T *s_pos, const T *s_q, T *s_scratch, "
+    self.gen_add_code_line("void " + name + "(T *s_pos, const T *s_q, T *s_scratch, "
                            "const grid::robotModel<T> *d_robotModel) {", True)
     self.gen_add_code_line("using namespace grid;")
     _scratch = self.gen_multi_target_position_inner_temp_mem_size(batch)
@@ -950,25 +971,25 @@ def gen_contact_frame_raw_evaluators(self):
                                                       arena_base_expr = "s_scratch")
     self.gen_load_update_XmatsHom_helpers_function_call()
     self.gen_multi_target_position_inner_function_call(updated_var_names = {"s_out_pos_name": "s_pos"},
-                                                       suffix = "_contact_frames")
+                                                       suffix = suffix)
     self.gen_add_sync()
     self.gen_add_end_function()
 
     self.gen_add_func_doc(
-        "contact_frame_positions_gradient: RAW contact-frame positions + tangent Jacobians (GATO ask 2026-09-20)",
+        name + "_gradient: RAW " + what + " positions + tangent Jacobians " + tag,
         ["Caller-scratch INNER: ONE XmatsHom load feeds both the position and the gradient inner.",
          "Jacobian layout: s_dpos[3*" + str(nv) + "*f + 3*vi + row] (position rows only; tangent d/dv",
          "convention — floating base = [v_lin; omega; joints] in the pin LOCAL chart).",
-         "s_scratch must hold >= CONTACT_FRAME_POSITIONS_GRADIENT_DYNAMIC_SHARED_MEM_COUNT elements of T, 16B aligned."],
-        ["s_pos is the 3*NUM_CONTACT_FRAMES position output",
-         "s_dpos is the 3*NUM_VEL*NUM_CONTACT_FRAMES Jacobian output",
+         "s_scratch must hold >= " + smem_sym + "_GRADIENT_DYNAMIC_SHARED_MEM_COUNT elements of T, 16B aligned."],
+        ["s_pos is the 3*" + count_sym + " position output",
+         "s_dpos is the 3*NUM_VEL*" + count_sym + " Jacobian output",
          "s_q is the joint position vector (size NUM_POS)",
          "s_scratch is caller shared scratch",
          "d_robotModel is the GPU model helpers"],
         None)
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__device__")
-    self.gen_add_code_line("void contact_frame_positions_gradient(T *s_pos, T *s_dpos, const T *s_q, T *s_scratch, "
+    self.gen_add_code_line("void " + name + "_gradient(T *s_pos, T *s_dpos, const T *s_q, T *s_scratch, "
                            "const grid::robotModel<T> *d_robotModel) {", True)
     self.gen_add_code_line("using namespace grid;")
     _scratch = max(self.gen_multi_target_position_inner_temp_mem_size(batch),
@@ -978,10 +999,10 @@ def gen_contact_frame_raw_evaluators(self):
                                                       arena_base_expr = "s_scratch")
     self.gen_load_update_XmatsHom_helpers_function_call()
     self.gen_multi_target_position_inner_function_call(updated_var_names = {"s_out_pos_name": "s_pos"},
-                                                       suffix = "_contact_frames")
+                                                       suffix = suffix)
     self.gen_add_sync()
     self.gen_multi_target_position_gradient_inner_function_call(updated_var_names = {"s_out_grad_name": "s_dpos"},
-                                                                suffix = "_contact_frames")
+                                                                suffix = suffix)
     self.gen_add_sync()
     self.gen_add_end_function()
 
@@ -2764,6 +2785,7 @@ def gen_grid_plant(self, algorithms):
     else:
         self.gen_add_code_line("// [grid_plant] ee_pos / ee_pos_gradient (raw) skipped: requires 'end_effector_pose' — not generated.")
     gen_contact_frame_raw_evaluators(self)   # no-op comment unless contact_frames were baked
+    gen_multi_target_raw_evaluators(self)     # GATO nit 2: emitted only for multi-target headers
     if ee_cost_ok:
         self.gen_ee_pos_cost(with_d2ee = ("end_effector_pose_hessian" in algorithms))
     else:
