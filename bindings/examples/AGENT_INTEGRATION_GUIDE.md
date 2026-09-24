@@ -42,7 +42,10 @@ grid_rbd.precompile("iiwa14", "/path/to/iiwa14.urdf",
                     backends=("jax", "torch"))      # warm the surfaces you'll use
 ```
 
-`precompile` is idempotent: a cached tier is an instant no-op (no `nvcc`). First build of a
+`precompile` is idempotent: a cached tier is an instant no-op (no `nvcc`). The `numpy` backend is
+warmed without a handle or a CUDA context (a GPU-less build box works with `cuda_arch=`);
+`grid_rbd.build_plan(name, urdf, cuda_arch=...)` shows what a build would key on and whether the
+cache already holds it, without building. First build of a
 small arm is ~30–60 s; large humanoids with second-order kernels take minutes (and lots of RAM).
 Ship the cache dir (`grid_rbd.default_cache_dir()`, default `~/.cache/grid-rbd/` or
 `$GRID_RBD_CACHE_DIR`) and every later run starts in well under a second.
@@ -148,7 +151,9 @@ time, one compiled robot serves all).
 `f_ext`; needs `register_robot(contact_frames=[...])`). The canonical per-backend surface list is
 `docs/source/user_guide/tutorials/python_wrappers.rst`.
 
-Properties: `num_joints`, `num_vel`, `num_ees`, `floating_base`, `max_batch`, `output_convention`.
+Properties: `num_joints`, `num_vel`, `num_ees`, `num_bodies`, `floating_base`, `max_batch`,
+`output_convention`, plus the unambiguous aliases `nq` / `nv` / `nb` (configuration width /
+tangent width / body count).
 
 > **fp32 caveat:** the jax/torch surfaces are **strictly fp32** (compute and I/O). The numpy
 > handle defaults to fp32 too but supports a true fp64 tier via `dtype="float64"` (separate `.so`)
@@ -181,7 +186,7 @@ pokes, so one `set_*_params` call is seen by every surface over that `.so`:
 | Build flag | Mutator | Table shape | Mutates |
 |------------|---------|-------------|---------|
 | `runtime_inertia=True` | `handle.set_inertia_params(t)` | `(num_bodies, 10)` rows `[m, hx,hy,hz, Ixx,Ixy,Ixz, Iyy,Iyz, Izz]` | spatial inertia in **every** dynamics call (id/fd/aba/crba/minv/gradients) |
-| `runtime_transform=True` | `handle.set_transform_params(t)` | `(num_joints, 6)` rows `[x,y,z,roll,pitch,yaw]` (URDF `<origin>`) | each joint's `Xfixed` in the **dynamics** (EE pose still uses the baked origin in v1) |
+| `runtime_transform=True` | `handle.set_transform_params(t)` | `(num_joints, 6)` rows `[x,y,z,roll,pitch,yaw]` (URDF `<origin>`) | each joint's `Xfixed` in the **dynamics** (EE pose still uses the baked origin in v1) | **Dynamics only**: baked end-effector kinematics keep the URDF geometry after a transform update (documented partial capability).
 
 Fetch the baked table from `handle.inertia_params` / `handle.transform_params`, mutate, set it
 back. Passing the baked values back is byte-identical to a plain build. Each flag re-keys the

@@ -1133,7 +1133,7 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   reframe `J·G⁻¹`), `congruence` (`G·X·Gᵀ`). The `ω×v` trap recurs anywhere a quantity is "evaluated at
   qacc_mjx=0" or reads qd: `nonlinear_effects` (=`G·ID(q,qd,−ω×v)`, naive covector off by 32.7),
   `dccrba` dh/dq (needs `+A·_cross_cols(v_lin,−1)`, naive off by 23.6), the hdot/gradient families. The
-  full convention map (formula + class + verified error per function) is `docs/open-tasks/archive/mjx_codegen_fusion_master_plan.md` §2/§0b (gitignored local ledger).
+  full convention map (formula + class + verified error per function) is the *Convention map* section of `docs/source/user_guide/concepts/mjx_convention.rst` (promoted 09-23 from the gitignored ledger).
 - **Test the HOST-WRAPPER BATCH path, not just the single-timestep device fn (2026-06-08).** The
   floating nq-vs-nv matrix-buffer stride bug (Minv/M/dc_du/df_du host malloc+copy at nq² while the
   kernel writes nv²) corrupted only BATCHED floating (`init_gridData<T,B>`, B>1, slot k>0) — silent
