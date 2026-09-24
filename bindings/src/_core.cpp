@@ -27,6 +27,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
+#include <optional>
 
 #include <dlfcn.h>
 #include <cstring>
@@ -40,6 +41,18 @@
 #include <tuple>
 
 namespace py = pybind11;
+
+// codex follow-up (2026-09-24): a native wait that can block behind a REPLAY ADMISSION
+// TOKEN — held across Python code by another thread (GraphCallable.replay) — must not
+// hold the GIL, or that thread can never reach its graph_end(): exclusive admission
+// (runtime-parameter setters, launch overrides), context close / arena drain, and the
+// token bracket itself. No Python object is touched inside a released section (array
+// data pointers are taken before it). Guarded: a call from a thread without the GIL
+// (never expected) is a no-op instead of an abort.
+struct GridNoGil {
+    std::optional<py::gil_scoped_release> r;
+    GridNoGil() { if (PyGILState_Check()) r.emplace(); }
+};
 
 
 // ─── C ABI function signatures (must match wrapper_template.cu) ──────────────
@@ -364,19 +377,28 @@ public:
     }
     void release() {
         if (!handle_) return;
-        py::object pool;
+        // Decide under the owners mutex, DRAIN outside it and without the GIL: the
+        // last-owner close waits for admitted work (incl. replay tokens held by other
+        // Python threads), so neither the GIL nor the owners mutex may be held meanwhile.
+        PyObject *pool_raw = nullptr;
+        bool last = false;
         {
             std::lock_guard<std::mutex> lk(owners_mutex());
             auto it = owners().find(so_key_);
             if (it != owners().end() && --(it->second.count) <= 0) {
-                if (fn_close_) fn_close_();      // last owner: free the runtime
-                // The library may stay loaded through Torch/JAX registrations.
-                // Never leave its pool pointing at a released framework tensor.
-                if (fn_set_device_pool_) fn_set_device_pool_(nullptr, 0, 0);
-                pool = std::move(it->second.pool);
+                last = true;
+                pool_raw = it->second.pool.release().ptr();
                 owners().erase(it);
             }
         }
+        if (last) {
+            GridNoGil nogil;
+            if (fn_close_) fn_close_();      // last owner: free the runtime
+            // The library may stay loaded through Torch/JAX registrations.
+            // Never leave its pool pointing at a released framework tensor.
+            if (fn_set_device_pool_) fn_set_device_pool_(nullptr, 0, 0);
+        }
+        py::object pool = py::reinterpret_steal<py::object>(pool_raw);   // dropped under the GIL
         dlclose(handle_);
         handle_ = nullptr;
     }
@@ -399,14 +421,14 @@ public:
     // set_threads_per_block override still wins when set.
     void set_threads_for(int algo, int n) {
         if (n < 0) throw std::invalid_argument("set_threads_for: n must be >= 0");
-        int rc = fn_set_threads_for_(ctx_id_, algo, n);
+        int rc; { GridNoGil nogil; rc = fn_set_threads_for_(ctx_id_, algo, n); }
         if (rc != 0) throw std::runtime_error(rc_message(rc, "set_threads_for", nullptr));
     }
     int algo_count() const { return fn_algo_count_(); }
     // E6 batch-switch: when a call's batch <= threshold, launch `algo` with
     // n_small threads (threshold==0 clears the switch for that algo).
     void set_threads_for_n(int algo, int threshold, int n_small) {
-        int rc = fn_set_threads_for_n_(ctx_id_, algo, threshold, n_small);
+        int rc; { GridNoGil nogil; rc = fn_set_threads_for_n_(ctx_id_, algo, threshold, n_small); }
         if (rc != 0) throw std::runtime_error(rc_message(rc, "set_threads_for_n", nullptr));
     }
     py::tuple get_batch_switch(int algo) const {
@@ -436,7 +458,7 @@ public:
         return id;
     }
     void ctx_close(long long id) {
-        int rc = fn_ctx_close_(id);
+        int rc; { GridNoGil nogil; rc = fn_ctx_close_(id); }
         if (rc != 0) throw std::runtime_error(rc_message(rc, "ctx_close", nullptr));
     }
     long long ctx_default_id() {
@@ -454,14 +476,14 @@ public:
     // codex R5: replay admission bracket (see grid_rbd_graph_begin in the wrapper).
     long long graph_begin(long long id, unsigned long long version) {
         long long tok = 0;
-        int rc = fn_graph_begin_(id, version, &tok);
+        int rc; { GridNoGil nogil; rc = fn_graph_begin_(id, version, &tok); }
         if (rc == 15) throw std::runtime_error(
             "graph replay refused: the model was mutated since this graph was captured (recapture it)");
         if (rc != 0) throw std::runtime_error(rc_message(rc, "graph_begin", nullptr));
         return tok;
     }
     void graph_end(long long token) {
-        int rc = fn_graph_end_(token);
+        int rc; { GridNoGil nogil; rc = fn_graph_end_(token); }
         if (rc != 0) throw std::runtime_error(rc_message(rc, "graph_end", nullptr));
     }
     int ctx_count() const { return fn_ctx_count_(); }
@@ -499,9 +521,12 @@ public:
         // grid_rbd_close: free the device/host arena (attached tools + runtime
         // parameter tables reset with it); the next call re-inits lazily.
         // Explicit resets retain any owned slab, but cannot reset a sibling's state.
-        std::lock_guard<std::mutex> lk(owners_mutex());
-        if (owners().at(so_key_).count > 1)
-            throw std::runtime_error("cannot reset an arena shared by multiple handles");
+        {
+            std::lock_guard<std::mutex> lk(owners_mutex());
+            if (owners().at(so_key_).count > 1)
+                throw std::runtime_error("cannot reset an arena shared by multiple handles");
+        }
+        GridNoGil nogil;   // the drain waits for admitted work, incl. replay tokens
         if (fn_close_) fn_close_();
     }
     int threads_per_block() const { return fn_threads_per_block_(ctx_id_); }
@@ -515,7 +540,7 @@ public:
             throw std::invalid_argument(
                 "set_threads_per_block: n must be >= 0 (0 resets to autotuned default), got " + std::to_string(n));
         }
-        int rc = fn_set_threads_per_block_(ctx_id_, n);
+        int rc; { GridNoGil nogil; rc = fn_set_threads_per_block_(ctx_id_, n); }
         if (rc != 0) throw std::runtime_error(rc_message(rc, "set_threads_per_block", nullptr));
     }
 
@@ -1906,7 +1931,8 @@ public:
                 "ndim=" + std::to_string(params.ndim()) +
                 ", size=" + std::to_string(params.size()));
         }
-        int rc = fn_set_inertia_params_(ctx_id_, params.data());
+        const CT *pdata = params.data();
+        int rc; { GridNoGil nogil; rc = fn_set_inertia_params_(ctx_id_, pdata); }
         if (rc != 0) throw std::runtime_error(rc_message(rc, "set_inertia_params", nullptr));
     }
 
@@ -1930,7 +1956,8 @@ public:
                 "ndim=" + std::to_string(params.ndim()) +
                 ", size=" + std::to_string(params.size()));
         }
-        int rc = fn_set_transform_params_(ctx_id_, params.data());
+        const CT *pdata = params.data();
+        int rc; { GridNoGil nogil; rc = fn_set_transform_params_(ctx_id_, pdata); }
         if (rc != 0) throw std::runtime_error(rc_message(rc, "set_transform_params", nullptr));
     }
 
@@ -1954,7 +1981,8 @@ public:
                 "ndim=" + std::to_string(params.ndim()) +
                 ", size=" + std::to_string(params.size()));
         }
-        int rc = fn_set_jd_params_(ctx_id_, params.data());
+        const CT *pdata = params.data();
+        int rc; { GridNoGil nogil; rc = fn_set_jd_params_(ctx_id_, pdata); }
         if (rc != 0) throw std::runtime_error(rc_message(rc, "set_joint_dynamics_params", nullptr));
     }
 

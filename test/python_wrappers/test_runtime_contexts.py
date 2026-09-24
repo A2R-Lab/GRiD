@@ -370,3 +370,71 @@ def test_jax_vjp_rejects_a_mutated_model_and_a_jitted_grad_follows_it(iiwa):
         assert np.allclose(g_a, eager_a, atol=1e-5)
     finally:
         iiwa.set_inertia_params(base)
+
+
+_RACE_CHILD = r'''
+import sys, time, threading
+import numpy as np, grid_rbd
+h = grid_rbd.get_robot("ctx_pytest_iiwa14")
+r = h._runner
+q = np.zeros((2, h.nq), np.float32)
+h.forward_dynamics(q, q, q)                       # default context exists
+base = np.asarray(h.inertia_params, np.float32)
+
+def hold(runner, version, secs=1.0):
+    tok = runner.graph_begin(runner.ctx_id(), version)
+    time.sleep(secs)
+    runner.graph_end(tok)
+
+# 1. a runtime-parameter setter racing a held replay token (exclusive vs shared)
+t = threading.Thread(target=hold, args=(r, h.model_version)); t.start(); time.sleep(0.2)
+t0 = time.time(); h.set_inertia_params(base); dt1 = time.time() - t0; t.join()
+
+# 2. an explicit context closed while a token is held on it (drain vs shared)
+ctx = h.context(); ctx.forward_dynamics(q, q, q); rc = ctx._runner
+t = threading.Thread(target=hold, args=(rc, ctx.model_version)); t.start(); time.sleep(0.2)
+t0 = time.time(); ctx.close(); dt2 = time.time() - t0; t.join()
+del rc, ctx                                       # drop the closed context's runner (arena owner count)
+
+# 3. the default arena reset while a token is held on the default context
+t = threading.Thread(target=hold, args=(r, h.model_version)); t.start(); time.sleep(0.2)
+t0 = time.time(); r.close_arena(); dt3 = time.time() - t0; t.join()
+h.forward_dynamics(q, q, q)                       # default re-created lazily
+
+# 4. the real GraphCallable bracket: a replay loop racing a mutation ends REFUSED, never hung
+import torch, grid_rbd.torch as gt
+key = grid_rbd.manifest_lookup(grid_rbd.default_cache_dir(), h._name)["cache_key"]
+tv = gt.TorchRobotHandle(h, key, h._so_path)
+tq = torch.zeros(2, h.nq, device="cuda")
+g = tv.capture("forward_dynamics", tq, tq, tq)
+state = {"refused": False, "n": 0}
+def spin():
+    end = time.time() + 5.0
+    while time.time() < end:
+        try:
+            g.replay(); state["n"] += 1
+        except RuntimeError as e:
+            state["refused"] = "mutated since this graph was captured" in str(e); break
+t = threading.Thread(target=spin); t.start(); time.sleep(0.1)
+h.set_inertia_params(base); t.join()
+assert dt1 >= 0.6 and dt2 >= 0.6 and dt3 >= 0.6, (dt1, dt2, dt3)   # each waited for the token
+assert state["refused"] and state["n"] > 0, state
+print("OK", round(dt1, 2), round(dt2, 2), round(dt3, 2), state["n"])
+'''
+
+
+def test_replay_admission_racing_mutation_and_close_never_deadlocks(iiwa, tmp_path):
+    """codex follow-up (2026-09-24): a replay token holds native admission across
+    Python; a setter / close / arena reset in another thread must WAIT for it
+    without holding the GIL (else the token holder can never reach graph_end).
+    Deterministic and subprocess-isolated with a hard timeout: a regression hangs
+    the child, which is reported as a failure instead of hanging the suite."""
+    import subprocess
+    script = tmp_path / "race_child.py"
+    script.write_text(_RACE_CHILD)
+    try:
+        res = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
+                             timeout=240, cwd=str(_REPO))
+    except subprocess.TimeoutExpired as e:
+        pytest.fail(f"replay-admission race DEADLOCKED (child timed out); stdout={e.stdout!r}")
+    assert res.returncode == 0 and "OK" in res.stdout, f"rc={res.returncode}\n{res.stdout}\n{res.stderr[-3000:]}"
