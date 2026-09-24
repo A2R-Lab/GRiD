@@ -326,7 +326,7 @@ It was NOT. The `*_device` wrappers (`forward_dynamics_device`, `minv_device`, �
   same family as §1a/§1e.
 
 ### 1o. Frame-index convention mismatch — anchoring a target/sphere to the WRONG frame (ANTICIPATED — W3 collision)
-Not yet encountered, but flagged in the collision design (`docs/open-tasks/design_W3_collision_2026-07-07.md`)
+Not yet encountered, but flagged in the collision design (`docs/open-tasks/archive/design_W3_collision_2026-07-07.md` (gitignored local ledger))
 as the #1 silent-wrong-answer risk, and it is the same *index-convention* family as §1a/§1e. A "target" (named EE
 point, or a foam collision sphere) is a fixed offset off a link; its world position/gradient reads
 `s_Xworld[16*anchor_jid]`. Different tools index links DIFFERENTLY: **foam's `sphere_to_joint` uses an
@@ -1133,7 +1133,7 @@ A serial block with no P1/P2/P3 justification is a bug to file, not a style choi
   reframe `J·G⁻¹`), `congruence` (`G·X·Gᵀ`). The `ω×v` trap recurs anywhere a quantity is "evaluated at
   qacc_mjx=0" or reads qd: `nonlinear_effects` (=`G·ID(q,qd,−ω×v)`, naive covector off by 32.7),
   `dccrba` dh/dq (needs `+A·_cross_cols(v_lin,−1)`, naive off by 23.6), the hdot/gradient families. The
-  full convention map (formula + class + verified error per function) is `docs/open-tasks/mjx_codegen_fusion_master_plan.md` §2/§0b.
+  full convention map (formula + class + verified error per function) is `docs/open-tasks/archive/mjx_codegen_fusion_master_plan.md` §2/§0b (gitignored local ledger).
 - **Test the HOST-WRAPPER BATCH path, not just the single-timestep device fn (2026-06-08).** The
   floating nq-vs-nv matrix-buffer stride bug (Minv/M/dc_du/df_du host malloc+copy at nq² while the
   kernel writes nv²) corrupted only BATCHED floating (`init_gridData<T,B>`, B>1, slot k>0) — silent

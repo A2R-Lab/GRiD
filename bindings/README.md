@@ -47,9 +47,13 @@ conventions) lives in the
 (`docs/source/user_guide/tutorials/python_wrappers.rst` in-repo).
 
 Shape legend: `NJ = num_joints (== num_pos == nq)`, `NV = num_vel (tangent /
-velocity space)`. Inputs `q`, `qd`, `qdd`, `u` and the value outputs (`c`, `qdd`)
-are `NJ`-wide; matrix/Jacobian outputs are tangent-space (pinocchio convention)
-and `NV`-dimensioned. For a **FIXED base `NV == NJ`**.
+velocity space)`, `NB = num_bodies`. Every handle also exposes the unambiguous
+read-only aliases `h.nq` / `h.nv` / `h.nb`. Inputs `q`, `qd`, `qdd`, `u` and
+the value outputs (`c`, `qdd`) are `NJ`-wide; matrix/Jacobian outputs are
+tangent-space (pinocchio convention) and `NV`-dimensioned. For a **FIXED base
+`NV == NJ`**. The per-method differentiability table (VJP inputs, fixed-base
+restrictions, output representations) lives in the Python wrappers docs and is
+cross-checked against the ABI specification by a CPU test.
 
 > **Breaking change (v0.5) — floating-base only.** `crba`/`minv` now return
 > `(B, NV, NV)` and `inverse_dynamics_gradient`/`forward_dynamics_gradient` return
@@ -210,7 +214,18 @@ grid_rbd.precompile(
 ```
 
 A tier already in the cache is a no-op (no nvcc); a missing tier compiles once.
+The `numpy` backend is warmed WITHOUT constructing a handle (no dlopen, no CUDA
+context), so a build box with `nvcc` but no usable GPU can populate the cache —
+pass `cuda_arch=` (e.g. `120`) since there is no `nvidia-smi` to ask; only the
+`jax` / `torch` backends need the device at warm time. To see what a
+registration would key on and whether the cache already holds it, without
+building anything, call `grid_rbd.build_plan(name, urdf_path, cuda_arch=...)`.
 Build the cache offline, ship/keep the cache dir, and every later
-`register_robot` / `get_robot` / `jax.jit` starts in well under a second. On a
+`register_robot` / `get_robot` / `jax.jit` starts in well under a second.
+
+Registration failures (a failed device allocation, a bad toolkit) raise a Python
+exception naming the failed operation; the generated initializers never
+`exit()` or reset the CUDA context inside the interpreter (they use the
+library-safe `*_checked` path — see the *Library-safe initialization* page). On a
 successful build the `build.log` path is reported too (not just on failure), so
 you can inspect nvcc/ptxas output for warnings.
