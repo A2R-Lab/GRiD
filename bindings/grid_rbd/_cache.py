@@ -45,7 +45,7 @@ same name with a different URDF or options overwrites the binding (the old
 """
 from __future__ import annotations
 
-from grid_codegen.env_knobs import GENERATION_ENV_KNOBS as _ALL_GENERATION_ENV_KNOBS
+from grid_codegen.env_knobs import GENERATION_ENV_KNOBS as _ALL_GENERATION_ENV_KNOBS, BINDINGS_ENV_KNOBS
 
 import fcntl
 import hashlib
@@ -436,7 +436,7 @@ def _toolchain_memo_valid() -> bool:
 
 
 def _generation_env() -> dict[str, str | None]:
-    return {k: os.environ.get(k) for k in GENERATION_ENV_KNOBS}
+    return {k: os.environ.get(k) for k in (*GENERATION_ENV_KNOBS, *BINDINGS_ENV_KNOBS)}
 
 
 def build_identity(cuda_arch: int) -> dict[str, Any]:

@@ -79,7 +79,9 @@ bash examples/cuda/build_and_validate.sh   # generate → nvcc → run → valid
 
 > **Requires a C++17-capable host compiler** (e.g., g++ ≥ 7, clang++ ≥ 5).
 > The benchmark and codegen runtime compile with `-std=c++17` — needed for
-> inline variables in the bench common header.
+> inline variables in the bench common header. With the `[torch]` extra the
+> per-robot `.so` follows torch's ATen requirement (`-std=c++20` from torch
+> 2.14; needs CUDA 12+ and g++ ≥ 10).
 
 ## Usage
 + `grid-generate PATH_TO_URDF` — generate `grid.cuh`; add `-d` for full debug mode, `-f` for floating base, `-t JOINT_NAME` to target a specific end-effector joint

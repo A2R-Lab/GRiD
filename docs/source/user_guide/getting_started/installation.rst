@@ -127,12 +127,16 @@ Add the following to ``~/.bashrc``
 
    export PATH="/usr/local/cuda/bin:$PATH"
    export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
-   export PATH="opt/nvidia/nsight-compute/:$PATH"
+   export PATH="/opt/nvidia/nsight-compute/:$PATH"
 
 .. note::
 
     GRiD requires a C++17-capable host compiler (e.g. ``g++ >= 7`` or
     ``clang++ >= 5``). The benchmark and codegen runtime compile with
     ``-std=c++17``, needed for inline variables in the bench common
-    header.
+    header. With the ``[torch]`` extra the per-robot ``.so`` is compiled
+    with whatever standard the installed torch's ATen headers demand
+    (``-std=c++20`` from torch 2.14 on, detected from the header guard), so
+    a torch-enabled build needs an nvcc and host compiler that accept C++20
+    (CUDA 12+, ``g++ >= 10``). ``GRID_RBD_CXX_STD`` forces the standard.
 

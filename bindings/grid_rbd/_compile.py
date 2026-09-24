@@ -478,6 +478,31 @@ def _torch_build_flags() -> dict | None:
         return None
 
 
+def _required_cxx_std(torch_includes) -> str:
+    """The C++ standard the wrapper must be compiled with when torch is present.
+
+    Release check 2026-09-24: `pip install -e ".[torch]"` on a clean checkout pulls a
+    torch whose ATen.h guard demands C++20 (`#error C++20 or later ... ATen`, torch
+    2.14), while the wrapper compiled with -std=c++17 → every torch-enabled artifact
+    failed to build. Parse the guard rather than pin a version so older (c++17) and
+    newer torch both work. `GRID_RBD_CXX_STD` overrides (a cache-key knob).
+    """
+    import os
+    import re
+    forced = os.environ.get("GRID_RBD_CXX_STD")
+    if forced:
+        return forced
+    need = 201703
+    for inc in torch_includes:
+        aten = Path(inc) / "ATen" / "ATen.h"
+        if aten.exists():
+            m = re.search(r"__cplusplus\s*<\s*(\d{6})L", aten.read_text(errors="ignore"))
+            if m:
+                need = max(need, int(m.group(1)))
+            break
+    return "c++20" if need >= 202002 else "c++17"
+
+
 def _mjx_signature_flags(cuh_path: Path) -> list[str]:
     """Derive the wrapper's host-template SIGNATURE flags from the generated header.
 
@@ -619,6 +644,8 @@ def compile_so(
     tflags = _torch_build_flags()
     if tflags is not None:
         cmd.append("-DGRID_RBD_WITH_TORCH=1")
+        std = _required_cxx_std(tflags["includes"])
+        cmd[:] = [f"-std={std}" if f == "-std=c++17" else f for f in cmd]
         for inc in tflags["includes"]:
             cmd.append(f"-I{inc}")
         for ld in tflags["libdirs"]:

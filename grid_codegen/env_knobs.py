@@ -25,6 +25,15 @@ GENERATION_ENV_KNOBS = (
 )
 
 
+# Bindings-only knobs: read by bindings/grid_rbd (never by grid_codegen), folded into the
+# per-robot .so key next to the generation knobs. GRID_RBD_CXX_STD forces the wrapper C++
+# standard (default: what the installed torch's ATen requires — c++20 from torch 2.14 —
+# else c++17).
+BINDINGS_ENV_KNOBS = (
+    "GRID_RBD_CXX_STD",
+)
+
+
 def generation_env() -> dict[str, str | None]:
     """The current value of every generation-time knob (None = unset), for cache keys."""
     return {k: os.environ.get(k) for k in GENERATION_ENV_KNOBS}
