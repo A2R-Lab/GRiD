@@ -22,6 +22,7 @@ W1a hessian collapse. Subsumes backlog D (multi-named-EE-target).
 """
 from grid_codegen._constants_arena import _tier2_bytes_line
 from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, host_mode_flags, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import host_q_compressed_input_transfer_lines
 
 
 # ---------------------------------------------------------------------------
@@ -550,15 +551,7 @@ def gen_multi_target_position_host(self, mode=0):
     if single_call_timing:
         func_call_start = func_call_start.replace("multi_target_position_kernel<", "multi_target_position_kernel_single_timing<")
     if not compute_only:
-        self.gen_add_code_lines(["// start code with memory transfer",
-                                 "int stride_q;",
-                                 "if (USE_COMPRESSED_MEM) {stride_q = NUM_JOINTS; " +
-                                    "gpuErrchk(cudaMemcpyAsync(hd_data->d_q,hd_data->h_q,stride_q*" +
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}",
-                                 "else {stride_q = 3*NUM_JOINTS; " +
-                                    "gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q*" +
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}",
-                                 "gpuErrchkKernel();"])
+        self.gen_add_code_lines(host_q_compressed_input_transfer_lines(single_call_timing))
     else:
         self.gen_add_code_line("int stride_q = USE_COMPRESSED_MEM ? NUM_JOINTS: 3*NUM_JOINTS;")
     self.gen_add_code_line("// then call the kernel")
@@ -665,15 +658,7 @@ def gen_multi_target_position_gradient_host(self, mode=0):
     if single_call_timing:
         func_call_start = func_call_start.replace("multi_target_position_gradient_kernel<", "multi_target_position_gradient_kernel_single_timing<")
     if not compute_only:
-        self.gen_add_code_lines(["// start code with memory transfer",
-                                 "int stride_q;",
-                                 "if (USE_COMPRESSED_MEM) {stride_q = NUM_JOINTS; " +
-                                    "gpuErrchk(cudaMemcpyAsync(hd_data->d_q,hd_data->h_q,stride_q*" +
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}",
-                                 "else {stride_q = 3*NUM_JOINTS; " +
-                                    "gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q*" +
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}",
-                                 "gpuErrchkKernel();"])
+        self.gen_add_code_lines(host_q_compressed_input_transfer_lines(single_call_timing))
     else:
         self.gen_add_code_line("int stride_q = USE_COMPRESSED_MEM ? NUM_JOINTS: 3*NUM_JOINTS;")
     self.gen_add_code_line("// then call the kernel")

@@ -6,6 +6,7 @@ fixed targets at once) via the ``fixed_target_name`` variants.
 """
 from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
 from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
+from grid_codegen.helpers._code_generation_helpers import host_q_compressed_input_transfer_lines
 
 
 def gen_end_effector_pose_inner_temp_mem_size(self, fixed_target_name = ""):
@@ -357,15 +358,7 @@ def gen_end_effector_pose_host(self, mode = 0, fixed_target_name = ""):
             func_call_start = func_call_start.replace("kernel<T, RESOURCE_TIER>","kernel_single_timing<T, RESOURCE_TIER>")
     if not compute_only:
         # start code with memory transfer
-        self.gen_add_code_lines(["// start code with memory transfer", \
-                                 "int stride_q;", \
-                                 "if (USE_COMPRESSED_MEM) {stride_q = NUM_JOINTS; " + \
-                                    "gpuErrchk(cudaMemcpyAsync(hd_data->d_q,hd_data->h_q,stride_q*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}", \
-                                 "else {stride_q = 3*NUM_JOINTS; " + \
-                                    "gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}", \
-                                 "gpuErrchkKernel();"])
+        self.gen_add_code_lines(host_q_compressed_input_transfer_lines(single_call_timing))
     else:
         self.gen_add_code_line("int stride_q = USE_COMPRESSED_MEM ? NUM_JOINTS: 3*NUM_JOINTS;")
     # then compute but adjust for compressed mem and qdd usage
@@ -1089,15 +1082,7 @@ def gen_end_effector_pose_gradient_host(self, mode = 0, fixed_target_name = ""):
             func_call_start = func_call_start.replace("kernel<T, RESOURCE_TIER>","kernel_single_timing<T, RESOURCE_TIER>")
     if not compute_only:
         # start code with memory transfer
-        self.gen_add_code_lines(["// start code with memory transfer", \
-                                 "int stride_q;", \
-                                 "if (USE_COMPRESSED_MEM) {stride_q = NUM_JOINTS; " + \
-                                    "gpuErrchk(cudaMemcpyAsync(hd_data->d_q,hd_data->h_q,stride_q*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}", \
-                                 "else {stride_q = 3*NUM_JOINTS; " + \
-                                    "gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}", \
-                                 "gpuErrchkKernel();"])
+        self.gen_add_code_lines(host_q_compressed_input_transfer_lines(single_call_timing))
     else:
         self.gen_add_code_line("int stride_q = USE_COMPRESSED_MEM ? NUM_JOINTS: 3*NUM_JOINTS;")
     # then compute but adjust for compressed mem and qdd usage
@@ -2661,15 +2646,7 @@ def gen_end_effector_pose_hessian_host(self, mode = 0, fixed_target_name = ""):
             func_call_start = func_call_start.replace("kernel<T, RESOURCE_TIER>","kernel_single_timing<T, RESOURCE_TIER>")
     if not compute_only:
         # start code with memory transfer
-        self.gen_add_code_lines(["// start code with memory transfer", \
-                                 "int stride_q;", \
-                                 "if (USE_COMPRESSED_MEM) {stride_q = NUM_JOINTS; " + \
-                                    "gpuErrchk(cudaMemcpyAsync(hd_data->d_q,hd_data->h_q,stride_q*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}", \
-                                 "else {stride_q = 3*NUM_JOINTS; " + \
-                                    "gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q*" + \
-                                    ("num_timesteps*" if not single_call_timing else "") + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}", \
-                                 "gpuErrchkKernel();"])
+        self.gen_add_code_lines(host_q_compressed_input_transfer_lines(single_call_timing))
     else:
         self.gen_add_code_line("int stride_q = USE_COMPRESSED_MEM ? NUM_JOINTS: 3*NUM_JOINTS;")
     # then compute but adjust for compressed mem and qdd usage

@@ -485,6 +485,25 @@ def gen_host_wrapper_head(self, name, func_def_start, func_def_end, kind_rule="d
     return mjx_host
 
 
+def host_q_compressed_input_transfer_lines(single_call_timing, errcheck=True):
+    """The q-only USE_COMPRESSED_MEM host->device transfer block (hygiene 2026-09-24,
+    folded from 11 sites, byte-identical): comment, stride decl, compressed
+    branch (d_q from h_q at NUM_JOINTS) / packed branch (d_q_qd_u at
+    3*NUM_JOINTS), and the launch-error check. A thin string helper: it encodes
+    today's hd_data->h_* staging only (the W04-B lease design replaces the
+    staging, not this helper's shape)."""
+    nt = "num_timesteps*" if not single_call_timing else ""
+    lines = ["// start code with memory transfer",
+             "int stride_q;",
+             "if (USE_COMPRESSED_MEM) {stride_q = NUM_JOINTS; " +
+             "gpuErrchk(cudaMemcpyAsync(hd_data->d_q,hd_data->h_q,stride_q*" + nt + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}",
+             "else {stride_q = 3*NUM_JOINTS; " +
+             "gpuErrchk(cudaMemcpyAsync(hd_data->d_q_qd_u,hd_data->h_q_qd_u,stride_q*" + nt + "sizeof(T),cudaMemcpyHostToDevice,streams[0]));}"]
+    if errcheck:
+        lines.append("gpuErrchkKernel();")
+    return lines
+
+
 def wrap_host_single_call_timing(func_call_code, kernel_errcheck=False):
     """Wrap the host launch-line list in the single-call timing scaffold, IN
     PLACE: clock_gettime start prepended, [optional gpuErrchkKernel,] clock_
