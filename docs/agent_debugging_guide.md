@@ -2260,3 +2260,19 @@ per-item math must be copied verbatim from the sequential emitter (the patch scr
 re-emits the emitter's own switch and kr body rather than retyping them); (4) gate =
 byte gate cells named, c++11 parse, bit-identity runner pre/post, thread invariance,
 equivalence modules, racecheck, THEN the n≥5 timing A/B against the pre-declared bar.
+
+### 7.z23 Codegen was 185× slower than it had to be: `self.code_str += line` (2026-09-24, hygiene 10)
+cProfile on a full g1 generation (206 s under the profiler, ~148 s real): 123 s of it
+was `gen_add_code_line`'s `self.code_str += ...`. CPython's in-place string append
+only works when the string's refcount is 1; an attribute string has more, so every
+one of the 80,612 emitted lines copied the whole multi-MB buffer — quadratic. The
+other 80 s was sympy `is_constant()` running `simplify()` on the 195 floating-root
+quaternion d²X cells (~0.2 s each) even though they visibly vary. Fixes: (1) the
+generator keeps a list of parts and exposes `code_str` as a lazily joined, cached
+property (reads/reassignments unchanged); (2) `custom_is_constant` first evaluates
+the expression at two fixed real points and returns False when the values differ
+(exactly sympy's answer for a varying expression), so only the "numerically
+constant" handful still pays for the symbolic proof. Both byte-identical. g1
+148 s → 0.8 s, go2 68 → 0.5 s, iiwa14 23 → 0.1 s. RULES: profile before assuming
+"codegen is inherently slow"; never `+=` onto an attribute string in a loop; when a
+symbolic predicate is only ever consumed as a boolean, refute numerically first.

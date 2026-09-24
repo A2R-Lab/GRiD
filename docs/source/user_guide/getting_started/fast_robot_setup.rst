@@ -158,7 +158,8 @@ What to expect: cold vs. warm
 
 Measured 2026-09-24 on an RTX 5090 / 24-core host, ``max_batch_size=1024``,
 one build per process (``/usr/bin/time -v`` wall and peak RSS). A cold build is
-the Python code generation plus ONE ``nvcc`` translation unit; "generation-only"
+the Python code generation (about a second, even for g1) plus ONE ``nvcc``
+translation unit, so a cold build is essentially all ``nvcc``; "generation-only"
 is what a codegen edit with byte-identical output costs (the content key re-hits
 the compiled ``.so``, no ``nvcc``); a warm start is a fresh process calling
 ``get_robot`` and one ``forward_dynamics``.
@@ -176,13 +177,13 @@ the compiled ``.so``, no ``nvcc``); a warm start is a fresh process calling
    * - iiwa14 fixed, all algorithms, pin-only
      - 10 min 53 s
      - 2.0 GB
-     - 23 s
+     - 1.1 s
      - 1.7 s
      - 1.1 GB
    * - go2 floating, all algorithms, pin-only
      - 14 min 55 s
      - 3.6 GB
-     - 68 s
+     - 2.0 s
      - 1.9 s
      - 1.8 GB
    * - go2 floating, all algorithms + mjx twins
@@ -194,7 +195,7 @@ the compiled ``.so``, no ``nvcc``); a warm start is a fresh process calling
    * - g1 floating, all algorithms, pin-only
      - 53 min 29 s
      - 8.3 GB
-     - 2 min 28 s
+     - 2.9 s
      - 3.2 s
      - 6.9 GB
    * - g1 floating, all algorithms + mjx twins

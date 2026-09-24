@@ -100,12 +100,41 @@ def custom_is_constant(self, val):
     try:
         if val in cache:
             return cache[val]
-        result = val.is_constant()
+        # Fast refutation (hygiene 10, 2026-09-24): sympy's is_constant() falls into
+        # simplify() on the floating-base quaternion cells (rational functions of
+        # q1..q4_fb, ~0.2 s EACH, 195 of them on g1 = 23 of the remaining 25 s of a
+        # g1 generation). An expression whose value differs at two fixed real points
+        # is provably not constant, and that is exactly the answer is_constant()
+        # returns for it — so only the "looks constant numerically" cases (a few
+        # hundred, e.g. sin²+cos²) still pay for the symbolic proof. Byte-identical.
+        result = False if _varies_numerically(val) else val.is_constant()
         cache[val] = result
         return result
     except TypeError:
         # Unhashable expression — fall back to uncached call.
         return val.is_constant()
+
+
+def _varies_numerically(val):
+    """True only when `val` provably is NOT constant: two fixed pseudo-random real
+    substitutions (away from zero, so quaternion-norm denominators stay regular)
+    give different finite values. False means "undecided" — defer to sympy."""
+    symbols = getattr(val, "free_symbols", None)
+    if not symbols:
+        return False
+    import math, random
+    rng = random.Random(0x5EED)
+    values = []
+    for _ in range(2):
+        point = {s: rng.uniform(0.3, 1.7) for s in sorted(symbols, key=str)}
+        try:
+            v = complex(val.subs(point).evalf())
+        except Exception:
+            return False
+        if not (math.isfinite(v.real) and math.isfinite(v.imag)):
+            return False
+        values.append(v)
+    return abs(values[0] - values[1]) > 1e-6 * (1.0 + abs(values[0]) + abs(values[1]))
 
 
 def gen_checked_table_tail(self, h_name, d_name, size_expr, ctype, host_freed=True):

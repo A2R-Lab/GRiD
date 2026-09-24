@@ -164,6 +164,27 @@ class GRiDCodeGenerator:
                       test_rnea_grad, mx0, mx1, mx2, mx3, mx4, mx5, mxS, fxv
 
     # initialize the object
+    # Emitted-code buffer (hygiene 10, 2026-09-24): gen_add_code_line appends to a
+    # list and the joined string is built lazily on read (cached until the next
+    # append). `self.code_str += line` on a multi-MB attribute string copied the
+    # whole buffer per line (CPython's in-place concat needs a refcount of 1):
+    # 123 s of a 206 s g1 generation. Reads and reassignments (the ID-gradient
+    # rewrite, the post passes, the file write) go through the property unchanged.
+    @property
+    def code_str(self):
+        if self._code_cache is None:
+            self._code_cache = "".join(self._code_parts)
+        return self._code_cache
+
+    @code_str.setter
+    def code_str(self, value):
+        self._code_parts = [value]
+        self._code_cache = value
+
+    def _append_code(self, text):
+        self._code_parts.append(text)
+        self._code_cache = None
+
     def __init__(self, robotObj, DEBUG_MODE = False, NEED_PRINT_MAT = False, FILE_NAMESPACE = "grid", USE_JOINT_DYNAMICS = False, dtype = "float", MUJOCO_OUTPUT = False, LAUNCH_CONFIG_ROBOT = None, LAUNCH_CONFIG_PROFILE = "host", runtime_joint_dynamics = False, LAUNCH_CONFIG_GPU = None):
         self.robot = robotObj
         # runtime_joint_dynamics: when True, the id/fd/aba/*_gradient bias reads

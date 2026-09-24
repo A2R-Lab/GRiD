@@ -77,7 +77,7 @@ def _id_S_desc(self, jid):
 
 
 def gen_add_code_line(self, new_code_line, add_indent_after = False):
-    self.code_str += self.indent_level * "    " + new_code_line + "\n"
+    self._append_code(self.indent_level * "    " + new_code_line + "\n")
     if add_indent_after:
         self.indent_level += 1
 
@@ -99,7 +99,7 @@ FRAGMENT_SENTINEL = "//__GRID_FRAGMENT__ "
 def gen_add_fragment_mark(self, name):
     # raw append (no indent): the sentinel is matched by lstrip().startswith,
     # but keeping it column-0 makes the stripped/kept invariant trivial.
-    self.code_str += FRAGMENT_SENTINEL + name + "\n"
+    self._append_code(FRAGMENT_SENTINEL + name + "\n")
 
 
 def split_fragment_sentinels(code_str):
