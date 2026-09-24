@@ -2241,3 +2241,22 @@ references it. RULES: (1) a new `os.environ.get("GRID_…")` in grid_codegen goe
 that list in the same commit (the test fails otherwise); (2) an A/B script asserts
 the variant marker is present/absent in EACH built header before timing (l2_ab.py
 does, which is how this was caught) — never trust a cache to honour a knob.
+
+### 7.z22 Fusing barrier-separated stages: PROVE the write set disjoint per topology first (2026-09-24, L1a)
+The world-frame idsva_so inner spent 68% of its stall samples on barriers because it
+ran two block barriers per ancestor velocity column with 72 work items. Fusing all
+pairs of a body column into one stage is only sound if no two pairs write the same
+output cell. Rather than trusting the algebra, enumerate it: a 40-line Python model
+of the loop nest (the emitter's own write list, the baked wf_parent/wf_body_v_start
+tables) lists every (tensor, cell) each (j, t, k, r) tuple writes and reports cells
+with writers from different pairs. On go2/g1 exactly one class appeared — the
+symmetric `dM_dq` fill when `k == j` on a multi-column body — and the model also showed
+the sequential last writer is always the tuple with `vel_j > vel_k`, so a guard making
+it the sole writer reproduces the old values bit-for-bit (proved by the fdsva_so runner
+at 32/256/max threads, float and double, then racecheck). RULES: (1) fuse only with a
+per-topology write-set proof in the perf note; (2) reproduce the SEQUENTIAL last-writer,
+never "either writer, they are equal" (rounding differs → run-to-run drift); (3) the
+per-item math must be copied verbatim from the sequential emitter (the patch script
+re-emits the emitter's own switch and kr body rather than retyping them); (4) gate =
+byte gate cells named, c++11 parse, bit-identity runner pre/post, thread invariance,
+equivalence modules, racecheck, THEN the n≥5 timing A/B against the pre-declared bar.

@@ -93,6 +93,18 @@ one-output-per-thread loop; measured on g1-floating the kernel is 7–11% faster
 (2026-09-24). ``GRID_FDSVA_SO_MINV_TILE=1`` at generation time forces the untiled loop
 (an A/B knob; it is part of every header cache key).
 
+The world-frame second-order inner (``idsva_so_world_frame_inner``, the floating-base
+and mimic path) runs its triple ancestor walk with ONE pair of block barriers per body
+column: every ancestor-or-self velocity column ``(j, t)`` of body ``i`` is built into a
+per-pair scratch slab (``72 × WF_MAX_PAIRS`` floats, a codegen constant) in one parallel
+loop, and one flattened ``(pair, k, r)`` loop then performs every contraction. The write
+set was enumerated per topology to prove the cells written by different pairs are
+disjoint, except the symmetric ``dM_dq`` pair on a multi-column body (the floating root),
+whose sequential last writer (``vel_j > vel_k``) is made the sole writer — so the outputs
+are bit-identical to the former per-pair loop while the kernel's barrier count falls by
+an order of magnitude (go2 264 → 36; g1 712 → 70 per launch). Measured 2026-09-24:
+idsva_so −20% and fdsva_so −18% of compute on g1-floating, −13…−52% on go2.
+
 .. code-block:: text
 
    fdsva_so_device

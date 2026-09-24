@@ -3056,6 +3056,22 @@ def gen_idsva_so_body_frame(self):
 # existing shim-based `gen_idsva_so_body_frame_floating_reference_inner` path.
 # =============================================================================
 
+def _idsva_so_wf_pairs(robot):
+    """(WF_MAX_PAIRS, wf_anc_v_count) for the L1a fused stage: wf_anc_v_count[b] = the
+    number of velocity columns on body b's ancestor-or-self chain (= the (j, t) pairs of
+    an (i = b, p) round = the kr items of a pair (j = b, t)); WF_MAX_PAIRS = its max."""
+    body_v_start = _idsva_so_floating_velocity_metadata(robot)["body_v_start"]
+    NB = robot.get_num_bodies()
+    parent = [robot.get_parent_id(b) for b in range(NB)]
+    counts = []
+    for b in range(NB):
+        c = 0; j = b
+        while j >= 0:
+            c += body_v_start[j + 1] - body_v_start[j]; j = parent[j]
+        counts.append(c)
+    return max(counts), counts
+
+
 def gen_idsva_so_world_frame_temp_mem_size(self):
     """Shared-memory float count for the world-frame inner.
 
@@ -3064,7 +3080,8 @@ def gen_idsva_so_world_frame_temp_mem_size(self):
       - v, a, f:           3 *  6 * NB
       - S, Sd, psid, psidd: 4 *  6 * NV
       - Per-(i, p) scratch (A0..A7, Bic_phi, Bic_psid): 10 * 36
-      - Per-(j, t) scratch (u1..u12): 12 * 6
+      - Per-(j, t) scratch (u1..u12) for all pairs of one (i, p): 72 * WF_MAX_PAIRS
+        (L1a fused stage; WF_MAX_PAIRS = max over bodies of the ancestor-or-self velocity count)
       - a_grav scratch: 6
       - Per-(i, p) helper vectors (ICi_S, ICi_psid, ICi_psidd, BCi_S, BCi_psid,
         BCiT_S, crf_S_f_i, A5_vec, A7_vec): 9 * 6 — moved from thread-0 stack
@@ -3085,7 +3102,7 @@ def gen_idsva_so_world_frame_temp_mem_size(self):
     else:
         n_int = NV
         internal_slab = 0
-    return int(4 * 36 * NB + 3 * 6 * NB + 4 * 6 * n_int + 10 * 36 + 12 * 6 + 6 + 9 * 6 + internal_slab)
+    return int(4 * 36 * NB + 3 * 6 * NB + 4 * 6 * n_int + 10 * 36 + 72 * _idsva_so_wf_pairs(self.robot)[0] + 6 + 9 * 6 + internal_slab)
 
 
 def gen_idsva_so_world_frame_inner(self):
@@ -3191,6 +3208,7 @@ def gen_idsva_so_world_frame_inner(self):
         # line below can reference it. Non-mimic: SO_N == "NUM_VEL" (no SO_N_INT emitted).
         f"constexpr int SO_N_INT = {n_int};",
     ] if is_mimic else []) + [
+        f"constexpr int WF_MAX_PAIRS = {_idsva_so_wf_pairs(self.robot)[0]};  // L1a: (j,t) pairs of one (i,p) round, max over bodies",
         "T *Ipool   = s_XImats + XIMAT_SIZE*NUM_BODIES;",
         "// --- HOT region (always smem when SCRATCH_IN_SMEM) ---",
         "// Xup is RELOCATED to the tail cold band (built Step 1, dead after the Step-4 IC",
@@ -3215,20 +3233,10 @@ def gen_idsva_so_world_frame_inner(self):
         "T *S_A5    = S_A4      + 36;",
         "T *S_A6    = S_A5      + 36;",
         "T *S_A7    = S_A6      + 36;",
-        "// Per-(j,t) scratch: u1..u12 (each 6-vector).",
-        "T *S_u1    = S_A7      + 36;",
-        "T *S_u2    = S_u1      +  6;",
-        "T *S_u3    = S_u2      +  6;",
-        "T *S_u4    = S_u3      +  6;",
-        "T *S_u5    = S_u4      +  6;",
-        "T *S_u6    = S_u5      +  6;",
-        "T *S_u7    = S_u6      +  6;",
-        "T *S_u8    = S_u7      +  6;",
-        "T *S_u9    = S_u8      +  6;",
-        "T *S_u10   = S_u9      +  6;",
-        "T *S_u11   = S_u10     +  6;",
-        "T *S_u12   = S_u11     +  6;",
-        "T *S_agrav = S_u12     +  6;",
+        "// Per-(j,t) scratch: u1..u12 (each 6-vector) for EVERY (j,t) pair of the current (i,p)",
+        "// at once (L1a fused stage, 2026-09-24): pair p owns S_uslab[p*72 .. p*72+72).",
+        "T *S_uslab = S_A7      + 36;",
+        "T *S_agrav = S_uslab   + 72*WF_MAX_PAIRS;",
         "// Per-(i,p) vector intermediates (used by phase 5a parallel idx-over-36 build of A0..A7).",
         "T *S_ICi_S      = S_agrav      +  6;",
         "T *S_ICi_psid   = S_ICi_S      +  6;",
@@ -3279,6 +3287,7 @@ def gen_idsva_so_world_frame_inner(self):
         # the same template instantiation lives in multiple per-algo TUs.
         f"constexpr int wf_parent[] = {{ {_idsva_so_int_array(parent_ids)} }};",
         f"constexpr int wf_body_v_start[] = {{ {_idsva_so_int_array(metadata['body_v_start'])} }};",
+        f"constexpr int wf_anc_v_count[] = {{ {_idsva_so_int_array(_idsva_so_wf_pairs(self.robot)[1])} }};  // velocity columns on the ancestor-or-self chain",
         # For mimic, wf_body_v_index holds UNIQUE per-column INTERNAL slots (so mimic
         # siblings get distinct slots) and wf_vel_s_* are indexed by internal slot. For
         # non-mimic these are byte-identical to the legacy reduced-vel tables.
@@ -3644,21 +3653,35 @@ def gen_idsva_so_world_frame_inner(self):
     self.gen_add_end_control_flow()
     self.gen_add_sync()
 
-    # j-loop (all threads run sequentially through ancestor chain).
-    self.gen_add_code_line("int j = i;")
-    self.gen_add_code_line("while (j >= 0) {", True)
-    self.gen_add_code_line("for (int tt = wf_body_v_start[j]; tt < wf_body_v_start[j + 1]; ++tt) {", True)
-    self.gen_add_code_line("int vel_j = wf_body_v_index[tt];")
-    # Per-(j, t) intermediates: parallel build of u1..u12 over 72 element-slots
-    # (12 u-vectors × 6 elements each). Each thread builds one element of one u.
-    self.gen_add_code_line("T *S_t     = &S_vel[vel_j*6];")
-    self.gen_add_code_line("T *Sd_t    = &Sd_vel[vel_j*6];")
-    self.gen_add_code_line("T *psid_t  = &psid_v[vel_j*6];")
-    self.gen_add_code_line("T *psidd_t = &psidd_v[vel_j*6];")
-    self.gen_add_parallel_loop("u_idx", "72")
+    # ---- L1a fused (j, t) stage (2026-09-24; perf_design_a2_leads "Implementation plan") ----
+    # The ncu capture put 68% of this kernel's stall samples on barriers: the sequential
+    # (j, tt) loop cost TWO block barriers per ancestor velocity column of body i with
+    # only 72 work items in the u-stage. Every (j, t) pair of one (i, p) round is now
+    # built at once into the per-pair u-slab (S_uslab, WF_MAX_PAIRS x 72), then ONE
+    # parallel loop covers every (pair, kr) contraction item. Per-cell arithmetic is
+    # unchanged (each item computes exactly what its sequential twin computed, from
+    # the same S_u vectors); writes stay one-writer-per-cell (the dM guard below) so the
+    # outputs are bit-identical and thread-count invariant. Chain walks are per-thread
+    # integer work bounded by the tree depth; wf_anc_v_count is a codegen constant.
+    self.gen_add_code_line("// === L1a fused stage: every ancestor-or-self velocity column (j,t) of body i at once ===")
+    self.gen_add_code_line("int wf_npairs = wf_anc_v_count[i];")
+    self.gen_add_parallel_loop("u_idx", "72*wf_npairs")
     self.gen_add_code_lines([
-        "int which_u = u_idx / 6;",
-        "int r = u_idx % 6;",
+        "int p = u_idx / 72; int u_local = u_idx % 72;",
+        "// pair p -> (j, vel_j): walk the ancestor-or-self chain of i",
+        "int j = i; int _pl = p;",
+        "for (;;) { int _nk = wf_body_v_start[j + 1] - wf_body_v_start[j]; if (_pl < _nk) break; _pl -= _nk; j = wf_parent[j]; }",
+        "int vel_j = wf_body_v_index[wf_body_v_start[j] + _pl];",
+        "T *S_t     = &S_vel[vel_j*6];",
+        "T *Sd_t    = &Sd_vel[vel_j*6];",
+        "T *psid_t  = &psid_v[vel_j*6];",
+        "T *psidd_t = &psidd_v[vel_j*6];",
+        "T *S_u1 = &S_uslab[p*72]; T *S_u2 = S_u1 + 6; T *S_u3 = S_u1 + 12; T *S_u4 = S_u1 + 18; T *S_u5 = S_u1 + 24; T *S_u6 = S_u1 + 30;",
+        "T *S_u7 = S_u1 + 36; T *S_u8 = S_u1 + 42; T *S_u9 = S_u1 + 48; T *S_u10 = S_u1 + 54; T *S_u11 = S_u1 + 60; T *S_u12 = S_u1 + 66;",
+    ])
+    self.gen_add_code_lines([
+        "int which_u = u_local / 6;",
+        "int r = u_local % 6;",
         "switch (which_u) {",
         "  case 0:  S_u1[r]  = dot_prod<T, 6, 1, 1>(&S_A3[6*r], S_t); break;",
         "  case 1:  S_u2[r]  = dot_prod<T, 6, 1, 1>(&S_A1[6*r], S_t); break;",
@@ -3678,28 +3701,33 @@ def gen_idsva_so_world_frame_inner(self):
         "  case 11: S_u12[r] = dot_prod<T, 6, 6, 1>(&S_A1[r], S_t); break;",
         "}",
     ])
-    self.gen_add_end_control_flow()  # end parallel_loop u_idx
+    self.gen_add_end_control_flow()  # end parallel_loop u_idx (all pairs)
     self.gen_add_sync()
 
-    # ---- Parallel inner (k, rr) walk ----
-    # Each thread is assigned a unique kr_idx in [0, total_kr). The thread chases
-    # the ancestor chain of j to map kr_idx -> (k_local, rr_local, vel_k). All
-    # writes to output tensors contain `vel_k` in the index, and vel_k values are
-    # disjoint across kr_idx (each velocity belongs to exactly one body in the
-    # ancestor chain), so threads never race on output cells.
-    self.gen_add_code_line("// Flatten (k, rr) iterations of the ancestor chain of j into a single index space.")
-    self.gen_add_code_line("int wf_total_kr = 0;")
-    self.gen_add_code_line("for (int _kk = j; _kk >= 0; _kk = wf_parent[_kk]) wf_total_kr += wf_body_v_start[_kk + 1] - wf_body_v_start[_kk];")
-    self.gen_add_parallel_loop("kr_idx", "wf_total_kr")
+    # ---- one (pair, kr) contraction loop over every pair of this (i, p) round ----
+    self.gen_add_code_line("// Flatten (pair, k, rr): pair (j, t) contributes wf_anc_v_count[j] items (its ancestor-or-self velocity columns).")
+    self.gen_add_code_line("int wf_total = 0;")
+    self.gen_add_code_line("for (int _j = i; _j >= 0; _j = wf_parent[_j]) wf_total += (wf_body_v_start[_j + 1] - wf_body_v_start[_j]) * wf_anc_v_count[_j];")
+    self.gen_add_parallel_loop("kr_idx", "wf_total")
     self.gen_add_code_lines([
-        "// Map kr_idx -> (k, vel_k) by walking the chain.",
+        "// Map kr_idx -> (pair p = (j, vel_j), kr): blocks of nk_j * wf_anc_v_count[j] down the chain of i.",
+        "int j = i; int p = 0; int _rem = kr_idx; int _tl = 0; int kr = 0;",
+        "for (;;) { int _nk = wf_body_v_start[j + 1] - wf_body_v_start[j]; int _blk = _nk * wf_anc_v_count[j];",
+        "           if (_rem < _blk) { _tl = _rem / wf_anc_v_count[j]; kr = _rem % wf_anc_v_count[j]; break; }",
+        "           _rem -= _blk; p += _nk; j = wf_parent[j]; }",
+        "p += _tl; int vel_j = wf_body_v_index[wf_body_v_start[j] + _tl];",
+        "T *S_u1 = &S_uslab[p*72]; T *S_u2 = S_u1 + 6; T *S_u3 = S_u1 + 12; T *S_u4 = S_u1 + 18; T *S_u5 = S_u1 + 24; T *S_u6 = S_u1 + 30;",
+        "T *S_u7 = S_u1 + 36; T *S_u8 = S_u1 + 42; T *S_u9 = S_u1 + 48; T *S_u10 = S_u1 + 54; T *S_u11 = S_u1 + 60; T *S_u12 = S_u1 + 66;",
+    ])
+    self.gen_add_code_lines([
+        "// Map kr -> (k, vel_k) by walking the chain of j.",
         "int k = -1; int vel_k = -1; int rr = -1;",
         "{",
         "int _seen = 0;",
         "for (int _kk = j; _kk >= 0; _kk = wf_parent[_kk]) {",
         "    int _nk = wf_body_v_start[_kk + 1] - wf_body_v_start[_kk];",
-        "    if (kr_idx < _seen + _nk) {",
-        "        rr = wf_body_v_start[_kk] + (kr_idx - _seen);",
+        "    if (kr < _seen + _nk) {",
+        "        rr = wf_body_v_start[_kk] + (kr - _seen);",
         "        vel_k = wf_body_v_index[rr];",
         "        k = _kk;",
         "        break;",
@@ -3741,9 +3769,17 @@ def gen_idsva_so_world_frame_inner(self):
         f"d2tau_dvdq[(vel_j*{SO_N} + vel_i)*{SO_N} + vel_k] = u1_S_r + u2_psd_Sd;",
         f"d2tau_dqd2[(vel_j*{SO_N} + vel_k)*{SO_N} + vel_i] = u11_S_r;",
         f"d2tau_dqd2[(vel_j*{SO_N} + vel_i)*{SO_N} + vel_k] = u11_S_r;",
+    ])
+    # L1a canonical writer: with every (j,t) pair of this (i,p) in flight at once, the
+    # symmetric dM_dq pair below is the ONLY output cell two pairs both write — k == j on a
+    # multi-column body (the floating root), tuples (t, r) and (r, t). Sequentially the
+    # later t (vel_j > vel_k) won; make it the sole writer (>= keeps the r == t cell).
+    self.gen_add_code_line("if (k != j || vel_j >= vel_k) {", True)
+    self.gen_add_code_lines([
         f"dM_dq[(vel_k*{SO_N} + vel_j)*{SO_N} + vel_i] = S_r_u12;",
         f"dM_dq[(vel_j*{SO_N} + vel_k)*{SO_N} + vel_i] = S_r_u12;",
     ])
+    self.gen_add_end_control_flow()
     self.gen_add_end_control_flow()
     self.gen_add_code_lines([
         "if (k != j) {", True,
@@ -3770,12 +3806,8 @@ def gen_idsva_so_world_frame_inner(self):
     self.gen_add_code_line(f"d2tau_dqd2[(vel_i*{SO_N} + vel_j)*{SO_N} + vel_k] = -dot_prod<T, 6, 1, 1>(S_u2, S_r);")
     self.gen_add_end_control_flow()
 
-    self.gen_add_end_control_flow()  # end parallel_loop over kr_idx
+    self.gen_add_end_control_flow()  # end parallel_loop over (pair, kr)
     self.gen_add_sync()
-
-    self.gen_add_end_control_flow()  # end tt loop
-    self.gen_add_code_line("j = wf_parent[j];")
-    self.gen_add_end_control_flow()  # end while j
 
     self.gen_add_end_control_flow()  # end pp loop
 
