@@ -27,6 +27,7 @@ per-column independence is left for a future perf pass.
 import numpy as np
 
 from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, gen_workspace_repoint_line, host_mode_flags, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 
 
 __all__ = [
@@ -364,15 +365,7 @@ def gen_frame_jacobian_host(self, mode=0):
     # MUJOCO_OUTPUT (floating only) host flag, LAST: forwarded to the kernel launch
     # (naming the tier positionally to reach the trailing flag). Default false ->
     # byte-identical pin codegen.
-    mjx_host = self.robot.floating_base
-    if mjx_host:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    else:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS, \"frame_jacobian requires all-data or kinematics gridData\");")
+    mjx_host = gen_host_wrapper_head(self, "frame_jacobian", func_def_start, func_def_end, kind_rule="kinematics")
     self.gen_add_code_line("if (target_jid < 0) { target_jid = " + str(default_tjid) + "; }       // -1 => leaf-EE default (frame still honored)")
     self.gen_add_code_line("if (reference_frame < 0) { reference_frame = " + str(_REF_LWA) + "; }  // -1 => LOCAL_WORLD_ALIGNED default")
     fj_kernel_tmpl = "frame_jacobian_kernel<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_host else "frame_jacobian_kernel<T, RESOURCE_TIER>"
@@ -736,15 +729,7 @@ def gen_frame_jacobian_dot_host(self, mode=0):
     # MUJOCO_OUTPUT (floating only) host flag, LAST: forwarded to the kernel launch
     # (naming the tier positionally to reach the trailing flag). Default false ->
     # byte-identical pin codegen.
-    mjx_host = self.robot.floating_base
-    if mjx_host:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    else:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS, \"frame_jacobian_dot requires all-data or kinematics gridData\");")
+    mjx_host = gen_host_wrapper_head(self, "frame_jacobian_dot", func_def_start, func_def_end, kind_rule="kinematics")
     self.gen_add_code_line("if (target_jid < 0) { target_jid = " + str(default_tjid) + "; }       // -1 => leaf-EE default (frame still honored)")
     self.gen_add_code_line("if (reference_frame < 0) { reference_frame = " + str(_REF_LWA) + "; }  // -1 => LOCAL_WORLD_ALIGNED default")
     # Jdot needs qd; always source from the full q|qd|u buffer (stride 3*NUM_JOINTS),
@@ -988,15 +973,7 @@ def gen_osc_inertia_host(self, mode=0):
     # (naming the tier positionally to reach the trailing flag). osc_inertia is
     # frame-INVARIANT (no output epilogue) but the kernel still input-converts the
     # quaternion under the flag. Default false -> byte-identical pin codegen.
-    mjx_host = self.robot.floating_base
-    if mjx_host:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    else:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS, \"osc_inertia requires all-data or kinematics gridData\");")
+    mjx_host = gen_host_wrapper_head(self, "osc_inertia", func_def_start, func_def_end, kind_rule="kinematics")
     osc_kernel_tmpl = "osc_inertia_kernel<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_host else "osc_inertia_kernel<T, RESOURCE_TIER>"
     func_call_start = (osc_kernel_tmpl + "<<<block_dimms,thread_dimms,OSC_INERTIA_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()>>>"
                        "(hd_data->d_osc_inertia,hd_data->d_workspace,hd_data->d_q,stride_q,")

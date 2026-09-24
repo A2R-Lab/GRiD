@@ -2,6 +2,7 @@ import numpy as np
 import copy
 
 from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, gen_workspace_repoint_line, host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 
 # CRBA has a 3-rung ladder: full | s_M->d_workspace (surgical OUTPUT_SPILL of the
 # nv*nv mass matrix, the dominant write-once buffer, read only by the optional mjx
@@ -958,15 +959,7 @@ def gen_crba_host(self, mode = 0):
     # MUJOCO_OUTPUT (floating only) host flag, LAST: forwarded to the kernel launch
     # (naming the tier positionally to reach the trailing flag). Default false ->
     # byte-identical pin codegen.
-    mjx_host = self.robot.floating_base
-    if mjx_host:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    else:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_DYNAMICS, \"crba requires all-data or dynamics gridData\");")
+    mjx_host = gen_host_wrapper_head(self, "crba", func_def_start, func_def_end, kind_rule="dynamics")
     crba_kernel_tmpl = "crba_kernel<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_host else "crba_kernel<T, RESOURCE_TIER>"
     func_call_start = crba_kernel_tmpl + "<<<block_dimms,thread_dimms,CRBA_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()>>>(hd_data->d_M,hd_data->d_workspace,hd_data->d_q_qd,stride_q_qd,"
     func_call_end = "d_robotModel,gravity,num_timesteps);"

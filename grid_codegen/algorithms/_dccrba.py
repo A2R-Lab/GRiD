@@ -57,6 +57,7 @@ import numpy as np
 
 from ._coriolis import _emit_crm_cm, _emit_crf_cm, _coriolis_int_array as _dccrba_int_array
 from grid_codegen.helpers._code_generation_helpers import host_q_input_transfer_lines, gen_emit_host_result_transfer, _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 from ._centroidal import _centroidal_inner_temp_mem_size
 
 
@@ -750,15 +751,7 @@ def gen_cmm_time_variation_host(self, mode=0):
     # MUJOCO_OUTPUT (floating only) host flag, LAST: forwarded to the kernel launch
     # naming the tier positionally (<T, GRID_DEFAULT_RESOURCE_TIER, MUJOCO_OUTPUT>) to
     # reach the trailing flag. Default false -> byte-identical pin codegen.
-    mjx_host = self.robot.floating_base
-    if mjx_host:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    else:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS, \"cmm_time_variation requires all-data or kinematics gridData\");")
+    mjx_host = gen_host_wrapper_head(self, "cmm_time_variation", func_def_start, func_def_end, kind_rule="kinematics")
     if mjx_host:
         ktmpl = "<T, RESOURCE_TIER, MUJOCO_OUTPUT>"
         kname = "cmm_time_variation_kernel" + ("_single_timing" if single_call_timing else "") + ktmpl
@@ -895,15 +888,7 @@ def gen_dccrba_host(self, mode=0):
     # MUJOCO_OUTPUT (floating only) host flag, LAST: forwarded to the kernel launch
     # naming the tier positionally (<T, GRID_DEFAULT_RESOURCE_TIER, MUJOCO_OUTPUT>) to
     # reach the trailing flag. Default false -> byte-identical pin codegen.
-    mjx_host = self.robot.floating_base
-    if mjx_host:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    else:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS, \"dccrba requires all-data or kinematics gridData\");")
+    mjx_host = gen_host_wrapper_head(self, "dccrba", func_def_start, func_def_end, kind_rule="kinematics")
     # The non-timing kernel carries the MUJOCO_OUTPUT epilogue; name the tier
     # positionally so the trailing flag binds. The single-timing kernel takes the
     # flag too (host forwarding) but elides the epilogue (perf-phase follow-up).

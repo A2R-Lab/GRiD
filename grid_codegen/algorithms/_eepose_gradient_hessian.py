@@ -5,6 +5,7 @@ Fixed-joint targets are supported (including on branched trees and multiple
 fixed targets at once) via the ``fixed_target_name`` variants.
 """
 from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, _gen_mjx_build_R_lines, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 
 
 def gen_end_effector_pose_inner_temp_mem_size(self, fixed_target_name = ""):
@@ -343,15 +344,7 @@ def gen_end_effector_pose_host(self, mode = 0, fixed_target_name = ""):
     # (naming the tier positionally to reach the trailing flag). end_effector_pose is
     # frame-INVARIANT (no output epilogue) but the kernel still input-converts the
     # quaternion under the flag. Default false -> byte-identical pin codegen.
-    mjx_host = self.robot.floating_base
-    if mjx_host:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    else:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS, \"end_effector_pose requires all-data or kinematics gridData\");")
+    mjx_host = gen_host_wrapper_head(self, "end_effector_pose", func_def_start, func_def_end, kind_rule="kinematics")
     eep_kernel_tmpl = ("end_effector_pose_kernel" + ("" if fixed_target_name == "" else "_" + fixed_target_name) +
                        ("<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_host else "<T, RESOURCE_TIER>"))
     func_call_start = eep_kernel_tmpl + \
@@ -1084,15 +1077,7 @@ def gen_end_effector_pose_gradient_host(self, mode = 0, fixed_target_name = ""):
     # (naming the tier positionally to reach the trailing flag). The EE-pose Jacobian
     # base-linear columns reframe by R^T under the flag. Default false -> byte-
     # identical pin codegen.
-    mjx_host = self.robot.floating_base
-    if mjx_host:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    else:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS, \"end_effector_pose_gradient requires all-data or kinematics gridData\");")
+    mjx_host = gen_host_wrapper_head(self, "end_effector_pose_gradient", func_def_start, func_def_end, kind_rule="kinematics")
     eepg_kernel_tmpl = ("end_effector_pose_gradient_kernel" + ("" if fixed_target_name == "" else "_" + fixed_target_name) +
                         ("<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_host else "<T, RESOURCE_TIER>"))
     func_call_start = eepg_kernel_tmpl + "<<<block_dimms,thread_dimms,END_EFFECTOR_POSE_GRADIENT_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()>>>(hd_data->d_end_effector_pose_gradient,hd_data->d_workspace,hd_data->d_q,stride_q,"
@@ -2664,15 +2649,7 @@ def gen_end_effector_pose_hessian_host(self, mode = 0, fixed_target_name = ""):
     # (naming the tier positionally to reach the trailing flag). The pin Hessian +
     # bundled pose-gradient transform to the mjx convention under the flag. Default
     # false -> byte-identical pin codegen.
-    mjx_host = self.robot.floating_base
-    if mjx_host:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    else:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS, \"end_effector_pose_hessian requires all-data or kinematics gridData\");")
+    mjx_host = gen_host_wrapper_head(self, "end_effector_pose_hessian", func_def_start, func_def_end, kind_rule="kinematics")
     eeph_kernel_tmpl = ("end_effector_pose_hessian_kernel" + ("" if fixed_target_name == "" else "_" + fixed_target_name) +
                         ("<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_host else "<T, RESOURCE_TIER>"))
     func_call_start = eeph_kernel_tmpl + "<<<block_dimms,thread_dimms,END_EFFECTOR_POSE_HESSIAN_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()>>>(hd_data->d_end_effector_pose_hessian,hd_data->d_end_effector_pose_gradient,hd_data->d_workspace,hd_data->d_q,stride_q,"

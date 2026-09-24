@@ -1,4 +1,5 @@
 from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, host_mode_flags, host_q_qd_input_transfer_lines, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 
 
 def _id_S_row_coeff(S_desc, row):
@@ -941,15 +942,7 @@ def gen_inverse_dynamics_host(self, mode = 0):
     # MUJOCO_OUTPUT (floating only) host template flag: forwarded to the with-qdd
     # kernel launch (the only mjx-capable overload). Added LAST so existing
     # positional template args are unaffected; default false -> byte-identical.
-    mjx_host = self.robot.floating_base
-    if mjx_host:
-        self.gen_add_code_line("template <typename T, bool USE_QDD_FLAG = false, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    else:
-        self.gen_add_code_line("template <typename T, bool USE_QDD_FLAG = false, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_DYNAMICS, \"inverse_dynamics requires all-data or dynamics gridData\");")
+    mjx_host = gen_host_wrapper_head(self, "inverse_dynamics", func_def_start, func_def_end, kind_rule="dynamics", extra_tparams="bool USE_QDD_FLAG = false, ")
     func_call_start = "inverse_dynamics_kernel<T, RESOURCE_TIER><<<block_dimms,thread_dimms,INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(hd_data->d_c,hd_data->d_q_qd,stride_q_qd,"
     # the with-qdd launch is the mjx-capable overload: forward MUJOCO_OUTPUT (and
     # the caller-chosen tier, which it must name positionally to reach the trailing flag).

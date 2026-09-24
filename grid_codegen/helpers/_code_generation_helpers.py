@@ -464,6 +464,27 @@ def gen_emit_host_result_transfer(self, h_buf, d_buf, size_expr, single_call_tim
                              "gpuErrchkKernel();"])
 
 
+def gen_host_wrapper_head(self, name, func_def_start, func_def_end, kind_rule="dynamics", extra_tparams=""):
+    """The uniform host-wrapper head (hygiene 2026-09-24, folded from 12+ sites,
+    byte-identical): the template line — with the trailing MUJOCO_OUTPUT flag on
+    floating robots (default false keeps pin codegen byte-identical) — then
+    `__host__`, the two def lines and the gridData-kind static_assert.
+    `extra_tparams` is spliced verbatim after `typename T, ` (e.g.
+    "bool USE_QDD_FLAG = false, "); `kind_rule` = "dynamics" | "kinematics".
+    Returns mjx_host so the caller can pick its kernel template."""
+    mjx_host = self.robot.floating_base
+    if mjx_host:
+        self.gen_add_code_line("template <typename T, " + extra_tparams + "bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
+    else:
+        self.gen_add_code_line("template <typename T, " + extra_tparams + "bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
+    self.gen_add_code_line("__host__")
+    self.gen_add_code_line(func_def_start)
+    self.gen_add_code_line(func_def_end, True)
+    kind_sym, kind_txt = ("GRID_DATA_DYNAMICS", "dynamics") if kind_rule == "dynamics" else ("GRID_DATA_KINEMATICS", "kinematics")
+    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == " + kind_sym + ", \"" + name + " requires all-data or " + kind_txt + " gridData\");")
+    return mjx_host
+
+
 def wrap_host_single_call_timing(func_call_code, kernel_errcheck=False):
     """Wrap the host launch-line list in the single-call timing scaffold, IN
     PLACE: clock_gettime start prepended, [optional gpuErrchkKernel,] clock_

@@ -39,6 +39,7 @@ back into hd_data->h_Y (uniform `(hd_data, model, ...)` host signature).
 """
 
 from grid_codegen.helpers._code_generation_helpers import host_q_input_transfer_lines, _gen_mjx_build_R_lines, gen_workspace_repoint_line, gen_workspace_cast_expr, host_mode_flags, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 
 # The 10 basis spatial-inertia derivatives dI/dpi_k in GRiD [angular; linear]
 # 6x6 order, for pi = [m, hx, hy, hz, Ixx, Ixy, Ixz, Iyy, Iyz, Izz].
@@ -443,16 +444,8 @@ def gen_inverse_dynamics_regressor_host(self, mode=0):
     # MUJOCO_OUTPUT (floating only) host template flag, forwarded to the kernel
     # launch (names RESOURCE_TIER positionally to reach the trailing flag). Added
     # LAST so existing positional call sites don't rebind.
-    mjx_host = self.robot.floating_base
     self.gen_add_func_doc("Compute the joint-torque regressor Y (tau = Y . pi)", [], func_params, None)
-    if mjx_host:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    else:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_DYNAMICS, \"inverse_dynamics_regressor requires all-data or dynamics gridData\");")
+    mjx_host = gen_host_wrapper_head(self, "inverse_dynamics_regressor", func_def_start, func_def_end, kind_rule="dynamics")
     kernel_tmpl = "inverse_dynamics_regressor_kernel<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_host else "inverse_dynamics_regressor_kernel<T, RESOURCE_TIER>"
     func_call_start = kernel_tmpl + "<<<block_dimms,thread_dimms,INVERSE_DYNAMICS_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()>>>(hd_data->d_Y,hd_data->d_workspace,hd_data->d_q_qd_u,stride_q_qd_qdd,"
     func_call_end = "d_robotModel,gravity,num_timesteps);"
@@ -792,16 +785,8 @@ def gen_forward_dynamics_parameter_gradient_host(self, mode=0):
     # MUJOCO_OUTPUT (floating only) host template flag, forwarded to the kernel
     # launch (names RESOURCE_TIER positionally to reach the trailing flag). Added
     # LAST so existing positional call sites don't rebind.
-    mjx_host = self.robot.floating_base
     self.gen_add_func_doc("Compute the FD param gradient dqdd/dpi = -Minv . Y", [], func_params, None)
-    if mjx_host:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    else:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_DYNAMICS, \"forward_dynamics_parameter_gradient requires all-data or dynamics gridData\");")
+    mjx_host = gen_host_wrapper_head(self, "forward_dynamics_parameter_gradient", func_def_start, func_def_end, kind_rule="dynamics")
     # g1-spill: pass hd_data->d_workspace as the kernel's 2nd arg. At the spilled
     # default tier (s_Y in d_workspace) it is read; at TIER_SHARED it is unused.
     kernel_tmpl = "forward_dynamics_parameter_gradient_kernel<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_host else "forward_dynamics_parameter_gradient_kernel<T, RESOURCE_TIER>"
@@ -1077,16 +1062,8 @@ def gen_kinetic_energy_regressor_host(self, mode=0):
     # MUJOCO_OUTPUT (floating only) host template flag, forwarded to the kernel
     # launch (names RESOURCE_TIER positionally to reach the trailing flag). KE is
     # invariant -> only the kernel's input-convert changes; no host post-process.
-    mjx_host = self.robot.floating_base
     self.gen_add_func_doc("Compute the kinetic-energy regressor y_KE (KE = y_KE . pi)", [], func_params, None)
-    if mjx_host:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    else:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_DYNAMICS, \"kinetic_energy_regressor requires all-data or dynamics gridData\");")
+    mjx_host = gen_host_wrapper_head(self, "kinetic_energy_regressor", func_def_start, func_def_end, kind_rule="dynamics")
     kernel_tmpl = "kinetic_energy_regressor_kernel<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_host else "kinetic_energy_regressor_kernel<T, RESOURCE_TIER>"
     func_call_start = kernel_tmpl + "<<<block_dimms,thread_dimms,KINETIC_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(hd_data->d_ke_regressor,hd_data->d_q_qd,stride_q_qd,"
     func_call_end = "d_robotModel,gravity,num_timesteps);"
@@ -1322,16 +1299,8 @@ def gen_potential_energy_regressor_host(self, mode=0):
     # MUJOCO_OUTPUT (floating only) host template flag, forwarded to the kernel
     # launch (names RESOURCE_TIER positionally to reach the trailing flag). PE is
     # invariant -> only the kernel's quat-reorder changes; no host post-process.
-    mjx_host = self.robot.floating_base
     self.gen_add_func_doc("Compute the potential-energy regressor y_PE (PE = y_PE . pi)", [], func_params, None)
-    if mjx_host:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    else:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_KINEMATICS, \"potential_energy_regressor requires all-data or kinematics gridData\");")
+    mjx_host = gen_host_wrapper_head(self, "potential_energy_regressor", func_def_start, func_def_end, kind_rule="kinematics")
     kernel_tmpl = "potential_energy_regressor_kernel<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_host else "potential_energy_regressor_kernel<T, RESOURCE_TIER>"
     func_call_start = kernel_tmpl + "<<<block_dimms,thread_dimms,POTENTIAL_ENERGY_REGRESSOR_DYNAMIC_SHARED_MEM_BYTES<T>()>>>(hd_data->d_pe_regressor,hd_data->d_q,stride_q,"
     func_call_end = "d_robotModel,gravity,num_timesteps);"

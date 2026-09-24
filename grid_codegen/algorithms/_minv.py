@@ -1,4 +1,5 @@
 from grid_codegen.helpers._code_generation_helpers import gen_emit_host_result_transfer, gen_workspace_repoint_line, host_mode_flags, host_std_func_params, mangle_host_func_defs, wrap_host_single_call_timing
+from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 
 
 def _minv_Svec_cpp(robot, jid):
@@ -794,15 +795,7 @@ def gen_minv_host(self, mode = 0):
     # MUJOCO_OUTPUT (floating only) host flag, LAST: forwarded to the kernel launch
     # (naming the tier positionally to reach the trailing flag). Default false ->
     # byte-identical pin codegen.
-    mjx_host = self.robot.floating_base
-    if mjx_host:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, bool MUJOCO_OUTPUT = false, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    else:
-        self.gen_add_code_line("template <typename T, bool USE_COMPRESSED_MEM = false, gridDataKind KIND = GRID_DATA_ALL, int RESOURCE_TIER = GRID_DEFAULT_RESOURCE_TIER>")
-    self.gen_add_code_line("__host__")
-    self.gen_add_code_line(func_def_start)
-    self.gen_add_code_line(func_def_end, True)
-    self.gen_add_code_line("static_assert(KIND == GRID_DATA_ALL || KIND == GRID_DATA_DYNAMICS, \"minv requires all-data or dynamics gridData\");")
+    mjx_host = gen_host_wrapper_head(self, "minv", func_def_start, func_def_end, kind_rule="dynamics")
     minv_kernel_tmpl = "minv_kernel<T, RESOURCE_TIER, MUJOCO_OUTPUT>" if mjx_host else "minv_kernel<T, RESOURCE_TIER>"
     func_call_start = minv_kernel_tmpl + "<<<block_dimms,thread_dimms,MINV_DYNAMIC_SHARED_MEM_BYTES<T, RESOURCE_TIER>()>>>(hd_data->d_Minv,hd_data->d_workspace,hd_data->d_q,stride_q,"
     func_call_end = "d_robotModel,num_timesteps);"
