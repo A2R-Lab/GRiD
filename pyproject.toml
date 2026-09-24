@@ -115,6 +115,9 @@ exclude = '''
 '''
 
 [tool.pytest.ini_options]
+# pytest's defaults plus the gitignored local scratch dir at the repo root (a stray
+# scratchpad/*/_test.py produced 10 collection errors in a full-tree run, 2026-09-24).
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "scratchpad"]
 markers = [
     "pinocchio_equivalence: Pinocchio equivalence coverage for GRiD reference code.",
     "developer_only: Optional developer-only tests that require extra dependencies.",
