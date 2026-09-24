@@ -61,6 +61,20 @@ The task router: find the right entry point for what you are trying to do.
        ``output_convention="mujoco"`` — values AND derivative/second-order
        surfaces, floating base; see the conventions section of
        :doc:`user_guide/tutorials/python_wrappers`.
+   * - **Run several pipelines on one GPU without them sharing scratch**
+     - ``handle.context()`` (numpy, jax and torch handles alike) opens an
+       isolated runtime context on the same artifact — own arena, tables,
+       streams, launch overrides — closed with that handle;
+       ``handle.device_profile`` says what it was fitted to. One pipeline per
+       context. :doc:`user_guide/concepts/runtime_contexts`.
+   * - **Swap inertias / attach a tool at run time and keep autograd honest**
+     - ``set_inertia_params`` / ``attach_tool`` / ``set_joint_dynamics``
+       mutate the context under an exclusive admission lock and bump
+       ``handle.model_version``; a torch/JAX backward whose forward ran under
+       an older version raises — recompute the forward. Same page as above.
+   * - **Know what shapes / dtypes / devices a call accepts (and rejects)**
+     - One rule set per operand class, enforced natively on every surface:
+       :doc:`user_guide/concepts/operand_validation`.
    * - **Understand why something recompiled (or refused to)**
      - Three DIFFERENT "cache keys" exist: (1) the per-robot ``.so`` cache key
        (URDF bytes + codegen options + version + arch — ``register_robot``);
