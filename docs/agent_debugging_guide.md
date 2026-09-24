@@ -2332,3 +2332,20 @@ lists against the `Tensor? …` rows, or the .so aborts at dlopen with
 "Inferred operator schema … doesn't match" (found only when a test process
 loads it); (4) the crosscheck's body extractor must look for `_body(` before
 `_impl(` once a key is split.
+
+### 7.z26 A consistently generated omission passes every generator-consistency gate (2026-09-24, codex R1)
+Thirty generated `grid_rbd_<op>_mujoco` C-ABI twins lacked the new leading
+`long long ctx_id` while their bodies named it. Every gate stayed green: the
+generated-block drift test faithfully reproduced the broken generator, the
+signature crosscheck only inspected the primary symbol, and the wrapper
+smokes build a FIXED-base artifact, where the twins are `#ifdef`'d out. The
+same class hid a hand-written mjx-only JAX forwarder
+(`quadratic_state_cost_mujoco_impl`) that dropped `ctx_id`. RULES: (1) a
+signature contract test must enumerate every emitted VARIANT (primary, twin,
+`_stamped`/`_checked`), not the spec stem; (2) any feature that is gated by a
+build option needs a gate that BUILDS with that option — here
+`test/python_wrappers/test_mjx_twins_contexts.py` (go2 floating subset with
+`enable_mujoco_kernels=True`, numpy/torch/jax twins, explicit context);
+(3) "the generator and the template agree" proves consistency, never
+correctness — a test that only agrees with its generator cannot detect a
+consistently generated omission (codex's phrasing; keep it).

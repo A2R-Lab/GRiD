@@ -11,8 +11,9 @@ A GPU-accelerated library for computing rigid body dynamics with analytical grad
 GRiD turns a URDF into optimized, per-robot CUDA C++ for rigid-body dynamics, kinematics, their analytical
 first- and second-order derivatives and a trajectory-optimization plant layer, then hands you that code three
 ways — a numpy handle, a `jax.jit`-able FFI surface, or `torch.autograd`-aware ops — from one content-addressed
-`.so` cache. One CUDA block per problem, batched, bit-deterministic and thread-count invariant, so the same
-artifact runs on an embedded Jetson and a desktop GPU. Website: https://a2r-lab.github.io/GRiD/.
+`.so` cache. One CUDA block per problem, batched, bit-deterministic and thread-count invariant; the same
+model and API rebuild for each target architecture (one artifact per `sm_XX`), with runtime memory
+adaptation from embedded Jetson class devices to desktop GPUs. Website: https://a2r-lab.github.io/GRiD/.
 
 GRiD builds on our [URDFParser](https://github.com/A2R-Lab/URDFParser), [RBDReference](https://github.com/A2R-Lab/RBDReference), and [GLASS](https://github.com/A2R-Lab/GLASS) packages (URDF parsing, Pinocchio-validated reference dynamics, and GPU linear algebra), together with its own bundled code generator. Using its scripts, users can easily generate and test optimized rigid body dynamics CUDA C++ code for their URDF files.
 

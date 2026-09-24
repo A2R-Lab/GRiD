@@ -547,7 +547,12 @@ For fixed-batch, low-launch-overhead replay (MPC / training),
 ``handle.capture(method, *example_inputs, **kwargs)`` returns a
 ``GraphCallable`` backed by a CUDA graph. A mandatory off-graph warmup
 runs the one-time >48 KB dynamic-smem opt-in (illegal during capture)
-before the graph is recorded:
+before the graph is recorded. A graph bakes device addresses and the model
+epoch it was captured at: every replay takes a replay admission on its
+context and is refused (``RuntimeError``) after a runtime-parameter mutation
+(recapture) or after the context was closed; ``static_out`` is overwritten by
+the next replay, so clone it to keep a value (see the *Runtime contexts*
+concepts page):
 
 .. code-block:: python
 

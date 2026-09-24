@@ -28,7 +28,10 @@ The rule set
      - finite values, joint limits, unit quaternion on a floating base
    * - ``force``
      - ``(B, 6 * num_bodies)`` body-major ``[angular; linear]`` local-frame
-       wrenches; same ``B`` as the state (a broadcast ``(1, 6NB)`` is refused)
+       wrenches; the native buffer must physically carry the state's ``B``
+       (numpy and torch refuse a broadcast ``(1, 6NB)``; the JAX method
+       materializes a supported broadcast before the FFI call, whose handler
+       still refuses a mismatched physical batch)
      - ``f_ext``
      - frame consistency
    * - ``state``
@@ -101,7 +104,10 @@ Where each surface enforces the rules
 The native checks are the contract; the Python checks exist to give the
 friendlier message first. One asymmetry: an **empty batch** is refused on
 numpy and torch (``batch must be >= 1``), but on JAX it returns an empty
-result — XLA elides a zero-sized custom call, so no handler runs. The malformed-input test module
-(``test/python_wrappers/test_operand_validation.py``) drives every row above
-through all three surfaces, including the native JAX path with the Python
-checks bypassed.
+result — XLA elides a zero-sized custom call, so no handler runs. The
+malformed-input test module (``test/python_wrappers/test_operand_validation.py``)
+drives the configuration and force classes through all three surfaces,
+including the native JAX handler with the Python checks bypassed, plus the
+plant, tool and runtime-offset classes on the surfaces that carry them; the
+CPU table test proves the classification is complete, not that every class is
+exercised on every surface.

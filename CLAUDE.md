@@ -64,8 +64,9 @@ Clear `grid_codegen/__pycache__` after codegen changes.
 
 Markers: `pinocchio_equivalence`, `cuda_equivalence`, `python_wrappers`, `floating_base`,
 `robot_{smoke,curated,nightly}`, `gpu_proof`, `notebooks`, `developer_only`. GPU test outcomes are captured in a signed
-`gpu-proof.json` receipt (see `test/run_gpu_proof.sh`) that CPU-only CI verifies — so GPU correctness
-can gate merges without paid GPU CI.
+`gpu-proof.json` receipt (see `test/run_gpu_proof.sh`) that CPU-only CI verifies against the committed
+test fingerprints (red when fingerprinted tests change without a refreshed receipt; the workflow passes
+when no receipt exists). A release needs one fresh full run verified under the RELEASE policy.
 
 Prefer the crash-isolated split driver for full GPU passes:
 `test/run_split_suite.py` runs `python_wrappers` as per-module shards (compile-warm

@@ -16,8 +16,10 @@ Pinocchio-validated numpy oracle every kernel is tested against) and
 
 **One block per problem, batched.** Every algorithm runs as a single CUDA
 block per sample with in-block parallelism, so a batch of 16 or 4096 states
-is the same kernel on a Jetson or an RTX 5090 — no multi-block reductions,
-no cooperative groups, bit-deterministic and thread-count invariant.
+is the same kernel design on a Jetson or an RTX 5090 — no multi-block
+reductions, no cooperative groups, bit-deterministic and thread-count
+invariant. Artifacts are built per target architecture (``sm_XX``); the
+model, the API and the generated code carry over, the binary does not.
 
 .. grid:: 3
    :gutter: 3
@@ -86,7 +88,9 @@ What you get per robot
 Every algorithm exists on two surfaces that are tested for numerical
 agreement — the numpy oracle (validated against Pinocchio) and the generated
 CUDA — and the GPU outcomes are captured in a signed receipt that CPU-only CI
-verifies, so GPU correctness gates every merge without paid GPU CI.
+verifies against the committed test fingerprints (the receipt-verify job goes
+red when fingerprinted tests change without a refreshed receipt; a release
+requires one fresh full receipt at the release tip under the release policy).
 
 Measured
 --------
@@ -111,8 +115,10 @@ largest humanoids still fit a 48 KB budget), launch configurations are
 autotuned per robot and architecture, and a **runtime context** carries the device arena, streams
 and model tables — several isolated pipelines can share one GPU, one handle
 can swap inertial parameters at run time, and autograd refuses to
-differentiate a model that changed under it. GRiD targets a single GPU; the
-same artifact runs on an embedded Jetson and a desktop card.
+differentiate a model that changed under it. GRiD targets a single GPU, from
+embedded Jetson-class devices to desktop cards, one artifact per
+architecture; the tested deployment platform of this release is Linux x86_64
+(see the installation page).
 
 30-second quickstart
 --------------------
