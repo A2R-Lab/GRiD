@@ -140,3 +140,61 @@ def test_every_registry_algorithm_is_mentioned_in_the_docs():
     text = "\n".join(Path(f).read_text() for f in glob.glob(str(DOCS / "**" / "*.rst"), recursive=True))
     missing = sorted(k for k in REGISTRY if k not in text)
     assert not missing, f"registry algorithms never mentioned under docs/source: {missing}"
+
+
+# ─── R1 (2026-09-23): the tutorial's VJP table must MATCH VjpSpec, not just mention names ──
+
+import re as _re
+
+
+def _tutorial_vjp_rows():
+    """Parse the 'What is differentiable' list-table: {method: (inputs, notes)}."""
+    doc = TUTORIAL.read_text()
+    start = doc.index("**What is differentiable.**")
+    end = doc.index("Each of these is a **reverse-mode VJP only**")
+    block = doc[start:end]
+    rows = {}
+    for m in _re.finditer(r"\* - (.+?)\n\s+- (.+?)\n\s+- (.+?)(?=\n\s+\* - |\Z)", block, _re.S):
+        names = _re.findall(r"``([a-z_]+)``", m.group(1))
+        inputs = tuple(_re.findall(r"``([a-z_]+)``", m.group(2)))
+        for n in names:
+            rows[n] = (inputs, m.group(3))
+    return rows
+
+
+def _spec_differentiable_inputs(spec):
+    v = spec.vjp
+    inputs = list(v.wrt)
+    if getattr(v, "u_via_minv", False) and "u" not in inputs:
+        inputs.append("u")
+    if getattr(v, "param_grad_op", None):
+        inputs.append("params")
+    return set(inputs)
+
+
+def test_tutorial_vjp_table_matches_vjpspec():
+    rows = _tutorial_vjp_rows()
+    assert rows, "could not parse the tutorial's VJP table"
+    specced = {k: s for k, s in ABI_SPECS.items() if getattr(s, "vjp", None) is not None}
+    documented_public = {k for k in rows}
+    missing = sorted(k for k in specced if k not in documented_public)
+    assert not missing, f"differentiable ops absent from the tutorial VJP table: {missing}"
+    extra = sorted(k for k in documented_public if k not in specced)
+    assert not extra, f"tutorial VJP table lists ops with no VjpSpec: {extra}"
+    for k, spec in specced.items():
+        inputs, notes = rows[k]
+        assert set(inputs) == _spec_differentiable_inputs(spec), (
+            f"{k}: tutorial says {sorted(inputs)}, VjpSpec implies {sorted(_spec_differentiable_inputs(spec))}")
+        if getattr(spec.vjp, "fixed_base_only", False):
+            assert "fixed-base only" in notes, f"{k}: fixed-base restriction not stated in the table"
+
+
+def test_tutorial_ee_pose_representation_matches_implementation():
+    """VjpSpec does not encode output representations; assert them separately."""
+    rows = _tutorial_vjp_rows()
+    _, notes = rows["end_effector_pose"]
+    assert "[xyz, rpy]" in notes and "6 per EE" in notes, notes
+    assert "fk_batched" in notes and "7-coordinate" in notes, notes
+    from grid_rbd._handle import RobotHandle
+    doc = RobotHandle.end_effector_pose.__doc__ or ""
+    assert "rpy" in doc and "6*NUM_EES" in doc, doc[:120]

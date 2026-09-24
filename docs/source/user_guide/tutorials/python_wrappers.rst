@@ -319,20 +319,29 @@ methods; everything else is forward-only on every backend.
      - ``q``, ``qd``, ``u``
      - ``f_ext`` is a residual, its cotangent is zero. ``∂qdd/∂u = M⁻¹``.
    * - ``inverse_dynamics``
-     - ``q``, ``qd``, ``qdd``
-     - same ``f_ext`` treatment.
+     - ``q``, ``qd``
+     - ``qdd`` and ``f_ext`` are residuals (the derivative is taken AT the
+       saved acceleration/force); their cotangents are zero.
    * - ``end_effector_pose``
      - ``q``
-     - the derivative of the returned coordinates (position + quaternion
-       block), i.e. a coordinate, not a geometric, orientation derivative.
+     - the derivative of the returned coordinates ``[xyz, rpy]`` (6 per EE),
+       i.e. a coordinate, not a geometric, orientation derivative.
+       ``fk_batched`` is the 7-coordinate position + quaternion surface and is
+       forward-only.
    * - ``integrator``
      - ``q``, ``qd``, ``u``
-     - through the baked ``integrator_with_gradient`` kernel (the same fused
-       step + Jacobian that ``integrator_gradient`` / ``plant_step_gradient``
-       return); ``dt``/steps are static.
-   * - ``inverse_dynamics_wrt_params`` / ``forward_dynamics_wrt_params``
-     - ``params`` only
-     - local parameter sensitivity, see below.
+     - **fixed-base only** (the SE(3)-chart VJP is not implemented); through
+       the baked ``integrator_with_gradient`` kernel (the same fused step +
+       Jacobian that ``integrator_gradient`` / ``plant_step_gradient`` return);
+       ``dt``/steps are static.
+   * - ``inverse_dynamics_wrt_params``
+     - ``params``, ``q``, ``qd``
+     - local parameter sensitivity (``∂τ/∂π`` via the regressor at
+       ``qdd = 0``) PLUS the ordinary ``q``/``qd`` cotangents; see below.
+   * - ``forward_dynamics_wrt_params``
+     - ``params``, ``q``, ``qd``, ``u``
+     - local parameter sensitivity (``∂qdd/∂π = -M⁻¹Y``) PLUS the ordinary
+       ``q``/``qd``/``u`` cotangents; see below.
 
 Each of these is a **reverse-mode VJP only**: there is no forward-mode
 (``jax.jvp`` / ``jax.jacfwd`` through them fails), no higher-order autograd

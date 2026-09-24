@@ -131,9 +131,11 @@ but no usable GPU (a CI builder, a container image build) can produce the
 ``.so`` for the target arch. Only the ``jax`` / ``torch`` backends need the
 device at warm time (they register FFI targets against it).
 
-The baked launch profile is chosen for the **device you build for**: among
-``config/launch_configs/<robot>/*.json`` the profile whose name ends in
-``_sm<arch>`` matching ``cuda_arch`` is used; if none exists the default
+The baked launch profile is chosen for the **architecture you build for**:
+among ``config/launch_configs/<robot>/*.json`` the profile whose name ends
+in ``_sm<arch>`` matching ``cuda_arch`` is used (several profiles for one
+architecture resolve to the default, else the first by name — GPU *models*
+sharing an architecture are not told apart yet); if none exists the default
 profile is baked with a one-time warning (correct, just not this GPU's
 measured optimum — ``config/autotune_robot.sh`` adds one). The choice rides
 the cache key and is recorded in ``meta.json`` as ``launch_config_gpu``.
