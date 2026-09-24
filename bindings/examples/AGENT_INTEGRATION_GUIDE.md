@@ -31,6 +31,21 @@ reports what the context was fitted to (device/artifact arch, memory at init, ar
 slots, `max_batch`). Ids are salted per artifact: a foreign or closed id raises a clear error, never a
 use-after-free. Details: the *Runtime contexts* concepts page.
 
+**Model versions (W04-B B2).** Runtime-parameter mutations (`set_inertia_params`, `set_transform_params`,
+`set_joint_dynamics`, `attach_tool`/`detach_tool`) take the context's admission lock exclusively (ordered
+after every admitted call, before every later one) and bump `handle.model_version`. torch/JAX autograd
+forwards stamp that version on device at execution time and their backwards refuse a stale stamp
+(`model mutated between forward and backward … recompute the forward`) — a jitted `jax.grad` keeps
+working across mutations (forward and backward stamp/check inside one execution); only a backward
+deferred across a mutation is refused. Launch overrides serialize the same way but do not bump the version.
+
+**Operand validation (W03).** Every input belongs to one operand class (configuration `(B, nq)`, force
+`(B, 6*num_bodies)`, plant state `(B, nq+nv)`, plant operands, tool operands, runtime offset, scalars) and each
+surface enforces the class rule natively: `1 <= B <= max_batch`, 2D with the exact last dim, every operand
+carrying the leading operand's batch, `f_ext` never broadcast. numpy coerces layout/dtype (contiguous copy,
+cast); torch refuses CPU / non-contiguous / wrong-dtype tensors; JAX checks in Python first and again in every
+FFI handler. Details + the not-checked column: the *Operand validation* concepts page.
+
 Four entry points over the same cache:
 
 | Call | Does | Use when |

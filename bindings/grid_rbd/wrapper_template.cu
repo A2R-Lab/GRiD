@@ -928,6 +928,7 @@ extern "C" int grid_rbd_fk_batched(long long ctx_id,
 {
 #ifdef GRID_HAS_FK_BATCHED
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
 
     const int n = grid::NUM_POS;
@@ -1109,6 +1110,7 @@ __global__ void grid_rbd_tool_fext_kernel(const T* d_q, int stride_q, int jid,
 extern "C" int grid_rbd_tool_fext(long long ctx_id, const T* q, const T* wrench, int jid, const T* rc,
                                   T* out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     const int nj = grid::NUM_JOINTS;
     pack_q_qd_u(g_ctx, q, q, nullptr, batch, nj);   // q at offset 0, stride 3*nj
@@ -1187,6 +1189,7 @@ __global__ void grid_rbd_contact_fext_kernel(const T* d_q, int stride_q,
 
 extern "C" int grid_rbd_contact_fext(long long ctx_id, const T* q, const T* f_c, T* out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     const int nj = grid::NUM_JOINTS;
     const int fc_stride = 6 * grid::NUM_CONTACT_FRAMES;
@@ -1333,6 +1336,7 @@ static void launch_integrator_grad_host_mujoco(GridCtx *ctx, int batch, T gravit
 extern "C" int grid_rbd_nonlinear_effects(long long ctx_id, const T* q, const T* qd, T* out, int batch, T gravity) {
 #if GRID_HAS_NONLINEAR_EFFECTS
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::nonlinear_effects<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_NONLINEAR_EFFECTS>(g_ctx, batch), g_streams);
@@ -1348,6 +1352,7 @@ extern "C" int grid_rbd_nonlinear_effects(long long ctx_id, const T* q, const T*
 extern "C" int grid_rbd_generalized_gravity(long long ctx_id, const T* q, T* out, int batch, T gravity) {
 #if GRID_HAS_GENERALIZED_GRAVITY
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     grid::generalized_gravity<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_GENERALIZED_GRAVITY>(g_ctx, batch), g_streams);
@@ -1363,6 +1368,7 @@ extern "C" int grid_rbd_generalized_gravity(long long ctx_id, const T* q, T* out
 extern "C" int grid_rbd_coriolis_matrix(long long ctx_id, const T* q, const T* qd, T* out, int batch, T gravity) {
 #if GRID_HAS_CORIOLIS_MATRIX
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::coriolis_matrix<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_CORIOLIS_MATRIX>(g_ctx, batch), g_streams);
@@ -1378,6 +1384,7 @@ extern "C" int grid_rbd_coriolis_matrix(long long ctx_id, const T* q, const T* q
 extern "C" int grid_rbd_energy(long long ctx_id, const T* q, const T* qd, T* out, int batch, T gravity) {
 #ifdef GRID_HAS_ENERGY
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::energy<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_ENERGY>(g_ctx, batch), g_streams);
@@ -1393,6 +1400,7 @@ extern "C" int grid_rbd_energy(long long ctx_id, const T* q, const T* qd, T* out
 extern "C" int grid_rbd_com(long long ctx_id, const T* q, T* out, int batch) {
 #ifdef GRID_HAS_COM
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q(g_ctx, q, batch, grid::NUM_JOINTS);
     grid::com<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_COM>(g_ctx, batch), g_streams);
@@ -1408,6 +1416,7 @@ extern "C" int grid_rbd_com(long long ctx_id, const T* q, T* out, int batch) {
 extern "C" int grid_rbd_ccrba(long long ctx_id, const T* q, const T* qd, T* out, int batch) {
 #ifdef GRID_HAS_CCRBA
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::ccrba<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_clamp_threads_for(grid::ccrba_kernel<T>, grid_rbd_launch_threads_n<grid::GRID_ALGO_CCRBA>(g_ctx, batch)), g_streams);
@@ -1423,6 +1432,7 @@ extern "C" int grid_rbd_ccrba(long long ctx_id, const T* q, const T* qd, T* out,
 extern "C" int grid_rbd_dccrba(long long ctx_id, const T* q, T* out, int batch) {
 #ifdef GRID_HAS_DCCRBA
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q(g_ctx, q, batch, grid::NUM_JOINTS);
     grid::dccrba<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_clamp_threads_for(grid::dccrba_kernel<T>, grid_rbd_launch_threads_n<grid::GRID_ALGO_DCCRBA>(g_ctx, batch)), g_streams);
@@ -1438,6 +1448,7 @@ extern "C" int grid_rbd_dccrba(long long ctx_id, const T* q, T* out, int batch) 
 extern "C" int grid_rbd_cmm_time_variation(long long ctx_id, const T* q, const T* qd, T* out, int batch) {
 #ifdef GRID_HAS_CMM_TIME_VARIATION
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::cmm_time_variation<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_clamp_threads_for(grid::cmm_time_variation_kernel<T>, grid_rbd_launch_threads_n<grid::GRID_ALGO_CMM_TIME_VARIATION>(g_ctx, batch)), g_streams);
@@ -1453,6 +1464,7 @@ extern "C" int grid_rbd_cmm_time_variation(long long ctx_id, const T* q, const T
 extern "C" int grid_rbd_kinetic_energy_regressor(long long ctx_id, const T* q, const T* qd, T* out, int batch, T gravity) {
 #if GRID_HAS_KINETIC_ENERGY_REGRESSOR
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::kinetic_energy_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_KINETIC_ENERGY_REGRESSOR>(g_ctx, batch), g_streams);
@@ -1468,6 +1480,7 @@ extern "C" int grid_rbd_kinetic_energy_regressor(long long ctx_id, const T* q, c
 extern "C" int grid_rbd_potential_energy_regressor(long long ctx_id, const T* q, T* out, int batch, T gravity) {
 #if GRID_HAS_POTENTIAL_ENERGY_REGRESSOR
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q(g_ctx, q, batch, grid::NUM_JOINTS);
     grid::potential_energy_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_POTENTIAL_ENERGY_REGRESSOR>(g_ctx, batch), g_streams);
@@ -1483,7 +1496,9 @@ extern "C" int grid_rbd_potential_energy_regressor(long long ctx_id, const T* q,
 extern "C" int grid_rbd_frame_jacobian(long long ctx_id, const T* q, T* out, int batch, int target_jid, int reference_frame) {
 #ifdef GRID_HAS_FRAME_JACOBIAN
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
+    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     // -1 per arg => "use default" (leaf-EE / LWA); the host resolves each
     // INDEPENDENTLY, so a default target with an explicit frame is honored.
@@ -1500,7 +1515,9 @@ extern "C" int grid_rbd_frame_jacobian(long long ctx_id, const T* q, T* out, int
 extern "C" int grid_rbd_frame_jacobian_dot(long long ctx_id, const T* q, const T* qd, T* out, int batch, int target_jid, int reference_frame) {
 #ifdef GRID_HAS_FRAME_JACOBIAN_DOT
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
+    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     // -1 per arg => "use default" (leaf-EE / LWA); the host resolves each
     // INDEPENDENTLY, so a default target with an explicit frame is honored.
@@ -1517,6 +1534,7 @@ extern "C" int grid_rbd_frame_jacobian_dot(long long ctx_id, const T* q, const T
 extern "C" int grid_rbd_osc_inertia(long long ctx_id, const T* q, T* out, int batch) {
 #ifdef GRID_HAS_OSC_INERTIA
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     grid::osc_inertia<T>(g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_OSC_INERTIA>(g_ctx, batch), g_streams);
@@ -1532,6 +1550,7 @@ extern "C" int grid_rbd_osc_inertia(long long ctx_id, const T* q, T* out, int ba
 extern "C" int grid_rbd_minv(long long ctx_id, const T* q, T* minv_out, int batch) {
 #if GRID_HAS_MINV
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
 
@@ -1561,6 +1580,7 @@ extern "C" int grid_rbd_minv(long long ctx_id, const T* q, T* minv_out, int batc
 extern "C" int grid_rbd_crba(long long ctx_id, const T* q, T* m_out, int batch, T gravity) {
 #if GRID_HAS_CRBA
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
 
@@ -1591,6 +1611,7 @@ extern "C" int grid_rbd_crba(long long ctx_id, const T* q, T* m_out, int batch, 
 extern "C" int grid_rbd_end_effector_pose(long long ctx_id, const T* q, T* ee_out, int batch) {
 #if GRID_HAS_END_EFFECTOR_POSE
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
 
@@ -1618,6 +1639,7 @@ extern "C" int grid_rbd_end_effector_pose(long long ctx_id, const T* q, T* ee_ou
 extern "C" int grid_rbd_end_effector_pose_gradient(long long ctx_id, const T* q, T* dee_out, int batch) {
 #if GRID_HAS_END_EFFECTOR_POSE_GRADIENT
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
 
@@ -1645,6 +1667,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient(long long ctx_id, const T* q,
 extern "C" int grid_rbd_end_effector_pose_hessian(long long ctx_id, const T* q, T* d2ee_out, int batch) {
 #if GRID_HAS_END_EFFECTOR_POSE_HESSIAN
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
 
@@ -1672,6 +1695,7 @@ extern "C" int grid_rbd_end_effector_pose_hessian(long long ctx_id, const T* q, 
 extern "C" int grid_rbd_idsva_so(long long ctx_id, const T* q, const T* qd, const T* qdd, T* out, int batch, T gravity) {
 #if GRID_HAS_IDSVA_SO
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     // idsva_so reads the joint acceleration from the u-slot of d_q_qd_u (s_qdd);
     // pack qdd there so the second-order tensors use the requested acceleration.
@@ -1704,6 +1728,7 @@ extern "C" int grid_rbd_idsva_so(long long ctx_id, const T* q, const T* qd, cons
 extern "C" int grid_rbd_fdsva_so(long long ctx_id, const T* q, const T* qd, const T* u, T* out, int batch, T gravity) {
 #if GRID_HAS_FDSVA_SO
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS);
 
@@ -1732,6 +1757,7 @@ extern "C" int grid_rbd_fdsva_so(long long ctx_id, const T* q, const T* qd, cons
 extern "C" int grid_rbd_forward_dynamics(long long ctx_id, const T* q, const T* qd, const T* u, T* qdd_out, int batch, T gravity, const T* f_ext) {
 #if GRID_HAS_FORWARD_DYNAMICS
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS);
     if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;
@@ -1767,6 +1793,7 @@ extern "C" int grid_rbd_forward_dynamics(long long ctx_id, const T* q, const T* 
 extern "C" int grid_rbd_aba(long long ctx_id, const T* q, const T* qd, const T* u, T* qdd_out, int batch, T gravity, const T* f_ext) {
 #if GRID_HAS_ABA
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS);
     if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;
@@ -1802,6 +1829,7 @@ extern "C" int grid_rbd_aba(long long ctx_id, const T* q, const T* qd, const T* 
 extern "C" int grid_rbd_inverse_dynamics(long long ctx_id, const T* q, const T* qd, const T* qdd_opt, T* c_out, int batch, T gravity, const T* f_ext) {
 #if GRID_HAS_INVERSE_DYNAMICS
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;
@@ -1848,6 +1876,7 @@ extern "C" int grid_rbd_inverse_dynamics(long long ctx_id, const T* q, const T* 
 extern "C" int grid_rbd_inverse_dynamics_gradient(long long ctx_id, const T* q, const T* qd, const T* qdd_opt, T* dc_du_out, int batch, T gravity, const T* f_ext) {
 #if GRID_HAS_INVERSE_DYNAMICS_GRADIENT
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;
@@ -1894,6 +1923,7 @@ extern "C" int grid_rbd_inverse_dynamics_gradient(long long ctx_id, const T* q, 
 extern "C" int grid_rbd_forward_dynamics_gradient(long long ctx_id, const T* q, const T* qd, const T* u, T* df_du_out, int batch, T gravity, const T* f_ext) {
 #if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS);
     if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;
@@ -1929,6 +1959,7 @@ extern "C" int grid_rbd_forward_dynamics_gradient(long long ctx_id, const T* q, 
 extern "C" int grid_rbd_integrator(long long ctx_id, const T* q, const T* qd, const T* u, T* x_kp1_out, int batch, T gravity, T dt, int it) {
 #if GRID_HAS_INTEGRATOR
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS);
     GRID_RBD_IT_DISPATCH(it, launch_integrator_host, batch, gravity, dt);
@@ -1945,6 +1976,7 @@ extern "C" int grid_rbd_integrator(long long ctx_id, const T* q, const T* qd, co
 extern "C" int grid_rbd_integrator_gradient(long long ctx_id, const T* q, const T* qd, const T* u, T* dAB_out, int batch, T gravity, T dt, int it) {
 #if GRID_HAS_INTEGRATOR_GRADIENT
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS);
     GRID_RBD_IT_DISPATCH(it, launch_integrator_grad_host, batch, gravity, dt);
@@ -1961,6 +1993,7 @@ extern "C" int grid_rbd_integrator_gradient(long long ctx_id, const T* q, const 
 extern "C" int grid_rbd_inverse_dynamics_regressor(long long ctx_id, const T* q, const T* qd, const T* qdd, T* out, int batch, T gravity) {
 #if GRID_HAS_INVERSE_DYNAMICS_REGRESSOR
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, qdd, batch, grid::NUM_JOINTS);
     grid::inverse_dynamics_regressor<T>(g_data, g_robot, gravity, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS_REGRESSOR>(g_ctx, batch), g_streams);
@@ -1976,7 +2009,9 @@ extern "C" int grid_rbd_inverse_dynamics_regressor(long long ctx_id, const T* q,
 extern "C" int grid_rbd_end_effector_pose_runtime(long long ctx_id, const T* q, T* out, int batch, int target_jid, const T* offset) {
 #ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
+    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     // stage the runtime offset (frame origin when offset==nullptr):
     // offset is the 4x4 col-major SE(3) tool/tip transform (16 floats); identity => frame origin.
@@ -1998,7 +2033,9 @@ extern "C" int grid_rbd_end_effector_pose_runtime(long long ctx_id, const T* q, 
 extern "C" int grid_rbd_end_effector_pose_gradient_runtime(long long ctx_id, const T* q, T* out, int batch, int target_jid, const T* offset) {
 #ifdef GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
+    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     // stage the runtime offset (frame origin when offset==nullptr):
     // offset is the 4x4 col-major SE(3) tool/tip transform (16 floats); identity => frame origin.
@@ -2031,6 +2068,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime(long long ctx_id, con
 // base-rotates the bias output, so the returned c is the mjx-frame qfrc_bias.
 extern "C" int grid_rbd_nonlinear_effects_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::nonlinear_effects<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
@@ -2047,6 +2085,7 @@ extern "C" int grid_rbd_nonlinear_effects_mujoco(const T* q, const T* qd, T* out
 // the gravity output so the returned g is mjx-frame. Output is NUM_VEL invariant-shaped.
 extern "C" int grid_rbd_generalized_gravity_mujoco(const T* q, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     grid::generalized_gravity<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
@@ -2063,6 +2102,7 @@ extern "C" int grid_rbd_generalized_gravity_mujoco(const T* q, T* out, int batch
 // reorders the quaternion + reframes qd), mjx-frame C out (nv x nv row-major).
 extern "C" int grid_rbd_coriolis_matrix_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::coriolis_matrix<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
@@ -2080,6 +2120,7 @@ extern "C" int grid_rbd_coriolis_matrix_mujoco(const T* q, const T* qd, T* out, 
 // is byte-equal to feeding the pin kernel the pin-converted q/qd.
 extern "C" int grid_rbd_energy_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::energy<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_ENERGY>::TIER>(
@@ -2097,6 +2138,7 @@ extern "C" int grid_rbd_energy_mujoco(const T* q, const T* qd, T* out, int batch
 // column reframe before saving, so NO host pre/post-process is needed.
 extern "C" int grid_rbd_com_mujoco(const T* q, T* out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q(g_ctx, q, batch, grid::NUM_JOINTS);
     grid::com<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_COM>::TIER>(
@@ -2114,6 +2156,7 @@ extern "C" int grid_rbd_com_mujoco(const T* q, T* out, int batch) {
 // qd), so NO host pre/post-process is needed.
 extern "C" int grid_rbd_ccrba_mujoco(const T* q, const T* qd, T* out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::ccrba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CCRBA>::TIER>(
@@ -2131,6 +2174,7 @@ extern "C" int grid_rbd_ccrba_mujoco(const T* q, const T* qd, T* out, int batch)
 // (using the in-kernel CMM value) before saving.
 extern "C" int grid_rbd_dccrba_mujoco(const T* q, T* out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q(g_ctx, q, batch, grid::NUM_JOINTS);
     grid::dccrba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
@@ -2147,6 +2191,7 @@ extern "C" int grid_rbd_dccrba_mujoco(const T* q, T* out, int batch) {
 // and the kernel (MUJOCO_OUTPUT=true) reframes the Adot columns before saving.
 extern "C" int grid_rbd_cmm_time_variation_mujoco(const T* q, const T* qd, T* out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::cmm_time_variation<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
@@ -2165,6 +2210,7 @@ extern "C" int grid_rbd_cmm_time_variation_mujoco(const T* q, const T* qd, T* ou
 // only exists for floating, hence the GRID_RBD_WITH_MUJOCO gate.)
 extern "C" int grid_rbd_kinetic_energy_regressor_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::kinetic_energy_regressor<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
@@ -2181,6 +2227,7 @@ extern "C" int grid_rbd_kinetic_energy_regressor_mujoco(const T* q, const T* qd,
 // (quaternion reorder). Output byte-equal to feeding the pin kernel pin-converted q.
 extern "C" int grid_rbd_potential_energy_regressor_mujoco(const T* q, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q(g_ctx, q, batch, grid::NUM_JOINTS);
     grid::potential_energy_regressor<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
@@ -2200,7 +2247,9 @@ extern "C" int grid_rbd_potential_energy_regressor_mujoco(const T* q, T* out, in
 // rather than silently mis-built by the pin kernel. All take raw mjx inputs.
 extern "C" int grid_rbd_frame_jacobian_mujoco(const T* q, T* out, int batch, int target_jid, int reference_frame) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
+    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     grid::frame_jacobian<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN>(g_ctx, batch), g_streams, target_jid, reference_frame);
@@ -2213,7 +2262,9 @@ extern "C" int grid_rbd_frame_jacobian_mujoco(const T* q, T* out, int batch, int
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FRAME_JACOBIAN_DOT
 extern "C" int grid_rbd_frame_jacobian_dot_mujoco(const T* q, const T* qd, T* out, int batch, int target_jid, int reference_frame) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
+    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     grid::frame_jacobian_dot<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
         g_data, g_robot, batch, dim3((unsigned)batch, 1, 1), grid_rbd_launch_threads_n<grid::GRID_ALGO_FRAME_JACOBIAN_DOT>(g_ctx, batch), g_streams, target_jid, reference_frame);
@@ -2226,6 +2277,7 @@ extern "C" int grid_rbd_frame_jacobian_dot_mujoco(const T* q, const T* qd, T* ou
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_OSC_INERTIA
 extern "C" int grid_rbd_osc_inertia_mujoco(const T* q, T* out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     grid::osc_inertia<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
@@ -2244,6 +2296,7 @@ extern "C" int grid_rbd_osc_inertia_mujoco(const T* q, T* out, int batch) {
 // minv_pin_to_mjx post-process are needed.
 extern "C" int grid_rbd_minv_mujoco(const T* q, T* minv_out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     grid::minv<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER>(
@@ -2261,6 +2314,7 @@ extern "C" int grid_rbd_minv_mujoco(const T* q, T* minv_out, int batch) {
 // block before saving, so NO host pre/post-process is needed.
 extern "C" int grid_rbd_crba_mujoco(const T* q, T* m_out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     grid::crba<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER>(
@@ -2278,6 +2332,7 @@ extern "C" int grid_rbd_crba_mujoco(const T* q, T* m_out, int batch, T gravity) 
 // kernel the pin-converted q.
 extern "C" int grid_rbd_end_effector_pose_mujoco(const T* q, T* ee_out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     grid::GRID_RBD_EE_POSE_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER>(
@@ -2295,6 +2350,7 @@ extern "C" int grid_rbd_end_effector_pose_mujoco(const T* q, T* ee_out, int batc
 // saving (the column reframe acts on the NV axis cols 0:3).
 extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(const T* q, T* dee_out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     grid::GRID_RBD_EE_POSE_GRADIENT_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_GRADIENT>::TIER>(
@@ -2312,6 +2368,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(const T* q, T* dee_out
 // symmetrized base-rotation frame term before saving. Output is invariant-shaped.
 extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(const T* q, T* d2ee_out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     grid::GRID_RBD_EE_POSE_HESSIAN_FN<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE_HESSIAN>::TIER>(
@@ -2330,6 +2387,7 @@ extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(const T* q, T* d2ee_out
 // post-launch error check surfaces a silent launch-config failure as rc!=0.
 extern "C" int grid_rbd_idsva_so_mujoco(const T* q, const T* qd, const T* qdd, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, qdd, batch, grid::NUM_JOINTS);
     grid::idsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO>::TIER>(
@@ -2349,6 +2407,7 @@ extern "C" int grid_rbd_idsva_so_mujoco(const T* q, const T* qd, const T* qdd, T
 // launch-config failure as rc!=0.
 extern "C" int grid_rbd_fdsva_so_mujoco(const T* q, const T* qd, const T* u, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS);
     grid::fdsva_so<T, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true, /*RESOURCE_TIER=*/grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER>(
@@ -2368,6 +2427,7 @@ extern "C" int grid_rbd_fdsva_so_mujoco(const T* q, const T* qd, const T* u, T* 
 // _handle dispatch only takes this path when f_ext is null.
 extern "C" int grid_rbd_forward_dynamics_mujoco(const T* q, const T* qd, const T* u, T* qdd_out, int batch, T gravity, const T* f_ext) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS);
     if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;
@@ -2392,6 +2452,7 @@ extern "C" int grid_rbd_forward_dynamics_mujoco(const T* q, const T* qd, const T
 // not reframed -> the _handle dispatch only uses this path when f_ext is null.
 extern "C" int grid_rbd_aba_mujoco(const T* q, const T* qd, const T* u, T* qdd_out, int batch, T gravity, const T* f_ext) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS);
     if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;
@@ -2427,6 +2488,7 @@ extern "C" int grid_rbd_aba_mujoco(const T* q, const T* qd, const T* u, T* qdd_o
 extern "C" int grid_rbd_inverse_dynamics_mujoco(const T* q, const T* qd, const T* qdd_opt, T* c_out, int batch, T gravity, const T* f_ext) {
     if (!qdd_opt) return 4;  // mjx requires an explicit qdd
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;
@@ -2456,6 +2518,7 @@ extern "C" int grid_rbd_inverse_dynamics_mujoco(const T* q, const T* qd, const T
 extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(const T* q, const T* qd, const T* qdd_opt, T* dc_du_out, int batch, T gravity, const T* f_ext) {
     if (!qdd_opt) return 4;  // mjx requires an explicit qdd
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);
     if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;
@@ -2483,6 +2546,7 @@ extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(const T* q, const T* qd
 // + ω×v couplings) so the returned df/d(q,qd) is the mjx-frame gradient.
 extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(const T* q, const T* qd, const T* u, T* df_du_out, int batch, T gravity, const T* f_ext) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS);
     if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;
@@ -2508,6 +2572,7 @@ extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(const T* q, const T* qd
 // x_kp1 raw mjx out (q wxyz). Baked into the kernel (MUJOCO_OUTPUT=true).
 extern "C" int grid_rbd_integrator_mujoco(const T* q, const T* qd, const T* u, T* x_kp1_out, int batch, T gravity, T dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS);
     GRID_RBD_IT_DISPATCH(it, launch_integrator_host_mujoco, batch, gravity, dt);
@@ -2526,6 +2591,7 @@ extern "C" int grid_rbd_integrator_mujoco(const T* q, const T* qd, const T* u, T
 // only (multistage static_asserts out). Register-heavy; post-launch error check.
 extern "C" int grid_rbd_integrator_gradient_mujoco(const T* q, const T* qd, const T* u, T* dAB_out, int batch, T gravity, T dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS);
     GRID_RBD_IT_DISPATCH_HESSIAN(it, launch_integrator_grad_host_mujoco, batch, gravity, dt);
@@ -2543,6 +2609,7 @@ extern "C" int grid_rbd_integrator_gradient_mujoco(const T* q, const T* qd, cons
 // same base-row rotate as id_tau. Baked via the MUJOCO_OUTPUT=true template flag.
 extern "C" int grid_rbd_inverse_dynamics_regressor_mujoco(const T* q, const T* qd, const T* qdd, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     pack_q_qd_u(g_ctx, q, qd, qdd, batch, grid::NUM_JOINTS);
     grid::inverse_dynamics_regressor<T, /*USE_COMPRESSED_MEM=*/false, /*KIND=*/grid::GRID_DATA_ALL, /*MUJOCO_OUTPUT=*/true>(
@@ -2562,7 +2629,9 @@ extern "C" int grid_rbd_inverse_dynamics_regressor_mujoco(const T* q, const T* q
 extern "C" int grid_rbd_end_effector_pose_runtime_mujoco(const T* q, T* out, int batch, int target_jid, const T* offset) {
 #ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
+    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     // stage the runtime offset (frame origin when offset==nullptr):
     // offset is the 4x4 col-major SE(3) tool/tip transform (16 floats); identity => frame origin.
@@ -2591,7 +2660,9 @@ extern "C" int grid_rbd_end_effector_pose_runtime_mujoco(const T* q, T* out, int
 extern "C" int grid_rbd_end_effector_pose_gradient_runtime_mujoco(const T* q, T* out, int batch, int target_jid, const T* offset) {
 #ifdef GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
+    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;
     pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);
     // stage the runtime offset (frame origin when offset==nullptr):
     // offset is the 4x4 col-major SE(3) tool/tip transform (16 floats); identity => frame origin.
@@ -2681,6 +2752,7 @@ static int plant_quadratic_cost_impl(GridCtx *ctx,
     T* out, T* grad, T* hess, int batch)
 {
     GRID_RBD_CTX_LOCALS(ctx);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     if (plant_alloc(g_ctx)) return 4;
     const int N = STATE ? (grid::NUM_POS + grid::NUM_VEL) : grid::NUM_VEL;
@@ -2727,6 +2799,7 @@ extern "C" int grid_plant_quadratic_input_cost(long long ctx_id,
 extern "C" int grid_rbd_quadratic_state_cost_mujoco(long long ctx_id, 
     const T* x, const T* x_des, const T* Q, T* out, T* grad, T* hess, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     if (plant_alloc(g_ctx)) return 4;
     const int N = grid::NUM_POS + grid::NUM_VEL;
@@ -2758,6 +2831,7 @@ static int plant_barrier_impl(GridCtx *ctx,
     T* out, T* grad, T* hess_diag, int batch)
 {
     GRID_RBD_CTX_LOCALS(ctx);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     if (plant_alloc(g_ctx)) return 4;
     const int N = (which == PlantBarrier::POSITION) ? grid::NUM_POS : grid::NUM_VEL;
@@ -2830,6 +2904,7 @@ static void launch_plant_step(GridCtx *ctx, int batch, T gravity, T dt) {
 extern "C" int grid_plant_step(long long ctx_id, 
     const T* x, const T* u, T* x_kp1, int batch, float gravity, float dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     if (plant_alloc(g_ctx)) return 4;
     const int nx = grid::NUM_POS + grid::NUM_VEL;
@@ -2863,6 +2938,7 @@ static void launch_plant_step_mujoco(GridCtx *ctx, int batch, T gravity, T dt) {
 extern "C" int grid_plant_step_mujoco(long long ctx_id, 
     const T* x, const T* u, T* x_kp1, int batch, float gravity, float dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     if (plant_alloc(g_ctx)) return 4;
     const int nx = grid::NUM_POS + grid::NUM_VEL;
@@ -2885,6 +2961,7 @@ extern "C" int grid_plant_ee_pos_cost(long long ctx_id,
     const T* q, const T* p_des, const T* W,
     T* out, T* grad, T* hess, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     if (plant_alloc(g_ctx)) return 4;
     const int nq = grid::NUM_POS;
@@ -2922,6 +2999,7 @@ extern "C" int grid_plant_com_cost(long long ctx_id,
     const T* q, const T* p_des, const T* W,
     T* out, T* grad, T* hess, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     if (plant_alloc(g_ctx)) return 4;
     const int nq = grid::NUM_POS;
@@ -2958,6 +3036,7 @@ extern "C" int grid_plant_momentum_cost(long long ctx_id,
     const T* q, const T* qd, const T* h_des, const T* W,
     T* out, T* grad, T* hess, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     if (plant_alloc(g_ctx)) return 4;
     const int nq = grid::NUM_POS;
@@ -2998,6 +3077,7 @@ extern "C" int grid_rbd_ee_pos_cost_mujoco(long long ctx_id,
     const T* q, const T* p_des, const T* W,
     T* out, T* grad, T* hess, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     if (plant_alloc(g_ctx)) return 4;
     const int nq = grid::NUM_POS;
@@ -3029,6 +3109,7 @@ extern "C" int grid_rbd_com_cost_mujoco(long long ctx_id,
     const T* q, const T* p_des, const T* W,
     T* out, T* grad, T* hess, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     if (plant_alloc(g_ctx)) return 4;
     const int nq = grid::NUM_POS;
@@ -3062,6 +3143,7 @@ extern "C" int grid_rbd_momentum_cost_mujoco(long long ctx_id,
     const T* q, const T* qd, const T* h_des, const T* W,
     T* out, T* grad, T* hess, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     if (plant_alloc(g_ctx)) return 4;
     const int nq = grid::NUM_POS;
@@ -3118,6 +3200,7 @@ static void launch_plant_step_gradient(GridCtx *ctx, int batch, T gravity, T dt)
 extern "C" int grid_plant_step_gradient(long long ctx_id, 
     const T* x, const T* u, T* dAB, int batch, float gravity, float dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     if (plant_alloc(g_ctx)) return 4;
     const int nx = grid::NUM_POS + grid::NUM_VEL;
@@ -3155,6 +3238,7 @@ static void launch_plant_step_gradient_mujoco(GridCtx *ctx, int batch, T gravity
 extern "C" int grid_plant_step_gradient_mujoco(long long ctx_id, 
     const T* x, const T* u, T* dAB, int batch, float gravity, float dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     if (plant_alloc(g_ctx)) return 4;
     const int nx = grid::NUM_POS + grid::NUM_VEL;
@@ -3201,6 +3285,7 @@ static void launch_plant_step_hessian(GridCtx *ctx, int batch, T gravity, T dt) 
 extern "C" int grid_plant_step_hessian(long long ctx_id, 
     const T* x, const T* u, T* d2AB, int batch, float gravity, float dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     if (plant_alloc(g_ctx)) return 4;
     const int nx = grid::NUM_POS + grid::NUM_VEL;
@@ -3252,6 +3337,7 @@ static void launch_plant_step_hessian_mujoco(GridCtx *ctx, int batch, T gravity,
 extern "C" int grid_plant_step_hessian_mujoco(long long ctx_id, 
     const T* x, const T* u, T* d2AB, int batch, float gravity, float dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
+    if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
     if (plant_alloc(g_ctx)) return 4;
     const int nx = grid::NUM_POS + grid::NUM_VEL;
@@ -3363,6 +3449,16 @@ namespace ffi = xla::ffi;
 
 // Shared helper: validate (B, NJ) and return batch size, or error.
 // Kept inline so each handler stays self-contained for grep-ability.
+// W03: every operand after the leading one must also carry the leading batch
+// (the copies below are sized by that batch — a shorter operand would be read
+// past its end, a longer one silently truncated).
+#define GRID_RBD_FFI_VALIDATE_ROWS(buf, name, expected_last_dim, batch)          \
+    do {                                                                         \
+        GRID_RBD_FFI_VALIDATE_2D(buf, name, expected_last_dim);                  \
+        if ((int)(buf).dimensions()[0] != (batch))                               \
+            return ffi::Error::InvalidArgument(                                  \
+                std::string(name) + " batch must equal the leading operand's batch"); \
+    } while (0)
 #define GRID_RBD_FFI_VALIDATE_2D(buf, name, expected_last_dim)                   \
     do {                                                                         \
         auto _dims = (buf).dimensions();                                         \
@@ -3421,7 +3517,10 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_body(
     GRID_RBD_FFI_VALIDATE_2D(q, "inverse_dynamics: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS;
+    if (batch < 1) return ffi::Error::InvalidArgument("inverse_dynamics: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("inverse_dynamics: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "inverse_dynamics: qd", grid::NUM_JOINTS, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(qdd, "inverse_dynamics: qdd", grid::NUM_JOINTS, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -3521,6 +3620,7 @@ static ffi::Error grid_rbd_jax_minv_body(
     GRID_RBD_FFI_VALIDATE_2D(q, "minv: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("minv: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("minv: batch > max_batch");
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -3601,7 +3701,10 @@ static ffi::Error grid_rbd_jax_forward_dynamics_body(
     GRID_RBD_FFI_VALIDATE_2D(q, "forward_dynamics: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS;
+    if (batch < 1) return ffi::Error::InvalidArgument("forward_dynamics: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("forward_dynamics: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "forward_dynamics: qd", grid::NUM_JOINTS, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(u, "forward_dynamics: u", grid::NUM_JOINTS, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -3705,7 +3808,10 @@ static ffi::Error grid_rbd_jax_aba_body(
     GRID_RBD_FFI_VALIDATE_2D(q, "aba: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS;
+    if (batch < 1) return ffi::Error::InvalidArgument("aba: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("aba: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "aba: qd", grid::NUM_JOINTS, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(u, "aba: u", grid::NUM_JOINTS, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -3807,6 +3913,7 @@ static ffi::Error grid_rbd_jax_crba_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "crba: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("crba: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("crba: batch > max_batch");
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -3840,6 +3947,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_body(
     GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nee = GRID_RBD_NUM_EES;
+    if (batch < 1) return ffi::Error::InvalidArgument("end_effector_pose: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("end_effector_pose: batch > max_batch");
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -3921,6 +4029,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_gradient_body(
     GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose_gradient: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL, nee = GRID_RBD_NUM_EES;
+    if (batch < 1) return ffi::Error::InvalidArgument("end_effector_pose_gradient: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("end_effector_pose_gradient: batch > max_batch");
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -3999,6 +4108,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_hessian_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose_hessian: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL, nee = GRID_RBD_NUM_EES;
+    if (batch < 1) return ffi::Error::InvalidArgument("end_effector_pose_hessian: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("end_effector_pose_hessian: batch > max_batch");
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -4046,7 +4156,10 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_gradient_body(
     GRID_RBD_FFI_VALIDATE_2D(q, "inverse_dynamics_gradient: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("inverse_dynamics_gradient: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("inverse_dynamics_gradient: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "inverse_dynamics_gradient: qd", grid::NUM_JOINTS, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(qdd, "inverse_dynamics_gradient: qdd", grid::NUM_JOINTS, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -4150,7 +4263,10 @@ static ffi::Error grid_rbd_jax_forward_dynamics_gradient_body(
     GRID_RBD_FFI_VALIDATE_2D(q, "forward_dynamics_gradient: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("forward_dynamics_gradient: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("forward_dynamics_gradient: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "forward_dynamics_gradient: qd", grid::NUM_JOINTS, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(u, "forward_dynamics_gradient: u", grid::NUM_JOINTS, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -4253,7 +4369,10 @@ static ffi::Error grid_rbd_jax_fdsva_so_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "fdsva_so: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS;
+    if (batch < 1) return ffi::Error::InvalidArgument("fdsva_so: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("fdsva_so: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "fdsva_so: qd", grid::NUM_JOINTS, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(u, "fdsva_so: u", grid::NUM_JOINTS, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -4305,7 +4424,10 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_regressor_body(
     GRID_RBD_FFI_VALIDATE_2D(q, "inverse_dynamics_regressor: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL, nb = grid::NUM_BODIES;
+    if (batch < 1) return ffi::Error::InvalidArgument("inverse_dynamics_regressor: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("inverse_dynamics_regressor: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "inverse_dynamics_regressor: qd", grid::NUM_JOINTS, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(qdd, "inverse_dynamics_regressor: qdd", grid::NUM_JOINTS, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -4401,7 +4523,10 @@ static ffi::Error grid_rbd_jax_forward_dynamics_parameter_gradient_body(
     GRID_RBD_FFI_VALIDATE_2D(q, "forward_dynamics_parameter_gradient: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL, nb = grid::NUM_BODIES;
+    if (batch < 1) return ffi::Error::InvalidArgument("forward_dynamics_parameter_gradient: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("forward_dynamics_parameter_gradient: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "forward_dynamics_parameter_gradient: qd", grid::NUM_JOINTS, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(u, "forward_dynamics_parameter_gradient: u", grid::NUM_JOINTS, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -4497,6 +4622,7 @@ static ffi::Error grid_rbd_jax_generalized_gravity_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "generalized_gravity: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("generalized_gravity: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("generalized_gravity: batch > max_batch");
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -4532,7 +4658,9 @@ static ffi::Error grid_rbd_jax_nonlinear_effects_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "nonlinear_effects: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("nonlinear_effects: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("nonlinear_effects: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "nonlinear_effects: qd", grid::NUM_JOINTS, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -4568,7 +4696,9 @@ static ffi::Error grid_rbd_jax_coriolis_matrix_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "coriolis_matrix: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("coriolis_matrix: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("coriolis_matrix: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "coriolis_matrix: qd", grid::NUM_JOINTS, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -4604,7 +4734,9 @@ static ffi::Error grid_rbd_jax_kinetic_energy_regressor_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "kinetic_energy_regressor: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nb = grid::NUM_BODIES;
+    if (batch < 1) return ffi::Error::InvalidArgument("kinetic_energy_regressor: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("kinetic_energy_regressor: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "kinetic_energy_regressor: qd", grid::NUM_JOINTS, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -4639,6 +4771,7 @@ static ffi::Error grid_rbd_jax_potential_energy_regressor_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "potential_energy_regressor: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nb = grid::NUM_BODIES;
+    if (batch < 1) return ffi::Error::InvalidArgument("potential_energy_regressor: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("potential_energy_regressor: batch > max_batch");
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -4676,7 +4809,9 @@ static ffi::Error grid_rbd_jax_energy_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "energy: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS;
+    if (batch < 1) return ffi::Error::InvalidArgument("energy: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("energy: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "energy: qd", grid::NUM_JOINTS, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -4711,6 +4846,7 @@ static ffi::Error grid_rbd_jax_com_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "com: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("com: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("com: batch > max_batch");
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -4746,7 +4882,9 @@ static ffi::Error grid_rbd_jax_ccrba_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "ccrba: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("ccrba: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("ccrba: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "ccrba: qd", grid::NUM_JOINTS, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -4781,7 +4919,9 @@ static ffi::Error grid_rbd_jax_cmm_time_variation_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "cmm_time_variation: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("cmm_time_variation: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("cmm_time_variation: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "cmm_time_variation: qd", grid::NUM_JOINTS, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -4815,6 +4955,7 @@ static ffi::Error grid_rbd_jax_dccrba_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "dccrba: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("dccrba: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("dccrba: batch > max_batch");
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -4860,6 +5001,7 @@ static ffi::Error grid_rbd_jax_frame_jacobian_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "frame_jacobian: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("frame_jacobian: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("frame_jacobian: batch > max_batch");
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -4916,7 +5058,9 @@ static ffi::Error grid_rbd_jax_frame_jacobian_dot_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "frame_jacobian_dot: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("frame_jacobian_dot: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("frame_jacobian_dot: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "frame_jacobian_dot: qd", grid::NUM_JOINTS, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0], dst_pitch, q.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -4972,6 +5116,7 @@ static ffi::Error grid_rbd_jax_osc_inertia_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "osc_inertia: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS;
+    if (batch < 1) return ffi::Error::InvalidArgument("osc_inertia: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("osc_inertia: batch > max_batch");
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
@@ -5017,8 +5162,10 @@ static ffi::Error grid_rbd_jax_end_effector_pose_runtime_impl(
 {
     GRID_RBD_CTX_OR_FFI(ctx_id);
     GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose_runtime: q", grid::NUM_JOINTS);
+    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return ffi::Error::InvalidArgument("end_effector_pose_runtime: target_jid out of range");
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS;
+    if (batch < 1) return ffi::Error::InvalidArgument("end_effector_pose_runtime: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("end_effector_pose_runtime: batch > max_batch");
     if (xtool.size() != 16) return ffi::Error::InvalidArgument(
         "end_effector_pose_runtime: xtool must be the 16-float col-major 4x4 SE(3) tool transform");
@@ -5089,8 +5236,10 @@ static ffi::Error grid_rbd_jax_end_effector_pose_gradient_runtime_impl(
 {
     GRID_RBD_CTX_OR_FFI(ctx_id);
     GRID_RBD_FFI_VALIDATE_2D(q, "end_effector_pose_gradient_runtime: q", grid::NUM_JOINTS);
+    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return ffi::Error::InvalidArgument("end_effector_pose_gradient_runtime: target_jid out of range");
     int batch = (int)q.dimensions()[0];
     int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("end_effector_pose_gradient_runtime: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("end_effector_pose_gradient_runtime: batch > max_batch");
     if (xtool.size() != 16) return ffi::Error::InvalidArgument(
         "end_effector_pose_gradient_runtime: xtool must be the 16-float col-major 4x4 SE(3) tool transform");
@@ -5168,6 +5317,7 @@ static ffi::Error grid_rbd_jax_idsva_so_impl(
     GRID_RBD_FFI_VALIDATE_2D(q, "idsva_so: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj    = grid::NUM_JOINTS;
+    if (batch < 1) return ffi::Error::InvalidArgument("idsva_so: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("idsva_so: batch > max_batch");
 
     const size_t row_bytes = nj * sizeof(T);
@@ -5284,11 +5434,13 @@ static void launch_integrator_grad_kernel_jax(GridCtx *ctx, cudaStream_t stream,
         __VA_ARGS__)
 
 // q/qd/u D→D pack into the singleton's d_q_qd_u (layout [q,qd,u] per timestep).
-static void grid_rbd_jax_pack_qqdu(GridCtx *ctx, cudaStream_t stream, int batch, int nj,
+static ffi::Error grid_rbd_jax_pack_qqdu(GridCtx *ctx, cudaStream_t stream, int batch, int nj,
                                    ffi::Buffer<GRID_FFI_T>& q,
                                    ffi::Buffer<GRID_FFI_T>& qd,
                                    ffi::Buffer<GRID_FFI_T>& u) {
     GRID_RBD_CTX_LOCALS(ctx);
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "qd", nj, batch);   // W03: q's batch sizes every copy
+    GRID_RBD_FFI_VALIDATE_ROWS(u, "u", nj, batch);
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],     dst_pitch, q.typed_data(),  row_bytes,
@@ -5297,6 +5449,7 @@ static void grid_rbd_jax_pack_qqdu(GridCtx *ctx, cudaStream_t stream, int batch,
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
     cudaMemcpy2DAsync(&g_data->d_q_qd_u[2*nj],  dst_pitch, u.typed_data(),  row_bytes,
                       row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
+    return ffi::Error::Success();
 }
 
 #if GRID_HAS_INTEGRATOR
@@ -5312,9 +5465,10 @@ static ffi::Error grid_rbd_jax_integrator_body(
     GRID_RBD_FFI_VALIDATE_2D(q, "integrator: q", grid::NUM_JOINTS);
     int batch = (int)q.dimensions()[0];
     int nj    = grid::NUM_JOINTS;
+    if (batch < 1) return ffi::Error::InvalidArgument("integrator: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("integrator: batch > max_batch");
 
-    grid_rbd_jax_pack_qqdu(g_ctx, stream, batch, nj, q, qd, u);
+    { ffi::Error _pe = grid_rbd_jax_pack_qqdu(g_ctx, stream, batch, nj, q, qd, u); if (_pe.failure()) return _pe; }
     GRID_RBD_IT_DISPATCH_FFI_MJX((int)it, launch_integrator_kernel_jax, MUJOCO, stream, batch, dt, gravity);
     GRID_RBD_FFI_CHECK_LAUNCH("integrator_kernel");
 
@@ -5378,9 +5532,10 @@ static ffi::Error grid_rbd_jax_integrator_gradient_body(
     int batch = (int)q.dimensions()[0];
     int nj    = grid::NUM_JOINTS;
     int nv    = grid::NUM_VEL;
+    if (batch < 1) return ffi::Error::InvalidArgument("integrator_gradient: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("integrator_gradient: batch > max_batch");
 
-    grid_rbd_jax_pack_qqdu(g_ctx, stream, batch, nj, q, qd, u);
+    { ffi::Error _pe = grid_rbd_jax_pack_qqdu(g_ctx, stream, batch, nj, q, qd, u); if (_pe.failure()) return _pe; }
     // mjx gradient is single-stage (euler/si) only; pin supports all integrator types.
     if constexpr (MUJOCO) {
         GRID_RBD_IT_DISPATCH_FFI_MJX_SS((int)it, launch_integrator_grad_kernel_jax, true, stream, batch, dt, gravity);
@@ -5465,7 +5620,10 @@ static ffi::Error grid_rbd_jax_plant_quadratic_cost_impl(
     if (dims.size() != 2 || (int)dims[1] != N)
         return ffi::Error::InvalidArgument("quadratic_cost: var must be 2D (B, N)");
     int batch = (int)dims[0];
+    if (batch < 1) return ffi::Error::InvalidArgument("quadratic_cost: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("quadratic_cost: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(des, "quadratic_cost: des", N, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(w, "quadratic_cost: w", N, batch);
     cudaMemcpyAsync(g_plant.d_in_a, var.typed_data(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_b, des.typed_data(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_c, w.typed_data(),   (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5542,7 +5700,10 @@ static ffi::Error grid_rbd_jax_plant_barrier_impl(
     if (dims.size() != 2 || (int)dims[1] != N)
         return ffi::Error::InvalidArgument("barrier: var must be 2D (B, N)");
     int batch = (int)dims[0];
+    if (batch < 1) return ffi::Error::InvalidArgument("barrier: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("barrier: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(lower, "barrier: lower", N, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(upper, "barrier: upper", N, batch);
     cudaMemcpyAsync(g_plant.d_in_a, var.typed_data(),   (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_b, lower.typed_data(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_c, upper.typed_data(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5631,7 +5792,9 @@ static ffi::Error grid_rbd_jax_plant_step_impl(
     if (dims.size() != 2 || (int)dims[1] != nx)
         return ffi::Error::InvalidArgument("plant_step: x must be 2D (B, NX)");
     int batch = (int)dims[0];
+    if (batch < 1) return ffi::Error::InvalidArgument("plant_step: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("plant_step: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(u, "plant_step: u", nv, batch);
     cudaMemcpyAsync(g_plant.d_in_a, x.typed_data(), (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_b, u.typed_data(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     GRID_RBD_IT_DISPATCH_FFI_MJX((int)it, launch_plant_step_jax, MUJOCO, stream, batch, gravity, dt);
@@ -5681,7 +5844,9 @@ static ffi::Error grid_rbd_jax_plant_step_gradient_impl(
     if (dims.size() != 2 || (int)dims[1] != nx)
         return ffi::Error::InvalidArgument("plant_step_gradient: x must be 2D (B, NX)");
     int batch = (int)dims[0];
+    if (batch < 1) return ffi::Error::InvalidArgument("plant_step_gradient: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("plant_step_gradient: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(u, "plant_step_gradient: u", nv, batch);
     cudaMemcpyAsync(g_plant.d_in_a, x.typed_data(), (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_b, u.typed_data(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     // mjx gradient is single-stage (euler/si) only; pin supports all integrator types.
@@ -5719,7 +5884,10 @@ static ffi::Error grid_rbd_jax_plant_ee_pos_cost_impl(
     if (dims.size() != 2 || (int)dims[1] != nq)
         return ffi::Error::InvalidArgument("ee_pos_cost: q must be 2D (B, NQ)");
     int batch = (int)dims[0];
+    if (batch < 1) return ffi::Error::InvalidArgument("ee_pos_cost: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("ee_pos_cost: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(p_des, "ee_pos_cost: p_des", 3, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(W, "ee_pos_cost: W", 3, batch);
     cudaMemcpyAsync(g_plant.d_in_a, q.typed_data(),     (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_b, p_des.typed_data(), (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_c, W.typed_data(),     (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5763,7 +5931,10 @@ static ffi::Error grid_rbd_jax_plant_com_cost_impl(
     if (dims.size() != 2 || (int)dims[1] != nq)
         return ffi::Error::InvalidArgument("com_cost: q must be 2D (B, NQ)");
     int batch = (int)dims[0];
+    if (batch < 1) return ffi::Error::InvalidArgument("com_cost: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("com_cost: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(p_des, "com_cost: p_des", 3, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(W, "com_cost: W", 3, batch);
     cudaMemcpyAsync(g_plant.d_in_a, q.typed_data(),     (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_b, p_des.typed_data(), (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_c, W.typed_data(),     (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5810,7 +5981,11 @@ static ffi::Error grid_rbd_jax_plant_momentum_cost_impl(
     if (dims.size() != 2 || (int)dims[1] != nq)
         return ffi::Error::InvalidArgument("momentum_cost: q must be 2D (B, NQ)");
     int batch = (int)dims[0];
+    if (batch < 1) return ffi::Error::InvalidArgument("momentum_cost: batch must be >= 1");
     if (batch > kMaxBatch) return ffi::Error::InvalidArgument("momentum_cost: batch > max_batch");
+    GRID_RBD_FFI_VALIDATE_ROWS(qd, "momentum_cost: qd", nv, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(h_des, "momentum_cost: h_des", 6, batch);
+    GRID_RBD_FFI_VALIDATE_ROWS(W, "momentum_cost: W", 6, batch);
     cudaMemcpyAsync(g_plant.d_in_a, q.typed_data(),  (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_b, qd.typed_data(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_c,                  h_des.typed_data(), (size_t)batch * 6 * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -5945,8 +6120,14 @@ static inline void grid_torch_stamp_check(GridCtx *ctx, cudaStream_t stream, con
 
 static inline int grid_torch_batch(const torch::Tensor& q) {
     int batch = (int)q.size(0);
+    TORCH_CHECK(batch >= 1, "batch must be >= 1 (got ", batch, ")");
     TORCH_CHECK(batch <= kMaxBatch, "batch ", batch, " > compiled-in max_batch ", kMaxBatch);
     return batch;
+}
+// W03: every operand after the leading one must carry the leading batch (the
+// D2D copies are sized by it).
+static inline void grid_torch_check_rows(const torch::Tensor& t, int batch, const char* name) {
+    TORCH_CHECK(t.size(0) == batch, name, ": batch ", t.size(0), " must equal the leading operand's batch ", batch);
 }
 
 static inline torch::Tensor grid_torch_empty(int rows, int cols, const torch::Tensor& like) {
@@ -5960,6 +6141,9 @@ static inline void grid_torch_pack(GridCtx *ctx, cudaStream_t stream, int batch,
                                    const torch::Tensor* qd,
                                    const torch::Tensor* u) {
     GRID_RBD_CTX_LOCALS(ctx);
+    if (q)  grid_torch_check_rows(*q,  batch, "q");     // W03: q's batch sizes every copy
+    if (qd) grid_torch_check_rows(*qd, batch, "qd");
+    if (u)  grid_torch_check_rows(*u,  batch, "u");
     const size_t row_bytes = nj * sizeof(T);
     const size_t dst_pitch = 3 * nj * sizeof(T);
     if (q)  cudaMemcpy2DAsync(&g_data->d_q_qd_u[0],      dst_pitch, q->data_ptr<T>(),  row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);
@@ -6021,6 +6205,7 @@ torch::Tensor torch_inverse_dynamics(torch::Tensor q, torch::Tensor qd, double g
     if (qdd.has_value()) {
         const torch::Tensor& a = qdd.value();
         grid_torch_check(a, "inverse_dynamics: qdd", nj);
+        grid_torch_check_rows(a, batch, "inverse_dynamics: qdd");
         cudaMemcpyAsync(g_data->d_qdd, a.data_ptr<T>(),
                         (size_t)batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);
         grid::inverse_dynamics_kernel<T, grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_rbd_grid_for(g_ctx, batch), grid_rbd_launch_threads_n<grid::GRID_ALGO_INVERSE_DYNAMICS>(g_ctx, batch), grid::INVERSE_DYNAMICS_DYNAMIC_SHARED_MEM_BYTES<T>(), stream>>>(
@@ -6583,6 +6768,7 @@ torch::Tensor torch_osc_inertia(torch::Tensor q, int64_t ctx_id) {
 template <bool MUJOCO>
 torch::Tensor torch_end_effector_pose_runtime(torch::Tensor q, int64_t target_jid, torch::Tensor offset, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
+    TORCH_CHECK(target_jid >= 0 && target_jid < grid::NUM_JOINTS, "end_effector_pose_runtime: target_jid out of range");
     const int nj = grid::NUM_JOINTS;
     grid_torch_check(q, "end_effector_pose_runtime: q", nj);
     TORCH_CHECK(offset.is_cuda() && offset.numel() == 16,
@@ -6606,6 +6792,7 @@ torch::Tensor torch_end_effector_pose_runtime(torch::Tensor q, int64_t target_ji
 template <bool MUJOCO>
 torch::Tensor torch_end_effector_pose_gradient_runtime(torch::Tensor q, int64_t target_jid, torch::Tensor offset, int64_t ctx_id) {
     GRID_RBD_CTX_OR_THROW(ctx_id);
+    TORCH_CHECK(target_jid >= 0 && target_jid < grid::NUM_JOINTS, "end_effector_pose_gradient_runtime: target_jid out of range");
     const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     grid_torch_check(q, "end_effector_pose_gradient_runtime: q", nj);
     TORCH_CHECK(offset.is_cuda() && offset.numel() == 16,
@@ -6834,6 +7021,8 @@ static std::vector<torch::Tensor> torch_plant_quadratic_cost(
     grid_torch_check_n(des, "quadratic_cost: des", N);
     grid_torch_check_n(w,   "quadratic_cost: w",   N);
     int batch = grid_torch_batch(var);
+    grid_torch_check_rows(des, batch, "quadratic_cost: des");
+    grid_torch_check_rows(w,   batch, "quadratic_cost: w");
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     cudaMemcpyAsync(g_plant.d_in_a, var.data_ptr<T>(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_b, des.data_ptr<T>(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6874,6 +7063,8 @@ static std::vector<torch::Tensor> torch_plant_barrier(
     grid_torch_check_n(lower, "barrier: lower", N);
     grid_torch_check_n(upper, "barrier: upper", N);
     int batch = grid_torch_batch(var);
+    grid_torch_check_rows(lower, batch, "barrier: lower");
+    grid_torch_check_rows(upper, batch, "barrier: upper");
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     cudaMemcpyAsync(g_plant.d_in_a, var.data_ptr<T>(),   (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_b, lower.data_ptr<T>(), (size_t)batch * N * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6932,6 +7123,7 @@ torch::Tensor torch_plant_step(torch::Tensor x, torch::Tensor u, double dt, int6
     grid_torch_check_n(x, "plant_step: x", nx);
     grid_torch_check_n(u, "plant_step: u", nv);
     int batch = grid_torch_batch(x);
+    grid_torch_check_rows(u, batch, "plant_step: u");
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     cudaMemcpyAsync(g_plant.d_in_a, x.data_ptr<T>(), (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_b, u.data_ptr<T>(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6967,6 +7159,7 @@ torch::Tensor torch_plant_step_gradient(torch::Tensor x, torch::Tensor u, double
     grid_torch_check_n(x, "plant_step_gradient: x", nx);
     grid_torch_check_n(u, "plant_step_gradient: u", nv);
     int batch = grid_torch_batch(x);
+    grid_torch_check_rows(u, batch, "plant_step_gradient: u");
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     cudaMemcpyAsync(g_plant.d_in_a, x.data_ptr<T>(), (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_b, u.data_ptr<T>(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -6993,6 +7186,8 @@ std::vector<torch::Tensor> torch_ee_pos_cost(torch::Tensor q, torch::Tensor p_de
     grid_torch_check_n(p_des, "ee_pos_cost: p_des", 3);
     grid_torch_check_n(W, "ee_pos_cost: W", 3);
     int batch = grid_torch_batch(q);
+    grid_torch_check_rows(p_des, batch, "ee_pos_cost: p_des");
+    grid_torch_check_rows(W, batch, "ee_pos_cost: W");
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     cudaMemcpyAsync(g_plant.d_in_a, q.data_ptr<T>(),     (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_b, p_des.data_ptr<T>(), (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -7024,6 +7219,8 @@ std::vector<torch::Tensor> torch_com_cost(torch::Tensor q, torch::Tensor p_des, 
     grid_torch_check_n(p_des, "com_cost: p_des", 3);
     grid_torch_check_n(W, "com_cost: W", 3);
     int batch = grid_torch_batch(q);
+    grid_torch_check_rows(p_des, batch, "com_cost: p_des");
+    grid_torch_check_rows(W, batch, "com_cost: W");
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     cudaMemcpyAsync(g_plant.d_in_a, q.data_ptr<T>(),     (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_b, p_des.data_ptr<T>(), (size_t)batch * 3  * sizeof(T), cudaMemcpyDeviceToDevice, stream);
@@ -7056,6 +7253,9 @@ std::vector<torch::Tensor> torch_momentum_cost(torch::Tensor q, torch::Tensor qd
     grid_torch_check_n(h_des, "momentum_cost: h_des", 6);
     grid_torch_check_n(W, "momentum_cost: W", 6);
     int batch = grid_torch_batch(q);
+    grid_torch_check_rows(qd, batch, "momentum_cost: qd");
+    grid_torch_check_rows(h_des, batch, "momentum_cost: h_des");
+    grid_torch_check_rows(W, batch, "momentum_cost: W");
     cudaStream_t stream = at::cuda::getCurrentCUDAStream();
     cudaMemcpyAsync(g_plant.d_in_a, q.data_ptr<T>(),  (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);
     cudaMemcpyAsync(g_plant.d_in_b, qd.data_ptr<T>(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);

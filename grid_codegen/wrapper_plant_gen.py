@@ -179,7 +179,9 @@ def _jax_step_block(key: str) -> list[str]:
         "    if (dims.size() != 2 || (int)dims[1] != nx)",
         f'        return ffi::Error::InvalidArgument("{name}: x must be 2D (B, NX)");',
         "    int batch = (int)dims[0];",
+        f'    if (batch < 1) return ffi::Error::InvalidArgument("{name}: batch must be >= 1");',
         f'    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("{name}: batch > max_batch");',
+        f'    GRID_RBD_FFI_VALIDATE_ROWS(u, "{name}: u", nv, batch);',
         "    cudaMemcpyAsync(g_plant.d_in_a, x.typed_data(), (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);",
         "    cudaMemcpyAsync(g_plant.d_in_b, u.typed_data(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);",
     ]
@@ -255,8 +257,12 @@ def _jax_cost_block(key: str) -> list[str]:
         "    if (dims.size() != 2 || (int)dims[1] != nq)",
         f'        return ffi::Error::InvalidArgument("{key}: q must be 2D (B, NQ)");',
         "    int batch = (int)dims[0];",
+        f'    if (batch < 1) return ffi::Error::InvalidArgument("{key}: batch must be >= 1");',
         f'    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("{key}: batch > max_batch");',
     ]
+    # W03: the other operands must carry the leading batch (copies sized by it).
+    for n, d in op["ins"][1:]:
+        L.append(f'    GRID_RBD_FFI_VALIDATE_ROWS({n}, "{key}: {n}", {d.strip()}, batch);')
     if four_in:
         L += [
             "    cudaMemcpyAsync(g_plant.d_in_a, q.typed_data(),  (size_t)batch * nq * sizeof(T), cudaMemcpyDeviceToDevice, stream);",
@@ -383,6 +389,7 @@ def _torch_step_block(key: str) -> list[str]:
         f'    grid_torch_check_n(x, "{name}: x", nx);',
         f'    grid_torch_check_n(u, "{name}: u", nv);',
         "    int batch = grid_torch_batch(x);",
+        f'    grid_torch_check_rows(u, batch, "{name}: u");',
         "    cudaStream_t stream = at::cuda::getCurrentCUDAStream();",
         "    cudaMemcpyAsync(g_plant.d_in_a, x.data_ptr<T>(), (size_t)batch * nx * sizeof(T), cudaMemcpyDeviceToDevice, stream);",
         "    cudaMemcpyAsync(g_plant.d_in_b, u.data_ptr<T>(), (size_t)batch * nv * sizeof(T), cudaMemcpyDeviceToDevice, stream);",
@@ -430,6 +437,9 @@ def _torch_cost_block(key: str) -> list[str]:
     first = op["ins"][0][0]
     L += [
         f"    int batch = grid_torch_batch({first});",
+    ]
+    L += [f'    grid_torch_check_rows({n}, batch, "{key}: {n}");' for n, _ in op["ins"][1:]]
+    L += [
         "    cudaStream_t stream = at::cuda::getCurrentCUDAStream();",
     ]
     if four_in:

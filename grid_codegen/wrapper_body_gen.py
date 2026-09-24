@@ -292,7 +292,10 @@ def gen_body(spec: AbiSpec) -> str:
     L = [f'extern "C" int grid_rbd_{stem}(long long ctx_id, {sig}) {{',
          f"#{spec.gate_form} {gate}",
          "    GRID_RBD_CTX_OR_RETURN(ctx_id);",
+         "    if (batch < 1) return 1;",          # W03: zero batch is an argument error
          "    if (batch > kMaxBatch) return 2;"]
+    if "target_jid" in spec.trailing_runtime_args:
+        L.append("    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;")
     if spec.key in PRE_PACK_COMMENTS:
         L.append(PRE_PACK_COMMENTS[spec.key])
     L.append(_PACK[spec.pack_mode])
@@ -494,7 +497,10 @@ def gen_mjx_body(spec: AbiSpec) -> str:
     if spec.mjx_requires_qdd:
         L.append(_MJX_QDD_REQ)
     L.append("    GRID_RBD_CTX_OR_RETURN(ctx_id);")
+    L.append("    if (batch < 1) return 1;")
     L.append("    if (batch > kMaxBatch) return 2;")
+    if "target_jid" in spec.trailing_runtime_args:
+        L.append("    if (target_jid < 0 || target_jid >= grid::NUM_JOINTS) return 1;")
     L.append(_PACK[spec.pack_mode])
     if spec.key in XTOOL_STAGING:
         L.append(XTOOL_BLOCK)
@@ -805,7 +811,12 @@ def emit_jax_handler(key: str) -> str:
     L.append(f'    GRID_RBD_FFI_VALIDATE_2D(q, "{key}: q", grid::NUM_JOINTS);')
     L.append("    int batch = (int)q.dimensions()[0];")
     L.append("    int " + ", ".join(f"{l} = {f}" for f, l in dims) + ";")
+    L.append(f'    if (batch < 1) return ffi::Error::InvalidArgument("{key}: batch must be >= 1");')
     L.append(f'    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("{key}: batch > max_batch");')
+    # W03: every operand after the leading one must carry q's batch (the copies
+    # below are sized by it).
+    for b in packed[1:] + (["qdd"] if staged_qdd else []):
+        L.append(f'    GRID_RBD_FFI_VALIDATE_ROWS({b}, "{key}: {b}", grid::NUM_JOINTS, batch);')
     L.append("    const size_t row_bytes = nj * sizeof(T);")
     L.append("    const size_t dst_pitch = 3 * nj * sizeof(T);")
     slots = ["0", "nj", "2*nj"]

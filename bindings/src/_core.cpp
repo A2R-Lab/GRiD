@@ -1980,6 +1980,9 @@ private:
     void check_array_2d(const py::array_t<CT>& a, int batch, int last_dim,
                         const char* name) const
     {
+        if (batch < 1)   // W03: an empty batch is an argument error, not a launch error
+            throw std::invalid_argument(std::string(name) + ": batch must be >= 1 (got "
+                                        + std::to_string(batch) + ")");
         if (a.ndim() != 2 || a.shape(0) != batch || a.shape(1) != last_dim) {
             throw std::invalid_argument(
                 std::string(name) + " must be (batch=" + std::to_string(batch)

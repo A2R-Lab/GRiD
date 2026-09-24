@@ -12,6 +12,7 @@ input/output ABI, and the parallelism patterns.
    input_output_abi
    library_safe_initialization
    runtime_contexts
+   operand_validation
    parallelism_patterns
    algorithms/index
    codegen_architecture
