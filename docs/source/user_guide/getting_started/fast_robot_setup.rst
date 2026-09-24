@@ -156,24 +156,74 @@ the cache key and is recorded in ``meta.json`` as ``launch_config_gpu``.
 What to expect: cold vs. warm
 -----------------------------
 
+Measured 2026-09-24 on an RTX 5090 / 24-core host, ``max_batch_size=1024``,
+one build per process (``/usr/bin/time -v`` wall and peak RSS). A cold build is
+the Python code generation plus ONE ``nvcc`` translation unit; "generation-only"
+is what a codegen edit with byte-identical output costs (the content key re-hits
+the compiled ``.so``, no ``nvcc``); a warm start is a fresh process calling
+``get_robot`` and one ``forward_dynamics``.
+
 .. list-table::
    :header-rows: 1
-   :widths: 30 40 30
+   :widths: 22 16 12 16 16 18
 
-   * - Robot
-     - First (cold) build
-     - Every later load (warm)
-   * - Small arm (e.g. iiwa14, 7-DOF fixed-base)
-     - ~30–60 s of ``nvcc``
-     - well under a second
-   * - Large humanoid (e.g. g1, h1_2), floating base
-     - minutes, and heavy RAM (a full g1-floating pin-only build is ~33 min
-       at ~11 GB peak)
-     - well under a second
+   * - Robot / build
+     - Cold build
+     - Peak RSS
+     - Generation-only
+     - Warm start
+     - Host RSS after one call
+   * - iiwa14 fixed, all algorithms, pin-only
+     - 10 min 53 s
+     - 2.0 GB
+     - 23 s
+     - 1.7 s
+     - 1.1 GB
+   * - go2 floating, all algorithms, pin-only
+     - 14 min 55 s
+     - 3.6 GB
+     - 68 s
+     - 1.9 s
+     - 1.8 GB
+   * - go2 floating, all algorithms + mjx twins
+     - 27 min 26 s
+     - 10.1 GB
+     - —
+     - —
+     - —
+   * - g1 floating, all algorithms, pin-only
+     - 53 min 29 s
+     - 8.3 GB
+     - 2 min 28 s
+     - 3.2 s
+     - 6.9 GB
+   * - g1 floating, all algorithms + mjx twins
+     - 1 h 16 min
+     - 11.0 GB
+     - —
+     - 3.2 s
+     - 7.1 GB
+   * - g1 floating, ``algorithm_list`` = fd, id, fd-gradient
+     - 3 min 0 s
+     - 1.7 GB
+     - —
+     - 1.7 s
+     - 1.1 GB
+
+Three things to take from the table. ``algorithm_list`` is the biggest lever on
+every axis (g1: 53 min → 3 min, 8.3 → 1.7 GB to build, 6.9 → 1.1 GB of host RAM
+to run). The mjx twins roughly double a floating-base build and triple its RAM,
+so ``enable_mujoco_kernels=False`` is the default advice for humanoids. And the
+host RSS of a full build is dominated by per-algorithm workspaces sized by
+``max_batch_size`` and allocated at init, whether or not the process ever calls
+those algorithms — on a shared-memory device (Jetson) size ``max_batch_size``
+and ``algorithm_list`` to what you run.
 
 The warm path is the whole point: pay the cold cost once — ideally
 out-of-band, see below — and interactive sessions, notebooks, tests, and
-deployed processes all start instantly.
+deployed processes all start in a few seconds (about 0.9 s of that is loading
+the ``.so`` and initialising the device tables; the first call pays the lazy
+allocations; the second call runs at kernel speed).
 
 RAM-safe big-robot builds
 -------------------------
