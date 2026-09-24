@@ -18,47 +18,25 @@ import pytest
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 grid_rbd = pytest.importorskip("grid_rbd")
+from ._subset_artifacts import register_subset, cache_key as _cache_key, random_state as _state  # noqa: E402
 
 pytestmark = pytest.mark.python_wrappers
 MAX_BATCH = 16
 
 
-def _register(name, urdf, floating, algos, runtime_inertia=False):
-    if shutil.which("nvcc") is None:
-        pytest.skip("nvcc not on PATH")
-    return grid_rbd.register_robot(name, str(_REPO / "config/robot_assets" / urdf), floating_base=floating,
-                                   max_batch_size=MAX_BATCH, algorithm_list=algos, enable_mujoco_kernels=False,
-                                   runtime_inertia=runtime_inertia)
-
-
 @pytest.fixture(scope="module")
 def iiwa():
-    h = _register("ctx_pytest_iiwa14", "iiwa14.urdf", False,
-                  ["forward_dynamics", "inverse_dynamics", "forward_dynamics_gradient", "minv"], runtime_inertia=True)
+    h = register_subset("ctx_pytest_iiwa14", "iiwa14.urdf", floating=False,
+                        algos=["forward_dynamics", "inverse_dynamics", "forward_dynamics_gradient", "minv"], runtime_inertia=True)
     yield h
     h.close()
 
 
 @pytest.fixture(scope="module")
 def go2():
-    h = _register("ctx_pytest_go2", "go2.urdf", True, ["forward_dynamics", "inverse_dynamics"])
+    h = register_subset("ctx_pytest_go2", "go2.urdf", floating=True, algos=["forward_dynamics", "inverse_dynamics"])
     yield h
     h.close()
-
-
-def _cache_key(handle):
-    return grid_rbd.manifest_lookup(grid_rbd.default_cache_dir(), handle._name)["cache_key"]
-
-
-def _state(h, B=4):
-    rng = np.random.default_rng(0)
-    q = 0.3 * rng.standard_normal((B, h.nq)).astype(np.float32)
-    if h.floating_base:
-        quat = rng.standard_normal((B, 4)); quat /= np.linalg.norm(quat, axis=1, keepdims=True); q[:, 3:7] = quat
-    qd = 0.3 * rng.standard_normal((B, h.nq)).astype(np.float32); u = 0.3 * rng.standard_normal((B, h.nq)).astype(np.float32)
-    if h.floating_base:
-        qd[:, h.nv:] = 0; u[:, h.nv:] = 0
-    return q, qd, u
 
 
 # ─── numpy ───────────────────────────────────────────────────────────────────

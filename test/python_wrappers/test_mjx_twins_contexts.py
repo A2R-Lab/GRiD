@@ -8,7 +8,6 @@ module stays minutes.
 """
 from __future__ import annotations
 
-import shutil
 import sys
 from pathlib import Path
 
@@ -18,6 +17,7 @@ import pytest
 _REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO))
 grid_rbd = pytest.importorskip("grid_rbd")
+from ._subset_artifacts import register_subset, cache_key as _cache_key, random_state as _state  # noqa: E402
 
 pytestmark = pytest.mark.python_wrappers
 ALGOS = ["forward_dynamics", "inverse_dynamics", "forward_dynamics_gradient", "minv"]
@@ -25,26 +25,9 @@ ALGOS = ["forward_dynamics", "inverse_dynamics", "forward_dynamics_gradient", "m
 
 @pytest.fixture(scope="module")
 def go2():
-    if shutil.which("nvcc") is None:
-        pytest.skip("nvcc not on PATH")
-    h = grid_rbd.register_robot("ctx_pytest_go2_mjx", str(_REPO / "config/robot_assets/go2.urdf"),
-                                floating_base=True, max_batch_size=16, algorithm_list=ALGOS,
-                                enable_mujoco_kernels=True)
+    h = register_subset("ctx_pytest_go2_mjx", "go2.urdf", floating=True, algos=ALGOS, mujoco=True)
     yield h
     h.close()
-
-
-def _cache_key(handle):
-    return grid_rbd.manifest_lookup(grid_rbd.default_cache_dir(), handle._name)["cache_key"]
-
-
-def _state(h, B=4, seed=0):
-    rng = np.random.default_rng(seed)
-    q = 0.3 * rng.standard_normal((B, h.nq)).astype(np.float32)
-    quat = rng.standard_normal((B, 4)); quat /= np.linalg.norm(quat, axis=1, keepdims=True); q[:, 3:7] = quat
-    qd = 0.3 * rng.standard_normal((B, h.nq)).astype(np.float32); u = 0.3 * rng.standard_normal((B, h.nq)).astype(np.float32)
-    qd[:, h.nv:] = 0; u[:, h.nv:] = 0
-    return q, qd, u
 
 
 def test_numpy_mujoco_twins_run_and_differ_from_pinocchio(go2):
