@@ -2208,3 +2208,20 @@ stops at the FIRST `])` — which sits INSIDE an emitted string
 (`streams[0]));}`); scan with a quote-aware bracket walker instead; and fold
 sites by asserting an exact shape match per site (skip + report the rest),
 never by best-effort substitution. Byte gate before AND after (8 cells).
+
+### 7.z20 `get_robot` must validate LOAD compatibility — the manifest is a bare name→key binding (2026-09-24)
+`grid_rbd.get_robot("iiwa14")` on a cache whose entry predated the build-identity
+record dlopen'ed an August `.so` and died with `undefined symbol:
+grid_rbd_device_pool_bytes`. `register_robot` validated its stage-1 pointer
+against the full identity (W05), but `get_robot` took the manifest binding at
+face value. Fix: `_cache.load_incompat_reasons` checks the LOAD subset
+(`LOAD_IDENTITY_KEYS` = key_schema, cuda_arch, wrapper_template, torch_abi,
+jax_ffi) and `get_robot` raises `StaleRobotError` with the reasons + the rebuild
+instruction; a missing sidecar is refused too. Provenance keys (nvcc, host_cxx,
+GLASS content, compile flags, generation env) deliberately do NOT block a load —
+a shipped cache must load on a box without the build toolchain. jax/torch
+`get_robot` route through the numpy lookup and inherit the check. Test:
+`test_rbd_cache_identity.py::test_get_robot_loads_a_registered_entry_and_refuses_an_incompatible_one`
+(handle + arch stubbed; CPU-only). RULE: every reader of a persisted pointer
+validates what the pointer implies before dereferencing it — a name binding
+carries no proof of ABI compatibility.

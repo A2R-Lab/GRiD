@@ -30,7 +30,7 @@ Four entry points over the same cache:
 | `load_robot(urdf_path, backend=...)` | ZERO-ceremony: derives a stable content-addressed name, builds-if-missing, returns a handle | the frictionless default — no name to invent |
 | `register_robot(name, urdf_path, ...)` | build-if-missing **and** return a handle under YOUR name | you want a human-friendly handle name |
 | `precompile(name, urdf_path, tiers=..., backends=...)` | build + cache only (no handle) | warm the cache offline (CI / Docker), maybe several tiers/backends |
-| `get_robot(name)` | look up an already-registered robot by name | fast start once the cache is warm; raises `RobotNotRegisteredError` if absent |
+| `get_robot(name)` | look up an already-registered robot by name | fast start once the cache is warm; raises `RobotNotRegisteredError` if absent, `StaleRobotError` if the cached build is from another wrapper/ABI/arch (rebuild) |
 
 ```python
 import grid_rbd
@@ -283,6 +283,9 @@ apply per-algo small-batch thread overrides from the config's `ffi_bases_by_n` b
 
 - **`RobotNotRegisteredError`** from `get_robot` → the cache isn't warm; run `register_robot` /
   `precompile` first (or ship the cache dir).
+- **`StaleRobotError`** from `get_robot` → the manifest names a build this `grid_rbd` cannot load
+  (older wrapper / torch-jax ABI / GPU arch, or a pre-2026-09-22 entry with no build record); re-run
+  `register_robot` / `precompile` — byte-identical sources re-hit the store without `nvcc`.
 - **"symbol missing" / "not built into this `.so`"** → you used `algorithm_list=` and called a
   method outside the subset; add it and rebuild. Same on all three surfaces.
 - **torch "no kernel image available for sm_120"** → the backward VJP runs torch's own CUDA

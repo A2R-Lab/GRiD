@@ -33,6 +33,7 @@ from ._cache import (
     detect_cuda_arch,
     keymap_lookup,
     keymap_record,
+    load_incompat_reasons,
     list_registered as _list_registered,
     manifest_lookup,
     manifest_register,
@@ -57,6 +58,22 @@ try:
     del _pkg_version
 except Exception:  # pragma: no cover - only hit when not installed
     __version__ = "unknown"
+
+
+class StaleRobotError(RuntimeError):
+    """Raised by get_robot() when the manifest names a build this grid_rbd
+    cannot soundly load (built from another wrapper / framework ABI / GPU
+    arch, or before the build-identity record existed). The fix is a
+    rebuild through register_robot / precompile — byte-identical sources
+    re-hit the content store without nvcc."""
+
+    def __init__(self, name: str, reasons: list[str]):
+        self.reasons = list(reasons)
+        super().__init__(
+            f"The registered build for {name!r} cannot be loaded by this grid_rbd "
+            f"({'; '.join(reasons)}). Re-run grid_rbd.register_robot(name={name!r}, "
+            f"urdf_path=...) or grid_rbd.precompile(...) to rebuild it."
+        )
 
 
 class RobotNotRegisteredError(KeyError):
@@ -764,6 +781,14 @@ def get_robot(name: str, cache_dir: str | Path | None = None, *,
             f"Manifest entry for {name!r} points at {so_path}, but the file "
             f"is missing. Cache is corrupted; re-register with force_rebuild=True."
         )
+    # Load-compatibility (2026-09-24): the manifest is a name -> content-key
+    # binding with no validation of its own; before this check a pre-identity
+    # entry loaded and died on an undefined symbol. No GPU detectable -> the
+    # arch is taken from the entry (the runtime fails on its own terms then).
+    identity = build_identity(detect_cuda_arch() or int(entry.get("cuda_arch", 0)))
+    reasons = load_incompat_reasons(so_path.parent, identity)
+    if reasons:
+        raise StaleRobotError(name, reasons)
     handle = RobotHandle(name, str(so_path), entry)
     handle.output_convention = output_convention
     if _profile_overlay:
@@ -965,6 +990,7 @@ __all__ = [
     "SecondOrderID",
     "SecondOrderFD",
     "RobotNotRegisteredError",
+    "StaleRobotError",
     "register_robot",
     "load_robot",
     "get_robot",

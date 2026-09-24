@@ -495,6 +495,30 @@ def stale_hit_reasons(entry_dir: Path, identity: dict[str, Any]) -> list[str]:
     return reasons
 
 
+# The subset of the identity a LOAD must match (2026-09-24). A stage-1 HIT must
+# match the whole record (register_robot rebuilds otherwise); get_robot only
+# loads what the manifest names, and a registered artifact loads soundly on a
+# box that never had the toolchain that built it (a shipped cache) — nvcc,
+# host_cxx, GLASS content, compile flags and generation env are provenance.
+# What decides whether dlopen + the C ABI + the framework op tables are sound:
+# the wrapper the .so was generated from, the torch/jax ABIs its tables were
+# compiled against, the GPU it was compiled for, and the key schema.
+LOAD_IDENTITY_KEYS = ("key_schema", "cuda_arch", "wrapper_template", "torch_abi", "jax_ffi")
+
+
+def load_incompat_reasons(entry_dir: Path, identity: dict[str, Any]) -> list[str]:
+    """Why the .so under `entry_dir` must NOT be loaded by this grid_rbd:
+    [] = sound. A missing sidecar is refused too: an entry that predates the
+    identity record may have been built against an older wrapper, and the
+    failure that shows is an undefined symbol at dlopen (seen 2026-09-24:
+    `grid_rbd_device_pool_bytes` missing from an August .so)."""
+    recorded = read_build_inputs(entry_dir)
+    if recorded is None:
+        return ["no build_inputs.json (entry predates the build-identity record)"]
+    return [f"{k}: recorded {recorded.get(k)!r} != current {identity.get(k)!r}"
+            for k in LOAD_IDENTITY_KEYS if recorded.get(k) != identity.get(k)]
+
+
 def compute_content_key(source_dir: Path, options: dict[str, Any],
                         cuda_arch: int, max_batch: int) -> str:
     """Content-addressed key for a generated-source dir: exactly the inputs

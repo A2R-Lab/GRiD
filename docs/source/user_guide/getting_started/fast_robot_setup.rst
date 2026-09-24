@@ -60,8 +60,14 @@ All three drive the same persistent cache; pick by ceremony level.
        interactive use never compiles
 
 Once a named robot is in the cache, ``get_robot(name)`` looks it up without
-touching the URDF (raises ``RobotNotRegisteredError`` if absent), and
-``list_registered()`` shows everything in the manifest.
+touching the URDF (raises ``RobotNotRegisteredError`` if absent, and
+``StaleRobotError`` when the registered build cannot be loaded by this
+``grid_rbd`` — built from another wrapper, torch/jax ABI or GPU arch, or before
+the build-identity record existed; re-run ``register_robot`` / ``precompile``
+and a byte-identical build re-hits the store without ``nvcc``), and
+``list_registered()`` shows everything in the manifest. Toolchain provenance
+(``nvcc``, host compiler, GLASS content) is NOT a load blocker: a shipped cache
+loads on a box that never had the toolchain that built it.
 
 All of these are **idempotent**: a robot already in the cache is an instant
 no-op — re-registering never re-runs ``nvcc``.

@@ -158,6 +158,43 @@ def test_stale_pointer_is_rejected_not_returned(stubs, monkeypatch):
     assert stubs.compile_calls == 1
 
 
+class _HandleStub:
+    def __init__(self, name, so_path, entry):
+        self.name, self.so_path, self.entry = name, so_path, entry
+
+    def apply_profile_overlay(self, *_):
+        pass
+
+
+def _get(stubs, monkeypatch, name="probe"):
+    monkeypatch.setattr(grid_rbd, "RobotHandle", _HandleStub)
+    monkeypatch.setattr(grid_rbd, "detect_cuda_arch", lambda: ARCH)
+    h = grid_rbd.get_robot(name, cache_dir=stubs.cache_dir)
+    return h
+
+
+def test_get_robot_loads_a_registered_entry_and_refuses_an_incompatible_one(stubs, monkeypatch):
+    """get_robot validates the LOAD subset of the identity (2026-09-24): a
+    provenance change (nvcc) still loads; a wrapper/ABI/arch change or a
+    missing sidecar raises StaleRobotError with the reasons, never an
+    undefined-symbol crash from a stale .so."""
+    key, so, _ = _warm(stubs)
+    assert _get(stubs, monkeypatch).so_path == str(so)
+    sidecar = so.parent / _cache.BUILD_INPUTS_FILE
+    rec = json.loads(sidecar.read_text())
+    sidecar.write_text(json.dumps(dict(rec, nvcc="/old/nvcc:11.0")))
+    assert _get(stubs, monkeypatch).so_path == str(so), "provenance is not a load blocker"
+    sidecar.write_text(json.dumps(dict(rec, wrapper_template="deadbeef")))
+    with pytest.raises(grid_rbd.StaleRobotError) as ei:
+        _get(stubs, monkeypatch)
+    assert ei.value.reasons == [f"wrapper_template: recorded 'deadbeef' != current {rec['wrapper_template']!r}"]
+    assert "register_robot" in str(ei.value)
+    sidecar.unlink()
+    with pytest.raises(grid_rbd.StaleRobotError, match="predates"):
+        _get(stubs, monkeypatch)
+    assert stubs.generate_calls == 1, "get_robot never builds"
+
+
 def test_pointer_without_sidecar_is_a_miss(stubs):
     key, so, _ = _warm(stubs)
     (so.parent / _cache.BUILD_INPUTS_FILE).unlink()
