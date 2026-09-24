@@ -130,6 +130,16 @@ def _integrator_code(integrator_type: str) -> int:
 _REFERENCE_FRAME_CODES = {"local": 0, "world": 1, "local_world_aligned": 2}
 
 
+def _finalize_context(runner, cid):
+    # Called at garbage collection of an owning handle (codex R3). Idempotent
+    # against an explicit close (that detaches the finalizer first) and silent
+    # at interpreter shutdown (a closed/tombstoned id raises; nothing to do).
+    try:
+        runner.ctx_close(cid)
+    except Exception:
+        pass
+
+
 def _frame_args(target_jid, reference_frame):
     """Normalize the frame_jacobian[_dot] runtime frame kwargs to the C ABI's
     (int target_jid, int reference_frame), where -1 means "use the codegen
@@ -2309,8 +2319,10 @@ class RobotHandle:
         drain, free). After close(), method calls will fail. Idempotent."""
         if self._runner is not None:
             if self._owns_context:
+                fin = getattr(self, "_ctx_finalizer", None)
                 try:
-                    self._runner.ctx_close(self._runner.ctx_id())
+                    if fin is not None and fin.detach() is not None:
+                        self._runner.ctx_close(self._runner.ctx_id())
                 finally:
                     self._owns_context = False
             del self._runner
@@ -2333,9 +2345,16 @@ class RobotHandle:
         context. ``workspace_slots`` caps the per-block workspace slot count
         (0 = the auto-fit). Contexts are the unit of isolation for concurrent
         pipelines on the single GPU; they are NOT a multi-GPU mechanism."""
+        import weakref
         from . import _core  # noqa: F401
         new = RobotHandle(self._name, self._so_path, self._meta, allow_fp64=self.allow_fp64)
         cid = new._runner.ctx_create(0, 0, int(workspace_slots))
+        # codex R3 (2026-09-24): the handle is the ONE owner of its context. A
+        # dropped handle (no close(), no `with`) is finalized at garbage collection
+        # — the finalizer holds the runner (keeps the .so mapped) and the id, never
+        # the handle; close() detaches it first so the context is closed exactly
+        # once. Borrowed views (jax/torch) reference the handle, not the context.
+        new._ctx_finalizer = weakref.finalize(new, _finalize_context, new._runner, cid)
         new._runner.bind_context(cid)
         new._owns_context = True
         new.output_convention = self._output_convention

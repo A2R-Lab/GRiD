@@ -2127,9 +2127,14 @@ def gen_init_gridData(self):
     # gridData cudaMalloc goes through grid_device_alloc (carve-or-malloc);
     # (c) gridData_device_bytes is DERIVED from the same lines so the slab
     # size and the carve can never drift.
+    # codex R2 (2026-09-24): precedence = explicit pool cap (any context, slab or
+    # cudaMalloc path) > GRID_WORKSPACE_TIMESTEP_SLOTS env > cudaMemGetInfo auto-fit.
+    # 0 in the pool means "auto" (never silently forced to max_batch).
     _ws_env_i = next(i for i, l in enumerate(code_lines) if "_ws_env != nullptr" in l)
-    code_lines.insert(_ws_env_i + 1,
-        "        else if (_pool->base != nullptr && _pool->ws_slots > 0) "
+    assert code_lines[_ws_env_i].lstrip().startswith("if (")
+    code_lines[_ws_env_i] = code_lines[_ws_env_i].replace("        if (", "        else if (", 1)
+    code_lines.insert(_ws_env_i,
+        "        if (_pool->ws_slots > 0) "
         "{ _ws_slots = _pool->ws_slots < NUM_TIMESTEPS ? _pool->ws_slots : NUM_TIMESTEPS; }")
     bytes_lines = _derive_device_bytes_lines(code_lines)
     code_lines = [l.replace("gpuErrchk(cudaMalloc((void**)&hd_data->",

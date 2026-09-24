@@ -100,9 +100,17 @@ struct PlantBuffers {
 };
 
 // release a context's plant staging (always compiled: the close path needs it even on a subset build)
+// codex R4 (2026-09-24): safe for PARTIALLY built storage — every non-null pointer is
+// released regardless of the success flag (plant_alloc builds into a temporary and
+// publishes only on complete success; a failed build is torn down through here).
 static void plant_free(PlantBuffers *p) {
-    if (!p || !p->allocated) return;
-    cudaFree(p->d_in_a); cudaFree(p->d_in_b); cudaFree(p->d_in_c); cudaFree(p->d_out); cudaFree(p->d_grad); cudaFree(p->d_hess);
+    if (!p) return;
+    if (p->d_in_a) cudaFree(p->d_in_a);
+    if (p->d_in_b) cudaFree(p->d_in_b);
+    if (p->d_in_c) cudaFree(p->d_in_c);
+    if (p->d_out) cudaFree(p->d_out);
+    if (p->d_grad) cudaFree(p->d_grad);
+    if (p->d_hess) cudaFree(p->d_hess);
     if (p->d_d2AB) cudaFree(p->d_d2AB);
     if (p->d_d2AB_workspace) cudaFree(p->d_d2AB_workspace);
     if (p->d_end_effector_pose) cudaFree(p->d_end_effector_pose);
@@ -162,6 +170,12 @@ static long long grid_ctx_salt() {
     return salt;
 }
 static long long g_ctx_next_serial = 1;     // under the registry mutex
+// codex R6 (2026-09-24): a context's `version` is drawn from ONE per-.so monotonic
+// epoch — bumped on every context creation and every model mutation of any context —
+// so no two (context incarnation, model state) pairs ever share a stamp value. A
+// deferred backward whose forward ran on a since-recreated default context is refused
+// even when the per-context mutation counts coincide.
+static std::atomic<unsigned long long> g_model_epoch{0};
 static long long g_ctx_default_id = 0;      // the default context's REAL id (0 = none live)
 static grid::grid_device_pool_t g_ctx_pending_default_pool = {nullptr, 0, 0, 0};  // set_device_pool before the default exists
 // rc codes (the pybind rc decoder names them): 10 unknown or foreign id, 11 closed id,
@@ -238,8 +252,9 @@ struct GridCtxRef {
 // slot is int32 so JAX needs no x64 mode).
 __global__ void grid_rbd_stamp_kernel(int *dst, int v) { if (threadIdx.x == 0) *dst = v; }
 static inline int grid_ctx_stamp_value(const GridCtx *c) { return (int)(c->version & 0x7fffffffULL); }
-static inline void grid_rbd_stamp_write(GridCtx *ctx, cudaStream_t stream, int *dst) {
+static inline cudaError_t grid_rbd_stamp_write(GridCtx *ctx, cudaStream_t stream, int *dst) {
     grid_rbd_stamp_kernel<<<1, 1, 0, stream>>>(dst, grid_ctx_stamp_value(ctx));
+    return cudaGetLastError();   // launch-configuration errors surface to the caller
 }
 static inline int grid_rbd_stamp_check(GridCtx *ctx, cudaStream_t stream, const int *src, int *seen) {
     int h = 0;
@@ -347,6 +362,7 @@ static int grid_ctx_create_locked(GridCtx **out, const grid::grid_device_pool_t 
         return 13;
     }
     GridCtx *c = new GridCtx();
+    c->version = ++g_model_epoch;
     c->pool = pool; c->pool.used = 0;
     c->plant = new PlantBuffers();
     size_t free_b = 0, total_b = 0; cudaMemGetInfo(&free_b, &total_b);
@@ -417,7 +433,10 @@ extern "C" int grid_rbd_close() {
 extern "C" int grid_rbd_ctx_create(void *pool_base, unsigned long long pool_bytes, int ws_slots, long long *out_id) {
     if (!out_id) return 1;
     *out_id = 0;
-    grid::grid_device_pool_t pool = {pool_base, (size_t)pool_bytes, 0, ws_slots < 1 ? kMaxBatch : ws_slots};
+    // codex R2: ws_slots < 0 is an argument error; 0 = auto-fit; > max_batch clamps
+    // (in the generated allocator). A slab caller sizes its slab from an explicit count.
+    if (ws_slots < 0) return 1;
+    grid::grid_device_pool_t pool = {pool_base, (size_t)pool_bytes, 0, ws_slots};
     std::lock_guard<std::mutex> lk(grid_ctx_mutex());
     GridCtx *c = nullptr;
     int rc = grid_ctx_create_locked(&c, pool, /*make_default=*/false);
@@ -451,6 +470,40 @@ extern "C" int grid_rbd_ctx_version(long long id, unsigned long long *out) {
     GridCtxRef ref(id);
     if (!ref.ctx) return ref.rc;
     *out = ref.ctx->version;
+    return 0;
+}
+// codex R5 (2026-09-24): a captured CUDA graph bypasses every entry-point guard, so
+// the torch GraphCallable brackets each replay with begin/end. begin takes a SHARED
+// admission on the context (ordered against mutators and close, like any compute
+// call) and refuses a closed context or a model epoch other than the captured one
+// (rc 15); end releases it. The token owns a heap GridCtxRef; begin and end must run
+// on the SAME thread (shared_mutex ownership is per thread), which the Python
+// bracket guarantees (try/finally around graph.replay()).
+static std::mutex &grid_replay_mutex() { static std::mutex m; return m; }
+static std::unordered_map<long long, GridCtxRef *> &grid_replay_tokens() { static std::unordered_map<long long, GridCtxRef *> t; return t; }
+static long long g_replay_next_token = 1;    // under grid_replay_mutex
+extern "C" int grid_rbd_graph_begin(long long ctx_id, unsigned long long version, long long *token) {
+    if (!token) return 1;
+    *token = 0;
+    GridCtxRef *ref = new GridCtxRef(ctx_id);
+    if (!ref->ctx) { int rc = ref->rc; delete ref; return rc; }
+    if (ref->ctx->version != version) { delete ref; return 15; }
+    std::lock_guard<std::mutex> lk(grid_replay_mutex());
+    long long t = g_replay_next_token++;
+    grid_replay_tokens()[t] = ref;
+    *token = t;
+    return 0;
+}
+extern "C" int grid_rbd_graph_end(long long token) {
+    GridCtxRef *ref = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(grid_replay_mutex());
+        auto it = grid_replay_tokens().find(token);
+        if (it == grid_replay_tokens().end()) return 10;
+        ref = it->second;
+        grid_replay_tokens().erase(it);
+    }
+    delete ref;
     return 0;
 }
 extern "C" int grid_rbd_ctx_count() { std::lock_guard<std::mutex> lk(grid_ctx_mutex()); return (int)grid_ctx_registry().size(); }
@@ -789,7 +842,7 @@ extern "C" int grid_rbd_kernel_max_threads(const char* algo) {
 #define GRID_RBD_RUNTIME_PARAM_SETTER(NAME, SIZE_EXPR)                          \
 extern "C" int grid_rbd_set_##NAME##_params(long long ctx_id, const T* h_params) { \
     GRID_RBD_CTX_MUT_OR_RETURN(ctx_id); /* B2: exclusive admission */          \
-    ++g_ctx->version;                   /* new version BEFORE any byte moves */ \
+    g_ctx->version = ++g_model_epoch;   /* new epoch BEFORE any byte moves (R6) */ \
     cudaDeviceSynchronize(); /* drain framework streams reading the table */   \
     grid::set_##NAME##_params<T>(g_robot, h_params);                            \
     cudaError_t err = cudaDeviceSynchronize();                                  \
@@ -2066,7 +2119,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient_runtime(long long ctx_id, con
 // raw mjx (kernel reorders the quaternion). The kernel (MUJOCO_OUTPUT=true) injects
 // the accel-couple delta_a (base-linear = -(omega x v_lin)) via a zeroed s_qdd then
 // base-rotates the bias output, so the returned c is the mjx-frame qfrc_bias.
-extern "C" int grid_rbd_nonlinear_effects_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
+extern "C" int grid_rbd_nonlinear_effects_mujoco(long long ctx_id, const T* q, const T* qd, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2083,7 +2136,7 @@ extern "C" int grid_rbd_nonlinear_effects_mujoco(const T* q, const T* qd, T* out
 // MuJoCo-convention generalized_gravity(q) -> g(q) (floating base only). q is raw
 // mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true) base-rotates
 // the gravity output so the returned g is mjx-frame. Output is NUM_VEL invariant-shaped.
-extern "C" int grid_rbd_generalized_gravity_mujoco(const T* q, T* out, int batch, T gravity) {
+extern "C" int grid_rbd_generalized_gravity_mujoco(long long ctx_id, const T* q, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2100,7 +2153,7 @@ extern "C" int grid_rbd_generalized_gravity_mujoco(const T* q, T* out, int batch
 // MuJoCo-convention Coriolis matrix (floating base only): C_mjx = G C_pin G^T, a
 // congruence baked into the kernel (MUJOCO_OUTPUT=true). q/qd raw mjx in (kernel
 // reorders the quaternion + reframes qd), mjx-frame C out (nv x nv row-major).
-extern "C" int grid_rbd_coriolis_matrix_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
+extern "C" int grid_rbd_coriolis_matrix_mujoco(long long ctx_id, const T* q, const T* qd, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2118,7 +2171,7 @@ extern "C" int grid_rbd_coriolis_matrix_mujoco(const T* q, const T* qd, T* out, 
 // frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) just converts the mjx-native
 // inputs (quaternion reorder + qd reframe) so the energy is built correctly. Output
 // is byte-equal to feeding the pin kernel the pin-converted q/qd.
-extern "C" int grid_rbd_energy_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
+extern "C" int grid_rbd_energy_mujoco(long long ctx_id, const T* q, const T* qd, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2136,7 +2189,7 @@ extern "C" int grid_rbd_energy_mujoco(const T* q, const T* qd, T* out, int batch
 // INVARIANT; the J_com columns are reframed by the kernel (MUJOCO_OUTPUT=true): q
 // is MuJoCo-native (quat wxyz) and the kernel reorders the quaternion + applies the
 // column reframe before saving, so NO host pre/post-process is needed.
-extern "C" int grid_rbd_com_mujoco(const T* q, T* out, int batch) {
+extern "C" int grid_rbd_com_mujoco(long long ctx_id, const T* q, T* out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2154,7 +2207,7 @@ extern "C" int grid_rbd_com_mujoco(const T* q, T* out, int batch) {
 // momentum h is INVARIANT; the A columns are reframed by the kernel
 // (MUJOCO_OUTPUT=true). q/qd raw mjx in (kernel reorders the quaternion + reframes
 // qd), so NO host pre/post-process is needed.
-extern "C" int grid_rbd_ccrba_mujoco(const T* q, const T* qd, T* out, int batch) {
+extern "C" int grid_rbd_ccrba_mujoco(long long ctx_id, const T* q, const T* qd, T* out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2172,7 +2225,7 @@ extern "C" int grid_rbd_ccrba_mujoco(const T* q, const T* qd, T* out, int batch)
 // mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true) double-reframes
 // the qd-column and q-tangent indices by G^{-1} and adds the base-rotation frame term
 // (using the in-kernel CMM value) before saving.
-extern "C" int grid_rbd_dccrba_mujoco(const T* q, T* out, int batch) {
+extern "C" int grid_rbd_dccrba_mujoco(long long ctx_id, const T* q, T* out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2189,7 +2242,7 @@ extern "C" int grid_rbd_dccrba_mujoco(const T* q, T* out, int batch) {
 // MuJoCo-convention cmm_time_variation(q, qd) -> 6*NUM_VEL Adot (per timestep).
 // Column-reframe: q/qd raw mjx in (kernel reorders the quaternion + reframes qd)
 // and the kernel (MUJOCO_OUTPUT=true) reframes the Adot columns before saving.
-extern "C" int grid_rbd_cmm_time_variation_mujoco(const T* q, const T* qd, T* out, int batch) {
+extern "C" int grid_rbd_cmm_time_variation_mujoco(long long ctx_id, const T* q, const T* qd, T* out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2208,7 +2261,7 @@ extern "C" int grid_rbd_cmm_time_variation_mujoco(const T* q, const T* qd, T* ou
 // the mjx-native inputs (quaternion reorder + qd reframe). Output is byte-equal to
 // feeding the pin kernel the pin-converted q/qd. (The MUJOCO_OUTPUT instantiation
 // only exists for floating, hence the GRID_RBD_WITH_MUJOCO gate.)
-extern "C" int grid_rbd_kinetic_energy_regressor_mujoco(const T* q, const T* qd, T* out, int batch, T gravity) {
+extern "C" int grid_rbd_kinetic_energy_regressor_mujoco(long long ctx_id, const T* q, const T* qd, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2225,7 +2278,7 @@ extern "C" int grid_rbd_kinetic_energy_regressor_mujoco(const T* q, const T* qd,
 // MuJoCo-convention potential_energy_regressor(q) -> length 10*NUM_BODIES y_PE.
 // Frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts the mjx-native q
 // (quaternion reorder). Output byte-equal to feeding the pin kernel pin-converted q.
-extern "C" int grid_rbd_potential_energy_regressor_mujoco(const T* q, T* out, int batch, T gravity) {
+extern "C" int grid_rbd_potential_energy_regressor_mujoco(long long ctx_id, const T* q, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2245,7 +2298,7 @@ extern "C" int grid_rbd_potential_energy_regressor_mujoco(const T* q, T* out, in
 // its q input still needs the quaternion reordered (wxyz->xyzw) so the internal
 // J/Minv build correctly — the mjx kernel does that, so a raw-mjx q is handled here
 // rather than silently mis-built by the pin kernel. All take raw mjx inputs.
-extern "C" int grid_rbd_frame_jacobian_mujoco(const T* q, T* out, int batch, int target_jid, int reference_frame) {
+extern "C" int grid_rbd_frame_jacobian_mujoco(long long ctx_id, const T* q, T* out, int batch, int target_jid, int reference_frame) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2260,7 +2313,7 @@ extern "C" int grid_rbd_frame_jacobian_mujoco(const T* q, T* out, int batch, int
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FRAME_JACOBIAN
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_FRAME_JACOBIAN_DOT
-extern "C" int grid_rbd_frame_jacobian_dot_mujoco(const T* q, const T* qd, T* out, int batch, int target_jid, int reference_frame) {
+extern "C" int grid_rbd_frame_jacobian_dot_mujoco(long long ctx_id, const T* q, const T* qd, T* out, int batch, int target_jid, int reference_frame) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2275,7 +2328,7 @@ extern "C" int grid_rbd_frame_jacobian_dot_mujoco(const T* q, const T* qd, T* ou
 #endif  // GRID_RBD_WITH_MUJOCO && GRID_HAS_FRAME_JACOBIAN_DOT
 
 #if defined(GRID_RBD_WITH_MUJOCO) && GRID_HAS_OSC_INERTIA
-extern "C" int grid_rbd_osc_inertia_mujoco(const T* q, T* out, int batch) {
+extern "C" int grid_rbd_osc_inertia_mujoco(long long ctx_id, const T* q, T* out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2294,7 +2347,7 @@ extern "C" int grid_rbd_osc_inertia_mujoco(const T* q, T* out, int batch) {
 // on the base block (MUJOCO_OUTPUT=true). The native kernel writes a FULL DENSE
 // SYMMETRIC mjx Minv (both triangles), so NO host symmetrize and NO host
 // minv_pin_to_mjx post-process are needed.
-extern "C" int grid_rbd_minv_mujoco(const T* q, T* minv_out, int batch) {
+extern "C" int grid_rbd_minv_mujoco(long long ctx_id, const T* q, T* minv_out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2312,7 +2365,7 @@ extern "C" int grid_rbd_minv_mujoco(const T* q, T* minv_out, int batch) {
 // congruence baked into the kernel (MUJOCO_OUTPUT=true). q is MuJoCo-native (quat
 // wxyz); the kernel reorders the quaternion and applies the congruence on the base
 // block before saving, so NO host pre/post-process is needed.
-extern "C" int grid_rbd_crba_mujoco(const T* q, T* m_out, int batch, T gravity) {
+extern "C" int grid_rbd_crba_mujoco(long long ctx_id, const T* q, T* m_out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2330,7 +2383,7 @@ extern "C" int grid_rbd_crba_mujoco(const T* q, T* m_out, int batch, T gravity) 
 // frame-INVARIANT; the kernel (MUJOCO_OUTPUT=true) only converts the mjx-native q
 // (quaternion reorder, like osc_inertia). Output byte-equal to feeding the pin
 // kernel the pin-converted q.
-extern "C" int grid_rbd_end_effector_pose_mujoco(const T* q, T* ee_out, int batch) {
+extern "C" int grid_rbd_end_effector_pose_mujoco(long long ctx_id, const T* q, T* ee_out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2348,7 +2401,7 @@ extern "C" int grid_rbd_end_effector_pose_mujoco(const T* q, T* ee_out, int batc
 // timestep. Column-reframe: q raw mjx in (kernel reorders the quaternion) and the
 // kernel (MUJOCO_OUTPUT=true) reframes the base-linear Jacobian columns before
 // saving (the column reframe acts on the NV axis cols 0:3).
-extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(const T* q, T* dee_out, int batch) {
+extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(long long ctx_id, const T* q, T* dee_out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2366,7 +2419,7 @@ extern "C" int grid_rbd_end_effector_pose_gradient_mujoco(const T* q, T* dee_out
 // q is raw mjx (kernel reorders the quaternion); the kernel (MUJOCO_OUTPUT=true)
 // double-column-reframes the Hessian (J·G^{-1} on both tangent indices) and adds the
 // symmetrized base-rotation frame term before saving. Output is invariant-shaped.
-extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(const T* q, T* d2ee_out, int batch) {
+extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(long long ctx_id, const T* q, T* d2ee_out, int batch) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2385,7 +2438,7 @@ extern "C" int grid_rbd_end_effector_pose_hessian_mujoco(const T* q, T* d2ee_out
 // 2nd-order tensors to the mjx frame (explicit-analytic SO transform + dM_dq closed
 // form), reusing the id/crba/id-grad inners. The mjx kernel is register-heavy; the
 // post-launch error check surfaces a silent launch-config failure as rc!=0.
-extern "C" int grid_rbd_idsva_so_mujoco(const T* q, const T* qd, const T* qdd, T* out, int batch, T gravity) {
+extern "C" int grid_rbd_idsva_so_mujoco(long long ctx_id, const T* q, const T* qd, const T* qdd, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2405,7 +2458,7 @@ extern "C" int grid_rbd_idsva_so_mujoco(const T* q, const T* qd, const T* qdd, T
 // 2nd-order forward-dynamics tensors to the mjx frame (explicit-analytic SO transform,
 // contravector output-map). Register-heavy; post-launch error check surfaces a silent
 // launch-config failure as rc!=0.
-extern "C" int grid_rbd_fdsva_so_mujoco(const T* q, const T* qd, const T* u, T* out, int batch, T gravity) {
+extern "C" int grid_rbd_fdsva_so_mujoco(long long ctx_id, const T* q, const T* qd, const T* u, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2425,7 +2478,7 @@ extern "C" int grid_rbd_fdsva_so_mujoco(const T* q, const T* qd, const T* u, T* 
 // qdd[0:3] = R(qdd_pin + omega x v) back to the mjx frame (MUJOCO_OUTPUT=true) — no
 // host pre/post-process. f_ext is not reframed by the kernel input-convert, so the
 // _handle dispatch only takes this path when f_ext is null.
-extern "C" int grid_rbd_forward_dynamics_mujoco(const T* q, const T* qd, const T* u, T* qdd_out, int batch, T gravity, const T* f_ext) {
+extern "C" int grid_rbd_forward_dynamics_mujoco(long long ctx_id, const T* q, const T* qd, const T* u, T* qdd_out, int batch, T gravity, const T* f_ext) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2450,7 +2503,7 @@ extern "C" int grid_rbd_forward_dynamics_mujoco(const T* q, const T* qd, const T
 // MuJoCo-convention ABA (floating base only). Same accel_out convention as
 // forward_dynamics: q/qd/u raw mjx in, mjx-frame qdd out (MUJOCO_OUTPUT=true). f_ext
 // not reframed -> the _handle dispatch only uses this path when f_ext is null.
-extern "C" int grid_rbd_aba_mujoco(const T* q, const T* qd, const T* u, T* qdd_out, int batch, T gravity, const T* f_ext) {
+extern "C" int grid_rbd_aba_mujoco(long long ctx_id, const T* q, const T* qd, const T* u, T* qdd_out, int batch, T gravity, const T* f_ext) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2485,7 +2538,7 @@ extern "C" int grid_rbd_aba_mujoco(const T* q, const T* qd, const T* u, T* qdd_o
 // qdd is REQUIRED: the qdd=0 "bias" path cannot represent mjx (mjx qacc=0 implies a
 // nonzero pin acceleration -omega x v — the nonlinear_effects accel-coupling), so a
 // null qdd returns rc=4. Callers wanting the mjx bias use nonlinear_effects instead.
-extern "C" int grid_rbd_inverse_dynamics_mujoco(const T* q, const T* qd, const T* qdd_opt, T* c_out, int batch, T gravity, const T* f_ext) {
+extern "C" int grid_rbd_inverse_dynamics_mujoco(long long ctx_id, const T* q, const T* qd, const T* qdd_opt, T* c_out, int batch, T gravity, const T* f_ext) {
     if (!qdd_opt) return 4;  // mjx requires an explicit qdd
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
@@ -2515,7 +2568,7 @@ extern "C" int grid_rbd_inverse_dynamics_mujoco(const T* q, const T* qd, const T
 // gradient convention transform (reframe + base-row rotate + ω×v couplings, with M
 // from an in-kernel crba reuse) so the returned dc/d(q,qd) is the mjx-frame gradient.
 // REQUIRES qdd (the mjx gradient is the with-qdd surface; a null qdd returns rc=4).
-extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(const T* q, const T* qd, const T* qdd_opt, T* dc_du_out, int batch, T gravity, const T* f_ext) {
+extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(long long ctx_id, const T* q, const T* qd, const T* qdd_opt, T* dc_du_out, int batch, T gravity, const T* f_ext) {
     if (!qdd_opt) return 4;  // mjx requires an explicit qdd
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
@@ -2544,7 +2597,7 @@ extern "C" int grid_rbd_inverse_dynamics_gradient_mujoco(const T* q, const T* qd
 // MuJoCo-native; qdd is computed internally. The kernel converts inputs mjx->pin on
 // load and applies the full gradient convention transform (reframe + base-row rotate
 // + ω×v couplings) so the returned df/d(q,qd) is the mjx-frame gradient.
-extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(const T* q, const T* qd, const T* u, T* df_du_out, int batch, T gravity, const T* f_ext) {
+extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(long long ctx_id, const T* q, const T* qd, const T* u, T* df_du_out, int batch, T gravity, const T* f_ext) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2570,7 +2623,7 @@ extern "C" int grid_rbd_forward_dynamics_gradient_mujoco(const T* q, const T* qd
 // takes a GLOBAL additive step (mjx retract) instead of pin's SE(3) V(phi); the
 // base quaternion + joints integrate normally. q/qd raw mjx in (q wxyz, qd global),
 // x_kp1 raw mjx out (q wxyz). Baked into the kernel (MUJOCO_OUTPUT=true).
-extern "C" int grid_rbd_integrator_mujoco(const T* q, const T* qd, const T* u, T* x_kp1_out, int batch, T gravity, T dt, int it) {
+extern "C" int grid_rbd_integrator_mujoco(long long ctx_id, const T* q, const T* qd, const T* u, T* x_kp1_out, int batch, T gravity, T dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2589,7 +2642,7 @@ extern "C" int grid_rbd_integrator_mujoco(const T* q, const T* qd, const T* u, T
 // transforms the discrete state-transition Jacobian to the mjx tangent (global-add
 // retract rows + G velocity reframe + input-conversion column couplings). EULER/SI-EULER
 // only (multistage static_asserts out). Register-heavy; post-launch error check.
-extern "C" int grid_rbd_integrator_gradient_mujoco(const T* q, const T* qd, const T* u, T* dAB_out, int batch, T gravity, T dt, int it) {
+extern "C" int grid_rbd_integrator_gradient_mujoco(long long ctx_id, const T* q, const T* qd, const T* u, T* dAB_out, int batch, T gravity, T dt, int it) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2607,7 +2660,7 @@ extern "C" int grid_rbd_integrator_gradient_mujoco(const T* q, const T* qd, cons
 // mjx (kernel input-converts); the regressor ROWS are tangent-indexed generalized
 // forces, so the base-LINEAR rows (0:3) rotate by R (Y_mjx[0:3] = R Y_pin[0:3]) -- the
 // same base-row rotate as id_tau. Baked via the MUJOCO_OUTPUT=true template flag.
-extern "C" int grid_rbd_inverse_dynamics_regressor_mujoco(const T* q, const T* qd, const T* qdd, T* out, int batch, T gravity) {
+extern "C" int grid_rbd_inverse_dynamics_regressor_mujoco(long long ctx_id, const T* q, const T* qd, const T* qdd, T* out, int batch, T gravity) {
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
     if (batch > kMaxBatch) return 2;
@@ -2626,7 +2679,7 @@ extern "C" int grid_rbd_inverse_dynamics_regressor_mujoco(const T* q, const T* q
 // input-converts q (quat reorder) on load; the pose VALUE is frame-INVARIANT (the
 // 6-vector [xyz; rpy] is the same world frame), so this matches the pin pose with
 // the mjx-reordered quaternion. Baked via the MUJOCO_OUTPUT=true host/kernel flag.
-extern "C" int grid_rbd_end_effector_pose_runtime_mujoco(const T* q, T* out, int batch, int target_jid, const T* offset) {
+extern "C" int grid_rbd_end_effector_pose_runtime_mujoco(long long ctx_id, const T* q, T* out, int batch, int target_jid, const T* offset) {
 #ifdef GRID_HAS_END_EFFECTOR_POSE_RUNTIME
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
@@ -2657,7 +2710,7 @@ extern "C" int grid_rbd_end_effector_pose_runtime_mujoco(const T* q, T* out, int
 // pose value is invariant, but the gradient is COLUMN-reframed: the base-linear
 // columns reframe by R^T (mjx base-linear velocity is global). Baked via
 // MUJOCO_OUTPUT=true. Output 6 x NUM_VEL col-major, like the pin variant.
-extern "C" int grid_rbd_end_effector_pose_gradient_runtime_mujoco(const T* q, T* out, int batch, int target_jid, const T* offset) {
+extern "C" int grid_rbd_end_effector_pose_gradient_runtime_mujoco(long long ctx_id, const T* q, T* out, int batch, int target_jid, const T* offset) {
 #ifdef GRID_HAS_END_EFFECTOR_POSE_GRADIENT_RUNTIME
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     if (batch < 1) return 1;
@@ -2727,18 +2780,21 @@ static int plant_alloc(GridCtx *ctx) {
     // kept as a conservative floor (harmless over-allocation).
     const size_t kin_scratch = std::max((size_t)(6 * nee),
                                 std::max((size_t)(3 + 3 * nv), (size_t)(6 * nv + 6)));
+    // codex R4: build into a temporary, publish only on complete success; a failure
+    // at any position frees what was built (nothing leaks, a retry starts clean).
+    PlantBuffers tmp;
     auto ok = [](cudaError_t e){ return e == cudaSuccess; };
-    bool good = true;
-    good &= ok(cudaMalloc(&g_plant.d_in_a,  B * vec * sizeof(T)));
-    good &= ok(cudaMalloc(&g_plant.d_in_b,  B * vec * sizeof(T)));
-    good &= ok(cudaMalloc(&g_plant.d_in_c,  B * vec * sizeof(T)));
-    good &= ok(cudaMalloc(&g_plant.d_out,   B * sizeof(T)));
-    good &= ok(cudaMalloc(&g_plant.d_grad,  B * mat * sizeof(T)));
-    good &= ok(cudaMalloc(&g_plant.d_hess,  B * mat * sizeof(T)));
-    good &= ok(cudaMalloc(&g_plant.d_end_effector_pose, B * kin_scratch * sizeof(T)));
-    good &= ok(cudaMalloc(&g_plant.d_end_effector_pose_gradient, B * (size_t)(6 * nv * nee) * sizeof(T)));
-    if (!good) return 1;
-    g_plant.allocated = true;
+    bool good = ok(cudaMalloc(&tmp.d_in_a,  B * vec * sizeof(T)))
+             && ok(cudaMalloc(&tmp.d_in_b,  B * vec * sizeof(T)))
+             && ok(cudaMalloc(&tmp.d_in_c,  B * vec * sizeof(T)))
+             && ok(cudaMalloc(&tmp.d_out,   B * sizeof(T)))
+             && ok(cudaMalloc(&tmp.d_grad,  B * mat * sizeof(T)))
+             && ok(cudaMalloc(&tmp.d_hess,  B * mat * sizeof(T)))
+             && ok(cudaMalloc(&tmp.d_end_effector_pose, B * kin_scratch * sizeof(T)))
+             && ok(cudaMalloc(&tmp.d_end_effector_pose_gradient, B * (size_t)(6 * nv * nee) * sizeof(T)));
+    if (!good) { grid_consume_last_error(); plant_free(&tmp); return 1; }
+    tmp.allocated = true;
+    g_plant = tmp;
     return 0;
 }
 
@@ -3294,17 +3350,19 @@ extern "C" int grid_plant_step_hessian(long long ctx_id,
     const size_t d2ab = (size_t)(2 * nv) * (size_t)nz * (size_t)nz;
     // d_d2AB (18*NV^3 per timestep) is far larger than d_grad's worst-case
     // (6*NV^2), so it gets its own lazily-allocated band (allocated on first use).
-    if (g_plant.d_d2AB == nullptr) {
-        if (cudaMalloc(&g_plant.d_d2AB, (size_t)kMaxBatch * d2ab * sizeof(T)) != cudaSuccess)
-            return 4;
+    if (g_plant.d_d2AB == nullptr) {   // R4: publish only on success
+        T *p = nullptr;
+        if (cudaMalloc(&p, (size_t)kMaxBatch * d2ab * sizeof(T)) != cudaSuccess) { grid_consume_last_error(); return 4; }
+        g_plant.d_d2AB = p;
     }
     // Spill workspace: only allocated when some tier spills (big robots). One
     // per-timestep slot per block (k indexes the block). On TIER_SHARED the macro
     // is 0 and the kernel never touches d_workspace (passed but unused).
     if (grid_plant::GRID_PLANT_HESSIAN_USES_WORKSPACE_ANY_TIER && g_plant.d_d2AB_workspace == nullptr) {
         const size_t ws = grid_plant::PLANT_HESSIAN_WORKSPACE_BYTES_PER_TIMESTEP<T>();
-        if (cudaMalloc(&g_plant.d_d2AB_workspace, (size_t)kMaxBatch * ws) != cudaSuccess)
-            return 4;
+        unsigned char *p = nullptr;
+        if (cudaMalloc(&p, (size_t)kMaxBatch * ws) != cudaSuccess) { grid_consume_last_error(); return 4; }
+        g_plant.d_d2AB_workspace = p;
     }
     cudaMemcpy(g_plant.d_in_a, x, batch * nx * sizeof(T), cudaMemcpyHostToDevice);
     cudaMemcpy(g_plant.d_in_b, u, batch * nv * sizeof(T), cudaMemcpyHostToDevice);
@@ -3344,12 +3402,16 @@ extern "C" int grid_plant_step_hessian_mujoco(long long ctx_id,
     const int nv = grid::NUM_VEL;
     const int nz = 3 * nv;
     const size_t d2ab = (size_t)(2 * nv) * (size_t)nz * (size_t)nz;
-    if (g_plant.d_d2AB == nullptr) {
-        if (cudaMalloc(&g_plant.d_d2AB, (size_t)kMaxBatch * d2ab * sizeof(T)) != cudaSuccess) return 4;
+    if (g_plant.d_d2AB == nullptr) {   // R4: publish only on success
+        T *p = nullptr;
+        if (cudaMalloc(&p, (size_t)kMaxBatch * d2ab * sizeof(T)) != cudaSuccess) { grid_consume_last_error(); return 4; }
+        g_plant.d_d2AB = p;
     }
     if (grid_plant::GRID_PLANT_HESSIAN_USES_WORKSPACE_ANY_TIER && g_plant.d_d2AB_workspace == nullptr) {
         const size_t ws = grid_plant::PLANT_HESSIAN_WORKSPACE_BYTES_PER_TIMESTEP<T>();
-        if (cudaMalloc(&g_plant.d_d2AB_workspace, (size_t)kMaxBatch * ws) != cudaSuccess) return 4;
+        unsigned char *p = nullptr;
+        if (cudaMalloc(&p, (size_t)kMaxBatch * ws) != cudaSuccess) { grid_consume_last_error(); return 4; }
+        g_plant.d_d2AB_workspace = p;
     }
     cudaMemcpy(g_plant.d_in_a, x, batch * nx * sizeof(T), cudaMemcpyHostToDevice);
     cudaMemcpy(g_plant.d_in_b, u, batch * nv * sizeof(T), cudaMemcpyHostToDevice);
@@ -3568,7 +3630,7 @@ static ffi::Error grid_rbd_jax_inverse_dynamics_stamped_impl(
     GRID_RBD_CTX_OR_FFI(ctx_id);
     ffi::Error e = grid_rbd_jax_inverse_dynamics_body<MUJOCO>(g_ctx, stream, q, qd, qdd, f_ext, out, gravity);
     if (e.failure()) return e;
-    grid_rbd_stamp_write(g_ctx, stream, stamp->typed_data());
+    if (grid_rbd_stamp_write(g_ctx, stream, stamp->typed_data()) != cudaSuccess) return ffi::Error::Internal("inverse_dynamics: stamp launch failed");
     return ffi::Error::Success();
 }
 
@@ -3752,7 +3814,7 @@ static ffi::Error grid_rbd_jax_forward_dynamics_stamped_impl(
     GRID_RBD_CTX_OR_FFI(ctx_id);
     ffi::Error e = grid_rbd_jax_forward_dynamics_body<MUJOCO>(g_ctx, stream, q, qd, u, f_ext, out, gravity);
     if (e.failure()) return e;
-    grid_rbd_stamp_write(g_ctx, stream, stamp->typed_data());
+    if (grid_rbd_stamp_write(g_ctx, stream, stamp->typed_data()) != cudaSuccess) return ffi::Error::Internal("forward_dynamics: stamp launch failed");
     return ffi::Error::Success();
 }
 
@@ -3859,7 +3921,7 @@ static ffi::Error grid_rbd_jax_aba_stamped_impl(
     GRID_RBD_CTX_OR_FFI(ctx_id);
     ffi::Error e = grid_rbd_jax_aba_body<MUJOCO>(g_ctx, stream, q, qd, u, f_ext, out, gravity);
     if (e.failure()) return e;
-    grid_rbd_stamp_write(g_ctx, stream, stamp->typed_data());
+    if (grid_rbd_stamp_write(g_ctx, stream, stamp->typed_data()) != cudaSuccess) return ffi::Error::Internal("aba: stamp launch failed");
     return ffi::Error::Success();
 }
 
@@ -3982,7 +4044,7 @@ static ffi::Error grid_rbd_jax_end_effector_pose_stamped_impl(
     GRID_RBD_CTX_OR_FFI(ctx_id);
     ffi::Error e = grid_rbd_jax_end_effector_pose_body<MUJOCO>(g_ctx, stream, q, out);
     if (e.failure()) return e;
-    grid_rbd_stamp_write(g_ctx, stream, stamp->typed_data());
+    if (grid_rbd_stamp_write(g_ctx, stream, stamp->typed_data()) != cudaSuccess) return ffi::Error::Internal("end_effector_pose: stamp launch failed");
     return ffi::Error::Success();
 }
 
@@ -5500,7 +5562,7 @@ static ffi::Error grid_rbd_jax_integrator_stamped_impl(
     GRID_RBD_CTX_OR_FFI(ctx_id);
     ffi::Error e = grid_rbd_jax_integrator_body<MUJOCO>(g_ctx, stream, q, qd, u, x_kp1_out, dt, it, gravity);
     if (e.failure()) return e;
-    grid_rbd_stamp_write(g_ctx, stream, stamp->typed_data());
+    if (grid_rbd_stamp_write(g_ctx, stream, stamp->typed_data()) != cudaSuccess) return ffi::Error::Internal("integrator: stamp launch failed");
     return ffi::Error::Success();
 }
 
@@ -5676,8 +5738,8 @@ GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_quadratic_input_cost,
 static ffi::Error grid_rbd_jax_plant_quadratic_state_cost_mujoco_impl(
     cudaStream_t stream, ffi::Buffer<GRID_FFI_T> var, ffi::Buffer<GRID_FFI_T> des,
     ffi::Buffer<GRID_FFI_T> w, ffi::ResultBuffer<GRID_FFI_T> out,
-    ffi::ResultBuffer<GRID_FFI_T> grad, ffi::ResultBuffer<GRID_FFI_T> hess) {
-    return grid_rbd_jax_plant_quadratic_cost_impl<true, true>(stream, var, des, w, out, grad, hess);
+    ffi::ResultBuffer<GRID_FFI_T> grad, ffi::ResultBuffer<GRID_FFI_T> hess, int64_t ctx_id) {
+    return grid_rbd_jax_plant_quadratic_cost_impl<true, true>(stream, var, des, w, out, grad, hess, ctx_id);   // R1 class: mjx-only forwarder
 }
 GRID_RBD_JAX_PLANT_COST_BIND(grid_rbd_jax_plant_quadratic_state_cost_mujoco,
                              grid_rbd_jax_plant_quadratic_state_cost_mujoco_impl);
@@ -6107,7 +6169,8 @@ static inline void grid_torch_stamp_validate(const torch::Tensor& s, const char*
 static inline void grid_torch_stamp_write(GridCtx *ctx, cudaStream_t stream, const c10::optional<torch::Tensor>& stamp_out) {
     if (!stamp_out.has_value()) return;
     grid_torch_stamp_validate(*stamp_out, "stamp_out");
-    grid_rbd_stamp_write(ctx, stream, stamp_out->data_ptr<int32_t>());
+    cudaError_t e = grid_rbd_stamp_write(ctx, stream, stamp_out->data_ptr<int32_t>());
+    TORCH_CHECK(e == cudaSuccess, "stamp_out: launch failed: ", cudaGetErrorName(e));
 }
 static inline void grid_torch_stamp_check(GridCtx *ctx, cudaStream_t stream, const c10::optional<torch::Tensor>& stamp_expect) {
     if (!stamp_expect.has_value()) return;

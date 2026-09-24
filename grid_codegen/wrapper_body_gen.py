@@ -495,7 +495,10 @@ def gen_mjx_body(spec: AbiSpec) -> str:
         L.append(f"#if defined(GRID_RBD_WITH_MUJOCO) && {gate}")
     if stem in MJX_DOC:
         L.append(MJX_DOC[stem])
-    L.append(f'extern "C" int grid_rbd_{stem}_mujoco({sig}) {{')
+    # codex R1 (2026-09-24): the twin takes the SAME leading context id as its
+    # primary (the guard below names ctx_id; 30 twins failed to compile without it —
+    # invisible to fixed-base smokes, where the twins are #ifdef'd out).
+    L.append(f'extern "C" int grid_rbd_{stem}_mujoco(long long ctx_id, {sig}) {{')
     if inner:
         L.append(f"#{spec.gate_form} {gate}")
     if spec.mjx_requires_qdd:
@@ -888,7 +891,7 @@ def emit_jax_handler(key: str) -> str:
             L.append("    GRID_RBD_CTX_OR_FFI(ctx_id);")
             L.append(f"    ffi::Error e = {call};")
             L.append("    if (e.failure()) return e;")
-            L.append("    grid_rbd_stamp_write(g_ctx, stream, stamp->typed_data());")
+            L.append(f'    if (grid_rbd_stamp_write(g_ctx, stream, stamp->typed_data()) != cudaSuccess) return ffi::Error::Internal("{key}: stamp launch failed");')
             L.append("    return ffi::Error::Success();")
             L.append("}")
         else:

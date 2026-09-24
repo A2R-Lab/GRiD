@@ -107,6 +107,9 @@ struct CAbi {
     using fn_ctx_idp_t      = int (*)(long long*);                   // ctx_default_id(&id)
     using fn_ctx_profile_t  = int (*)(long long, void*);             // ctx_profile(id, GridDeviceProfile*)
     using fn_ctx_version_t  = int (*)(long long, unsigned long long*);  // ctx_version(id, &version)  (B2)
+    using fn_graph_begin_t  = int (*)(long long, unsigned long long, long long*);  // graph_begin(id, version, &token) (R5)
+    using fn_graph_end_t    = int (*)(long long);                    // graph_end(token)
+    using fn_ctx_count_t    = int (*)();                             // ctx_count()
 };
 
 
@@ -152,6 +155,9 @@ class RunnerT {
     using fn_ctx_idp_t = typename CAbi<CT>::fn_ctx_idp_t;
     using fn_ctx_profile_t = typename CAbi<CT>::fn_ctx_profile_t;
     using fn_ctx_version_t = typename CAbi<CT>::fn_ctx_version_t;
+    using fn_graph_begin_t = typename CAbi<CT>::fn_graph_begin_t;
+    using fn_graph_end_t = typename CAbi<CT>::fn_graph_end_t;
+    using fn_ctx_count_t = typename CAbi<CT>::fn_ctx_count_t;
     // Per-dtype numpy array alias: an input is force-cast to CT, outputs are CT.
     using arr_t = py::array_t<CT, py::array::c_style | py::array::forcecast>;
 public:
@@ -176,6 +182,9 @@ public:
         fn_ctx_default_id_   = reinterpret_cast<fn_ctx_idp_t>(require_sym("grid_rbd_ctx_default_id"));
         fn_ctx_profile_      = reinterpret_cast<fn_ctx_profile_t>(require_sym("grid_rbd_ctx_profile"));
         fn_ctx_version_      = reinterpret_cast<fn_ctx_version_t>(require_sym("grid_rbd_ctx_version"));
+        fn_graph_begin_      = reinterpret_cast<fn_graph_begin_t>(require_sym("grid_rbd_graph_begin"));
+        fn_graph_end_        = reinterpret_cast<fn_graph_end_t>(require_sym("grid_rbd_graph_end"));
+        fn_ctx_count_        = reinterpret_cast<fn_ctx_count_t>(require_sym("grid_rbd_ctx_count"));
         // E1 kernel ceiling + E6 per-algo/batch-regime overlays.
         fn_kernel_max_threads_ = reinterpret_cast<fn_int_s_t>(require_sym("grid_rbd_kernel_max_threads"));
         fn_set_threads_for_  = reinterpret_cast<fn_ctx_int_ii_t>(require_sym("grid_rbd_set_threads_for"));
@@ -442,6 +451,20 @@ public:
         if (rc != 0) throw std::runtime_error(rc_message(rc, "ctx_version", nullptr));
         return v;
     }
+    // codex R5: replay admission bracket (see grid_rbd_graph_begin in the wrapper).
+    long long graph_begin(long long id, unsigned long long version) {
+        long long tok = 0;
+        int rc = fn_graph_begin_(id, version, &tok);
+        if (rc == 15) throw std::runtime_error(
+            "graph replay refused: the model was mutated since this graph was captured (recapture it)");
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "graph_begin", nullptr));
+        return tok;
+    }
+    void graph_end(long long token) {
+        int rc = fn_graph_end_(token);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "graph_end", nullptr));
+    }
+    int ctx_count() const { return fn_ctx_count_(); }
     py::dict ctx_profile(long long id) {
         struct P { int device_cc, artifact_cc; long long total_bytes, free_bytes, arena_bytes; int workspace_slots, max_batch; long long smem_optin_bytes; int slab_installed; } prof{};
         int rc = fn_ctx_profile_(id, &prof);
@@ -2030,6 +2053,9 @@ private:
     fn_ctx_idp_t fn_ctx_default_id_ = nullptr;
     fn_ctx_profile_t fn_ctx_profile_ = nullptr;
     fn_ctx_version_t fn_ctx_version_ = nullptr;
+    fn_graph_begin_t fn_graph_begin_ = nullptr;
+    fn_graph_end_t fn_graph_end_ = nullptr;
+    fn_ctx_count_t fn_ctx_count_ = nullptr;
     long long ctx_id_ = 0;  // 0 = this artifact's default context; explicit contexts hold their salted id
     fn_int_v_t fn_algo_count_             = nullptr;
     fn_ctx_int_iii_t fn_set_threads_for_n_    = nullptr;
@@ -2215,6 +2241,9 @@ static void register_runner(py::module_& m, const char* cls_name) {
         .def("ctx_default_id", &R::ctx_default_id, "The default context's real id (created if absent).")
         .def("ctx_profile", &R::ctx_profile, py::arg("id"), "The device-profile record captured when the context was created.")
         .def("ctx_version", &R::ctx_version, py::arg("id"), "The context's model version (bumps on every runtime-parameter mutation; W04-B B2).")
+        .def("graph_begin", &R::graph_begin, py::arg("id"), py::arg("version"), "Take a replay admission on a context at a captured model version; returns a token (R5).")
+        .def("graph_end", &R::graph_end, py::arg("token"), "Release a replay admission token (R5).")
+        .def("ctx_count", &R::ctx_count, "Number of live runtime contexts of this artifact.")
         .def("inverse_dynamics", &R::inverse_dynamics,
              py::arg("q"), py::arg("qd"),
              py::arg("qdd") = py::none(),

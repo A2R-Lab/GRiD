@@ -210,25 +210,83 @@ def _scaled_inertia(h, factor):
 
 
 def test_model_version_bumps_on_parameter_mutation_only(iiwa):
+    # versions are drawn from the artifact-wide epoch (R6): strictly increasing on
+    # every model mutation, never contiguous (context creations bump the epoch too)
     v0 = iiwa.model_version
     assert v0 >= 1
     iiwa.set_inertia_params(np.asarray(iiwa.inertia_params, dtype=np.float32))
-    assert iiwa.model_version == v0 + 1
+    v1 = iiwa.model_version
+    assert v1 > v0
     # launch overrides are exclusive-admission too, but NOT a model mutation
     iiwa.set_threads_per_block(64); iiwa.set_threads_per_block(0)
-    assert iiwa.model_version == v0 + 1
+    assert iiwa.model_version == v1
     # attach/detach route through the inertia setter: one bump each
     row_joint = list(iiwa._meta.get("inertia_row_by_joint_name") or {"": None})[-1]
     if row_joint:
         iiwa.attach_tool(row_joint, mass=0.5)
+        v2 = iiwa.model_version
         iiwa.detach_tool()
-        assert iiwa.model_version == v0 + 3
-    # a NEW context starts at its own version 1, independent of the default's history
+        assert v2 > v1 and iiwa.model_version > v2
+    # a NEW context draws its version from the artifact-wide epoch (R6): unique,
+    # never equal to another context's, and its own mutations bump only it
     ctx = iiwa.context()
     try:
-        assert ctx.model_version == 1
+        assert ctx.model_version != iiwa.model_version
+        v_ctx, v_def = ctx.model_version, iiwa.model_version
+        ctx.set_inertia_params(np.asarray(ctx.inertia_params, dtype=np.float32))
+        assert ctx.model_version > v_ctx and iiwa.model_version == v_def   # only ctx moved
     finally:
         ctx.close()
+
+
+def test_dropped_explicit_context_is_finalized_and_close_is_idempotent(iiwa):
+    """codex R3: a handle is the one owner of its context; dropping it without
+    close() reclaims the context at GC; explicit close + GC never double-closes."""
+    import gc
+    n0 = iiwa._runner.ctx_count()
+    ctx = iiwa.context()
+    q, qd, u = _state(iiwa)
+    ctx.forward_dynamics(q, qd, u)
+    assert iiwa._runner.ctx_count() == n0 + 1
+    del ctx
+    gc.collect()
+    assert iiwa._runner.ctx_count() == n0
+    ctx = iiwa.context()
+    ctx.close(); ctx.close()
+    del ctx
+    gc.collect()
+    assert iiwa._runner.ctx_count() == n0
+
+
+def test_explicit_workspace_cap_is_honoured_and_results_hold(iiwa):
+    """codex R2: context(workspace_slots=1) really fits one slot (no slab, no env)
+    and a batch above the cap still grid-strides to the same result."""
+    q, qd, u = _state(iiwa, B=6)
+    ref = iiwa.forward_dynamics_gradient(q, qd, u)
+    ctx = iiwa.context(workspace_slots=1)
+    try:
+        assert ctx.device_profile["workspace_slots"] == 1
+        assert np.allclose(ctx.forward_dynamics_gradient(q, qd, u), ref, atol=1e-6)
+    finally:
+        ctx.close()
+
+
+def test_default_context_reset_invalidates_a_deferred_backward(iiwa):
+    """codex R6: a backward whose forward ran on a since-recreated default context
+    is refused even when the per-context mutation counts coincide."""
+    torch = pytest.importorskip("torch")
+    import grid_rbd.torch as gt
+    tv = gt.TorchRobotHandle(iiwa, _cache_key(iiwa), iiwa._so_path)
+    q, qd, u = _state(iiwa)
+    base = np.asarray(iiwa.inertia_params, dtype=np.float32)
+    tq = torch.as_tensor(q, device="cuda").requires_grad_(True)
+    tqd, tu = (torch.as_tensor(x, device="cuda") for x in (qd, u))
+    out = tv.forward_dynamics(tq, tqd, tu)                # forward on incarnation A
+    iiwa._runner.close_arena()                            # default context A closed (Runner-level reset)
+    iiwa.forward_dynamics(q, qd, u)                       # incarnation B created lazily
+    with pytest.raises(RuntimeError, match="model mutated between forward and backward"):
+        out.sum().backward()
+    iiwa.set_inertia_params(base)
 
 
 def test_mutation_is_serialized_against_admitted_calls(iiwa):
@@ -253,10 +311,39 @@ def test_mutation_is_serialized_against_admitted_calls(iiwa):
     v = iiwa.model_version
     for i in range(20):
         iiwa.set_inertia_params(_scaled_inertia(iiwa, 2.0) if i % 2 == 0 else base)
-        assert iiwa.model_version == v + i + 1
+        assert iiwa.model_version > v; v = iiwa.model_version
     stop.set(); th.join()
     iiwa.set_inertia_params(base)
     assert not bad, f"{len(bad)} torn/inconsistent results under a racing mutation"
+
+
+def test_graph_replay_is_refused_after_mutation_or_close(iiwa):
+    """codex R5: a captured graph replays only on its context at its captured
+    model epoch: mutation → refused until recapture; close → refused, never a
+    launch into freed memory."""
+    torch = pytest.importorskip("torch")
+    import grid_rbd.torch as gt
+    base = np.asarray(iiwa.inertia_params, dtype=np.float32)
+    q, qd, u = (torch.as_tensor(x, device="cuda") for x in _state(iiwa))
+    tv = gt.TorchRobotHandle(iiwa, _cache_key(iiwa), iiwa._so_path)
+    g = tv.capture("forward_dynamics", q, qd, u)
+    ref = g.replay().clone()
+    assert torch.allclose(g(q, qd, u), ref)
+    iiwa.set_inertia_params(_scaled_inertia(iiwa, 1.5))
+    try:
+        with pytest.raises(RuntimeError, match="mutated since this graph was captured"):
+            g.replay()
+        g2 = tv.capture("forward_dynamics", q, qd, u)     # recapture at the new model
+        assert not torch.allclose(g2.replay(), ref)
+    finally:
+        iiwa.set_inertia_params(base)
+    ctx = iiwa.context()
+    cv = gt.TorchRobotHandle(ctx, _cache_key(iiwa), ctx._so_path)
+    gc_ = cv.capture("forward_dynamics", q, qd, u)
+    gc_.replay()
+    ctx.close()
+    with pytest.raises(RuntimeError, match="closed"):
+        gc_.replay()
 
 
 def test_torch_backward_rejects_a_mutated_model_and_fresh_forward_recovers(iiwa):

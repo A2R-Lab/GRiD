@@ -171,3 +171,50 @@ def test_jax_native_handler_checks_every_operand(iiwa):
     with pytest.raises(Exception, match="batch > max_batch"):
         z = jnp.zeros((MAX_BATCH + 1, nj), jnp.float32)
         call(z, z, z, jnp.zeros((MAX_BATCH + 1, 6 * nb), jnp.float32), B=MAX_BATCH + 1)
+
+
+# ─── plant, tool and runtime-offset classes (codex R8: representative native negatives) ──
+
+@pytest.fixture(scope="module")
+def plant():
+    """The plant smoke's artifact (same registration → cache hit)."""
+    if shutil.which("nvcc") is None:
+        pytest.skip("nvcc not on PATH")
+    h = grid_rbd.register_robot(name="iiwa14_plant_smoke", urdf_path=str(_REPO / "config/robot_assets/iiwa14.urdf"),
+                                floating_base=False, max_batch_size=8)
+    yield h
+    h.close()
+
+
+def test_plant_operands_must_carry_the_leading_batch(plant):
+    nx = plant.nq + plant.nv
+    x = np.zeros((4, nx), np.float32); x_des = np.zeros((3, nx), np.float32); Q = np.ones((4, nx), np.float32)
+    with pytest.raises((ValueError, RuntimeError), match="batch"):
+        plant.quadratic_state_cost(x, x_des, Q)
+    lo = -np.ones((4, plant.nq), np.float32); hi = np.ones((2, plant.nq), np.float32)
+    with pytest.raises((ValueError, RuntimeError), match="batch"):
+        plant.joint_position_barrier(np.zeros((4, plant.nq), np.float32), lo, hi, 1.0)
+    torch = pytest.importorskip("torch")
+    import grid_rbd.torch as gt
+    tv = gt.TorchRobotHandle(plant, _cache_key(plant), plant._so_path)
+    t = lambda a: torch.as_tensor(a, device="cuda")
+    with pytest.raises(RuntimeError, match="must equal the leading operand's batch"):
+        tv.quadratic_state_cost(t(x), t(x_des), t(Q))
+    with pytest.raises(RuntimeError, match="must equal the leading operand's batch"):
+        tv.joint_position_barrier(t(np.zeros((4, plant.nq), np.float32)), t(lo), t(hi), 1.0)
+    jax = pytest.importorskip("jax")
+    import jax.numpy as jnp, grid_rbd.jax as gj
+    jv = gj.JaxRobotHandle(plant, _cache_key(plant), plant._so_path)
+    with pytest.raises(ValueError, match="batch"):
+        jv.quadratic_state_cost(jnp.asarray(x), jnp.asarray(x_des), jnp.asarray(Q))
+
+
+def test_tool_wrench_and_runtime_target_are_validated(iiwa, plant):
+    q, qd, u = _state(iiwa)
+    with pytest.raises((ValueError, RuntimeError)):
+        iiwa.tool_fext(q, np.zeros(5, np.float32))                       # wrench must be 6 numbers
+    # the native runtime-EE target range check (Python resolves joint NAMES, so the
+    # pybind runner is the boundary a bad id can reach) — on the full artifact
+    qf = np.zeros((4, plant.nq), np.float32)
+    with pytest.raises(RuntimeError, match="rc=1"):
+        plant._runner.end_effector_pose_runtime(qf, 99, np.zeros(16, np.float32))

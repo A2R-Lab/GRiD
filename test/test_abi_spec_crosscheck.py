@@ -42,6 +42,7 @@ _INFRA = {
     "device_pool_bytes", "set_device_pool", "device_pool_used",
     "ctx_create", "ctx_close", "ctx_default_id", "ctx_profile", "ctx_count",  # W04-B B1 runtime contexts
     "ctx_version",  # W04-B B2 model version
+    "graph_begin", "graph_end",  # codex R5 replay admission
     # Multi-contact f_ext (2026-09-17): `grid_rbd_contact_fext` + `grid_rbd_num_contact_frames`
     # are HAND-WRITTEN in wrapper_template.cu under GRID_HAS_CONTACT_FRAMES (they call the
     # baked grid::f_ext_body_device and mirror tool_fext's d_f_ext handling); they are a
@@ -421,6 +422,16 @@ def test_jax_buffer_inputs(key):
     bufs = tuple(re.findall(r"ffi::Buffer<GRID_FFI_T>\s+(\w+)", sig))
     assert bufs == jax_buffer_inputs_for(spec), (
         f"{key}: handler buffers {bufs} != jax_buffer_inputs {jax_buffer_inputs_for(spec)}")
+
+
+def test_mujoco_twins_declare_their_context():
+    """codex R1 (2026-09-24): every generated `_mujoco` C-ABI twin takes the same
+    leading `long long ctx_id` as its primary (the guard inside names it; 30 twins
+    once compiled only because fixed-base smokes #ifdef them out)."""
+    twins = re.findall(r'extern "C" int grid_rbd_([a-z0-9_]+_mujoco)\(([^)]*)\)', _SRC)
+    assert len(twins) >= 30, f"only {len(twins)} mujoco twins found"
+    bad = [name for name, params in twins if not params.strip().startswith("long long ctx_id")]
+    assert not bad, f"mujoco twins without a leading ctx_id: {bad}"
 
 
 def test_substitution_partitions():

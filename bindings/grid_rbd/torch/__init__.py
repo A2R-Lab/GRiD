@@ -415,11 +415,24 @@ class GraphCallable:
     work (RL/training loops) or when many small ops are captured together.
     """
 
-    def __init__(self, op, example_inputs, kwargs):
+    def __init__(self, op, example_inputs, kwargs, *, handle=None):
+        import threading
         import torch
         self._torch = torch
         self.static_in = [t.clone() for t in example_inputs]
         self._kwargs = kwargs
+        # codex R5 (2026-09-24): a captured graph bypasses the native entry-point
+        # guards, so every replay is bracketed by a replay ADMISSION on the
+        # context at the captured model epoch (refused after a mutation or a
+        # close; ordered against a concurrent mutator/close like any compute
+        # call). The GraphCallable also owns a strong reference to the handle so
+        # the context cannot be finalized under a live graph. Replays are
+        # serialized per graph (one lock covers copy-in + replay).
+        self._handle = handle
+        self._runner = handle._base._runner if handle is not None else None
+        self._ctx_id = int(handle.ctx_id) if handle is not None else 0
+        self._lock = threading.Lock()
+        v0 = int(handle.model_version) if handle is not None else 0
         # 1. WARMUP off-graph: forces grid_rbd_init (>48KB smem opt-in) + first
         #    allocs. These device-global registrations are illegal during capture.
         s = torch.cuda.Stream()
@@ -435,23 +448,43 @@ class GraphCallable:
         with torch.cuda.graph(self.graph):
             self.static_out = op(*self.static_in, **kwargs)
         self._op = op
+        if handle is not None and int(handle.model_version) != v0:
+            raise RuntimeError("model mutated during capture; capture again")
+        self._version = v0
+
+    def _replay_admitted(self):
+        if self._runner is None:
+            self.graph.replay()
+            return self.static_out
+        tok = self._runner.graph_begin(self._ctx_id, self._version)
+        try:
+            self.graph.replay()
+        finally:
+            self._runner.graph_end(tok)
+        return self.static_out
 
     def replay(self):
-        self.graph.replay()
-        return self.static_out
+        """Re-run the captured graph on the current contents of ``static_in``.
+        Refused (``RuntimeError``) once the model was mutated since capture or the
+        context was closed — capture again. ``static_out`` is an OWNED tensor whose
+        value is overwritten by the next replay: clone it to keep a value, and order
+        a reader on another stream with ``wait_stream`` before the next replay."""
+        with self._lock:
+            return self._replay_admitted()
 
     def __call__(self, *inputs):
         if len(inputs) != len(self.static_in):
             raise ValueError(f"expected {len(self.static_in)} inputs, got {len(inputs)}")
-        # Fused copy-in: one dispatcher hop for all inputs (falls back to a
-        # per-tensor loop on torch builds without _foreach_copy_).
-        foreach = getattr(self._torch, "_foreach_copy_", None)
-        if foreach is not None:
-            foreach(self.static_in, list(inputs))
-        else:
-            for dst, src in zip(self.static_in, inputs):
-                dst.copy_(src)
-        return self.replay()
+        with self._lock:
+            # Fused copy-in: one dispatcher hop for all inputs (falls back to a
+            # per-tensor loop on torch builds without _foreach_copy_).
+            foreach = getattr(self._torch, "_foreach_copy_", None)
+            if foreach is not None:
+                foreach(self.static_in, list(inputs))
+            else:
+                for dst, src in zip(self.static_in, inputs):
+                    dst.copy_(src)
+            return self._replay_admitted()
 
 
 # ─── mjx view ────────────────────────────────────────────────────────────────
@@ -1157,7 +1190,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         ``.replay()`` directly.
         """
         op = getattr(self, method)
-        return GraphCallable(op, example_inputs, kwargs)
+        return GraphCallable(op, example_inputs, kwargs, handle=self)
 
     # ─── lifecycle ───────────────────────────────────────────────────────────
 
