@@ -195,8 +195,10 @@ autograd gradient is qdd-aware, returning the correct ∂τ/∂(q,q̇) including
 `forward_dynamics_parameter_gradient` ∂q̈/∂π), runtime tool welding
 (`attach_tool`/`tool_fext`, via `enable_tool=True`), and multi-contact
 wrench mapping (`contact_fext`, via `register_robot(contact_frames=[...])`)
-are bound as well. Pass `allow_fp64=True` at `register_robot` for an
-fp64-in/fp64-out convenience cast (compute stays fp32). See
+are bound as well. For true fp64 compute build with
+`register_robot(..., dtype="float64")` (its own cache entry); `allow_fp64=True`
+is only the numpy handle's fp64-in/fp64-out convenience cast on an fp32 build
+(ignored when `dtype="float64"`). See
 [`bindings/README.md`](bindings/README.md) and the
 [Python wrappers docs](https://a2r-lab.github.io/GRiD/user_guide/tutorials/python_wrappers.html).
 
