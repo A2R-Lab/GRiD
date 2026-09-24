@@ -118,7 +118,7 @@ can swap inertial parameters at run time, and autograd refuses to
 differentiate a model that changed under it. GRiD targets a single GPU, from
 embedded Jetson-class devices to desktop cards, one artifact per
 architecture; the tested deployment platform of this release is Linux x86_64
-(see the installation page).
+(see :doc:`compatibility and known limitations <user_guide/getting_started/compatibility>`).
 
 30-second quickstart
 --------------------
@@ -219,6 +219,7 @@ If you use GRiD in your research, please cite:
    user_guide/getting_started/fast_robot_setup
    user_guide/getting_started/library_overview
    user_guide/getting_started/docker_setup
+   user_guide/getting_started/compatibility
    user_guide/glossary
 
 .. toctree::

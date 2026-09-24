@@ -72,6 +72,11 @@ The task router: find the right entry point for what you are trying to do.
        mutate the context under an exclusive admission lock and bump
        ``handle.model_version``; a torch/JAX backward whose forward ran under
        an older version raises — recompute the forward. Same page as above.
+   * - **Know what this release supports, what changed, and what it does not do**
+     - :doc:`user_guide/getting_started/compatibility` — platforms and toolchain,
+       runtime contexts and versions, captured graphs, operands, native-interface
+       stability (the wrapper's C symbols are private; ``grid.cuh`` is the
+       supported inline API), differentiation, build cost.
    * - **Know what shapes / dtypes / devices a call accepts (and rejects)**
      - One rule set per operand class, enforced natively on every surface:
        :doc:`user_guide/concepts/operand_validation`.

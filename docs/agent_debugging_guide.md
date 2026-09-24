@@ -2349,3 +2349,21 @@ build option needs a gate that BUILDS with that option — here
 (3) "the generator and the template agree" proves consistency, never
 correctness — a test that only agrees with its generator cannot detect a
 consistently generated omission (codex's phrasing; keep it).
+
+### 7.z27 A native lock held across Python code needs GIL-free waiters (2026-09-24, codex follow-up)
+The replay-admission token (R5) holds the context's shared admission across
+`graph.replay()` in Python. Any pybind method that then WAITS on that
+admission with the GIL held — a runtime-parameter setter (exclusive), a
+launch override, `ctx_close`/`close_arena` (drain), or the token bracket
+itself — deadlocks: the token holder needs the GIL to reach `graph_end()`,
+the waiter holds it. Reproduced deterministically (child hung, rc 124) and
+fixed by releasing the GIL around every such native wait (`GridNoGil`:
+`py::gil_scoped_release` guarded by `PyGILState_Check`), taking array data
+pointers BEFORE the released section and touching no Python object inside
+it. The last-owner `release()` also stopped draining under the owners mutex:
+decide under the mutex, drain outside it, re-acquire the GIL before the
+`py::object` pool handle is dropped. RULES: (1) whenever a native lock can
+be held across Python, audit every waiter for the GIL; (2) test the race in a
+SUBPROCESS with a hard timeout so a regression fails instead of hanging the
+suite; (3) never `pkill -f <pattern>` from a command whose own text contains
+the pattern — kill by PID (the bracket trick is not reliable here; rc 144).
