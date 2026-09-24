@@ -1,4 +1,5 @@
 import numpy as np
+from ._gpu_err import legacy_wrapper_lines
 import sympy as sp
 
 def gen_get_XI_size(self, include_base_inertia = False, include_homogenous_transforms = False):
@@ -133,12 +134,8 @@ def gen_legacy_init_wrapper(self, name, ctype):
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line(ctype + "* " + name + "() {", True)
-    self.gen_add_code_lines([
-        ctype + " *d = nullptr; const char *op = nullptr;",
-        "cudaError_t e = " + name + "_checked<T>(&d, &op);  // sequenced BEFORE reading op",
-        "grid_legacy_check(e, op, __FILE__, __LINE__);",
-        "return d;",
-    ])
+    self.gen_add_code_lines(legacy_wrapper_lines(ctype + " *d = nullptr; const char *op = nullptr;",
+                                                 name + "_checked<T>(&d, &op)", ret="d"))
     self.gen_add_end_function()
 
 
@@ -1726,10 +1723,8 @@ def gen_init_robotModel(self):
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("robotModel<T>* init_robotModel() {", True)
-    self.gen_add_code_lines(["robotModel<T> *d_robotModel = nullptr; const char *op = nullptr;",
-                             "cudaError_t e = init_robotModel_checked<T>(&d_robotModel, &op);  // sequenced BEFORE reading op",
-                             "grid_legacy_check(e, op, __FILE__, __LINE__);",
-                             "return d_robotModel;"])
+    self.gen_add_code_lines(legacy_wrapper_lines("robotModel<T> *d_robotModel = nullptr; const char *op = nullptr;",
+                                                 "init_robotModel_checked<T>(&d_robotModel, &op)", ret="d_robotModel"))
     self.gen_add_end_function()
 
 def gen_free_robotModel(self):
@@ -1772,9 +1767,8 @@ def gen_free_robotModel(self):
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("void free_robotModel(robotModel<T> *d_robotModel) {", True)
-    self.gen_add_code_lines(["const char *op = nullptr;",
-                             "cudaError_t e = free_robotModel_checked<T>(d_robotModel, &op);  // sequenced BEFORE reading op",
-                             "grid_legacy_check(e, op, __FILE__, __LINE__);"])
+    self.gen_add_code_lines(legacy_wrapper_lines("const char *op = nullptr;",
+                                                 "free_robotModel_checked<T>(d_robotModel, &op)"))
     self.gen_add_end_function()
 
     # Optional owning handle: noncopyable, movable, destroys on scope exit

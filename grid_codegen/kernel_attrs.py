@@ -4,6 +4,7 @@ attr fns, init_grid/close_grid/streams). H4 move from GRiDCodeGenerator.py
 (2026-08-27, verbatim). The names are class-bound on GRiDCodeGenerator (tests
 read GRiDCodeGenerator.KERNEL_ATTR_MANIFEST etc.)."""
 from .algo_registry import ALGO_DESCRIPTORS, descriptor_for
+from .helpers._gpu_err import legacy_wrapper_lines
 from .launch_config import baked_launch_cfg
 
 
@@ -585,9 +586,7 @@ def gen_init_close_grid(self):
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__ __forceinline__")
     self.gen_add_code_line("void init_grid_kernel_attrs(){", True)
-    self.gen_add_code_lines(["const char *op = nullptr;",
-                             "cudaError_t e = init_grid_kernel_attrs_checked<T>(&op);  // sequenced BEFORE reading op",
-                             "grid_legacy_check(e, op, __FILE__, __LINE__);"])
+    self.gen_add_code_lines(legacy_wrapper_lines("const char *op = nullptr;", "init_grid_kernel_attrs_checked<T>(&op)"))
     self.gen_add_end_function()
 
     # ----- Per-algo init_grid_kernel_attr_<short><T>() (P0: split-compile) ----
@@ -697,10 +696,8 @@ def gen_init_close_grid(self):
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("cudaStream_t *init_grid_streams(){", True)
-    self.gen_add_code_lines(["cudaStream_t *streams = nullptr; const char *op = nullptr;",
-                             "cudaError_t e = init_grid_streams_checked<T>(&streams, &op);  // sequenced BEFORE reading op",
-                             "grid_legacy_check(e, op, __FILE__, __LINE__);",
-                             "return streams;"])
+    self.gen_add_code_lines(legacy_wrapper_lines("cudaStream_t *streams = nullptr; const char *op = nullptr;",
+                                                 "init_grid_streams_checked<T>(&streams, &op)", ret="streams"))
     self.gen_add_end_function()
 
     # ----- init_grid<T>(): full init = attrs + streams (the original API) ----
@@ -709,10 +706,8 @@ def gen_init_close_grid(self):
     self.gen_add_code_line("template <typename T>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("cudaStream_t *init_grid(){", True)
-    self.gen_add_code_lines(["cudaStream_t *streams = nullptr; const char *op = nullptr;",
-                             "cudaError_t e = init_grid_checked<T>(&streams, &op);  // sequenced BEFORE reading op",
-                             "grid_legacy_check(e, op, __FILE__, __LINE__);",
-                             "return streams;"])
+    self.gen_add_code_lines(legacy_wrapper_lines("cudaStream_t *streams = nullptr; const char *op = nullptr;",
+                                                 "init_grid_checked<T>(&streams, &op)", ret="streams"))
     self.gen_add_end_function()
     # free the streams and all allocated data — library-safe (part 2): the
     # release list is DERIVED from init_gridData's allocation lines
@@ -745,7 +740,6 @@ def gen_init_close_grid(self):
     self.gen_add_code_line("template <typename T, gridDataKind KIND = GRID_DATA_ALL>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("void close_grid(cudaStream_t *streams, robotModel<T> *d_robotModel, gridData<T, KIND> *hd_data){", True)
-    self.gen_add_code_lines(["const char *op = nullptr;",
-                             "cudaError_t e = close_grid_checked<T, KIND>(streams, d_robotModel, hd_data, &op);  // sequenced BEFORE reading op",
-                             "grid_legacy_check(e, op, __FILE__, __LINE__);"])
+    self.gen_add_code_lines(legacy_wrapper_lines("const char *op = nullptr;",
+                                                 "close_grid_checked<T, KIND>(streams, d_robotModel, hd_data, &op)"))
     self.gen_add_end_function()

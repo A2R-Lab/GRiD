@@ -57,6 +57,20 @@ def gen_add_gpu_err(self):
     self.gen_add_code_line("")
     self.gen_library_safe_init_contract()
 
+def legacy_wrapper_lines(decl, checked_call, ret=None):
+    """Body of a legacy (fail-fast / sticky) wrapper over a `*_checked` call:
+    `decl` declares the out-var(s) + `const char *op = nullptr;`, the checked
+    call is sequenced into a local BEFORE `op` is read (C++ argument evaluation
+    order is unspecified), then grid_legacy_check applies the historical
+    policy; `ret` names the value to return (None for void wrappers)."""
+    lines = [decl,
+             "cudaError_t e = " + checked_call + ";  // sequenced BEFORE reading op",
+             "grid_legacy_check(e, op, __FILE__, __LINE__);"]
+    if ret is not None:
+        lines.append("return " + ret + ";")
+    return lines
+
+
 def gen_library_safe_init_contract(self):
     """Library-safe (nonterminating) initialization contract (2026-09-22,
     HJCD ask): the `*_checked` initializers/destructor emitted by

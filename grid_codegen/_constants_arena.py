@@ -6,6 +6,7 @@ contract with the algorithm emitters is unchanged; see the audit before
 restructuring internals)."""
 import numpy as np
 
+from .helpers._gpu_err import legacy_wrapper_lines
 from .algo_registry import (ALGO_DESCRIPTORS, arena_ctx_from_codegen, compose_arena_full,
                             compose_arena_rungs, ARENA_COMPOSED_KEYS, ARENA_RUNG_KEYS)
 
@@ -2165,20 +2166,16 @@ def gen_init_gridData(self):
     self.gen_add_code_line("template <typename T, int NUM_TIMESTEPS, gridDataKind KIND = GRID_DATA_ALL>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("gridData<T, KIND> *init_gridData(){", True)
-    self.gen_add_code_lines(["gridData<T, KIND> *hd_data = nullptr; const char *op = nullptr;",
-                             "cudaError_t e = init_gridData_checked<T, NUM_TIMESTEPS, KIND>(&hd_data, &op);  // sequenced BEFORE reading op",
-                             "grid_legacy_check(e, op, __FILE__, __LINE__);",
-                             "return hd_data;"])
+    self.gen_add_code_lines(legacy_wrapper_lines("gridData<T, KIND> *hd_data = nullptr; const char *op = nullptr;",
+                                                 "init_gridData_checked<T, NUM_TIMESTEPS, KIND>(&hd_data, &op)", ret="hd_data"))
     self.gen_add_end_function()
     self.gen_add_func_doc("Allocated device and host memory for all computations (legacy policy; prefer init_gridData_checked in library code)",
                           [], ["Max number of timesteps in the trajectory"], "A pointer to the gridData struct of pointers")
     self.gen_add_code_line("template <typename T, gridDataKind KIND = GRID_DATA_ALL>")
     self.gen_add_code_line("__host__")
     self.gen_add_code_line("gridData<T, KIND> *init_gridData(int NUM_TIMESTEPS){", True)
-    self.gen_add_code_lines(["gridData<T, KIND> *hd_data = nullptr; const char *op = nullptr;",
-                             "cudaError_t e = init_gridData_checked<T, KIND>(NUM_TIMESTEPS, &hd_data, &op);  // sequenced BEFORE reading op",
-                             "grid_legacy_check(e, op, __FILE__, __LINE__);",
-                             "return hd_data;"])
+    self.gen_add_code_lines(legacy_wrapper_lines("gridData<T, KIND> *hd_data = nullptr; const char *op = nullptr;",
+                                                 "init_gridData_checked<T, KIND>(NUM_TIMESTEPS, &hd_data, &op)", ret="hd_data"))
     self.gen_add_end_function()
     self.gen_add_func_doc("Device bytes a pool-mode init_gridData will carve for "
                           "this KIND at the given workspace slot count — size the "
