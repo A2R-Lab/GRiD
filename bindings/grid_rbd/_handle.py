@@ -243,6 +243,8 @@ class RobotHandle:
 
         self._name = name
         self._meta = dict(meta)
+        self._so_path = str(so_path)
+        self._owns_context = False   # True for handles made by .context(): they close their context
         # fp64 (Phase 8): a .so built with dtype="float64" has a double-precision
         # C ABI; it must be driven through RunnerF64 (which declares its buffers
         # + fn-pointers as double) and fed/returned float64 numpy arrays. fp32
@@ -2302,11 +2304,52 @@ class RobotHandle:
     # ─── lifecycle ───────────────────────────────────────────────────────────
 
     def close(self) -> None:
-        """Release the underlying .so handle. After close(), method calls
-        will fail. Idempotent."""
+        """Release the underlying .so handle (and, for a handle made by
+        :py:meth:`context`, close its runtime context first: no new admissions,
+        drain, free). After close(), method calls will fail. Idempotent."""
         if self._runner is not None:
+            if self._owns_context:
+                try:
+                    self._runner.ctx_close(self._runner.ctx_id())
+                finally:
+                    self._owns_context = False
             del self._runner
             self._runner = None
+
+    # ─── runtime contexts (W04-B B1) ──────────────────────────────────────
+    @property
+    def ctx_id(self) -> int:
+        """The runtime-context id this handle dispatches to. 0 = the artifact's
+        DEFAULT context (created lazily on the first call, shared by every
+        handle over this .so that did not ask for its own); a handle made by
+        :py:meth:`context` carries its own salted id."""
+        return int(self._runner.ctx_id())
+
+    def context(self, *, workspace_slots: int = 0) -> "RobotHandle":
+        """A NEW runtime context on the same compiled artifact: its own arena
+        (allocator pool, streams, robot tables, plant staging, launch
+        overrides), independent of the default context and of every other
+        context. Returns a handle bound to it; closing that handle closes the
+        context. ``workspace_slots`` caps the per-block workspace slot count
+        (0 = the auto-fit). Contexts are the unit of isolation for concurrent
+        pipelines on the single GPU; they are NOT a multi-GPU mechanism."""
+        from . import _core  # noqa: F401
+        new = RobotHandle(self._name, self._so_path, self._meta, allow_fp64=self.allow_fp64)
+        cid = new._runner.ctx_create(0, 0, int(workspace_slots))
+        new._runner.bind_context(cid)
+        new._owns_context = True
+        new.output_convention = self._output_convention
+        return new
+
+    @property
+    def device_profile(self) -> dict:
+        """The device-profile record captured when this handle's context was
+        created: device and artifact compute capability, total/free device
+        memory at init, the arena bytes and workspace slot count that were
+        fitted, max_batch, the opt-in shared-memory cap, and whether the arena
+        was carved from a caller-owned slab. Creates the default context if
+        this handle uses it and it does not exist yet."""
+        return dict(self._runner.ctx_profile(self._runner.ctx_id()))
 
     def __enter__(self):
         return self

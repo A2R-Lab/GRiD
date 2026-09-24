@@ -241,11 +241,11 @@ BODY_COMMENTS: dict[str, str] = {
 }
 
 _PACK = {
-    "q_qd_null": "    pack_q_qd_u(q, qd, nullptr, batch, grid::NUM_JOINTS);",
-    "q_q_null": "    pack_q_qd_u(q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);",
-    "q_qd_u": "    pack_q_qd_u(q, qd, u, batch, grid::NUM_JOINTS);",
-    "qdd_u_slot": "    pack_q_qd_u(q, qd, qdd, batch, grid::NUM_JOINTS);",
-    "pack_q": "    pack_q(q, batch, grid::NUM_JOINTS);",
+    "q_qd_null": "    pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);",
+    "q_q_null": "    pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);",
+    "q_qd_u": "    pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS);",
+    "qdd_u_slot": "    pack_q_qd_u(g_ctx, q, qd, qdd, batch, grid::NUM_JOINTS);",
+    "pack_q": "    pack_q(g_ctx, q, batch, grid::NUM_JOINTS);",
 }
 
 _STUB_MSG = {
@@ -268,9 +268,9 @@ def gen_body(spec: AbiSpec) -> str:
     pnames = [n for n, _t in spec.inputs]
     out_name = next(n for n in pnames if n.endswith("out") or n == "out")
     sig = ", ".join(f"{t} {n}" for (n, t) in spec.inputs)
-    L = [f'extern "C" int grid_rbd_{stem}({sig}) {{',
+    L = [f'extern "C" int grid_rbd_{stem}(long long ctx_id, {sig}) {{',
          f"#{spec.gate_form} {gate}",
-         "    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }",
+         "    GRID_RBD_CTX_OR_RETURN(ctx_id);",
          "    if (batch > kMaxBatch) return 2;"]
     if spec.key in PRE_PACK_COMMENTS:
         L.append(PRE_PACK_COMMENTS[spec.key])
@@ -286,7 +286,7 @@ def gen_body(spec: AbiSpec) -> str:
     else:
         grav = "gravity, " if spec.takes_gravity else ""
         trail = "".join(", " + a for a in spec.trailing_runtime_args)
-        dims = f"grid_rbd_launch_threads_n<grid::{launch}>(batch)"
+        dims = f"grid_rbd_launch_threads_n<grid::{launch}>(g_ctx, batch)"
         if spec.clamp_kernel:
             dims = f"grid_clamp_threads_for({spec.clamp_kernel}, {dims})"
         L.append(f"    {sym}<T>(g_data, g_robot, {grav}batch, "
@@ -346,11 +346,11 @@ def _gen_expanded(spec: AbiSpec, L: list[str]) -> str:
                f"{indent}{sym}<T, {mid(qdd_flag)}, {tier}>(",
                "#endif",
                f"{indent}    g_data, g_robot, {grav}batch, dim3((unsigned)batch, 1, 1), "
-               f"grid_rbd_launch_threads_n<grid::{launch}>(batch), g_streams);"]
+               f"grid_rbd_launch_threads_n<grid::{launch}>(g_ctx, batch), g_streams);"]
         return out
 
     if spec.f_ext_mode == "optional":
-        L.append("    if (int rc = apply_f_ext(f_ext, batch)) return rc;")
+        L.append("    if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;")
     L.append("")
     L.append(SIG_COMMENT)
     if spec.key in PRE_LAUNCH_COMMENTS:
@@ -372,7 +372,7 @@ def _gen_expanded(spec: AbiSpec, L: list[str]) -> str:
         L.append("    cudaError_t e = cudaDeviceSynchronize();")
         L.append(NO_EXIT_COMMENT)
         L.append("    if (e == cudaSuccess) e = grid_consume_last_error();")
-        L.append("    reset_f_ext(f_ext, batch);")
+        L.append("    reset_f_ext(g_ctx, f_ext, batch);")
         L.append("    if (e != cudaSuccess) return 100 + (int)e;")
     else:
         L.append("    if (int rc = grid_rbd_sync_consume()) return rc;")
@@ -472,13 +472,13 @@ def gen_mjx_body(spec: AbiSpec) -> str:
         L.append(f"#{spec.gate_form} {gate}")
     if spec.mjx_requires_qdd:
         L.append(_MJX_QDD_REQ)
-    L.append("    if (!g_data) { int rc = grid_rbd_init(); if (rc) return rc; }")
+    L.append("    GRID_RBD_CTX_OR_RETURN(ctx_id);")
     L.append("    if (batch > kMaxBatch) return 2;")
     L.append(_PACK[spec.pack_mode])
     if spec.key in XTOOL_STAGING:
         L.append(XTOOL_BLOCK)
     if spec.f_ext_mode == "optional":
-        L.append("    if (int rc = apply_f_ext(f_ext, batch)) return rc;")
+        L.append("    if (int rc = apply_f_ext(g_ctx, f_ext, batch)) return rc;")
     if spec.mjx_requires_qdd:
         L.append(_MJX_QDD_COPY)
 
@@ -493,7 +493,7 @@ def gen_mjx_body(spec: AbiSpec) -> str:
                 else f", /*RESOURCE_TIER=*/grid::launch_cfg<grid::{launch}>::TIER")
         L.append(f"    {sym}<T, {_mjx_mid(spec)}, /*MUJOCO_OUTPUT=*/true{tier}>(")
         L.append(f"        g_data, g_robot, {grav}batch, dim3((unsigned)batch, 1, 1), "
-                 f"grid_rbd_launch_threads_n<grid::{launch}>(batch), g_streams{trail});")
+                 f"grid_rbd_launch_threads_n<grid::{launch}>(g_ctx, batch), g_streams{trail});")
     if spec.pre_launch_check or spec.mjx_post_launch_check:
         L.append(_POST_LAUNCH)
 
@@ -501,7 +501,7 @@ def gen_mjx_body(spec: AbiSpec) -> str:
         L.append("    cudaError_t e = cudaDeviceSynchronize();")
         L.append(NO_EXIT_COMMENT)
         L.append("    if (e == cudaSuccess) e = grid_consume_last_error();")
-        L.append("    reset_f_ext(f_ext, batch);")
+        L.append("    reset_f_ext(g_ctx, f_ext, batch);")
         L.append("    if (e != cudaSuccess) return 100 + (int)e;")
     else:
         L.append("    if (int rc = grid_rbd_sync_consume()) return rc;")
@@ -664,6 +664,7 @@ def emit_torch_body(key: str) -> str:
         args.append("double gravity")
     if spec.f_ext_mode == "optional":
         args.append("c10::optional<torch::Tensor> f_ext")
+    args.append("int64_t ctx_id")  # W04-B B1: the op's LAST argument
     prefix = ("template <bool MUJOCO>\n" if templated else "") + \
         f"torch::Tensor torch_{key}("
     if any(a.startswith("c10::optional") for a in args):
@@ -687,14 +688,14 @@ def emit_torch_body(key: str) -> str:
     ksym = kernel_symbol_for(spec)
     targs = (f"T, grid::launch_cfg<grid::{algo}>::TIER, /*MUJOCO_OUTPUT=*/MUJOCO"
              if templated else "T")
-    L = [sig, "    grid_torch_init_or_throw();", decls, *check_lines,
+    L = [sig, "    GRID_RBD_CTX_OR_THROW(ctx_id);", decls, *check_lines,
          "    int batch = grid_torch_batch(q);",
          "    cudaStream_t stream = at::cuda::getCurrentCUDAStream();"]
     if key in TORCH_PRE_PACK_COMMENTS:
         L.append("    " + TORCH_PRE_PACK_COMMENTS[key])
-    L.append(f"    grid_torch_pack(stream, batch, nj, {', '.join(pack)});")
+    L.append(f"    grid_torch_pack(g_ctx, stream, batch, nj, {', '.join(pack)});")
     if spec.f_ext_mode == "optional":
-        L.append("    grid_torch_f_ext_apply(stream, batch, f_ext);")
+        L.append("    grid_torch_f_ext_apply(g_ctx, stream, batch, f_ext);")
     if key in TORCH_PRE_ALLOC_COMMENTS:
         L.append("    " + TORCH_PRE_ALLOC_COMMENTS[key])
     if spec.hoist_out_size:
@@ -702,8 +703,8 @@ def emit_torch_body(key: str) -> str:
     kargs = ", ".join(kernel_launch_args(spec, "torch"))
     L += [f"    auto out = grid_torch_empty(batch, {alloc_size}, q);",
           "    constexpr int stride = 3 * grid::NUM_JOINTS;",
-          f"    grid::{ksym}<{targs}><<<grid_rbd_grid_for(batch), "
-          f"grid_rbd_launch_threads_n<grid::{algo}>(batch), {smem_bytes_call(spec)}, stream>>>(",
+          f"    grid::{ksym}<{targs}><<<grid_rbd_grid_for(g_ctx, batch), "
+          f"grid_rbd_launch_threads_n<grid::{algo}>(g_ctx, batch), {smem_bytes_call(spec)}, stream>>>(",
           f"        {kargs});",
           f'    grid_torch_check_launch("{ksym}");']
     batch_sz = "(size_t)batch" if spec.hoist_out_size else "batch"
@@ -711,7 +712,7 @@ def emit_torch_body(key: str) -> str:
     L.append(f"    cudaMemcpyAsync(out.data_ptr<T>(), {out_arg}, "
              f"{batch_sz} * {copy_size} * sizeof(T), cudaMemcpyDeviceToDevice, stream);")
     if spec.f_ext_mode == "optional":
-        L.append("    grid_torch_f_ext_reset(stream, batch, f_ext);")
+        L.append("    grid_torch_f_ext_reset(g_ctx, stream, batch, f_ext);")
     L += ["    return out;", "}"]
     return "\n".join(L) + "\n"
 
@@ -747,6 +748,7 @@ def emit_jax_handler(key: str) -> str:
     sig += [f"    int64_t {a}" for a in spec.trailing_runtime_args]
     if spec.takes_gravity:
         sig.append("    T gravity")
+    sig.append("    int64_t ctx_id")  # W04-B B1: the Bind chain's LAST attr
     _alloc, copy_size, size_dims = _surface_size(spec)
     dims = [("grid::NUM_JOINTS", "nj")] + [
         (f, l) for f, l in _SURF_DIM_ORDER if l in size_dims and l != "nj"]
@@ -756,7 +758,7 @@ def emit_jax_handler(key: str) -> str:
     L.append(f"static ffi::Error grid_rbd_jax_{key}_impl(")
     L.append(",\n".join(sig) + ")")
     L.append("{")
-    L.append('    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }')
+    L.append("    GRID_RBD_CTX_OR_FFI(ctx_id);")
     L.append(f'    GRID_RBD_FFI_VALIDATE_2D(q, "{key}: q", grid::NUM_JOINTS);')
     L.append("    int batch = (int)q.dimensions()[0];")
     L.append("    int " + ", ".join(f"{l} = {f}" for f, l in dims) + ";")
@@ -787,7 +789,7 @@ def emit_jax_handler(key: str) -> str:
              if templated else "T")
     kargs = ", ".join(kernel_launch_args(spec, "jax"))
     L.append(f"    grid::{ksym}<{targs}><<<")
-    L.append(f"        grid_rbd_grid_for(batch), grid_rbd_launch_threads_n<grid::{algo}>(batch), {smem_bytes_call(spec)}, stream>>>(")
+    L.append(f"        grid_rbd_grid_for(g_ctx, batch), grid_rbd_launch_threads_n<grid::{algo}>(g_ctx, batch), {smem_bytes_call(spec)}, stream>>>(")
     L.append(f"            {kargs});")
     L.append(f'    GRID_RBD_FFI_CHECK_LAUNCH("{ksym}");')
     out_arg = kernel_launch_args(spec, "jax")[0]
@@ -820,6 +822,7 @@ def _jax_bind(name: str, impl: str, spec: AbiSpec) -> str:
                 f"{args}"
                 "        .Ret<ffi::Buffer<GRID_FFI_T>>()\n"
                 f"        .{attrs}\n"
+                '        .Attr<int64_t>("ctx_id")\n'
                 ");")
     macro = (f"GRID_RBD_JAX_BIND_{len(jax_buffer_inputs_for(spec))}IN"
              + ("_DT_IT" if spec.takes_dt_it else "")
@@ -939,7 +942,7 @@ def _torch_schema(spec: AbiSpec) -> str:
         args.append("Tensor? qdd=None")
     if spec.f_ext_mode == "optional":
         args.append("Tensor? f_ext=None")
-    return '"(' + ", ".join(args) + ') -> Tensor"'
+    return '"(' + ", ".join(args) + ', int ctx_id=0) -> Tensor"'
 
 
 def _torch_table_row(key: str) -> str:
@@ -952,7 +955,7 @@ def _torch_table_row(key: str) -> str:
         name = key.removeprefix("plant_")
         macro = "GRID_TORCH_ROW_" + name.upper()
         tensors = [n for n, t in spec.inputs if t == "const T*"]
-        schema = '"(' + ", ".join(f"Tensor {n}" for n in tensors) + ') -> Tensor[]"'
+        schema = '"(' + ", ".join(f"Tensor {n}" for n in tensors) + ', int ctx_id=0) -> Tensor[]"'
         if spec.gate_macro is None:
             return f"#define {macro}(X) X({name}, {schema})  // always emitted\n"
         return (f"#ifdef {spec.gate_macro}\n"

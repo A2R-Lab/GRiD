@@ -187,6 +187,34 @@ class JaxRobotHandle(BaseDelegateMixin):
         # mu / xtool stay np.float32 by C++ contract (Span<const float> / float mu).
         self._np_dt = np.float64 if base.dtype == "float64" else np.float32
 
+    # ─── runtime context (W04-B B1) ─────────────────────────────────────
+    # Every FFI call carries the context id as an int64 attribute (the handler's
+    # LAST attr); the id is read at CALL time from the base handle so a view of a
+    # handle made by RobotHandle.context() dispatches to that context.
+    @property
+    def ctx_id(self) -> int:
+        return self._base.ctx_id
+
+    @property
+    def device_profile(self) -> dict:
+        return self._base.device_profile
+
+    def context(self, *, workspace_slots: int = 0):
+        """A view over a NEW runtime context of the same artifact (see
+        :py:meth:`grid_rbd.RobotHandle.context`): its own arena/streams/tables,
+        independent of the default context; closing the returned handle closes
+        the context. Every call on the view carries that context's id."""
+        return type(self)(self._base.context(workspace_slots=workspace_slots), self._cache_key,
+                          str(self._so_path), output_convention=self.output_convention)
+
+    def _ffi(self, target, out, *, vmap_method):
+        import jax
+        call = jax.ffi.ffi_call(target, out, vmap_method=vmap_method)
+        cid = np.int64(self._base.ctx_id)
+        def _bound(*args, **attrs):
+            return call(*args, ctx_id=cid, **attrs)
+        return _bound
+
     # ─── metadata (delegated) ────────────────────────────────────────────
     @property
     def name(self) -> str:        return self._base.name
@@ -369,7 +397,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         @functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
         def fd(gravity, q, qd, u, f_ext):
             t = _t("forward_dynamics", "grid_rbd_jax_forward_dynamics")
-            return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
+            return self._ffi(t, self._out(q, nj), vmap_method=VM)(
                 q, qd, u, f_ext, gravity=self._np_dt(gravity))
 
         def fd_fwd(gravity, q, qd, u, f_ext):
@@ -384,13 +412,13 @@ class JaxRobotHandle(BaseDelegateMixin):
             g = vjp_backward(ABI_SPECS["forward_dynamics"].vjp, ct, {
                 "grad": lambda: self._shape_out(
                     "forward_dynamics_gradient",
-                    jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
+                    self._ffi(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
                         q, qd, u, f_ext, gravity=self._np_dt(gravity))),
                 # minv is gravity-independent and its FFI binding declares NO
                 # gravity attr (BIND_1IN) — do not pass one (H6 drift fix).
                 "minv": lambda: self._shape_out(
                     "minv",
-                    jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(q),
+                    self._ffi(tm, self._out(q, nv * nv), vmap_method=VM)(q),
                     mjx=mjx),
             }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"], g["qd"], g["u"], g["f_ext"])
@@ -409,7 +437,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         @functools.partial(jax.custom_vjp, nondiff_argnums=(0,))
         def idyn(gravity, q, qd, qdd, f_ext):
             t = _t("inverse_dynamics", "grid_rbd_jax_inverse_dynamics")
-            return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
+            return self._ffi(t, self._out(q, nj), vmap_method=VM)(
                 q, qd, qdd, f_ext, gravity=self._np_dt(gravity))
 
         def id_fwd(gravity, q, qd, qdd, f_ext):
@@ -423,7 +451,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             g = vjp_backward(ABI_SPECS["inverse_dynamics"].vjp, ct, {
                 "grad": lambda: self._shape_out(
                     "inverse_dynamics_gradient",
-                    jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
+                    self._ffi(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
                         q, qd, qdd, f_ext, gravity=self._np_dt(gravity))),
             }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"], g["qd"], g["qdd"], g["f_ext"])
@@ -435,7 +463,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         @jax.custom_vjp
         def eepose(q):
             t = _t("end_effector_pose", "grid_rbd_jax_end_effector_pose")
-            return jax.ffi.ffi_call(t, self._out(q, 6 * nee), vmap_method=VM)(q)
+            return self._ffi(t, self._out(q, 6 * nee), vmap_method=VM)(q)
 
         def ee_fwd(q):
             return eepose(q), (q,)
@@ -446,7 +474,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             g = vjp_backward(ABI_SPECS["end_effector_pose"].vjp, ct, {
                 "grad": lambda: self._shape_out(
                     "end_effector_pose_gradient",
-                    jax.ffi.ffi_call(tg, self._out(q, 6 * nee * nv), vmap_method=VM)(q)),
+                    self._ffi(tg, self._out(q, 6 * nee * nv), vmap_method=VM)(q)),
             }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"],)
 
@@ -472,7 +500,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             # (qdd=0) with no external force → pass zeros for both.
             z = jnp.zeros_like(q)
             zfe = jnp.zeros(q.shape[:-1] + (6 * nb,), dtype=q.dtype)
-            return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
+            return self._ffi(t, self._out(q, nj), vmap_method=VM)(
                 q, qd, z, zfe, gravity=self._np_dt(gravity))
 
         def id_pi_fwd(gravity, q, qd, params):
@@ -488,12 +516,12 @@ class JaxRobotHandle(BaseDelegateMixin):
             g = vjp_backward(ABI_SPECS["inverse_dynamics_wrt_params"].vjp, ct, {
                 "grad": lambda: self._shape_out(
                     "inverse_dynamics_gradient",
-                    jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
+                    self._ffi(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
                         q, qd, zq, jnp.zeros(q.shape[:-1] + (6 * nb,), dtype=q.dtype),   # sysID: zero force by design
                         gravity=self._np_dt(gravity))),
                 "param_grad": lambda: self._shape_out(
                     "inverse_dynamics_regressor",
-                    jax.ffi.ffi_call(tr, self._out(q, nv * npar), vmap_method=VM)(
+                    self._ffi(tr, self._out(q, nv * npar), vmap_method=VM)(
                         q, qd, zq, gravity=self._np_dt(gravity))),
             }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"], g["qd"], g["params"])
@@ -511,7 +539,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             # FD FFI now takes an explicit f_ext buffer; sysID has no external
             # force → pass zeros.
             zfe = jnp.zeros(q.shape[:-1] + (6 * nb,), dtype=q.dtype)
-            return jax.ffi.ffi_call(t, self._out(q, nj), vmap_method=VM)(
+            return self._ffi(t, self._out(q, nj), vmap_method=VM)(
                 q, qd, u, zfe, gravity=self._np_dt(gravity))
 
         def fd_pi_fwd(gravity, q, qd, u, params):
@@ -526,17 +554,17 @@ class JaxRobotHandle(BaseDelegateMixin):
             g = vjp_backward(ABI_SPECS["forward_dynamics_wrt_params"].vjp, ct, {
                 "grad": lambda: self._shape_out(
                     "forward_dynamics_gradient",
-                    jax.ffi.ffi_call(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
+                    self._ffi(tg, self._out(q, 2 * nv * nv), vmap_method=VM)(
                         q, qd, u, jnp.zeros(q.shape[:-1] + (6 * nb,), dtype=q.dtype),    # sysID: zero force by design
                         gravity=self._np_dt(gravity))),
                 # wrt_params is pin-only → always the pin symmetrize (no mjx=).
                 # minv declares NO gravity attr (BIND_1IN) — do not pass one.
                 "minv": lambda: self._shape_out(
                     "minv",
-                    jax.ffi.ffi_call(tm, self._out(q, nv * nv), vmap_method=VM)(q)),
+                    self._ffi(tm, self._out(q, nv * nv), vmap_method=VM)(q)),
                 "param_grad": lambda: self._shape_out(
                     "forward_dynamics_parameter_gradient",
-                    jax.ffi.ffi_call(tp, self._out(q, nv * npar), vmap_method=VM)(
+                    self._ffi(tp, self._out(q, nv * npar), vmap_method=VM)(
                         q, qd, u, gravity=self._np_dt(gravity))),
             }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
             return (g["q"], g["qd"], g["u"], g["params"])
@@ -551,7 +579,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         @functools.partial(jax.custom_vjp, nondiff_argnums=(0, 1, 2))
         def integ(gravity, dt, it, q, qd, u):
             t = _t("integrator", "grid_rbd_jax_integrator")
-            return jax.ffi.ffi_call(t, self._out(q, nj + nv), vmap_method=VM)(
+            return self._ffi(t, self._out(q, nj + nv), vmap_method=VM)(
                 q, qd, u, dt=self._np_dt(dt), it=np.int64(it),
                 gravity=self._np_dt(gravity))
 
@@ -564,7 +592,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             g = vjp_backward(ABI_SPECS["integrator"].vjp, ct, {
                 "grad": lambda: self._shape_out(
                     "integrator_gradient",
-                    jax.ffi.ffi_call(tg, self._out(q, 2 * nv * 3 * nv), vmap_method=VM)(
+                    self._ffi(tg, self._out(q, 2 * nv * 3 * nv), vmap_method=VM)(
                         q, qd, u, dt=self._np_dt(dt), it=np.int64(it),
                         gravity=self._np_dt(gravity))),
             }, nv=nv, nj=nj, q=q, mjx=mjx, configuration_layout=configuration_layout)
@@ -655,7 +683,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         target = self._mt(conv, "minv", "grid_rbd_jax_minv")
         (q,) = self._prep_2d("minv", q)
         nv = self.num_vel
-        flat = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(q)
+        flat = self._ffi(target, self._out(q, nv * nv), vmap_method="broadcast_all")(q)
         # "minv" in the shared out-layout module: pin = UPPER-triangle
         # symmetrize (M + Mᵀ − diag), mjx twin = full dense pass-through.
         return self._shape_out("minv", flat, mjx=self._mjx_active(_convention))
@@ -732,7 +760,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             qdd = jnp.zeros_like(jnp.asarray(q, dtype=self._np_dt))
         (q, qd, qdd) = self._prep_2d("inverse_dynamics_regressor", q, qd, qdd)
         nv, npar = self.num_vel, 10 * self.num_bodies
-        flat = jax.ffi.ffi_call(target, self._out(q, nv * npar), vmap_method="broadcast_all")(
+        flat = self._ffi(target, self._out(q, nv * npar), vmap_method="broadcast_all")(
             q, qd, qdd, gravity=self._np_dt(gravity))
         return self._shape_out("inverse_dynamics_regressor", flat)
 
@@ -747,7 +775,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             "grid_rbd_jax_forward_dynamics_parameter_gradient")
         (q, qd, u) = self._prep_2d("forward_dynamics_parameter_gradient", q, qd, u)
         nv, npar = self.num_vel, 10 * self.num_bodies
-        flat = jax.ffi.ffi_call(target, self._out(q, nv * npar), vmap_method="broadcast_all")(
+        flat = self._ffi(target, self._out(q, nv * npar), vmap_method="broadcast_all")(
             q, qd, u, gravity=self._np_dt(gravity))
         return self._shape_out("forward_dynamics_parameter_gradient", flat)
 
@@ -766,7 +794,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         self._refuse_mjx_f_ext("aba", f_ext, _convention)
         fe = self._f_ext_or_zeros(q, f_ext)
         out_type = self._out(q, self.num_joints)
-        return jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+        return self._ffi(target, out_type, vmap_method="broadcast_all")(
             q, qd, u, fe, gravity=self._np_dt(gravity))
 
     def crba(self, q, *, gravity: float = -9.81, _convention=None):
@@ -782,7 +810,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         target = self._mt(_convention, "crba", "grid_rbd_jax_crba")
         (q,) = self._prep_2d("crba", q)
         nv = self.num_vel
-        flat = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(
+        flat = self._ffi(target, self._out(q, nv * nv), vmap_method="broadcast_all")(
             q, gravity=self._np_dt(gravity))
         return self._shape_out("crba", flat)
 
@@ -804,7 +832,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         target = self._mt(_convention, "generalized_gravity", "grid_rbd_jax_generalized_gravity")
         (q,) = self._prep_2d("generalized_gravity", q)
         nv = self.num_vel
-        return jax.ffi.ffi_call(target, self._out(q, nv), vmap_method="broadcast_all")(
+        return self._ffi(target, self._out(q, nv), vmap_method="broadcast_all")(
             q, gravity=self._np_dt(gravity))
 
     def nonlinear_effects(self, q, qd, *, gravity: float = -9.81, _convention=None):
@@ -816,7 +844,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         target = self._mt(_convention, "nonlinear_effects", "grid_rbd_jax_nonlinear_effects")
         (q, qd) = self._prep_2d("nonlinear_effects", q, qd)
         nv = self.num_vel
-        return jax.ffi.ffi_call(target, self._out(q, nv), vmap_method="broadcast_all")(
+        return self._ffi(target, self._out(q, nv), vmap_method="broadcast_all")(
             q, qd, gravity=self._np_dt(gravity))
 
     def energy(self, q, qd, *, gravity: float = -9.81, _convention=None):
@@ -827,7 +855,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         import jax
         target = self._mt(_convention, "energy", "grid_rbd_jax_energy")
         (q, qd) = self._prep_2d("energy", q, qd)
-        return jax.ffi.ffi_call(target, self._out(q, 3), vmap_method="broadcast_all")(
+        return self._ffi(target, self._out(q, 3), vmap_method="broadcast_all")(
             q, qd, gravity=self._np_dt(gravity))
 
     def com(self, q, *, _convention=None):
@@ -843,7 +871,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         target = self._mt(_convention, "com", "grid_rbd_jax_com")
         (q,) = self._prep_2d("com", q)
         nv = self.num_vel
-        raw = jax.ffi.ffi_call(target, self._out(q, 3 + 3 * nv), vmap_method="broadcast_all")(q)
+        raw = self._ffi(target, self._out(q, 3 + 3 * nv), vmap_method="broadcast_all")(q)
         return self._shape_out("com", raw)
 
     def ccrba(self, q, qd, *, _convention=None):
@@ -858,7 +886,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         target = self._mt(_convention, "ccrba", "grid_rbd_jax_ccrba")
         (q, qd) = self._prep_2d("ccrba", q, qd)
         nv = self.num_vel
-        raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv + 6), vmap_method="broadcast_all")(q, qd)
+        raw = self._ffi(target, self._out(q, 6 * nv + 6), vmap_method="broadcast_all")(q, qd)
         return self._shape_out("ccrba", raw)
 
     def dccrba(self, q, *, _convention=None):
@@ -871,7 +899,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         target = self._mt(_convention, "dccrba", "grid_rbd_jax_dccrba")
         (q,) = self._prep_2d("dccrba", q)
         nv = self.num_vel
-        raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv * nv), vmap_method="broadcast_all")(q)
+        raw = self._ffi(target, self._out(q, 6 * nv * nv), vmap_method="broadcast_all")(q)
         return self._shape_out("dccrba", raw)
 
     def cmm_time_variation(self, q, qd, *, _convention=None):
@@ -884,7 +912,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         target = self._mt(_convention, "cmm_time_variation", "grid_rbd_jax_cmm_time_variation")
         (q, qd) = self._prep_2d("cmm_time_variation", q, qd)
         nv = self.num_vel
-        raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(q, qd)
+        raw = self._ffi(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(q, qd)
         return self._shape_out("cmm_time_variation", raw)
 
     def coriolis_matrix(self, q, qd, *, gravity: float = -9.81, _convention=None):
@@ -898,7 +926,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         target = self._mt(_convention, "coriolis_matrix", "grid_rbd_jax_coriolis_matrix")
         (q, qd) = self._prep_2d("coriolis_matrix", q, qd)
         nv = self.num_vel
-        raw = jax.ffi.ffi_call(target, self._out(q, nv * nv), vmap_method="broadcast_all")(
+        raw = self._ffi(target, self._out(q, nv * nv), vmap_method="broadcast_all")(
             q, qd, gravity=self._np_dt(gravity))
         return self._shape_out("coriolis_matrix", raw)
 
@@ -913,7 +941,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             "kinetic_energy_regressor", "grid_rbd_jax_kinetic_energy_regressor")
         (q, qd) = self._prep_2d("kinetic_energy_regressor", q, qd)
         npar = 10 * self.num_bodies
-        return jax.ffi.ffi_call(target, self._out(q, npar), vmap_method="broadcast_all")(
+        return self._ffi(target, self._out(q, npar), vmap_method="broadcast_all")(
             q, qd, gravity=self._np_dt(gravity))
 
     def potential_energy_regressor(self, q, *, gravity: float = -9.81, _convention=None):
@@ -927,7 +955,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             "potential_energy_regressor", "grid_rbd_jax_potential_energy_regressor")
         (q,) = self._prep_2d("potential_energy_regressor", q)
         npar = 10 * self.num_bodies
-        return jax.ffi.ffi_call(target, self._out(q, npar), vmap_method="broadcast_all")(
+        return self._ffi(target, self._out(q, npar), vmap_method="broadcast_all")(
             q, gravity=self._np_dt(gravity))
 
     def frame_jacobian(self, q, *, target_jid=None, reference_frame=None, _convention=None):
@@ -946,7 +974,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
         (q,) = self._prep_2d("frame_jacobian", q)
         nv = self.num_vel
-        raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(
+        raw = self._ffi(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(
             q, target_jid=np.int64(tj), reference_frame=np.int64(rf))
         return self._shape_out("frame_jacobian", raw)
 
@@ -964,7 +992,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         tj, rf = _resolve_frame_args(self._base._meta, target_jid, reference_frame)
         (q, qd) = self._prep_2d("frame_jacobian_dot", q, qd)
         nv = self.num_vel
-        raw = jax.ffi.ffi_call(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(
+        raw = self._ffi(target, self._out(q, 6 * nv), vmap_method="broadcast_all")(
             q, qd, target_jid=np.int64(tj), reference_frame=np.int64(rf))
         return self._shape_out("frame_jacobian_dot", raw)
 
@@ -977,7 +1005,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         import jax
         target = self._mt(_convention, "osc_inertia", "grid_rbd_jax_osc_inertia")
         (q,) = self._prep_2d("osc_inertia", q)
-        raw = jax.ffi.ffi_call(target, self._out(q, 36), vmap_method="broadcast_all")(q)
+        raw = self._ffi(target, self._out(q, 36), vmap_method="broadcast_all")(q)
         return self._shape_out("osc_inertia", raw)
 
     def end_effector_pose(self, q, *, _convention=None):
@@ -1011,7 +1039,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         nee = self.num_ees
         nv = self.num_vel
         out_type = self._out(q, 6 * nee * nv)
-        raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(q)
+        raw = self._ffi(target, out_type, vmap_method="broadcast_all")(q)
         return self._shape_out("end_effector_pose_gradient", raw)
 
     def end_effector_pose_hessian(self, q, *, _convention=None):
@@ -1029,7 +1057,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         nee = self.num_ees
         nv = self.num_vel
         out_type = self._out(q, 6 * nee * nv * nv)
-        flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(q)
+        flat = self._ffi(target, out_type, vmap_method="broadcast_all")(q)
         return self._shape_out("end_effector_pose_hessian", flat)
 
     def end_effector_pose_runtime(self, q, ee_joint_names=None, ee_offsets=None,
@@ -1061,7 +1089,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             # off is the 16-float col-major X_tool from _normalize_ee_offsets;
             # pass ALL 16 (translation lives at [12..14], not [0..2]).
             xtool = np.ascontiguousarray(np.asarray(off, dtype=np.float32).reshape(-1))
-            raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+            raw = self._ffi(target, out_type, vmap_method="broadcast_all")(
                 q, target_jid=np.int64(int(jid)), xtool=xtool)
             per_ee.append(raw)  # (..., 6)
         return jnp.stack(per_ee, axis=-2)  # (..., NUM_EE, 6)
@@ -1092,7 +1120,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         per_ee = []
         for jid, off in zip(jids, offsets):
             xtool = np.ascontiguousarray(np.asarray(off, dtype=np.float32).reshape(-1))
-            raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+            raw = self._ffi(target, out_type, vmap_method="broadcast_all")(
                 q, target_jid=np.int64(int(jid)), xtool=xtool)
             per_ee.append(self._shape_out("end_effector_pose_gradient_runtime", raw))
         return jnp.stack(per_ee, axis=-3)  # (..., NUM_EE, 6, NV)
@@ -1127,7 +1155,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             (q, qd, qdd_b) = self._prep_2d("inverse_dynamics_gradient", q, qd, qdd)
         nv = self.num_vel
         out_type = self._out(q, 2 * nv * nv)
-        raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+        raw = self._ffi(target, out_type, vmap_method="broadcast_all")(
             q, qd, qdd_b, self._f_ext_or_zeros(q, f_ext), gravity=self._np_dt(gravity))
         return self._shape_out("inverse_dynamics_gradient", raw)
 
@@ -1150,7 +1178,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         (q, qd, u) = self._prep_2d("forward_dynamics_gradient", q, qd, u)
         nv = self.num_vel
         out_type = self._out(q, 2 * nv * nv)
-        raw = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+        raw = self._ffi(target, out_type, vmap_method="broadcast_all")(
             q, qd, u, self._f_ext_or_zeros(q, f_ext), gravity=self._np_dt(gravity))
         return self._shape_out("forward_dynamics_gradient", raw)
 
@@ -1176,7 +1204,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         (q, qd, qdd) = self._prep_2d("idsva_so", q, qd, qdd)
         nv = self.num_vel
         out_type = self._out(q, 4 * nv ** 3)
-        flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+        flat = self._ffi(target, out_type, vmap_method="broadcast_all")(
             q, qd, qdd, gravity=self._np_dt(gravity))
         return SecondOrderID(*self._shape_out("idsva_so", flat))
 
@@ -1200,7 +1228,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         (q, qd, u) = self._prep_2d("fdsva_so", q, qd, u)
         nv = self.num_vel
         out_type = self._out(q, 4 * nv ** 3)
-        flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+        flat = self._ffi(target, out_type, vmap_method="broadcast_all")(
             q, qd, u, gravity=self._np_dt(gravity))
         return SecondOrderFD(*self._shape_out("fdsva_so", flat))
 
@@ -1227,7 +1255,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         # is unimplemented (VjpSpec.fixed_base_only). vmap-able since 2026-09-09.
         target = self._mt(_convention, "integrator", "grid_rbd_jax_integrator")
         out_type = self._out(q, self.num_joints + self.num_vel)
-        return jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+        return self._ffi(target, out_type, vmap_method="broadcast_all")(
             q, qd, u, dt=self._np_dt(dt), it=np.int64(_integrator_code(integrator_type)),
             gravity=self._np_dt(gravity))
 
@@ -1246,7 +1274,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         nv = self.num_vel
         # vmap-able since 2026-09-09 (was a hard-coded 2-D ShapeDtypeStruct).
         out_type = self._out(q, 2 * nv * 3 * nv)
-        flat = jax.ffi.ffi_call(target, out_type, vmap_method="broadcast_all")(
+        flat = self._ffi(target, out_type, vmap_method="broadcast_all")(
             q, qd, u, dt=self._np_dt(dt), it=np.int64(_integrator_code(integrator_type)),
             gravity=self._np_dt(gravity))
         # h_dAB is (2*NV x 3*NV) column-major per timestep → shared out-layout.
@@ -1308,7 +1336,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             "plant_quadratic_state_cost", "grid_rbd_jax_plant_quadratic_state_cost")
         cast, B = self._prep_plant("quadratic_state_cost", x=x, x_des=x_des, Q=Q)
         nx = self.num_joints + self.num_vel
-        out, grad, hess = jax.ffi.ffi_call(target, self._cost_out_types(B, nx, nx * nx))(
+        out, grad, hess = self._ffi(target, self._cost_out_types(B, nx, nx * nx))(
             cast["x"], cast["x_des"], cast["Q"])
         return out[:, 0], grad, hess.reshape(B, nx, nx)
 
@@ -1321,7 +1349,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             "plant_quadratic_input_cost", "grid_rbd_jax_plant_quadratic_input_cost")
         cast, B = self._prep_plant("quadratic_input_cost", u=u, u_des=u_des, R=R)
         nv = self.num_vel
-        out, grad, hess = jax.ffi.ffi_call(target, self._cost_out_types(B, nv, nv * nv))(
+        out, grad, hess = self._ffi(target, self._cost_out_types(B, nv, nv * nv))(
             cast["u"], cast["u_des"], cast["R"])
         return out[:, 0], grad, hess.reshape(B, nv, nv)
 
@@ -1335,7 +1363,7 @@ class JaxRobotHandle(BaseDelegateMixin):
             jax.ShapeDtypeStruct((B, n), self._np_dt),
             jax.ShapeDtypeStruct((B, n), self._np_dt),
         )
-        out, grad, hdiag = jax.ffi.ffi_call(target, out_types)(
+        out, grad, hdiag = self._ffi(target, out_types)(
             cast["var"], cast["lower"], cast["upper"], mu=np.float32(mu))
         return out[:, 0], grad, hdiag
 
@@ -1370,7 +1398,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         cast, B = self._prep_plant("plant_step", x=x, u=u)
         nx = self.num_joints + self.num_vel
         out_type = jax.ShapeDtypeStruct((B, nx), self._np_dt)
-        return jax.ffi.ffi_call(target, out_type)(
+        return self._ffi(target, out_type)(
             cast["x"], cast["u"], dt=self._np_dt(dt),
             it=np.int64(_integrator_code(integrator_type)), gravity=self._np_dt(gravity))
 
@@ -1388,7 +1416,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         cast, B = self._prep_plant("plant_step_gradient", x=x, u=u)
         nv = self.num_vel
         out_type = jax.ShapeDtypeStruct((B, 2 * nv * 3 * nv), self._np_dt)
-        flat = jax.ffi.ffi_call(target, out_type)(
+        flat = self._ffi(target, out_type)(
             cast["x"], cast["u"], dt=self._np_dt(dt),
             it=np.int64(_integrator_code(integrator_type)), gravity=self._np_dt(gravity))
         # (2*NV x 3*NV) column-major per timestep → shared out-layout.
@@ -1404,7 +1432,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         target = self._mt(_convention, "plant_ee_pos_cost", "grid_rbd_jax_plant_ee_pos_cost")
         cast, B = self._prep_plant("ee_pos_cost", q=q, p_des=p_des, W=W)
         nx = self.num_joints + self.num_vel
-        out, grad, hess = jax.ffi.ffi_call(target, self._cost_out_types(B, nx, nx * nx))(
+        out, grad, hess = self._ffi(target, self._cost_out_types(B, nx, nx * nx))(
             cast["q"], cast["p_des"], cast["W"])
         return out[:, 0], grad, hess.reshape(B, nx, nx)
 
@@ -1418,7 +1446,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         target = self._mt(_convention, "plant_com_cost", "grid_rbd_jax_plant_com_cost")
         cast, B = self._prep_plant("com_cost", q=q, p_des=p_des, W=W)
         nx = self.num_joints + self.num_vel
-        out, grad, hess = jax.ffi.ffi_call(target, self._cost_out_types(B, nx, nx * nx))(
+        out, grad, hess = self._ffi(target, self._cost_out_types(B, nx, nx * nx))(
             cast["q"], cast["p_des"], cast["W"])
         return out[:, 0], grad, hess.reshape(B, nx, nx)
 
@@ -1432,7 +1460,7 @@ class JaxRobotHandle(BaseDelegateMixin):
         target = self._mt(_convention, "plant_momentum_cost", "grid_rbd_jax_plant_momentum_cost")
         cast, B = self._prep_plant("momentum_cost", q=q, qd=qd, h_des=h_des, W=W)
         nx = self.num_joints + self.num_vel
-        out, grad, hess = jax.ffi.ffi_call(target, self._cost_out_types(B, nx, nx * nx))(
+        out, grad, hess = self._ffi(target, self._cost_out_types(B, nx, nx * nx))(
             cast["q"], cast["qd"], cast["h_des"], cast["W"])
         return out[:, 0], grad, hess.reshape(B, nx, nx)
 

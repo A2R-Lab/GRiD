@@ -40,6 +40,7 @@ _INFRA = {
     # now has real spec rows; its referees are the plant-specific tests below.
     # device-pool (slab) framework-allocator integration
     "device_pool_bytes", "set_device_pool", "device_pool_used",
+    "ctx_create", "ctx_close", "ctx_default_id", "ctx_profile", "ctx_count",  # W04-B B1 runtime contexts
     # Multi-contact f_ext (2026-09-17): `grid_rbd_contact_fext` + `grid_rbd_num_contact_frames`
     # are HAND-WRITTEN in wrapper_template.cu under GRID_HAS_CONTACT_FRAMES (they call the
     # baked grid::f_ext_body_device and mirror tool_fext's d_f_ext handling); they are a
@@ -164,8 +165,11 @@ def test_signature_params(key):
     else:
         _, sig = _fn_def(_stem(spec))
     names = [p.strip().split()[-1].lstrip("*") for p in sig.split(",") if p.strip()]
+    # W04-B B1 (2026-09-24): every C-ABI compute entry point names its runtime
+    # context first (`long long ctx_id`); the per-op inputs the spec spells follow.
+    assert names and names[0] == "ctx_id", f"{key}: C-ABI entry point must take the context id first, got {names}"
     want = [n for (n, _t) in spec.inputs]
-    assert names == want, f"{key}: params {names} != spec.inputs {want}"
+    assert names[1:] == want, f"{key}: params {names[1:]} != spec.inputs {want}"
 
 
 @pytest.mark.parametrize("key", _SPEC_IDS)

@@ -162,10 +162,29 @@ def _load_ops(so_path: Path, cache_key: str) -> str:
 # itself graph-capturable.
 
 
-def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None):
+class _CtxOps:
+    """A view of ``torch.ops.<ns>`` whose every op appends the runtime-context id
+    (the schema's LAST argument, ``int ctx_id=0``) — W04-B B1. The id is read
+    at call time so a handle made by RobotHandle.context() dispatches to its own
+    context; ``None`` is never appended (the schema requires an int)."""
+
+    def __init__(self, ops, ctx_id_fn):
+        self._ops = ops
+        self._ctx_id_fn = ctx_id_fn
+
+    def __getattr__(self, name):
+        op = getattr(self._ops, name)
+        ctx_id_fn = self._ctx_id_fn
+        def _call(*args, **kwargs):
+            return op(*args, int(ctx_id_fn()), **kwargs)
+        _call.__name__ = name
+        return _call
+
+
+def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_id_fn=lambda: 0):
     import torch
 
-    ops = getattr(torch.ops, ns)
+    ops = _CtxOps(getattr(torch.ops, ns), ctx_id_fn)
 
     def _op(name):
         # In mjx mode every forward/backward op dispatches to its _mujoco
@@ -449,7 +468,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         self._so_path = Path(so_path)
         self._ns = _load_ops(self._so_path, cache_key)
         import torch
-        self._ops = getattr(torch.ops, self._ns)
+        self._ops = _CtxOps(getattr(torch.ops, self._ns), lambda: self._base.ctx_id)
         # Per-convention registry of autograd Functions, built lazily. mjx mode
         # binds every op to its _mujoco variant (floating-base only).
         self._fns_cache: dict[str, dict] = {}
@@ -457,6 +476,23 @@ class TorchRobotHandle(BaseDelegateMixin):
         # on a floating base, mjx-twin presence (fixed base: "mujoco" = no-op).
         self.output_convention = output_convention
         self._mjx_view = None
+
+    # ─── runtime context (W04-B B1) ─────────────────────────────────────
+    @property
+    def ctx_id(self) -> int:
+        return self._base.ctx_id
+
+    @property
+    def device_profile(self) -> dict:
+        return self._base.device_profile
+
+    def context(self, *, workspace_slots: int = 0):
+        """A view over a NEW runtime context of the same artifact (see
+        :py:meth:`grid_rbd.RobotHandle.context`): its own arena/streams/tables,
+        independent of the default context; closing the returned handle closes
+        the context. Every op call on the view carries that context's id."""
+        return type(self)(self._base.context(workspace_slots=workspace_slots), self._cache_key,
+                          str(self._so_path), output_convention=self.output_convention)
 
     # ─── metadata (delegated) ────────────────────────────────────────────
     @property
@@ -513,7 +549,8 @@ class TorchRobotHandle(BaseDelegateMixin):
             # pin closures ARE the mjx closures (the conventions coincide).
             cache[conv] = _make_autograd(self._ns, self._base.num_vel,
                                          mujoco=self._mjx_active(conv), nee=self._base.num_ees,
-                                         configuration_layout=self._base.configuration_layout)
+                                         configuration_layout=self._base.configuration_layout,
+                                         ctx_id_fn=lambda: self._base.ctx_id)
         return cache[conv]
 
     @property

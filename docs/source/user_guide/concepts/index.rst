@@ -11,6 +11,7 @@ input/output ABI, and the parallelism patterns.
    design_principles
    input_output_abi
    library_safe_initialization
+   runtime_contexts
    parallelism_patterns
    algorithms/index
    codegen_architecture

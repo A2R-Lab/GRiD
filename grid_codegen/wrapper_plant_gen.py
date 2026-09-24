@@ -146,12 +146,13 @@ def _jax_step_block(key: str) -> list[str]:
     L += op["jax_comment"]
     L += [
         "template <grid::IntegratorType IT, bool MUJOCO>",
-        f"static void launch_{name}_jax(cudaStream_t stream, int batch, T gravity, T dt) {{",
+        f"static void launch_{name}_jax(GridCtx *ctx, cudaStream_t stream, int batch, T gravity, T dt) {{",
+        "    GRID_RBD_CTX_LOCALS(ctx);",
         *op["launcher_decls"],
-        "    dim3 grid_dim = grid_rbd_grid_for(batch);",
+        "    dim3 grid_dim = grid_rbd_grid_for(g_ctx, batch);",
         f"    const size_t smem = grid::{smem}<T>();",
         f"    cudaFuncSetAttribute(grid_plant::{kern}<T, IT, MUJOCO>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);",
-        f"    dim3 thr = grid_clamp_threads_for(grid_plant::{kern}<T, IT, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));",
+        f"    dim3 thr = grid_clamp_threads_for(grid_plant::{kern}<T, IT, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch));",
         f"    grid_plant::{kern}<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr,",
         "        smem, stream>>>(",
         "            g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,",
@@ -164,10 +165,10 @@ def _jax_step_block(key: str) -> list[str]:
         "    cudaStream_t stream,",
         "    ffi::Buffer<GRID_FFI_T> x, ffi::Buffer<GRID_FFI_T> u,",
         f"    ffi::ResultBuffer<GRID_FFI_T> {op['out_name']},",
-        "    T dt, int64_t it, T gravity)",
+        "    T dt, int64_t it, T gravity, int64_t ctx_id)",
         "{",
-        '    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }',
-        '    if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");',
+        "    GRID_RBD_CTX_OR_FFI(ctx_id);",
+        '    if (plant_alloc(g_ctx)) return ffi::Error::Internal("plant_alloc failed");',
         "    const int nx = grid::NUM_POS + grid::NUM_VEL;",
         "    const int nv = grid::NUM_VEL;",
     ]
@@ -233,10 +234,10 @@ def _jax_cost_block(key: str) -> list[str]:
         ]
     L += [
         "    ffi::ResultBuffer<GRID_FFI_T> out, ffi::ResultBuffer<GRID_FFI_T> grad,",
-        "    ffi::ResultBuffer<GRID_FFI_T> hess)",
+        "    ffi::ResultBuffer<GRID_FFI_T> hess, int64_t ctx_id)",
         "{",
-        '    if (!g_data) { int rc = grid_rbd_init(); if (rc) return ffi::Error::Internal("init failed"); }',
-        '    if (plant_alloc()) return ffi::Error::Internal("plant_alloc failed");',
+        "    GRID_RBD_CTX_OR_FFI(ctx_id);",
+        '    if (plant_alloc(g_ctx)) return ffi::Error::Internal("plant_alloc failed");',
     ]
     if four_in:
         L += [
@@ -269,10 +270,10 @@ def _jax_cost_block(key: str) -> list[str]:
             pad = " " * (w - len(n) + 1)
             L.append(f"    cudaMemcpyAsync(g_plant.d_in_{slot}, {n}.typed_data(),{pad}{_size_expr(d)}, cudaMemcpyDeviceToDevice, stream);")
     L.append(f"    size_t smem = grid::{op['smem']}<T>();")
-    L.append("    dim3 grid_dim = grid_rbd_grid_for(batch);")
+    L.append("    dim3 grid_dim = grid_rbd_grid_for(g_ctx, batch);")
     if "clamp_comment" in op:
         L.append(op["clamp_comment"])
-    L.append(f"    dim3 thr = grid_clamp_threads_for(grid_plant::{op['clamp_sym']}, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));")
+    L.append(f"    dim3 thr = grid_clamp_threads_for(grid_plant::{op['clamp_sym']}, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch));")
     L.append(f"    grid_plant::{kern}<{op['jax_launch_targs']}><<<grid_dim, thr, smem, stream>>>(")
     layout = op["jax_kargs_layout"]
     if layout == "ee":
@@ -325,6 +326,7 @@ def _jax_cost_block(key: str) -> list[str]:
                 "        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()",
                 "        .Arg<ffi::Buffer<GRID_FFI_T>>().Arg<ffi::Buffer<GRID_FFI_T>>()",
                 "        .Ret<ffi::Buffer<GRID_FFI_T>>().Ret<ffi::Buffer<GRID_FFI_T>>().Ret<ffi::Buffer<GRID_FFI_T>>()",
+                '        .Attr<int64_t>("ctx_id")',
                 ");",
             ]
             if suffix:
@@ -350,7 +352,8 @@ def _torch_step_block(key: str) -> list[str]:
     L = [f"#ifdef {op['gate']}"]
     L += [
         "template <grid::IntegratorType IT, bool MUJOCO>",
-        f"static void torch_launch_{name}(cudaStream_t stream, int batch, double gravity, double dt) {{",
+        f"static void torch_launch_{name}(GridCtx *ctx, cudaStream_t stream, int batch, double gravity, double dt) {{",
+        "    GRID_RBD_CTX_LOCALS(ctx);",
     ]
     # torch launchers fold the decls onto one line for the gradient (historical)
     if key == "plant_step":
@@ -358,10 +361,10 @@ def _torch_step_block(key: str) -> list[str]:
     else:
         L.append("    const int nx = grid::NUM_POS + grid::NUM_VEL, nv = grid::NUM_VEL;")
     L += [
-        "    dim3 grid_dim = grid_rbd_grid_for(batch);",
+        "    dim3 grid_dim = grid_rbd_grid_for(g_ctx, batch);",
         f"    const size_t smem = grid::{smem}<T>();",
         f"    cudaFuncSetAttribute(grid_plant::{kern}<T, IT, MUJOCO>, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)smem);",
-        f"    dim3 thr = grid_clamp_threads_for(grid_plant::{kern}<T, IT, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));",
+        f"    dim3 thr = grid_clamp_threads_for(grid_plant::{kern}<T, IT, MUJOCO>, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch));",
         f"    grid_plant::{kern}<T, IT, /*MUJOCO_OUTPUT=*/MUJOCO><<<grid_dim, thr,",
         "        smem, stream>>>(",
         "            g_plant.d_grad, g_plant.d_in_a, g_plant.d_in_b,",
@@ -369,8 +372,9 @@ def _torch_step_block(key: str) -> list[str]:
         "}",
         "",
         "template <bool MUJOCO>",
-        f"torch::Tensor torch_{name}(torch::Tensor x, torch::Tensor u, double dt, int64_t it, double gravity) {{",
-        "    grid_torch_plant_init();",
+        f"torch::Tensor torch_{name}(torch::Tensor x, torch::Tensor u, double dt, int64_t it, double gravity, int64_t ctx_id) {{",
+        "    GRID_RBD_CTX_OR_THROW(ctx_id);",
+        "    grid_torch_plant_init(g_ctx);",
         "    const int nx = grid::NUM_POS + grid::NUM_VEL, nv = grid::NUM_VEL;",
     ]
     if op["out_size"] == "dab":
@@ -409,12 +413,13 @@ def _torch_cost_block(key: str) -> list[str]:
     op = COST_OPS[key]
     kern = op["kernel"]
     four_in = len(op["ins"]) == 4
-    args = ", ".join(f"torch::Tensor {n}" for n, _ in op["ins"])
+    args = ", ".join(f"torch::Tensor {n}" for n, _ in op["ins"]) + ", int64_t ctx_id"
     L = [
         f"#ifdef {op['gate']}",
         "template <bool MUJOCO>",
         f"std::vector<torch::Tensor> torch_{key}({args}) {{",
-        "    grid_torch_plant_init();",
+        "    GRID_RBD_CTX_OR_THROW(ctx_id);",
+        "    grid_torch_plant_init(g_ctx);",
     ]
     if four_in:
         L.append("    const int nq = grid::NUM_POS, nv = grid::NUM_VEL, nx = nq + nv;")
@@ -444,11 +449,11 @@ def _torch_cost_block(key: str) -> list[str]:
         f"    auto grad = grid_torch_empty(batch, nx, {first});",
         f"    auto hess = grid_torch_empty(batch, nx * nx, {first});",
         f"    size_t smem = grid::{op['smem']}<T>();",
-        "    dim3 grid_dim = grid_rbd_grid_for(batch);",
+        "    dim3 grid_dim = grid_rbd_grid_for(g_ctx, batch);",
     ]
     if "clamp_comment" in op:
         L.append(op["clamp_comment"])
-    L.append(f"    dim3 thr = grid_clamp_threads_for(grid_plant::{op['clamp_sym']}, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(batch));")
+    L.append(f"    dim3 thr = grid_clamp_threads_for(grid_plant::{op['clamp_sym']}, grid_rbd_launch_threads_n<grid::GRID_ALGO_COUNT>(g_ctx, batch));")
     targs = op["launch_targs"].replace("T, 0, ", "T, 0, ")
     L.append(f"    grid_plant::{kern}<{targs}><<<grid_dim, thr, smem, stream>>>(")
     if four_in:

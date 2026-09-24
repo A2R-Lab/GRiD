@@ -23,6 +23,14 @@ wrapper rotates every key; rebuilds are automatic, no force_rebuild needed). Bui
 
 ## Lifecycle: load_robot / register → precompile → get_robot
 
+**Runtime contexts (W04-B B1).** A handle dispatches to the artifact's *default* context
+(`handle.ctx_id == 0`, shared by every handle over the same `.so`). `handle.context()` (numpy,
+jax and torch handles alike) gives you an isolated context on the same artifact — its own
+arena, tables, streams and launch overrides — closed when that handle closes; `handle.device_profile`
+reports what the context was fitted to (device/artifact arch, memory at init, arena bytes, workspace
+slots, `max_batch`). Ids are salted per artifact: a foreign or closed id raises a clear error, never a
+use-after-free. Details: the *Runtime contexts* concepts page.
+
 Four entry points over the same cache:
 
 | Call | Does | Use when |

@@ -197,7 +197,7 @@ def gen_method(spec, mjx: bool) -> str:
     for p in prelude:
         L.append("        " + p)
     L.append(f"        py::array_t<CT> out({{batch, {dims}}});")
-    L.append(f"        int rc = {fn}({', '.join(call)});")
+    L.append(f"        int rc = {fn}(ctx_id_, {', '.join(call)});")
     # A1 (2026-09-08): ONE throw per method through the rc_message decoder
     # (defined beside the shared validators in the hand region). rc==3 returns
     # the per-algo hint VERBATIM (the wrapper subset tests key on its "not

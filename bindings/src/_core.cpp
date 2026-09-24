@@ -71,31 +71,41 @@ struct CAbi {
     using fn_ll_i_t         = long long (*)(int);       // device_pool_bytes(ws_slots)
     using fn_int_pulli_t    = int (*)(void*, unsigned long long, int); // set_device_pool(base, bytes, ws_slots)
     using fn_ll_v_t         = long long (*)();          // device_pool_used()
-    using fn_dyn_t         = int (*)(const CT*, const CT*, const CT*,
+    using fn_dyn_t         = int (*)(long long, const CT*, const CT*, const CT*,
                                       CT*, int, CT, const CT*);
-    using fn_dyn_no_fext_t = int (*)(const CT*, const CT*, const CT*,
+    using fn_dyn_no_fext_t = int (*)(long long, const CT*, const CT*, const CT*,
                                       CT*, int, CT);
-    using fn_fk_batched_t   = int (*)(const CT*, CT*, int, int);
-    using fn_integrator_t   = int (*)(const CT*, const CT*, const CT*,
+    using fn_fk_batched_t   = int (*)(long long, const CT*, CT*, int, int);
+    using fn_integrator_t   = int (*)(long long, const CT*, const CT*, const CT*,
                                       CT*, int, CT, CT, int);
-    using fn_plant_cost_t   = int (*)(const CT*, const CT*, const CT*,
+    using fn_plant_cost_t   = int (*)(long long, const CT*, const CT*, const CT*,
                                       CT*, CT*, CT*, int);
-    using fn_plant_barrier_t = int (*)(const CT*, const CT*, const CT*, float,
+    using fn_plant_barrier_t = int (*)(long long, const CT*, const CT*, const CT*, float,
                                        CT*, CT*, CT*, int);
-    using fn_plant_step_t   = int (*)(const CT*, const CT*, CT*,
+    using fn_plant_step_t   = int (*)(long long, const CT*, const CT*, CT*,
                                       int, CT, CT, int);
-    using fn_plant_mom_t    = int (*)(const CT*, const CT*, const CT*, const CT*,
+    using fn_plant_mom_t    = int (*)(long long, const CT*, const CT*, const CT*, const CT*,
                                       CT*, CT*, CT*, int);
-    using fn_q_out_t        = int (*)(const CT*, CT*, int);
-    using fn_q_qd_out_t     = int (*)(const CT*, const CT*, CT*, int);
-    using fn_frame_jac_t    = int (*)(const CT*, CT*, int, int, int);
-    using fn_frame_jac_dot_t = int (*)(const CT*, const CT*, CT*, int, int, int);
-    using fn_ee_runtime_t   = int (*)(const CT*, CT*, int, int, const CT*);
-    using fn_tool_fext_t    = int (*)(const CT*, const CT*, int, const CT*, CT*, int);  // grid_rbd_tool_fext
-    using fn_contact_fext_t = int (*)(const CT*, const CT*, CT*, int);                   // grid_rbd_contact_fext
-    using fn_q_qd_out_grav_t = int (*)(const CT*, const CT*, CT*, int, CT);
-    using fn_q_out_grav_t   = int (*)(const CT*, CT*, int, CT);
-    using fn_set_params_t   = int (*)(const CT*);   // set_{inertia,transform,joint_dynamics}_params
+    using fn_q_out_t        = int (*)(long long, const CT*, CT*, int);
+    using fn_q_qd_out_t     = int (*)(long long, const CT*, const CT*, CT*, int);
+    using fn_frame_jac_t    = int (*)(long long, const CT*, CT*, int, int, int);
+    using fn_frame_jac_dot_t = int (*)(long long, const CT*, const CT*, CT*, int, int, int);
+    using fn_ee_runtime_t   = int (*)(long long, const CT*, CT*, int, int, const CT*);
+    using fn_tool_fext_t    = int (*)(long long, const CT*, const CT*, int, const CT*, CT*, int);  // grid_rbd_tool_fext
+    using fn_contact_fext_t = int (*)(long long, const CT*, const CT*, CT*, int);                   // grid_rbd_contact_fext
+    using fn_q_qd_out_grav_t = int (*)(long long, const CT*, const CT*, CT*, int, CT);
+    using fn_q_out_grav_t   = int (*)(long long, const CT*, CT*, int, CT);
+    using fn_set_params_t   = int (*)(long long, const CT*);   // set_{inertia,transform,joint_dynamics}_params
+    // W04-B B1 runtime contexts: id-taking launch-override setters + the context API
+    using fn_ctx_int_v_t    = int (*)(long long);                    // threads_per_block(ctx)
+    using fn_ctx_int_i_t    = int (*)(long long, int);               // set_threads_per_block(ctx, n)
+    using fn_ctx_int_ii_t   = int (*)(long long, int, int);          // set_threads_for(ctx, algo, n)
+    using fn_ctx_int_iii_t  = int (*)(long long, int, int, int);     // set_threads_for_n(ctx, algo, threshold, n_small)
+    using fn_ctx_int_ipp_t  = int (*)(long long, int, int*, int*);   // get_batch_switch(ctx, algo, &threshold, &n_small)
+    using fn_ctx_create_t   = int (*)(void*, unsigned long long, int, long long*);  // ctx_create(base, bytes, ws_slots, &id)
+    using fn_ctx_close_t    = int (*)(long long);                    // ctx_close(id)
+    using fn_ctx_idp_t      = int (*)(long long*);                   // ctx_default_id(&id)
+    using fn_ctx_profile_t  = int (*)(long long, void*);             // ctx_profile(id, GridDeviceProfile*)
 };
 
 
@@ -131,6 +141,15 @@ class RunnerT {
     using fn_q_qd_out_grav_t = typename CAbi<CT>::fn_q_qd_out_grav_t;
     using fn_q_out_grav_t = typename CAbi<CT>::fn_q_out_grav_t;
     using fn_set_params_t = typename CAbi<CT>::fn_set_params_t;
+    using fn_ctx_int_v_t = typename CAbi<CT>::fn_ctx_int_v_t;
+    using fn_ctx_int_i_t = typename CAbi<CT>::fn_ctx_int_i_t;
+    using fn_ctx_int_ii_t = typename CAbi<CT>::fn_ctx_int_ii_t;
+    using fn_ctx_int_iii_t = typename CAbi<CT>::fn_ctx_int_iii_t;
+    using fn_ctx_int_ipp_t = typename CAbi<CT>::fn_ctx_int_ipp_t;
+    using fn_ctx_create_t = typename CAbi<CT>::fn_ctx_create_t;
+    using fn_ctx_close_t = typename CAbi<CT>::fn_ctx_close_t;
+    using fn_ctx_idp_t = typename CAbi<CT>::fn_ctx_idp_t;
+    using fn_ctx_profile_t = typename CAbi<CT>::fn_ctx_profile_t;
     // Per-dtype numpy array alias: an input is force-cast to CT, outputs are CT.
     using arr_t = py::array_t<CT, py::array::c_style | py::array::forcecast>;
 public:
@@ -148,14 +167,18 @@ public:
         fn_num_bodies_       = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_num_bodies"));
         fn_max_batch_        = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_max_batch"));
         fn_max_perf_level_threads_ = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_max_perf_level_threads"));
-        fn_threads_per_block_ = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_threads_per_block"));
-        fn_set_threads_per_block_ = reinterpret_cast<fn_int_i_t>(require_sym("grid_rbd_set_threads_per_block"));
+        fn_threads_per_block_ = reinterpret_cast<fn_ctx_int_v_t>(require_sym("grid_rbd_threads_per_block"));
+        fn_set_threads_per_block_ = reinterpret_cast<fn_ctx_int_i_t>(require_sym("grid_rbd_set_threads_per_block"));
+        fn_ctx_create_       = reinterpret_cast<fn_ctx_create_t>(require_sym("grid_rbd_ctx_create"));
+        fn_ctx_close_        = reinterpret_cast<fn_ctx_close_t>(require_sym("grid_rbd_ctx_close"));
+        fn_ctx_default_id_   = reinterpret_cast<fn_ctx_idp_t>(require_sym("grid_rbd_ctx_default_id"));
+        fn_ctx_profile_      = reinterpret_cast<fn_ctx_profile_t>(require_sym("grid_rbd_ctx_profile"));
         // E1 kernel ceiling + E6 per-algo/batch-regime overlays.
         fn_kernel_max_threads_ = reinterpret_cast<fn_int_s_t>(require_sym("grid_rbd_kernel_max_threads"));
-        fn_set_threads_for_  = reinterpret_cast<fn_int_ii_t>(require_sym("grid_rbd_set_threads_for"));
+        fn_set_threads_for_  = reinterpret_cast<fn_ctx_int_ii_t>(require_sym("grid_rbd_set_threads_for"));
         fn_algo_count_       = reinterpret_cast<fn_int_v_t>(require_sym("grid_rbd_algo_count"));
-        fn_set_threads_for_n_ = reinterpret_cast<fn_int_iii_t>(require_sym("grid_rbd_set_threads_for_n"));
-        fn_get_batch_switch_ = reinterpret_cast<fn_int_ipp_t>(require_sym("grid_rbd_get_batch_switch"));
+        fn_set_threads_for_n_ = reinterpret_cast<fn_ctx_int_iii_t>(require_sym("grid_rbd_set_threads_for_n"));
+        fn_get_batch_switch_ = reinterpret_cast<fn_ctx_int_ipp_t>(require_sym("grid_rbd_get_batch_switch"));
         fn_device_pool_bytes_ = reinterpret_cast<fn_ll_i_t>(require_sym("grid_rbd_device_pool_bytes"));
         fn_set_device_pool_  = reinterpret_cast<fn_int_pulli_t>(require_sym("grid_rbd_set_device_pool"));
         fn_device_pool_used_ = reinterpret_cast<fn_ll_v_t>(require_sym("grid_rbd_device_pool_used"));
@@ -364,19 +387,19 @@ public:
     // set_threads_per_block override still wins when set.
     void set_threads_for(int algo, int n) {
         if (n < 0) throw std::invalid_argument("set_threads_for: n must be >= 0");
-        int rc = fn_set_threads_for_(algo, n);
+        int rc = fn_set_threads_for_(ctx_id_, algo, n);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "set_threads_for", nullptr));
     }
     int algo_count() const { return fn_algo_count_(); }
     // E6 batch-switch: when a call's batch <= threshold, launch `algo` with
     // n_small threads (threshold==0 clears the switch for that algo).
     void set_threads_for_n(int algo, int threshold, int n_small) {
-        int rc = fn_set_threads_for_n_(algo, threshold, n_small);
+        int rc = fn_set_threads_for_n_(ctx_id_, algo, threshold, n_small);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "set_threads_for_n", nullptr));
     }
     py::tuple get_batch_switch(int algo) const {
         int threshold = 0, n_small = -1;
-        int rc = fn_get_batch_switch_(algo, &threshold, &n_small);
+        int rc = fn_get_batch_switch_(ctx_id_, algo, &threshold, &n_small);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "get_batch_switch", nullptr));
         return py::make_tuple(threshold, n_small);
     }
@@ -391,6 +414,35 @@ public:
             "before the first kernel call (or close() first; the slab must outlive the arena)");
     }
     long long device_pool_used() const { return fn_device_pool_used_(); }
+    // ── W04-B B1 runtime contexts ────────────────────────────────────────
+    long long ctx_id() const { return ctx_id_; }
+    void bind_context(long long id) { ctx_id_ = id; }
+    long long ctx_create(unsigned long long base_ptr, unsigned long long bytes, int ws_slots) {
+        long long id = 0;
+        int rc = fn_ctx_create_(reinterpret_cast<void *>(static_cast<uintptr_t>(base_ptr)), bytes, ws_slots, &id);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "ctx_create", nullptr));
+        return id;
+    }
+    void ctx_close(long long id) {
+        int rc = fn_ctx_close_(id);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "ctx_close", nullptr));
+    }
+    long long ctx_default_id() {
+        long long id = 0;
+        int rc = fn_ctx_default_id_(&id);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "ctx_default_id", nullptr));
+        return id;
+    }
+    py::dict ctx_profile(long long id) {
+        struct P { int device_cc, artifact_cc; long long total_bytes, free_bytes, arena_bytes; int workspace_slots, max_batch; long long smem_optin_bytes; int slab_installed; } prof{};
+        int rc = fn_ctx_profile_(id, &prof);
+        if (rc != 0) throw std::runtime_error(rc_message(rc, "ctx_profile", nullptr));
+        py::dict d;
+        d["device_cc"] = prof.device_cc; d["artifact_cc"] = prof.artifact_cc; d["total_bytes"] = prof.total_bytes;
+        d["free_bytes_at_init"] = prof.free_bytes; d["arena_bytes"] = prof.arena_bytes; d["workspace_slots"] = prof.workspace_slots;
+        d["max_batch"] = prof.max_batch; d["smem_optin_bytes"] = prof.smem_optin_bytes; d["slab_installed"] = bool(prof.slab_installed);
+        return d;
+    }
     bool has_owned_device_pool() const {
         std::lock_guard<std::mutex> lk(owners_mutex());
         const auto it = owners().find(so_key_);
@@ -420,7 +472,7 @@ public:
             throw std::runtime_error("cannot reset an arena shared by multiple handles");
         if (fn_close_) fn_close_();
     }
-    int threads_per_block() const { return fn_threads_per_block_(); }
+    int threads_per_block() const { return fn_threads_per_block_(ctx_id_); }
     void set_threads_per_block(int n) {
         // Override the per-block thread count for all subsequent kernel
         // launches. Default is the per-algo autotuned launch_cfg<ALGO>::THREADS;
@@ -431,7 +483,7 @@ public:
             throw std::invalid_argument(
                 "set_threads_per_block: n must be >= 0 (0 resets to autotuned default), got " + std::to_string(n));
         }
-        int rc = fn_set_threads_per_block_(n);
+        int rc = fn_set_threads_per_block_(ctx_id_, n);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "set_threads_per_block", nullptr));
     }
 
@@ -494,7 +546,7 @@ public:
     {
         int batch = check_q(q, "crba");
         py::array_t<CT> out({batch, num_vel_, num_vel_});
-        int rc = fn_crba_(q.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_crba_(ctx_id_, q.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "crba",
             "crba not built into this robot .so — add 'crba' to algorithm_list "
             "in register_robot() and rebuild"));
@@ -510,7 +562,7 @@ public:
             "floating-base robots export grid_rbd_crba_mujoco)");
         int batch = check_q(q, "crba_mujoco");
         py::array_t<CT> out({batch, num_vel_, num_vel_});
-        int rc = fn_crba_mujoco_(q.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_crba_mujoco_(ctx_id_, q.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "crba_mujoco",
             nullptr));
         return out;
@@ -529,7 +581,7 @@ public:
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_joints_});
-        int rc = fn_inverse_dynamics_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity, fe_ptr);
+        int rc = fn_inverse_dynamics_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics",
             "inverse_dynamics not built into this robot .so — add "
             "'inverse_dynamics' to algorithm_list in register_robot() and "
@@ -550,7 +602,7 @@ public:
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_joints_});
-        int rc = fn_inverse_dynamics_mujoco_(q.data(), qd.data(), qdd.data(), out.mutable_data(), batch, gravity, fe_ptr);
+        int rc = fn_inverse_dynamics_mujoco_(ctx_id_, q.data(), qd.data(), qdd.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics_mujoco",
             nullptr));
         return out;
@@ -562,7 +614,7 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
         py::array_t<CT> out({batch, num_joints_ + num_vel_});
-        int rc = fn_integrator_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
+        int rc = fn_integrator_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "integrator",
             "integrator not built into this robot .so — add 'integrator' to "
             "algorithm_list in register_robot() and rebuild"));
@@ -578,7 +630,7 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
         py::array_t<CT> out({batch, num_joints_ + num_vel_});
-        int rc = fn_integrator_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
+        int rc = fn_integrator_mujoco_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "integrator_mujoco",
             "integrator_mujoco: unsupported integrator_type for this build"));
         return out;
@@ -589,7 +641,7 @@ public:
     {
         int batch = check_q(q, "minv");
         py::array_t<CT> out({batch, num_vel_, num_vel_});
-        int rc = fn_minv_(q.data(), out.mutable_data(), batch);
+        int rc = fn_minv_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "minv",
             "minv not built into this robot .so — add 'minv' to algorithm_list "
             "in register_robot() and rebuild"));
@@ -605,7 +657,7 @@ public:
             "floating-base robots export grid_rbd_minv_mujoco)");
         int batch = check_q(q, "minv_mujoco");
         py::array_t<CT> out({batch, num_vel_, num_vel_});
-        int rc = fn_minv_mujoco_(q.data(), out.mutable_data(), batch);
+        int rc = fn_minv_mujoco_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "minv_mujoco",
             nullptr));
         return out;
@@ -619,7 +671,7 @@ public:
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_joints_});
-        int rc = fn_fd_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
+        int rc = fn_fd_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics",
             "forward_dynamics not built into this robot .so — add "
             "'forward_dynamics' to algorithm_list in register_robot() and "
@@ -638,7 +690,7 @@ public:
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_joints_});
-        int rc = fn_fd_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
+        int rc = fn_fd_mujoco_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics_mujoco",
             nullptr));
         return out;
@@ -652,7 +704,7 @@ public:
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_joints_});
-        int rc = fn_aba_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
+        int rc = fn_aba_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "aba",
             "aba not built into this robot .so — add 'aba' to algorithm_list in "
             "register_robot() and rebuild"));
@@ -670,7 +722,7 @@ public:
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_joints_});
-        int rc = fn_aba_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
+        int rc = fn_aba_mujoco_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "aba_mujoco",
             nullptr));
         return out;
@@ -689,7 +741,7 @@ public:
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
-        int rc = fn_inverse_dynamics_gradient_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity, fe_ptr);
+        int rc = fn_inverse_dynamics_gradient_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics_gradient",
             "inverse_dynamics_gradient not built into this robot .so — add "
             "'inverse_dynamics_gradient' to algorithm_list in register_robot() "
@@ -708,7 +760,7 @@ public:
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
-        int rc = fn_inverse_dynamics_gradient_mujoco_(q.data(), qd.data(), qdd.data(), out.mutable_data(), batch, gravity, fe_ptr);
+        int rc = fn_inverse_dynamics_gradient_mujoco_(ctx_id_, q.data(), qd.data(), qdd.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics_gradient_mujoco",
             nullptr));
         return out;
@@ -722,7 +774,7 @@ public:
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
-        int rc = fn_fd_grad_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
+        int rc = fn_fd_grad_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics_gradient",
             "forward_dynamics_gradient not built into this robot .so — add "
             "'forward_dynamics_gradient' to algorithm_list in register_robot() "
@@ -741,7 +793,7 @@ public:
         arr_t fe_hold;
         const CT* fe_ptr = f_ext_ptr(f_ext_opt, fe_hold, batch);
         py::array_t<CT> out({batch, num_vel_, 2 * num_vel_});
-        int rc = fn_fd_grad_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
+        int rc = fn_fd_grad_mujoco_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, fe_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "forward_dynamics_gradient_mujoco",
             nullptr));
         return out;
@@ -758,7 +810,7 @@ public:
             qdd_ptr = qdd.data();
         }
         py::array_t<CT> out({batch, second_order_tensor_size});
-        int rc = fn_idsva_so_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
+        int rc = fn_idsva_so_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "idsva_so",
             "idsva_so not built into this robot .so — add 'idsva_so_body_frame' "
             "to algorithm_list in register_robot() and rebuild"));
@@ -779,7 +831,7 @@ public:
             qdd_ptr = qdd.data();
         }
         py::array_t<CT> out({batch, second_order_tensor_size});
-        int rc = fn_idsva_so_mujoco_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
+        int rc = fn_idsva_so_mujoco_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "idsva_so_mujoco",
             nullptr));
         return out;
@@ -791,7 +843,7 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
         py::array_t<CT> out({batch, second_order_tensor_size});
-        int rc = fn_fdsva_so_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_fdsva_so_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "fdsva_so",
             "fdsva_so not built into this robot .so — add 'fdsva_so' to "
             "algorithm_list in register_robot() and rebuild"));
@@ -807,7 +859,7 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
         py::array_t<CT> out({batch, second_order_tensor_size});
-        int rc = fn_fdsva_so_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_fdsva_so_mujoco_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "fdsva_so_mujoco",
             nullptr));
         return out;
@@ -824,7 +876,7 @@ public:
             qdd_ptr = qdd.data();
         }
         py::array_t<CT> out({batch, num_vel_ * 10 * num_bodies_});
-        int rc = fn_id_regressor_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
+        int rc = fn_id_regressor_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics_regressor",
             "inverse_dynamics_regressor not built into this robot .so — add "
             "'inverse_dynamics_regressor' to algorithm_list in register_robot() "
@@ -846,7 +898,7 @@ public:
             qdd_ptr = qdd.data();
         }
         py::array_t<CT> out({batch, num_vel_ * 10 * num_bodies_});
-        int rc = fn_id_regressor_mujoco_(q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
+        int rc = fn_id_regressor_mujoco_(ctx_id_, q.data(), qd.data(), qdd_ptr, out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "inverse_dynamics_regressor_mujoco",
             nullptr));
         return out;
@@ -858,7 +910,7 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
         py::array_t<CT> out({batch, 2 * num_vel_ * 3 * num_vel_});
-        int rc = fn_integrator_grad_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
+        int rc = fn_integrator_grad_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "integrator_gradient",
             "integrator_gradient not built into this robot .so — add "
             "'integrator_gradient' to algorithm_list in register_robot() and "
@@ -875,7 +927,7 @@ public:
         int batch = check_inputs_2d(q, qd, num_joints_);
         check_array_2d(u, batch, num_joints_, "u");
         py::array_t<CT> out({batch, 2 * num_vel_ * 3 * num_vel_});
-        int rc = fn_integrator_grad_mujoco_(q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
+        int rc = fn_integrator_grad_mujoco_(ctx_id_, q.data(), qd.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "integrator_gradient_mujoco",
             "integrator_gradient_mujoco: only EULER/SI-EULER supported"));
         return out;
@@ -886,7 +938,7 @@ public:
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 10 * num_bodies_});
-        int rc = fn_kinetic_energy_regressor_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_kinetic_energy_regressor_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "kinetic_energy_regressor",
             nullptr));
         return out;
@@ -901,7 +953,7 @@ public:
             "only (re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 10 * num_bodies_});
-        int rc = fn_kinetic_energy_regressor_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_kinetic_energy_regressor_mujoco_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "kinetic_energy_regressor_mujoco",
             nullptr));
         return out;
@@ -912,7 +964,7 @@ public:
     {
         int batch = check_q(q, "potential_energy_regressor");
         py::array_t<CT> out({batch, 10 * num_bodies_});
-        int rc = fn_potential_energy_regressor_(q.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_potential_energy_regressor_(ctx_id_, q.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "potential_energy_regressor",
             nullptr));
         return out;
@@ -927,7 +979,7 @@ public:
             "only (re-register with force_rebuild=True)");
         int batch = check_q(q, "potential_energy_regressor_mujoco");
         py::array_t<CT> out({batch, 10 * num_bodies_});
-        int rc = fn_potential_energy_regressor_mujoco_(q.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_potential_energy_regressor_mujoco_(ctx_id_, q.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "potential_energy_regressor_mujoco",
             nullptr));
         return out;
@@ -938,7 +990,7 @@ public:
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 3});
-        int rc = fn_energy_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_energy_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "energy",
             "energy not available for this robot: it is not generated for mimic "
             "robots (the per-body Jacobian fold is not yet mimic-reduced)"));
@@ -954,7 +1006,7 @@ public:
             "(re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 3});
-        int rc = fn_energy_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_energy_mujoco_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "energy_mujoco",
             nullptr));
         return out;
@@ -965,7 +1017,7 @@ public:
     {
         int batch = check_q(q, "end_effector_pose");
         py::array_t<CT> out({batch, 6 * num_ees_});
-        int rc = fn_ee_pose_(q.data(), out.mutable_data(), batch);
+        int rc = fn_ee_pose_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose",
             "end_effector_pose not built into this robot .so — add "
             "'end_effector_pose' to algorithm_list in register_robot() and "
@@ -981,7 +1033,7 @@ public:
             "end_effector_pose_mujoco unavailable: floating-base .so only");
         int batch = check_q(q, "end_effector_pose_mujoco");
         py::array_t<CT> out({batch, 6 * num_ees_});
-        int rc = fn_ee_pose_mujoco_(q.data(), out.mutable_data(), batch);
+        int rc = fn_ee_pose_mujoco_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_mujoco",
             nullptr));
         return out;
@@ -992,7 +1044,7 @@ public:
     {
         int batch = check_q(q, "end_effector_pose_gradient");
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_});
-        int rc = fn_ee_pose_grad_(q.data(), out.mutable_data(), batch);
+        int rc = fn_ee_pose_grad_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_gradient",
             "end_effector_pose_gradient not built into this robot .so — add "
             "'end_effector_pose_gradient' to algorithm_list in register_robot() "
@@ -1008,7 +1060,7 @@ public:
             "end_effector_pose_gradient_mujoco unavailable: floating-base .so only");
         int batch = check_q(q, "end_effector_pose_gradient_mujoco");
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_});
-        int rc = fn_ee_pose_grad_mujoco_(q.data(), out.mutable_data(), batch);
+        int rc = fn_ee_pose_grad_mujoco_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_gradient_mujoco",
             nullptr));
         return out;
@@ -1019,7 +1071,7 @@ public:
     {
         int batch = check_q(q, "end_effector_pose_hessian");
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_, num_vel_});
-        int rc = fn_ee_pose_hessian_(q.data(), out.mutable_data(), batch);
+        int rc = fn_ee_pose_hessian_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_hessian",
             "end_effector_pose_hessian not built into this robot .so — add "
             "'end_effector_pose_hessian' to algorithm_list in register_robot() "
@@ -1035,7 +1087,7 @@ public:
             "end_effector_pose_hessian_mujoco unavailable: floating-base .so only");
         int batch = check_q(q, "end_effector_pose_hessian_mujoco");
         py::array_t<CT> out({batch, 6 * num_ees_, num_vel_, num_vel_});
-        int rc = fn_ee_pose_hessian_mujoco_(q.data(), out.mutable_data(), batch);
+        int rc = fn_ee_pose_hessian_mujoco_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_hessian_mujoco",
             nullptr));
         return out;
@@ -1046,7 +1098,7 @@ public:
     {
         int batch = check_q(q, "fk_batched");
         py::array_t<CT> out({batch, 7});
-        int rc = fn_fk_batched_(q.data(), out.mutable_data(), batch, use_warp ? 1 : 0);
+        int rc = fn_fk_batched_(ctx_id_, q.data(), out.mutable_data(), batch, use_warp ? 1 : 0);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "fk_batched",
             "fk_batched: not supported for this robot (floating-base / mimic)"));
         return out;
@@ -1057,7 +1109,7 @@ public:
     {
         int batch = check_q(q, "frame_jacobian");
         py::array_t<CT> out({batch, 6 * num_vel_});
-        int rc = fn_frame_jacobian_(q.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        int rc = fn_frame_jacobian_(ctx_id_, q.data(), out.mutable_data(), batch, target_jid, reference_frame);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_jacobian",
             "frame_jacobian not built into this robot .so — add "
             "'frame_jacobian' to algorithm_list in register_robot() and rebuild"));
@@ -1073,7 +1125,7 @@ public:
             "frame_jacobian only");
         int batch = check_q(q, "frame_jacobian_mujoco");
         py::array_t<CT> out({batch, 6 * num_vel_});
-        int rc = fn_frame_jacobian_mujoco_(q.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        int rc = fn_frame_jacobian_mujoco_(ctx_id_, q.data(), out.mutable_data(), batch, target_jid, reference_frame);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_jacobian_mujoco",
             nullptr));
         return out;
@@ -1084,7 +1136,7 @@ public:
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_});
-        int rc = fn_frame_jacobian_dot_(q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        int rc = fn_frame_jacobian_dot_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_jacobian_dot",
             "frame_jacobian_dot not built into this robot .so — add "
             "'frame_jacobian_dot' to algorithm_list in register_robot() and "
@@ -1101,7 +1153,7 @@ public:
             "frame_jacobian only");
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_});
-        int rc = fn_frame_jacobian_dot_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
+        int rc = fn_frame_jacobian_dot_mujoco_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, target_jid, reference_frame);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "frame_jacobian_dot_mujoco",
             nullptr));
         return out;
@@ -1112,7 +1164,7 @@ public:
     {
         int batch = check_q(q, "osc_inertia");
         py::array_t<CT> out({batch, 36});
-        int rc = fn_osc_inertia_(q.data(), out.mutable_data(), batch);
+        int rc = fn_osc_inertia_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "osc_inertia",
             "osc_inertia not built into this robot .so — add 'osc_inertia' to "
             "algorithm_list in register_robot() and rebuild"));
@@ -1128,7 +1180,7 @@ public:
             "frame_jacobian only");
         int batch = check_q(q, "osc_inertia_mujoco");
         py::array_t<CT> out({batch, 36});
-        int rc = fn_osc_inertia_mujoco_(q.data(), out.mutable_data(), batch);
+        int rc = fn_osc_inertia_mujoco_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "osc_inertia_mujoco",
             nullptr));
         return out;
@@ -1139,7 +1191,7 @@ public:
     {
         int batch = check_q(q, "generalized_gravity");
         py::array_t<CT> out({batch, num_vel_});
-        int rc = fn_generalized_gravity_(q.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_generalized_gravity_(ctx_id_, q.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "generalized_gravity",
             nullptr));
         return out;
@@ -1153,7 +1205,7 @@ public:
             "generalized_gravity_mujoco unavailable: floating-base .so only");
         int batch = check_q(q, "generalized_gravity_mujoco");
         py::array_t<CT> out({batch, num_vel_});
-        int rc = fn_generalized_gravity_mujoco_(q.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_generalized_gravity_mujoco_(ctx_id_, q.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "generalized_gravity_mujoco",
             nullptr));
         return out;
@@ -1164,7 +1216,7 @@ public:
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, num_vel_});
-        int rc = fn_nonlinear_effects_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_nonlinear_effects_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "nonlinear_effects",
             nullptr));
         return out;
@@ -1178,7 +1230,7 @@ public:
             "nonlinear_effects_mujoco unavailable: floating-base .so only");
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, num_vel_});
-        int rc = fn_nonlinear_effects_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_nonlinear_effects_mujoco_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "nonlinear_effects_mujoco",
             nullptr));
         return out;
@@ -1189,7 +1241,7 @@ public:
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, num_vel_ * num_vel_});
-        int rc = fn_coriolis_matrix_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_coriolis_matrix_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "coriolis_matrix",
             nullptr));
         return out;
@@ -1203,7 +1255,7 @@ public:
             "coriolis_matrix_mujoco unavailable: floating-base .so only");
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, num_vel_ * num_vel_});
-        int rc = fn_coriolis_matrix_mujoco_(q.data(), qd.data(), out.mutable_data(), batch, gravity);
+        int rc = fn_coriolis_matrix_mujoco_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch, gravity);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "coriolis_matrix_mujoco",
             nullptr));
         return out;
@@ -1214,7 +1266,7 @@ public:
     {
         int batch = check_q(q, "com");
         py::array_t<CT> out({batch, 3 + 3 * num_vel_});
-        int rc = fn_com_(q.data(), out.mutable_data(), batch);
+        int rc = fn_com_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "com",
             "com not available for this robot: it is not generated for mimic "
             "robots (the per-body Jacobian fold is not yet mimic-reduced)"));
@@ -1230,7 +1282,7 @@ public:
             "(re-register with force_rebuild=True)");
         int batch = check_q(q, "com_mujoco");
         py::array_t<CT> out({batch, 3 + 3 * num_vel_});
-        int rc = fn_com_mujoco_(q.data(), out.mutable_data(), batch);
+        int rc = fn_com_mujoco_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "com_mujoco",
             nullptr));
         return out;
@@ -1241,7 +1293,7 @@ public:
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_ + 6});
-        int rc = fn_ccrba_(q.data(), qd.data(), out.mutable_data(), batch);
+        int rc = fn_ccrba_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "ccrba",
             "ccrba not available for this robot: it is not generated for mimic "
             "robots (the per-body Jacobian fold is not yet mimic-reduced)"));
@@ -1257,7 +1309,7 @@ public:
             "(re-register with force_rebuild=True)");
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_ + 6});
-        int rc = fn_ccrba_mujoco_(q.data(), qd.data(), out.mutable_data(), batch);
+        int rc = fn_ccrba_mujoco_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "ccrba_mujoco",
             nullptr));
         return out;
@@ -1268,7 +1320,7 @@ public:
     {
         int batch = check_q(q, "dccrba");
         py::array_t<CT> out({batch, 6 * num_vel_ * num_vel_});
-        int rc = fn_dccrba_(q.data(), out.mutable_data(), batch);
+        int rc = fn_dccrba_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "dccrba",
             "dccrba not available for this robot: it is not generated for mimic "
             "robots (the per-body Jacobian fold is not yet mimic-reduced)"));
@@ -1283,7 +1335,7 @@ public:
             "dccrba_mujoco unavailable: floating-base non-mimic .so only");
         int batch = check_q(q, "dccrba_mujoco");
         py::array_t<CT> out({batch, 6 * num_vel_ * num_vel_});
-        int rc = fn_dccrba_mujoco_(q.data(), out.mutable_data(), batch);
+        int rc = fn_dccrba_mujoco_(ctx_id_, q.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "dccrba_mujoco",
             nullptr));
         return out;
@@ -1294,7 +1346,7 @@ public:
     {
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_});
-        int rc = fn_cmm_time_variation_(q.data(), qd.data(), out.mutable_data(), batch);
+        int rc = fn_cmm_time_variation_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "cmm_time_variation",
             "cmm_time_variation not available for this robot: it is not "
             "generated for mimic robots (the per-body Jacobian fold is not yet "
@@ -1310,7 +1362,7 @@ public:
             "cmm_time_variation_mujoco unavailable: floating-base .so only");
         int batch = check_inputs_2d(q, qd, num_joints_);
         py::array_t<CT> out({batch, 6 * num_vel_});
-        int rc = fn_cmm_time_variation_mujoco_(q.data(), qd.data(), out.mutable_data(), batch);
+        int rc = fn_cmm_time_variation_mujoco_(ctx_id_, q.data(), qd.data(), out.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "cmm_time_variation_mujoco",
             nullptr));
         return out;
@@ -1324,7 +1376,7 @@ public:
         if (offset.size() == 16) off_ptr = offset.data();
         else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_runtime: offset must be length-16 (4x4 col-major) or empty");
         py::array_t<CT> out({batch, 6});
-        int rc = fn_ee_pose_runtime_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
+        int rc = fn_ee_pose_runtime_(ctx_id_, q.data(), out.mutable_data(), batch, target_jid, off_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_runtime",
             "end_effector_pose_runtime not built into this robot .so — add "
             "'end_effector_pose_runtime' to algorithm_list in register_robot() "
@@ -1343,7 +1395,7 @@ public:
         if (offset.size() == 16) off_ptr = offset.data();
         else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_runtime_mujoco: offset must be length-16 (4x4 col-major) or empty");
         py::array_t<CT> out({batch, 6});
-        int rc = fn_ee_pose_runtime_mujoco_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
+        int rc = fn_ee_pose_runtime_mujoco_(ctx_id_, q.data(), out.mutable_data(), batch, target_jid, off_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_runtime_mujoco",
             "end_effector_pose_runtime_mujoco not generated for this robot .so"));
         return out;
@@ -1357,7 +1409,7 @@ public:
         if (offset.size() == 16) off_ptr = offset.data();
         else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_gradient_runtime: offset must be length-16 (4x4 col-major) or empty");
         py::array_t<CT> out({batch, 6 * num_vel_});
-        int rc = fn_ee_pose_grad_runtime_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
+        int rc = fn_ee_pose_grad_runtime_(ctx_id_, q.data(), out.mutable_data(), batch, target_jid, off_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_gradient_runtime",
             "end_effector_pose_gradient_runtime not built into this robot .so — "
             "add 'end_effector_pose_gradient_runtime' to algorithm_list in "
@@ -1377,7 +1429,7 @@ public:
         if (offset.size() == 16) off_ptr = offset.data();
         else if (offset.size() != 0) throw std::invalid_argument("end_effector_pose_gradient_runtime_mujoco: offset must be length-16 (4x4 col-major) or empty");
         py::array_t<CT> out({batch, 6 * num_vel_});
-        int rc = fn_ee_pose_grad_runtime_mujoco_(q.data(), out.mutable_data(), batch, target_jid, off_ptr);
+        int rc = fn_ee_pose_grad_runtime_mujoco_(ctx_id_, q.data(), out.mutable_data(), batch, target_jid, off_ptr);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "end_effector_pose_gradient_runtime_mujoco",
             "end_effector_pose_gradient_runtime_mujoco not generated for this "
             "robot .so"));
@@ -1414,7 +1466,7 @@ public:
         py::array_t<CT> out({batch});
         py::array_t<CT> grad({batch, N});
         py::array_t<CT> hess({batch, N, N});
-        int rc = fn(var.data(), des.data(), w.data(),
+        int rc = fn(ctx_id_, var.data(), des.data(), w.data(),
                     out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, name, nullptr));
         return {out, grad, hess};
@@ -1460,7 +1512,7 @@ public:
         py::array_t<CT> out({batch});
         py::array_t<CT> grad({batch, N});
         py::array_t<CT> hess_diag({batch, N});
-        int rc = fn(var.data(), lower.data(), upper.data(), mu,
+        int rc = fn(ctx_id_, var.data(), lower.data(), upper.data(), mu,
                     out.mutable_data(), grad.mutable_data(), hess_diag.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, name, nullptr));
         return {out, grad, hess_diag};
@@ -1504,7 +1556,7 @@ public:
         check_array_2d(u, batch, num_vel_, "u");
         trailing.insert(trailing.begin(), batch);
         py::array_t<CT> out(trailing);
-        int rc = fn(x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
+        int rc = fn(ctx_id_, x.data(), u.data(), out.mutable_data(), batch, gravity, dt, it);
         if (rc == 3 && rc3_msg)
             throw std::runtime_error(std::string(name) + ": " + rc3_msg);
         if (rc != 0) throw std::runtime_error(rc_message(rc, name, nullptr));
@@ -1543,7 +1595,7 @@ public:
         py::array_t<CT> out({batch});
         py::array_t<CT> grad({batch, nx});
         py::array_t<CT> hess({batch, nx, nx});
-        int rc = fn(q.data(), p_des.data(), W.data(),
+        int rc = fn(ctx_id_, q.data(), p_des.data(), W.data(),
                     out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, name, nullptr));
         return {out, grad, hess};
@@ -1576,7 +1628,7 @@ public:
         py::array_t<CT> out({batch});
         py::array_t<CT> grad({batch, nx});
         py::array_t<CT> hess({batch, nx, nx});
-        int rc = fn_plant_mom_cost_(q.data(), qd.data(), h_des.data(), W.data(),
+        int rc = fn_plant_mom_cost_(ctx_id_, q.data(), qd.data(), h_des.data(), W.data(),
                                     out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "momentum_cost", nullptr));
         return {out, grad, hess};
@@ -1606,7 +1658,7 @@ public:
         check_array_2d(h_des, batch, 6, "h_des");
         check_array_2d(W, batch, 6, "W");
         py::array_t<CT> out({batch}); py::array_t<CT> grad({batch, nx}); py::array_t<CT> hess({batch, nx, nx});
-        int rc = fn_plant_mom_cost_mujoco_(q.data(), qd.data(), h_des.data(), W.data(),
+        int rc = fn_plant_mom_cost_mujoco_(ctx_id_, q.data(), qd.data(), h_des.data(), W.data(),
                                            out.mutable_data(), grad.mutable_data(), hess.mutable_data(), batch);
         if (rc != 0) throw std::runtime_error(rc_message(rc, "momentum_cost_mujoco", nullptr));
         return {out, grad, hess};
@@ -1722,6 +1774,14 @@ public:
             m += " (cudaMemcpy failed)";
         else if (rc == 6)
             m += " (cudaMalloc failed)";
+        else if (rc == 10)
+            m += " (unknown context id, or a context of another robot artifact)";
+        else if (rc == 11)
+            m += " (context is closed)";
+        else if (rc == 12)
+            m += " (context is closing)";
+        else if (rc == 13)
+            m += " (this robot artifact was compiled for another GPU architecture)";
         else if (rc >= 200)
             m += " (CUDA error " + cuda_err(rc - 200) + " at kernel LAUNCH: "
                  "usually threads above the kernel's __launch_bounds__ or dynamic "
@@ -1755,7 +1815,7 @@ public:
             throw std::invalid_argument("tool_fext: wrench must be (batch, 6)");
         if (rc.size() != 3) throw std::invalid_argument("tool_fext: rc must be length-3");
         py::array_t<CT> out({batch, 6 * num_bodies_});
-        int rc0 = fn_tool_fext_(q.data(), wrench.data(), jid, rc.data(), out.mutable_data(), batch);
+        int rc0 = fn_tool_fext_(ctx_id_, q.data(), wrench.data(), jid, rc.data(), out.mutable_data(), batch);
         if (rc0 != 0) throw std::runtime_error(rc_message(rc0, "tool_fext",
             "tool_fext not built into this robot .so — re-register with enable_tool=True, force_rebuild=True"));
         return out;
@@ -1778,7 +1838,7 @@ public:
         if (f_c.size() != (py::ssize_t)6 * num_contact_frames_ * batch)
             throw std::invalid_argument("contact_fext: f_c must be (batch, 6*num_contact_frames)");
         py::array_t<CT> out({batch, 6 * num_bodies_});
-        int rc0 = fn_contact_fext_(q.data(), f_c.data(), out.mutable_data(), batch);
+        int rc0 = fn_contact_fext_(ctx_id_, q.data(), f_c.data(), out.mutable_data(), batch);
         if (rc0 != 0) throw std::runtime_error(rc_message(rc0, "contact_fext",
             "contact_fext not built into this robot .so — re-register with contact_frames=[...], force_rebuild=True"));
         return out;
@@ -1812,7 +1872,7 @@ public:
                 "ndim=" + std::to_string(params.ndim()) +
                 ", size=" + std::to_string(params.size()));
         }
-        int rc = fn_set_inertia_params_(params.data());
+        int rc = fn_set_inertia_params_(ctx_id_, params.data());
         if (rc != 0) throw std::runtime_error(rc_message(rc, "set_inertia_params", nullptr));
     }
 
@@ -1836,7 +1896,7 @@ public:
                 "ndim=" + std::to_string(params.ndim()) +
                 ", size=" + std::to_string(params.size()));
         }
-        int rc = fn_set_transform_params_(params.data());
+        int rc = fn_set_transform_params_(ctx_id_, params.data());
         if (rc != 0) throw std::runtime_error(rc_message(rc, "set_transform_params", nullptr));
     }
 
@@ -1860,7 +1920,7 @@ public:
                 "ndim=" + std::to_string(params.ndim()) +
                 ", size=" + std::to_string(params.size()));
         }
-        int rc = fn_set_jd_params_(params.data());
+        int rc = fn_set_jd_params_(ctx_id_, params.data());
         if (rc != 0) throw std::runtime_error(rc_message(rc, "set_joint_dynamics_params", nullptr));
     }
 
@@ -1947,13 +2007,18 @@ private:
     fn_int_v_t fn_num_bodies_ = nullptr;
     fn_int_v_t fn_max_batch_  = nullptr;
     fn_int_v_t fn_max_perf_level_threads_      = nullptr;
-    fn_int_v_t fn_threads_per_block_      = nullptr;
-    fn_int_i_t fn_set_threads_per_block_  = nullptr;
+    fn_ctx_int_v_t fn_threads_per_block_      = nullptr;
+    fn_ctx_int_i_t fn_set_threads_per_block_  = nullptr;
     fn_int_s_t fn_kernel_max_threads_     = nullptr;
-    fn_int_ii_t fn_set_threads_for_       = nullptr;
+    fn_ctx_int_ii_t fn_set_threads_for_ = nullptr;
+    fn_ctx_create_t fn_ctx_create_ = nullptr;
+    fn_ctx_close_t fn_ctx_close_ = nullptr;
+    fn_ctx_idp_t fn_ctx_default_id_ = nullptr;
+    fn_ctx_profile_t fn_ctx_profile_ = nullptr;
+    long long ctx_id_ = 0;  // 0 = this artifact's default context; explicit contexts hold their salted id
     fn_int_v_t fn_algo_count_             = nullptr;
-    fn_int_iii_t fn_set_threads_for_n_    = nullptr;
-    fn_int_ipp_t fn_get_batch_switch_     = nullptr;
+    fn_ctx_int_iii_t fn_set_threads_for_n_    = nullptr;
+    fn_ctx_int_ipp_t fn_get_batch_switch_     = nullptr;
     fn_ll_i_t fn_device_pool_bytes_       = nullptr;
     fn_int_pulli_t fn_set_device_pool_    = nullptr;
     fn_ll_v_t fn_device_pool_used_        = nullptr;
@@ -2127,6 +2192,13 @@ static void register_runner(py::module_& m, const char* cls_name) {
             "Bytes carved from the installed device pool so far (0 = cudaMalloc mode "
             "or not yet initialized); equals device_pool_bytes(ws_slots) after a "
             "pool-mode init — the no-drift referee.")
+        .def("ctx_id", &R::ctx_id, "The runtime-context id this runner dispatches to (0 = the artifact's default context).")
+        .def("bind_context", &R::bind_context, py::arg("id"), "Dispatch every later call to the given context id (W04-B B1).")
+        .def("ctx_create", &R::ctx_create, py::arg("base_ptr") = 0, py::arg("bytes") = 0, py::arg("ws_slots") = 0,
+             "Create a NEW runtime context on this artifact (optional caller-owned slab), returning its salted id.")
+        .def("ctx_close", &R::ctx_close, py::arg("id"), "Close a context: refuse new admissions, drain, free.")
+        .def("ctx_default_id", &R::ctx_default_id, "The default context's real id (created if absent).")
+        .def("ctx_profile", &R::ctx_profile, py::arg("id"), "The device-profile record captured when the context was created.")
         .def("inverse_dynamics", &R::inverse_dynamics,
              py::arg("q"), py::arg("qd"),
              py::arg("qdd") = py::none(),

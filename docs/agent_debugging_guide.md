@@ -2276,3 +2276,28 @@ constant" handful still pays for the symbolic proof. Both byte-identical. g1
 148 s → 0.8 s, go2 68 → 0.5 s, iiwa14 23 → 0.1 s. RULES: profile before assuming
 "codegen is inherently slow"; never `+=` onto an attribute string in a loop; when a
 symbolic predicate is only ever consumed as a boolean, refute numerically first.
+
+### 7.z24 Retiring a per-.so singleton: shadow locals + a deleted global = a compile-time completeness check (2026-09-24, W04-B B1)
+The wrapper's `g_data / g_robot / g_streams / g_plant` were used at ~600 sites
+across hand-written and generated code. Instead of rewriting every reference,
+B1 deleted the globals and made every entry point start with a guard macro
+(`GRID_RBD_CTX_OR_RETURN/OR_FFI/OR_THROW(ctx_id)`) that resolves the context
+by id and declares SHADOW LOCALS with the old names — bodies stay textually
+identical, and any function that still reaches a global without the guard fails
+to compile, which is how the last stragglers were found. Lessons from the
+four compile rounds it took: (1) internal helpers take `GridCtx *ctx` and
+declare the same locals — a helper must NOT also carry the guard (double
+declaration; the guard is for ENTRY points only); (2) thin delegating wrappers
+(the joint barriers, the quadratic-cost pair, the jax/torch `_impl<N>`
+forwarders) have no prologue of their own and are invisible to a
+prologue-driven rewrite — grep the compile errors, not the prologues; (3) a
+function defined inside an anonymous namespace does not satisfy a file-scope
+`static` forward declaration (the .so loads with an undefined `_ZL…` symbol) —
+put lifecycle helpers the close path needs at file scope, always compiled,
+never behind a surface gate; (4) torch op schemas live in THREE places (the
+generated X-macro table, the plant generator, and hand-written `m.def` rows):
+a schema whose kernel gained an argument fails at LOAD time (`Inferred operator
+schema … doesn't match`), so every spelling must change together, and a trailing
+`int ctx_id=0` default keeps it legal after defaulted tensors; (5) a mechanical
+signature rewrite must insert once per FUNCTION, not once per prologue
+occurrence (`#if` branches carry two prologues).

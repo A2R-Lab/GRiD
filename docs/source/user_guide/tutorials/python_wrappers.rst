@@ -532,8 +532,12 @@ completed before that buffer is released. A fresh runtime allocates lazily on
 its first operation or parameter update, so CUDA allocation errors can surface
 there rather than during registration. A framework view opened after a NumPy
 arena is already live reuses it; it does not replace the allocator or erase
-inertia, transform, or tool updates. This does not introduce isolated contexts
-or make concurrent operations on shared scratch independently safe.
+inertia, transform, or tool updates. Isolation is opt-in: ``handle.context()``
+(numpy, jax and torch handles alike) opens a **runtime context** of its own on
+the same artifact — its own arena, tables, streams and launch overrides — see
+the *Runtime contexts* concepts page. Concurrent operations on ONE context's
+scratch are still not independently safe (per-call leases are a later
+increment).
 
 For fixed-batch, low-launch-overhead replay (MPC / training),
 ``handle.capture(method, *example_inputs, **kwargs)`` returns a

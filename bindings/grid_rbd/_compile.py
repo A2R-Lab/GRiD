@@ -562,6 +562,7 @@ def compile_so(
     cmd = [nvcc] + _NVCC_DEFAULT_FLAGS + [
         f"-gencode=arch=compute_{cuda_arch},code={arch}",
         f"-DGRID_RBD_MAX_BATCH={max_batch}",
+        f"-DGRID_RBD_ARCH={cuda_arch}",
         # Library embedding: generated gpuAssert must never cudaDeviceReset+exit()
         # the host interpreter — errors land in the sticky slot and surface as rc
         # from grid_rbd_init/close (direct-CUDA consumers keep the fail-fast
