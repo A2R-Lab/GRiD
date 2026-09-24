@@ -2363,9 +2363,11 @@ def gen_plant_step_hessian_kernel(self):
     self.gen_add_code_line(
         "template <typename T, int TIER = grid::GRID_DEFAULT_RESOURCE_TIER> __host__ __device__ constexpr size_t "
         "INTEGRATOR_HESSIAN_DYNAMIC_SHARED_MEM_BYTES() { "
-        "if constexpr (TIER == grid::TIER_SHARED)    return grid::grid_shared_arena_bytes<T>(" + str(t0) + ", grid::TOPOLOGY_HELPERS_COUNT, grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-        "else if constexpr (TIER == grid::TIER_LITE) return grid::grid_shared_arena_bytes<T>(" + str(t1) + ", grid::TOPOLOGY_HELPERS_COUNT, grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
-        "else                                        return grid::grid_shared_arena_bytes<T>(" + str(t2) + ", grid::TOPOLOGY_HELPERS_COUNT, grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
+        # ONE return (nested ternary): constexpr under the runners' -std=c++11
+        # (same tier values as the if-constexpr chain it replaced, 2026-09-23).
+        "return (TIER == grid::TIER_SHARED) ? grid::grid_shared_arena_bytes<T>(" + str(t0) + ", grid::TOPOLOGY_HELPERS_COUNT, grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()) "
+        ": (TIER == grid::TIER_LITE) ? grid::grid_shared_arena_bytes<T>(" + str(t1) + ", grid::TOPOLOGY_HELPERS_COUNT, grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()) "
+        ": grid::grid_shared_arena_bytes<T>(" + str(t2) + ", grid::TOPOLOGY_HELPERS_COUNT, grid::GRID_LINALG_NVIDIA_MAX_HELPER_BYTES<T>()); "
         "}")
     # 1 when any tier spills (so the launcher knows it must allocate d_workspace).
     spills_any = 1 if any(p >= 1 for p in picks) else 0
