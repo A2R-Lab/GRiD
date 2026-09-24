@@ -47,8 +47,10 @@ What each activity needs:
    * - ``backend="jax"`` / ``backend="torch"``
      - the ``[jax]`` / ``[torch]`` extra **plus a CUDA build of that framework
        matching your GPU arch** (the extras pin the CPU packages only; the
-       CUDA wheel is your choice, see ``bindings/README.md``). A missing
-       framework is reported at ``register_robot`` time, not deep inside a call.
+       CUDA wheel is your choice, e.g. ``pip install "jax[cuda12]"`` or
+       ``"jax[cuda13]"``, and a ``cu1xx`` torch wheel — see ``bindings/README.md``).
+       A missing framework, or a CPU-only jax, is reported at
+       ``register_robot`` time, not deep inside a call.
    * - Equivalence tests / the Pinocchio oracle / docs
      - ``install/developer_install.sh`` (apt build deps, ``pin``,
        robot-description fixtures, the Pinocchio second-order extension).

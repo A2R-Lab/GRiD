@@ -165,6 +165,20 @@ class _JaxMujocoView(MujocoDerivativeViewMixin, MujocoViewBase):
 # ─── JaxRobotHandle ─────────────────────────────────────────────────────────
 
 
+def _require_gpu_backend() -> None:
+    """GRiD's FFI targets are registered for the CUDA platform only. A CPU-only jax
+    (the plain `jax` wheel the `[jax]` extra pins) fails deep inside the first call
+    with "No FFI handler registered ... on a platform Host"; say it at handle
+    construction instead (release check 2026-09-24, clean checkout)."""
+    jax = _require_jax()
+    backend = jax.default_backend()
+    if backend != "gpu":
+        raise RuntimeError(
+            f"grid_rbd.jax needs a CUDA-enabled jax; the installed jax runs on {backend!r}. "
+            "Install the CUDA wheel matching your CUDA version, e.g. "
+            "pip install \"jax[cuda12]\"  (or jax[cuda13]), then retry.")
+
+
 class JaxRobotHandle(BaseDelegateMixin):
     """JAX-flavored wrapper. Methods return ``jax.Array`` and are jittable.
 
@@ -175,6 +189,7 @@ class JaxRobotHandle(BaseDelegateMixin):
 
     def __init__(self, base: RobotHandle, cache_key: str, so_path: str,
                  output_convention: str = "pinocchio"):
+        _require_gpu_backend()
         self._base = base
         self._cache_key = cache_key
         self._so_path = Path(so_path)
