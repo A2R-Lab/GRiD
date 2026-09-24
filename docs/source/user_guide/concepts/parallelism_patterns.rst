@@ -19,7 +19,7 @@ laid out so the fan-out is fast, not bandwidth- or indirection-bound). They are
 all four, and **every remaining serial block (or strided/uncoalesced access)
 must justify why none of P1/P2/P3/P4 apply**. This document is the canonical
 reference; the agent-facing condensed version lives in
-``docs/agent_debugging_guide.md`` §4.
+the `agent debugging guide <https://github.com/A2R-Lab/GRiD/blob/main/docs/agent_debugging_guide.md>`_ §4.
 
 ----
 

@@ -41,7 +41,8 @@ Register-then-run UX
    import grid_rbd
 
    # One-time per (robot, options, GRiD version, CUDA arch).
-   # ~30-60 s for iiwa14; cached under ~/.cache/grid-rbd/.
+   # cold: about ten minutes for iiwa14 on an RTX 5090 (see Fast Robot Setup); warm: seconds.
+   # Cached under ~/.cache/grid-rbd/ by content key.
    handle = grid_rbd.register_robot(
        name="iiwa14",
        urdf_path="path/to/iiwa.urdf",
@@ -56,7 +57,7 @@ Register-then-run UX
    u  = np.random.randn(64, handle.num_joints).astype(np.float32)
 
    qdd = handle.forward_dynamics(q, qd, u)   # shape (64, NJ)
-   M   = handle.crba(q)                      # shape (64, NJ, NJ)
+   M   = handle.crba(q)                      # shape (64, NV, NV)  (fixed base: NV == NJ)
 
 A complete walkthrough exercising every bound method is at
 ``bindings/examples/quickstart_iiwa14.py``.
@@ -64,8 +65,14 @@ A complete walkthrough exercising every bound method is at
 Method surface
 --------------
 
-All methods take and return 2D ``float32`` arrays where axis 0 is the
-batch. ``gravity`` is the **signed gravitational acceleration**, default
+Inputs are 2D arrays of the handle dtype (``float32`` unless the artifact was
+built with ``dtype="float64"``) with the batch on axis 0 and ``num_joints``
+(``NJ``, the configuration width ``nq``) on axis 1 — on a floating base that
+is ``NV + 1`` (the quaternion pad; a velocity or torque is passed at the same
+``NJ`` width with the last slot zero). Outputs are batched on axis 0 with the
+shapes below: vectors are ``NJ``-wide, matrices, Jacobians and gradients are
+``NV``-wide (``num_vel``; on a fixed base ``NV == NJ``). ``gravity`` is the
+**signed gravitational acceleration**, default
 ``-9.81`` (standard downward gravity) — the same convention as
 ``RBDReference.inverse_dynamics(..., GRAVITY=-9.81)`` and pinocchio, so
 pass the same value to both for cross-validation.
@@ -82,7 +89,7 @@ pass the same value to both for cross-validation.
      - Inverse dynamics bias (RNEA); alias ``rnea``. ``qdd=None`` ⇒ bias
        ``c = h − g``; a nonzero ``qdd`` adds the ``M·qdd`` term.
    * - ``minv(q)``
-     - ``(B, NJ, NJ)``
+     - ``(B, NV, NV)``
      - Direct mass-matrix inverse.
    * - ``forward_dynamics(q, qd, u)``
      - ``(B, NJ)``
@@ -91,7 +98,7 @@ pass the same value to both for cross-validation.
      - ``(B, NJ)``
      - Articulated body algorithm FD.
    * - ``crba(q)``
-     - ``(B, NJ, NJ)``
+     - ``(B, NV, NV)``
      - Composite-rigid-body mass matrix.
    * - ``end_effector_pose(q)``
      - ``(B, 6*NUM_EES)``
@@ -102,13 +109,13 @@ pass the same value to both for cross-validation.
        Fixed-base ``NV == NJ``; floating-base ``NV = 6 + n_joints`` (spatial
        twist, ``[omega; v]``) rather than the older quaternion-derivative columns.
    * - ``end_effector_pose_hessian(q)``
-     - ``(B, 6*NUM_EES, NJ, NJ)``
+     - ``(B, 6*NUM_EES, NV, NV)``
      - EE pose Hessian (∂²ee/∂q²).
    * - ``inverse_dynamics_gradient(q, qd, qdd=None)``
-     - ``(B, NJ, 2*NJ)``
+     - ``(B, NV, 2*NV)``
      - ``[dc_dq | dc_dqd]``.
    * - ``forward_dynamics_gradient(q, qd, u)``
-     - ``(B, NJ, 2*NJ)``
+     - ``(B, NV, 2*NV)``
      - ``[df_dq | df_dqd]``.
    * - ``idsva_so(q, qd, qdd=None)``
      - tuple of 4 ``(B, NV, NV, NV)``
@@ -216,8 +223,9 @@ If you do not need the MuJoCo output convention, build pin-only:
        enable_mujoco_kernels=False,
    )
 
-On g1-floating that is the difference between not building at all and a
-~33 min build at ~11 GB peak. Fixed-base and mimic robots (e.g. ``h1_2``)
+On g1-floating that is the difference between a 53-minute / 8.3 GB build
+(pin-only) and a 1 h 16 min / 11 GB one (with the mjx twins) — the dated table
+is on :doc:`../getting_started/fast_robot_setup`. Fixed-base and mimic robots (e.g. ``h1_2``)
 never get mjx twins, so the flag is a no-op there. It is mutually
 exclusive with ``output_convention="mujoco"``, and participates in the
 ``.so`` cache key only when ``False``, so existing caches stay valid.

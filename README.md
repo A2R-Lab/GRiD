@@ -17,7 +17,7 @@ adaptation from embedded Jetson class devices to desktop GPUs. Website: https://
 
 GRiD builds on our [URDFParser](https://github.com/A2R-Lab/URDFParser), [RBDReference](https://github.com/A2R-Lab/RBDReference), and [GLASS](https://github.com/A2R-Lab/GLASS) packages (URDF parsing, Pinocchio-validated reference dynamics, and GPU linear algebra), together with its own bundled code generator. Using its scripts, users can easily generate and test optimized rigid body dynamics CUDA C++ code for their URDF files.
 
-For additional information and links to our paper on this work, check out our [project website](https://brianplancher.com/publication/GRiD).
+For additional information and links to our paper on this work, check out our [project website](https://a2r-lab.org/publication/grid/).
 
 ## I want to…
 
@@ -228,7 +228,7 @@ When performing multiple computations of rigid body dynamics algorithms, GRiD pr
 
 ![Latency (including GPU I/O overhead) for N = 16, 32, 64, 128, and 256 computations of the gradient of forward dynamics for both the Pinocchio CPU baseline and the GRiD GPU library for various robot models (IIWA, HyQ, and Atlas). Overlayed is the speedup (or slowdown) of GRiD as compared to Pinocchio both in terms of pure computation and including I/O overhead.](docs/imgs/benchmark_multi_fd_grad.png)
 
-To learn more about GRiD's performance results and to run your own benchmark analysis please see [`test/benchmarks/`](test/benchmarks/) and our [paper](https://brianplancher.com/publication/GRiD/).
+To learn more about GRiD's performance results and to run your own benchmark analysis please see [`test/benchmarks/`](test/benchmarks/) and our [paper](https://a2r-lab.org/publication/grid//).
 
 ## Installation
 The Quick Start above covers the common-case install. For CUDA Toolkit

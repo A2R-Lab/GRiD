@@ -39,7 +39,7 @@ including the subtle dR/dq chart-slope terms in the second-order tensors).
 **Do not "debug" the reframe.** If an mjx output looks wrong, check the pin
 baseline FIRST — pin↔mjx is a KNOWN, validated transform, and every mjx bug
 so far was actually a pin bug or a caller-side convention mixup
-(``docs/agent_debugging_guide.md`` §1k).
+(`agent debugging guide <https://github.com/A2R-Lab/GRiD/blob/main/docs/agent_debugging_guide.md>`_ §1k).
 
 How GRiD serves it: native kernel twins
 ---------------------------------------

@@ -53,7 +53,7 @@ The task router: find the right entry point for what you are trying to do.
    * - **Benchmark GRiD (or compare against Pinocchio / MJX / Warp)**
      - :doc:`user_guide/tutorials/benchmarks`.
    * - **Debug a CUDA-vs-numpy mismatch or a weird kernel failure**
-     - ``docs/agent_debugging_guide.md`` — the accumulated bug-class bible
+     - the `agent debugging guide <https://github.com/A2R-Lab/GRiD/blob/main/docs/agent_debugging_guide.md>`_ — the accumulated bug-class bible
        (shared-memory init, output-convention traps, reduction
        nondeterminism, launch-config pitfalls, …).
    * - **Get MuJoCo/mjx-convention inputs & outputs**

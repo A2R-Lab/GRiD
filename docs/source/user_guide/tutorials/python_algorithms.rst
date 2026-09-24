@@ -69,8 +69,8 @@ directories are sourced correctly.
 5. Suggested testing includes
 ``RNEA (ID)``, ``HandC``, ``Hinverse``, and more.
 
-Instalation Instructions::
---------------------------
+Installation Instructions::
+---------------------------
 
 The only external dependency is ``numpy`` which can be automatically
 installed by running:

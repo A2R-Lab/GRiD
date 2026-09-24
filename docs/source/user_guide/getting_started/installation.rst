@@ -48,7 +48,8 @@ What each activity needs:
      - the ``[jax]`` / ``[torch]`` extra **plus a CUDA build of that framework
        matching your GPU arch** (the extras pin the CPU packages only; the
        CUDA wheel is your choice, e.g. ``pip install "jax[cuda12]"`` or
-       ``"jax[cuda13]"``, and a ``cu1xx`` torch wheel — see ``bindings/README.md``).
+       ``"jax[cuda13]"``, and a ``cu1xx`` torch wheel — see the
+       `bindings README <https://github.com/A2R-Lab/GRiD/blob/main/bindings/README.md>`_).
        A missing framework, or a CPU-only jax, is reported at
        ``register_robot`` time, not deep inside a call.
    * - Equivalence tests / the Pinocchio oracle / docs
@@ -58,10 +59,11 @@ What each activity needs:
 Platform: Linux x86_64 with CUDA 12.x/13.x is what is built and tested
 (the committed GPU-proof receipt names the exact GPU and toolkit). Windows
 and macOS are not supported and are not incidental scope. The submodules
-must be populated **before** ``pip install -e .`` — the install scripts do
-this in the right order; a bare editable install on a non-recursive clone
-succeeds and then fails at first generation with a "GLASS submodule is
-missing" error naming the fix.
+must be populated before the first **generation** (not before the editable
+install itself): ``install/base_install.sh`` runs ``pip install -e .`` and
+then ``git submodule update --init --recursive``; a bare editable install on
+a non-recursive clone succeeds and then fails at first generation with a
+"GLASS submodule is missing" error naming the fix.
 
 Install Python Dependencies
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

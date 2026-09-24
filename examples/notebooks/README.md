@@ -38,8 +38,8 @@ checkout):
 ```bash
 # from the repo root
 pip install -e .                 # numpy backend
-pip install -e ".[jax]"          # + JAX FFI bridge
-pip install -e ".[torch]"        # + torch autograd bridge (notebook 02)
+pip install -e ".[jax]" "jax[cuda12]"   # + JAX FFI bridge — the extra pins CPU jax; install the CUDA wheel (cuda12/cuda13) yourself
+pip install -e ".[torch]"        # + torch autograd bridge (notebook 02) — needs a CUDA (cu1xx) torch wheel; torch >= 2.14 compiles the .so with C++20
 pip install -r install/requirements-dev.txt     # nbval, for running the notebooks as tests
 ```
 

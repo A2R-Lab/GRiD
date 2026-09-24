@@ -321,5 +321,5 @@ See also
   method surface, cache layout, jax/torch backends, ``grid_plant``.
 * ``bindings/examples/AGENT_INTEGRATION_GUIDE.md`` — GPU-resident usage
   patterns for agents (stay on device, CUDA graphs, zero-copy interop).
-* ``examples/notebooks/`` — the guided notebook track (start with
+* `examples/notebooks/ <https://github.com/A2R-Lab/GRiD/tree/main/examples/notebooks>`_ — the guided notebook track (start with
   ``01_quickstart_iiwa14``).

@@ -132,18 +132,20 @@ the next replay: clone it to keep a value, and order a reader on another
 stream (``wait_stream``) before the next replay overwrites it. Capturing a
 backward is not supported (the backward's stamp check synchronises).
 
-What stays for later increments
--------------------------------
+What is deferred
+----------------
 
-B1/B2 keep today's synchronisation: setters still fence with a device-wide
-synchronise and the numpy input pack still drains the device. The admission
-lock orders *submissions*; it does not wait for outstanding GPU work, so the
-setter fence is what guarantees a mutation never lands under a kernel still
-reading the table — it stays until per-call leases and completion events
-(B3) supply that ordering. Concurrent asynchronous calls on ONE context still
-share its scratch buffers — one pipeline per context; use a context per
-pipeline. Setter and numpy fences and the per-backward stamp check are
-synchronisation points: do not read this page as fully asynchronous execution.
+This release keeps today's synchronisation: setters still fence with a
+device-wide synchronise and the numpy input pack still drains the device. The
+admission lock orders *submissions*; it does not wait for outstanding GPU
+work, so the setter fence is what guarantees a mutation never lands under a
+kernel still reading the table — it stays until per-call leases and completion
+events supply that ordering in a later release. Concurrent asynchronous calls
+on ONE context still share its scratch buffers — one pipeline per context; use
+a context per pipeline. Setter and numpy fences and the per-backward stamp
+check are synchronisation points: do not read this page as fully asynchronous
+execution. The complete list of stated limits is on
+:doc:`../getting_started/compatibility`.
 
 Inline-CUDA consumers of ``grid.cuh`` are untouched: ``init_gridData`` /
 ``init_gridData_checked`` / ``close_grid`` keep their signatures (the checked

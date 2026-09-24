@@ -21,50 +21,33 @@ reductions, no cooperative groups, bit-deterministic and thread-count
 invariant. Artifacts are built per target architecture (``sm_XX``); the
 model, the API and the generated code carry over, the binary does not.
 
-.. grid:: 3
+.. grid:: 1 1 3 3
    :gutter: 3
 
    .. grid-item-card:: numpy
       :link: user_guide/tutorials/python_wrappers
       :link-type: doc
 
-      .. code-block:: python
-
-         import grid_rbd
-         r = grid_rbd.load_robot("iiwa14.urdf")
-         qdd = r.forward_dynamics(q, qd, u)
-         dqdd = r.forward_dynamics_gradient(q, qd, u)
-
-      20+ batched methods; inputs and outputs are host arrays.
+      ``load_robot(urdf)`` → a handle with 20+ batched methods; inputs and
+      outputs are host arrays, batched on axis 0.
 
    .. grid-item-card:: JAX
       :link: jax-ffi-quickstart
       :link-type: ref
 
-      .. code-block:: python
-
-         r = grid_rbd.load_robot("go2.urdf", backend="jax",
-                                 floating_base=True)
-         loss = lambda q: r.forward_dynamics(q, qd, u).sum()
-         g = jax.jit(jax.grad(loss))(q)   # analytic VJP, on device
-
-      Device-in / device-out FFI targets that compose under ``jit``,
-      ``vmap`` and ``scan``; ``jax.grad`` runs the analytical gradient
-      kernels, never finite differences.
+      ``backend="jax"`` → device-in / device-out FFI targets that compose
+      under ``jit``, ``vmap`` and ``scan``; ``jax.grad`` runs the analytical
+      gradient kernels, never finite differences.
 
    .. grid-item-card:: torch
       :link: user_guide/tutorials/python_wrappers
       :link-type: doc
 
-      .. code-block:: python
+      ``backend="torch"`` → autograd-aware ops on the current CUDA stream,
+      plus CUDA-graph capture for fixed-batch replay.
 
-         r = grid_rbd.load_robot("iiwa14.urdf", backend="torch")
-         qdd = r.forward_dynamics(q, qd, u)   # CUDA tensors in/out
-         qdd.sum().backward()                 # analytic backward
-         step = r.capture("forward_dynamics", q, qd, u)  # CUDA graph
-
-      Autograd-aware ops on the current CUDA stream, CUDA-graph capture
-      for fixed-batch replay.
+Complete, copy-paste examples for each surface are in the
+:ref:`quickstart <landing-quickstart>` below.
 
 What you get per robot
 ----------------------
@@ -120,30 +103,81 @@ embedded Jetson-class devices to desktop cards, one artifact per
 architecture; the tested deployment platform of this release is Linux x86_64
 (see :doc:`compatibility and known limitations <user_guide/getting_started/compatibility>`).
 
-30-second quickstart
---------------------
+.. _landing-quickstart:
+
+Quickstart
+----------
+
+Install from a recursive clone (editable install; the extras pin the CPU jax
+/ torch packages, so add the CUDA wheels yourself — see
+:doc:`installation <user_guide/getting_started/installation>`):
 
 .. code-block:: shell
 
    git clone --recursive https://github.com/A2R-Lab/GRiD && cd GRiD
-   bash install/base_install.sh && source .venv/bin/activate   # + pip install -e ".[jax]" / ".[torch]"
+   bash install/base_install.sh && source .venv/bin/activate
+   pip install -e ".[jax,torch]" "jax[cuda12]"      # optional: the JAX and torch surfaces
 
-.. code-block:: python
+Each example below runs as written from the repository root. The **first**
+``load_robot`` of a robot generates and compiles its ``.so`` — about ten
+minutes for the 7-DoF iiwa14 on an RTX 5090, an hour for a humanoid (the dated
+cold/warm table and the RAM-safe subset builds are on
+:doc:`fast robot setup <user_guide/getting_started/fast_robot_setup>`).
+Every later load is seconds: the artifact is cached by content key and rebuilt
+only when the URDF, the options, the GRiD version or the toolchain change.
 
-   import numpy as np, grid_rbd
-   r = grid_rbd.load_robot("config/robot_assets/iiwa14.urdf")   # compiles once, cached forever
-   q, qd, u = (np.zeros((8, r.nq), np.float32) for _ in range(3))
-   print(r.forward_dynamics(q, qd, u).shape)                    # (8, 7)
+.. tab-set::
 
-The first ``load_robot`` of a robot generates and compiles its ``.so``
-(minutes; see :doc:`fast robot setup <user_guide/getting_started/fast_robot_setup>`
-for the cold/warm numbers and how to keep a humanoid build in RAM); every
-later load is seconds.
+   .. tab-item:: numpy
+
+      .. code-block:: python
+
+         import numpy as np
+         import grid_rbd
+
+         r = grid_rbd.load_robot("config/robot_assets/iiwa14.urdf")
+         q, qd, u = (np.zeros((8, r.nq), np.float32) for _ in range(3))
+         qdd = r.forward_dynamics(q, qd, u)                 # (8, 7)
+         dqdd = r.forward_dynamics_gradient(q, qd, u)       # (8, 7, 14) = [d/dq | d/dqd]
+         print(qdd.shape, dqdd.shape)
+
+   .. tab-item:: JAX
+
+      .. code-block:: python
+
+         import jax
+         import jax.numpy as jnp
+         import grid_rbd
+
+         r = grid_rbd.load_robot("config/robot_assets/go2.urdf", backend="jax",
+                                 floating_base=True)
+         q = jnp.zeros((8, r.nq), jnp.float32).at[:, 6].set(1.0)   # unit quaternion (x, y, z, w)
+         qd = jnp.zeros((8, r.nq), jnp.float32)                    # nq-wide: the last slot is a pad
+         u = jnp.zeros((8, r.nq), jnp.float32)
+         loss = lambda a: r.forward_dynamics(a, qd, u).sum()
+         g = jax.jit(jax.grad(loss))(q)                           # analytic VJP, stays on the device
+         print(g.shape)
+
+   .. tab-item:: torch
+
+      .. code-block:: python
+
+         import torch
+         import grid_rbd
+
+         r = grid_rbd.load_robot("config/robot_assets/iiwa14.urdf", backend="torch")
+         q = torch.zeros(8, r.nq, device="cuda", requires_grad=True)
+         qd = torch.zeros(8, r.nq, device="cuda")
+         u = torch.zeros(8, r.nq, device="cuda")
+         qdd = r.forward_dynamics(q, qd, u)                 # CUDA tensors in and out
+         qdd.sum().backward()                               # analytic backward
+         step = r.capture("forward_dynamics", q.detach(), qd, u)   # CUDA-graph replay
+         print(q.grad.shape, step.replay().shape)
 
 Go deeper
 ---------
 
-.. grid:: 3
+.. grid:: 1 1 3 3
    :gutter: 3
 
    .. grid-item-card:: How do I…?
@@ -167,7 +201,7 @@ Go deeper
       ``grid-generate robot.urdf`` emits a self-contained ``grid.cuh`` to
       ``#include`` in your own kernels.
 
-.. grid:: 3
+.. grid:: 1 1 3 3
    :gutter: 3
 
    .. grid-item-card:: API Reference

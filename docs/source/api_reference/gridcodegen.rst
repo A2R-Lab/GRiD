@@ -30,8 +30,8 @@ directory and can then be included into your project. See the
 `GRiD <https://github.com/A2R-Lab/GRiD>`__ repository for more
 instructions on how to use and test this code.
 
-Instalation Instructions:
--------------------------
+Installation Instructions:
+--------------------------
 
 The code generator (``grid_codegen``) ships with the GRiD repository. A
 single editable install pulls it in along with the ``URDFParser`` /
@@ -145,8 +145,8 @@ few are also found in the ``_topology_helpers.py`` and
    and similar Python numerical values can be returned through
    ``dva_cols_per_partial, dva_cols_per_jid, running_sum_dva_cols_per_jid, df_cols_per_partial,  df_cols_per_jid,  running_sum_df_cols_per_jid,  df_col_that_is_jid = gen_topology_sparsity_helpers_python()``
 
-Additonal Features:
--------------------
+Additional Features:
+--------------------
 
 This package also includes test functions which allow for code
 optimizations and refactorizations to be tested against reference
