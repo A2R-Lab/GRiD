@@ -313,7 +313,7 @@ class GRiDCodeGenerator:
         self.gen_add_code_line("#define XIMAT_SIZE 36")
 
         
-    def gen_all_code(self, include_base_inertia = False, include_homogenous_transforms = False, fixed_target_name = "", output_path = None,
+    def _resolve_emission_plan(self, include_base_inertia = False, include_homogenous_transforms = False, fixed_target_name = "", output_path = None,
                      codegen_profile = "all", algorithm_list = None, enable_floating_second_order = True,
                      enable_idsva_so_world_frame = None, enable_idsva_so_body_frame = None,
                      runtime_inertia = False, runtime_transform = False,
@@ -321,6 +321,12 @@ class GRiDCodeGenerator:
                      contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None,
                      emit_alloc_gating = False, fragments_dir = None,
                      vendor_glass = True, glass_revision = None):
+        """Pure option resolution for gen_all_code (hygiene 5/9, 2026-09-24): profile/
+        closure expansion, feature gates and every `self.*` build flag are decided
+        HERE, emitting nothing. Returns (algorithms, include_any_kinematics,
+        include_homogenous_transforms) — the plan the emission half consumes. Tests
+        assert on this plan without generating (the §7.z15 class); the closure and
+        subset tests remain the referee for what a plan actually builds."""
         # enable_mujoco_kernels=False builds a PIN-ONLY header: the mjx
         # (MUJOCO_OUTPUT=true) template overloads are still EMITTED (they are
         # templates -- uninstantiated they cost nothing; a bare #include is 2 s /
@@ -542,6 +548,17 @@ class GRiDCodeGenerator:
         include_homogenous_transforms = (include_homogenous_transforms or include_any_kinematics
                                          or bool(contact_frames) or bool(enable_contact_runtime))
         # first generate the file info
+        return algorithms, include_any_kinematics, include_homogenous_transforms
+
+    def gen_all_code(self, include_base_inertia = False, include_homogenous_transforms = False, fixed_target_name = "", output_path = None,
+                     codegen_profile = "all", algorithm_list = None, enable_floating_second_order = True,
+                     enable_idsva_so_world_frame = None, enable_idsva_so_body_frame = None,
+                     runtime_inertia = False, runtime_transform = False,
+                     runtime_joint_dynamics = None, multi_target_batch = None, collision_spec = None,
+                     contact_frames = None, enable_contact_runtime = False, enable_mujoco_kernels = None,
+                     emit_alloc_gating = False, fragments_dir = None,
+                     vendor_glass = True, glass_revision = None):
+        algorithms, include_any_kinematics, include_homogenous_transforms = self._resolve_emission_plan(include_base_inertia=include_base_inertia, include_homogenous_transforms=include_homogenous_transforms, fixed_target_name=fixed_target_name, output_path=output_path, codegen_profile=codegen_profile, algorithm_list=algorithm_list, enable_floating_second_order=enable_floating_second_order, enable_idsva_so_world_frame=enable_idsva_so_world_frame, enable_idsva_so_body_frame=enable_idsva_so_body_frame, runtime_inertia=runtime_inertia, runtime_transform=runtime_transform, runtime_joint_dynamics=runtime_joint_dynamics, multi_target_batch=multi_target_batch, collision_spec=collision_spec, contact_frames=contact_frames, enable_contact_runtime=enable_contact_runtime, enable_mujoco_kernels=enable_mujoco_kernels, emit_alloc_gating=emit_alloc_gating, fragments_dir=fragments_dir, vendor_glass=vendor_glass, glass_revision=glass_revision)
         file_notes = [ "Interface is:", \
             "    __host__   robotModel<T> *d_robotModel = init_robotModel<T>()", \
             "    __host__   cudaStream_t streams = init_grid<T>()", \
