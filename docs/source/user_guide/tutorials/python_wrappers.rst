@@ -418,6 +418,12 @@ frame, layout ``[3*NUM_VEL*f + 3*vi + row]``, floating tangent
 ``CONTACT_FRAME_POSITIONS[_GRADIENT]_DYNAMIC_SHARED_MEM_COUNT``. They ride
 the multi-target emitters, so a dynamics-only ``algorithm_list`` still gets
 them. (No Python method yet — the device/plant layer is the consumer.)
+The same caller-scratch pair exists for the DEFAULT multi-target batch (the
+``multi_target_batch`` option / collision spheres):
+``grid_plant::multi_target_position[_gradient](…, s_scratch, …)`` with
+``s_scratch`` sized by the constexpr
+``MULTI_TARGET_POSITION[_GRADIENT]_DYNAMIC_SHARED_MEM_BYTES<T>()`` — the raw
+evaluator a consumer's own FK carve would otherwise have to compose.
 
 ``register_robot(enable_tool=True)`` enables the runtime welded-tool
 surface — ``attach_tool`` / ``detach_tool`` / ``tool_fext`` — by turning

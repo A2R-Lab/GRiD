@@ -2188,3 +2188,23 @@ dropped line that opens a block drops the block; (3) in the fault-injection
 runner, resetting the ledger between a dry init and its dry close makes
 every destroy look unmatched — clear only the injection index between a
 paired acquire/release.
+
+### 7.z19 Emitter refactors: gate on FULL headers under the runners' -std=c++11, and grep for QUALIFIED spellings (2026-09-23)
+The constexpr-sizer change was gated on an ID-only header and a generic
+`if constexpr (TIER ==` grep. Both missed the one chain that mattered: the
+plant's `INTEGRATOR_HESSIAN_DYNAMIC_SHARED_MEM_BYTES` spells the tier symbols
+`grid::TIER_SHARED` (it is emitted inside `grid_plant`), so the grep never saw
+it, and no ID-only header emits the plant — 14 red receipt cells (3 shards),
+every one a C++11 "constexpr function must contain exactly one return". RULES:
+(1) an emitter change is gated by generating FULL all-profile headers for
+iiwa14-fixed, go2-floating (+mjx twins) and fr3 (mimic) and compiling each with
+`nvcc -std=c++11 -c` (~3 min total) — the equivalence runners are C++11;
+(2) when sweeping emitted text, grep BOTH the bare and the namespace-qualified
+spellings (`TIER_SHARED` and `grid::TIER_SHARED`); (3) the local gate ceiling is
+g1 — h1_2/h2_plus SO compiles (20-30 min each) belong to the real receipt only;
+(4) prefer the exact 14 red cells as the re-run set over a fleet-wide `-k`.
+Mechanical-refactor traps met the same day: a non-greedy `\[(.*?)\]\)` regex
+stops at the FIRST `])` — which sits INSIDE an emitted string
+(`streams[0]));}`); scan with a quote-aware bracket walker instead; and fold
+sites by asserting an exact shape match per site (skip + report the rest),
+never by best-effort substitution. Byte gate before AND after (8 cells).
