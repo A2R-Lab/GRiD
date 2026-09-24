@@ -26,6 +26,7 @@ Families emitted (each: device + kernel(timing + batch) + host(0/1/2)):
   energy                {KE, PE, mechanical}                 -> d_energy (3)
 """
 
+from ._frame_jacobian import _emit_world_transform_chainup
 import numpy as np
 
 from grid_codegen.helpers._code_generation_helpers import host_q_input_transfer_lines, gen_emit_host_result_transfer, gen_workspace_repoint_line, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
@@ -365,26 +366,7 @@ def gen_centroidal_inner(self):
     self.gen_add_end_control_flow()
 
     # ---- Step 1: world homogeneous transforms by BFS level (chain-up) ----
-    self.gen_add_code_line("// Step 1: world homogeneous transforms (chain-up of local s_Xhom)")
-    for level in range(n_bfs_levels):
-        ids_at_level = self.robot.get_ids_by_bfs_level(level)
-        if not ids_at_level:
-            continue
-        njs = len(ids_at_level)
-        self.gen_add_parallel_loop("ind", str(16 * njs))
-        self.gen_add_code_line("int slot = ind / 16; int ele = ind % 16;")
-        self.gen_add_code_line("int row = ele & 3; int col = ele >> 2;")
-        jid_list = [str(j) for j in ids_at_level]
-        par_list = [str(self.robot.get_parent_id(j)) for j in ids_at_level]
-        if njs > 1:
-            self.gen_add_multi_threaded_select("slot", "<", [str(i + 1) for i in range(njs)],
-                                               [("int", "jid", jid_list), ("int", "par", par_list)])
-        else:
-            self.gen_add_code_line("const int jid = " + jid_list[0] + "; const int par = " + par_list[0] + ";")
-        self.gen_add_code_line("if (par == -1) { s_Xworld[16*jid + ele] = s_Xhom[16*jid + ele]; }")
-        self.gen_add_code_line("else { s_Xworld[16*jid + ele] = dot_prod<T,4,4,1>(&s_Xworld[16*par + row], &s_Xhom[16*jid + 4*col]); }")
-        self.gen_add_end_control_flow()
-        self.gen_add_sync()
+    _emit_world_transform_chainup(self, declare_xworld = False)
 
     # ---- Step 2: per-body world spatial inertia Iw = Xpx^{-T} Ibw Xpx^{-1} ----
     # We assemble the world inertia in angular-first [ang; lin] order directly

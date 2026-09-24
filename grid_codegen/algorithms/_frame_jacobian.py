@@ -60,12 +60,17 @@ def _frame_jacobian_inner_temp_mem_size(self):
     return 16 * NJ
 
 
-def _emit_world_transform_chainup(self):
+def _emit_world_transform_chainup(self, declare_xworld = True):
     """Step 1: per-joint world homogeneous transforms by BFS level (chain-up of
-    local s_Xhom into s_temp[0..16*NJ)). The shared kinematics primitive behind
-    frame_jacobian and the runtime-target ee-pose surfaces (_eepose_runtime)."""
+    local s_Xhom into s_Xworld). The shared kinematics primitive behind
+    frame_jacobian, the runtime-target ee-pose surfaces (_eepose_runtime), the
+    centroidal inner and the potential-energy regressor (hygiene 12, 2026-09-24:
+    the latter two carried verbatim copies). ``declare_xworld`` emits the
+    ``s_Xworld = &s_temp[0]`` alias; callers that place s_Xworld themselves pass
+    False."""
     n_bfs_levels = self.robot.get_max_bfs_level() + 1
-    self.gen_add_code_line("T *s_Xworld = &s_temp[0];")
+    if declare_xworld:
+        self.gen_add_code_line("T *s_Xworld = &s_temp[0];")
     self.gen_add_code_line("// Step 1: world homogeneous transforms (chain-up of local s_Xhom)")
     for level in range(n_bfs_levels):
         ids_at_level = self.robot.get_ids_by_bfs_level(level)

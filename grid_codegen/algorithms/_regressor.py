@@ -38,6 +38,7 @@ The output is shaped nv x 10*NB. R2: it is a gridData field (hd_data->d_Y, sized
 back into hd_data->h_Y (uniform `(hd_data, model, ...)` host signature).
 """
 
+from ._frame_jacobian import _emit_world_transform_chainup
 from grid_codegen.helpers._code_generation_helpers import host_q_input_transfer_lines, _gen_mjx_build_R_lines, gen_workspace_repoint_line, gen_workspace_cast_expr, host_mode_flags, host_q_qd_input_transfer_lines, mangle_host_func_defs, wrap_host_single_call_timing
 from grid_codegen.helpers._code_generation_helpers import gen_host_wrapper_head
 
@@ -1162,26 +1163,7 @@ def gen_potential_energy_regressor_inner(self):
 
     # Step 1: world homogeneous transforms by BFS level (chain-up of local s_Xhom).
     # Mirrors centroidal Step-1 -> use s_Xworld, do NOT rebuild from spatial.
-    self.gen_add_code_line("// Step 1: world homogeneous transforms (chain-up of local s_Xhom)")
-    for level in range(n_bfs_levels):
-        ids_at_level = self.robot.get_ids_by_bfs_level(level)
-        if not ids_at_level:
-            continue
-        njs = len(ids_at_level)
-        self.gen_add_parallel_loop("ind", str(16 * njs))
-        self.gen_add_code_line("int slot = ind / 16; int ele = ind % 16;")
-        self.gen_add_code_line("int row = ele & 3; int col = ele >> 2;")
-        jid_list = [str(j) for j in ids_at_level]
-        par_list = [str(self.robot.get_parent_id(j)) for j in ids_at_level]
-        if njs > 1:
-            self.gen_add_multi_threaded_select("slot", "<", [str(i + 1) for i in range(njs)],
-                                               [("int", "jid", jid_list), ("int", "par", par_list)])
-        else:
-            self.gen_add_code_line("const int jid = " + jid_list[0] + "; const int par = " + par_list[0] + ";")
-        self.gen_add_code_line("if (par == -1) { s_Xworld[16*jid + ele] = s_Xhom[16*jid + ele]; }")
-        self.gen_add_code_line("else { s_Xworld[16*jid + ele] = dot_prod<T,4,4,1>(&s_Xworld[16*par + row], &s_Xhom[16*jid + 4*col]); }")
-        self.gen_add_end_control_flow()
-        self.gen_add_sync()
+    _emit_world_transform_chainup(self, declare_xworld = False)
 
     # Step 2: P2-fan over 10*NB columns. Zero every col, then fill the 4 nonzeros
     #   per body from (R_i, p_i): g = [0,0,gravity], so
