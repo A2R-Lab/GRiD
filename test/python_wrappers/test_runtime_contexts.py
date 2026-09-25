@@ -438,3 +438,23 @@ def test_replay_admission_racing_mutation_and_close_never_deadlocks(iiwa, tmp_pa
     except subprocess.TimeoutExpired as e:
         pytest.fail(f"replay-admission race DEADLOCKED (child timed out); stdout={e.stdout!r}")
     assert res.returncode == 0 and "OK" in res.stdout, f"rc={res.returncode}\n{res.stdout}\n{res.stderr[-3000:]}"
+
+
+def test_construction_does_not_create_the_default_context_and_a_slab_still_installs(iiwa):
+    """Release receipt #3 (2026-09-25): a handle's init-time launch overlay resolved
+    context 0 and CREATED the default context, after which a device slab could never
+    be installed. Overlays set before any context exists are pending and seeded at
+    creation; the first kernel call is what creates the default context."""
+    import grid_rbd
+    n0 = iiwa._runner.ctx_count()
+    h = grid_rbd.get_robot("ctx_pytest_iiwa14")          # fresh handle over the same .so
+    try:
+        assert h._runner.ctx_count() == n0                  # construction created nothing
+        h.set_threads_per_block(64)                         # pending when no default exists
+        assert h.threads_per_block == 64
+        q, qd, u = _state(h)
+        h.forward_dynamics(q, qd, u)                        # first call creates the default…
+        assert h.threads_per_block == 64                    # …seeded with the pending overlay
+        h.set_threads_per_block(0)
+    finally:
+        h.close()

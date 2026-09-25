@@ -178,6 +178,12 @@ static long long g_ctx_next_serial = 1;     // under the registry mutex
 static std::atomic<unsigned long long> g_model_epoch{0};
 static long long g_ctx_default_id = 0;      // the default context's REAL id (0 = none live)
 static grid::grid_device_pool_t g_ctx_pending_default_pool = {nullptr, 0, 0, 0};  // set_device_pool before the default exists
+// Launch overrides addressed to context 0 while NO default context exists are recorded
+// here (under the registry mutex) and seeded into every context at creation. A handle
+// applies its launch-config overlay at construction; resolving context 0 for that used
+// to CREATE the default context (and its arena), after which a device slab could never
+// be installed ("default context already live") — release receipt #3, 2026-09-25.
+static LaunchOverrides g_ctx_pending_launch;
 // rc codes (the pybind rc decoder names them): 10 unknown or foreign id, 11 closed id,
 // 12 context closing, 13 artifact/device arch mismatch, 14 pool/arena creation failed.
 static const char *grid_ctx_rc_message(int rc) {
@@ -363,6 +369,7 @@ static int grid_ctx_create_locked(GridCtx **out, const grid::grid_device_pool_t 
     }
     GridCtx *c = new GridCtx();
     c->version = ++g_model_epoch;
+    c->launch = g_ctx_pending_launch;   // overlays recorded before any context existed
     c->pool = pool; c->pool.used = 0;
     c->plant = new PlantBuffers();
     size_t free_b = 0, total_b = 0; cudaMemGetInfo(&free_b, &total_b);
@@ -547,7 +554,13 @@ extern "C" int grid_rbd_max_perf_level_threads() { return grid::MAX_PERF_LEVEL_T
 // Returns the active global override: -1 means "use the per-algo autotuned
 // default" (launch_cfg<ALGO>::THREADS baked into grid.cuh); a value >=1 means
 // the caller forced that thread count for ALL algos via set_threads_per_block.
-extern "C" int grid_rbd_threads_per_block(long long ctx_id) { GridCtxRef r(ctx_id); return r.ctx ? r.ctx->launch.threads_override : -1; }
+extern "C" int grid_rbd_threads_per_block(long long ctx_id) {
+    {
+        std::lock_guard<std::mutex> lk(grid_ctx_mutex());
+        if (ctx_id == 0 && g_ctx_default_id == 0) return g_ctx_pending_launch.threads_override;
+    }
+    GridCtxRef r(ctx_id); return r.ctx ? r.ctx->launch.threads_override : -1;
+}
 extern "C" int grid_rbd_set_threads_per_block(long long ctx_id, int n) {
     // Control the per-block thread count used for all subsequent kernel launches.
     // The DEFAULT is per-algo autotuned: each call defaults its threads-per-block
@@ -561,6 +574,10 @@ extern "C" int grid_rbd_set_threads_per_block(long long ctx_id, int n) {
     // so any block size with enough threads to cover the parallel work is valid (the
     // SIMT helpers use block-stride loops, so smaller block sizes are correct but slower).
     if (n < 0) return 1;
+    {
+        std::lock_guard<std::mutex> lk(grid_ctx_mutex());
+        if (ctx_id == 0 && g_ctx_default_id == 0) { g_ctx_pending_launch.threads_override = (n == 0) ? -1 : n; return 0; }
+    }
     GRID_RBD_CTX_MUT_OR_RETURN(ctx_id);   // B2: exclusive; launch overrides do not bump the model version
     g_ctx->launch.threads_override = (n == 0) ? -1 : n;
     return 0;
@@ -576,6 +593,10 @@ extern "C" int grid_rbd_algo_count() { return grid::GRID_ALGO_COUNT; }
 // override (set_threads_per_block) still takes precedence when set.
 extern "C" int grid_rbd_set_threads_for(long long ctx_id, int algo, int n) {
     if (algo < 0 || algo >= grid::GRID_ALGO_COUNT || n < 0) return 1;
+    {
+        std::lock_guard<std::mutex> lk(grid_ctx_mutex());
+        if (ctx_id == 0 && g_ctx_default_id == 0) { g_ctx_pending_launch.threads_per_algo[algo] = (n == 0) ? -1 : n; return 0; }
+    }
     GRID_RBD_CTX_MUT_OR_RETURN(ctx_id);
     g_ctx->launch.threads_per_algo[algo] = (n == 0) ? -1 : n;
     return 0;
@@ -588,6 +609,15 @@ extern "C" int grid_rbd_set_threads_for(long long ctx_id, int algo, int n) {
 // <profile>_bases_by_n block; process-global like the other overlays.
 extern "C" int grid_rbd_set_threads_for_n(long long ctx_id, int algo, int threshold, int n_small) {
     if (algo < 0 || algo >= grid::GRID_ALGO_COUNT || threshold < 0) return 1;
+    if (threshold != 0 && n_small < 1) return 1;
+    {
+        std::lock_guard<std::mutex> lk(grid_ctx_mutex());
+        if (ctx_id == 0 && g_ctx_default_id == 0) {
+            g_ctx_pending_launch.batch_threshold_per_algo[algo] = threshold;
+            g_ctx_pending_launch.threads_per_algo_small[algo] = threshold == 0 ? -1 : n_small;
+            return 0;
+        }
+    }
     GRID_RBD_CTX_MUT_OR_RETURN(ctx_id);
     if (threshold == 0) {
         g_ctx->launch.batch_threshold_per_algo[algo] = 0;
@@ -604,6 +634,14 @@ extern "C" int grid_rbd_set_threads_for_n(long long ctx_id, int algo, int thresh
 // Returns 0 and fills (threshold, n_small); threshold 0 = no switch armed.
 extern "C" int grid_rbd_get_batch_switch(long long ctx_id, int algo, int *threshold, int *n_small) {
     if (algo < 0 || algo >= grid::GRID_ALGO_COUNT || !threshold || !n_small) return 1;
+    {
+        std::lock_guard<std::mutex> lk(grid_ctx_mutex());
+        if (ctx_id == 0 && g_ctx_default_id == 0) {
+            *threshold = g_ctx_pending_launch.batch_threshold_per_algo[algo];
+            *n_small = g_ctx_pending_launch.threads_per_algo_small[algo];
+            return 0;
+        }
+    }
     GRID_RBD_CTX_OR_RETURN(ctx_id);
     *threshold = g_ctx->launch.batch_threshold_per_algo[algo];
     *n_small = g_ctx->launch.threads_per_algo_small[algo];
