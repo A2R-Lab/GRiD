@@ -362,7 +362,7 @@ def test_fdsva_so_jit_matches_eager(jax_handle, samples):
         assert np.max(np.abs(a - b)) < 1e-6
 
 
-_INTEGRATOR_TYPES = ("euler", "semi_implicit_euler", "midpoint", "rk3", "rk4")
+_INTEGRATOR_TYPES = ("euler", "semi_implicit_euler", "constant_acceleration", "trapezoidal", "midpoint", "rk4")
 
 
 @pytest.mark.parametrize("it_name", _INTEGRATOR_TYPES)

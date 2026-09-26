@@ -1356,7 +1356,8 @@ extern "C" int grid_rbd_contact_fext(const T*, const T*, T*, int) { return 3; }
 //
 // dt is a runtime float; gravity is the signed gravitational acceleration (default -9.81). The
 // integrator type is selected at call time via an int code (0=EULER,
-// 1=SEMI_IMPLICIT_EULER, 2=MIDPOINT, 3=RK3, 4=RK4) dispatched onto the
+// 1=SEMI_IMPLICIT_EULER, 2=MIDPOINT, 3=RK4, 4=TRAPEZOIDAL (Heun), 5=CONSTANT_ACCELERATION;
+// mirrored by _handle.py's _INTEGRATOR_CODES) dispatched onto the
 // compile-time `IntegratorType IT` template. x_kp1 is size (NUM_POS + NUM_VEL)
 // per timestep; dAB is (2*NUM_VEL) x (3*NUM_VEL) per timestep (column-major).
 
@@ -1414,9 +1415,9 @@ static void launch_integrator_grad_host_mujoco(GridCtx *ctx, int batch, T gravit
         case 0: FN<grid::IntegratorType::EULER>(g_ctx, __VA_ARGS__); break;             \
         case 1: FN<grid::IntegratorType::SEMI_IMPLICIT_EULER>(g_ctx, __VA_ARGS__); break;\
         case 2: FN<grid::IntegratorType::MIDPOINT>(g_ctx, __VA_ARGS__); break;          \
-        case 3: FN<grid::IntegratorType::RK3>(g_ctx, __VA_ARGS__); break;               \
-        case 4: FN<grid::IntegratorType::RK4>(g_ctx, __VA_ARGS__); break;               \
-        case 5: FN<grid::IntegratorType::TRAPEZOIDAL>(g_ctx, __VA_ARGS__); break;               \
+        case 3: FN<grid::IntegratorType::RK4>(g_ctx, __VA_ARGS__); break;               \
+        case 4: FN<grid::IntegratorType::TRAPEZOIDAL>(g_ctx, __VA_ARGS__); break;       \
+        case 5: FN<grid::IntegratorType::CONSTANT_ACCELERATION>(g_ctx, __VA_ARGS__); break; \
         default: return 3;                                                       \
     }
 
@@ -1435,15 +1436,15 @@ static void launch_integrator_grad_host_mujoco(GridCtx *ctx, int batch, T gravit
 // ERR_STMT is the whole surface-specific statement (ffi::Error return vs
 // TORCH_CHECK). The _SS core is single-stage (EULER / SEMI_IMPLICIT_EULER)
 // ONLY — the mjx gradient / plant-step epilogues static_assert multi-stage
-// out, so those dispatchers must never name the MIDPOINT/RK/TRAPEZOIDAL cases.
+// out, so those dispatchers must never name the multi-stage cases.
 #define GRID_RBD_IT_SWITCH_MJX(it_code, FN, MUJOCO_FLAG, ERR_STMT, ...)                         \
     switch (it_code) {                                                                          \
         case 0: FN<grid::IntegratorType::EULER, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break;               \
         case 1: FN<grid::IntegratorType::SEMI_IMPLICIT_EULER, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break; \
         case 2: FN<grid::IntegratorType::MIDPOINT, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break;            \
-        case 3: FN<grid::IntegratorType::RK3, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break;                 \
-        case 4: FN<grid::IntegratorType::RK4, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break;                 \
-        case 5: FN<grid::IntegratorType::TRAPEZOIDAL, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break;         \
+        case 3: FN<grid::IntegratorType::RK4, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break;                 \
+        case 4: FN<grid::IntegratorType::TRAPEZOIDAL, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break;         \
+        case 5: FN<grid::IntegratorType::CONSTANT_ACCELERATION, MUJOCO_FLAG>(g_ctx, __VA_ARGS__); break; \
         default: ERR_STMT;                                                                      \
     }
 #define GRID_RBD_IT_SWITCH_MJX_SS(it_code, FN, MUJOCO_FLAG, ERR_STMT, ...)                      \

@@ -103,14 +103,16 @@ class SecondOrderFD(NamedTuple):
 
 
 # Integrator-type name -> the int code the C ABI dispatches onto IntegratorType.
+# Mirrors grid::IntegratorType (grid_codegen/algorithms/_integrator.py, 2026-09-26
+# contract): full-state midpoint / Heun ("trapezoidal") / rk4, and the one-evaluation
+# "constant_acceleration" formula. No aliases; "rk3" and "si_euler" are gone.
 _INTEGRATOR_CODES = {
     "euler": 0,
     "semi_implicit_euler": 1,
-    "si_euler": 1,
     "midpoint": 2,
-    "rk3": 3,
-    "rk4": 4,
-    "trapezoidal": 5,
+    "rk4": 3,
+    "trapezoidal": 4,
+    "constant_acceleration": 5,
 }
 
 
@@ -1620,8 +1622,8 @@ class RobotHandle:
 
         Returns shape (B, NUM_POS + NUM_VEL) — concatenated [q_new, v_new].
         `dt` is the runtime timestep; gravity is the signed gravitational acceleration (default -9.81).
-        `integrator_type` is one of euler / semi_implicit_euler / midpoint /
-        rk3 / rk4.
+        `integrator_type` is one of euler / semi_implicit_euler / constant_acceleration /
+        trapezoidal (Heun) / midpoint / rk4.
 
         With ``output_convention="mujoco"`` (floating base) the free-joint base
         position takes a GLOBAL additive step (the MuJoCo retract) rather than
@@ -1752,8 +1754,8 @@ class RobotHandle:
         """x_{k+1} = integrator(x_k, u_k, dt). Thin wrapper over grid::integrator.
 
         x is (B, NUM_POS + NUM_VEL); u is (B, NUM_VEL). Returns (B, NX).
-        `integrator_type` is one of euler / semi_implicit_euler / midpoint /
-        rk3 / rk4 (same codes as :py:meth:`integrator`).
+        `integrator_type` is one of euler / semi_implicit_euler / constant_acceleration /
+        trapezoidal (Heun) / midpoint / rk4 (same codes as :py:meth:`integrator`).
 
         With ``output_convention="mujoco"`` (floating base, EULER/SI-EULER) ``x``/``u``
         are MuJoCo-convention and the returned next state uses the mjx global-add
@@ -1776,7 +1778,7 @@ class RobotHandle:
         to grid::integrator_gradient (the value is byte-identical to
         :py:meth:`integrator_gradient`). Matches ``RBDReference.plant_step_gradient``
         (= ``integrator_gradient``). ``integrator_type`` is one of euler /
-        semi_implicit_euler / midpoint / rk3 / rk4.
+        semi_implicit_euler / constant_acceleration / trapezoidal / midpoint / rk4.
         """
         x = np.ascontiguousarray(x, dtype=self._dt)
         u = np.ascontiguousarray(u, dtype=self._dt)
