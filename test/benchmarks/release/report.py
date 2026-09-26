@@ -19,7 +19,7 @@ LABELS = {"grid_cuda": "GRiD CUDA host call", "grid_native": "GRiD C ABI", "grid
           "grid_torch": "GRiD PyTorch", "pinocchio": "Pinocchio CPU (codegen)", "pinocchio_plain": "Pinocchio CPU (standard API)", "mjx": "MJX",
           "mujoco_warp": "MuJoCo Warp", "mujoco_cpu": "MuJoCo CPU", "bard": "BARD", "frax": "Frax"}
 OP_LABELS = {**dict(zip(CORE, ("RNEA", "grad RNEA", "Hessian RNEA"))),
-             "minv": "M⁻¹", "forward_dynamics": "ABA", "forward_dynamics_gradient": "grad ABA", "fdsva_so": "Hessian ABA",
+             "minv": "M⁻¹", "forward_dynamics": "FD", "forward_dynamics_gradient": "grad FD", "fdsva_so": "Hessian FD",
              "end_effector_pose": "EE pose", "end_effector_pose_gradient": "grad EE pose", "end_effector_pose_hessian": "Hessian EE pose",
              "crba": "CRBA (M)", "nonlinear_effects": "bias (C·qd + g)", "generalized_gravity": "gravity g",
              "ccrba": "centroidal momentum matrix", "coriolis_matrix": "Coriolis matrix"}
@@ -532,7 +532,7 @@ import math  # noqa: E402
 
 COMPETITOR_ORDER_ALL = ("pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
 SHORT_OP = {"inverse_dynamics": "RNEA", "inverse_dynamics_gradient": "∇RNEA", "idsva_so": "∇²RNEA", "minv": "M⁻¹",
-            "forward_dynamics": "ABA", "forward_dynamics_gradient": "∇ABA", "fdsva_so": "∇²ABA",
+            "forward_dynamics": "FD", "forward_dynamics_gradient": "∇FD", "fdsva_so": "∇²FD",
             "end_effector_pose": "EE pose", "end_effector_pose_gradient": "∇EE", "end_effector_pose_hessian": "∇²EE",
             "crba": "M", "nonlinear_effects": "C·q̇+g", "generalized_gravity": "g", "ccrba": "A_G", "coriolis_matrix": "C"}
 # diverging blue <-> gray <-> red (reference palette poles), centred on 1x

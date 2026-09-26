@@ -546,3 +546,12 @@ def test_cpu_power_is_recorded_and_part_of_the_contract(tmp_path):
     table = json.loads((out / 'table.json').read_text())
     assert {c['status'] for c in table['cells']} == {'contract_mismatch'}
     assert all('cpu_power' in r['contract'] for r in table['raw_records'])
+
+
+def test_forward_dynamics_rows_are_labelled_fd_not_aba():
+    # GRiD's timed forward_dynamics is the mass-matrix-inverse path, and MJX / Warp solve with
+    # their own factorisations; "ABA" named an algorithm none of the timed rows necessarily run.
+    from test.benchmarks.release.report import OP_LABELS, SHORT_OP
+    assert (OP_LABELS["forward_dynamics"], OP_LABELS["forward_dynamics_gradient"], OP_LABELS["fdsva_so"]) == ("FD", "grad FD", "Hessian FD")
+    assert (SHORT_OP["forward_dynamics"], SHORT_OP["forward_dynamics_gradient"], SHORT_OP["fdsva_so"]) == ("FD", "∇FD", "∇²FD")
+    assert not any("ABA" in v for v in (*OP_LABELS.values(), *SHORT_OP.values()))
