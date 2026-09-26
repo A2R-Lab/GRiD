@@ -42,6 +42,9 @@ def stable_provenance(provenance):
     return gpu, cpu
 
 
+ACCEPTED_SOURCE_DRIFT = set()   # filled from --accept-source-drift; always recorded in table.json
+
+
 def records(directory):
     directory = Path(directory)
     plan = json.loads((directory / "plan.json").read_text())
@@ -107,12 +110,24 @@ def records(directory):
                     "threads": adapter.get("active_cpu_threads", adapter.get("threads_per_block")),
                     "urdf_sha256": capture.get("fixture", {}).get("urdf_sha256"),
                     "input_values_sha256": capture.get("input_values_sha256"),
-                    "contract": json.dumps({"commit": provenance.get("commit"),
-                        "sources": capture.get("collector_sources", provenance.get("collector_sources")), "packages": provenance.get("packages"),
+                    # The contract is the measurement protocol, the inputs and the
+                    # hardware; the code under test is versioned per capture
+                    # (commit and diff in provenance, library hashes in the adapter
+                    # metadata) so a narrow re-collection at a later commit can
+                    # supersede cells beside their unchanged neighbours.
+                    "commit": provenance.get("commit"), "code_diff": provenance.get("diff_sha256"),
+                    "submodules": provenance.get("submodules"),
+                    "contract": json.dumps({
+                        # the timing code only: the oracle files (RBDReference, URDFParser) are
+                        # provenance — every cell is validated against the oracle at collection
+                        # time, so an oracle fix later does not change what a timing means.
+                        "sources": {k: v for k, v in (capture.get("collector_sources") or provenance.get("collector_sources") or {}).items()
+                                    if k.startswith("test/benchmarks/") and not k.endswith("/report.py")
+                                    and k not in ACCEPTED_SOURCE_DRIFT},
+                        "packages": provenance.get("packages"),
                         "arithmetic_policy": plan.get("arithmetic_policy"),
                         "accuracy_policy": policy, "fd_warning_max_relative_l2": plan.get("fd_warning_max_relative_l2"),
                         "accuracy_policy_version": version,
-                        "code_diff": provenance.get("diff_sha256"), "submodules": provenance.get("submodules"),
                         "gpu": stable_provenance(provenance)[0], "cpu": stable_provenance(provenance)[1],
                         "iterations": plan["iterations"], "warmups": plan["warmups"],
                         "cpu_threads": plan.get("cpu_threads")}, sort_keys=True),
@@ -293,6 +308,8 @@ def plot(rows, directory, kind, purpose):
 # (BACKEND_HUE is defined near the top of the module.)
 SEGMENT_HUE = {"compute": "#184f95", "memory": "#3987e5", "wrapper": "#86b6ef"}
 COMPETITOR_ORDER = ("pinocchio", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
+PINOCCHIO_CODEGEN_OPS = {"inverse_dynamics", "inverse_dynamics_gradient", "minv", "forward_dynamics",
+                         "forward_dynamics_gradient", "crba", "nonlinear_effects", "generalized_gravity"}
 SURFACE_LABELS = {"grid_native": "C ABI", "grid_numpy": "NumPy", "grid_jax": "JAX", "grid_torch": "PyTorch"}
 
 
@@ -362,11 +379,14 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax"):
                     total, resident = row.get("host_us"), row.get("resident_us")
                     if backend == "pinocchio":
                         # codegen full call as the base, the standard API's extra
-                        # time as the cap (same robot, inputs and thread policy).
+                        # time as the cap (same robot, inputs and thread policy);
+                        # only where a codegen path exists — the second-order and
+                        # FK operations run the same analytical code in both modes.
                         plain = lookup.get((robot, op, "pinocchio_plain", batch), {}).get("host_us")
+                        codegen_op = op in PINOCCHIO_CODEGEN_OPS
                         if total is None and plain is not None:
                             total, resident = plain, None
-                        elif total is not None and plain is not None:
+                        elif total is not None and plain is not None and codegen_op:
                             resident, total = total, plain
                     if total is None:
                         ax.text(x, .025, "N/C" if not row else row.get("status", "N/A").replace("_", " "),
@@ -606,7 +626,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("captures", nargs="+", type=Path)
     ap.add_argument("--output", required=True, type=Path)
+    ap.add_argument("--accept-source-drift", action="append", default=[], metavar="PATH",
+                    help="collector source file whose version may differ between the captures being combined "
+                         "(an adapter edited for another backend); every accepted path is recorded in table.json")
     args = ap.parse_args()
+    ACCEPTED_SOURCE_DRIFT.update(args.accept_source_drift)
     # Captures are read in order; a cell (robot, operation, backend, batch, repeat)
     # already produced by an earlier capture supersedes the same cell in a later
     # one — so a narrow re-collection goes FIRST, and the core and wrappers
@@ -629,7 +653,8 @@ def main():
     rows = aggregate(raw)
     args.output.mkdir(parents=True, exist_ok=False)
     write_json(args.output / "table.json", {"publication_approved": False, "purpose": raw[0]["purpose"], "cells": rows, "raw_records": raw,
-        "superseded_cells": superseded, "capture_order": [str(d) for d in args.captures]})
+        "superseded_cells": superseded, "capture_order": [str(d) for d in args.captures],
+        "accepted_source_drift": sorted(ACCEPTED_SOURCE_DRIFT)})
     with (args.output / "table.csv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader(); writer.writerows(rows)

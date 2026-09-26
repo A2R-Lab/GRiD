@@ -27,6 +27,12 @@
 #ifndef GRID_KERNEL_MAX_BATCH
 #define GRID_KERNEL_MAX_BATCH 256
 #endif
+// Poses written per timestep by the artifact's end-effector kernel: one for a
+// fixed-target build (grid::NUM_EES still counts every leaf), passed by the
+// adapter from the artifact metadata like the wrapper's GRID_RBD_NUM_EES.
+#ifndef GRID_KERNEL_NUM_EES
+#define GRID_KERNEL_NUM_EES grid::NUM_EES
+#endif
 
 using T = float;
 
@@ -43,7 +49,17 @@ double now_us() {
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-constexpr int OP_ID = 0, OP_ID_GRAD = 1, OP_IDSVA_SO = 2;
+// Operation codes = the collector's OPS order (pin_adapter.OPS / grid_adapter.KERNEL_OPS).
+constexpr int OP_ID = 0, OP_ID_GRAD = 1, OP_IDSVA_SO = 2, OP_MINV = 3, OP_FD = 4, OP_FD_GRAD = 5,
+              OP_FDSVA_SO = 6, OP_EE_POSE = 7, OP_CRBA = 8, OP_NLE = 9, OP_GRAVITY = 10, OP_CCRBA = 11, OP_CORIOLIS = 12;
+#define KB_CAT_(a, b) a##b
+#define KB_CAT(a, b) KB_CAT_(a, b)
+#if !defined(GRID_HAS_IDSVA_SO)
+#define GRID_HAS_IDSVA_SO 0
+#endif
+#if !defined(GRID_HAS_FDSVA_SO)
+#define GRID_HAS_FDSVA_SO 0
+#endif
 
 bool op_built(int op) {
     switch (op) {
@@ -56,17 +72,52 @@ bool op_built(int op) {
 #if GRID_HAS_IDSVA_SO
         case OP_IDSVA_SO: return true;
 #endif
+#if GRID_HAS_MINV
+        case OP_MINV: return true;
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS
+        case OP_FD: return true;
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+        case OP_FD_GRAD: return true;
+#endif
+#if GRID_HAS_FDSVA_SO
+        case OP_FDSVA_SO: return true;
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE && defined(GRID_RBD_EE_POSE_FN)
+        case OP_EE_POSE: return true;
+#endif
+#if GRID_HAS_CRBA
+        case OP_CRBA: return true;
+#endif
+#if GRID_HAS_NONLINEAR_EFFECTS
+        case OP_NLE: return true;
+#endif
+#if GRID_HAS_GENERALIZED_GRAVITY
+        case OP_GRAVITY: return true;
+#endif
+#if GRID_HAS_CCRBA
+        case OP_CCRBA: return true;
+#endif
+#if GRID_HAS_CORIOLIS_MATRIX
+        case OP_CORIOLIS: return true;
+#endif
         default: return false;
     }
 }
 
 int output_size(int op) {
+    const int nj = grid::NUM_JOINTS, nv = grid::NUM_VEL;
     switch (op) {
-        case OP_ID: return grid::NUM_JOINTS;
-        case OP_ID_GRAD: return 2 * grid::NUM_VEL * grid::NUM_VEL;
-#if GRID_HAS_IDSVA_SO
-        case OP_IDSVA_SO: return grid::SECOND_ORDER_TENSOR_SIZE;
+        case OP_ID: case OP_FD: return nj;
+        case OP_ID_GRAD: case OP_FD_GRAD: return 2 * nv * nv;
+#if GRID_HAS_IDSVA_SO || GRID_HAS_FDSVA_SO
+        case OP_IDSVA_SO: case OP_FDSVA_SO: return grid::SECOND_ORDER_TENSOR_SIZE;
 #endif
+        case OP_MINV: case OP_CRBA: case OP_CORIOLIS: return nv * nv;
+        case OP_EE_POSE: return 6 * GRID_KERNEL_NUM_EES;
+        case OP_NLE: case OP_GRAVITY: return nv;
+        case OP_CCRBA: return 6 * nv + 6;
         default: return 0;
     }
 }
@@ -76,8 +127,29 @@ int baked_threads(int op) {
         case OP_ID: return grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS>::THREADS;
         case OP_ID_GRAD: return grid::launch_cfg<grid::GRID_ALGO_INVERSE_DYNAMICS_GRADIENT>::THREADS;
         case OP_IDSVA_SO: return grid::launch_cfg<grid::GRID_ALGO_IDSVA_SO>::THREADS;
+        case OP_MINV: return grid::launch_cfg<grid::GRID_ALGO_MINV>::THREADS;
+        case OP_FD: return grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::THREADS;
+        case OP_FD_GRAD: return grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::THREADS;
+        case OP_FDSVA_SO: return grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::THREADS;
+        case OP_EE_POSE: return grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::THREADS;
+        case OP_CRBA: return grid::launch_cfg<grid::GRID_ALGO_CRBA>::THREADS;
+        case OP_NLE: return grid::launch_cfg<grid::GRID_ALGO_NONLINEAR_EFFECTS>::THREADS;
+        case OP_GRAVITY: return grid::launch_cfg<grid::GRID_ALGO_GENERALIZED_GRAVITY>::THREADS;
+        case OP_CCRBA: return grid::launch_cfg<grid::GRID_ALGO_CCRBA>::THREADS;
+        case OP_CORIOLIS: return grid::launch_cfg<grid::GRID_ALGO_CORIOLIS_MATRIX>::THREADS;
         default: return 0;
     }
+}
+
+// Like the wrapper: clamp to a kernel's register-limited block cap where the
+// wrapper does (ccrba); a failed attribute query keeps the request.
+template <typename KernelPtr>
+dim3 clamp_threads(KernelPtr kernel, dim3 requested) {
+    cudaFuncAttributes attr;
+    if (cudaFuncGetAttributes(&attr, (const void*)kernel) != cudaSuccess) { cudaGetLastError(); return requested; }
+    unsigned cap = attr.maxThreadsPerBlock > 0 ? (unsigned)attr.maxThreadsPerBlock : requested.x;
+    if (requested.x > cap) requested.x = cap;
+    return requested;
 }
 
 // Same template arguments as the wrapper's C ABI bodies (wrapper_template.cu):
@@ -106,6 +178,51 @@ int baked_threads(int op) {
 #endif
 #endif
 
+#if GRID_HAS_MINV
+#if defined(GRID_RBD_SIG_MJX_MINV)
+#define KB_MINV_ARGS T, false, grid::GRID_DATA_ALL, false, grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER
+#else
+#define KB_MINV_ARGS T, false, grid::GRID_DATA_ALL, grid::launch_cfg<grid::GRID_ALGO_MINV>::TIER
+#endif
+#endif
+#if GRID_HAS_CRBA
+#if defined(GRID_RBD_SIG_MJX_CRBA)
+#define KB_CRBA_ARGS T, false, grid::GRID_DATA_ALL, false, grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER
+#else
+#define KB_CRBA_ARGS T, false, grid::GRID_DATA_ALL, grid::launch_cfg<grid::GRID_ALGO_CRBA>::TIER
+#endif
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS
+#if defined(GRID_RBD_SIG_MJX_FORWARD_DYNAMICS)
+#define KB_FD_ARGS T, grid::GRID_DATA_ALL, false, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER
+#else
+#define KB_FD_ARGS T, grid::GRID_DATA_ALL, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS>::TIER
+#endif
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+#if defined(GRID_RBD_SIG_MJX_FORWARD_DYNAMICS_GRADIENT)
+#define KB_FDG_ARGS T, false, grid::GRID_DATA_ALL, false, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER
+#else
+#define KB_FDG_ARGS T, false, grid::GRID_DATA_ALL, grid::launch_cfg<grid::GRID_ALGO_FORWARD_DYNAMICS_GRADIENT>::TIER
+#endif
+#endif
+#if GRID_HAS_FDSVA_SO
+#if defined(GRID_RBD_SIG_MJX_FDSVA_SO)
+#define KB_FDSO_ARGS T, grid::GRID_DATA_ALL, false, grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER
+#else
+#define KB_FDSO_ARGS T, grid::GRID_DATA_ALL, grid::launch_cfg<grid::GRID_ALGO_FDSVA_SO>::TIER
+#endif
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE && defined(GRID_RBD_EE_POSE_FN)
+#if defined(GRID_RBD_SIG_MJX_EE_POSE)
+#define KB_EE_ARGS T, false, grid::GRID_DATA_ALL, false, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER
+#else
+#define KB_EE_ARGS T, false, grid::GRID_DATA_ALL, grid::launch_cfg<grid::GRID_ALGO_END_EFFECTOR_POSE>::TIER
+#endif
+#define KB_EE_FN grid::GRID_RBD_EE_POSE_FN
+#define KB_EE_FN_CO grid::KB_CAT(GRID_RBD_EE_POSE_FN, _compute_only)
+#endif
+
 void with_mem(KernelCtx &c, int op, T gravity, int n, dim3 thr) {
     const dim3 blocks((unsigned)n, 1, 1);
     switch (op) {
@@ -117,6 +234,36 @@ void with_mem(KernelCtx &c, int op, T gravity, int n, dim3 thr) {
 #endif
 #if GRID_HAS_IDSVA_SO
         case OP_IDSVA_SO: grid::idsva_so<KB_SO_ARGS>(c.data, c.model, gravity, n, blocks, thr, c.streams); break;
+#endif
+#if GRID_HAS_MINV
+        case OP_MINV: grid::minv<KB_MINV_ARGS>(c.data, c.model, n, blocks, thr, c.streams); break;
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS
+        case OP_FD: grid::forward_dynamics<KB_FD_ARGS>(c.data, c.model, gravity, n, blocks, thr, c.streams); break;
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+        case OP_FD_GRAD: grid::forward_dynamics_gradient<KB_FDG_ARGS>(c.data, c.model, gravity, n, blocks, thr, c.streams); break;
+#endif
+#if GRID_HAS_FDSVA_SO
+        case OP_FDSVA_SO: grid::fdsva_so<KB_FDSO_ARGS>(c.data, c.model, gravity, n, blocks, thr, c.streams); break;
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE && defined(GRID_RBD_EE_POSE_FN)
+        case OP_EE_POSE: KB_EE_FN<KB_EE_ARGS>(c.data, c.model, n, blocks, thr, c.streams); break;
+#endif
+#if GRID_HAS_CRBA
+        case OP_CRBA: grid::crba<KB_CRBA_ARGS>(c.data, c.model, gravity, n, blocks, thr, c.streams); break;
+#endif
+#if GRID_HAS_NONLINEAR_EFFECTS
+        case OP_NLE: grid::nonlinear_effects<T>(c.data, c.model, gravity, n, blocks, thr, c.streams); break;
+#endif
+#if GRID_HAS_GENERALIZED_GRAVITY
+        case OP_GRAVITY: grid::generalized_gravity<T>(c.data, c.model, gravity, n, blocks, thr, c.streams); break;
+#endif
+#if GRID_HAS_CCRBA
+        case OP_CCRBA: grid::ccrba<T>(c.data, c.model, n, blocks, clamp_threads(grid::ccrba_kernel<T>, thr), c.streams); break;
+#endif
+#if GRID_HAS_CORIOLIS_MATRIX
+        case OP_CORIOLIS: grid::coriolis_matrix<T>(c.data, c.model, gravity, n, blocks, thr, c.streams); break;
 #endif
         default: break;
     }
@@ -134,48 +281,102 @@ void compute_only(KernelCtx &c, int op, T gravity, int n, dim3 thr) {
 #if GRID_HAS_IDSVA_SO
         case OP_IDSVA_SO: grid::idsva_so_compute_only<KB_SO_ARGS>(c.data, c.model, gravity, n, blocks, thr); break;
 #endif
+#if GRID_HAS_MINV
+        case OP_MINV: grid::minv_compute_only<KB_MINV_ARGS>(c.data, c.model, n, blocks, thr); break;
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS
+        case OP_FD: grid::forward_dynamics_compute_only<KB_FD_ARGS>(c.data, c.model, gravity, n, blocks, thr); break;
+#endif
+#if GRID_HAS_FORWARD_DYNAMICS_GRADIENT
+        case OP_FD_GRAD: grid::forward_dynamics_gradient_compute_only<KB_FDG_ARGS>(c.data, c.model, gravity, n, blocks, thr); break;
+#endif
+#if GRID_HAS_FDSVA_SO
+        case OP_FDSVA_SO: grid::fdsva_so_compute_only<KB_FDSO_ARGS>(c.data, c.model, gravity, n, blocks, thr); break;
+#endif
+#if GRID_HAS_END_EFFECTOR_POSE && defined(GRID_RBD_EE_POSE_FN)
+        case OP_EE_POSE: KB_EE_FN_CO<KB_EE_ARGS>(c.data, c.model, n, blocks, thr); break;
+#endif
+#if GRID_HAS_CRBA
+        case OP_CRBA: grid::crba_compute_only<KB_CRBA_ARGS>(c.data, c.model, gravity, n, blocks, thr); break;
+#endif
+#if GRID_HAS_NONLINEAR_EFFECTS
+        case OP_NLE: grid::nonlinear_effects_compute_only<T>(c.data, c.model, gravity, n, blocks, thr); break;
+#endif
+#if GRID_HAS_GENERALIZED_GRAVITY
+        case OP_GRAVITY: grid::generalized_gravity_compute_only<T>(c.data, c.model, gravity, n, blocks, thr); break;
+#endif
+#if GRID_HAS_CCRBA
+        case OP_CCRBA: grid::ccrba_compute_only<T>(c.data, c.model, n, blocks, clamp_threads(grid::ccrba_kernel<T>, thr)); break;
+#endif
+#if GRID_HAS_CORIOLIS_MATRIX
+        case OP_CORIOLIS: grid::coriolis_matrix_compute_only<T>(c.data, c.model, gravity, n, blocks, thr); break;
+#endif
         default: break;
     }
 }
 
 const T *host_output(const KernelCtx &c, int op) {
     switch (op) {
-        case OP_ID: return c.data->h_c;
+        case OP_ID: case OP_NLE: case OP_GRAVITY: return c.data->h_c;
         case OP_ID_GRAD: return c.data->h_dc_du;
 #if GRID_HAS_IDSVA_SO
         case OP_IDSVA_SO: return c.data->h_idsva_so;
 #endif
+#if GRID_HAS_FDSVA_SO
+        case OP_FDSVA_SO: return c.data->h_df2;
+#endif
+        case OP_MINV: return c.data->h_Minv;
+        case OP_FD: return c.data->h_qdd;
+        case OP_FD_GRAD: return c.data->h_df_du;
+        case OP_EE_POSE: return c.data->h_end_effector_pose;
+        case OP_CRBA: return c.data->h_M;
+        case OP_CCRBA: return c.data->h_ccrba;
+        case OP_CORIOLIS: return c.data->h_coriolis;
         default: return nullptr;
     }
 }
 
 const T *device_output(const KernelCtx &c, int op) {
     switch (op) {
-        case OP_ID: return c.data->d_c;
+        case OP_ID: case OP_NLE: case OP_GRAVITY: return c.data->d_c;
         case OP_ID_GRAD: return c.data->d_dc_du;
 #if GRID_HAS_IDSVA_SO
         case OP_IDSVA_SO: return c.data->d_idsva_so;
 #endif
+#if GRID_HAS_FDSVA_SO
+        case OP_FDSVA_SO: return c.data->d_df2;
+#endif
+        case OP_MINV: return c.data->d_Minv;
+        case OP_FD: return c.data->d_qdd;
+        case OP_FD_GRAD: return c.data->d_df_du;
+        case OP_EE_POSE: return c.data->d_end_effector_pose;
+        case OP_CRBA: return c.data->d_M;
+        case OP_CCRBA: return c.data->d_ccrba;
+        case OP_CORIOLIS: return c.data->d_coriolis;
         default: return nullptr;
     }
 }
 
 // Pack exactly like the wrapper's pack_q_qd_u: per timestep [q | qd | u] with
-// stride 3*NUM_JOINTS; the acceleration goes to the u slot for idsva_so and
-// to h_qdd (USE_QDD_FLAG) for RNEA / grad RNEA. Then stage the packed inputs
-// on the device once so the compute-only path has resident inputs.
+// stride 3*NUM_JOINTS. The u slot carries the torque (forward-dynamics family)
+// or the acceleration (idsva_so); RNEA / grad RNEA take the acceleration via
+// h_qdd (USE_QDD_FLAG); q-only operations mirror q into the qd slot like the
+// wrapper does. Then stage the packed inputs on the device once so the
+// compute-only path has resident inputs.
 int stage_inputs(KernelCtx &c, int op, const T *q, const T *qd, const T *third, int batch) {
     const int nj = grid::NUM_JOINTS, stride = 3 * nj;
+    const bool u_slot = (op == OP_IDSVA_SO || op == OP_FD || op == OP_FD_GRAD || op == OP_FDSVA_SO);
+    const bool qdd_slot = (op == OP_ID || op == OP_ID_GRAD);
     for (int t = 0; t < batch; ++t) {
         std::memcpy(&c.data->h_q_qd_u[t * stride], &q[t * nj], nj * sizeof(T));
         std::memcpy(&c.data->h_q_qd_u[t * stride + nj], &qd[t * nj], nj * sizeof(T));
-        if (op == OP_IDSVA_SO) std::memcpy(&c.data->h_q_qd_u[t * stride + 2 * nj], &third[t * nj], nj * sizeof(T));
+        if (u_slot) std::memcpy(&c.data->h_q_qd_u[t * stride + 2 * nj], &third[t * nj], nj * sizeof(T));
         else std::memset(&c.data->h_q_qd_u[t * stride + 2 * nj], 0, nj * sizeof(T));
     }
-    if (op != OP_IDSVA_SO) std::memcpy(c.data->h_qdd, third, (size_t)batch * nj * sizeof(T));
+    if (qdd_slot) std::memcpy(c.data->h_qdd, third, (size_t)batch * nj * sizeof(T));
     cudaError_t e = cudaMemcpy(c.data->d_q_qd_u, c.data->h_q_qd_u, (size_t)batch * stride * sizeof(T), cudaMemcpyHostToDevice);
     if (e != cudaSuccess) return 100 + (int)e;
-    if (op != OP_IDSVA_SO) {
+    if (qdd_slot) {
         e = cudaMemcpy(c.data->d_qdd, c.data->h_qdd, (size_t)batch * nj * sizeof(T), cudaMemcpyHostToDevice);
         if (e != cudaSuccess) return 100 + (int)e;
     }

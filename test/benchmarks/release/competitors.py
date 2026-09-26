@@ -10,7 +10,7 @@ import numpy as np
 from .protocol import digest
 
 
-def mujoco_model(fixture, directory):
+def mujoco_model(fixture, directory, dense_jacobian=False):
     import mujoco
     tree = ET.parse(fixture.urdf)
     root = tree.getroot()
@@ -37,6 +37,10 @@ def mujoco_model(fixture, directory):
         ET.SubElement(body, "freejoint", name="release_floating_root")
     resolved.write(path)
     model = mujoco.MjModel.from_xml_path(str(path))
+    if dense_jacobian:
+        # The dense mass-matrix study needs the dense formulation (auto picks
+        # sparse for the humanoid); only the crba worker asks for it.
+        model.opt.jacobian = int(mujoco.mjtJacobian.mjJAC_DENSE)
     # Unconstrained rigid dynamics: no contacts, limits, springs or friction.
     model.opt.disableflags |= int(mujoco.mjtDisableBit.mjDSBL_CONSTRAINT)
     model.geom_contype[:] = 0
@@ -78,7 +82,8 @@ class SimulatorAdapter:
         import mujoco
         self.backend, self.op, self.f = backend, operation, fixture
         self.family = FAMILY.get(operation, operation)
-        self.m, self.body, self.qindex, self.vindex, path = mujoco_model(fixture, directory)
+        self.m, self.body, self.qindex, self.vindex, path = mujoco_model(
+            fixture, directory, dense_jacobian=(backend == "mujoco_warp" and operation == "crba"))
         self.metadata = {"backend": backend, "dtype": "float64" if backend == "mujoco_cpu" else "float32",
             "method": "autodiff" if operation.endswith("_gradient") else
                       "simulator inverse dynamics at zero acceleration" if operation == "nonlinear_effects" else
@@ -88,7 +93,8 @@ class SimulatorAdapter:
             "convention": "MuJoCo tangent space; oracle transported outside timing",
             "constraints": "disabled", "contacts": "disabled", "passive_forces": "disabled",
             "output": "selected generalized vector, tangent Jacobian, or endpoint xyz+RPY pose",
-            "precision_note": "MuJoCo CPU installed binary uses mjtNum double" if backend == "mujoco_cpu" else "fp32"}
+            "precision_note": "MuJoCo CPU installed binary uses mjtNum double" if backend == "mujoco_cpu" else "fp32",
+            "jacobian_option": "dense (forced for the mass-matrix study)" if (backend == "mujoco_warp" and operation == "crba") else "model default"}
         self.qs, self.vs, self.ts = self.inputs()
         if backend == "mjx":
             import jax
@@ -269,9 +275,10 @@ class SimulatorAdapter:
                     wp.launch(endpoint_pose, dim=batch, inputs=[d.xpos, d.xmat, self.body, pose])
                     return pose
                 if op == "crba":
-                    # dense CRB: kinematics + com_pos + crb fill d.qM (nworld, nv, nv)
+                    # dense CRB: kinematics + com_pos + crb fill d.M (nworld, nv_pad, nv_pad)
+                    # on a dense model; normalize() selects the nv x nv block by dof index.
                     mjw.kinematics(self.mx, d); mjw.com_pos(self.mx, d); mjw.crb(self.mx, d)
-                    return d.qM
+                    return d.M
                 (mjw.inverse if inverse_like else mjw.forward)(self.mx, d)
                 return getattr(d, field)
             # One eager call loads/compiles every kernel, then the call is
@@ -285,7 +292,7 @@ class SimulatorAdapter:
             graph = capture.graph
             def replay():
                 wp.capture_launch(graph)
-                return pose if op == "end_effector_pose" else getattr(d, field)
+                return pose if op == "end_effector_pose" else d.M if op == "crba" else getattr(d, field)
             def full():
                 upload()
                 return replay().numpy()

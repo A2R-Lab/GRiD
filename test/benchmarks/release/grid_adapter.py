@@ -7,10 +7,13 @@ import os
 from pathlib import Path
 import subprocess
 import numpy as np
-from .protocol import digest, ROOT, CORE, VECTOR_OPS
+from .protocol import digest, ROOT, CORE, VECTOR_OPS, Q_ONLY_OPS, Q_QD_OPS
 
-KERNEL_OPS = {"inverse_dynamics": 0, "inverse_dynamics_gradient": 1, "idsva_so": 2}
-assert tuple(KERNEL_OPS) == CORE
+# Operation codes of kernel_bridge.cu (= the collector's OPS order).
+KERNEL_OPS = {op: i for i, op in enumerate(("inverse_dynamics", "inverse_dynamics_gradient", "idsva_so", "minv",
+    "forward_dynamics", "forward_dynamics_gradient", "fdsva_so", "end_effector_pose",
+    "crba", "nonlinear_effects", "generalized_gravity", "ccrba", "coriolis_matrix"))}
+assert tuple(KERNEL_OPS)[:3] == CORE
 
 
 def tree_map(fn, value):
@@ -80,7 +83,7 @@ class GridAdapter:
         self.kernel = None
         if backend == "grid_cuda":
             if operation not in KERNEL_OPS:
-                raise ValueError("CUDA host-call timing covers RNEA, grad RNEA and the RNEA Hessian")
+                raise ValueError("CUDA host-call timing bridge does not cover " + operation)
             self.kernel = self.kernel_library()
             self.kernel_ctx = self.kernel.grid_kernel_create()
             if not self.kernel_ctx:
@@ -172,7 +175,7 @@ class GridAdapter:
         glass = ROOT / "external" / "GLASS"
         flags = [f for f in _compile._NVCC_DEFAULT_FLAGS] + [
             f"-gencode=arch=compute_{arch},code=sm_{arch}", f"-DGRID_RBD_ARCH={arch}",
-            f"-DGRID_KERNEL_MAX_BATCH={int(meta['max_batch'])}",
+            f"-DGRID_KERNEL_MAX_BATCH={int(meta['max_batch'])}", f"-DGRID_KERNEL_NUM_EES={int(meta.get('num_ees', 1))}",
             f"-I{store}", f"-I{glass}", f"-I{glass / 'src'}",
             *_compile._mjx_signature_flags(header)]
         nvcc = _compile.find_nvcc()
@@ -198,8 +201,17 @@ class GridAdapter:
         return bridge
 
     def _kernel_inputs(self, batch):
+        """(q, qd, third) as the bridge expects: q-only operations mirror q into
+        the qd slot (as the wrapper's C ABI does) and pass zeros as third;
+        (q, qd) operations pass zeros as third; the rest pass their third array."""
         fp = ctypes.POINTER(ctypes.c_float)
         args = tuple(np.ascontiguousarray(a, np.float32) for a in self.fixture.args(self.op, batch))
+        if self.op in Q_ONLY_OPS:
+            args = (args[0], args[0], np.zeros_like(args[0]))
+        elif self.op in Q_QD_OPS:
+            args = (args[0], args[1], np.zeros_like(args[1]))
+        args = tuple(np.ascontiguousarray(a, np.float32) for a in args)
+        self._kernel_keepalive = args
         return args, tuple(a.ctypes.data_as(fp) for a in args)
 
     def _kernel_output(self, batch):

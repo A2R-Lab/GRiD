@@ -32,7 +32,7 @@ def test_capability_gaps_are_not_library_claims():
     assert p.capability("frax","inverse_dynamics","g1").startswith("model_mismatch:")
     assert p.capability("pinocchio","end_effector_pose_hessian","iiwa14").startswith("adapter_pending:")
     assert all(p.capability("grid_cuda",op,"g1") is None for op in p.CORE)
-    assert p.capability("grid_cuda","minv","g1").startswith("adapter_pending:")
+    assert p.capability("grid_cuda","minv","g1") is None and p.capability("grid_cuda","end_effector_pose_hessian","g1").startswith("adapter_pending:")
     assert p.capability("grid_native","idsva_so","g1").startswith("adapter_pending:")
     assert p.capability("pinocchio_plain","ccrba","g1") is None and p.capability("pinocchio","ccrba","g1").startswith("adapter_pending:")
     assert p.capability("mjx","crba","go2") is None and p.capability("mujoco_warp","crba","go2") is None

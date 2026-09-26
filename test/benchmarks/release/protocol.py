@@ -27,7 +27,7 @@ PRIMARY = {CORE[0]: ("grid_cuda", "grid_jax", "pinocchio", "pinocchio_plain", "m
            CORE[1]: ("grid_cuda", "grid_jax", "pinocchio", "pinocchio_plain", "mjx"),
            CORE[2]: ("grid_cuda", "grid_jax", "pinocchio", "pinocchio_plain")}
 WRAPPERS = ("grid_cuda", "grid_native", "grid_numpy", "grid_jax", "grid_torch")
-TABLE_BACKENDS = ("grid_jax", "pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
+TABLE_BACKENDS = ("grid_cuda", "grid_jax", "pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
 BACKENDS = WRAPPERS + ("pinocchio", "pinocchio_plain", "mjx", "mujoco_warp", "mujoco_cpu", "bard", "frax")
 # Sustained warm-up before sampling: a handful of microsecond calls never
 # leaves the idle clock (this box idles far below its sustained boost and
@@ -93,7 +93,9 @@ def capability(backend, operation, robot):
     if backend == "grid_native":
         return None if operation in WRAPPER_OPS else "adapter_pending: native C-ABI timing bridge covers RNEA and its gradient"
     if backend == "grid_cuda":
-        return None if operation in CORE else "adapter_pending: CUDA host-call timing bridge covers RNEA, grad RNEA and the RNEA Hessian"
+        if operation in {"end_effector_pose_gradient", "end_effector_pose_hessian"}:
+            return "adapter_pending: CUDA host-call timing bridge covers every operation but the end-effector derivatives"
+        return None
     if backend.startswith("grid_"):
         return None
     if backend in {"pinocchio", "pinocchio_plain"}:

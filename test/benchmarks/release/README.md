@@ -146,6 +146,9 @@ directory and choose which version to retain. Do not merge duplicate repeats.
   sample at the artifact's baked per-algorithm thread count (recorded). Both
   outputs, and the two boundaries against each other, must be bitwise equal to
   the NumPy wrapper's result before any timing is kept. No Python in the loop.
+  Covers every operation except the end-effector derivatives, so the table
+  figure carries a kernel-level GRiD bar next to each competitor and the
+  speedup heatmaps can compare kernel launch against resident library calls.
 - Full-call wall time includes host inputs, necessary H2D copies, evaluation,
   synchronization, and **all selected outputs copied to host**. Resident wall
   time includes ordinary API dispatch and synchronization. Input generation,
