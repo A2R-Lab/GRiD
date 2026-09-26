@@ -32,7 +32,7 @@ Here's a quick overview of the main algorithms:
 * **Frame Jacobian**: general-frame geometric Jacobian :math:`J` for an
   arbitrary target frame in any of the three Pinocchio reference frames
   (``LOCAL`` / ``WORLD`` / ``LOCAL_WORLD_ALIGNED``), plus the
-  reference-only Jacobian time-variation :math:`\dot J` and the
+  Jacobian time-variation :math:`\dot J` and the
   operational-space (OSC) inertia
   :math:`\Lambda = (J M^{-1} J^{\top})^{-1}`.
 * **IDSVA-SO**: Second-order Inverse Dynamics Spatial Vector Algorithm,

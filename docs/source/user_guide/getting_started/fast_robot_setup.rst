@@ -2,9 +2,10 @@ Fast Robot Setup
 ================
 
 How to get a robot registered on your machine quickly and efficiently — and
-why you only ever pay the compile cost **once**. The per-robot ``.so`` cache
-is content-keyed and persistent, so a robot warmed today is an instant,
-sub-second load in every later process. This page is the quick canonical
+how to reuse compiled artifacts. The per-robot ``.so`` cache is content-keyed
+and persistent, so compatible later loads avoid compilation. Loading and
+runtime initialization still take time; sub-second loading is not a guarantee.
+This page is the quick canonical
 path; the full API tour lives at :doc:`../tutorials/python_wrappers`.
 
 The three-line happy path
@@ -22,8 +23,9 @@ from the URDF bytes (``{stem}_{fixed|floating}_{sha256(urdf)[:12]}``), so:
 
 * the **first** call generates ``grid.cuh``, compiles the per-robot ``.so``
   with ``nvcc``, and caches it;
-* **every later call — in any process, any day** — that loads the same URDF
-  bytes with the same options is a sub-second cache hit. No recompile, ever.
+* later calls reuse compatible cached builds. Source, toolchain, GPU
+  architecture, options or cache changes can require regeneration or
+  recompilation even when the URDF bytes are unchanged.
 
 Pass ``name="my_arm"`` if you want a human-friendly handle instead, and
 ``floating_base=True`` for free-base robots (the fixed and floating loads of

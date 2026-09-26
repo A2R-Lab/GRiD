@@ -2,8 +2,10 @@ Compatibility and known limitations
 ===================================
 
 What this release supports, what changed for existing users, and what it does
-not do. Everything here is tested at the release tip; the receipt in
-``gpu-proof.json`` is the GPU evidence and the CPU-only CI verifies it.
+not do. The receipt in ``gpu-proof.json`` records GPU evidence for its
+specific source revision and test scope; CPU-only CI verifies that receipt.
+A fresh receipt matching the final release revision is a release gate,
+not a consequence of this page building successfully.
 
 Platforms and toolchain
 -----------------------

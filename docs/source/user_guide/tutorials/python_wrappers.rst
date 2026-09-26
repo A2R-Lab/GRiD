@@ -599,7 +599,9 @@ All take/return 2D arrays with axis 0 = batch; cost methods return
    * - ``com_cost(q, p_des, W)``
      - ``value (B,)``, ``grad (B, NX)``, Gauss-Newton ``hess (B, NX, NX)`` (CoM tracking)
    * - ``momentum_cost(q, qd, h_des, W)``
-     - ``value (B,)``, ``grad (B, NX)``, Gauss-Newton ``hess (B, NX, NX)`` (centroidal-momentum tracking)
+     - ``value (B,)``, ``grad (B, NX)``, ``hess (B, NX, NX)``;
+       configuration derivatives are dropped, leaving only the velocity
+       gradient and velocity–velocity Gauss–Newton block
    * - ``joint_position_barrier(var, lower, upper, mu)``
      - ``value (B,)``, ``grad (B, NP)``, ``hess_diag (B, NP)``
    * - ``joint_velocity_barrier(var, lower, upper, mu)``
@@ -613,6 +615,10 @@ All take/return 2D arrays with axis 0 = batch; cost methods return
    * - ``plant_step_hessian(x, u, dt, integrator_type="euler")``
      - ``(B, 2*NV, 3*NV, 3*NV)`` second-order sensitivity ``d²x_{k+1}/d(x,u)²``
        (fixed- and floating-base, euler/semi-implicit-euler; RK deferred)
+
+``plant_step_hessian`` is available on the NumPy handle, not the JAX or
+PyTorch handles. See :doc:`../concepts/algorithms/integrators_and_plant` for
+input layouts, diagonal weights and derivative scope.
 
 External forces (``f_ext``)
 ---------------------------

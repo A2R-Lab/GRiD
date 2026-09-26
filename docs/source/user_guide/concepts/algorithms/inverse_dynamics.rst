@@ -43,7 +43,13 @@ The Python reference is ``RBDReference.inverse_dynamics`` in
 
 In GRiD
 -------
-``tau = h.inverse_dynamics(q, qd, qdd)`` returns ``(B, NV)``. With ``qdd``
+On the NumPy handle, ``tau = h.inverse_dynamics(q, qd, qdd)`` returns
+``(B, h.nq)``, with physical torques in the first ``NV = h.num_vel`` slots
+and padding in the remaining slots. On the default Pinocchio-convention
+path, ``q``, ``qd`` and ``qdd`` all use ``(B, h.nq)`` storage; velocity and
+acceleration have tangent entries first and zero padding. Matrix and
+derivative outputs are instead ``NV``-wide. See :doc:`../input_output_abi`
+and :doc:`../../tutorials/python_wrappers`. With ``qdd``
 omitted it returns the bias ``c(q, qd) = C(q, qd)·qd + g(q)``, which is also
 available as ``h.nonlinear_effects``; ``h.generalized_gravity`` is the
 ``qd = 0`` special case. Optional per-body external forces (``f_ext``,
@@ -55,14 +61,14 @@ Derivatives: ``h.inverse_dynamics_gradient`` returns ``∂τ/∂(q, qd)`` as
 ``(B, NV, 2*NV)`` in the tangent space, and :doc:`idsva` provides the
 second-order tensors. Inverse dynamics also anchors the inertial-parameter
 regressor ``Y(q, qd, qdd)`` with ``tau = Y·π`` (``h.inverse_dynamics_regressor``)
-and its analytic gradient.
+and a generated CUDA regressor-gradient operation. The latter is not a
+method on the NumPy ``RobotHandle``.
 
 The CUDA host entries are ``grid::inverse_dynamics`` and
-``inverse_dynamics_compute_only``. RNEA is the smallest kernel in the library
-and the one most sensitive to launch overhead: on the release benchmarks its
-kernel time at batch 16 is about ten microseconds, so the choice of surface
-(C++ host call, NumPy, PyTorch or JAX) matters more than for any other
-operation.
+``inverse_dynamics_compute_only``. RNEA is a short-running operation in the
+release collection, so dispatch and transfers can be substantial relative
+to compute time. The choice of C++ host call, NumPy, PyTorch or JAX surface
+is therefore part of the performance comparison, not just a syntax choice.
 
 See Also
 --------

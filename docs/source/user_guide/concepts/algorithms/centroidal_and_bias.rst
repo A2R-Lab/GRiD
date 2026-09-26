@@ -40,7 +40,21 @@ Signature
 
 The centroidal quantities follow the Pinocchio convention: ``[linear;
 angular]`` at the centre of mass, world aligned. The ten inertial parameters
-per body are ordered as in Pinocchio's ``Inertia.toDynamicParameters``.
+per body use GRiD's order
+``[m, hx, hy, hz, Ixx, Ixy, Ixz, Iyy, Iyz, Izz]``: ``h = m*c`` and the
+inertia is about the body-frame origin, not the centre of mass. This differs
+from Pinocchio's ``toDynamicParameters`` (which places ``Iyy`` before
+``Ixz``); do not multiply a GRiD regressor by an unconverted Pinocchio vector.
+See :doc:`../../tutorials/verified_inputs` for a CPU-tested parameter-vector
+construction and regressor identity check.
+
+These examples use the NumPy handle and batched inputs. ``q`` is
+``(B, h.nq)``; the default Pinocchio-convention dynamics calls shown here
+expect ``qd``/``qdd`` padded to that width, with ``h.num_vel`` tangent entries
+first. ``dccrba`` is indexed ``dA[b, row, column, tangent_direction]``.
+Select the named operations in ``algorithm_list`` when loading the model;
+the :doc:`Python wrapper guide <../../tutorials/python_wrappers>` describes
+registration and operation discovery.
 
 Implementation
 --------------
@@ -52,14 +66,15 @@ generators are the matching modules under ``grid_codegen/algorithms/``.
 
 In GRiD
 -------
-The bias and gravity vectors reuse the inverse-dynamics kernel with the
-acceleration (and velocity) inputs held at zero, so their cost and their
-behaviour on every joint type are those of :doc:`inverse_dynamics`. The
+The bias and gravity vectors have dedicated kernels that reuse the
+inverse-dynamics inner recursion with acceleration (and velocity for gravity)
+held at zero. They are not timings of the full inverse-dynamics API. The
 Coriolis matrix and the centroidal quantities are their own kernels, and the
 centroidal derivatives (``dccrba``, ``cmm_time_variation``) run on the big
 floating-base humanoids through the sweep-pool spill path of the
 :doc:`resource tier system <../resource_tier_system>`. All of them fold to the
-reduced coordinates on mimic robots.
+reduced coordinates on mimic robots. Spill tiers extend coverage, but
+generation and launch remain subject to the target GPU's resource limits.
 
 The CUDA host entries carry the same names (``grid::nonlinear_effects``,
 ``grid::coriolis_matrix``, ``grid::ccrba`` and so on), each with a
@@ -74,7 +89,8 @@ advantage over Pinocchio's code-generated C++ is smallest: they are the
 cheapest operations, so the host↔device copies are a large share of the GPU
 time. The centroidal momentum matrix is one operation where Pinocchio's
 standard API beats GRiD's host call on the floating-base robots at every
-batch size; the kernel is not at fault so much as the output size.
+measured batch size. That timing alone does not isolate the cause to output
+size or transfer cost.
 
 See Also
 --------

@@ -16,6 +16,14 @@ Usage
    parser = URDFParser()
    robot = parser.parse(urdf_filepath, floating_base=False, joint_ordering="pinocchio_order")
 
+The complete signature is::
+
+   parse(filename, floating_base=False, using_quaternion=True,
+         alpha_tie_breaker=None, joint_ordering="pinocchio_order",
+         floating_base_convention="pinocchio", strict_inertial=False)
+
+Keep ``using_quaternion=True`` for the documented floating-base GRiD paths.
+
 ``joint_ordering`` controls how sibling joints under the same parent link are
 ordered in the depth-first walk that assigns joint ids:
 
@@ -27,6 +35,7 @@ ordered in the depth-first walk that assigns joint ids:
 
 The older ``alpha_tie_breaker`` argument is still accepted: ``False`` means
 ``urdf_order`` and ``True`` means ``alphabetical_order``.
+When supplied, it takes precedence over ``joint_ordering``.
 
 A floating base adds a free-flyer root joint. The public input convention is
 selected with ``floating_base_convention``:
@@ -38,9 +47,10 @@ selected with ``floating_base_convention``:
    floating_base_convention="pinocchio"  # default: q = [x, y, z, qx, qy, qz, qw], v = [vx, vy, vz, wx, wy, wz]
    floating_base_convention="legacy"     # q = [x, y, z, qw, qx, qy, qz], v = [wx, wy, wz, vx, vy, vz]
 
-Internally the parser and the downstream dynamics code always use the
-Pinocchio-style ordering, so generated code and reference algorithms agree
-whichever public convention was chosen.
+The robot's normalization helpers convert legacy vectors to the internal
+Pinocchio ordering; RBDReference uses these helpers. This parser option is
+not a legacy-layout switch for the Python/CUDA bindings: use their documented
+Pinocchio or MuJoCo interfaces and buffer layouts.
 
 Supported joint types
 ---------------------
@@ -50,6 +60,10 @@ joints are supported, as are mimic joints (chained mimics are flattened when
 the model is resolved; a mimic cycle raises ``MimicResolutionError``). An
 arbitrary ``<axis>`` direction is parsed into a dense 6-vector motion subspace
 ``S``; robots with only cardinal axes keep the compact form.
+Planar joints expand into two prismatic joints and one continuous joint;
+``translation`` (alias ``cartesian``) expands into three prismatic joints.
+Fixed joints are merged into the moving-body model. Mimic bodies remain in
+the tree, but their coordinates are tied to the independent driver.
 
 Helical (screw) joints are a one-degree-of-freedom joint whose single
 coordinate drives coupled rotation about and translation along the same axis,
@@ -72,9 +86,12 @@ Parse options and errors
 ------------------------
 
 * ``strict_inertial=True`` rejects a missing or degenerate ``<inertial>``
-  block with a ``URDFParseError``; the default keeps parsing and warns.
+  on a real moving body with a ``URDFParseError``. Root/base and dummy links
+  are exempt; the default keeps parsing and warns.
 * The typed exceptions live in ``errors.py``: ``URDFParseError``,
   ``UnsupportedJointTypeError`` and ``MimicResolutionError``.
+  Other parse failures can still return ``None`` under the legacy catch-all;
+  check the return value before using the model.
 * Joint limits from the URDF ``<limit>`` tags are available through
   ``get_joint_limits_by_id``, ``get_velocity_limit_by_id`` and
   ``get_effort_limit_by_id``.
@@ -98,13 +115,14 @@ The accessor families below take **XXX** as one of:
 
 * **joint**: a joint object (see the joint API below)
 * **link**: a link object (see the link API below)
-* **Xmat**: a sympy spatial transform with one free variable defined by its
+* **Xmat**: a sympy spatial transform with coordinates defined by its
   joint (a 4x4 homogeneous version and its first and second derivatives also
   exist, for example ``d2Xmat_hom``)
 * **Xmat_Func**: a function returning a numpy matrix for a value of the free
   variable (again with homogeneous and derivative variants)
 * **Imat**: a numpy 6x6 spatial inertia matrix
-* **S**: a numpy 6x1 motion subspace matrix
+* **S**: a numpy motion subspace, shape ``(6,)`` for a scalar joint and
+  multiple columns for a multi-DoF joint
 
 .. code:: python
 
@@ -131,14 +149,17 @@ The API also includes the following functions:
    # get the robot type (if applicable)
    is_serial_chain()
    # get the number of positions and velocities in the robot state as well as numbers of links and joints
-   # note: links should be joints + 1 when including the base, num_joints = num_pos
-   #       num_vel = num_pos for fixed base (and is one larger with quaternion)
+   # Do not infer coordinate widths from the number of joints or bodies.
+   # Each independent quaternion joint adds one position coordinate over NV.
+   # Mimic joints add bodies, not independent coordinates.
    get_num_pos()
    get_num_vel()
-   get_num_bodies() # assumes fixed world base frame included for fixed base robots
+   get_num_bodies() # effective moving bodies; excludes the fixed world base
    get_num_joints()
    get_num_links()
    get_num_links_effective() # num_links - 1 (base link is not used in many RBD algorithms when fixed)
+   get_joint_index_q(jid) # scalar index or list of position indices
+   get_joint_index_v(jid) # scalar index or list of tangent indices
    # get the max bfs_level
    get_max_bfs_level()
    # get the IDs at a given bfs level and the bfs level for a given id

@@ -14,9 +14,9 @@ CRBA is one of two GRiD paths for getting mass-matrix information:
 * **CRBA** produces the full :math:`M`, useful when downstream
   algorithms need the dense matrix (e.g. operational-space inverse
   dynamics, Cholesky-based forward-dynamics solves).
-* :doc:`minv` produces :math:`M^{-1}` directly without forming
-  :math:`M` first — the right choice when forward dynamics is the
-  only downstream consumer.
+* :doc:`minv` produces :math:`M^{-1}`, normally without forming :math:`M`
+  first. Mimic and spherical models instead use a dense CRBA-based inverse.
+  Forward dynamics can use Minv/RNEA composition or the independent :doc:`aba`.
 
 Signature
 ---------
@@ -36,9 +36,11 @@ In GRiD
 -------
 From the Python handles, ``M = h.crba(q)`` returns ``(B, NV, NV)``, the
 tangent-space mass matrix in the Pinocchio convention. For a fixed base
-``NV`` equals the number of joints; for a floating base ``NV`` is six plus
-the joint count while ``q`` has seven base coordinates (position plus a unit
-quaternion). The result does not depend on gravity; the keyword only mirrors
+with independent scalar joints, ``NV`` equals the joint count. A floating
+root contributes six tangent and seven position coordinates; spherical and
+mimic joints require the model's coordinate maps rather than joint counts.
+Pass ``q`` as ``(B, h.nq)`` and obtain ``NV`` from ``h.num_vel``.
+The result does not depend on ``gravity=-9.81``; the keyword only mirrors
 the host signature. With ``output_convention="mujoco"`` the input is
 MuJoCo-convention and the matrix comes back in the MuJoCo frame, computed in
 the kernel.
@@ -47,8 +49,8 @@ The generated CUDA host entry is ``grid::crba`` (host arrays in, host arrays
 out, copies included) with a ``crba_compute_only`` variant that runs the kernel
 alone on data already resident on the GPU; see
 :doc:`../../tutorials/codegen` for the host-call pattern. The dense matrix is
-what operational-space formulations and Cholesky-based solves consume; if only forward dynamics needs it, :doc:`minv` skips the
-matrix entirely. Mimic and spherical joints, arbitrary axes and the floating
+what operational-space formulations and Cholesky-based solves consume.
+Mimic and spherical joints, arbitrary axes and the floating
 base are supported; per-robot caveats are listed on the
 :doc:`support matrix <../../tutorials/cuda_support_status>`.
 

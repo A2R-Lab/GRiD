@@ -22,20 +22,62 @@ Signature
 
    x_next = h.plant_step(x, u, dt, integrator_type="euler")     # x = [q; qd], (B, NX)
    AB     = h.plant_step_gradient(x, u, dt, integrator_type="euler")    # [A | B]
-   H      = h.plant_step_hessian(x, u, dt, integrator_type="euler")     # second-order sensitivity
+   H      = h.plant_step_hessian(x, u, dt, integrator_type="euler")     # NumPy: (B, 2*NV, 3*NV, 3*NV)
 
-   c = h.quadratic_state_cost(x, x_des, Q)      # 1/2 Σ Q_i (x_i − x_des_i)²
-   c = h.quadratic_input_cost(u, u_des, R)
-   c = h.ee_pos_cost(q, p_des, W)               # end-effector position, Gauss-Newton Hessian
-   c = h.com_cost(q, p_des, W)                  # centre-of-mass tracking
-   c = h.momentum_cost(q, qd, h_des, W)         # centroidal-momentum tracking
-   b = h.joint_position_barrier(q, lower, upper, mu)   # log barriers; also velocity and torque
+   value, grad, Hcost = h.quadratic_state_cost(x, x_des, Q)
+   value, grad, Hcost = h.quadratic_input_cost(u, u_des, R)
+   value, grad, Hcost = h.ee_pos_cost(q, p_des, W)       # first EE only
+   value, grad, Hcost = h.com_cost(q, p_des, W)
+   value, grad, Hcost = h.momentum_cost(q, qd, h_des, W) # velocity-only derivative blocks
+   value, grad, Hdiag = h.joint_position_barrier(q, lower, upper, mu)
 
 ``integrator_type`` is one of ``euler``, ``semi_implicit_euler``,
-``midpoint``, ``rk3`` and ``rk4`` (the generator also knows a trapezoidal
-scheme); ``dt`` and the signed gravity are runtime arguments. The gradient is ``[A | B] = ∂x_{k+1}/∂(x, u)`` in the tangent
+``midpoint``, ``rk3``, ``rk4`` and ``trapezoidal`` (``si_euler`` is an alias
+for semi-implicit Euler); the default is ``euler``. ``dt`` and
+``gravity=-9.81`` are runtime arguments. The gradient is ``[A | B] = ∂x_{k+1}/∂(x, u)`` in the tangent
 space, ``2·NV`` rows by ``3·NV`` columns, and the Hessian is the second-order
 sensitivity of the same step.
+
+.. important::
+
+   The names ``midpoint``, ``rk3`` and ``rk4`` refer to GRiD's current
+   TrajoptPlant-style schemes. Intermediate configurations use the original
+   velocity, and the final position is ``integrate(q, dt*qd)``; only the
+   velocity update combines the intermediate acceleration evaluations.
+   This is not textbook Runge–Kutta integration of the full ``[q, qd]``
+   state, and the name ``rk4`` is not a claim of fourth-order state accuracy.
+   ``trapezoidal`` likewise uses one acceleration evaluation with a
+   half-acceleration position term, not an implicit trapezoidal solve.
+
+Inputs, outputs and scope
+---------------------------
+
+A runnable :doc:`CPU diagnostic <../../tutorials/verified_inputs>` illustrates
+the current RK position-update semantics on constant acceleration.
+
+These examples require a handle built with the relevant algorithms. The
+NumPy ``integrator`` calls take ``q``, ``qd`` and ``u`` in position-width
+``(B, h.nq)`` storage on the default Pinocchio path (pad tangent inputs);
+the ``plant_step`` calls instead take ``x`` of shape ``(B, NQ+NV)`` and
+``u`` of shape ``(B, NV)``. They return the same position-plus-velocity state.
+``NX = NQ + NV``; derivative outputs use the ``2*NV`` tangent state, not
+the ambient quaternion coordinates.
+
+``plant_step_hessian`` is a NumPy/CUDA surface, not a JAX or PyTorch handle
+method. It supports Euler and semi-implicit Euler on fixed and floating
+bases; multi-stage RK Hessians are not implemented. Multi-stage integrator
+gradients are not available for spherical joints or MuJoCo-output twins.
+See :doc:`../../tutorials/python_wrappers` for backend coverage.
+
+Weights are diagonal, supplied as vectors: state ``x_des`` and ``Q`` have
+shape ``(B, NX)``, input ``u_des`` and ``R`` have ``(B, NV)``, and tracking
+targets and weights have ``(B, 3)`` for position or ``(B, 6)`` for momentum.
+Cost outputs are a tuple of value ``(B,)``, gradient and Hessian; the
+state/tracking costs use ``NX``-sized outputs, and input costs use ``NV``.
+Position barriers take ``(B, NQ)`` bounds and velocity/torque barriers take
+``(B, NV)`` bounds. Their third output is the Hessian diagonal, not a dense
+matrix. Finite log-barrier bounds require strictly interior inputs;
+infinite bounds contribute no term.
 
 Implementation
 --------------
@@ -48,11 +90,11 @@ The Python references are ``plant_step``, ``plant_step_gradient``,
 In GRiD
 -------
 The integrator composes forward dynamics (the mass-matrix-inverse path) with
-the chosen scheme inside one kernel, so a Runge–Kutta step does not pay four
-launches. Its gradient uses the analytical forward-dynamics gradient, and the
-Hessian uses the second-order :doc:`fdsva_so`; the fixed-base Hessian is the
-one the release test suite gates, and the floating-base variants are listed
-on the :doc:`support matrix <../../tutorials/cuda_support_status>`.
+the chosen scheme inside one kernel, so the four acceleration stages of
+``rk4`` do not require four kernel launches. Its gradient uses the analytical forward-dynamics gradient, and the
+step Hessian composes the second-order :doc:`fdsva_so` with the integration
+map (including the floating-base retract derivatives). This fused integrator
+kernel does not make an arbitrary sequence of Python calls a single launch.
 
 On a floating base the integrator applies Pinocchio's SE(3) update to the
 base pose. With ``output_convention="mujoco"`` the free-joint base position
@@ -60,13 +102,24 @@ takes MuJoCo's global additive step instead, the quaternion is reordered, and
 the returned state is in the MuJoCo frame; this is baked into the kernel, not
 patched on the host.
 
-The plant layer is what the sibling trajectory-optimization projects consume
-through the C ABI and the JAX and PyTorch handles: quadratic state and input
+The plant layer exposes quadratic state and input
 costs, an end-effector position cost with a Gauss–Newton Hessian, centre-of-
 mass and centroidal-momentum costs, and log-barriers on joint positions,
-velocities and torques with a runtime ``mu``. Each returns its value, its
-gradient and a Hessian (exact for the quadratic costs, Gauss–Newton for the
-end-effector cost), batched over the knot points.
+velocities and torques with a runtime ``mu``. Quadratic costs have exact
+ambient-coordinate Hessians; end-effector-position and CoM tracking use
+Gauss–Newton Hessians. The current momentum cost deliberately drops the
+configuration derivative: it returns ``[0; A.T @ (W*r)]`` and only the
+velocity–velocity Hessian block ``A.T @ diag(W) @ A``. These are not the
+full derivatives of ``h(q, qd)`` with respect to the state. On quaternion
+models, geometric tracking derivatives occupy tangent blocks embedded in
+the ``NX``-sized outputs; they are not ambient quaternion Hessians.
+
+Select ``integrator`` / ``integrator_gradient`` for step values / gradients
+and ``fdsva_so`` for the step Hessian dependency; the plant generator only
+emits operations whose dependencies exist. CoM and momentum costs require
+``com`` and ``ccrba``. Use the wrapper guide's available-operation checks
+after registration rather than assuming every handle includes the full
+plant layer.
 
 See Also
 --------

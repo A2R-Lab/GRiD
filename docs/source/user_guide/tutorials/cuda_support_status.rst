@@ -9,6 +9,26 @@ Development testing currently targets **sm_120 (RTX 5090)** for correctness
 and performance validation. Earlier compute capabilities (sm_8x) remain
 supported but are not the active development target.
 
+Joint and interface restrictions
+--------------------------------
+
+This is a coverage summary, not a guarantee for every combination of joint
+type, algorithm, backend and GPU resource budget.
+
+* Planar and translation joints are decomposed into scalar-joint chains by
+  the parser; mimic joints retain dependent bodies but reduce coordinates.
+* Mimic and spherical ``minv`` use a dense inverse of the reduced CRBA
+  matrix rather than the scalar-joint direct-inverse recursion.
+* ``fk_batched`` is a NumPy-only single-leaf pose helper. It is not emitted
+  for spherical models or models with more than 32 joints.
+* Multi-stage integrator gradients are not supported for spherical joints
+  or MuJoCo-output twins. ``plant_step_hessian`` supports Euler and
+  semi-implicit Euler on fixed and floating bases, via NumPy/CUDA rather
+  than the JAX/PyTorch handles.
+
+See :doc:`../concepts/algorithms/kinematics` and
+:doc:`../concepts/algorithms/integrators_and_plant` for shapes and method scope.
+
 Fixed-Base Robots
 -----------------
 

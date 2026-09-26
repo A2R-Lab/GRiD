@@ -5,33 +5,39 @@ Every number on this page comes from one audited collection on one machine
 (NVIDIA RTX 5090, fp32 everywhere except where marked, 26 September 2026,
 ``modernizing-tests`` branch). Three robots — **iiwa14** (fixed base, 7 joints),
 **go2** (floating base, 18 velocities) and **G1** (floating base, 43 velocities) —
-fifteen operations, batch sizes 16 to 1024, GRiD through every one of its
-surfaces beside Pinocchio, MJX, MuJoCo Warp, MuJoCo CPU, BARD and Frax. Each
-cell was validated against an independent fp64 Pinocchio oracle before and after
-timing; a cell that failed validation has no bar. The collector, its protocol
-and the raw captures are in ``test/benchmarks/release/`` (see its ``README.md``).
+fifteen operations and batch sizes 16 to 1024, with supported comparisons
+against Pinocchio, MJX, MuJoCo Warp, MuJoCo CPU, BARD and Frax. The five GRiD
+surfaces are compared on RNEA and its gradient; expanded-operation coverage
+varies by backend. Each timed cell was checked against RBDReference's fp64
+Pinocchio-backed oracle before and after timing; a validation failure has no
+bar. This is a separate reference path, not an independent library when
+checking Pinocchio itself. Collector code and protocol are in
+``test/benchmarks/release/``; raw captures are under the gitignored
+``test/benchmarks/results/`` directory. Published tables and provenance
+metadata are linked below.
 
 In short:
 
-* **GRiD's kernel leads every GPU library.** With no host–device transfers on
+* **GRiD's compute-only calls lead on most matched GPU-library cells.** With no host–device transfers on
   either side, GRiD's CUDA compute-only call is faster than MJX on every
-  measured cell (1–30×, most cells 5–20×) and faster than MuJoCo Warp on the
-  dynamics operations (2–17×). It is faster than BARD by 14–160× and than Frax
-  by 4–7×. This holds at every batch size up to 1024. The library's resident
+  measured cell (1–30×, most cells 5–20×). Most dynamics comparisons against
+  MuJoCo Warp favor GRiD, with gains up to 17× and exceptions noted below.
+  It is faster than BARD by 14–160× and than Frax by 4–7× across their matched
+  cells. The library's resident
   call includes its framework dispatch. With GRiD's own JAX dispatch included
   too (the middle panel of Figure 3) the ratios shrink, and two MJX cells turn
   into losses: floating-base end-effector pose at batch 1024, 0.7× on go2 and
   0.9× on G1.
 * **GRiD does not win everywhere.** End-effector pose on the floating-base
-  robots is a tiny kernel and MuJoCo Warp's is faster (GRiD at 0.4–0.9× of
-  Warp kernel to kernel, 0.3–0.6× through the JAX API). On G1 at batch 1024 the
-  ABA and mass-matrix kernels are at parity with Warp. Through the JAX API's
+  robots loses to MuJoCo Warp in the measured calls (GRiD at 0.4–0.9× of
+  Warp's resident call, 0.3–0.6× through the JAX API). On G1 at batch 1024 the
+  forward-dynamics and mass-matrix comparisons are near parity with Warp. Through the JAX API's
   complete call from host arrays GRiD still beats MJX and BARD on nearly every
   cell. On that boundary it is at parity or behind Warp on the first-order
   operations, because Warp's host round trip is cheaper than JAX's, and it
   trades cells with Frax.
 * **Against Pinocchio, the boundary and the batch decide.** Pinocchio's
-  code-generated C++ (best of 1, batch/16 and 8 threads per cell) wins nearly
+  code-generated C++ (best of the candidate thread counts, capped at eight) wins nearly
   every cell below batch 64. With the data already on the GPU, GRiD's kernel
   is 1.2–14× faster at batch 1024 on every operation Pinocchio code-generates.
   Including the host–device copies, GRiD's CUDA host call reaches parity around
@@ -40,9 +46,9 @@ In short:
   GRiD's JAX full call adds a host round trip of roughly 150–200 µs, loses to
   Pinocchio's codegen at small batch and reaches parity only at the largest
   batches. The PyTorch full call is much cheaper, about 35 µs over the CUDA
-  host call on iiwa14 RNEA at batch 256, and the NumPy call is within 1 µs of
-  it. Most users call Pinocchio's standard templated API, which measured about
-  twice the code-generated time. Both are shown. Pinocchio's centroidal
+  host call on iiwa14 RNEA at batch 256; NumPy is about 1.2 µs above that
+  CUDA host call. Pinocchio's standard templated API is shown separately
+  from codegen; their relative cost depends on the operation. Pinocchio's centroidal
   momentum matrix beats GRiD's host call on the floating robots at every batch
   (0.1–0.6×).
 
@@ -60,8 +66,8 @@ own overhead on top of that (full call minus with-memory). Each GPU competitor
 is its resident evaluation plus a hatched cap for its host round trip.
 Pinocchio CPU is its code-generated time plus a hatched cap for the standard
 API. Where Pinocchio has no code-generated path (the Hessian) both modes run
-the same standard analytical code and the whole bar is hatched. Every segment
-is a difference of two measured medians on the same cell. A negative
+the same standard analytical code and the whole bar is hatched. Incremental
+overhead segments are differences of measured medians on the same cell. A negative
 difference is marked rather than clamped. ``*`` marks fp64 arithmetic and
 ``†`` a retained fp32 accuracy warning (see below). Whiskers show the range of
 the three run means. The same figure for all fifteen operations:
@@ -78,7 +84,8 @@ Ratio of Pinocchio's warmed batch time to GRiD's, blue when GRiD is faster,
 red when Pinocchio is. The top row is the kernel with the data already on the
 GPU, the situation inside a GPU optimiser. The bottom row includes the copies
 in and out. Pinocchio runs a persistent C++ thread pool. For every cell the
-best of the recorded thread counts (1, batch/16 and 8) is used, so small
+best of the valid candidates from ``{1, max(1, batch//16), 8}``, excluding
+counts above eight or the batch size, is used, so small
 batches often run on one or two threads.
 
 Figure 3 — Speedup against the GPU libraries
@@ -89,7 +96,7 @@ Figure 3 — Speedup against the GPU libraries
    :target: _static/release/speedup_gpu_resident.svg
 
 .. image:: _static/release/speedup_gpu_jax_resident.svg
-   :alt: Heatmaps of GRiD JAX resident call against MJX, MuJoCo Warp, BARD and Frax resident calls: no memory traffic on either side, each framework's own dispatch included.
+   :alt: Heatmaps of GRiD JAX resident call against MJX, MuJoCo Warp, BARD and Frax resident calls: no host-device transfers on either side, each framework's own dispatch included.
    :target: _static/release/speedup_gpu_jax_resident.svg
 
 .. image:: _static/release/speedup_gpu_full.svg
@@ -106,8 +113,10 @@ like-for-like view.
 **Bottom:** the complete call from host arrays to host arrays on both sides,
 through GRiD's JAX API; this is where Warp's cheaper host round trip shows, and
 where GRiD's own JAX overhead on large outputs shows (on G1 at batch 1024 the
-JAX resident mass-matrix call is 3× the kernel, a device copy of a 7.6 MB
-output). Second-order competitor cells are absent by design:
+JAX resident mass-matrix call is about 3× the CUDA compute-only call).
+The resident path includes device-side copies, but these timings alone do
+not isolate how much of the gap each wrapper component causes.
+Second-order GPU-competitor cells are absent by design:
 this is an analytical-Hessian study and no finite-difference or nested-autodiff
 Hessians were built to fill them.
 
@@ -116,20 +125,21 @@ Protocol
 
 * One worker process per (robot, backend, operation) and three independent
   repeats. Each repeat warms the exact closure for at least 1.5 s of sustained
-  calls, then takes 5 warm-ups and 30 timed samples. The reported value is the
+  calls and at least 5 warm-up calls, then takes 30 timed samples. The reported value is the
   **median of the three run means**, with the range recorded: whiskers on the
   stacked bars, and ``~`` on a heatmap cell when either side's three run means
   spread by more than 1.5×.
 * **Run-to-run variability is real on the Python-driven paths.** GRiD's CUDA
-  host-call boundaries (kernel and with-memory) repeat within a few percent.
+  host-call boundaries are generally more stable, but are not exempt from
+  the variability checks.
   The Python-driven paths (GRiD's JAX API, MJX, Frax and Pinocchio's thread
   pool), at both the resident and the full-call boundary, show occasional
   repeats in which every sample of the window runs 3–5× slower while the
   C++-timed kernel in the same process is unchanged; this reproduces on
   an otherwise idle machine, the GPU clock stays at its maximum throughout,
   and a run pinned to the efficiency cores was slower but free of it, which
-  points at CPU power management (``intel_pstate`` in ``powersave`` with cores
-  idling to 800 MHz between synchronised calls) rather than the GPU. Those cells are marked;
+  suggests a host-side effect. CPU power management (``intel_pstate`` in
+  ``powersave``) is a hypothesis, not an isolated cause. Those cells are marked;
   their medians are indicative, not precise. A governor-locked re-collection of
   the affected cells is a listed follow-up.
 * Boundaries measured directly, never stacked from unrelated runs:
@@ -145,8 +155,9 @@ Protocol
   its eager launch time is in the table as ``resident_eager_us``.
 * Identical inputs for every backend (seeded legal states, normalised
   quaternions), a shared fixture per robot, hashed into every capture.
-* Every cell validated against RBDReference's Pinocchio-backed fp64 oracle
-  before timing, after timing and across repeats (``rtol 2e-4, atol 1e-3``
+* Each timed process checks agreement against RBDReference's Pinocchio-backed
+  fp64 oracle before and after timing, plus within-process repeatability and
+  boundary agreement (``rtol 2e-4, atol 1e-3``
   entrywise). Under the ``fp32-fd-warnings`` policy, fp32 forward-dynamics-family
   cells that exceed the entrywise gate but keep every output block within 0.1 %
   relative L2 error are **retained with their errors reported** (status
@@ -168,12 +179,12 @@ reason in the table:
      - Timed; agreed with the fp64 oracle before and after timing.
    * - ``accuracy_warning``
      - Timed; fp32 forward-dynamics-family cell retained under the policy above with
-       its measured error (GRiD JAX grad/Hessian ABA, Pinocchio/MJX/Warp/Frax ABA
+       its measured error (GRiD CUDA/JAX forward-dynamics gradient/Hessian, Pinocchio/MJX/Warp/Frax forward-dynamics
        family, Pinocchio M⁻¹).
    * - ``adapter_pending``
      - The library may support the operation but this collection's adapter does
        not wire it (MJX and Warp M⁻¹; centroidal momentum and Coriolis matrices on
-       every competitor; end-effector derivatives on BARD, Frax and Pinocchio, whose
+       GPU competitors; end-effector derivatives on BARD, Frax and Pinocchio, whose
        spatial kinematic derivatives are not the RPY pose-coordinate derivatives GRiD
        returns). Not a capability claim.
    * - ``excluded_method``
@@ -182,7 +193,7 @@ reason in the table:
      - Frax on the floating-base robots (six-coordinate base against the shared
        quaternion fixture, no validated conversion); Frax appears on iiwa14 only.
    * - ``validation_failed``
-     - G1 Pinocchio Hessian ABA (both APIs) at batch 256 and 1024: one tensor entry
+     - G1 Pinocchio forward-dynamics Hessian (both APIs) at batch 256 and 1024: one tensor entry
        of one sample disagrees with the oracle by about 1 %, identically in both
        Pinocchio modes. Not timed; under investigation.
 
@@ -214,13 +225,13 @@ From the repository root, with a GPU and the ``[all]`` extras installed:
 Known limitations and open items
 --------------------------------
 
-* End-effector pose on go2 and G1 is slower than MuJoCo Warp at every
-  boundary. The kernel itself is 10–50 % slower, and JAX dispatch (~44 µs)
-  then dominates a ~30 µs kernel. This is both a kernel item and a wrapper
-  item.
-* GRiD's JAX resident path carries 240–290 µs beyond the kernel on G1's ABA
-  and mass matrix (batch 256–1024): a device copy of the large output and
-  the ABA composition in the wrapper. The C++ host call does not pay it.
+* End-effector pose on go2 and G1 loses to MuJoCo Warp in the displayed
+  comparisons. A resident-API comparison does not isolate device-kernel
+  execution from dispatch and device-side copying.
+* Some large-batch G1 forward-dynamics and mass-matrix calls have substantial
+  JAX resident overhead relative to the CUDA compute-only call. Profiling
+  the output-copy and forward-dynamics composition paths is a follow-up;
+  the timings do not by themselves establish the cause.
 * The NumPy and PyTorch surfaces spend over a millisecond staging G1 gradient
   outputs at batch 1024 (pageable host memory); pinned output buffers are a
   backlog item.

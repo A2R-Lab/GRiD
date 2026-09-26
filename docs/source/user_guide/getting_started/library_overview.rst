@@ -51,9 +51,9 @@ II. URDFParser
 --------------
 
 URDFParser reads a URDF file and builds the ``robot`` object that both
-RBDReference and the code generator consume. Nothing downstream touches the XML
-again: joint ordering, motion subspaces, spatial inertias and the joint-frame
-transforms all come from this object.
+RBDReference and the dynamics code generator consume. Joint ordering, motion
+subspaces, spatial inertias and joint-frame transforms come from this object;
+geometry workflows may also read the URDF's visual and collision elements.
 
 .. code:: python
 
@@ -71,12 +71,13 @@ Parsing choices that matter for GRiD:
   ``floating_base_convention="pinocchio"`` (the default) uses
   ``q = [x, y, z, qx, qy, qz, qw]`` and ``v = [vx, vy, vz, wx, wy, wz]``; the
   parser normalises the legacy ordering to this convention internally.
-* **Strictness.** ``strict_inertial=True`` turns a missing or degenerate
-  ``<inertial>`` block into a ``URDFParseError`` instead of a warning.
+* **Strictness.** ``strict_inertial=True`` rejects missing or degenerate
+  inertials on real moving bodies. Root/base and dummy links are exempt.
 
 Supported joint types: revolute, continuous, prismatic, fixed, helical (screw),
-planar, spherical and mimic, including chained mimics, which are flattened at
-parse time. An arbitrary ``<axis>`` direction is parsed into a dense 6-vector
+planar, translation (alias cartesian), spherical and mimic. Chained mimic
+relations resolve to an independent driver; their bodies remain in the tree.
+An arbitrary ``<axis>`` direction is parsed into a dense 6-vector
 motion subspace; cardinal axes keep the compact form. Closed kinematic loops
 are not supported.
 
@@ -101,8 +102,9 @@ include:
   the per-body force; passing ``nullptr`` (the default) reproduces the
   no-force path byte-for-byte.
 * **``grid_plant`` layer:** a sibling ``namespace grid_plant { ... }`` emitted
-  after the ``grid`` namespace, providing ``plant_step`` (+ gradient and the
-  F1 fixed-base ``plant_step_hessian``), quadratic state/input costs,
+  after the ``grid`` namespace, providing ``plant_step`` (+ gradient and
+  ``plant_step_hessian`` for Euler/semi-implicit Euler on fixed and floating
+  bases), quadratic state/input costs,
   end-effector-position / CoM / centroidal-momentum costs (Gauss-Newton
   Hessian), and joint position/velocity/torque log-barriers.
 * **Resource tiers:** every emitted kernel and inline-CUDA ``_device`` /
@@ -146,8 +148,9 @@ include:
   stay byte-identical, gated on ``robot_has_skew_axis()``). The ``helical`` /
   ``planar`` / ``translation`` joint types are also landed (planar decomposes to a
   prismatic+prismatic+continuous chain). ``spherical`` (ball) emits value +
-  gradient paths; only its CUDA ``minv`` falls back to dense ``inv(crba)`` (matches
-  pinocchio's reduced model). Joint ``<dynamics damping/friction>`` is landed
+  gradient paths, with method-specific restrictions (in particular no
+  multi-stage integrator gradients for spherical joints). CUDA ``minv`` on
+  spherical or mimic robots uses dense ``inv(crba)``. Joint
+  ``<dynamics damping/friction>`` is landed
   behind the ``use_joint_dynamics`` flag (default off, byte-identical). See
   ``docs/open-tasks/design_urdf_features_audit.md`` for the full feature matrix.
-

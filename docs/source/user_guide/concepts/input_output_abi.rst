@@ -42,9 +42,10 @@ Always derive your offsets from these emitted constants (or ``NUM_POS`` /
 .. warning::
 
    **Do not pack ``q|qd|u`` tightly.** The slots are ``NUM_POS`` wide, *not*
-   ``NUM_VEL`` wide. On a fixed base ``nq == nv``, so a tight packing happens to
+   ``NUM_VEL`` wide. On a fixed base with independent scalar joints ``nq == nv``, so a tight packing happens to
    produce identical bytes and the mistake is invisible. On a quaternion floating
-   base ``nq == nv + 1``, so a tight packing writes ``u`` at ``NUM_POS + NUM_VEL``
+   base without spherical joints ``nq == nv + 1``; each independent spherical
+   joint adds another quaternion offset. A tight packing writes ``u`` at ``NUM_POS + NUM_VEL``
    while every kernel reads it from ``2*NUM_POS``. That read is in bounds, so
    nothing traps: you get plausible, wrong numbers. Fixed-base code that is
    "known good" therefore proves nothing about your floating-base packing.

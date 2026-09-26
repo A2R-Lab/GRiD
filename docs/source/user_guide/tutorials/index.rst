@@ -10,6 +10,8 @@ Using GRiD
    :maxdepth: 2
 
    python_wrappers
+   backend_coverage
+   verified_inputs
    codegen
    collisions
    python_algorithms
