@@ -427,3 +427,22 @@ def test_plot_handles_single_robot_and_missing_backends(tmp_path):
         warnings.filterwarnings("error", message="Tight layout not applied.*")
         plot(aggregate([row()]),tmp_path,"wrappers","smoke")
     assert (tmp_path/"wrappers.png").stat().st_size > 1000
+
+
+def test_stacked_and_composition_figures_from_synthetic_rows(tmp_path):
+    from test.benchmarks.release.report import plot_stacked_comparison, plot_grid_composition, grid_stack
+    cells={"grid_cuda":(12.,4.),"grid_native":(15.,None),"grid_numpy":(22.,None),"grid_jax":(400.,9.),"grid_torch":(10.,3.),
+           "pinocchio":(30.,None),"mjx":(900.,300.),"mujoco_warp":(500.,600.)}
+    rows=[]
+    for op in ("inverse_dynamics","inverse_dynamics_gradient","idsva_so"):
+        for batch in (16,256):
+            rows+=[dict(robot="iiwa14",operation=op,backend=b,batch=batch,host_us=h,resident_us=r,dtype="float32",status="validated")
+                   for b,(h,r) in cells.items()]
+    lookup={(r["robot"],r["operation"],r["backend"],r["batch"]):r for r in rows}
+    assert grid_stack(lookup,"iiwa14","inverse_dynamics",16,"grid_jax")==(4.,8.,388.,[])
+    compute,memory,wrapper,flags=grid_stack(lookup,"iiwa14","inverse_dynamics",16,"grid_torch")
+    assert (compute,memory,wrapper,flags)==(4.,8.,None,["wrapper"])
+    assert plot_stacked_comparison(rows,tmp_path,"smoke").exists()
+    assert plot_grid_composition(rows,tmp_path,"smoke").exists()
+    assert (tmp_path/"comparison_stacked.png").stat().st_size>1000 and (tmp_path/"grid_composition.png").stat().st_size>1000
+    assert plot_stacked_comparison([r for r in rows if r["backend"]!="grid_cuda" and r["operation"]=="minv"],tmp_path,"smoke") is None
