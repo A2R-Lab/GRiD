@@ -10,8 +10,10 @@ Input: a directory written by ``python -m test.benchmarks.release.report`` (its
   stacked_all         the same for every operation that has at least one competitor
   speedup_pinocchio   GRiD kernel (compute-only) and CUDA host call (with memory)
                       against Pinocchio's code-generated and standard C++ APIs
-  speedup_gpu         GRiD kernel (compute-only) and JAX full call against MJX,
-                      MuJoCo Warp, BARD and Frax at the matched boundary
+  speedup_gpu_*       GRiD against MJX, MuJoCo Warp, BARD and Frax at three matched
+                      boundaries: kernel (compute-only) vs the library's resident call,
+                      JAX resident vs resident (no memory traffic on either side, the
+                      framework dispatch on both), JAX full call vs full call
   table.csv, decomposition.csv   copies of the report tables
   manifest.json       report identity (table.json hash, commits, capture order,
                       accepted source drift, status counts) and output hashes
@@ -41,6 +43,7 @@ PINOCCHIO = ("pinocchio", "pinocchio_plain")
 GPU_LIBRARIES = ("mjx", "mujoco_warp", "bard", "frax")
 GRID_SIDE = {"kernel": ("grid_cuda", "resident_us", "GRiD kernel (CUDA host call, compute-only)"),
              "host": ("grid_cuda", "host_us", "GRiD CUDA host call (with memory)"),
+             "jax_resident": ("grid_jax", "resident_us", "GRiD JAX resident call (device in, device out)"),
              "jax_full": ("grid_jax", "host_us", "GRiD JAX full call (host in, host out)")}
 
 
@@ -119,6 +122,11 @@ def main():
         "GRiD kernel against GPU libraries, inputs and outputs resident on the device",
         "Competitor resident call = its warmed device-to-device evaluation including the framework's dispatch; GRiD = CUDA host call compute-only."))
     outputs.append(out / "speedup_gpu_resident.png")
+    outputs.append(speedup_grid(rows, out, "speedup_gpu_jax_resident", purpose,
+        [GRID_SIDE["jax_resident"]], GPU_LIBRARIES, "resident_us",
+        "GRiD JAX API against GPU libraries, both resident: no memory traffic, each framework's own dispatch",
+        "Both sides: inputs already on the device, outputs left on the device, synchronised; the strictest like-for-like comparison."))
+    outputs.append(out / "speedup_gpu_jax_resident.png")
     outputs.append(speedup_grid(rows, out, "speedup_gpu_full", purpose,
         [GRID_SIDE["jax_full"]], GPU_LIBRARIES, "host_us",
         "GRiD JAX API against GPU libraries, complete call from host arrays to host arrays",

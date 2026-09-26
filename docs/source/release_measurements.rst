@@ -77,18 +77,24 @@ Figure 3 — Speedup against the GPU libraries
    :alt: Heatmaps of GRiD kernel compute-only time against MJX, MuJoCo Warp, BARD and Frax resident calls, rows are robot and operation, columns are batch sizes.
    :target: _static/release/speedup_gpu_resident.svg
 
+.. image:: _static/release/speedup_gpu_jax_resident.svg
+   :alt: Heatmaps of GRiD JAX resident call against MJX, MuJoCo Warp, BARD and Frax resident calls: no memory traffic on either side, each framework's own dispatch included.
+   :target: _static/release/speedup_gpu_jax_resident.svg
+
 .. image:: _static/release/speedup_gpu_full.svg
    :alt: Heatmaps of GRiD JAX full call against MJX, MuJoCo Warp, BARD and Frax full calls from host arrays to host arrays.
    :target: _static/release/speedup_gpu_full.svg
 
-Top: inputs and outputs resident on the device — the competitor's warmed
-device-to-device evaluation (including its framework dispatch) over GRiD's
-kernel. Bottom: the complete call from host arrays to host arrays on both
-sides, through GRiD's JAX API; this is where Warp's cheaper host round trip
-shows, and where GRiD's own JAX overhead on large outputs shows (on G1 at batch
-1024 the JAX resident mass-matrix call is 3× the kernel, a device copy of a
-7.6 MB output). The full report also carries GRiD's JAX *resident* call against
-each competitor's resident call (same framework overhead on both sides). Second-order competitor cells are absent by design:
+Three boundaries, each measured directly on both sides. **Top:** the
+competitor's warmed device-to-device evaluation (including its framework
+dispatch) over GRiD's bare kernel. **Middle:** no memory traffic on either
+side — GRiD's JAX resident call against the competitor's resident call, each
+paying its own framework dispatch; this is the strictest like-for-like view.
+**Bottom:** the complete call from host arrays to host arrays on both sides,
+through GRiD's JAX API; this is where Warp's cheaper host round trip shows, and
+where GRiD's own JAX overhead on large outputs shows (on G1 at batch 1024 the
+JAX resident mass-matrix call is 3× the kernel, a device copy of a 7.6 MB
+output). Second-order competitor cells are absent by design:
 this is an analytical-Hessian study and no finite-difference or nested-autodiff
 Hessians were built to fill them.
 
@@ -100,8 +106,9 @@ Protocol
   calls, then 5 warm-ups and 30 timed samples; the reported value is the
   **median of the three run means**, with the range recorded.
 * Boundaries measured directly, never stacked from unrelated runs:
-  *resident* = inputs and outputs on the device, synchronised; *full call* =
-  host arrays in, host arrays out. GRiD's CUDA host call is the generated
+  *resident* = inputs pre-placed on the device, outputs left on the device,
+  synchronised, no copies (for every GPU library and for GRiD's JAX and PyTorch
+  surfaces alike); *full call* = fresh upload, call, download to host arrays. GRiD's CUDA host call is the generated
   ``<op>_compute_only`` (resident) and ``<op>`` (with memory) host functions
   called from a C++ harness, checked bitwise against the NumPy wrapper.
 * fp32 for every backend, including GRiD's Hessians. Pinocchio's analytical
