@@ -79,14 +79,15 @@ def check(root):
             errors.append(f"Legacy query/fragment preservation missing: {old}")
     if errors:
         raise SystemExit("\n".join(errors))
-    assets = root / "docs/_static/release-preview"
+    assets = root / "docs/_static/release"
     if (assets / "manifest.json").exists():
         manifest = json.loads((assets / "manifest.json").read_text())
-        expected = {"historical-excerpt.json": manifest["input_sha256"], **manifest["outputs"]}
-        for name, digest in expected.items():
+        if not manifest.get("approved"):
+            raise SystemExit("Release figures are tracked but not approved (docs/plot_release_figures.py --approve)")
+        for name, digest in manifest["outputs"].items():
             path = assets / name
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-                raise SystemExit(f"Historical preview asset hash mismatch: {name}")
+                raise SystemExit(f"Release figure asset hash mismatch: {name}")
     print(f"PASS: {len(pages)} pages; local links/assets, homepage anchors, {len(routes)} redirects")
 
 

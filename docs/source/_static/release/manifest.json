@@ -1,0 +1,54 @@
+{
+  "approved": true,
+  "purpose": "release",
+  "report": "test/benchmarks/results/release-report-final-20260926",
+  "table_json_sha256": "a5d12088bc733fc8ce36d993a943508707b88156585acb9468dc6e25bc600f04",
+  "commits": [
+    "c908ac26587fea3f54acf3e0f821deeed446425d",
+    "d4073b56d227171ba2ff1c261946ebe8f017d810",
+    "f906aeb6f4fab9a3b54a9be0da756f64f2529837"
+  ],
+  "capture_order": [
+    "test/benchmarks/results/release-fix-core-iiwa14pin-20260926_1110",
+    "test/benchmarks/results/release-cuda-table-g1rest-20260926_1058",
+    "test/benchmarks/results/release-cuda-table-20260926_0638",
+    "test/benchmarks/results/release-fix-table-warpcrba3-20260926_1119",
+    "test/benchmarks/results/release-fix-core-go2so-20260926_0622",
+    "test/benchmarks/results/release-fix-core-g1grad-20260926_0622",
+    "test/benchmarks/results/release-fix-wrappers-g1grad-20260926_0622",
+    "test/benchmarks/results/release-fix-table-g1-20260926_0622",
+    "test/benchmarks/results/release-core-20260926_0026",
+    "test/benchmarks/results/release-wrappers-20260926_0026",
+    "test/benchmarks/results/release-table-20260926_0026",
+    "test/benchmarks/results/release-table-core-baselines-20260926_0026"
+  ],
+  "accepted_source_drift": [
+    "test/benchmarks/release/competitors.py",
+    "test/benchmarks/release/grid_adapter.py",
+    "test/benchmarks/release/kernel_bridge.cu",
+    "test/benchmarks/release/protocol.py"
+  ],
+  "superseded_cells": 702,
+  "status_counts": {
+    "adapter_pending": 546,
+    "validated": 1377,
+    "model_mismatch": 120,
+    "excluded_method": 234,
+    "accuracy_warning": 167,
+    "validation_failed": 4
+  },
+  "outputs": {
+    "stacked_core.svg": "2019a4decbd2f5e7f5ce76a28cc0bb9f4f5c804d40777cd86af88f2d894ac79c",
+    "stacked_core.png": "2b253b338836b844dff8656473d4408e618ce7724fbff15da2eaf1b3f2db963c",
+    "stacked_all.svg": "85c12c0acb9c70a6c1b6446fb63ab3bafd61b537fb5a382b31aea1cf2efffc10",
+    "stacked_all.png": "eff43a55cec8721c8e8589fe5c72f7e7586864d4fecfe213619f22363179ea4d",
+    "speedup_pinocchio.svg": "1cc5ab224e11e02c6faceef570add588648236969396f9124925cab9f3a24084",
+    "speedup_pinocchio.png": "18890a3962f7b97176ca751b6693f373b9783fd6567b888317f868feb5013603",
+    "speedup_gpu_resident.svg": "e3a2878fbc434a82b008b48133c0c78648f924eca2af9a89fa144b2b05baf2f8",
+    "speedup_gpu_resident.png": "bd8b3d1e86b6a621969d6daac71fd3efb5003a71419a6071b5c2fdd7938eb442",
+    "speedup_gpu_full.svg": "761d5b4d17a5257ac8094817ba4d4c1037d06640aef08a7731310fc90c19ae3c",
+    "speedup_gpu_full.png": "9fd5fcf7c7eefefc9c83b0d1fdbf6c583c53ac1b86fe3d999857716b38e779d9",
+    "table.csv": "178a2cdc8b33dfa755876acd5a7bde4463af4fa28ac95429009648a0b6e02ca2",
+    "decomposition.csv": "afc9465c3fe9f7b1261221561f01e7c463fa2f832f3af43c551a9fa2aff035ed"
+  }
+}

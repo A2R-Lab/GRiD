@@ -1,329 +1,193 @@
-Release measurement plan
-========================
+Release measurements
+====================
 
-**Release protocol for review. Functional GPU smoke tests have been run, but
-no new release-quality performance sweep has been collected.** Collect the comparison
-plots first, the remaining operations for a full results table second, and
-collisions later. The previous resident-rollout figure is no longer in scope.
-See :doc:`plot_designs` for a CPU-generated layout preview, not release evidence.
+Every number on this page comes from one audited collection on one machine
+(NVIDIA RTX 5090, fp32 everywhere except where marked, 26 September 2026,
+``modernizing-tests`` branch). Three robots — **iiwa14** (fixed base, 7 joints),
+**go2** (floating base, 18 velocities) and **G1** (floating base, 43 velocities) —
+fifteen operations, batch sizes 16 to 1024, GRiD through every one of its
+surfaces beside Pinocchio, MJX, MuJoCo Warp, MuJoCo CPU, BARD and Frax. Each
+cell was validated against an independent fp64 Pinocchio oracle before and after
+timing; a cell that failed validation has no bar. The collector, its protocol
+and the raw captures are in ``test/benchmarks/release/`` (see its ``README.md``).
 
-Collection implementation
--------------------------
+The short version, stated the way the data says it:
 
-The validation-gated implementation is in ``test/benchmarks/release/``. Its
-``README.md`` documents exact commands, adapter coverage, precision exceptions,
-and measurement boundaries. Plan without launching GPU work::
+* **Kernel against kernel, GRiD leads.** With inputs and outputs resident on
+  the device, GRiD's generated kernels are faster than MJX on every measured
+  cell (1–30×, most cells 5–20×), faster than MuJoCo Warp on the dynamics
+  operations (2–17×), faster than BARD by 14–160× and faster than Frax by 4–7×,
+  at every batch size up to 1024.
+* **We do not always win.** End-effector pose on the floating-base robots is
+  a tiny kernel and MuJoCo Warp's is faster (GRiD at 0.4–0.9× of Warp, kernel
+  to kernel; 0.3–0.6× through the JAX API). On G1 at batch 1024 the ABA and
+  mass-matrix kernels are at parity with Warp. Through the JAX API's complete
+  call (host arrays in and out) GRiD still beats MJX and BARD on nearly every
+  cell, but is at parity or behind Warp on the first-order operations, because
+  Warp's host round trip is cheaper than JAX's, and trades cells with Frax.
+* **Against Pinocchio, the boundary and the batch decide.** Pinocchio's
+  code-generated C++ on eight CPU threads wins nearly every cell below batch
+  64. With the data already on the GPU, GRiD's kernel is 1.2–14× faster at
+  batch 1024 on every operation Pinocchio code-generates; including the
+  host↔device copies, GRiD's CUDA host call reaches parity around batch 128–256
+  and 0.7–6× at 1024 (most cells above 1×; the floating-base bias vector and
+  G1's mass matrix stay just below parity).
+  GRiD's JAX and PyTorch full calls add a framework round trip of roughly
+  150–200 µs and lose to Pinocchio's codegen at small batch, reaching parity
+  only at the largest batches. Most users call Pinocchio's standard templated
+  API, which measured about twice the code-generated time; both are shown.
+  Pinocchio's centroidal momentum matrix beats GRiD's host call on the floating
+  robots at every batch (0.1–0.6×).
 
-   .venv/bin/python -m test.benchmarks.release.collect --stage core
+Figure 1 — Where the time goes
+------------------------------
 
-Run a functional check in a fresh directory::
+.. image:: _static/release/stacked_core.svg
+   :alt: Nine panels (RNEA, grad RNEA, Hessian RNEA by iiwa14, go2, G1). GRiD is a three-segment stack of kernel compute, memory traffic and JAX wrapper overhead; each competitor is its resident time plus a hatched host round trip; Pinocchio is its code-generated time plus a hatched standard-API cap. Log axis, batches 16 to 1024.
+   :target: _static/release/stacked_core.svg
 
-   .venv/bin/python -m test.benchmarks.release.collect --stage core --smoke \
-       --execute --output test/benchmarks/results/release-core-smoke
+Absolute microseconds per complete batch, log axis. GRiD is the blue stack: the
+generated kernel's compute-only time (CUDA host call), the host↔device memory
+traffic on top (with-memory host call minus compute), and the JAX API's own
+overhead on top of that (full call minus with-memory). Each GPU competitor is
+its resident evaluation plus a hatched cap for its host round trip; Pinocchio
+CPU is its code-generated time plus a hatched cap for the standard API. Every
+segment is a difference of two measured medians on the same cell; a negative
+difference is marked, never clamped. ``*`` marks fp64 arithmetic, ``†`` a
+retained fp32 accuracy warning (see below). The same figure for all fifteen
+operations: :download:`stacked_all.svg <_static/release/stacked_all.svg>`.
 
-Export draft figures and the complete table::
+Figure 2 — Speedup against Pinocchio (CPU)
+-------------------------------------------
 
-   .venv/bin/python -m test.benchmarks.release.report \
-       test/benchmarks/results/release-core-smoke \
-       --output test/benchmarks/results/release-core-smoke-report
+.. image:: _static/release/speedup_pinocchio.svg
+   :alt: Four heatmaps, rows are robot and operation, columns are batch sizes. Top row: GRiD kernel compute-only against Pinocchio code-generated and standard APIs. Bottom row: GRiD CUDA host call including copies against the same two. Blue cells are GRiD faster, red cells are Pinocchio faster.
+   :target: _static/release/speedup_pinocchio.svg
 
-Smoke reports are prominently marked and must not replace website placeholders.
-The collector retains actual shared inputs, per-iteration samples, numerical
-errors, source/build identities, and capture hashes. Failed or missing cells
-never become zero-valued bars. Some expanded FD-table cells exceed the current
-entrywise accuracy gate. Following review, ``--accuracy-policy fp32-fd-warnings``
-retains bounded fp32 Minv/FD discrepancies with explicit error metrics, not strict
-pass labels; shape/nonfinite failures and gross errors remain blocked. All 135
-core cells passed, and the affected 45 GRiD cells and all 120 wrapper cells
-passed again after the parser fix. See ``test/benchmarks/release/BUG_TRIAGE.md``
-and the collector README for details. The
-default core comparison currently labels GRiD's JAX API explicitly; it is not
-a claim of pure native-kernel latency. C++/NumPy/JAX/PyTorch full-call comparisons
-are collected in the separate wrapper stage.
+Ratio of Pinocchio's warmed batch time to GRiD's, blue when GRiD is faster, red
+when Pinocchio is. The top row is the kernel with data already on the GPU (the
+situation inside a GPU optimiser); the bottom row includes the copies in and
+out. Pinocchio runs a persistent C++ thread pool and the best of the recorded
+thread counts (1, batch/16, 8) is used for every cell.
 
-Collection matrix and order
----------------------------
+Figure 3 — Speedup against the GPU libraries
+--------------------------------------------
 
-Use **iiwa14 fixed-base, go2 floating-base, and G1 floating-base**, with
-**B = 16, 32, 64, 128, 256**. Confirm these base choices before collection.
-Default to **fp32**, including GRiD Hessians. Use one GPU/host initially and existing documented launch settings, not a new
-autotuning sweep. Pin the exact G1 model and joint count; historical baselines
-have used different G1 configurations. Never compare just by robot name.
+.. image:: _static/release/speedup_gpu_resident.svg
+   :alt: Heatmaps of GRiD kernel compute-only time against MJX, MuJoCo Warp, BARD and Frax resident calls, rows are robot and operation, columns are batch sizes.
+   :target: _static/release/speedup_gpu_resident.svg
+
+.. image:: _static/release/speedup_gpu_full.svg
+   :alt: Heatmaps of GRiD JAX full call against MJX, MuJoCo Warp, BARD and Frax full calls from host arrays to host arrays.
+   :target: _static/release/speedup_gpu_full.svg
+
+Top: inputs and outputs resident on the device — the competitor's warmed
+device-to-device evaluation (including its framework dispatch) over GRiD's
+kernel. Bottom: the complete call from host arrays to host arrays on both
+sides, through GRiD's JAX API; this is where Warp's cheaper host round trip
+shows, and where GRiD's own JAX overhead on large outputs shows (on G1 at batch
+1024 the JAX resident mass-matrix call is 3× the kernel, a device copy of a
+7.6 MB output). The full report also carries GRiD's JAX *resident* call against
+each competitor's resident call (same framework overhead on both sides). Second-order competitor cells are absent by design:
+this is an analytical-Hessian study and no finite-difference or nested-autodiff
+Hessians were built to fill them.
+
+Protocol
+--------
+
+* One worker process per (robot, backend, operation); three independent
+  repeats; each repeat warms the exact closure for at least 1.5 s of sustained
+  calls, then 5 warm-ups and 30 timed samples; the reported value is the
+  **median of the three run means**, with the range recorded.
+* Boundaries measured directly, never stacked from unrelated runs:
+  *resident* = inputs and outputs on the device, synchronised; *full call* =
+  host arrays in, host arrays out. GRiD's CUDA host call is the generated
+  ``<op>_compute_only`` (resident) and ``<op>`` (with memory) host functions
+  called from a C++ harness, checked bitwise against the NumPy wrapper.
+* fp32 for every backend, including GRiD's Hessians. Pinocchio's analytical
+  second derivatives run in fp64 (marked ``*``). MuJoCo Warp is graph-captured;
+  its eager launch time is in the table as ``resident_eager_us``.
+* Identical inputs for every backend (seeded legal states, normalised
+  quaternions), a shared fixture per robot, hashed into every capture.
+* Every cell validated against RBDReference's Pinocchio-backed fp64 oracle
+  before timing, after timing and across repeats (``rtol 2e-4, atol 1e-3``
+  entrywise). Under the ``fp32-fd-warnings`` policy, fp32 forward-dynamics-family
+  cells that exceed the entrywise gate but keep every output block within 0.1 %
+  relative L2 error are **retained with their errors reported** (status
+  ``accuracy_warning``, ``†``); this applies to every backend equally.
+
+Coverage and statuses
+---------------------
+
+A missing bar is never a zero. Every planned cell carries a status and a
+reason in the table:
 
 .. list-table::
    :header-rows: 1
-   :widths: 18 57 25
+   :widths: 22 78
 
-   * - Stage
-     - Operations
-     - GRiD configurations
-   * - 1. Core plot
-     - RNEA, grad RNEA, Hessian RNEA (IDSVA-SO)
-     - 45, before repeats and timing boundaries
-   * - 2. Interface plot
-     - RNEA and grad RNEA through NumPy/pybind, JAX, and PyTorch,
-       plus a matched CUDA C++ reference
-     - 90 wrapper configurations; 30 native references reusable only if matched
-   * - 3. Full table
-     - Add Minv, FD, grad FD, Hessian FD (FDSVA-SO), FK, grad FK, Hessian FK
-     - 105 additional native configurations; 150 total over ten operations
-   * - 4. Follow-up
-     - Collision latency, coverage, and agreement
-     - Separate protocol below; not a gate for the first two plots
+   * - Status
+     - Meaning
+   * - ``validated``
+     - Timed; agreed with the fp64 oracle before and after timing.
+   * - ``accuracy_warning``
+     - Timed; fp32 forward-dynamics-family cell retained under the policy above with
+       its measured error (GRiD JAX grad/Hessian ABA, Pinocchio/MJX/Warp/Frax ABA
+       family, Pinocchio M⁻¹).
+   * - ``adapter_pending``
+     - The library may support the operation but this collection's adapter does
+       not wire it (MJX and Warp M⁻¹; centroidal momentum and Coriolis matrices on
+       every competitor; end-effector derivatives on BARD, Frax and Pinocchio, whose
+       spatial kinematic derivatives are not the RPY pose-coordinate derivatives GRiD
+       returns). Not a capability claim.
+   * - ``excluded_method``
+     - Second-order cells that would need finite differences or nested autodiff.
+   * - ``model_mismatch``
+     - Frax on the floating-base robots (six-coordinate base against the shared
+       quaternion fixture, no validated conversion); Frax appears on iiwa14 only.
+   * - ``validation_failed``
+     - G1 Pinocchio Hessian ABA (both APIs) at batch 256 and 1024: one tensor entry
+       of one sample disagrees with the oracle by about 1 %, identically in both
+       Pinocchio modes. Not timed; under investigation.
 
-These counts are not a runtime estimate and exclude comparator cells. G1
-second-order generation/compilation may dominate preparation. Preflight one
-build and record time/peak memory before launching the full stage.
-
-Recommended comparison set
+Downloads and reproduction
 --------------------------
 
-**Main plot:** GRiD, Pinocchio, MJX, and MuJoCo Warp for RNEA; GRiD,
-Pinocchio, and MJX for grad RNEA; GRiD and analytical Pinocchio for Hessian
-RNEA. This keeps clusters readable while representing CPU code generation,
-GPU simulation, autodiff, and analytical derivatives. Label each method and
-device explicitly. The gradient row is not restricted to analytical methods.
+:download:`table.csv <_static/release/table.csv>` — every planned cell:
+status, reason, host and resident medians, run range, threads, dtype, oracle
+errors and exceedance counts.
+:download:`decomposition.csv <_static/release/decomposition.csv>` — GRiD's
+kernel / memory / C ABI / NumPy / JAX / PyTorch terms per cell, and Pinocchio's
+standard-API overhead over its codegen.
+:download:`manifest.json <_static/release/manifest.json>` — the report identity
+(table hash, commits, capture order, accepted source drift, status counts) and
+the hash of every figure.
 
-**Full table:** add standalone MuJoCo CPU, BARD, and Frax where their supported
-operations match. Include the MuJoCo Warp finite-difference gradient as an
-explicitly labeled secondary comparison if feasible, not a headline full-
-Jacobian competitor silently mixed with analytical/autodiff methods. Do not
-build finite-difference Hessians merely to fill missing cells. Keep cuRobo as
-optional until its model and full-output contract match this collection.
+From the repository root, with a GPU and the ``[all]`` extras installed:
 
-.. list-table:: Adapter audit, not a certified library support matrix
-   :header-rows: 1
-   :widths: 18 47 35
+.. code-block:: shell
 
-   * - Baseline
-     - Existing path and applicable comparison
-     - Preparation or scope limit
-   * - Pinocchio CPU
-     - Codegen paths for RNEA, Minv, FD, grad RNEA, grad FD; direct analytical
-       RNEA second derivatives and additional direct/composed operations
-     - Hessian is not codegen. Current direct second-order path uses double;
-       footnote that mixed-precision comparison. Pin CPU threads/batch policy.
-   * - MJX GPU
-     - RNEA, FD, pose and autodiff dynamics gradients are wired
-     - Match derivative variables and output materialization. Exclude optional
-       second-order autodiff from this deliberately analytical Hessian study.
-   * - MuJoCo Warp GPU
-     - RNEA, FD, pose and CRBA are wired
-     - Current gradient adapter is finite differences, not analytical/autodiff.
-       Not applicable to the selected headline gradient-method set.
-   * - MuJoCo CPU
-     - Useful familiar simulator baseline for supported first-order operations
-     - No standalone CPU timing column found in the multi-version driver.
-       Adapter pending, not evidence of an unsupported library operation.
-   * - BARD GPU
-     - PyTorch RNEA, FD and CRBA paths are wired
-     - Add applicable timings to the table. Derivative comparison is not wired;
-       do not infer that the library lacks differentiability.
-   * - Frax GPU
-     - Dynamics and inverse-inertia paths are wired; CPU results also exist
-     - Select GPU results explicitly; verify model and operation semantics.
-       Wider derivatives are not covered by the current adapter.
-   * - cuRobo GPU, optional
-     - Separate fixed-base G1 RNEA/FK driver exists
-     - Historical model/base differ; its backward timing is a VJP, not a full
-       Jacobian. Not a comparable grad RNEA cell without additional work.
+   # plan without launching GPU work (add --execute to collect)
+   .venv/bin/python -m test.benchmarks.release.collect --stage core
+   .venv/bin/python -m test.benchmarks.release.collect --stage table --accuracy-policy fp32-fd-warnings
+   # combine captures (narrow re-collections first: the first listed capture supersedes)
+   .venv/bin/python -m test.benchmarks.release.report <capture>... --output <report>
+   # website figures (DRAFT banner unless --approve, after the audit)
+   python docs/plot_release_figures.py <report>
 
-Adapter sources are under ``test/benchmarks/baselines/``. The main coordinator
-is ``test/benchmarks/run_multi_version.py``; cuRobo uses a separate path.
-Availability of adapter code is not proof it runs at the release tip.
+Known limitations and open items
+--------------------------------
 
-Use **N/A — unsupported** only after checking the selected version cannot
-produce the agreed output through an applicable supported API. Distinguish
-**adapter pending**, **not collected**, **excluded method**, **model mismatch**,
-**failed validation**, and **OOM/error**. Record reasons in the table rather
-than leaving blanks. A coverage advantage may be stated for verified support;
-an unwritten adapter is not a competitor capability limitation.
-
-.. _figure-core:
-.. _figure-derivatives:
-
-Figure 1 — Clustered operation comparisons
-------------------------------------------
-
-Rows are RNEA, grad RNEA, Hessian RNEA; columns are the three robots. Each panel
-has five batch clusters and baseline-colored bars. Use absolute microseconds
-per complete batch, log y axes if needed, and matching row scales where legible.
-Label ratios from the same full-call boundary, not across different boundaries.
-
-The **bar top is a warmed host-input to host-output call**, including required
-transfers and synchronization. The colored portion for a GPU baseline is its
-warmed resident-input/resident-output evaluation wall time, including ordinary
-API dispatch. The **gray hatched cap is the paired total-minus-resident delta**,
-not a separately measured pure PCIe transfer or pure Python overhead. CPU
-Pinocchio has no GPU-transfer cap. Resident costs already include Python launch
-overhead where applicable; do not call them pure kernel latency.
-
-Measure both boundaries directly, using the same computation/configuration,
-allocation policy and inputs. If a total is below its resident measurement,
-flag/repeat that cell rather than silently clamping overhead to zero. Retain
-raw paired results. The stack is a descriptive difference of timings, not a
-claim that independently measured components have an exact additive execution
-trace. Error bars describe total-call run variability, not fabricated component
-uncertainty. Publish resident and full-call values separately in the table.
-
-* [ ] Match model assets, base convention, gravity, input state and external
-  forces, output components, frames, quaternion/tangent convention, and variables
-  differentiated. Full Jacobians/Hessians are not interchangeable with VJPs or
-  directional derivatives. FK means the agreed endpoint pose, not all-link poses.
-* [ ] Default to fp32 for every operation. Retain the current fp64 Pinocchio
-  analytical Hessian path as an explicitly footnoted exception, not a
-  same-precision speedup. Label its bars ``Pinocchio CPU (fp64)*``. Audit direct
-  Pinocchio FK and other table paths too; their current implementations also
-  use double internally. Mark every actual exception, not just the headline one.
-  Do not infer arithmetic precision from the input array dtype.
-* [ ] Validate outputs before timing, with dtype-appropriate recorded tolerances.
-  Use legal joint states and normalized floating-base quaternions. Confirm
-  Hessian blocks and symmetry conventions, not merely matching array sizes.
-* [ ] Repair/adapt timing boundaries before claiming host-to-host comparisons.
-  Current MJX, MuJoCo Warp and BARD ``with_mem`` paths do not include equivalent
-  output copies to host. Current native compute-only timings and Python wall
-  timings also cannot simply be stacked as if they were identical boundaries.
-* [ ] Add an explicit five-batch execution filter where missing. Several drivers
-  currently include 1024 or hard-code templates; hiding that batch in the plot
-  does not avoid its compilation/run cost. Subset selected operations as well.
-* [ ] Warm exact closures/builds, exclude compilation, use a fixed disclosed CPU
-  thread policy, time on an idle GPU, and run three independent warmed repeats.
-  Report the median of the three run means and their range, named precisely.
-
-Precision footnote and accuracy evidence
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Accuracy-warning footnote for the expanded table: **"FP32 forward-dynamics
-computations can amplify rounding and cancellation, particularly in high-velocity
-cases. Selected entries show percent-level discrepancies from the fp64 reference;
-relative errors can be larger near zero. GPU reduction order can also cause
-small run-to-run differences. Accuracy-warning timings are retained
-with measured errors and entrywise exceedance counts, not labeled strict
-validation passes."** Do not claim a single-digit-percentage upper bound.
-The opt-in policy requires each output block's relative L2 error to remain at
-most 0.1%, while preserving the original entrywise exceedance counts. It applies
-equally to every backend's fp32 Minv/FD-family operations and does not override
-shape or nonfinite failures. Policy v2 additionally permits bounded fp32
-repeatability/API-boundary discrepancies under the same budget, with both paths
-checked against the oracle before and after timing. Larger discrepancies still
-block; native C++/NumPy agreement remains exact. Pre/post sampling is not a
-guarantee about every timed call. Use the preparation-only commands in
-``test/benchmarks/release/README.md`` to populate reusable caches before timing.
-
-Proposed caption footnote: **"GRiD uses fp32. The Pinocchio analytical Hessian
-baseline uses fp64 in our current benchmark implementation; this comparison
-therefore includes a precision difference."** Do not say Pinocchio cannot
-compute fp32 Hessians: its installed C++ API is scalar-templated, while our
-``timePinocchio.cpp::idsvaSoThreaded_inner`` explicitly uses ``pinocchio::Model``,
-``pinocchio::Data`` and casts to double. Whether adapting that path is worthwhile
-is separate from choosing the practical baseline for this collection.
-
-The existing fp32 CUDA RNEA Hessian tests compare all selected tensor entries
-at **rtol = 2e-4, atol = 1e-3**, with the Pinocchio extension as the default
-independent oracle. Archived JUnit records include iiwa14-fixed passing in
-``test/.split_suite/receipt_20260920_195310/cuda_04_kinematics_thread__mjx_tier_inva.xml``
-and go2/G1 floating world-frame passes in
-``test/.split_suite/receipt_20260924_145347/cuda_01_gen3_fetch_baxter_f_ext_contact_.xml``.
-This supports historical agreement within the test criteria, **not equal
-precision, a measured 0.02% error bound, or validation of every benchmark cell**.
-The mixed absolute/relative threshold matters for near-zero entries. A later
-fixed-base archive had C++ compilation failures, not numerical disagreements;
-neither historical passing nor failing runs certify the final release tip.
-
-During collection, record maximum absolute error and relative tensor-norm error
-per Hessian block against the double oracle on the same inputs, plus failure
-counts. Compare equal represented inputs (fp32 values promoted for the oracle),
-and separately document model-parameter rounding. Include seeded legal random
-states beyond the existing zero/conservative smoke samples. Report actual
-errors beside timings before claiming "close agreement with the fp64 reference
-on the benchmark inputs." Do not generalize RNEA-Hessian tolerances to FD or FK
-Hessians, which have different output scales and test criteria.
-
-.. _figure-workflows:
-
-Figure 2 — GRiD interface costs
--------------------------------
-
-Two rows (RNEA, grad RNEA), three robot columns, five batch clusters. Compare
-CUDA C++, NumPy/pybind, JAX and PyTorch using the **same generated kernels,
-dtype, launch configuration, inputs and full outputs**. Primary comparison is
-warmed host-to-host synchronized wall time for every interface. Record JAX and
-PyTorch resident-call timings separately in the table; do not pretend NumPy's
-host-array entry point provides the same resident interface.
-
-Use colored matched native full-call reference plus a gray hatched
-**incremental interface cost** for wrapper bars, only when the measured
-difference is nonnegative and the underlying work matches. The cap includes
-dispatch, conversions, and any extra allocation/copy behavior; it is not pure
-Python execution time. The native reference already includes the transfers
-required by this host-to-host contract. Unlike Figure 1, this hatch does not
-represent the host-versus-resident delta; captions must state the distinction.
-
-* [ ] Extend the existing ``baselines/grid/timeGRiD_bindings.py`` approach into
-  a matched three-interface harness. It currently times JAX only, and its
-  ``with_mem`` path does not establish a full host-output boundary.
-* [ ] Keep JIT/compilation outside warm timing; force completion and materialize
-  every promised output. Document allocations, cache policy and graph use.
-* [ ] Call GRiD's explicit gradient API in each wrapper, not a scalar-loss VJP.
-* [ ] Save numerical agreement, native/reference timings and raw wrapper totals;
-  never fabricate a wrapper cap from unrelated historical kernel captures.
-
-Full results table
-------------------
-
-Place it below the figures after stage 3. Include all ten operations, robots,
-batches and selected baselines, with searchable/filterable rows and a download
-of the underlying records. Columns: operation, robot/base/joints, batch, dtype,
-baseline/version, differentiation method, CPU threads/GPU, resident mean,
-host-to-host mean, run variability, matched-boundary speedup, validation/status,
-and capture reference. Aggregate values must identify their population; never
-count N/A as a win or infinity. FK/grad FK/Hessian FK require endpoint-frame and
-output-parameterization agreement before any ratio is meaningful.
-
-.. _figure-collisions:
-
-Deferred collision collection
------------------------------
-
-No collision timing runs in stages 1–3. Start later with go2, frozen resolved
-geometry, a fixed obstacle scene and self-pair table, and the same five batch
-sizes. Compare single-fine-tier against coarse-to-fine GRiD checks; collect
-latency, free/colliding/near-contact counts, fine-tier verdict agreement, and
-complete geometry coverage. An external collision baseline is a separate scope
-decision requiring matched geometry and distance/contact semantics.
-
-The generic registry excludes the composite collision operation. Adapt and
-validate a current timing wrapper first; the archived
-``test/benchmarks/archive/collision_configfree_timing.cu`` is a starting point,
-not a current ready benchmark. Reject unresolved assets. Agreement with GRiD's
-fine representation does not establish exact-mesh accuracy or an independent
-false-negative guarantee. Freeze seeds and representation resolution; report
-them next to the figure. See the layout-only sketch in :doc:`plot_designs`.
-
-Bug fixes and release gates
----------------------------
-
-The timing parser no longer copies an average into a fictional median, and a
-single summary no longer invents a zero-variance distribution. Python baseline
-single-call medians are explicitly preserved as medians. The legacy latency
-plot no longer substitutes zero for missing data or clamps negative overhead;
-it marks unstackable totals and uses the actual B=256 reference index. Existing
-captures are unchanged and must still be read as recorded means. The two JAX
-resident examples now match host/resident final-state outputs, fence both
-outputs, use equal repetition counts, and check agreement outside timing.
-Those fixes are retained even though the rollout plot is dropped. CPU regression
-tests exercise parsing and workload structure; GPU validation is still needed.
-
-* [ ] Agree on comparison/precision/output contracts before GPU collection.
-* [ ] Pin source/submodule SHAs, asset hashes, hardware/software versions, dtype,
-  CPU threads, power/clocks, allocation policy, build/launch options, exact commands,
-  warmups/repetitions and tolerances. Save logs and failure records.
-* [ ] Publish immutable captures with SHA-256s and plotting revision, not just
-  ignored local results. No historical preview becomes a release claim.
-* [ ] Review stage 1 before widening collection; do not silently drop expensive
-  or unfavorable cells. Time all selected baselines under the agreed protocol.
-* [ ] Require a fresh full GPU validation receipt at the final release tip.
-  Rerun affected timing cells after numerical or tuning changes.
-* [ ] Replace homepage placeholders only with reviewed data. Once merged to
-  ``main``, update the development clone command/banner and verify installation.
-  The original paper stays tied to the archival repository.
+* End-effector pose on go2 and G1 is slower than MuJoCo Warp at every
+  boundary: the kernel itself is 10–50 % slower and JAX dispatch (~44 µs) then
+  dominates a ~30 µs kernel. A kernel item and a wrapper item.
+* GRiD's JAX resident path carries 240–290 µs beyond the kernel on G1's ABA
+  and mass matrix (batch 256–1024): a device copy of the large output and
+  the ABA composition in the wrapper. The C++ host call does not pay it.
+* The NumPy and PyTorch surfaces spend over a millisecond staging G1 gradient
+  outputs at batch 1024 (pageable host memory); pinned output buffers are a
+  backlog item.
+* Pinocchio's CPU numbers are the best of three thread counts on a 24-thread
+  desktop CPU; they are not a claim of optimal CPU threading.
+* Collision-checking timings are a separate follow-up with their own protocol
+  (matched geometry, coverage and agreement beside latency).

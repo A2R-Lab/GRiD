@@ -34,18 +34,14 @@ Relative URLs also support hosting below `/GRiD/`.
 
 ## Data and release review
 
-The single source of truth for proposed data collection is
+The single source of truth for the release measurements is
 [`../source/release_measurements.rst`](../source/release_measurements.rst), rendered
-at `/docs/release_measurements.html`. Two homepage placeholders link to its
-checklists: clustered RNEA/gradient/Hessian comparisons across iiwa14, go2 and
-G1, then matched CUDA C++/NumPy/JAX/PyTorch interface costs. Remaining operations
-follow in a full table; collisions are deferred. `/docs/plot_designs.html` shows
-historical native bar styling with pending competitor slots, plus data-free
-wrapper and collision layouts. These are not current performance claims.
-
-Regenerate the checked-in preview plots with `python docs/plot_release_previews.py`
-in an environment with Matplotlib and NumPy. The ordinary site build only uses
-the checked-in assets and does not need plotting dependencies or original captures.
+at `/docs/release_measurements.html`: the protocol, the three figures (stacked
+absolute timings, speedup against Pinocchio, speedup against the GPU libraries)
+and the full table with every cell's status. The homepage embeds the figures from
+`docs/source/_static/release/`, which `docs/plot_release_figures.py --approve`
+writes from an audited report directory (`python -m test.benchmarks.release.report`);
+`check_site.py` verifies the manifest hashes. Collisions are a separate follow-up.
 
 Before publication, agree on that matrix, collect and review the data, replace or
 remove unfilled slots, validate the release tip, and change the preview clone

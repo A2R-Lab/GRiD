@@ -3,11 +3,11 @@ Benchmarks
 
 .. warning::
 
-   This page includes dated development measurements, not a benchmark of the
-   upcoming rerelease. Some historical reports compare different timing
-   boundaries or model variants. Do not reuse their speedups as release
-   headlines. The :doc:`release measurement plan <../../release_measurements>`
-   defines the matched comparisons and new captures required for the website.
+   This page includes dated development measurements, not the release
+   benchmark. Some historical reports compare different timing boundaries or
+   model variants; do not reuse their speedups as headlines. The audited
+   release collection is on the :doc:`release measurements <../../release_measurements>`
+   page.
 
 GRiD ships a benchmark harness that compares GRiD against CPU and GPU
 baselines (Pinocchio, MJX, Frax, BARD) and against historical GRiD

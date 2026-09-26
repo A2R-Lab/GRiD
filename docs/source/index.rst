@@ -85,12 +85,13 @@ requires one fresh full receipt at the release tip under the release policy).
 Performance and release measurements
 ------------------------------------------------------------
 
-New release measurements are being planned, not inferred from earlier
-development captures. The :doc:`release measurement checklist <release_measurements>`
-defines the proposed figures, timing boundaries, and evidence needed before
-publishing comparisons. The :doc:`benchmarks page <user_guide/tutorials/benchmarks>`
-retains dated development experiments and harness guidance; those results do
-not certify performance of the upcoming release.
+The :doc:`release measurements <release_measurements>` page holds one audited
+collection — three robots, fifteen operations, batches 16 to 1024, GRiD through
+every surface beside Pinocchio, MJX, MuJoCo Warp, MuJoCo CPU, BARD and Frax —
+with the protocol, every cell's validation status and the cases GRiD loses.
+The :doc:`benchmarks page <user_guide/tutorials/benchmarks>` retains dated
+development experiments and harness guidance; those results are not release
+evidence.
 
 Portable by construction
 ------------------------
@@ -289,7 +290,6 @@ research, cite the original paper and record the software commit or release:
    :caption: Performance and validation
 
    release_measurements
-   plot_designs
 
 .. toctree::
    :hidden:

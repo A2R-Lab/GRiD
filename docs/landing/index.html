@@ -22,7 +22,7 @@
     <p class="hero-sub">Turn your URDF into robot-specific CUDA kernels with analytical derivatives and Hessians.<br>Work from NumPy, JAX, PyTorch, or directly in CUDA C++.</p>
     <div class="links"><a class="button primary" href="#get-started">Get started</a><a class="button" href="https://github.com/A2R-Lab/GRiD">Code on GitHub</a><a class="button" href="docs/">Documentation</a></div>
     <p class="note">Developed at <a href="https://a2r-lab.org/">A²R Lab</a> · <a href="#research">Original ICRA 2022 paper and project history</a></p>
-    <aside class="review-note"><strong>Rerelease preview.</strong> This draft follows <code>modernizing-tests</code>. Benchmark figures are reserved below while we agree on and collect new release data. The release will live in <a href="https://github.com/A2R-Lab/GRiD">A2R-Lab/GRiD</a>.</aside>
+    <aside class="review-note"><strong>Rerelease preview.</strong> This draft follows <code>modernizing-tests</code>. The benchmark figures below are from the September 2026 release collection, pending its audit. The release will live in <a href="https://github.com/A2R-Lab/GRiD">A2R-Lab/GRiD</a>.</aside>
   </section>
 
   <div id="capabilities" class="highlights" aria-label="Core capabilities">
@@ -42,15 +42,13 @@
   </section>
 
   <section id="measurements">
-    <div class="eyebrow">Release measurements</div><h2>Compare computation, derivatives, and interface costs.</h2>
-    <p>The proposed collection covers iiwa14, go2, and G1 at batch sizes 16 through 256. We will compare supported operations at matched numerical and timing boundaries, with missing capabilities identified explicitly. New release data is pending.</p>
+    <div class="eyebrow">Release measurements</div><h2>Measured, validated, and shown with the losses.</h2>
+    <p>One audited collection on an RTX 5090: iiwa14, go2, and G1 at batch sizes 16 through 1024, fifteen operations, GRiD through every surface beside Pinocchio, MJX, MuJoCo Warp, MuJoCo CPU, BARD, and Frax. Every cell was checked against an fp64 oracle before and after timing; missing capabilities are named, never zeroed. Kernel against kernel, GRiD leads every GPU library on nearly every cell; against code-generated Pinocchio on the CPU the GPU wins as the batch grows and the framework round trip costs the small batches. <a href="docs/release_measurements.html">Read the protocol, the statuses, and the open items →</a></p>
     <div class="grid results-grid">
-      <figure id="figure-core" class="placeholder"><div class="placeholder-label">Figure 1 · Release data pending</div><h3 id="figure-derivatives">RNEA, analytical gradients, and Hessians</h3><p>Clustered bars compare GRiD with applicable CPU and GPU baselines across three robots. Gray hatching identifies the measured additional host-boundary cost.</p><figcaption><a href="docs/plot_designs.html#core-design">Preview the plot design →</a> · <a href="docs/release_measurements.html#figure-core">Collection checklist</a></figcaption></figure>
-      <figure id="figure-workflows" class="placeholder"><div class="placeholder-label">Figure 2 · Release data pending</div><h3>CUDA C++, NumPy, JAX, and PyTorch</h3><p>RNEA and its gradient through the same generated GRiD kernels. Compare complete calls and show the incremental interface cost against a matched native reference.</p><figcaption><a href="docs/plot_designs.html#workflow-design">Preview the plot design →</a> · <a href="docs/release_measurements.html#figure-workflows">Collection checklist</a></figcaption></figure>
+      <figure id="figure-core"><a href="docs/_static/release/stacked_core.svg"><img src="docs/_static/release/stacked_core.png" alt="RNEA, grad RNEA and Hessian RNEA across iiwa14, go2 and G1: GRiD as a stack of kernel compute, memory traffic and wrapper overhead beside each competitor's resident time and host round trip, log axis, batches 16 to 1024." loading="lazy"></a><h3 id="figure-derivatives">Where the time goes</h3><p>RNEA, its gradient, and its Hessian. GRiD is a stack of kernel compute, memory traffic, and JAX overhead; competitors are resident time plus a hatched host round trip; Pinocchio is codegen plus a hatched standard-API cap.</p><figcaption><a href="docs/release_measurements.html#figure-1-where-the-time-goes">Figure 1 and the all-operation version →</a></figcaption></figure>
+      <figure id="figure-workflows"><a href="docs/_static/release/speedup_pinocchio.svg"><img src="docs/_static/release/speedup_pinocchio.png" alt="Heatmaps of GRiD kernel and CUDA host-call speedup over Pinocchio code-generated and standard APIs by robot, operation and batch size; blue is GRiD faster, red is Pinocchio faster." loading="lazy"></a><h3>Speedup against Pinocchio, and against the GPU libraries</h3><p>Blue is GRiD faster, red is the competitor faster, at matched boundaries: kernel-only, with the copies, and the complete call.</p><figcaption><a href="docs/release_measurements.html#figure-2-speedup-against-pinocchio-cpu">Figures 2 and 3 →</a></figcaption></figure>
     </div>
-    <h3>Full results table</h3>
-    <p>After the plot collection, add inverse inertia, forward dynamics and its derivatives, and forward kinematics and its derivatives. The complete table will include every requested robot, batch, baseline, and operation, with N/A reasons and downloadable captures. No missing timing will be treated as zero.</p>
-    <p id="figure-collisions" class="note">Collision measurements are a separate follow-up. <a href="docs/release_measurements.html">Review the comparison set, full table scope, and release gates →</a></p>
+    <p id="figure-collisions" class="note">The <a href="docs/release_measurements.html#downloads-and-reproduction">full table</a> lists every robot, batch, baseline, and operation with its status and reason. Collision measurements are a separate follow-up.</p>
   </section>
 
   <section id="get-started">
