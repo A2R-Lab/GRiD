@@ -53,6 +53,7 @@ _CASES = [
     ("fr3",    False, False),
     ("iiwa14", False, True),    # rt: +36*NJ in ~20 arenas
     ("go2",    True,  True),    # rt on the floating/branched cell -- the hardest one
+    ("g1",     True,  False),   # 36-position humanoid: the 2026-09-26 tier-workspace floor regression showed here first
 ]
 
 # Regions the arena carves but that are NOT part of the T-count the macro reports (the macro accounts

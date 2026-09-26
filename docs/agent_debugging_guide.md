@@ -2398,3 +2398,21 @@ requirement floored INTO the carve, never assumed from "inners are always bigger
 racecheck first (`compute-sanitizer --tool racecheck`), the hazard names the kernel even
 without -lineinfo; (3) the collector's oracle gate caught this at B=256 only because
 the race is more likely with more blocks in flight — a passing B=16 smoke is not evidence.
+
+#### 7.z28 addendum — the floor's first version broke the spill tiers (2026-09-26)
+The floor as first committed (21c652f) applied to EVERY arena, including tiers whose temp
+is NOT in shared memory: the global-temp spill rungs pass `temp_mem_size = 0` and point
+`s_temp` at the per-block workspace, and the tier-workspace rungs pass a workspace
+expression. Flooring those to 2*num_pos carved a 72-float shared region in front of
+`s_topology_helpers` that the launch-size macro (descriptor composer) does not know
+about → the carve outgrew the macro (g1 inverse_dynamics_gradient lite/minimal: 5418 vs
+5346) → memcheck "Invalid __shared__ write ... out of bounds" on the first launch of every
+lite/minimal-tier gradient / world-frame-Hessian kernel of g1 and go2 (release collection
+2026-09-26: g1 ∇RNEA, g1 ∇ABA, g1 ∇²ABA, go2 ∇²RNEA). The smoke passed because it built
+only shared-tier cells. Fix: floor only when `tier_workspace_expr is None and temp > 0`
+(a real shared temp) — byte-identical to the pre-floor tree on all byte-gate cells, and
+`test_shared_arena_covers_carve` now includes g1 (its matrix had no robot with a
+workspace-backed gradient tier, so the under-count was invisible). RULES: (4) a carve
+change must be checked against the composer macro on EVERY tier and on the biggest
+robot — add the robot to the coverage matrix before trusting a smoke; (5) `temp = 0` is a
+routing decision, not a size request.

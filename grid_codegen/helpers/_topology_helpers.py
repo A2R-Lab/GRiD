@@ -683,8 +683,15 @@ def gen_XImats_helpers_temp_shared_memory_code(self, temp_mem_size = 0, include_
     XI_size = self.gen_get_XI_size(include_base_inertia,include_homogenous_transforms)
     if extra_t_buffers is None:
         extra_t_buffers = []
-    # The helper's sin/cos table must fit whatever the inner asked for.
-    temp_mem_size = max(int(temp_mem_size or 0), _helpers_sincos_temp_floor(self))
+    # The helper's sin/cos table must fit whatever the inner asked for — only
+    # where a NON-ZERO temp slot is carved from SHARED memory. A zero request
+    # (the global-temp spill rungs) or a tier workspace means the slot is a
+    # pointer into the per-block global workspace, sized by the descriptor
+    # composer (always >= the table); carving a shared region for it pushed
+    # the arena past the launch-size macro (2026-09-26: OOB shared writes in
+    # the lite/minimal-tier gradient and world-frame Hessian kernels of g1/go2).
+    if tier_workspace_expr is None and int(temp_mem_size or 0) > 0:
+        temp_mem_size = max(int(temp_mem_size), _helpers_sincos_temp_floor(self))
     # runtime_transform: the XImats helper rebuilds each joint's constant 6x6
     # Xfixed into s_temp at offset _runtime_transform_xfixed_offset (= 2*num_pos
     # non-mimic / 3*NB mimic), occupying 36*NB extra floats. That block is DEAD
@@ -1145,8 +1152,10 @@ def gen_XmatsHom_helpers_temp_shared_memory_code(self, temp_mem_size = 0, includ
     if extra_t_buffers is None:
         extra_t_buffers = []
     # The helper's sin/cos table must fit whatever the inner asked for (the
-    # end_effector_pose inner needs only 2x16 floats; g1 needs 72 here).
-    temp_mem_size = max(int(temp_mem_size or 0), _helpers_sincos_temp_floor(self))
+    # end_effector_pose inner needs only 2x16 floats; g1 needs 72 here) — only
+    # where the temp slot is carved from shared memory (see the XImats twin).
+    if tier_workspace_expr is None and int(temp_mem_size or 0) > 0:
+        temp_mem_size = max(int(temp_mem_size), _helpers_sincos_temp_floor(self))
     hom_buffers = [("s_XmatsHom", Xhom_size)]
     if include_gradients and include_dxhom_shared:
         hom_buffers.append(("s_dXmatsHom", dXhom_size))
