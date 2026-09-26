@@ -5,7 +5,6 @@ from __future__ import annotations
 import platform
 import re
 import subprocess
-from statistics import median
 from typing import Optional
 
 # ---------------------------------------------------------------------------
@@ -120,11 +119,15 @@ _PIN_BATCH_LABELS: dict[str, str] = {
 
 
 def _stats(avg: float, std: float, mn: float, mx: float) -> dict[str, float]:
-    return {"min": mn, "mean": avg, "max": mx, "std": std, "median": avg}
+    # The native text format reports an average, not samples or a median.
+    # Omit unknown statistics so consumers fall back to the measured mean.
+    return {"min": mn, "mean": avg, "max": mx, "std": std}
 
 
-def _single_stats(value: float) -> dict[str, float]:
-    return {"min": value, "mean": value, "max": value, "std": 0.0, "median": value}
+def _single_stats(value: float, statistic: str = "mean") -> dict[str, float]:
+    if statistic not in {"mean", "median"}:
+        raise ValueError(f"Unsupported single-call statistic: {statistic}")
+    return {statistic: value}
 
 
 def _batch_key(n: int, kind: str) -> str:
@@ -136,7 +139,7 @@ def _batch_key(n: int, kind: str) -> str:
 # GRiD parser
 # ---------------------------------------------------------------------------
 
-def parse_grid_output(stdout: str) -> dict[str, Optional[dict]]:
+def parse_grid_output(stdout: str, *, single_statistic: str = "mean") -> dict[str, Optional[dict]]:
     """Parse timeGRiD stdout into algo→timing dict.
 
     Returns a dict keyed by algo name (e.g. 'id', 'aba') with values:
@@ -146,6 +149,8 @@ def parse_grid_output(stdout: str) -> dict[str, Optional[dict]]:
           ...
         }
     Missing entries are left absent (caller fills with None for the JSON).
+    Native single-call timers report means; Python baseline callers must pass
+    single_statistic="median" when that is what their untagged text reports.
     """
     results: dict[str, dict] = {}
 
@@ -178,7 +183,7 @@ def parse_grid_output(stdout: str) -> dict[str, Optional[dict]]:
             value = float(m.group("value"))
             algo = _GRID_SINGLE_LABELS.get(label)
             if algo is not None:
-                results.setdefault(algo, {})["single_us"] = _single_stats(value)
+                results.setdefault(algo, {})["single_us"] = _single_stats(value, single_statistic)
 
     return results
 

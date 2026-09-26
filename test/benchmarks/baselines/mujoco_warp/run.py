@@ -185,7 +185,7 @@ def main() -> None:
         sys.exit(1)
 
     # parse_grid_output handles the same label format that timeMujocoWarp.py emits.
-    timings = parse_grid_output(output)
+    timings = parse_grid_output(output, single_statistic="median")
     # Zero out algos that MJWarp doesn't support (so they appear as null, not absent).
     for algo in list(timings.keys()):
         if algo not in MUJOCO_WARP_ALGOS:
@@ -206,7 +206,7 @@ def main() -> None:
         if entry is None:
             print(f"    {algo}: null")
         elif "single_us" in entry:
-            v = entry["single_us"]["mean"]
+            v = entry["single_us"]["median"]
             print(f"    {algo}: {v:.2f}us (single)")
 
 

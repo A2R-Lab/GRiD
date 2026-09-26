@@ -156,7 +156,10 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Pre-build JIT functions (each algorithm has its own)
     # ------------------------------------------------------------------
-    _id_jit   = jax.jit(lambda q, qd, qdd: robot.rnea(q, qd, qdd, None, None))
+    # Frax rnea(None gravity) omits gravity, unlike forward_dynamics. Match
+    # the rigid-dynamics contract instead of timing a zero-gravity shortcut.
+    gravity_accel = jnp.array([0.0, 0.0, 9.81, 0.0, 0.0, 0.0], dtype=q_single.dtype)
+    _id_jit   = jax.jit(lambda q, qd, qdd: robot.rnea(q, qd, qdd, gravity_accel, None))
     _fd_jit   = jax.jit(lambda q, qd, tau: robot.forward_dynamics(q, qd, tau, None))
     _crba_jit = jax.jit(lambda q: robot.crba(q))
     _minv_jit = jax.jit(lambda q: robot.mass_matrix_inverse(robot.mass_matrix(q)))

@@ -674,7 +674,9 @@ inline void fdsvaSoSynth_one(const pinocchio::Model &model, pinocchio::Data &dat
     pinocchio::computeABADerivatives(model, data, q_d, qd_d, u_d,
                                      S.fd_dq, S.fd_dqd, S.ddq_dtau);
     // Symmetrize Minv.
-    S.Minv = data.Minv;
+    // The explicit-output overload writes the torque Jacobian to ddq_dtau;
+    // data.Minv is not its output and can remain zero/stale.
+    S.Minv = S.ddq_dtau;
     S.Minv.triangularView<Eigen::StrictlyLower>() =
         S.Minv.transpose().triangularView<Eigen::StrictlyLower>();
 
@@ -767,6 +769,7 @@ inline bool needs_codegen(const std::string &enabled, const char *cg) {
     return false;
 }
 
+#ifndef GRID_RELEASE_PIN_HELPERS_ONLY
 template<typename T, int TEST_ITERS, int NUM_THREADS, int NUM_TIME_STEPS>
 void test(std::string urdf_filepath, bool floating_base, std::string frame_name = "", std::string enabled_algo = "all"){
     struct timespec start, end;
@@ -1386,3 +1389,4 @@ int main(int argc, const char ** argv){
     run_all_tests<float,TEST_ITERS_GLOBAL,CPU_THREADS_GLOBAL>(urdf_filepath, floating_base, frame_name, enabled_algo);
     return 0;
 }
+#endif // GRID_RELEASE_PIN_HELPERS_ONLY

@@ -159,7 +159,7 @@ def main() -> None:
             # Continue to the other device — partial results better than none.
             continue
 
-        timings = parse_grid_output(output)
+        timings = parse_grid_output(output, single_statistic="median")
         for algo in list(timings.keys()):
             if algo not in FRAX_ALGOS:
                 timings[algo] = None
@@ -186,7 +186,7 @@ def main() -> None:
             if entry is None:
                 continue  # skip null algos in the summary print
             if "single_us" in entry:
-                v = entry["single_us"]["mean"]
+                v = entry["single_us"]["median"]
                 print(f"    {algo}: {v:.2f}us (single)")
 
 

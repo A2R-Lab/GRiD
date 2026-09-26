@@ -129,18 +129,19 @@ def main() -> None:
             x = h.integrator(q, qd, uk, dt)               # GRiD call inside the scan
             q = x[:, :nq]
             qd = jnp.concatenate([x[:, nq:], pad], axis=1)
-            return (q, qd), jnp.mean(x[:, nq:] ** 2)
-        (qK, qdK), traj = jax.lax.scan(body, (q0, qd0), us)
-        return qK, qdK, traj
+            return (q, qd), None
+        (qK, qdK), _ = jax.lax.scan(body, (q0, qd0), us)
+        return qK, qdK
     rollout_jit = jax.jit(rollout_resident)
     us = jax.device_put(jnp.concatenate(
         [jax.random.uniform(ku, (args.steps, B, nv), jnp.float32, -0.2, 0.2),
          jnp.zeros((args.steps, B, nq - nv), jnp.float32)], axis=2))
-    qK, qdK, traj = rollout_jit(q, qd, us); jax.block_until_ready(qK)   # compile + warm
+    qK, qdK = jax.block_until_ready(rollout_jit(q, qd, us))   # compile + warm all outputs
+    rollout_repeats = 20
     t0 = time.perf_counter()
-    for _ in range(20):
-        qK, qdK, traj = rollout_jit(q, qd, us); jax.block_until_ready(qK)
-    t_res = (time.perf_counter() - t0) / 20 * 1e3
+    for _ in range(rollout_repeats):
+        qK, qdK = jax.block_until_ready(rollout_jit(q, qd, us))
+    t_res = (time.perf_counter() - t0) / rollout_repeats * 1e3
 
     # sanity: the resident rollout kept the base quaternion on the unit sphere
     quat_norm_drift = float(jnp.max(jnp.abs(jnp.linalg.norm(qK[:, 3:7], axis=1) - 1.0)))
@@ -155,11 +156,14 @@ def main() -> None:
             q = x[:, :nq]
             qd = np.concatenate([x[:, nq:], np_pad], axis=1)
         return q, qd
-    _ = rollout_host_roundtrip(q, qd, np.asarray(us))   # warm
+    host_controls = np.asarray(us)  # fixed controls; setup excluded for both paths
+    q_host, qd_host = rollout_host_roundtrip(q, qd, host_controls)   # warm
+    np.testing.assert_allclose(np.asarray(qK), q_host, rtol=5e-4, atol=5e-5)
+    np.testing.assert_allclose(np.asarray(qdK), qd_host, rtol=5e-4, atol=5e-5)
     t0 = time.perf_counter()
-    for _ in range(3):
-        rollout_host_roundtrip(q, qd, np.asarray(us))
-    t_host = (time.perf_counter() - t0) / 3 * 1e3
+    for _ in range(rollout_repeats):
+        rollout_host_roundtrip(q, qd, host_controls)
+    t_host = (time.perf_counter() - t0) / rollout_repeats * 1e3
     print(f"[6] {args.steps}-step rollout (B={B}):  RESIDENT (lax.scan) {t_res:7.2f} ms"
           f"   vs   host-roundtrip-per-step {t_host:8.2f} ms   →  {t_host/t_res:.1f}× faster staying on GPU")
     print(f"    base quaternion after {args.steps} on-manifold steps: max |1-||quat||| = "

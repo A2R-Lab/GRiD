@@ -28,6 +28,7 @@ Usage:
 """
 from __future__ import annotations
 import argparse, json
+import warnings
 from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
@@ -71,6 +72,16 @@ def _get(data, robot, base, col, algo):
     except (KeyError, TypeError):
         return None
 
+def _overhead(total, core):
+    """Do not turn missing measurements or an invalid stack into zero cost."""
+    if total is None or core is None or not np.isfinite([total, core]).all():
+        return np.nan
+    if total < core:
+        warnings.warn("Transfer-inclusive timing is below compute timing; omitting overhead cap",
+                      RuntimeWarning, stacklevel=2)
+        return np.nan
+    return total - core
+
 def plot_latency(data, algo, base, robots, grid_col, base_col, title, out):
     fig, axes = plt.subplots(1, len(robots), figsize=(4.3*len(robots), 5.0), squeeze=False)
     axes = axes[0]
@@ -85,12 +96,16 @@ def plot_latency(data, algo, base, robots, grid_col, base_col, title, out):
         w = 0.38
         xb = x - 0.21
         xg = x + 0.21
-        ax.bar(xb, [v or 0 for v in b_wm], w, color=C_BASE, label="CPU baseline")
-        ax.bar(xg, [v or 0 for v in g_co], w, color=C_COMPUTE, label="Compute")
-        io = [max(0,(wm or 0)-(co or 0)) for wm,co in zip(g_wm,g_co)]
-        ax.bar(xg, io, w, bottom=[v or 0 for v in g_co], color=C_IO, label="I/O Overhead")
+        ax.bar(xb, [np.nan if v is None else v for v in b_wm], w, color=C_BASE, label="CPU baseline")
+        ax.bar(xg, [np.nan if v is None else v for v in g_co], w, color=C_COMPUTE, label="Compute")
+        io = [_overhead(wm, co) for wm, co in zip(g_wm, g_co)]
+        ax.bar(xg, io, w, bottom=[np.nan if v is None else v for v in g_co],
+               color=C_IO, hatch="////", label="with_mem − compute")
+        for pos, total, delta in zip(xg, g_wm, io):
+            if total is not None and np.isfinite(total) and np.isnan(delta):
+                ax.plot(pos, total, "rx", label="Unstackable total" if pos == xg[0] else None)
         # dashed CPU-N256 reference + speedup arrows at each N.
-        ref = b_wm[-1]
+        ref = b_wm[NS.index(256)]
         if ref:
             ax.axhline(ref, ls="--", lw=0.8, color="k", alpha=0.6, xmin=0.02, xmax=0.98)
             for i in range(len(NS)):

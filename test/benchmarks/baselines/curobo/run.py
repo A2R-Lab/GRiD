@@ -239,7 +239,7 @@ def main() -> None:
         return
 
     # parse_grid_output handles the same label format that timeCurobo.py emits.
-    timings = parse_grid_output(output)
+    timings = parse_grid_output(output, single_statistic="median")
     # Zero out algos cuRobo doesn't support (so they appear as null, not absent).
     for algo in list(timings.keys()):
         if algo not in CUROBO_ALGOS:
@@ -260,7 +260,7 @@ def main() -> None:
         if entry is None:
             print(f"    {algo}: null")
         elif "single_us" in entry:
-            v = entry["single_us"]["mean"]
+            v = entry["single_us"]["median"]
             print(f"    {algo}: {v:.2f}us (single)")
 
 

@@ -12,12 +12,12 @@ timing_parser.parse_grid_output can reuse it. Available algorithms:
 BARD has no explicit M^-1 (minv) entry point, and no gradient / second-order /
 ee_pose algorithms, so those map to null (rendered `—` by the report).
 
-Conventions (verified to match GRiD/Pinocchio):
+Conventions (the release collector validates and converts shared inputs):
   * URDF loading via bard.build_model_from_urdf; joint order == URDF order
     (same order Pinocchio + GRiD use).
   * Gravity passed explicitly as the 3-vector [0, 0, -9.81] (matches GRiD).
   * Fixed base: nq == nv. Floating base: nq == nv + 1 (quaternion free-flyer,
-    like Pinocchio) so the config vector q has shape (B, nq) while
+    with quaternion wxyz, unlike Pinocchio's xyzw) so q has shape (B, nq) while
     qd/qdd/tau have shape (B, nv).
   * Batched: inputs are (B, n) tensors; the whole batch runs in one call.
 
