@@ -158,8 +158,8 @@ only when the URDF, the options, the GRiD version or the toolchain change.
          r = grid_rbd.load_robot("config/robot_assets/go2.urdf", backend="jax",
                                  floating_base=True)
          q = jnp.zeros((8, r.nq), jnp.float32).at[:, 6].set(1.0)   # unit quaternion (x, y, z, w)
-         qd = jnp.zeros((8, r.nq), jnp.float32)                    # nq-wide: the last slot is a pad
-         u = jnp.zeros((8, r.nq), jnp.float32)
+         qd = jnp.zeros((8, r.nv), jnp.float32)                    # nv-wide: the tangent width
+         u = jnp.zeros((8, r.nv), jnp.float32)
          loss = lambda a: r.forward_dynamics(a, qd, u).sum()
          g = jax.jit(jax.grad(loss))(q)                           # analytic VJP, stays on the device
          print(g.shape)

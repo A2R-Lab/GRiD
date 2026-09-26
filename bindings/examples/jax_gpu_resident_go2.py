@@ -7,8 +7,7 @@ floating base:
   * the configuration is nq = 7 + 12 = 19 wide: ``q = [base_pos(3), base_quat_xyzw(4),
     joint_angles(12)]`` with a NORMALIZED quaternion;
   * the tangent space is nv = 6 + 12 = 18 (nv != nq): velocity/torque buffers are passed
-    nq-wide with the trailing quaternion-padding slot zeroed; only the leading nv entries
-    of nq-wide outputs are meaningful;
+    nv-wide and dynamics vector outputs come back nv-wide (Pinocchio / MuJoCo widths);
   * a hand-rolled ``q + dt*qd`` Euler step is WRONG for the quaternion — the resident
     rollout therefore drives GRiD's own ``integrator`` kernel (on-manifold base retract)
     inside ``jax.lax.scan``, which is exactly the nq != nv path this example exercises.
@@ -77,20 +76,16 @@ def main() -> None:
     kq, kquat, kv, ku = jax.random.split(key, 4)
 
     # ── 1. place a VALID floating state on the GPU once ──────────────────────
-    # q = [pos(3), quat_xyzw(4) NORMALIZED, joints(12)]; qd/u nq-wide with the
-    # trailing quaternion-padding slot zeroed (leading nv entries = tangent data).
+    # q = [pos(3), quat_xyzw(4) NORMALIZED, joints(12)]; qd/u are nv-wide tangent data.
     pos = jax.random.uniform(kq, (B, 3), jnp.float32, -1.0, 1.0)
     quat = jax.random.normal(kquat, (B, 4), jnp.float32)
     quat = quat / jnp.linalg.norm(quat, axis=1, keepdims=True)
     joints = jax.random.uniform(kq, (B, nq - 7), jnp.float32, -1.0, 1.0)
     q = jax.device_put(jnp.concatenate([pos, quat, joints], axis=1))
-    pad = jnp.zeros((B, nq - nv), jnp.float32)
-    qd = jax.device_put(jnp.concatenate(
-        [jax.random.uniform(kv, (B, nv), jnp.float32, -1.0, 1.0), pad], axis=1))
-    u = jax.device_put(jnp.concatenate(
-        [jax.random.uniform(ku, (B, nv), jnp.float32, -1.0, 1.0), pad], axis=1))
+    qd = jax.device_put(jax.random.uniform(kv, (B, nv), jnp.float32, -1.0, 1.0))
+    u = jax.device_put(jax.random.uniform(ku, (B, nv), jnp.float32, -1.0, 1.0))
     print(f"\n[1] inputs resident on: {q.devices()}  (q normalized quaternion, "
-          f"qd/u padded {nq - nv} slot)")
+          f"qd/u nv={nv} wide)")
 
     # ── 2. single call → device-resident output (no host hop) ────────────────
     qdd = h.forward_dynamics(q, qd, u)
@@ -121,21 +116,19 @@ def main() -> None:
     # ── 6. RESIDENT ROLLOUT: K steps, quaternion-correct, state never leaves GPU ─
     # GRiD's integrator kernel does the on-manifold base retract (nq != nv), so
     # the scan carries the full floating state device-to-device. The kernel
-    # returns (B, nq+nv): [q_next (nq) | qd_next (nv)] — re-pad qd for the next call.
+    # returns (B, nq+nv): [q_next (nq) | qd_next (nv)].
     dt = 0.01
     def rollout_resident(q0, qd0, us):
         def body(carry, uk):
             q, qd = carry
             x = h.integrator(q, qd, uk, dt)               # GRiD call inside the scan
             q = x[:, :nq]
-            qd = jnp.concatenate([x[:, nq:], pad], axis=1)
+            qd = x[:, nq:]
             return (q, qd), None
         (qK, qdK), _ = jax.lax.scan(body, (q0, qd0), us)
         return qK, qdK
     rollout_jit = jax.jit(rollout_resident)
-    us = jax.device_put(jnp.concatenate(
-        [jax.random.uniform(ku, (args.steps, B, nv), jnp.float32, -0.2, 0.2),
-         jnp.zeros((args.steps, B, nq - nv), jnp.float32)], axis=2))
+    us = jax.device_put(jax.random.uniform(ku, (args.steps, B, nv), jnp.float32, -0.2, 0.2))
     qK, qdK = jax.block_until_ready(rollout_jit(q, qd, us))   # compile + warm all outputs
     rollout_repeats = 20
     t0 = time.perf_counter()
@@ -150,11 +143,10 @@ def main() -> None:
     def rollout_host_roundtrip(q0, qd0, us):
         q, qd = np.asarray(q0), np.asarray(qd0)
         step = jax.jit(lambda q, qd, uk: h.integrator(q, qd, uk, dt))
-        np_pad = np.zeros((B, nq - nv), np.float32)
         for k in range(us.shape[0]):
             x = np.asarray(step(jnp.asarray(q), jnp.asarray(qd), jnp.asarray(us[k])))  # D2H+H2D each step
             q = x[:, :nq]
-            qd = np.concatenate([x[:, nq:], np_pad], axis=1)
+            qd = x[:, nq:]
         return q, qd
     host_controls = np.asarray(us)  # fixed controls; setup excluded for both paths
     q_host, qd_host = rollout_host_roundtrip(q, qd, host_controls)   # warm

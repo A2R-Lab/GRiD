@@ -2,8 +2,8 @@
 2026-09-09). The jax custom_vjp closures and the torch autograd.Function
 backwards previously duplicated the same five facts per differentiable op —
 which analytic gradient backs it, the saved residuals, the per-input
-cotangent recipes (Jacobian blocks / M⁻¹ / regressor), the floating-base
-nv-slice/nj-pad pattern, and the non-diff set. Those facts now live in
+cotangent recipes (Jacobian blocks / M⁻¹ / regressor), the quaternion
+configuration pull-back, and the non-diff set. Those facts now live in
 ``grid_codegen.abi_specs`` (``AbiSpec.vjp``: a :class:`VjpSpec`); this module
 is the one driver both surfaces call. The surfaces keep only their
 registration shells (``defvjp`` / the ``ctx`` protocol) plus callables that
@@ -20,8 +20,9 @@ Framework-agnostic like ``_out_transform`` (imports NO numpy/jax/torch):
   EXACTLY contracting each block separately (each output element reduces over
   the same rows either way), so the fd/id halves, the EE single block, and
   the integrator thirds all flow through one path.
-- The nj-pad is spelled as concat-with-zeros through
-  :func:`_out_transform._concat_last` so no framework pad API is needed.
+- Every surface passes velocity-like inputs and dynamics outputs at the tangent
+  width NV (2026-09-26 width contract), so no padding or slicing happens here;
+  only the configuration cotangent needs the quaternion pull-back.
 """
 from __future__ import annotations
 
@@ -42,19 +43,6 @@ def _contract(ct, G):
     class the pre-collapse einsum spelling used — and these contractions are
     tiny (nv × len(wrt)·nv), so gemm throughput is irrelevant."""
     return (ct[..., :, None] * G).sum(-2)
-
-
-def _pad_tail(g, n):
-    """Append ``n`` zeros on the last axis (the nj-wide quaternion-padding slot
-    of a floating base's VELOCITY-like input buffers qd/qdd/u — their tangent
-    cotangent is already in transport order, only the trailing pad slot is
-    missing); no-op for n == 0. n <= g's width by construction (one extra
-    slot per quaternion joint). NEVER use this for ``q``: its quaternion
-    blocks may occur anywhere in the chain and its cotangent needs
-    :func:`_configuration_cotangent`."""
-    if n <= 0:
-        return g
-    return _concat_last([g, g[..., :n] * 0])
 
 
 def _quaternion_cotangent(g_ang, p, scalar_first=False):
@@ -116,12 +104,13 @@ def _configuration_cotangent(g, q, mjx=False, *, layout):
     return result
 
 
-def vjp_backward(vjp, ct, ops, *, nv, nj, q=None, mjx=False, configuration_layout=None):
+def vjp_backward(vjp, ct, ops, *, nv, nq, q=None, mjx=False, configuration_layout=None):
     """Run one recipe: returns ``{input_name: cotangent-or-None}``.
 
     ``vjp`` is the :class:`grid_codegen.abi_specs.VjpSpec` row. ``ct`` is the
-    value cotangent. ``ops`` maps recipe roles to zero-arg callables returning
-    SHAPED arrays (built by the calling surface so this module stays
+    value cotangent (NV-wide for dynamics vectors, 6*NEE for the EE pose, 2NV
+    for the integrator state). ``ops`` maps recipe roles to zero-arg callables
+    returning SHAPED arrays (built by the calling surface so this module stays
     framework- and dispatch-free):
 
     - ``"grad"``       → the grad_op output, last dim ``len(wrt) * nv``
@@ -130,21 +119,19 @@ def vjp_backward(vjp, ct, ops, *, nv, nj, q=None, mjx=False, configuration_layou
     - ``"minv"``       → (…, nv, nv), required when ``u_via_minv``.
     - ``"param_grad"`` → (…, nv, 10*NB), required when ``param_grad_op``.
 
-    The configuration/tangent bridge: dynamics VALUE cotangents are nj-wide → take the
-    leading nv tangent rows (``ct_slice_nv``); the qd/qdd/u cotangents are
-    tail-padded back to nj, and the ``q`` cotangent is pulled back to the
-    per-joint position layout by :func:`_configuration_cotangent`
-    (needs saved ``q`` and ``configuration_layout``). Scalar joints: no-ops.
+    Velocity-like cotangents (qd/qdd/u) are the tangent blocks as contracted.
+    The ``q`` cotangent is tangent-width from the contraction; on a model with
+    quaternion joints (``nq != nv``) it is pulled back to the per-joint position
+    layout by :func:`_configuration_cotangent` (needs the saved ``q`` and
+    ``configuration_layout``). Scalar joints: identity.
     """
     out = {}
-    ctv = ct[..., :nv] if (vjp.ct_slice_nv and nj != nv) else ct
-    pad = nj - nv
     G = ops["grad"]()
-    g_all = _contract(ctv, G)
+    g_all = _contract(ct, G)
     w = G.shape[-1] // len(vjp.wrt)
     for i, name in enumerate(vjp.wrt):
         block = g_all[..., i * w:(i + 1) * w]
-        if name == "q" and pad > 0:
+        if name == "q" and nq != nv:
             if q is None:
                 raise ValueError("vjp_backward: a quaternion-joint 'q' cotangent needs the saved q "
                                  "(pass q=) and its joint layout")
@@ -152,11 +139,11 @@ def vjp_backward(vjp, ct, ops, *, nv, nj, q=None, mjx=False, configuration_layou
                 raise ValueError("vjp_backward: quaternion joints need configuration_layout metadata")
             out[name] = _configuration_cotangent(block, q, mjx=mjx, layout=configuration_layout)
         else:
-            out[name] = _pad_tail(block, pad)
+            out[name] = block
     if vjp.u_via_minv:
-        out["u"] = _pad_tail(_contract(ctv, ops["minv"]()), pad)
+        out["u"] = _contract(ct, ops["minv"]())
     if vjp.param_grad_op:
-        out["params"] = _contract(ctv, ops["param_grad"]())  # π is npar-wide: no pad
+        out["params"] = _contract(ct, ops["param_grad"]())
     for name in vjp.nondiff:
         out[name] = None
     return out

@@ -46,8 +46,8 @@ def _sample(nq, nv, unit_quat: bool, seed=20260919):
     quat /= np.linalg.norm(quat)
     q[3:7] = quat if unit_quat else 1.3 * quat        # non-unit exercises the normalizing extension
     q[7:] = rng.uniform(-1.0, 1.0, nq - 7)
-    qd = np.zeros(nq); qd[:nv] = rng.uniform(-1.0, 1.0, nv)
-    u = np.zeros(nq); u[:nv] = rng.uniform(-1.0, 1.0, nv)
+    qd = rng.uniform(-1.0, 1.0, nv)
+    u = rng.uniform(-1.0, 1.0, nv)
     return q, qd, u
 
 
@@ -74,7 +74,7 @@ def jax_go2():
 def _jax_cases(h):
     import jax.numpy as jnp
     nv = h.num_vel
-    w_tau = np.linspace(0.5, 1.5, h.num_joints)
+    w_tau = np.linspace(0.5, 1.5, h.num_vel)
     w_pose = np.linspace(-1.0, 1.0, 6 * h.num_ees)
     return {
         "inverse_dynamics": lambda q, qd, u: jnp.sum(jnp.asarray(w_tau) * h.inverse_dynamics(q[None], qd[None])[0]),
@@ -120,7 +120,7 @@ def test_torch_q_gradient_matches_ambient_finite_differences(torch_go2, method, 
     import torch
     h = torch_go2
     q, qd, u = _sample(h.num_joints, h.num_vel, unit_quat)
-    w_tau = torch.linspace(0.5, 1.5, h.num_joints, dtype=torch.float64, device="cuda")
+    w_tau = torch.linspace(0.5, 1.5, h.num_vel, dtype=torch.float64, device="cuda")
     w_pose = torch.linspace(-1.0, 1.0, 6 * h.num_ees, dtype=torch.float64, device="cuda")
     T = lambda a: torch.as_tensor(a, dtype=torch.float64, device="cuda")
 
@@ -170,7 +170,7 @@ def test_mujoco_convention_q_cotangent_is_the_on_manifold_pullback(numpy_go2_mjx
     q = np.zeros(nq); q[:3] = rng.uniform(-1, 1, 3)
     quat = rng.standard_normal(4); q[3:7] = quat / np.linalg.norm(quat)          # wxyz, UNIT
     q[7:] = rng.uniform(-1, 1, nq - 7)
-    qd = np.zeros(nq); qd[:nv] = rng.uniform(-1, 1, nv); qdd = np.zeros(nq)
+    qd = rng.uniform(-1, 1, nv); qdd = np.zeros(nv)
     if method == "inverse_dynamics":
         w = np.linspace(0.5, 1.5, nv)
         f = lambda qq: float(w @ np.asarray(h.inverse_dynamics(qq[None], qd[None], qdd[None]), dtype=np.float64)[0, :nv])
@@ -218,8 +218,8 @@ def test_spherical_public_q_gradient(spherical_handle, backend, method):
         if kind != "euclidean":
             start = qi + (3 if kind == "floating" else 0)
             q[start:start+4] *= 1.2 / np.linalg.norm(q[start:start+4])
-    qd = np.zeros_like(q); qd[:base.num_vel] = rng.uniform(-.2, .2, base.num_vel)
-    u = np.zeros_like(q); u[:base.num_vel] = rng.uniform(-.3, .3, base.num_vel)
+    qd = rng.uniform(-.2, .2, base.num_vel)
+    u = rng.uniform(-.3, .3, base.num_vel)
     try:
         if backend == "jax":
             loss = _jax_cases(h)[method]

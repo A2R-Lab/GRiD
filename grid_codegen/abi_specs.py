@@ -10,6 +10,13 @@ validates every field against the actual code. Field shapes may still be
 refined when P1 consumes them; the cross-check is what keeps transcription
 honest in the meantime.
 
+Width contract (2026-09-26 clean break): on EVERY public surface — C ABI, pybind/NumPy,
+JAX FFI, torch ops — `q` is NUM_POS (== NUM_JOINTS) wide and `qd`/`qdd`/`u` are NUM_VEL
+wide; vector dynamics outputs (c, qdd) are NUM_VEL wide. The NUM_JOINTS-strided
+`d_q_qd_u` / `d_qdd` staging buffers (leading NUM_VEL entries, trailing pad) are an
+INTERNAL layout of the .so: the pack helpers copy NUM_VEL entries per row into the
+padded slots and the out copies read NUM_VEL entries per NUM_JOINTS-pitched row.
+
 Vocabulary (observed variance, 2026-08-28 wrapper audit):
 - pack_mode:  how q/qd/u map onto pack_q_qd_u
     "q_qd_u"     pack_q_qd_u(q, qd, u, ...)
@@ -49,9 +56,6 @@ class VjpSpec:
     - u_via_minv:     extra ∂out/∂u = M⁻¹ contraction for the "u" input.
     - param_grad_op:  extra ∂out/∂π op (regressor / -M⁻¹Y) for "params".
     - nondiff:   inputs whose cotangent is None.
-    - ct_slice_nv:    slice the value cotangent to its leading NV rows before
-                 contracting (the nj-wide dynamics outputs on a floating base;
-                 False for tangent-/task-space outputs like the EE pose).
     - fixed_base_only: the recipe is undefined on a floating base (integrator:
                  the SE(3)-chart VJP is unimplemented — shells must raise)."""
     residuals: tuple[str, ...]
@@ -60,7 +64,6 @@ class VjpSpec:
     u_via_minv: bool = False
     param_grad_op: str | None = None
     nondiff: tuple[str, ...] = ()
-    ct_slice_nv: bool = True
     fixed_base_only: bool = False
 
 
@@ -104,6 +107,10 @@ class AbiSpec:
     out_buffer: str | None = None             # gridData member (h_c / d_M / ...)
     out_copy: str = "memcpy_h"
     out_size_expr: str | None = None          # per-batch-item element count, C expression
+    # Row pitch of out_buffer when it is WIDER than the public row (the padded
+    # NUM_JOINTS-strided vector buffers h_c / h_qdd behind NUM_VEL-wide outputs):
+    # the emitters copy out_size_expr elements per row at this pitch.
+    out_pitch_expr: str | None = None
     # ── mjx twin ────────────────────────────────────────────────────────
     has_mjx_twin: bool = False
     mjx_omits_tier: bool = False
@@ -210,10 +217,10 @@ ABI_SPECS: dict[str, AbiSpec] = {
         takes_gravity=True,
         sig_mjx_macro="GRID_RBD_SIG_MJX_INVERSE_DYNAMICS",
         template_shape="qdd6",
-        out_buffer="h_c", out_copy="memcpy_h", out_size_expr="grid::NUM_JOINTS",
+        out_buffer="h_c", out_copy="memcpy_h", out_size_expr="grid::NUM_VEL", out_pitch_expr="grid::NUM_JOINTS",
         has_mjx_twin=True,
         mjx_rejects_f_ext=True, mjx_requires_qdd=True,
-        py_out_dims=('num_joints_',),
+        py_out_dims=('num_vel_',),
         out_layout="flat",
         py_rc3_msg="inverse_dynamics not built into this robot .so — add 'inverse_dynamics' to algorithm_list in register_robot() and rebuild",
         py_twin_guard='inverse_dynamics_mujoco unavailable: this .so has no mjx ID kernel (only floating-base robots export grid_rbd_inverse_dynamics_mujoco)',
@@ -282,12 +289,12 @@ ABI_SPECS: dict[str, AbiSpec] = {
         takes_gravity=True,
         sig_mjx_macro="GRID_RBD_SIG_MJX_FORWARD_DYNAMICS",
         template_shape="so4",
-        out_buffer="h_qdd", out_copy="memcpy_h", out_size_expr="grid::NUM_JOINTS",
+        out_buffer="h_qdd", out_copy="memcpy_h", out_size_expr="grid::NUM_VEL", out_pitch_expr="grid::NUM_JOINTS",
         has_mjx_twin=True,
         mjx_rejects_f_ext=True,
         # Twin note (no field): _mujoco path only valid for null f_ext (kernel does
         # not reframe f_ext); enforced by the python dispatch, NOT by a return-4 here.
-        py_out_dims=('num_joints_',),
+        py_out_dims=('num_vel_',),
         out_layout="flat",
         py_rc3_msg="forward_dynamics not built into this robot .so — add 'forward_dynamics' to algorithm_list in register_robot() and rebuild",
         py_twin_guard='forward_dynamics_mujoco unavailable: floating-base .so only',
@@ -303,10 +310,10 @@ ABI_SPECS: dict[str, AbiSpec] = {
         takes_gravity=True,
         sig_mjx_macro="GRID_RBD_SIG_MJX_ABA",
         template_shape="so4",
-        out_buffer="h_qdd", out_copy="memcpy_h", out_size_expr="grid::NUM_JOINTS",
+        out_buffer="h_qdd", out_copy="memcpy_h", out_size_expr="grid::NUM_VEL", out_pitch_expr="grid::NUM_JOINTS",
         has_mjx_twin=True,
         mjx_rejects_f_ext=True,
-        py_out_dims=('num_joints_',),
+        py_out_dims=('num_vel_',),
         out_layout="flat",
         py_rc3_msg="aba not built into this robot .so — add 'aba' to algorithm_list in register_robot() and rebuild",
         py_twin_guard='aba_mujoco unavailable: floating-base .so only',
@@ -1042,13 +1049,11 @@ _VJPS = {
         residuals=("q",),
         grad_op="end_effector_pose_gradient",
         wrt=("q",),
-        ct_slice_nv=False,                 # ct is the 6*NEE task-space cotangent
     ),
     "integrator": VjpSpec(
         residuals=("q", "qd", "u"),
         grad_op="integrator_gradient",     # (2NV, 3NV) dAB → thirds (gq, gqd, gu)
         wrt=("q", "qd", "u"),
-        ct_slice_nv=False,                 # ct is the FULL 2NV state cotangent
         fixed_base_only=True,              # SE(3)-chart VJP unimplemented
     ),
 }

@@ -4,8 +4,15 @@ Input / Output ABI (``h_q_qd_u``)
 **Read this before you pack a buffer by hand.** GRiD is built for power users who
 call the generated kernels directly from their own CUDA (see
 :doc:`design_principles`), which means *you* own the layout of the input buffer.
-This page is the contract. Getting it wrong on a floating base does not crash and
-does not warn — it silently returns wrong dynamics.
+This page is the contract for that raw kernel buffer. Getting it wrong on a
+floating base does not crash and does not warn: it silently returns wrong
+dynamics.
+
+The Python handles and the C ABI of the compiled ``grid-rbd`` wrapper do **not**
+expose this buffer. They take ``q`` at the configuration width ``nq`` and every
+velocity-like input (``qd``, ``qdd``, ``u``) at the tangent width ``nv``, and
+return dynamics vectors at ``nv``, exactly as Pinocchio and MuJoCo do. The
+padded layout below is staged inside the wrapper. See :doc:`../tutorials/python_wrappers`.
 
 The per-timestep input block
 ----------------------------
@@ -60,28 +67,28 @@ For a floating base the root contributes **7 positions but only 6 velocities**:
    q  (NUM_POS = 7 + n_joints)   [ translation(3) | quaternion xyzw(4) | joint positions ]
    qd (NUM_VEL = 6 + n_joints)   [ linear vel(3)  | angular vel(3)     | joint velocities ]
 
-``qd`` and ``u`` are still passed at the **``NUM_POS`` width**: their ``NUM_VEL``
-meaningful values occupy the *leading* slots of their block and the trailing slot
-is a pad (write zero). The quaternion is ``xyzw`` — identity is
-``[0, 0, 0, 1]``. The user-facing root velocity is ordered ``[linear; angular]``;
-GRiD permutes it into the internal Featherstone ``[angular; linear]`` spatial
-ordering for you.
+In the raw kernel buffer ``qd`` and ``u`` occupy **``NUM_POS``-wide slots**: their
+``NUM_VEL`` meaningful values fill the *leading* entries of the slot and the
+trailing entry is a pad (write zero). The kernels index velocities by tangent
+index, so this "leading entries, then padding" rule holds for every model,
+floating or spherical. The quaternion is ``xyzw``; identity is ``[0, 0, 0, 1]``.
+The user-facing root velocity is ordered ``[linear; angular]``; GRiD permutes it
+into the internal Featherstone ``[angular; linear]`` spatial ordering for you.
 
 .. note::
 
-   **Inputs are nq-wide, outputs are nv-wide.** Mass matrices, ``Minv``, and the
-   dynamics gradients all come back at ``NUM_VEL``. A caller porting from
-   Pinocchio or MuJoCo naturally reaches for an ``nv``-wide ``qd``/``u`` to match
-   those outputs — that is the single most common floating-base mistake.
+   **Kernel buffer slots are nq-wide; every public width is physical.** Mass
+   matrices, ``Minv``, the dynamics gradients and, on the wrapper surfaces, the
+   dynamics vectors and the velocity-like inputs are all ``NUM_VEL`` wide. Only a
+   hand-packed ``h_q_qd_u`` carries the padding.
 
 Which surface protects you
 --------------------------
 
-* **Python bindings (**``grid-rbd``**)** — protected. The handle packs the buffer
-  for you, and ``_check_nq_width`` raises a precise ``ValueError`` if you hand it
-  an ``nv``-wide ``qd``/``qdd``/``u`` on a floating-base robot. It deliberately
-  does *not* auto-pad: guessing the base-velocity layout would be worse than an
-  explicit error.
+* **Python bindings and the C ABI (**``grid-rbd``**)** — protected. You pass
+  ``qd``/``qdd``/``u`` at ``nv`` and the wrapper stages the padded buffer itself;
+  an ``nq``-wide (padded) array on a floating-base robot raises a precise
+  ``ValueError`` naming the tangent width. Nothing is auto-padded or sliced.
 * **Direct CUDA consumers** — unprotected by construction. You pack
   ``h_q_qd_u`` yourself, so this page is the only contract. Size the buffer as
   ``3 * NUM_JOINTS * NUM_TIMESTEPS`` (what ``init_gridData`` allocates) and take

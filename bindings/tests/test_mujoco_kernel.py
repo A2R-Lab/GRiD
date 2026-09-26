@@ -61,8 +61,8 @@ def test_native_mjx_inverse_dynamics_matches_host_oracle(go2_floating):
     for B in (1, 4):
         qpos = rng.standard_normal((B, nq))
         qpos[:, 3:7] /= np.linalg.norm(qpos[:, 3:7], axis=1, keepdims=True)  # wxyz quat
-        qvel = rng.standard_normal((B, nq)); qvel[:, nv:] = 0.0  # pad past the tangent
-        qacc = rng.standard_normal((B, nq)); qacc[:, nv:] = 0.0
+        qvel = rng.standard_normal((B, nv))
+        qacc = rng.standard_normal((B, nv))
 
         native = np.asarray(h.mujoco.inverse_dynamics(qpos, qvel, qacc), dtype=np.float64)
 
@@ -112,8 +112,8 @@ def test_native_mjx_crba_matches_host_oracle(go2_floating):
 def _rand_state(h, rng, B, with_qd=True, with_u=False):
     nq, nv = h.num_joints, h.num_vel
     qpos = rng.standard_normal((B, nq)); qpos[:, 3:7] /= np.linalg.norm(qpos[:, 3:7], axis=1, keepdims=True)
-    qvel = rng.standard_normal((B, nq)); qvel[:, nv:] = 0.0
-    u = rng.standard_normal((B, nq))
+    qvel = rng.standard_normal((B, nv))
+    u = rng.standard_normal((B, nv))
     return qpos, (qvel if with_qd else None), (u if with_u else None)
 
 
@@ -582,7 +582,7 @@ def test_native_mjx_inverse_dynamics_gradient_matches_oracle(go2_floating):
     rng = np.random.default_rng(7)
     for B in (1, 4):
         qpos, qvel, _ = _rand_state(h, rng, B, with_qd=True)
-        qacc = rng.standard_normal((B, nq)); qacc[:, nv:] = 0.0
+        qacc = rng.standard_normal((B, nv))
         native = np.asarray(h.inverse_dynamics_gradient(qpos, qvel, qacc, _convention="mujoco"),
                             np.float64)  # (B, NV, 2NV)
         q_pin, qd_pin, qdd_pin, _, R = h._mjx_inputs(qpos, qvel, qacc)
@@ -618,7 +618,7 @@ def test_native_mjx_idsva_so_matches_oracle(go2_floating):
     rng = np.random.default_rng(41)
     for B in (1, 2):
         qpos, qvel, _ = _rand_state(h, rng, B, with_qd=True)
-        qacc = rng.standard_normal((B, nq)); qacc[:, nv:] = 0.0
+        qacc = rng.standard_normal((B, nv))
         native = h.idsva_so(qpos, qvel, qacc, _convention="mujoco")  # SecondOrderID 4×(B,NV,NV,NV)
         q_pin, qd_pin, qdd_pin, _, R = h._mjx_inputs(qpos, qvel, qacc)
         pin_so = h.idsva_so(q_pin, qd_pin, qdd_pin)
@@ -1004,8 +1004,8 @@ def test_native_mjx_inverse_dynamics_regressor_matches_oracle(go2_floating):
     rng = np.random.default_rng(61)
     for B in (1, 4):
         qpos = rng.standard_normal((B, nq)); qpos[:, 3:7] /= np.linalg.norm(qpos[:, 3:7], axis=1, keepdims=True)
-        qvel = rng.standard_normal((B, nq)); qvel[:, nv:] = 0.0
-        qacc = rng.standard_normal((B, nq)); qacc[:, nv:] = 0.0
+        qvel = rng.standard_normal((B, nv))
+        qacc = rng.standard_normal((B, nv))
         native = np.asarray(h.inverse_dynamics_regressor(qpos, qvel, qacc, _convention="mujoco"),
                             np.float64)  # (B, nv, ncol)
         assert native.shape == (B, nv, ncol)

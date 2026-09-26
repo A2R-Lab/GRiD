@@ -6,11 +6,9 @@ floating base:
 
   * the configuration is nq = 7 + 12 = 19 wide: ``q = [base_pos(3), base_quat_xyzw(4),
     joint_angles(12)]`` with a NORMALIZED quaternion;
-  * the tangent space is nv = 6 + 12 = 18 (nv != nq): velocity/torque buffers are still
-    passed nq-wide with the trailing quaternion-padding slot zeroed, and only the leading
-    nv entries of nq-wide outputs are meaningful;
-  * autograd handles the nq<->nv bridge internally (cotangents are sliced to nv for the
-    tangent-space Jacobians and padded back to nq).
+  * the tangent space is nv = 6 + 12 = 18 (nv != nq): velocity/torque buffers are passed
+    nv-wide and dynamics vector outputs come back nv-wide (Pinocchio / MuJoCo widths);
+  * autograd pulls the tangent q-cotangent back to the quaternion coordinates internally.
 
 The .so is built pin-convention-only (``enable_mujoco_kernels=False``) to keep the
 one-time nvcc build light; the timing structure (eager wall vs graph-replay wall vs CPU
@@ -74,23 +72,20 @@ def main() -> None:
     g = torch.Generator(device="cuda").manual_seed(0)
     q = torch.rand(B, nq, device=dev, generator=g) * 2 - 1
     q[:, 3:7] = torch.nn.functional.normalize(q[:, 3:7], dim=1)   # unit quaternion
-    # qd/u are nq-wide buffers; only the leading nv entries are tangent-space data —
-    # zero the trailing quaternion-padding slot.
-    qd = torch.rand(B, nq, device=dev, generator=g) * 2 - 1
-    u  = torch.rand(B, nq, device=dev, generator=g) * 2 - 1
-    qd[:, nv:] = 0.0
-    u[:, nv:] = 0.0
+    # qd/u are nv-wide tangent-space data.
+    qd = torch.rand(B, nv, device=dev, generator=g) * 2 - 1
+    u  = torch.rand(B, nv, device=dev, generator=g) * 2 - 1
 
     # ── 1. resident call ─────────────────────────────────────────────────────
     qdd = h.forward_dynamics(q, qd, u)
     torch.cuda.synchronize()
     print(f"\n[1] forward_dynamics output {tuple(qdd.shape)} on {qdd.device} "
-          f"(nq-wide; leading nv={nv} entries are the tangent qdd)")
+          f"(nv={nv} wide tangent qdd)")
 
-    # ── 2. autograd through the analytic backward (nq<->nv bridge inside) ────
+    # ── 2. autograd through the analytic backward (quaternion pull-back inside) ─
     qg = q.clone().requires_grad_(True)
     ug = u.clone().requires_grad_(True)
-    loss = h.forward_dynamics(qg, qd, ug)[:, :nv].pow(2).mean() + 1e-3 * ug.pow(2).mean()
+    loss = h.forward_dynamics(qg, qd, ug).pow(2).mean() + 1e-3 * ug.pow(2).mean()
     loss.backward()
     print(f"[2] loss={float(loss.detach()):.4f}  →  grads via GRiD analytic Jacobian: "
           f"|∂/∂q|={qg.grad.norm():.4f}  |∂/∂u|={ug.grad.norm():.4f}")

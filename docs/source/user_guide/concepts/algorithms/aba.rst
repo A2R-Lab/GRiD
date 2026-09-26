@@ -31,12 +31,10 @@ The Python reference is ``RBDReference.aba`` in
 
 In GRiD
 -------
-On the NumPy handle, ``qdd = h.aba(q, qd, u)`` returns ``(B, h.nq)``:
-the first ``NV = h.num_vel`` entries are physical accelerations and any
-remaining entries are padding. Supply ``q``, ``qd`` and ``u`` at
-``(B, h.nq)`` width on the default Pinocchio-convention path, with tangent
-velocity/torque entries first and unused slots zeroed. See
-:doc:`../input_output_abi` and :doc:`../../tutorials/python_wrappers`.
+On every handle, ``qdd = h.aba(q, qd, u)`` takes ``q`` at ``(B, h.nq)`` and
+``qd``, ``u`` at ``(B, h.nv)``, and returns the accelerations at
+``(B, h.nv)``, the tangent width. See :doc:`../input_output_abi` and
+:doc:`../../tutorials/python_wrappers`.
 It takes the same optional
 per-body external forces as inverse dynamics (``f_ext``, shape
 ``(B, 6*num_bodies)``, body-major, ``[angular; linear]`` in each body's local

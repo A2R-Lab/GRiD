@@ -49,9 +49,8 @@ See :doc:`../../tutorials/verified_inputs` for a CPU-tested parameter-vector
 construction and regressor identity check.
 
 These examples use the NumPy handle and batched inputs. ``q`` is
-``(B, h.nq)``; the default Pinocchio-convention dynamics calls shown here
-expect ``qd``/``qdd`` padded to that width, with ``h.num_vel`` tangent entries
-first. ``dccrba`` is indexed ``dA[b, row, column, tangent_direction]``.
+``(B, h.nq)`` and ``qd``/``qdd`` are ``(B, h.nv)``, the tangent width.
+``dccrba`` is indexed ``dA[b, row, column, tangent_direction]``.
 Select the named operations in ``algorithm_list`` when loading the model;
 the :doc:`Python wrapper guide <../../tutorials/python_wrappers>` describes
 registration and operation discovery.

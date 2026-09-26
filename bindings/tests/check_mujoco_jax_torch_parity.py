@@ -58,9 +58,9 @@ def main():
         a[:, 3:7] /= np.linalg.norm(a[:, 3:7], axis=1, keepdims=True)
         return a
     q = mk(); q[:, 3:7] /= np.linalg.norm(q[:, 3:7], axis=1, keepdims=True)
-    qd = rng.standard_normal((B, nq)).astype(np.float32); qd[:, nv:] = 0.0
-    qdd = rng.standard_normal((B, nq)).astype(np.float32); qdd[:, nv:] = 0.0
-    u = rng.standard_normal((B, nq)).astype(np.float32); u[:, nv:] = 0.0
+    qd = rng.standard_normal((B, nv)).astype(np.float32)
+    qdd = rng.standard_normal((B, nv)).astype(np.float32)
+    u = rng.standard_normal((B, nv)).astype(np.float32)
     jq, jqd, jqdd, ju = map(jnp.asarray, (q, qd, qdd, u))
     tq, tqd, tqdd, tu = (torch.tensor(z, device="cuda") for z in (q, qd, qdd, u))
 

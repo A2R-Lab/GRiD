@@ -197,7 +197,7 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
         return _resolve_core_op(ops, (name + "_mujoco") if mujoco else name)
 
     # A4-1 vjp_ops: each backward is a SHELL — the recipe (grad op, per-input
-    # cotangents, the floating-base nv-slice/nj-pad bridge) lives in
+    # cotangents, the quaternion configuration pull-back) lives in
     # ABI_SPECS[key].vjp and runs through the shared _vjp_common.vjp_backward
     # driver, identical to the jax surface.
     from grid_codegen.abi_specs import ABI_SPECS
@@ -228,12 +228,12 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
             q, qd, stamp = ctx.saved_tensors
             # f_ext is affine in RNEA (passed through for bias consistency);
             # qdd threads into the USE_QDD grad overload so ∂(M·qdd)/∂q is
-            # included. Recipe + nv-slice/nj-pad bridge: the shared vjp table.
+            # included. Recipe + quaternion pull-back: the shared vjp table.
             g = vjp_backward(ABI_SPECS["inverse_dynamics"].vjp, grad_c, {
                 "grad": lambda: apply_out_layout(
                     _op("inverse_dynamics_gradient")(q, qd, ctx.gravity, ctx.qdd, ctx.f_ext, stamp_expect=stamp),
                     ("grad_concat",), None, nv=nv),
-            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
+            }, nv=nv, nq=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
             # grads for (q, qd, gravity, qdd, f_ext)
             return g["q"], g["qd"], None, g["qdd"], g["f_ext"]
 
@@ -261,7 +261,7 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
                     "minv": lambda: apply_out_layout(
                         _op("minv")(q, stamp_expect=stamp), ("minv",), None, nv=nv, mjx=mujoco,
                         eye=torch.eye(nv, dtype=q.dtype, device=q.device)),
-                }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
+                }, nv=nv, nq=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
                 return g["q"], g["qd"], g["u"], None, g["f_ext"]
         return FDLikeFn
 
@@ -295,8 +295,8 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
                     ops.inverse_dynamics_gradient(q, qd, ctx.gravity, None, ctx.f_ext, stamp_expect=stamp),
                     ("grad_concat",), None, nv=nv),
                 "param_grad": lambda: ops.inverse_dynamics_regressor(
-                    q, qd, torch.zeros_like(q), ctx.gravity, stamp_expect=stamp).reshape(q.shape[0], nv, -1),
-            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
+                    q, qd, torch.zeros_like(qd), ctx.gravity, stamp_expect=stamp).reshape(q.shape[0], nv, -1),
+            }, nv=nv, nq=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
             return g["q"], g["qd"], g["params"], None, None
 
     class FDWrtParamsFn(torch.autograd.Function):
@@ -321,7 +321,7 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
                     eye=torch.eye(nv, dtype=q.dtype, device=q.device)),
                 "param_grad": lambda: ops.forward_dynamics_parameter_gradient(
                     q, qd, u, ctx.gravity, stamp_expect=stamp).reshape(q.shape[0], nv, -1),
-            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
+            }, nv=nv, nq=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
             return g["q"], g["qd"], g["u"], g["params"], None, None
 
     class IntegratorFn(torch.autograd.Function):
@@ -353,7 +353,7 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
                 "grad": lambda: apply_out_layout(
                     _op("integrator_gradient")(q, qd, u, ctx.dt, ctx.it, ctx.gravity, stamp_expect=stamp),
                     ("colmajor_whole", None), (2 * nv, 3 * nv), nv=nv),
-            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
+            }, nv=nv, nq=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
             return g["q"], g["qd"], g["u"], None, None, None
 
     class EndEffectorPoseFn(torch.autograd.Function):
@@ -373,7 +373,7 @@ def _make_autograd(ns, nv, mujoco=False, nee=0, configuration_layout=None, ctx_i
                 "grad": lambda: apply_out_layout(
                     _op("end_effector_pose_gradient")(q, stamp_expect=stamp), ("ee_grad",), (nee,), nv=nv,
                     mjx=mujoco, eye=torch.eye(nv, dtype=q.dtype, device=q.device)),
-            }, nv=nv, nj=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
+            }, nv=nv, nq=q.shape[1], q=q, mjx=mujoco, configuration_layout=configuration_layout)
             return (g["q"],)
 
     fns = {"inverse_dynamics": InverseDynamicsFn, "fd": FDFn, "aba": AbaFn,
@@ -657,9 +657,10 @@ class TorchRobotHandle(BaseDelegateMixin):
 
     def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None,
                          _convention=None):
-        """Inverse dynamics (RNEA) τ = M·qdd + h − g (B, NJ). Autograd-aware wrt (q, qd).
+        """Inverse dynamics (RNEA) τ = M·qdd + h − g, returned (B, NV). Autograd-aware wrt (q, qd).
 
-        ``qdd`` (optional): joint acceleration, CUDA float32 ``(B, NJ)``. With
+        ``q`` is ``(B, NQ)``; ``qd`` and the optional ``qdd`` are ``(B, NV)`` (tangent
+        width, as in Pinocchio and MuJoCo). CUDA tensors in the .so dtype. With
         ``qdd=None`` (default) returns the bias c = h − g; a nonzero ``qdd`` adds
         the M·qdd inertial term (USE_QDD overload). The autograd backward threads
         the saved qdd through, so the q/qd Jacobian includes ∂(M·qdd)/∂q for a
@@ -678,7 +679,7 @@ class TorchRobotHandle(BaseDelegateMixin):
 
     def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None,
                          _convention=None):
-        """qdd = M⁻¹(τ − c) (B, NJ). Autograd-aware wrt (q, qd, u).
+        """qdd = M⁻¹(τ − c), returned (B, NV); ``qd``/``u`` are (B, NV). Autograd-aware wrt (q, qd, u).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``
         CUDA float32 (see :py:meth:`inverse_dynamics`).
@@ -689,7 +690,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         return self._fns_for(_convention)["fd"].apply(q, qd, u, float(gravity), f_ext)
 
     def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None):
-        """qdd via ABA (B, NJ). Autograd-aware wrt (q, qd, u).
+        """qdd via ABA, returned (B, NV); ``qd``/``u`` are (B, NV). Autograd-aware wrt (q, qd, u).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``
         CUDA float32 (see :py:meth:`inverse_dynamics`).
@@ -700,7 +701,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         return self._fns_for(_convention)["aba"].apply(q, qd, u, float(gravity), f_ext)
 
     def inverse_dynamics_wrt_params(self, q, qd, params, *, gravity: float = -9.81, f_ext=None):
-        """Inverse-dynamics bias c = ID(q, qd, qdd=0) (B, NJ), differentiable wrt
+        """Inverse-dynamics bias c = ID(q, qd, qdd=0) (B, NV), differentiable wrt
         the per-link inertial parameters ``params`` (π) AND ``q``/``qd``.
 
         ``params``: (B, 10*num_bodies) — per-link [m, m*c(3), I_O(6)] in the
@@ -714,7 +715,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         return self._fns["id_wrt_params"].apply(q, qd, params, float(gravity), f_ext)
 
     def forward_dynamics_wrt_params(self, q, qd, u, params, *, gravity: float = -9.81, f_ext=None):
-        """Forward dynamics qdd = FD(q, qd, u) (B, NJ), differentiable wrt the
+        """Forward dynamics qdd = FD(q, qd, u) (B, NV), differentiable wrt the
         per-link inertial parameters ``params`` (π) AND ``q``/``qd``/``u``.
 
         ``params``: (B, 10*num_bodies) — see :py:meth:`inverse_dynamics_wrt_params`.
@@ -986,7 +987,7 @@ class TorchRobotHandle(BaseDelegateMixin):
         """∂c/∂(q,qd) (B, NV, 2*NV) = [dc_dq | dc_dqd], tangent-space (pinocchio)
         convention. FIXED base: NV == NJ (unchanged); FLOATING base: NV < NJ.
 
-        ``qdd`` (optional): joint acceleration ``(B, NJ)``. With ``qdd=None``
+        ``qdd`` (optional): joint acceleration ``(B, NV)``. With ``qdd=None``
         (default) this is the bias gradient ∂(h−g)/∂(q,qd); a nonzero ``qdd``
         adds ∂(M·qdd)/∂q (USE_QDD overload).
 
@@ -1027,8 +1028,8 @@ class TorchRobotHandle(BaseDelegateMixin):
         import torch
         nv, npar = self.num_vel, 10 * self.num_bodies
         if qdd is None:
-            q = torch.as_tensor(q)
-            qdd = torch.zeros_like(q)
+            qd = torch.as_tensor(qd)
+            qdd = torch.zeros_like(qd)
         return self._op(_convention, "inverse_dynamics_regressor")(
             q, qd, qdd, float(gravity)).reshape(-1, nv, npar)
 
@@ -1051,8 +1052,8 @@ class TorchRobotHandle(BaseDelegateMixin):
         import torch
         nv = self.num_vel
         if qdd is None:
-            q = torch.as_tensor(q)
-            qdd = torch.zeros_like(q)
+            qd = torch.as_tensor(qd)
+            qdd = torch.zeros_like(qd)
         flat = self._op(_convention, "idsva_so")(q, qd, qdd, float(gravity))
         return SecondOrderID(*self._shape_out("idsva_so", flat))
 

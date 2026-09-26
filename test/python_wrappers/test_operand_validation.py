@@ -65,14 +65,16 @@ def test_numpy_coerces_layout_and_dtype(iiwa):
     assert np.allclose(iiwa.forward_dynamics(qT, qd.astype(np.float64), u), ref, atol=1e-6)
 
 
-def test_numpy_refuses_a_broadcast_force_and_the_nv_footgun(iiwa, go2):
+def test_numpy_refuses_a_broadcast_force_and_the_padded_width(iiwa, go2):
     q, qd, u = _state(iiwa)
     fe1 = np.zeros((1, 6 * iiwa.num_bodies), np.float32)
     with pytest.raises((ValueError, RuntimeError)):
         iiwa.forward_dynamics(q, qd, u, f_ext=fe1)
     q, qd, u = _state(go2)
-    with pytest.raises(ValueError, match="nv=|num_vel"):
-        go2.forward_dynamics(q, qd[:, :go2.nv], u)
+    # velocity-like inputs are nv-wide; the old nq-wide padded layout is refused
+    with pytest.raises(ValueError, match="tangent width"):
+        go2.forward_dynamics(q, np.pad(qd, ((0, 0), (0, go2.nq - go2.nv))), u)
+    assert go2.forward_dynamics(q, qd, u).shape == (q.shape[0], go2.nv)
 
 
 # ─── torch ───────────────────────────────────────────────────────────────────
@@ -116,8 +118,9 @@ def test_jax_python_checks(iiwa, go2):
         big = jnp.zeros((MAX_BATCH + 1, iiwa.nq)); jv.forward_dynamics(big, big, big)
     gv = gj.JaxRobotHandle(go2, _cache_key(go2), go2._so_path)
     q, qd, u = (jnp.asarray(x) for x in _state(go2))
-    with pytest.raises(ValueError, match="FLOATING-base"):
-        gv.forward_dynamics(q, qd[:, :go2.nv], u)
+    with pytest.raises(ValueError, match="tangent width"):
+        gv.forward_dynamics(q, jnp.pad(qd, ((0, 0), (0, go2.nq - go2.nv))), u)
+    assert gv.forward_dynamics(q, qd, u).shape == (q.shape[0], go2.nv)
     # an empty batch: XLA elides a zero-sized custom call, so the native check
     # is never reached and the result is simply empty (documented behaviour)
     z = jnp.zeros((0, iiwa.nq))

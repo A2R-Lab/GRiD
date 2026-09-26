@@ -21,16 +21,12 @@ def model_inputs(name, batch=2):
     q = np.zeros((batch, nq), dtype=np.float32)
     if floating:
         q[:, 6] = 1  # Pinocchio base [xyz, qx, qy, qz, qw].
+    # Velocities, accelerations and torques are NV wide on every surface.
     v = np.zeros((batch, nv), dtype=np.float32)
     u = np.zeros_like(v)
-    # Default NumPy dynamics/integrator calls use position-width storage.
-    qd_padded = np.zeros_like(q)
-    u_padded = np.zeros_like(q)
-    qd_padded[:, :nv] = v
-    u_padded[:, :nv] = u
-    # plant_step instead accepts x=[q,v] and an NV-wide control.
+    # plant_step takes the state x = [q, v] and the NV-wide control.
     x = np.concatenate((q, v), axis=1)
-    return robot, q, qd_padded, u_padded, x, u
+    return robot, q, v, u, x
 
 
 def inertial_parameters(robot):
@@ -59,9 +55,8 @@ def regressor_residual(robot):
 
 if __name__ == "__main__":
     for name in ("iiwa14", "go2"):
-        robot, q, qd, u_padded, x, u = model_inputs(name)
+        robot, q, qd, u, x = model_inputs(name)
         print(name, "NQ/NV:", robot.get_num_pos(), robot.get_num_vel(),
-              "q/qd/u_padded/x/u shapes:",
-              q.shape, qd.shape, u_padded.shape, x.shape, u.shape)
+              "q/qd/u/x shapes:", q.shape, qd.shape, u.shape, x.shape)
         if name == "iiwa14":
             print("max |Y*pi - tau|:", regressor_residual(robot))

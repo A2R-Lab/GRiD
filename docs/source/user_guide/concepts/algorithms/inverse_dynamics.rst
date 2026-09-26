@@ -43,13 +43,10 @@ The Python reference is ``RBDReference.inverse_dynamics`` in
 
 In GRiD
 -------
-On the NumPy handle, ``tau = h.inverse_dynamics(q, qd, qdd)`` returns
-``(B, h.nq)``, with physical torques in the first ``NV = h.num_vel`` slots
-and padding in the remaining slots. On the default Pinocchio-convention
-path, ``q``, ``qd`` and ``qdd`` all use ``(B, h.nq)`` storage; velocity and
-acceleration have tangent entries first and zero padding. Matrix and
-derivative outputs are instead ``NV``-wide. See :doc:`../input_output_abi`
-and :doc:`../../tutorials/python_wrappers`. With ``qdd``
+On every handle, ``tau = h.inverse_dynamics(q, qd, qdd)`` takes ``q`` at
+``(B, h.nq)`` and ``qd``, ``qdd`` at ``(B, h.nv)``, and returns the torques at
+``(B, h.nv)``. Matrix and derivative outputs are ``nv``-wide as well. See
+:doc:`../input_output_abi` and :doc:`../../tutorials/python_wrappers`. With ``qdd``
 omitted it returns the bias ``c(q, qd) = C(q, qd)·qd + g(q)``, which is also
 available as ``h.nonlinear_effects``; ``h.generalized_gravity`` is the
 ``qd = 0`` special case. Optional per-body external forces (``f_ext``,

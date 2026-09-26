@@ -76,7 +76,8 @@ robot = grid_rbd.load_robot(
     algorithm_list=["forward_dynamics"],
     enable_mujoco_kernels=False,
 )
-q, qd, tau = (np.zeros((8, robot.nq), dtype=np.float32) for _ in range(3))
+q = np.zeros((8, robot.nq), dtype=np.float32)
+qd, tau = (np.zeros((8, robot.nv), dtype=np.float32) for _ in range(2))
 qdd = robot.forward_dynamics(q, qd, tau)
 print(qdd.shape)  # (8, 7)
 robot.close()</code></pre>

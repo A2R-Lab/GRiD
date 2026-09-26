@@ -149,7 +149,7 @@ class GridAdapter:
                        ctypes.POINTER(ctypes.c_double), fp]
         fn.restype = ctypes.c_int
         args = self.fixture.args(self.op, batch)
-        size = self.fixture.nq if self.op == "inverse_dynamics" else 2*self.fixture.nv**2
+        size = self.fixture.nv if self.op == "inverse_dynamics" else 2*self.fixture.nv**2
         raw = np.empty((batch, size), np.float32)
         samples = np.empty(iterations, np.float64)
         rc = fn(self.h._so_path.encode(), ("grid_rbd_"+self.op).encode(), self.h._runner.ctx_id(),
@@ -205,7 +205,7 @@ class GridAdapter:
         the qd slot (as the wrapper's C ABI does) and pass zeros as third;
         (q, qd) operations pass zeros as third; the rest pass their third array."""
         fp = ctypes.POINTER(ctypes.c_float)
-        args = tuple(np.ascontiguousarray(a, np.float32) for a in self.fixture.args(self.op, batch))
+        args = tuple(np.ascontiguousarray(a, np.float32) for a in self.fixture.args(self.op, batch, padded=True))
         if self.op in Q_ONLY_OPS:
             args = (args[0], args[0], np.zeros_like(args[0]))
         elif self.op in Q_QD_OPS:

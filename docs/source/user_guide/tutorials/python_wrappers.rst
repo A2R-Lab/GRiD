@@ -307,13 +307,16 @@ names remain as aliases):
      - Body count (base included on a floating base): ``f_ext`` is
        ``(B, 6*nb)``, one spatial force per body in the local body frame.
 
-**Velocity-space inputs are nq-wide.** ``qd``, ``qdd`` and ``u`` are passed
-at the ``nq`` stride: on a floating base the tangent occupies the first
-``nv`` slots and the trailing slot is a 0 pad (the raw transport layout the
-kernels read). An ``nv``-wide input raises a clear ``ValueError`` rather than
-being padded silently; outputs never carry the pad. Accepting natural
-``nv``-wide velocity inputs at the high-level API is a registered design
-item (audit W11) — not done, so as not to change existing shapes quietly.
+**Velocity-space inputs and dynamics vector outputs are nv-wide.** ``qd``,
+``qdd`` and ``u`` are passed at the tangent width ``nv`` on every surface
+(NumPy, JAX, PyTorch and the C ABI), and ``inverse_dynamics``,
+``forward_dynamics``, ``aba``, ``nonlinear_effects`` and
+``generalized_gravity`` return ``(B, nv)``. This is the Pinocchio and MuJoCo
+convention; on a scalar-joint fixed base ``nq == nv`` and nothing changes. An
+``nq``-wide padded array on a floating-base robot raises a clear
+``ValueError`` naming the tangent width rather than being sliced silently. The
+kernels' padded staging layout (:doc:`../concepts/input_output_abi`) is
+internal to the compiled wrapper.
 
 **What is differentiable.** ``jax`` and ``torch`` handles attach an analytic
 backward (a batched VJP through the ``*_gradient`` kernels) to exactly these

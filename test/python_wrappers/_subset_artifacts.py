@@ -30,12 +30,10 @@ def cache_key(handle):
 
 
 def random_state(h, B=4, seed=0):
-    """(q, qd, u) at the nq stride; floating base gets a unit quaternion and zero pads."""
+    """(q, qd, u): q at the nq width (unit quaternion on a floating base), qd/u at the nv width."""
     rng = np.random.default_rng(seed)
     q = 0.3 * rng.standard_normal((B, h.nq)).astype(np.float32)
     if h.floating_base:
         quat = rng.standard_normal((B, 4)); quat /= np.linalg.norm(quat, axis=1, keepdims=True); q[:, 3:7] = quat
-    qd = 0.3 * rng.standard_normal((B, h.nq)).astype(np.float32); u = 0.3 * rng.standard_normal((B, h.nq)).astype(np.float32)
-    if h.floating_base:
-        qd[:, h.nv:] = 0; u[:, h.nv:] = 0
+    qd = 0.3 * rng.standard_normal((B, h.nv)).astype(np.float32); u = 0.3 * rng.standard_normal((B, h.nv)).astype(np.float32)
     return q, qd, u

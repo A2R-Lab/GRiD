@@ -53,5 +53,5 @@ arbitrary axes) and the parse options are on the
 
 Parser coordinates are not the packed CUDA ABI. Before constructing floating
 or spherical dynamics inputs, read :doc:`../concepts/input_output_abi` and
-:doc:`python_wrappers`; several dynamics calls use position-width padded
-velocity/torque arrays even though their derivatives are tangent-width.
+:doc:`python_wrappers`: ``q`` is ``nq`` wide and velocities, accelerations and
+torques are ``nv`` wide on every wrapper surface.

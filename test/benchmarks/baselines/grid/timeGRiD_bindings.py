@@ -95,12 +95,11 @@ def _stats(times_us: np.ndarray) -> dict:
 
 
 def _make_np(arity, n, nq, nv, rng, floating=False):
-    """Random batched numpy inputs (host) for the requested arg arity.
-
-    Floating base: GRiD packs every per-timestep input (q, qd, qacc/qfrc) into nq-wide
-    slots (stride = 3*NUM_JOINTS, NUM_JOINTS=nq), so qd/qacc/qfrc are nq-wide too — NOT nv.
-    Fixed base: nq==nv so this is identical."""
-    vw = nq if floating else nv
+    """Random batched numpy inputs (host) for the requested arg arity: q at nq,
+    qd/qacc/qfrc at the tangent width nv on every surface (the wrapper stages the
+    kernels' padded slots itself). ``floating`` is kept for the call sites."""
+    del floating
+    vw = nv
     widths = {"q": nq, "v": vw, "a": vw, "u": vw}
     return tuple(rng.standard_normal((n, widths[k])).astype(np.float32) for k in arity)
 

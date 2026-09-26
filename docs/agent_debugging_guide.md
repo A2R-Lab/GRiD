@@ -2416,3 +2416,27 @@ workspace-backed gradient tier, so the under-count was invisible). RULES: (4) a 
 change must be checked against the composer macro on EVERY tier and on the biggest
 robot — add the robot to the coverage matrix before trusting a smoke; (5) `temp = 0` is a
 routing decision, not a size request.
+
+### 7.z29 Public widths are physical; the padded `q|qd|u` slots are internal to the .so (2026-09-26, width contract)
+
+The kernels stage inputs in three `NUM_JOINTS`-wide slots (`d_q_qd_u`, stride 3·nq) and
+index velocities by tangent index, so a velocity row is "leading nv entries, then pad" on
+every model. For years that internal layout leaked to every public surface: NumPy, JAX,
+torch and the C ABI took `qd`/`qdd`/`u` at nq and returned torques/accelerations at nq,
+with a Python guard (`_check_nq_width`) that REJECTED the nv-wide arrays every Pinocchio
+or MuJoCo user naturally writes, and a VJP bridge that sliced and re-padded cotangents.
+Clean break: the `.so` boundary is now nv-wide. The strided staging copies that already
+existed (`cudaMemcpy2DAsync` into the padded slots in the FFI/torch handlers, the host
+memcpy in `pack_q_qd_u`) simply copy nv entries per row; `pack_qdd`/`unpack_rows` do the
+same for the nj-pitched `h_qdd`/`h_c`; `AbiSpec.out_pitch_expr` marks the three padded
+vector outputs so every emitter (C ABI, mjx twins, FFI, torch, pybind) copies nv per
+nj-pitched row. The pad column of `d_q_qd_u`/`d_qdd` is zeroed once at context creation
+and never written again. No path gained an XLA/torch op. RULES: (1) a "convenient"
+internal stride must never become a public width — fix it at the boundary the moment a
+guard has to explain it; (2) when the kernel indexes by tangent index, one strided copy
+converts widths for free — reach for `cudaMemcpy2D` before a pad/slice op; (3) the
+old-width array must still be REJECTED with a migration message (`tangent width` in the
+error), never silently sliced, or a padded caller gets plausible wrong dynamics on the
+last joint; (4) `grid.cuh` and its raw buffer contract (`test_cuda_input_abi.py`) are
+unchanged, so kernel timings survive — only wrapper-boundary timings on nq != nv robots
+need re-collection.

@@ -20,10 +20,11 @@ writes ``u`` at ``NUM_POS + NUM_VEL`` while every kernel reads it from ``2*NUM_P
 Nothing traps that — the read is in-bounds, so the result is silently wrong dynamics.
 Floating base is new and about to be adopted downstream, so the ABI is pinned here.
 
-On a floating base ``qd``/``u``/``qdd`` are still passed at the **nq** width: the nv
-meaningful values occupy the LEADING slots of their block and the trailing slot is a
-pad. (Matrix/gradient OUTPUTS are nv-wide — the asymmetry is the documented "Friction 3"
-footgun that ``grid_rbd``'s ``_check_nq_width`` raises on for binding users.)
+In this raw buffer ``qd``/``u``/``qdd`` occupy **nq**-wide slots: the nv meaningful
+values fill the LEADING entries and the trailing entry is a pad. This is internal to
+the kernels and the compiled wrapper: every public surface of ``grid_rbd`` (NumPy,
+JAX, PyTorch, C ABI) takes and returns velocity-like vectors at the nv width and
+stages the padded rows itself (2026-09-26 width contract).
 
 These checks are pure codegen text/constants (no GPU): they catch a silently MOVED
 offset, which the end-to-end equivalence suite would also catch but only for algorithms

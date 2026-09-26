@@ -50,8 +50,7 @@ def _accept_1d(method):
     the leading positional DOF arrays and the ``f_ext`` kwarg are reshaped to
     ``(1, -1)``; scalars (``dt``, ``gravity``), strings (``_convention``), and any
     ndim>=2 input are untouched. The reshape happens BEFORE the method body, so
-    ``_check_nq_width`` still fires on an nv-wide floating-base velocity (the
-    Friction 3 guard is preserved). The jax/torch surfaces already accept 1-D via
+    ``_check_nv_width`` still fires on a wrong-width floating-base velocity. The jax/torch surfaces already accept 1-D via
     ``vmap``; this brings the numpy surface to parity."""
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
@@ -318,9 +317,9 @@ class RobotHandle:
 
     @property
     def nv(self) -> int:
-        """Tangent/velocity width: matrix and gradient OUTPUTS are ``nv``-wide.
-        Floating base: 6 + joints. Velocity/force INPUTS are passed ``nq``-wide
-        (tangent in the first ``nv`` slots, trailing slot a 0 pad)."""
+        """Tangent/velocity width: ``qd``/``qdd``/``u`` INPUTS, dynamics vector
+        OUTPUTS and every matrix/gradient axis are ``nv`` wide. Floating base:
+        6 + joints."""
         return self._runner.num_vel
 
     @property
@@ -1141,15 +1140,14 @@ class RobotHandle:
 
     # ─── algorithms ──────────────────────────────────────────────────────────
     #
-    # All methods take 2D float32 arrays of shape (B, num_joints) for the q/qd/qdd
-    # /u inputs (GRiD's kernels consume q, qd, qdd and u all at the NUM_JOINTS
-    # (== num_pos == nq) stride — for a floating base the 6-dof base velocity
-    # occupies the first slots and the +1 quaternion offset is a padded slot).
-    # VALUE vector outputs (torque c, qdd) are likewise (B, num_joints).
-    # MATRIX / Jacobian outputs are tangent-space (pinocchio convention) and are
-    # nv-dimensioned: crba/minv -> (B, num_vel, num_vel); the dynamics gradients
-    # -> (B, num_vel, 2*num_vel). For a FIXED base num_vel == num_joints so all
-    # shapes coincide; for a FLOATING base num_vel < num_joints.
+    # All methods take 2D arrays in the handle dtype: ``q`` is (B, nq) and the
+    # velocity-like inputs qd/qdd/u are (B, nv) — the tangent width, as in
+    # Pinocchio and MuJoCo (2026-09-26 width contract). VALUE vector outputs
+    # (torque c, qdd) are (B, nv). MATRIX / Jacobian outputs are tangent-space
+    # too: crba/minv -> (B, nv, nv); the dynamics gradients -> (B, nv, 2*nv).
+    # On a scalar-joint FIXED base nq == nv; a quaternion joint adds one
+    # configuration coordinate (floating base: nq = nv + 1). The kernels' padded
+    # NUM_JOINTS-strided staging layout is internal to the compiled .so.
 
     @property
     def num_bodies(self) -> int:
@@ -1179,44 +1177,26 @@ class RobotHandle:
             )
         return fe
 
-    def _check_nq_width(self, arr, kind: str):
-        """Guard floating-base velocity/force/acceleration inputs against the
-        ``nq`` vs ``nv`` footgun (Friction 3).
-
-        GRiD consumes ``q``/``qd``/``qdd``/``u`` all at the ``NUM_JOINTS == nq``
-        (== num_pos) stride — for a FLOATING base the +1 quaternion slot is a
-        padded position; the 6-DOF base velocity occupies the FIRST slots and the
-        velocity vector is still passed at the ``nq`` width (last slot a pad).
-        Matrix/gradient OUTPUTS are ``nv``-wide, so a caller porting from
-        mjx/pinocchio naturally reaches for an ``nv``-wide ``qd``/``u`` — which
-        ``_core`` silently accepts (it only checks last-dim ``== num_joints``)
-        and reads into the quaternion pad, returning subtly WRONG dynamics with
-        no error.
-
-        This raises a precise ``ValueError`` in exactly that case. It is a no-op
-        on a FIXED base (``nq == nv`` ⇒ the widths coincide, nothing to confuse)
-        and a no-op for any already-``nq``-wide input. v1 deliberately does NOT
-        auto-pad — an explicit error is safer than guessing the base-velocity
-        layout. ``arr`` must already be a numpy array (post-``asarray``); ``kind``
-        names the offending argument for the message (e.g. ``"qd"``).
-        """
-        nj = self.num_joints
+    def _check_nv_width(self, arr, kind: str):
+        """Velocity-like inputs (``qd``/``qdd``/``u``) are ``nv`` wide on every
+        surface (2026-09-26 width contract: the tangent width, as in Pinocchio
+        and MuJoCo). On a scalar-joint fixed base ``nq == nv`` and this is a
+        no-op. On a floating or spherical model an ``nq``-wide array (the old
+        padded layout) raises with the migration hint; any other width raises
+        the plain shape error. Nothing is auto-padded or auto-sliced. ``arr``
+        must already be a numpy array; ``kind`` names the argument."""
+        nq = self.num_joints
         nv = self.num_vel
-        # Only a floating base can confuse the two widths (fixed base: nj == nv).
-        if nj == nv:
-            return
         last = arr.shape[-1] if arr.ndim else 0
         if last == nv:
+            return
+        if last == nq != nv:
             raise ValueError(
-                f"{kind} last dim is {last}, which equals num_vel (nv={nv}); "
-                f"but this is a FLOATING-base robot and GRiD expects {kind} at "
-                f"the num_joints (nq={nj}) stride — the base DOFs occupy the "
-                f"leading slots and the +1 quaternion slot is a pad. Pass an "
-                f"nq-wide ({nj}) {kind} (velocity/force in the first nv={nv} "
-                f"slots, the trailing slot a 0 pad), not an nv-wide one. "
-                f"(Matrix/gradient OUTPUTS are nv-wide; the kinematic INPUTS are "
-                f"nq-wide.)"
-            )
+                f"{kind} last dim is {last} (= nq); GRiD takes velocity, acceleration "
+                f"and force inputs at the tangent width nv={nv} (Pinocchio / MuJoCo "
+                f"convention). Drop the trailing padding slot and pass an nv-wide "
+                f"{kind}; dynamics vector outputs are nv-wide too.")
+        raise ValueError(f"{kind} must be (batch, nv={nv}); got shape {arr.shape}")
 
     def _cast_out(self, *arrays):
         """fp64-out convenience: upcast results to float64 when ``allow_fp64``
@@ -1236,8 +1216,8 @@ class RobotHandle:
     # block (quat reorder + the G=blockdiag(R,I) root basis change + the omega x v
     # acceleration term); internal joints are untouched. See `_mujoco.py` and
     # `external/RBDReference/equivalents/mujoco_convention.md`. Velocity-space inputs are
-    # nq-wide (tangent in the first NV slots), so the slice-based transforms apply
-    # unchanged. Done in float64 then cast back to the handle dtype.
+    # nv-wide with the base block leading, so the slice-based transforms apply
+    # directly. Done in float64 then cast back to the handle dtype.
 
     def _mjx_inputs(self, q, qd=None, qdd=None, u=None):
         from . import _mujoco
@@ -1249,7 +1229,8 @@ class RobotHandle:
         return q_pin, qd_pin, qdd_pin, u_pin, R
 
     def inverse_dynamics(self, q, qd, qdd=None, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
-        """Inverse dynamics (RNEA): τ = M(q)·qdd + h(q,qd) − g(q). Returns ``(B, NJ)``.
+        """Inverse dynamics (RNEA): τ = M(q)·qdd + h(q,qd) − g(q). ``q`` is ``(B, nq)``,
+        ``qd`` and the optional ``qdd`` are ``(B, nv)``. Returns ``(B, nv)``.
 
         With ``qdd=None`` (default) this is the **bias** c = h(q,qd) − g(q)
         (= ``RBDReference.inverse_dynamics(q, qd, qdd=0)``). Pass a nonzero
@@ -1283,11 +1264,11 @@ class RobotHandle:
             q, qd, qdd, _, R = self._mjx_inputs(q, qd, qdd)
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
-        self._check_nq_width(qd, "qd")
+        self._check_nv_width(qd, "qd")
         qdd_arr = None
         if qdd is not None:
             qdd_arr = np.ascontiguousarray(qdd, dtype=self._dt)
-            self._check_nq_width(qdd_arr, "qdd")
+            self._check_nv_width(qdd_arr, "qdd")
         c = self._runner.inverse_dynamics(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
         if R is not None:
             from . import _mujoco
@@ -1322,7 +1303,7 @@ class RobotHandle:
         return self._cast_out(self._shape_out("minv", self._runner.minv(q)))
 
     def forward_dynamics(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
-        """Forward dynamics qdd = M⁻¹·(τ − c). Returns shape (B, NJ).
+        """Forward dynamics qdd = M⁻¹·(τ − c). ``q`` is (B, nq), ``qd``/``u`` (B, nv). Returns (B, nv).
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``,
         body-major, ``[angular; linear]`` local-frame (see :py:meth:`inverse_dynamics`).
@@ -1343,8 +1324,8 @@ class RobotHandle:
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
-        self._check_nq_width(qd, "qd")
-        self._check_nq_width(u, "u")
+        self._check_nv_width(qd, "qd")
+        self._check_nv_width(u, "u")
         acc = self._runner.forward_dynamics(q, qd, u, gravity, self._prep_f_ext(f_ext))
         if R is not None:
             from . import _mujoco
@@ -1353,7 +1334,7 @@ class RobotHandle:
 
     def aba(self, q, qd, u, *, gravity: float = -9.81, f_ext=None, _convention=None) -> np.ndarray:
         """Recursive forward dynamics via Articulated Body Algorithm.
-        Returns shape (B, NJ). Alternative to forward_dynamics() with the
+        Returns shape (B, nv). Alternative to forward_dynamics() with the
         same output but a different implementation.
 
         ``f_ext`` (optional): per-body external forces ``(B, 6*num_bodies)``,
@@ -1372,8 +1353,8 @@ class RobotHandle:
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
-        self._check_nq_width(qd, "qd")
-        self._check_nq_width(u, "u")
+        self._check_nv_width(qd, "qd")
+        self._check_nv_width(u, "u")
         acc = self._runner.aba(q, qd, u, gravity, self._prep_f_ext(f_ext))
         if R is not None:
             from . import _mujoco
@@ -1488,11 +1469,11 @@ class RobotHandle:
                 "qdd, no f_ext, and a floating-base .so built with the mjx kernel twins (this .so was built with enable_mujoco_kernels=False, or the robot is mimic/skew — twins are never emitted there) — re-register with enable_mujoco_kernels=True.")
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
-        self._check_nq_width(qd, "qd")
+        self._check_nv_width(qd, "qd")
         qdd_arr = None
         if qdd is not None:
             qdd_arr = np.ascontiguousarray(qdd, dtype=self._dt)
-            self._check_nq_width(qdd_arr, "qdd")
+            self._check_nv_width(qdd_arr, "qdd")
         raw = self._runner.inverse_dynamics_gradient(q, qd, qdd_arr, gravity, self._prep_f_ext(f_ext))
         # A3 slice 4: the two-col-major-halves -> (NV, 2NV) hstack chain lives
         # in the shared out-layout module ("grad_concat").
@@ -1524,8 +1505,8 @@ class RobotHandle:
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
         u  = np.ascontiguousarray(u,  dtype=self._dt)
-        self._check_nq_width(qd, "qd")
-        self._check_nq_width(u, "u")
+        self._check_nv_width(qd, "qd")
+        self._check_nv_width(u, "u")
         raw = self._runner.forward_dynamics_gradient(q, qd, u, gravity, self._prep_f_ext(f_ext))
         # Same layout as dc_du ("grad_concat" in the shared out-layout module).
         return self._shape_out("forward_dynamics_gradient", raw)
@@ -1565,7 +1546,7 @@ class RobotHandle:
         # qdd is packed into the device acceleration slot; pass explicit zeros for
         # the default (qdd=None ⇒ zero acceleration) so the result never depends on
         # a stale device buffer from a previous call.
-        qdd_in = qdd if qdd is not None else np.zeros_like(q)
+        qdd_in = qdd if qdd is not None else np.zeros_like(qd)
         qdd_arr = np.ascontiguousarray(qdd_in, dtype=self._dt)
         NV = self.num_vel
         if self._mjx_active(_convention) and getattr(self._runner, "has_idsva_so_mujoco", False):
@@ -1574,8 +1555,8 @@ class RobotHandle:
             raise NotImplementedError(
                 "idsva_so(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         else:
-            self._check_nq_width(qd, "qd")
-            self._check_nq_width(qdd_arr, "qdd")
+            self._check_nv_width(qd, "qd")
+            self._check_nv_width(qdd_arr, "qdd")
             flat = self._runner.idsva_so(q, qd, qdd_arr, 4 * NV ** 3, gravity)
         # 4 NV^3 slabs ("so_slabs" in the shared out-layout module).
         return SecondOrderID(*self._cast_out(*self._shape_out("idsva_so", flat)))
@@ -1592,7 +1573,7 @@ class RobotHandle:
         """
         q  = np.ascontiguousarray(q,  dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
-        qdd_in = qdd if qdd is not None else np.zeros_like(q)
+        qdd_in = qdd if qdd is not None else np.zeros_like(qd)
         qdd_arr = np.ascontiguousarray(qdd_in, dtype=self._dt)
         NV = self.num_vel
         ncol = 10 * self.num_bodies
@@ -1602,8 +1583,8 @@ class RobotHandle:
             raise NotImplementedError(
                 "inverse_dynamics_regressor(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         else:
-            self._check_nq_width(qd, "qd")
-            self._check_nq_width(qdd_arr, "qdd")
+            self._check_nv_width(qd, "qd")
+            self._check_nv_width(qdd_arr, "qdd")
             flat = self._runner.inverse_dynamics_regressor(q, qd, qdd_arr, gravity)
         B = flat.shape[0]
         return self._cast_out(flat.reshape(B, NV, ncol))  # (B, NV, 10*NUM_BODIES)
@@ -1629,8 +1610,8 @@ class RobotHandle:
             raise NotImplementedError(
                 "fdsva_so(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         else:
-            self._check_nq_width(qd, "qd")
-            self._check_nq_width(u, "u")
+            self._check_nv_width(qd, "qd")
+            self._check_nv_width(u, "u")
             flat = self._runner.fdsva_so(q, qd, u, 4 * NV ** 3, gravity)
         return SecondOrderFD(*self._cast_out(*self._shape_out("fdsva_so", flat)))
 
@@ -1653,8 +1634,8 @@ class RobotHandle:
         if self._mjx_active(_convention):
             self._require_mjx_twin("integrator", "integrator")
             return self._runner.integrator_mujoco(q, qd, u, float(dt), it, gravity=float(gravity))
-        self._check_nq_width(qd, "qd")
-        self._check_nq_width(u, "u")
+        self._check_nv_width(qd, "qd")
+        self._check_nv_width(u, "u")
         return self._runner.integrator(q, qd, u, float(dt), it, gravity=float(gravity))
 
     def integrator_gradient(self, q, qd, u, dt, *, integrator_type: str = "euler", gravity: float = -9.81, _convention=None):
@@ -1676,8 +1657,8 @@ class RobotHandle:
             raise NotImplementedError(
                 "integrator_gradient(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         else:
-            self._check_nq_width(qd, "qd")
-            self._check_nq_width(u, "u")
+            self._check_nv_width(qd, "qd")
+            self._check_nv_width(u, "u")
             raw = self._runner.integrator_gradient(q, qd, u, float(dt), it, gravity=float(gravity))
         # (2NV x 3NV) col-major dAB ("colmajor_whole" in the shared module).
         return self._shape_out("integrator_gradient", raw)
@@ -1937,7 +1918,7 @@ class RobotHandle:
         else:
             q = np.ascontiguousarray(q, dtype=self._dt)
             qd = np.ascontiguousarray(qd, dtype=self._dt)
-            self._check_nq_width(qd, "qd")
+            self._check_nv_width(qd, "qd")
             raw = self._runner.ccrba(q, qd)  # (B, 6*NV + 6): [A(6 x NV col-major); h(6)]
         A, h = self._shape_out("ccrba", raw)
         return self._cast_out(A), self._cast_out(h)
@@ -1959,7 +1940,7 @@ class RobotHandle:
             return self._cast_out(self._runner.energy_mujoco(q, qd, float(gravity)))
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
-        self._check_nq_width(qd, "qd")
+        self._check_nv_width(qd, "qd")
         return self._runner.energy(q, qd, float(gravity))
 
     def generalized_gravity(self, q, *, gravity: float = -9.81, _convention=None):
@@ -1996,7 +1977,7 @@ class RobotHandle:
                 "nonlinear_effects(output_convention='mujoco') " + self._MJX_TWINS_ADVICE)
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
-        self._check_nq_width(qd, "qd")
+        self._check_nv_width(qd, "qd")
         return self._runner.nonlinear_effects(q, qd, float(gravity))
 
     def coriolis_matrix(self, q, qd, *, gravity: float = -9.81, _convention=None):
@@ -2019,7 +2000,7 @@ class RobotHandle:
             return self._cast_out(self._shape_out("coriolis_matrix", raw))
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
-        self._check_nq_width(qd, "qd")
+        self._check_nv_width(qd, "qd")
         raw = self._runner.coriolis_matrix(q, qd, float(gravity))  # (B, NV*NV) row-major
         return self._cast_out(self._shape_out("coriolis_matrix", raw))
 
@@ -2039,7 +2020,7 @@ class RobotHandle:
             return self._cast_out(self._runner.kinetic_energy_regressor_mujoco(q, qd, float(gravity)))
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
-        self._check_nq_width(qd, "qd")
+        self._check_nv_width(qd, "qd")
         return self._cast_out(self._runner.kinetic_energy_regressor(q, qd, float(gravity)))
 
     def potential_energy_regressor(self, q, *, gravity: float = -9.81, _convention=None):
@@ -2107,7 +2088,7 @@ class RobotHandle:
             return self._cast_out(self._shape_out("cmm_time_variation", raw))
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
-        self._check_nq_width(qd, "qd")
+        self._check_nv_width(qd, "qd")
         raw = self._runner.cmm_time_variation(q, qd)  # (B, 6*NV) col-major A[r + 6*c]
         return self._cast_out(self._shape_out("cmm_time_variation", raw))
 
@@ -2159,7 +2140,7 @@ class RobotHandle:
             return self._shape_out("frame_jacobian_dot", raw)
         q = np.ascontiguousarray(q, dtype=self._dt)
         qd = np.ascontiguousarray(qd, dtype=self._dt)
-        self._check_nq_width(qd, "qd")
+        self._check_nv_width(qd, "qd")
         raw = self._runner.frame_jacobian_dot(q, qd, tj, rf)  # (B, 6*NV) col-major
         return self._shape_out("frame_jacobian_dot", raw)
 

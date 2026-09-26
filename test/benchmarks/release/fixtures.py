@@ -35,7 +35,9 @@ class Fixture:
             "joint_names": self.project.joint_names,
             "convention": "project order, Pinocchio tangent convention, quaternion xyzw"}
 
-    def args(self, op, batch, padded=True):
+    def args(self, op, batch, padded=False):
+        """Inputs at the public widths (q: nq, qd/qdd/u: nv). ``padded=True`` gives the
+        nq-wide padded velocity rows the raw grid.cuh kernel bridge stages itself."""
         def width(a):
             return np.pad(a[:batch], ((0, 0), (0, self.nq-self.nv))) if padded else a[:batch]
         if op in Q_ONLY_OPS:
@@ -46,7 +48,7 @@ class Fixture:
         return self.q[:batch], width(self.v), width(third)
 
     def expected(self, op, batch):
-        args = self.args(op, batch, padded=False)
+        args = self.args(op, batch)
         method = getattr(self.oracle, "idsva_so_body_frame" if op == "idsva_so" else op)
         outs = []
         for i in range(batch):

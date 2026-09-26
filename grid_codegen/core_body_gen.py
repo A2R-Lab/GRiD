@@ -107,11 +107,11 @@ def _signature_and_call(spec, mjx: bool):
             params.append(f"arr_t {n}")
             call.append(f"{n}.data()")
             if n == "u":
-                prelude.append('check_array_2d(u, batch, num_joints_, "u");')
+                prelude.append('check_array_2d(u, batch, num_vel_, "u");')
         elif n in ("qdd_opt", "qdd"):  # nullable C-ABI qdd -> py::object surface
             if mjx and spec.mjx_requires_qdd:
                 params.append("arr_t qdd")
-                prelude.append('check_array_2d(qdd, batch, num_joints_, "qdd");')
+                prelude.append('check_array_2d(qdd, batch, num_vel_, "qdd");')
                 call.append("qdd.data()")
             else:
                 params.append("py::object qdd_opt")
@@ -119,7 +119,7 @@ def _signature_and_call(spec, mjx: bool):
                     "const CT* qdd_ptr = nullptr;",
                     "if (!qdd_opt.is_none()) {",
                     "    auto qdd = qdd_opt.cast<arr_t>();",
-                    '    check_array_2d(qdd, batch, num_joints_, "qdd");',
+                    '    check_array_2d(qdd, batch, num_vel_, "qdd");',
                     "    qdd_ptr = qdd.data();",
                     "}",
                 ]
@@ -191,7 +191,7 @@ def gen_method(spec, mjx: bool) -> str:
         L.append(f"        if (!{fn}) throw std::runtime_error(")
         L.append(f"            {_cxx_str(guard, '            ')});")
     if has_qd:
-        L.append("        int batch = check_inputs_2d(q, qd, num_joints_);")
+        L.append("        int batch = check_inputs_2d(q, qd, num_joints_, num_vel_);")
     else:
         L.append(f'        int batch = check_q(q, "{name}");')
     for p in prelude:
@@ -232,11 +232,10 @@ def gen_region() -> str:
          "    // Table: grid_codegen/abi_specs.py (ABI_SPECS: inputs/py_out_dims/",
          "    // py_rc3_msg/py_twin_guard); drift-gated by test/test_core_generated_block.py.",
          "    //",
-         "    // Shared input contract: q/qd/qdd/u are (batch, NUM_JOINTS) float32,",
-         "    // C-contiguous. For a FLOATING base the 6-dof base velocity lives in the",
-         "    // leading slots and the +1 quaternion offset is a padded slot (qd/qdd stay",
-         "    // nq-wide, NOT nv-wide, on this surface). Value vector outputs (c, qdd) are",
-         "    // likewise nq-wide; matrix/Jacobian outputs are tangent-space (nv-sized).",
+         "    // Shared input contract: q is (batch, NUM_JOINTS) and qd/qdd/u are",
+         "    // (batch, NUM_VEL), C-contiguous in the .so dtype. Value vector outputs",
+         "    // (c, qdd) are NUM_VEL wide; matrix/Jacobian outputs are tangent-space",
+         "    // (nv-sized). The NUM_JOINTS-pitched padding is internal to the .so.",
          ""]
     for key in generated_keys():
         spec = ABI_SPECS[key]

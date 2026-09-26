@@ -13,10 +13,9 @@ Conventions:
     LOCAL_WORLD_ALIGNED). A pure 3D point force is just n_w = 0.
   * the returned f_ext is (B, 6*num_bodies) body-local [angular; linear] —
     exactly what every dynamics op's f_ext= argument expects.
-  * FLOATING-BASE width discipline: q is nq-wide ([pos(3), quat_xyzw(4),
-    joints]); qd/qdd/u are ALSO passed nq-wide with the trailing quaternion-
-    padding slot zeroed (leading nv entries = tangent data). An nv-wide qd is
-    the classic footgun and the handle rejects it with a precise error.
+  * FLOATING-BASE widths: q is nq-wide ([pos(3), quat_xyzw(4), joints]);
+    qd/qdd/u are nv-wide (the tangent width, as in Pinocchio and MuJoCo). An
+    nq-wide padded qd is rejected with a precise error.
 
 Run:  .venv/bin/python bindings/examples/multi_contact_fext.py [--urdf PATH]
 """
@@ -48,14 +47,13 @@ def main(urdf: str):
     nq, nv = h.num_joints, h.num_vel
     rng = np.random.default_rng(0)
 
-    # q = [pos(3), quat_xyzw(4) identity, joints]; qd/qdd/u nq-wide + zero pad.
+    # q = [pos(3), quat_xyzw(4) identity, joints]; qd/qdd/u nv-wide.
     q = np.zeros((B, nq), dtype=np.float32)
     q[:, 6] = 1.0  # identity quaternion (xyzw: w at index 6)
     q[:, 7:] = rng.uniform(-0.3, 0.3, size=(B, nq - 7)).astype(np.float32)
-    pad = np.zeros((B, nq - nv), dtype=np.float32)
-    qd = np.concatenate([np.zeros((B, nv), dtype=np.float32), pad], axis=1)
-    qdd = np.concatenate([np.zeros((B, nv), dtype=np.float32), pad], axis=1)
-    u = np.concatenate([np.zeros((B, nv), dtype=np.float32), pad], axis=1)
+    qd = np.zeros((B, nv), dtype=np.float32)
+    qdd = np.zeros((B, nv), dtype=np.float32)
+    u = np.zeros((B, nv), dtype=np.float32)
 
     # Stance: each foot pushes up with ~1/4 of the robot's weight (world +z),
     # no contact moments (point feet).

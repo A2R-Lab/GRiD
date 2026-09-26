@@ -48,10 +48,10 @@ conventions) lives in the
 
 Shape legend: `NJ = num_joints (== num_pos == nq)`, `NV = num_vel (tangent /
 velocity space)`, `NB = num_bodies`. Every handle also exposes the unambiguous
-read-only aliases `h.nq` / `h.nv` / `h.nb`. Inputs `q`, `qd`, `qdd`, `u` and
-the value outputs (`c`, `qdd`) are `NJ`-wide; matrix/Jacobian outputs are
-tangent-space (pinocchio convention) and `NV`-dimensioned. For a **FIXED base
-`NV == NJ`**. The per-method differentiability table (VJP inputs, fixed-base
+read-only aliases `h.nq` / `h.nv` / `h.nb`. `q` is `NJ`-wide; `qd`, `qdd`, `u`,
+the value outputs (`c`, `qdd`) and every matrix/Jacobian axis are `NV`-wide
+(tangent space, Pinocchio / MuJoCo convention) on every surface. For a
+**FIXED base `NV == NJ`**. The per-method differentiability table (VJP inputs, fixed-base
 restrictions, output representations) lives in the Python wrappers docs and is
 cross-checked against the ABI specification by a CPU test.
 

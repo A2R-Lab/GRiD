@@ -262,10 +262,10 @@ BODY_COMMENTS: dict[str, str] = {
 }
 
 _PACK = {
-    "q_qd_null": "    pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS);",
-    "q_q_null": "    pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS);",
-    "q_qd_u": "    pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS);",
-    "qdd_u_slot": "    pack_q_qd_u(g_ctx, q, qd, qdd, batch, grid::NUM_JOINTS);",
+    "q_qd_null": "    pack_q_qd_u(g_ctx, q, qd, nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);",
+    "q_q_null": "    pack_q_qd_u(g_ctx, q, /*qd=*/q, /*u=*/nullptr, batch, grid::NUM_JOINTS, grid::NUM_VEL);",
+    "q_qd_u": "    pack_q_qd_u(g_ctx, q, qd, u, batch, grid::NUM_JOINTS, grid::NUM_VEL);",
+    "qdd_u_slot": "    pack_q_qd_u(g_ctx, q, qd, qdd, batch, grid::NUM_JOINTS, grid::NUM_VEL);",
     "pack_q": "    pack_q(g_ctx, q, batch, grid::NUM_JOINTS);",
 }
 
@@ -322,13 +322,7 @@ def gen_body(spec: AbiSpec) -> str:
     if spec.pre_launch_check:
         L.append("    { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }")
     L.append("    if (int rc = grid_rbd_sync_consume()) return rc;")
-    size = _paren(spec.out_size_expr)
-    if spec.out_copy == "memcpy_h":
-        L.append(f"    std::memcpy({out_name}, g_data->{spec.out_buffer}, "
-                 f"(size_t)batch * {size} * sizeof(T));")
-    else:
-        L.append(f"    gpuErrchk(cudaMemcpy({out_name}, g_data->{spec.out_buffer}, "
-                 f"(size_t)batch * {size} * sizeof(T), cudaMemcpyDeviceToHost));")
+    L.extend(_out_copy_lines(spec, out_name, _paren(spec.out_size_expr), gpuerr=True))
     msg = _STUB_MSG.get(spec.not_built_msg, spec.not_built_msg)
     L += ["    return 0;",
           "#else",
@@ -337,6 +331,24 @@ def gen_body(spec: AbiSpec) -> str:
           "#endif",
           "}"]
     return "\n".join(L) + "\n"
+
+
+def _out_copy_lines(spec: AbiSpec, out_name: str, size: str, *, gpuerr: bool) -> list[str]:
+    """The out-buffer -> caller copy. A row-pitched spec (out_pitch_expr: the
+    NUM_JOINTS-strided vector buffers behind NUM_VEL-wide outputs) copies `size`
+    elements per row at that pitch; everything else is one contiguous copy."""
+    buf = f"g_data->{spec.out_buffer}"
+    if spec.out_pitch_expr:
+        pitch = _size_c(spec.out_pitch_expr)
+        if spec.out_copy == "memcpy_h":
+            return [f"    unpack_rows({out_name}, {buf}, batch, {size}, {pitch});"]
+        call = (f"cudaMemcpy2D({out_name}, {size} * sizeof(T), {buf}, {pitch} * sizeof(T), "
+                f"{size} * sizeof(T), batch, cudaMemcpyDeviceToHost)")
+        return [f"    gpuErrchk({call});" if gpuerr else f"    {call};"]
+    if spec.out_copy == "memcpy_h":
+        return [f"    std::memcpy({out_name}, {buf}, (size_t)batch * {size} * sizeof(T));"]
+    call = f"cudaMemcpy({out_name}, {buf}, (size_t)batch * {size} * sizeof(T), cudaMemcpyDeviceToHost)"
+    return [f"    gpuErrchk({call});" if gpuerr else f"    {call};"]
 
 
 def _size_c(expr: str) -> str:
@@ -385,8 +397,8 @@ def _gen_expanded(spec: AbiSpec, L: list[str]) -> str:
         L.append(PRE_LAUNCH_COMMENTS[spec.key])
     if spec.qdd_route == "flag_fork":
         L.append("    if (qdd_opt) {")
-        L.append("        // Host wrapper copies h_qdd->d_qdd (NUM_JOINTS per timestep, contiguous).")
-        L.append("        std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * grid::NUM_JOINTS * sizeof(T));")
+        L.append("        // NUM_VEL-wide rows into the NUM_JOINTS-pitched h_qdd (host wrapper copies h_qdd->d_qdd).")
+        L.append("        pack_qdd(g_ctx, qdd_opt, batch);")
         L.extend(launch_lines("true", indent="        "))
         L.append("    } else {")
         L.extend(launch_lines("false", indent="        "))
@@ -407,13 +419,7 @@ def _gen_expanded(spec: AbiSpec, L: list[str]) -> str:
     L.append("")
     if spec.key in PRE_COPY_COMMENTS:
         L.append(PRE_COPY_COMMENTS[spec.key])
-    size = _size_c(spec.out_size_expr)
-    if spec.out_copy == "memcpy_h":
-        L.append(f"    std::memcpy({out_name}, g_data->{spec.out_buffer}, "
-                 f"(size_t)batch * {size} * sizeof(T));")
-    else:
-        L.append(f"    cudaMemcpy({out_name}, g_data->{spec.out_buffer}, "
-                 f"(size_t)batch * {size} * sizeof(T), cudaMemcpyDeviceToHost);")
+    L.extend(_out_copy_lines(spec, out_name, _size_c(spec.out_size_expr), gpuerr=False))
     msg = _STUB_MSG.get(spec.not_built_msg, spec.not_built_msg)
     L += ["    return 0;",
           "#else",
@@ -460,8 +466,8 @@ MJX_INNER_GATE: frozenset[str] = XTOOL_STAGING
 
 _MJX_QDD_REQ = "    if (!qdd_opt) return 4;  // mjx requires an explicit qdd"
 _MJX_QDD_COPY = (
-    "    // Host wrapper copies h_qdd->d_qdd (NUM_JOINTS per timestep, contiguous).\n"
-    "    std::memcpy(g_data->h_qdd, qdd_opt, (size_t)batch * grid::NUM_JOINTS * sizeof(T));")
+    "    // NUM_VEL-wide rows into the NUM_JOINTS-pitched h_qdd (host wrapper copies h_qdd->d_qdd).\n"
+    "    pack_qdd(g_ctx, qdd_opt, batch);")
 _POST_LAUNCH = "    { cudaError_t _le = cudaGetLastError(); if (_le != cudaSuccess) return 200 + (int)_le; }"
 
 
@@ -544,13 +550,7 @@ def gen_mjx_body(spec: AbiSpec) -> str:
     else:
         L.append("    if (int rc = grid_rbd_sync_consume()) return rc;")
 
-    size = _size_c(spec.out_size_expr)
-    if spec.out_copy == "memcpy_h":
-        L.append(f"    std::memcpy({out_name}, g_data->{spec.out_buffer}, "
-                 f"(size_t)batch * {size} * sizeof(T));")
-    else:
-        L.append(f"    cudaMemcpy({out_name}, g_data->{spec.out_buffer}, "
-                 f"(size_t)batch * {size} * sizeof(T), cudaMemcpyDeviceToHost);")
+    L.extend(_out_copy_lines(spec, out_name, _size_c(spec.out_size_expr), gpuerr=False))
     L.append("    return 0;")
     if inner:
         L += ["#else",
@@ -720,10 +720,13 @@ def emit_torch_body(key: str) -> str:
     if spec.hoist_out_size:
         alloc_size = copy_size = "out_size"
         size_dims = []
-    dims = [("grid::NUM_JOINTS", "nj")] + [
-        (f, l) for f, l in _SURF_DIM_ORDER if l in size_dims and l != "nj"]
+    # nj and nv are always declared: q is checked at nj, every velocity-like
+    # operand at nv, and the pack helper takes both widths.
+    dims = [("grid::NUM_JOINTS", "nj"), ("grid::NUM_VEL", "nv")] + [
+        (f, l) for f, l in _SURF_DIM_ORDER if l in size_dims and l not in ("nj", "nv")]
     decls = "    const int " + ", ".join(f"{l} = {f}" for f, l in dims) + ";"
-    checks = [f'grid_torch_check({n}, "{key}: {n}", nj);' for n in tensors]
+    checks = [f'grid_torch_check({n}, "{key}: {n}", {"nj" if i == 0 else "nv"});'
+              for i, n in enumerate(tensors)]
     joined = "    " + " ".join(checks)
     check_lines = [joined] if len(joined) <= 140 else ["    " + c for c in checks]
     pack = ["&" + n for n in tensors[:3]] + ["nullptr"] * (3 - len(tensors))
@@ -738,7 +741,7 @@ def emit_torch_body(key: str) -> str:
         L.append("    grid_torch_stamp_check(g_ctx, stream, stamp_expect);")
     if key in TORCH_PRE_PACK_COMMENTS:
         L.append("    " + TORCH_PRE_PACK_COMMENTS[key])
-    L.append(f"    grid_torch_pack(g_ctx, stream, batch, nj, {', '.join(pack)});")
+    L.append(f"    grid_torch_pack(g_ctx, stream, batch, nj, nv, {', '.join(pack)});")
     if spec.f_ext_mode == "optional":
         L.append("    grid_torch_f_ext_apply(g_ctx, stream, batch, f_ext);")
     if key in TORCH_PRE_ALLOC_COMMENTS:
@@ -754,8 +757,13 @@ def emit_torch_body(key: str) -> str:
           f'    grid_torch_check_launch("{ksym}");']
     batch_sz = "(size_t)batch" if spec.hoist_out_size else "batch"
     out_arg = kernel_launch_args(spec, "torch")[0]
-    L.append(f"    cudaMemcpyAsync(out.data_ptr<T>(), {out_arg}, "
-             f"{batch_sz} * {copy_size} * sizeof(T), cudaMemcpyDeviceToDevice, stream);")
+    if spec.out_pitch_expr:
+        pitch = _surface_size(spec.__class__(**{**spec.__dict__, "out_size_expr": spec.out_pitch_expr}))[1]
+        L.append(f"    cudaMemcpy2DAsync(out.data_ptr<T>(), {copy_size} * sizeof(T), {out_arg}, "
+                 f"{pitch} * sizeof(T), {copy_size} * sizeof(T), batch, cudaMemcpyDeviceToDevice, stream);")
+    else:
+        L.append(f"    cudaMemcpyAsync(out.data_ptr<T>(), {out_arg}, "
+                 f"{batch_sz} * {copy_size} * sizeof(T), cudaMemcpyDeviceToDevice, stream);")
     if spec.f_ext_mode == "optional":
         L.append("    grid_torch_f_ext_reset(g_ctx, stream, batch, f_ext);")
     if role == "fwd":
@@ -826,17 +834,20 @@ def emit_jax_handler(key: str) -> str:
     L.append(f'    if (batch > kMaxBatch) return ffi::Error::InvalidArgument("{key}: batch > max_batch");')
     # W03: every operand after the leading one must carry q's batch (the copies
     # below are sized by it).
+    # Width contract: q is NUM_JOINTS wide, every velocity-like operand NUM_VEL wide;
+    # the padded NUM_JOINTS-pitched staging rows receive NUM_VEL entries (leading slots).
     for b in packed[1:] + (["qdd"] if staged_qdd else []):
-        L.append(f'    GRID_RBD_FFI_VALIDATE_ROWS({b}, "{key}: {b}", grid::NUM_JOINTS, batch);')
-    L.append("    const size_t row_bytes = nj * sizeof(T);")
+        L.append(f'    GRID_RBD_FFI_VALIDATE_ROWS({b}, "{key}: {b}", grid::NUM_VEL, batch);')
+    L.append("    const size_t q_bytes = nj * sizeof(T), v_bytes = grid::NUM_VEL * sizeof(T);")
     L.append("    const size_t dst_pitch = 3 * nj * sizeof(T);")
     slots = ["0", "nj", "2*nj"]
     for i, b in enumerate(packed):
+        w = "q_bytes" if i == 0 else "v_bytes"
         L.append(f"    cudaMemcpy2DAsync(&g_data->d_q_qd_u[{slots[i]}], dst_pitch, "
-                 f"{b}.typed_data(), row_bytes, row_bytes, batch, cudaMemcpyDeviceToDevice, stream);")
+                 f"{b}.typed_data(), {w}, {w}, batch, cudaMemcpyDeviceToDevice, stream);")
     if staged_qdd:
-        L.append("    cudaMemcpyAsync(g_data->d_qdd, qdd.typed_data(), "
-                 "batch * nj * sizeof(T), cudaMemcpyDeviceToDevice, stream);")
+        L.append("    cudaMemcpy2DAsync(g_data->d_qdd, q_bytes, qdd.typed_data(), "
+                 "v_bytes, v_bytes, batch, cudaMemcpyDeviceToDevice, stream);")
     if "f_ext" in bufs:
         # Native buffer contract (audit W03, 2026-09-19): the copy below is sized by
         # the STATE batch, so the force operand must physically be (batch, 6*NB) —
@@ -862,6 +873,10 @@ def emit_jax_handler(key: str) -> str:
         L.append(f"    const int out_size = {spec.out_size_expr};")
         L.append(f"    cudaMemcpyAsync(out->typed_data(), {out_arg}, "
                  f"batch * out_size * sizeof(T), cudaMemcpyDeviceToDevice, stream);")
+    elif spec.out_pitch_expr:
+        pitch = _surface_size(spec.__class__(**{**spec.__dict__, "out_size_expr": spec.out_pitch_expr}))[1]
+        L.append(f"    cudaMemcpy2DAsync(out->typed_data(), {copy_size} * sizeof(T), {out_arg}, "
+                 f"{pitch} * sizeof(T), {copy_size} * sizeof(T), batch, cudaMemcpyDeviceToDevice, stream);")
     else:
         L.append(f"    cudaMemcpyAsync(out->typed_data(), {out_arg}, "
                  f"batch * {copy_size} * sizeof(T), cudaMemcpyDeviceToDevice, stream);")
