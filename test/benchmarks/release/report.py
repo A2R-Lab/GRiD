@@ -404,16 +404,20 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax", ops=CORE, 
                         continue
                     row = lookup.get((robot, op, backend, batch), {})
                     total, resident = row.get("host_us"), row.get("resident_us")
+                    standard_only = False
                     if backend == "pinocchio":
                         # codegen full call as the base, the standard API's extra
-                        # time as the cap (same robot, inputs and thread policy);
-                        # only where a codegen path exists — the second-order and
-                        # FK operations run the same analytical code in both modes.
+                        # time as the cap (same robot, inputs and thread policy).
+                        # Where no codegen path exists (second-order, kinematics,
+                        # centroidal) both modes run the same standard analytical
+                        # code: the whole bar is the standard API and is hatched.
                         plain = lookup.get((robot, op, "pinocchio_plain", batch), {}).get("host_us")
                         codegen_op = op in PINOCCHIO_CODEGEN_OPS
-                        if total is None and plain is not None:
-                            total, resident = plain, None
-                        elif total is not None and plain is not None and codegen_op:
+                        if not codegen_op:
+                            total, resident, standard_only = (plain if plain is not None else total), None, True
+                        elif total is None and plain is not None:
+                            total, resident, standard_only = plain, None, True
+                        elif total is not None and plain is not None:
                             resident, total = total, plain
                     if total is None:
                         ax.text(x, .025, "N/C" if not row else row.get("status", "N/A").replace("_", " "),
@@ -423,10 +427,12 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax", ops=CORE, 
                     if cap is not None:
                         ax.bar(x, resident, width*.85, color=BACKEND_HUE[backend], edgecolor="white", linewidth=.6)
                         ax.bar(x, cap, width*.85, bottom=resident, facecolor=BACKEND_HUE[backend], alpha=.45, hatch="////", edgecolor="white", linewidth=.6)
+                    elif standard_only:
+                        ax.bar(x, total, width*.85, facecolor=BACKEND_HUE[backend], alpha=.45, hatch="////", edgecolor="white", linewidth=.6)
                     else:
                         ax.bar(x, total, width*.85, color=BACKEND_HUE[backend], edgecolor="white", linewidth=.6)
                     lo, hi = row.get("host_min_us"), row.get("host_max_us")
-                    if backend == "pinocchio" and cap is not None:
+                    if backend == "pinocchio" and (cap is not None or standard_only) and lookup.get((robot, op, "pinocchio_plain", batch), {}).get("host_us") is not None:
                         plain_row = lookup.get((robot, op, "pinocchio_plain", batch), {})
                         lo, hi = plain_row.get("host_min_us"), plain_row.get("host_max_us")
                     if lo and hi:
@@ -454,7 +460,7 @@ def plot_stacked_comparison(rows, directory, purpose, api="grid_jax", ops=CORE, 
     handles += [Patch(color=BACKEND_HUE[b], label=f"{LABELS[b]} (resident or full call)" if b != "pinocchio" else "Pinocchio CPU codegen full call")
                 for b in COMPETITOR_ORDER if any(r["backend"] == b and r["host_us"] for r in rows)]
     handles.append(Patch(facecolor=".7", alpha=.45, hatch="////", edgecolor="white",
-                         label="Competitor host round trip (full call − resident); for Pinocchio: standard API minus codegen"))
+                         label="Competitor host round trip (full call − resident); for Pinocchio: the standard API's time over codegen, or the whole bar where no codegen path exists"))
     fig.legend(handles=handles, loc="lower center", ncol=2, fontsize=8, bbox_to_anchor=(.5, .01))
     tall = len(ops) > 3
     fig.text(.5, .045 if tall else .13, "Log axis: stacked segment heights are not proportional; read the composition figure or the decomposition table for shares. "

@@ -50,11 +50,13 @@ p { margin:.7rem 0 1.1rem; }
 .flow span:not(.step) { color:var(--dim); font-size:.88rem; }
 .step { color:var(--accent); font-family:var(--mono); font-size:.8rem; }
 figcaption { margin-top:1rem; }
+.card ul { margin:.4rem 0 0; padding-left:1.2rem; }
+.card li { margin:.3rem 0; color:var(--dim); font-size:.94rem; }
 .results-grid { grid-template-columns:1fr; }
 .results-grid figure { margin:0; padding:1.2rem 1.4rem 1rem; border:1px solid var(--border); border-radius:12px; background:white; }
 .results-grid img { display:block; width:100%; height:auto; border-radius:6px; }
-.results-grid h3 { margin-top:1rem; }
-.results-grid p { color:var(--dim); font-size:.94rem; }
+.results-grid h3 { margin:0 0 .5rem; }
+.results-grid p { color:var(--dim); font-size:.94rem; margin:0 0 1rem; }
 .results-grid figcaption { border-top:1px solid var(--border); padding-top:.8rem; }
 .method { margin-top:1.4rem; background:#eaf3ef; border-left:3px solid var(--accent); padding:1.2rem 1.4rem; border-radius:0 8px 8px 0; font-size:.9rem; }
 .start-links { justify-content:flex-start; }

@@ -131,8 +131,8 @@ Known Caveats
   reduced coordinates on mimic robots as well.
 
 
-Algorithm catalog (moved from the README, 2026-09-09)
------------------------------------------------------
+Algorithm catalog
+-----------------
 
 - Inverse Dynamics via the Recursive Newton Euler Algorithm (RNEA) from `Featherstone <https://link.springer.com/book/10.1007/978-1-4899-7560-7>`__
 - Composite Rigid Body Algorithm (CRBA) for the joint-space mass matrix and the Articulated Body Algorithm (ABA) for forward dynamics, both from `Featherstone <https://link.springer.com/book/10.1007/978-1-4899-7560-7>`__

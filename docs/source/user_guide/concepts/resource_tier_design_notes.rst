@@ -75,9 +75,8 @@ autotuners write {tier, threads} into ``config/launch_configs/`` and the
 codegen bakes it as ``grid::launch_cfg<GRID_ALGO_*>::TIER``, which every
 binding launch site (numpy/pybind host-wrapper calls AND the jax/torch
 direct kernel launches) instantiates. Divergent-tier instantiations get
-their own dynamic-smem registration in ``init_grid_kernel_attrs`` (the B2
-fix, 2026-09-05) — a distinct ``__global__`` per tier is the reason that
-registration exists. Untuned robots/algos fall back to ``TIER_SHARED``
+their own dynamic-smem registration in ``init_grid_kernel_attrs``; a
+distinct ``__global__`` per tier is the reason that registration exists. Untuned robots/algos fall back to ``TIER_SHARED``
 via the primary ``launch_cfg`` template, which preserves the old behavior.
 
 **The LITE smem target between SHARED and MINIMAL — now landed.**

@@ -8,6 +8,9 @@ Input: a directory written by ``python -m test.benchmarks.release.report`` (its
                       memory traffic + wrapper overhead beside every competitor's
                       resident + host round trip; absolute microseconds, log axis
   stacked_all         the same for every operation that has at least one competitor
+  speedup_core        the homepage summary: RNEA, grad RNEA and Hessian RNEA against every
+                      baseline, one column per library — CPU libraries against GRiD's CUDA
+                      host call with the copies, GPU libraries at the resident boundary
   speedup_pinocchio   GRiD kernel (compute-only) and CUDA host call (with memory)
                       against Pinocchio's code-generated and standard C++ APIs
   speedup_gpu_*       GRiD against MJX, MuJoCo Warp, BARD and Frax at three matched
@@ -92,6 +95,44 @@ def speedup_grid(rows, out, name, purpose, sides, comps, comp_field, title, note
     return out / f"{name}.svg"
 
 
+def speedup_core(rows, out, purpose):
+    """Homepage summary: the three core operations against every baseline. CPU
+    libraries (no resident boundary) are compared with GRiD's CUDA host call
+    including the copies; GPU libraries at the resident boundary against GRiD's
+    kernel. Each column title states its boundary."""
+    import numpy as np
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    lookup = {(r["robot"], r["operation"], r["backend"], r["batch"]): r for r in rows}
+    batches = sorted({r["batch"] for r in rows})
+    columns = [("pinocchio", "grid_cuda", "host_us", "host_us", "vs Pinocchio codegen\nGRiD host call incl. copies"),
+               ("pinocchio_plain", "grid_cuda", "host_us", "host_us", "vs Pinocchio standard API\nGRiD host call incl. copies"),
+               ("mujoco_cpu", "grid_cuda", "host_us", "host_us", "vs MuJoCo CPU\nGRiD host call incl. copies"),
+               ("mjx", "grid_cuda", "resident_us", "resident_us", "vs MJX resident\nGRiD kernel"),
+               ("mujoco_warp", "grid_cuda", "resident_us", "resident_us", "vs MuJoCo Warp resident\nGRiD kernel"),
+               ("bard", "grid_cuda", "resident_us", "resident_us", "vs BARD resident\nGRiD kernel"),
+               ("frax", "grid_cuda", "resident_us", "resident_us", "vs Frax resident\nGRiD kernel")]
+    columns = [c for c in columns if any(r["backend"] == c[0] and r["operation"] in CORE and r.get(c[3]) for r in rows)]
+    cells = [(op, ro) for op in CORE for ro in ROBOTS if any(lookup.get((ro, op, "grid_cuda", b), {}).get("host_us") for b in batches)]
+    labels = [f"{ro} · {SHORT_OP.get(op, op)}" for op, ro in cells]
+    fig, axes = plt.subplots(1, len(columns), figsize=(2.5 * len(columns) + 1.8, .34 * len(labels) + 2.4), squeeze=False, sharey=True)
+    for ci, (comp, gb, gf, cf, title) in enumerate(columns):
+        matrix = [[(lambda g, c: c / g if (g and c) else np.nan)(lookup.get((ro, op, gb, b), {}).get(gf), lookup.get((ro, op, comp, b), {}).get(cf))
+                   for b in batches] for op, ro in cells]
+        marks = [[cell_marks(lookup.get((ro, op, gb, b)), gf, lookup.get((ro, op, comp, b)), cf) for b in batches] for op, ro in cells]
+        _ratio_heatmap(axes[0, ci], matrix, labels, batches, title, marks=marks)
+        axes[0, ci].set_xlabel("batch")
+    fig.suptitle(banner(purpose, "Speedup of GRiD on RNEA, its gradient and its Hessian against every baseline"), fontsize=12)
+    fig.text(.5, .01, "Ratio > 1: GRiD faster; < 1: the baseline faster. CPU libraries have no resident boundary and are compared with GRiD's CUDA host call including the copies; "
+             "GPU libraries at the resident boundary against GRiD's bare kernel. '–': the library has no analytical version of that operation. "
+             "* a side computes in fp64. † a side is a retained fp32 accuracy warning. ~ a side's three run means spread by more than 1.5×.", ha="center", fontsize=7.5, wrap=True)
+    fig.tight_layout(rect=(0, .05, 1, .95))
+    fig.savefig(out / "speedup_core.svg"); fig.savefig(out / "speedup_core.png", dpi=150)
+    plt.close(fig)
+    return out / "speedup_core.svg"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("report", type=Path, help="directory written by test.benchmarks.release.report")
@@ -112,6 +153,7 @@ def main():
     outputs += [stacked_core, out / "stacked_core.png"]
     stacked_all = plot_stacked_comparison(rows, out, purpose, "grid_jax", CORE + EXTRA, "stacked_all")
     outputs += [stacked_all, out / "stacked_all.png"]
+    outputs += [speedup_core(rows, out, purpose), out / "speedup_core.png"]
     outputs.append(speedup_grid(rows, out, "speedup_pinocchio", purpose,
         [GRID_SIDE["kernel"], GRID_SIDE["host"]], PINOCCHIO, "host_us",
         "GRiD on the GPU against Pinocchio on the CPU (medians of run means, same inputs)",

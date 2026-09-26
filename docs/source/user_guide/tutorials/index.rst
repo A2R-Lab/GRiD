@@ -1,8 +1,7 @@
 Tutorials
 =========
 
-Two audiences share this section — pick your track. (Grouped in place rather
-than split into separate trees so no deep links churn; N3, 2026-09-09.)
+Two audiences share this section. Pick your track.
 
 Using GRiD
 ----------
