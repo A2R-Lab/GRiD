@@ -267,7 +267,10 @@ def test_timer_sustains_warmup_for_the_requested_wall_time():
     start=time.perf_counter()
     out=p.timed(call,lambda out:None,1,2,warm_seconds=.05)
     warm_calls=len(calls)-2
-    assert warm_calls >= 2 and calls[warm_calls-1]-start >= .05
+    # The last warm-up may START before the deadline and finish after it.
+    # The first measured call must start after the requested warm-up duration.
+    # A preempted warm-up can consume the whole interval in one call.
+    assert warm_calls >= 1 and calls[warm_calls]-start >= .05
     assert len(out["samples_us"]) == 2
 
 
