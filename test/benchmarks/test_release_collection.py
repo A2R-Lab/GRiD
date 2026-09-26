@@ -446,3 +446,21 @@ def test_stacked_and_composition_figures_from_synthetic_rows(tmp_path):
     assert plot_grid_composition(rows,tmp_path,"smoke").exists()
     assert (tmp_path/"comparison_stacked.png").stat().st_size>1000 and (tmp_path/"grid_composition.png").stat().st_size>1000
     assert plot_stacked_comparison([r for r in rows if r["backend"]!="grid_cuda" and r["operation"]=="minv"],tmp_path,"smoke") is None
+
+
+def test_report_earlier_capture_supersedes_same_cell(tmp_path):
+    """core and wrappers both plan the GRiD CUDA/JAX RNEA cells; the first capture
+    listed wins, later duplicates are recorded as superseded, never as extra repeats."""
+    from test.benchmarks.release.report import main as report_main
+    import sys as _sys
+    plan=json.loads(subprocess.run([_sys.executable,"-m","test.benchmarks.release.collect","--stage","wrappers","--smoke",
+        "--robots","iiwa14","--backends","grid_cuda","--operations","inverse_dynamics"],cwd=p.ROOT,text=True,capture_output=True,check=True).stdout)
+    for name in ("first","second"):
+        (tmp_path/name).mkdir(); p.write_json(tmp_path/name/"plan.json",plan)
+    out=tmp_path/"report"
+    _sys.argv=["report",str(tmp_path/"first"),str(tmp_path/"second"),"--output",str(out)]
+    report_main()
+    table=json.loads((out/"table.json").read_text())
+    assert len(table["raw_records"])==1 and len(table["superseded_cells"])==1
+    assert table["superseded_cells"][0]["capture"].endswith("second")
+    assert all(r["capture"].startswith(str(tmp_path/"first")) for r in table["raw_records"])

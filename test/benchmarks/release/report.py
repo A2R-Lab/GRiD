@@ -432,7 +432,20 @@ def main():
     ap.add_argument("captures", nargs="+", type=Path)
     ap.add_argument("--output", required=True, type=Path)
     args = ap.parse_args()
-    raw = [r for directory in args.captures for r in records(directory)]
+    # Captures are read in order; a cell (robot, operation, backend, batch, repeat)
+    # already produced by an earlier capture supersedes the same cell in a later
+    # one — so a narrow re-collection goes FIRST, and the core and wrappers
+    # captures (which both plan the GRiD CUDA/JAX RNEA cells) can be reported
+    # together without being mistaken for extra repeats.
+    raw, seen, superseded = [], set(), []
+    for directory in args.captures:
+        for r in records(directory):
+            key = (r["robot"], r["operation"], r["backend"], r["batch"], r["repeat"])
+            if key in seen:
+                superseded.append({"capture": str(directory), **dict(zip(("robot", "operation", "backend", "batch", "repeat"), key))})
+                continue
+            seen.add(key)
+            raw.append(r)
     if not raw:
         ap.error("No planned cells")
     purposes = {r["purpose"] for r in raw}
@@ -440,7 +453,8 @@ def main():
         ap.error("Do not mix smoke and collection captures")
     rows = aggregate(raw)
     args.output.mkdir(parents=True, exist_ok=False)
-    write_json(args.output / "table.json", {"publication_approved": False, "purpose": raw[0]["purpose"], "cells": rows, "raw_records": raw})
+    write_json(args.output / "table.json", {"publication_approved": False, "purpose": raw[0]["purpose"], "cells": rows, "raw_records": raw,
+        "superseded_cells": superseded, "capture_order": [str(d) for d in args.captures]})
     with (args.output / "table.csv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
         writer.writeheader(); writer.writerows(rows)
