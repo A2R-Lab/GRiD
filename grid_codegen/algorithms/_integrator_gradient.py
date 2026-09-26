@@ -35,7 +35,7 @@ from grid_codegen.helpers._code_generation_helpers import _gen_mjx_build_R_lines
 _INTEGRATOR_BUTCHER = {
     # IT: (stage_count, [c_1..c_{N-1}], [b_1..b_N])
     "MIDPOINT": (2, [0.5],            [0.0, 1.0]),
-    "RK3":      (3, [0.5, 0.75],      [2.0/9.0, 3.0/9.0, 4.0/9.0]),
+    "TRAPEZOIDAL":      (3, [0.5, 0.75],      [2.0/9.0, 3.0/9.0, 4.0/9.0]),
     "RK4":      (4, [0.5, 0.5, 1.0],  [1.0/6.0, 2.0/6.0, 2.0/6.0, 1.0/6.0]),
 }
 
@@ -322,16 +322,16 @@ def gen_integrator_gradient_dAB_assembly(self, integrator_type="IT",
         self.gen_add_code_line("}")
     self.gen_add_code_line(s_dAB_name + "[ind] = val;")
     self.gen_add_end_control_flow()  # end if constexpr SI_EULER
-    # ----- TRAPEZOIDAL -----  (GATO integrator.cuh:143-184)
+    # ----- CONSTANT_ACCELERATION -----  (GATO integrator.cuh:143-184)
     # v_{k+1} = v + dt*qdd       -> bottom rows IDENTICAL to EULER (dt*dqdd, I+dt*dqdd, dt*Minv)
     # q_{k+1} = q + dt*v + 0.5*dt^2*qdd -> top rows = SI-Euler top with dt2 -> 0.5*dt^2 (dt2h):
     # (fixed-base below; the floating-base arm with SE(3) dIntegrate wiring is above)
     #   d(q_kp1)/dq  = I  + dt2h*dqdd/dq
     #   d(q_kp1)/dqd = dt*I + dt2h*dqdd/dqd
     #   d(q_kp1)/du  = dt2h*Minv
-    self.gen_add_code_line("else if constexpr (" + tok + " == IntegratorType::TRAPEZOIDAL) {", True)
+    self.gen_add_code_line("else if constexpr (" + tok + " == IntegratorType::CONSTANT_ACCELERATION) {", True)
     if fb:
-        # Floating-base TRAPEZOIDAL: v_new = qd + dt*qdd (bottom rows IDENTICAL to
+        # Floating-base CONSTANT_ACCELERATION: v_new = qd + dt*qdd (bottom rows IDENTICAL to
         # the Euler/SI velocity update); q_new = integrate(q, w), w = dt*qd + dt2h*qdd,
         # dt2h = 0.5*dt^2. The position (top) rows have the SAME structure as the
         # floating SI-Euler top rows — dInt_q + dInt_v @ dw/dX — but the inner tangent
@@ -387,7 +387,7 @@ def gen_integrator_gradient_dAB_assembly(self, integrator_type="IT",
         self.gen_add_code_line("}")
         self.gen_add_code_line(s_dAB_name + "[ind] = val;")
     elif sph:
-        # Fixed-base + spherical TRAPEZOIDAL: top rows = dInt_q + dInt_v @ dw/dX
+        # Fixed-base + spherical CONSTANT_ACCELERATION: top rows = dInt_q + dInt_v @ dw/dX
         # with the block-diagonal SO(3) blocks (evaluated at w = dt*qd + dt2h*qdd
         # by the precompute); bottom rows identical to Euler.
         self.gen_add_code_line("T val = static_cast<T>(0);")
@@ -469,10 +469,10 @@ def gen_integrator_gradient_dAB_assembly(self, integrator_type="IT",
         self.gen_add_code_line("    }")
         self.gen_add_code_line("}")
         self.gen_add_code_line(s_dAB_name + "[ind] = val;")
-    self.gen_add_end_control_flow()  # end if constexpr TRAPEZOIDAL
+    self.gen_add_end_control_flow()  # end if constexpr CONSTANT_ACCELERATION
     self.gen_add_code_line("else {", True)
-    self.gen_add_code_line("static_assert(" + tok + " == IntegratorType::EULER || " + tok + " == IntegratorType::SEMI_IMPLICIT_EULER || " + tok + " == IntegratorType::TRAPEZOIDAL,")
-    self.gen_add_code_line("              \"dAB assembly handles single-stage IT only; Midpoint/RK3/RK4 are routed through gen_integrator_gradient_multistage.\");")
+    self.gen_add_code_line("static_assert(" + tok + " == IntegratorType::EULER || " + tok + " == IntegratorType::SEMI_IMPLICIT_EULER || " + tok + " == IntegratorType::CONSTANT_ACCELERATION,")
+    self.gen_add_code_line("              \"dAB assembly handles single-stage IT only; Midpoint/TRAPEZOIDAL/RK4 are routed through gen_integrator_gradient_multistage.\");")
     self.gen_add_end_control_flow()
     self.gen_add_end_control_flow()  # end parallel loop
 
@@ -906,7 +906,7 @@ def gen_integrator_gradient_inner_python(self, compute_x_kp1=False,
     q-update increment — dt*qd for Euler, dt*v_new for SI-Euler — and reads them
     in the dAB top-nv rows. The SI-Euler floating top rows additionally fold in
     the dInt_v @ dv/dX matmul (see the SEMI_IMPLICIT_EULER branch in
-    gen_integrator_gradient_dAB_assembly). Multi-stage (Midpoint/RK3/RK4) goes
+    gen_integrator_gradient_dAB_assembly). Multi-stage (Midpoint/TRAPEZOIDAL/RK4) goes
     through gen_integrator_gradient_multistage instead.
     """
     fb = self.robot.floating_base
@@ -924,14 +924,14 @@ def gen_integrator_gradient_inner_python(self, compute_x_kp1=False,
         # Euler:       q_new = integrate(q, dt*qd)               -> v_dt = dt*qd
         # SI-Euler:    q_new = integrate(q, dt*v_new), where     -> v_dt = dt*(qd + dt*qdd)
         #              v_new = qd + dt*qdd  (s_qdd holds qdd after the FD gradient).
-        # TRAPEZOIDAL: q_new = integrate(q, dt*qd + 0.5*dt^2*qdd) -> v_dt = dt*qd + dt2h*qdd
+        # CONSTANT_ACCELERATION: q_new = integrate(q, dt*qd + 0.5*dt^2*qdd) -> v_dt = dt*qd + dt2h*qdd
         #              (the combined position tangent w; dt2h = 0.5*dt*dt).
         tok = _integrator_type_token(integrator_type)
         self.gen_add_serial_ops()
         self.gen_add_code_line(f"T v_dt_for_dInt[{n}];")
         self.gen_add_code_line("if constexpr (" + tok + " == IntegratorType::SEMI_IMPLICIT_EULER) {")
         self.gen_add_code_line(f"    for (int i = 0; i < {n}; ++i) v_dt_for_dInt[i] = dt * (s_qd[i] + dt * s_qdd[i]);")
-        self.gen_add_code_line("} else if constexpr (" + tok + " == IntegratorType::TRAPEZOIDAL) {")
+        self.gen_add_code_line("} else if constexpr (" + tok + " == IntegratorType::CONSTANT_ACCELERATION) {")
         self.gen_add_code_line(f"    for (int i = 0; i < {n}; ++i) v_dt_for_dInt[i] = dt * s_qd[i] + static_cast<T>(0.5) * dt * dt * s_qdd[i];")
         self.gen_add_code_line("} else {")
         self.gen_add_code_line(f"    for (int i = 0; i < {n}; ++i) v_dt_for_dInt[i] = dt * s_qd[i];")
@@ -951,7 +951,7 @@ def gen_integrator_gradient_inner_python(self, compute_x_kp1=False,
         self.gen_add_code_line(f"T v_dt_for_dInt[{n}];")
         self.gen_add_code_line("if constexpr (" + tok + " == IntegratorType::SEMI_IMPLICIT_EULER) {")
         self.gen_add_code_line(f"    for (int i = 0; i < {n}; ++i) v_dt_for_dInt[i] = dt * (s_qd[i] + dt * s_qdd[i]);")
-        self.gen_add_code_line("} else if constexpr (" + tok + " == IntegratorType::TRAPEZOIDAL) {")
+        self.gen_add_code_line("} else if constexpr (" + tok + " == IntegratorType::CONSTANT_ACCELERATION) {")
         self.gen_add_code_line(f"    for (int i = 0; i < {n}; ++i) v_dt_for_dInt[i] = dt * s_qd[i] + static_cast<T>(0.5) * dt * dt * s_qdd[i];")
         self.gen_add_code_line("} else {")
         self.gen_add_code_line(f"    for (int i = 0; i < {n}; ++i) v_dt_for_dInt[i] = dt * s_qd[i];")
@@ -1038,7 +1038,7 @@ def gen_integrator_gradient_device(self, compute_x_kp1=False):
     gen_fdsva_so_device). It wraps, in order:
       [repoint s_temp] -> load_update_XImats -> (compile-time IT dispatch)
         single-stage: gen_integrator_gradient_inner_python (Euler / SI-Euler)
-        multi-stage : gen_integrator_gradient_multistage    (Midpoint / RK3 / RK4)
+        multi-stage : gen_integrator_gradient_multistage    (Midpoint / TRAPEZOIDAL / RK4)
     Because the s_temp repoint happens at the very top, EVERY consumer below —
     including the XImats helper's sincos scratch and the per-stage XImats refresh in
     the multi-stage path — follows the placement, so the kernel never repoints
@@ -1108,6 +1108,7 @@ def gen_integrator_gradient_device(self, compute_x_kp1=False):
     # regcount error. Inlining folds them into the kernel. See _fdsva_so.py:295-300.
     self.gen_add_code_line("__device__ __forceinline__")
     self.gen_add_code_line(func_def, True)
+    self.gen_add_code_line('static_assert(IT == IntegratorType::EULER || IT == IntegratorType::SEMI_IMPLICIT_EULER || IT == IntegratorType::CONSTANT_ACCELERATION, "Full-state multi-stage integration gradients are not yet enabled.");')
     # Inner owns the FD-grad pool placement; the repoint covers every consumer below
     # (incl. the XImats helper's sincos scratch and the multi-stage per-stage XImats
     # refresh), so no caller-side repoint. This is the migrated kernel line-744 case.
@@ -1116,11 +1117,11 @@ def gen_integrator_gradient_device(self, compute_x_kp1=False):
     # sincos scratch follows the placed s_temp pool.
     self.gen_load_update_XImats_helpers_function_call()
     # Compile-time IT dispatch: single-stage (Euler / SI-Euler) vs multi-stage
-    # (Midpoint / RK3 / RK4). Per-rung band flags are passed as 'true'/'false'
+    # (Midpoint / TRAPEZOIDAL / RK4). Per-rung band flags are passed as 'true'/'false'
     # literals through the stable FD-grad _inner_python composition surface.
     spill_flag = "USE_DA_DF_SPILL"
     self.gen_add_code_line(
-        "if constexpr (IT == IntegratorType::EULER || IT == IntegratorType::SEMI_IMPLICIT_EULER || IT == IntegratorType::TRAPEZOIDAL) {", True
+        "if constexpr (IT == IntegratorType::EULER || IT == IntegratorType::SEMI_IMPLICIT_EULER || IT == IntegratorType::CONSTANT_ACCELERATION) {", True
     )
     self.gen_integrator_gradient_inner_python(
         compute_x_kp1=compute_x_kp1,
@@ -1144,8 +1145,8 @@ def gen_integrator_gradient_device(self, compute_x_kp1=False):
         # Spherical + multi-stage RK is a follow-on slice (per-stage SO(3)
         # blocks + the stage projections). Refuse at compile time rather than
         # run the multistage path with its implicit dInt=I joint treatment.
-        self.gen_add_code_line("static_assert(IT == IntegratorType::EULER || IT == IntegratorType::SEMI_IMPLICIT_EULER || IT == IntegratorType::TRAPEZOIDAL,")
-        self.gen_add_code_line("              \"spherical-joint integrator gradient supports single-stage IT only (Midpoint/RK3/RK4 are a follow-on slice).\");")
+        self.gen_add_code_line("static_assert(IT == IntegratorType::EULER || IT == IntegratorType::SEMI_IMPLICIT_EULER || IT == IntegratorType::CONSTANT_ACCELERATION,")
+        self.gen_add_code_line("              \"spherical-joint integrator gradient supports single-stage IT only (Midpoint/TRAPEZOIDAL/RK4 are a follow-on slice).\");")
     self.gen_integrator_gradient_multistage(
         compute_x_kp1=compute_x_kp1,
         d_temp_spill_name="d_temp_spill",

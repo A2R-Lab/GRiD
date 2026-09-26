@@ -8,28 +8,28 @@ is size `2n`. dt is a per-call scalar threaded through device/kernel/host.
 
 The integrator type is selected at compile time by an `IntegratorType IT`
 template parameter. Only `EULER` is wired up here; the `_dispatch` helper
-below is structured so adding semi-implicit Euler / Midpoint / RK3 / RK4
+below is structured so adding semi-implicit Euler / Midpoint / TRAPEZOIDAL / RK4
 later is purely additive (one extra `if constexpr (IT == ...)` branch).
 """
 from grid_codegen.helpers._code_generation_helpers import gen_workspace_repoint_line, wrap_host_single_call_timing
 
 
 # integrator name <-> codegen-side string constant
-_INTEGRATOR_TYPES = ("EULER", "SEMI_IMPLICIT_EULER", "MIDPOINT", "RK3", "RK4", "TRAPEZOIDAL")
+_INTEGRATOR_TYPES = ("EULER", "SEMI_IMPLICIT_EULER", "MIDPOINT", "RK4", "TRAPEZOIDAL", "CONSTANT_ACCELERATION")
 
 # Number of forward-dynamics evaluations each integrator type requires.
 # Used at codegen time to size shared-memory buffers (per-stage qdd) and to
 # guide which stage-computation branches are emitted.
-# TRAPEZOIDAL is single-stage (1 FD eval) like EULER, so _max_stages_in_use()
+# CONSTANT_ACCELERATION is single-stage (1 FD eval) like EULER, so _max_stages_in_use()
 # stays == 4 -> per-stage scratch sizing is byte-identical and EULER/SI/RK
 # kernels emit unchanged.
 _STAGE_COUNT = {
     "EULER": 1,
     "SEMI_IMPLICIT_EULER": 1,
     "MIDPOINT": 2,
-    "RK3": 3,
+    "TRAPEZOIDAL": 3,
     "RK4": 4,
-    "TRAPEZOIDAL": 1,
+    "CONSTANT_ACCELERATION": 1,
 }
 
 
@@ -569,10 +569,10 @@ def _emit_q_update(self, scale_expr, dst_name, src_q_name="s_q", src_v_name="s_s
     alignment so cardinal-robot codegen stays byte-identical. Defaults to the
     canonical single-space form when not given.
 
-    `accel_name` / `accel_scale_expr` (optional, TRAPEZOIDAL): fold an extra
+    `accel_name` / `accel_scale_expr` (optional, CONSTANT_ACCELERATION): fold an extra
     `accel_scale_expr * accel_name[v]` term into the retracted tangent at every
     v-index, so the effective tangent is `scale*src_v + accel_scale*accel`. This
-    lets TRAPEZOIDAL retract `dt*qd + 0.5*dt^2*qdd` in ONE step — correct for
+    lets CONSTANT_ACCELERATION retract `dt*qd + 0.5*dt^2*qdd` in ONE step — correct for
     fixed-base (collapses to the in-place add), floating-base (single SE(3) Lie
     retract of the combined tangent) AND spherical (the SO(3) half-angle uses the
     combined angular velocity). When `accel_name is None` the emitted code is
@@ -703,14 +703,14 @@ def gen_integrator_finish(self):
     # For SI-Euler, the v_new computed above is the integration source. Read
     # it back from s_x_kp1[nq:nq+nv] when IT == SEMI_IMPLICIT_EULER.
     # q-update by integrator type. EULER retracts dt*qd; SI-EULER retracts dt*v_new;
-    # TRAPEZOIDAL retracts the COMBINED tangent dt*qd + 0.5*dt^2*qdd in ONE step
+    # CONSTANT_ACCELERATION retracts the COMBINED tangent dt*qd + 0.5*dt^2*qdd in ONE step
     # (GATO integrator.cuh:36 -> q_next = q + dt*qd + 0.5*dt^2*qdd, reading OLD qd).
     # Folding the accel into the single retract (via _emit_q_update's accel term) is
     # correct for fixed-base (collapses to the in-place add), floating-base (SE(3)
     # Lie retract of the combined tangent) AND spherical (SO(3) half uses the
     # combined angular velocity) — no in-place add onto manifold/quaternion slots.
     # if constexpr discards the untaken branch, so EULER/SI/RK codegen is byte-identical.
-    self.gen_add_code_line("if constexpr (IT == IntegratorType::TRAPEZOIDAL) {", True)
+    self.gen_add_code_line("if constexpr (IT == IntegratorType::CONSTANT_ACCELERATION) {", True)
     self._emit_q_update("dt", "s_x_kp1", src_q_name="s_q", src_v_name="s_qd",
                         accel_name="s_qdd", accel_scale_expr="static_cast<T>(0.5) * dt * dt")
     self.gen_add_end_control_flow()
@@ -723,10 +723,10 @@ def gen_integrator_finish(self):
 
     # ---- Multi-stage IT values are not supposed to hit this function ----
     # Compile-time sentinel: emit a static_assert that fires if someone tries
-    # to instantiate integrator_finish for MP/RK3/RK4 (they should drive the
+    # to instantiate integrator_finish for MP/TRAPEZOIDAL/RK4 (they should drive the
     # finish inline from integrator_inner's multi-stage block).
     self.gen_add_code_line(
-        "static_assert(IT == IntegratorType::EULER || IT == IntegratorType::SEMI_IMPLICIT_EULER || IT == IntegratorType::TRAPEZOIDAL,")
+        "static_assert(IT == IntegratorType::EULER || IT == IntegratorType::SEMI_IMPLICIT_EULER || IT == IntegratorType::CONSTANT_ACCELERATION,")
     self.gen_add_code_line(
         "              \"integrator_finish only handles single-stage IT; multi-stage uses inner directly.\");")
     self.gen_add_end_function()
@@ -793,7 +793,7 @@ def gen_integrator_inner(self):
         helper-inside-inner uniformity move was deliberately skipped.)
       - `s_qdd`: stage-1 qdd output (size n) — always used.
       - `s_stage_qdd`: stages 2..N qdd outputs (size (max_stages-1)*n) — only
-        used for multi-stage integrators (Midpoint/RK3/RK4).
+        used for multi-stage integrators (Midpoint/TRAPEZOIDAL/RK4).
       - `s_stage_point`: intermediate state scratch (size (max_stages-1)*2n) —
         only used for multi-stage integrators.
     For Euler/SI-Euler, `s_stage_qdd` / `s_stage_point` are allocated but
@@ -829,12 +829,14 @@ def gen_integrator_inner(self):
     func_params.append("d_f_ext is the (optional) GLOBAL external forces, body-major 6*NUM_BODIES local-frame, or nullptr")
     func_notes = ["Assumes s_XImats is updated already for the current s_q",
                   "MINV_F_IN_SMEM selects where the FD inner's Minv 6*NV*NV F-region lives (s_temp vs d_workspace)",
-                  "For Midpoint/RK3/RK4, re-runs forward_dynamics at intermediate states and weights stage qdd outputs."]
+                  "For Midpoint/TRAPEZOIDAL/RK4, re-runs forward_dynamics at intermediate states and weights stage qdd outputs."]
     self.gen_add_func_doc("Computes a single integrator step (x_{k+1} = integrator(x_k, u_k, dt))",
                           func_notes, func_params, None)
     self.gen_add_code_line("template <typename T, IntegratorType IT, bool MINV_F_IN_SMEM = true>")
     self.gen_add_code_line("__device__")
     self.gen_add_code_line(func_def_start + func_def_end, True)
+
+    self.gen_add_code_line('static_assert(IT == IntegratorType::EULER || IT == IntegratorType::SEMI_IMPLICIT_EULER || IT == IntegratorType::CONSTANT_ACCELERATION, "Full-state multi-stage integration is not yet enabled.");')
 
     # Stage 1: always run forward dynamics on (q, qd, u). Thread the Minv-F
     # placement + global scratch through every FD inner call (stages reuse the
@@ -844,7 +846,7 @@ def gen_integrator_inner(self):
     self.gen_add_sync()
 
     # Single-stage branch — Euler / Semi-Implicit Euler.
-    self.gen_add_code_line("if constexpr (IT == IntegratorType::EULER || IT == IntegratorType::SEMI_IMPLICIT_EULER || IT == IntegratorType::TRAPEZOIDAL) {", True)
+    self.gen_add_code_line("if constexpr (IT == IntegratorType::EULER || IT == IntegratorType::SEMI_IMPLICIT_EULER || IT == IntegratorType::CONSTANT_ACCELERATION) {", True)
     self.gen_integrator_finish_function_call(integrator_type="IT")
     self.gen_add_end_control_flow()
 
@@ -867,8 +869,8 @@ def gen_integrator_inner(self):
         self.gen_add_code_line("T *s_p3_q  = &s_stage_point[" + str(2 * slot_size) + "];")
         self.gen_add_code_line("T *s_p3_qd = &s_stage_point[" + str(2 * slot_size + nq) + "];")
 
-    # ----- Stage 2 (Midpoint / RK3 / RK4): p1 = x + c1*dt*[qd; qdd_1] -----
-    # Midpoint: c1 = 0.5. RK3: c1 = 0.5. RK4: c1 = 0.5. (All three use 0.5
+    # ----- Stage 2 (Midpoint / TRAPEZOIDAL / RK4): p1 = x + c1*dt*[qd; qdd_1] -----
+    # Midpoint: c1 = 0.5. TRAPEZOIDAL: c1 = 0.5. RK4: c1 = 0.5. (All three use 0.5
     # for stage 2's offset.) For floating-base the q-update is a Lie retract.
     self.gen_add_code_line("constexpr T c1 = static_cast<T>(0.5);")
     self.gen_add_parallel_loop("ind", str(n))
@@ -888,15 +890,15 @@ def gen_integrator_inner(self):
     ), minv_f_in_smem_expr="MINV_F_IN_SMEM")
     self.gen_add_sync()
 
-    # ----- Stage 3 (RK3 / RK4) -----
+    # ----- Stage 3 (TRAPEZOIDAL / RK4) -----
     if max_stages >= 3:
-        self.gen_add_code_line("if constexpr (IT == IntegratorType::RK3 || IT == IntegratorType::RK4) {", True)
+        self.gen_add_code_line("if constexpr (IT == IntegratorType::TRAPEZOIDAL || IT == IntegratorType::RK4) {", True)
         # TrajoptPlant convention: xdot_i = [qd; qdd_i] (note: uses original qd,
         # NOT the stage-i velocity). So p_2 = xk + c2*dt*xdot_2 means
         # p_2.q = q + c2*dt*qd, p_2.qd = qd + c2*dt*qdd_2.
-        # RK3: c2 = 0.75 (point2 = xk + 0.75*dt*xdot_2)
+        # TRAPEZOIDAL: c2 = 0.75 (point2 = xk + 0.75*dt*xdot_2)
         # RK4: c2 = 0.5  (point2 = xk + 0.5*dt*xdot_2)
-        self.gen_add_code_line("constexpr T c2 = (IT == IntegratorType::RK3) ? static_cast<T>(0.75) : static_cast<T>(0.5);")
+        self.gen_add_code_line("constexpr T c2 = (IT == IntegratorType::TRAPEZOIDAL) ? static_cast<T>(0.75) : static_cast<T>(0.5);")
         self.gen_add_parallel_loop("ind", str(n))
         self.gen_add_code_line("s_p2_qd[ind] = s_qd[ind] + c2 * dt * s_qdd_2[ind];")
         self.gen_add_end_control_flow()
@@ -941,7 +943,7 @@ def gen_integrator_inner(self):
     self.gen_add_code_line("T accel = static_cast<T>(0);")
     self.gen_add_code_line("if constexpr (IT == IntegratorType::MIDPOINT) {")
     self.gen_add_code_line("    accel = s_qdd_2[ind];")
-    self.gen_add_code_line("} else if constexpr (IT == IntegratorType::RK3) {")
+    self.gen_add_code_line("} else if constexpr (IT == IntegratorType::TRAPEZOIDAL) {")
     self.gen_add_code_line("    constexpr T b1 = static_cast<T>(2.0/9.0);")
     self.gen_add_code_line("    constexpr T b2 = static_cast<T>(3.0/9.0);")
     self.gen_add_code_line("    constexpr T b3 = static_cast<T>(4.0/9.0);")
